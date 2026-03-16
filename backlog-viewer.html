@@ -1,0 +1,2462 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Taskmaster</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/js-yaml@4/dist/js-yaml.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root, [data-theme="dark"] {
+      /* ── Font sizes ─────────────────────────────── */
+      --fs-xs:     10px;
+      --fs-sm:     11px;
+      --fs-base:   13px;
+      --fs-card:   14px;
+      --fs-card-title: 15px;
+      --fs-card-id: 12.5px;
+      --fs-card-tag: 12px;
+      --fs-heading: 15px;
+      --fs-lg:     18px;
+
+      --bg:        #1a1a1e;
+      --surface:   #222226;
+      --surface2:  #2a2a2f;
+      --surface3:  #323238;
+      --border:    #3c3c42;
+      --border-subtle: #333339;
+      --text:      #e2e0dc;
+      --text-muted:#9f9d98;
+      --text-dim:  #6a6964;
+      --p0:        #f85149;
+      --p1:        #d29922;
+      --p2:        #5ea8ff;
+      --p3:        #5c5b57;
+      --done-bg:   #19191c;
+      --progress:  #238636;
+      --accent:    #5ea8ff;
+      --accent-dim:#2a3d62;
+      --stat-total-bg: #202024; --stat-total-border: var(--border);
+      --stat-done-bg: #0f1f16; --stat-done-border: #1a5c2e; --stat-done-color: #3fb950;
+      --stat-progress-bg: #0f162a; --stat-progress-border: #1f4480;
+      --stat-todo-bg: #1e1a12; --stat-todo-border: #6e4a08; --stat-todo-color: #e3b341;
+      --stat-blocked-bg: #221010; --stat-blocked-border: #8b2022; --stat-blocked-color: #f85149;
+      --stat-archived-bg: #1a1a1c; --stat-archived-border: #383838; --stat-archived-color: #706e6a;
+      --p0-bg: #221010; --p0-border: #3a1616;
+      --p1-bg: #1e1a12; --p1-border: #362610;
+      --p2-bg: #0f162a; --p2-border: #1c2a42;
+      --p3-bg: #202020; --p3-border: #2e2e30; --p3-color: #706e6a;
+      --card-hover-border: #50504a;
+      --card-hover-shadow: rgba(0,0,0,0.35);
+      --header-bg: linear-gradient(180deg, #1e1e22 0%, #1c1c20 100%);
+      --glow-accent: rgba(94, 168, 255, 0.06);
+    }
+
+    [data-theme="light"] {
+      --bg:        #dfe1e6;
+      --surface:   #e8eaef;
+      --surface2:  #f3f4f6;
+      --surface3:  #eaecf0;
+      --border:    #c4c9d4;
+      --border-subtle: #cdd3dc;
+      --text:      #1a2030;
+      --text-muted:#5a6475;
+      --text-dim:  #8892a0;
+      --p0:        #dc2626;
+      --p1:        #c27000;
+      --p2:        #2563eb;
+      --p3:        #8892a0;
+      --done-bg:   #f4f5f7;
+      --progress:  #16a34a;
+      --accent:    #2563eb;
+      --accent-dim:#b0c8f0;
+      --stat-total-bg: #eaecf0; --stat-total-border: var(--border);
+      --stat-done-bg: #ddf5e8; --stat-done-border: #16a34a; --stat-done-color: #15803d;
+      --stat-progress-bg: #e0ebfa; --stat-progress-border: #2563eb;
+      --stat-todo-bg: #f5edd6; --stat-todo-border: #c27000; --stat-todo-color: #9a5a00;
+      --stat-blocked-bg: #f5dede; --stat-blocked-border: #dc2626; --stat-blocked-color: #dc2626;
+      --stat-archived-bg: #e8e8ec; --stat-archived-border: #9898a8; --stat-archived-color: #6e6e82;
+      --p0-bg: #f5dede; --p0-border: #f0b8b8;
+      --p1-bg: #f5edd6; --p1-border: #e8d5a0;
+      --p2-bg: #e0ebfa; --p2-border: #a8c8f0;
+      --p3-bg: #e4e6ea; --p3-border: #c8ccd3; --p3-color: #6b7280;
+      --card-hover-border: #8892a0;
+      --card-hover-shadow: rgba(0,0,0,0.08);
+      --header-bg: linear-gradient(180deg, #e4e6eb 0%, #e0e2e8 100%);
+      --glow-accent: rgba(37, 99, 235, 0.04);
+    }
+
+    html, body {
+      height: 100%;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      font-size: var(--fs-card);
+      line-height: 1.5;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    /* ── Header ─────────────────────────────────────────── */
+    .header {
+      background: var(--header-bg);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      backdrop-filter: blur(12px);
+    }
+
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .header-logo {
+      width: 30px;
+      height: 30px;
+      flex-shrink: 0;
+    }
+
+    .header-logo svg {
+      width: 30px;
+      height: 30px;
+      display: block;
+    }
+
+    .header-title {
+      font-size: var(--fs-heading);
+      font-weight: 700;
+      color: var(--text);
+      letter-spacing: -0.2px;
+    }
+
+    .header-subtitle {
+      font-size: var(--fs-sm);
+      color: var(--text-dim);
+      margin-top: 1px;
+    }
+
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .header-search {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      padding: 6px 12px;
+      font-size: var(--fs-base);
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+      width: 200px;
+    }
+
+    .header-search:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--glow-accent);
+    }
+
+    .header-search::placeholder { color: var(--text-dim); }
+
+    .load-indicator {
+      font-size: var(--fs-sm);
+      color: var(--text-dim);
+      white-space: nowrap;
+    }
+
+    .load-indicator.ok { color: var(--stat-done-color); }
+    .load-indicator.err { color: var(--p0); }
+
+    /* ── File load (collapsed by default after load) ───── */
+    .load-bar {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 8px 24px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      transition: max-height 0.3s ease, opacity 0.3s ease, padding 0.3s ease;
+      max-height: 60px;
+      overflow: hidden;
+    }
+
+    .load-bar.collapsed {
+      max-height: 0;
+      opacity: 0;
+      padding-top: 0;
+      padding-bottom: 0;
+      border-bottom: none;
+    }
+
+    .load-bar label {
+      font-size: var(--fs-card-tag);
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+
+    .file-input-wrapper {
+      position: relative;
+    }
+
+    .file-input-wrapper input[type="file"] {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+      width: 100%;
+    }
+
+    .file-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 12px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-size: var(--fs-card-tag);
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      white-space: nowrap;
+    }
+
+    .file-btn:hover { border-color: var(--accent); }
+
+    /* ── Toolbar (filters) ──────────────────────────────── */
+    .toolbar {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 8px 24px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .filter-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .filter-label {
+      font-size: var(--fs-sm);
+      color: var(--text-dim);
+      white-space: nowrap;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .filter-select {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      padding: 5px 10px;
+      font-size: var(--fs-base);
+      cursor: pointer;
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    .filter-select:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--glow-accent);
+    }
+
+    .priority-toggles {
+      display: flex;
+      gap: 3px;
+    }
+
+    .priority-btn {
+      padding: 4px 10px;
+      border-radius: 6px;
+      border: 1.5px solid transparent;
+      font-size: var(--fs-sm);
+      font-weight: 700;
+      cursor: pointer;
+      transition: opacity 0.15s, transform 0.1s;
+      user-select: none;
+    }
+
+    .priority-btn.active { opacity: 1; }
+    .priority-btn.inactive { opacity: 0.3; }
+    .priority-btn:hover { transform: scale(1.06); }
+
+    .priority-btn[data-p="P0"] { background: var(--p0-bg); border-color: var(--p0); color: var(--p0); }
+    .priority-btn[data-p="P1"] { background: var(--p1-bg); border-color: var(--p1); color: var(--p1); }
+    .priority-btn[data-p="P2"] { background: var(--p2-bg); border-color: var(--p2); color: var(--p2); }
+    .priority-btn[data-p="P3"] { background: var(--p3-bg); border-color: var(--p3-color, #6e7681); color: var(--p3-color, #6e7681); }
+
+    .toolbar-sep {
+      width: 1px;
+      height: 20px;
+      background: var(--border);
+      flex-shrink: 0;
+    }
+
+    .archive-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 4px 10px;
+      border-radius: 6px;
+      border: 1.5px solid var(--border);
+      background: var(--surface2);
+      color: var(--text-dim);
+      font-size: var(--fs-sm);
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      user-select: none;
+    }
+
+    .archive-toggle:hover { border-color: var(--text-dim); color: var(--text-muted); }
+
+    .archive-toggle.active {
+      border-color: var(--stat-archived-border);
+      color: var(--stat-archived-color);
+      background: var(--stat-archived-bg);
+    }
+
+    .archive-toggle .archive-count {
+      font-weight: 700;
+    }
+
+    /* ── Active Session banner ─────────────────────────────── */
+    .active-session {
+      padding: 8px 24px;
+      background: linear-gradient(90deg, #0c1a12, #0f1f16);
+      border-bottom: 2px solid #1a5c2e;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    [data-theme="light"] .active-session {
+      background: linear-gradient(90deg, #ddf5e8, #cceedd);
+      border-bottom-color: #16a34a;
+    }
+
+    .active-session-pulse {
+      width: 8px;
+      height: 8px;
+      background: #3fb950;
+      border-radius: 50%;
+      flex-shrink: 0;
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(63, 185, 80, 0.4); }
+      50% { opacity: 0.7; box-shadow: 0 0 0 6px rgba(63, 185, 80, 0); }
+    }
+
+    .active-session-label {
+      font-size: var(--fs-xs);
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      color: #3fb950;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .active-session-task {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 3px 12px;
+      background: var(--surface);
+      border: 1px solid #1a5c2e;
+      border-radius: 6px;
+      font-size: var(--fs-base);
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .active-session-task .as-id {
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: var(--fs-sm);
+      color: #3fb950;
+      font-weight: 700;
+    }
+
+    .active-session-task .as-epic {
+      font-size: var(--fs-xs);
+      color: var(--text-muted);
+      font-weight: 400;
+    }
+
+    /* ── Now Working On banner ─────────────────────────────── */
+    .now-working {
+      padding: 8px 24px;
+      background: var(--stat-progress-bg);
+      border-bottom: 1px solid var(--stat-progress-border, var(--accent));
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    [data-theme="light"] .now-working {
+      background: var(--stat-progress-bg);
+    }
+
+    .now-working-label {
+      font-size: var(--fs-xs);
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      color: var(--accent);
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .now-working-tasks {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .now-working-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 3px 12px;
+      background: var(--surface);
+      border: 1px solid var(--accent-dim);
+      border-radius: 6px;
+      font-size: var(--fs-base);
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .now-working-item .nw-id {
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: var(--fs-sm);
+      color: var(--accent);
+      font-weight: 700;
+    }
+
+    .now-working-item .nw-epic {
+      font-size: var(--fs-xs);
+      color: var(--text-muted);
+      font-weight: 400;
+    }
+
+    .stat-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 10px;
+      border-radius: 6px;
+      font-size: var(--fs-card-tag);
+      font-weight: 600;
+      border: 1.5px solid transparent;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .stat-chip .stat-num { font-weight: 800; }
+
+    .stat-total    { background: var(--stat-total-bg); border-color: var(--stat-total-border); color: var(--text-muted); }
+    .stat-done     { background: var(--stat-done-bg); border-color: var(--stat-done-border); color: var(--stat-done-color); }
+    .stat-progress { background: var(--stat-progress-bg); border-color: var(--stat-progress-border); color: var(--accent); }
+    .stat-todo     { background: var(--stat-todo-bg); border-color: var(--stat-todo-border); color: var(--stat-todo-color); }
+    .stat-blocked  { background: var(--stat-blocked-bg); border-color: var(--stat-blocked-border); color: var(--stat-blocked-color); }
+
+    /* ── Read-only badge ───────────────────────────────────── */
+    .read-only-badge {
+      font-size: var(--fs-xs);
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      color: var(--p1);
+      background: var(--p1-bg);
+      border: 1.5px solid var(--p1-border);
+      border-radius: 6px;
+      padding: 3px 10px;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    /* ── Sort direction toggle ─────────────────────────────── */
+    .sort-dir-btn {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text-muted);
+      padding: 4px 8px;
+      font-size: var(--fs-sm);
+      cursor: pointer;
+      transition: border-color 0.2s, color 0.2s;
+      font-weight: 700;
+      line-height: 1;
+    }
+
+    .sort-dir-btn:hover {
+      border-color: var(--accent);
+      color: var(--text);
+    }
+
+    /* ── Milestone banner ──────────────────────────────────── */
+    .milestone-banner {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 10px 16px;
+      background: var(--surface);
+      border: 1.5px solid var(--accent-dim);
+      border-radius: 10px;
+      margin-bottom: 6px;
+    }
+
+    .milestone-banner .ms-label {
+      font-size: var(--fs-xs);
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      color: var(--accent);
+      text-transform: uppercase;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .milestone-banner .ms-name {
+      font-size: var(--fs-heading);
+      font-weight: 700;
+      color: var(--text);
+      white-space: nowrap;
+    }
+
+    .milestone-banner .ms-progress-bar {
+      flex: 1;
+      height: 8px;
+      background: var(--border-subtle);
+      border-radius: 4px;
+      overflow: hidden;
+      min-width: 80px;
+    }
+
+    .milestone-banner .ms-progress-fill {
+      height: 100%;
+      background: var(--progress);
+      border-radius: 4px;
+      transition: width 0.4s ease;
+    }
+
+    .milestone-banner .ms-stats {
+      font-size: var(--fs-sm);
+      color: var(--text-muted);
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .milestone-steps {
+      display: flex;
+      gap: 4px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-top: 4px;
+    }
+
+    .ms-step {
+      font-size: var(--fs-xs);
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-weight: 600;
+      border: 1px solid var(--border);
+      background: var(--surface2);
+      color: var(--text-dim);
+    }
+
+    .ms-step.ms-active {
+      border-color: var(--accent);
+      background: var(--p2-bg);
+      color: var(--accent);
+    }
+
+    .ms-step.ms-done {
+      border-color: var(--stat-done-border);
+      background: var(--stat-done-bg);
+      color: var(--stat-done-color);
+    }
+
+    /* ── Epic progress ───────────────────────────────────── */
+    .epics-section {
+      padding: 8px 24px 0;
+    }
+
+    .epics-grid {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 4px;
+    }
+
+    .epic-card {
+      background: var(--surface);
+      border: 1.5px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 12px;
+      min-width: 150px;
+      flex: 1 1 150px;
+      max-width: 240px;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+    }
+
+    .epic-card:hover {
+      border-color: var(--card-hover-border);
+      background: var(--surface2);
+    }
+
+    .epic-card.active-filter {
+      border-color: var(--accent);
+      background: var(--p2-bg);
+    }
+
+    .epic-card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6px;
+      gap: 6px;
+    }
+
+    .epic-name {
+      font-size: var(--fs-card-tag);
+      font-weight: 700;
+      color: var(--text);
+      letter-spacing: -0.1px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .epic-status-pill {
+      font-size: var(--fs-xs);
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      white-space: nowrap;
+      flex-shrink: 0;
+      -webkit-font-smoothing: antialiased;
+      border: 1.5px solid;
+    }
+
+    .status-active   { background: #0f1f16; color: #3fb950; border-color: #1a5c2e; }
+    .status-planned  { background: var(--surface2); color: var(--text-muted); border-color: var(--border); }
+    .status-done     { background: #0f1f16; color: #3fb950; border-color: #1a5c2e; }
+    .status-inactive { background: var(--surface2); color: var(--text-dim); border-color: var(--border); }
+
+    [data-theme="light"] .status-active   { background: #ddf5e8; color: #15803d; border-color: #86d9a0; }
+    [data-theme="light"] .status-planned  { background: var(--surface2); color: var(--text-muted); border-color: var(--border); }
+    [data-theme="light"] .status-done     { background: #ddf5e8; color: #15803d; border-color: #86d9a0; }
+    [data-theme="light"] .status-inactive { background: var(--surface2); color: var(--text-dim); border-color: var(--border); }
+
+    .epic-progress-bar {
+      height: 4px;
+      background: var(--border-subtle);
+      border-radius: 2px;
+      overflow: hidden;
+      margin-bottom: 4px;
+      display: flex;
+    }
+
+    .epic-progress-fill {
+      height: 100%;
+      transition: width 0.4s ease;
+    }
+
+    .epic-progress-fill:first-child { border-radius: 2px 0 0 2px; }
+    .epic-progress-fill:last-child  { border-radius: 0 2px 2px 0; }
+    .epic-progress-fill:only-child  { border-radius: 2px; }
+
+    .epic-progress-fill.done    { background: #238636; }
+    .epic-progress-fill.review  { background: var(--p1); }
+    .epic-progress-fill.inprog  { background: var(--accent); }
+    .epic-progress-fill.full    { background: #3fb950; }
+
+    .epic-progress-text {
+      font-size: var(--fs-xs);
+      color: var(--text-dim);
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── Board ───────────────────────────────────────────── */
+    .board-wrapper {
+      padding: 10px 24px 0;
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
+    }
+
+    .board {
+      display: flex;
+      gap: 10px;
+      align-items: stretch;
+      flex: 1;
+      min-height: 0;
+    }
+
+    .column {
+      flex: 1;
+      min-width: 0;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .column-header {
+      padding: 12px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .column-title {
+      font-size: var(--fs-base);
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      letter-spacing: -0.1px;
+    }
+
+    .column-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .col-todo     .column-dot { background: #5c5b57; }
+    .col-progress .column-dot { background: var(--accent); }
+    .col-review   .column-dot { background: var(--p1); }
+    .col-done     .column-dot { background: #3fb950; }
+
+    .column-count {
+      font-size: var(--fs-sm);
+      background: var(--surface2);
+      color: var(--text-dim);
+      padding: 2px 8px;
+      border-radius: 6px;
+      font-weight: 700;
+      border: 1px solid var(--border);
+    }
+
+    .column-count-archived {
+      font-size: var(--fs-xs);
+      color: var(--text-dim);
+      font-weight: 500;
+      margin-left: 2px;
+    }
+
+    .column-body {
+      padding: 8px;
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+    }
+
+    .column-body::-webkit-scrollbar { width: 4px; }
+    .column-body::-webkit-scrollbar-track { background: transparent; }
+    .column-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    /* ── Task card ───────────────────────────────────────── */
+    .task-card {
+      background: var(--surface2);
+      border: 1.5px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 16px;
+      margin-bottom: 6px;
+      transition: border-color 0.2s, background 0.2s;
+      cursor: pointer;
+    }
+
+    .task-card:hover {
+      border-color: var(--card-hover-border);
+      background: var(--surface3);
+    }
+
+    .task-card:last-child { margin-bottom: 0; }
+
+    .task-card-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      margin-bottom: 6px;
+    }
+
+    .task-id {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: var(--fs-card-id);
+      font-weight: 600;
+      color: var(--text-dim);
+      background: var(--surface3);
+      padding: 2px 7px;
+      border-radius: 4px;
+      white-space: nowrap;
+    }
+
+    .priority-badge {
+      font-size: var(--fs-card-tag);
+      font-weight: 800;
+      padding: 2px 8px;
+      border-radius: 5px;
+      white-space: nowrap;
+      letter-spacing: 0.03em;
+      border: 1.5px solid;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .p0-badge { background: var(--p0-bg); color: var(--p0); border-color: var(--p0-border); }
+    .p1-badge { background: var(--p1-bg); color: var(--p1); border-color: var(--p1-border); }
+    .p2-badge { background: var(--p2-bg); color: var(--p2); border-color: var(--p2-border); }
+    .p3-badge { background: var(--p3-bg); color: var(--p3-color, #6e7681); border-color: var(--p3-border); }
+
+    .task-title {
+      font-size: var(--fs-card-title);
+      font-weight: 600;
+      color: var(--text);
+      line-height: 1.4;
+      margin-bottom: 8px;
+      word-break: break-word;
+    }
+
+    .col-done .task-title { color: var(--text-muted); }
+
+    .task-card-footer {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 4px;
+    }
+
+    .epic-tag {
+      font-size: var(--fs-card-tag);
+      font-weight: 500;
+      padding: 2px 8px;
+      border-radius: 5px;
+      background: var(--surface3);
+      color: var(--text-dim);
+      border: 1px solid var(--border-subtle);
+      white-space: nowrap;
+    }
+
+    .task-date {
+      font-size: var(--fs-card-tag);
+      color: var(--text-dim);
+      margin-left: auto;
+    }
+
+    /* ── Card sub_repo + estimate + stage tags ────────── */
+    .task-card-tags {
+      display: flex; flex-wrap: wrap; gap: 4px;
+      margin-bottom: 6px;
+    }
+
+    .tag-subrepo {
+      font-size: var(--fs-sm); font-weight: 600;
+      padding: 2px 7px; border-radius: 4px;
+      background: var(--surface3);
+      color: var(--text-muted);
+      border: 1px solid var(--border-subtle);
+      font-family: "SFMono-Regular", Consolas, monospace;
+    }
+
+    .tag-stage {
+      font-size: var(--fs-sm); font-weight: 700;
+      padding: 2px 7px; border-radius: 4px;
+      background: var(--p2-bg);
+      color: var(--p2);
+      border: 1px solid var(--p2-border);
+    }
+
+    .tag-estimate {
+      font-size: var(--fs-sm); font-weight: 600;
+      padding: 2px 7px; border-radius: 4px;
+      background: var(--p1-bg);
+      color: var(--p1);
+      border: 1px solid var(--p1-border);
+    }
+
+    /* ── Recently moved cards ──────────────────────────────── */
+    .task-card.recently-moved {
+      border-left: 3px solid var(--accent);
+    }
+
+    .col-done .task-card.recently-moved {
+      border-left-color: #3fb950;
+    }
+
+    /* ── Archived section ──────────────────────────────── */
+    .archived-section {
+      padding: 0 24px 8px;
+      flex-shrink: 0;
+    }
+
+    .archived-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 6px 0;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .archived-header:hover .archived-title { color: var(--text); }
+
+    .archived-chevron {
+      color: var(--text-dim);
+      font-size: var(--fs-card-tag);
+      transition: transform 0.2s;
+      display: inline-block;
+    }
+
+    .archived-chevron.open { transform: rotate(90deg); }
+
+    .archived-title {
+      font-size: var(--fs-card-tag);
+      font-weight: 700;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      transition: color 0.2s;
+    }
+
+    .archived-count {
+      font-size: var(--fs-sm);
+      background: var(--stat-archived-bg);
+      color: var(--stat-archived-color);
+      padding: 2px 8px;
+      border-radius: 6px;
+      font-weight: 700;
+      border: 1px solid var(--stat-archived-border);
+    }
+
+    .archived-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 6px;
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.3s ease;
+    }
+
+    .archived-grid.open {
+      max-height: 2000px;
+    }
+
+    .archived-grid .task-card {
+      opacity: 0.65;
+      margin-bottom: 0;
+    }
+
+    .archived-grid .task-card:hover { opacity: 0.85; }
+    .archived-grid .task-title { color: var(--text-dim); }
+
+    /* ── Empty state ─────────────────────────────────────── */
+    .empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 32px 16px;
+      color: var(--text-dim);
+      text-align: center;
+      gap: 8px;
+    }
+
+    .empty-icon {
+      font-size: 24px;
+      opacity: 0.3;
+    }
+
+    .empty-text {
+      font-size: var(--fs-card-tag);
+    }
+
+    /* ── No data screen ──────────────────────────────────── */
+    .no-data-screen {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 60vh;
+      gap: 16px;
+      padding: 24px;
+      text-align: center;
+    }
+
+    .no-data-icon { font-size: 48px; opacity: 0.2; }
+    .no-data-title { font-size: var(--fs-lg); font-weight: 700; color: var(--text); }
+    .no-data-sub { font-size: var(--fs-base); color: var(--text-muted); max-width: 340px; }
+
+    /* ── Theme toggle ────────────────────────────────────── */
+    .theme-toggle {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      border: 1.5px solid var(--border);
+      background: var(--surface2);
+      color: var(--text-muted);
+      font-size: 16px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: border-color 0.2s, background 0.2s;
+      flex-shrink: 0;
+    }
+
+    .theme-toggle:hover { border-color: var(--accent); background: var(--surface3); }
+
+    /* ── Modal ──────────────────────────────────────────── */
+    .modal-backdrop {
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(0,0,0,0.6); backdrop-filter: blur(6px);
+      z-index: 1000;
+      display: flex; align-items: center; justify-content: center;
+      padding: 24px;
+    }
+
+    .modal-content {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      max-width: 720px;
+      width: 100%;
+      max-height: calc(100vh - 48px);
+      overflow-y: auto;
+      position: relative;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+    }
+
+    .modal-content::-webkit-scrollbar { width: 6px; }
+    .modal-content::-webkit-scrollbar-track { background: transparent; }
+    .modal-content::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    .modal-close {
+      position: absolute; top: 12px; right: 16px;
+      background: var(--surface2); border: 1.5px solid var(--border);
+      width: 28px; height: 28px; border-radius: 8px;
+      font-size: 18px; cursor: pointer; color: var(--text-muted);
+      display: flex; align-items: center; justify-content: center;
+      transition: background 0.15s, color 0.15s;
+      z-index: 1;
+    }
+
+    .modal-close:hover { background: var(--border); color: var(--text); }
+
+    .modal-header {
+      padding: 20px 24px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .modal-header-top {
+      display: flex; align-items: center; gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .modal-task-id {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: var(--fs-base); font-weight: 700;
+      color: var(--accent);
+      background: var(--p2-bg);
+      border: 1px solid var(--p2-border);
+      padding: 3px 8px; border-radius: 6px;
+    }
+
+    .modal-priority {
+      font-size: var(--fs-sm); font-weight: 800;
+      padding: 3px 8px; border-radius: 5px;
+      letter-spacing: 0.03em;
+      border: 1.5px solid;
+    }
+
+    .modal-title {
+      font-size: var(--fs-lg); font-weight: 700;
+      color: var(--text); line-height: 1.35;
+    }
+
+    .modal-meta {
+      padding: 16px 24px;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      gap: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .meta-item {
+      display: flex; flex-direction: column; gap: 3px;
+    }
+
+    .meta-label {
+      font-size: var(--fs-xs); font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.08em;
+      color: var(--text-dim);
+    }
+
+    .meta-value {
+      font-size: var(--fs-base); color: var(--text);
+    }
+
+    .meta-value.mono {
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: var(--fs-card-tag);
+    }
+
+    .status-chip {
+      display: inline-flex; align-items: center; gap: 5px;
+      font-size: var(--fs-card-tag); font-weight: 600;
+      padding: 2px 8px; border-radius: 6px;
+      border: 1.5px solid;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .status-chip.s-todo      { background: #202024; color: #95938e; border-color: var(--border); }
+    .status-chip.s-progress  { background: var(--stat-progress-bg); color: var(--accent); border-color: var(--stat-progress-border); }
+    .status-chip.s-review    { background: var(--p1-bg); color: var(--p1); border-color: var(--p1-border); }
+    .status-chip.s-done      { background: var(--stat-done-bg); color: var(--stat-done-color); border-color: var(--stat-done-border); }
+    .status-chip.s-blocked   { background: var(--stat-blocked-bg); color: var(--stat-blocked-color); border-color: var(--stat-blocked-border); }
+    .status-chip.s-archived  { background: var(--stat-archived-bg); color: var(--stat-archived-color); border-color: var(--stat-archived-border); }
+
+    /* ── Docs section ──────────────────────────────────── */
+    .modal-docs {
+      padding: 12px 24px;
+      border-bottom: 1px solid var(--border);
+      display: flex; flex-wrap: wrap; gap: 8px;
+      align-items: center;
+    }
+
+    .docs-label {
+      font-size: var(--fs-xs); font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.08em;
+      color: var(--text-dim);
+      margin-right: 4px;
+    }
+
+    .doc-badge {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 4px 10px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: var(--fs-card-tag); color: var(--text);
+      font-family: "SFMono-Regular", Consolas, monospace;
+      cursor: pointer;
+      transition: border-color 0.15s;
+      text-decoration: none;
+    }
+
+    .doc-badge:hover { border-color: var(--accent); }
+
+    .doc-badge-type {
+      font-size: var(--fs-xs); font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.05em;
+      color: var(--accent);
+    }
+
+    .doc-badge-path {
+      color: var(--text-muted);
+      max-width: 300px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .doc-badge-fragment {
+      font-size: var(--fs-xs);
+      color: var(--p1);
+      font-weight: 600;
+    }
+
+    /* ── Blockers ───────────────────────────────────────── */
+    .modal-blockers {
+      padding: 12px 24px;
+      background: var(--stat-blocked-bg);
+      border-bottom: 1px solid var(--stat-blocked-border);
+    }
+
+    .blockers-label {
+      font-size: var(--fs-xs); font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.08em;
+      color: var(--stat-blocked-color);
+      margin-bottom: 4px;
+    }
+
+    .blockers-text {
+      font-size: var(--fs-base); color: var(--text);
+      line-height: 1.5;
+    }
+
+    /* ── Notes (markdown) ──────────────────────────────── */
+    .modal-notes {
+      padding: 20px 24px;
+    }
+
+    .notes-label {
+      font-size: var(--fs-xs); font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.08em;
+      color: var(--text-dim);
+      margin-bottom: 10px;
+    }
+
+    .notes-body {
+      font-size: var(--fs-base);
+      line-height: 1.65;
+      color: var(--text);
+    }
+
+    .notes-body h1, .notes-body h2, .notes-body h3, .notes-body h4 {
+      color: var(--text);
+      margin: 16px 0 8px;
+      line-height: 1.3;
+    }
+
+    .notes-body h1 { font-size: var(--fs-lg); border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+    .notes-body h2 { font-size: 16px; border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+    .notes-body h3 { font-size: var(--fs-card); }
+    .notes-body h4 { font-size: var(--fs-base); color: var(--text-muted); }
+
+    .notes-body p { margin: 8px 0; }
+
+    .notes-body ul, .notes-body ol {
+      margin: 6px 0; padding-left: 20px;
+    }
+
+    .notes-body li { margin: 3px 0; }
+
+    .notes-body code {
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: var(--fs-card-tag);
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      padding: 1px 5px;
+      border-radius: 4px;
+      color: var(--accent);
+    }
+
+    .notes-body pre {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 16px;
+      overflow-x: auto;
+      margin: 10px 0;
+    }
+
+    .notes-body pre code {
+      background: none; border: none; padding: 0;
+      color: var(--text); font-size: var(--fs-card-tag);
+    }
+
+    .notes-body strong { color: var(--text); font-weight: 600; }
+
+    .notes-body table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 10px 0;
+      font-size: var(--fs-card-tag);
+    }
+
+    .notes-body table th {
+      text-align: left;
+      padding: 6px 10px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .notes-body table td {
+      padding: 6px 10px;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+    }
+
+    .notes-body table tr:hover td { background: var(--surface2); }
+
+    .notes-body hr {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 16px 0;
+    }
+
+    .notes-body blockquote {
+      border-left: 3px solid var(--accent);
+      padding: 4px 12px;
+      margin: 8px 0;
+      color: var(--text-muted);
+      background: var(--surface2);
+      border-radius: 0 6px 6px 0;
+    }
+
+    .notes-body .task-checkbox {
+      margin-right: 4px;
+    }
+
+    /* ── Dependencies ──────────────────────────────────── */
+    .modal-deps {
+      padding: 12px 24px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .deps-label {
+      font-size: var(--fs-xs); font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.08em;
+      color: var(--text-dim);
+      margin-bottom: 6px;
+    }
+
+    .deps-row {
+      display: flex; flex-wrap: wrap; gap: 6px;
+      margin-bottom: 6px;
+    }
+
+    .deps-row:last-child { margin-bottom: 0; }
+
+    .dep-chip {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 3px 10px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: var(--fs-card-tag);
+      cursor: pointer;
+      transition: border-color 0.15s;
+    }
+
+    .dep-chip:hover { border-color: var(--accent); }
+
+    .dep-chip .dep-arrow { color: var(--text-dim); font-size: var(--fs-xs); }
+    .dep-chip .dep-id { color: var(--accent); font-weight: 600; }
+    .dep-chip .dep-title { color: var(--text-muted); font-family: inherit; font-size: var(--fs-card-tag); }
+
+    .dep-chip.dep-done { opacity: 0.5; }
+    .dep-chip.dep-done .dep-id { color: var(--stat-done-color, #3fb950); }
+
+    .dep-direction {
+      font-size: var(--fs-sm); font-weight: 600;
+      color: var(--text-dim);
+      margin-bottom: 4px;
+    }
+
+    /* ── Responsive ──────────────────────────────────────── */
+    @media (max-width: 768px) {
+      .header { padding: 10px 16px; }
+      .toolbar, .epics-section, .board-wrapper, .archived-section, .stats-row { padding-left: 16px; padding-right: 16px; }
+
+      .board { flex-direction: column; }
+
+      body { overflow: auto; }
+      .board-wrapper { flex: none; }
+      .column-body { min-height: 200px; max-height: none; }
+
+      .header-search { width: 140px; }
+
+      .epics-grid { gap: 8px; }
+      .epic-card { max-width: 100%; }
+      .now-working { padding: 8px 16px; gap: 10px; flex-direction: column; align-items: flex-start; }
+
+      .archived-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- Header -->
+<header class="header">
+  <div class="header-left">
+    <div class="header-logo"><svg viewBox="0 0 30 30" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="5" y="3" width="20" height="24" rx="3" fill="var(--surface2)" stroke="var(--border)" stroke-width="1.5"/>
+      <rect x="10" y="1.5" width="10" height="4" rx="1.5" fill="var(--surface3)" stroke="var(--border)" stroke-width="1.2"/>
+      <line x1="9" y1="12" x2="21" y2="12" stroke="var(--border)" stroke-width="1.5" stroke-linecap="round"/>
+      <line x1="9" y1="16.5" x2="21" y2="16.5" stroke="var(--border)" stroke-width="1.5" stroke-linecap="round"/>
+      <line x1="9" y1="21" x2="16" y2="21" stroke="var(--border)" stroke-width="1.5" stroke-linecap="round"/>
+      <polyline points="17,19.5 19,22 23,18" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    </svg></div>
+    <div>
+      <div class="header-title" id="project-name">Taskmaster</div>
+      <div class="header-subtitle" id="project-updated">Task Management</div>
+    </div>
+    <span class="read-only-badge">READ-ONLY · AI Workflow Viewer</span>
+  </div>
+  <div class="header-right">
+    <span class="stat-chip stat-total"><span class="stat-num" id="stat-total">0</span> total</span>
+    <span class="stat-chip stat-done"><span class="stat-num" id="stat-done">0</span> done</span>
+    <span class="stat-chip stat-progress"><span class="stat-num" id="stat-progress">0</span> active</span>
+    <span class="stat-chip stat-todo"><span class="stat-num" id="stat-todo">0</span> todo</span>
+    <span class="stat-chip stat-blocked" id="stat-blocked-wrapper" style="display:none;"><span class="stat-num" id="stat-blocked">0</span> blocked</span>
+    <span class="load-indicator" id="load-status">Trying fetch…</span>
+    <input type="text" class="header-search" id="search-input" placeholder="Search tasks…  /" />
+    <button class="theme-toggle" id="theme-toggle" title="Toggle theme">◑</button>
+  </div>
+</header>
+
+<!-- Load bar (collapses after successful load) -->
+<div class="load-bar" id="load-bar">
+  <label>Load YAML:</label>
+  <div class="file-input-wrapper">
+    <div class="file-btn">Choose file</div>
+    <input type="file" accept=".yaml,.yml" id="file-input" />
+  </div>
+</div>
+
+<!-- Toolbar (filters) -->
+<div class="toolbar" id="toolbar">
+  <div class="filter-group">
+    <span class="filter-label">Epic</span>
+    <select class="filter-select" id="epic-filter">
+      <option value="all">All epics</option>
+    </select>
+  </div>
+  <div class="filter-group">
+    <span class="filter-label">Priority</span>
+    <div class="priority-toggles" id="priority-toggles">
+      <button class="priority-btn active" data-p="P0">P0</button>
+      <button class="priority-btn active" data-p="P1">P1</button>
+      <button class="priority-btn active" data-p="P2">P2</button>
+      <button class="priority-btn active" data-p="P3">P3</button>
+    </div>
+  </div>
+  <div class="filter-group">
+    <span class="filter-label">Sort</span>
+    <select class="filter-select" id="sort-select">
+      <option value="priority">Priority</option>
+      <option value="created">Created</option>
+      <option value="started">Started</option>
+      <option value="completed">Completed</option>
+      <option value="updated">Last updated</option>
+      <option value="alpha">Alphabetical</option>
+    </select>
+    <button class="sort-dir-btn" id="sort-dir-btn" title="Toggle sort direction">↓</button>
+  </div>
+  <div class="toolbar-sep"></div>
+  <button class="archive-toggle" id="archive-toggle" style="display:none;">
+    <span class="archive-count" id="archive-toggle-count">0</span> archived
+  </button>
+</div>
+
+<!-- Active Session banner -->
+<div class="active-session" id="active-session" style="display:none;">
+  <div class="active-session-pulse"></div>
+  <div class="active-session-label">ACTIVE SESSION</div>
+  <div id="active-session-task"></div>
+</div>
+
+<!-- Now Working On banner -->
+<div class="now-working" id="now-working" style="display:none;">
+  <div class="now-working-label">NOW WORKING ON</div>
+  <div class="now-working-tasks" id="now-working-tasks"></div>
+</div>
+
+<!-- Milestone banner -->
+<div class="epics-section" id="milestone-section" style="display:none;">
+  <div id="milestone-banner"></div>
+</div>
+
+<!-- Epics section -->
+<div class="epics-section" id="epics-section" style="display:none;">
+  <div class="epics-grid" id="epics-grid"></div>
+</div>
+
+<!-- Board -->
+<div class="board-wrapper" id="board-wrapper">
+  <div class="no-data-screen" id="no-data-screen">
+    <div class="no-data-icon">&#9634;</div>
+    <div class="no-data-title">No backlog loaded</div>
+    <div class="no-data-sub">Use the file picker above to load a backlog.yaml, or serve this file alongside backlog.yaml for auto-load.</div>
+  </div>
+
+  <div class="board" id="board" style="display:none;">
+    <div class="column col-todo" id="col-todo">
+      <div class="column-header">
+        <div class="column-title"><div class="column-dot"></div>Todo</div>
+        <span class="column-count" id="count-todo">0</span>
+      </div>
+      <div class="column-body" id="body-todo"></div>
+    </div>
+    <div class="column col-progress" id="col-progress">
+      <div class="column-header">
+        <div class="column-title"><div class="column-dot"></div>In Progress</div>
+        <span class="column-count" id="count-progress">0</span>
+      </div>
+      <div class="column-body" id="body-progress"></div>
+    </div>
+    <div class="column col-review" id="col-review">
+      <div class="column-header">
+        <div class="column-title"><div class="column-dot"></div>In Review</div>
+        <span class="column-count" id="count-review">0</span>
+      </div>
+      <div class="column-body" id="body-review"></div>
+    </div>
+    <div class="column col-done" id="col-done">
+      <div class="column-header">
+        <div class="column-title"><div class="column-dot"></div>Done</div>
+        <span><span class="column-count" id="count-done">0</span><span class="column-count-archived" id="count-done-archived"></span></span>
+      </div>
+      <div class="column-body" id="body-done"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Archived section (below board) -->
+<div class="archived-section" id="archived-section" style="display:none;">
+  <div class="archived-header" id="archived-header">
+    <span class="archived-chevron" id="archived-chevron">&#9654;</span>
+    <span class="archived-title">Archived</span>
+    <span class="archived-count" id="archived-count">0</span>
+  </div>
+  <div class="archived-grid" id="archived-grid"></div>
+</div>
+
+<script>
+// ── State ────────────────────────────────────────────────
+let allTasks     = [];
+let allEpics     = [];
+let activeEpic   = 'all';
+let activePriorities = new Set(['P0','P1','P2','P3']);
+let searchQuery  = '';
+let sortMode     = 'priority';
+let sortAsc      = true;  // true = default direction for the mode
+let loadedData   = null;
+let showArchived = false;
+
+// ── Column map ───────────────────────────────────────────
+const COL_MAP = {
+  'todo':        'todo',
+  'to-do':       'todo',
+  'in-progress': 'progress',
+  'in progress': 'progress',
+  'in-review':   'review',
+  'in review':   'review',
+  'done':        'done',
+  'completed':   'done',
+  'closed':      'done',
+  'archived':    'archived',
+};
+
+function colKey(status) {
+  return COL_MAP[(status||'').toLowerCase()] || 'todo';
+}
+
+// ── Parse & flatten ──────────────────────────────────────
+function ingestData(data) {
+  loadedData = data;
+  allTasks   = [];
+  allEpics   = [];
+
+  const epics = data.epics || [];
+  for (const epic of epics) {
+    allEpics.push(epic);
+    const tasks = epic.tasks || [];
+    for (const task of tasks) {
+      allTasks.push({ ...task, _epicId: epic.id, _epicName: epic.name || epic.id });
+    }
+  }
+
+  // Header — dynamic from data.meta.project
+  const meta = data.meta || {};
+  document.getElementById('project-name').textContent = meta.project || 'Taskmaster';
+  if (meta.updated) {
+    document.getElementById('project-updated').textContent = 'Updated ' + meta.updated;
+  } else {
+    document.getElementById('project-updated').textContent = 'Task Management';
+  }
+
+  // Collapse load bar after successful load
+  document.getElementById('load-bar').classList.add('collapsed');
+
+  // Epic dropdown — preserve current filter across live reloads
+  const sel = document.getElementById('epic-filter');
+  const prevEpic = activeEpic;
+  while (sel.options.length > 1) sel.remove(1);
+  for (const epic of allEpics) {
+    const opt = document.createElement('option');
+    opt.value = epic.id;
+    opt.textContent = epic.name || epic.id;
+    sel.appendChild(opt);
+  }
+  // Restore previous filter if the epic still exists, otherwise reset
+  if (prevEpic !== 'all' && allEpics.some(e => e.id === prevEpic)) {
+    activeEpic = prevEpic;
+    sel.value  = prevEpic;
+  } else {
+    activeEpic = 'all';
+    sel.value  = 'all';
+  }
+
+  renderMilestones();
+  renderEpics();
+  render();
+}
+
+// ── Milestones ───────────────────────────────────────────
+function renderMilestones() {
+  const section = document.getElementById('milestone-section');
+  const banner = document.getElementById('milestone-banner');
+  const milestones = (loadedData && loadedData.milestones) || [];
+  banner.innerHTML = '';
+
+  if (!milestones.length) { section.style.display = 'none'; return; }
+  section.style.display = '';
+
+  const sorted = [...milestones].sort((a, b) => (a.order || 999) - (b.order || 999));
+  const active = sorted.find(m => m.status === 'active');
+
+  if (active) {
+    // Count tasks in active milestone
+    let total = 0, done = 0;
+    for (const t of allTasks) {
+      if (t.milestone === active.id) {
+        const s = colKey(t.status);
+        if (s === 'archived') continue;
+        total++;
+        if (s === 'done') done++;
+      }
+    }
+    const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+
+    banner.innerHTML += `
+      <div class="milestone-banner">
+        <span class="ms-label">Milestone</span>
+        <span class="ms-name">${esc(active.name)}</span>
+        <div class="ms-progress-bar"><div class="ms-progress-fill" style="width:${pct}%"></div></div>
+        <span class="ms-stats">${done}/${total} done (${pct}%)</span>
+      </div>
+    `;
+  }
+
+  // Steps indicator
+  if (sorted.length > 1) {
+    let stepsHtml = '<div class="milestone-steps">';
+    for (const ms of sorted) {
+      if (ms.status === 'archived') continue;
+      const cls = ms.status === 'active' ? 'ms-active' : ms.status === 'done' ? 'ms-done' : '';
+      const icon = ms.status === 'done' ? '✓ ' : ms.status === 'active' ? '▶ ' : '';
+      stepsHtml += `<span class="ms-step ${cls}">${icon}${esc(ms.name)}</span>`;
+      if (ms !== sorted[sorted.length - 1] && ms.status !== 'archived') stepsHtml += '<span style="color:var(--text-dim);font-size:10px">→</span>';
+    }
+    stepsHtml += '</div>';
+    banner.innerHTML += stepsHtml;
+  }
+}
+
+// ── Stats ────────────────────────────────────────────────
+function computeStats(tasks) {
+  const s = { total: 0, done: 0, in_progress: 0, todo: 0, blocked: 0, archived: 0 };
+  for (const t of tasks) {
+    const st = (t.status || '').toLowerCase();
+    if (st === 'archived') {
+      s.archived++;
+      // Count archived-done tasks toward the done total
+      if ((t.archive_reason || 'done') === 'done') s.done++;
+      continue;
+    }
+    s.total++;
+    if (st === 'done' || st === 'completed' || st === 'closed') s.done++;
+    else if (st === 'in-progress' || st === 'in progress') s.in_progress++;
+    else if (st === 'blocked') s.blocked++;
+    else if (st === 'in-review' || st === 'in review') s.in_progress++; // count review as active
+    else s.todo++;
+  }
+  return s;
+}
+
+// ── Epic progress bars ───────────────────────────────────
+function renderEpics() {
+  const section = document.getElementById('epics-section');
+  const grid    = document.getElementById('epics-grid');
+  grid.innerHTML = '';
+
+  if (!allEpics.length) { section.style.display = 'none'; return; }
+  section.style.display = '';
+
+  for (const epic of allEpics) {
+    const tasks = (epic.tasks || []);
+    const archived = tasks.filter(t => colKey(t.status) === 'archived').length;
+    const activeTasks = tasks.filter(t => colKey(t.status) !== 'archived');
+    const total = activeTasks.length;
+    const done  = activeTasks.filter(t => colKey(t.status) === 'done').length;
+    const pct   = total > 0 ? Math.round((done / total) * 100) : 0;
+
+    const card = document.createElement('div');
+    card.className = 'epic-card' + (activeEpic === epic.id ? ' active-filter' : '');
+    card.dataset.epicId = epic.id;
+
+    const statusClass = {
+      active:   'status-active',
+      planned:  'status-planned',
+      done:     'status-done',
+    }[epic.status] || 'status-planned';
+
+    const inProg = activeTasks.filter(t => colKey(t.status) === 'progress').length;
+    const inRev  = activeTasks.filter(t => colKey(t.status) === 'review').length;
+    const todo   = total - done - inProg - inRev;
+
+    const breakdownParts = [];
+    if (done)     breakdownParts.push(`<span style="color:var(--stat-done-color,#3fb950)">${done} done</span>`);
+    if (inProg)   breakdownParts.push(`<span style="color:var(--accent)">${inProg} active</span>`);
+    if (inRev)    breakdownParts.push(`<span style="color:var(--p1)">${inRev} review</span>`);
+    if (todo)     breakdownParts.push(`<span style="color:var(--text-dim)">${todo} todo</span>`);
+    if (archived) breakdownParts.push(`<span style="color:var(--stat-archived-color)">${archived} archived</span>`);
+
+    card.innerHTML = `
+      <div class="epic-card-header">
+        <div class="epic-name">${esc(epic.name || epic.id)}</div>
+        <div class="epic-status-pill ${statusClass}">${esc(epic.status || 'planned')}</div>
+      </div>
+      <div class="epic-progress-bar">
+        ${done ? `<div class="epic-progress-fill done${pct===100?' full':''}" style="width:${total?Math.round(done/total*100):0}%"></div>` : ''}
+        ${inRev ? `<div class="epic-progress-fill review" style="width:${total?Math.round(inRev/total*100):0}%"></div>` : ''}
+        ${inProg ? `<div class="epic-progress-fill inprog" style="width:${total?Math.round(inProg/total*100):0}%"></div>` : ''}
+      </div>
+      <div class="epic-progress-text">${breakdownParts.join(' · ')} &mdash; ${pct}%</div>
+    `;
+
+    card.addEventListener('click', () => {
+      const sel = document.getElementById('epic-filter');
+      if (activeEpic === epic.id) {
+        activeEpic = 'all';
+        sel.value  = 'all';
+      } else {
+        activeEpic = epic.id;
+        sel.value  = epic.id;
+      }
+      // re-highlight cards
+      document.querySelectorAll('.epic-card').forEach(c => {
+        c.classList.toggle('active-filter', c.dataset.epicId === activeEpic);
+      });
+      render();
+    });
+
+    grid.appendChild(card);
+  }
+}
+
+// ── Now Working On banner ────────────────────────────────
+function renderNowWorking() {
+  const container = document.getElementById('now-working');
+  const tasksEl = document.getElementById('now-working-tasks');
+  const inProgress = allTasks.filter(t => {
+    const st = (t.status || '').toLowerCase();
+    return st === 'in-progress' || st === 'in progress';
+  });
+
+  if (!inProgress.length) {
+    container.style.display = 'none';
+    return;
+  }
+
+  container.style.display = '';
+  tasksEl.innerHTML = inProgress.map(t => `
+    <div class="now-working-item">
+      <span class="nw-id">${esc(t.id)}</span>
+      ${esc(t.title)}
+      <span class="nw-epic">${esc(t._epicName || '')}</span>
+    </div>
+  `).join('');
+}
+
+// ── Main render ──────────────────────────────────────────
+function render() {
+  if (!loadedData) return;
+  renderNowWorking();
+
+  // Filter
+  let tasks = allTasks;
+  if (activeEpic !== 'all') {
+    tasks = tasks.filter(t => t._epicId === activeEpic);
+  }
+  tasks = tasks.filter(t => {
+    const p = (t.priority || 'P3').toUpperCase();
+    return activePriorities.has(p);
+  });
+  // Search filter
+  if (searchQuery) {
+    const q = searchQuery.toLowerCase();
+    tasks = tasks.filter(t =>
+      (t.id || '').toLowerCase().includes(q) ||
+      (t.title || '').toLowerCase().includes(q) ||
+      (t.notes || '').toLowerCase().includes(q) ||
+      (t._epicName || '').toLowerCase().includes(q) ||
+      (t.branch || '').toLowerCase().includes(q)
+    );
+  }
+  // Sort — all modes support ascending/descending via sortAsc toggle
+  const pOrder = { P0: 0, P1: 1, P2: 2, P3: 3 };
+  const dir = sortAsc ? 1 : -1;
+  const tsCompare = (field) => (a, b) => {
+    const av = a[field] || '';
+    const bv = b[field] || '';
+    // Push empty values to the end regardless of direction
+    if (!av && bv) return 1;
+    if (av && !bv) return -1;
+    if (!av && !bv) return 0;
+    return dir * av.localeCompare(bv);
+  };
+  const sorters = {
+    'priority': (a, b) => dir * ((pOrder[a.priority?.toUpperCase()] ?? 3) - (pOrder[b.priority?.toUpperCase()] ?? 3)),
+    'created': tsCompare('created'),
+    'started': tsCompare('started'),
+    'completed': tsCompare('completed'),
+    'updated': (a, b) => {
+      // "Last updated" uses the most recent timestamp on each task
+      const aTs = a.completed || a.started || a.created || '';
+      const bTs = b.completed || b.started || b.created || '';
+      if (!aTs && bTs) return 1;
+      if (aTs && !bTs) return -1;
+      if (!aTs && !bTs) return 0;
+      return dir * aTs.localeCompare(bTs);
+    },
+    'alpha': (a, b) => dir * (a.title || '').localeCompare(b.title || ''),
+  };
+  if (sorters[sortMode]) {
+    tasks = [...tasks].sort(sorters[sortMode]);
+  }
+
+  // Stats (over all tasks, not filtered — feels more useful)
+  const statsSource = activeEpic === 'all' ? allTasks : allTasks.filter(t => t._epicId === activeEpic);
+  const stats = computeStats(statsSource);
+  document.getElementById('stat-total').textContent    = stats.total;
+  document.getElementById('stat-done').textContent     = stats.done;
+  document.getElementById('stat-progress').textContent = stats.in_progress;
+  document.getElementById('stat-todo').textContent     = stats.todo;
+  document.getElementById('stat-blocked').textContent  = stats.blocked;
+  document.getElementById('stat-blocked-wrapper').style.display = stats.blocked ? '' : 'none';
+
+  // Archive toggle in toolbar
+  const archiveToggle = document.getElementById('archive-toggle');
+  const archiveCount = stats.archived;
+  document.getElementById('archive-toggle-count').textContent = archiveCount;
+  archiveToggle.style.display = archiveCount ? '' : 'none';
+
+  // Bucket
+  const buckets = { todo: [], progress: [], review: [], done: [], archived: [] };
+  for (const t of tasks) {
+    const key = colKey(t.status);
+    buckets[key].push(t);
+  }
+
+  // Show board
+  document.getElementById('no-data-screen').style.display = 'none';
+  document.getElementById('board').style.display           = '';
+
+  renderColumn('todo',     buckets.todo);
+  renderColumn('progress', buckets.progress);
+  renderColumn('review',   buckets.review);
+  renderColumn('done',     buckets.done);
+
+  // Archived-done count in Done column header
+  const archivedDone = buckets.archived.filter(t => (t.archive_reason || 'done') === 'done').length;
+  const adEl = document.getElementById('count-done-archived');
+  adEl.textContent = archivedDone ? ` +${archivedDone} archived` : '';
+
+  // Archived section
+  renderArchived(buckets.archived);
+
+  // Refresh keyboard nav index
+  updateVisibleCards();
+}
+
+function renderColumn(key, tasks) {
+  const body  = document.getElementById('body-' + key);
+  const count = document.getElementById('count-' + key);
+  count.textContent = tasks.length;
+  body.innerHTML    = '';
+
+  if (!tasks.length) {
+    body.innerHTML = `<div class="empty-state"><div class="empty-icon">&#9675;</div><div class="empty-text">No tasks</div></div>`;
+    return;
+  }
+
+  for (const task of tasks) {
+    body.appendChild(makeCard(task));
+  }
+}
+
+function renderArchived(tasks) {
+  const section = document.getElementById('archived-section');
+  const grid = document.getElementById('archived-grid');
+  const countEl = document.getElementById('archived-count');
+
+  if (!tasks.length) {
+    section.style.display = 'none';
+    return;
+  }
+
+  section.style.display = '';
+  countEl.textContent = tasks.length;
+  grid.innerHTML = '';
+
+  for (const task of tasks) {
+    grid.appendChild(makeCard(task));
+  }
+
+  // Apply open/closed state
+  const chevron = document.getElementById('archived-chevron');
+  if (showArchived) {
+    grid.classList.add('open');
+    chevron.classList.add('open');
+  } else {
+    grid.classList.remove('open');
+    chevron.classList.remove('open');
+  }
+}
+
+// ── Archive toggle handler ───────────────────────────────
+document.getElementById('archived-header').addEventListener('click', () => {
+  showArchived = !showArchived;
+  const grid = document.getElementById('archived-grid');
+  const chevron = document.getElementById('archived-chevron');
+  grid.classList.toggle('open', showArchived);
+  chevron.classList.toggle('open', showArchived);
+});
+
+document.getElementById('archive-toggle').addEventListener('click', function() {
+  showArchived = !showArchived;
+  this.classList.toggle('active', showArchived);
+  const grid = document.getElementById('archived-grid');
+  const chevron = document.getElementById('archived-chevron');
+  grid.classList.toggle('open', showArchived);
+  chevron.classList.toggle('open', showArchived);
+  // Scroll to archived section if opening
+  if (showArchived) {
+    document.getElementById('archived-section').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+});
+
+// ── Minimal markdown renderer ────────────────────────────
+function renderMarkdown(text) {
+  if (!text) return '';
+  let html = esc(text);
+
+  // Code blocks (``` ... ```)
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) =>
+    `<pre><code>${code.trim()}</code></pre>`
+  );
+
+  // Inline code
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+  // Tables
+  html = html.replace(/((?:^\|.+\|$\n?)+)/gm, (block) => {
+    const rows = block.trim().split('\n').filter(r => r.trim());
+    if (rows.length < 2) return block;
+    // Check if second row is separator
+    const isSep = /^\|[\s\-:|]+\|$/.test(rows[1]);
+    let out = '<table>';
+    rows.forEach((row, i) => {
+      if (isSep && i === 1) return; // skip separator
+      const cells = row.split('|').filter((_, j, a) => j > 0 && j < a.length - 1).map(c => c.trim());
+      const tag = (i === 0 && isSep) ? 'th' : 'td';
+      out += '<tr>' + cells.map(c => `<${tag}>${c}</${tag}>`).join('') + '</tr>';
+    });
+    return out + '</table>';
+  });
+
+  // Headers
+  html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
+  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+
+  // Horizontal rules
+  html = html.replace(/^---+$/gm, '<hr>');
+
+  // Bold
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+
+  // Italic
+  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+
+  // Task list checkboxes
+  html = html.replace(/^- \[x\] (.+)$/gm, '<li><input type="checkbox" checked disabled class="task-checkbox">$1</li>');
+  html = html.replace(/^- \[ \] (.+)$/gm, '<li><input type="checkbox" disabled class="task-checkbox">$1</li>');
+
+  // Unordered lists
+  html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+  // Wrap consecutive <li> in <ul>
+  html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
+
+  // Blockquotes
+  html = html.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
+
+  // Paragraphs — wrap remaining loose lines
+  html = html.replace(/\n{2,}/g, '</p><p>');
+  // Don't wrap block elements in <p>
+  if (!html.startsWith('<')) html = '<p>' + html;
+  if (!html.endsWith('>')) html += '</p>';
+  // Clean empty paragraphs
+  html = html.replace(/<p>\s*<\/p>/g, '');
+  // Remove <p> around block elements
+  html = html.replace(/<p>(<(?:h[1-4]|ul|ol|pre|table|blockquote|hr)[\s>])/g, '$1');
+  html = html.replace(/(<\/(?:h[1-4]|ul|ol|pre|table|blockquote|hr)>)<\/p>/g, '$1');
+
+  return html;
+}
+
+function openTaskModal(taskId) {
+  const task = allTasks.find(t => t.id === taskId);
+  if (!task) return;
+
+  const p = (task.priority || '').toUpperCase();
+  const pClass = { P0:'p0-badge', P1:'p1-badge', P2:'p2-badge', P3:'p3-badge' }[p] || 'p3-badge';
+
+  // Status chip class
+  const statusKey = colKey(task.status);
+  const statusMap = { todo: 's-todo', progress: 's-progress', review: 's-review', done: 's-done', archived: 's-archived' };
+  const statusClass = statusMap[statusKey] || 's-todo';
+  const statusLabel = task.status || 'todo';
+
+  // Build metadata items
+  const metaItems = [];
+  metaItems.push(`<div class="meta-item"><div class="meta-label">Status</div><div class="meta-value"><span class="status-chip ${statusClass}">${esc(statusLabel)}</span></div></div>`);
+  metaItems.push(`<div class="meta-item"><div class="meta-label">Epic</div><div class="meta-value">${esc(task._epicName || '—')}</div></div>`);
+  if (task.stage != null) metaItems.push(`<div class="meta-item"><div class="meta-label">Stage</div><div class="meta-value"><span style="font-weight:600;">Stage ${esc(String(task.stage))}</span></div></div>`);
+  if (task.estimate) metaItems.push(`<div class="meta-item"><div class="meta-label">Estimate</div><div class="meta-value">${esc(task.estimate)}</div></div>`);
+  if (task.sub_repo) metaItems.push(`<div class="meta-item"><div class="meta-label">Sub-repo</div><div class="meta-value mono">${esc(task.sub_repo)}</div></div>`);
+  if (task.created) metaItems.push(`<div class="meta-item"><div class="meta-label">Created</div><div class="meta-value">${fmtTs(task.created)}</div></div>`);
+  if (task.started) metaItems.push(`<div class="meta-item"><div class="meta-label">Started</div><div class="meta-value">${fmtTs(task.started)}</div></div>`);
+  if (task.completed) metaItems.push(`<div class="meta-item"><div class="meta-label">Completed</div><div class="meta-value">${fmtTs(task.completed)}</div></div>`);
+  if (task.branch) {
+    const wt = worktreesByBranch[task.branch];
+    metaItems.push(`<div class="meta-item"><div class="meta-label">Branch</div><div class="meta-value mono">${esc(task.branch)}${wt ? ` <span style="color:var(--progress);font-size:11px;">(worktree: ${esc(wt.path)})</span>` : ''}</div></div>`);
+  }
+  if (task.worktree) metaItems.push(`<div class="meta-item"><div class="meta-label">Worktree</div><div class="meta-value mono">${esc(task.worktree)}</div></div>`);
+  if (task.archive_reason) metaItems.push(`<div class="meta-item"><div class="meta-label">Archive Reason</div><div class="meta-value"><span class="status-chip s-archived">${esc(task.archive_reason)}</span></div></div>`);
+  if (task.archived) metaItems.push(`<div class="meta-item"><div class="meta-label">Archived</div><div class="meta-value">${esc(task.archived)}</div></div>`);
+
+  // Build docs section
+  let docsHtml = '';
+  if (task.docs) {
+    const docs = typeof task.docs === 'string'
+      ? [['ref', task.docs]]
+      : Object.entries(task.docs);
+    if (docs.length) {
+      docsHtml = `<div class="modal-docs"><span class="docs-label">Docs</span>${
+        docs.map(([type, path]) => {
+          const [filePath, fragment] = String(path).split('#');
+          const href = '/file/' + filePath + (fragment ? '#' + fragment : '');
+          return `<a class="doc-badge" href="${href}" target="_blank" onclick="event.stopPropagation()"><span class="doc-badge-type">${esc(type)}</span><span class="doc-badge-path" title="${esc(path)}">${esc(filePath)}</span>${fragment ? `<span class="doc-badge-fragment">#${esc(fragment)}</span>` : ''}</a>`;
+        }).join('')
+      }</div>`;
+    }
+  }
+
+  // Dependencies
+  let depsHtml = '';
+  const dependsOn = task.depends_on ? (Array.isArray(task.depends_on) ? task.depends_on : [task.depends_on]) : [];
+  // Find reverse deps — tasks that depend on this one
+  const unblocks = allTasks.filter(t => {
+    const d = t.depends_on ? (Array.isArray(t.depends_on) ? t.depends_on : [t.depends_on]) : [];
+    return d.includes(task.id);
+  });
+
+  if (dependsOn.length || unblocks.length) {
+    let inner = '';
+    if (dependsOn.length) {
+      inner += `<div class="dep-direction">Depends on</div><div class="deps-row">`;
+      inner += dependsOn.map(depId => {
+        const dep = allTasks.find(t => t.id === depId);
+        const isDone = dep && colKey(dep.status) === 'done';
+        return `<div class="dep-chip${isDone ? ' dep-done' : ''}" onclick="closeModal();openTaskModal('${esc(depId)}')">
+          <span class="dep-arrow">&larr;</span>
+          <span class="dep-id">${esc(depId)}</span>
+          ${dep ? `<span class="dep-title">${esc(dep.title)}</span>` : ''}
+        </div>`;
+      }).join('');
+      inner += `</div>`;
+    }
+    if (unblocks.length) {
+      inner += `<div class="dep-direction">Unblocks</div><div class="deps-row">`;
+      inner += unblocks.map(dep => {
+        const isDone = colKey(dep.status) === 'done';
+        return `<div class="dep-chip${isDone ? ' dep-done' : ''}" onclick="closeModal();openTaskModal('${esc(dep.id)}')">
+          <span class="dep-arrow">&rarr;</span>
+          <span class="dep-id">${esc(dep.id)}</span>
+          <span class="dep-title">${esc(dep.title)}</span>
+        </div>`;
+      }).join('');
+      inner += `</div>`;
+    }
+    depsHtml = `<div class="modal-deps"><div class="deps-label">Dependencies</div>${inner}</div>`;
+  }
+
+  // Blockers
+  let blockersHtml = '';
+  if (task.blockers) {
+    blockersHtml = `<div class="modal-blockers"><div class="blockers-label">Blockers</div><div class="blockers-text">${esc(task.blockers)}</div></div>`;
+  }
+
+  // Notes
+  let notesHtml = '';
+  if (task.notes) {
+    notesHtml = `<div class="modal-notes"><div class="notes-label">Notes</div><div class="notes-body">${renderMarkdown(task.notes)}</div></div>`;
+  }
+
+  const html = `
+    <div class="modal-header">
+      <div class="modal-header-top">
+        <span class="modal-task-id">${esc(task.id)}</span>
+        ${p ? `<span class="modal-priority ${pClass}">${esc(p)}</span>` : ''}
+      </div>
+      <div class="modal-title">${esc(task.title || 'Untitled')}</div>
+    </div>
+    <div class="modal-meta">${metaItems.join('')}</div>
+    ${docsHtml}
+    ${depsHtml}
+    ${blockersHtml}
+    ${notesHtml}
+  `;
+
+  document.getElementById('modal-body').innerHTML = html;
+  document.getElementById('task-modal').style.display = 'flex';
+}
+
+function closeModal() {
+  document.getElementById('task-modal').style.display = 'none';
+}
+
+// ── Keyboard navigation ──────────────────────────────────
+let _selectedCardIdx = -1;
+let _visibleCards = [];
+
+function updateVisibleCards() {
+  _visibleCards = Array.from(document.querySelectorAll('.board .task-card'));
+  _selectedCardIdx = -1;
+}
+
+function highlightCard(idx) {
+  // Remove previous highlight
+  _visibleCards.forEach(c => c.style.outline = '');
+  if (idx >= 0 && idx < _visibleCards.length) {
+    _selectedCardIdx = idx;
+    const card = _visibleCards[idx];
+    card.style.outline = '2px solid var(--accent)';
+    card.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    if (document.getElementById('task-modal').style.display !== 'none') {
+      closeModal();
+    } else {
+      // Clear search on Escape
+      const searchEl = document.getElementById('search-input');
+      if (searchEl.value) {
+        searchEl.value = '';
+        searchQuery = '';
+        render();
+      }
+    }
+    return;
+  }
+
+  // Don't nav when typing in search
+  if (document.activeElement === document.getElementById('search-input')) {
+    return;
+  }
+
+  // Focus search with /
+  if (e.key === '/' && document.getElementById('task-modal').style.display === 'none') {
+    e.preventDefault();
+    document.getElementById('search-input').focus();
+    return;
+  }
+
+  // Card navigation with arrow keys
+  if (e.key === 'ArrowDown' || e.key === 'j') {
+    e.preventDefault();
+    if (!_visibleCards.length) updateVisibleCards();
+    highlightCard(Math.min(_selectedCardIdx + 1, _visibleCards.length - 1));
+  } else if (e.key === 'ArrowUp' || e.key === 'k') {
+    e.preventDefault();
+    if (!_visibleCards.length) updateVisibleCards();
+    highlightCard(Math.max(_selectedCardIdx - 1, 0));
+  } else if (e.key === 'Enter' && _selectedCardIdx >= 0) {
+    e.preventDefault();
+    _visibleCards[_selectedCardIdx]?.click();
+  }
+});
+
+function makeCard(task) {
+  const card = document.createElement('div');
+  card.className = 'task-card';
+  card.addEventListener('click', () => openTaskModal(task.id));
+
+  // Highlight recently moved cards (started or completed within last 2 days)
+  const now = new Date();
+  const twoDaysAgo = new Date(now);
+  twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
+  const movedDate = task.completed || task.started;
+  if (movedDate) {
+    try {
+      const d = new Date(movedDate);
+      if (d >= twoDaysAgo) card.classList.add('recently-moved');
+    } catch(e) {}
+  }
+
+  const p = (task.priority || '').toUpperCase();
+  const pClass = { P0:'p0-badge', P1:'p1-badge', P2:'p2-badge', P3:'p3-badge' }[p] || 'p3-badge';
+  const pLabel = p || '—';
+
+  const date = task.completed || task.started || task.created || '';
+
+  const hasTags = task.sub_repo || task.stage != null || task.estimate;
+  const depsCount = task.depends_on ? (Array.isArray(task.depends_on) ? task.depends_on.length : 1) : 0;
+
+  card.innerHTML = `
+    <div class="task-card-top">
+      <span class="task-id">${esc(task.id || '—')}</span>
+      ${p ? `<span class="priority-badge ${pClass}">${esc(pLabel)}</span>` : ''}
+    </div>
+    <div class="task-title">${esc(task.title || 'Untitled')}</div>
+    ${hasTags ? `<div class="task-card-tags">
+      ${task.stage != null ? `<span class="tag-stage">S${esc(String(task.stage))}</span>` : ''}
+      ${task.estimate ? `<span class="tag-estimate">${esc(task.estimate)}</span>` : ''}
+      ${task.sub_repo ? `<span class="tag-subrepo">${esc(task.sub_repo)}</span>` : ''}
+    </div>` : ''}
+    <div class="task-card-footer">
+      ${task._epicName ? `<span class="epic-tag">${esc(task._epicName)}</span>` : ''}
+      ${task.archive_reason ? `<span class="epic-tag" style="color:var(--stat-archived-color);border-color:var(--stat-archived-border);">${esc(task.archive_reason)}</span>` : ''}
+      ${task.docs ? `<span class="epic-tag" style="color:var(--accent);border-color:var(--p2-border);">docs</span>` : ''}
+      ${depsCount ? `<span class="epic-tag" style="color:var(--p1);border-color:var(--p1-border);">${depsCount} dep${depsCount > 1 ? 's' : ''}</span>` : ''}
+      ${task.branch ? `<span class="epic-tag" style="color:var(--progress);border-color:var(--stat-done-border);">${esc(task.branch)}${worktreesByBranch[task.branch] ? ' (wt)' : ''}</span>` : ''}
+      ${!task.branch && task.worktree ? `<span class="epic-tag" style="color:var(--progress);border-color:var(--stat-done-border);">worktree</span>` : ''}
+      ${date ? `<span class="task-date">${fmtTs(date)}</span>` : ''}
+    </div>
+  `;
+
+  return card;
+}
+
+function esc(s) {
+  return String(s)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;');
+}
+
+function fmtTs(s) {
+  // Format "2026-03-13T14:30" → "2026-03-13 14:30", pass through date-only as-is
+  if (!s) return '—';
+  const str = String(s);
+  if (str.includes('T')) {
+    const [d, t] = str.split('T');
+    return `${d} ${t}`;
+  }
+  return str;
+}
+
+// ── File picker ──────────────────────────────────────────
+document.getElementById('file-input').addEventListener('change', function(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(ev) {
+    try {
+      const data = jsyaml.load(ev.target.result);
+      ingestData(data);
+      setStatus('Loaded ' + file.name, 'ok');
+    } catch(err) {
+      setStatus('Parse error: ' + err.message, 'err');
+    }
+  };
+  reader.readAsText(file);
+});
+
+// ── Search ───────────────────────────────────────────────
+document.getElementById('search-input').addEventListener('input', function() {
+  searchQuery = this.value.trim();
+  render();
+});
+
+// ── Sort ─────────────────────────────────────────────────
+document.getElementById('sort-dir-btn').addEventListener('click', function() {
+  sortAsc = !sortAsc;
+  this.textContent = sortAsc ? '↓' : '↑';
+  this.title = sortAsc ? 'Ascending (click to reverse)' : 'Descending (click to reverse)';
+  render();
+});
+document.getElementById('sort-select').addEventListener('change', function() {
+  sortMode = this.value;
+  render();
+});
+
+// ── Epic select ──────────────────────────────────────────
+document.getElementById('epic-filter').addEventListener('change', function() {
+  activeEpic = this.value;
+  document.querySelectorAll('.epic-card').forEach(c => {
+    c.classList.toggle('active-filter', c.dataset.epicId === activeEpic);
+  });
+  render();
+});
+
+// ── Priority toggles ─────────────────────────────────────
+document.getElementById('priority-toggles').addEventListener('click', function(e) {
+  const btn = e.target.closest('.priority-btn');
+  if (!btn) return;
+  const p = btn.dataset.p;
+  if (activePriorities.has(p)) {
+    // Don't allow deselecting all
+    if (activePriorities.size === 1) return;
+    activePriorities.delete(p);
+    btn.classList.replace('active','inactive');
+  } else {
+    activePriorities.add(p);
+    btn.classList.replace('inactive','active');
+  }
+  render();
+});
+
+// ── Status helper ────────────────────────────────────────
+function setStatus(msg, cls) {
+  const el = document.getElementById('load-status');
+  el.textContent  = msg;
+  el.className    = 'load-indicator ' + (cls || '');
+}
+
+// ── Theme toggle ─────────────────────────────────────────
+(function() {
+  const saved = localStorage.getItem('backlog-theme');
+  if (saved) document.documentElement.setAttribute('data-theme', saved);
+  document.getElementById('theme-toggle').addEventListener('click', function() {
+    const current = document.documentElement.getAttribute('data-theme') || 'dark';
+    const next = current === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    localStorage.setItem('backlog-theme', next);
+    this.textContent = next === 'dark' ? '◑' : '◐';
+  });
+  const theme = document.documentElement.getAttribute('data-theme') || 'dark';
+  document.getElementById('theme-toggle').textContent = theme === 'dark' ? '◑' : '◐';
+})();
+
+// ── Auto-fetch + live polling ─────────────────────────────
+let _lastYamlText = null;
+
+async function fetchBacklog() {
+  try {
+    const resp = await fetch('backlog.yaml');
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const text = await resp.text();
+    if (text === _lastYamlText) return; // no changes
+    _lastYamlText = text;
+    const data = jsyaml.load(text);
+    ingestData(data);
+    setStatus('Live — updated ' + new Date().toLocaleTimeString(), 'ok');
+  } catch (err) {
+    // Only show error on first load; polling failures are silent
+    if (_lastYamlText === null) {
+      setStatus('No auto-load (use file picker)', '');
+      document.getElementById('load-bar').classList.remove('collapsed');
+    }
+  }
+}
+
+// Initial fetch
+fetchBacklog();
+
+// ── Worktree polling ───────────────────────────────────────
+let worktreesByBranch = {}; // branch → { path, repo, head }
+
+async function fetchWorktrees() {
+  try {
+    const resp = await fetch('/api/worktrees');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const newMap = {};
+    for (const wt of data) {
+      if (wt.branch) newMap[wt.branch] = wt;
+    }
+    const changed = JSON.stringify(newMap) !== JSON.stringify(worktreesByBranch);
+    worktreesByBranch = newMap;
+    if (changed && loadedData) render();
+  } catch (e) { /* worktree endpoint not available */ }
+}
+
+// ── Active session polling ─────────────────────────────────
+let _lastSessionId = null;
+
+async function fetchSession() {
+  try {
+    const resp = await fetch('/api/session');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const container = document.getElementById('active-session');
+    const taskEl = document.getElementById('active-session-task');
+
+    if (!data || !data.id) {
+      container.style.display = 'none';
+      _lastSessionId = null;
+      return;
+    }
+
+    if (data.id === _lastSessionId) return; // no change
+    _lastSessionId = data.id;
+
+    container.style.display = '';
+    taskEl.innerHTML = `
+      <div class="active-session-task">
+        <span class="as-id">${esc(data.id)}</span>
+        ${esc(data.title || '')}
+        <span class="as-epic">${esc(data.epic || '')}</span>
+      </div>
+    `;
+  } catch (e) {
+    // session endpoint not available — hide banner
+    document.getElementById('active-session').style.display = 'none';
+  }
+}
+
+// Poll every 3 seconds when served over HTTP
+if (window.location.protocol === 'http:' || window.location.protocol === 'https:') {
+  setInterval(fetchBacklog, 3000);
+  setInterval(fetchSession, 3000);
+  setInterval(fetchWorktrees, 10000); // worktrees change less often
+  fetchSession();
+  fetchWorktrees();
+}
+</script>
+
+<div id="task-modal" class="modal-backdrop" style="display:none;" onclick="if(event.target===this)closeModal()">
+  <div class="modal-content">
+    <button class="modal-close" onclick="closeModal()" title="Close (Esc)">&times;</button>
+    <div id="modal-body"></div>
+  </div>
+</div>
+</body>
+</html>

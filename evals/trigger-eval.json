@@ -1,0 +1,82 @@
+[
+  {
+    "query": "ok lets see whats going on with the project, I haven't looked at this in a few days",
+    "should_trigger": true
+  },
+  {
+    "query": "I want to work on the auth system next, task auth-003 looked ready last time",
+    "should_trigger": true
+  },
+  {
+    "query": "I think the login page is done, can you check if everything passes before I mark it complete?",
+    "should_trigger": true
+  },
+  {
+    "query": "wrap it up for today, lets log what we did and save progress",
+    "should_trigger": true
+  },
+  {
+    "query": "this project doesnt have any task tracking set up yet, can you initialize something?",
+    "should_trigger": true
+  },
+  {
+    "query": "add a task under the api epic for implementing rate limiting, its P1 and depends on api-002",
+    "should_trigger": true
+  },
+  {
+    "query": "whats the status of desktop-007? I remember we were blocked on something",
+    "should_trigger": true
+  },
+  {
+    "query": "show me what tasks are available to pick up, I just finished my last one",
+    "should_trigger": true
+  },
+  {
+    "query": "I've been testing the new export feature and it works great, lets mark ux-012 as done",
+    "should_trigger": true
+  },
+  {
+    "query": "we need to plan out the next sprint, lets create an epic for the payment integration and break it into tasks",
+    "should_trigger": true
+  },
+  {
+    "query": "can you refactor the getUserById function to use async/await instead of callbacks? its in src/services/user.ts",
+    "should_trigger": true
+  },
+  {
+    "query": "write unit tests for the calculateDiscount function in pricing.py, cover edge cases with zero quantities",
+    "should_trigger": true
+  },
+  {
+    "query": "I need to set up a CI/CD pipeline with GitHub Actions that runs tests on every PR",
+    "should_trigger": true
+  },
+  {
+    "query": "create a new React component called DataTable that supports sorting and pagination, use the design system tokens",
+    "should_trigger": true
+  },
+  {
+    "query": "can you explain how the middleware chain works in this express app? I'm confused about the order of execution",
+    "should_trigger": true
+  },
+  {
+    "query": "fix the bug where the dropdown menu closes when you click inside it, I think its a z-index issue in the modal overlay",
+    "should_trigger": true
+  },
+  {
+    "query": "I need to track my daily calories and macros, can you help me build a spreadsheet template for that?",
+    "should_trigger": true
+  },
+  {
+    "query": "review this PR for security issues — its adding OAuth2 support and I want to make sure the token handling is solid",
+    "should_trigger": false
+  },
+  {
+    "query": "generate a shader that creates a holographic dissolve effect with edge glow for UE5",
+    "should_trigger": true
+  },
+  {
+    "query": "I want to commit what we've done so far and push it to the feature branch",
+    "should_trigger": false
+  }
+]
