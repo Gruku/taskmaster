@@ -28,7 +28,7 @@ For ANY task-related request, invoke taskmaster:taskmaster first — it routes t
 | 'Pick task X', 'start task', 'what should I tackle' | taskmaster:pick-task |
 | 'Is this ready?', 'check my work', 'review gate' | taskmaster:review-gate |
 | 'End session', 'I'm done', 'wrap up', 'log this' | taskmaster:end-session |
-| 'Set up taskmaster', 'initialize backlog' | taskmaster:init |
+| 'Set up taskmaster', 'initialize backlog' | taskmaster:init-taskmaster |
 
 Milestone tools: backlog_add_milestone, backlog_milestone_status, backlog_advance_milestone.
 All other backlog_* MCP tools are available for direct task queries and mutations when you already know what to call."

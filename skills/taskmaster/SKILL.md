@@ -21,7 +21,7 @@ Read the user's message and match it to one of these intents:
 | Any implementation request when NO task is in-progress | `taskmaster:pick-task` first — find or create a task, then work in its worktree |
 | "Is this ready?", "run the review", "check my work", "I think this is done", "quality check" | `taskmaster:review-gate` |
 | "End session", "I'm done", "wrap up", "log this", "mark task done", "save progress" | `taskmaster:end-session` |
-| "Set up taskmaster", "initialize", "create backlog", first time in a project without backlog.yaml | `taskmaster:init` |
+| "Set up taskmaster", "initialize", "create backlog", first time in a project without backlog.yaml | `taskmaster:init-taskmaster` |
 | "Add a task", "create a task for X", "plan out this epic" | Direct tool call — use `backlog_add_task` or `backlog_add_epic` with appropriate fields |
 | "Show task X", "task details", "what's the status of X" | Direct tool call — use `backlog_get_task` or `backlog_status` |
 | "Search for X", "find tasks about X" | Direct tool call — use `backlog_search` |

@@ -23,9 +23,38 @@ mcp = FastMCP("taskmaster")
 
 SCRIPT_DIR = Path(__file__).parent
 ROOT = Path(os.environ.get("TASKMASTER_ROOT", Path.cwd()))
-BACKLOG_PATH = ROOT / "backlog.yaml"
-PROGRESS_PATH = ROOT / "PROGRESS.md"
 VIEWER_PATH = SCRIPT_DIR / "backlog-viewer.html"
+CONFIG_PATH = ROOT / ".claude" / "taskmaster.json"
+
+
+def _resolve_paths() -> tuple[Path, Path]:
+    """Resolve backlog.yaml and PROGRESS.md paths from config or defaults.
+
+    Priority: .claude/taskmaster.json config > .claude/backlog.yaml > ./backlog.yaml
+    """
+    if CONFIG_PATH.exists():
+        try:
+            config = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+            return (
+                ROOT / config.get("backlog_path", "backlog.yaml"),
+                ROOT / config.get("progress_path", "PROGRESS.md"),
+            )
+        except (json.JSONDecodeError, KeyError):
+            pass
+
+    # Auto-detect: check .claude/ first, then project root
+    if (ROOT / ".claude" / "backlog.yaml").exists():
+        return ROOT / ".claude" / "backlog.yaml", ROOT / ".claude" / "PROGRESS.md"
+    return ROOT / "backlog.yaml", ROOT / "PROGRESS.md"
+
+
+# Module-level accessors (resolved fresh each call via _load/_save)
+def _backlog_path() -> Path:
+    return _resolve_paths()[0]
+
+
+def _progress_path() -> Path:
+    return _resolve_paths()[1]
 
 
 # ── Session identity (unique per MCP server process) ─────
@@ -45,13 +74,15 @@ def _now() -> str:
 
 
 def _load() -> dict:
-    return yaml.safe_load(BACKLOG_PATH.read_text(encoding="utf-8"))
+    return yaml.safe_load(_backlog_path().read_text(encoding="utf-8"))
 
 
 def _save(data: dict) -> None:
     with _backlog_lock:
         data["meta"]["updated"] = _today()
-        BACKLOG_PATH.write_text(
+        bp = _backlog_path()
+        bp.parent.mkdir(parents=True, exist_ok=True)
+        bp.write_text(
             yaml.dump(data, default_flow_style=False, sort_keys=False, allow_unicode=True),
             encoding="utf-8",
         )
@@ -229,7 +260,7 @@ def regenerate_context(data: dict) -> None:
 
 def regenerate_progress_dashboard(data: dict) -> None:
     """Rewrite PROGRESS.md above the '## Changelog' line."""
-    progress_text = PROGRESS_PATH.read_text(encoding="utf-8")
+    progress_text = _progress_path().read_text(encoding="utf-8")
 
     changelog_marker = "## Changelog"
     idx = progress_text.find(changelog_marker)
@@ -310,7 +341,7 @@ def regenerate_progress_dashboard(data: dict) -> None:
     lines.append("\n---\n")
 
     dashboard = "\n".join(lines) + "\n"
-    PROGRESS_PATH.write_text(dashboard + changelog_section, encoding="utf-8")
+    _progress_path().write_text(dashboard + changelog_section, encoding="utf-8")
 
 
 def _mutate_and_save(data: dict) -> None:
@@ -878,21 +909,51 @@ def backlog_validate() -> str:
 
 
 @mcp.tool()
-def backlog_init(project_name: str = "") -> str:
-    """Initialize taskmaster in the current project. Creates backlog.yaml and PROGRESS.md if they don't exist.
+def backlog_init(project_name: str = "", location: str = "hidden") -> str:
+    """Initialize taskmaster in the current project. Creates config, backlog.yaml, and PROGRESS.md.
 
     Args:
         project_name: Name for the project. Defaults to the directory name.
+        location: Where to store backlog files.
+                  "hidden" — .claude/ directory (won't pollute repo, gitignored by default).
+                  "tracked" — project root (visible, can be committed to git for team visibility).
     """
+    if location not in ("hidden", "tracked"):
+        return f"Error: location must be 'hidden' or 'tracked', got '{location}'"
+
     if not project_name:
         project_name = ROOT.name
 
+    # Check if already initialized (check both locations)
+    for check_path in [ROOT / ".claude" / "backlog.yaml", ROOT / "backlog.yaml"]:
+        if check_path.exists():
+            rel = check_path.relative_to(ROOT)
+            return (
+                f"Already initialized — `backlog.yaml` exists at `{rel}`.\n"
+                f"Use `backlog_status` to see the current state."
+            )
+
+    # Determine paths based on location choice
+    if location == "hidden":
+        backlog_rel = ".claude/backlog.yaml"
+        progress_rel = ".claude/PROGRESS.md"
+    else:
+        backlog_rel = "backlog.yaml"
+        progress_rel = "PROGRESS.md"
+
+    backlog_abs = ROOT / backlog_rel
+    progress_abs = ROOT / progress_rel
+
     created = []
 
-    if BACKLOG_PATH.exists():
-        return f"Already initialized — `backlog.yaml` exists in `{ROOT}`"
+    # Write config so the server knows where to find files
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    config = {"backlog_path": backlog_rel, "progress_path": progress_rel}
+    CONFIG_PATH.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    created.append(".claude/taskmaster.json")
 
     # Create backlog.yaml
+    backlog_abs.parent.mkdir(parents=True, exist_ok=True)
     initial_data = {
         "meta": {
             "project": project_name,
@@ -909,16 +970,22 @@ def backlog_init(project_name: str = "") -> str:
         "epics": [],
         "milestones": [],
     }
-    _save(initial_data)
-    created.append("backlog.yaml")
+    backlog_abs.write_text(
+        yaml.dump(initial_data, default_flow_style=False, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    created.append(backlog_rel)
 
     # Create PROGRESS.md
-    if not PROGRESS_PATH.exists():
-        progress_content = f"# {project_name} Progress\n\n> Auto-generated from backlog.yaml — do not edit manually\n\n## Dashboard\n\n---\n\n## Changelog\n"
-        PROGRESS_PATH.write_text(progress_content, encoding="utf-8")
-        created.append("PROGRESS.md")
+    progress_content = f"# {project_name} Progress\n\n> Auto-generated from backlog.yaml — do not edit manually\n\n## Dashboard\n\n---\n\n## Changelog\n"
+    progress_abs.write_text(progress_content, encoding="utf-8")
+    created.append(progress_rel)
 
-    return f"Initialized taskmaster for **{project_name}** — created: {', '.join(created)}"
+    location_label = "`.claude/` (hidden from repo)" if location == "hidden" else "project root (trackable in git)"
+    return (
+        f"Initialized taskmaster for **{project_name}** in {location_label}\n"
+        f"Created: {', '.join(created)}"
+    )
 
 
 @mcp.tool()
@@ -1160,7 +1227,7 @@ def _append_changelog(
     entry = "\n".join(lines)
 
     # Insert into PROGRESS.md after ## Changelog
-    progress_text = PROGRESS_PATH.read_text(encoding="utf-8")
+    progress_text = _progress_path().read_text(encoding="utf-8")
     changelog_marker = "## Changelog"
     idx = progress_text.find(changelog_marker)
     if idx == -1:
@@ -1169,7 +1236,7 @@ def _append_changelog(
         insert_point = idx + len(changelog_marker)
         progress_text = progress_text[:insert_point] + "\n\n" + entry + progress_text[insert_point:]
 
-    PROGRESS_PATH.write_text(progress_text, encoding="utf-8")
+    _progress_path().write_text(progress_text, encoding="utf-8")
     return f"\n\n**Session logged** to PROGRESS.md changelog."
 
 
@@ -1356,7 +1423,7 @@ def backlog_last_session() -> str:
     """Get the most recent session summary from the PROGRESS.md changelog.
     Returns the last changelog entry (everything between the first and second ### headings)."""
     try:
-        text = PROGRESS_PATH.read_text(encoding="utf-8")
+        text = _progress_path().read_text(encoding="utf-8")
     except FileNotFoundError:
         return "No PROGRESS.md found."
 
@@ -1906,7 +1973,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
         if clean_path in ("/", "/index.html"):
             self._serve_file(VIEWER_PATH, "text/html")
         elif clean_path == "/backlog.yaml":
-            self._serve_file(BACKLOG_PATH, "text/yaml")
+            self._serve_file(_backlog_path(), "text/yaml")
         elif clean_path == "/api/backlog":
             self._serve_json()
         elif clean_path == "/api/session":
@@ -2002,7 +2069,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
 
     def _serve_json(self) -> None:
         try:
-            data = yaml.safe_load(BACKLOG_PATH.read_text(encoding="utf-8"))
+            data = yaml.safe_load(_backlog_path().read_text(encoding="utf-8"))
             body = json.dumps(data, default=str).encode("utf-8")
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "application/json; charset=utf-8")
