@@ -28,6 +28,7 @@ Read the user's message and match it to one of these intents:
 | "Create a milestone", "plan the next phase", "set up sprints" | Direct tool call — use `backlog_add_milestone` |
 | "Show milestone progress", "where are we in the milestone?" | Direct tool call — use `backlog_milestone_status` |
 | "Advance to next milestone", "this milestone is done" | Direct tool call — use `backlog_advance_milestone` |
+| "Check TODOs", "scan for TODOs", "are my TODOs tracked", "todo audit" | `taskmaster:check-todos` |
 
 ## Do NOT Route Through Taskmaster
 
