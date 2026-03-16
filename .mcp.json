@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "taskmaster": {
+      "command": "uv",
+      "args": ["run", "${CLAUDE_PLUGIN_ROOT}/backlog_server.py"]
+    }
+  }
+}
