@@ -11,15 +11,35 @@ This is the bridge between "I left a TODO in the code" and "it's actually in the
 
 ## Steps
 
-### 1. Scan the codebase
+### 1. Scan for task files
 
-Use Grep to find all work markers. Run these searches in parallel:
+First, look for dedicated task/planning files. Use Glob to find:
+
+```
+TODO.md, TODOS.md, TASKS.md, ROADMAP.md, BACKLOG.md
+```
+
+Also check subdirectories — some projects keep these per-module (e.g., `src/api/TODO.md`).
+
+If found, **read each file** and parse it as a structured task list:
+- Markdown checkboxes (`- [ ] item`, `- [x] done item`) → individual work items
+- Headings → potential epic/category groupings
+- Bullet points without checkboxes → also work items
+- Already-checked items (`[x]`) → note as "completed in TODO.md but may need a backlog task for cleanup"
+
+These files are a rich source of planned work — treat each unchecked item as a potential task.
+
+### 2. Scan for inline markers
+
+Use Grep to find all inline work markers in code files:
 
 ```
 Grep pattern: "TODO|FIXME|HACK|XXX" (case-insensitive)
 ```
 
-Exclude common noise directories: `node_modules`, `.git`, `vendor`, `dist`, `build`, `__pycache__`, `.next`, `.nuxt`, `coverage`, `.claude`.
+Exclude noise directories: `node_modules`, `.git`, `vendor`, `dist`, `build`, `__pycache__`, `.next`, `.nuxt`, `coverage`, `.claude`.
+
+**Also exclude the task files found in step 1** — they're already parsed structurally, don't double-count them as grep hits.
 
 Collect results as a list of:
 - **File path** and **line number**
@@ -27,13 +47,13 @@ Collect results as a list of:
 - **Text** — the comment content after the marker
 - **Context** — the surrounding code (1-2 lines) to understand what it relates to
 
-If there are more than 50 results, group by directory first and report counts. Only show individual items for the top areas.
+If there are more than 50 inline results, group by directory first and report counts. Only show individual items for the top areas.
 
-### 2. Load the backlog
+### 3. Load the backlog
 
-Call `backlog_search` with key terms from each TODO to check if it's already tracked. Also call `backlog_list_tasks` to get the full task list for matching.
+Call `backlog_search` with key terms from each item to check if it's already tracked. Also call `backlog_list_tasks` to get the full task list for matching.
 
-### 3. Cross-reference
+### 4. Cross-reference
 
 For each TODO found, determine its status:
 
@@ -46,14 +66,15 @@ For each TODO found, determine its status:
 
 **Stale candidates** — Tasks that reference files/lines where the TODO no longer exists (the TODO may have been resolved but the task wasn't updated). Flag these for review, don't assert they're stale — the task may have evolved beyond the original TODO.
 
-### 4. Present the report
+### 5. Present the report
 
 Structure the output as:
 
 ```
 ## TODO Audit — {project name}
 
-**Scanned:** {N} files, found {M} work markers
+**Task files found:** {list of TODO.md etc., or "none"}
+**Inline markers:** {M} across {N} files
 
 ### Coverage
 - Tracked: {X} ({pct}%) — already have matching tasks
@@ -85,7 +106,7 @@ Structure the output as:
 - XXX → P1 (needs urgent attention)
 - TODO → P2 (planned work, not broken)
 
-### 5. Offer actions
+### 6. Offer actions
 
 After the report, offer:
 
@@ -115,3 +136,6 @@ This skill works well as a periodic check-in. Suggest to the user:
 - **TODOs in tests** — These are often intentional test stubs. Flag them separately and default to lower priority (P3).
 - **TODOs in third-party/generated code** — Skip files in vendor/, node_modules/, dist/, generated/ directories.
 - **No backlog exists** — Suggest running `/init-taskmaster` first.
+- **TODO.md with checkboxes** — Parse `- [ ]` as open items and `- [x]` as completed. Completed items may still need backlog tasks if follow-up work remains (cleanup, tests, docs).
+- **Multiple TODO.md files** — Some projects keep per-module TODO files (e.g., `src/api/TODO.md`, `src/auth/TODO.md`). Find all of them and group results by location. The directory name is a strong hint for which epic the items belong to.
+- **TODO.md items that are already tasks** — When creating tasks from TODO.md items, add `Source: TODO.md line N` in the task notes. On future scans, this enables matching.
