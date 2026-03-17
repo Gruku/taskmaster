@@ -79,6 +79,8 @@ If the user chose analyze:
 
 4. **Present the proposed backlog to the user:**
 
+   First, output your findings as text:
+
    > **Here's what I found:**
    >
    > **Proposed Epics:**
@@ -90,8 +92,29 @@ If the user chose analyze:
    > - [list each with source: "TODO in src/api/routes.ts:45"]
    >
    > **Proposed Milestone:** "Cleanup & Foundation" — group the FIXMEs and HACKs
-   >
-   > Want me to create this backlog, or do you want to adjust it first?
+
+   Then use `AskUserQuestion` to get explicit approval:
+
+   ```
+   AskUserQuestion({
+     questions: [
+       {
+         question: "Should I create this backlog?",
+         header: "Approval",
+         multiSelect: false,
+         options: [
+           { label: "Create it", description: "Add the proposed epics, tasks, and milestone to the backlog" },
+           { label: "Adjust first", description: "I want to change some things before you create it" },
+           { label: "Cancel", description: "Don't create anything, I'll set it up manually" }
+         ]
+       }
+     ]
+   })
+   ```
+
+   - "Create it" → proceed to step 5
+   - "Adjust first" → ask what they want to change, update the proposal, then re-ask
+   - "Cancel" → stop, tell them they can run `/init-taskmaster` again later
 
 5. **After user approval**, create the epics, tasks, and milestone using the MCP tools (do NOT write the YAML file directly — the server owns the schema):
    - `backlog_add_epic` for each epic
