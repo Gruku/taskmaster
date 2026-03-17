@@ -129,17 +129,20 @@
       display: flex;
       align-items: center;
       gap: 10px;
-      padding: 6px 14px 6px 8px;
-      background: color-mix(in srgb, var(--project-color, var(--accent)) 12%, var(--surface));
-      border: 1.5px solid color-mix(in srgb, var(--project-color, var(--accent)) 25%, var(--border));
-      border-radius: 12px;
-      transition: border-color 0.2s, background 0.2s;
+      padding: 6px 20px 6px 8px;
+      margin: -12px -24px -12px -24px;
+      padding-left: 24px;
+      background: linear-gradient(90deg,
+        color-mix(in srgb, var(--project-color, var(--accent)) 15%, transparent) 0%,
+        color-mix(in srgb, var(--project-color, var(--accent)) 8%, transparent) 60%,
+        transparent 100%
+      );
     }
 
     /* ── Project icon ───────────────────────────────────── */
     .header-logo {
-      background: color-mix(in srgb, var(--project-color, var(--accent)) 20%, var(--surface2));
-      border: 1.5px solid color-mix(in srgb, var(--project-color, var(--accent)) 35%, var(--border));
+      background: color-mix(in srgb, var(--project-color, var(--accent)) 18%, var(--surface2));
+      border: 1.5px solid color-mix(in srgb, var(--project-color, var(--accent)) 30%, var(--border));
       border-radius: 8px;
       cursor: pointer;
       display: flex;
@@ -2649,7 +2652,7 @@ function setStatus(msg, cls) {
     if (legacy === 'light') { base = 'light'; colored = false; }
     else if (legacy === 'colored') { base = 'dark'; colored = true; }
     else if (legacy === 'light-colored') { base = 'light'; colored = true; }
-    else { base = 'dark'; colored = false; }
+    else { base = 'dark'; colored = true; }
     localStorage.removeItem('backlog-theme');
   }
 
