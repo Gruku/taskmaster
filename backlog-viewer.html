@@ -109,29 +109,29 @@
 
     /* ── Colored overlay — light base ────────────────── */
     [data-theme="light-colored"] {
-      --border:    color-mix(in srgb, var(--project-color) 20%, #c4c9d4);
-      --border-subtle: color-mix(in srgb, var(--project-color) 12%, #cdd3dc);
-      --p2:        color-mix(in srgb, var(--project-color) 60%, #2563eb);
-      --progress:  color-mix(in srgb, var(--project-color) 30%, #16a34a);
-      --accent:    color-mix(in srgb, var(--project-color) 80%, #2563eb);
-      --accent-dim: color-mix(in srgb, var(--project-color) 15%, #b0c8f0);
-      --stat-progress-bg: color-mix(in srgb, var(--project-color) 8%, #e0ebfa);
-      --stat-progress-border: color-mix(in srgb, var(--project-color) 25%, #2563eb);
-      --p2-bg: color-mix(in srgb, var(--project-color) 6%, #e0ebfa);
-      --p2-border: color-mix(in srgb, var(--project-color) 12%, #a8c8f0);
-      --card-hover-border: color-mix(in srgb, var(--project-color) 25%, #8892a0);
-      --header-bg: linear-gradient(180deg, color-mix(in srgb, var(--project-color) 5%, #e4e6eb) 0%, #e0e2e8 100%);
-      --glow-accent: color-mix(in srgb, var(--project-color) 4%, transparent);
+      --border:    color-mix(in srgb, var(--project-color) 30%, #c4c9d4);
+      --border-subtle: color-mix(in srgb, var(--project-color) 20%, #cdd3dc);
+      --p2:        color-mix(in srgb, var(--project-color) 70%, #2563eb);
+      --progress:  color-mix(in srgb, var(--project-color) 40%, #16a34a);
+      --accent:    color-mix(in srgb, var(--project-color) 85%, #2563eb);
+      --accent-dim: color-mix(in srgb, var(--project-color) 25%, #b0c8f0);
+      --stat-progress-bg: color-mix(in srgb, var(--project-color) 12%, #e0ebfa);
+      --stat-progress-border: color-mix(in srgb, var(--project-color) 40%, #2563eb);
+      --p2-bg: color-mix(in srgb, var(--project-color) 10%, #e0ebfa);
+      --p2-border: color-mix(in srgb, var(--project-color) 20%, #a8c8f0);
+      --card-hover-border: color-mix(in srgb, var(--project-color) 35%, #8892a0);
+      --header-bg: linear-gradient(180deg, color-mix(in srgb, var(--project-color) 10%, #e4e6eb) 0%, color-mix(in srgb, var(--project-color) 5%, #e0e2e8) 100%);
+      --glow-accent: color-mix(in srgb, var(--project-color) 8%, transparent);
     }
 
     /* ── Project color pill ────────────────────────────── */
     .project-pill {
-      height: 18px;
-      width: 4px;
+      height: 6px;
+      width: 36px;
       border-radius: 3px;
       background: var(--project-color, var(--accent));
       flex-shrink: 0;
-      box-shadow: 0 0 6px color-mix(in srgb, var(--project-color, var(--accent)) 50%, transparent);
+      box-shadow: 0 0 8px color-mix(in srgb, var(--project-color, var(--accent)) 40%, transparent);
     }
 
     html, body {
@@ -400,7 +400,7 @@
       gap: 14px;
     }
 
-    [data-theme="light"] .active-session {
+    [data-theme="light"] .active-session, [data-theme="light-colored"] .active-session {
       background: linear-gradient(90deg, #ddf5e8, #cceedd);
       border-bottom-color: #16a34a;
     }
@@ -464,7 +464,7 @@
       gap: 14px;
     }
 
-    [data-theme="light"] .now-working {
+    [data-theme="light"] .now-working, [data-theme="light-colored"] .now-working {
       background: var(--stat-progress-bg);
     }
 
@@ -719,10 +719,10 @@
     .status-done     { background: #0f1f16; color: #3fb950; border-color: #1a5c2e; }
     .status-inactive { background: var(--surface2); color: var(--text-dim); border-color: var(--border); }
 
-    [data-theme="light"] .status-active   { background: #ddf5e8; color: #15803d; border-color: #86d9a0; }
-    [data-theme="light"] .status-planned  { background: var(--surface2); color: var(--text-muted); border-color: var(--border); }
-    [data-theme="light"] .status-done     { background: #ddf5e8; color: #15803d; border-color: #86d9a0; }
-    [data-theme="light"] .status-inactive { background: var(--surface2); color: var(--text-dim); border-color: var(--border); }
+    [data-theme="light"] .status-active, [data-theme="light-colored"] .status-active     { background: #ddf5e8; color: #15803d; border-color: #86d9a0; }
+    [data-theme="light"] .status-planned, [data-theme="light-colored"] .status-planned  { background: var(--surface2); color: var(--text-muted); border-color: var(--border); }
+    [data-theme="light"] .status-done, [data-theme="light-colored"] .status-done        { background: #ddf5e8; color: #15803d; border-color: #86d9a0; }
+    [data-theme="light"] .status-inactive, [data-theme="light-colored"] .status-inactive { background: var(--surface2); color: var(--text-dim); border-color: var(--border); }
 
     .epic-progress-bar {
       height: 4px;
