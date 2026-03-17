@@ -42,9 +42,12 @@ def _resolve_paths() -> tuple[Path, Path]:
         except (json.JSONDecodeError, KeyError):
             pass
 
-    # Auto-detect: check .claude/ first, then project root
+    # Auto-detect: check .claude/ first, then .taskmaster/, then project root
     if (ROOT / ".claude" / "backlog.yaml").exists():
         return ROOT / ".claude" / "backlog.yaml", ROOT / ".claude" / "PROGRESS.md"
+    if (ROOT / ".taskmaster" / "backlog.yaml").exists():
+        return ROOT / ".taskmaster" / "backlog.yaml", ROOT / ".taskmaster" / "PROGRESS.md"
+    # Legacy: project root (before .taskmaster/ was introduced)
     return ROOT / "backlog.yaml", ROOT / "PROGRESS.md"
 
 
@@ -924,8 +927,8 @@ def backlog_init(project_name: str = "", location: str = "hidden") -> str:
     if not project_name:
         project_name = ROOT.name
 
-    # Check if already initialized (check both locations)
-    for check_path in [ROOT / ".claude" / "backlog.yaml", ROOT / "backlog.yaml"]:
+    # Check if already initialized (check all locations)
+    for check_path in [ROOT / ".claude" / "backlog.yaml", ROOT / ".taskmaster" / "backlog.yaml", ROOT / "backlog.yaml"]:
         if check_path.exists():
             rel = check_path.relative_to(ROOT)
             return (
@@ -938,8 +941,8 @@ def backlog_init(project_name: str = "", location: str = "hidden") -> str:
         backlog_rel = ".claude/backlog.yaml"
         progress_rel = ".claude/PROGRESS.md"
     else:
-        backlog_rel = "backlog.yaml"
-        progress_rel = "PROGRESS.md"
+        backlog_rel = ".taskmaster/backlog.yaml"
+        progress_rel = ".taskmaster/PROGRESS.md"
 
     backlog_abs = ROOT / backlog_rel
     progress_abs = ROOT / progress_rel
@@ -981,7 +984,7 @@ def backlog_init(project_name: str = "", location: str = "hidden") -> str:
     progress_abs.write_text(progress_content, encoding="utf-8")
     created.append(progress_rel)
 
-    location_label = "`.claude/` (hidden from repo)" if location == "hidden" else "project root (trackable in git)"
+    location_label = "`.claude/` (hidden from repo)" if location == "hidden" else "`.taskmaster/` (trackable in git)"
     return (
         f"Initialized taskmaster for **{project_name}** in {location_label}\n"
         f"Created: {', '.join(created)}"

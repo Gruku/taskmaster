@@ -26,7 +26,7 @@ AskUserQuestion({
       multiSelect: false,
       options: [
         { label: "Hidden (Recommended)", description: ".claude/ directory — stays out of your repo, good for personal tracking" },
-        { label: "Tracked", description: "Project root — visible files you can commit to git, good for team visibility" }
+        { label: "Tracked", description: ".taskmaster/ directory — visible files you can commit to git, good for team visibility" }
       ]
     },
     {
