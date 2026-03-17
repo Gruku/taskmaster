@@ -7,6 +7,8 @@ description: "Set up Taskmaster in the current project. Invoke when the user wan
 
 Set up AI-powered task management in the current project. Offers two modes: clean start or analyze existing work.
 
+> **CRITICAL: Never write `backlog.yaml` directly.** All backlog mutations MUST go through the `backlog_*` MCP tools (`backlog_init`, `backlog_add_epic`, `backlog_add_task`, `backlog_add_milestone`). The schema is owned by the server — writing the file manually will produce an incompatible format that breaks the viewer and all other tools.
+
 ## Step 1: Check if already initialized
 
 Call `backlog_init` with no arguments — if it reports "already initialized", call `backlog_status` instead and show the user what's there. Skip the rest of these steps.
@@ -80,15 +82,17 @@ If the user chose analyze:
    >
    > Want me to create this backlog, or do you want to adjust it first?
 
-5. **After user approval**, create the epics, tasks, and milestone using the MCP tools:
+5. **After user approval**, create the epics, tasks, and milestone using the MCP tools (do NOT write the YAML file directly — the server owns the schema):
    - `backlog_add_epic` for each epic
    - `backlog_add_task` for each task (include the source file:line in notes)
    - `backlog_add_milestone` for the initial milestone
    - Assign tasks to the milestone
 
-## Step 5: Confirm
+## Step 5: Open the viewer and confirm
 
-Show the result: "Taskmaster is set up! Use `/start-session` to see your dashboard."
+1. Call `backlog_open_viewer` to open the backlog dashboard in the browser.
+2. Show the result: "Taskmaster is set up! Use `/start-session` to see your dashboard."
+3. **Tell the user:** if MCP tools stop responding or return connection errors in a future session, run `/mcp` to reconnect to the Taskmaster server.
 
 ## Edge Cases
 

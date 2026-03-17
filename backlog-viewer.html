@@ -601,6 +601,10 @@
       color: var(--stat-done-color);
     }
 
+    .ms-step.ms-selected {
+      box-shadow: 0 0 0 2px var(--accent);
+    }
+
     /* ── Epic progress ───────────────────────────────────── */
     .epics-section {
       padding: 8px 24px 0;
@@ -1441,6 +1445,12 @@
       <option value="all">All epics</option>
     </select>
   </div>
+  <div class="filter-group" id="milestone-filter-group" style="display:none;">
+    <span class="filter-label">Milestone</span>
+    <select class="filter-select" id="milestone-filter">
+      <option value="all">All milestones</option>
+    </select>
+  </div>
   <div class="filter-group">
     <span class="filter-label">Priority</span>
     <div class="priority-toggles" id="priority-toggles">
@@ -1546,6 +1556,7 @@
 let allTasks     = [];
 let allEpics     = [];
 let activeEpic   = 'all';
+let activeMilestone = 'all';
 let activePriorities = new Set(['P0','P1','P2','P3']);
 let searchQuery  = '';
 let sortMode     = 'priority';
@@ -1617,6 +1628,37 @@ function ingestData(data) {
     sel.value  = 'all';
   }
 
+  // Milestone dropdown — populate and auto-select active milestone
+  const msSel = document.getElementById('milestone-filter');
+  const msGroup = document.getElementById('milestone-filter-group');
+  const milestones = (data.milestones || []).filter(m => m.status !== 'archived');
+  const prevMs = activeMilestone;
+  while (msSel.options.length > 1) msSel.remove(1);
+  if (milestones.length) {
+    msGroup.style.display = '';
+    for (const ms of milestones) {
+      const opt = document.createElement('option');
+      opt.value = ms.id;
+      opt.textContent = ms.name || ms.id;
+      msSel.appendChild(opt);
+    }
+    // Restore previous selection, or auto-select active milestone on first load
+    if (prevMs !== 'all' && milestones.some(m => m.id === prevMs)) {
+      activeMilestone = prevMs;
+      msSel.value = prevMs;
+    } else if (prevMs === 'all') {
+      // Auto-select the active milestone on first load
+      const activeMs = milestones.find(m => m.status === 'active');
+      if (activeMs) {
+        activeMilestone = activeMs.id;
+        msSel.value = activeMs.id;
+      }
+    }
+  } else {
+    msGroup.style.display = 'none';
+    activeMilestone = 'all';
+  }
+
   renderMilestones();
   renderEpics();
   render();
@@ -1635,11 +1677,15 @@ function renderMilestones() {
   const sorted = [...milestones].sort((a, b) => (a.order || 999) - (b.order || 999));
   const active = sorted.find(m => m.status === 'active');
 
-  if (active) {
-    // Count tasks in active milestone
+  // Show banner for the selected milestone (or the active one if none selected)
+  const displayed = (activeMilestone !== 'all')
+    ? sorted.find(m => m.id === activeMilestone)
+    : active;
+
+  if (displayed) {
     let total = 0, done = 0;
     for (const t of allTasks) {
-      if (t.milestone === active.id) {
+      if (t.milestone === displayed.id) {
         const s = colKey(t.status);
         if (s === 'archived') continue;
         total++;
@@ -1651,25 +1697,44 @@ function renderMilestones() {
     banner.innerHTML += `
       <div class="milestone-banner">
         <span class="ms-label">Milestone</span>
-        <span class="ms-name">${esc(active.name)}</span>
+        <span class="ms-name">${esc(displayed.name)}</span>
         <div class="ms-progress-bar"><div class="ms-progress-fill" style="width:${pct}%"></div></div>
         <span class="ms-stats">${done}/${total} done (${pct}%)</span>
       </div>
     `;
   }
 
-  // Steps indicator
+  // Steps indicator — clickable to filter by milestone
   if (sorted.length > 1) {
     let stepsHtml = '<div class="milestone-steps">';
     for (const ms of sorted) {
       if (ms.status === 'archived') continue;
-      const cls = ms.status === 'active' ? 'ms-active' : ms.status === 'done' ? 'ms-done' : '';
+      const statusCls = ms.status === 'active' ? 'ms-active' : ms.status === 'done' ? 'ms-done' : '';
+      const selectedCls = activeMilestone === ms.id ? ' ms-selected' : '';
       const icon = ms.status === 'done' ? '✓ ' : ms.status === 'active' ? '▶ ' : '';
-      stepsHtml += `<span class="ms-step ${cls}">${icon}${esc(ms.name)}</span>`;
+      stepsHtml += `<span class="ms-step ${statusCls}${selectedCls}" data-ms-id="${esc(ms.id)}" style="cursor:pointer">${icon}${esc(ms.name)}</span>`;
       if (ms !== sorted[sorted.length - 1] && ms.status !== 'archived') stepsHtml += '<span style="color:var(--text-dim);font-size:10px">→</span>';
     }
     stepsHtml += '</div>';
     banner.innerHTML += stepsHtml;
+
+    // Click handler for milestone steps
+    banner.querySelectorAll('.ms-step[data-ms-id]').forEach(step => {
+      step.addEventListener('click', () => {
+        const msId = step.dataset.msId;
+        const msSel = document.getElementById('milestone-filter');
+        if (activeMilestone === msId) {
+          activeMilestone = 'all';
+          msSel.value = 'all';
+        } else {
+          activeMilestone = msId;
+          msSel.value = msId;
+        }
+        renderMilestones();
+        renderEpics();
+        render();
+      });
+    });
   }
 }
 
@@ -1703,8 +1768,15 @@ function renderEpics() {
   if (!allEpics.length) { section.style.display = 'none'; return; }
   section.style.display = '';
 
+  let visibleCount = 0;
   for (const epic of allEpics) {
-    const tasks = (epic.tasks || []);
+    let tasks = (epic.tasks || []);
+    // When a milestone is selected, only show epics that have tasks in that milestone
+    if (activeMilestone !== 'all') {
+      tasks = tasks.filter(t => t.milestone === activeMilestone);
+      if (!tasks.length) continue; // hide epic entirely
+    }
+    visibleCount++;
     const archived = tasks.filter(t => colKey(t.status) === 'archived').length;
     const activeTasks = tasks.filter(t => colKey(t.status) !== 'archived');
     const total = activeTasks.length;
@@ -1763,6 +1835,8 @@ function renderEpics() {
 
     grid.appendChild(card);
   }
+  // Hide epics section if milestone filter hides all epics
+  if (!visibleCount) section.style.display = 'none';
 }
 
 // ── Now Working On banner ────────────────────────────────
@@ -1796,6 +1870,9 @@ function render() {
 
   // Filter
   let tasks = allTasks;
+  if (activeMilestone !== 'all') {
+    tasks = tasks.filter(t => t.milestone === activeMilestone);
+  }
   if (activeEpic !== 'all') {
     tasks = tasks.filter(t => t._epicId === activeEpic);
   }
@@ -1846,8 +1923,10 @@ function render() {
     tasks = [...tasks].sort(sorters[sortMode]);
   }
 
-  // Stats (over all tasks, not filtered — feels more useful)
-  const statsSource = activeEpic === 'all' ? allTasks : allTasks.filter(t => t._epicId === activeEpic);
+  // Stats — scope to active milestone/epic filters (not search/priority)
+  let statsSource = allTasks;
+  if (activeMilestone !== 'all') statsSource = statsSource.filter(t => t.milestone === activeMilestone);
+  if (activeEpic !== 'all') statsSource = statsSource.filter(t => t._epicId === activeEpic);
   const stats = computeStats(statsSource);
   document.getElementById('stat-total').textContent    = stats.total;
   document.getElementById('stat-done').textContent     = stats.done;
@@ -2323,6 +2402,14 @@ document.getElementById('epic-filter').addEventListener('change', function() {
   document.querySelectorAll('.epic-card').forEach(c => {
     c.classList.toggle('active-filter', c.dataset.epicId === activeEpic);
   });
+  render();
+});
+
+// ── Milestone select ─────────────────────────────────────
+document.getElementById('milestone-filter').addEventListener('change', function() {
+  activeMilestone = this.value;
+  renderMilestones();
+  renderEpics();
   render();
 });
 
