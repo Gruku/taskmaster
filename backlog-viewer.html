@@ -124,14 +124,68 @@
       --glow-accent: color-mix(in srgb, var(--project-color) 8%, transparent);
     }
 
-    /* ── Project color pill ────────────────────────────── */
-    .project-pill {
-      height: 6px;
-      width: 36px;
-      border-radius: 3px;
-      background: var(--project-color, var(--accent));
-      flex-shrink: 0;
-      box-shadow: 0 0 8px color-mix(in srgb, var(--project-color, var(--accent)) 40%, transparent);
+    /* ── Project icon ───────────────────────────────────── */
+    .header-logo {
+      background: color-mix(in srgb, var(--project-color, var(--accent)) 15%, var(--surface2));
+      border: 1.5px solid color-mix(in srgb, var(--project-color, var(--accent)) 30%, var(--border));
+      border-radius: 10px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
+      position: relative;
+    }
+
+    .header-logo:hover {
+      border-color: var(--project-color, var(--accent));
+      box-shadow: 0 0 10px color-mix(in srgb, var(--project-color, var(--accent)) 25%, transparent);
+    }
+
+    .header-logo .logo-emoji {
+      font-size: 16px;
+      line-height: 1;
+    }
+
+    /* ── Icon picker popover ─────────────────────────── */
+    .icon-picker {
+      position: absolute;
+      top: calc(100% + 8px);
+      left: 0;
+      background: var(--surface);
+      border: 1.5px solid var(--border);
+      border-radius: 12px;
+      padding: 10px;
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 4px;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.4);
+      z-index: 200;
+      min-width: 210px;
+    }
+
+    .icon-picker-item {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      border: 1.5px solid transparent;
+      background: transparent;
+      font-size: 16px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.15s, border-color 0.15s;
+    }
+
+    .icon-picker-item:hover {
+      background: var(--surface3);
+      border-color: var(--border);
+    }
+
+    .icon-picker-item.selected {
+      background: color-mix(in srgb, var(--project-color, var(--accent)) 15%, var(--surface2));
+      border-color: var(--project-color, var(--accent));
     }
 
     html, body {
@@ -173,14 +227,14 @@
     }
 
     .header-logo {
-      width: 30px;
-      height: 30px;
+      width: 34px;
+      height: 34px;
       flex-shrink: 0;
     }
 
     .header-logo svg {
-      width: 30px;
-      height: 30px;
+      width: 20px;
+      height: 20px;
       display: block;
     }
 
@@ -1447,20 +1501,14 @@
 <!-- Header -->
 <header class="header">
   <div class="header-left">
-    <div class="header-logo"><svg viewBox="0 0 30 30" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <rect x="5" y="3" width="20" height="24" rx="3" fill="var(--surface2)" stroke="var(--border)" stroke-width="1.5"/>
-      <rect x="10" y="1.5" width="10" height="4" rx="1.5" fill="var(--surface3)" stroke="var(--border)" stroke-width="1.2"/>
-      <line x1="9" y1="12" x2="21" y2="12" stroke="var(--border)" stroke-width="1.5" stroke-linecap="round"/>
-      <line x1="9" y1="16.5" x2="21" y2="16.5" stroke="var(--border)" stroke-width="1.5" stroke-linecap="round"/>
-      <line x1="9" y1="21" x2="16" y2="21" stroke="var(--border)" stroke-width="1.5" stroke-linecap="round"/>
-      <polyline points="17,19.5 19,22 23,18" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-    </svg></div>
+    <div class="header-logo" id="project-icon" title="Click to change icon">
+      <span class="logo-emoji" id="logo-emoji"></span>
+    </div>
     <div>
       <div class="header-title" id="project-name">Taskmaster</div>
       <div class="header-subtitle" id="project-updated">Task Management</div>
     </div>
     <span class="read-only-badge">READ-ONLY · AI Workflow Viewer</span>
-    <div class="project-pill" id="project-pip"></div>
   </div>
   <div class="header-right">
     <span class="stat-chip stat-total"><span class="stat-num" id="stat-total">0</span> total</span>
@@ -1617,7 +1665,6 @@ function projectColor(name) {
   for (let i = 0; i < name.length; i++) {
     hash = ((hash << 5) - hash + name.charCodeAt(i)) | 0;
   }
-  // Use a high saturation pastel: fixed S=70%, L=65% with hue from hash
   const hue = ((hash % 360) + 360) % 360;
   return `hsl(${hue}, 70%, 65%)`;
 }
@@ -1625,9 +1672,74 @@ function projectColor(name) {
 function applyProjectColor(name) {
   const color = projectColor(name);
   document.documentElement.style.setProperty('--project-color', color);
-  document.getElementById('project-pip').style.background = color;
-  document.getElementById('project-pip').style.boxShadow = `0 0 6px ${color}80`;
+  // Update page title with icon
+  const icon = getProjectIcon(name);
+  document.title = `${icon} ${name}`;
 }
+
+// ── Project icon picker ──────────────────────────────────
+const PROJECT_ICONS = [
+  '📋', '🚀', '⚡', '🔧', '🎯', '💎',
+  '🏗️', '🔬', '🎨', '🛡️', '📦', '🌐',
+  '🤖', '🧪', '🔥', '💡', '🎮', '📱',
+  '🖥️', '🗂️', '⚙️', '🧩', '🔮', '📡',
+  '🪐', '🌿', '🎵', '📊', '🔑', '🏆',
+];
+
+function iconStorageKey(name) {
+  return `backlog-icon-${name}`;
+}
+
+function getProjectIcon(name) {
+  return localStorage.getItem(iconStorageKey(name)) || '📋';
+}
+
+function setProjectIcon(name, icon) {
+  localStorage.setItem(iconStorageKey(name), icon);
+  document.getElementById('logo-emoji').textContent = icon;
+  document.title = `${icon} ${name}`;
+}
+
+function initIconPicker() {
+  const logo = document.getElementById('project-icon');
+  let pickerOpen = false;
+  let pickerEl = null;
+
+  logo.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (pickerOpen) { closePicker(); return; }
+
+    const name = (loadedData && loadedData.meta && loadedData.meta.project) || 'Taskmaster';
+    const currentIcon = getProjectIcon(name);
+    pickerEl = document.createElement('div');
+    pickerEl.className = 'icon-picker';
+    for (const icon of PROJECT_ICONS) {
+      const btn = document.createElement('button');
+      btn.className = 'icon-picker-item' + (icon === currentIcon ? ' selected' : '');
+      btn.textContent = icon;
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        setProjectIcon(name, icon);
+        closePicker();
+      });
+      pickerEl.appendChild(btn);
+    }
+    logo.appendChild(pickerEl);
+    pickerOpen = true;
+
+    // Close on outside click
+    setTimeout(() => document.addEventListener('click', outsideClick), 0);
+  });
+
+  function outsideClick() { closePicker(); }
+  function closePicker() {
+    if (pickerEl && pickerEl.parentNode) pickerEl.remove();
+    pickerOpen = false;
+    document.removeEventListener('click', outsideClick);
+  }
+}
+
+initIconPicker();
 
 // ── Column map ───────────────────────────────────────────
 const COL_MAP = {
@@ -1667,6 +1779,7 @@ function ingestData(data) {
   const projectName = meta.project || 'Taskmaster';
   document.getElementById('project-name').textContent = projectName;
   applyProjectColor(projectName);
+  document.getElementById('logo-emoji').textContent = getProjectIcon(projectName);
   if (meta.updated) {
     document.getElementById('project-updated').textContent = 'Updated ' + meta.updated;
   } else {
