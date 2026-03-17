@@ -706,10 +706,114 @@
       border-color: var(--stat-done-border);
       background: var(--stat-done-bg);
       color: var(--stat-done-color);
+      cursor: pointer;
+      opacity: 0.7;
+      transition: opacity 0.15s;
     }
 
     .ms-step.ms-selected {
       box-shadow: 0 0 0 2px var(--accent);
+    }
+
+    .ms-step.ms-done:hover {
+      opacity: 1;
+    }
+
+    .ms-step.ms-done.ms-selected {
+      opacity: 1;
+      box-shadow: 0 0 0 2px var(--stat-done-color);
+    }
+
+    /* ── Milestone date info ─────────────────────────────── */
+    .ms-date-info {
+      font-size: var(--fs-xs);
+      color: var(--text-muted);
+      margin-left: 8px;
+    }
+
+    .ms-date-info.ms-overdue {
+      color: var(--stat-blocked-color);
+      font-weight: 600;
+    }
+
+    .ms-date-info.ms-due-soon {
+      color: var(--stat-todo-color, #e3b341);
+      font-weight: 600;
+    }
+
+    /* ── Milestone history panel ─────────────────────────── */
+    .ms-history-toggle {
+      font-size: var(--fs-xs);
+      color: var(--text-muted);
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 2px 6px;
+      border-radius: 4px;
+      margin-top: 4px;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+
+    .ms-history-toggle:hover {
+      color: var(--text);
+    }
+
+    .ms-history-panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 12px;
+      margin-top: 6px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .ms-history-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 6px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: var(--fs-sm);
+      color: var(--text);
+      transition: background 0.15s;
+    }
+
+    .ms-history-item:hover {
+      background: var(--surface2);
+    }
+
+    .ms-history-item.ms-selected {
+      background: var(--stat-done-bg);
+    }
+
+    .ms-history-item-name {
+      font-weight: 600;
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .ms-history-stat {
+      font-size: var(--fs-xs);
+      background: var(--surface2);
+      border-radius: 4px;
+      padding: 1px 6px;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+
+    .ms-ontime {
+      color: var(--stat-done-color);
+    }
+
+    .ms-late {
+      color: var(--stat-blocked-color);
     }
 
     /* ── Epic progress ───────────────────────────────────── */
@@ -1859,6 +1963,53 @@ function ingestData(data) {
 }
 
 // ── Milestones ───────────────────────────────────────────
+
+// Helper: parse YYYY-MM-DD string to a Date object (noon UTC to avoid TZ drift)
+function parseDateStr(s) {
+  if (!s) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+  if (!m) return null;
+  return new Date(Date.UTC(+m[1], +m[2]-1, +m[3], 12, 0, 0));
+}
+
+// Helper: days between two dates (a - b), ignoring time
+function daysBetween(a, b) {
+  return Math.round((a - b) / 86400000);
+}
+
+// Helper: format a YYYY-MM-DD date string as "Mar 17, 2026"
+function fmtDate(s) {
+  const d = parseDateStr(s);
+  if (!d) return s;
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+}
+
+// Helper: build date info HTML for active/planned milestones
+function msDateInfoHtml(ms) {
+  if (!ms.target_date) return '';
+  const target = parseDateStr(ms.target_date);
+  if (!target) return '';
+  const today = new Date(); today.setHours(12, 0, 0, 0);
+  const diff = daysBetween(target, today);
+  let cls = 'ms-date-info';
+  let label;
+  if (diff > 7) {
+    label = `${diff}d remaining`;
+  } else if (diff > 0) {
+    cls += ' ms-due-soon';
+    label = `${diff}d remaining`;
+  } else if (diff === 0) {
+    cls += ' ms-due-soon';
+    label = 'due today';
+  } else {
+    cls += ' ms-overdue';
+    label = `${Math.abs(diff)}d overdue`;
+  }
+  return `<span class="${cls}">${esc(label)}</span>`;
+}
+
+let msHistoryOpen = false;
+
 function renderMilestones() {
   const section = document.getElementById('milestone-section');
   const banner = document.getElementById('milestone-banner');
@@ -1870,6 +2021,7 @@ function renderMilestones() {
 
   const sorted = [...milestones].sort((a, b) => (a.order || 999) - (b.order || 999));
   const active = sorted.find(m => m.status === 'active');
+  const doneMilestones = sorted.filter(m => m.status === 'done');
 
   // Show banner for the selected milestone (or the active one if none selected)
   const displayed = (activeMilestone !== 'all')
@@ -1877,40 +2029,154 @@ function renderMilestones() {
     : active;
 
   if (displayed) {
-    let total = 0, done = 0;
-    for (const t of allTasks) {
-      if (t.milestone === displayed.id) {
-        const s = colKey(t.status);
-        if (s === 'archived') continue;
-        total++;
-        if (s === 'done') done++;
+    // 3.3 — Retrospective banner for done milestones
+    if (displayed.status === 'done') {
+      // Count archived + done tasks for this milestone
+      let completedCount = 0;
+      for (const t of allTasks) {
+        if (t.milestone === displayed.id) {
+          const s = colKey(t.status);
+          if (s === 'done' || s === 'archived') completedCount++;
+        }
       }
-    }
-    const pct = total > 0 ? Math.round((done / total) * 100) : 0;
 
-    banner.innerHTML += `
-      <div class="milestone-banner">
-        <span class="ms-label">Milestone</span>
-        <span class="ms-name">${esc(displayed.name)}</span>
-        <div class="ms-progress-bar"><div class="ms-progress-fill" style="width:${pct}%"></div></div>
-        <span class="ms-stats">${done}/${total} done (${pct}%)</span>
-      </div>
-    `;
+      // Duration
+      let durationHtml = '';
+      if (displayed.start_date && displayed.completed) {
+        const start = parseDateStr(displayed.start_date);
+        const end = parseDateStr(displayed.completed);
+        if (start && end) {
+          const days = daysBetween(end, start);
+          durationHtml = `<span class="ms-stats">${days}d duration</span>`;
+        }
+      }
+
+      // On-time status
+      let ontimeHtml = '';
+      if (displayed.target_date && displayed.completed) {
+        const target = parseDateStr(displayed.target_date);
+        const end = parseDateStr(displayed.completed);
+        if (target && end) {
+          const diff = daysBetween(end, target);
+          if (diff <= 0) {
+            const early = Math.abs(diff);
+            ontimeHtml = `<span class="ms-history-stat ms-ontime">${early > 0 ? `${early}d early` : 'on time'}</span>`;
+          } else {
+            ontimeHtml = `<span class="ms-history-stat ms-late">${diff}d late</span>`;
+          }
+        }
+      }
+
+      const completedDateHtml = displayed.completed
+        ? `<span class="ms-date-info">Completed: ${esc(fmtDate(displayed.completed))}</span>`
+        : '';
+
+      const descHtml = displayed.description
+        ? `<div style="font-size:var(--fs-sm);color:var(--text-muted);margin-top:4px">${esc(displayed.description)}</div>`
+        : '';
+
+      banner.innerHTML += `
+        <div class="milestone-banner">
+          <span class="ms-label" style="color:var(--stat-done-color)">Completed Milestone</span>
+          <span class="ms-name">${esc(displayed.name)}</span>
+          <div class="ms-progress-bar"><div class="ms-progress-fill" style="width:100%;background:var(--stat-done-color)"></div></div>
+          <span class="ms-stats">${completedCount} tasks completed</span>
+          ${durationHtml}
+          ${completedDateHtml}
+          ${ontimeHtml}
+          ${descHtml}
+        </div>
+      `;
+    } else {
+      // 3.2 — Active/planned milestone banner with date info
+      let total = 0, done = 0;
+      for (const t of allTasks) {
+        if (t.milestone === displayed.id) {
+          const s = colKey(t.status);
+          if (s === 'archived') continue;
+          total++;
+          if (s === 'done') done++;
+        }
+      }
+      const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+      const dateInfoHtml = msDateInfoHtml(displayed);
+
+      banner.innerHTML += `
+        <div class="milestone-banner">
+          <span class="ms-label">Milestone</span>
+          <span class="ms-name">${esc(displayed.name)}</span>
+          <div class="ms-progress-bar"><div class="ms-progress-fill" style="width:${pct}%"></div></div>
+          <span class="ms-stats">${done}/${total} done (${pct}%)</span>
+          ${dateInfoHtml}
+        </div>
+      `;
+    }
   }
 
   // Steps indicator — clickable to filter by milestone
   if (sorted.length > 1) {
+    const visibleSteps = sorted.filter(m => m.status !== 'archived');
     let stepsHtml = '<div class="milestone-steps">';
-    for (const ms of sorted) {
-      if (ms.status === 'archived') continue;
+    for (let i = 0; i < visibleSteps.length; i++) {
+      const ms = visibleSteps[i];
       const statusCls = ms.status === 'active' ? 'ms-active' : ms.status === 'done' ? 'ms-done' : '';
       const selectedCls = activeMilestone === ms.id ? ' ms-selected' : '';
       const icon = ms.status === 'done' ? '✓ ' : ms.status === 'active' ? '▶ ' : '';
-      stepsHtml += `<span class="ms-step ${statusCls}${selectedCls}" data-ms-id="${esc(ms.id)}" style="cursor:pointer">${icon}${esc(ms.name)}</span>`;
-      if (ms !== sorted[sorted.length - 1] && ms.status !== 'archived') stepsHtml += '<span style="color:var(--text-dim);font-size:10px">→</span>';
+      stepsHtml += `<span class="ms-step ${statusCls}${selectedCls}" data-ms-id="${esc(ms.id)}">${icon}${esc(ms.name)}</span>`;
+      if (i < visibleSteps.length - 1) stepsHtml += '<span style="color:var(--text-dim);font-size:10px">→</span>';
     }
     stepsHtml += '</div>';
     banner.innerHTML += stepsHtml;
+
+    // 3.5 — Milestone history section
+    if (doneMilestones.length) {
+      let historyHtml = `<div><button class="ms-history-toggle" id="ms-history-toggle">${msHistoryOpen ? '▾' : '▸'} History (${doneMilestones.length})</button></div>`;
+      if (msHistoryOpen) {
+        historyHtml += '<div class="ms-history-panel" id="ms-history-panel">';
+        for (const ms of doneMilestones) {
+          const selectedCls = activeMilestone === ms.id ? ' ms-selected' : '';
+          // Count tasks
+          let taskCount = 0;
+          for (const t of allTasks) {
+            if (t.milestone === ms.id) {
+              const s = colKey(t.status);
+              if (s === 'done' || s === 'archived') taskCount++;
+            }
+          }
+          // Duration
+          let durStat = '';
+          if (ms.start_date && ms.completed) {
+            const start = parseDateStr(ms.start_date);
+            const end = parseDateStr(ms.completed);
+            if (start && end) durStat = `<span class="ms-history-stat">${daysBetween(end, start)}d</span>`;
+          }
+          // On-time
+          let ontimeStat = '';
+          if (ms.target_date && ms.completed) {
+            const target = parseDateStr(ms.target_date);
+            const end = parseDateStr(ms.completed);
+            if (target && end) {
+              const diff = daysBetween(end, target);
+              ontimeStat = diff <= 0
+                ? `<span class="ms-history-stat ms-ontime">${diff === 0 ? 'on time' : `${Math.abs(diff)}d early`}</span>`
+                : `<span class="ms-history-stat ms-late">${diff}d late</span>`;
+            }
+          }
+          const completedDate = ms.completed ? `<span class="ms-history-stat">${esc(fmtDate(ms.completed))}</span>` : '';
+          historyHtml += `
+            <div class="ms-history-item${selectedCls}" data-ms-id="${esc(ms.id)}">
+              <span class="ms-history-item-name">✓ ${esc(ms.name)}</span>
+              <span class="ms-history-stat">${taskCount} tasks</span>
+              ${durStat}
+              ${ontimeStat}
+              ${completedDate}
+            </div>
+          `;
+        }
+        historyHtml += '</div>';
+      }
+      banner.innerHTML += historyHtml;
+    }
 
     // Click handler for milestone steps
     banner.querySelectorAll('.ms-step[data-ms-id]').forEach(step => {
@@ -1929,7 +2195,43 @@ function renderMilestones() {
         render();
       });
     });
+
+    // Click handler for history toggle
+    const histToggle = banner.querySelector('#ms-history-toggle');
+    if (histToggle) {
+      histToggle.addEventListener('click', () => {
+        msHistoryOpen = !msHistoryOpen;
+        renderMilestones();
+      });
+    }
+
+    // Click handlers for history items
+    banner.querySelectorAll('.ms-history-item[data-ms-id]').forEach(item => {
+      item.addEventListener('click', () => {
+        const msId = item.dataset.msId;
+        const msSel = document.getElementById('milestone-filter');
+        if (activeMilestone === msId) {
+          activeMilestone = 'all';
+          msSel.value = 'all';
+        } else {
+          activeMilestone = msId;
+          msSel.value = msId;
+        }
+        renderMilestones();
+        renderEpics();
+        render();
+      });
+    });
   }
+}
+
+// ── Done milestone helper ─────────────────────────────────
+// Returns true when the currently selected milestone filter is a "done" milestone
+function isViewingDoneMilestone() {
+  if (activeMilestone === 'all') return false;
+  const milestones = (loadedData && loadedData.milestones) || [];
+  const ms = milestones.find(m => m.id === activeMilestone);
+  return ms && ms.status === 'done';
 }
 
 // ── Stats ────────────────────────────────────────────────
@@ -1962,6 +2264,7 @@ function renderEpics() {
   if (!allEpics.length) { section.style.display = 'none'; return; }
   section.style.display = '';
 
+  const viewingDone = isViewingDoneMilestone();
   let visibleCount = 0;
   for (const epic of allEpics) {
     let tasks = (epic.tasks || []);
@@ -1970,8 +2273,12 @@ function renderEpics() {
       tasks = tasks.filter(t => t.milestone === activeMilestone);
       if (!tasks.length) continue; // hide epic entirely
     }
+    // 3.4 — When viewing a done milestone, treat archived tasks as done (shallow copy, no mutation)
+    if (viewingDone) {
+      tasks = tasks.map(t => colKey(t.status) === 'archived' ? { ...t, status: 'done' } : t);
+    }
     visibleCount++;
-    const archived = tasks.filter(t => colKey(t.status) === 'archived').length;
+    const archived = viewingDone ? 0 : tasks.filter(t => colKey(t.status) === 'archived').length;
     const activeTasks = tasks.filter(t => colKey(t.status) !== 'archived');
     const total = activeTasks.length;
     const done  = activeTasks.filter(t => colKey(t.status) === 'done').length;
@@ -2067,6 +2374,10 @@ function render() {
   if (activeMilestone !== 'all') {
     tasks = tasks.filter(t => t.milestone === activeMilestone);
   }
+  // 3.4 — When viewing a done milestone, include archived tasks remapped as done (shallow copy)
+  if (isViewingDoneMilestone()) {
+    tasks = tasks.map(t => colKey(t.status) === 'archived' ? { ...t, status: 'done' } : t);
+  }
   if (activeEpic !== 'all') {
     tasks = tasks.filter(t => t._epicId === activeEpic);
   }
@@ -2121,6 +2432,10 @@ function render() {
   let statsSource = allTasks;
   if (activeMilestone !== 'all') statsSource = statsSource.filter(t => t.milestone === activeMilestone);
   if (activeEpic !== 'all') statsSource = statsSource.filter(t => t._epicId === activeEpic);
+  // 3.4 — When viewing a done milestone, treat archived tasks as done for stats
+  if (isViewingDoneMilestone()) {
+    statsSource = statsSource.map(t => colKey(t.status) === 'archived' ? { ...t, status: 'done' } : t);
+  }
   const stats = computeStats(statsSource);
   document.getElementById('stat-total').textContent    = stats.total;
   document.getElementById('stat-done').textContent     = stats.done;

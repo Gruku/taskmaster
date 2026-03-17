@@ -76,6 +76,31 @@ def _now() -> str:
     return datetime.now().strftime("%Y-%m-%dT%H:%M")
 
 
+def _validate_date(s: str) -> date | None:
+    """Parse YYYY-MM-DD string, return date or None if invalid."""
+    try:
+        return datetime.strptime(s, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def _time_remaining(target_date_str: str | None) -> str | None:
+    """Return human-readable time remaining/overdue, or None if no target."""
+    if not target_date_str:
+        return None
+    try:
+        target = datetime.strptime(str(target_date_str), "%Y-%m-%d").date()
+        delta = (target - date.today()).days
+        if delta > 0:
+            return f"{delta}d remaining"
+        elif delta == 0:
+            return "due today"
+        else:
+            return f"{abs(delta)}d overdue"
+    except ValueError:
+        return None
+
+
 def _load() -> dict:
     return yaml.safe_load(_backlog_path().read_text(encoding="utf-8"))
 
@@ -256,6 +281,8 @@ def regenerate_context(data: dict) -> None:
             "id": active_ms["id"],
             "name": active_ms["name"],
             "stats": ms_stats,
+            "target_date": active_ms.get("target_date"),
+            "start_date": active_ms.get("start_date"),
         }
     else:
         data["context"]["active_milestone"] = None
@@ -306,7 +333,11 @@ def regenerate_progress_dashboard(data: dict) -> None:
             ms_stats = _milestone_stats(data, active_ms["id"])
             ms_done = ms_stats["done"]
             ms_total = ms_stats["total"]
-            lines.append(f"**Active Milestone:** {active_ms['name']} ({ms_done}/{ms_total} done)")
+            remaining = _time_remaining(active_ms.get("target_date"))
+            target_info = f" — target: {active_ms['target_date']}" if active_ms.get("target_date") else ""
+            if remaining:
+                target_info += f" ({remaining})"
+            lines.append(f"**Active Milestone:** {active_ms['name']} ({ms_done}/{ms_total} done){target_info}")
         # List all milestones briefly
         ms_summary = []
         for ms in sorted(milestones, key=lambda m: m.get("order", 999)):
@@ -467,7 +498,9 @@ def backlog_status() -> str:
         ms_stats = _milestone_stats(data, active_ms["id"])
         ms_done = ms_stats["done"]
         ms_total = ms_stats["total"]
-        lines.append(f"\n**Active Milestone:** {active_ms['name']} — {ms_done}/{ms_total} tasks done")
+        remaining = _time_remaining(active_ms.get("target_date"))
+        time_note = f" — {remaining}" if remaining else ""
+        lines.append(f"\n**Active Milestone:** {active_ms['name']} — {ms_done}/{ms_total} tasks done{time_note}")
         if active_ms.get("description"):
             lines.append(f"  {active_ms['description']}")
     if milestones:
@@ -478,7 +511,8 @@ def backlog_status() -> str:
                 continue
             ms_st = _milestone_stats(data, ms["id"])
             marker = {"active": "▶", "done": "✓", "planned": "○"}.get(s, "?")
-            lines.append(f"- {marker} **{ms['name']}** ({ms_st['done']}/{ms_st['total']}) — {s}")
+            target_note = f", target: {ms.get('target_date')}" if ms.get("target_date") else ""
+            lines.append(f"- {marker} **{ms['name']}** ({ms_st['done']}/{ms_st['total']}) — {s}{target_note}")
 
     return "\n".join(lines)
 
@@ -1669,12 +1703,13 @@ def backlog_add_epic(
 
 
 VALID_MILESTONE_STATUSES = {"planned", "active", "done", "archived"}
-ALLOWED_MILESTONE_FIELDS = {"name", "status", "description", "order"}
+ALLOWED_MILESTONE_FIELDS = {"name", "status", "description", "order", "target_date", "start_date"}
 
 
 @mcp.tool()
 def backlog_add_milestone(
     milestone_id: str, name: str, description: str = "", order: int | None = None,
+    target_date: str = "", start_date: str = "",
 ) -> str:
     """Create a new milestone. Milestones are sequential blocks of work — only one is active at a time.
     Tasks are assigned to milestones to control focus.
@@ -1684,6 +1719,8 @@ def backlog_add_milestone(
         name: Human-readable name (e.g., "Foundation", "Core Features", "Polish & Launch")
         description: Brief description of the milestone's goals
         order: Position in the sequence (1, 2, 3...). Auto-assigned if omitted.
+        target_date: Optional target completion date (YYYY-MM-DD format)
+        start_date: Optional start date (YYYY-MM-DD format). Auto-set to today if status is active and omitted.
     """
     # Validate ID format
     if not milestone_id or not all(c.isalnum() or c == "-" for c in milestone_id) or milestone_id != milestone_id.lower():
@@ -1702,6 +1739,12 @@ def backlog_add_milestone(
         existing_orders = [ms.get("order", 0) for ms in data["milestones"]]
         order = max(existing_orders, default=0) + 1
 
+    # Validate dates if provided
+    if target_date and not _validate_date(target_date):
+        return f"Error: target_date must be YYYY-MM-DD format, got `{target_date}`"
+    if start_date and not _validate_date(start_date):
+        return f"Error: start_date must be YYYY-MM-DD format, got `{start_date}`"
+
     # Auto-activate if this is the first milestone
     status = "planned"
     if not any(ms.get("status") == "active" for ms in data["milestones"]):
@@ -1715,6 +1758,12 @@ def backlog_add_milestone(
         "order": order,
         "created": _now(),
     }
+    if target_date:
+        new_milestone["target_date"] = target_date
+    if start_date:
+        new_milestone["start_date"] = start_date
+    elif status == "active":
+        new_milestone["start_date"] = _today()
 
     data["milestones"].append(new_milestone)
     _mutate_and_save(data)
@@ -1729,8 +1778,8 @@ def backlog_update_milestone(milestone_id: str, field: str, value: str) -> str:
 
     Args:
         milestone_id: The milestone ID (e.g., "m1", "foundation")
-        field: Field to update — one of: name, status, description, order
-        value: New value. For status: planned, active, done, archived. For order: integer.
+        field: Field to update — one of: name, status, description, order, target_date, start_date
+        value: New value. For status: planned, active, done, archived. For order: integer. For dates: YYYY-MM-DD or empty to clear.
     """
     if field not in ALLOWED_MILESTONE_FIELDS:
         return f"Error: field `{field}` not allowed. Allowed: {', '.join(sorted(ALLOWED_MILESTONE_FIELDS))}"
@@ -1748,6 +1797,8 @@ def backlog_update_milestone(milestone_id: str, field: str, value: str) -> str:
             for other_ms in data.get("milestones", []):
                 if other_ms["id"] != milestone_id and other_ms.get("status") == "active":
                     other_ms["status"] = "planned"
+            if not ms.get("start_date"):
+                ms["start_date"] = _today()
         if value == "done":
             ms["completed"] = _now()
         ms["status"] = value
@@ -1756,6 +1807,13 @@ def backlog_update_milestone(milestone_id: str, field: str, value: str) -> str:
             ms["order"] = int(value)
         except ValueError:
             return f"Error: order must be an integer, got `{value}`"
+    elif field in ("target_date", "start_date"):
+        if value == "":
+            ms.pop(field, None)
+        else:
+            if not _validate_date(value):
+                return f"Error: {field} must be YYYY-MM-DD format, got `{value}`"
+            ms[field] = value
     else:
         ms[field] = value
 
@@ -1785,21 +1843,72 @@ def backlog_milestone_status(milestone_id: str = "") -> str:
     lines = [f"## Milestone: {ms['name']}\n"]
     if ms.get("description"):
         lines.append(f"{ms['description']}\n")
-    lines.append(f"**Status:** {ms['status']} | **Order:** {ms.get('order', '?')}")
-    lines.append(f"**Progress:** {stats['done']}/{stats['total']} done")
-    if stats["total"] > 0:
-        pct = int(stats["done"] / stats["total"] * 100)
-        bar_filled = pct // 5
-        bar_empty = 20 - bar_filled
-        lines.append(f"[{'█' * bar_filled}{'░' * bar_empty}] {pct}%")
-    lines.append("")
 
-    # Breakdown by status
-    lines.append(f"Done: {stats['done']} | In Progress: {stats['in-progress']} | In Review: {stats['in-review']} | Todo: {stats['todo']} | Blocked: {stats['blocked']}")
-    lines.append("")
+    # Retrospective for done milestones
+    if ms.get("status") == "done":
+        lines.append("**Status:** Completed")
+        # Duration
+        if ms.get("start_date") and ms.get("completed"):
+            try:
+                start = datetime.strptime(str(ms["start_date"]), "%Y-%m-%d").date()
+                comp_str = str(ms["completed"])
+                comp = datetime.fromisoformat(comp_str).date() if "T" in comp_str else datetime.strptime(comp_str, "%Y-%m-%d").date()
+                duration_days = (comp - start).days
+                lines.append(f"**Duration:** {duration_days} days ({ms['start_date']} → {comp_str[:10]})")
+            except ValueError:
+                if ms.get("completed"):
+                    lines.append(f"**Completed:** {str(ms['completed'])[:10]}")
+        elif ms.get("completed"):
+            lines.append(f"**Completed:** {str(ms['completed'])[:10]}")
+        # On-time analysis
+        if ms.get("target_date") and ms.get("completed"):
+            try:
+                target = datetime.strptime(str(ms["target_date"]), "%Y-%m-%d").date()
+                comp_str = str(ms["completed"])
+                comp = datetime.fromisoformat(comp_str).date() if "T" in comp_str else datetime.strptime(comp_str, "%Y-%m-%d").date()
+                delta = (comp - target).days
+                if delta < 0:
+                    lines.append(f"**On-time:** Yes ({abs(delta)}d early)")
+                elif delta == 0:
+                    lines.append("**On-time:** Yes (exact)")
+                else:
+                    lines.append(f"**On-time:** No ({delta}d late)")
+            except ValueError:
+                pass
+        # Count archived tasks as completed work
+        total_completed = stats["done"] + stats["archived"]
+        lines.append(f"**Tasks completed & archived:** {total_completed}")
+        lines.append("")
+    else:
+        lines.append(f"**Status:** {ms['status']} | **Order:** {ms.get('order', '?')}")
+        # Date info
+        date_parts = []
+        if ms.get("start_date"):
+            date_parts.append(f"Started: {ms['start_date']}")
+        if ms.get("target_date"):
+            date_parts.append(f"Target: {ms['target_date']}")
+            remaining = _time_remaining(ms["target_date"])
+            if remaining:
+                date_parts.append(f"**{remaining}**")
+        if date_parts:
+            lines.append(" | ".join(date_parts))
+        lines.append(f"**Progress:** {stats['done']}/{stats['total']} done")
+        if stats["total"] > 0:
+            pct = int(stats["done"] / stats["total"] * 100)
+            bar_filled = pct // 5
+            bar_empty = 20 - bar_filled
+            lines.append(f"[{'█' * bar_filled}{'░' * bar_empty}] {pct}%")
+        lines.append("")
+
+        # Breakdown by status
+        lines.append(f"Done: {stats['done']} | In Progress: {stats['in-progress']} | In Review: {stats['in-review']} | Todo: {stats['todo']} | Blocked: {stats['blocked']}")
+        lines.append("")
 
     # List tasks in this milestone grouped by status
-    for status_group in ["in-progress", "in-review", "todo", "blocked", "done"]:
+    status_groups = ["in-progress", "in-review", "todo", "blocked", "done"]
+    if ms.get("status") == "done":
+        status_groups.append("archived")
+    for status_group in status_groups:
         group_tasks = []
         for epic in data["epics"]:
             for t in epic.get("tasks", []):
@@ -1807,7 +1916,7 @@ def backlog_milestone_status(milestone_id: str = "") -> str:
                     group_tasks.append((t, epic))
 
         if group_tasks:
-            label = status_group.replace("-", " ").title()
+            label = "Completed (Archived)" if status_group == "archived" else status_group.replace("-", " ").title()
             lines.append(f"**{label}:**")
             for t, epic in group_tasks:
                 pri = t.get("priority", "P2")
@@ -1870,10 +1979,29 @@ def backlog_advance_milestone() -> str:
 
     if next_ms:
         next_ms["status"] = "active"
+        if not next_ms.get("start_date"):
+            next_ms["start_date"] = _today()
 
     _mutate_and_save(data)
 
     result = f"Completed milestone **{active_ms['name']}** — archived {archived_count} done tasks."
+    if active_ms.get("start_date"):
+        try:
+            start = datetime.strptime(str(active_ms["start_date"]), "%Y-%m-%d").date()
+            duration = (date.today() - start).days
+            result += f" Duration: {duration}d."
+        except ValueError:
+            pass
+    if active_ms.get("target_date"):
+        try:
+            target = datetime.strptime(str(active_ms["target_date"]), "%Y-%m-%d").date()
+            delta = (date.today() - target).days
+            if delta <= 0:
+                result += " Completed on time."
+            else:
+                result += f" Completed {delta}d past target."
+        except ValueError:
+            pass
     if next_ms:
         next_stats = _milestone_stats(data, next_ms["id"])
         result += f"\n\nActivated next milestone: **{next_ms['name']}** ({next_stats['total']} tasks, order: {next_ms.get('order', '?')})"
