@@ -1837,12 +1837,15 @@ function ingestData(data) {
     if (prevMs !== 'all' && milestones.some(m => m.id === prevMs)) {
       activeMilestone = prevMs;
       msSel.value = prevMs;
-    } else if (prevMs === 'all') {
-      // Auto-select the active milestone on first load
+    } else {
+      // Auto-select the active milestone (first load or if previous selection was removed)
       const activeMs = milestones.find(m => m.status === 'active');
       if (activeMs) {
         activeMilestone = activeMs.id;
         msSel.value = activeMs.id;
+      } else {
+        activeMilestone = 'all';
+        msSel.value = 'all';
       }
     }
   } else {
