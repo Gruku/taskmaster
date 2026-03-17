@@ -1035,7 +1035,7 @@ def backlog_add_task(
         "title": title,
         "status": "todo",
         "priority": priority,
-        "created": _today(),
+        "created": _now(),
         "notes": notes,
     }
 
@@ -1653,6 +1653,7 @@ def backlog_add_epic(
         "name": name,
         "status": status,
         "description": description,
+        "created": _now(),
         "tasks": [],
     }
 
@@ -1709,7 +1710,7 @@ def backlog_add_milestone(
         "status": status,
         "description": description,
         "order": order,
-        "created": _today(),
+        "created": _now(),
     }
 
     data["milestones"].append(new_milestone)

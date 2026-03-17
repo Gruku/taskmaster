@@ -90,6 +90,53 @@
       --glow-accent: rgba(37, 99, 235, 0.04);
     }
 
+    /* ── Colored theme (generated from project hash) ───── */
+    [data-theme="colored"] {
+      --bg:        #1a1a1e;
+      --surface:   #222226;
+      --surface2:  #2a2a2f;
+      --surface3:  #323238;
+      --border:    color-mix(in srgb, var(--project-color) 25%, #3c3c42);
+      --border-subtle: color-mix(in srgb, var(--project-color) 15%, #333339);
+      --text:      #e2e0dc;
+      --text-muted:#9f9d98;
+      --text-dim:  #6a6964;
+      --p0:        #f85149;
+      --p1:        #d29922;
+      --p2:        color-mix(in srgb, var(--project-color) 70%, #5ea8ff);
+      --p3:        #5c5b57;
+      --done-bg:   #19191c;
+      --progress:  color-mix(in srgb, var(--project-color) 40%, #238636);
+      --accent:    var(--project-color);
+      --accent-dim: color-mix(in srgb, var(--project-color) 20%, #1a1a1e);
+      --stat-total-bg: #202024; --stat-total-border: var(--border);
+      --stat-done-bg: #0f1f16; --stat-done-border: #1a5c2e; --stat-done-color: #3fb950;
+      --stat-progress-bg: color-mix(in srgb, var(--project-color) 10%, #0f162a);
+      --stat-progress-border: color-mix(in srgb, var(--project-color) 30%, #1f4480);
+      --stat-todo-bg: #1e1a12; --stat-todo-border: #6e4a08; --stat-todo-color: #e3b341;
+      --stat-blocked-bg: #221010; --stat-blocked-border: #8b2022; --stat-blocked-color: #f85149;
+      --stat-archived-bg: #1a1a1c; --stat-archived-border: #383838; --stat-archived-color: #706e6a;
+      --p0-bg: #221010; --p0-border: #3a1616;
+      --p1-bg: #1e1a12; --p1-border: #362610;
+      --p2-bg: color-mix(in srgb, var(--project-color) 8%, #0f162a);
+      --p2-border: color-mix(in srgb, var(--project-color) 15%, #1c2a42);
+      --p3-bg: #202020; --p3-border: #2e2e30; --p3-color: #706e6a;
+      --card-hover-border: color-mix(in srgb, var(--project-color) 30%, #50504a);
+      --card-hover-shadow: rgba(0,0,0,0.35);
+      --header-bg: linear-gradient(180deg, color-mix(in srgb, var(--project-color) 8%, #1e1e22) 0%, #1c1c20 100%);
+      --glow-accent: color-mix(in srgb, var(--project-color) 6%, transparent);
+    }
+
+    /* ── Project color pip ─────────────────────────────── */
+    .project-pip {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--project-color, var(--accent));
+      flex-shrink: 0;
+      box-shadow: 0 0 6px color-mix(in srgb, var(--project-color, var(--accent)) 50%, transparent);
+    }
+
     html, body {
       height: 100%;
     }
@@ -1410,6 +1457,7 @@
       <line x1="9" y1="21" x2="16" y2="21" stroke="var(--border)" stroke-width="1.5" stroke-linecap="round"/>
       <polyline points="17,19.5 19,22 23,18" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
     </svg></div>
+    <div class="project-pip" id="project-pip"></div>
     <div>
       <div class="header-title" id="project-name">Taskmaster</div>
       <div class="header-subtitle" id="project-updated">Task Management</div>
@@ -1564,6 +1612,24 @@ let sortAsc      = true;  // true = default direction for the mode
 let loadedData   = null;
 let showArchived = false;
 
+// ── Project color from name hash ─────────────────────────
+function projectColor(name) {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = ((hash << 5) - hash + name.charCodeAt(i)) | 0;
+  }
+  // Use a high saturation pastel: fixed S=70%, L=65% with hue from hash
+  const hue = ((hash % 360) + 360) % 360;
+  return `hsl(${hue}, 70%, 65%)`;
+}
+
+function applyProjectColor(name) {
+  const color = projectColor(name);
+  document.documentElement.style.setProperty('--project-color', color);
+  document.getElementById('project-pip').style.background = color;
+  document.getElementById('project-pip').style.boxShadow = `0 0 6px ${color}80`;
+}
+
 // ── Column map ───────────────────────────────────────────
 const COL_MAP = {
   'todo':        'todo',
@@ -1599,7 +1665,9 @@ function ingestData(data) {
 
   // Header — dynamic from data.meta.project
   const meta = data.meta || {};
-  document.getElementById('project-name').textContent = meta.project || 'Taskmaster';
+  const projectName = meta.project || 'Taskmaster';
+  document.getElementById('project-name').textContent = projectName;
+  applyProjectColor(projectName);
   if (meta.updated) {
     document.getElementById('project-updated').textContent = 'Updated ' + meta.updated;
   } else {
@@ -2437,19 +2505,23 @@ function setStatus(msg, cls) {
   el.className    = 'load-indicator ' + (cls || '');
 }
 
-// ── Theme toggle ─────────────────────────────────────────
+// ── Theme toggle (dark → light → colored) ───────────────
 (function() {
+  const THEMES = ['dark', 'light', 'colored'];
+  const ICONS  = { dark: '◑', light: '◐', colored: '◈' };
   const saved = localStorage.getItem('backlog-theme');
   if (saved) document.documentElement.setAttribute('data-theme', saved);
   document.getElementById('theme-toggle').addEventListener('click', function() {
     const current = document.documentElement.getAttribute('data-theme') || 'dark';
-    const next = current === 'dark' ? 'light' : 'dark';
+    const next = THEMES[(THEMES.indexOf(current) + 1) % THEMES.length];
     document.documentElement.setAttribute('data-theme', next);
     localStorage.setItem('backlog-theme', next);
-    this.textContent = next === 'dark' ? '◑' : '◐';
+    this.textContent = ICONS[next] || '◑';
+    this.title = `Theme: ${next}`;
   });
   const theme = document.documentElement.getAttribute('data-theme') || 'dark';
-  document.getElementById('theme-toggle').textContent = theme === 'dark' ? '◑' : '◐';
+  document.getElementById('theme-toggle').textContent = ICONS[theme] || '◑';
+  document.getElementById('theme-toggle').title = `Theme: ${theme}`;
 })();
 
 // ── Auto-fetch + live polling ─────────────────────────────
