@@ -124,11 +124,23 @@
       --glow-accent: color-mix(in srgb, var(--project-color) 8%, transparent);
     }
 
+    /* ── Project badge (icon + name) ─────────────────── */
+    .project-badge {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 6px 14px 6px 8px;
+      background: color-mix(in srgb, var(--project-color, var(--accent)) 12%, var(--surface));
+      border: 1.5px solid color-mix(in srgb, var(--project-color, var(--accent)) 25%, var(--border));
+      border-radius: 12px;
+      transition: border-color 0.2s, background 0.2s;
+    }
+
     /* ── Project icon ───────────────────────────────────── */
     .header-logo {
-      background: color-mix(in srgb, var(--project-color, var(--accent)) 15%, var(--surface2));
-      border: 1.5px solid color-mix(in srgb, var(--project-color, var(--accent)) 30%, var(--border));
-      border-radius: 10px;
+      background: color-mix(in srgb, var(--project-color, var(--accent)) 20%, var(--surface2));
+      border: 1.5px solid color-mix(in srgb, var(--project-color, var(--accent)) 35%, var(--border));
+      border-radius: 8px;
       cursor: pointer;
       display: flex;
       align-items: center;
@@ -143,7 +155,7 @@
     }
 
     .header-logo .logo-emoji {
-      font-size: 16px;
+      font-size: 15px;
       line-height: 1;
     }
 
@@ -227,15 +239,9 @@
     }
 
     .header-logo {
-      width: 34px;
-      height: 34px;
+      width: 30px;
+      height: 30px;
       flex-shrink: 0;
-    }
-
-    .header-logo svg {
-      width: 20px;
-      height: 20px;
-      display: block;
     }
 
     .header-title {
@@ -1501,12 +1507,14 @@
 <!-- Header -->
 <header class="header">
   <div class="header-left">
-    <div class="header-logo" id="project-icon" title="Click to change icon">
-      <span class="logo-emoji" id="logo-emoji"></span>
-    </div>
-    <div>
-      <div class="header-title" id="project-name">Taskmaster</div>
-      <div class="header-subtitle" id="project-updated">Task Management</div>
+    <div class="project-badge" id="project-badge">
+      <div class="header-logo" id="project-icon" title="Click to change icon">
+        <span class="logo-emoji" id="logo-emoji"></span>
+      </div>
+      <div>
+        <div class="header-title" id="project-name">Taskmaster</div>
+        <div class="header-subtitle" id="project-updated">Task Management</div>
+      </div>
     </div>
     <span class="read-only-badge">READ-ONLY · AI Workflow Viewer</span>
   </div>
