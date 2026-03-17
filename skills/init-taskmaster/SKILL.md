@@ -15,19 +15,36 @@ Call `backlog_init` with no arguments — if it reports "already initialized", c
 
 ## Step 2: Ask setup questions — MANDATORY, do NOT skip
 
-You MUST present these two questions to the user and WAIT for their response before doing anything else. Do not assume defaults. Do not proceed until you have answers.
+Use the `AskUserQuestion` tool with both questions in a single call. Do NOT call `backlog_init` or create any files until you have the answers.
 
-> **Two quick setup questions:**
->
-> **1. Where should I store the backlog?**
->    - **a) Hidden** (`.claude/` directory) — stays out of your repo. Good for personal tracking. *(default)*
->    - **b) Tracked** (project root) — visible files you can commit to git. Good for team visibility.
->
-> **2. How do you want to start?**
->    - **a) Clean start** — empty backlog, you'll add epics and tasks as you go
->    - **b) Analyze project** — I'll scan for TODOs, FIXMEs, README plans, and existing structure to suggest an initial backlog
+```
+AskUserQuestion({
+  questions: [
+    {
+      question: "Where should I store the backlog?",
+      header: "Location",
+      multiSelect: false,
+      options: [
+        { label: "Hidden (Recommended)", description: ".claude/ directory — stays out of your repo, good for personal tracking" },
+        { label: "Tracked", description: "Project root — visible files you can commit to git, good for team visibility" }
+      ]
+    },
+    {
+      question: "How do you want to start?",
+      header: "Init mode",
+      multiSelect: false,
+      options: [
+        { label: "Analyze project (Recommended)", description: "Scan for TODOs, FIXMEs, README plans, and existing structure to suggest an initial backlog" },
+        { label: "Clean start", description: "Empty backlog — you'll add epics and tasks as you go" }
+      ]
+    }
+  ]
+})
+```
 
-**STOP HERE and wait for the user's response.** Do not call `backlog_init` or create any files until you have their answers. If they say something like "go ahead" or "yes", use the defaults (hidden + analyze).
+Map the answers:
+- Location: "Hidden" → `location="hidden"`, "Tracked" → `location="tracked"`
+- Init mode: "Analyze project" → Step 3b, "Clean start" → Step 3a
 
 ## Step 3a: Clean start
 
