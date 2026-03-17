@@ -13,29 +13,23 @@ Set up AI-powered task management in the current project. Offers two modes: clea
 
 Call `backlog_init` with no arguments — if it reports "already initialized", call `backlog_status` instead and show the user what's there. Skip the rest of these steps.
 
-## Step 2: Choose storage location
+## Step 2: Ask setup questions — MANDATORY, do NOT skip
 
-Ask the user where they want the backlog stored:
+You MUST present these two questions to the user and WAIT for their response before doing anything else. Do not assume defaults. Do not proceed until you have answers.
 
-> **Where should I store the backlog?**
+> **Two quick setup questions:**
 >
-> 1. **Hidden** (`.claude/` directory) — won't show up in your repo, stays out of the way. Good for personal tracking.
-> 2. **Tracked** (project root) — visible files you can commit to git. Good for team visibility and shared progress tracking.
+> **1. Where should I store the backlog?**
+>    - **a) Hidden** (`.claude/` directory) — stays out of your repo. Good for personal tracking. *(default)*
+>    - **b) Tracked** (project root) — visible files you can commit to git. Good for team visibility.
 >
-> Default: hidden
+> **2. How do you want to start?**
+>    - **a) Clean start** — empty backlog, you'll add epics and tasks as you go
+>    - **b) Analyze project** — I'll scan for TODOs, FIXMEs, README plans, and existing structure to suggest an initial backlog
 
-Map their choice to the `location` parameter: "hidden" or "tracked".
+**STOP HERE and wait for the user's response.** Do not call `backlog_init` or create any files until you have their answers. If they say something like "go ahead" or "yes", use the defaults (hidden + analyze).
 
-## Step 3: Choose init mode
-
-Ask the user how they want to start:
-
-> **How do you want to set up the backlog?**
->
-> 1. **Clean start** — empty backlog, you'll add epics and tasks as you go
-> 2. **Analyze project** — I'll scan the codebase for TODOs, FIXMEs, README plans, and existing structure to suggest an initial backlog
-
-## Step 4a: Clean start
+## Step 3a: Clean start
 
 If the user chose clean start:
 
@@ -44,7 +38,7 @@ If the user chose clean start:
 3. Help them add tasks under those epics.
 4. Suggest creating a milestone to organize the first batch of work.
 
-## Step 4b: Analyze project
+## Step 3b: Analyze project
 
 If the user chose analyze:
 
@@ -88,7 +82,7 @@ If the user chose analyze:
    - `backlog_add_milestone` for the initial milestone
    - Assign tasks to the milestone
 
-## Step 5: Open the viewer and confirm
+## Step 4: Open the viewer and confirm
 
 1. Call `backlog_open_viewer` to open the backlog dashboard in the browser.
 2. Show the result: "Taskmaster is set up! Use `/start-session` to see your dashboard."
