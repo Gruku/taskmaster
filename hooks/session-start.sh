@@ -3,6 +3,17 @@
 
 set -euo pipefail
 
+# Check for required dependency: uv
+if ! command -v uv &>/dev/null; then
+  cat >&2 <<'WARN'
+⚠️ taskmaster plugin: 'uv' is not installed or not in PATH.
+The MCP server (backlog tools) will not work without it.
+Install: https://docs.astral.sh/uv/getting-started/installation/
+  - macOS/Linux: curl -LsSf https://astral.sh/uv/install.sh | sh
+  - Windows:     winget install astral-sh.uv
+WARN
+fi
+
 # Determine plugin root directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
