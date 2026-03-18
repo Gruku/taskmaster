@@ -254,7 +254,7 @@ def regenerate_context(data: dict) -> None:
     else:
         # fallback: first active epic alphabetically
         active_epics = sorted([e["id"] for e in data["epics"] if e.get("status") == "active"])
-        active_epic = active_epics[0] if active_epics else data["epics"][0]["id"]
+        active_epic = active_epics[0] if active_epics else (data["epics"][0]["id"] if data["epics"] else "")
 
     data["context"] = {
         "active_epic": active_epic,
