@@ -2016,6 +2016,202 @@ def backlog_advance_milestone() -> str:
 
 
 @mcp.tool()
+def backlog_batch_update(operations: str) -> str:
+    """Apply multiple task/epic updates in a single atomic operation. One load/save cycle.
+
+    Use this instead of calling backlog_update_task repeatedly — it's faster and atomic.
+
+    Args:
+        operations: Newline-separated list of operations. Each line format:
+            "update {task_id} {field} {value}" — update a task field
+            "status {task_id} {new_status}" — shorthand for status changes
+            "complete {task_id}" — mark task done (shorthand for status done)
+            "archive {task_id} [reason]" — archive a task (default reason: done)
+            "pick {task_id}" — set task to in-progress with started timestamp
+            "update_epic {epic_id} {field} {value}" — update an epic field
+    """
+    data = _load()
+    results: list[str] = []
+    errors: list[str] = []
+    changed = False
+
+    for line in operations.strip().split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split(None, 3)  # split into max 4 parts
+        if len(parts) < 2:
+            errors.append(f"Skipped malformed line: `{line}`")
+            continue
+
+        op = parts[0].lower()
+
+        if op == "update" and len(parts) >= 4:
+            task_id, field, value = parts[1], parts[2], parts[3]
+            if field not in ALLOWED_FIELDS:
+                errors.append(f"`{task_id}`: field `{field}` not allowed")
+                continue
+            result = _find_task(data, task_id)
+            if not result:
+                errors.append(f"`{task_id}`: not found")
+                continue
+            task, epic = result
+            # Apply field update using same logic as backlog_update_task
+            if field == "status":
+                if value not in VALID_STATUSES:
+                    errors.append(f"`{task_id}`: invalid status `{value}`")
+                    continue
+                task["status"] = value
+                if value == "in-progress" and not task.get("started"):
+                    task["started"] = _now()
+                elif value == "done" and not task.get("completed"):
+                    task["completed"] = _now()
+                if value not in ("in-progress",):
+                    task.pop("locked_by", None)
+            elif field == "priority":
+                if value not in VALID_PRIORITIES:
+                    errors.append(f"`{task_id}`: invalid priority `{value}`")
+                    continue
+                task["priority"] = value
+            elif field == "docs":
+                if ":" not in value:
+                    errors.append(f"`{task_id}`: docs must be `key:path` format")
+                    continue
+                doc_key, doc_path = value.split(":", 1)
+                if doc_key.strip() not in VALID_DOC_KEYS:
+                    errors.append(f"`{task_id}`: invalid docs key `{doc_key.strip()}`")
+                    continue
+                if "docs" not in task or not isinstance(task.get("docs"), dict):
+                    task["docs"] = {}
+                task["docs"][doc_key.strip()] = doc_path.strip()
+            elif field == "depends_on":
+                dep_ids = [d.strip() for d in value.split(",") if d.strip()]
+                bad = [d for d in dep_ids if not _find_task(data, d)]
+                if bad:
+                    errors.append(f"`{task_id}`: dependencies not found: {', '.join(bad)}")
+                    continue
+                task["depends_on"] = dep_ids
+            elif field == "stage":
+                try:
+                    task["stage"] = int(value)
+                except ValueError:
+                    errors.append(f"`{task_id}`: stage must be integer")
+                    continue
+            elif field == "locked_by":
+                if value == "" or value.lower() == "none":
+                    task.pop("locked_by", None)
+                else:
+                    task["locked_by"] = value
+            elif field == "milestone":
+                if value == "" or value.lower() == "none":
+                    task.pop("milestone", None)
+                else:
+                    if not _find_milestone(data, value):
+                        errors.append(f"`{task_id}`: milestone `{value}` not found")
+                        continue
+                    task["milestone"] = value
+            else:
+                task[field] = value
+            results.append(f"`{task_id}`.{field} → {value}")
+            changed = True
+
+        elif op == "status" and len(parts) >= 3:
+            task_id, new_status = parts[1], parts[2]
+            if new_status not in VALID_STATUSES:
+                errors.append(f"`{task_id}`: invalid status `{new_status}`")
+                continue
+            result = _find_task(data, task_id)
+            if not result:
+                errors.append(f"`{task_id}`: not found")
+                continue
+            task, epic = result
+            task["status"] = new_status
+            if new_status == "in-progress" and not task.get("started"):
+                task["started"] = _now()
+            elif new_status == "done" and not task.get("completed"):
+                task["completed"] = _now()
+            if new_status not in ("in-progress",):
+                task.pop("locked_by", None)
+            results.append(f"`{task_id}` → {new_status}")
+            changed = True
+
+        elif op == "complete" and len(parts) >= 2:
+            task_id = parts[1]
+            result = _find_task(data, task_id)
+            if not result:
+                errors.append(f"`{task_id}`: not found")
+                continue
+            task, epic = result
+            task["status"] = "done"
+            if not task.get("completed"):
+                task["completed"] = _now()
+            task.pop("locked_by", None)
+            results.append(f"`{task_id}` → done")
+            changed = True
+
+        elif op == "archive" and len(parts) >= 2:
+            task_id = parts[1]
+            reason = parts[2] if len(parts) > 2 else "done"
+            result = _find_task(data, task_id)
+            if not result:
+                errors.append(f"`{task_id}`: not found")
+                continue
+            task, epic = result
+            task["status"] = "archived"
+            task["archived_reason"] = reason
+            task.pop("locked_by", None)
+            results.append(f"`{task_id}` → archived ({reason})")
+            changed = True
+
+        elif op == "pick" and len(parts) >= 2:
+            task_id = parts[1]
+            result = _find_task(data, task_id)
+            if not result:
+                errors.append(f"`{task_id}`: not found")
+                continue
+            task, epic = result
+            task["status"] = "in-progress"
+            if not task.get("started"):
+                task["started"] = _now()
+            results.append(f"`{task_id}` → in-progress")
+            changed = True
+
+        elif op == "update_epic" and len(parts) >= 4:
+            epic_id, field, value = parts[1], parts[2], parts[3]
+            if field not in ALLOWED_EPIC_FIELDS:
+                errors.append(f"epic `{epic_id}`: field `{field}` not allowed")
+                continue
+            epic = _find_epic(data, epic_id)
+            if not epic:
+                errors.append(f"epic `{epic_id}`: not found")
+                continue
+            if field == "status" and value not in VALID_EPIC_STATUSES:
+                errors.append(f"epic `{epic_id}`: invalid status `{value}`")
+                continue
+            epic[field] = value
+            results.append(f"epic `{epic_id}`.{field} → {value}")
+            changed = True
+
+        else:
+            errors.append(f"Unknown or malformed: `{line}`")
+
+    if changed:
+        _mutate_and_save(data)
+
+    summary = f"**Batch update:** {len(results)} applied"
+    if errors:
+        summary += f", {len(errors)} errors"
+    summary += "\n\n"
+
+    if results:
+        summary += "**Applied:**\n" + "\n".join(f"- {r}" for r in results) + "\n"
+    if errors:
+        summary += "\n**Errors:**\n" + "\n".join(f"- {e}" for e in errors) + "\n"
+
+    return summary
+
+
+@mcp.tool()
 def backlog_snapshot(operations: str) -> str:
     """Preview what would change without writing to disk. Dry-run mode for batch planning.
     Describes the current state of the specified tasks/epics and what the requested operations would do.
