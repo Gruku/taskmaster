@@ -1,7 +1,7 @@
 {
   "name": "taskmaster",
   "description": "Universal AI-powered task and backlog management with kanban viewer, session tracking, worktree isolation, and dependency graphs. Drop into any project.",
-  "version": "1.0.3",
+  "version": "1.1.0",
   "author": {
     "name": "gruku"
   }

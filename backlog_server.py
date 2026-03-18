@@ -3,11 +3,13 @@
 # dependencies = ["fastmcp", "pyyaml"]
 # ///
 
+import hashlib
 import json
 import os
 import socket
 import subprocess
 import threading
+import urllib.request
 import uuid
 import webbrowser
 from datetime import date, datetime
@@ -2112,6 +2114,8 @@ class ViewerHandler(BaseHTTPRequestHandler):
             self._serve_session()
         elif clean_path == "/api/worktrees":
             self._serve_worktrees()
+        elif clean_path == "/api/identity":
+            self._serve_identity()
         elif clean_path.startswith("/file/"):
             self._serve_repo_file(clean_path)
         else:
@@ -2133,6 +2137,16 @@ class ViewerHandler(BaseHTTPRequestHandler):
         session_data = dict(_session_task) if _session_task else {}
         session_data["session_id"] = SESSION_ID
         body = json.dumps(session_data).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_identity(self) -> None:
+        """Return the project root so callers can verify which project this server serves."""
+        body = json.dumps({"root": str(ROOT.resolve())}).encode("utf-8")
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
@@ -2260,15 +2274,37 @@ document.getElementById('content').innerHTML = marked.parse(raw);
 </script>
 </body></html>"""
 
-VIEWER_PORT = 6800
 _viewer_started = False
+VIEWER_PORT = 0
+
+
+def _project_port() -> int:
+    """Deterministic port per project root, in range 6800–6899."""
+    h = hashlib.md5(str(ROOT.resolve()).encode()).hexdigest()
+    return 6800 + int(h, 16) % 100
+
+
+def _check_identity(port: int) -> bool:
+    """Check if an existing server on `port` belongs to this project."""
+    try:
+        resp = urllib.request.urlopen(f"http://127.0.0.1:{port}/api/identity", timeout=1)
+        data = json.loads(resp.read())
+        return Path(data.get("root", "")).resolve() == ROOT.resolve()
+    except Exception:
+        return False
 
 
 def _start_viewer_server() -> int:
-    """Start the viewer HTTP server. Picks a free port if 6800 is taken."""
+    """Start the viewer HTTP server on a deterministic per-project port.
+
+    If another session for the same project already owns the port, reuse it.
+    If a different project owns it, fall back to an OS-assigned port.
+    """
     global _viewer_started, VIEWER_PORT
     if _viewer_started:
         return VIEWER_PORT
+
+    target_port = _project_port()
 
     # Disable SO_REUSEADDR — on Windows, it allows multiple processes to bind
     # the same port, causing requests to route to the wrong session's server.
@@ -2276,10 +2312,16 @@ def _start_viewer_server() -> int:
         allow_reuse_address = False
 
     try:
-        server = _ExclusiveServer(("127.0.0.1", VIEWER_PORT), ViewerHandler)
+        server = _ExclusiveServer(("127.0.0.1", target_port), ViewerHandler)
+        VIEWER_PORT = target_port
     except OSError:
-        # Port 6800 is taken (stale process or another active session).
-        # Use port 0 to let the OS pick a free port.
+        # Port taken — check if the existing server serves the same project
+        if _check_identity(target_port):
+            # Same project, another session already runs the server — reuse it
+            _viewer_started = True
+            VIEWER_PORT = target_port
+            return VIEWER_PORT
+        # Different project owns this port — use a random free port
         server = _ExclusiveServer(("127.0.0.1", 0), ViewerHandler)
         VIEWER_PORT = server.server_address[1]
 
