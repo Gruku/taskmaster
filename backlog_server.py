@@ -2270,12 +2270,17 @@ def _start_viewer_server() -> int:
     if _viewer_started:
         return VIEWER_PORT
 
+    # Disable SO_REUSEADDR — on Windows, it allows multiple processes to bind
+    # the same port, causing requests to route to the wrong session's server.
+    class _ExclusiveServer(ThreadingHTTPServer):
+        allow_reuse_address = False
+
     try:
-        server = ThreadingHTTPServer(("127.0.0.1", VIEWER_PORT), ViewerHandler)
+        server = _ExclusiveServer(("127.0.0.1", VIEWER_PORT), ViewerHandler)
     except OSError:
         # Port 6800 is taken (stale process or another active session).
         # Use port 0 to let the OS pick a free port.
-        server = ThreadingHTTPServer(("127.0.0.1", 0), ViewerHandler)
+        server = _ExclusiveServer(("127.0.0.1", 0), ViewerHandler)
         VIEWER_PORT = server.server_address[1]
 
     thread = threading.Thread(target=server.serve_forever, daemon=True)
