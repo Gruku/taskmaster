@@ -1152,11 +1152,13 @@ def _build_worktree_instruction(task_id: str, sub_repo: str, branch: str, worktr
 
 
 @mcp.tool()
-def backlog_pick_task(task_id: str) -> str:
+def backlog_pick_task(task_id: str, force: bool = False) -> str:
     """Start working on a task — sets it to in-progress. Idempotent if already in-progress.
 
     Args:
         task_id: The task ID to pick (e.g., "ue-plugin-003")
+        force: Force-claim the task even if locked by another session. Use when a previous
+               session ended without releasing the lock.
     """
     data = _load()
     result = _find_task(data, task_id)
@@ -1171,12 +1173,15 @@ def backlog_pick_task(task_id: str) -> str:
 
     if status == "in-progress":
         if locked_by and locked_by != SESSION_ID:
-            # Another session owns this task
-            return (
-                f"Error: task `{task_id}` is locked by another session (`{locked_by}`). "
-                f"It is already in-progress elsewhere. Pick a different task, or use "
-                f"`backlog_update_task({task_id}, locked_by, {SESSION_ID})` to force-claim it."
-            )
+            if not force:
+                return (
+                    f"Error: task `{task_id}` is locked by another session (`{locked_by}`). "
+                    f"It is already in-progress elsewhere. Pick a different task, or use "
+                    f"`backlog_pick_task({task_id}, force=true)` to reclaim it for this session."
+                )
+            # Force-claim: transfer lock to this session
+            task["locked_by"] = SESSION_ID
+            _mutate_and_save(data)
         # Idempotent: update session state and lock, return details without mutation
         if not locked_by:
             task["locked_by"] = SESSION_ID

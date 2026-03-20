@@ -61,6 +61,13 @@ See `references/task-lifecycle.md` for the full state machine and transition rul
 todo → in-progress → in-review → done → archived
 ```
 
+## Reclaiming a locked task
+
+If `backlog_pick_task` returns a lock conflict (task locked by another session), the previous session likely ended without releasing the lock. **Do not** manually edit `backlog.yaml` or use `backlog_update_task` to change `locked_by` — instead:
+
+1. Call `backlog_pick_task(task_id, force=true)` — this reclaims the lock in a single atomic call.
+2. Verify the existing worktree is still valid (directory exists, `.git` file present). If orphaned, prune and recreate.
+
 ## Notes
 
 - `backlog_pick_task` is idempotent for already in-progress tasks in the same session.
