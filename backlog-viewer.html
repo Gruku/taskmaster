@@ -2047,57 +2047,20 @@ function ingestData(data) {
   // Collapse load bar after successful load
   document.getElementById('load-bar').classList.add('collapsed');
 
-  // Epic dropdown — preserve current filter across live reloads
-  const sel = document.getElementById('epic-filter');
-  const prevEpic = activeEpic;
-  while (sel.options.length > 1) sel.remove(1);
-  for (const epic of allEpics) {
-    const opt = document.createElement('option');
-    opt.value = epic.id;
-    opt.textContent = epic.name || epic.id;
-    sel.appendChild(opt);
-  }
-  // Restore previous filter if the epic still exists, otherwise reset
-  if (prevEpic !== 'all' && allEpics.some(e => e.id === prevEpic)) {
-    activeEpic = prevEpic;
-    sel.value  = prevEpic;
-  } else {
+  // Preserve epic filter across live reloads
+  if (activeEpic !== 'all' && !allEpics.some(e => e.id === activeEpic)) {
     activeEpic = 'all';
-    sel.value  = 'all';
   }
 
-  // Phase dropdown — populate and auto-select active phase
-  const phSel = document.getElementById('phase-filter');
-  const phGroup = document.getElementById('phase-filter-group');
+  // Preserve phase filter — auto-select active phase on first load
   const phases = (data.phases || []).filter(m => m.status !== 'archived');
-  const prevPh = activePhase;
-  while (phSel.options.length > 1) phSel.remove(1);
-  if (phases.length) {
-    phGroup.style.display = '';
-    for (const ph of phases) {
-      const opt = document.createElement('option');
-      opt.value = ph.id;
-      opt.textContent = ph.name || ph.id;
-      phSel.appendChild(opt);
-    }
-    // Restore previous selection, or auto-select active phase on first load
-    if (prevPh !== 'all' && phases.some(m => m.id === prevPh)) {
-      activePhase = prevPh;
-      phSel.value = prevPh;
-    } else {
-      // Auto-select the active phase (first load or if previous selection was removed)
-      const activePh = phases.find(m => m.status === 'active');
-      if (activePh) {
-        activePhase = activePh.id;
-        phSel.value = activePh.id;
-      } else {
-        activePhase = 'all';
-        phSel.value = 'all';
-      }
-    }
-  } else {
-    phGroup.style.display = 'none';
-    activePhase = 'all';
+  if (activePhase !== 'all' && !phases.some(m => m.id === activePhase)) {
+    const activePh = phases.find(m => m.status === 'active');
+    activePhase = activePh ? activePh.id : 'all';
+  } else if (activePhase === 'all' && !_lastYamlText) {
+    // First load — auto-select active phase
+    const activePh = phases.find(m => m.status === 'active');
+    if (activePh) activePhase = activePh.id;
   }
 
   renderPhases();
@@ -2333,13 +2296,10 @@ function renderPhases() {
     banner.querySelectorAll('.ms-step[data-ms-id]').forEach(step => {
       step.addEventListener('click', () => {
         const msId = step.dataset.msId;
-        const phSel = document.getElementById('phase-filter');
         if (activePhase === msId) {
           activePhase = 'all';
-          phSel.value = 'all';
         } else {
           activePhase = msId;
-          phSel.value = msId;
         }
         renderPhases();
         renderEpics();
@@ -2360,13 +2320,10 @@ function renderPhases() {
     banner.querySelectorAll('.ms-history-item[data-ms-id]').forEach(item => {
       item.addEventListener('click', () => {
         const msId = item.dataset.msId;
-        const phSel = document.getElementById('phase-filter');
         if (activePhase === msId) {
           activePhase = 'all';
-          phSel.value = 'all';
         } else {
           activePhase = msId;
-          phSel.value = msId;
         }
         renderPhases();
         renderEpics();
@@ -2470,13 +2427,10 @@ function renderEpics() {
     `;
 
     card.addEventListener('click', () => {
-      const sel = document.getElementById('epic-filter');
       if (activeEpic === epic.id) {
         activeEpic = 'all';
-        sel.value  = 'all';
       } else {
         activeEpic = epic.id;
-        sel.value  = epic.id;
       }
       // re-highlight cards
       document.querySelectorAll('.epic-card').forEach(c => {
@@ -2491,34 +2445,9 @@ function renderEpics() {
   if (!visibleCount) section.style.display = 'none';
 }
 
-// ── Now Working On banner ────────────────────────────────
-function renderNowWorking() {
-  const container = document.getElementById('now-working');
-  const tasksEl = document.getElementById('now-working-tasks');
-  const inProgress = allTasks.filter(t => {
-    const st = (t.status || '').toLowerCase();
-    return st === 'in-progress' || st === 'in progress';
-  });
-
-  if (!inProgress.length) {
-    container.style.display = 'none';
-    return;
-  }
-
-  container.style.display = '';
-  tasksEl.innerHTML = inProgress.map(t => `
-    <div class="now-working-item">
-      <span class="nw-id">${esc(t.id)}</span>
-      ${esc(t.title)}
-      <span class="nw-epic">${esc(t._epicName || '')}</span>
-    </div>
-  `).join('');
-}
-
 // ── Main render ──────────────────────────────────────────
 function render() {
   if (!loadedData) return;
-  renderNowWorking();
 
   // Filter
   let tasks = allTasks;
@@ -2588,18 +2517,6 @@ function render() {
     statsSource = statsSource.map(t => colKey(t.status) === 'archived' ? { ...t, status: 'done' } : t);
   }
   const stats = computeStats(statsSource);
-  document.getElementById('stat-total').textContent    = stats.total;
-  document.getElementById('stat-done').textContent     = stats.done;
-  document.getElementById('stat-progress').textContent = stats.in_progress;
-  document.getElementById('stat-todo').textContent     = stats.todo;
-  document.getElementById('stat-blocked').textContent  = stats.blocked;
-  document.getElementById('stat-blocked-wrapper').style.display = stats.blocked ? '' : 'none';
-
-  // Archive toggle in toolbar
-  const archiveToggle = document.getElementById('archive-toggle');
-  const archiveCount = stats.archived;
-  document.getElementById('archive-toggle-count').textContent = archiveCount;
-  archiveToggle.style.display = archiveCount ? '' : 'none';
 
   // Bucket
   const buckets = { todo: [], progress: [], review: [], done: [], archived: [] };
@@ -2681,19 +2598,6 @@ document.getElementById('archived-header').addEventListener('click', () => {
   const chevron = document.getElementById('archived-chevron');
   grid.classList.toggle('open', showArchived);
   chevron.classList.toggle('open', showArchived);
-});
-
-document.getElementById('archive-toggle').addEventListener('click', function() {
-  showArchived = !showArchived;
-  this.classList.toggle('active', showArchived);
-  const grid = document.getElementById('archived-grid');
-  const chevron = document.getElementById('archived-chevron');
-  grid.classList.toggle('open', showArchived);
-  chevron.classList.toggle('open', showArchived);
-  // Scroll to archived section if opening
-  if (showArchived) {
-    document.getElementById('archived-section').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-  }
 });
 
 // ── Minimal markdown renderer ────────────────────────────
@@ -3060,23 +2964,6 @@ document.getElementById('sort-select').addEventListener('change', function() {
   render();
 });
 
-// ── Epic select ──────────────────────────────────────────
-document.getElementById('epic-filter').addEventListener('change', function() {
-  activeEpic = this.value;
-  document.querySelectorAll('.epic-card').forEach(c => {
-    c.classList.toggle('active-filter', c.dataset.epicId === activeEpic);
-  });
-  render();
-});
-
-// ── Phase select ─────────────────────────────────────────
-document.getElementById('phase-filter').addEventListener('change', function() {
-  activePhase = this.value;
-  renderPhases();
-  renderEpics();
-  render();
-});
-
 // ── Priority toggles ─────────────────────────────────────
 document.getElementById('priority-toggles').addEventListener('click', function(e) {
   const btn = e.target.closest('.priority-btn');
@@ -3101,20 +2988,16 @@ function setStatus(msg, cls) {
   el.className    = 'load-indicator ' + (cls || '');
 }
 
-// ── Theme toggles: dark/light + colored on/off ──────────
+// ── Settings dropdown + Theme toggles ─────────────────
 (function() {
-  // State: base = 'dark'|'light', colored = true|false
-  // Theme names: dark, light, colored, light-colored
   let base = localStorage.getItem('backlog-base') || 'dark';
-  let colored = localStorage.getItem('backlog-colored') !== 'false'; // default true
+  let colored = localStorage.getItem('backlog-colored') !== 'false';
 
   function applyTheme() {
     const theme = colored ? (base === 'light' ? 'light-colored' : 'colored') : base;
     document.documentElement.setAttribute('data-theme', theme);
-    document.getElementById('theme-toggle').textContent = base === 'dark' ? '◑' : '◐';
-    document.getElementById('theme-toggle').title = `Theme: ${base}`;
-    document.getElementById('color-toggle').classList.toggle('active', colored);
-    document.getElementById('color-toggle').title = colored ? 'Colored accent: on' : 'Colored accent: off';
+    document.getElementById('settings-theme-value').textContent = base === 'dark' ? 'Dark' : 'Light';
+    document.getElementById('settings-color-value').textContent = colored ? 'On' : 'Off';
     localStorage.setItem('backlog-base', base);
     localStorage.setItem('backlog-colored', colored);
   }
@@ -3129,14 +3012,27 @@ function setStatus(msg, cls) {
     localStorage.removeItem('backlog-theme');
   }
 
-  document.getElementById('theme-toggle').addEventListener('click', function() {
+  document.getElementById('settings-theme').addEventListener('click', function() {
     base = base === 'dark' ? 'light' : 'dark';
     applyTheme();
   });
 
-  document.getElementById('color-toggle').addEventListener('click', function() {
+  document.getElementById('settings-color').addEventListener('click', function() {
     colored = !colored;
     applyTheme();
+  });
+
+  // Settings dropdown open/close
+  const btn = document.getElementById('settings-btn');
+  const dropdown = document.getElementById('settings-dropdown');
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    dropdown.classList.toggle('open');
+  });
+  document.addEventListener('click', () => dropdown.classList.remove('open'));
+  dropdown.addEventListener('click', (e) => e.stopPropagation());
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') dropdown.classList.remove('open');
   });
 
   applyTheme();
@@ -3185,46 +3081,10 @@ async function fetchWorktrees() {
   } catch (e) { /* worktree endpoint not available */ }
 }
 
-// ── Active session polling ─────────────────────────────────
-let _lastSessionId = null;
-
-async function fetchSession() {
-  try {
-    const resp = await fetch('/api/session');
-    if (!resp.ok) return;
-    const data = await resp.json();
-    const container = document.getElementById('active-session');
-    const taskEl = document.getElementById('active-session-task');
-
-    if (!data || !data.id) {
-      container.style.display = 'none';
-      _lastSessionId = null;
-      return;
-    }
-
-    if (data.id === _lastSessionId) return; // no change
-    _lastSessionId = data.id;
-
-    container.style.display = '';
-    taskEl.innerHTML = `
-      <div class="active-session-task">
-        <span class="as-id">${esc(data.id)}</span>
-        ${esc(data.title || '')}
-        <span class="as-epic">${esc(data.epic || '')}</span>
-      </div>
-    `;
-  } catch (e) {
-    // session endpoint not available — hide banner
-    document.getElementById('active-session').style.display = 'none';
-  }
-}
-
 // Poll every 3 seconds when served over HTTP
 if (window.location.protocol === 'http:' || window.location.protocol === 'https:') {
   setInterval(fetchBacklog, 3000);
-  setInterval(fetchSession, 3000);
   setInterval(fetchWorktrees, 10000); // worktrees change less often
-  fetchSession();
   fetchWorktrees();
 }
 </script>
