@@ -2875,6 +2875,9 @@ function makeCard(task) {
 
   const hasTags = task.sub_repo || task.stage != null || task.estimate;
   const depsCount = task.depends_on ? (Array.isArray(task.depends_on) ? task.depends_on.length : 1) : 0;
+  const anchorsHtml = (task.anchors && task.anchors.length)
+    ? `<div class="task-anchors" style="font-size:var(--fs-xs);color:var(--text-dim);margin-top:2px">📌 ${task.anchors.map(a => esc(a)).join(', ')}</div>`
+    : '';
 
   card.innerHTML = `
     <div class="task-card-top">
@@ -2882,6 +2885,7 @@ function makeCard(task) {
       ${p ? `<span class="priority-badge ${pClass}">${esc(pLabel)}</span>` : ''}
     </div>
     <div class="task-title">${esc(task.title || 'Untitled')}</div>
+    ${anchorsHtml}
     ${hasTags ? `<div class="task-card-tags">
       ${task.stage != null ? `<span class="tag-stage">S${esc(String(task.stage))}</span>` : ''}
       ${task.estimate ? `<span class="tag-estimate">${esc(task.estimate)}</span>` : ''}
