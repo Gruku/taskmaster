@@ -2855,6 +2855,38 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
+// ── Time in status helper ──────────────────────────────
+function timeInStatus(task) {
+  const now = new Date();
+  const statusKey = colKey(task.status);
+  let since = null;
+  if (statusKey === 'done') since = task.completed;
+  else if (statusKey === 'progress' || statusKey === 'review') since = task.started;
+  else since = task.created;
+  if (!since) return '';
+  try {
+    const d = new Date(since);
+    const days = Math.floor((now - d) / 86400000);
+    if (days < 1) return '<1d';
+    if (days < 30) return days + 'd';
+    if (days < 365) return Math.floor(days / 30) + 'mo';
+    return Math.floor(days / 365) + 'y';
+  } catch(e) { return ''; }
+}
+
+function statusDisplayLabel(task) {
+  const st = (task.status || 'todo').toLowerCase();
+  const map = {
+    'todo': 'Todo', 'to-do': 'Todo',
+    'in-progress': 'In Progress', 'in progress': 'In Progress',
+    'in-review': 'In Review', 'in review': 'In Review',
+    'done': 'Done', 'completed': 'Done', 'closed': 'Done',
+    'blocked': 'Blocked',
+    'archived': 'Archived',
+  };
+  return map[st] || st;
+}
+
 function makeCard(task) {
   const card = document.createElement('div');
   card.className = 'task-card';
@@ -2874,10 +2906,17 @@ function makeCard(task) {
 
   const p = (task.priority || '').toUpperCase();
   const pClass = { P0:'p0-badge', P1:'p1-badge', P2:'p2-badge', P3:'p3-badge' }[p] || 'p3-badge';
-  const pLabel = p || '—';
 
+  // Card header — status info
+  const statusKey = colKey(task.status);
+  const statusLabel = statusDisplayLabel(task);
+  const timeStr = timeInStatus(task);
+  const branchHtml = task.branch
+    ? `<span class="card-header-sep">·</span><span class="card-branch" title="${esc(task.branch)}">${esc(task.branch)}${worktreesByBranch[task.branch] ? ' (wt)' : ''}</span>`
+    : '';
+
+  // Card body
   const date = task.completed || task.started || task.created || '';
-
   const hasTags = task.sub_repo || task.stage != null || task.estimate;
   const depsCount = task.depends_on ? (Array.isArray(task.depends_on) ? task.depends_on.length : 1) : 0;
   const anchorsHtml = (task.anchors && task.anchors.length)
@@ -2885,25 +2924,32 @@ function makeCard(task) {
     : '';
 
   card.innerHTML = `
-    <div class="task-card-top">
-      <span class="task-id">${esc(task.id || '—')}</span>
-      ${p ? `<span class="priority-badge ${pClass}">${esc(pLabel)}</span>` : ''}
+    <div class="task-card-header">
+      <div class="task-card-header-row1">
+        <span class="task-id">${esc(task.id || '—')}</span>
+        ${p ? `<span class="priority-badge ${pClass}">${esc(p)}</span>` : ''}
+      </div>
+      <div class="task-card-header-row2">
+        <span class="card-status-label cs-${statusKey}">${esc(statusLabel)}</span>
+        ${timeStr ? `<span class="card-header-sep">·</span><span class="card-time-in-status">${esc(timeStr)}</span>` : ''}
+        ${branchHtml}
+      </div>
     </div>
-    <div class="task-title">${esc(task.title || 'Untitled')}</div>
-    ${anchorsHtml}
-    ${hasTags ? `<div class="task-card-tags">
-      ${task.stage != null ? `<span class="tag-stage">S${esc(String(task.stage))}</span>` : ''}
-      ${task.estimate ? `<span class="tag-estimate">${esc(task.estimate)}</span>` : ''}
-      ${task.sub_repo ? `<span class="tag-subrepo">${esc(task.sub_repo)}</span>` : ''}
-    </div>` : ''}
-    <div class="task-card-footer">
-      ${task._epicName ? `<span class="epic-tag">${esc(task._epicName)}</span>` : ''}
-      ${task.archive_reason ? `<span class="epic-tag" style="color:var(--stat-archived-color);border-color:var(--stat-archived-border);">${esc(task.archive_reason)}</span>` : ''}
-      ${task.docs ? `<span class="epic-tag" style="color:var(--accent);border-color:var(--p2-border);">docs</span>` : ''}
-      ${depsCount ? `<span class="epic-tag" style="color:var(--p1);border-color:var(--p1-border);">${depsCount} dep${depsCount > 1 ? 's' : ''}</span>` : ''}
-      ${task.branch ? `<span class="epic-tag" style="color:var(--progress);border-color:var(--stat-done-border);">${esc(task.branch)}${worktreesByBranch[task.branch] ? ' (wt)' : ''}</span>` : ''}
-      ${!task.branch && task.worktree ? `<span class="epic-tag" style="color:var(--progress);border-color:var(--stat-done-border);">worktree</span>` : ''}
-      ${date ? `<span class="task-date">${fmtTs(date)}</span>` : ''}
+    <div class="task-card-body">
+      <div class="task-title">${esc(task.title || 'Untitled')}</div>
+      ${anchorsHtml}
+      ${hasTags ? `<div class="task-card-tags">
+        ${task.stage != null ? `<span class="tag-stage">S${esc(String(task.stage))}</span>` : ''}
+        ${task.estimate ? `<span class="tag-estimate">${esc(task.estimate)}</span>` : ''}
+        ${task.sub_repo ? `<span class="tag-subrepo">${esc(task.sub_repo)}</span>` : ''}
+      </div>` : ''}
+      <div class="task-card-footer">
+        ${task._epicName ? `<span class="epic-tag">${esc(task._epicName)}</span>` : ''}
+        ${task.archive_reason ? `<span class="epic-tag" style="color:var(--stat-archived-color);border-color:var(--stat-archived-border);">${esc(task.archive_reason)}</span>` : ''}
+        ${task.docs ? `<span class="epic-tag" style="color:var(--accent);border-color:var(--p2-border);">docs</span>` : ''}
+        ${depsCount ? `<span class="epic-tag" style="color:var(--p1);border-color:var(--p1-border);">${depsCount} dep${depsCount > 1 ? 's' : ''}</span>` : ''}
+        ${date ? `<span class="task-date">${fmtTs(date)}</span>` : ''}
+      </div>
     </div>
   `;
 
