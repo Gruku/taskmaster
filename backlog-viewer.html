@@ -434,12 +434,13 @@
     .phase-banner {
       display: flex;
       align-items: center;
-      gap: 16px;
-      padding: 10px 16px;
+      gap: 10px;
+      padding: 6px 12px;
       background: var(--surface);
       border: 1.5px solid var(--accent-dim);
-      border-radius: 10px;
+      border-radius: 8px;
       margin-bottom: 0;
+      flex-shrink: 0;
     }
 
     .phase-banner .ms-label {
@@ -507,6 +508,21 @@
       align-items: center;
       gap: 12px;
       flex-wrap: wrap;
+    }
+
+    .phase-row-left {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex-wrap: wrap;
+    }
+
+    .phase-row-right {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-left: auto;
+      flex-shrink: 0;
     }
 
     .ms-step .ph-num {
@@ -604,8 +620,8 @@
       cursor: pointer;
       padding: 4px 12px;
       border-radius: 6px;
-      margin-top: 4px;
       transition: border-color 0.2s, color 0.2s;
+      white-space: nowrap;
     }
 
     .ms-history-toggle:hover {
@@ -2097,20 +2113,35 @@ function renderPhases() {
     stepsHtml += '</div>';
     banner.innerHTML += stepsHtml;
 
-    // Wrap banner + steps in a single row
+    // Build history button HTML (inline, not a separate section)
+    let historyBtnHtml = '';
+    if (donePhases.length) {
+      historyBtnHtml = `<button class="ms-history-toggle" id="ms-history-toggle">${msHistoryOpen ? '▾' : '▸'} History (${donePhases.length})</button>`;
+    }
+
+    // Wrap into: left = steps, right = banner + history button
     const bannerEl = banner.querySelector('.phase-banner');
     const stepsEl = banner.querySelector('.phase-steps');
     if (bannerEl && stepsEl) {
       const row = document.createElement('div');
       row.className = 'phase-row';
-      row.appendChild(bannerEl);
-      row.appendChild(stepsEl);
+      const left = document.createElement('div');
+      left.className = 'phase-row-left';
+      left.appendChild(stepsEl);
+      const right = document.createElement('div');
+      right.className = 'phase-row-right';
+      right.appendChild(bannerEl);
+      if (historyBtnHtml) {
+        right.insertAdjacentHTML('beforeend', historyBtnHtml);
+      }
+      row.appendChild(left);
+      row.appendChild(right);
       banner.insertBefore(row, banner.firstChild);
     }
 
-    // 3.5 — Phase history section
+    // 3.5 — Phase history panel (below the row)
     if (donePhases.length) {
-      let historyHtml = `<div><button class="ms-history-toggle" id="ms-history-toggle">${msHistoryOpen ? '▾' : '▸'} History (${donePhases.length})</button></div>`;
+      let historyHtml = '';
       if (msHistoryOpen) {
         historyHtml += '<div class="ms-history-panel" id="ms-history-panel">';
         for (const ph of donePhases) {
