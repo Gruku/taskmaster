@@ -626,8 +626,8 @@
       color: var(--text);
     }
 
-    /* ── Milestone banner ──────────────────────────────────── */
-    .milestone-banner {
+    /* ── Phase banner ──────────────────────────────────── */
+    .phase-banner {
       display: flex;
       align-items: center;
       gap: 16px;
@@ -638,7 +638,7 @@
       margin-bottom: 6px;
     }
 
-    .milestone-banner .ms-label {
+    .phase-banner .ms-label {
       font-size: var(--fs-xs);
       font-weight: 700;
       letter-spacing: 0.1em;
@@ -648,14 +648,14 @@
       flex-shrink: 0;
     }
 
-    .milestone-banner .ms-name {
+    .phase-banner .ms-name {
       font-size: var(--fs-heading);
       font-weight: 700;
       color: var(--text);
       white-space: nowrap;
     }
 
-    .milestone-banner .ms-progress-bar {
+    .phase-banner .ms-progress-bar {
       flex: 1;
       height: 8px;
       background: var(--border-subtle);
@@ -664,26 +664,65 @@
       min-width: 80px;
     }
 
-    .milestone-banner .ms-progress-fill {
+    .phase-banner .ms-progress-fill {
       height: 100%;
       background: var(--progress);
       border-radius: 4px;
       transition: width 0.4s ease;
     }
 
-    .milestone-banner .ms-stats {
+    .phase-banner .ms-stats {
       font-size: var(--fs-sm);
       color: var(--text-muted);
       font-weight: 600;
       white-space: nowrap;
     }
 
-    .milestone-steps {
+    .phase-steps {
       display: flex;
       gap: 4px;
       align-items: center;
       flex-wrap: wrap;
       margin-top: 4px;
+    }
+
+    .phase-steps .ph-connector {
+      width: 24px;
+      height: 2px;
+      background: var(--border);
+      flex-shrink: 0;
+    }
+
+    .phase-steps .ph-connector.ph-done-connector {
+      background: var(--stat-done-color);
+      opacity: 0.5;
+    }
+
+    .ms-step .ph-num {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      line-height: 16px;
+      text-align: center;
+      border-radius: 50%;
+      font-size: 10px;
+      font-weight: 700;
+      margin-right: 4px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+    }
+
+    .ms-step.ms-active .ph-num {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: var(--surface);
+    }
+
+    .ms-step.ms-done .ph-num {
+      background: var(--stat-done-color);
+      border-color: var(--stat-done-color);
+      color: var(--surface);
     }
 
     .ms-step {
@@ -700,6 +739,9 @@
       border-color: var(--accent);
       background: var(--p2-bg);
       color: var(--accent);
+      font-size: var(--fs-sm);
+      padding: 4px 12px;
+      box-shadow: 0 0 0 1px var(--accent), 0 2px 8px rgba(0,0,0,0.15);
     }
 
     .ms-step.ms-done {
@@ -724,7 +766,7 @@
       box-shadow: 0 0 0 2px var(--stat-done-color);
     }
 
-    /* ── Milestone date info ─────────────────────────────── */
+    /* ── Phase date info ────────────────────────────────── */
     .ms-date-info {
       font-size: var(--fs-xs);
       color: var(--text-muted);
@@ -741,7 +783,7 @@
       font-weight: 600;
     }
 
-    /* ── Milestone history panel ─────────────────────────── */
+    /* ── Phase history panel ─────────────────────────────── */
     .ms-history-toggle {
       font-size: var(--fs-xs);
       color: var(--text-muted);
@@ -1655,10 +1697,10 @@
       <option value="all">All epics</option>
     </select>
   </div>
-  <div class="filter-group" id="milestone-filter-group" style="display:none;">
-    <span class="filter-label">Milestone</span>
-    <select class="filter-select" id="milestone-filter">
-      <option value="all">All milestones</option>
+  <div class="filter-group" id="phase-filter-group" style="display:none;">
+    <span class="filter-label">Phase</span>
+    <select class="filter-select" id="phase-filter">
+      <option value="all">All phases</option>
     </select>
   </div>
   <div class="filter-group">
@@ -1701,9 +1743,9 @@
   <div class="now-working-tasks" id="now-working-tasks"></div>
 </div>
 
-<!-- Milestone banner -->
-<div class="epics-section" id="milestone-section" style="display:none;">
-  <div id="milestone-banner"></div>
+<!-- Phase banner -->
+<div class="epics-section" id="phase-section" style="display:none;">
+  <div id="phase-banner"></div>
 </div>
 
 <!-- Epics section -->
@@ -1766,7 +1808,7 @@
 let allTasks     = [];
 let allEpics     = [];
 let activeEpic   = 'all';
-let activeMilestone = 'all';
+let activePhase = 'all';
 let activePriorities = new Set(['P0','P1','P2','P3']);
 let searchQuery  = '';
 let sortMode     = 'priority';
@@ -1923,46 +1965,46 @@ function ingestData(data) {
     sel.value  = 'all';
   }
 
-  // Milestone dropdown — populate and auto-select active milestone
-  const msSel = document.getElementById('milestone-filter');
-  const msGroup = document.getElementById('milestone-filter-group');
-  const milestones = (data.milestones || []).filter(m => m.status !== 'archived');
-  const prevMs = activeMilestone;
-  while (msSel.options.length > 1) msSel.remove(1);
-  if (milestones.length) {
-    msGroup.style.display = '';
-    for (const ms of milestones) {
+  // Phase dropdown — populate and auto-select active phase
+  const phSel = document.getElementById('phase-filter');
+  const phGroup = document.getElementById('phase-filter-group');
+  const phases = (data.phases || []).filter(m => m.status !== 'archived');
+  const prevPh = activePhase;
+  while (phSel.options.length > 1) phSel.remove(1);
+  if (phases.length) {
+    phGroup.style.display = '';
+    for (const ph of phases) {
       const opt = document.createElement('option');
-      opt.value = ms.id;
-      opt.textContent = ms.name || ms.id;
-      msSel.appendChild(opt);
+      opt.value = ph.id;
+      opt.textContent = ph.name || ph.id;
+      phSel.appendChild(opt);
     }
-    // Restore previous selection, or auto-select active milestone on first load
-    if (prevMs !== 'all' && milestones.some(m => m.id === prevMs)) {
-      activeMilestone = prevMs;
-      msSel.value = prevMs;
+    // Restore previous selection, or auto-select active phase on first load
+    if (prevPh !== 'all' && phases.some(m => m.id === prevPh)) {
+      activePhase = prevPh;
+      phSel.value = prevPh;
     } else {
-      // Auto-select the active milestone (first load or if previous selection was removed)
-      const activeMs = milestones.find(m => m.status === 'active');
-      if (activeMs) {
-        activeMilestone = activeMs.id;
-        msSel.value = activeMs.id;
+      // Auto-select the active phase (first load or if previous selection was removed)
+      const activePh = phases.find(m => m.status === 'active');
+      if (activePh) {
+        activePhase = activePh.id;
+        phSel.value = activePh.id;
       } else {
-        activeMilestone = 'all';
-        msSel.value = 'all';
+        activePhase = 'all';
+        phSel.value = 'all';
       }
     }
   } else {
-    msGroup.style.display = 'none';
-    activeMilestone = 'all';
+    phGroup.style.display = 'none';
+    activePhase = 'all';
   }
 
-  renderMilestones();
+  renderPhases();
   renderEpics();
   render();
 }
 
-// ── Milestones ───────────────────────────────────────────
+// ── Phases ───────────────────────────────────────────
 
 // Helper: parse YYYY-MM-DD string to a Date object (noon UTC to avoid TZ drift)
 function parseDateStr(s) {
@@ -1984,7 +2026,7 @@ function fmtDate(s) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
 }
 
-// Helper: build date info HTML for active/planned milestones
+// Helper: build date info HTML for active/planned phases
 function msDateInfoHtml(ms) {
   if (!ms.target_date) return '';
   const target = parseDateStr(ms.target_date);
@@ -2010,31 +2052,35 @@ function msDateInfoHtml(ms) {
 
 let msHistoryOpen = false;
 
-function renderMilestones() {
-  const section = document.getElementById('milestone-section');
-  const banner = document.getElementById('milestone-banner');
-  const milestones = (loadedData && loadedData.milestones) || [];
+function renderPhases() {
+  const section = document.getElementById('phase-section');
+  const banner = document.getElementById('phase-banner');
+  const phases = (loadedData && loadedData.phases) || [];
   banner.innerHTML = '';
 
-  if (!milestones.length) { section.style.display = 'none'; return; }
+  if (!phases.length) { section.style.display = 'none'; return; }
   section.style.display = '';
 
-  const sorted = [...milestones].sort((a, b) => (a.order || 999) - (b.order || 999));
+  const sorted = [...phases].sort((a, b) => (a.order || 999) - (b.order || 999));
   const active = sorted.find(m => m.status === 'active');
-  const doneMilestones = sorted.filter(m => m.status === 'done');
+  const donePhases = sorted.filter(m => m.status === 'done');
 
-  // Show banner for the selected milestone (or the active one if none selected)
-  const displayed = (activeMilestone !== 'all')
-    ? sorted.find(m => m.id === activeMilestone)
+  // Show banner for the selected phase (or the active one if none selected)
+  const displayed = (activePhase !== 'all')
+    ? sorted.find(m => m.id === activePhase)
     : active;
 
   if (displayed) {
-    // 3.3 — Retrospective banner for done milestones
+    const phaseIdx = sorted.findIndex(m => m.id === displayed.id);
+    const phaseNum = phaseIdx + 1;
+    const totalPhases = sorted.length;
+
+    // 3.3 — Retrospective banner for done phases
     if (displayed.status === 'done') {
-      // Count archived + done tasks for this milestone
+      // Count archived + done tasks for this phase
       let completedCount = 0;
       for (const t of allTasks) {
-        if (t.milestone === displayed.id) {
+        if (t.phase === displayed.id) {
           const s = colKey(t.status);
           if (s === 'done' || s === 'archived') completedCount++;
         }
@@ -2076,8 +2122,8 @@ function renderMilestones() {
         : '';
 
       banner.innerHTML += `
-        <div class="milestone-banner">
-          <span class="ms-label" style="color:var(--stat-done-color)">Completed Milestone</span>
+        <div class="phase-banner">
+          <span class="ms-label" style="color:var(--stat-done-color)">Completed Phase ${phaseNum}/${totalPhases}</span>
           <span class="ms-name">${esc(displayed.name)}</span>
           <div class="ms-progress-bar"><div class="ms-progress-fill" style="width:100%;background:var(--stat-done-color)"></div></div>
           <span class="ms-stats">${completedCount} tasks completed</span>
@@ -2088,10 +2134,10 @@ function renderMilestones() {
         </div>
       `;
     } else {
-      // 3.2 — Active/planned milestone banner with date info
+      // 3.2 — Active/planned phase banner with date info
       let total = 0, done = 0;
       for (const t of allTasks) {
-        if (t.milestone === displayed.id) {
+        if (t.phase === displayed.id) {
           const s = colKey(t.status);
           if (s === 'archived') continue;
           total++;
@@ -2102,8 +2148,8 @@ function renderMilestones() {
       const dateInfoHtml = msDateInfoHtml(displayed);
 
       banner.innerHTML += `
-        <div class="milestone-banner">
-          <span class="ms-label">Milestone</span>
+        <div class="phase-banner">
+          <span class="ms-label">Phase ${phaseNum}/${totalPhases}</span>
           <span class="ms-name">${esc(displayed.name)}</span>
           <div class="ms-progress-bar"><div class="ms-progress-fill" style="width:${pct}%"></div></div>
           <span class="ms-stats">${done}/${total} done (${pct}%)</span>
@@ -2113,48 +2159,52 @@ function renderMilestones() {
     }
   }
 
-  // Steps indicator — clickable to filter by milestone
+  // Steps indicator — numbered, connected, current-phase emphasized
   if (sorted.length > 1) {
     const visibleSteps = sorted.filter(m => m.status !== 'archived');
-    let stepsHtml = '<div class="milestone-steps">';
+    let stepsHtml = '<div class="phase-steps">';
     for (let i = 0; i < visibleSteps.length; i++) {
-      const ms = visibleSteps[i];
-      const statusCls = ms.status === 'active' ? 'ms-active' : ms.status === 'done' ? 'ms-done' : '';
-      const selectedCls = activeMilestone === ms.id ? ' ms-selected' : '';
-      const icon = ms.status === 'done' ? '✓ ' : ms.status === 'active' ? '▶ ' : '';
-      stepsHtml += `<span class="ms-step ${statusCls}${selectedCls}" data-ms-id="${esc(ms.id)}">${icon}${esc(ms.name)}</span>`;
-      if (i < visibleSteps.length - 1) stepsHtml += '<span style="color:var(--text-dim);font-size:10px">→</span>';
+      const ph = visibleSteps[i];
+      const phNum = i + 1;
+      const statusCls = ph.status === 'active' ? 'ms-active' : ph.status === 'done' ? 'ms-done' : '';
+      const selectedCls = activePhase === ph.id ? ' ms-selected' : '';
+      const numContent = ph.status === 'done' ? '✓' : phNum;
+      stepsHtml += `<span class="ms-step ${statusCls}${selectedCls}" data-ms-id="${esc(ph.id)}"><span class="ph-num">${numContent}</span>${esc(ph.name)}</span>`;
+      if (i < visibleSteps.length - 1) {
+        const connectorDone = ph.status === 'done' ? ' ph-done-connector' : '';
+        stepsHtml += `<span class="ph-connector${connectorDone}"></span>`;
+      }
     }
     stepsHtml += '</div>';
     banner.innerHTML += stepsHtml;
 
-    // 3.5 — Milestone history section
-    if (doneMilestones.length) {
-      let historyHtml = `<div><button class="ms-history-toggle" id="ms-history-toggle">${msHistoryOpen ? '▾' : '▸'} History (${doneMilestones.length})</button></div>`;
+    // 3.5 — Phase history section
+    if (donePhases.length) {
+      let historyHtml = `<div><button class="ms-history-toggle" id="ms-history-toggle">${msHistoryOpen ? '▾' : '▸'} History (${donePhases.length})</button></div>`;
       if (msHistoryOpen) {
         historyHtml += '<div class="ms-history-panel" id="ms-history-panel">';
-        for (const ms of doneMilestones) {
-          const selectedCls = activeMilestone === ms.id ? ' ms-selected' : '';
+        for (const ph of donePhases) {
+          const selectedCls = activePhase === ph.id ? ' ms-selected' : '';
           // Count tasks
           let taskCount = 0;
           for (const t of allTasks) {
-            if (t.milestone === ms.id) {
+            if (t.phase === ph.id) {
               const s = colKey(t.status);
               if (s === 'done' || s === 'archived') taskCount++;
             }
           }
           // Duration
           let durStat = '';
-          if (ms.start_date && ms.completed) {
-            const start = parseDateStr(ms.start_date);
-            const end = parseDateStr(ms.completed);
+          if (ph.start_date && ph.completed) {
+            const start = parseDateStr(ph.start_date);
+            const end = parseDateStr(ph.completed);
             if (start && end) durStat = `<span class="ms-history-stat">${daysBetween(end, start)}d</span>`;
           }
           // On-time
           let ontimeStat = '';
-          if (ms.target_date && ms.completed) {
-            const target = parseDateStr(ms.target_date);
-            const end = parseDateStr(ms.completed);
+          if (ph.target_date && ph.completed) {
+            const target = parseDateStr(ph.target_date);
+            const end = parseDateStr(ph.completed);
             if (target && end) {
               const diff = daysBetween(end, target);
               ontimeStat = diff <= 0
@@ -2162,10 +2212,10 @@ function renderMilestones() {
                 : `<span class="ms-history-stat ms-late">${diff}d late</span>`;
             }
           }
-          const completedDate = ms.completed ? `<span class="ms-history-stat">${esc(fmtDate(ms.completed))}</span>` : '';
+          const completedDate = ph.completed ? `<span class="ms-history-stat">${esc(fmtDate(ph.completed))}</span>` : '';
           historyHtml += `
-            <div class="ms-history-item${selectedCls}" data-ms-id="${esc(ms.id)}">
-              <span class="ms-history-item-name">✓ ${esc(ms.name)}</span>
+            <div class="ms-history-item${selectedCls}" data-ms-id="${esc(ph.id)}">
+              <span class="ms-history-item-name">✓ ${esc(ph.name)}</span>
               <span class="ms-history-stat">${taskCount} tasks</span>
               ${durStat}
               ${ontimeStat}
@@ -2178,19 +2228,19 @@ function renderMilestones() {
       banner.innerHTML += historyHtml;
     }
 
-    // Click handler for milestone steps
+    // Click handler for phase steps
     banner.querySelectorAll('.ms-step[data-ms-id]').forEach(step => {
       step.addEventListener('click', () => {
         const msId = step.dataset.msId;
-        const msSel = document.getElementById('milestone-filter');
-        if (activeMilestone === msId) {
-          activeMilestone = 'all';
-          msSel.value = 'all';
+        const phSel = document.getElementById('phase-filter');
+        if (activePhase === msId) {
+          activePhase = 'all';
+          phSel.value = 'all';
         } else {
-          activeMilestone = msId;
-          msSel.value = msId;
+          activePhase = msId;
+          phSel.value = msId;
         }
-        renderMilestones();
+        renderPhases();
         renderEpics();
         render();
       });
@@ -2201,7 +2251,7 @@ function renderMilestones() {
     if (histToggle) {
       histToggle.addEventListener('click', () => {
         msHistoryOpen = !msHistoryOpen;
-        renderMilestones();
+        renderPhases();
       });
     }
 
@@ -2209,15 +2259,15 @@ function renderMilestones() {
     banner.querySelectorAll('.ms-history-item[data-ms-id]').forEach(item => {
       item.addEventListener('click', () => {
         const msId = item.dataset.msId;
-        const msSel = document.getElementById('milestone-filter');
-        if (activeMilestone === msId) {
-          activeMilestone = 'all';
-          msSel.value = 'all';
+        const phSel = document.getElementById('phase-filter');
+        if (activePhase === msId) {
+          activePhase = 'all';
+          phSel.value = 'all';
         } else {
-          activeMilestone = msId;
-          msSel.value = msId;
+          activePhase = msId;
+          phSel.value = msId;
         }
-        renderMilestones();
+        renderPhases();
         renderEpics();
         render();
       });
@@ -2225,13 +2275,13 @@ function renderMilestones() {
   }
 }
 
-// ── Done milestone helper ─────────────────────────────────
-// Returns true when the currently selected milestone filter is a "done" milestone
-function isViewingDoneMilestone() {
-  if (activeMilestone === 'all') return false;
-  const milestones = (loadedData && loadedData.milestones) || [];
-  const ms = milestones.find(m => m.id === activeMilestone);
-  return ms && ms.status === 'done';
+// ── Done phase helper ─────────────────────────────────
+// Returns true when the currently selected phase filter is a "done" phase
+function isViewingDonePhase() {
+  if (activePhase === 'all') return false;
+  const phases = (loadedData && loadedData.phases) || [];
+  const ph = phases.find(p => p.id === activePhase);
+  return ph && ph.status === 'done';
 }
 
 // ── Stats ────────────────────────────────────────────────
@@ -2264,16 +2314,16 @@ function renderEpics() {
   if (!allEpics.length) { section.style.display = 'none'; return; }
   section.style.display = '';
 
-  const viewingDone = isViewingDoneMilestone();
+  const viewingDone = isViewingDonePhase();
   let visibleCount = 0;
   for (const epic of allEpics) {
     let tasks = (epic.tasks || []);
-    // When a milestone is selected, only show epics that have tasks in that milestone
-    if (activeMilestone !== 'all') {
-      tasks = tasks.filter(t => t.milestone === activeMilestone);
+    // When a phase is selected, only show epics that have tasks in that phase
+    if (activePhase !== 'all') {
+      tasks = tasks.filter(t => t.phase === activePhase);
       if (!tasks.length) continue; // hide epic entirely
     }
-    // 3.4 — When viewing a done milestone, treat archived tasks as done (shallow copy, no mutation)
+    // 3.4 — When viewing a done phase, treat archived tasks as done (shallow copy, no mutation)
     if (viewingDone) {
       tasks = tasks.map(t => colKey(t.status) === 'archived' ? { ...t, status: 'done' } : t);
     }
@@ -2336,7 +2386,7 @@ function renderEpics() {
 
     grid.appendChild(card);
   }
-  // Hide epics section if milestone filter hides all epics
+  // Hide epics section if phase filter hides all epics
   if (!visibleCount) section.style.display = 'none';
 }
 
@@ -2371,11 +2421,11 @@ function render() {
 
   // Filter
   let tasks = allTasks;
-  if (activeMilestone !== 'all') {
-    tasks = tasks.filter(t => t.milestone === activeMilestone);
+  if (activePhase !== 'all') {
+    tasks = tasks.filter(t => t.phase === activePhase);
   }
-  // 3.4 — When viewing a done milestone, include archived tasks remapped as done (shallow copy)
-  if (isViewingDoneMilestone()) {
+  // 3.4 — When viewing a done phase, include archived tasks remapped as done (shallow copy)
+  if (isViewingDonePhase()) {
     tasks = tasks.map(t => colKey(t.status) === 'archived' ? { ...t, status: 'done' } : t);
   }
   if (activeEpic !== 'all') {
@@ -2428,12 +2478,12 @@ function render() {
     tasks = [...tasks].sort(sorters[sortMode]);
   }
 
-  // Stats — scope to active milestone/epic filters (not search/priority)
+  // Stats — scope to active phase/epic filters (not search/priority)
   let statsSource = allTasks;
-  if (activeMilestone !== 'all') statsSource = statsSource.filter(t => t.milestone === activeMilestone);
+  if (activePhase !== 'all') statsSource = statsSource.filter(t => t.phase === activePhase);
   if (activeEpic !== 'all') statsSource = statsSource.filter(t => t._epicId === activeEpic);
-  // 3.4 — When viewing a done milestone, treat archived tasks as done for stats
-  if (isViewingDoneMilestone()) {
+  // 3.4 — When viewing a done phase, treat archived tasks as done for stats
+  if (isViewingDonePhase()) {
     statsSource = statsSource.map(t => colKey(t.status) === 'archived' ? { ...t, status: 'done' } : t);
   }
   const stats = computeStats(statsSource);
@@ -2914,10 +2964,10 @@ document.getElementById('epic-filter').addEventListener('change', function() {
   render();
 });
 
-// ── Milestone select ─────────────────────────────────────
-document.getElementById('milestone-filter').addEventListener('change', function() {
-  activeMilestone = this.value;
-  renderMilestones();
+// ── Phase select ─────────────────────────────────────────
+document.getElementById('phase-filter').addEventListener('change', function() {
+  activePhase = this.value;
+  renderPhases();
   renderEpics();
   render();
 });
