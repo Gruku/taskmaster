@@ -15,6 +15,17 @@ Log the current work session, transition tasks, and commit tracking files.
 
 ## Steps
 
+0. **Determine summary mode.** Check the session weight:
+   - Count commits this session and files changed
+   - If the session was **light** (1-2 commits, single-topic work, or user says "quick wrap"):
+     - Use **auto-summary mode**: skip the structured Done/Decisions/Issues template
+     - Generate a one-line summary from git: `git diff --stat HEAD~N` and commit messages
+     - Call `backlog_complete_task` with `auto_summary=true` and pass the git stats as the `done` field
+     - Format: "Files changed: N | +X -Y\nCommits: \"msg1\", \"msg2\""
+   - If the session was **substantial** (3+ commits, multiple topics, design decisions made):
+     - Use **structured mode** (the existing flow below)
+   - The user can always override: "give me the full summary" forces structured mode
+
 1. **Auto-generate session summary** by reviewing the current conversation:
    - **Done:** List of accomplishments (what was built, fixed, configured)
    - **Decisions:** Architectural or design choices made during the session

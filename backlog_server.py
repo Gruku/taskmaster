@@ -171,6 +171,11 @@ def _phase_stats(data: dict, phase_id: str) -> dict:
     return {"total": total, **counts}
 
 
+def _touch_task(task: dict) -> None:
+    """Update last_referenced timestamp on a task."""
+    task["last_referenced"] = _now()
+
+
 def _epic_names(data: dict) -> str:
     return ", ".join(e["id"] for e in data["epics"])
 
@@ -289,6 +294,29 @@ def regenerate_context(data: dict) -> None:
     else:
         data["context"]["active_phase"] = None
 
+    # Stale tasks
+    stale = []
+    for ep in data["epics"]:
+        for t in ep.get("tasks", []):
+            if t.get("status") != "todo":
+                continue
+            last_ref = t.get("last_referenced")
+            if not last_ref:
+                continue
+            try:
+                ref_str = str(last_ref)
+                if "T" in ref_str:
+                    ref_date = datetime.fromisoformat(ref_str).date()
+                else:
+                    ref_date = datetime.strptime(ref_str, "%Y-%m-%d").date()
+                days_ago = (date.today() - ref_date).days
+                if days_ago >= 14:
+                    stale.append({"id": t["id"], "title": t["title"], "last_referenced": ref_str, "days_stale": days_ago})
+            except (ValueError, TypeError):
+                pass
+    stale.sort(key=lambda x: x["days_stale"], reverse=True)
+    data["context"]["stale"] = stale[:10]
+
 
 def regenerate_progress_dashboard(data: dict) -> None:
     """Rewrite PROGRESS.md above the '## Changelog' line."""
@@ -399,6 +427,14 @@ def _task_context(data: dict, task: dict, epic: dict) -> str:
         lines.append(f"**Branch:** {task['branch']}")
     if task.get("blockers"):
         lines.append(f"**Blockers:** {task['blockers']}")
+    if task.get("anchors"):
+        lines.append(f"**Anchors:** {', '.join(f'`{a}`' for a in task['anchors'])}")
+        file_anchors = [a for a in task["anchors"] if not a.startswith(("http", "localhost"))]
+        url_anchors = [a for a in task["anchors"] if a.startswith(("http", "localhost"))]
+        if file_anchors:
+            lines.append(f"  Files: {', '.join(f'`{a}`' for a in file_anchors)}")
+        if url_anchors:
+            lines.append(f"  URLs: {', '.join(url_anchors)}")
 
     # Recently completed in same epic
     epic_done = [t for t in epic.get("tasks", []) if t.get("status") == "done"]
@@ -516,6 +552,33 @@ def backlog_status() -> str:
             target_note = f", target: {ph.get('target_date')}" if ph.get("target_date") else ""
             lines.append(f"- {marker} **{ph['name']}** ({ph_st['done']}/{ph_st['total']}) — {s}{target_note}")
 
+    # Stale tasks (todo tasks not referenced in 14+ days)
+    stale_tasks = []
+    for ep in data["epics"]:
+        for t in ep.get("tasks", []):
+            if t.get("status") != "todo":
+                continue
+            last_ref = t.get("last_referenced")
+            if not last_ref:
+                continue
+            try:
+                ref_str = str(last_ref)
+                if "T" in ref_str:
+                    ref_date = datetime.fromisoformat(ref_str).date()
+                else:
+                    ref_date = datetime.strptime(ref_str, "%Y-%m-%d").date()
+                days_ago = (date.today() - ref_date).days
+                if days_ago >= 14:
+                    stale_tasks.append((t, ep, days_ago))
+            except (ValueError, TypeError):
+                pass
+    if stale_tasks:
+        stale_tasks.sort(key=lambda x: x[2], reverse=True)
+        lines.append(f"\n**Stale tasks** (not referenced in 14+ days):")
+        for t, ep, days in stale_tasks[:10]:
+            lines.append(f"- `{t['id']}` — {t['title']} — stale {days}d ({ep['id']})")
+        lines.append("*Still relevant? Archive with `backlog_archive_task` or touch to refresh.*")
+
     return "\n".join(lines)
 
 
@@ -581,6 +644,11 @@ def backlog_get_task(task_id: str) -> str:
         return f"Error: task `{task_id}` not found"
 
     task, epic = result
+
+    # Update staleness tracking
+    task["last_referenced"] = _now()
+    _save(data)
+
     lines = [f"## `{task['id']}` — {task['title']}\n"]
 
     fields = [
@@ -590,6 +658,7 @@ def backlog_get_task(task_id: str) -> str:
         ("Stage", str(task["stage"]) if task.get("stage") is not None else "—"),
         ("Estimate", task.get("estimate", "—")),
         ("Phase", task.get("phase", "—")),
+        ("Anchors", ", ".join(task["anchors"]) if task.get("anchors") else "—"),
         ("Sub-repo", task.get("sub_repo", "—")),
         ("Created", str(task.get("created", "—"))),
         ("Started", str(task.get("started", "—"))),
@@ -1032,6 +1101,7 @@ def backlog_add_task(
     title: str, epic: str, priority: str = "P2", notes: str = "",
     docs: str = "", depends_on: str = "", sub_repo: str = "",
     stage: int | None = None, estimate: str = "", phase: str = "",
+    anchors: str = "",
 ) -> str:
     """Create a new task under an epic. Auto-generates the task ID.
 
@@ -1046,6 +1116,7 @@ def backlog_add_task(
         stage: Optional stage number for phased work
         estimate: Optional size estimate (e.g., "S", "M", "L")
         phase: Optional phase ID to assign this task to
+        anchors: Optional comma-separated glob patterns or URLs declaring target files/systems (e.g., "src/auth/**,localhost:3000/api/auth")
     """
     if priority not in VALID_PRIORITIES:
         return f"Error: invalid priority `{priority}`. Valid: {', '.join(sorted(VALID_PRIORITIES))}"
@@ -1075,6 +1146,7 @@ def backlog_add_task(
         "status": "todo",
         "priority": priority,
         "created": _now(),
+        "last_referenced": _now(),
         "notes": notes,
     }
 
@@ -1095,6 +1167,9 @@ def backlog_add_task(
         if not _find_phase(data, phase):
             return f"Error: phase `{phase}` not found"
         new_task["phase"] = phase
+    if anchors:
+        anchor_list = [a.strip() for a in anchors.split(",") if a.strip()]
+        new_task["anchors"] = anchor_list
 
     # Parse docs if provided: "plan:path;spec:path"
     if docs:
@@ -1122,7 +1197,19 @@ def backlog_add_task(
             f"to an external doc and linking it via `backlog_update_task({new_id}, docs, plan:docs/plans/...)`"
         )
 
-    return f"Added `{new_id}` — {title} ({priority}) under {epic_obj['name']}" + notes_warning
+    # Budget warning
+    budget_warning = ""
+    active_count = sum(1 for t in epic_obj.get("tasks", []) if t.get("status") not in ("archived", "done"))
+    max_tasks = epic_obj.get("max_tasks", 8)
+    if active_count > max_tasks:
+        budget_warning = (
+            f"\n\n**Warning:** Epic `{epic}` now has {active_count} active tasks (soft cap: {max_tasks}). "
+            f"Consider grouping related work into fewer, coarser tasks — tasks should be things you "
+            f"might pick up in different sessions, not steps within one session. "
+            f"Link a plan document (`docs.plan`) for detailed steps instead."
+        )
+
+    return f"Added `{new_id}` — {title} ({priority}) under {epic_obj['name']}" + notes_warning + budget_warning
 
 
 def _build_worktree_instruction(task_id: str, sub_repo: str, branch: str, worktree: str) -> str:
@@ -1166,6 +1253,7 @@ def backlog_pick_task(task_id: str, force: bool = False) -> str:
         return f"Error: task `{task_id}` not found"
 
     task, epic = result
+    _touch_task(task)
     status = task.get("status", "todo")
 
     # Allowed statuses: todo, in-progress (idempotent), in-review (revert to in-progress)
@@ -1219,12 +1307,31 @@ def _append_changelog(
     decisions: str,
     issues: str,
     tasks_touched: str,
+    auto: bool = False,
+    auto_stats: str = "",
 ) -> str:
     """Insert a changelog entry into PROGRESS.md right after the '## Changelog' marker.
 
     Returns a confirmation message for the tool response.
     """
     title = session_title or "Work session"
+
+    if auto:
+        heading = f"### {_today()} — auto"
+        entry = f"{heading}\n{auto_stats}\nTasks touched: {tasks_touched}\n"
+        try:
+            text = _progress_path().read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return "No PROGRESS.md found."
+        marker = "## Changelog"
+        idx = text.find(marker)
+        if idx == -1:
+            return "No changelog section found."
+        insert_pos = idx + len(marker)
+        new_text = text[:insert_pos] + "\n\n" + entry + text[insert_pos:]
+        _progress_path().write_text(new_text, encoding="utf-8")
+        return f"\nSession auto-logged to PROGRESS.md."
+
     heading = f"### {_today()} — {title}"
 
     lines = [heading]
@@ -1293,6 +1400,7 @@ def backlog_complete_task(
     issues: str = "",
     tasks_touched: str = "",
     target_status: str = "done",
+    auto_summary: bool = False,
 ) -> str:
     """Mark a task as done (or in-review) and optionally log a session summary to the PROGRESS.md changelog.
 
@@ -1313,6 +1421,7 @@ def backlog_complete_task(
         issues: Optional newline-separated list of issues encountered. Use "None" if none.
         tasks_touched: Optional comma-separated task IDs that changed status this session
         target_status: Target status — "done" (default) or "in-review" (needs manual testing)
+        auto_summary: If true, generates a lightweight auto-summary instead of the structured format. Pass git stats as the done field.
     """
     if target_status not in ("done", "in-review"):
         return f"Error: target_status must be 'done' or 'in-review', got '{target_status}'"
@@ -1323,6 +1432,7 @@ def backlog_complete_task(
         return f"Error: task `{task_id}` not found"
 
     task, epic = result
+    _touch_task(task)
     status = task.get("status", "todo")
 
     if status not in ("in-progress", "in-review", "blocked"):
@@ -1344,7 +1454,9 @@ def backlog_complete_task(
 
     # Append changelog entry if session summary provided
     changelog_msg = ""
-    if session_title or done:
+    if auto_summary:
+        changelog_msg = _append_changelog(session_title, done, decisions, issues, tasks_touched, auto=True, auto_stats=done)
+    elif session_title or done:
         changelog_msg = _append_changelog(session_title, done, decisions, issues, tasks_touched)
 
     # Suggest next task in same epic
@@ -1535,7 +1647,7 @@ def _clear_session_task(task_id: str) -> None:
         _session_task = None
 
 
-ALLOWED_FIELDS = {"title", "status", "priority", "notes", "branch", "worktree", "blockers", "docs", "depends_on", "sub_repo", "stage", "estimate", "locked_by", "review_instructions", "phase"}
+ALLOWED_FIELDS = {"title", "status", "priority", "notes", "branch", "worktree", "blockers", "docs", "depends_on", "sub_repo", "stage", "estimate", "locked_by", "review_instructions", "phase", "anchors"}
 VALID_STATUSES = {"todo", "in-progress", "in-review", "done", "archived", "blocked"}
 VALID_PRIORITIES = {"P0", "P1", "P2", "P3"}
 VALID_DOC_KEYS = {"plan", "spec", "roadmap", "design", "analysis"}
@@ -1556,6 +1668,7 @@ def backlog_update_task(task_id: str, field: str, value: str) -> str:
             - sub_repo: sub-repo directory name for monorepo projects
             - locked_by: session ID to claim the lock, or "" to clear it
             - phase: phase ID to assign, or "" to clear
+            - anchors: comma-separated glob patterns/URLs, or "" to clear
     """
     if field not in ALLOWED_FIELDS:
         return f"Error: field `{field}` not allowed. Allowed: {', '.join(sorted(ALLOWED_FIELDS))}"
@@ -1566,6 +1679,7 @@ def backlog_update_task(task_id: str, field: str, value: str) -> str:
         return f"Error: task `{task_id}` not found"
 
     task, epic = result
+    _touch_task(task)
 
     if field == "status":
         if value not in VALID_STATUSES:
@@ -1620,6 +1734,11 @@ def backlog_update_task(task_id: str, field: str, value: str) -> str:
             if not _find_phase(data, value):
                 return f"Error: phase `{value}` not found"
             task["phase"] = value
+    elif field == "anchors":
+        if value == "" or value.lower() == "none":
+            task.pop("anchors", None)
+        else:
+            task["anchors"] = [a.strip() for a in value.split(",") if a.strip()]
     else:
         task[field] = value
 
