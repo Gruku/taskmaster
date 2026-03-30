@@ -350,30 +350,11 @@
 
     .file-btn:hover { border-color: var(--accent); }
 
-    /* ── Toolbar (filters) ──────────────────────────────── */
-    .toolbar {
-      background: var(--surface);
-      border-bottom: 1px solid var(--border);
-      padding: 8px 24px;
-      display: flex;
-      align-items: center;
-      gap: 16px;
-      flex-wrap: wrap;
-    }
-
+    /* ── Filters ──────────────────────────────────────── */
     .filter-group {
       display: flex;
       align-items: center;
       gap: 6px;
-    }
-
-    .filter-label {
-      font-size: var(--fs-sm);
-      color: var(--text-dim);
-      white-space: nowrap;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
     }
 
     .filter-select {
@@ -417,181 +398,6 @@
     .priority-btn[data-p="P1"] { background: var(--p1-bg); border-color: var(--p1); color: var(--p1); }
     .priority-btn[data-p="P2"] { background: var(--p2-bg); border-color: var(--p2); color: var(--p2); }
     .priority-btn[data-p="P3"] { background: var(--p3-bg); border-color: var(--p3-color, #6e7681); color: var(--p3-color, #6e7681); }
-
-    .toolbar-sep {
-      width: 1px;
-      height: 20px;
-      background: var(--border);
-      flex-shrink: 0;
-    }
-
-    .archive-toggle {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      padding: 4px 10px;
-      border-radius: 6px;
-      border: 1.5px solid var(--border);
-      background: var(--surface2);
-      color: var(--text-dim);
-      font-size: var(--fs-sm);
-      font-weight: 600;
-      cursor: pointer;
-      transition: all 0.2s;
-      user-select: none;
-    }
-
-    .archive-toggle:hover { border-color: var(--text-dim); color: var(--text-muted); }
-
-    .archive-toggle.active {
-      border-color: var(--stat-archived-border);
-      color: var(--stat-archived-color);
-      background: var(--stat-archived-bg);
-    }
-
-    .archive-toggle .archive-count {
-      font-weight: 700;
-    }
-
-    /* ── Active Session banner ─────────────────────────────── */
-    .active-session {
-      padding: 8px 24px;
-      background: linear-gradient(90deg, #0c1a12, #0f1f16);
-      border-bottom: 2px solid #1a5c2e;
-      display: flex;
-      align-items: center;
-      gap: 14px;
-    }
-
-    [data-theme="light"] .active-session, [data-theme="light-colored"] .active-session {
-      background: linear-gradient(90deg, #ddf5e8, #cceedd);
-      border-bottom-color: #16a34a;
-    }
-
-    .active-session-pulse {
-      width: 8px;
-      height: 8px;
-      background: #3fb950;
-      border-radius: 50%;
-      flex-shrink: 0;
-      animation: pulse 2s ease-in-out infinite;
-    }
-
-    @keyframes pulse {
-      0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(63, 185, 80, 0.4); }
-      50% { opacity: 0.7; box-shadow: 0 0 0 6px rgba(63, 185, 80, 0); }
-    }
-
-    .active-session-label {
-      font-size: var(--fs-xs);
-      font-weight: 700;
-      letter-spacing: 0.1em;
-      color: #3fb950;
-      white-space: nowrap;
-      flex-shrink: 0;
-    }
-
-    .active-session-task {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      padding: 3px 12px;
-      background: var(--surface);
-      border: 1px solid #1a5c2e;
-      border-radius: 6px;
-      font-size: var(--fs-base);
-      font-weight: 600;
-      color: var(--text);
-    }
-
-    .active-session-task .as-id {
-      font-family: "SFMono-Regular", Consolas, monospace;
-      font-size: var(--fs-sm);
-      color: #3fb950;
-      font-weight: 700;
-    }
-
-    .active-session-task .as-epic {
-      font-size: var(--fs-xs);
-      color: var(--text-muted);
-      font-weight: 400;
-    }
-
-    /* ── Now Working On banner ─────────────────────────────── */
-    .now-working {
-      padding: 8px 24px;
-      background: var(--stat-progress-bg);
-      border-bottom: 1px solid var(--stat-progress-border, var(--accent));
-      display: flex;
-      align-items: center;
-      gap: 14px;
-    }
-
-    [data-theme="light"] .now-working, [data-theme="light-colored"] .now-working {
-      background: var(--stat-progress-bg);
-    }
-
-    .now-working-label {
-      font-size: var(--fs-xs);
-      font-weight: 700;
-      letter-spacing: 0.1em;
-      color: var(--accent);
-      white-space: nowrap;
-      flex-shrink: 0;
-    }
-
-    .now-working-tasks {
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-      align-items: center;
-    }
-
-    .now-working-item {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      padding: 3px 12px;
-      background: var(--surface);
-      border: 1px solid var(--accent-dim);
-      border-radius: 6px;
-      font-size: var(--fs-base);
-      font-weight: 600;
-      color: var(--text);
-    }
-
-    .now-working-item .nw-id {
-      font-family: "SFMono-Regular", Consolas, monospace;
-      font-size: var(--fs-sm);
-      color: var(--accent);
-      font-weight: 700;
-    }
-
-    .now-working-item .nw-epic {
-      font-size: var(--fs-xs);
-      color: var(--text-muted);
-      font-weight: 400;
-    }
-
-    .stat-chip {
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      padding: 3px 10px;
-      border-radius: 6px;
-      font-size: var(--fs-card-tag);
-      font-weight: 600;
-      border: 1.5px solid transparent;
-      -webkit-font-smoothing: antialiased;
-    }
-
-    .stat-chip .stat-num { font-weight: 800; }
-
-    .stat-total    { background: var(--stat-total-bg); border-color: var(--stat-total-border); color: var(--text-muted); }
-    .stat-done     { background: var(--stat-done-bg); border-color: var(--stat-done-border); color: var(--stat-done-color); }
-    .stat-progress { background: var(--stat-progress-bg); border-color: var(--stat-progress-border); color: var(--accent); }
-    .stat-todo     { background: var(--stat-todo-bg); border-color: var(--stat-todo-border); color: var(--stat-todo-color); }
-    .stat-blocked  { background: var(--stat-blocked-bg); border-color: var(--stat-blocked-border); color: var(--stat-blocked-color); }
 
     /* ── Read-only badge ───────────────────────────────────── */
     .read-only-badge {
@@ -1128,14 +934,6 @@
       padding: 10px 14px 12px;
     }
 
-    .task-card-top {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 6px;
-      margin-bottom: 6px;
-    }
-
     .task-id {
       font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
       font-size: var(--fs-card-id);
@@ -1340,26 +1138,6 @@
     .no-data-icon { font-size: 48px; opacity: 0.2; }
     .no-data-title { font-size: var(--fs-lg); font-weight: 700; color: var(--text); }
     .no-data-sub { font-size: var(--fs-base); color: var(--text-muted); max-width: 340px; }
-
-    /* ── Theme toggle ────────────────────────────────────── */
-    .theme-toggle {
-      width: 32px;
-      height: 32px;
-      border-radius: 8px;
-      border: 1.5px solid var(--border);
-      background: var(--surface2);
-      color: var(--text-muted);
-      font-size: 16px;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: border-color 0.2s, background 0.2s;
-      flex-shrink: 0;
-    }
-
-    .theme-toggle:hover { border-color: var(--accent); background: var(--surface3); }
-    .theme-toggle.active { border-color: var(--project-color, var(--accent)); color: var(--project-color, var(--accent)); background: var(--accent-dim, var(--surface3)); }
 
     /* ── Settings dropdown ─────────────────────────────────── */
     .settings-wrapper {
@@ -1760,21 +1538,15 @@
 
     /* ── Responsive ──────────────────────────────────────── */
     @media (max-width: 768px) {
-      .header { padding: 10px 16px; }
-      .toolbar, .epics-section, .board-wrapper, .archived-section, .stats-row { padding-left: 16px; padding-right: 16px; }
-
+      .header { padding: 10px 16px; flex-wrap: wrap; }
+      .epics-section, .board-wrapper, .archived-section { padding-left: 16px; padding-right: 16px; }
       .board { flex-direction: column; }
-
       body { overflow: auto; }
       .board-wrapper { flex: none; }
       .column-body { min-height: 200px; max-height: none; }
-
       .header-search { width: 140px; }
-
       .epics-grid { gap: 8px; }
       .epic-card { max-width: 100%; }
-      .now-working { padding: 8px 16px; gap: 10px; flex-direction: column; align-items: flex-start; }
-
       .archived-grid { grid-template-columns: 1fr; }
     }
   </style>
