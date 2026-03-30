@@ -275,7 +275,7 @@
       font-size: var(--fs-base);
       outline: none;
       transition: border-color 0.2s, box-shadow 0.2s;
-      width: 200px;
+      width: 240px;
     }
 
     .header-search:focus {
@@ -1052,10 +1052,10 @@
       background: var(--surface2);
       border: 1.5px solid var(--border);
       border-radius: 8px;
-      padding: 14px 16px;
       margin-bottom: 6px;
       transition: border-color 0.2s, background 0.2s;
       cursor: pointer;
+      overflow: hidden;
     }
 
     .task-card:hover {
@@ -1064,6 +1064,69 @@
     }
 
     .task-card:last-child { margin-bottom: 0; }
+
+    /* ── Card header zone ─────────────────────────────────── */
+    .task-card-header {
+      background: var(--surface3);
+      padding: 10px 14px 8px;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .task-card-header-row1 {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      margin-bottom: 4px;
+    }
+
+    .task-card-header-row2 {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: var(--fs-sm);
+      flex-wrap: wrap;
+    }
+
+    .card-status-label {
+      font-weight: 700;
+      font-size: var(--fs-sm);
+      text-transform: capitalize;
+    }
+
+    .card-status-label.cs-todo     { color: var(--text-dim); }
+    .card-status-label.cs-progress { color: var(--accent); }
+    .card-status-label.cs-review   { color: var(--p1); }
+    .card-status-label.cs-done     { color: var(--stat-done-color); }
+    .card-status-label.cs-blocked  { color: var(--stat-blocked-color); }
+    .card-status-label.cs-archived { color: var(--stat-archived-color); }
+
+    .card-time-in-status {
+      color: var(--text-dim);
+      font-size: var(--fs-xs);
+      font-weight: 600;
+    }
+
+    .card-branch {
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: var(--fs-xs);
+      color: var(--progress);
+      font-weight: 600;
+      max-width: 160px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .card-header-sep {
+      color: var(--text-dim);
+      font-size: var(--fs-xs);
+    }
+
+    /* ── Card body (below header) ─────────────────────────── */
+    .task-card-body {
+      padding: 10px 14px 12px;
+    }
 
     .task-card-top {
       display: flex;
@@ -1168,11 +1231,11 @@
 
     /* ── Recently moved cards ──────────────────────────────── */
     .task-card.recently-moved {
-      border-left: 3px solid var(--accent);
+      box-shadow: inset 0 0 0 1px var(--accent), 0 0 12px color-mix(in srgb, var(--accent) 15%, transparent);
     }
 
     .col-done .task-card.recently-moved {
-      border-left-color: #3fb950;
+      box-shadow: inset 0 0 0 1px #3fb950, 0 0 12px rgba(63, 185, 80, 0.15);
     }
 
     /* ── Archived section ──────────────────────────────── */
@@ -1297,6 +1360,71 @@
 
     .theme-toggle:hover { border-color: var(--accent); background: var(--surface3); }
     .theme-toggle.active { border-color: var(--project-color, var(--accent)); color: var(--project-color, var(--accent)); background: var(--accent-dim, var(--surface3)); }
+
+    /* ── Settings dropdown ─────────────────────────────────── */
+    .settings-wrapper {
+      position: relative;
+      flex-shrink: 0;
+    }
+
+    .settings-btn {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      border: 1.5px solid var(--border);
+      background: var(--surface2);
+      color: var(--text-muted);
+      font-size: 16px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: border-color 0.2s, background 0.2s;
+      flex-shrink: 0;
+    }
+
+    .settings-btn:hover { border-color: var(--accent); background: var(--surface3); }
+
+    .settings-dropdown {
+      position: absolute;
+      top: calc(100% + 8px);
+      right: 0;
+      background: var(--surface);
+      border: 1.5px solid var(--border);
+      border-radius: 10px;
+      padding: 8px;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.4);
+      z-index: 200;
+      min-width: 200px;
+      display: none;
+    }
+
+    .settings-dropdown.open { display: block; }
+
+    .settings-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 10px;
+      border-radius: 6px;
+      font-size: var(--fs-base);
+      color: var(--text);
+      cursor: pointer;
+      transition: background 0.15s;
+      user-select: none;
+    }
+
+    .settings-item:hover { background: var(--surface2); }
+
+    .settings-item-label {
+      font-weight: 500;
+    }
+
+    .settings-item-value {
+      font-size: var(--fs-sm);
+      color: var(--text-muted);
+      font-weight: 600;
+    }
 
     /* ── Modal ──────────────────────────────────────────── */
     .modal-backdrop {
