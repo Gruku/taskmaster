@@ -14,8 +14,8 @@ Select a task to work on and set it to in-progress.
 ## Steps
 
 1. **If no task ID provided:**
-   - Call `backlog_next_available` to get tasks ready to work on. When a milestone is active, this only returns tasks from that milestone — keeping you focused on the current block of work.
-   - If no available tasks: the milestone may be complete (suggest `/advance-milestone`), or suggest adding work.
+   - Call `backlog_next_available` to get tasks ready to work on. When a phase is active, this only returns tasks from that phase — keeping you focused on the current block of work.
+   - If no available tasks: the phase may be complete (suggest `/advance-phase`), or suggest adding work.
    - Present the list and ask the user to pick one.
 
 2. **Check for parallel task overload:**

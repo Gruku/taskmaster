@@ -120,13 +120,13 @@ If the user chooses to create tasks:
 - Group TODOs by directory/domain into epics (create new epics if needed)
 - Create tasks with the source `file:line` in the notes field so future scans can match them
 - Format notes as: `Source: {file}:{line} — {original TODO comment}`
-- If a milestone is active, ask if new tasks should be assigned to it or left unassigned
+- If a phase is active, ask if new tasks should be assigned to it or left unassigned
 - Assign priorities based on the marker type
 
 ## Running as a health check
 
 This skill works well as a periodic check-in. Suggest to the user:
-- Run at the start of a new milestone to catch untracked work
+- Run at the start of a new phase to catch untracked work
 - Run before ending a session to make sure new TODOs got captured
 - Run after a big refactor to find stale task references
 

@@ -22,9 +22,9 @@ The user is arriving at the start of a conversation — they've lost context sin
    - **If there are in-progress items:** "**Resuming:** You left these in progress:" — these are the most important because work is already started.
    - **If there are in-review items:** "**Needs your testing:** These are implemented but waiting for you to confirm they work:" — in-review tasks are equally important as in-progress. They represent finished work the user hasn't verified yet. Don't let them be forgotten between sessions.
    - **Last session summary** — what was accomplished last time, for continuity.
-   - **Milestone progress** — if an active milestone exists, show it prominently: "**Milestone: {name}** — {done}/{total} tasks done". This gives the user a sense of where they are in the project's arc.
+   - **Phase progress** — if an active phase exists, show it prominently: "**Phase: {name}** — {done}/{total} tasks done". This gives the user a sense of where they are in the project's arc.
    - **Dashboard** — epic progress, stats.
-   - **If there are next-up items:** "**Suggested next:** {first item} ({priority})" — these are filtered to the active milestone when one exists, so the user only sees what's relevant right now.
+   - **If there are next-up items:** "**Suggested next:** {first item} ({priority})" — these are filtered to the active phase when one exists, so the user only sees what's relevant right now.
 
 4. **Prompt:** "What would you like to work on? Pick a task with `/pick-task` or tell me to add new work."
 

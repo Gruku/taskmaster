@@ -25,9 +25,9 @@ Read the user's message and match it to one of these intents:
 | "Add a task", "create a task for X", "plan out this epic" | Direct tool call — use `backlog_add_task` or `backlog_add_epic` with appropriate fields |
 | "Show task X", "task details", "what's the status of X" | Direct tool call — use `backlog_get_task` or `backlog_status` |
 | "Search for X", "find tasks about X" | Direct tool call — use `backlog_search` |
-| "Create a milestone", "plan the next phase", "set up sprints" | Direct tool call — use `backlog_add_milestone` |
-| "Show milestone progress", "where are we in the milestone?" | Direct tool call — use `backlog_milestone_status` |
-| "Advance to next milestone", "this milestone is done" | Direct tool call — use `backlog_advance_milestone` |
+| "Create a phase", "plan the next phase", "set up phases" | Direct tool call — use `backlog_add_phase` |
+| "Show phase progress", "where are we in the phase?" | Direct tool call — use `backlog_phase_status` |
+| "Advance to next phase", "this phase is done" | Direct tool call — use `backlog_advance_phase` |
 | "Check TODOs", "scan for TODOs", "are my TODOs tracked", "todo audit" | `taskmaster:check-todos` |
 
 ## Do NOT Route Through Taskmaster

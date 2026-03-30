@@ -7,7 +7,7 @@ description: "Set up Taskmaster in the current project. Invoke when the user wan
 
 Set up AI-powered task management in the current project. Offers two modes: clean start or analyze existing work.
 
-> **CRITICAL: Never write `backlog.yaml` directly.** All backlog mutations MUST go through the `backlog_*` MCP tools (`backlog_init`, `backlog_add_epic`, `backlog_add_task`, `backlog_add_milestone`). The schema is owned by the server — writing the file manually will produce an incompatible format that breaks the viewer and all other tools.
+> **CRITICAL: Never write `backlog.yaml` directly.** All backlog mutations MUST go through the `backlog_*` MCP tools (`backlog_init`, `backlog_add_epic`, `backlog_add_task`, `backlog_add_phase`). The schema is owned by the server — writing the file manually will produce an incompatible format that breaks the viewer and all other tools.
 
 ## Step 1: Check if already initialized
 
@@ -53,7 +53,7 @@ If the user chose clean start:
 1. Call `backlog_init(project_name, location)` with their chosen location.
 2. Guide them to create their first epic: "What are the main workstreams? For example: `auth-system`, `api`, `frontend`"
 3. Help them add tasks under those epics.
-4. Suggest creating a milestone to organize the first batch of work.
+4. Suggest creating a phase to organize the first batch of work.
 
 ## Step 3b: Analyze project
 
@@ -91,7 +91,7 @@ If the user chose analyze:
    > **Proposed Tasks:** (12 total)
    > - [list each with source: "TODO in src/api/routes.ts:45"]
    >
-   > **Proposed Milestone:** "Cleanup & Foundation" — group the FIXMEs and HACKs
+   > **Proposed Phase:** "Cleanup & Foundation" — group the FIXMEs and HACKs
 
    Then use `AskUserQuestion` to get explicit approval:
 
@@ -103,7 +103,7 @@ If the user chose analyze:
          header: "Approval",
          multiSelect: false,
          options: [
-           { label: "Create it", description: "Add the proposed epics, tasks, and milestone to the backlog" },
+           { label: "Create it", description: "Add the proposed epics, tasks, and phase to the backlog" },
            { label: "Adjust first", description: "I want to change some things before you create it" },
            { label: "Cancel", description: "Don't create anything, I'll set it up manually" }
          ]
@@ -116,11 +116,11 @@ If the user chose analyze:
    - "Adjust first" → ask what they want to change, update the proposal, then re-ask
    - "Cancel" → stop, tell them they can run `/init-taskmaster` again later
 
-5. **After user approval**, create the epics, tasks, and milestone using the MCP tools (do NOT write the YAML file directly — the server owns the schema):
+5. **After user approval**, create the epics, tasks, and phase using the MCP tools (do NOT write the YAML file directly — the server owns the schema):
    - `backlog_add_epic` for each epic
    - `backlog_add_task` for each task (include the source file:line in notes)
-   - `backlog_add_milestone` for the initial milestone
-   - Assign tasks to the milestone
+   - `backlog_add_phase` for the initial phase
+   - Assign tasks to the phase
 
 ## Step 4: Open the viewer and confirm
 
