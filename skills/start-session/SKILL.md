@@ -23,8 +23,27 @@ The user is arriving at the start of a conversation — they've lost context sin
    - **If there are in-review items:** "**Needs your testing:** These are implemented but waiting for you to confirm they work:" — in-review tasks are equally important as in-progress. They represent finished work the user hasn't verified yet. Don't let them be forgotten between sessions.
    - **Last session summary** — what was accomplished last time, for continuity.
    - **Phase progress** — if an active phase exists, show it prominently: "**Phase: {name}** — {done}/{total} tasks done". This gives the user a sense of where they are in the project's arc.
+   - **Stale tasks** — if the `backlog_status` output includes stale tasks (tasks not referenced in 14+ days), show them:
+     ```
+     Stale tasks (not referenced in 14+ days):
+       auth-007  Add SAML support        — stale 21d
+       api-012   GraphQL migration        — stale 18d
+     Still relevant? Say "archive auth-007" or "keep it".
+     ```
    - **Dashboard** — epic progress, stats.
    - **If there are next-up items:** "**Suggested next:** {first item} ({priority})" — these are filtered to the active phase when one exists, so the user only sees what's relevant right now.
+   - **Untracked work** — After showing the dashboard, check for commits since the last session that aren't associated with any tracked task branch:
+     1. Get the last session date from `backlog_last_session` output (the `### YYYY-MM-DD` heading)
+     2. Run `git log --oneline --since="{last_session_date}" --no-merges` on the main branch
+     3. Get the list of tracked task branches from in-progress tasks (their `branch` field)
+     4. Any commits on the main branch that aren't in a task branch are "untracked work"
+     5. If found, show informatively (not judgmentally):
+        ```
+        Since last session: N commits outside tracked tasks
+          - fix typo in README
+          - bump dependencies
+        ```
+     6. If none found, skip this section silently
 
 4. **Prompt:** "What would you like to work on? Pick a task with `/pick-task` or tell me to add new work."
 
