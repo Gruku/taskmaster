@@ -1781,7 +1781,7 @@
 </head>
 <body>
 
-<!-- Header -->
+<!-- Header — Row 1: branding + controls -->
 <header class="header">
   <div class="header-left">
     <div class="project-badge" id="project-badge">
@@ -1796,15 +1796,40 @@
     <span class="read-only-badge">READ-ONLY · AI Workflow Viewer</span>
   </div>
   <div class="header-right">
-    <span class="stat-chip stat-total"><span class="stat-num" id="stat-total">0</span> total</span>
-    <span class="stat-chip stat-done"><span class="stat-num" id="stat-done">0</span> done</span>
-    <span class="stat-chip stat-progress"><span class="stat-num" id="stat-progress">0</span> active</span>
-    <span class="stat-chip stat-todo"><span class="stat-num" id="stat-todo">0</span> todo</span>
-    <span class="stat-chip stat-blocked" id="stat-blocked-wrapper" style="display:none;"><span class="stat-num" id="stat-blocked">0</span> blocked</span>
     <span class="load-indicator" id="load-status">Trying fetch…</span>
     <input type="text" class="header-search" id="search-input" placeholder="Search tasks…  /" />
-    <button class="theme-toggle" id="color-toggle" title="Toggle colored accent">◈</button>
-    <button class="theme-toggle" id="theme-toggle" title="Toggle dark/light">◑</button>
+    <div class="filter-group">
+      <div class="priority-toggles" id="priority-toggles">
+        <button class="priority-btn active" data-p="P0">P0</button>
+        <button class="priority-btn active" data-p="P1">P1</button>
+        <button class="priority-btn active" data-p="P2">P2</button>
+        <button class="priority-btn active" data-p="P3">P3</button>
+      </div>
+    </div>
+    <div class="filter-group">
+      <select class="filter-select" id="sort-select">
+        <option value="priority">Priority</option>
+        <option value="created">Created</option>
+        <option value="started">Started</option>
+        <option value="completed">Completed</option>
+        <option value="updated">Last updated</option>
+        <option value="alpha">Alphabetical</option>
+      </select>
+      <button class="sort-dir-btn" id="sort-dir-btn" title="Toggle sort direction">↓</button>
+    </div>
+    <div class="settings-wrapper" id="settings-wrapper">
+      <button class="settings-btn" id="settings-btn" title="Settings">⚙</button>
+      <div class="settings-dropdown" id="settings-dropdown">
+        <div class="settings-item" id="settings-theme">
+          <span class="settings-item-label">Theme</span>
+          <span class="settings-item-value" id="settings-theme-value">Dark</span>
+        </div>
+        <div class="settings-item" id="settings-color">
+          <span class="settings-item-label">Project color</span>
+          <span class="settings-item-value" id="settings-color-value">On</span>
+        </div>
+      </div>
+    </div>
   </div>
 </header>
 
@@ -1817,59 +1842,7 @@
   </div>
 </div>
 
-<!-- Toolbar (filters) -->
-<div class="toolbar" id="toolbar">
-  <div class="filter-group">
-    <span class="filter-label">Epic</span>
-    <select class="filter-select" id="epic-filter">
-      <option value="all">All epics</option>
-    </select>
-  </div>
-  <div class="filter-group" id="phase-filter-group" style="display:none;">
-    <span class="filter-label">Phase</span>
-    <select class="filter-select" id="phase-filter">
-      <option value="all">All phases</option>
-    </select>
-  </div>
-  <div class="filter-group">
-    <span class="filter-label">Priority</span>
-    <div class="priority-toggles" id="priority-toggles">
-      <button class="priority-btn active" data-p="P0">P0</button>
-      <button class="priority-btn active" data-p="P1">P1</button>
-      <button class="priority-btn active" data-p="P2">P2</button>
-      <button class="priority-btn active" data-p="P3">P3</button>
-    </div>
-  </div>
-  <div class="filter-group">
-    <span class="filter-label">Sort</span>
-    <select class="filter-select" id="sort-select">
-      <option value="priority">Priority</option>
-      <option value="created">Created</option>
-      <option value="started">Started</option>
-      <option value="completed">Completed</option>
-      <option value="updated">Last updated</option>
-      <option value="alpha">Alphabetical</option>
-    </select>
-    <button class="sort-dir-btn" id="sort-dir-btn" title="Toggle sort direction">↓</button>
-  </div>
-  <div class="toolbar-sep"></div>
-  <button class="archive-toggle" id="archive-toggle" style="display:none;">
-    <span class="archive-count" id="archive-toggle-count">0</span> archived
-  </button>
-</div>
 
-<!-- Active Session banner -->
-<div class="active-session" id="active-session" style="display:none;">
-  <div class="active-session-pulse"></div>
-  <div class="active-session-label">ACTIVE SESSION</div>
-  <div id="active-session-task"></div>
-</div>
-
-<!-- Now Working On banner -->
-<div class="now-working" id="now-working" style="display:none;">
-  <div class="now-working-label">NOW WORKING ON</div>
-  <div class="now-working-tasks" id="now-working-tasks"></div>
-</div>
 
 <!-- Phase banner -->
 <div class="epics-section" id="phase-section" style="display:none;">
