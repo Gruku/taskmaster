@@ -439,7 +439,7 @@
       background: var(--surface);
       border: 1.5px solid var(--accent-dim);
       border-radius: 10px;
-      margin-bottom: 6px;
+      margin-bottom: 0;
     }
 
     .phase-banner .ms-label {
@@ -487,7 +487,7 @@
       gap: 4px;
       align-items: center;
       flex-wrap: wrap;
-      margin-top: 4px;
+      margin-top: 0;
     }
 
     .phase-steps .ph-connector {
@@ -500,6 +500,13 @@
     .phase-steps .ph-connector.ph-done-connector {
       background: var(--stat-done-color);
       opacity: 0.5;
+    }
+
+    .phase-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
     }
 
     .ms-step .ph-num {
@@ -589,19 +596,20 @@
 
     /* ── Phase history panel ─────────────────────────────── */
     .ms-history-toggle {
-      font-size: var(--fs-xs);
+      font-size: var(--fs-sm);
+      font-weight: 600;
       color: var(--text-muted);
-      background: none;
-      border: none;
+      background: var(--surface2);
+      border: 1px solid var(--border);
       cursor: pointer;
-      padding: 2px 6px;
-      border-radius: 4px;
+      padding: 4px 12px;
+      border-radius: 6px;
       margin-top: 4px;
-      text-decoration: underline;
-      text-underline-offset: 2px;
+      transition: border-color 0.2s, color 0.2s;
     }
 
     .ms-history-toggle:hover {
+      border-color: var(--accent);
       color: var(--text);
     }
 
@@ -1202,6 +1210,14 @@
       font-weight: 600;
     }
 
+    .sort-check {
+      font-size: var(--fs-sm);
+      color: var(--accent);
+      font-weight: 700;
+      min-width: 14px;
+      text-align: right;
+    }
+
     /* ── Modal ──────────────────────────────────────────── */
     .modal-backdrop {
       position: fixed; top: 0; left: 0; width: 100%; height: 100%;
@@ -1568,6 +1584,12 @@
   <div class="header-right">
     <span class="load-indicator" id="load-status">Trying fetch…</span>
     <input type="text" class="header-search" id="search-input" placeholder="Search tasks…  /" />
+    <select class="filter-select" id="epic-filter">
+      <option value="all">All epics</option>
+    </select>
+    <select class="filter-select" id="phase-filter" style="display:none;">
+      <option value="all">All phases</option>
+    </select>
     <div class="filter-group">
       <div class="priority-toggles" id="priority-toggles">
         <button class="priority-btn active" data-p="P0">P0</button>
@@ -1576,16 +1598,39 @@
         <button class="priority-btn active" data-p="P3">P3</button>
       </div>
     </div>
-    <div class="filter-group">
-      <select class="filter-select" id="sort-select">
-        <option value="priority">Priority</option>
-        <option value="created">Created</option>
-        <option value="started">Started</option>
-        <option value="completed">Completed</option>
-        <option value="updated">Last updated</option>
-        <option value="alpha">Alphabetical</option>
-      </select>
-      <button class="sort-dir-btn" id="sort-dir-btn" title="Toggle sort direction">↓</button>
+    <div class="settings-wrapper" id="sort-wrapper">
+      <button class="settings-btn" id="sort-btn" title="Sorting" style="width:auto;padding:0 10px;font-size:var(--fs-base);font-weight:600;">Sorting</button>
+      <div class="settings-dropdown" id="sort-dropdown">
+        <div class="settings-item sort-option" data-sort="priority">
+          <span class="settings-item-label">Priority</span>
+          <span class="sort-check" id="sort-check-priority">✓</span>
+        </div>
+        <div class="settings-item sort-option" data-sort="created">
+          <span class="settings-item-label">Created</span>
+          <span class="sort-check" id="sort-check-created"></span>
+        </div>
+        <div class="settings-item sort-option" data-sort="started">
+          <span class="settings-item-label">Started</span>
+          <span class="sort-check" id="sort-check-started"></span>
+        </div>
+        <div class="settings-item sort-option" data-sort="completed">
+          <span class="settings-item-label">Completed</span>
+          <span class="sort-check" id="sort-check-completed"></span>
+        </div>
+        <div class="settings-item sort-option" data-sort="updated">
+          <span class="settings-item-label">Last updated</span>
+          <span class="sort-check" id="sort-check-updated"></span>
+        </div>
+        <div class="settings-item sort-option" data-sort="alpha">
+          <span class="settings-item-label">Alphabetical</span>
+          <span class="sort-check" id="sort-check-alpha"></span>
+        </div>
+        <div style="height:1px;background:var(--border);margin:4px 0;"></div>
+        <div class="settings-item" id="sort-direction-toggle">
+          <span class="settings-item-label">Direction</span>
+          <span class="settings-item-value" id="sort-direction-label">Ascending ↓</span>
+        </div>
+      </div>
     </div>
     <div class="settings-wrapper" id="settings-wrapper">
       <button class="settings-btn" id="settings-btn" title="Settings">⚙</button>
@@ -1817,20 +1862,53 @@ function ingestData(data) {
   // Collapse load bar after successful load
   document.getElementById('load-bar').classList.add('collapsed');
 
-  // Preserve epic filter across live reloads
-  if (activeEpic !== 'all' && !allEpics.some(e => e.id === activeEpic)) {
+  // Epic dropdown — preserve current filter across live reloads
+  const epicSel = document.getElementById('epic-filter');
+  const prevEpic = activeEpic;
+  while (epicSel.options.length > 1) epicSel.remove(1);
+  for (const epic of allEpics) {
+    const opt = document.createElement('option');
+    opt.value = epic.id;
+    opt.textContent = epic.name || epic.id;
+    epicSel.appendChild(opt);
+  }
+  if (prevEpic !== 'all' && allEpics.some(e => e.id === prevEpic)) {
+    activeEpic = prevEpic;
+    epicSel.value = prevEpic;
+  } else {
     activeEpic = 'all';
+    epicSel.value = 'all';
   }
 
-  // Preserve phase filter — auto-select active phase on first load
+  // Phase dropdown — populate and auto-select active phase
+  const phSel = document.getElementById('phase-filter');
   const phases = (data.phases || []).filter(m => m.status !== 'archived');
-  if (activePhase !== 'all' && !phases.some(m => m.id === activePhase)) {
-    const activePh = phases.find(m => m.status === 'active');
-    activePhase = activePh ? activePh.id : 'all';
-  } else if (activePhase === 'all' && !_lastYamlText) {
-    // First load — auto-select active phase
-    const activePh = phases.find(m => m.status === 'active');
-    if (activePh) activePhase = activePh.id;
+  const prevPh = activePhase;
+  while (phSel.options.length > 1) phSel.remove(1);
+  if (phases.length) {
+    phSel.style.display = '';
+    for (const ph of phases) {
+      const opt = document.createElement('option');
+      opt.value = ph.id;
+      opt.textContent = ph.name || ph.id;
+      phSel.appendChild(opt);
+    }
+    if (prevPh !== 'all' && phases.some(m => m.id === prevPh)) {
+      activePhase = prevPh;
+      phSel.value = prevPh;
+    } else {
+      const activePh = phases.find(m => m.status === 'active');
+      if (activePh) {
+        activePhase = activePh.id;
+        phSel.value = activePh.id;
+      } else {
+        activePhase = 'all';
+        phSel.value = 'all';
+      }
+    }
+  } else {
+    phSel.style.display = 'none';
+    activePhase = 'all';
   }
 
   renderPhases();
@@ -2012,6 +2090,17 @@ function renderPhases() {
     stepsHtml += '</div>';
     banner.innerHTML += stepsHtml;
 
+    // Wrap banner + steps in a single row
+    const bannerEl = banner.querySelector('.phase-banner');
+    const stepsEl = banner.querySelector('.phase-steps');
+    if (bannerEl && stepsEl) {
+      const row = document.createElement('div');
+      row.className = 'phase-row';
+      row.appendChild(bannerEl);
+      row.appendChild(stepsEl);
+      banner.insertBefore(row, banner.firstChild);
+    }
+
     // 3.5 — Phase history section
     if (donePhases.length) {
       let historyHtml = `<div><button class="ms-history-toggle" id="ms-history-toggle">${msHistoryOpen ? '▾' : '▸'} History (${donePhases.length})</button></div>`;
@@ -2066,10 +2155,13 @@ function renderPhases() {
     banner.querySelectorAll('.ms-step[data-ms-id]').forEach(step => {
       step.addEventListener('click', () => {
         const msId = step.dataset.msId;
+        const phSel = document.getElementById('phase-filter');
         if (activePhase === msId) {
           activePhase = 'all';
+          phSel.value = 'all';
         } else {
           activePhase = msId;
+          phSel.value = msId;
         }
         renderPhases();
         renderEpics();
@@ -2090,10 +2182,13 @@ function renderPhases() {
     banner.querySelectorAll('.ms-history-item[data-ms-id]').forEach(item => {
       item.addEventListener('click', () => {
         const msId = item.dataset.msId;
+        const phSel = document.getElementById('phase-filter');
         if (activePhase === msId) {
           activePhase = 'all';
+          phSel.value = 'all';
         } else {
           activePhase = msId;
+          phSel.value = msId;
         }
         renderPhases();
         renderEpics();
@@ -2197,10 +2292,13 @@ function renderEpics() {
     `;
 
     card.addEventListener('click', () => {
+      const epicSel = document.getElementById('epic-filter');
       if (activeEpic === epic.id) {
         activeEpic = 'all';
+        epicSel.value = 'all';
       } else {
         activeEpic = epic.id;
+        epicSel.value = epic.id;
       }
       // re-highlight cards
       document.querySelectorAll('.epic-card').forEach(c => {
@@ -2758,15 +2856,66 @@ document.getElementById('search-input').addEventListener('input', function() {
   render();
 });
 
-// ── Sort ─────────────────────────────────────────────────
-document.getElementById('sort-dir-btn').addEventListener('click', function() {
-  sortAsc = !sortAsc;
-  this.textContent = sortAsc ? '↓' : '↑';
-  this.title = sortAsc ? 'Ascending (click to reverse)' : 'Descending (click to reverse)';
+// ── Sort dropdown ────────────────────────────────────────
+(function() {
+  const btn = document.getElementById('sort-btn');
+  const dropdown = document.getElementById('sort-dropdown');
+
+  function updateSortUI() {
+    // Update checkmarks
+    document.querySelectorAll('.sort-check').forEach(el => el.textContent = '');
+    const active = document.getElementById('sort-check-' + sortMode);
+    if (active) active.textContent = '✓';
+    // Update direction label
+    document.getElementById('sort-direction-label').textContent = sortAsc ? 'Ascending ↓' : 'Descending ↑';
+  }
+
+  // Sort option clicks
+  dropdown.querySelectorAll('.sort-option').forEach(item => {
+    item.addEventListener('click', (e) => {
+      e.stopPropagation();
+      sortMode = item.dataset.sort;
+      updateSortUI();
+      render();
+    });
+  });
+
+  // Direction toggle
+  document.getElementById('sort-direction-toggle').addEventListener('click', (e) => {
+    e.stopPropagation();
+    sortAsc = !sortAsc;
+    updateSortUI();
+    render();
+  });
+
+  // Open/close
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    // Close settings dropdown if open
+    document.getElementById('settings-dropdown').classList.remove('open');
+    dropdown.classList.toggle('open');
+  });
+  document.addEventListener('click', () => dropdown.classList.remove('open'));
+  dropdown.addEventListener('click', (e) => e.stopPropagation());
+
+  updateSortUI();
+})();
+
+// ── Epic filter dropdown ─────────────────────────────────
+document.getElementById('epic-filter').addEventListener('change', function() {
+  activeEpic = this.value;
+  document.querySelectorAll('.epic-card').forEach(c => {
+    c.classList.toggle('active-filter', c.dataset.epicId === activeEpic);
+  });
+  renderEpics();
   render();
 });
-document.getElementById('sort-select').addEventListener('change', function() {
-  sortMode = this.value;
+
+// ── Phase filter dropdown ────────────────────────────────
+document.getElementById('phase-filter').addEventListener('change', function() {
+  activePhase = this.value;
+  renderPhases();
+  renderEpics();
   render();
 });
 
@@ -2833,6 +2982,7 @@ function setStatus(msg, cls) {
   const dropdown = document.getElementById('settings-dropdown');
   btn.addEventListener('click', (e) => {
     e.stopPropagation();
+    document.getElementById('sort-dropdown').classList.remove('open');
     dropdown.classList.toggle('open');
   });
   document.addEventListener('click', () => dropdown.classList.remove('open'));
