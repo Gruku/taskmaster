@@ -54,6 +54,7 @@ If the user chose clean start:
 2. Guide them to create their first epic: "What are the main workstreams? For example: `auth-system`, `api`, `frontend`"
 3. Help them add tasks under those epics.
 4. Suggest creating a phase to organize the first batch of work.
+5. **Budget guidance:** Remind the user: "Aim for 5-8 tasks per epic. Tasks should be things you'd pick up in different sessions. If a task has many steps, create a plan document and link it with `docs.plan` instead of splitting into micro-tasks."
 
 ## Step 3b: Analyze project
 

@@ -88,6 +88,14 @@ Temporal blocks of work that cut across epics — like sprints or release phases
 - `backlog_advance_phase` completes the active phase, archives its done tasks, and activates the next one by order
 - Have optional `target_date` for deadline tracking
 
+### Task Budget
+
+Each epic has a soft cap of 8 active (non-archived, non-done) tasks. When `backlog_add_task` pushes an epic past this cap, a warning is returned. The cap is configurable per epic via the `max_tasks` field. Tasks should represent work you'd pick up in different sessions — use plan documents for detailed step breakdowns.
+
+### Staleness
+
+Tasks track when they were last referenced (`last_referenced` field). Todo tasks not referenced in 14+ days are flagged as stale during `start-session` and in `backlog_status` output. Archive stale tasks or interact with them to refresh the timestamp.
+
 ### Sessions
 
 A session is one Claude conversation process. The MCP server generates a unique `SESSION_ID` (`hostname-pid-uuid8`) on startup.
@@ -215,10 +223,10 @@ All tools are prefixed with `backlog_`. These are the low-level building blocks 
 | Tool | Description |
 |------|-------------|
 | `backlog_init(project, location)` | Initialize Taskmaster. Location: `hidden` or `tracked` |
-| `backlog_add_task(title, epic, ...)` | Create task. ID auto-generated as `{epic}-{NNN}` |
+| `backlog_add_task(title, epic, ...)` | Create task. ID auto-generated as `{epic}-{NNN}`. New params: `anchors` (comma-separated globs/URLs), tasks get `last_referenced` auto-set |
 | `backlog_update_task(task_id, field, value)` | Update one field. Validates enums, parses docs/depends_on/stage |
 | `backlog_pick_task(task_id, force?)` | Lock to session, set in-progress, set timestamps |
-| `backlog_complete_task(task_id, ...)` | Atomic status transition + changelog append to `PROGRESS.md` |
+| `backlog_complete_task(task_id, ...)` | Atomic status transition + changelog append to `PROGRESS.md`. New param: `auto_summary` (bool) — lightweight session log for small sessions |
 | `backlog_archive_task(task_id, reason)` | Archive with reason: `done`, `deprecated`, `duplicate`, `wont-fix`, `superseded` |
 | `backlog_add_epic(id, name, ...)` | Create epic. ID must be lowercase kebab-case |
 | `backlog_update_epic(id, field, value)` | Update epic name, status, or description |
@@ -298,6 +306,8 @@ phases:
 | `review_instructions` | string | How to manually test |
 | `created` / `started` / `completed` / `archived` | datetime | Auto-managed timestamps |
 | `archive_reason` | enum | `done`, `deprecated`, `duplicate`, `wont-fix`, `superseded` |
+| `anchors` | list[string] | Glob patterns or URLs declaring target files/systems |
+| `last_referenced` | string | ISO timestamp, auto-updated when any tool touches this task |
 
 ### Context Block
 

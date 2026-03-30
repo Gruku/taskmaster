@@ -27,15 +27,20 @@ Select a task to work on and set it to in-progress.
    - If any dependencies are NOT done, warn: "This task depends on `{dep_id}` which is still `{status}`. Proceed anyway?"
    - Let the user decide. Do not silently skip.
 
-4. **Once a task is selected:**
+4. **Show anchors (if present):**
+   - If the task has `anchors`, display them prominently:
+     "This task is anchored to `src/auth/**`. Expected at `localhost:3000/api/auth`."
+   - Remind: "If you find yourself editing files outside these anchors, double-check you're working on the right target."
+
+5. **Once a task is selected:**
    - Call `backlog_pick_task(task_id)` — this sets status to `in-progress`, records `started` date, locks to session, and regenerates context + dashboard.
    - The tool returns task details, epic context, and recently completed tasks in the same epic.
 
-5. **Read linked docs:**
+6. **Read linked docs:**
    - If the task has a `docs` field (plan, spec, etc.), read those files to understand the existing context before writing any code.
    - This prevents agents from ignoring existing specs and plans.
 
-6. **Git worktree creation (REQUIRED):**
+7. **Git worktree creation (REQUIRED):**
 
    **Why worktrees?** When multiple tasks are in-flight, work on different branches can bleed together if everything happens in the same working tree. A dedicated worktree per task means you can switch tasks instantly, the review gate can diff the correct branch cleanly, and there's no risk of committing task B's changes onto task A's branch. This is the foundation of safe parallel task work.
 
