@@ -884,6 +884,13 @@
       border-bottom: 1px solid var(--border-subtle);
     }
 
+    .task-card-header.ch-todo     { background: var(--surface3); }
+    .task-card-header.ch-progress { background: var(--stat-progress-bg); border-bottom-color: var(--stat-progress-border); }
+    .task-card-header.ch-review   { background: var(--p1-bg); border-bottom-color: var(--p1-border); }
+    .task-card-header.ch-done     { background: var(--stat-done-bg); border-bottom-color: var(--stat-done-border); }
+    .task-card-header.ch-blocked  { background: var(--stat-blocked-bg); border-bottom-color: var(--stat-blocked-border); }
+    .task-card-header.ch-archived { background: var(--stat-archived-bg); border-bottom-color: var(--stat-archived-border); }
+
     .task-card-header-row1 {
       display: flex;
       align-items: center;
@@ -2782,7 +2789,7 @@ function makeCard(task) {
     : '';
 
   card.innerHTML = `
-    <div class="task-card-header">
+    <div class="task-card-header ch-${statusKey}">
       <div class="task-card-header-row1">
         <span class="task-id">${esc(task.id || '—')}</span>
         ${p ? `<span class="priority-badge ${pClass}">${esc(p)}</span>` : ''}
