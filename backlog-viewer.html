@@ -2278,16 +2278,6 @@ function render() {
     tasks = [...tasks].sort(sorters[sortMode]);
   }
 
-  // Stats — scope to active phase/epic filters (not search/priority)
-  let statsSource = allTasks;
-  if (activePhase !== 'all') statsSource = statsSource.filter(t => t.phase === activePhase);
-  if (activeEpic !== 'all') statsSource = statsSource.filter(t => t._epicId === activeEpic);
-  // 3.4 — When viewing a done phase, treat archived tasks as done for stats
-  if (isViewingDonePhase()) {
-    statsSource = statsSource.map(t => colKey(t.status) === 'archived' ? { ...t, status: 'done' } : t);
-  }
-  const stats = computeStats(statsSource);
-
   // Bucket
   const buckets = { todo: [], progress: [], review: [], done: [], archived: [] };
   for (const t of tasks) {
@@ -2683,7 +2673,7 @@ function makeCard(task) {
   const timeStr = timeInStatus(task);
   const branchHtml = task.branch
     ? `<span class="card-header-sep">·</span><span class="card-branch" title="${esc(task.branch)}">${esc(task.branch)}${worktreesByBranch[task.branch] ? ' (wt)' : ''}</span>`
-    : '';
+    : (!task.branch && task.worktree ? `<span class="card-header-sep">·</span><span class="card-branch">worktree</span>` : '');
 
   // Card body
   const date = task.completed || task.started || task.created || '';
