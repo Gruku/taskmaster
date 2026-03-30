@@ -38,9 +38,9 @@ Tasks should NOT skip from `in-progress` directly to `done`. The in-review check
 | done | archived | `backlog_archive_task` | Clears from board. Reason recorded. |
 | todo/blocked | archived | `backlog_archive_task` | Requires non-"done" reason (deprecated, duplicate, wont-fix, superseded) |
 
-## Milestones
+## Phases
 
-Milestones are sequential blocks of work that cut across epics. They provide focus by limiting what's visible and actionable.
+Phases are sequential blocks of work that cut across epics. They provide focus by limiting what's visible and actionable.
 
 ```
 planned → active → done → archived
@@ -50,15 +50,15 @@ planned → active → done → archived
 
 | Concept | How It Works |
 |---------|-------------|
-| **One active at a time** | Only one milestone can be `active`. `backlog_next_available` only shows tasks from the active milestone. |
-| **Tasks belong to milestones** | Each task has an optional `milestone` field. Tasks without a milestone are "unassigned" and shown separately. |
-| **Advancing** | When a milestone's work is complete, `backlog_advance_milestone` marks it done, archives its done tasks, and activates the next planned milestone by order. |
-| **Cross-cutting** | A milestone can contain tasks from multiple epics. Epics are thematic (auth, api, ux); milestones are temporal (foundation, core features, polish). |
+| **One active at a time** | Only one phase can be `active`. `backlog_next_available` only shows tasks from the active phase. |
+| **Tasks belong to phases** | Each task has an optional `phase` field. Tasks without a phase are "unassigned" and shown separately. |
+| **Advancing** | When a phase's work is complete, `backlog_advance_phase` marks it done, archives its done tasks, and activates the next planned phase by order. |
+| **Cross-cutting** | A phase can contain tasks from multiple epics. Epics are thematic (auth, api, ux); phases are temporal (foundation, core features, polish). |
 
-### Milestone + Task Workflow
+### Phase + Task Workflow
 
-1. Create milestones in order: `backlog_add_milestone("m1", "Foundation", order=1)`
-2. Assign tasks: `backlog_update_task("auth-001", "milestone", "m1")`
-3. Work through the active milestone's tasks
-4. When done: `backlog_advance_milestone` — archives done tasks, activates next
-5. Repeat until all milestones complete
+1. Create phases in order: `backlog_add_phase("p1", "Phase 1: Foundation", order=1)`
+2. Assign tasks: `backlog_update_task("auth-001", "phase", "p1")`
+3. Work through the active phase's tasks
+4. When done: `backlog_advance_phase` — archives done tasks, activates next
+5. Repeat until all phases complete

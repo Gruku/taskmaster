@@ -41,7 +41,7 @@ For ANY task-related request, invoke taskmaster:taskmaster first — it routes t
 | 'End session', 'I'm done', 'wrap up', 'log this' | taskmaster:end-session |
 | 'Set up taskmaster', 'initialize backlog' | taskmaster:init-taskmaster |
 
-Milestone tools: backlog_add_milestone, backlog_milestone_status, backlog_advance_milestone.
+Phase tools: backlog_add_phase, backlog_phase_status, backlog_advance_phase.
 All other backlog_* MCP tools are available for direct task queries and mutations when you already know what to call."
 
 context_escaped=$(escape_for_json "$CONTEXT")
