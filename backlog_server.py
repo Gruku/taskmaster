@@ -134,37 +134,37 @@ def _find_epic(data: dict, epic_id: str) -> dict | None:
     return None
 
 
-def _find_milestone(data: dict, milestone_id: str) -> dict | None:
-    for ms in data.get("milestones", []):
-        if ms["id"] == milestone_id:
-            return ms
+def _find_phase(data: dict, phase_id: str) -> dict | None:
+    for ph in data.get("phases", []):
+        if ph["id"] == phase_id:
+            return ph
     return None
 
 
-def _active_milestone(data: dict) -> dict | None:
-    """Return the currently active milestone, or None."""
-    for ms in data.get("milestones", []):
-        if ms.get("status") == "active":
-            return ms
+def _active_phase(data: dict) -> dict | None:
+    """Return the currently active phase, or None."""
+    for ph in data.get("phases", []):
+        if ph.get("status") == "active":
+            return ph
     return None
 
 
-def _milestone_task_ids(data: dict, milestone_id: str) -> set[str]:
-    """Get all task IDs assigned to a milestone."""
+def _phase_task_ids(data: dict, phase_id: str) -> set[str]:
+    """Get all task IDs assigned to a phase."""
     ids = set()
     for epic in data["epics"]:
         for t in epic.get("tasks", []):
-            if t.get("milestone") == milestone_id:
+            if t.get("phase") == phase_id:
                 ids.add(t["id"])
     return ids
 
 
-def _milestone_stats(data: dict, milestone_id: str) -> dict:
-    """Compute stats for a specific milestone."""
+def _phase_stats(data: dict, phase_id: str) -> dict:
+    """Compute stats for a specific phase."""
     counts = {"todo": 0, "in-progress": 0, "in-review": 0, "done": 0, "blocked": 0, "archived": 0}
     for epic in data["epics"]:
         for t in epic.get("tasks", []):
-            if t.get("milestone") == milestone_id:
+            if t.get("phase") == phase_id:
                 s = t.get("status", "todo")
                 counts[s] = counts.get(s, 0) + 1
     total = sum(counts.values()) - counts["archived"]
@@ -275,19 +275,19 @@ def regenerate_context(data: dict) -> None:
         },
     }
 
-    # Milestone context
-    active_ms = _active_milestone(data)
-    if active_ms:
-        ms_stats = _milestone_stats(data, active_ms["id"])
-        data["context"]["active_milestone"] = {
-            "id": active_ms["id"],
-            "name": active_ms["name"],
-            "stats": ms_stats,
-            "target_date": active_ms.get("target_date"),
-            "start_date": active_ms.get("start_date"),
+    # Phase context
+    active_ph = _active_phase(data)
+    if active_ph:
+        ph_stats = _phase_stats(data, active_ph["id"])
+        data["context"]["active_phase"] = {
+            "id": active_ph["id"],
+            "name": active_ph["name"],
+            "stats": ph_stats,
+            "target_date": active_ph.get("target_date"),
+            "start_date": active_ph.get("start_date"),
         }
     else:
-        data["context"]["active_milestone"] = None
+        data["context"]["active_phase"] = None
 
 
 def regenerate_progress_dashboard(data: dict) -> None:
@@ -327,29 +327,29 @@ def regenerate_progress_dashboard(data: dict) -> None:
 
     lines.append("")
 
-    # Milestone progress
-    milestones = data.get("milestones", [])
-    if milestones:
-        active_ms = _active_milestone(data)
-        if active_ms:
-            ms_stats = _milestone_stats(data, active_ms["id"])
-            ms_done = ms_stats["done"]
-            ms_total = ms_stats["total"]
-            remaining = _time_remaining(active_ms.get("target_date"))
-            target_info = f" — target: {active_ms['target_date']}" if active_ms.get("target_date") else ""
+    # Phase progress
+    phases = data.get("phases", [])
+    if phases:
+        active_ph = _active_phase(data)
+        if active_ph:
+            ph_stats = _phase_stats(data, active_ph["id"])
+            ph_done = ph_stats["done"]
+            ph_total = ph_stats["total"]
+            remaining = _time_remaining(active_ph.get("target_date"))
+            target_info = f" — target: {active_ph['target_date']}" if active_ph.get("target_date") else ""
             if remaining:
                 target_info += f" ({remaining})"
-            lines.append(f"**Active Milestone:** {active_ms['name']} ({ms_done}/{ms_total} done){target_info}")
-        # List all milestones briefly
-        ms_summary = []
-        for ms in sorted(milestones, key=lambda m: m.get("order", 999)):
-            s = ms.get("status", "planned")
+            lines.append(f"**Active Phase:** {active_ph['name']} ({ph_done}/{ph_total} done){target_info}")
+        # List all phases briefly
+        ph_summary = []
+        for ph in sorted(phases, key=lambda m: m.get("order", 999)):
+            s = ph.get("status", "planned")
             if s == "archived":
                 continue
             label = {"active": ">>", "done": "done", "planned": "..."}.get(s, s)
-            ms_summary.append(f"{label} {ms['name']}")
-        if ms_summary:
-            lines.append(f"**Milestones:** {' | '.join(ms_summary)}")
+            ph_summary.append(f"{label} {ph['name']}")
+        if ph_summary:
+            lines.append(f"**Phases:** {' | '.join(ph_summary)}")
         lines.append("")
 
     ctx = data.get("context", {})
@@ -493,41 +493,41 @@ def backlog_status() -> str:
         stats_line += f" | Archived: {s['archived']}"
     lines.append(stats_line)
 
-    # Milestone info
-    milestones = data.get("milestones", [])
-    active_ms = _active_milestone(data)
-    if active_ms:
-        ms_stats = _milestone_stats(data, active_ms["id"])
-        ms_done = ms_stats["done"]
-        ms_total = ms_stats["total"]
-        remaining = _time_remaining(active_ms.get("target_date"))
+    # Phase info
+    phases = data.get("phases", [])
+    active_ph = _active_phase(data)
+    if active_ph:
+        ph_stats = _phase_stats(data, active_ph["id"])
+        ph_done = ph_stats["done"]
+        ph_total = ph_stats["total"]
+        remaining = _time_remaining(active_ph.get("target_date"))
         time_note = f" — {remaining}" if remaining else ""
-        lines.append(f"\n**Active Milestone:** {active_ms['name']} — {ms_done}/{ms_total} tasks done{time_note}")
-        if active_ms.get("description"):
-            lines.append(f"  {active_ms['description']}")
-    if milestones:
-        lines.append("\n**Milestones:**")
-        for ms in sorted(milestones, key=lambda m: m.get("order", 999)):
-            s = ms.get("status", "planned")
+        lines.append(f"\n**Active Phase:** {active_ph['name']} — {ph_done}/{ph_total} tasks done{time_note}")
+        if active_ph.get("description"):
+            lines.append(f"  {active_ph['description']}")
+    if phases:
+        lines.append("\n**Phases:**")
+        for ph in sorted(phases, key=lambda m: m.get("order", 999)):
+            s = ph.get("status", "planned")
             if s == "archived":
                 continue
-            ms_st = _milestone_stats(data, ms["id"])
+            ph_st = _phase_stats(data, ph["id"])
             marker = {"active": "▶", "done": "✓", "planned": "○"}.get(s, "?")
-            target_note = f", target: {ms.get('target_date')}" if ms.get("target_date") else ""
-            lines.append(f"- {marker} **{ms['name']}** ({ms_st['done']}/{ms_st['total']}) — {s}{target_note}")
+            target_note = f", target: {ph.get('target_date')}" if ph.get("target_date") else ""
+            lines.append(f"- {marker} **{ph['name']}** ({ph_st['done']}/{ph_st['total']}) — {s}{target_note}")
 
     return "\n".join(lines)
 
 
 @mcp.tool()
-def backlog_list_tasks(epic: str = "", status: str = "", priority: str = "", milestone: str = "") -> str:
+def backlog_list_tasks(epic: str = "", status: str = "", priority: str = "", phase: str = "") -> str:
     """List tasks with optional filters. All params optional — defaults to showing all tasks.
 
     Args:
         epic: Filter by epic ID (e.g., "ue-plugin", "desktop-app")
         status: Filter by status: todo, in-progress, in-review, done, blocked
         priority: Filter by priority: P0, P1, P2, P3
-        milestone: Filter by milestone ID
+        phase: Filter by phase ID
     """
     data = _load()
     priority_order = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
@@ -543,7 +543,7 @@ def backlog_list_tasks(epic: str = "", status: str = "", priority: str = "", mil
                 continue
             if priority and t.get("priority") != priority:
                 continue
-            if milestone and t.get("milestone") != milestone:
+            if phase and t.get("phase") != phase:
                 continue
             pri = t.get("priority", "P2")
             results.append((
@@ -560,8 +560,8 @@ def backlog_list_tasks(epic: str = "", status: str = "", priority: str = "", mil
             filters.append(f"status={status}")
         if priority:
             filters.append(f"priority={priority}")
-        if milestone:
-            filters.append(f"milestone={milestone}")
+        if phase:
+            filters.append(f"phase={phase}")
         return f"No tasks found matching: {', '.join(filters) if filters else 'any'}"
 
     results.sort(key=lambda x: (x[0], x[1]))
@@ -589,7 +589,7 @@ def backlog_get_task(task_id: str) -> str:
         ("Epic", f"{epic['name']} ({epic['id']})"),
         ("Stage", str(task["stage"]) if task.get("stage") is not None else "—"),
         ("Estimate", task.get("estimate", "—")),
-        ("Milestone", task.get("milestone", "—")),
+        ("Phase", task.get("phase", "—")),
         ("Sub-repo", task.get("sub_repo", "—")),
         ("Created", str(task.get("created", "—"))),
         ("Started", str(task.get("started", "—"))),
@@ -767,7 +767,7 @@ def backlog_next_available() -> str:
     """Show tasks that are ready to work on — todo tasks in active epics with all dependencies satisfied.
     Sorted by priority, then by creation date."""
     data = _load()
-    active_ms = _active_milestone(data)
+    active_ph = _active_phase(data)
 
     # Build lookup of all task statuses
     task_status: dict[str, str] = {}
@@ -784,8 +784,8 @@ def backlog_next_available() -> str:
         for task in epic.get("tasks", []):
             if task.get("status") != "todo":
                 continue
-            # Filter by active milestone if one exists
-            if active_ms and task.get("milestone") != active_ms["id"]:
+            # Filter by active phase if one exists
+            if active_ph and task.get("phase") != active_ph["id"]:
                 continue
 
             # Check dependencies
@@ -804,16 +804,16 @@ def backlog_next_available() -> str:
 
     lines = ["## Available Tasks\n"]
 
-    if active_ms:
-        lines.append(f"*Filtered to milestone: **{active_ms['name']}***\n")
+    if active_ph:
+        lines.append(f"*Filtered to phase: **{active_ph['name']}***\n")
 
     if available:
         lines.append(f"**{len(available)} tasks ready to pick:**")
         for task, epic in available:
             lines.append(f"- `{task['id']}` — {task['title']} ({task.get('priority', 'P2')}, {epic['id']})")
     else:
-        if active_ms:
-            lines.append(f"No tasks available in milestone **{active_ms['name']}** — all tasks are done, in progress, or have unmet dependencies.")
+        if active_ph:
+            lines.append(f"No tasks available in phase **{active_ph['name']}** — all tasks are done, in progress, or have unmet dependencies.")
         else:
             lines.append("No tasks available — all todo tasks have unmet dependencies or belong to non-active epics.")
 
@@ -824,16 +824,16 @@ def backlog_next_available() -> str:
             lines.append(f"- `{task['id']}` — {task['title']} (waiting on {unmet_str})")
 
     # Show unassigned tasks hint
-    if active_ms:
+    if active_ph:
         unassigned = []
         for epic in data["epics"]:
             if epic.get("status") != "active":
                 continue
             for task in epic.get("tasks", []):
-                if task.get("status") == "todo" and not task.get("milestone"):
+                if task.get("status") == "todo" and not task.get("phase"):
                     unassigned.append(task)
         if unassigned:
-            lines.append(f"\n*{len(unassigned)} todo tasks are not assigned to any milestone.*")
+            lines.append(f"\n*{len(unassigned)} todo tasks are not assigned to any phase.*")
 
     return "\n".join(lines)
 
@@ -926,13 +926,13 @@ def backlog_validate() -> str:
     for cycle in cycles_found:
         issues.append(f"Circular dependency: {' → '.join(f'`{c}`' for c in cycle)}")
 
-    # 7. Milestone validation
+    # 7. Phase validation
     for task, epic in all_tasks:
         tid = task["id"]
-        # 8. Milestone references that don't exist
-        task_ms = task.get("milestone")
-        if task_ms and not _find_milestone(data, task_ms):
-            issues.append(f"`{tid}`: milestone `{task_ms}` does not exist")
+        # 8. Phase references that don't exist
+        task_ph = task.get("phase")
+        if task_ph and not _find_phase(data, task_ph):
+            issues.append(f"`{tid}`: phase `{task_ph}` does not exist")
 
     # Stats summary
     stats = {"total": len(all_tasks), "issues": len(issues)}
@@ -1007,7 +1007,7 @@ def backlog_init(project_name: str = "", location: str = "hidden") -> str:
             "stats": {"total": 0, "done": 0, "in_progress": 0, "in_review": 0, "todo": 0, "blocked": 0, "archived": 0},
         },
         "epics": [],
-        "milestones": [],
+        "phases": [],
     }
     backlog_abs.write_text(
         yaml.dump(initial_data, default_flow_style=False, sort_keys=False, allow_unicode=True),
@@ -1031,7 +1031,7 @@ def backlog_init(project_name: str = "", location: str = "hidden") -> str:
 def backlog_add_task(
     title: str, epic: str, priority: str = "P2", notes: str = "",
     docs: str = "", depends_on: str = "", sub_repo: str = "",
-    stage: int | None = None, estimate: str = "", milestone: str = "",
+    stage: int | None = None, estimate: str = "", phase: str = "",
 ) -> str:
     """Create a new task under an epic. Auto-generates the task ID.
 
@@ -1045,7 +1045,7 @@ def backlog_add_task(
         sub_repo: Optional sub-repo directory name for monorepo projects
         stage: Optional stage number for phased work
         estimate: Optional size estimate (e.g., "S", "M", "L")
-        milestone: Optional milestone ID to assign this task to
+        phase: Optional phase ID to assign this task to
     """
     if priority not in VALID_PRIORITIES:
         return f"Error: invalid priority `{priority}`. Valid: {', '.join(sorted(VALID_PRIORITIES))}"
@@ -1091,10 +1091,10 @@ def backlog_add_task(
         new_task["stage"] = stage
     if estimate:
         new_task["estimate"] = estimate
-    if milestone:
-        if not _find_milestone(data, milestone):
-            return f"Error: milestone `{milestone}` not found"
-        new_task["milestone"] = milestone
+    if phase:
+        if not _find_phase(data, phase):
+            return f"Error: phase `{phase}` not found"
+        new_task["phase"] = phase
 
     # Parse docs if provided: "plan:path;spec:path"
     if docs:
@@ -1535,7 +1535,7 @@ def _clear_session_task(task_id: str) -> None:
         _session_task = None
 
 
-ALLOWED_FIELDS = {"title", "status", "priority", "notes", "branch", "worktree", "blockers", "docs", "depends_on", "sub_repo", "stage", "estimate", "locked_by", "review_instructions", "milestone"}
+ALLOWED_FIELDS = {"title", "status", "priority", "notes", "branch", "worktree", "blockers", "docs", "depends_on", "sub_repo", "stage", "estimate", "locked_by", "review_instructions", "phase"}
 VALID_STATUSES = {"todo", "in-progress", "in-review", "done", "archived", "blocked"}
 VALID_PRIORITIES = {"P0", "P1", "P2", "P3"}
 VALID_DOC_KEYS = {"plan", "spec", "roadmap", "design", "analysis"}
@@ -1547,7 +1547,7 @@ def backlog_update_task(task_id: str, field: str, value: str) -> str:
 
     Args:
         task_id: The task ID (e.g., "ue-plugin-003")
-        field: Field to update — one of: title, status, priority, notes, branch, worktree, blockers, docs, depends_on, sub_repo, stage, estimate, locked_by, review_instructions, milestone
+        field: Field to update — one of: title, status, priority, notes, branch, worktree, blockers, docs, depends_on, sub_repo, stage, estimate, locked_by, review_instructions, phase
         value: New value. Format varies by field:
             - docs: "key:path" (e.g., "plan:docs/plans/foo.md")
             - depends_on: comma-separated task IDs (e.g., "cpp-parser-002,cpp-parser-003")
@@ -1555,7 +1555,7 @@ def backlog_update_task(task_id: str, field: str, value: str) -> str:
             - estimate: size string (e.g., "S", "M", "L")
             - sub_repo: sub-repo directory name for monorepo projects
             - locked_by: session ID to claim the lock, or "" to clear it
-            - milestone: milestone ID to assign, or "" to clear
+            - phase: phase ID to assign, or "" to clear
     """
     if field not in ALLOWED_FIELDS:
         return f"Error: field `{field}` not allowed. Allowed: {', '.join(sorted(ALLOWED_FIELDS))}"
@@ -1613,13 +1613,13 @@ def backlog_update_task(task_id: str, field: str, value: str) -> str:
             task.pop("locked_by", None)
         else:
             task["locked_by"] = value
-    elif field == "milestone":
+    elif field == "phase":
         if value == "" or value.lower() == "none":
-            task.pop("milestone", None)
+            task.pop("phase", None)
         else:
-            if not _find_milestone(data, value):
-                return f"Error: milestone `{value}` not found"
-            task["milestone"] = value
+            if not _find_phase(data, value):
+                return f"Error: phase `{value}` not found"
+            task["phase"] = value
     else:
         task[field] = value
 
@@ -1706,44 +1706,45 @@ def backlog_add_epic(
     return f"Created epic `{epic_id}` — {name} ({status})"
 
 
-# ── Milestone Tools ──────────────────────────────────────
+# ── Phase Tools ──────────────────────────────────────
 
 
-VALID_MILESTONE_STATUSES = {"planned", "active", "done", "archived"}
-ALLOWED_MILESTONE_FIELDS = {"name", "status", "description", "order", "target_date", "start_date"}
+VALID_PHASE_STATUSES = {"planned", "active", "done", "archived"}
+ALLOWED_PHASE_FIELDS = {"name", "status", "description", "order", "target_date", "start_date"}
 
 
 @mcp.tool()
-def backlog_add_milestone(
-    milestone_id: str, name: str, description: str = "", order: int | None = None,
+def backlog_add_phase(
+    phase_id: str, name: str, description: str = "", order: int | None = None,
     target_date: str = "", start_date: str = "",
 ) -> str:
-    """Create a new milestone. Milestones are sequential blocks of work — only one is active at a time.
-    Tasks are assigned to milestones to control focus.
+    """Create a new phase. Phases are temporal attention scopes for sequential ordering, NOT feature
+    groupings — features belong in epics. Only one phase is active at a time; tasks are assigned
+    to phases to control focus.
 
     Args:
-        milestone_id: Short kebab-case identifier (e.g., "m1", "foundation", "mvp"). Must be unique.
+        phase_id: Short kebab-case identifier (e.g., "p1", "foundation", "mvp"). Must be unique.
         name: Human-readable name (e.g., "Foundation", "Core Features", "Polish & Launch")
-        description: Brief description of the milestone's goals
+        description: Brief description of the phase's goals
         order: Position in the sequence (1, 2, 3...). Auto-assigned if omitted.
         target_date: Optional target completion date (YYYY-MM-DD format)
         start_date: Optional start date (YYYY-MM-DD format). Auto-set to today if status is active and omitted.
     """
     # Validate ID format
-    if not milestone_id or not all(c.isalnum() or c == "-" for c in milestone_id) or milestone_id != milestone_id.lower():
-        return f"Error: milestone_id must be lowercase kebab-case (e.g., 'm1', 'foundation'), got `{milestone_id}`"
+    if not phase_id or not all(c.isalnum() or c == "-" for c in phase_id) or phase_id != phase_id.lower():
+        return f"Error: phase_id must be lowercase kebab-case (e.g., 'p1', 'foundation'), got `{phase_id}`"
 
     data = _load()
 
-    if _find_milestone(data, milestone_id):
-        return f"Error: milestone `{milestone_id}` already exists"
+    if _find_phase(data, phase_id):
+        return f"Error: phase `{phase_id}` already exists"
 
-    if "milestones" not in data:
-        data["milestones"] = []
+    if "phases" not in data:
+        data["phases"] = []
 
     # Auto-assign order
     if order is None:
-        existing_orders = [ms.get("order", 0) for ms in data["milestones"]]
+        existing_orders = [ph.get("order", 0) for ph in data["phases"]]
         order = max(existing_orders, default=0) + 1
 
     # Validate dates if provided
@@ -1752,13 +1753,13 @@ def backlog_add_milestone(
     if start_date and not _validate_date(start_date):
         return f"Error: start_date must be YYYY-MM-DD format, got `{start_date}`"
 
-    # Auto-activate if this is the first milestone
+    # Auto-activate if this is the first phase
     status = "planned"
-    if not any(ms.get("status") == "active" for ms in data["milestones"]):
+    if not any(ph.get("status") == "active" for ph in data["phases"]):
         status = "active"
 
-    new_milestone = {
-        "id": milestone_id,
+    new_phase = {
+        "id": phase_id,
         "name": name,
         "status": status,
         "description": description,
@@ -1766,112 +1767,132 @@ def backlog_add_milestone(
         "created": _now(),
     }
     if target_date:
-        new_milestone["target_date"] = target_date
+        new_phase["target_date"] = target_date
     if start_date:
-        new_milestone["start_date"] = start_date
+        new_phase["start_date"] = start_date
     elif status == "active":
-        new_milestone["start_date"] = _today()
+        new_phase["start_date"] = _today()
 
-    data["milestones"].append(new_milestone)
+    data["phases"].append(new_phase)
     _mutate_and_save(data)
 
-    status_note = f" (auto-activated — first milestone)" if status == "active" else ""
-    return f"Created milestone `{milestone_id}` — {name} (order: {order}){status_note}"
+    status_note = f" (auto-activated — first phase)" if status == "active" else ""
+    return f"Created phase `{phase_id}` — {name} (order: {order}){status_note}"
 
 
 @mcp.tool()
-def backlog_update_milestone(milestone_id: str, field: str, value: str) -> str:
-    """Update a single field on a milestone.
+def backlog_update_phase(phase_id: str, field: str, value: str) -> str:
+    """Update a single field on a phase.
 
     Args:
-        milestone_id: The milestone ID (e.g., "m1", "foundation")
+        phase_id: The phase ID (e.g., "p1", "foundation")
         field: Field to update — one of: name, status, description, order, target_date, start_date
         value: New value. For status: planned, active, done, archived. For order: integer. For dates: YYYY-MM-DD or empty to clear.
     """
-    if field not in ALLOWED_MILESTONE_FIELDS:
-        return f"Error: field `{field}` not allowed. Allowed: {', '.join(sorted(ALLOWED_MILESTONE_FIELDS))}"
+    if field not in ALLOWED_PHASE_FIELDS:
+        return f"Error: field `{field}` not allowed. Allowed: {', '.join(sorted(ALLOWED_PHASE_FIELDS))}"
 
     data = _load()
-    ms = _find_milestone(data, milestone_id)
-    if not ms:
-        return f"Error: milestone `{milestone_id}` not found"
+    ph = _find_phase(data, phase_id)
+    if not ph:
+        return f"Error: phase `{phase_id}` not found"
 
     if field == "status":
-        if value not in VALID_MILESTONE_STATUSES:
-            return f"Error: invalid status `{value}`. Valid: {', '.join(sorted(VALID_MILESTONE_STATUSES))}"
-        # If activating, deactivate any currently active milestone
+        if value not in VALID_PHASE_STATUSES:
+            return f"Error: invalid status `{value}`. Valid: {', '.join(sorted(VALID_PHASE_STATUSES))}"
+        # If activating, deactivate any currently active phase
         if value == "active":
-            for other_ms in data.get("milestones", []):
-                if other_ms["id"] != milestone_id and other_ms.get("status") == "active":
-                    other_ms["status"] = "planned"
-            if not ms.get("start_date"):
-                ms["start_date"] = _today()
+            for other_ph in data.get("phases", []):
+                if other_ph["id"] != phase_id and other_ph.get("status") == "active":
+                    other_ph["status"] = "planned"
+            if not ph.get("start_date"):
+                ph["start_date"] = _today()
         if value == "done":
-            ms["completed"] = _now()
-        ms["status"] = value
+            ph["completed"] = _now()
+        ph["status"] = value
     elif field == "order":
         try:
-            ms["order"] = int(value)
+            ph["order"] = int(value)
         except ValueError:
             return f"Error: order must be an integer, got `{value}`"
     elif field in ("target_date", "start_date"):
         if value == "":
-            ms.pop(field, None)
+            ph.pop(field, None)
         else:
             if not _validate_date(value):
                 return f"Error: {field} must be YYYY-MM-DD format, got `{value}`"
-            ms[field] = value
+            ph[field] = value
     else:
-        ms[field] = value
+        ph[field] = value
 
     _mutate_and_save(data)
-    return f"Updated milestone `{milestone_id}` field `{field}` → {value}"
+    return f"Updated phase `{phase_id}` field `{field}` → {value}"
 
 
 @mcp.tool()
-def backlog_milestone_status(milestone_id: str = "") -> str:
-    """Show detailed progress for a milestone. Defaults to the active milestone.
+def backlog_phase_status(phase_id: str = "") -> str:
+    """Show detailed progress for a phase. Defaults to the active phase.
 
     Args:
-        milestone_id: Milestone ID. If omitted, shows the active milestone.
+        phase_id: Phase ID. If omitted, shows the active phase.
     """
     data = _load()
 
-    if milestone_id:
-        ms = _find_milestone(data, milestone_id)
-        if not ms:
-            return f"Error: milestone `{milestone_id}` not found"
+    if phase_id:
+        ph = _find_phase(data, phase_id)
+        if not ph:
+            return f"Error: phase `{phase_id}` not found"
     else:
-        ms = _active_milestone(data)
-        if not ms:
-            return "No active milestone. Create one with `backlog_add_milestone`."
+        ph = _active_phase(data)
+        if not ph:
+            return "No active phase. Create one with `backlog_add_phase`."
 
-    stats = _milestone_stats(data, ms["id"])
-    lines = [f"## Milestone: {ms['name']}\n"]
-    if ms.get("description"):
-        lines.append(f"{ms['description']}\n")
+    stats = _phase_stats(data, ph["id"])
 
-    # Retrospective for done milestones
-    if ms.get("status") == "done":
+    # Get all phases sorted by order for sequential context
+    all_phases = sorted(data.get("phases", []), key=lambda p: p.get("order", 999))
+    current_idx = next((i for i, p in enumerate(all_phases) if p["id"] == ph["id"]), -1)
+    prev_phase = all_phases[current_idx - 1] if current_idx > 0 else None
+    next_phase = all_phases[current_idx + 1] if current_idx < len(all_phases) - 1 else None
+
+    # Phase sequence header
+    phase_num = current_idx + 1
+    total_phases = len(all_phases)
+    lines = [f"## Phase {phase_num}/{total_phases}: {ph['name']}\n"]
+
+    if ph.get("description"):
+        lines.append(f"{ph['description']}\n")
+
+    # Previous/next phase context
+    if prev_phase:
+        prev_status = "completed" if prev_phase.get("status") == "done" else prev_phase.get("status", "planned")
+        lines.append(f"**Previous:** {prev_phase['name']} ({prev_status})")
+    if next_phase:
+        lines.append(f"**Next up:** {next_phase['name']} — {next_phase.get('description', 'no description')}")
+    if prev_phase or next_phase:
+        lines.append("")
+
+    # Retrospective for done phases
+    if ph.get("status") == "done":
         lines.append("**Status:** Completed")
         # Duration
-        if ms.get("start_date") and ms.get("completed"):
+        if ph.get("start_date") and ph.get("completed"):
             try:
-                start = datetime.strptime(str(ms["start_date"]), "%Y-%m-%d").date()
-                comp_str = str(ms["completed"])
+                start = datetime.strptime(str(ph["start_date"]), "%Y-%m-%d").date()
+                comp_str = str(ph["completed"])
                 comp = datetime.fromisoformat(comp_str).date() if "T" in comp_str else datetime.strptime(comp_str, "%Y-%m-%d").date()
                 duration_days = (comp - start).days
-                lines.append(f"**Duration:** {duration_days} days ({ms['start_date']} → {comp_str[:10]})")
+                lines.append(f"**Duration:** {duration_days} days ({ph['start_date']} → {comp_str[:10]})")
             except ValueError:
-                if ms.get("completed"):
-                    lines.append(f"**Completed:** {str(ms['completed'])[:10]}")
-        elif ms.get("completed"):
-            lines.append(f"**Completed:** {str(ms['completed'])[:10]}")
+                if ph.get("completed"):
+                    lines.append(f"**Completed:** {str(ph['completed'])[:10]}")
+        elif ph.get("completed"):
+            lines.append(f"**Completed:** {str(ph['completed'])[:10]}")
         # On-time analysis
-        if ms.get("target_date") and ms.get("completed"):
+        if ph.get("target_date") and ph.get("completed"):
             try:
-                target = datetime.strptime(str(ms["target_date"]), "%Y-%m-%d").date()
-                comp_str = str(ms["completed"])
+                target = datetime.strptime(str(ph["target_date"]), "%Y-%m-%d").date()
+                comp_str = str(ph["completed"])
                 comp = datetime.fromisoformat(comp_str).date() if "T" in comp_str else datetime.strptime(comp_str, "%Y-%m-%d").date()
                 delta = (comp - target).days
                 if delta < 0:
@@ -1887,14 +1908,14 @@ def backlog_milestone_status(milestone_id: str = "") -> str:
         lines.append(f"**Tasks completed & archived:** {total_completed}")
         lines.append("")
     else:
-        lines.append(f"**Status:** {ms['status']} | **Order:** {ms.get('order', '?')}")
+        lines.append(f"**Status:** {ph['status']} | **Order:** {ph.get('order', '?')}")
         # Date info
         date_parts = []
-        if ms.get("start_date"):
-            date_parts.append(f"Started: {ms['start_date']}")
-        if ms.get("target_date"):
-            date_parts.append(f"Target: {ms['target_date']}")
-            remaining = _time_remaining(ms["target_date"])
+        if ph.get("start_date"):
+            date_parts.append(f"Started: {ph['start_date']}")
+        if ph.get("target_date"):
+            date_parts.append(f"Target: {ph['target_date']}")
+            remaining = _time_remaining(ph["target_date"])
             if remaining:
                 date_parts.append(f"**{remaining}**")
         if date_parts:
@@ -1911,15 +1932,15 @@ def backlog_milestone_status(milestone_id: str = "") -> str:
         lines.append(f"Done: {stats['done']} | In Progress: {stats['in-progress']} | In Review: {stats['in-review']} | Todo: {stats['todo']} | Blocked: {stats['blocked']}")
         lines.append("")
 
-    # List tasks in this milestone grouped by status
+    # List tasks in this phase grouped by status
     status_groups = ["in-progress", "in-review", "todo", "blocked", "done"]
-    if ms.get("status") == "done":
+    if ph.get("status") == "done":
         status_groups.append("archived")
     for status_group in status_groups:
         group_tasks = []
         for epic in data["epics"]:
             for t in epic.get("tasks", []):
-                if t.get("milestone") == ms["id"] and t.get("status") == status_group:
+                if t.get("phase") == ph["id"] and t.get("status") == status_group:
                     group_tasks.append((t, epic))
 
         if group_tasks:
@@ -1934,74 +1955,74 @@ def backlog_milestone_status(milestone_id: str = "") -> str:
     unassigned_count = 0
     for epic in data["epics"]:
         for t in epic.get("tasks", []):
-            if t.get("status") not in ("done", "archived") and not t.get("milestone"):
+            if t.get("status") not in ("done", "archived") and not t.get("phase"):
                 unassigned_count += 1
     if unassigned_count:
-        lines.append(f"*{unassigned_count} active tasks are not assigned to any milestone.*")
+        lines.append(f"*{unassigned_count} active tasks are not assigned to any phase.*")
 
     return "\n".join(lines)
 
 
 @mcp.tool()
-def backlog_advance_milestone() -> str:
-    """Complete the active milestone and activate the next one in sequence.
-    Archives all 'done' tasks in the completed milestone. Activates the next 'planned' milestone by order.
+def backlog_advance_phase() -> str:
+    """Complete the active phase and activate the next one in sequence.
+    Archives all 'done' tasks in the completed phase. Activates the next 'planned' phase by order.
     """
     data = _load()
-    active_ms = _active_milestone(data)
-    if not active_ms:
-        return "No active milestone to advance."
+    active_ph = _active_phase(data)
+    if not active_ph:
+        return "No active phase to advance."
 
-    ms_stats = _milestone_stats(data, active_ms["id"])
+    ph_stats = _phase_stats(data, active_ph["id"])
 
     # Warn if there are incomplete tasks
-    incomplete = ms_stats["todo"] + ms_stats["in-progress"] + ms_stats["in-review"] + ms_stats["blocked"]
+    incomplete = ph_stats["todo"] + ph_stats["in-progress"] + ph_stats["in-review"] + ph_stats["blocked"]
     warning = ""
     if incomplete > 0:
         warning = (
-            f"\n\n**Warning:** {incomplete} tasks in this milestone are not done "
-            f"(todo: {ms_stats['todo']}, in-progress: {ms_stats['in-progress']}, "
-            f"in-review: {ms_stats['in-review']}, blocked: {ms_stats['blocked']}). "
-            f"They will remain in their current status but the milestone will be marked done."
+            f"\n\n**Warning:** {incomplete} tasks in this phase are not done "
+            f"(todo: {ph_stats['todo']}, in-progress: {ph_stats['in-progress']}, "
+            f"in-review: {ph_stats['in-review']}, blocked: {ph_stats['blocked']}). "
+            f"They will remain in their current status but the phase will be marked done."
         )
 
-    # Mark active milestone as done
-    active_ms["status"] = "done"
-    active_ms["completed"] = _now()
+    # Mark active phase as done
+    active_ph["status"] = "done"
+    active_ph["completed"] = _now()
 
-    # Archive done tasks in this milestone
+    # Archive done tasks in this phase
     archived_count = 0
     for epic in data["epics"]:
         for t in epic.get("tasks", []):
-            if t.get("milestone") == active_ms["id"] and t.get("status") == "done":
+            if t.get("phase") == active_ph["id"] and t.get("status") == "done":
                 t["status"] = "archived"
                 t["archive_reason"] = "done"
                 t["archived"] = _now()
                 archived_count += 1
 
-    # Find and activate next planned milestone by order
-    planned = [ms for ms in data.get("milestones", []) if ms.get("status") == "planned"]
+    # Find and activate next planned phase by order
+    planned = [ph for ph in data.get("phases", []) if ph.get("status") == "planned"]
     planned.sort(key=lambda m: m.get("order", 999))
-    next_ms = planned[0] if planned else None
+    next_ph = planned[0] if planned else None
 
-    if next_ms:
-        next_ms["status"] = "active"
-        if not next_ms.get("start_date"):
-            next_ms["start_date"] = _today()
+    if next_ph:
+        next_ph["status"] = "active"
+        if not next_ph.get("start_date"):
+            next_ph["start_date"] = _today()
 
     _mutate_and_save(data)
 
-    result = f"Completed milestone **{active_ms['name']}** — archived {archived_count} done tasks."
-    if active_ms.get("start_date"):
+    result = f"Completed phase **{active_ph['name']}** — archived {archived_count} done tasks."
+    if active_ph.get("start_date"):
         try:
-            start = datetime.strptime(str(active_ms["start_date"]), "%Y-%m-%d").date()
+            start = datetime.strptime(str(active_ph["start_date"]), "%Y-%m-%d").date()
             duration = (date.today() - start).days
             result += f" Duration: {duration}d."
         except ValueError:
             pass
-    if active_ms.get("target_date"):
+    if active_ph.get("target_date"):
         try:
-            target = datetime.strptime(str(active_ms["target_date"]), "%Y-%m-%d").date()
+            target = datetime.strptime(str(active_ph["target_date"]), "%Y-%m-%d").date()
             delta = (date.today() - target).days
             if delta <= 0:
                 result += " Completed on time."
@@ -2009,13 +2030,13 @@ def backlog_advance_milestone() -> str:
                 result += f" Completed {delta}d past target."
         except ValueError:
             pass
-    if next_ms:
-        next_stats = _milestone_stats(data, next_ms["id"])
-        result += f"\n\nActivated next milestone: **{next_ms['name']}** ({next_stats['total']} tasks, order: {next_ms.get('order', '?')})"
-        if next_ms.get("description"):
-            result += f"\n{next_ms['description']}"
+    if next_ph:
+        next_stats = _phase_stats(data, next_ph["id"])
+        result += f"\n\nActivated next phase: **{next_ph['name']}** ({next_stats['total']} tasks, order: {next_ph.get('order', '?')})"
+        if next_ph.get("description"):
+            result += f"\n{next_ph['description']}"
     else:
-        result += "\n\nNo more planned milestones. Create one with `backlog_add_milestone`."
+        result += "\n\nNo more planned phases. Create one with `backlog_add_phase`."
 
     return result + warning
 
@@ -2107,14 +2128,14 @@ def backlog_batch_update(operations: str) -> str:
                     task.pop("locked_by", None)
                 else:
                     task["locked_by"] = value
-            elif field == "milestone":
+            elif field == "phase":
                 if value == "" or value.lower() == "none":
-                    task.pop("milestone", None)
+                    task.pop("phase", None)
                 else:
-                    if not _find_milestone(data, value):
-                        errors.append(f"`{task_id}`: milestone `{value}` not found")
+                    if not _find_phase(data, value):
+                        errors.append(f"`{task_id}`: phase `{value}` not found")
                         continue
-                    task["milestone"] = value
+                    task["phase"] = value
             else:
                 task[field] = value
             results.append(f"`{task_id}`.{field} → {value}")
