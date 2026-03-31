@@ -600,6 +600,9 @@ def backlog_list_tasks(epic: str = "", status: str = "", priority: str = "", pha
     for ep in data["epics"]:
         if epic and ep["id"] != epic:
             continue
+        # Hide tasks in archived epics unless explicitly filtering for archived status
+        if not status and ep.get("status") == "archived":
+            continue
         for t in ep.get("tasks", []):
             if status and t.get("status") != status:
                 continue
