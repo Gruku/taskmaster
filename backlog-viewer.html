@@ -507,7 +507,7 @@
       display: flex;
       align-items: center;
       gap: 12px;
-      flex-wrap: wrap;
+      justify-content: center;
     }
 
     .phase-row-left {
@@ -684,6 +684,19 @@
 
     .ms-late {
       color: var(--stat-blocked-color);
+    }
+
+    /* ── Phase section bar ──────────────────────────────── */
+    .phase-section-bar {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 8px 24px;
+      display: flex;
+      justify-content: center;
+    }
+
+    .phase-section-bar #phase-banner {
+      width: 100%;
     }
 
     /* ── Epic progress ───────────────────────────────────── */
@@ -1241,6 +1254,52 @@
       text-align: right;
     }
 
+    /* ── Filter dropdown buttons (Epic, Phase, Sorting) ──── */
+    .filter-dropdown-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 5px 10px;
+      border-radius: 8px;
+      border: 1.5px solid var(--border);
+      background: var(--surface2);
+      color: var(--text-muted);
+      font-size: var(--fs-base);
+      font-weight: 600;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s, color 0.2s;
+      white-space: nowrap;
+    }
+
+    .filter-dropdown-btn:hover {
+      border-color: var(--accent);
+      color: var(--text);
+    }
+
+    .filter-dropdown-btn.active-filter {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: var(--p2-bg);
+    }
+
+    .filter-arrow {
+      font-size: var(--fs-xs);
+      opacity: 0.6;
+    }
+
+    .filter-dropdown {
+      min-width: 180px;
+    }
+
+    .filter-dropdown .settings-item.selected {
+      color: var(--accent);
+    }
+
+    .filter-dropdown .settings-item.selected .settings-item-label {
+      color: var(--accent);
+      font-weight: 700;
+    }
+
     /* ── Modal ──────────────────────────────────────────── */
     .modal-backdrop {
       position: fixed; top: 0; left: 0; width: 100%; height: 100%;
@@ -1607,12 +1666,14 @@
   <div class="header-right">
     <span class="load-indicator" id="load-status">Trying fetch…</span>
     <input type="text" class="header-search" id="search-input" placeholder="Search tasks…  /" />
-    <select class="filter-select" id="epic-filter">
-      <option value="all">All epics</option>
-    </select>
-    <select class="filter-select" id="phase-filter" style="display:none;">
-      <option value="all">All phases</option>
-    </select>
+    <div class="settings-wrapper" id="epic-wrapper">
+      <button class="filter-dropdown-btn" id="epic-btn">Epic <span class="filter-arrow">▾</span></button>
+      <div class="settings-dropdown filter-dropdown" id="epic-dropdown"></div>
+    </div>
+    <div class="settings-wrapper" id="phase-wrapper" style="display:none;">
+      <button class="filter-dropdown-btn" id="phase-btn">Phase <span class="filter-arrow">▾</span></button>
+      <div class="settings-dropdown filter-dropdown" id="phase-dropdown"></div>
+    </div>
     <div class="filter-group">
       <div class="priority-toggles" id="priority-toggles">
         <button class="priority-btn active" data-p="P0">P0</button>
@@ -1622,7 +1683,7 @@
       </div>
     </div>
     <div class="settings-wrapper" id="sort-wrapper">
-      <button class="settings-btn" id="sort-btn" title="Sorting" style="width:auto;padding:0 10px;font-size:var(--fs-base);font-weight:600;">Sorting</button>
+      <button class="filter-dropdown-btn" id="sort-btn" title="Sorting">Sorting <span class="filter-arrow">▾</span></button>
       <div class="settings-dropdown" id="sort-dropdown">
         <div class="settings-item sort-option" data-sort="priority">
           <span class="settings-item-label">Priority</span>
@@ -1650,8 +1711,7 @@
         </div>
         <div style="height:1px;background:var(--border);margin:4px 0;"></div>
         <div class="settings-item" id="sort-direction-toggle">
-          <span class="settings-item-label">Direction</span>
-          <span class="settings-item-value" id="sort-direction-label">Ascending ↓</span>
+          <span class="settings-item-label" id="sort-direction-label">Ascending ↓</span>
         </div>
       </div>
     </div>
@@ -1683,7 +1743,7 @@
 
 
 <!-- Phase banner -->
-<div class="epics-section" id="phase-section" style="display:none;">
+<div class="phase-section-bar" id="phase-section" style="display:none;">
   <div id="phase-banner"></div>
 </div>
 
@@ -1885,54 +1945,28 @@ function ingestData(data) {
   // Collapse load bar after successful load
   document.getElementById('load-bar').classList.add('collapsed');
 
-  // Epic dropdown — preserve current filter across live reloads
-  const epicSel = document.getElementById('epic-filter');
-  const prevEpic = activeEpic;
-  while (epicSel.options.length > 1) epicSel.remove(1);
-  for (const epic of allEpics) {
-    const opt = document.createElement('option');
-    opt.value = epic.id;
-    opt.textContent = epic.name || epic.id;
-    epicSel.appendChild(opt);
-  }
-  if (prevEpic !== 'all' && allEpics.some(e => e.id === prevEpic)) {
-    activeEpic = prevEpic;
-    epicSel.value = prevEpic;
-  } else {
+  // Epic dropdown — populate and preserve filter
+  if (activeEpic !== 'all' && !allEpics.some(e => e.id === activeEpic)) {
     activeEpic = 'all';
-    epicSel.value = 'all';
   }
+  populateEpicDropdown();
 
   // Phase dropdown — populate and auto-select active phase
-  const phSel = document.getElementById('phase-filter');
   const phases = (data.phases || []).filter(m => m.status !== 'archived');
-  const prevPh = activePhase;
-  while (phSel.options.length > 1) phSel.remove(1);
   if (phases.length) {
-    phSel.style.display = '';
-    for (const ph of phases) {
-      const opt = document.createElement('option');
-      opt.value = ph.id;
-      opt.textContent = ph.name || ph.id;
-      phSel.appendChild(opt);
-    }
-    if (prevPh !== 'all' && phases.some(m => m.id === prevPh)) {
-      activePhase = prevPh;
-      phSel.value = prevPh;
-    } else {
+    document.getElementById('phase-wrapper').style.display = '';
+    if (activePhase !== 'all' && !phases.some(m => m.id === activePhase)) {
       const activePh = phases.find(m => m.status === 'active');
-      if (activePh) {
-        activePhase = activePh.id;
-        phSel.value = activePh.id;
-      } else {
-        activePhase = 'all';
-        phSel.value = 'all';
-      }
+      activePhase = activePh ? activePh.id : 'all';
+    } else if (activePhase === 'all' && !_lastYamlText) {
+      const activePh = phases.find(m => m.status === 'active');
+      if (activePh) activePhase = activePh.id;
     }
   } else {
-    phSel.style.display = 'none';
+    document.getElementById('phase-wrapper').style.display = 'none';
     activePhase = 'all';
   }
+  populatePhaseDropdown();
 
   renderPhases();
   renderEpics();
@@ -2193,14 +2227,9 @@ function renderPhases() {
     banner.querySelectorAll('.ms-step[data-ms-id]').forEach(step => {
       step.addEventListener('click', () => {
         const msId = step.dataset.msId;
-        const phSel = document.getElementById('phase-filter');
-        if (activePhase === msId) {
-          activePhase = 'all';
-          phSel.value = 'all';
-        } else {
-          activePhase = msId;
-          phSel.value = msId;
-        }
+        activePhase = (activePhase === msId) ? 'all' : msId;
+        updatePhaseUI();
+        populatePhaseDropdown();
         renderPhases();
         renderEpics();
         render();
@@ -2220,14 +2249,9 @@ function renderPhases() {
     banner.querySelectorAll('.ms-history-item[data-ms-id]').forEach(item => {
       item.addEventListener('click', () => {
         const msId = item.dataset.msId;
-        const phSel = document.getElementById('phase-filter');
-        if (activePhase === msId) {
-          activePhase = 'all';
-          phSel.value = 'all';
-        } else {
-          activePhase = msId;
-          phSel.value = msId;
-        }
+        activePhase = (activePhase === msId) ? 'all' : msId;
+        updatePhaseUI();
+        populatePhaseDropdown();
         renderPhases();
         renderEpics();
         render();
@@ -2330,18 +2354,9 @@ function renderEpics() {
     `;
 
     card.addEventListener('click', () => {
-      const epicSel = document.getElementById('epic-filter');
-      if (activeEpic === epic.id) {
-        activeEpic = 'all';
-        epicSel.value = 'all';
-      } else {
-        activeEpic = epic.id;
-        epicSel.value = epic.id;
-      }
-      // re-highlight cards
-      document.querySelectorAll('.epic-card').forEach(c => {
-        c.classList.toggle('active-filter', c.dataset.epicId === activeEpic);
-      });
+      activeEpic = (activeEpic === epic.id) ? 'all' : epic.id;
+      updateEpicUI();
+      populateEpicDropdown();
       render();
     });
 
@@ -2929,8 +2944,7 @@ document.getElementById('search-input').addEventListener('input', function() {
   // Open/close
   btn.addEventListener('click', (e) => {
     e.stopPropagation();
-    // Close settings dropdown if open
-    document.getElementById('settings-dropdown').classList.remove('open');
+    closeAllDropdowns();
     dropdown.classList.toggle('open');
   });
   document.addEventListener('click', () => dropdown.classList.remove('open'));
@@ -2940,22 +2954,120 @@ document.getElementById('search-input').addEventListener('input', function() {
 })();
 
 // ── Epic filter dropdown ─────────────────────────────────
-document.getElementById('epic-filter').addEventListener('change', function() {
-  activeEpic = this.value;
+function populateEpicDropdown() {
+  const dropdown = document.getElementById('epic-dropdown');
+  const btn = document.getElementById('epic-btn');
+  dropdown.innerHTML = '';
+  // "All epics" option
+  const allItem = document.createElement('div');
+  allItem.className = 'settings-item' + (activeEpic === 'all' ? ' selected' : '');
+  allItem.innerHTML = '<span class="settings-item-label">All epics</span>';
+  allItem.addEventListener('click', (e) => {
+    e.stopPropagation();
+    activeEpic = 'all';
+    updateEpicUI();
+    dropdown.classList.remove('open');
+    renderEpics();
+    render();
+  });
+  dropdown.appendChild(allItem);
+  // Per-epic options
+  for (const epic of allEpics) {
+    const item = document.createElement('div');
+    item.className = 'settings-item' + (activeEpic === epic.id ? ' selected' : '');
+    item.innerHTML = `<span class="settings-item-label">${esc(epic.name || epic.id)}</span>`;
+    item.addEventListener('click', (e) => {
+      e.stopPropagation();
+      activeEpic = epic.id;
+      updateEpicUI();
+      dropdown.classList.remove('open');
+      renderEpics();
+      render();
+    });
+    dropdown.appendChild(item);
+  }
+  updateEpicUI();
+}
+
+function updateEpicUI() {
+  const btn = document.getElementById('epic-btn');
+  btn.classList.toggle('active-filter', activeEpic !== 'all');
   document.querySelectorAll('.epic-card').forEach(c => {
     c.classList.toggle('active-filter', c.dataset.epicId === activeEpic);
   });
-  renderEpics();
-  render();
-});
+}
+
+(function() {
+  const btn = document.getElementById('epic-btn');
+  const dropdown = document.getElementById('epic-dropdown');
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeAllDropdowns();
+    dropdown.classList.toggle('open');
+  });
+  document.addEventListener('click', () => dropdown.classList.remove('open'));
+})();
 
 // ── Phase filter dropdown ────────────────────────────────
-document.getElementById('phase-filter').addEventListener('change', function() {
-  activePhase = this.value;
-  renderPhases();
-  renderEpics();
-  render();
-});
+function populatePhaseDropdown() {
+  const dropdown = document.getElementById('phase-dropdown');
+  const phases = (loadedData && loadedData.phases || []).filter(m => m.status !== 'archived');
+  dropdown.innerHTML = '';
+  // "All phases" option
+  const allItem = document.createElement('div');
+  allItem.className = 'settings-item' + (activePhase === 'all' ? ' selected' : '');
+  allItem.innerHTML = '<span class="settings-item-label">All phases</span>';
+  allItem.addEventListener('click', (e) => {
+    e.stopPropagation();
+    activePhase = 'all';
+    updatePhaseUI();
+    dropdown.classList.remove('open');
+    renderPhases();
+    renderEpics();
+    render();
+  });
+  dropdown.appendChild(allItem);
+  for (const ph of phases) {
+    const item = document.createElement('div');
+    item.className = 'settings-item' + (activePhase === ph.id ? ' selected' : '');
+    item.innerHTML = `<span class="settings-item-label">${esc(ph.name || ph.id)}</span>`;
+    item.addEventListener('click', (e) => {
+      e.stopPropagation();
+      activePhase = ph.id;
+      updatePhaseUI();
+      dropdown.classList.remove('open');
+      renderPhases();
+      renderEpics();
+      render();
+    });
+    dropdown.appendChild(item);
+  }
+  updatePhaseUI();
+}
+
+function updatePhaseUI() {
+  const btn = document.getElementById('phase-btn');
+  btn.classList.toggle('active-filter', activePhase !== 'all');
+}
+
+(function() {
+  const btn = document.getElementById('phase-btn');
+  const dropdown = document.getElementById('phase-dropdown');
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeAllDropdowns();
+    dropdown.classList.toggle('open');
+  });
+  document.addEventListener('click', () => dropdown.classList.remove('open'));
+})();
+
+// ── Close all dropdowns helper ───────────────────────────
+function closeAllDropdowns() {
+  document.getElementById('epic-dropdown').classList.remove('open');
+  document.getElementById('phase-dropdown').classList.remove('open');
+  document.getElementById('sort-dropdown').classList.remove('open');
+  document.getElementById('settings-dropdown').classList.remove('open');
+}
 
 // ── Priority toggles ─────────────────────────────────────
 document.getElementById('priority-toggles').addEventListener('click', function(e) {
@@ -3020,13 +3132,13 @@ function setStatus(msg, cls) {
   const dropdown = document.getElementById('settings-dropdown');
   btn.addEventListener('click', (e) => {
     e.stopPropagation();
-    document.getElementById('sort-dropdown').classList.remove('open');
+    closeAllDropdowns();
     dropdown.classList.toggle('open');
   });
   document.addEventListener('click', () => dropdown.classList.remove('open'));
   dropdown.addEventListener('click', (e) => e.stopPropagation());
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') dropdown.classList.remove('open');
+    if (e.key === 'Escape') closeAllDropdowns();
   });
 
   applyTheme();
