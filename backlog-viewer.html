@@ -506,8 +506,8 @@
     .phase-row {
       display: flex;
       align-items: center;
-      gap: 12px;
-      justify-content: center;
+      position: relative;
+      width: 100%;
     }
 
     .phase-row-left {
@@ -515,6 +515,9 @@
       align-items: center;
       gap: 4px;
       flex-wrap: wrap;
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
     }
 
     .phase-row-right {
@@ -522,6 +525,7 @@
       align-items: center;
       gap: 12px;
       flex-shrink: 0;
+      margin-left: auto;
     }
 
     .ms-step .ph-num {
