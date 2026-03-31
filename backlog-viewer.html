@@ -770,6 +770,11 @@
     .status-active   { background: #0f1f16; color: #3fb950; border-color: #1a5c2e; }
     .status-planned  { background: var(--surface2); color: var(--text-muted); border-color: var(--border); }
     .status-done     { background: #0f1f16; color: #3fb950; border-color: #1a5c2e; }
+    .status-archived {
+      background: var(--stat-archived-bg);
+      color: var(--stat-archived-color);
+      border-color: var(--stat-archived-border);
+    }
     .status-inactive { background: var(--surface2); color: var(--text-dim); border-color: var(--border); }
 
     [data-theme="light"] .status-active, [data-theme="light-colored"] .status-active     { background: #ddf5e8; color: #15803d; border-color: #86d9a0; }
@@ -1137,6 +1142,63 @@
 
     .archived-grid .task-card:hover { opacity: 0.85; }
     .archived-grid .task-title { color: var(--text-dim); }
+
+    /* Archived epics section */
+    .archived-epics-section {
+      padding: 0 24px 8px;
+      flex-shrink: 0;
+    }
+
+    .archived-epics-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 6px 0;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .archived-epics-header:hover .archived-epics-title { color: var(--text); }
+
+    .archived-epics-chevron {
+      color: var(--text-dim);
+      font-size: var(--fs-card-tag);
+      transition: transform 0.2s;
+      display: inline-block;
+    }
+
+    .archived-epics-chevron.open { transform: rotate(90deg); }
+
+    .archived-epics-title {
+      font-size: var(--fs-card-tag);
+      font-weight: 700;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      transition: color 0.2s;
+    }
+
+    .archived-epics-grid {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 4px;
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.3s ease;
+    }
+
+    .archived-epics-grid.open {
+      max-height: 2000px;
+    }
+
+    .archived-epics-grid .epic-card {
+      opacity: 0.65;
+    }
+
+    .archived-epics-grid .epic-card:hover {
+      opacity: 0.85;
+    }
 
     /* ── Empty state ─────────────────────────────────────── */
     .empty-state {
@@ -1746,6 +1808,16 @@
   <div class="epics-grid" id="epics-grid"></div>
 </div>
 
+<!-- Archived epics section -->
+<div class="archived-epics-section" id="archived-epics-section" style="display:none;">
+  <div class="archived-epics-header" id="archived-epics-header">
+    <span class="archived-epics-chevron" id="archived-epics-chevron">&#9654;</span>
+    <span class="archived-epics-title">Archived Epics</span>
+    <span class="archived-count" id="archived-epics-count">0</span>
+  </div>
+  <div class="archived-epics-grid" id="archived-epics-grid"></div>
+</div>
+
 <!-- Board -->
 <div class="board-wrapper" id="board-wrapper">
   <div class="no-data-screen" id="no-data-screen">
@@ -1808,6 +1880,7 @@ let sortMode     = 'priority';
 let sortAsc      = true;  // true = default direction for the mode
 let loadedData   = null;
 let showArchived = false;
+let showArchivedEpics = false;
 
 // ── Project color from name hash ─────────────────────────
 function projectColor(name) {
@@ -2319,19 +2392,35 @@ function renderEpics() {
   const grid    = document.getElementById('epics-grid');
   grid.innerHTML = '';
 
-  if (!allEpics.length) { section.style.display = 'none'; return; }
-  section.style.display = '';
+  const archivedSection = document.getElementById('archived-epics-section');
+  const archivedGrid    = document.getElementById('archived-epics-grid');
+  const archivedCountEl = document.getElementById('archived-epics-count');
+  archivedGrid.innerHTML = '';
+
+  if (!allEpics.length) {
+    section.style.display = 'none';
+    archivedSection.style.display = 'none';
+    return;
+  }
 
   const viewingDone = isViewingDonePhase();
   let visibleCount = 0;
+  const archivedEpics = [];
+
   for (const epic of allEpics) {
+    // Separate archived epics
+    if (epic.status === 'archived') {
+      archivedEpics.push(epic);
+      continue;
+    }
+
     let tasks = (epic.tasks || []);
     // When a phase is selected, only show epics that have tasks in that phase
     if (activePhase !== 'all') {
       tasks = tasks.filter(t => t.phase === activePhase);
       if (!tasks.length) continue; // hide epic entirely
     }
-    // 3.4 — When viewing a done phase, treat archived tasks as done (shallow copy, no mutation)
+    // When viewing a done phase, treat archived tasks as done (shallow copy, no mutation)
     if (viewingDone) {
       tasks = tasks.map(t => colKey(t.status) === 'archived' ? { ...t, status: 'done' } : t);
     }
@@ -2385,8 +2474,50 @@ function renderEpics() {
 
     grid.appendChild(card);
   }
+
   // Hide epics section if phase filter hides all epics
-  if (!visibleCount) section.style.display = 'none';
+  section.style.display = visibleCount ? '' : 'none';
+
+  // Render archived epics section
+  if (!archivedEpics.length) {
+    archivedSection.style.display = 'none';
+    return;
+  }
+
+  archivedSection.style.display = '';
+  archivedCountEl.textContent = archivedEpics.length;
+
+  for (const epic of archivedEpics) {
+    const tasks = epic.tasks || [];
+    const total = tasks.length;
+
+    const card = document.createElement('div');
+    card.className = 'epic-card';
+    card.dataset.epicId = epic.id;
+
+    card.innerHTML = `
+      <div class="epic-card-header">
+        <div class="epic-name">${esc(epic.name || epic.id)}</div>
+        <div class="epic-status-pill status-archived">archived</div>
+      </div>
+      <div class="epic-progress-bar">
+        <div class="epic-progress-fill done full" style="width:100%"></div>
+      </div>
+      <div class="epic-progress-text"><span style="color:var(--stat-archived-color)">${total} tasks</span> &mdash; ${esc(epic.archive_reason || 'done')}</div>
+    `;
+
+    archivedGrid.appendChild(card);
+  }
+
+  // Apply open/closed state
+  const chevron = document.getElementById('archived-epics-chevron');
+  if (showArchivedEpics) {
+    archivedGrid.classList.add('open');
+    chevron.classList.add('open');
+  } else {
+    archivedGrid.classList.remove('open');
+    chevron.classList.remove('open');
+  }
 }
 
 // ── Main render ──────────────────────────────────────────
@@ -2551,6 +2682,15 @@ document.getElementById('archived-header').addEventListener('click', () => {
   const chevron = document.getElementById('archived-chevron');
   grid.classList.toggle('open', showArchived);
   chevron.classList.toggle('open', showArchived);
+});
+
+// ── Archived epics toggle handler ───────────────────────
+document.getElementById('archived-epics-header').addEventListener('click', () => {
+  showArchivedEpics = !showArchivedEpics;
+  const grid = document.getElementById('archived-epics-grid');
+  const chevron = document.getElementById('archived-epics-chevron');
+  grid.classList.toggle('open', showArchivedEpics);
+  chevron.classList.toggle('open', showArchivedEpics);
 });
 
 // ── Minimal markdown renderer ────────────────────────────
