@@ -1755,7 +1755,7 @@ def backlog_update_task(task_id: str, field: str, value: str) -> str:
     return f"Updated `{task_id}` field `{field}` → {value}" + notes_warning
 
 
-VALID_EPIC_STATUSES = {"active", "planned", "done"}
+VALID_EPIC_STATUSES = {"active", "planned", "done", "archived"}
 ALLOWED_EPIC_FIELDS = {"name", "status", "description"}
 
 
@@ -1784,6 +1784,44 @@ def backlog_update_epic(epic_id: str, field: str, value: str) -> str:
     epic[field] = value
     _mutate_and_save(data)
     return f"Updated epic `{epic_id}` field `{field}`: `{old_value}` → `{value}`"
+
+
+@mcp.tool()
+def backlog_archive_epic(epic_id: str, reason: str = "done") -> str:
+    """Archive an epic and all its tasks — hides the epic from the board and default listings.
+    Cascades: every non-archived task in the epic is also archived with the same reason.
+
+    Args:
+        epic_id: The epic ID (e.g., "features", "infra")
+        reason: Why the epic is being archived. One of: done, deprecated, duplicate, wont-fix, superseded. Default: done.
+    """
+    if reason not in VALID_ARCHIVE_REASONS:
+        return f"Error: invalid reason `{reason}`. Valid: {', '.join(sorted(VALID_ARCHIVE_REASONS))}"
+
+    data = _load()
+    epic = _find_epic(data, epic_id)
+    if not epic:
+        return f"Error: epic `{epic_id}` not found"
+
+    if epic.get("status") == "archived":
+        return f"Error: epic `{epic_id}` is already archived"
+
+    now = _now()
+    epic["status"] = "archived"
+    epic["archive_reason"] = reason
+    epic["archived"] = now
+
+    cascaded = 0
+    for task in epic.get("tasks", []):
+        if task.get("status") != "archived":
+            task["status"] = "archived"
+            task["archive_reason"] = reason
+            task["archived"] = now
+            task.pop("locked_by", None)
+            cascaded += 1
+
+    _mutate_and_save(data)
+    return f"Archived epic `{epic_id}` — {epic.get('name', epic_id)} ({cascaded} tasks cascaded, reason: {reason})"
 
 
 @mcp.tool()
