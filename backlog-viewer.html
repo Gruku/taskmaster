@@ -466,7 +466,7 @@
       background: var(--border-subtle);
       border-radius: 4px;
       overflow: hidden;
-      min-width: 80px;
+      min-width: 112px;
     }
 
     .phase-banner .ms-progress-fill {
@@ -912,36 +912,27 @@
     /* ── Card header zone ─────────────────────────────────── */
     .task-card-header {
       background: var(--surface3);
-      padding: 10px 14px 8px;
+      padding: 5px 10px;
       border-bottom: 1px solid var(--border-subtle);
-    }
-
-    .task-card-header.ch-todo     { background: var(--surface3); }
-    .task-card-header.ch-progress { background: var(--stat-progress-bg); border-bottom-color: var(--stat-progress-border); }
-    .task-card-header.ch-review   { background: var(--p1-bg); border-bottom-color: var(--p1-border); }
-    .task-card-header.ch-done     { background: var(--stat-done-bg); border-bottom-color: var(--stat-done-border); }
-    .task-card-header.ch-blocked  { background: var(--stat-blocked-bg); border-bottom-color: var(--stat-blocked-border); }
-    .task-card-header.ch-archived { background: var(--stat-archived-bg); border-bottom-color: var(--stat-archived-border); }
-
-    .task-card-header-row1 {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 6px;
-      margin-bottom: 4px;
-    }
-
-    .task-card-header-row2 {
       display: flex;
       align-items: center;
       gap: 8px;
-      font-size: var(--fs-sm);
       flex-wrap: wrap;
+    }
+
+    /* Epic-based coloring is applied via inline style on each card header */
+
+    .task-card-header-row1 {
+      display: contents;
+    }
+
+    .task-card-header-row2 {
+      display: contents;
     }
 
     .card-status-label {
       font-weight: 700;
-      font-size: var(--fs-sm);
+      font-size: var(--fs-xs);
       text-transform: capitalize;
     }
 
@@ -1918,11 +1909,40 @@ function colKey(status) {
   return COL_MAP[(status||'').toLowerCase()] || 'todo';
 }
 
+// ── Epic color palette ──────────────────────────────────
+const EPIC_HUES = [210, 160, 30, 280, 340, 50, 120, 190, 250, 310];
+const epicColorMap = {};
+let _epicHueIdx = 0;
+
+function getEpicHue(epicId) {
+  if (!epicId) return 0;
+  if (!(epicId in epicColorMap)) {
+    epicColorMap[epicId] = EPIC_HUES[_epicHueIdx % EPIC_HUES.length];
+    _epicHueIdx++;
+  }
+  return epicColorMap[epicId];
+}
+
+function epicHeaderStyle(epicId) {
+  if (!epicId) return '';
+  const h = getEpicHue(epicId);
+  const isDark = document.documentElement.dataset.theme !== 'light' &&
+                 document.documentElement.dataset.theme !== 'light-colored';
+  if (isDark) {
+    return `background:hsl(${h} 35% 14%);border-bottom-color:hsl(${h} 40% 22%)`;
+  } else {
+    return `background:hsl(${h} 45% 92%);border-bottom-color:hsl(${h} 50% 78%)`;
+  }
+}
+
 // ── Parse & flatten ──────────────────────────────────────
 function ingestData(data) {
   loadedData = data;
   allTasks   = [];
   allEpics   = [];
+  // Reset epic color assignments
+  Object.keys(epicColorMap).forEach(k => delete epicColorMap[k]);
+  _epicHueIdx = 0;
 
   const epics = data.epics || [];
   for (const epic of epics) {
@@ -2439,14 +2459,28 @@ function render() {
     buckets[key].push(t);
   }
 
+  // Compute unfiltered column counts (phase-scoped only) to detect hidden tasks
+  const unfilteredBuckets = { todo: 0, progress: 0, review: 0, done: 0 };
+  let unfilteredTasks = allTasks;
+  if (activePhase !== 'all') {
+    unfilteredTasks = unfilteredTasks.filter(t => t.phase === activePhase);
+  }
+  if (isViewingDonePhase()) {
+    unfilteredTasks = unfilteredTasks.map(t => colKey(t.status) === 'archived' ? { ...t, status: 'done' } : t);
+  }
+  for (const t of unfilteredTasks) {
+    const key = colKey(t.status);
+    if (key in unfilteredBuckets) unfilteredBuckets[key]++;
+  }
+
   // Show board
   document.getElementById('no-data-screen').style.display = 'none';
   document.getElementById('board').style.display           = '';
 
-  renderColumn('todo',     buckets.todo);
-  renderColumn('progress', buckets.progress);
-  renderColumn('review',   buckets.review);
-  renderColumn('done',     buckets.done);
+  renderColumn('todo',     buckets.todo,     unfilteredBuckets.todo);
+  renderColumn('progress', buckets.progress, unfilteredBuckets.progress);
+  renderColumn('review',   buckets.review,   unfilteredBuckets.review);
+  renderColumn('done',     buckets.done,     unfilteredBuckets.done);
 
   // Archived-done count in Done column header
   const archivedDone = buckets.archived.filter(t => (t.archive_reason || 'done') === 'done').length;
@@ -2460,14 +2494,19 @@ function render() {
   updateVisibleCards();
 }
 
-function renderColumn(key, tasks) {
+function renderColumn(key, tasks, unfilteredCount) {
   const body  = document.getElementById('body-' + key);
   const count = document.getElementById('count-' + key);
   count.textContent = tasks.length;
   body.innerHTML    = '';
 
   if (!tasks.length) {
-    body.innerHTML = `<div class="empty-state"><div class="empty-icon">&#9675;</div><div class="empty-text">No tasks</div></div>`;
+    const hidden = (unfilteredCount || 0) - tasks.length;
+    if (hidden > 0) {
+      body.innerHTML = `<div class="empty-state"><div class="empty-icon">&#9737;</div><div class="empty-text">${hidden} task${hidden !== 1 ? 's' : ''} hidden by filters</div></div>`;
+    } else {
+      body.innerHTML = `<div class="empty-state"><div class="empty-icon">&#9675;</div><div class="empty-text">No tasks</div></div>`;
+    }
     return;
   }
 
@@ -2837,17 +2876,14 @@ function makeCard(task) {
     ? `<div class="task-anchors" style="font-size:var(--fs-xs);color:var(--text-dim);margin-top:2px">📌 ${task.anchors.map(a => esc(a)).join(', ')}</div>`
     : '';
 
+  const epicStyle = epicHeaderStyle(task._epicId);
   card.innerHTML = `
-    <div class="task-card-header ch-${statusKey}">
-      <div class="task-card-header-row1">
-        <span class="task-id">${esc(task.id || '—')}</span>
-        ${p ? `<span class="priority-badge ${pClass}">${esc(p)}</span>` : ''}
-      </div>
-      <div class="task-card-header-row2">
-        <span class="card-status-label cs-${statusKey}">${esc(statusLabel)}</span>
-        ${timeStr ? `<span class="card-header-sep">·</span><span class="card-time-in-status">${esc(timeStr)}</span>` : ''}
-        ${branchHtml}
-      </div>
+    <div class="task-card-header" style="${epicStyle}">
+      <span class="task-id">${esc(task.id || '—')}</span>
+      <span class="card-status-label cs-${statusKey}">${esc(statusLabel)}</span>
+      ${timeStr ? `<span class="card-time-in-status">${esc(timeStr)}</span>` : ''}
+      ${branchHtml}
+      ${p ? `<span class="priority-badge ${pClass}" style="margin-left:auto">${esc(p)}</span>` : ''}
     </div>
     <div class="task-card-body">
       <div class="task-title">${esc(task.title || 'Untitled')}</div>
