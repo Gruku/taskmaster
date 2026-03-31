@@ -1782,6 +1782,8 @@ def backlog_update_epic(epic_id: str, field: str, value: str) -> str:
         return f"Error: epic `{epic_id}` not found"
 
     if field == "status":
+        if value == "archived":
+            return "Error: use `backlog_archive_epic` to archive an epic (it cascades to tasks)"
         if value not in VALID_EPIC_STATUSES:
             return f"Error: invalid epic status `{value}`. Valid: {', '.join(sorted(VALID_EPIC_STATUSES))}"
 
