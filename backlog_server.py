@@ -462,6 +462,8 @@ def backlog_status() -> str:
     lines.append("|-----------|--------|----------|---------------|")
 
     for epic in data["epics"]:
+        if epic.get("status") == "archived":
+            continue
         tasks = epic.get("tasks", [])
         active_tasks = [t for t in tasks if t.get("status") != "archived"]
         done_count = sum(1 for t in active_tasks if t.get("status") == "done")
