@@ -521,7 +521,6 @@
       display: flex;
       align-items: center;
       gap: 12px;
-      margin-left: auto;
       flex-shrink: 0;
     }
 
@@ -581,7 +580,7 @@
     }
 
     .ms-step.ms-selected {
-      box-shadow: 0 0 0 2px var(--accent);
+      box-shadow: 0 0 0 2px var(--text), 0 0 0 3px var(--border);
     }
 
     .ms-step.ms-done:hover {
@@ -590,7 +589,7 @@
 
     .ms-step.ms-done.ms-selected {
       opacity: 1;
-      box-shadow: 0 0 0 2px var(--stat-done-color);
+      box-shadow: 0 0 0 2px var(--text), 0 0 0 3px var(--border);
     }
 
     /* ── Phase date info ────────────────────────────────── */
