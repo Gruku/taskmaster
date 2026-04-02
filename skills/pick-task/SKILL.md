@@ -54,26 +54,11 @@ Select a task to work on and set it to in-progress.
    3. Call `backlog_update_task(task_id, "branch", "feature/{task-id}")` to record the branch.
    4. Call `backlog_update_task(task_id, "worktree", ".worktrees/{task-id}")` to record the worktree path.
 
-   **Submodule worktree protocol:**
-   After creating the worktree, check if the repo contains submodules (`git submodule status` in the worktree). If it does:
-
-   > **⚠ SUBMODULE WORKTREE PROTOCOL**
-   > Worktree submodules are isolated — commits made inside them are **LOST on worktree removal** unless fetched back to the main checkout.
-   >
-   > **After creating the worktree, init submodules from local:**
-   > ```
-   > git -C <worktree>/<submodule> fetch <main-checkout>/<submodule>
-   > git -C <worktree> submodule update --init <submodule>
-   > ```
-   >
-   > **BEFORE merge/cleanup, fetch commits back:**
-   > ```
-   > git -C <main-checkout>/<submodule> fetch <worktree>/<submodule>
-   > ```
-   >
-   > Repeat for each submodule. See the project's CLAUDE.md "Submodule Worktree Protocol" section if one exists for project-specific details.
-
-   Display this warning prominently. If there are no submodules, skip it silently.
+   **Submodules:** A PostToolUse hook (`worktree-submodule-init.sh`) automatically initializes submodules and fetches from the main checkout after `git worktree add`. You don't need to do this manually. However, **before removing the worktree or merging**, you MUST fetch submodule commits back to the main checkout:
+   ```
+   git -C <main-checkout>/<submodule> fetch <worktree>/<submodule>
+   ```
+   The hook will remind you of this. If there are no submodules, nothing happens.
 
    **If `git worktree add` fails:**
    - "branch already exists" — the branch was left behind from a previous attempt. Either check it out in a new worktree (`git worktree add .worktrees/{task-id} feature/{task-id}` without `-b`), or ask the user if they want to delete the stale branch and start fresh.
