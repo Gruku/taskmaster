@@ -1188,10 +1188,11 @@ def backlog_add_task(
         new_task["stage"] = stage
     if estimate:
         new_task["estimate"] = estimate
-    if phase:
-        if not _find_phase(data, phase):
-            return f"Error: phase `{phase}` not found"
-        new_task["phase"] = phase
+    if not phase:
+        return "Error: `phase` is required — every task must belong to a phase. Use `backlog_phase_status()` to see available phases."
+    if not _find_phase(data, phase):
+        return f"Error: phase `{phase}` not found. Use `backlog_phase_status()` to see available phases."
+    new_task["phase"] = _find_phase(data, phase)["id"]
     if anchors:
         anchor_list = [a.strip() for a in anchors.split(",") if a.strip()]
         new_task["anchors"] = anchor_list

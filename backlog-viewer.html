@@ -2488,7 +2488,10 @@ function renderEpics() {
 
     let tasks = (epic.tasks || []);
     // When a phase is selected, only show epics that have tasks in that phase
-    if (activePhase !== 'all') {
+    if (activePhase === '__none__') {
+      tasks = tasks.filter(t => !t.phase);
+      if (!tasks.length) continue; // hide epic entirely
+    } else if (activePhase !== 'all') {
       tasks = tasks.filter(t => t.phase === activePhase);
       if (!tasks.length) continue; // hide epic entirely
     }
@@ -2598,7 +2601,9 @@ function render() {
 
   // Filter
   let tasks = allTasks;
-  if (activePhase !== 'all') {
+  if (activePhase === '__none__') {
+    tasks = tasks.filter(t => !t.phase);
+  } else if (activePhase !== 'all') {
     tasks = tasks.filter(t => t.phase === activePhase);
   }
   // 3.4 — When viewing a done phase, include archived tasks remapped as done (shallow copy)
@@ -2671,7 +2676,9 @@ function render() {
   // Compute unfiltered column counts (phase-scoped only) to detect hidden tasks
   const unfilteredBuckets = { todo: 0, progress: 0, review: 0, done: 0 };
   let unfilteredTasks = allTasks;
-  if (activePhase !== 'all') {
+  if (activePhase === '__none__') {
+    unfilteredTasks = unfilteredTasks.filter(t => !t.phase);
+  } else if (activePhase !== 'all') {
     unfilteredTasks = unfilteredTasks.filter(t => t.phase === activePhase);
   }
   if (isViewingDonePhase()) {
@@ -3298,6 +3305,24 @@ function populatePhaseDropdown() {
       render();
     });
     dropdown.appendChild(item);
+  }
+  // Add "No phase" option to surface orphaned tasks
+  const noPhaseCount = allTasks.filter(t => !t.phase && colKey(t.status) !== 'archived').length;
+  if (noPhaseCount > 0) {
+    const opt = document.createElement('div');
+    opt.className = 'settings-item' + (activePhase === '__none__' ? ' selected' : '');
+    opt.dataset.phaseId = '__none__';
+    opt.innerHTML = `<span class="settings-item-label" style="color:var(--text-dim);font-style:italic">No phase</span> <span style="font-size:0.75rem;opacity:0.6">${noPhaseCount}</span>`;
+    opt.addEventListener('click', (e) => {
+      e.stopPropagation();
+      activePhase = '__none__';
+      updatePhaseUI();
+      dropdown.classList.remove('open');
+      renderPhases();
+      renderEpics();
+      render();
+    });
+    dropdown.appendChild(opt);
   }
   updatePhaseUI();
 }
