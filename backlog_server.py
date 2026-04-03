@@ -1880,7 +1880,7 @@ def backlog_add_epic(
 
 
 VALID_PHASE_STATUSES = {"planned", "active", "done", "archived"}
-ALLOWED_PHASE_FIELDS = {"name", "status", "description", "order", "target_date", "start_date"}
+ALLOWED_PHASE_FIELDS = {"name", "status", "description", "order", "target_date", "start_date", "deliverables"}
 
 
 @mcp.tool()
@@ -1992,6 +1992,36 @@ def backlog_update_phase(phase_id: str, field: str, value: str) -> str:
             if not _validate_date(value):
                 return f"Error: {field} must be YYYY-MM-DD format, got `{value}`"
             ph[field] = value
+    elif field == "deliverables":
+        # value is a JSON string: {"action": "add"|"remove"|"toggle"|"set", ...}
+        try:
+            cmd = json.loads(value)
+        except (ValueError, TypeError):
+            return "Error: deliverables value must be JSON — {\"action\": \"add\", \"text\": \"...\"}"
+
+        deliverables = ph.setdefault("deliverables", [])
+        action = cmd.get("action", "")
+
+        if action == "add":
+            text = cmd.get("text", "").strip()
+            if not text:
+                return "Error: deliverable text is required"
+            deliverables.append({"text": text, "done": False})
+        elif action == "remove":
+            idx = cmd.get("index")
+            if idx is None or not isinstance(idx, int) or idx < 0 or idx >= len(deliverables):
+                return f"Error: invalid index {idx} — phase has {len(deliverables)} deliverables"
+            deliverables.pop(idx)
+        elif action == "toggle":
+            idx = cmd.get("index")
+            if idx is None or not isinstance(idx, int) or idx < 0 or idx >= len(deliverables):
+                return f"Error: invalid index {idx} — phase has {len(deliverables)} deliverables"
+            deliverables[idx]["done"] = not deliverables[idx]["done"]
+        elif action == "set":
+            items = cmd.get("items", [])
+            ph["deliverables"] = [{"text": str(d.get("text", "")), "done": bool(d.get("done", False))} for d in items]
+        else:
+            return f"Error: unknown deliverables action `{action}`. Use: add, remove, toggle, set"
     else:
         ph[field] = value
 
@@ -2102,6 +2132,18 @@ def backlog_phase_status(phase_id: str = "") -> str:
         lines.append(f"Done: {stats['done']} | In Progress: {stats['in-progress']} | In Review: {stats['in-review']} | Todo: {stats['todo']} | Blocked: {stats['blocked']}")
         lines.append("")
 
+    # Deliverables checklist
+    deliverables = ph.get("deliverables", [])
+    if deliverables:
+        lines.append("")
+        lines.append("**Deliverables:**")
+        for i, d in enumerate(deliverables):
+            check = "x" if d.get("done") else " "
+            lines.append(f"  - [{check}] {d['text']}")
+        done_count = sum(1 for d in deliverables if d.get("done"))
+        lines.append(f"  ({done_count}/{len(deliverables)} complete)")
+        lines.append("")
+
     # List tasks in this phase grouped by status
     status_groups = ["in-progress", "in-review", "todo", "blocked", "done"]
     if ph.get("status") == "done":
@@ -2134,9 +2176,13 @@ def backlog_phase_status(phase_id: str = "") -> str:
 
 
 @mcp.tool()
-def backlog_advance_phase() -> str:
+def backlog_advance_phase(force: bool = False) -> str:
     """Complete the active phase and activate the next one in sequence.
     Archives all 'done' tasks in the completed phase. Activates the next 'planned' phase by order.
+    Blocks if phase has unchecked deliverables unless force=True.
+
+    Args:
+        force: If True, advance even if deliverables are incomplete.
     """
     data = _load()
     active_ph = _active_phase(data)
@@ -2144,6 +2190,19 @@ def backlog_advance_phase() -> str:
         return "No active phase to advance."
 
     ph_stats = _phase_stats(data, active_ph["id"])
+
+    # Block if deliverables are incomplete (unless force=True)
+    deliverables = active_ph.get("deliverables", [])
+    unchecked = [d for d in deliverables if not d.get("done")]
+    if unchecked and not force:
+        items = "\n".join(f"  - [ ] {d['text']}" for d in unchecked)
+        return (
+            f"**Blocked:** {len(unchecked)} unchecked deliverable(s) in phase "
+            f"**{active_ph['name']}**:\n{items}\n\n"
+            f"Check them off with `backlog_update_phase(phase_id=\"{active_ph['id']}\", "
+            f"field=\"deliverables\", value='{{\"action\":\"toggle\",\"index\":N}}')` "
+            f"or advance with force=True."
+        )
 
     # Warn if there are incomplete tasks
     incomplete = ph_stats["todo"] + ph_stats["in-progress"] + ph_stats["in-review"] + ph_stats["blocked"]
