@@ -141,8 +141,22 @@ def _find_epic(data: dict, epic_id: str) -> dict | None:
 
 
 def _find_phase(data: dict, phase_id: str) -> dict | None:
-    for ph in data.get("phases", []):
+    """Find a phase by ID (exact) or name (case-insensitive, whitespace-normalized)."""
+    phases = data.get("phases", [])
+    # Exact ID match first
+    for ph in phases:
         if ph["id"] == phase_id:
+            return ph
+    # Fuzzy: case-insensitive name match
+    needle = phase_id.strip().lower().replace("-", " ").replace("_", " ")
+    for ph in phases:
+        name = ph.get("name", "").strip().lower().replace("-", " ").replace("_", " ")
+        if name == needle:
+            return ph
+    # Partial: needle is a substring of the name or vice versa
+    for ph in phases:
+        name = ph.get("name", "").strip().lower().replace("-", " ").replace("_", " ")
+        if needle in name or name in needle:
             return ph
     return None
 
