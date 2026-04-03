@@ -483,6 +483,44 @@
       white-space: nowrap;
     }
 
+    .phase-deliverables {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      padding: 6px 0 2px;
+      width: 100%;
+    }
+
+    .phase-deliverable-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: var(--fs-xs);
+      color: var(--text-muted);
+      padding: 2px 4px;
+      border-radius: 4px;
+    }
+
+    .phase-deliverable-item input[type="checkbox"] {
+      accent-color: var(--accent);
+      pointer-events: none;
+      width: 14px;
+      height: 14px;
+      flex-shrink: 0;
+    }
+
+    .phase-deliverable-item.done {
+      text-decoration: line-through;
+      color: var(--text-dim);
+    }
+
+    .phase-deliverable-summary {
+      font-size: var(--fs-xs);
+      color: var(--text-dim);
+      font-weight: 600;
+      padding-top: 2px;
+    }
+
     .phase-steps {
       display: flex;
       gap: 4px;
@@ -2198,6 +2236,23 @@ function renderPhases() {
           ${descHtml}
         </div>
       `;
+
+      // Render deliverables if present
+      const deliverables = displayed.deliverables || [];
+      if (deliverables.length > 0) {
+        const doneCount = deliverables.filter(d => d.done).length;
+        let delHtml = '<div class="phase-deliverables">';
+        deliverables.forEach((d, i) => {
+          const checked = d.done ? 'checked' : '';
+          const doneCls = d.done ? ' done' : '';
+          delHtml += `<label class="phase-deliverable-item${doneCls}">` +
+            `<input type="checkbox" ${checked} disabled>` +
+            `<span>${esc(d.text)}</span></label>`;
+        });
+        delHtml += `<span class="phase-deliverable-summary">${doneCount}/${deliverables.length} deliverables complete</span>`;
+        delHtml += '</div>';
+        banner.innerHTML += delHtml;
+      }
     } else {
       // 3.2 — Active/planned phase banner with date info
       let total = 0, done = 0;
@@ -2221,6 +2276,23 @@ function renderPhases() {
           ${dateInfoHtml}
         </div>
       `;
+
+      // Render deliverables if present
+      const deliverables = displayed.deliverables || [];
+      if (deliverables.length > 0) {
+        const doneCount = deliverables.filter(d => d.done).length;
+        let delHtml = '<div class="phase-deliverables">';
+        deliverables.forEach((d, i) => {
+          const checked = d.done ? 'checked' : '';
+          const doneCls = d.done ? ' done' : '';
+          delHtml += `<label class="phase-deliverable-item${doneCls}">` +
+            `<input type="checkbox" ${checked} disabled>` +
+            `<span>${esc(d.text)}</span></label>`;
+        });
+        delHtml += `<span class="phase-deliverable-summary">${doneCount}/${deliverables.length} deliverables complete</span>`;
+        delHtml += '</div>';
+        banner.innerHTML += delHtml;
+      }
     }
   }
 
