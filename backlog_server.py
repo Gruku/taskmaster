@@ -104,7 +104,13 @@ def _time_remaining(target_date_str: str | None) -> str | None:
 
 
 def _load() -> dict:
-    return yaml.safe_load(_backlog_path().read_text(encoding="utf-8"))
+    data = yaml.safe_load(_backlog_path().read_text(encoding="utf-8"))
+    # Backfill missing 'created' on tasks
+    for epic in data.get("epics", []):
+        for t in epic.get("tasks", []):
+            if not t.get("created"):
+                t["created"] = t.get("started") or t.get("completed") or "2025-01-01T00:00"
+    return data
 
 
 def _save(data: dict) -> None:
