@@ -2710,19 +2710,23 @@ body{background:#141920;color:#d4dae3;font-family:-apple-system,BlinkMacSystemFo
 .topbar .path{color:#97a0ad;font-family:"SFMono-Regular",Consolas,monospace;font-size:12px;flex:1}
 .open-editor{background:#232a34;border:1px solid #363e4a;border-radius:4px;padding:4px 10px;font-size:12px !important;white-space:nowrap}
 .open-editor:hover{background:#363e4a}
-.content{max-width:860px;margin:0 auto;padding:32px 24px}
+.zoom-controls{display:flex;align-items:center;gap:4px}
+.zoom-btn{background:#232a34;border:1px solid #363e4a;border-radius:4px;padding:2px 8px;color:#d4dae3;cursor:pointer;font-size:13px;font-weight:600;line-height:1.4;min-width:26px;text-align:center}
+.zoom-btn:hover{background:#363e4a}
+.zoom-label{color:#97a0ad;font-size:11px;font-family:"SFMono-Regular",Consolas,monospace;min-width:36px;text-align:center}
+.content{max-width:860px;margin:0 auto;padding:32px 24px;transition:font-size 0.15s ease}
 h1,h2,h3,h4{color:#d4dae3;margin:20px 0 10px;line-height:1.3}
-h1{font-size:24px;border-bottom:1px solid #363e4a;padding-bottom:8px}
-h2{font-size:20px;border-bottom:1px solid #363e4a;padding-bottom:6px}
-h3{font-size:16px}h4{font-size:14px;color:#97a0ad}
+h1{font-size:1.7em;border-bottom:1px solid #363e4a;padding-bottom:8px}
+h2{font-size:1.4em;border-bottom:1px solid #363e4a;padding-bottom:6px}
+h3{font-size:1.15em}h4{font-size:1em;color:#97a0ad}
 p{margin:8px 0}
 a{color:#58a6ff}
-code{font-family:"SFMono-Regular",Consolas,monospace;font-size:12px;background:#232a34;border:1px solid #363e4a;padding:1px 5px;border-radius:3px;color:#58a6ff}
+code{font-family:"SFMono-Regular",Consolas,monospace;font-size:0.85em;background:#232a34;border:1px solid #363e4a;padding:1px 5px;border-radius:3px;color:#58a6ff}
 pre{background:#0d1117;border:1px solid #363e4a;border-radius:6px;padding:14px 18px;overflow-x:auto;margin:12px 0}
 pre code{background:none;border:none;padding:0;color:#d4dae3}
 ul,ol{margin:8px 0;padding-left:22px}
 li{margin:3px 0}
-table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13px}
+table{width:100%;border-collapse:collapse;margin:12px 0;font-size:0.93em}
 th{text-align:left;padding:8px 12px;background:#232a34;border:1px solid #363e4a;font-weight:600}
 td{padding:8px 12px;border:1px solid #363e4a}
 tr:hover td{background:#1c222b}
@@ -2732,11 +2736,41 @@ strong{color:#d4dae3}
 img{max-width:100%}
 </style>
 </head><body>
-<div class="topbar"><a href="/">&larr; Backlog</a><span class="path">{{TITLE}}</span><a href="vscode://file/{{FULL_PATH}}" class="open-editor">&#x1F4DD; Open in VSCode</a></div>
+<div class="topbar">
+  <a href="/">&larr; Backlog</a>
+  <span class="path">{{TITLE}}</span>
+  <div class="zoom-controls">
+    <button class="zoom-btn" id="zoom-out" title="Zoom out">&minus;</button>
+    <span class="zoom-label" id="zoom-label">100%</span>
+    <button class="zoom-btn" id="zoom-in" title="Zoom in">+</button>
+    <button class="zoom-btn" id="zoom-reset" title="Reset zoom">&#x21bb;</button>
+  </div>
+  <a href="vscode://file/{{FULL_PATH}}" class="open-editor">&#x1F4DD; Open in VSCode</a>
+</div>
 <div class="content" id="content"></div>
 <script>
 const raw = decodeURIComponent(atob("{{B64CONTENT}}").split('').map(c=>'%'+('00'+c.charCodeAt(0).toString(16)).slice(-2)).join(''));
 document.getElementById('content').innerHTML = marked.parse(raw);
+
+// Zoom
+const ZOOM_KEY = 'taskmaster-docs-zoom';
+const ZOOM_STEP = 10;
+const ZOOM_MIN = 60;
+const ZOOM_MAX = 200;
+const BASE_SIZE = 14;
+let zoomPct = parseInt(localStorage.getItem(ZOOM_KEY) || '100', 10);
+
+function applyZoom() {
+  zoomPct = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoomPct));
+  document.getElementById('content').style.fontSize = (BASE_SIZE * zoomPct / 100) + 'px';
+  document.getElementById('zoom-label').textContent = zoomPct + '%';
+  localStorage.setItem(ZOOM_KEY, String(zoomPct));
+}
+
+document.getElementById('zoom-in').addEventListener('click', () => { zoomPct += ZOOM_STEP; applyZoom(); });
+document.getElementById('zoom-out').addEventListener('click', () => { zoomPct -= ZOOM_STEP; applyZoom(); });
+document.getElementById('zoom-reset').addEventListener('click', () => { zoomPct = 100; applyZoom(); });
+applyZoom();
 </script>
 </body></html>"""
 
