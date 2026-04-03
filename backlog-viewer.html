@@ -461,12 +461,12 @@
     }
 
     .phase-banner .ms-progress-bar {
-      flex: 1;
+      flex: 2;
       height: 8px;
       background: var(--border-subtle);
       border-radius: 4px;
       overflow: hidden;
-      min-width: 112px;
+      min-width: 180px;
     }
 
     .phase-banner .ms-progress-fill {
@@ -474,6 +474,7 @@
       background: var(--progress);
       border-radius: 4px;
       transition: width 0.4s ease;
+      min-width: 4px;
     }
 
     .phase-banner .ms-stats {
@@ -525,8 +526,24 @@
       display: flex;
       gap: 4px;
       align-items: center;
-      flex-wrap: wrap;
+      flex-wrap: nowrap;
       margin-top: 0;
+      overflow-x: auto;
+      max-width: 100%;
+      scrollbar-width: thin;
+    }
+
+    .phase-steps::-webkit-scrollbar {
+      height: 4px;
+    }
+
+    .phase-steps::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 2px;
+    }
+
+    .phase-steps::-webkit-scrollbar-track {
+      background: transparent;
     }
 
     .phase-steps .ph-connector {
@@ -552,10 +569,17 @@
       display: flex;
       align-items: center;
       gap: 4px;
-      flex-wrap: wrap;
+      flex-wrap: nowrap;
       position: absolute;
       left: 50%;
       transform: translateX(-50%);
+      max-width: 60%;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+
+    .phase-row-left::-webkit-scrollbar {
+      display: none;
     }
 
     .phase-row-right {
@@ -2282,7 +2306,8 @@ function renderPhases() {
           if (s === 'done') done++;
         }
       }
-      const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+      const pctRaw = total > 0 ? (done / total) * 100 : 0;
+      const pct = total > 0 ? Math.max(done > 0 ? 1 : 0, Math.round(pctRaw)) : 0;
       const dateInfoHtml = msDateInfoHtml(displayed);
 
       banner.innerHTML += `
