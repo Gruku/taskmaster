@@ -1170,7 +1170,8 @@
     }
 
     .archived-grid.open {
-      max-height: 2000px;
+      max-height: 50vh;
+      overflow-y: auto;
     }
 
     .archived-grid .task-card {
@@ -1227,7 +1228,24 @@
     }
 
     .archived-epics-grid.open {
-      max-height: 2000px;
+      max-height: 50vh;
+      overflow-y: auto;
+    }
+
+    .archived-grid::-webkit-scrollbar,
+    .archived-epics-grid::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    .archived-grid::-webkit-scrollbar-thumb,
+    .archived-epics-grid::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 3px;
+    }
+
+    .archived-grid::-webkit-scrollbar-track,
+    .archived-epics-grid::-webkit-scrollbar-track {
+      background: transparent;
     }
 
     .archived-epics-grid .epic-card {
