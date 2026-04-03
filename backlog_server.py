@@ -1759,7 +1759,7 @@ def backlog_update_task(task_id: str, field: str, value: str) -> str:
         else:
             if not _find_phase(data, value):
                 return f"Error: phase `{value}` not found"
-            task["phase"] = value
+            task["phase"] = _find_phase(data, value)["id"]
     elif field == "anchors":
         if value == "" or value.lower() == "none":
             task.pop("anchors", None)
@@ -1921,7 +1921,8 @@ def backlog_add_phase(
 
     data = _load()
 
-    if _find_phase(data, phase_id):
+    # Exact ID match only — fuzzy matching would cause false positives
+    if any(ph["id"] == phase_id for ph in data.get("phases", [])):
         return f"Error: phase `{phase_id}` already exists"
 
     if "phases" not in data:
@@ -2379,7 +2380,7 @@ def backlog_batch_update(operations: str) -> str:
                     if not _find_phase(data, value):
                         errors.append(f"`{task_id}`: phase `{value}` not found")
                         continue
-                    task["phase"] = value
+                    task["phase"] = _find_phase(data, value)["id"]
             else:
                 task[field] = value
             results.append(f"`{task_id}`.{field} → {value}")
