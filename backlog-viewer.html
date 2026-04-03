@@ -2554,9 +2554,16 @@ function render() {
   // Sort — all modes support ascending/descending via sortAsc toggle
   const pOrder = { P0: 0, P1: 1, P2: 2, P3: 3 };
   const dir = sortAsc ? 1 : -1;
+  // Resolve the best available timestamp for a task given a preferred field
+  const tsResolve = (task, pref) => {
+    if (pref === 'created')   return task.created || task.started || task.completed || '';
+    if (pref === 'started')   return task.started || task.created || task.completed || '';
+    if (pref === 'completed') return task.completed || task.started || task.created || '';
+    return task.completed || task.started || task.created || '';
+  };
   const tsCompare = (field) => (a, b) => {
-    const av = a[field] || '';
-    const bv = b[field] || '';
+    const av = tsResolve(a, field);
+    const bv = tsResolve(b, field);
     // Push empty values to the end regardless of direction
     if (!av && bv) return 1;
     if (av && !bv) return -1;
@@ -2565,13 +2572,12 @@ function render() {
   };
   const sorters = {
     'priority': (a, b) => dir * ((pOrder[a.priority?.toUpperCase()] ?? 3) - (pOrder[b.priority?.toUpperCase()] ?? 3)),
-    'created': tsCompare('created'),
-    'started': tsCompare('started'),
+    'created':   tsCompare('created'),
+    'started':   tsCompare('started'),
     'completed': tsCompare('completed'),
     'updated': (a, b) => {
-      // "Last updated" uses the most recent timestamp on each task
-      const aTs = a.completed || a.started || a.created || '';
-      const bTs = b.completed || b.started || b.created || '';
+      const aTs = tsResolve(a, 'updated');
+      const bTs = tsResolve(b, 'updated');
       if (!aTs && bTs) return 1;
       if (aTs && !bTs) return -1;
       if (!aTs && !bTs) return 0;
