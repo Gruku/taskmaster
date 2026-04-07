@@ -259,11 +259,21 @@ def regenerate_context(data: dict) -> None:
         for t in done_tasks[:5]
     ]
 
-    # next_up: top 3 priority todo across active epics
+    # next_up: top 3 priority todo across active epics, filtered to active phase
+    active_ph = _active_phase(data)
+    task_statuses: dict[str, str] = {t["id"]: t.get("status", "todo") for t, _ in all_tasks}
     todo_tasks = []
     for t, epic in all_tasks:
-        if t.get("status") == "todo" and epic.get("status") == "active":
-            todo_tasks.append((t, epic))
+        if t.get("status") != "todo" or epic.get("status") != "active":
+            continue
+        if active_ph and t.get("phase") != active_ph["id"]:
+            continue
+        deps = t.get("depends_on", [])
+        if isinstance(deps, str):
+            deps = [deps]
+        if any(task_statuses.get(d, "todo") != "done" for d in deps):
+            continue
+        todo_tasks.append((t, epic))
     priority_order = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
     todo_tasks.sort(key=lambda x: (priority_order.get(x[0].get("priority", "P2"), 9), str(x[0].get("created", ""))))
     next_up = [
@@ -857,9 +867,10 @@ def backlog_dependencies(task_id: str) -> str:
 
 
 @mcp.tool()
-def backlog_next_available() -> str:
+def backlog_next_available(include_future_phases: bool = False) -> str:
     """Show tasks that are ready to work on — todo tasks in active epics with all dependencies satisfied.
-    Sorted by priority, then by creation date."""
+    Sorted by priority, then by creation date. By default only shows tasks from the active phase;
+    set include_future_phases=true to see tasks from all phases."""
     data = _load()
     active_ph = _active_phase(data)
 
@@ -878,8 +889,8 @@ def backlog_next_available() -> str:
         for task in epic.get("tasks", []):
             if task.get("status") != "todo":
                 continue
-            # Filter by active phase if one exists
-            if active_ph and task.get("phase") != active_ph["id"]:
+            # Filter by active phase unless future phases requested
+            if active_ph and not include_future_phases and task.get("phase") != active_ph["id"]:
                 continue
 
             # Check dependencies
