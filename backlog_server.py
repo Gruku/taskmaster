@@ -3,6 +3,7 @@
 # dependencies = ["fastmcp", "pyyaml"]
 # ///
 
+import asyncio
 import hashlib
 import json
 import os
@@ -1644,11 +1645,11 @@ def backlog_last_session() -> str:
 
 
 @mcp.tool()
-def backlog_worktrees() -> str:
+async def backlog_worktrees() -> str:
     """List all active git worktrees across the monorepo and sub-repos.
     Shows worktree path, branch, and which repo it belongs to.
     Useful for checking what worktrees exist before creating new ones or for cleanup."""
-    worktrees = _discover_worktrees()
+    worktrees = await asyncio.to_thread(_discover_worktrees)
 
     if not worktrees:
         return "No active worktrees found (only main worktrees exist)."
