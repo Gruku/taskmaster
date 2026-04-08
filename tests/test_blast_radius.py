@@ -556,3 +556,127 @@ class TestAnalyzeEvidence:
         assert "utils.py" in result["changed_files"]
         assert isinstance(result["summary_stats"], dict)
         assert "total_affected" in result["summary_stats"]
+
+
+# ---------------------------------------------------------------------------
+# Integration Tests
+# ---------------------------------------------------------------------------
+
+class TestEndToEndPredictive:
+    """Full predictive flow: task with anchors, overlapping tasks."""
+
+    def test_full_predictive_with_overlaps(self):
+        task = {
+            "id": "FEAT-001",
+            "title": "Add user profile page",
+            "priority": "P1",
+            "notes": "Profile page with avatar, bio, settings",
+            "anchors": ["src/user/profile.py", "src/user/avatar.py"],
+        }
+        all_tasks = [
+            task,
+            {"id": "FEAT-002", "status": "in-progress", "title": "User settings",
+             "anchors": ["src/user/settings.py", "src/user/profile.py"]},
+            {"id": "FEAT-003", "status": "todo", "title": "Admin panel",
+             "anchors": ["src/admin/**"]},
+            {"id": "OLD-001", "status": "archived", "title": "Archived task",
+             "anchors": ["src/user/**"]},
+        ]
+
+        result = br.analyze_predictive(task, all_tasks)
+
+        assert result["task_summary"].endswith("Add user profile page")
+        assert len(result["anchored_areas"]) == 2
+        assert len(result["overlapping_tasks"]) == 1  # FEAT-002 only
+        assert result["overlapping_tasks"][0]["task_id"] == "FEAT-002"
+
+    def test_no_overlaps(self):
+        task = {"id": "ISO-001", "title": "Isolated task", "anchors": ["src/isolated/"]}
+        all_tasks = [
+            task,
+            {"id": "OTHER-001", "status": "todo", "title": "Other", "anchors": ["src/other/"]},
+        ]
+        result = br.analyze_predictive(task, all_tasks)
+        assert result["overlapping_tasks"] == []
+
+
+class TestEndToEndEvidence:
+    """Full evidence flow: changed files → graph → overlaps."""
+
+    def test_full_evidence_pipeline(self, tmp_path):
+        # Mini project: lib/auth.py is imported by api/routes.py and api/admin.py
+        (tmp_path / "lib").mkdir()
+        (tmp_path / "lib" / "auth.py").write_text("def check_token():\n    pass\n")
+        (tmp_path / "api").mkdir()
+        (tmp_path / "api" / "routes.py").write_text("from lib.auth import check_token\n")
+        (tmp_path / "api" / "admin.py").write_text("from lib.auth import check_token\n")
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_auth.py").write_text("from lib.auth import check_token\n")
+
+        task = {
+            "id": "SEC-001",
+            "title": "Fix auth bypass",
+            "priority": "P0",
+            "branch": "fix/auth-bypass",
+            "anchors": ["lib/auth.py"],
+        }
+        all_tasks = [
+            {"id": "SEC-001", "status": "in-progress", "title": "Fix auth bypass",
+             "anchors": ["lib/auth.py"]},
+            {"id": "API-001", "status": "in-progress", "title": "API routes refactor",
+             "anchors": ["api/**"]},
+        ]
+
+        def mock_git(*args, **kwargs):
+            cmd = args[0]
+            if "diff" in cmd and "--name-only" in cmd:
+                r = MagicMock()
+                r.returncode = 0
+                r.stdout = "lib/auth.py\n"
+                return r
+            elif "show" in cmd:
+                r = MagicMock()
+                r.returncode = 0
+                r.stdout = "def check_token(old):\n    pass\n"
+                return r
+            r = MagicMock()
+            r.returncode = 1
+            return r
+
+        config = br.BlastRadiusConfig(max_file_scan=100)
+
+        with patch("blast_radius.subprocess.run", side_effect=mock_git):
+            result = br.analyze_evidence(
+                task=task,
+                all_tasks=all_tasks,
+                project_root=tmp_path,
+                config=config,
+                base_branch="main",
+            )
+
+        assert result["changed_files"] == ["lib/auth.py"]
+        assert result["fan_out_scores"]["lib/auth.py"] >= 2
+        # P0 + shared dir (lib/) + export change → depth should be 2
+        assert result["depth_used"]["lib/auth.py"] == 2
+        assert result["summary_stats"]["files_changed"] == 1
+        assert result["summary_stats"]["total_dependents"] >= 2
+        # API-001 should overlap (api/routes.py and api/admin.py are dependents matching api/**)
+        overlap_ids = {o["task_id"] for o in result["overlapping_tasks"]}
+        assert "API-001" in overlap_ids
+
+    def test_no_changes(self, tmp_path):
+        task = {"id": "X-001", "title": "Nothing", "priority": "P3", "branch": "feature/x"}
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = ""
+        config = br.BlastRadiusConfig()
+
+        with patch("blast_radius.subprocess.run", return_value=mock_result):
+            result = br.analyze_evidence(
+                task=task, all_tasks=[], project_root=tmp_path,
+                config=config, base_branch="main",
+            )
+
+        assert result["changed_files"] == []
+        assert result["summary_stats"]["files_changed"] == 0
+        assert result["truncated"] is False
