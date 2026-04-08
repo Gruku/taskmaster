@@ -75,7 +75,7 @@ Thematic workstreams that group related tasks. Each epic has a kebab-case ID (e.
 The atomic unit of work. Each task belongs to one epic and optionally references one phase.
 
 - **ID format:** `{epic-id}-{NNN}` (auto-generated, e.g., `auth-003`)
-- **Priority:** `P0` (critical) | `P1` (high) | `P2` (medium) | `P3` (low)
+- **Priority:** `critical` | `high` | `medium` | `low`
 - **Estimate:** `S` | `M` | `L`
 - Tasks track timestamps (created, started, completed, archived), git branch, worktree path, dependencies, docs references, and review instructions
 
@@ -160,7 +160,7 @@ Handles lock conflicts from crashed sessions with `force=true` to reclaim.
 **Trigger:** "is this ready?", "check my work", "run the review gate"
 
 Three gates:
-1. **Spec/Plan check** (P0/P1 only) — verifies linked docs exist on disk
+1. **Spec/Plan check** (critical/high only) — verifies linked docs exist on disk
 2. **Code review** — diffs branch vs. base, runs code reviewer sub-agent
 3. **Tests + Build** — auto-detects test runner (pytest, npm test, cargo test, go test, etc.)
 
@@ -194,7 +194,7 @@ Scans the codebase for `TODO|FIXME|HACK|XXX` comments, cross-references with the
 - **Untracked:** TODO with no corresponding task
 - **Stale:** Task exists but the TODO is gone
 
-Offers to create tasks for untracked items. Priority mapping: `FIXME/HACK/XXX` → P1, `TODO` → P2.
+Offers to create tasks for untracked items. Priority mapping: `FIXME/HACK/XXX` → high, `TODO` → medium.
 
 ---
 
@@ -271,7 +271,7 @@ epics:
       - id: "auth-003"
         title: "Implement refresh token rotation"
         status: "in-progress"
-        priority: "P1"
+        priority: "high"
         phase: "m1"
         depends_on: ["auth-001", "auth-002"]
         branch: "feature/auth-003"
@@ -295,7 +295,7 @@ phases:
 | `id` | string | Auto-generated `{epic}-{NNN}` |
 | `title` | string | Required |
 | `status` | enum | `todo`, `in-progress`, `in-review`, `done`, `blocked`, `archived` |
-| `priority` | enum | `P0`, `P1`, `P2`, `P3` |
+| `priority` | enum | `critical`, `high`, `medium`, `low` |
 | `estimate` | enum | `S`, `M`, `L` |
 | `notes` | string | Freeform; warns if >300 chars |
 | `blockers` | string | Description of what's blocking |

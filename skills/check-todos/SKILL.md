@@ -86,8 +86,8 @@ Structure the output as:
 **{directory}/**
 | File:Line | Type | Comment | Suggested Priority |
 |-----------|------|---------|-------------------|
-| src/api/routes.ts:45 | FIXME | Race condition in auth check | P1 |
-| src/api/routes.ts:120 | TODO | Add rate limiting | P2 |
+| src/api/routes.ts:45 | FIXME | Race condition in auth check | high |
+| src/api/routes.ts:120 | TODO | Add rate limiting | medium |
 
 **{another directory}/**
 ...
@@ -101,10 +101,10 @@ Structure the output as:
 ```
 
 **Priority suggestions:**
-- FIXME → P1 (something is broken or wrong)
-- HACK → P1 (fragile workaround that needs proper fix)
-- XXX → P1 (needs urgent attention)
-- TODO → P2 (planned work, not broken)
+- FIXME → high (something is broken or wrong)
+- HACK → high (fragile workaround that needs proper fix)
+- XXX → high (needs urgent attention)
+- TODO → medium (planned work, not broken)
 
 ### 6. Offer actions
 
@@ -133,7 +133,7 @@ This skill works well as a periodic check-in. Suggest to the user:
 ## Edge Cases
 
 - **Hundreds of TODOs** — Don't create individual tasks for everything. Group by area, create epic-level tasks like "Address TODOs in src/api/ (23 items)", and list the individual TODOs in the task notes.
-- **TODOs in tests** — These are often intentional test stubs. Flag them separately and default to lower priority (P3).
+- **TODOs in tests** — These are often intentional test stubs. Flag them separately and default to lower priority (low).
 - **TODOs in third-party/generated code** — Skip files in vendor/, node_modules/, dist/, generated/ directories.
 - **No backlog exists** — Suggest running `/init-taskmaster` first.
 - **TODO.md with checkboxes** — Parse `- [ ]` as open items and `- [x]` as completed. Completed items may still need backlog tasks if follow-up work remains (cleanup, tests, docs).

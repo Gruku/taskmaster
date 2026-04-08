@@ -59,8 +59,8 @@ planned → active → done → archived
 
 ### Phase + Task Workflow
 
-1. Create phases in order: `backlog_add_phase("p1", "Phase 1: Foundation", order=1)`
-2. Assign tasks: `backlog_update_task("auth-001", "phase", "p1")`
+1. Create phases in order: `backlog_add_phase("foundation", "Phase 1: Foundation", order=1)`
+2. Assign tasks: `backlog_update_task("auth-001", "phase", "foundation")`
 3. Work through the active phase's tasks
 4. When done: `backlog_advance_phase` — archives done tasks, activates next
 5. Repeat until all phases complete

@@ -392,10 +392,10 @@
     .priority-btn.inactive { opacity: 0.3; }
     .priority-btn:hover { transform: scale(1.06); }
 
-    .priority-btn[data-p="P0"] { background: var(--p0-bg); border-color: var(--p0); color: var(--p0); }
-    .priority-btn[data-p="P1"] { background: var(--p1-bg); border-color: var(--p1); color: var(--p1); }
-    .priority-btn[data-p="P2"] { background: var(--p2-bg); border-color: var(--p2); color: var(--p2); }
-    .priority-btn[data-p="P3"] { background: var(--p3-bg); border-color: var(--p3-color, #6e7681); color: var(--p3-color, #6e7681); }
+    .priority-btn[data-p="critical"] { background: var(--p0-bg); border-color: var(--p0); color: var(--p0); }
+    .priority-btn[data-p="high"] { background: var(--p1-bg); border-color: var(--p1); color: var(--p1); }
+    .priority-btn[data-p="medium"] { background: var(--p2-bg); border-color: var(--p2); color: var(--p2); }
+    .priority-btn[data-p="low"] { background: var(--p3-bg); border-color: var(--p3-color, #6e7681); color: var(--p3-color, #6e7681); }
 
     /* ── Read-only badge ───────────────────────────────────── */
     .read-only-badge {
@@ -1801,6 +1801,7 @@
       </div>
     </div>
     <span class="read-only-badge">READ-ONLY · AI Workflow Viewer</span>
+    <span class="read-only-badge" id="version-badge" style="display:none;"></span>
   </div>
   <div class="header-right">
     <span class="load-indicator" id="load-status">Trying fetch…</span>
@@ -1815,10 +1816,10 @@
     </div>
     <div class="filter-group">
       <div class="priority-toggles" id="priority-toggles">
-        <button class="priority-btn active" data-p="P0">P0</button>
-        <button class="priority-btn active" data-p="P1">P1</button>
-        <button class="priority-btn active" data-p="P2">P2</button>
-        <button class="priority-btn active" data-p="P3">P3</button>
+        <button class="priority-btn active" data-p="critical">Critical</button>
+        <button class="priority-btn active" data-p="high">High</button>
+        <button class="priority-btn active" data-p="medium">Medium</button>
+        <button class="priority-btn active" data-p="low">Low</button>
       </div>
     </div>
     <div class="settings-wrapper" id="sort-wrapper">
@@ -1957,7 +1958,10 @@ let allTasks     = [];
 let allEpics     = [];
 let activeEpic   = 'all';
 let activePhase = 'all';
-let activePriorities = new Set(['P0','P1','P2','P3']);
+let activePriorities = new Set(['critical','high','medium','low']);
+// Normalize legacy P0-P3 to new names
+const _legacyPri = { P0:'critical', P1:'high', P2:'medium', P3:'low' };
+function normPri(p) { return _legacyPri[(p||'').toUpperCase()] || (p||'medium').toLowerCase(); }
 let searchQuery  = '';
 let sortMode     = 'priority';
 let sortAsc      = true;  // true = default direction for the mode
@@ -2125,6 +2129,12 @@ function ingestData(data) {
     document.getElementById('project-updated').textContent = 'Updated ' + meta.updated;
   } else {
     document.getElementById('project-updated').textContent = 'Task Management';
+  }
+  // Version badge
+  if (meta._version) {
+    const vb = document.getElementById('version-badge');
+    vb.textContent = 'v' + meta._version;
+    vb.style.display = '';
   }
 
   // Collapse load bar after successful load
@@ -2666,7 +2676,7 @@ function render() {
     tasks = tasks.filter(t => t._epicId === activeEpic);
   }
   tasks = tasks.filter(t => {
-    const p = (t.priority || 'P3').toUpperCase();
+    const p = normPri(t.priority);
     return activePriorities.has(p);
   });
   // Search filter
@@ -2681,7 +2691,7 @@ function render() {
     );
   }
   // Sort — all modes support ascending/descending via sortAsc toggle
-  const pOrder = { P0: 0, P1: 1, P2: 2, P3: 3 };
+  const pOrder = { critical: 0, high: 1, medium: 2, low: 3 };
   const dir = sortAsc ? 1 : -1;
   // Resolve the best available timestamp for a task given a preferred field
   const tsResolve = (task, pref) => {
@@ -2700,7 +2710,7 @@ function render() {
     return dir * av.localeCompare(bv);
   };
   const sorters = {
-    'priority': (a, b) => dir * ((pOrder[a.priority?.toUpperCase()] ?? 3) - (pOrder[b.priority?.toUpperCase()] ?? 3)),
+    'priority': (a, b) => dir * ((pOrder[normPri(a.priority)] ?? 3) - (pOrder[normPri(b.priority)] ?? 3)),
     'created':   tsCompare('created'),
     'started':   tsCompare('started'),
     'completed': tsCompare('completed'),
@@ -2904,8 +2914,8 @@ function openTaskModal(taskId) {
   const task = allTasks.find(t => t.id === taskId);
   if (!task) return;
 
-  const p = (task.priority || '').toUpperCase();
-  const pClass = { P0:'p0-badge', P1:'p1-badge', P2:'p2-badge', P3:'p3-badge' }[p] || 'p3-badge';
+  const p = normPri(task.priority);
+  const pClass = { critical:'p0-badge', high:'p1-badge', medium:'p2-badge', low:'p3-badge' }[p] || 'p3-badge';
 
   // Status chip class
   const statusKey = colKey(task.status);
@@ -3136,8 +3146,8 @@ function makeCard(task) {
     } catch(e) {}
   }
 
-  const p = (task.priority || '').toUpperCase();
-  const pClass = { P0:'p0-badge', P1:'p1-badge', P2:'p2-badge', P3:'p3-badge' }[p] || 'p3-badge';
+  const p = normPri(task.priority);
+  const pClass = { critical:'p0-badge', high:'p1-badge', medium:'p2-badge', low:'p3-badge' }[p] || 'p3-badge';
 
   // Card header — status info
   const statusKey = colKey(task.status);

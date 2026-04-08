@@ -9,6 +9,7 @@ import json
 import os
 import socket
 import subprocess
+import sys
 import threading
 import urllib.request
 import uuid
@@ -34,6 +35,15 @@ SCRIPT_DIR = Path(__file__).parent
 ROOT = Path(os.environ.get("TASKMASTER_ROOT", Path.cwd()))
 VIEWER_PATH = SCRIPT_DIR / "backlog-viewer.html"
 CONFIG_PATH = ROOT / ".claude" / "taskmaster.json"
+
+# Version from plugin.json
+_plugin_json = SCRIPT_DIR / ".claude-plugin" / "plugin.json"
+VERSION = json.loads(_plugin_json.read_text(encoding="utf-8"))["version"] if _plugin_json.exists() else "0.0.0"
+
+# Priority mapping: canonical names ↔ legacy P-codes
+PRIORITY_NAMES = ("critical", "high", "medium", "low")
+_LEGACY_TO_NAME = {"P0": "critical", "P1": "high", "P2": "medium", "P3": "low"}
+_NAME_TO_LEGACY = {v: k for k, v in _LEGACY_TO_NAME.items()}
 
 
 def _resolve_paths() -> tuple[Path, Path]:
@@ -110,13 +120,23 @@ def _time_remaining(target_date_str: str | None) -> str | None:
         return None
 
 
+def _normalize_priority(value: str) -> str:
+    """Normalize a priority value: accept both legacy P0-P3 and new names."""
+    if value in PRIORITY_NAMES:
+        return value
+    return _LEGACY_TO_NAME.get(value, value)
+
+
 def _load() -> dict:
     data = yaml.safe_load(_backlog_path().read_text(encoding="utf-8"))
-    # Backfill missing 'created' on tasks
+    # Backfill missing 'created' on tasks + normalize legacy priorities
     for epic in data.get("epics", []):
         for t in epic.get("tasks", []):
             if not t.get("created"):
                 t["created"] = t.get("started") or t.get("completed") or "2025-01-01T00:00"
+            pri = t.get("priority", "")
+            if pri in _LEGACY_TO_NAME:
+                t["priority"] = _LEGACY_TO_NAME[pri]
     return data
 
 
@@ -281,10 +301,10 @@ def regenerate_context(data: dict) -> None:
         if any(task_statuses.get(d, "todo") != "done" for d in deps):
             continue
         todo_tasks.append((t, epic))
-    priority_order = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
-    todo_tasks.sort(key=lambda x: (priority_order.get(x[0].get("priority", "P2"), 9), str(x[0].get("created", ""))))
+    priority_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    todo_tasks.sort(key=lambda x: (priority_order.get(x[0].get("priority", "medium"), 9), str(x[0].get("created", ""))))
     next_up = [
-        {"id": t["id"], "title": t["title"], "priority": t.get("priority", "P2"), "epic": epic["id"]}
+        {"id": t["id"], "title": t["title"], "priority": t.get("priority", "medium"), "epic": epic["id"]}
         for t, epic in todo_tasks[:3]
     ]
 
@@ -434,7 +454,7 @@ def regenerate_progress_dashboard(data: dict) -> None:
 
     next_items = ctx.get("next_up", [])
     if next_items:
-        nu_str = ", ".join(f"{t['id']} {t['title']} ({t.get('priority', 'P2')})" for t in next_items)
+        nu_str = ", ".join(f"{t['id']} {t['title']} ({t.get('priority', 'medium')})" for t in next_items)
         lines.append(f"**Next Up:** {nu_str}")
     else:
         lines.append("**Next Up:** —")
@@ -456,7 +476,7 @@ def _task_context(data: dict, task: dict, epic: dict) -> str:
     """Format task details + epic context for display after pick."""
     lines = [
         f"**Epic:** {epic['name']} — {epic.get('description', '')}",
-        f"**Priority:** {task.get('priority', 'P2')}",
+        f"**Priority:** {task.get('priority', 'medium')}",
     ]
     if task.get("notes"):
         lines.append(f"**Notes:** {task['notes']}")
@@ -557,7 +577,7 @@ def backlog_status() -> str:
     if nu:
         lines.append("**Next Up:**")
         for t in nu:
-            lines.append(f"- `{t['id']}` — {t['title']} ({t.get('priority', 'P2')})")
+            lines.append(f"- `{t['id']}` — {t['title']} ({t.get('priority', 'medium')})")
     else:
         lines.append("**Next Up:** —")
 
@@ -628,11 +648,11 @@ def backlog_list_tasks(epic: str = "", status: str = "", priority: str = "", pha
     Args:
         epic: Filter by epic ID (e.g., "ue-plugin", "desktop-app")
         status: Filter by status: todo, in-progress, in-review, done, blocked
-        priority: Filter by priority: P0, P1, P2, P3
+        priority: Filter by priority: critical, high, medium, low
         phase: Filter by phase ID
     """
     data = _load()
-    priority_order = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
+    priority_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
     results: list[tuple[int, str, str]] = []  # (priority_rank, created, formatted)
     for ep in data["epics"]:
         if epic and ep["id"] != epic:
@@ -650,7 +670,7 @@ def backlog_list_tasks(epic: str = "", status: str = "", priority: str = "", pha
                 continue
             if phase and t.get("phase") != phase:
                 continue
-            pri = t.get("priority", "P2")
+            pri = t.get("priority", "medium")
             results.append((
                 priority_order.get(pri, 9),
                 str(t.get("created", "")),
@@ -695,7 +715,7 @@ def backlog_get_task(task_id: str) -> str:
 
     fields = [
         ("Status", task.get("status", "todo")),
-        ("Priority", task.get("priority", "P2")),
+        ("Priority", task.get("priority", "medium")),
         ("Epic", f"{epic['name']} ({epic['id']})"),
         ("Stage", str(task["stage"]) if task.get("stage") is not None else "—"),
         ("Estimate", task.get("estimate", "—")),
@@ -751,11 +771,11 @@ def backlog_get_task(task_id: str) -> str:
             lines.append(f"- `{t['id']}` — {t['title']} ({t.get('completed', '?')})")
 
     next_todo = [t for t in epic_tasks if t.get("status") == "todo" and t["id"] != task_id]
-    next_todo.sort(key=lambda t: ({"P0": 0, "P1": 1, "P2": 2, "P3": 3}.get(t.get("priority", "P2"), 9)))
+    next_todo.sort(key=lambda t: ({"critical": 0, "high": 1, "medium": 2, "low": 3}.get(t.get("priority", "medium"), 9)))
     if next_todo[:3]:
         lines.append("\n**Next todo in this epic:**")
         for t in next_todo[:3]:
-            lines.append(f"- `{t['id']}` — {t['title']} ({t.get('priority', 'P2')})")
+            lines.append(f"- `{t['id']}` — {t['title']} ({t.get('priority', 'medium')})")
 
     return "\n".join(lines)
 
@@ -799,7 +819,7 @@ def backlog_search(query: str) -> str:
 
             if score > 0:
                 status = task.get("status", "todo")
-                priority = task.get("priority", "P2")
+                priority = task.get("priority", "medium")
                 scored.append((score, f"`{tid}` — {title} ({priority}, {epic['id']}, {status})"))
 
     if not scored:
@@ -911,8 +931,8 @@ def backlog_next_available(include_future_phases: bool = False) -> str:
             else:
                 available.append((task, epic))
 
-    priority_order = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
-    available.sort(key=lambda x: (priority_order.get(x[0].get("priority", "P2"), 9), str(x[0].get("created", ""))))
+    priority_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    available.sort(key=lambda x: (priority_order.get(x[0].get("priority", "medium"), 9), str(x[0].get("created", ""))))
 
     lines = ["## Available Tasks\n"]
 
@@ -922,7 +942,7 @@ def backlog_next_available(include_future_phases: bool = False) -> str:
     if available:
         lines.append(f"**{len(available)} tasks ready to pick:**")
         for task, epic in available:
-            lines.append(f"- `{task['id']}` — {task['title']} ({task.get('priority', 'P2')}, {epic['id']})")
+            lines.append(f"- `{task['id']}` — {task['title']} ({task.get('priority', 'medium')}, {epic['id']})")
     else:
         if active_ph:
             lines.append(f"No tasks available in phase **{active_ph['name']}** — all tasks are done, in progress, or have unmet dependencies.")
@@ -1141,7 +1161,7 @@ def backlog_init(project_name: str = "", location: str = "hidden") -> str:
 
 @mcp.tool()
 def backlog_add_task(
-    title: str, epic: str, priority: str = "P2", notes: str = "",
+    title: str, epic: str, priority: str = "medium", notes: str = "",
     docs: str = "", depends_on: str = "", sub_repo: str = "",
     stage: int | None = None, estimate: str = "", phase: str = "",
     anchors: str = "",
@@ -1151,7 +1171,7 @@ def backlog_add_task(
     Args:
         title: Short imperative description of the task
         epic: Epic ID (e.g., "ue-plugin", "desktop-app", "cpp-parser")
-        priority: P0 (critical) through P3 (nice-to-have), default P2
+        priority: critical, high, medium (default), or low
         notes: Optional freeform context
         docs: Optional doc references as "key:path" pairs separated by semicolons (e.g., "plan:docs/plans/foo.md;spec:docs/specs/bar.md")
         depends_on: Optional comma-separated task IDs this task depends on (e.g., "cpp-parser-002,cpp-parser-003")
@@ -1161,8 +1181,9 @@ def backlog_add_task(
         phase: Optional phase ID to assign this task to
         anchors: Optional comma-separated glob patterns or URLs declaring target files/systems (e.g., "src/auth/**,localhost:3000/api/auth")
     """
+    priority = _normalize_priority(priority)
     if priority not in VALID_PRIORITIES:
-        return f"Error: invalid priority `{priority}`. Valid: {', '.join(sorted(VALID_PRIORITIES))}"
+        return f"Error: invalid priority `{priority}`. Valid: {', '.join(PRIORITY_NAMES)}"
 
     data = _load()
     epic_obj = _find_epic(data, epic)
@@ -1505,11 +1526,11 @@ def backlog_complete_task(
 
     # Suggest next task in same epic
     next_todo = [t for t in epic.get("tasks", []) if t.get("status") == "todo"]
-    next_todo.sort(key=lambda t: ({"P0": 0, "P1": 1, "P2": 2, "P3": 3}.get(t.get("priority", "P2"), 9)))
+    next_todo.sort(key=lambda t: ({"critical": 0, "high": 1, "medium": 2, "low": 3}.get(t.get("priority", "medium"), 9)))
     suggestion = ""
     if next_todo:
         n = next_todo[0]
-        suggestion = f"\n\n**Next in {epic['name']}:** `{n['id']}` — {n['title']} ({n.get('priority', 'P2')})"
+        suggestion = f"\n\n**Next in {epic['name']}:** `{n['id']}` — {n['title']} ({n.get('priority', 'medium')})"
 
     status_label = "Completed" if target_status == "done" else "Moved to in-review"
     return f"{status_label} `{task_id}` — {task['title']}" + changelog_msg + review_warning + suggestion
@@ -1559,12 +1580,26 @@ def backlog_archive_task(task_id: str, reason: str = "done") -> str:
 
 
 def _discover_sub_repos() -> list[Path]:
-    """Auto-discover git repositories in ROOT (immediate children only)."""
+    """Auto-discover git repositories in ROOT (immediate children only).
+    Only matches real repos (.git directory), not worktrees (.git file)."""
     sub_repos = []
-    for child in ROOT.iterdir():
-        if child.is_dir() and (child / ".git").exists():
-            sub_repos.append(child)
+    try:
+        for child in ROOT.iterdir():
+            if child.is_dir() and (child / ".git").is_dir():
+                sub_repos.append(child)
+    except OSError:
+        pass
     return sub_repos
+
+
+def _git_subprocess_kwargs() -> dict:
+    """Common kwargs for git subprocess calls — prevents hangs on Windows."""
+    kwargs: dict = {"capture_output": True, "text": True, "timeout": 3}
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": ""}
+    kwargs["env"] = env
+    if sys.platform == "win32":
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+    return kwargs
 
 
 def _discover_worktrees() -> list[dict]:
@@ -1572,16 +1607,17 @@ def _discover_worktrees() -> list[dict]:
     worktrees = []
     dirs_to_scan = [ROOT]
     dirs_to_scan.extend(_discover_sub_repos())
+    git_kwargs = _git_subprocess_kwargs()
 
     for repo_dir in dirs_to_scan:
         try:
             result = subprocess.run(
                 ["git", "worktree", "list", "--porcelain"],
-                capture_output=True, text=True, cwd=str(repo_dir), timeout=5,
+                cwd=str(repo_dir), **git_kwargs,
             )
             if result.returncode != 0:
                 continue
-        except (FileNotFoundError, subprocess.TimeoutExpired):
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
             continue
 
         # Parse porcelain output: blocks separated by blank lines
@@ -1612,10 +1648,23 @@ def _discover_worktrees() -> list[dict]:
             worktrees.append(current)
 
     # Filter out the main worktree (the repo root itself) — only show additional worktrees
-    main_paths = {str(d.resolve()) for d in dirs_to_scan}
-    worktrees = [w for w in worktrees if w.get("path") and str(Path(w["path"]).resolve()) not in main_paths]
+    main_paths: set[str] = set()
+    for d in dirs_to_scan:
+        try:
+            main_paths.add(os.path.realpath(str(d)))
+        except OSError:
+            main_paths.add(str(d))
 
-    return worktrees
+    def _is_extra(w: dict) -> bool:
+        p = w.get("path")
+        if not p:
+            return False
+        try:
+            return os.path.realpath(p) not in main_paths
+        except OSError:
+            return True
+
+    return [w for w in worktrees if _is_extra(w)]
 
 
 @mcp.tool()
@@ -1693,7 +1742,7 @@ def _clear_session_task(task_id: str) -> None:
 
 ALLOWED_FIELDS = {"title", "status", "priority", "notes", "branch", "worktree", "blockers", "docs", "depends_on", "sub_repo", "stage", "estimate", "locked_by", "review_instructions", "phase", "anchors", "blast_radius_depth"}
 VALID_STATUSES = {"todo", "in-progress", "in-review", "done", "archived", "blocked"}
-VALID_PRIORITIES = {"P0", "P1", "P2", "P3"}
+VALID_PRIORITIES = {"critical", "high", "medium", "low"}
 VALID_DOC_KEYS = {"plan", "spec", "roadmap", "design", "analysis"}
 
 
@@ -1738,8 +1787,9 @@ def backlog_update_task(task_id: str, field: str, value: str) -> str:
         if value not in ("in-progress",):
             task.pop("locked_by", None)
     elif field == "priority":
+        value = _normalize_priority(value)
         if value not in VALID_PRIORITIES:
-            return f"Error: invalid priority `{value}`. Valid: {', '.join(sorted(VALID_PRIORITIES))}"
+            return f"Error: invalid priority `{value}`. Valid: {', '.join(PRIORITY_NAMES)}"
         task["priority"] = value
     elif field == "docs":
         # Parse "key:path" format, e.g. "plan:docs/plans/2026-03-11-foo.md"
@@ -1933,7 +1983,7 @@ def backlog_add_phase(
     to phases to control focus.
 
     Args:
-        phase_id: Short kebab-case identifier (e.g., "p1", "foundation", "mvp"). Must be unique.
+        phase_id: Short kebab-case identifier (e.g., "foundation", "mvp", "polish"). Must be unique. Avoid "p1"/"p2" — too similar to priority names.
         name: Human-readable name (e.g., "Foundation", "Core Features", "Polish & Launch")
         description: Brief description of the phase's goals
         order: Position in the sequence (1, 2, 3...). Auto-assigned if omitted.
@@ -1942,7 +1992,7 @@ def backlog_add_phase(
     """
     # Validate ID format
     if not phase_id or not all(c.isalnum() or c == "-" for c in phase_id) or phase_id != phase_id.lower():
-        return f"Error: phase_id must be lowercase kebab-case (e.g., 'p1', 'foundation'), got `{phase_id}`"
+        return f"Error: phase_id must be lowercase kebab-case (e.g., 'foundation', 'mvp'), got `{phase_id}`"
 
     data = _load()
 
@@ -1996,7 +2046,7 @@ def backlog_update_phase(phase_id: str, field: str, value: str) -> str:
     """Update a single field on a phase.
 
     Args:
-        phase_id: The phase ID (e.g., "p1", "foundation")
+        phase_id: The phase ID (e.g., "foundation", "mvp")
         field: Field to update — one of: name, status, description, order, target_date, start_date
         value: New value. For status: planned, active, done, archived. For order: integer. For dates: YYYY-MM-DD or empty to clear.
     """
@@ -2200,7 +2250,7 @@ def backlog_phase_status(phase_id: str = "") -> str:
             label = "Completed (Archived)" if status_group == "archived" else status_group.replace("-", " ").title()
             lines.append(f"**{label}:**")
             for t, epic in group_tasks:
-                pri = t.get("priority", "P2")
+                pri = t.get("priority", "medium")
                 lines.append(f"- `{t['id']}` — {t['title']} ({pri}, {epic['id']})")
             lines.append("")
 
@@ -2365,6 +2415,7 @@ def backlog_batch_update(operations: str) -> str:
                 if value not in ("in-progress",):
                     task.pop("locked_by", None)
             elif field == "priority":
+                value = _normalize_priority(value)
                 if value not in VALID_PRIORITIES:
                     errors.append(f"`{task_id}`: invalid priority `{value}`")
                     continue
@@ -2620,7 +2671,7 @@ def backlog_blast_radius(task_id: str, mode: str = "predictive", depth_override:
 
     if mode == "predictive":
         analysis = analyze_predictive(task, all_tasks)
-        return _format_predictive(analysis, task.get("priority", "P2"))
+        return _format_predictive(analysis, task.get("priority", "medium"))
     else:
         # Resolve project root for code analysis
         sub_repo = task.get("sub_repo")
@@ -2648,7 +2699,7 @@ def _format_predictive(analysis: dict, priority: str) -> str:
     anchored = analysis["anchored_areas"]
     overlaps = analysis["overlapping_tasks"]
 
-    if priority in ("P0", "P1"):
+    if priority in ("critical", "high"):
         lines.append("── Predicted Blast Radius ──────────────────────")
         if anchored:
             lines.append("**Anchored areas:**")
@@ -2796,8 +2847,8 @@ class ViewerHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _serve_identity(self) -> None:
-        """Return the project root so callers can verify which project this server serves."""
-        body = json.dumps({"root": str(ROOT.resolve())}).encode("utf-8")
+        """Return the project root and version so callers can verify which project this server serves."""
+        body = json.dumps({"root": str(ROOT.resolve()), "version": VERSION}).encode("utf-8")
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
@@ -2867,6 +2918,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
     def _serve_json(self) -> None:
         try:
             data = yaml.safe_load(_backlog_path().read_text(encoding="utf-8"))
+            data.setdefault("meta", {})["_version"] = VERSION
             body = json.dumps(data, default=str).encode("utf-8")
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "application/json; charset=utf-8")

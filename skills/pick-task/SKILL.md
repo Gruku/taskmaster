@@ -32,7 +32,7 @@ Select a task to work on and set it to in-progress.
      "This task is anchored to `src/auth/**`. Expected at `localhost:3000/api/auth`."
    - Remind: "If you find yourself editing files outside these anchors, double-check you're working on the right target."
    - Call `backlog_blast_radius(task_id, mode="predictive")` to get predicted impact.
-   - Display the result. For P0/P1 tasks, show the full structured block (anchored areas, related active work, considerations). For P2/P3 tasks, show the single-line summary.
+   - Display the result. For critical/high tasks, show the full structured block (anchored areas, related active work, considerations). For medium/low tasks, show the single-line summary.
    - If overlapping in-progress tasks are found, highlight them: "Heads up — `{task_id}` is actively being worked on in the same area. Coordinate to avoid conflicts."
 
 5. **Once a task is selected:**

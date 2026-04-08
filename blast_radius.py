@@ -418,12 +418,14 @@ def compute_blast_depth(
     # Signal 3: Export change
     votes.append(2 if has_export_change else 0)
 
-    # Signal 4: Priority
-    if priority in ("P0", "P1"):
+    # Signal 4: Priority (accept both new names and legacy P0-P3)
+    _legacy = {"P0": "critical", "P1": "high", "P2": "medium", "P3": "low"}
+    pri = _legacy.get(priority, priority)
+    if pri in ("critical", "high"):
         votes.append(2)
-    elif priority == "P2":
+    elif pri == "medium":
         votes.append(1)
-    else:  # P3 or unknown
+    else:  # low or unknown
         votes.append(0)
 
     return max(votes)
@@ -577,7 +579,7 @@ def analyze_evidence(
              overlapping_tasks, summary_stats, truncated}.
     """
     task_id = task.get("id", "")
-    priority = task.get("priority", "P2")
+    priority = task.get("priority", "medium")
     sub_repo_str = task.get("sub_repo")
     sub_repo = (project_root / sub_repo_str) if sub_repo_str else None
 

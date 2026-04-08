@@ -71,10 +71,10 @@ If the user chose analyze:
 3. **Synthesize findings into a proposed backlog:**
    - Group related TODOs into epics (by directory/domain)
    - Convert individual TODOs into tasks with appropriate priorities:
-     - `FIXME` → P1 (should fix)
-     - `HACK` → P2 (tech debt)
-     - `TODO` → P2 (planned work)
-     - `XXX` → P1 (needs attention)
+     - `FIXME` → high (should fix)
+     - `HACK` → medium (tech debt)
+     - `TODO` → medium (planned work)
+     - `XXX` → high (needs attention)
    - Extract roadmap items from README as tasks
    - Identify the most active code areas from git log as likely epics
 

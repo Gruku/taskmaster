@@ -15,20 +15,20 @@ Quality gate before marking a task ready for user testing. The user has just fin
 
 1. **Get task details** — call `backlog_get_task(task_id)` to get priority, epic, branch, docs, sub_repo, and review_instructions.
 
-2. **Gate 1: Spec/Plan Check (P0/P1 tasks only)**
+2. **Gate 1: Spec/Plan Check (critical/high tasks only)**
 
    High-priority tasks should have documentation. This gate checks existence, not correctness — verifying spec-to-implementation alignment is out of scope for automated checks.
 
-   - For tasks with priority P0 or P1:
+   - For tasks with priority critical or high:
      - First check the task's `docs` field — if `docs.plan` or `docs.spec` exists, verify the files exist on disk.
      - If no docs field, search `docs/specs/` and `docs/plans/` (project root), and `{sub_repo}/docs/` if sub_repo is set.
      - If no spec or plan found: **WARN** — "No spec/plan found for {priority} task `{id}`." Continue anyway.
-   - For P2/P3 tasks: skip this gate entirely.
+   - For medium/low tasks: skip this gate entirely.
 
 3. **Gate 2: Code Review**
    - Determine the working directory: the task's worktree path if set, otherwise the project root.
    - Determine the working branch from the task's `branch` field. If `branch` is empty, check the current git branch in the working directory.
-   - If no branch can be determined: **WARN** for P2/P3, **escalate to user** for P0/P1 — skipping code review on a high-priority task silently is unacceptable.
+   - If no branch can be determined: **WARN** for medium/low, **escalate to user** for critical/high — skipping code review on a high-priority task silently is unacceptable.
    - If the `superpowers:code-reviewer` subagent is available, dispatch it scoped to changed files between the branch and its base. If not available, perform an inline review of the diff.
    - Report findings grouped by severity:
      - **Critical** — must fix before merge
