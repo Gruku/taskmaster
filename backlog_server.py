@@ -21,6 +21,12 @@ from pathlib import Path
 
 import yaml
 from fastmcp import FastMCP
+from blast_radius import (
+    BlastRadiusConfig,
+    load_config,
+    analyze_predictive,
+    analyze_evidence,
+)
 
 mcp = FastMCP("taskmaster")
 
@@ -1685,7 +1691,7 @@ def _clear_session_task(task_id: str) -> None:
         _session_task = None
 
 
-ALLOWED_FIELDS = {"title", "status", "priority", "notes", "branch", "worktree", "blockers", "docs", "depends_on", "sub_repo", "stage", "estimate", "locked_by", "review_instructions", "phase", "anchors"}
+ALLOWED_FIELDS = {"title", "status", "priority", "notes", "branch", "worktree", "blockers", "docs", "depends_on", "sub_repo", "stage", "estimate", "locked_by", "review_instructions", "phase", "anchors", "blast_radius_depth"}
 VALID_STATUSES = {"todo", "in-progress", "in-review", "done", "archived", "blocked"}
 VALID_PRIORITIES = {"P0", "P1", "P2", "P3"}
 VALID_DOC_KEYS = {"plan", "spec", "roadmap", "design", "analysis"}
@@ -1777,6 +1783,13 @@ def backlog_update_task(task_id: str, field: str, value: str) -> str:
             task.pop("anchors", None)
         else:
             task["anchors"] = [a.strip() for a in value.split(",") if a.strip()]
+    elif field == "blast_radius_depth":
+        if value == "" or value.lower() == "none":
+            task.pop("blast_radius_depth", None)
+        elif value in ("shallow", "deep"):
+            task["blast_radius_depth"] = value
+        else:
+            return f"Error: `blast_radius_depth` must be 'shallow', 'deep', or '' to clear. Got: `{value}`"
     else:
         task[field] = value
 
@@ -2570,6 +2583,165 @@ def backlog_snapshot(operations: str) -> str:
     header = f"**Dry-run preview** ({len(previews)} operations):\n"
     footer = "\n\n*No changes written. Use the actual tools to apply.*"
     return header + "\n".join(previews) + footer
+
+
+# ── Blast Radius Analysis ───────────────────────────────────
+
+
+@mcp.tool()
+def backlog_blast_radius(task_id: str, mode: str = "predictive", depth_override: str = "") -> str:
+    """Analyze the blast radius (impact footprint) of a task.
+
+    Two modes:
+    - predictive: metadata-only analysis for pick-task time. Fast, no code tracing.
+    - evidence: code-level impact analysis for review-gate time. Traces imports, builds dependency graph.
+
+    Args:
+        task_id: The task ID to analyze (e.g., "auth-005")
+        mode: Analysis mode — "predictive" or "evidence"
+        depth_override: Optional depth override — "shallow" (0-1 hop) or "deep" (2 hops). Overrides the adaptive heuristic.
+    """
+    if mode not in ("predictive", "evidence"):
+        return f"Error: mode must be 'predictive' or 'evidence', got '{mode}'"
+
+    data = _load()
+    result = _find_task(data, task_id)
+    if not result:
+        return f"Error: task `{task_id}` not found"
+    task, epic = result
+
+    # Collect all tasks for overlap detection
+    all_tasks: list[dict] = []
+    for e in data.get("epics", []):
+        all_tasks.extend(e.get("tasks", []))
+
+    config = load_config(data.get("meta", {}))
+    override = depth_override if depth_override in ("shallow", "deep") else None
+
+    if mode == "predictive":
+        analysis = analyze_predictive(task, all_tasks)
+        return _format_predictive(analysis, task.get("priority", "P2"))
+    else:
+        # Resolve project root for code analysis
+        sub_repo = task.get("sub_repo")
+        worktree = task.get("worktree")
+        if worktree:
+            project_root = Path(worktree).resolve() if Path(worktree).is_absolute() else (ROOT / worktree).resolve()
+        else:
+            project_root = ROOT
+
+        analysis = analyze_evidence(
+            task=task,
+            all_tasks=all_tasks,
+            project_root=project_root,
+            config=config,
+            base_branch="main",
+            depth_override=override,
+        )
+        return _format_evidence(analysis)
+
+
+def _format_predictive(analysis: dict, priority: str) -> str:
+    """Format predictive analysis results as markdown."""
+    lines: list[str] = []
+
+    anchored = analysis["anchored_areas"]
+    overlaps = analysis["overlapping_tasks"]
+
+    if priority in ("P0", "P1"):
+        lines.append("── Predicted Blast Radius ──────────────────────")
+        if anchored:
+            lines.append("**Anchored areas:**")
+            for a in anchored:
+                lines.append(f"  - `{a}`")
+        else:
+            lines.append("**Anchored areas:** None set")
+
+        if overlaps:
+            lines.append("")
+            lines.append("**Related active work:**")
+            for o in overlaps:
+                paths = ", ".join(f"`{p}`" for p in o["shared_paths"][:3])
+                lines.append(f"  - `{o['task_id']}` \"{o['title']}\" ({o['status']}) — shares {paths}")
+        else:
+            lines.append("")
+            lines.append("**Related active work:** None detected")
+
+        lines.append("────────────────────────────────────────────────")
+    else:
+        if overlaps:
+            overlap_strs = [f"{o['task_id']} ({o['status']})" for o in overlaps[:3]]
+            lines.append(f"Blast radius: Overlaps with {', '.join(overlap_strs)}")
+        else:
+            lines.append("Blast radius: No overlap with active tasks.")
+
+    return "\n".join(lines)
+
+
+def _format_evidence(analysis: dict) -> str:
+    """Format evidence analysis results as markdown."""
+    lines: list[str] = []
+    stats = analysis["summary_stats"]
+
+    # Summary line for gate table
+    parts = []
+    if stats["files_changed"]:
+        parts.append(f"{stats['total_dependents']} dependents")
+    if stats["overlap_count"]:
+        parts.append(f"{stats['overlap_count']} overlapping task{'s' if stats['overlap_count'] != 1 else ''}")
+    summary = ", ".join(parts) if parts else "no impact detected"
+    lines.append(f"**Gate 4 summary:** {summary}")
+
+    if not analysis["changed_files"]:
+        lines.append("")
+        lines.append("No changed files detected — nothing to analyze.")
+        return "\n".join(lines)
+
+    # Detailed report
+    lines.append("")
+    lines.append("── Blast Radius Report ─────────────────────────")
+
+    # Changed files with fan-out
+    lines.append(f"**Changed files ({stats['files_changed']}):**")
+    for f in analysis["changed_files"]:
+        fan = analysis["fan_out_scores"].get(f, 0)
+        depth = analysis["depth_used"].get(f, 0)
+        depth_label = {0: "leaf, no trace", 1: "1 hop", 2: "2 hops"}.get(depth, f"{depth} hops")
+        lines.append(f"  `{f}` — {fan} dependents ({depth_label})")
+
+    # Dependency graph (affected modules)
+    if analysis["dependency_graph"]:
+        lines.append("")
+        lines.append("**Affected modules:**")
+        dir_counts: dict[str, int] = {}
+        for deps in analysis["dependency_graph"].values():
+            for dep in deps:
+                parent = str(Path(dep).parent)
+                dir_counts[parent] = dir_counts.get(parent, 0) + 1
+        for d, count in sorted(dir_counts.items(), key=lambda x: -x[1]):
+            lines.append(f"  - `{d}/` ({count} file{'s' if count != 1 else ''})")
+
+    # Overlapping tasks
+    overlaps = analysis["overlapping_tasks"]
+    if overlaps:
+        lines.append("")
+        lines.append("**Overlapping tasks:**")
+        for o in overlaps:
+            is_in_progress = o["status"] == "in-progress"
+            marker = "!!" if is_in_progress else "-"
+            lines.append(f"  {marker} `{o['task_id']}` \"{o['title']}\" ({o['status']})")
+            paths = ", ".join(f"`{p}`" for p in o["shared_paths"][:5])
+            lines.append(f"    Shared paths: {paths}")
+            if is_in_progress:
+                lines.append(f"    **Risk: Both tasks modifying the same files concurrently**")
+
+    if analysis["truncated"]:
+        lines.append("")
+        lines.append("*Note: File scan was truncated — results may be incomplete.*")
+
+    lines.append("────────────────────────────────────────────────")
+
+    return "\n".join(lines)
 
 
 # ── HTTP Viewer Server ───────────────────────────────────

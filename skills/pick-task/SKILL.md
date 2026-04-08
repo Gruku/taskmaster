@@ -27,10 +27,13 @@ Select a task to work on and set it to in-progress.
    - If any dependencies are NOT done, warn: "This task depends on `{dep_id}` which is still `{status}`. Proceed anyway?"
    - Let the user decide. Do not silently skip.
 
-4. **Show anchors (if present):**
+4. **Show anchors and predicted blast radius:**
    - If the task has `anchors`, display them prominently:
      "This task is anchored to `src/auth/**`. Expected at `localhost:3000/api/auth`."
    - Remind: "If you find yourself editing files outside these anchors, double-check you're working on the right target."
+   - Call `backlog_blast_radius(task_id, mode="predictive")` to get predicted impact.
+   - Display the result. For P0/P1 tasks, show the full structured block (anchored areas, related active work, considerations). For P2/P3 tasks, show the single-line summary.
+   - If overlapping in-progress tasks are found, highlight them: "Heads up — `{task_id}` is actively being worked on in the same area. Coordinate to avoid conflicts."
 
 5. **Once a task is selected:**
    - Call `backlog_pick_task(task_id)` — this sets status to `in-progress`, records `started` date, locks to session, and regenerates context + dashboard.

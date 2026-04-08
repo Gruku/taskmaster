@@ -248,6 +248,10 @@ The `backlog.yaml` file is the single source of truth. **Never edit it directly*
 meta:
   project: "My Project"
   updated: "2026-03-20"
+  blast_radius:                   # Optional — all keys have sensible defaults
+    fan_out_threshold: 5          # Avg fan-out above this = "shared" directory (default: 5)
+    max_file_scan: 1000           # Max files to scan for import tracing (default: 1000)
+    shared_dirs: []               # Explicit shared directories, supplements auto-detection
 
 context:                          # Auto-regenerated on every save
   active_epic: "auth"
@@ -307,6 +311,7 @@ phases:
 | `created` / `started` / `completed` / `archived` | datetime | Auto-managed timestamps |
 | `archive_reason` | enum | `done`, `deprecated`, `duplicate`, `wont-fix`, `superseded` |
 | `anchors` | list[string] | Glob patterns or URLs declaring target files/systems |
+| `blast_radius_depth` | string | Optional depth override for blast radius analysis: `shallow` (0-1 hop) or `deep` (2 hops). Overrides the adaptive heuristic. |
 | `last_referenced` | string | ISO timestamp, auto-updated when any tool touches this task |
 
 ### Context Block
