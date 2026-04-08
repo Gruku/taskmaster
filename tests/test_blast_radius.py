@@ -253,17 +253,19 @@ class TestTraceDependencyGraph:
         (tmp_path / "main.py").write_text("from utils import helper\n")
         cfg = br.load_config({})
         depths = {"utils.py": 1}
-        graph = br.trace_dependency_graph(["utils.py"], depths, tmp_path, cfg)
+        graph, truncated = br.trace_dependency_graph(["utils.py"], depths, tmp_path, cfg)
         assert "utils.py" in graph
         assert "main.py" in graph["utils.py"]
+        assert isinstance(truncated, bool)
 
     def test_zero_depth(self, tmp_path):
         (tmp_path / "utils.py").write_text("def helper(): pass\n")
         (tmp_path / "main.py").write_text("from utils import helper\n")
         cfg = br.load_config({})
         depths = {"utils.py": 0}
-        graph = br.trace_dependency_graph(["utils.py"], depths, tmp_path, cfg)
+        graph, truncated = br.trace_dependency_graph(["utils.py"], depths, tmp_path, cfg)
         assert graph.get("utils.py", []) == []
+        assert isinstance(truncated, bool)
 
 
 # ---------------------------------------------------------------------------

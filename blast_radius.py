@@ -7,6 +7,8 @@ No side effects, safe to import for testing.
 
 import re
 import subprocess
+from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from pathlib import Path
@@ -111,7 +113,7 @@ def parse_imports_go(source: str) -> set[str]:
     return imports
 
 
-_PARSER_MAP: dict[str, callable] = {
+_PARSER_MAP: dict[str, Callable[[str], set[str]]] = {
     ".py": parse_imports_python,
     ".js": parse_imports_js,
     ".ts": parse_imports_js,
@@ -238,13 +240,14 @@ def trace_dependency_graph(
     project_root: Path,
     config: BlastRadiusConfig,
     sub_repo: Path | None = None,
-) -> dict[str, list[str]]:
+) -> tuple[dict[str, list[str]], bool]:
     """
     BFS import graph tracing up to specified depths per file.
-    Returns {file: [direct_importers]} for all reachable nodes.
+    Returns ({file: [direct_importers]}, truncated) for all reachable nodes.
     """
     graph: dict[str, list[str]] = {}
-    queue: list[tuple[str, int]] = []
+    queue: deque[tuple[str, int]] = deque()
+    any_truncated = False
 
     for f in changed_files:
         depth = depths.get(f, 1)
@@ -256,11 +259,13 @@ def trace_dependency_graph(
     visited: set[str] = set(changed_files)
 
     while queue:
-        current, remaining_depth = queue.pop(0)
+        current, remaining_depth = queue.popleft()
         if current in graph:
             continue
-        importers = find_importers(current, project_root, config, sub_repo)
+        importers, truncated = find_importers_with_limit(current, project_root, config, sub_repo)
         graph[current] = importers
+        if truncated:
+            any_truncated = True
 
         if remaining_depth > 1:
             for imp in importers:
@@ -268,7 +273,7 @@ def trace_dependency_graph(
                     visited.add(imp)
                     queue.append((imp, remaining_depth - 1))
 
-    return graph
+    return graph, any_truncated
 
 
 # ---------------------------------------------------------------------------
@@ -348,14 +353,20 @@ def has_export_changes(file_rel: str, base_branch: str, project_root: Path) -> b
 # Leaf directories that suggest shallow blast radius
 _LEAF_DIR_PREFIXES = ("plugins/", "components/", "pages/", "views/", "screens/")
 
+# Heuristic patterns for shared/core directories
+_SHARED_DIR_PATTERNS = {"lib", "core", "utils", "shared", "common", "internal", "pkg"}
+
 
 def _is_shared_dir(file_rel: str, config: BlastRadiusConfig) -> bool:
-    """Return True if file lives in a configured shared directory."""
+    """Return True if file lives in a configured shared directory or matches heuristic patterns."""
     normalized = file_rel.replace("\\", "/")
     for shared in config.shared_dirs:
         prefix = shared.rstrip("/") + "/"
         if normalized.startswith(prefix) or normalized == shared:
             return True
+    # Heuristic: check if any path component (directories only) matches known shared patterns
+    if any(p.lower() in _SHARED_DIR_PATTERNS for p in Path(file_rel).parts[:-1]):
+        return True
     return False
 
 
@@ -567,13 +578,16 @@ def analyze_evidence(
     """
     task_id = task.get("id", "")
     priority = task.get("priority", "P2")
+    sub_repo_str = task.get("sub_repo")
+    sub_repo = (project_root / sub_repo_str) if sub_repo_str else None
 
     # Step 1: Get changed files
     branch = task.get("branch", "HEAD")
-    changed_files = get_changed_files(branch, base_branch, project_root)
+    git_cwd = (project_root / sub_repo_str) if sub_repo_str else project_root
+    changed_files = get_changed_files(branch, base_branch, git_cwd)
 
     # Step 2: Fan-out scores
-    fan_out_scores = compute_fan_out_scores(changed_files, project_root, config)
+    fan_out_scores = compute_fan_out_scores(changed_files, project_root, config, sub_repo)
 
     # Step 3: Export changes + depth per file
     depth_used: dict[str, int] = {}
@@ -594,27 +608,29 @@ def analyze_evidence(
         depth_used[f] = depth
 
     # Step 4: Trace dependency graph
-    dependency_graph = trace_dependency_graph(
-        changed_files, depth_used, project_root, config
+    dependency_graph, truncated = trace_dependency_graph(
+        changed_files, depth_used, project_root, config, sub_repo
     )
 
     # Step 5: Collect all affected paths
     all_affected: set[str] = set(changed_files)
-    truncated = False
     for dependents in dependency_graph.values():
         all_affected.update(dependents)
+
+    # Compute unique dependent files (excluding the changed files themselves)
+    total_dependents_count = len(all_affected - set(changed_files))
 
     # Step 6: Find overlapping tasks
     overlapping_tasks = find_overlapping_tasks(
         list(all_affected), all_tasks, exclude_task_id=task_id
     )
 
-    # Step 7: Summary stats
+    # Step 7: Summary stats (spec-required keys + extras)
     summary_stats = {
-        "total_changed": len(changed_files),
+        "files_changed": len(changed_files),
+        "total_dependents": total_dependents_count,
+        "overlap_count": len(overlapping_tasks),
         "total_affected": len(all_affected),
-        "total_dependents": len(all_affected) - len(changed_files),
-        "overlapping_task_count": len(overlapping_tasks),
         "max_fan_out": max(fan_out_scores.values(), default=0),
     }
 
