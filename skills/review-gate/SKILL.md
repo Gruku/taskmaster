@@ -55,33 +55,53 @@ Quality gate before marking a task ready for user testing. The user has just fin
 
    **Review instructions:** If the task has a `review_instructions` field, display it prominently: "**Manual test steps:** {review_instructions}"
 
-5. **Present Results — lead with the verdict:**
+5. **Gate 4: Blast Radius (always advisory)**
+
+   Analyze the impact footprint of the task's changes. This gate never blocks — it surfaces what you might have missed.
+
+   - Call `backlog_blast_radius(task_id, mode="evidence")` to get code-level impact analysis.
+   - The tool returns: changed files with fan-out scores, dependency graph, depth used per file, overlapping tasks, and summary stats.
+   - **Interpret the results** — this is where you add judgment:
+     - Look at the dependency graph and identify which modules/subsystems are affected.
+     - If overlapping in-progress tasks are found, assess the conflict risk.
+     - Consider whether any existing features should be updated given these changes.
+     - Draft 2-4 specific "Suggested follow-ups" based on the data.
+
+   **Verdict logic (advisory only):**
+   - **PASS** — low fan-out (< 5 total dependents), no overlapping active tasks, changes well-contained.
+   - **WARN** — moderate fan-out (5-20 dependents), or overlapping tasks found, or changes touch shared modules.
+   - **WARN (loud)** — another in-progress task is modifying the same files. Call this out explicitly: "⚠ `{task_id}` is in-progress and shares files with this task — verify no conflicts."
+
+6. **Present Results — lead with the verdict:**
 
    Start with the overall outcome: "All gates passed — ready for your testing" or "Review gate found issues — see details below."
 
    Then show the breakdown:
    ```
-   Gate 1 — Spec/Plan:    PASS / WARN / SKIP
-   Gate 2 — Code Review:  PASS / FAIL (N issues)
-   Gate 3 — Tests:        PASS / FAIL / SKIP
-   Gate 3 — Build:        PASS / FAIL / SKIP
+   Gate 1 — Spec/Plan:      PASS / WARN / SKIP
+   Gate 2 — Code Review:     PASS / FAIL (N issues)
+   Gate 3 — Tests:           PASS / FAIL / SKIP
+   Gate 3 — Build:           PASS / FAIL / SKIP
+   Gate 4 — Blast Radius:    PASS / WARN (advisory)
    ```
 
    **Blocking rules:**
    - Critical code review findings block unconditionally.
    - Important findings require user acknowledgment before proceeding.
-   - Minor findings and WARN/SKIP results never block.
+   - Minor findings, WARN/SKIP results, and Gate 4 results never block.
+
+   If Gate 4 returned WARN, append the full Blast Radius Report (changed files, affected modules, overlapping tasks, suggested follow-ups) below the gate table.
 
    If gates failed, offer: "Stay in-progress and address issues" or "Move to in-review anyway (you'll need to justify the critical findings)."
 
-6. **Add review instructions:**
+7. **Add review instructions:**
    - If the task has no `review_instructions` (or they're empty):
      - Draft review instructions based on what was implemented: what to test, how to verify, specific steps.
      - Present: "**Proposed review instructions:**\n{drafted}\n\nWant to use these, edit them, or write your own?"
      - Save via `backlog_update_task(task_id, "review_instructions", "{final}")`
    - If existing: show and ask "Keep these or update?"
 
-7. **Transition to `in-review`:**
+8. **Transition to `in-review`:**
    - If all gates passed: "Move `{task_id}` to `in-review`? This means it's ready for you to manually test."
    - If confirmed, call `backlog_update_task(task_id, "status", "in-review")`
 
