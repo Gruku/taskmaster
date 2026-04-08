@@ -1,0 +1,90 @@
+project: visual-polish-test
+phases:
+  - id: setup
+    name: Setup
+    status: done
+    completed: "2026-03-20"
+  - id: development
+    name: Development
+    status: active
+  - id: polish
+    name: Polish
+    status: planned
+epics:
+  - id: features
+    name: Features
+    status: active
+    tasks:
+      - id: features-001
+        title: Build login page
+        status: in-progress
+        priority: P1
+        phase: development
+        started: "2026-03-28"
+        stage: 2
+        estimate: 3d
+      - id: features-002
+        title: Implement user dashboard with analytics widgets
+        status: todo
+        priority: P2
+        phase: development
+        created: "2026-03-25"
+      - id: features-003
+        title: Add notification system
+        status: in-review
+        priority: P1
+        phase: development
+        started: "2026-03-27"
+        estimate: 2d
+      - id: features-004
+        title: Set up email templates
+        status: done
+        priority: P2
+        phase: setup
+        completed: "2026-03-29"
+      - id: features-005
+        title: Create settings panel
+        status: todo
+        priority: P3
+        phase: polish
+        created: "2026-03-26"
+  - id: infra
+    name: Infrastructure
+    status: active
+    tasks:
+      - id: infra-001
+        title: Configure CI/CD pipeline
+        status: done
+        priority: P0
+        phase: setup
+        completed: "2026-03-28"
+      - id: infra-002
+        title: Set up monitoring and alerting
+        status: in-progress
+        priority: P1
+        phase: development
+        started: "2026-03-29"
+        sub_repo: ops-tools
+      - id: infra-003
+        title: Database migration tooling
+        status: todo
+        priority: P2
+        phase: development
+        created: "2026-03-24"
+      - id: infra-004
+        title: Performance optimization pass
+        status: todo
+        priority: P1
+        phase: polish
+        created: "2026-03-26"
+  - id: docs
+    name: Documentation
+    status: planned
+    tasks:
+      - id: docs-001
+        title: Write API reference docs
+        status: todo
+        priority: P3
+        phase: polish
+        created: "2026-03-20"
+        docs: true

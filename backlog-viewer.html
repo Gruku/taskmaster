@@ -1761,6 +1761,10 @@
     .dep-chip.dep-done { opacity: 0.5; }
     .dep-chip.dep-done .dep-id { color: var(--stat-done-color, #3fb950); }
 
+    .dep-chip.dep-archived { opacity: 0.45; }
+    .dep-chip.dep-archived .dep-id { color: var(--stat-archived-color, #6e7681); }
+    .dep-chip.dep-archived .dep-title { text-decoration: line-through; }
+
     .dep-direction {
       font-size: var(--fs-sm); font-weight: 600;
       color: var(--text-dim);
@@ -2061,16 +2065,23 @@ function colKey(status) {
   return COL_MAP[(status||'').toLowerCase()] || 'todo';
 }
 
-// ── Epic color palette ──────────────────────────────────
-const EPIC_HUES = [210, 160, 30, 280, 340, 50, 120, 190, 250, 310];
+// ── Epic color palette (hash-based for stable colors) ───
 const epicColorMap = {};
-let _epicHueIdx = 0;
+
+function hashString(str) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) - hash) + str.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash);
+}
 
 function getEpicHue(epicId) {
   if (!epicId) return 0;
   if (!(epicId in epicColorMap)) {
-    epicColorMap[epicId] = EPIC_HUES[_epicHueIdx % EPIC_HUES.length];
-    _epicHueIdx++;
+    // Hash the epicId to a hue in [0, 360), stepping by golden angle for good spread
+    epicColorMap[epicId] = hashString(epicId) % 360;
   }
   return epicColorMap[epicId];
 }
@@ -2092,9 +2103,8 @@ function ingestData(data) {
   loadedData = data;
   allTasks   = [];
   allEpics   = [];
-  // Reset epic color assignments
+  // Reset epic color cache (hash-based, so colors remain stable across reloads)
   Object.keys(epicColorMap).forEach(k => delete epicColorMap[k]);
-  _epicHueIdx = 0;
 
   const epics = data.epics || [];
   for (const epic of epics) {
@@ -2953,8 +2963,9 @@ function openTaskModal(taskId) {
       inner += `<div class="dep-direction">Depends on</div><div class="deps-row">`;
       inner += dependsOn.map(depId => {
         const dep = allTasks.find(t => t.id === depId);
-        const isDone = dep && colKey(dep.status) === 'done';
-        return `<div class="dep-chip${isDone ? ' dep-done' : ''}" onclick="closeModal();openTaskModal('${esc(depId)}')">
+        const depStatus = dep ? colKey(dep.status) : '';
+        const chipClass = depStatus === 'archived' ? ' dep-archived' : depStatus === 'done' ? ' dep-done' : '';
+        return `<div class="dep-chip${chipClass}" onclick="closeModal();openTaskModal('${esc(depId)}')">
           <span class="dep-arrow">&larr;</span>
           <span class="dep-id">${esc(depId)}</span>
           ${dep ? `<span class="dep-title">${esc(dep.title)}</span>` : ''}
@@ -2965,8 +2976,9 @@ function openTaskModal(taskId) {
     if (unblocks.length) {
       inner += `<div class="dep-direction">Unblocks</div><div class="deps-row">`;
       inner += unblocks.map(dep => {
-        const isDone = colKey(dep.status) === 'done';
-        return `<div class="dep-chip${isDone ? ' dep-done' : ''}" onclick="closeModal();openTaskModal('${esc(dep.id)}')">
+        const depStatus = colKey(dep.status);
+        const chipClass = depStatus === 'archived' ? ' dep-archived' : depStatus === 'done' ? ' dep-done' : '';
+        return `<div class="dep-chip${chipClass}" onclick="closeModal();openTaskModal('${esc(dep.id)}')">
           <span class="dep-arrow">&rarr;</span>
           <span class="dep-id">${esc(dep.id)}</span>
           <span class="dep-title">${esc(dep.title)}</span>

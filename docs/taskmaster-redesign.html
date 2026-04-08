@@ -1,0 +1,1171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Taskmaster Redesign — Concept Explorer</title>
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --surface: #12121a;
+    --surface2: #1a1a26;
+    --border: #2a2a3a;
+    --border-active: #4a4a6a;
+    --text: #c8c8d8;
+    --text-dim: #6a6a7a;
+    --text-bright: #e8e8f0;
+    --accent: #7b68ee;
+    --accent-dim: #5b48ce;
+    --red: #e85d5d;
+    --red-dim: #c83d3d;
+    --green: #5dcc8a;
+    --green-dim: #3dac6a;
+    --yellow: #d4a843;
+    --yellow-dim: #b48823;
+    --blue: #5d8de8;
+    --orange: #e8925d;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    overflow-x: hidden;
+  }
+
+  .container {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 40px 24px;
+  }
+
+  header {
+    text-align: center;
+    margin-bottom: 48px;
+  }
+
+  header h1 {
+    font-size: 2rem;
+    font-weight: 700;
+    color: var(--text-bright);
+    letter-spacing: -0.02em;
+    margin-bottom: 8px;
+  }
+
+  header p {
+    color: var(--text-dim);
+    font-size: 0.95rem;
+  }
+
+  /* Navigation tabs */
+  .tabs {
+    display: flex;
+    gap: 4px;
+    justify-content: center;
+    margin-bottom: 40px;
+    flex-wrap: wrap;
+  }
+
+  .tab {
+    padding: 10px 20px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-dim);
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 500;
+    transition: all 0.2s;
+  }
+
+  .tab:hover {
+    border-color: var(--border-active);
+    color: var(--text);
+  }
+
+  .tab.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: white;
+  }
+
+  /* Panels */
+  .panel {
+    display: none;
+  }
+
+  .panel.active {
+    display: block;
+    animation: fadeIn 0.3s ease;
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ── Pain Points Panel ── */
+  .pain-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+    gap: 20px;
+  }
+
+  .pain-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.2s;
+  }
+
+  .pain-card:hover {
+    border-color: var(--border-active);
+  }
+
+  .pain-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+  }
+
+  .pain-card.severity-high::before { background: var(--red); }
+  .pain-card.severity-med::before { background: var(--yellow); }
+  .pain-card.severity-low::before { background: var(--blue); }
+
+  .pain-severity {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 8px;
+  }
+
+  .severity-high .pain-severity { color: var(--red); }
+  .severity-med .pain-severity { color: var(--yellow); }
+  .severity-low .pain-severity { color: var(--blue); }
+
+  .pain-card h3 {
+    font-size: 1.05rem;
+    color: var(--text-bright);
+    margin-bottom: 8px;
+    font-weight: 600;
+  }
+
+  .pain-card p {
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    margin-bottom: 12px;
+  }
+
+  .pain-quote {
+    font-size: 0.8rem;
+    color: var(--text);
+    background: var(--surface2);
+    border-left: 2px solid var(--border-active);
+    padding: 8px 12px;
+    border-radius: 0 6px 6px 0;
+    font-style: italic;
+  }
+
+  /* ── Hierarchy Panel ── */
+  .comparison {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 32px;
+  }
+
+  @media (max-width: 800px) {
+    .comparison { grid-template-columns: 1fr; }
+  }
+
+  .comparison-side {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px;
+  }
+
+  .comparison-side h2 {
+    font-size: 1.1rem;
+    margin-bottom: 20px;
+    font-weight: 600;
+  }
+
+  .comparison-side.current h2 { color: var(--red); }
+  .comparison-side.proposed h2 { color: var(--green); }
+
+  .hierarchy-level {
+    display: flex;
+    align-items: stretch;
+    margin-bottom: 12px;
+  }
+
+  .hierarchy-bar {
+    width: 4px;
+    border-radius: 2px;
+    margin-right: 16px;
+    flex-shrink: 0;
+  }
+
+  .hierarchy-content {
+    flex: 1;
+  }
+
+  .hierarchy-content h4 {
+    font-size: 0.9rem;
+    color: var(--text-bright);
+    font-weight: 600;
+    margin-bottom: 2px;
+  }
+
+  .hierarchy-content .axis {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 4px;
+  }
+
+  .hierarchy-content p {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+  }
+
+  .hierarchy-content .problem {
+    font-size: 0.78rem;
+    color: var(--red);
+    margin-top: 4px;
+  }
+
+  .hierarchy-content .fix {
+    font-size: 0.78rem;
+    color: var(--green);
+    margin-top: 4px;
+  }
+
+  .arrow-down {
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 1.2rem;
+    margin: 4px 0 4px 20px;
+  }
+
+  /* ── Modes Panel ── */
+  .modes-visual {
+    display: flex;
+    flex-direction: column;
+    gap: 32px;
+  }
+
+  .mode-row {
+    display: grid;
+    grid-template-columns: 200px 1fr;
+    gap: 24px;
+    align-items: start;
+  }
+
+  @media (max-width: 700px) {
+    .mode-row { grid-template-columns: 1fr; }
+  }
+
+  .mode-label {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    text-align: center;
+  }
+
+  .mode-label h3 {
+    font-size: 1rem;
+    color: var(--text-bright);
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+
+  .mode-label .mode-type {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  .mode-features {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-content: start;
+  }
+
+  .feature-chip {
+    padding: 8px 14px;
+    border-radius: 8px;
+    font-size: 0.8rem;
+    font-weight: 500;
+    border: 1px solid;
+  }
+
+  .feature-chip.on {
+    background: rgba(93, 204, 138, 0.1);
+    border-color: rgba(93, 204, 138, 0.3);
+    color: var(--green);
+  }
+
+  .feature-chip.off {
+    background: rgba(106, 106, 122, 0.1);
+    border-color: rgba(106, 106, 122, 0.2);
+    color: var(--text-dim);
+    text-decoration: line-through;
+  }
+
+  .feature-chip.new {
+    background: rgba(123, 104, 238, 0.1);
+    border-color: rgba(123, 104, 238, 0.3);
+    color: var(--accent);
+  }
+
+  /* ── Ideas Panel ── */
+  .ideas-list {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .idea-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    display: grid;
+    grid-template-columns: 1fr 200px;
+    gap: 20px;
+    transition: border-color 0.2s;
+    cursor: pointer;
+  }
+
+  .idea-card:hover {
+    border-color: var(--border-active);
+  }
+
+  @media (max-width: 700px) {
+    .idea-card { grid-template-columns: 1fr; }
+  }
+
+  .idea-card h3 {
+    font-size: 1rem;
+    color: var(--text-bright);
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+
+  .idea-card p {
+    font-size: 0.85rem;
+    color: var(--text-dim);
+  }
+
+  .idea-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    align-items: flex-end;
+  }
+
+  @media (max-width: 700px) {
+    .idea-meta { align-items: flex-start; flex-direction: row; flex-wrap: wrap; }
+  }
+
+  .idea-tag {
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 4px 10px;
+    border-radius: 6px;
+    white-space: nowrap;
+  }
+
+  .idea-tag.impact-high {
+    background: rgba(232, 93, 93, 0.12);
+    color: var(--red);
+  }
+
+  .idea-tag.impact-med {
+    background: rgba(212, 168, 67, 0.12);
+    color: var(--yellow);
+  }
+
+  .idea-tag.effort-low {
+    background: rgba(93, 204, 138, 0.12);
+    color: var(--green);
+  }
+
+  .idea-tag.effort-med {
+    background: rgba(212, 168, 67, 0.12);
+    color: var(--yellow);
+  }
+
+  .idea-tag.effort-high {
+    background: rgba(232, 93, 93, 0.12);
+    color: var(--red);
+  }
+
+  .idea-detail {
+    display: none;
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+    font-size: 0.85rem;
+    color: var(--text);
+    line-height: 1.7;
+  }
+
+  .idea-card.expanded .idea-detail {
+    display: block;
+  }
+
+  .idea-detail code {
+    background: var(--surface2);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    color: var(--accent);
+  }
+
+  .idea-detail pre {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+    margin: 10px 0;
+    overflow-x: auto;
+    font-size: 0.78rem;
+    line-height: 1.5;
+    color: var(--text);
+  }
+
+  /* ── Flow Panel ── */
+  .flow-container {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+
+  .flow-section h2 {
+    font-size: 1.1rem;
+    color: var(--text-bright);
+    font-weight: 600;
+    margin-bottom: 16px;
+  }
+
+  .flow-steps {
+    display: flex;
+    gap: 0;
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
+  .flow-step {
+    flex: 1;
+    min-width: 140px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 16px;
+    text-align: center;
+    position: relative;
+  }
+
+  .flow-step:first-child { border-radius: 10px 0 0 10px; }
+  .flow-step:last-child { border-radius: 0 10px 10px 0; }
+
+  .flow-step:not(:last-child)::after {
+    content: '→';
+    position: absolute;
+    right: -8px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-dim);
+    font-size: 1rem;
+    z-index: 1;
+    background: var(--bg);
+    width: 16px;
+    text-align: center;
+  }
+
+  .flow-step h4 {
+    font-size: 0.82rem;
+    color: var(--text-bright);
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+
+  .flow-step p {
+    font-size: 0.72rem;
+    color: var(--text-dim);
+  }
+
+  .flow-step.heavy {
+    border-color: var(--red-dim);
+    background: rgba(232, 93, 93, 0.04);
+  }
+
+  .flow-step.light {
+    border-color: var(--green-dim);
+    background: rgba(93, 204, 138, 0.04);
+  }
+
+  .flow-step.removed {
+    border-color: var(--border);
+    background: var(--surface);
+    opacity: 0.35;
+  }
+
+  .flow-step .cost {
+    font-size: 0.68rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-top: 6px;
+  }
+
+  .flow-step.heavy .cost { color: var(--red); }
+  .flow-step.light .cost { color: var(--green); }
+  .flow-step.removed .cost { color: var(--text-dim); }
+
+  .flow-label {
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    margin-bottom: 8px;
+    font-weight: 500;
+  }
+
+  /* ── Summary Section ── */
+  .summary-section {
+    margin-top: 48px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px;
+  }
+
+  .summary-section h2 {
+    font-size: 1.1rem;
+    color: var(--text-bright);
+    font-weight: 600;
+    margin-bottom: 16px;
+  }
+
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 16px;
+  }
+
+  .summary-item {
+    padding: 16px;
+    background: var(--surface2);
+    border-radius: 8px;
+  }
+
+  .summary-item h4 {
+    font-size: 0.85rem;
+    color: var(--text-bright);
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+
+  .summary-item p {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+  }
+
+  .summary-item .priority {
+    display: inline-block;
+    font-size: 0.68rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 2px 8px;
+    border-radius: 4px;
+    margin-top: 8px;
+  }
+
+  .priority.p0 { background: rgba(232,93,93,0.15); color: var(--red); }
+  .priority.p1 { background: rgba(212,168,67,0.15); color: var(--yellow); }
+  .priority.p2 { background: rgba(93,141,232,0.15); color: var(--blue); }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <header>
+    <h1>Taskmaster Redesign</h1>
+    <p>Exploring friction points and ideas for a better task system</p>
+  </header>
+
+  <div class="tabs">
+    <div class="tab active" data-panel="pain">Pain Points</div>
+    <div class="tab" data-panel="flow">Ceremony Cost</div>
+    <div class="tab" data-panel="hierarchy">Hierarchy Redesign</div>
+    <div class="tab" data-panel="modes">Work Modes</div>
+    <div class="tab" data-panel="ideas">All Ideas</div>
+  </div>
+
+  <!-- ════════════════ PAIN POINTS ════════════════ -->
+  <div class="panel active" id="panel-pain">
+    <div class="pain-grid">
+
+      <div class="pain-card severity-high">
+        <div class="pain-severity">High — hours lost</div>
+        <h3>Single Mode: Full Ceremony or Nothing</h3>
+        <p>Taskmaster treats all work as if scope is settled. During exploration and rapid iteration, the pick → lock → worktree → implement → complete → log cycle adds friction without proportional value.</p>
+        <div class="pain-quote">"The backlog starts to get in our way instead of helping us, especially when we're not stabilized on features"</div>
+      </div>
+
+      <div class="pain-card severity-high">
+        <div class="pain-severity">High — wrong work done</div>
+        <h3>No Target Verification</h3>
+        <p>Tasks don't declare what files/systems they touch. AI picked a task, created a worktree, implemented changes — all against the wrong codebase. Nothing in the system flagged the mismatch.</p>
+        <div class="pain-quote">"I spent time creating tasks, picking them, completing them, logging session summaries — all for work that turned out to be on the wrong target"</div>
+      </div>
+
+      <div class="pain-card severity-med">
+        <div class="pain-severity">Medium — confusion</div>
+        <h3>Epic vs Milestone Conflation</h3>
+        <p>AI creates milestones per feature ("Auth milestone", "Dashboard milestone") instead of using them as temporal phases. The naming doesn't communicate the sequential/attention-filter purpose.</p>
+        <div class="pain-quote">"AI would tend to create milestones per features, not for the time axis"</div>
+      </div>
+
+      <div class="pain-card severity-med">
+        <div class="pain-severity">Medium — noise</div>
+        <h3>Granularity Explosion</h3>
+        <p>AI decomposes work into too many tasks. 25 tasks for one feature is a project plan, not a backlog. The overhead of managing each task exceeds the tracking value for a solo developer.</p>
+        <div class="pain-quote">25 observatory-react-* tasks for a single feature redesign</div>
+      </div>
+
+      <div class="pain-card severity-med">
+        <div class="pain-severity">Medium — drift</div>
+        <h3>Stale Tasks Accumulate</h3>
+        <p>When direction shifts, todo tasks become stale but look valid. Nobody cleans them up because cleanup is itself overhead. The backlog drifts from reality.</p>
+        <div class="pain-quote">"Three layers of tracking for what's really one evolving thing"</div>
+      </div>
+
+      <div class="pain-card severity-low">
+        <div class="pain-severity">Low — rigidity</div>
+        <h3>"All Work Through Tasks" Is Too Strict</h3>
+        <p>Some work is unplanned, exploratory, or cross-cutting. Forcing it through the task system adds overhead without adding tracking value. The system should observe, not gatekeep.</p>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ════════════════ CEREMONY COST ════════════════ -->
+  <div class="panel" id="panel-flow">
+    <div class="flow-container">
+
+      <div class="flow-section">
+        <div class="flow-label">CURRENT — Every task, every time</div>
+        <h2>Full Ceremony Flow</h2>
+        <div class="flow-steps">
+          <div class="flow-step heavy">
+            <h4>start-session</h4>
+            <p>Dashboard, last session, suggestions</p>
+            <div class="cost">~30s</div>
+          </div>
+          <div class="flow-step heavy">
+            <h4>pick-task</h4>
+            <p>Lock, deps check, read docs</p>
+            <div class="cost">~20s</div>
+          </div>
+          <div class="flow-step heavy">
+            <h4>create worktree</h4>
+            <p>git worktree add, record branch</p>
+            <div class="cost">~15s</div>
+          </div>
+          <div class="flow-step light">
+            <h4>implement</h4>
+            <p>The actual work</p>
+            <div class="cost">varies</div>
+          </div>
+          <div class="flow-step heavy">
+            <h4>review-gate</h4>
+            <p>3 gates: spec, review, tests</p>
+            <div class="cost">~60s</div>
+          </div>
+          <div class="flow-step heavy">
+            <h4>end-session</h4>
+            <p>Summary, status, changelog, commit</p>
+            <div class="cost">~30s</div>
+          </div>
+        </div>
+        <p style="font-size: 0.8rem; color: var(--red); margin-top: 12px; text-align: center;">
+          ~2.5 min overhead per task × multiple tasks per session = significant friction for exploratory work
+        </p>
+      </div>
+
+      <div class="flow-section" style="margin-top: 16px;">
+        <div class="flow-label">PROPOSED — Exploration mode</div>
+        <h2>Lightweight Flow (Spikes)</h2>
+        <div class="flow-steps">
+          <div class="flow-step light">
+            <h4>start-session</h4>
+            <p>"Last time: exploring X"</p>
+            <div class="cost">~10s</div>
+          </div>
+          <div class="flow-step removed">
+            <h4>pick-task</h4>
+            <p>Optional for spikes</p>
+            <div class="cost">skipped</div>
+          </div>
+          <div class="flow-step removed">
+            <h4>create worktree</h4>
+            <p>Work on current branch</p>
+            <div class="cost">skipped</div>
+          </div>
+          <div class="flow-step light">
+            <h4>implement</h4>
+            <p>The actual work</p>
+            <div class="cost">varies</div>
+          </div>
+          <div class="flow-step removed">
+            <h4>review-gate</h4>
+            <p>Not needed for exploration</p>
+            <div class="cost">skipped</div>
+          </div>
+          <div class="flow-step light">
+            <h4>auto-log</h4>
+            <p>Git diff summary, zero effort</p>
+            <div class="cost">~5s</div>
+          </div>
+        </div>
+        <p style="font-size: 0.8rem; color: var(--green); margin-top: 12px; text-align: center;">
+          ~15s overhead — just enough to maintain session continuity
+        </p>
+      </div>
+
+      <div class="flow-section" style="margin-top: 16px;">
+        <div class="flow-label">PROPOSED — Execution mode (unchanged, for stable scope)</div>
+        <h2>Full Flow (Tasks)</h2>
+        <div class="flow-steps">
+          <div class="flow-step light">
+            <h4>start-session</h4>
+            <p>Dashboard + suggestions</p>
+            <div class="cost">~30s</div>
+          </div>
+          <div class="flow-step light">
+            <h4>pick-task</h4>
+            <p>Lock + anchor check ✦</p>
+            <div class="cost">~20s</div>
+          </div>
+          <div class="flow-step light">
+            <h4>create worktree</h4>
+            <p>Isolated branch</p>
+            <div class="cost">~15s</div>
+          </div>
+          <div class="flow-step light">
+            <h4>implement</h4>
+            <p>The actual work</p>
+            <div class="cost">varies</div>
+          </div>
+          <div class="flow-step light">
+            <h4>review-gate</h4>
+            <p>Spec + review + tests</p>
+            <div class="cost">~60s</div>
+          </div>
+          <div class="flow-step light">
+            <h4>end-session</h4>
+            <p>Summary + changelog</p>
+            <div class="cost">~30s</div>
+          </div>
+        </div>
+        <p style="font-size: 0.8rem; color: var(--text-dim); margin-top: 12px; text-align: center;">
+          ✦ New: anchor check verifies you're editing the right files before work begins
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════ HIERARCHY REDESIGN ════════════════ -->
+  <div class="panel" id="panel-hierarchy">
+    <div class="comparison">
+
+      <div class="comparison-side current">
+        <h2>Current Model</h2>
+
+        <div class="hierarchy-level">
+          <div class="hierarchy-bar" style="background: var(--accent);"></div>
+          <div class="hierarchy-content">
+            <div class="axis" style="color: var(--accent);">Thematic axis</div>
+            <h4>Epic</h4>
+            <p>What you're building — auth, dashboard, API</p>
+          </div>
+        </div>
+        <div class="arrow-down">↓</div>
+        <div class="hierarchy-level">
+          <div class="hierarchy-bar" style="background: var(--yellow);"></div>
+          <div class="hierarchy-content">
+            <div class="axis" style="color: var(--yellow);">Temporal axis</div>
+            <h4>Milestone</h4>
+            <p>When things ship — Foundation, Polish</p>
+            <div class="problem">⚠ AI conflates with epics. Creates "Auth milestone" instead of "Phase 1"</div>
+            <div class="problem">⚠ Name doesn't communicate sequential/attention purpose</div>
+          </div>
+        </div>
+        <div class="arrow-down">↓</div>
+        <div class="hierarchy-level">
+          <div class="hierarchy-bar" style="background: var(--green);"></div>
+          <div class="hierarchy-content">
+            <div class="axis" style="color: var(--green);">Work unit</div>
+            <h4>Task</h4>
+            <p>Atomic work item</p>
+            <div class="problem">⚠ No distinction between exploration and execution</div>
+            <div class="problem">⚠ AI creates too many (25+ per feature)</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="comparison-side proposed">
+        <h2>Proposed Model</h2>
+
+        <div class="hierarchy-level">
+          <div class="hierarchy-bar" style="background: var(--accent);"></div>
+          <div class="hierarchy-content">
+            <div class="axis" style="color: var(--accent);">Thematic axis — WHAT</div>
+            <h4>Epic</h4>
+            <p>What you're building — unchanged</p>
+          </div>
+        </div>
+        <div class="arrow-down">↓</div>
+        <div class="hierarchy-level">
+          <div class="hierarchy-bar" style="background: var(--yellow);"></div>
+          <div class="hierarchy-content">
+            <div class="axis" style="color: var(--yellow);">Sequential axis — WHEN (attention filter)</div>
+            <h4>Phase <span style="font-weight:400; font-size:0.8rem;">(renamed from Milestone)</span></h4>
+            <p>Coarse-grained ordering: "all of this before all of that"</p>
+            <div class="fix">✓ Name communicates sequential ordering</div>
+            <div class="fix">✓ Required target_date grounds it in time</div>
+            <div class="fix">✓ Init asks "what needs to be built first?" not "define milestones"</div>
+          </div>
+        </div>
+        <div class="arrow-down">↓</div>
+        <div class="hierarchy-level">
+          <div class="hierarchy-bar" style="background: var(--green);"></div>
+          <div class="hierarchy-content">
+            <div class="axis" style="color: var(--green);">Work unit — two types</div>
+            <h4>Task</h4>
+            <p>Defined scope, full lifecycle, worktree isolation</p>
+            <div class="fix">✓ Soft cap of 5-8 per active epic</div>
+            <div class="fix">✓ Anchors declare target files/systems</div>
+          </div>
+        </div>
+        <div class="arrow-down" style="margin-left: 20px; font-size: 0.8rem; color: var(--text-dim);">or</div>
+        <div class="hierarchy-level">
+          <div class="hierarchy-bar" style="background: var(--orange);"></div>
+          <div class="hierarchy-content">
+            <div class="axis" style="color: var(--orange);">Work unit — lightweight</div>
+            <h4>Spike</h4>
+            <p>Exploration, no worktree, no review gate, minimal logging</p>
+            <div class="fix">✓ Continuity between sessions without ceremony</div>
+            <div class="fix">✓ Promote to tasks when scope crystallizes</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <div style="margin-top: 32px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px;">
+      <h3 style="font-size: 0.95rem; color: var(--text-bright); margin-bottom: 12px;">Why "Phase" instead of "Milestone"?</h3>
+      <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; font-size: 0.85rem;">
+        <div>
+          <strong style="color: var(--text-bright);">Attention filter</strong>
+          <p style="color: var(--text-dim); font-size: 0.8rem; margin-top: 4px;">Phase 2 tasks are hidden from "next available" — reduces cognitive load for the human reviewing the board</p>
+        </div>
+        <div>
+          <strong style="color: var(--text-bright);">Coarse dependency</strong>
+          <p style="color: var(--text-dim); font-size: 0.8rem; margin-top: 4px;">Instead of wiring 8×12 individual task deps, say "Phase 2 collectively after Phase 1"</p>
+        </div>
+        <div>
+          <strong style="color: var(--text-bright);">AI-proof naming</strong>
+          <p style="color: var(--text-dim); font-size: 0.8rem; margin-top: 4px;">"Phase 1: Foundation" naturally reads as sequential. "Milestone: Foundation" gets confused with a feature goal</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════ WORK MODES ════════════════ -->
+  <div class="panel" id="panel-modes">
+
+    <div class="modes-visual">
+
+      <div class="mode-row">
+        <div class="mode-label">
+          <h3>Spike</h3>
+          <div class="mode-type" style="color: var(--orange);">Exploration</div>
+        </div>
+        <div class="mode-features">
+          <div class="feature-chip on">Session continuity</div>
+          <div class="feature-chip on">Named in backlog</div>
+          <div class="feature-chip new">Auto-log (git diff)</div>
+          <div class="feature-chip off">Worktree isolation</div>
+          <div class="feature-chip off">Review gate</div>
+          <div class="feature-chip off">Session ceremony</div>
+          <div class="feature-chip off">Dependency tracking</div>
+          <div class="feature-chip new">Promote to task</div>
+        </div>
+      </div>
+
+      <div class="mode-row">
+        <div class="mode-label">
+          <h3>Task</h3>
+          <div class="mode-type" style="color: var(--green);">Execution</div>
+        </div>
+        <div class="mode-features">
+          <div class="feature-chip on">Session continuity</div>
+          <div class="feature-chip on">Named in backlog</div>
+          <div class="feature-chip on">Session ceremony</div>
+          <div class="feature-chip on">Worktree isolation</div>
+          <div class="feature-chip on">Review gate</div>
+          <div class="feature-chip on">Dependency tracking</div>
+          <div class="feature-chip new">Anchor check</div>
+          <div class="feature-chip new">Staleness decay</div>
+        </div>
+      </div>
+
+      <div class="mode-row">
+        <div class="mode-label">
+          <h3>Untracked</h3>
+          <div class="mode-type" style="color: var(--text-dim);">Ad-hoc</div>
+        </div>
+        <div class="mode-features">
+          <div class="feature-chip new">Observed by start-session</div>
+          <div class="feature-chip off">Named in backlog</div>
+          <div class="feature-chip off">Session ceremony</div>
+          <div class="feature-chip off">Worktree isolation</div>
+          <div class="feature-chip off">Review gate</div>
+          <div class="feature-chip off">Dependency tracking</div>
+        </div>
+      </div>
+
+    </div>
+
+    <div style="margin-top: 32px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px;">
+      <h3 style="font-size: 0.95rem; color: var(--text-bright); margin-bottom: 12px;">How it flows</h3>
+      <div style="font-size: 0.85rem; color: var(--text); line-height: 1.8;">
+        <strong style="color: var(--orange);">Spike</strong> — "I need to figure out how the predictions page should work"<br>
+        → Named exploration, auto-logged, no overhead<br><br>
+
+        <strong style="color: var(--orange);">Spike</strong> → <strong style="color: var(--green);">Task</strong> — "Okay, I know what to build now. Break this into tasks."<br>
+        → Spike is completed, real tasks are created with anchors and deps<br><br>
+
+        <strong style="color: var(--text-dim);">Untracked</strong> — "Hey fix this typo" / "Quick, the deploy is broken"<br>
+        → Just do it. start-session next time notes "3 commits outside tasks last session"<br>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════ IDEAS ════════════════ -->
+  <div class="panel" id="panel-ideas">
+    <div class="ideas-list">
+
+      <div class="idea-card" onclick="this.classList.toggle('expanded')">
+        <div>
+          <h3>Spike Work Type</h3>
+          <p>Lightweight exploration items: named in the backlog, auto-logged, no worktree/review/ceremony overhead. Promote to tasks when scope crystallizes.</p>
+          <div class="idea-detail">
+            Adds a <code>type: spike</code> field to backlog items. Spikes skip the pick-task ceremony (no lock, no worktree, no deps check) and end-session ceremony (auto-log from git diff instead of structured summary). <code>start-session</code> shows "Last time you were exploring: dash-spike" for continuity.
+            <pre>- id: "dash-spike"
+  title: "Figure out predictions page architecture"
+  type: "spike"
+  status: "in-progress"
+  # No worktree, no review gate, no session ceremony</pre>
+            When a spike produces clarity, a <code>backlog_promote_spike</code> tool converts it to real tasks with anchors and dependencies.
+          </div>
+        </div>
+        <div class="idea-meta">
+          <div class="idea-tag impact-high">High impact</div>
+          <div class="idea-tag effort-med">Medium effort</div>
+        </div>
+      </div>
+
+      <div class="idea-card" onclick="this.classList.toggle('expanded')">
+        <div>
+          <h3>Rename Milestone → Phase</h3>
+          <p>Communicates sequential ordering and attention-filtering purpose. Prevents AI from creating feature-milestones.</p>
+          <div class="idea-detail">
+            Rename throughout: schema field, MCP tools (<code>backlog_add_phase</code>, <code>backlog_advance_phase</code>), skills, viewer. Update init skill to ask "what needs to be built first before you can do the rest?" instead of "define your milestones." Consider making <code>target_date</code> required to ground phases in time.
+            <pre>phases:
+  - id: "foundation"
+    name: "Phase 1: Foundation"
+    target_date: "2026-04-01"
+  - id: "polish"
+    name: "Phase 2: Polish"
+    target_date: "2026-05-01"</pre>
+          </div>
+        </div>
+        <div class="idea-meta">
+          <div class="idea-tag impact-med">Med impact</div>
+          <div class="idea-tag effort-low">Low effort</div>
+        </div>
+      </div>
+
+      <div class="idea-card" onclick="this.classList.toggle('expanded')">
+        <div>
+          <h3>Task Anchors</h3>
+          <p>Tasks declare which files/directories/URLs they touch. pick-task verifies you're editing the right target before work begins.</p>
+          <div class="idea-detail">
+            New optional field <code>anchors</code> on tasks:
+            <pre>- id: "dash-009"
+  title: "Fix predictions table sorting"
+  anchors:
+    - "src/observatory/**"
+    - "localhost:5173"</pre>
+            When <code>pick-task</code> runs, it shows: "This task is anchored to <code>src/observatory/</code>." If the AI starts editing files outside the anchor paths, the system warns: "You're editing <code>predictions.html</code> but this task is anchored to <code>src/observatory/</code> — is that right?"
+            <br><br>
+            This would have caught the exact mistake from the conversation where hours were spent implementing against the wrong codebase.
+          </div>
+        </div>
+        <div class="idea-meta">
+          <div class="idea-tag impact-high">High impact</div>
+          <div class="idea-tag effort-med">Medium effort</div>
+        </div>
+      </div>
+
+      <div class="idea-card" onclick="this.classList.toggle('expanded')">
+        <div>
+          <h3>Task Budget per Epic</h3>
+          <p>Soft cap of 5-8 tasks per active epic. Forces coarser granularity — if you need 25 steps, that's a plan doc, not backlog items.</p>
+          <div class="idea-detail">
+            When <code>backlog_add_task</code> would push an active epic past 8 tasks, return a warning: "This epic has 8 tasks already. Consider grouping related work into fewer, coarser tasks — or link a plan document instead."
+            <br><br>
+            Not a hard block — just friction in the right direction. Tasks should be "things I might pick up in different sessions," not "steps within one session."
+          </div>
+        </div>
+        <div class="idea-meta">
+          <div class="idea-tag impact-med">Med impact</div>
+          <div class="idea-tag effort-low">Low effort</div>
+        </div>
+      </div>
+
+      <div class="idea-card" onclick="this.classList.toggle('expanded')">
+        <div>
+          <h3>Staleness Decay</h3>
+          <p>Todo tasks untouched for N sessions get auto-flagged as "stale?" during start-session. Quick y/n sweep keeps the backlog honest.</p>
+          <div class="idea-detail">
+            Track <code>last_mentioned</code> timestamp on tasks (updated when any tool references the task). During <code>start-session</code>, if a task has been in <code>todo</code> for 5+ sessions without mention, flag it:
+            <br><br>
+            "These tasks haven't been mentioned in 5+ sessions — still relevant?"<br>
+            <code>auth-007</code> Add SAML support — <em>stale?</em><br>
+            <code>api-012</code> GraphQL migration — <em>stale?</em>
+            <br><br>
+            User can confirm (resets counter) or archive. Prevents the slow accumulation of zombie tasks.
+          </div>
+        </div>
+        <div class="idea-meta">
+          <div class="idea-tag impact-med">Med impact</div>
+          <div class="idea-tag effort-med">Medium effort</div>
+        </div>
+      </div>
+
+      <div class="idea-card" onclick="this.classList.toggle('expanded')">
+        <div>
+          <h3>Auto-Summary (No Ceremony)</h3>
+          <p>Replace structured end-session template with auto-generated git diff summary. Zero-effort session continuity.</p>
+          <div class="idea-detail">
+            Instead of the Done/Decisions/Issues template that requires user review and approval, automatically capture:
+            <pre>### 2026-03-21 — auto
+Files changed: 4 | +127 -43
+Commits: "fix predictions sorting", "add filter dropdown"
+Tasks touched: dash-009</pre>
+            User can optionally add context, but the default is zero-effort. The changelog becomes a git-log-plus rather than a report.
+            <br><br>
+            Full structured summaries still available for execution-mode tasks where decisions and issues matter.
+          </div>
+        </div>
+        <div class="idea-meta">
+          <div class="idea-tag impact-med">Med impact</div>
+          <div class="idea-tag effort-low">Low effort</div>
+        </div>
+      </div>
+
+      <div class="idea-card" onclick="this.classList.toggle('expanded')">
+        <div>
+          <h3>Observe Untracked Work</h3>
+          <p>Don't force all work through tasks. Let start-session note "4 commits outside any task last session" — informational, not judgmental.</p>
+          <div class="idea-detail">
+            During <code>start-session</code>, compare git log since last session against tasks that were in-progress. Report any commits that don't map to a tracked task:
+            <br><br>
+            "Last session: 4 commits outside tracked tasks — <code>fix typo in README</code>, <code>bump deps</code>, <code>hotfix deploy script</code>, <code>experiment with new layout</code>"
+            <br><br>
+            No judgment, no "you should have created a task." Just awareness. The backlog tracks planned work; git tracks actual work. They don't have to match.
+          </div>
+        </div>
+        <div class="idea-meta">
+          <div class="idea-tag impact-med">Med impact</div>
+          <div class="idea-tag effort-low">Low effort</div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Priority Summary -->
+    <div class="summary-section">
+      <h2>Suggested Priority</h2>
+      <div class="summary-grid">
+        <div class="summary-item">
+          <h4>1. Spike work type</h4>
+          <p>Addresses the biggest pain: ceremony during exploration. Unblocks everything else.</p>
+          <span class="priority p0">Do first</span>
+        </div>
+        <div class="summary-item">
+          <h4>2. Task anchors</h4>
+          <p>Prevents the wrong-target failure mode. High value per effort.</p>
+          <span class="priority p0">Do first</span>
+        </div>
+        <div class="summary-item">
+          <h4>3. Rename → Phase</h4>
+          <p>Low effort naming fix that prevents ongoing confusion.</p>
+          <span class="priority p1">Do soon</span>
+        </div>
+        <div class="summary-item">
+          <h4>4. Auto-summary</h4>
+          <p>Reduces end-session friction for lightweight work.</p>
+          <span class="priority p1">Do soon</span>
+        </div>
+        <div class="summary-item">
+          <h4>5. Task budget</h4>
+          <p>Prevents granularity explosion with minimal enforcement.</p>
+          <span class="priority p2">Do later</span>
+        </div>
+        <div class="summary-item">
+          <h4>6. Staleness decay</h4>
+          <p>Self-cleaning backlog. Good but not urgent.</p>
+          <span class="priority p2">Do later</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  // Tab switching
+  document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+      tab.classList.add('active');
+      document.getElementById('panel-' + tab.dataset.panel).classList.add('active');
+    });
+  });
+</script>
+
+</body>
+</html>
