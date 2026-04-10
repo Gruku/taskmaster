@@ -214,7 +214,6 @@ All tools are prefixed with `backlog_`. These are the low-level building blocks 
 | `backlog_next_available` | Ready-to-work tasks: todo in active epics, deps satisfied, phase-filtered |
 | `backlog_validate` | Integrity check: dangling deps, circular deps, missing dates, status inconsistencies |
 | `backlog_last_session` | Most recent changelog entry from `PROGRESS.md` |
-| `backlog_worktrees` | All active git worktrees across repo and sub-repos |
 | `backlog_phase_status(id?)` | Phase progress with bar, task breakdown; defaults to active phase |
 | `backlog_snapshot(ops)` | Dry-run preview of batch operations without writing to disk |
 
@@ -335,7 +334,7 @@ Worktrees are the core isolation mechanism. Each in-progress task gets its own w
 
 **Lock conflicts:** If a previous session crashed without releasing a lock, use `backlog_pick_task(task_id, force=true)` to reclaim it.
 
-**Listing:** `backlog_worktrees` runs `git worktree list --porcelain` across the project root and any sub-repos.
+**Listing:** Run `git worktree list --porcelain` directly — Taskmaster does not wrap this in a dedicated tool.
 
 ---
 
@@ -356,7 +355,6 @@ Taskmaster includes a kanban board that runs in your browser.
 | `GET /backlog.yaml` | Raw YAML |
 | `GET /api/backlog` | Backlog as JSON |
 | `GET /api/session` | Current session state + SESSION_ID |
-| `GET /api/worktrees` | Live worktree list as JSON |
 | `GET /api/identity` | `{"root": "/path/to/project"}` for port ownership |
 | `GET /file/{path}` | Serve repo files; `.md` rendered as styled HTML |
 

@@ -1602,71 +1602,6 @@ def _git_subprocess_kwargs() -> dict:
     return kwargs
 
 
-def _discover_worktrees() -> list[dict]:
-    """Run `git worktree list --porcelain` in the project root and all sub-repos."""
-    worktrees = []
-    dirs_to_scan = [ROOT]
-    dirs_to_scan.extend(_discover_sub_repos())
-    git_kwargs = _git_subprocess_kwargs()
-
-    for repo_dir in dirs_to_scan:
-        try:
-            result = subprocess.run(
-                ["git", "worktree", "list", "--porcelain"],
-                cwd=str(repo_dir), **git_kwargs,
-            )
-            if result.returncode != 0:
-                continue
-        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-            continue
-
-        # Parse porcelain output: blocks separated by blank lines
-        current: dict = {}
-        repo_name = repo_dir.name
-        for line in result.stdout.splitlines():
-            if not line.strip():
-                if current:
-                    current["repo"] = repo_name
-                    worktrees.append(current)
-                    current = {}
-                continue
-            if line.startswith("worktree "):
-                current["path"] = line[len("worktree "):]
-            elif line.startswith("HEAD "):
-                current["head"] = line[len("HEAD "):][:8]
-            elif line.startswith("branch "):
-                # refs/heads/feature/foo → feature/foo
-                branch = line[len("branch "):]
-                if branch.startswith("refs/heads/"):
-                    branch = branch[len("refs/heads/"):]
-                current["branch"] = branch
-            elif line == "detached":
-                current["detached"] = True
-
-        if current:
-            current["repo"] = repo_name
-            worktrees.append(current)
-
-    # Filter out the main worktree (the repo root itself) — only show additional worktrees
-    main_paths: set[str] = set()
-    for d in dirs_to_scan:
-        try:
-            main_paths.add(os.path.realpath(str(d)))
-        except OSError:
-            main_paths.add(str(d))
-
-    def _is_extra(w: dict) -> bool:
-        p = w.get("path")
-        if not p:
-            return False
-        try:
-            return os.path.realpath(p) not in main_paths
-        except OSError:
-            return True
-
-    return [w for w in worktrees if _is_extra(w)]
-
-
 @mcp.tool()
 def backlog_last_session() -> str:
     """Get the most recent session summary from the PROGRESS.md changelog.
@@ -1697,26 +1632,6 @@ def backlog_last_session() -> str:
         entry = rest[:second_entry_start].strip()
 
     return f"**Last Session:**\n\n{entry}" if entry else "No session entries found in changelog."
-
-
-@mcp.tool()
-async def backlog_worktrees() -> str:
-    """List all active git worktrees across the monorepo and sub-repos.
-    Shows worktree path, branch, and which repo it belongs to.
-    Useful for checking what worktrees exist before creating new ones or for cleanup."""
-    worktrees = await asyncio.to_thread(_discover_worktrees)
-
-    if not worktrees:
-        return "No active worktrees found (only main worktrees exist)."
-
-    lines = [f"**{len(worktrees)} active worktree{'s' if len(worktrees) != 1 else ''}:**\n"]
-    for wt in worktrees:
-        branch = wt.get("branch", "detached")
-        repo = wt.get("repo", "?")
-        path = wt.get("path", "?")
-        lines.append(f"- `{branch}` in **{repo}** → `{path}`")
-
-    return "\n".join(lines)
 
 
 # ── Session State (in-memory, per MCP server process) ────
@@ -2814,8 +2729,6 @@ class ViewerHandler(BaseHTTPRequestHandler):
             self._serve_json()
         elif clean_path == "/api/session":
             self._serve_session()
-        elif clean_path == "/api/worktrees":
-            self._serve_worktrees()
         elif clean_path == "/api/identity":
             self._serve_identity()
         elif clean_path.startswith("/file/"):
@@ -2855,19 +2768,6 @@ class ViewerHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(body)
-
-    def _serve_worktrees(self) -> None:
-        try:
-            wts = _discover_worktrees()
-            body = json.dumps(wts, default=str).encode("utf-8")
-            self.send_response(HTTPStatus.OK)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(body)
-        except Exception as e:
-            self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(e))
 
     def _serve_repo_file(self, clean_path: str) -> None:
         """Serve a file from the repo root. Renders .md files as styled HTML."""

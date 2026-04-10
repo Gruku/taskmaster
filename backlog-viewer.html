@@ -2934,8 +2934,7 @@ function openTaskModal(taskId) {
   if (task.started) metaItems.push(`<div class="meta-item"><div class="meta-label">Started</div><div class="meta-value">${fmtTs(task.started)}</div></div>`);
   if (task.completed) metaItems.push(`<div class="meta-item"><div class="meta-label">Completed</div><div class="meta-value">${fmtTs(task.completed)}</div></div>`);
   if (task.branch) {
-    const wt = worktreesByBranch[task.branch];
-    metaItems.push(`<div class="meta-item"><div class="meta-label">Branch</div><div class="meta-value mono">${esc(task.branch)}${wt ? ` <span style="color:var(--progress);font-size:11px;">(worktree: ${esc(wt.path)})</span>` : ''}</div></div>`);
+    metaItems.push(`<div class="meta-item"><div class="meta-label">Branch</div><div class="meta-value mono">${esc(task.branch)}</div></div>`);
   }
   if (task.worktree) metaItems.push(`<div class="meta-item"><div class="meta-label">Worktree</div><div class="meta-value mono">${esc(task.worktree)}</div></div>`);
   if (task.archive_reason) metaItems.push(`<div class="meta-item"><div class="meta-label">Archive Reason</div><div class="meta-value"><span class="status-chip s-archived">${esc(task.archive_reason)}</span></div></div>`);
@@ -3154,7 +3153,7 @@ function makeCard(task) {
   const statusLabel = statusDisplayLabel(task);
   const timeStr = timeInStatus(task);
   const branchHtml = task.branch
-    ? `<span class="card-header-sep">·</span><span class="card-branch" title="${esc(task.branch)}">${esc(task.branch)}${worktreesByBranch[task.branch] ? ' (wt)' : ''}</span>`
+    ? `<span class="card-header-sep">·</span><span class="card-branch" title="${esc(task.branch)}">${esc(task.branch)}</span>`
     : (!task.branch && task.worktree ? `<span class="card-header-sep">·</span><span class="card-branch">worktree</span>` : '');
 
   // Card body
@@ -3515,29 +3514,9 @@ async function fetchBacklog() {
 // Initial fetch
 fetchBacklog();
 
-// ── Worktree polling ───────────────────────────────────────
-let worktreesByBranch = {}; // branch → { path, repo, head }
-
-async function fetchWorktrees() {
-  try {
-    const resp = await fetch('/api/worktrees');
-    if (!resp.ok) return;
-    const data = await resp.json();
-    const newMap = {};
-    for (const wt of data) {
-      if (wt.branch) newMap[wt.branch] = wt;
-    }
-    const changed = JSON.stringify(newMap) !== JSON.stringify(worktreesByBranch);
-    worktreesByBranch = newMap;
-    if (changed && loadedData) render();
-  } catch (e) { /* worktree endpoint not available */ }
-}
-
 // Poll every 3 seconds when served over HTTP
 if (window.location.protocol === 'http:' || window.location.protocol === 'https:') {
   setInterval(fetchBacklog, 3000);
-  setInterval(fetchWorktrees, 10000); // worktrees change less often
-  fetchWorktrees();
 }
 </script>
 
