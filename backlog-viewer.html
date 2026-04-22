@@ -1952,6 +1952,13 @@
   </div>
 
   <div class="board" id="board" style="display:none;">
+    <div class="column col-blocked" id="col-blocked" style="display:none;">
+      <div class="column-header">
+        <div class="column-title"><div class="column-dot"></div>Blocked</div>
+        <span class="column-count" id="count-blocked">0</span>
+      </div>
+      <div class="column-body" id="body-blocked"></div>
+    </div>
     <div class="column col-todo" id="col-todo">
       <div class="column-header">
         <div class="column-title"><div class="column-dot"></div>Todo</div>
@@ -1965,13 +1972,6 @@
         <span class="column-count" id="count-progress">0</span>
       </div>
       <div class="column-body" id="body-progress"></div>
-    </div>
-    <div class="column col-blocked" id="col-blocked" style="display:none;">
-      <div class="column-header">
-        <div class="column-title"><div class="column-dot"></div>Blocked</div>
-        <span class="column-count" id="count-blocked">0</span>
-      </div>
-      <div class="column-body" id="body-blocked"></div>
     </div>
     <div class="column col-review" id="col-review">
       <div class="column-header">
