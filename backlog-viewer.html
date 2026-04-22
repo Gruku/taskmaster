@@ -3602,14 +3602,15 @@ async function fetchBacklog() {
   }
 }
 
-// Ask the server for its identity (includes plugin version) — shows the
-// version badge immediately even before any YAML has been parsed.
+// Ask the server for its identity (includes plugin version) so the version
+// badge appears immediately even before any YAML has been parsed. If the
+// YAML load wins the race and already set the badge, leave it alone.
 fetch('/api/identity').then(r => r.ok ? r.json() : null).then(ident => {
-  if (ident && ident.version) {
-    const vb = document.getElementById('taskmaster-version-badge');
-    vb.textContent = 'Taskmaster v' + ident.version;
-    vb.style.display = '';
-  }
+  if (!ident || !ident.version) return;
+  const vb = document.getElementById('taskmaster-version-badge');
+  if (vb.textContent) return;
+  vb.textContent = 'Taskmaster v' + ident.version;
+  vb.style.display = '';
 }).catch(() => {});
 
 // Initial fetch
