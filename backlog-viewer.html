@@ -269,7 +269,7 @@
       border: 1px solid var(--border);
       border-radius: 8px;
       color: var(--text);
-      padding: 6px 12px;
+      padding: 6px 30px 6px 12px;
       font-size: var(--fs-base);
       outline: none;
       transition: border-color 0.2s, box-shadow 0.2s;
@@ -282,6 +282,39 @@
     }
 
     .header-search::placeholder { color: var(--text-dim); }
+
+    .search-wrapper {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+    }
+
+    .search-clear {
+      position: absolute;
+      right: 6px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 20px;
+      height: 20px;
+      border: none;
+      background: transparent;
+      color: var(--text-dim);
+      font-size: 16px;
+      line-height: 1;
+      cursor: pointer;
+      padding: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      border-radius: 4px;
+    }
+
+    .search-clear:hover {
+      color: var(--text);
+      background: var(--surface3);
+    }
+
+    .search-wrapper.has-value .search-clear { display: flex; }
 
     .load-indicator {
       font-size: var(--fs-sm);
@@ -926,6 +959,7 @@
 
     .col-todo     .column-dot { background: #5c5b57; }
     .col-progress .column-dot { background: var(--accent); }
+    .col-blocked  .column-dot { background: var(--stat-blocked-color); }
     .col-review   .column-dot { background: var(--p1); }
     .col-done     .column-dot { background: #3fb950; }
 
@@ -1801,11 +1835,14 @@
       </div>
     </div>
     <span class="read-only-badge">READ-ONLY · AI Workflow Viewer</span>
-    <span class="read-only-badge" id="version-badge" style="display:none;"></span>
+    <span class="read-only-badge" id="taskmaster-version-badge" title="Taskmaster plugin version" style="display:none;"></span>
   </div>
   <div class="header-right">
     <span class="load-indicator" id="load-status">Trying fetch…</span>
-    <input type="text" class="header-search" id="search-input" placeholder="Search tasks…  /" />
+    <div class="search-wrapper" id="search-wrapper">
+      <input type="text" class="header-search" id="search-input" placeholder="Search tasks…  /" />
+      <button type="button" class="search-clear" id="search-clear" title="Clear search" aria-label="Clear search">&times;</button>
+    </div>
     <div class="settings-wrapper" id="epic-wrapper">
       <button class="filter-dropdown-btn" id="epic-btn">Epic <span class="filter-arrow">▾</span></button>
       <div class="settings-dropdown filter-dropdown" id="epic-dropdown"></div>
@@ -1866,6 +1903,10 @@
           <span class="settings-item-label">Project color</span>
           <span class="settings-item-value" id="settings-color-value">On</span>
         </div>
+        <div class="settings-item" id="settings-blocked">
+          <span class="settings-item-label">Blocked column</span>
+          <span class="settings-item-value" id="settings-blocked-value">Off</span>
+        </div>
       </div>
     </div>
   </div>
@@ -1925,6 +1966,13 @@
       </div>
       <div class="column-body" id="body-progress"></div>
     </div>
+    <div class="column col-blocked" id="col-blocked" style="display:none;">
+      <div class="column-header">
+        <div class="column-title"><div class="column-dot"></div>Blocked</div>
+        <span class="column-count" id="count-blocked">0</span>
+      </div>
+      <div class="column-body" id="body-blocked"></div>
+    </div>
     <div class="column col-review" id="col-review">
       <div class="column-header">
         <div class="column-title"><div class="column-dot"></div>In Review</div>
@@ -1968,6 +2016,7 @@ let sortAsc      = true;  // true = default direction for the mode
 let loadedData   = null;
 let showArchived = false;
 let showArchivedEpics = false;
+let showBlockedCol = localStorage.getItem('backlog-show-blocked') === 'true';
 
 // ── Project color from name hash ─────────────────────────
 function projectColor(name) {
@@ -2062,6 +2111,7 @@ const COL_MAP = {
   'done':        'done',
   'completed':   'done',
   'closed':      'done',
+  'blocked':     'blocked',
   'archived':    'archived',
 };
 
@@ -2130,10 +2180,10 @@ function ingestData(data) {
   } else {
     document.getElementById('project-updated').textContent = 'Task Management';
   }
-  // Version badge
+  // Taskmaster version — server injects plugin.json version into meta._version
   if (meta._version) {
-    const vb = document.getElementById('version-badge');
-    vb.textContent = 'v' + meta._version;
+    const vb = document.getElementById('taskmaster-version-badge');
+    vb.textContent = 'Taskmaster v' + meta._version;
     vb.style.display = '';
   }
 
@@ -2729,14 +2779,19 @@ function render() {
   }
 
   // Bucket
-  const buckets = { todo: [], progress: [], review: [], done: [], archived: [] };
+  const buckets = { todo: [], progress: [], blocked: [], review: [], done: [], archived: [] };
   for (const t of tasks) {
     const key = colKey(t.status);
     buckets[key].push(t);
   }
+  // When the blocked column is hidden, surface blocked tasks in Todo so they're not lost
+  if (!showBlockedCol && buckets.blocked.length) {
+    buckets.todo = buckets.todo.concat(buckets.blocked);
+    buckets.blocked = [];
+  }
 
   // Compute unfiltered column counts (phase-scoped only) to detect hidden tasks
-  const unfilteredBuckets = { todo: 0, progress: 0, review: 0, done: 0 };
+  const unfilteredBuckets = { todo: 0, progress: 0, blocked: 0, review: 0, done: 0 };
   let unfilteredTasks = allTasks;
   if (activePhase === '__none__') {
     unfilteredTasks = unfilteredTasks.filter(t => !t.phase);
@@ -2750,6 +2805,11 @@ function render() {
     const key = colKey(t.status);
     if (key in unfilteredBuckets) unfilteredBuckets[key]++;
   }
+  // Fold hidden-column blocked counts into Todo for the "hidden by filters" hint
+  if (!showBlockedCol) {
+    unfilteredBuckets.todo += unfilteredBuckets.blocked;
+    unfilteredBuckets.blocked = 0;
+  }
 
   // Show board
   document.getElementById('no-data-screen').style.display = 'none';
@@ -2757,6 +2817,7 @@ function render() {
 
   renderColumn('todo',     buckets.todo,     unfilteredBuckets.todo);
   renderColumn('progress', buckets.progress, unfilteredBuckets.progress);
+  if (showBlockedCol) renderColumn('blocked', buckets.blocked, unfilteredBuckets.blocked);
   renderColumn('review',   buckets.review,   unfilteredBuckets.review);
   renderColumn('done',     buckets.done,     unfilteredBuckets.done);
 
@@ -3063,6 +3124,7 @@ document.addEventListener('keydown', (e) => {
       if (searchEl.value) {
         searchEl.value = '';
         searchQuery = '';
+        document.getElementById('search-wrapper').classList.remove('has-value');
         render();
       }
     }
@@ -3231,10 +3293,27 @@ document.getElementById('file-input').addEventListener('change', function(e) {
 });
 
 // ── Search ───────────────────────────────────────────────
-document.getElementById('search-input').addEventListener('input', function() {
-  searchQuery = this.value.trim();
-  render();
-});
+(function() {
+  const input = document.getElementById('search-input');
+  const wrapper = document.getElementById('search-wrapper');
+  const clearBtn = document.getElementById('search-clear');
+  function syncClearVisibility() {
+    wrapper.classList.toggle('has-value', input.value.length > 0);
+  }
+  input.addEventListener('input', function() {
+    searchQuery = this.value.trim();
+    syncClearVisibility();
+    render();
+  });
+  clearBtn.addEventListener('click', function() {
+    input.value = '';
+    searchQuery = '';
+    syncClearVisibility();
+    input.focus();
+    render();
+  });
+  syncClearVisibility();
+})();
 
 // ── Sort dropdown ────────────────────────────────────────
 (function() {
@@ -3472,6 +3551,18 @@ function setStatus(msg, cls) {
     applyTheme();
   });
 
+  function applyBlockedCol() {
+    document.getElementById('col-blocked').style.display = showBlockedCol ? '' : 'none';
+    document.getElementById('settings-blocked-value').textContent = showBlockedCol ? 'On' : 'Off';
+    localStorage.setItem('backlog-show-blocked', showBlockedCol);
+  }
+  document.getElementById('settings-blocked').addEventListener('click', function() {
+    showBlockedCol = !showBlockedCol;
+    applyBlockedCol();
+    render();
+  });
+  applyBlockedCol();
+
   // Settings dropdown open/close
   const btn = document.getElementById('settings-btn');
   const dropdown = document.getElementById('settings-dropdown');
@@ -3510,6 +3601,16 @@ async function fetchBacklog() {
     }
   }
 }
+
+// Ask the server for its identity (includes plugin version) — shows the
+// version badge immediately even before any YAML has been parsed.
+fetch('/api/identity').then(r => r.ok ? r.json() : null).then(ident => {
+  if (ident && ident.version) {
+    const vb = document.getElementById('taskmaster-version-badge');
+    vb.textContent = 'Taskmaster v' + ident.version;
+    vb.style.display = '';
+  }
+}).catch(() => {});
 
 // Initial fetch
 fetchBacklog();
