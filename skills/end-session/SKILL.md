@@ -32,9 +32,16 @@ Log the current work session, transition tasks, and commit tracking files.
    - **Issues:** Problems encountered, unresolved items. If none, write "None"
    - **Tasks touched:** IDs of any tasks whose status changed this session
 
-2. **Generate session title:** `{Topic}: {Brief Description}` (don't include the date — the server auto-prefixes with today's date)
+2. **Draft a user-facing patchnote (optional).** If the task has meaningful user impact (new feature, visible UX change, fixed bug a user would notice), draft a 1-2 sentence patchnote in the user's voice — not the internal title. Skip for internal/infra/cleanup/refactor tasks (leave blank). Examples:
+   - ✅ "Interactive clarification overlay — multi-question queue with option chips and a single SUBMIT ALL action."
+   - ✅ "Release-notes pipeline now aggregates patchnotes per release bucket."
+   - ❌ (skip) Refactor of `_load()` helper, CI config tweak, dependency bump.
 
-3. **Determine target status.** Ask the user:
+   Also pick a **release bucket** (`pre-alpha`, `alpha-1.0`, …) if the project uses them — ask the user if unclear. Patchnotes without a release tag are still stored but won't surface in `backlog_release_notes` unless `include_unreleased=true`.
+
+3. **Generate session title:** `{Topic}: {Brief Description}` (don't include the date — the server auto-prefixes with today's date)
+
+4. **Determine target status.** Ask the user:
 
    > "Does this task need manual testing before it's considered done?"
    > - **Yes → `in-review`** (implementation complete, you need to test/confirm)
@@ -42,9 +49,9 @@ Log the current work session, transition tasks, and commit tracking files.
 
    Default to `in-review` when unsure — it's better to have the user explicitly confirm than to silently skip testing.
 
-4. **Present the draft summary** for review. Include the target status. Ask: "Does this look right? Edit anything or say 'looks good'."
+5. **Present the draft summary** for review. Include the target status AND the drafted patchnote (if any). Ask: "Does this look right? Edit anything or say 'looks good'."
 
-5. **After user approval — call `backlog_complete_task` with all session fields:**
+6. **After user approval — call `backlog_complete_task` with all session fields:**
 
    ```
    backlog_complete_task(
@@ -54,21 +61,23 @@ Log the current work session, transition tasks, and commit tracking files.
        decisions="decision 1\ndecision 2",
        issues="None",
        tasks_touched="task-001, task-002",
-       target_status="in-review"  # or "done"
+       target_status="in-review",  # or "done"
+       patchnote="Interactive clarification overlay — ...",  # omit or "" for internal tasks
+       release="pre-alpha",  # omit or "" if project doesn't use release buckets
    )
    ```
 
    For OTHER tasks that also need transitions (not the primary task):
    - Use `backlog_update_task` for individual status changes — these won't get changelog entries, which is fine for secondary tasks.
 
-6. **Worktree cleanup (done tasks only):**
+7. **Worktree cleanup (done tasks only):**
    - If the task was marked **done** and has a worktree, offer cleanup:
      "Clean up the worktree for `{task_id}`? This removes the isolated working directory."
    - If confirmed: `git worktree remove .worktrees/{task-id}`, then `backlog_update_task(task_id, "worktree", "")`
    - If declined: leave it — the user may want to reference it.
    - **Skip for `in-review` tasks** — the user still needs the worktree for testing.
 
-7. **Commit tracking files:**
+8. **Commit tracking files:**
    ```bash
    git add backlog.yaml PROGRESS.md
    git commit -m "chore: log session — {brief topic}
@@ -76,12 +85,12 @@ Log the current work session, transition tasks, and commit tracking files.
    {1-line summary}"
    ```
 
-8. **Confirm:** "Session logged and committed. Task is now `{target_status}`."
+9. **Confirm:** "Session logged and committed. Task is now `{target_status}`."
 
 ## Edge Cases
 
 - **No in-progress task:** If the session was exploratory (planning, research, no task picked), you can still log a session by calling `backlog_complete_task` on any task that changed, or skip the tool and just manually append to PROGRESS.md. Ask the user what they'd prefer.
-- **Not in a git repo:** Skip step 7 (commit) and tell the user the tracking files were updated but not committed.
+- **Not in a git repo:** Skip step 8 (commit) and tell the user the tracking files were updated but not committed.
 - **Multiple tasks changed:** Use `backlog_complete_task` for the primary task (gets the full changelog entry), and `backlog_update_task` for secondary status changes.
 
 ## Task Lifecycle

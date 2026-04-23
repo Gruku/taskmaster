@@ -1466,6 +1466,8 @@ def backlog_complete_task(
     tasks_touched: str = "",
     target_status: str = "done",
     auto_summary: bool = False,
+    patchnote: str = "",
+    release: str = "",
 ) -> str:
     """Mark a task as done (or in-review) and optionally log a session summary to the PROGRESS.md changelog.
 
@@ -1487,6 +1489,8 @@ def backlog_complete_task(
         tasks_touched: Optional comma-separated task IDs that changed status this session
         target_status: Target status — "done" (default) or "in-review" (needs manual testing)
         auto_summary: If true, generates a lightweight auto-summary instead of the structured format. Pass git stats as the done field.
+        patchnote: Optional 1-2 sentence user-facing release-note line describing what shipped. Leave empty for internal/infra tasks.
+        release: Optional release bucket this task ships in (e.g., "pre-alpha", "alpha-1.0"). Groups patchnotes for release notes.
     """
     if target_status not in ("done", "in-review"):
         return f"Error: target_status must be 'done' or 'in-review', got '{target_status}'"
@@ -1513,6 +1517,11 @@ def backlog_complete_task(
         task["completed"] = _now()
     task.pop("locked_by", None)
 
+    if patchnote:
+        task["patchnote"] = patchnote
+    if release:
+        task["release"] = release
+
     _mutate_and_save(data)
     if target_status == "done":
         _clear_session_task(task_id)
@@ -1534,6 +1543,71 @@ def backlog_complete_task(
 
     status_label = "Completed" if target_status == "done" else "Moved to in-review"
     return f"{status_label} `{task_id}` — {task['title']}" + changelog_msg + review_warning + suggestion
+
+
+@mcp.tool()
+def backlog_release_notes(release: str = "", group_by: str = "epic", include_unreleased: bool = False) -> str:
+    """Aggregate user-facing patchnotes across tasks for a given release bucket.
+
+    Returns markdown output grouping patchnotes by epic or phase — ready to feed into a
+    release-notes writer. Only tasks with a non-empty `patchnote` field are included.
+    Internal/infra tasks (no patchnote) are omitted by design.
+
+    Args:
+        release: Release bucket to filter on (e.g., "pre-alpha", "alpha-1.0"). Empty = all releases.
+        group_by: "epic" (default) or "phase" — how to group the patchnotes in the output.
+        include_unreleased: If true, also include tasks that have a patchnote but no release tag.
+    """
+    if group_by not in ("epic", "phase"):
+        return f"Error: group_by must be 'epic' or 'phase', got '{group_by}'"
+
+    data = _load()
+    phases_by_id = {p["id"]: p for p in data.get("phases", [])}
+
+    # group_key -> list of (task, epic)
+    groups: dict[str, list[tuple[dict, dict]]] = {}
+    group_labels: dict[str, str] = {}
+
+    for epic in data.get("epics", []):
+        for task in epic.get("tasks", []):
+            note = task.get("patchnote", "").strip()
+            if not note:
+                continue
+            task_release = task.get("release", "").strip()
+            if release:
+                if task_release != release:
+                    continue
+            elif not include_unreleased and not task_release:
+                continue
+
+            if group_by == "epic":
+                key = epic["id"]
+                group_labels[key] = epic.get("name", epic["id"])
+            else:
+                phase_id = task.get("phase", "")
+                key = phase_id or "_no_phase"
+                if phase_id and phase_id in phases_by_id:
+                    group_labels[key] = phases_by_id[phase_id].get("name", phase_id)
+                else:
+                    group_labels[key] = "Unphased"
+
+            groups.setdefault(key, []).append((task, epic))
+
+    if not groups:
+        filt = f" for release `{release}`" if release else ""
+        return f"No patchnotes found{filt}."
+
+    header = f"# Release Notes" + (f" — `{release}`" if release else " — all releases")
+    lines = [header, ""]
+    for key in sorted(groups.keys(), key=lambda k: group_labels.get(k, k).lower()):
+        lines.append(f"## {group_labels[key]}")
+        lines.append("")
+        for task, _epic in groups[key]:
+            tag = f" ({task['id']})"
+            lines.append(f"- {task['patchnote'].strip()}{tag}")
+        lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
 
 
 VALID_ARCHIVE_REASONS = {"done", "deprecated", "duplicate", "wont-fix", "superseded"}
@@ -1655,7 +1729,7 @@ def _clear_session_task(task_id: str) -> None:
         _session_task = None
 
 
-ALLOWED_FIELDS = {"title", "status", "priority", "notes", "branch", "worktree", "blockers", "docs", "depends_on", "sub_repo", "stage", "estimate", "locked_by", "review_instructions", "phase", "anchors", "blast_radius_depth"}
+ALLOWED_FIELDS = {"title", "status", "priority", "notes", "branch", "worktree", "blockers", "docs", "depends_on", "sub_repo", "stage", "estimate", "locked_by", "review_instructions", "phase", "anchors", "blast_radius_depth", "patchnote", "release"}
 VALID_STATUSES = {"todo", "in-progress", "in-review", "done", "archived", "blocked"}
 VALID_PRIORITIES = {"critical", "high", "medium", "low"}
 VALID_DOC_KEYS = {"plan", "spec", "roadmap", "design", "analysis"}
@@ -1667,7 +1741,7 @@ def backlog_update_task(task_id: str, field: str, value: str) -> str:
 
     Args:
         task_id: The task ID (e.g., "ue-plugin-003")
-        field: Field to update — one of: title, status, priority, notes, branch, worktree, blockers, docs, depends_on, sub_repo, stage, estimate, locked_by, review_instructions, phase
+        field: Field to update — one of: title, status, priority, notes, branch, worktree, blockers, docs, depends_on, sub_repo, stage, estimate, locked_by, review_instructions, phase, patchnote, release
         value: New value. Format varies by field:
             - docs: "key:path" (e.g., "plan:docs/plans/foo.md")
             - depends_on: comma-separated task IDs (e.g., "cpp-parser-002,cpp-parser-003")
@@ -1677,6 +1751,8 @@ def backlog_update_task(task_id: str, field: str, value: str) -> str:
             - locked_by: session ID to claim the lock, or "" to clear it
             - phase: phase ID to assign, or "" to clear
             - anchors: comma-separated glob patterns/URLs, or "" to clear
+            - patchnote: 1-2 sentence user-facing release-note line, or "" to clear
+            - release: release bucket this task ships in (e.g., "pre-alpha", "alpha-1.0"), or "" to clear
     """
     if field not in ALLOWED_FIELDS:
         return f"Error: field `{field}` not allowed. Allowed: {', '.join(sorted(ALLOWED_FIELDS))}"
@@ -1748,6 +1824,11 @@ def backlog_update_task(task_id: str, field: str, value: str) -> str:
             task.pop("anchors", None)
         else:
             task["anchors"] = [a.strip() for a in value.split(",") if a.strip()]
+    elif field in ("patchnote", "release"):
+        if value == "" or value.lower() == "none":
+            task.pop(field, None)
+        else:
+            task[field] = value
     elif field == "blast_radius_depth":
         if value == "" or value.lower() == "none":
             task.pop("blast_radius_depth", None)
