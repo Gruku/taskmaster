@@ -19,7 +19,8 @@ Read the user's message and match it to one of these intents:
 | "Pick task X", "let's work on X", "what should I tackle", names a task ID, "start task" | `taskmaster:pick-task` |
 | Any implementation request (build feature, fix bug, write tests, refactor, create component, set up CI/CD) when a task is in-progress | Work in the current task's worktree — no routing needed, just confirm you're in the right worktree |
 | Any implementation request when NO task is in-progress | `taskmaster:pick-task` first — find or create a task, then work in its worktree |
-| "Is this ready?", "run the review", "check my work", "I think this is done", "quality check" | `taskmaster:review-gate` |
+| "Review this spec", "challenge this design", "is this the right approach?", "spec review" (before implementation) | `taskmaster:spec-review` |
+| "Is this ready?", "run the review", "check my work", "I think this is done", "quality check" (after implementation) | `taskmaster:review-gate` |
 | "End session", "I'm done", "wrap up", "log this", "mark task done", "save progress" | `taskmaster:end-session` |
 | "Set up taskmaster", "initialize", "create backlog", first time in a project without backlog.yaml | `taskmaster:init-taskmaster` |
 | "Add a task", "create a task for X", "plan out this epic" | Direct tool call — use `backlog_add_task` or `backlog_add_epic` with appropriate fields |

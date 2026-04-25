@@ -677,8 +677,15 @@
       transition: opacity 0.15s;
     }
 
+    /* Selection cue uses `outline` (not box-shadow) so it can co-exist with the
+       active state's accent ring. Outline + box-shadow occupy different paint
+       layers, so an active phase that is also user-selected shows BOTH the
+       accent glow (active) and the outer ring (selected) without one clobbering
+       the other. Offset gives breathing room from the active border. */
     .ms-step.ms-selected {
-      box-shadow: 0 0 0 2px var(--text), 0 0 0 3px var(--border);
+      outline: 2px solid var(--text);
+      outline-offset: 3px;
+      border-radius: 4px;
     }
 
     .ms-step.ms-done:hover {
@@ -687,7 +694,6 @@
 
     .ms-step.ms-done.ms-selected {
       opacity: 1;
-      box-shadow: 0 0 0 2px var(--text), 0 0 0 3px var(--border);
     }
 
     /* ── Phase date info ────────────────────────────────── */
@@ -876,6 +882,30 @@
     [data-theme="light"] .status-done, [data-theme="light-colored"] .status-done        { background: #ddf5e8; color: #15803d; border-color: #86d9a0; }
     [data-theme="light"] .status-inactive, [data-theme="light-colored"] .status-inactive { background: var(--surface2); color: var(--text-dim); border-color: var(--border); }
 
+    /* Epic-level docs (design / spec / roadmap chips on each epic card) */
+    .epic-docs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin: 0 0 6px;
+    }
+    .epic-doc-link {
+      font-size: var(--fs-xs);
+      color: var(--accent);
+      text-decoration: none;
+      padding: 1px 6px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: var(--surface);
+      line-height: 1.4;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .epic-doc-link:hover {
+      background: var(--surface2);
+      border-color: var(--accent);
+      text-decoration: none;
+    }
+
     .epic-progress-bar {
       height: 4px;
       background: var(--border-subtle);
@@ -990,6 +1020,63 @@
     .column-body::-webkit-scrollbar { width: 4px; }
     .column-body::-webkit-scrollbar-track { background: transparent; }
     .column-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    /* ── Column collapse ────────────────────────────────── */
+    .col-collapse-btn {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+      width: 22px;
+      height: 22px;
+      border-radius: 4px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      line-height: 1;
+      padding: 0;
+      flex-shrink: 0;
+      transition: color 0.15s, border-color 0.15s, background 0.15s;
+      margin-left: 6px;
+    }
+    .col-collapse-btn:hover {
+      color: var(--text);
+      border-color: var(--text-dim);
+      background: var(--surface2);
+    }
+    .col-collapse-btn .col-chevron {
+      display: inline-block;
+      transition: transform 0.18s ease;
+    }
+    .column.collapsed {
+      flex: 0 0 44px;
+      min-width: 44px;
+    }
+    .column.collapsed .column-header {
+      flex-direction: column;
+      padding: 10px 6px;
+      gap: 8px;
+      align-items: center;
+      justify-content: flex-start;
+      border-bottom: none;
+      height: 100%;
+    }
+    .column.collapsed .column-title {
+      writing-mode: vertical-rl;
+      transform: rotate(180deg);
+      gap: 6px;
+      letter-spacing: 0;
+    }
+    .column.collapsed .column-count,
+    .column.collapsed .column-count-archived {
+      writing-mode: horizontal-tb;
+    }
+    .column.collapsed .column-body { display: none; }
+    .column.collapsed .col-collapse-btn { margin-left: 0; }
+    .column.collapsed .col-collapse-btn .col-chevron {
+      transform: rotate(180deg);
+    }
 
     /* ── Task card ───────────────────────────────────────── */
     .task-card {
@@ -1806,6 +1893,30 @@
     }
 
     /* ── Responsive ──────────────────────────────────────── */
+
+    /* Phase row: at narrower widths the absolute-centered badges collide with
+       the right-side progress bar. Drop the absolute positioning so badges and
+       progress bar stack vertically — progress bar on top (priority), badges
+       below in a horizontally-scrollable strip. */
+    @media (max-width: 1100px) {
+      .phase-row {
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .phase-row-left {
+        position: static;
+        transform: none;
+        max-width: 100%;
+        width: 100%;
+        order: 2;
+      }
+      .phase-row-right {
+        margin-left: 0;
+        width: 100%;
+        order: 1;
+      }
+    }
+
     @media (max-width: 768px) {
       .header { padding: 10px 16px; flex-wrap: wrap; }
       .epics-section, .board-wrapper, .archived-section, .archived-epics-section { padding-left: 16px; padding-right: 16px; }
@@ -1817,6 +1928,12 @@
       .epics-grid { gap: 8px; }
       .epic-card { max-width: 100%; }
       .archived-grid { grid-template-columns: 1fr; }
+      /* Collapsed column should expand back to full width on stacked layout —
+         vertical rotation makes no sense in a column-flow board. */
+      .column.collapsed { flex: 1; min-width: 0; }
+      .column.collapsed .column-header { flex-direction: row; padding: 12px 14px; }
+      .column.collapsed .column-title { writing-mode: horizontal-tb; transform: none; }
+      .column.collapsed .column-body { display: block; }
     }
   </style>
 </head>
@@ -1956,6 +2073,7 @@
       <div class="column-header">
         <div class="column-title"><div class="column-dot"></div>Blocked</div>
         <span class="column-count" id="count-blocked">0</span>
+        <button type="button" class="col-collapse-btn" data-col="blocked" title="Collapse column" aria-label="Toggle column"><span class="col-chevron">&#9664;</span></button>
       </div>
       <div class="column-body" id="body-blocked"></div>
     </div>
@@ -1963,6 +2081,7 @@
       <div class="column-header">
         <div class="column-title"><div class="column-dot"></div>Todo</div>
         <span class="column-count" id="count-todo">0</span>
+        <button type="button" class="col-collapse-btn" data-col="todo" title="Collapse column" aria-label="Toggle column"><span class="col-chevron">&#9664;</span></button>
       </div>
       <div class="column-body" id="body-todo"></div>
     </div>
@@ -1970,6 +2089,7 @@
       <div class="column-header">
         <div class="column-title"><div class="column-dot"></div>In Progress</div>
         <span class="column-count" id="count-progress">0</span>
+        <button type="button" class="col-collapse-btn" data-col="progress" title="Collapse column" aria-label="Toggle column"><span class="col-chevron">&#9664;</span></button>
       </div>
       <div class="column-body" id="body-progress"></div>
     </div>
@@ -1977,6 +2097,7 @@
       <div class="column-header">
         <div class="column-title"><div class="column-dot"></div>In Review</div>
         <span class="column-count" id="count-review">0</span>
+        <button type="button" class="col-collapse-btn" data-col="review" title="Collapse column" aria-label="Toggle column"><span class="col-chevron">&#9664;</span></button>
       </div>
       <div class="column-body" id="body-review"></div>
     </div>
@@ -1984,6 +2105,7 @@
       <div class="column-header">
         <div class="column-title"><div class="column-dot"></div>Done</div>
         <span><span class="column-count" id="count-done">0</span><span class="column-count-archived" id="count-done-archived"></span></span>
+        <button type="button" class="col-collapse-btn" data-col="done" title="Collapse column" aria-label="Toggle column"><span class="col-chevron">&#9664;</span></button>
       </div>
       <div class="column-body" id="body-done"></div>
     </div>
@@ -2639,11 +2761,20 @@ function renderEpics() {
     if (todo)     breakdownParts.push(`<span style="color:var(--text-dim)">${todo} todo</span>`);
     if (archived) breakdownParts.push(`<span style="color:var(--stat-archived-color)">${archived} archived</span>`);
 
+    // Epic-level documents — render as small clickable chips so the user can jump
+    // straight to the design/spec/roadmap doc that explains what the epic is.
+    const epicDocsHtml = (epic.docs && typeof epic.docs === 'object' && !Array.isArray(epic.docs))
+      ? Object.entries(epic.docs)
+          .map(([k, v]) => `<a class="epic-doc-link" href="${esc(v)}" target="_blank" rel="noopener" data-epic-doc="1" title="${esc(v)}">${esc(k)}</a>`)
+          .join('')
+      : '';
+
     card.innerHTML = `
       <div class="epic-card-header">
         <div class="epic-name">${esc(epic.name || epic.id)}</div>
         <div class="epic-status-pill ${statusClass}">${esc(epic.status || 'planned')}</div>
       </div>
+      ${epicDocsHtml ? `<div class="epic-docs">${epicDocsHtml}</div>` : ''}
       <div class="epic-progress-bar">
         ${done ? `<div class="epic-progress-fill done${pct===100?' full':''}" style="width:${total?Math.round(done/total*100):0}%"></div>` : ''}
         ${inRev ? `<div class="epic-progress-fill review" style="width:${total?Math.round(inRev/total*100):0}%"></div>` : ''}
@@ -2652,7 +2783,10 @@ function renderEpics() {
       <div class="epic-progress-text">${breakdownParts.join(' · ')} &mdash; ${pct}%</div>
     `;
 
-    card.addEventListener('click', () => {
+    card.addEventListener('click', (e) => {
+      // Don't toggle the epic filter when the user clicks an epic-doc link —
+      // let the link navigate normally instead.
+      if (e.target.closest('a[data-epic-doc]')) return;
       activeEpic = (activeEpic === epic.id) ? 'all' : epic.id;
       updateEpicUI();
       populateEpicDropdown();
@@ -2708,8 +2842,39 @@ function renderEpics() {
 }
 
 // ── Main render ──────────────────────────────────────────
+// One-shot wiring for column collapse buttons. Idempotent — safe to call from render().
+let _columnCollapseWired = false;
+function setupColumnCollapse() {
+  if (_columnCollapseWired) return;
+  const STORAGE_KEY = 'taskmaster-collapsed-cols';
+  let collapsed = new Set();
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) collapsed = new Set(JSON.parse(raw));
+  } catch (e) {}
+
+  document.querySelectorAll('.col-collapse-btn').forEach(btn => {
+    const colId = btn.dataset.col;
+    const column = document.getElementById('col-' + colId);
+    if (!column) return;
+    if (collapsed.has(colId)) column.classList.add('collapsed');
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      column.classList.toggle('collapsed');
+      if (column.classList.contains('collapsed')) {
+        collapsed.add(colId);
+      } else {
+        collapsed.delete(colId);
+      }
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify([...collapsed])); } catch (e) {}
+    });
+  });
+  _columnCollapseWired = true;
+}
+
 function render() {
   if (!loadedData) return;
+  setupColumnCollapse();
 
   // Filter
   let tasks = allTasks;
@@ -3226,6 +3391,18 @@ function makeCard(task) {
     ? `<div class="task-anchors" style="font-size:var(--fs-xs);color:var(--text-dim);margin-top:2px">📌 ${task.anchors.map(a => esc(a)).join(', ')}</div>`
     : '';
 
+  // Spec-review badge — surfaces the design-review verdict if `taskmaster:spec-review`
+  // has been run against the task's spec/plan. Color tracks verdict severity so
+  // failed reviews are visually loud at the card level.
+  let specReviewBadge = '';
+  if (task.spec_review && task.spec_review.verdict) {
+    const v = task.spec_review.verdict;
+    const colorMap = { pass: 'var(--stat-done-color)', warn: 'var(--p1)', fail: 'var(--stat-blocked-color)' };
+    const symbolMap = { pass: '✓', warn: '!', fail: '✗' };
+    const codexNote = task.spec_review.codex_used ? ' (codex)' : '';
+    specReviewBadge = `<span class="epic-tag" style="color:${colorMap[v] || 'var(--text-dim)'};border-color:currentColor;" title="Spec review: ${esc(v)}${codexNote}">spec ${symbolMap[v] || '?'}</span>`;
+  }
+
   const epicStyle = epicHeaderStyle(task._epicId);
   card.innerHTML = `
     <div class="task-card-header" style="${epicStyle}">
@@ -3247,6 +3424,7 @@ function makeCard(task) {
         ${task._epicName ? `<span class="epic-tag">${esc(task._epicName)}</span>` : ''}
         ${task.archive_reason ? `<span class="epic-tag" style="color:var(--stat-archived-color);border-color:var(--stat-archived-border);">${esc(task.archive_reason)}</span>` : ''}
         ${task.docs ? `<span class="epic-tag" style="color:var(--accent);border-color:var(--p2-border);">docs</span>` : ''}
+        ${specReviewBadge}
         ${depsCount ? `<span class="epic-tag" style="color:var(--p1);border-color:var(--p1-border);">${depsCount} dep${depsCount > 1 ? 's' : ''}</span>` : ''}
         ${date ? `<span class="task-date">${fmtTs(date)}</span>` : ''}
       </div>

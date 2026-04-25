@@ -757,6 +757,27 @@ def backlog_get_task(task_id: str) -> str:
         for doc_key, doc_path in task_docs.items():
             lines.append(f"- **{doc_key}:** `{doc_path}`")
 
+    # Show epic docs (parent context)
+    epic_docs = epic.get("docs")
+    if epic_docs and isinstance(epic_docs, dict):
+        lines.append("\n**Epic docs:**")
+        for doc_key, doc_path in epic_docs.items():
+            lines.append(f"- **{doc_key}:** `{doc_path}`")
+
+    # Show spec-review record
+    sr = task.get("spec_review")
+    if sr and isinstance(sr, dict):
+        verdict = sr.get("verdict", "?")
+        ts = sr.get("timestamp", "?")
+        codex = "yes" if sr.get("codex_used") else "no"
+        crit = sr.get("critical_count", 0)
+        imp = sr.get("important_count", 0)
+        spec_path = sr.get("spec_path", "—")
+        lines.append(
+            f"\n**Spec review:** {verdict} ({ts}) — codex: {codex}, "
+            f"critical: {crit}, important: {imp}, spec: `{spec_path}`"
+        )
+
     # Epic context
     lines.append(f"\n**Epic:** {epic['name']}")
     lines.append(f"**Description:** {epic.get('description', '—')}")
@@ -1254,27 +1275,25 @@ def backlog_add_task(
     epic_obj["tasks"].append(new_task)
 
     _mutate_and_save(data)
-    # Warn if notes are getting bloated
-    notes_warning = ""
-    if notes and len(notes) > 300:
-        notes_warning = (
-            f"\n\n**Warning:** Notes are over 300 characters. Consider moving detailed content "
-            f"to an external doc and linking it via `backlog_update_task({new_id}, docs, plan:docs/plans/...)`"
-        )
 
-    # Budget warning
+    # Soft cap enforcement (only when explicitly set on the epic via `max_tasks`).
+    # The previous default of 8 has been lifted — large epics with many tasks are
+    # legitimate, and notes/work counts are not capped by default. Set
+    # `epic.max_tasks` explicitly if you want a per-epic budget.
     budget_warning = ""
-    active_count = sum(1 for t in epic_obj.get("tasks", []) if t.get("status") not in ("archived", "done"))
-    max_tasks = epic_obj.get("max_tasks", 8)
-    if active_count > max_tasks:
-        budget_warning = (
-            f"\n\n**Warning:** Epic `{epic}` now has {active_count} active tasks (soft cap: {max_tasks}). "
-            f"Consider grouping related work into fewer, coarser tasks — tasks should be things you "
-            f"might pick up in different sessions, not steps within one session. "
-            f"Link a plan document (`docs.plan`) for detailed steps instead."
+    if "max_tasks" in epic_obj:
+        active_count = sum(
+            1 for t in epic_obj.get("tasks", [])
+            if t.get("status") not in ("archived", "done")
         )
+        max_tasks = epic_obj["max_tasks"]
+        if active_count > max_tasks:
+            budget_warning = (
+                f"\n\n**Warning:** Epic `{epic}` now has {active_count} active tasks "
+                f"(this epic's `max_tasks` cap: {max_tasks})."
+            )
 
-    return f"Added `{new_id}` — {title} ({priority}) under {epic_obj['name']}" + notes_warning + budget_warning
+    return f"Added `{new_id}` — {title} ({priority}) under {epic_obj['name']}" + budget_warning
 
 
 def _build_worktree_instruction(task_id: str, sub_repo: str, branch: str, worktree: str) -> str:
@@ -1841,19 +1860,92 @@ def backlog_update_task(task_id: str, field: str, value: str) -> str:
 
     _mutate_and_save(data)
 
-    # Warn if notes are getting bloated
-    notes_warning = ""
-    if field == "notes" and len(value) > 300:
-        notes_warning = (
-            f"\n\n**Warning:** Notes are over 300 characters. Consider moving detailed content "
-            f"to an external doc and linking it via `backlog_update_task({task_id}, docs, plan:docs/plans/...)`"
+    return f"Updated `{task_id}` field `{field}` → {value}"
+
+
+VALID_SPEC_REVIEW_VERDICTS = {"pass", "warn", "fail"}
+
+
+@mcp.tool()
+def backlog_set_spec_review(
+    task_id: str,
+    verdict: str,
+    spec_path: str,
+    codex_used: bool = False,
+    critical_count: int = 0,
+    important_count: int = 0,
+) -> str:
+    """Record the result of a spec-review pass on a task. Overwrites any prior record.
+
+    The spec_review field is structured (dict). It captures the outcome of running
+    `taskmaster:spec-review` against the task's spec/plan, so downstream tools
+    (pick-task, review-gate, dashboard) can see whether the design was vetted
+    before implementation began.
+
+    Args:
+        task_id: The task ID (e.g., "auth-003")
+        verdict: One of "pass", "warn", "fail"
+        spec_path: Path to the spec/plan file that was reviewed
+        codex_used: True if the optional Codex adversarial pass was run
+        critical_count: Number of critical findings
+        important_count: Number of important findings
+    """
+    if verdict not in VALID_SPEC_REVIEW_VERDICTS:
+        return (
+            f"Error: invalid verdict `{verdict}`. "
+            f"Valid: {', '.join(sorted(VALID_SPEC_REVIEW_VERDICTS))}"
         )
 
-    return f"Updated `{task_id}` field `{field}` → {value}" + notes_warning
+    data = _load()
+    result = _find_task(data, task_id)
+    if not result:
+        return f"Error: task `{task_id}` not found"
+
+    task, _epic = result
+    _touch_task(task)
+
+    task["spec_review"] = {
+        "timestamp": _now(),
+        "verdict": verdict,
+        "codex_used": bool(codex_used),
+        "critical_count": int(critical_count),
+        "important_count": int(important_count),
+        "spec_path": spec_path,
+    }
+
+    _mutate_and_save(data)
+    return (
+        f"Recorded spec-review for `{task_id}`: {verdict} "
+        f"(codex={codex_used}, critical={critical_count}, important={important_count})"
+    )
+
+
+@mcp.tool()
+def backlog_clear_spec_review(task_id: str) -> str:
+    """Remove the spec-review record from a task. Use when the spec was significantly
+    revised and the prior review is no longer valid.
+
+    Args:
+        task_id: The task ID (e.g., "auth-003")
+    """
+    data = _load()
+    result = _find_task(data, task_id)
+    if not result:
+        return f"Error: task `{task_id}` not found"
+
+    task, _epic = result
+    _touch_task(task)
+
+    if "spec_review" not in task:
+        return f"`{task_id}` had no spec-review record"
+
+    del task["spec_review"]
+    _mutate_and_save(data)
+    return f"Cleared spec-review record on `{task_id}`"
 
 
 VALID_EPIC_STATUSES = {"active", "planned", "done", "archived"}
-ALLOWED_EPIC_FIELDS = {"name", "status", "description"}
+ALLOWED_EPIC_FIELDS = {"name", "status", "description", "docs"}
 
 
 @mcp.tool()
@@ -1862,8 +1954,11 @@ def backlog_update_epic(epic_id: str, field: str, value: str) -> str:
 
     Args:
         epic_id: The epic ID (e.g., "cpp-parser", "ue-plugin", "infra")
-        field: Field to update — one of: name, status, description
-        value: New value. For status, one of: active, planned, done
+        field: Field to update — one of: name, status, description, docs
+        value: New value. For status, one of: active, planned, done.
+            For docs, use "key:path" format (e.g., "design:docs/design/foo.md").
+            Valid doc keys mirror task docs: plan, spec, roadmap, design, analysis.
+            Pass "key:" (empty path) to remove a single doc entry.
     """
     if field not in ALLOWED_EPIC_FIELDS:
         return f"Error: field `{field}` not allowed. Allowed: {', '.join(sorted(ALLOWED_EPIC_FIELDS))}"
@@ -1878,6 +1973,31 @@ def backlog_update_epic(epic_id: str, field: str, value: str) -> str:
             return "Error: use `backlog_archive_epic` to archive an epic (it cascades to tasks)"
         if value not in VALID_EPIC_STATUSES:
             return f"Error: invalid epic status `{value}`. Valid: {', '.join(sorted(VALID_EPIC_STATUSES))}"
+
+    if field == "docs":
+        # Mirror task docs: "key:path" format, sharing VALID_DOC_KEYS.
+        if ":" not in value:
+            return (
+                f"Error: docs value must be `key:path` format "
+                f"(e.g., `design:docs/design/foo.md`). "
+                f"Valid keys: {', '.join(sorted(VALID_DOC_KEYS))}"
+            )
+        doc_key, doc_path = value.split(":", 1)
+        doc_key = doc_key.strip()
+        doc_path = doc_path.strip()
+        if doc_key not in VALID_DOC_KEYS:
+            return f"Error: invalid docs key `{doc_key}`. Valid: {', '.join(sorted(VALID_DOC_KEYS))}"
+        if "docs" not in epic or not isinstance(epic.get("docs"), dict):
+            epic["docs"] = {}
+        if doc_path == "":
+            epic["docs"].pop(doc_key, None)
+            if not epic["docs"]:
+                epic.pop("docs", None)
+            _mutate_and_save(data)
+            return f"Cleared epic `{epic_id}` doc key `{doc_key}`"
+        epic["docs"][doc_key] = doc_path
+        _mutate_and_save(data)
+        return f"Updated epic `{epic_id}` doc `{doc_key}` → `{doc_path}`"
 
     old_value = epic.get(field, "")
     epic[field] = value

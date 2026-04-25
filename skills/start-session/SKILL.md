@@ -32,6 +32,7 @@ The user is arriving at the start of a conversation — they've lost context sin
      ```
    - **Dashboard** — epic progress, stats.
    - **If there are next-up items:** "**Suggested next:** {first item} ({priority})" — these are filtered to the active phase when one exists, so the user only sees what's relevant right now.
+     - For each suggested critical/high task that has a spec/plan but **no `spec_review` record**, append a hint: "↳ run `taskmaster:spec-review {task_id}` before picking — design hasn't been vetted." This makes spec-review feel like a natural pre-step rather than a hidden gate.
    - **Untracked work** — After showing the dashboard, check for commits since the last session that aren't associated with any tracked task branch:
      1. Get the last session date from `backlog_last_session` output (the `### YYYY-MM-DD` heading)
      2. Run `git log --oneline --since="{last_session_date}" --no-merges` on the main branch

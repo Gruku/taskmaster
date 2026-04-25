@@ -27,13 +27,18 @@ Select a task to work on and set it to in-progress.
    - If any dependencies are NOT done, warn: "This task depends on `{dep_id}` which is still `{status}`. Proceed anyway?"
    - Let the user decide. Do not silently skip.
 
-4. **Show anchors and predicted blast radius:**
+4. **Show anchors, spec-review status, and predicted blast radius:**
    - If the task has `anchors`, display them prominently:
      "This task is anchored to `src/auth/**`. Expected at `localhost:3000/api/auth`."
    - Remind: "If you find yourself editing files outside these anchors, double-check you're working on the right target."
-   - Call `backlog_blast_radius(task_id, mode="predictive")` to get predicted impact.
-   - Display the result. For critical/high tasks, show the full structured block (anchored areas, related active work, considerations). For medium/low tasks, show the single-line summary.
-   - If overlapping in-progress tasks are found, highlight them: "Heads up — `{task_id}` is actively being worked on in the same area. Coordinate to avoid conflicts."
+   - **Spec-review check (critical/high tasks only):**
+     - If `task.spec_review` is present, summarize: "Spec reviewed {timestamp} — verdict: {verdict} (codex: {yes/no}, critical: N, important: N)." If verdict is `fail`, escalate: "Spec-review FAILED — implementation should not start until critical findings are addressed. Override?"
+     - If `task.spec_review` is absent and the task has a `docs.spec` or `docs.plan`: WARN — "No spec-review on record for this {priority} task. Run `taskmaster:spec-review` first?" Don't block; let the user decide.
+     - For medium/low tasks: skip silently (spec-review isn't expected at those priorities).
+   - **Predicted blast radius:**
+     - If `task.spec_review` exists, the predictive analysis was already done during spec-review. Show the one-line summary from `backlog_blast_radius(task_id, mode="predictive")` and reference the prior review: "Full predictive analysis in spec-review record."
+     - Otherwise, call `backlog_blast_radius(task_id, mode="predictive")` and display the full structured block for critical/high (single-line for medium/low).
+   - If overlapping in-progress tasks are found in either path, highlight them: "Heads up — `{task_id}` is actively being worked on in the same area. Coordinate to avoid conflicts."
 
 5. **Once a task is selected:**
    - Call `backlog_pick_task(task_id)` — this sets status to `in-progress`, records `started` date, locks to session, and regenerates context + dashboard.
