@@ -600,7 +600,7 @@
     .phase-row-left {
       display: flex;
       align-items: center;
-      gap: 4px;
+      gap: 6px;
       flex-wrap: nowrap;
       position: absolute;
       left: 50%;
@@ -608,6 +608,10 @@
       max-width: 60%;
       overflow-x: auto;
       scrollbar-width: none;
+      /* Vertical padding so lifted/selected badges don't clip — overflow-x: auto
+         is treated as auto on both axes by browsers, so a 4px shadow + -1px lift
+         needs at least ~6px of top/bottom room to render without truncation. */
+      padding: 8px 4px;
     }
 
     .phase-row-left::-webkit-scrollbar {
@@ -657,8 +661,11 @@
       border: 1px solid var(--border);
       background: var(--surface2);
       color: var(--text-dim);
+      transition: background 0.15s, color 0.15s, border-color 0.15s, box-shadow 0.15s, transform 0.15s;
     }
 
+    /* ACTIVE state — the project's CURRENT phase.
+       Communicates *status* via accent color (border + tinted bg + accent text). */
     .ms-step.ms-active {
       border-color: var(--accent);
       background: var(--p2-bg);
@@ -674,26 +681,70 @@
       color: var(--stat-done-color);
       cursor: pointer;
       opacity: 0.7;
-      transition: opacity 0.15s;
-    }
-
-    /* Selection cue uses `outline` (not box-shadow) so it can co-exist with the
-       active state's accent ring. Outline + box-shadow occupy different paint
-       layers, so an active phase that is also user-selected shows BOTH the
-       accent glow (active) and the outer ring (selected) without one clobbering
-       the other. Offset gives breathing room from the active border. */
-    .ms-step.ms-selected {
-      outline: 2px solid var(--text);
-      outline-offset: 3px;
-      border-radius: 4px;
     }
 
     .ms-step.ms-done:hover {
       opacity: 1;
     }
 
+    /* SELECTED state — the phase the USER is filtering by.
+       Deliberately uses a different visual language than ms-active so the two
+       roles never collide:
+         - active = COLOR  (accent fill + ring)
+         - selected = INVERSION (solid filled bg, inverted text, bold weight)
+       Idle-selected uses --text (a strong neutral) so it's instantly different
+       from accent. Active-selected and done-selected each invert into THEIR
+       own status color so the active/done meaning is preserved while the
+       "pressed in" treatment makes the user's pick unmistakable. */
+    .ms-step.ms-selected {
+      background: var(--text);
+      color: var(--surface);
+      border-color: var(--text);
+      font-weight: 800;
+      letter-spacing: 0.2px;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.30);
+      transform: translateY(-1px);
+    }
+
+    .ms-step.ms-selected .ph-num {
+      background: var(--surface);
+      color: var(--text);
+      border-color: var(--surface);
+    }
+
+    .ms-step.ms-active.ms-selected {
+      /* Active + Selected: keep accent (denotes "active phase") but apply the
+         filled/lifted selection treatment. Outer text-color ring layers on
+         top of the accent fill — both signals visible at once. */
+      background: var(--accent);
+      color: var(--surface);
+      border-color: var(--accent);
+      font-size: var(--fs-sm);
+      padding: 4px 12px;
+      font-weight: 800;
+      box-shadow: 0 0 0 2px var(--text), 0 4px 12px rgba(0,0,0,0.35);
+    }
+
+    .ms-step.ms-active.ms-selected .ph-num {
+      background: var(--surface);
+      color: var(--accent);
+      border-color: var(--surface);
+    }
+
     .ms-step.ms-done.ms-selected {
+      background: var(--stat-done-color);
+      color: var(--surface);
+      border-color: var(--stat-done-color);
       opacity: 1;
+      font-weight: 800;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.30);
+      transform: translateY(-1px);
+    }
+
+    .ms-step.ms-done.ms-selected .ph-num {
+      background: var(--surface);
+      color: var(--stat-done-color);
+      border-color: var(--surface);
     }
 
     /* ── Phase date info ────────────────────────────────── */
