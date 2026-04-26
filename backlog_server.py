@@ -1161,7 +1161,7 @@ def backlog_validate() -> str:
 
 
 @mcp.tool()
-def backlog_init(project_name: str = "", location: str = "hidden") -> str:
+def backlog_init(project_name: str = "", location: str = "hidden", schema_version: int = 0) -> str:
     """Initialize taskmaster in the current project. Creates config, backlog.yaml, and PROGRESS.md.
 
     Args:
@@ -1169,9 +1169,17 @@ def backlog_init(project_name: str = "", location: str = "hidden") -> str:
         location: Where to store backlog files.
                   "hidden" — .claude/ directory (won't pollute repo, gitignored by default).
                   "tracked" — project root (visible, can be committed to git for team visibility).
+        schema_version: 2 (stable, single backlog.yaml) or 3 (latest, slim index +
+                  per-task files + handovers/issues/lessons/auto). 0 → use SCHEMA_DEFAULT.
+                  v3 init creates the directory layout up front (tasks/, handovers/,
+                  lessons/, issues/, snapshots/, auto/).
     """
     if location not in ("hidden", "tracked"):
         return f"Error: location must be 'hidden' or 'tracked', got '{location}'"
+    if schema_version == 0:
+        schema_version = SCHEMA_DEFAULT
+    if schema_version not in (SCHEMA_V2, SCHEMA_V3):
+        return f"Error: schema_version must be {SCHEMA_V2} or {SCHEMA_V3}, got {schema_version}"
 
     if not project_name:
         project_name = ROOT.name
@@ -1209,7 +1217,7 @@ def backlog_init(project_name: str = "", location: str = "hidden") -> str:
     initial_data = {
         "meta": {
             "project": project_name,
-            "schema_version": SCHEMA_DEFAULT,
+            "schema_version": schema_version,
             "updated": _today(),
         },
         "context": {
@@ -1223,6 +1231,15 @@ def backlog_init(project_name: str = "", location: str = "hidden") -> str:
         "epics": [],
         "phases": [],
     }
+    if schema_version >= SCHEMA_V3:
+        # v3 adds top-level entity indexes + creates the directory layout.
+        initial_data["handovers"] = []
+        initial_data["issues"] = []
+        initial_data["lessons_meta"] = []
+        # Pre-create directories so first-run tooling has somewhere to write.
+        for sub in ("tasks", "handovers", "lessons", "issues", "snapshots", "auto"):
+            (backlog_abs.parent / sub).mkdir(parents=True, exist_ok=True)
+
     backlog_abs.write_text(
         yaml.dump(initial_data, default_flow_style=False, sort_keys=False, allow_unicode=True),
         encoding="utf-8",
@@ -1235,8 +1252,9 @@ def backlog_init(project_name: str = "", location: str = "hidden") -> str:
     created.append(progress_rel)
 
     location_label = "`.claude/` (hidden from repo)" if location == "hidden" else "`.taskmaster/` (trackable in git)"
+    schema_label = "v3 (latest — narrative continuity)" if schema_version >= SCHEMA_V3 else "v2 (stable)"
     return (
-        f"Initialized taskmaster for **{project_name}** in {location_label}\n"
+        f"Initialized taskmaster for **{project_name}** in {location_label} on schema {schema_label}.\n"
         f"Created: {', '.join(created)}"
     )
 

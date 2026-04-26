@@ -1115,3 +1115,125 @@ class TestAutoState:
         assert "epic" in out
         assert "T-1" in out
         assert "PICK" in out
+
+
+class TestV3EndToEndRoundtrip:
+    """End-to-end roundtrip: heavy fields survive multiple save/load cycles
+    interleaved with non-task mutations (handovers, issues, lessons).
+    Locks the invariant that v3 preserves all state across normal use.
+    """
+
+    def test_full_lifecycle_preserves_state(self, tmp_path: Path):
+        bp = tmp_path / ".taskmaster" / "backlog.yaml"
+
+        # Initial v3 backlog with a task carrying heavy content
+        original = {
+            "meta": {"schema_version": 3, "project": "p"},
+            "context": {},
+            "epics": [
+                {
+                    "id": "e1",
+                    "name": "Features",
+                    "tasks": [
+                        {
+                            "id": "T-001",
+                            "title": "Login",
+                            "status": "in-progress",
+                            "priority": "high",
+                            "description": "Wire login form",
+                            "notes": "cookie scope concern",
+                            v3.BODY_KEY: "## Decisions\nStateful sessions chosen.\n",
+                        },
+                    ],
+                }
+            ],
+            "phases": [],
+            "handovers": [],
+            "issues": [],
+            "lessons_meta": [],
+        }
+        v3.save_v3(bp, original)
+
+        # Mutate via the layered helpers: add handover, issue, lesson
+        v3.write_handover(bp, tldr="day end", task_ids=["T-001"], when="2026-04-26")
+        v3.write_issue(bp, title="bug", severity="P1", related_tasks=["T-001"])
+        v3.write_lesson(bp, title="auth gotcha", kind="gotcha")
+
+        # Sync indexes (what the MCP tools do after each create)
+        loaded = v3.load_v3(bp)
+        v3.sync_handover_index(loaded, bp)
+        v3.sync_issue_index(loaded, bp)
+        v3.sync_lesson_index(loaded, bp)
+        v3.save_v3(bp, loaded)
+
+        # Read everything back and assert nothing got lost
+        roundtripped = v3.load_v3(bp)
+        t1 = roundtripped["epics"][0]["tasks"][0]
+        assert t1["description"] == "Wire login form"
+        assert t1["notes"] == "cookie scope concern"
+        assert "Stateful sessions chosen" in t1[v3.BODY_KEY]
+        assert t1["status"] == "in-progress"
+        assert t1["priority"] == "high"
+
+        assert len(roundtripped["handovers"]) == 1
+        assert roundtripped["handovers"][0]["task_ids"] == ["T-001"]
+        assert len(roundtripped["issues"]) == 1
+        assert roundtripped["issues"][0]["severity"] == "P1"
+        assert len(roundtripped["lessons_meta"]) == 1
+        assert roundtripped["lessons_meta"][0]["kind"] == "gotcha"
+
+    def test_save_preserves_unrelated_top_level_keys(self, tmp_path: Path):
+        # save_v3 must not strip top-level keys it doesn't know about
+        bp = tmp_path / ".taskmaster" / "backlog.yaml"
+        data = {
+            "meta": {"schema_version": 3},
+            "context": {"active_epic": "auth"},
+            "epics": [],
+            "phases": [],
+            "custom_field": {"foo": "bar"},
+            "another": [1, 2, 3],
+        }
+        v3.save_v3(bp, data)
+        loaded = v3.load_v3(bp)
+        assert loaded["custom_field"] == {"foo": "bar"}
+        assert loaded["another"] == [1, 2, 3]
+        assert loaded["context"] == {"active_epic": "auth"}
+
+    def test_v2_backlog_without_v3_indexes_loads_clean(self, tmp_path: Path):
+        # A pristine v2 file (no schema_version, no handovers/issues/lessons) should
+        # not gain phantom v3 keys when read.
+        bp = tmp_path / ".taskmaster" / "backlog.yaml"
+        bp.parent.mkdir(parents=True)
+        import yaml as _y
+        bp.write_text(
+            _y.dump({
+                "meta": {"project": "p"},
+                "epics": [{"id": "e1", "tasks": [{"id": "T-1", "title": "x", "status": "todo"}]}],
+                "phases": [],
+            }),
+            encoding="utf-8",
+        )
+        # Force a v2-path read (the way backlog_server._load() dispatches).
+        raw = _y.safe_load(bp.read_text(encoding="utf-8"))
+        assert v3.detect_schema_version(raw) == v3.SCHEMA_V2
+        assert "handovers" not in raw
+        assert "lessons_meta" not in raw
+
+    def test_per_task_file_persists_across_n_saves(self, tmp_path: Path):
+        bp = tmp_path / ".taskmaster" / "backlog.yaml"
+        data = {
+            "meta": {"schema_version": 3},
+            "epics": [
+                {"id": "e1", "tasks": [
+                    {"id": "T-1", "title": "x", "description": "initial"},
+                ]},
+            ],
+            "phases": [],
+        }
+        v3.save_v3(bp, data)
+        for i in range(5):
+            loaded = v3.load_v3(bp)
+            loaded["epics"][0]["tasks"][0]["description"] = f"iteration {i}"
+            v3.save_v3(bp, loaded)
+        final = v3.load_v3(bp)
+        assert final["epics"][0]["tasks"][0]["description"] == "iteration 4"
