@@ -74,6 +74,18 @@ from taskmaster_v3 import (
     update_issue as _update_issue,
     list_issue_ids as _list_issue_ids,
     sync_issue_index as _sync_issue_index,
+    LESSON_KINDS,
+    LESSON_TIERS,
+    write_lesson as _write_lesson,
+    read_lesson as _read_lesson,
+    update_lesson as _update_lesson,
+    reinforce_lesson as _reinforce_lesson,
+    list_lesson_ids as _list_lesson_ids,
+    match_lessons_for_task as _match_lessons_for_task,
+    lesson_digest as _lesson_digest,
+    core_lessons as _core_lessons,
+    sync_lesson_index as _sync_lesson_index,
+    lesson_eligible_for_promotion as _lesson_eligible_for_promotion,
 )
 
 
@@ -1620,6 +1632,221 @@ def backlog_issue_resync() -> str:
     _save(data)
     n = len(data.get("issues") or [])
     return f"Issue index resynced — {n} entries."
+
+
+@mcp.tool()
+def backlog_lesson_create(
+    title: str,
+    kind: str,
+    body: str = "",
+    files: list[str] | None = None,
+    task_titles_match: list[str] | None = None,
+    task_kinds: list[str] | None = None,
+    related_tasks: list[str] | None = None,
+    related_issues: list[str] | None = None,
+    tier: str = "active",
+) -> str:
+    """Create a project-scoped lesson — a reusable pattern, anti-pattern, or gotcha.
+
+    Lessons compound: each session reinforces lessons that get applied,
+    raising their priority. Auto-promote to 'core' tier (always loaded full)
+    when a gotcha/anti-pattern reaches reinforce_count >= 5.
+
+    Triggers determine when this lesson loads on `pick-task`:
+    - files: glob patterns matched against files the task will touch.
+    - task_titles_match: substrings checked against the task title.
+    - task_kinds: list of task kinds (feature/bug/spike/etc).
+
+    Args:
+        title: Required. One-line summary of the lesson.
+        kind: pattern | anti-pattern | gotcha.
+        body: Markdown body. Suggested sections: ## Why, ## What to do, ## Examples.
+        files: Glob patterns for trigger matching.
+        task_titles_match: Substrings for trigger matching.
+        task_kinds: Task kinds for trigger matching.
+        related_tasks / related_issues: Cross-refs.
+        tier: active (default) | core | retired.
+    """
+    bp = _backlog_path()
+    if not bp.exists():
+        return f"Error: no backlog found at {bp}. Run `backlog_init` first."
+    if kind not in LESSON_KINDS:
+        return f"Error: kind must be one of {LESSON_KINDS}"
+    if tier not in LESSON_TIERS:
+        return f"Error: tier must be one of {LESSON_TIERS}"
+    triggers = {
+        "files": files or [],
+        "task_titles_match": task_titles_match or [],
+        "task_kinds": task_kinds or [],
+    }
+    try:
+        lid, target = _write_lesson(
+            bp,
+            title=title,
+            kind=kind,
+            triggers=triggers,
+            body=body,
+            tier=tier,
+            related_tasks=related_tasks or [],
+            related_issues=related_issues or [],
+        )
+    except ValueError as exc:
+        return f"Error: {exc}"
+
+    data = _load()
+    _sync_lesson_index(data, bp)
+    _save(data)
+    return f"Lesson created: {lid} ({kind}, {tier}) — {title}\nFile: {target.relative_to(ROOT)}"
+
+
+@mcp.tool()
+def backlog_lesson_list(tier: str = "", kind: str = "") -> str:
+    """List lessons, optionally filtered by tier and/or kind."""
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    lines = []
+    for lid in _list_lesson_ids(bp):
+        try:
+            fm, _ = _read_lesson(bp, lid)
+        except Exception:
+            continue
+        if tier and fm.get("tier") != tier:
+            continue
+        if kind and fm.get("kind") != kind:
+            continue
+        rc = fm.get("reinforce_count", 0)
+        lines.append(f"- {fm['id']} [{fm.get('tier','active')}/{fm.get('kind','?')}] x{rc} — {fm.get('title','')}")
+    return "\n".join(lines) if lines else "No lessons match."
+
+
+@mcp.tool()
+def backlog_lesson_get(lesson_id: str) -> str:
+    """Read a lesson's full content (frontmatter + body)."""
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    try:
+        fm, body = _read_lesson(bp, lesson_id)
+    except FileNotFoundError:
+        return f"Lesson not found: {lesson_id}"
+    fm_lines = [f"  {k}: {v}" for k, v in fm.items()]
+    return "---\n" + "\n".join(fm_lines) + "\n---\n" + body
+
+
+@mcp.tool()
+def backlog_lesson_update(
+    lesson_id: str,
+    title: str = "",
+    kind: str = "",
+    tier: str = "",
+    files: list[str] | None = None,
+    task_titles_match: list[str] | None = None,
+    task_kinds: list[str] | None = None,
+    body: str = "",
+) -> str:
+    """Update a lesson's metadata or body. Pass empty values to skip a field."""
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    updates: dict[str, Any] = {}
+    if title:
+        updates["title"] = title
+    if kind:
+        if kind not in LESSON_KINDS:
+            return f"Error: kind must be one of {LESSON_KINDS}"
+        updates["kind"] = kind
+    if tier:
+        if tier not in LESSON_TIERS:
+            return f"Error: tier must be one of {LESSON_TIERS}"
+        updates["tier"] = tier
+    if files is not None or task_titles_match is not None or task_kinds is not None:
+        # Need a fresh read to merge trigger fields
+        fm, _ = _read_lesson(bp, lesson_id)
+        triggers = dict(fm.get("triggers") or {})
+        if files is not None:
+            triggers["files"] = files
+        if task_titles_match is not None:
+            triggers["task_titles_match"] = task_titles_match
+        if task_kinds is not None:
+            triggers["task_kinds"] = task_kinds
+        updates["triggers"] = triggers
+    if body:
+        updates["body"] = body
+    try:
+        _update_lesson(bp, lesson_id, **updates)
+    except FileNotFoundError:
+        return f"Lesson not found: {lesson_id}"
+    except ValueError as exc:
+        return f"Error: {exc}"
+    data = _load()
+    _sync_lesson_index(data, bp)
+    _save(data)
+    return f"Lesson updated: {lesson_id}"
+
+
+@mcp.tool()
+def backlog_lesson_reinforce(lesson_id: str) -> str:
+    """Mark a lesson as applied this session (reinforce_count++, last_reinforced=today).
+
+    Suggests promotion to core tier when a gotcha/anti-pattern reaches the
+    reinforcement threshold.
+    """
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    try:
+        fm = _reinforce_lesson(bp, lesson_id)
+    except FileNotFoundError:
+        return f"Lesson not found: {lesson_id}"
+    msg = f"Reinforced {lesson_id} → x{fm['reinforce_count']}"
+    if _lesson_eligible_for_promotion(fm):
+        msg += "\n→ Eligible for promotion to core tier (auto-load at session start). Use `backlog_lesson_update {} tier=core` to promote.".format(lesson_id)
+    return msg
+
+
+@mcp.tool()
+def backlog_lesson_digest() -> str:
+    """Return the slim digest of active-tier lessons for session-start injection.
+
+    Format: one line per lesson with id, kind, title. Capped at 30 entries.
+    Excludes core (loaded separately, full body) and retired tiers.
+    """
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    digest = _lesson_digest(bp)
+    if not digest:
+        return "No active lessons."
+    return "\n".join(f"- {d['id']} [{d['kind']}] {d['title']}" for d in digest)
+
+
+@mcp.tool()
+def backlog_lesson_match(
+    task_title: str = "",
+    touched_files: list[str] | None = None,
+) -> str:
+    """Find lessons matching a task by title and/or file globs.
+
+    Used by `pick-task` to inject relevant lessons (full body) before a
+    task starts. Returns up to 3 best-match lesson summaries.
+    """
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    matches = _match_lessons_for_task(
+        bp,
+        {"title": task_title or ""},
+        touched_files=touched_files or [],
+    )
+    if not matches:
+        return "No matching lessons."
+    lines = []
+    for fm, _body in matches:
+        lines.append(
+            f"- {fm.get('id')} [{fm.get('kind')}] x{fm.get('reinforce_count', 0)}: {fm.get('title')}"
+        )
+    return "\n".join(lines)
 
 
 @mcp.tool()

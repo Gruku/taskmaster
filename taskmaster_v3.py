@@ -763,6 +763,275 @@ def sync_issue_index(
     return backlog_data
 
 
+# ── Lessons ────────────────────────────────────────────────────
+
+LESSON_KINDS = ("pattern", "anti-pattern", "gotcha")
+LESSON_TIERS = ("active", "core", "retired")
+
+# Caps from the v3 spec.
+LESSON_DIGEST_CAP = 30          # max 'active' tier lessons in digest
+LESSON_CORE_CAP = 5             # max 'core' tier lessons (always loaded full)
+LESSON_TRIGGER_MATCH_CAP = 3    # max trigger-matched lessons per pick-task
+
+# Auto-promotion / decay thresholds.
+LESSON_PROMOTE_REINFORCE = 5    # reinforce_count >= this → suggest core promotion
+LESSON_DECAY_DAYS = 180         # if last_reinforced older + reinforce_count < 2 → retire
+LESSON_DECAY_REINFORCE = 2      # threshold for auto-decay
+
+_LESSON_INDEX_FIELDS = ("id", "title", "kind", "tier", "reinforce_count")
+
+
+def lesson_path(backlog_path: Path, lesson_id: str) -> Path:
+    return backlog_path.parent / "lessons" / f"{lesson_id}.md"
+
+
+def lesson_dir(backlog_path: Path) -> Path:
+    return backlog_path.parent / "lessons"
+
+
+def list_lesson_ids(backlog_path: Path) -> list[str]:
+    """List lesson ids on disk, sorted by trailing number."""
+    d = lesson_dir(backlog_path)
+    if not d.exists():
+        return []
+
+    def _rank(p: Path) -> int:
+        m = re.search(r"(\d+)$", p.stem)
+        return int(m.group(1)) if m else -1
+
+    return [p.stem for p in sorted(d.glob("L-*.md"), key=_rank)]
+
+
+def next_lesson_id(backlog_path: Path) -> str:
+    existing = list_lesson_ids(backlog_path)
+    nums = []
+    for ident in existing:
+        m = re.search(r"(\d+)$", ident)
+        if m:
+            nums.append(int(m.group(1)))
+    n = (max(nums) + 1) if nums else 1
+    return f"L-{n:03d}"
+
+
+def _validate_lesson(fm: dict[str, Any]) -> None:
+    if fm.get("kind") not in LESSON_KINDS:
+        raise ValueError(f"kind must be one of {LESSON_KINDS}, got {fm.get('kind')!r}")
+    tier = fm.get("tier", "active")
+    if tier not in LESSON_TIERS:
+        raise ValueError(f"tier must be one of {LESSON_TIERS}, got {tier!r}")
+
+
+def write_lesson(
+    backlog_path: Path,
+    *,
+    title: str,
+    kind: str,
+    triggers: dict[str, Any] | None = None,
+    body: str = "",
+    tier: str = "active",
+    related_tasks: list[str] | None = None,
+    related_issues: list[str] | None = None,
+    lesson_id: str | None = None,
+) -> tuple[str, Path]:
+    """Create a new lesson. Returns (id, path)."""
+    if not title or not title.strip():
+        raise ValueError("lesson title is required")
+    lid = lesson_id or next_lesson_id(backlog_path)
+    fm: dict[str, Any] = {
+        "id": lid,
+        "title": title.strip(),
+        "kind": kind,
+        "triggers": triggers or {"files": [], "task_titles_match": [], "task_kinds": []},
+        "tier": tier,
+        "reinforce_count": 0,
+        "last_reinforced": None,
+        "created": date.today().isoformat(),
+        "related_tasks": list(related_tasks or []),
+        "related_issues": list(related_issues or []),
+    }
+    _validate_lesson(fm)
+    write_task_file(lesson_path(backlog_path, lid), fm, body)
+    return lid, lesson_path(backlog_path, lid)
+
+
+def read_lesson(backlog_path: Path, lesson_id: str) -> tuple[dict[str, Any], str]:
+    return read_task_file(lesson_path(backlog_path, lesson_id))
+
+
+def update_lesson(
+    backlog_path: Path,
+    lesson_id: str,
+    **updates: Any,
+) -> tuple[dict[str, Any], str]:
+    fm, body = read_lesson(backlog_path, lesson_id)
+    new_body = updates.pop("body", body)
+    fm.update({k: v for k, v in updates.items() if v is not None})
+    _validate_lesson(fm)
+    write_task_file(lesson_path(backlog_path, lesson_id), fm, new_body)
+    return fm, new_body
+
+
+def reinforce_lesson(backlog_path: Path, lesson_id: str) -> dict[str, Any]:
+    """Bump reinforce_count and set last_reinforced=today. Returns updated fm."""
+    fm, body = read_lesson(backlog_path, lesson_id)
+    fm["reinforce_count"] = int(fm.get("reinforce_count") or 0) + 1
+    fm["last_reinforced"] = date.today().isoformat()
+    write_task_file(lesson_path(backlog_path, lesson_id), fm, body)
+    return fm
+
+
+def lesson_eligible_for_promotion(fm: dict[str, Any]) -> bool:
+    """Eligible for core tier? reinforce_count >= threshold, kind is gotcha/anti-pattern."""
+    return (
+        fm.get("tier") == "active"
+        and fm.get("kind") in ("gotcha", "anti-pattern")
+        and int(fm.get("reinforce_count") or 0) >= LESSON_PROMOTE_REINFORCE
+    )
+
+
+def lesson_eligible_for_decay(fm: dict[str, Any], today: date | None = None) -> bool:
+    """Should this lesson auto-retire?
+
+    Active tier + last_reinforced older than LESSON_DECAY_DAYS + reinforce_count below threshold.
+    """
+    if fm.get("tier") != "active":
+        return False
+    if int(fm.get("reinforce_count") or 0) >= LESSON_DECAY_REINFORCE:
+        return False
+    last = fm.get("last_reinforced")
+    if not last:
+        # Never reinforced — judge by `created` date as a proxy.
+        last = fm.get("created")
+    if not last:
+        return False
+    try:
+        last_d = datetime.strptime(str(last), "%Y-%m-%d").date()
+    except ValueError:
+        return False
+    today = today or date.today()
+    return (today - last_d).days >= LESSON_DECAY_DAYS
+
+
+def _glob_match(patterns: list[str], path: str) -> bool:
+    """Simple glob match — supports * and **. Path-separator agnostic."""
+    if not patterns:
+        return False
+    norm = path.replace("\\", "/")
+    import fnmatch
+    for pat in patterns:
+        pat_norm = pat.replace("\\", "/")
+        # Handle ** by translating to fnmatch-friendly: ** = match anything including /.
+        if "**" in pat_norm:
+            # Build regex: ** -> .*, * -> [^/]*
+            regex = (
+                "^"
+                + re.escape(pat_norm)
+                .replace(r"\*\*", ".*")
+                .replace(r"\*", "[^/]*")
+                .replace(r"\?", ".")
+                + "$"
+            )
+            if re.match(regex, norm):
+                return True
+        elif fnmatch.fnmatch(norm, pat_norm):
+            return True
+    return False
+
+
+def match_lessons_for_task(
+    backlog_path: Path,
+    task: dict[str, Any],
+    touched_files: list[str] | None = None,
+    cap: int = LESSON_TRIGGER_MATCH_CAP,
+) -> list[tuple[dict[str, Any], str]]:
+    """Find lessons whose triggers match a task's title or touched files.
+
+    Returns up to `cap` (frontmatter, body) pairs, sorted by reinforce_count desc.
+    Only `active` and `core` tier lessons are considered — retired never matches.
+    """
+    title = (task.get("title") or "").lower()
+    files = touched_files or []
+    matches: list[tuple[dict[str, Any], str, int]] = []
+    for lid in list_lesson_ids(backlog_path):
+        try:
+            fm, body = read_lesson(backlog_path, lid)
+        except (OSError, ValueError):
+            continue
+        if fm.get("tier") not in ("active", "core"):
+            continue
+        triggers = fm.get("triggers") or {}
+        title_pats = triggers.get("task_titles_match") or []
+        if any(p and p.lower() in title for p in title_pats):
+            matches.append((fm, body, int(fm.get("reinforce_count") or 0)))
+            continue
+        file_pats = triggers.get("files") or []
+        if any(_glob_match(file_pats, f) for f in files):
+            matches.append((fm, body, int(fm.get("reinforce_count") or 0)))
+    matches.sort(key=lambda m: -m[2])
+    return [(fm, body) for fm, body, _ in matches[:cap]]
+
+
+def lesson_digest(
+    backlog_path: Path,
+    cap: int = LESSON_DIGEST_CAP,
+) -> list[dict[str, Any]]:
+    """Return the slim digest of active-tier lessons (id+title+kind only).
+
+    Excludes core tier (those load in full separately) and retired tier.
+    Sorted by reinforce_count desc so the most-applied are first.
+    """
+    items: list[tuple[dict[str, Any], int]] = []
+    for lid in list_lesson_ids(backlog_path):
+        try:
+            fm, _ = read_lesson(backlog_path, lid)
+        except (OSError, ValueError):
+            continue
+        if fm.get("tier") != "active":
+            continue
+        items.append(
+            (
+                {"id": fm.get("id"), "title": fm.get("title"), "kind": fm.get("kind")},
+                int(fm.get("reinforce_count") or 0),
+            )
+        )
+    items.sort(key=lambda i: -i[1])
+    return [d for d, _ in items[:cap]]
+
+
+def core_lessons(backlog_path: Path, cap: int = LESSON_CORE_CAP) -> list[tuple[dict[str, Any], str]]:
+    """Return up to `cap` core-tier lessons in full (frontmatter + body)."""
+    out: list[tuple[dict[str, Any], str, int]] = []
+    for lid in list_lesson_ids(backlog_path):
+        try:
+            fm, body = read_lesson(backlog_path, lid)
+        except (OSError, ValueError):
+            continue
+        if fm.get("tier") == "core":
+            out.append((fm, body, int(fm.get("reinforce_count") or 0)))
+    out.sort(key=lambda m: -m[2])
+    return [(fm, body) for fm, body, _ in out[:cap]]
+
+
+def _lesson_index_entry(fm: dict[str, Any]) -> dict[str, Any]:
+    return {f: fm.get(f) for f in _LESSON_INDEX_FIELDS if fm.get(f) is not None}
+
+
+def sync_lesson_index(
+    backlog_data: dict[str, Any],
+    backlog_path: Path,
+) -> dict[str, Any]:
+    """Rebuild backlog_data['lessons_meta'] from disk."""
+    entries: list[dict[str, Any]] = []
+    for lid in list_lesson_ids(backlog_path):
+        try:
+            fm, _ = read_lesson(backlog_path, lid)
+        except (OSError, ValueError):
+            continue
+        entries.append(_lesson_index_entry(fm))
+    backlog_data["lessons_meta"] = entries
+    return backlog_data
+
+
 def format_recap(diff: dict[str, Any]) -> str:
     """Render a recap diff as a compact human-readable string.
 
