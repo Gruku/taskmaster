@@ -150,3 +150,101 @@ class TestTaskFileIO:
         path = tmp_path / "T-001.md"
         v3.write_task_file(path, {"id": "T-001"}, "x")
         assert list(tmp_path.glob("*.tmp")) == []
+
+
+class TestV3LoadSave:
+    def _v3_backlog(self) -> dict:
+        return {
+            "meta": {"project": "p", "schema_version": 3, "updated": "2026-04-26"},
+            "context": {},
+            "epics": [
+                {
+                    "id": "features",
+                    "name": "Features",
+                    "tasks": [
+                        {
+                            "id": "T-001",
+                            "title": "Build login",
+                            "status": "in-progress",
+                            "priority": "high",
+                            "description": "Wire up the login form.",
+                            "notes": "Watch for cookie scope.",
+                            v3.BODY_KEY: "## Decisions\nWent with cookie auth.\n",
+                        },
+                        {
+                            "id": "T-002",
+                            "title": "No heavy fields",
+                            "status": "todo",
+                            "priority": "low",
+                        },
+                    ],
+                }
+            ],
+            "phases": [],
+        }
+
+    def test_save_writes_slim_index_and_task_files(self, tmp_path: Path):
+        bp = tmp_path / ".taskmaster" / "backlog.yaml"
+        data = self._v3_backlog()
+        v3.save_v3(bp, data)
+
+        # Slim index: heavy fields stripped from yaml task entries
+        import yaml as _y
+        loaded_yaml = _y.safe_load(bp.read_text(encoding="utf-8"))
+        t1 = loaded_yaml["epics"][0]["tasks"][0]
+        assert "description" not in t1
+        assert "notes" not in t1
+        assert t1["id"] == "T-001"
+        assert t1["title"] == "Build login"
+
+        # T-001 has heavy content → file written
+        assert (tmp_path / ".taskmaster" / "tasks" / "T-001.md").exists()
+        # T-002 has no heavy content → no file
+        assert not (tmp_path / ".taskmaster" / "tasks" / "T-002.md").exists()
+
+    def test_load_merges_heavy_fields_back(self, tmp_path: Path):
+        bp = tmp_path / ".taskmaster" / "backlog.yaml"
+        original = self._v3_backlog()
+        v3.save_v3(bp, original)
+        loaded = v3.load_v3(bp)
+
+        t1 = loaded["epics"][0]["tasks"][0]
+        assert t1["description"] == "Wire up the login form."
+        assert t1["notes"] == "Watch for cookie scope."
+        assert t1[v3.BODY_KEY] == "## Decisions\nWent with cookie auth.\n"
+
+        t2 = loaded["epics"][0]["tasks"][1]
+        assert "description" not in t2
+        assert v3.BODY_KEY not in t2
+
+    def test_roundtrip_preserves_data(self, tmp_path: Path):
+        bp = tmp_path / ".taskmaster" / "backlog.yaml"
+        original = self._v3_backlog()
+        v3.save_v3(bp, original)
+        loaded = v3.load_v3(bp)
+
+        # All task fields survive the roundtrip
+        t1_orig = original["epics"][0]["tasks"][0]
+        t1_loaded = loaded["epics"][0]["tasks"][0]
+        for key in ("id", "title", "status", "priority", "description", "notes", v3.BODY_KEY):
+            assert t1_loaded[key] == t1_orig[key], f"field {key!r} differs"
+
+    def test_load_tolerates_missing_task_files(self, tmp_path: Path):
+        # Hand-craft a v3 backlog with a slim task entry but no per-task file.
+        bp = tmp_path / ".taskmaster" / "backlog.yaml"
+        bp.parent.mkdir(parents=True)
+        import yaml as _y
+        bp.write_text(
+            _y.dump({
+                "meta": {"schema_version": 3},
+                "epics": [{"id": "e", "tasks": [{"id": "T-99", "title": "Phantom"}]}],
+            }),
+            encoding="utf-8",
+        )
+        data = v3.load_v3(bp)
+        assert data["epics"][0]["tasks"][0]["id"] == "T-99"
+        assert "description" not in data["epics"][0]["tasks"][0]
+
+    def test_task_file_path(self, tmp_path: Path):
+        bp = tmp_path / ".taskmaster" / "backlog.yaml"
+        assert v3.task_file_path(bp, "T-001") == tmp_path / ".taskmaster" / "tasks" / "T-001.md"

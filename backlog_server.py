@@ -53,6 +53,8 @@ from taskmaster_v3 import (
     SCHEMA_DEFAULT,
     detect_schema_version as _detect_schema_version,
     atomic_write as _atomic_write,
+    load_v3 as _load_v3,
+    save_v3 as _save_v3,
 )
 
 
@@ -138,8 +140,12 @@ def _normalize_priority(value: str) -> str:
 
 
 def _load() -> dict:
-    data = yaml.safe_load(_backlog_path().read_text(encoding="utf-8"))
-    # Backfill missing 'created' on tasks + normalize legacy priorities
+    bp = _backlog_path()
+    # Peek at version without per-file enrichment so we can dispatch.
+    raw = yaml.safe_load(bp.read_text(encoding="utf-8")) or {}
+    version = _detect_schema_version(raw)
+    data = _load_v3(bp) if version >= SCHEMA_V3 else raw
+    # Backfill missing 'created' on tasks + normalize legacy priorities (applies to both versions).
     for epic in data.get("epics", []):
         for t in epic.get("tasks", []):
             if not t.get("created"):
@@ -154,10 +160,13 @@ def _save(data: dict) -> None:
     with _backlog_lock:
         data["meta"]["updated"] = _today()
         bp = _backlog_path()
-        _atomic_write(
-            bp,
-            yaml.dump(data, default_flow_style=False, sort_keys=False, allow_unicode=True),
-        )
+        if _detect_schema_version(data) >= SCHEMA_V3:
+            _save_v3(bp, data)
+        else:
+            _atomic_write(
+                bp,
+                yaml.dump(data, default_flow_style=False, sort_keys=False, allow_unicode=True),
+            )
 
 
 def _find_task(data: dict, task_id: str) -> tuple[dict, dict] | None:
