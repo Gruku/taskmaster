@@ -611,6 +611,158 @@ def sync_handover_index(
     return backlog_data
 
 
+# ── Issues ─────────────────────────────────────────────────────
+
+ISSUE_STATUSES = ("open", "investigating", "fixed", "wontfix", "duplicate")
+ISSUE_SEVERITIES = ("P0", "P1", "P2", "P3")
+_SEVERITY_RANK = {s: i for i, s in enumerate(ISSUE_SEVERITIES)}  # P0=0 most-severe
+
+# Index entry slim metadata kept in backlog.yaml for fast dashboard render.
+_ISSUE_INDEX_FIELDS = (
+    "id",
+    "title",
+    "status",
+    "severity",
+    "components",
+    "related_tasks",
+)
+
+
+def issue_path(backlog_path: Path, issue_id: str) -> Path:
+    return backlog_path.parent / "issues" / f"{issue_id}.md"
+
+
+def issue_dir(backlog_path: Path) -> Path:
+    return backlog_path.parent / "issues"
+
+
+def list_issue_ids(backlog_path: Path) -> list[str]:
+    """List issue ids on disk, sorted numerically by the trailing number."""
+    d = issue_dir(backlog_path)
+    if not d.exists():
+        return []
+
+    def _rank(p: Path) -> int:
+        m = re.search(r"(\d+)$", p.stem)
+        return int(m.group(1)) if m else -1
+
+    files = sorted(d.glob("ISS-*.md"), key=_rank)
+    return [p.stem for p in files]
+
+
+def next_issue_id(backlog_path: Path) -> str:
+    """Allocate the next ISS-NNN id (zero-padded, 3+ digits)."""
+    existing = list_issue_ids(backlog_path)
+    nums = []
+    for ident in existing:
+        m = re.search(r"(\d+)$", ident)
+        if m:
+            nums.append(int(m.group(1)))
+    n = (max(nums) + 1) if nums else 1
+    return f"ISS-{n:03d}"
+
+
+def _validate_issue(fm: dict[str, Any]) -> None:
+    """Raise ValueError if frontmatter violates the issue invariants."""
+    status = fm.get("status")
+    if status not in ISSUE_STATUSES:
+        raise ValueError(f"status must be one of {ISSUE_STATUSES}, got {status!r}")
+    sev = fm.get("severity")
+    if sev not in ISSUE_SEVERITIES:
+        raise ValueError(f"severity must be one of {ISSUE_SEVERITIES}, got {sev!r}")
+    if status == "fixed" and not fm.get("fixed_in_task"):
+        raise ValueError("status=fixed requires fixed_in_task to be set")
+    if status == "duplicate" and not fm.get("duplicate_of"):
+        raise ValueError("status=duplicate requires duplicate_of to be set")
+
+
+def write_issue(
+    backlog_path: Path,
+    *,
+    title: str,
+    severity: str,
+    impact: str = "",
+    components: list[str] | None = None,
+    location: list[str] | None = None,
+    related_tasks: list[str] | None = None,
+    discovered: str | None = None,
+    discovered_by: str = "",
+    body: str = "",
+    issue_id: str | None = None,
+    status: str = "open",
+) -> tuple[str, Path]:
+    """Create a new issue file. Returns (id, path)."""
+    if not title or not title.strip():
+        raise ValueError("issue title is required")
+    iid = issue_id or next_issue_id(backlog_path)
+    fm: dict[str, Any] = {
+        "id": iid,
+        "title": title.strip(),
+        "status": status,
+        "severity": severity,
+        "components": list(components or []),
+        "impact": impact.strip(),
+        "location": list(location or []),
+        "discovered": discovered or date.today().isoformat(),
+        "discovered_by": discovered_by,
+        "resolved": None,
+        "related_tasks": list(related_tasks or []),
+        "fixed_in_task": None,
+        "duplicate_of": None,
+    }
+    _validate_issue(fm)
+    write_task_file(issue_path(backlog_path, iid), fm, body)
+    return iid, issue_path(backlog_path, iid)
+
+
+def read_issue(backlog_path: Path, issue_id: str) -> tuple[dict[str, Any], str]:
+    return read_task_file(issue_path(backlog_path, issue_id))
+
+
+def update_issue(
+    backlog_path: Path,
+    issue_id: str,
+    **updates: Any,
+) -> tuple[dict[str, Any], str]:
+    """Apply partial updates to an issue's frontmatter, validate, and rewrite.
+
+    Body is preserved unchanged unless `body=` is passed.
+    """
+    fm, body = read_issue(backlog_path, issue_id)
+    new_body = updates.pop("body", body)
+    fm.update({k: v for k, v in updates.items() if v is not None})
+    if fm.get("status") == "fixed" and not fm.get("resolved"):
+        fm["resolved"] = date.today().isoformat()
+    _validate_issue(fm)
+    write_task_file(issue_path(backlog_path, issue_id), fm, new_body)
+    return fm, new_body
+
+
+def _issue_index_entry(fm: dict[str, Any]) -> dict[str, Any]:
+    return {f: fm.get(f) for f in _ISSUE_INDEX_FIELDS if fm.get(f) is not None}
+
+
+def sync_issue_index(
+    backlog_data: dict[str, Any],
+    backlog_path: Path,
+) -> dict[str, Any]:
+    """Rebuild backlog_data['issues'] from disk.
+
+    Sorted by (severity asc, id asc) so P0s float to the top of the list.
+    No archive/cap — issues are bounded by reality, not policy.
+    """
+    entries: list[dict[str, Any]] = []
+    for iid in list_issue_ids(backlog_path):
+        try:
+            fm, _ = read_issue(backlog_path, iid)
+        except (OSError, ValueError):
+            continue
+        entries.append(_issue_index_entry(fm))
+    entries.sort(key=lambda e: (_SEVERITY_RANK.get(e.get("severity", "P3"), 99), e.get("id", "")))
+    backlog_data["issues"] = entries
+    return backlog_data
+
+
 def format_recap(diff: dict[str, Any]) -> str:
     """Render a recap diff as a compact human-readable string.
 

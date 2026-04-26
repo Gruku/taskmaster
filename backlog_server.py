@@ -67,6 +67,13 @@ from taskmaster_v3 import (
     list_handover_ids as _list_handover_ids,
     latest_handover_id as _latest_handover_id,
     sync_handover_index as _sync_handover_index,
+    ISSUE_STATUSES,
+    ISSUE_SEVERITIES,
+    write_issue as _write_issue,
+    read_issue as _read_issue,
+    update_issue as _update_issue,
+    list_issue_ids as _list_issue_ids,
+    sync_issue_index as _sync_issue_index,
 )
 
 
@@ -1436,6 +1443,183 @@ def backlog_handover_resync() -> str:
     _save(data)
     n = len(data.get("handovers") or [])
     return f"Handover index resynced — {n} entries in `backlog.yaml`."
+
+
+@mcp.tool()
+def backlog_issue_create(
+    title: str,
+    severity: str,
+    impact: str = "",
+    components: list[str] | None = None,
+    location: list[str] | None = None,
+    related_tasks: list[str] | None = None,
+    discovered_by: str = "",
+    body: str = "",
+) -> str:
+    """Log a bug as a first-class issue, separate from tasks.
+
+    A *task* is the unit of work; an *issue* is the unit of broken-ness.
+    One issue can spawn multiple fix attempts; one task can close many issues.
+
+    Args:
+        title: Required. Short summary.
+        severity: One of P0 (data loss/security), P1, P2, P3 (cosmetic).
+        impact: Why this matters (user-visible consequences).
+        components: Tags for which parts of the system are affected.
+        location: file:line refs to relevant code.
+        related_tasks: Task ids attempting or related to this issue.
+        discovered_by: Who/what found it (manual QA, alert, customer report).
+        body: Markdown body for repro steps + investigation notes.
+    """
+    bp = _backlog_path()
+    if not bp.exists():
+        return f"Error: no backlog found at {bp}. Run `backlog_init` first."
+    if severity not in ISSUE_SEVERITIES:
+        return f"Error: severity must be one of {ISSUE_SEVERITIES}"
+    try:
+        iid, target = _write_issue(
+            bp,
+            title=title,
+            severity=severity,
+            impact=impact,
+            components=components or [],
+            location=location or [],
+            related_tasks=related_tasks or [],
+            discovered_by=discovered_by,
+            body=body,
+        )
+    except ValueError as exc:
+        return f"Error: {exc}"
+
+    data = _load()
+    _sync_issue_index(data, bp)
+    _save(data)
+    return f"Issue created: {iid} ({severity}) — {title}\nFile: {target.relative_to(ROOT)}"
+
+
+@mcp.tool()
+def backlog_issue_list(
+    severity: str = "",
+    status: str = "",
+    limit: int = 20,
+) -> str:
+    """List issues, optionally filtered by severity and/or status.
+
+    Reads from the backlog.yaml index (sorted P0 → P3). Default lists the
+    top 20 active issues regardless of status — pass `status=open` to
+    focus on what still needs work.
+    """
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    data = _load()
+    entries = data.get("issues") or []
+    if severity:
+        entries = [e for e in entries if e.get("severity") == severity]
+    if status:
+        entries = [e for e in entries if e.get("status") == status]
+    entries = entries[: max(1, limit)]
+    if not entries:
+        return "No issues match."
+    lines = []
+    for e in entries:
+        comps = ", ".join(e.get("components") or [])
+        comps_tag = f" [{comps}]" if comps else ""
+        lines.append(
+            f"- {e['id']} {e.get('severity', '?')} {e.get('status', '?'):14} "
+            f"— {e.get('title', '')}{comps_tag}"
+        )
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def backlog_issue_get(issue_id: str) -> str:
+    """Read an issue's full content (frontmatter + body)."""
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    try:
+        fm, body = _read_issue(bp, issue_id)
+    except FileNotFoundError:
+        return f"Issue not found: {issue_id}"
+    fm_lines = [f"  {k}: {v}" for k, v in fm.items()]
+    return "---\n" + "\n".join(fm_lines) + "\n---\n" + body
+
+
+@mcp.tool()
+def backlog_issue_update(
+    issue_id: str,
+    status: str = "",
+    title: str = "",
+    severity: str = "",
+    impact: str = "",
+    components: list[str] | None = None,
+    location: list[str] | None = None,
+    related_tasks: list[str] | None = None,
+    fixed_in_task: str = "",
+    duplicate_of: str = "",
+    body: str = "",
+) -> str:
+    """Update an issue's metadata or body. Pass empty strings/None to skip a field.
+
+    Lifecycle constraints enforced:
+    - status=fixed requires fixed_in_task to be set.
+    - status=duplicate requires duplicate_of to be set.
+    - resolved date is auto-filled when status moves to fixed.
+    """
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    updates: dict[str, Any] = {}
+    if status:
+        if status not in ISSUE_STATUSES:
+            return f"Error: status must be one of {ISSUE_STATUSES}"
+        updates["status"] = status
+    if title:
+        updates["title"] = title
+    if severity:
+        if severity not in ISSUE_SEVERITIES:
+            return f"Error: severity must be one of {ISSUE_SEVERITIES}"
+        updates["severity"] = severity
+    if impact:
+        updates["impact"] = impact
+    if components is not None:
+        updates["components"] = components
+    if location is not None:
+        updates["location"] = location
+    if related_tasks is not None:
+        updates["related_tasks"] = related_tasks
+    if fixed_in_task:
+        updates["fixed_in_task"] = fixed_in_task
+    if duplicate_of:
+        updates["duplicate_of"] = duplicate_of
+    if body:
+        updates["body"] = body
+
+    try:
+        fm, _ = _update_issue(bp, issue_id, **updates)
+    except FileNotFoundError:
+        return f"Issue not found: {issue_id}"
+    except ValueError as exc:
+        return f"Error: {exc}"
+
+    data = _load()
+    _sync_issue_index(data, bp)
+    _save(data)
+    return f"Issue updated: {issue_id} → status={fm['status']}, severity={fm['severity']}"
+
+
+@mcp.tool()
+def backlog_issue_resync() -> str:
+    """Rebuild the issue index in backlog.yaml from disk."""
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    data = _load()
+    _sync_issue_index(data, bp)
+    _save(data)
+    n = len(data.get("issues") or [])
+    return f"Issue index resynced — {n} entries."
 
 
 @mcp.tool()

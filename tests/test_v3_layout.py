@@ -731,3 +731,97 @@ class TestHandoverIndex:
         # 2 archived, split across years
         assert (bp.parent / "handovers" / "_archive" / "2025").exists()
         assert (bp.parent / "handovers" / "_archive" / "2026").exists()
+
+
+class TestIssues:
+    def _bp(self, tmp_path: Path) -> Path:
+        return tmp_path / ".taskmaster" / "backlog.yaml"
+
+    def test_next_id_allocates_sequentially(self, tmp_path: Path):
+        bp = self._bp(tmp_path)
+        assert v3.next_issue_id(bp) == "ISS-001"
+        v3.write_issue(bp, title="A", severity="P1")
+        assert v3.next_issue_id(bp) == "ISS-002"
+        v3.write_issue(bp, title="B", severity="P0")
+        assert v3.next_issue_id(bp) == "ISS-003"
+
+    def test_create_and_read_roundtrip(self, tmp_path: Path):
+        bp = self._bp(tmp_path)
+        iid, target = v3.write_issue(
+            bp,
+            title="Login accepts whitespace password",
+            severity="P1",
+            impact="Effectively no password.",
+            components=["auth"],
+            location=["src/auth/validate.ts:42"],
+            related_tasks=["features-007"],
+            discovered="2026-04-15",
+            body="## Repro\n1. Submit empty password\n",
+        )
+        assert iid == "ISS-001"
+        assert target.exists()
+        fm, body = v3.read_issue(bp, iid)
+        assert fm["title"] == "Login accepts whitespace password"
+        assert fm["severity"] == "P1"
+        assert fm["status"] == "open"
+        assert fm["components"] == ["auth"]
+        assert fm["location"] == ["src/auth/validate.ts:42"]
+        assert fm["related_tasks"] == ["features-007"]
+        assert "Repro" in body
+
+    def test_invalid_severity_rejected(self, tmp_path: Path):
+        bp = self._bp(tmp_path)
+        with pytest.raises(ValueError):
+            v3.write_issue(bp, title="x", severity="urgent")
+
+    def test_invalid_status_rejected(self, tmp_path: Path):
+        bp = self._bp(tmp_path)
+        with pytest.raises(ValueError):
+            v3.write_issue(bp, title="x", severity="P1", status="bogus")
+
+    def test_fixed_requires_fixed_in_task(self, tmp_path: Path):
+        bp = self._bp(tmp_path)
+        iid, _ = v3.write_issue(bp, title="x", severity="P1")
+        with pytest.raises(ValueError):
+            v3.update_issue(bp, iid, status="fixed")
+
+    def test_fixed_with_task_sets_resolved(self, tmp_path: Path):
+        bp = self._bp(tmp_path)
+        iid, _ = v3.write_issue(bp, title="x", severity="P1")
+        fm, _ = v3.update_issue(bp, iid, status="fixed", fixed_in_task="features-007")
+        assert fm["status"] == "fixed"
+        assert fm["resolved"]  # ISO date populated
+
+    def test_duplicate_requires_target(self, tmp_path: Path):
+        bp = self._bp(tmp_path)
+        iid, _ = v3.write_issue(bp, title="x", severity="P1")
+        with pytest.raises(ValueError):
+            v3.update_issue(bp, iid, status="duplicate")
+        v3.update_issue(bp, iid, status="duplicate", duplicate_of="ISS-002")  # ok
+
+    def test_index_sorted_by_severity(self, tmp_path: Path):
+        bp = self._bp(tmp_path)
+        v3.write_issue(bp, title="low", severity="P3")
+        v3.write_issue(bp, title="critical", severity="P0")
+        v3.write_issue(bp, title="high", severity="P1")
+        data: dict = {}
+        v3.sync_issue_index(data, bp)
+        sevs = [e["severity"] for e in data["issues"]]
+        assert sevs == ["P0", "P1", "P3"]
+
+    def test_index_entry_is_slim(self, tmp_path: Path):
+        bp = self._bp(tmp_path)
+        v3.write_issue(
+            bp,
+            title="x",
+            severity="P2",
+            impact="long impact text" * 100,
+            body="long body" * 1000,
+        )
+        data: dict = {}
+        v3.sync_issue_index(data, bp)
+        entry = data["issues"][0]
+        # impact, body etc not in index
+        assert set(entry.keys()) <= {
+            "id", "title", "status", "severity", "components", "related_tasks"
+        }
