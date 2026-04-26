@@ -14,7 +14,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from datetime import datetime, timezone
+import re
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -444,6 +445,170 @@ def diff_against_snapshot(
         "tasks_changed": tasks_changed,
         "phase_changed": phase_changed,
     }
+
+
+# ── Handovers ──────────────────────────────────────────────────
+
+# Canonical session_kind values (free-form string in storage; these are
+# the well-known ones that may get special treatment elsewhere).
+HANDOVER_KINDS = ("end-of-day", "context-handoff", "crash-recovery", "auto-stage")
+
+# Index cap — `handovers:` array in backlog.yaml is bounded.
+HANDOVER_INDEX_CAP = 30
+
+
+def slugify(text: str, max_len: int = 40) -> str:
+    """Reduce arbitrary text to a URL-safe slug.
+
+    Lowercase, alnum + hyphens only, collapsed runs, length-capped. Empty
+    input falls back to 'untitled' so the resulting handover id is always
+    a valid filename.
+    """
+    if not text:
+        return "untitled"
+    s = re.sub(r"[^a-zA-Z0-9]+", "-", text).strip("-").lower()
+    if not s:
+        return "untitled"
+    return s[:max_len].rstrip("-") or "untitled"
+
+
+def make_handover_id(date_str: str, tldr: str) -> str:
+    """Build a handover id from a date and tldr text."""
+    return f"{date_str}-{slugify(tldr)}"
+
+
+def handover_path(backlog_path: Path, handover_id: str) -> Path:
+    """Resolve the file path for a given handover id."""
+    return backlog_path.parent / "handovers" / f"{handover_id}.md"
+
+
+def handover_dir(backlog_path: Path) -> Path:
+    return backlog_path.parent / "handovers"
+
+
+def write_handover(
+    backlog_path: Path,
+    *,
+    tldr: str,
+    next_action: str = "",
+    body: str = "",
+    task_ids: list[str] | None = None,
+    session_kind: str = "end-of-day",
+    when: str | None = None,
+    context_size_at_write: str | None = None,
+) -> tuple[str, Path]:
+    """Write a new handover file.
+
+    Returns (handover_id, file_path). The id is `<date>-<slug-of-tldr>`. If
+    a handover with the same id already exists the slug gets a numeric
+    suffix to avoid clobbering same-day handovers with similar tldrs.
+    """
+    if not tldr or not tldr.strip():
+        raise ValueError("handover tldr is required")
+    when = when or date.today().isoformat()
+    base_id = make_handover_id(when, tldr)
+    target = handover_path(backlog_path, base_id)
+    final_id = base_id
+    suffix = 2
+    while target.exists():
+        final_id = f"{base_id}-{suffix}"
+        target = handover_path(backlog_path, final_id)
+        suffix += 1
+
+    fm: dict[str, Any] = {
+        "id": final_id,
+        "date": when,
+        "tldr": tldr.strip(),
+        "next_action": (next_action or "").strip(),
+        "task_ids": list(task_ids or []),
+        "session_kind": session_kind,
+    }
+    if context_size_at_write:
+        fm["context_size_at_write"] = context_size_at_write
+
+    write_task_file(target, fm, body)
+    return final_id, target
+
+
+def read_handover(backlog_path: Path, handover_id: str) -> tuple[dict[str, Any], str]:
+    """Read a handover file by id. Raises FileNotFoundError if missing."""
+    return read_task_file(handover_path(backlog_path, handover_id))
+
+
+def list_handover_ids(backlog_path: Path) -> list[str]:
+    """List handover ids on disk, sorted newest-first by id (date-prefixed)."""
+    d = handover_dir(backlog_path)
+    if not d.exists():
+        return []
+    ids = [p.stem for p in d.glob("*.md")]
+    ids.sort(reverse=True)
+    return ids
+
+
+def latest_handover_id(backlog_path: Path) -> str | None:
+    ids = list_handover_ids(backlog_path)
+    return ids[0] if ids else None
+
+
+# Fields kept in the backlog.yaml `handovers:` index entry.
+_HANDOVER_INDEX_FIELDS = ("id", "date", "tldr", "next_action", "task_ids", "session_kind")
+
+
+def _handover_index_entry(fm: dict[str, Any]) -> dict[str, Any]:
+    """Project a handover frontmatter dict to its slim index entry."""
+    return {f: fm.get(f) for f in _HANDOVER_INDEX_FIELDS if fm.get(f) is not None}
+
+
+def archive_handover(backlog_path: Path, handover_id: str) -> Path:
+    """Move a handover file from handovers/ to handovers/_archive/<year>/.
+
+    The year is parsed from the id prefix (YYYY-...). If the id doesn't
+    follow that pattern, archive under handovers/_archive/unknown/.
+    Returns the new path.
+    """
+    src = handover_path(backlog_path, handover_id)
+    if not src.exists():
+        raise FileNotFoundError(handover_id)
+    year = handover_id[:4] if re.match(r"^\d{4}", handover_id) else "unknown"
+    dest_dir = handover_dir(backlog_path) / "_archive" / year
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / src.name
+    os.replace(src, dest)
+    return dest
+
+
+def sync_handover_index(
+    backlog_data: dict[str, Any],
+    backlog_path: Path,
+    cap: int = HANDOVER_INDEX_CAP,
+) -> dict[str, Any]:
+    """Populate backlog_data['handovers'] from disk; archive overflow.
+
+    Reads all handover files (excluding _archive/), sorts newest-first,
+    keeps the first `cap` as index entries in backlog_data, and archives
+    the rest. Mutates backlog_data in place and returns it for chaining.
+    """
+    ids = list_handover_ids(backlog_path)
+    keep_ids = ids[:cap]
+    overflow_ids = ids[cap:]
+
+    entries: list[dict[str, Any]] = []
+    for hid in keep_ids:
+        try:
+            fm, _ = read_handover(backlog_path, hid)
+        except (OSError, ValueError):
+            continue
+        entries.append(_handover_index_entry(fm))
+
+    backlog_data["handovers"] = entries
+
+    for hid in overflow_ids:
+        try:
+            archive_handover(backlog_path, hid)
+        except (OSError, FileNotFoundError):
+            continue
+
+    return backlog_data
 
 
 def format_recap(diff: dict[str, Any]) -> str:

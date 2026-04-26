@@ -51,6 +51,7 @@ from taskmaster_v3 import (
     SCHEMA_V2,
     SCHEMA_V3,
     SCHEMA_DEFAULT,
+    HANDOVER_KINDS,
     detect_schema_version as _detect_schema_version,
     atomic_write as _atomic_write,
     load_v3 as _load_v3,
@@ -61,6 +62,11 @@ from taskmaster_v3 import (
     read_snapshot as _read_snapshot,
     diff_against_snapshot as _diff_against_snapshot,
     format_recap as _format_recap,
+    write_handover as _write_handover,
+    read_handover as _read_handover,
+    list_handover_ids as _list_handover_ids,
+    latest_handover_id as _latest_handover_id,
+    sync_handover_index as _sync_handover_index,
 )
 
 
@@ -1289,6 +1295,147 @@ def backlog_recap() -> str:
     prev = _read_snapshot(bp)
     diff = _diff_against_snapshot(data, prev)
     return _format_recap(diff)
+
+
+@mcp.tool()
+def backlog_handover_create(
+    tldr: str,
+    next_action: str = "",
+    body: str = "",
+    task_ids: list[str] | None = None,
+    session_kind: str = "end-of-day",
+    context_size_at_write: str = "",
+) -> str:
+    """Write a session handover — committed markdown artifact for cross-session
+    continuity.
+
+    Use to capture the unwritten context at the end of a long session: decisions
+    made, blockers, where to start tomorrow. The body is freeform markdown
+    (suggested sections: Decisions, Blockers, Where I'd start, Open threads).
+
+    Args:
+        tldr: One-line summary. Required.
+        next_action: One-line "where to start next session." Optional but useful.
+        body: Markdown body (the four-section narrative).
+        task_ids: Tasks this handover relates to (surfaces in pick-task).
+        session_kind: One of {", ".join(HANDOVER_KINDS)}, or any custom string.
+        context_size_at_write: Optional marker for compaction-prompted handovers.
+    """
+    bp = _backlog_path()
+    if not bp.exists():
+        return f"Error: no backlog found at {bp}. Run `backlog_init` first."
+    try:
+        hid, target = _write_handover(
+            bp,
+            tldr=tldr,
+            next_action=next_action,
+            body=body,
+            task_ids=task_ids or [],
+            session_kind=session_kind,
+            context_size_at_write=context_size_at_write or None,
+        )
+    except ValueError as exc:
+        return f"Error: {exc}"
+
+    # Refresh index in backlog.yaml so the new handover is discoverable.
+    data = _load()
+    _sync_handover_index(data, bp)
+    _save(data)
+
+    return (
+        f"Handover written: {hid}\n"
+        f"- File: {target.relative_to(ROOT)}\n"
+        f"- Index entries: {len(data.get('handovers') or [])}"
+    )
+
+
+@mcp.tool()
+def backlog_handover_list(limit: int = 10) -> str:
+    """List recent handovers (slim metadata only — no bodies).
+
+    Reads from the backlog.yaml index, which is bounded to the most recent 30.
+    Older handovers are still on disk under handovers/_archive/ but not listed
+    here — fetch by id with `backlog_handover_get` if needed.
+    """
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    data = _load()
+    entries = (data.get("handovers") or [])[: max(1, limit)]
+    if not entries:
+        return "No handovers yet."
+    lines = []
+    for e in entries:
+        kind = e.get("session_kind", "")
+        tag = f" [{kind}]" if kind else ""
+        lines.append(f"- {e['id']}{tag} — {e.get('tldr', '')}")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def backlog_handover_get(handover_id: str) -> str:
+    """Read a handover's full content (frontmatter + body).
+
+    Use when start-session shows a handover tldr that you want to read in full,
+    or when picking a task that has linked handovers.
+    """
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    try:
+        fm, body = _read_handover(bp, handover_id)
+    except FileNotFoundError:
+        # Maybe it's archived?
+        archive_root = bp.parent / "handovers" / "_archive"
+        candidates = list(archive_root.rglob(f"{handover_id}.md")) if archive_root.exists() else []
+        if not candidates:
+            return f"Handover not found: {handover_id}"
+        from taskmaster_v3 import read_task_file as _read_task_file
+        fm, body = _read_task_file(candidates[0])
+
+    fm_lines = [f"  {k}: {v}" for k, v in fm.items()]
+    return "---\n" + "\n".join(fm_lines) + "\n---\n" + body
+
+
+@mcp.tool()
+def backlog_handover_latest() -> str:
+    """Return the latest handover's frontmatter (lightweight).
+
+    Use this in start-session to surface 'where I left off' without loading the
+    full body. Body fetch is on-demand via `backlog_handover_get`.
+    """
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    hid = _latest_handover_id(bp)
+    if not hid:
+        return "No handovers yet."
+    fm, _ = _read_handover(bp, hid)
+    return (
+        f"Latest handover: {hid}\n"
+        f"- TLDR: {fm.get('tldr', '')}\n"
+        f"- Next: {fm.get('next_action', '(none)')}\n"
+        f"- Tasks: {', '.join(fm.get('task_ids') or []) or '(none)'}\n"
+        f"- Kind: {fm.get('session_kind', 'end-of-day')}\n"
+        f"\nFetch body with `backlog_handover_get {hid}`."
+    )
+
+
+@mcp.tool()
+def backlog_handover_resync() -> str:
+    """Rebuild the handover index in backlog.yaml from disk.
+
+    Useful after manual edits to the handovers/ directory (deletes, renames),
+    or to enforce the 30-entry cap and archive overflow.
+    """
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    data = _load()
+    _sync_handover_index(data, bp)
+    _save(data)
+    n = len(data.get("handovers") or [])
+    return f"Handover index resynced — {n} entries in `backlog.yaml`."
 
 
 @mcp.tool()

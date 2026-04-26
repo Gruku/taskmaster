@@ -581,3 +581,153 @@ class TestSnapshotHookScript:
         assert result.returncode == 0
         # No snapshot dir created
         assert not (tmp_path / ".taskmaster").exists()
+
+
+class TestHandoverHelpers:
+    def test_slugify_basic(self):
+        assert v3.slugify("Login impl, OAuth pending") == "login-impl-oauth-pending"
+
+    def test_slugify_empty(self):
+        assert v3.slugify("") == "untitled"
+
+    def test_slugify_punctuation_only(self):
+        assert v3.slugify("!!!") == "untitled"
+
+    def test_slugify_caps_length(self):
+        s = v3.slugify("a" * 100)
+        assert len(s) <= 40
+
+    def test_make_handover_id(self):
+        assert v3.make_handover_id("2026-04-26", "Login impl") == "2026-04-26-login-impl"
+
+    def test_handover_path(self, tmp_path: Path):
+        bp = tmp_path / ".taskmaster" / "backlog.yaml"
+        p = v3.handover_path(bp, "2026-04-26-x")
+        assert p == tmp_path / ".taskmaster" / "handovers" / "2026-04-26-x.md"
+
+
+class TestWriteHandover:
+    def test_write_basic(self, tmp_path: Path):
+        bp = tmp_path / ".taskmaster" / "backlog.yaml"
+        hid, target = v3.write_handover(
+            bp,
+            tldr="Login impl, OAuth pending",
+            next_action="Resume IMPLEMENT once legal confirms.",
+            body="## Decisions\nWent stateful.\n",
+            task_ids=["features-001"],
+            session_kind="end-of-day",
+            when="2026-04-26",
+        )
+        assert hid == "2026-04-26-login-impl-oauth-pending"
+        assert target.exists()
+        fm, body = v3.read_handover(bp, hid)
+        assert fm["tldr"] == "Login impl, OAuth pending"
+        assert fm["next_action"] == "Resume IMPLEMENT once legal confirms."
+        assert fm["task_ids"] == ["features-001"]
+        assert fm["session_kind"] == "end-of-day"
+        assert fm["date"] == "2026-04-26"
+        assert "Decisions" in body
+
+    def test_empty_tldr_rejected(self, tmp_path: Path):
+        bp = tmp_path / ".taskmaster" / "backlog.yaml"
+        with pytest.raises(ValueError):
+            v3.write_handover(bp, tldr="")
+
+    def test_id_collision_gets_suffix(self, tmp_path: Path):
+        bp = tmp_path / ".taskmaster" / "backlog.yaml"
+        hid1, _ = v3.write_handover(bp, tldr="Same", when="2026-04-26", body="first")
+        hid2, _ = v3.write_handover(bp, tldr="Same", when="2026-04-26", body="second")
+        assert hid1 != hid2
+        assert hid1 == "2026-04-26-same"
+        assert hid2 == "2026-04-26-same-2"
+
+    def test_context_size_optional_field(self, tmp_path: Path):
+        bp = tmp_path / ".taskmaster" / "backlog.yaml"
+        hid, _ = v3.write_handover(bp, tldr="Big session", when="2026-04-26", context_size_at_write="320k")
+        fm, _ = v3.read_handover(bp, hid)
+        assert fm["context_size_at_write"] == "320k"
+
+    def test_omit_context_size_when_unset(self, tmp_path: Path):
+        bp = tmp_path / ".taskmaster" / "backlog.yaml"
+        hid, _ = v3.write_handover(bp, tldr="Small", when="2026-04-26")
+        fm, _ = v3.read_handover(bp, hid)
+        assert "context_size_at_write" not in fm
+
+
+class TestListHandovers:
+    def test_empty_when_no_dir(self, tmp_path: Path):
+        bp = tmp_path / ".taskmaster" / "backlog.yaml"
+        assert v3.list_handover_ids(bp) == []
+        assert v3.latest_handover_id(bp) is None
+
+    def test_sorted_newest_first(self, tmp_path: Path):
+        bp = tmp_path / ".taskmaster" / "backlog.yaml"
+        v3.write_handover(bp, tldr="A", when="2026-04-25")
+        v3.write_handover(bp, tldr="B", when="2026-04-26")
+        v3.write_handover(bp, tldr="C", when="2026-04-24")
+        ids = v3.list_handover_ids(bp)
+        assert ids[0].startswith("2026-04-26")
+        assert ids[-1].startswith("2026-04-24")
+        assert v3.latest_handover_id(bp) == ids[0]
+
+
+class TestHandoverIndex:
+    def _bp(self, tmp_path: Path) -> Path:
+        return tmp_path / ".taskmaster" / "backlog.yaml"
+
+    def test_sync_populates_index(self, tmp_path: Path):
+        bp = self._bp(tmp_path)
+        v3.write_handover(bp, tldr="First", when="2026-04-25", task_ids=["T-1"])
+        v3.write_handover(bp, tldr="Second", when="2026-04-26", task_ids=["T-2"])
+        data: dict = {}
+        v3.sync_handover_index(data, bp)
+        assert len(data["handovers"]) == 2
+        assert data["handovers"][0]["id"].startswith("2026-04-26")
+        assert data["handovers"][0]["task_ids"] == ["T-2"]
+
+    def test_sync_archives_overflow(self, tmp_path: Path):
+        bp = self._bp(tmp_path)
+        # Write 5 handovers, cap at 3 → 2 archived.
+        for i in range(5):
+            v3.write_handover(bp, tldr=f"h{i}", when=f"2026-04-{20 + i}")
+        data: dict = {}
+        v3.sync_handover_index(data, bp, cap=3)
+        assert len(data["handovers"]) == 3
+        archive = bp.parent / "handovers" / "_archive" / "2026"
+        assert archive.exists()
+        archived = sorted(archive.glob("*.md"))
+        assert len(archived) == 2
+        # Oldest two got archived
+        assert any("2026-04-20" in p.name for p in archived)
+        assert any("2026-04-21" in p.name for p in archived)
+        # Newest ones still in handovers/
+        live = sorted((bp.parent / "handovers").glob("*.md"))
+        assert len(live) == 3
+
+    def test_index_entry_shape(self, tmp_path: Path):
+        bp = self._bp(tmp_path)
+        v3.write_handover(
+            bp,
+            tldr="Day end",
+            next_action="Resume",
+            task_ids=["T-1"],
+            session_kind="end-of-day",
+            when="2026-04-26",
+        )
+        data: dict = {}
+        v3.sync_handover_index(data, bp)
+        entry = data["handovers"][0]
+        # id, date, tldr, next_action, task_ids, session_kind
+        assert set(entry.keys()) <= {"id", "date", "tldr", "next_action", "task_ids", "session_kind"}
+        assert entry["session_kind"] == "end-of-day"
+
+    def test_archive_year_inferred(self, tmp_path: Path):
+        bp = self._bp(tmp_path)
+        v3.write_handover(bp, tldr="x", when="2025-12-31")
+        v3.write_handover(bp, tldr="y", when="2026-01-01")
+        v3.write_handover(bp, tldr="z", when="2026-04-26")
+        data: dict = {}
+        v3.sync_handover_index(data, bp, cap=1)
+        # 2 archived, split across years
+        assert (bp.parent / "handovers" / "_archive" / "2025").exists()
+        assert (bp.parent / "handovers" / "_archive" / "2026").exists()
