@@ -43,6 +43,22 @@ Select a task to work on and set it to in-progress.
 5. **Once a task is selected:**
    - Call `backlog_pick_task(task_id)` — this sets status to `in-progress`, records `started` date, locks to session, and regenerates context + dashboard.
    - The tool returns task details, epic context, and recently completed tasks in the same epic.
+   - **Note the schema_version** in `backlog_status` output. Steps 5a–5c below activate only when `schema_version >= 3`. On v2 backlogs, skip them and proceed to step 6.
+
+5a. **(v3) Related handovers.** If the task's frontmatter has `related_handovers: [...]`, those are session handovers from prior work that touched this task or area. For each, call `backlog_handover_get <id>` and read the body. Don't dump them at the user — extract relevant decisions and constraints into your working context. Example surface to user: "Two prior handovers touched this task: 2026-04-25 (auth refactor decisions) and 2026-04-22 (cookie scope alignment with legal). Highlights loaded."
+
+5b. **(v3) Related issues.** If the task's frontmatter has `related_issues: [...]`, surface them so the user knows what bugs this task is intended to fix or interacts with:
+   ```
+   Linked issues:
+   - ISS-014 (P1, open) Login accepts whitespace password
+   - ISS-019 (P2, fixed) — already resolved by features-007
+   ```
+   Read body of any open P0/P1 entries via `backlog_issue_get` to inform implementation.
+
+5c. **(v3) Trigger-matched lessons.** Call `backlog_lesson_match(task_title=<title>, touched_files=<files>)` where `touched_files` is informed by `task.anchors` (file globs the task is expected to touch). The tool returns up to 3 best-match lessons (sorted by reinforce_count desc).
+   - For each match, fetch the full body via `backlog_lesson_get <id>` and keep it in working context for the duration of this task.
+   - Surface to user briefly: "3 lessons match this task: L-007 (gotcha) auth/session.ts read-before-edit, L-014 (anti-pattern) avoid raw SQL, L-022 (pattern) test names format. Loaded."
+   - **When you actually apply a lesson during work, call `backlog_lesson_reinforce <id>`** to bump its count. Don't reinforce on load — only on successful application. If a lesson didn't end up being relevant, don't reinforce it.
 
 6. **Read linked docs:**
    - If the task has a `docs` field (plan, spec, etc.), read those files to understand the existing context before writing any code.
@@ -92,3 +108,16 @@ If `backlog_pick_task` returns a lock conflict (task locked by another session),
 - `backlog_pick_task` is idempotent for already in-progress tasks in the same session.
 - If a task is `in-review`, picking it moves it back to `in-progress` — confirm this demotion with the user first, as it means they found issues during testing and want to reopen the work.
 - If a task is `blocked`, the tool will reject it. Help the user resolve blockers or change status first.
+
+### v3 token budget
+
+When v3 features activate (steps 5a–5c), the additional cost on top of `backlog_pick_task` should be roughly:
+- Related handovers: ≤2 bodies × ~200 tokens = ~400 tokens
+- Related issues: top 3 summaries × ~50 tokens = ~150 tokens
+- Trigger-matched lessons: ≤3 bodies × ~150 tokens = ~450 tokens
+
+Soft target: ~1,500 tokens additive. If a task accumulates more than this, prune `related_handovers` to the most recent 2 and let older ones live in the archive.
+
+### When auto modes call this skill
+
+If `backlog_auto_status` reports an active run with cursor at this task at stage `PICK`, the auto-task skill is the orchestrator. This skill still runs as normal — auto-task explicitly invokes pick-task as its PICK stage. After step 7 (worktree), auto-task takes over for SPEC_REVIEW.

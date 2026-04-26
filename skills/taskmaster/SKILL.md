@@ -30,6 +30,20 @@ Read the user's message and match it to one of these intents:
 | "Show phase progress", "where are we in the phase?" | Direct tool call — use `backlog_phase_status` |
 | "Advance to next phase", "this phase is done" | Direct tool call — use `backlog_advance_phase` |
 | "Check TODOs", "scan for TODOs", "are my TODOs tracked", "todo audit" | `taskmaster:check-todos` |
+| (v3) "Write a handover", "wrap up for tomorrow", "context handoff", "save where I left off" | Direct tool call — `backlog_handover_create` (or include in `taskmaster:end-session`) |
+| (v3) "Show last handover", "where did I leave off" | Direct tool call — `backlog_handover_latest` (then `backlog_handover_get` for full body if requested) |
+| (v3) "List handovers", "recent handovers" | Direct tool call — `backlog_handover_list` |
+| (v3) "Log a bug", "found an issue", "this is broken", "track this defect" | Direct tool call — `backlog_issue_create` (ask for severity P0–P3 if not provided) |
+| (v3) "List issues", "open bugs", "what's broken" | Direct tool call — `backlog_issue_list` (filter by `status=open` for active) |
+| (v3) "Mark issue fixed", "close ISS-XX" | Direct tool call — `backlog_issue_update` with `status=fixed` and `fixed_in_task=<id>` |
+| (v3) "Remember this", "this keeps happening", "we always do X here", "save a lesson" | Direct tool call — `backlog_lesson_create` (ask: pattern, anti-pattern, or gotcha?) |
+| (v3) "Show lessons", "what lessons apply", "lesson digest" | Direct tool call — `backlog_lesson_digest` or `backlog_lesson_match` |
+| (v3) "What changed since last time", "recap", "project state delta" | Direct tool call — `backlog_recap` |
+| (v3) "Snapshot the backlog", "save state for later" | Direct tool call — `backlog_snapshot` |
+| (v3) "Auto this task", "autopilot T-001", "run task auto" | `taskmaster:auto-task` |
+| (v3) "Auto-epic <id>", "run the whole epic", "batch this epic" | `taskmaster:auto-epic` |
+| (v3) "Auto-phase <id>", "run all of phase X", "batch phase" | `taskmaster:auto-phase` |
+| (v3) "Migrate to v3", "upgrade backlog", "switch to per-task files" | Direct tool call — `backlog_migrate_v3` |
 
 ## Do NOT Route Through Taskmaster
 
@@ -49,3 +63,13 @@ If the user asks to implement something and there's no task for it yet, don't ju
 4. Once a task is picked, work proceeds in its worktree
 
 This ensures nothing falls through the cracks.
+
+## v3 disambiguation
+
+Several v3 routes are easy to confuse — pick correctly:
+
+- **handover vs end-session:** end-session is a *task transition* (status → done/in-review with changelog). A handover is a *narrative continuity artifact* — it can be written without ending a task ("context handoff" mid-flow) or alongside one (end-of-day handover at end-session). When the user says "wrap up", route to `taskmaster:end-session` which itself offers handover write. When they say "context handoff" or "for tomorrow", call `backlog_handover_create` directly without transitioning any task.
+- **issue vs task:** an issue is a *bug record*; a task is a *unit of work*. "Track this bug" → `backlog_issue_create`. "Add a task to fix this bug" → `backlog_add_task` with `related_issues: [ISS-XX]`. Both can coexist for the same defect.
+- **lesson vs note:** task notes are scratch space for one task. A lesson is project-wide guidance that triggers across many future tasks. "Note this for the task" → task notes field. "Remember this for next time you touch auth" → `backlog_lesson_create`.
+- **recap vs last_session:** `last_session` shows what *you* did. `recap` shows what changed in the *project state* (could include changes from other sessions, manual backlog edits, auto runs). At session start, both render — they're not redundant.
+- **auto-task vs pick-task:** `pick-task` is interactive — user drives every step. `auto-task` is the state machine driving every stage with optional gates. If user wants to drive manually, route to pick-task. If they want hands-off (or scripted), auto-task.

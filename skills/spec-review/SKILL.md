@@ -150,6 +150,25 @@ Skip spec-review when there's no spec/plan, or for medium/low tasks (it's overki
 
    If the spec is revised later, re-running spec-review overwrites the record automatically. To explicitly invalidate a prior review (e.g. major spec rewrite without re-reviewing), call `backlog_clear_spec_review(task_id)`.
 
+7a. **(v3) Persist the spec into the task body.** Check `backlog_status` for `schema_version`. If `>= 3`:
+
+   - Read the spec content (the file at `spec_path`, or the inline plan if no external file).
+   - Read the current task body via the per-task file (`tasks/<task_id>.md`) — see slice 1C of v3.
+   - Update the body's `## Spec / Plan` section with:
+     - A heading: `## Spec / Plan`
+     - The spec content (or a reference + summary if the external file is large).
+     - Below the spec, append a `### Spec Review` block with verdict, date, and findings count:
+       ```
+       ### Spec Review
+       - Verdict: pass | warn | fail
+       - Date: YYYY-MM-DD
+       - Source: spec at <path>
+       - Findings: critical=N, important=N (codex: yes|no)
+       ```
+   - Write the updated body back via `backlog_update_task(task_id, body=<new body>)` (or whatever the canonical write path is — the v3 loader reads `_body` field; the corresponding write path goes through `save_v3` which serializes the body section back to `tasks/<id>.md`).
+   - This makes the spec discoverable from the task body in `pick-task` step 5a — no need for `pick-task` to chase a separate `docs.spec` file when v3 is active.
+   - On v2 backlogs: skip this step entirely. The external spec file remains the source of truth.
+
 8. **Next step**
 
    If the verdict is PASS or WARN with acknowledged Important findings: "Ready to `pick-task {task_id}` and start implementation."

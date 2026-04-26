@@ -15,6 +15,43 @@ Log the current work session, transition tasks, and commit tracking files.
 
 ## Steps
 
+### v3 pre-steps (skip on v2 backlogs)
+
+Check `backlog_status` for `schema_version`. If `>= 3`, run these BEFORE the existing flow:
+
+**v3-pre-1: Snapshot.** Call `backlog_snapshot(quiet=true)` to capture pre-end-of-session state. This makes the next session's `backlog_recap` show what changed across the session boundary, not just from now to the next snapshot. Cheap (~50ms), no token cost.
+
+**v3-pre-2: Handover offer.** Decide whether to offer a session handover. Auto-offer when ANY of:
+   - Session length > 60 turns of conversation.
+   - Conversation context estimate > 200k tokens.
+   - A task is still in flight (status `in-progress` or `auto/state.json` cursor non-null).
+   - User said anything like "for tomorrow", "remind me next time", "context handoff", "pick this up later".
+
+If offering, present:
+   ```
+   AskUserQuestion({
+     questions: [{
+       question: "Write a session handover? It captures decisions, blockers, and where to start next session.",
+       header: "Handover",
+       multiSelect: false,
+       options: [
+         { label: "Yes, end-of-day handover", description: "Standard wrap-up, latest will surface on next start-session" },
+         { label: "Yes, context handoff", description: "I'm near compaction or hitting context limit — flag this as such" },
+         { label: "Skip", description: "Lightweight session, no handover needed" }
+       ]
+     }]
+   })
+   ```
+
+If user picks yes:
+   - Generate a draft body with four sections (## Decisions, ## Blockers, ## Where I'd start, ## Open threads) from conversation context.
+   - Generate tldr (one line) and next_action (one line).
+   - Show draft to user, ask for confirmation/edits.
+   - Call `backlog_handover_create(tldr=..., next_action=..., body=..., task_ids=[...], session_kind=<chosen>)`.
+   - The created handover id will surface at the next session start via `backlog_handover_latest`.
+
+### Existing flow
+
 0. **Determine summary mode.** Check the session weight:
    - Count commits this session and files changed
    - If the session was **light** (1-2 commits, single-topic work, or user says "quick wrap"):
@@ -85,6 +122,14 @@ Log the current work session, transition tasks, and commit tracking files.
    {1-line summary}"
    ```
 
+   **(v3) Also stage these directories if they have changes:**
+   - `.taskmaster/handovers/` (handovers written this session)
+   - `.taskmaster/issues/` (issues created or updated)
+   - `.taskmaster/lessons/` (lessons reinforced — last_reinforced field updates)
+   - `.taskmaster/tasks/` (per-task body updates from spec-review or notes)
+
+   Do NOT stage `.taskmaster/snapshots/` or `.taskmaster/auto/` — both are gitignored. If git complains they're tracked, that's a misconfiguration the user should fix; do not work around it.
+
 9. **Confirm:** "Session logged and committed. Task is now `{target_status}`."
 
 ## Edge Cases
@@ -96,3 +141,9 @@ Log the current work session, transition tasks, and commit tracking files.
 ## Task Lifecycle
 
 See `references/task-lifecycle.md` for the full state machine. Key point: `in-review` means "Claude is done, user tests now." `done` means "user confirmed it works."
+
+## Auto-mode interaction (v3)
+
+If `backlog_auto_status` reports an active run, do NOT call `backlog_complete_task` directly — that's the auto-task skill's job at its END_SESSION stage. Instead, defer to the auto run:
+- If auto-task is currently driving the session, end-session is being called as part of that flow. Proceed with the v3-pre-steps above (snapshot + handover) and otherwise let auto-task handle the task transition.
+- If the user invokes /end-session manually mid-auto-run, ask: "There's an active auto run on `<target>`. Pause and write a handover, or abort the run?" — `backlog_auto_abort` clears the state, `backlog_handover_create(session_kind="crash-recovery")` preserves it.

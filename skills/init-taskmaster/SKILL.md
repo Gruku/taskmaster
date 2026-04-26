@@ -15,7 +15,7 @@ Call `backlog_init` with no arguments — if it reports "already initialized", c
 
 ## Step 2: Ask setup questions — MANDATORY, do NOT skip
 
-Use the `AskUserQuestion` tool with both questions in a single call. Do NOT call `backlog_init` or create any files until you have the answers.
+Use the `AskUserQuestion` tool with all three questions in a single call. Do NOT call `backlog_init` or create any files until you have the answers.
 
 ```
 AskUserQuestion({
@@ -27,6 +27,15 @@ AskUserQuestion({
       options: [
         { label: "Hidden (Recommended)", description: ".claude/ directory — stays out of your repo, good for personal tracking" },
         { label: "Tracked", description: ".taskmaster/ directory — visible files you can commit to git, good for team visibility" }
+      ]
+    },
+    {
+      question: "Which schema version?",
+      header: "Schema",
+      multiSelect: false,
+      options: [
+        { label: "v2 (Default — stable)", description: "Single backlog.yaml file. Simple, proven, all existing tools work." },
+        { label: "v3 (Narrative continuity — opt-in)", description: "Slim index + per-task files. Adds handovers, lessons, issues, recap, auto-mode. More moving parts; more capabilities. Recommended for projects you'll work on across many sessions." }
       ]
     },
     {
@@ -44,7 +53,15 @@ AskUserQuestion({
 
 Map the answers:
 - Location: "Hidden" → `location="hidden"`, "Tracked" → `location="tracked"`
+- Schema: "v2" → standard `backlog_init` flow. "v3" → after `backlog_init`, immediately call `backlog_migrate_v3` to upgrade the freshly-initialized backlog to v3 layout (this also creates `.taskmaster/tasks/`, `handovers/`, `lessons/`, `issues/` subdirectories ready to receive content).
 - Init mode: "Analyze project" → Step 3b, "Clean start" → Step 3a
+
+If user picked v3, also ensure these are gitignored (write to `.gitignore` if missing):
+```
+.taskmaster/snapshots/
+.taskmaster/auto/
+```
+These directories hold runtime state that shouldn't be committed.
 
 ## Step 3a: Clean start
 
@@ -128,6 +145,23 @@ If the user chose analyze:
 1. Call `backlog_open_viewer` to open the backlog dashboard in the browser.
 2. Show the result: "Taskmaster is set up! Use `/start-session` to see your dashboard."
 3. **Tell the user:** if MCP tools stop responding or return connection errors in a future session, run `/mcp` to reconnect to the Taskmaster server.
+
+### v3 setup additions
+
+If v3 was chosen in step 2, also tell the user about the new capabilities they just unlocked:
+
+> **You're on v3. New capabilities available:**
+> - **Handovers** — `backlog_handover_create` to capture session continuity. Auto-offered at end-session for big sessions.
+> - **Lessons** — `backlog_lesson_create` to record patterns/anti-patterns/gotchas; reinforces compound across sessions.
+> - **Issues** — `backlog_issue_create` for bug tracking separate from work tasks.
+> - **Recap** — `backlog_recap` shows what changed in the project since last snapshot.
+> - **Auto modes** — `taskmaster:auto-task`, `auto-epic`, `auto-phase` for state-machine-driven execution.
+>
+> The PreCompact hook (`hooks.json`) will auto-snapshot before context compaction so recap stays accurate. No setup needed.
+
+### v2 → v3 upgrade later
+
+If the user picked v2 now and wants to upgrade later, they can run `backlog_migrate_v3` at any point. The migration is idempotent and preserves all existing data — it only restructures storage.
 
 ## Edge Cases
 
