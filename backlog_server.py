@@ -45,6 +45,16 @@ PRIORITY_NAMES = ("critical", "high", "medium", "low")
 _LEGACY_TO_NAME = {"P0": "critical", "P1": "high", "P2": "medium", "P3": "low"}
 _NAME_TO_LEGACY = {v: k for k, v in _LEGACY_TO_NAME.items()}
 
+# v3 layout primitives (schema versions, atomic writes, etc.) live in taskmaster_v3.
+# Re-imported here for in-module reference.
+from taskmaster_v3 import (
+    SCHEMA_V2,
+    SCHEMA_V3,
+    SCHEMA_DEFAULT,
+    detect_schema_version as _detect_schema_version,
+    atomic_write as _atomic_write,
+)
+
 
 def _resolve_paths() -> tuple[Path, Path]:
     """Resolve backlog.yaml and PROGRESS.md paths from config or defaults.
@@ -144,10 +154,9 @@ def _save(data: dict) -> None:
     with _backlog_lock:
         data["meta"]["updated"] = _today()
         bp = _backlog_path()
-        bp.parent.mkdir(parents=True, exist_ok=True)
-        bp.write_text(
+        _atomic_write(
+            bp,
             yaml.dump(data, default_flow_style=False, sort_keys=False, allow_unicode=True),
-            encoding="utf-8",
         )
 
 
@@ -1149,6 +1158,7 @@ def backlog_init(project_name: str = "", location: str = "hidden") -> str:
     initial_data = {
         "meta": {
             "project": project_name,
+            "schema_version": SCHEMA_DEFAULT,
             "updated": _today(),
         },
         "context": {
