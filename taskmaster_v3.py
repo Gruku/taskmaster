@@ -11,7 +11,10 @@ tested in isolation. It owns:
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -270,6 +273,207 @@ def migrate_v2_to_v3(backlog_path: Path) -> dict[str, Any]:
         "schema_before": before,
         "schema_after": SCHEMA_V3,
     }
+
+
+# ── Snapshots (for recap diff) ─────────────────────────────────
+
+# Snapshot fields tracked per task. Keep this slim — adding fields
+# bloats every snapshot file. Issues join later in step 4.
+_SNAPSHOT_TASK_FIELDS = ("status", "priority", "stage")
+
+
+def snapshot_path(backlog_path: Path) -> Path:
+    """Resolve the snapshot file path. Lives next to the backlog under snapshots/."""
+    return backlog_path.parent / "snapshots" / "last.json"
+
+
+def take_snapshot(data: dict[str, Any]) -> dict[str, Any]:
+    """Build a slim snapshot dict from in-memory backlog data.
+
+    The snapshot captures only the fields needed for `recap` to show what
+    changed since last session — not the full backlog content. The
+    `structural_hash` is a quick check for 'did anything change at all'.
+    """
+    tasks: dict[str, dict[str, Any]] = {}
+    for epic in data.get("epics", []):
+        for t in epic.get("tasks", []):
+            tid = t.get("id")
+            if not tid:
+                continue
+            entry = {f: t.get(f) for f in _SNAPSHOT_TASK_FIELDS if t.get(f) is not None}
+            # Track epic membership too — moves between epics show up in recap.
+            entry["epic"] = epic.get("id")
+            entry["title"] = t.get("title", "")
+            tasks[tid] = entry
+
+    phase_active = None
+    for p in data.get("phases", []) or []:
+        if p.get("status") == "active":
+            phase_active = p.get("id")
+            break
+
+    payload_for_hash = json.dumps({"tasks": tasks, "phase_active": phase_active}, sort_keys=True)
+    return {
+        "taken_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "schema_version": SCHEMA_V3,
+        "structural_hash": "sha256:" + hashlib.sha256(payload_for_hash.encode("utf-8")).hexdigest(),
+        "tasks": tasks,
+        "phase_active": phase_active,
+    }
+
+
+def write_snapshot(backlog_path: Path, snapshot: dict[str, Any]) -> Path:
+    """Persist a snapshot atomically to .taskmaster/snapshots/last.json."""
+    sp = snapshot_path(backlog_path)
+    atomic_write(sp, json.dumps(snapshot, indent=2) + "\n")
+    return sp
+
+
+def read_snapshot(backlog_path: Path) -> dict[str, Any] | None:
+    """Read the latest snapshot if present, else None."""
+    sp = snapshot_path(backlog_path)
+    if not sp.exists():
+        return None
+    try:
+        return json.loads(sp.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+# ── Recap (diff against last snapshot) ─────────────────────────
+
+
+def diff_against_snapshot(
+    current_data: dict[str, Any],
+    prev_snapshot: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Compute the recap diff between current backlog and the previous snapshot.
+
+    Returns a structured dict with task add/remove/change groups and a phase
+    change marker. Designed to be cheap to render as a few lines of text.
+
+    With no prior snapshot (first run), returns the 'no_prior_snapshot' shape
+    so the caller can render an appropriate first-time message rather than
+    pretending nothing changed.
+    """
+    current_snap = take_snapshot(current_data)
+
+    if prev_snapshot is None:
+        return {
+            "no_prior_snapshot": True,
+            "current_taken_at": current_snap["taken_at"],
+            "tasks_added": [],
+            "tasks_removed": [],
+            "tasks_changed": [],
+            "phase_changed": None,
+            "no_changes": False,
+        }
+
+    if prev_snapshot.get("structural_hash") == current_snap["structural_hash"]:
+        return {
+            "no_prior_snapshot": False,
+            "no_changes": True,
+            "prev_taken_at": prev_snapshot.get("taken_at"),
+            "current_taken_at": current_snap["taken_at"],
+            "tasks_added": [],
+            "tasks_removed": [],
+            "tasks_changed": [],
+            "phase_changed": None,
+        }
+
+    prev_tasks: dict[str, dict[str, Any]] = prev_snapshot.get("tasks", {}) or {}
+    cur_tasks: dict[str, dict[str, Any]] = current_snap.get("tasks", {}) or {}
+
+    added_ids = sorted(set(cur_tasks) - set(prev_tasks))
+    removed_ids = sorted(set(prev_tasks) - set(cur_tasks))
+    common_ids = set(cur_tasks) & set(prev_tasks)
+
+    tasks_added = [
+        {
+            "id": tid,
+            "title": cur_tasks[tid].get("title", ""),
+            "status": cur_tasks[tid].get("status"),
+            "priority": cur_tasks[tid].get("priority"),
+            "epic": cur_tasks[tid].get("epic"),
+        }
+        for tid in added_ids
+    ]
+    tasks_removed = [
+        {
+            "id": tid,
+            "title": prev_tasks[tid].get("title", ""),
+            "epic": prev_tasks[tid].get("epic"),
+        }
+        for tid in removed_ids
+    ]
+
+    tracked_fields = (*_SNAPSHOT_TASK_FIELDS, "epic")
+    tasks_changed = []
+    for tid in sorted(common_ids):
+        before = prev_tasks[tid]
+        after = cur_tasks[tid]
+        changes = [
+            {"field": f, "before": before.get(f), "after": after.get(f)}
+            for f in tracked_fields
+            if before.get(f) != after.get(f)
+        ]
+        if changes:
+            tasks_changed.append(
+                {
+                    "id": tid,
+                    "title": after.get("title", before.get("title", "")),
+                    "changes": changes,
+                }
+            )
+
+    phase_before = prev_snapshot.get("phase_active")
+    phase_after = current_snap["phase_active"]
+    phase_changed = (
+        {"before": phase_before, "after": phase_after}
+        if phase_before != phase_after
+        else None
+    )
+
+    return {
+        "no_prior_snapshot": False,
+        "no_changes": False,
+        "prev_taken_at": prev_snapshot.get("taken_at"),
+        "current_taken_at": current_snap["taken_at"],
+        "tasks_added": tasks_added,
+        "tasks_removed": tasks_removed,
+        "tasks_changed": tasks_changed,
+        "phase_changed": phase_changed,
+    }
+
+
+def format_recap(diff: dict[str, Any]) -> str:
+    """Render a recap diff as a compact human-readable string.
+
+    Format roughly mirrors the spec example:
+        + T features-009 "Add SSO" (high, todo)
+        ~ T features-002 status: todo → in-progress
+        - T infra-005 "Old thing"
+        Phase: setup → development
+    """
+    if diff.get("no_prior_snapshot"):
+        return "No prior snapshot — recap will populate after the next snapshot."
+    if diff.get("no_changes"):
+        return f"No changes since {diff.get('prev_taken_at', 'last snapshot')}."
+
+    lines: list[str] = []
+    for t in diff["tasks_added"]:
+        prio = t.get("priority") or "?"
+        status = t.get("status") or "?"
+        lines.append(f"+ T {t['id']} \"{t['title']}\" ({prio}, {status})")
+    for t in diff["tasks_changed"]:
+        for c in t["changes"]:
+            lines.append(f"~ T {t['id']} {c['field']}: {c['before']} → {c['after']}")
+    for t in diff["tasks_removed"]:
+        lines.append(f"- T {t['id']} \"{t['title']}\"")
+    if diff["phase_changed"]:
+        pc = diff["phase_changed"]
+        lines.append(f"Phase: {pc['before']} → {pc['after']}")
+    return "\n".join(lines)
 
 
 def save_v3(backlog_path: Path, data: dict[str, Any]) -> None:

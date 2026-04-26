@@ -56,6 +56,11 @@ from taskmaster_v3 import (
     load_v3 as _load_v3,
     save_v3 as _save_v3,
     migrate_v2_to_v3 as _migrate_v2_to_v3,
+    take_snapshot as _take_snapshot,
+    write_snapshot as _write_snapshot,
+    read_snapshot as _read_snapshot,
+    diff_against_snapshot as _diff_against_snapshot,
+    format_recap as _format_recap,
 )
 
 
@@ -1236,6 +1241,54 @@ def backlog_migrate_v3() -> str:
         f"\nv3 features (handovers, lessons, issues, recap, auto modes) will land in "
         f"subsequent slices."
     )
+
+
+@mcp.tool()
+def backlog_snapshot(quiet: bool = False) -> str:
+    """Capture a slim snapshot of the backlog for later recap diffing.
+
+    Snapshots are written to `<backlog_dir>/snapshots/last.json` (gitignored).
+    Each snapshot tracks per-task status/priority/stage/epic and the active
+    phase — enough to compute a "what changed since" diff without storing
+    full backlog history.
+
+    Args:
+        quiet: When true, return an empty string on success (use for hooks).
+               Errors still surface.
+    """
+    bp = _backlog_path()
+    if not bp.exists():
+        return "" if quiet else "No backlog found — nothing to snapshot."
+    try:
+        data = _load()
+    except Exception as exc:
+        return f"snapshot failed: {exc}"
+    snap = _take_snapshot(data)
+    sp = _write_snapshot(bp, snap)
+    if quiet:
+        return ""
+    return f"Snapshot written: {sp.relative_to(ROOT)} ({snap['structural_hash'][:18]}…)"
+
+
+@mcp.tool()
+def backlog_recap() -> str:
+    """Show what changed in the backlog since the last snapshot.
+
+    Compares the current backlog state against `<backlog_dir>/snapshots/last.json`
+    and renders a compact diff: tasks added/removed, status/priority/stage/epic
+    changes, and active-phase transitions. Returns guidance text when no prior
+    snapshot exists.
+    """
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    try:
+        data = _load()
+    except Exception as exc:
+        return f"recap failed: {exc}"
+    prev = _read_snapshot(bp)
+    diff = _diff_against_snapshot(data, prev)
+    return _format_recap(diff)
 
 
 @mcp.tool()
