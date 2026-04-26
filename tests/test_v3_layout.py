@@ -4,6 +4,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import taskmaster_v3 as v3  # noqa: E402
@@ -54,3 +56,97 @@ class TestAtomicWrite:
         v3.atomic_write(target, "x\n")
         leftovers = list(tmp_path.glob("*.tmp"))
         assert leftovers == []
+
+
+class TestParseFrontmatter:
+    def test_basic(self):
+        text = "---\nid: T-001\ntitle: Hi\n---\nbody line\n"
+        fm, body = v3.parse_frontmatter(text)
+        assert fm == {"id": "T-001", "title": "Hi"}
+        assert body == "body line\n"
+
+    def test_no_frontmatter(self):
+        text = "just a body\nwith two lines\n"
+        fm, body = v3.parse_frontmatter(text)
+        assert fm == {}
+        assert body == "just a body\nwith two lines\n"
+
+    def test_empty_string(self):
+        fm, body = v3.parse_frontmatter("")
+        assert fm == {} and body == ""
+
+    def test_empty_frontmatter(self):
+        fm, body = v3.parse_frontmatter("---\n---\nhello\n")
+        assert fm == {} and body == "hello\n"
+
+    def test_body_contains_dashes(self):
+        text = "---\na: 1\n---\nintro\n\n---\nnot a fence, just markdown rule\n"
+        fm, body = v3.parse_frontmatter(text)
+        assert fm == {"a": 1}
+        assert "---\nnot a fence" in body
+
+    def test_unclosed_frontmatter_treated_as_body(self):
+        text = "---\nbroken\nno closer\n"
+        fm, body = v3.parse_frontmatter(text)
+        assert fm == {}
+        assert body == text
+
+    def test_crlf_normalized(self):
+        text = "---\r\nid: T-1\r\n---\r\nhello\r\n"
+        fm, body = v3.parse_frontmatter(text)
+        assert fm == {"id": "T-1"}
+        assert body == "hello\n"
+
+    def test_non_mapping_frontmatter_rejected(self):
+        with pytest.raises(ValueError):
+            v3.parse_frontmatter("---\n- a\n- b\n---\nbody")
+
+    def test_frontmatter_with_lists(self):
+        text = "---\ntags: [foo, bar]\nrelated: []\n---\nb\n"
+        fm, _ = v3.parse_frontmatter(text)
+        assert fm == {"tags": ["foo", "bar"], "related": []}
+
+
+class TestRenderFrontmatter:
+    def test_basic(self):
+        out = v3.render_frontmatter({"id": "T-1"}, "body")
+        assert out.startswith("---\nid: T-1\n---\n")
+        assert out.endswith("body\n")
+
+    def test_empty_frontmatter_omits_fences(self):
+        out = v3.render_frontmatter({}, "just body")
+        assert "---" not in out
+        assert out == "just body\n"
+
+    def test_empty_body_with_frontmatter(self):
+        out = v3.render_frontmatter({"id": "T-1"}, "")
+        assert out == "---\nid: T-1\n---\n"
+
+    def test_roundtrip(self):
+        fm = {"id": "T-7", "title": "test", "tags": ["a", "b"]}
+        body = "## Section\n\nSome content.\n"
+        rendered = v3.render_frontmatter(fm, body)
+        fm2, body2 = v3.parse_frontmatter(rendered)
+        assert fm2 == fm
+        assert body2 == body
+
+
+class TestTaskFileIO:
+    def test_write_then_read(self, tmp_path: Path):
+        path = tmp_path / "T-001.md"
+        fm = {"id": "T-001", "title": "Build it"}
+        body = "## Description\nPlain text.\n"
+        v3.write_task_file(path, fm, body)
+        fm2, body2 = v3.read_task_file(path)
+        assert fm2 == fm
+        assert body2 == body
+
+    def test_write_creates_parent(self, tmp_path: Path):
+        path = tmp_path / "tasks" / "T-001.md"
+        v3.write_task_file(path, {"id": "T-001"}, "x")
+        assert path.exists()
+
+    def test_write_atomic_no_tmp(self, tmp_path: Path):
+        path = tmp_path / "T-001.md"
+        v3.write_task_file(path, {"id": "T-001"}, "x")
+        assert list(tmp_path.glob("*.tmp")) == []
