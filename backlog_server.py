@@ -55,6 +55,7 @@ from taskmaster_v3 import (
     atomic_write as _atomic_write,
     load_v3 as _load_v3,
     save_v3 as _save_v3,
+    migrate_v2_to_v3 as _migrate_v2_to_v3,
 )
 
 
@@ -1196,6 +1197,44 @@ def backlog_init(project_name: str = "", location: str = "hidden") -> str:
     return (
         f"Initialized taskmaster for **{project_name}** in {location_label}\n"
         f"Created: {', '.join(created)}"
+    )
+
+
+@mcp.tool()
+def backlog_migrate_v3() -> str:
+    """Migrate this project's backlog to v3 layout (slim index + per-task files).
+
+    v3 introduces narrative-continuity features (handovers, lessons, issues, recap,
+    auto modes). The on-disk shape changes: heavy task fields (description, notes,
+    docs, review_instructions) move out of `backlog.yaml` into per-task files at
+    `tasks/<id>.md`. Slim metadata (id, title, status, priority, etc.) stays in
+    `backlog.yaml` as the index.
+
+    The migration is idempotent — running on a v3 backlog is a no-op. The in-memory
+    shape is identical across versions, so existing tools/skills keep working.
+    """
+    bp = _backlog_path()
+    if not bp.exists():
+        return f"Error: no backlog found at {bp}. Run `backlog_init` first."
+    summary = _migrate_v2_to_v3(bp)
+    if summary["status"] == "already_v3":
+        return (
+            f"Already on v3 — {summary['tasks_total']} tasks, no changes made.\n"
+            f"Backlog at: {bp.relative_to(ROOT)}"
+        )
+    files = summary["task_files_written"]
+    files_msg = (
+        f"Wrote {len(files)} per-task files under `tasks/`."
+        if files
+        else "No tasks had heavy content — only the index was rewritten."
+    )
+    return (
+        f"Migrated v2 → v3.\n"
+        f"- Tasks: {summary['tasks_total']}\n"
+        f"- {files_msg}\n"
+        f"- Index: {bp.relative_to(ROOT)}\n"
+        f"\nv3 features (handovers, lessons, issues, recap, auto modes) will land in "
+        f"subsequent slices."
     )
 
 

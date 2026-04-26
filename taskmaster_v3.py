@@ -219,6 +219,59 @@ def load_v3(backlog_path: Path) -> dict[str, Any]:
     return data
 
 
+def migrate_v2_to_v3(backlog_path: Path) -> dict[str, Any]:
+    """Convert a v2 backlog at `backlog_path` to v3 in place.
+
+    - Reads the v2 single-file backlog.
+    - Sets `meta.schema_version = 3`.
+    - Calls save_v3, which strips HEAVY_FIELDS into per-task files and
+      writes the slim index back to backlog.yaml.
+
+    Idempotent: re-running on a v3 backlog returns a 'no-op' summary.
+
+    Returns:
+        Summary dict with keys:
+          - status: "migrated" | "already_v3"
+          - tasks_total: int
+          - task_files_written: list[str] (relative paths)
+          - schema_before / schema_after
+    """
+    raw = yaml.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
+    before = detect_schema_version(raw)
+    if before >= SCHEMA_V3:
+        return {
+            "status": "already_v3",
+            "tasks_total": sum(len(e.get("tasks", [])) for e in raw.get("epics", [])),
+            "task_files_written": [],
+            "schema_before": before,
+            "schema_after": before,
+        }
+
+    raw.setdefault("meta", {})["schema_version"] = SCHEMA_V3
+
+    # Determine which task files will get written so we can report them.
+    files_to_write: list[Path] = []
+    for epic in raw.get("epics", []):
+        for task in epic.get("tasks", []):
+            tid = task.get("id")
+            if not tid:
+                continue
+            _, heavy_fm, body = _split_task_for_v3(task)
+            has_heavy = any(k in heavy_fm for k in HEAVY_FIELDS) or bool(body)
+            if has_heavy:
+                files_to_write.append(task_file_path(backlog_path, tid))
+
+    save_v3(backlog_path, raw)
+
+    return {
+        "status": "migrated",
+        "tasks_total": sum(len(e.get("tasks", [])) for e in raw.get("epics", [])),
+        "task_files_written": [str(p.relative_to(backlog_path.parent)) for p in files_to_write],
+        "schema_before": before,
+        "schema_after": SCHEMA_V3,
+    }
+
+
 def save_v3(backlog_path: Path, data: dict[str, Any]) -> None:
     """Save a v3 backlog: slim index → backlog.yaml; heavy fields → per-task files.
 

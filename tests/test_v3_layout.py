@@ -248,3 +248,92 @@ class TestV3LoadSave:
     def test_task_file_path(self, tmp_path: Path):
         bp = tmp_path / ".taskmaster" / "backlog.yaml"
         assert v3.task_file_path(bp, "T-001") == tmp_path / ".taskmaster" / "tasks" / "T-001.md"
+
+
+class TestMigrateV2ToV3:
+    def _v2_backlog(self) -> dict:
+        # Note: no schema_version → implies v2 (legacy)
+        return {
+            "meta": {"project": "p", "updated": "2026-04-26"},
+            "context": {},
+            "epics": [
+                {
+                    "id": "e1",
+                    "name": "Features",
+                    "tasks": [
+                        {
+                            "id": "T-001",
+                            "title": "Has body fields",
+                            "status": "todo",
+                            "description": "Detailed description.",
+                            "notes": "A note.",
+                        },
+                        {
+                            "id": "T-002",
+                            "title": "Empty task",
+                            "status": "todo",
+                        },
+                    ],
+                }
+            ],
+            "phases": [],
+        }
+
+    def _write_v2(self, tmp_path: Path) -> Path:
+        import yaml as _y
+        bp = tmp_path / ".taskmaster" / "backlog.yaml"
+        bp.parent.mkdir(parents=True)
+        bp.write_text(_y.dump(self._v2_backlog()), encoding="utf-8")
+        return bp
+
+    def test_migrate_writes_schema_version(self, tmp_path: Path):
+        bp = self._write_v2(tmp_path)
+        summary = v3.migrate_v2_to_v3(bp)
+        assert summary["status"] == "migrated"
+        assert summary["schema_before"] == v3.SCHEMA_V2
+        assert summary["schema_after"] == v3.SCHEMA_V3
+
+        import yaml as _y
+        loaded = _y.safe_load(bp.read_text(encoding="utf-8"))
+        assert loaded["meta"]["schema_version"] == v3.SCHEMA_V3
+
+    def test_migrate_extracts_heavy_fields(self, tmp_path: Path):
+        bp = self._write_v2(tmp_path)
+        v3.migrate_v2_to_v3(bp)
+
+        # Heavy fields stripped from yaml
+        import yaml as _y
+        loaded = _y.safe_load(bp.read_text(encoding="utf-8"))
+        t1 = loaded["epics"][0]["tasks"][0]
+        assert "description" not in t1
+        assert "notes" not in t1
+        assert t1["title"] == "Has body fields"
+
+        # Per-task file written for T-001 only
+        assert (tmp_path / ".taskmaster" / "tasks" / "T-001.md").exists()
+        assert not (tmp_path / ".taskmaster" / "tasks" / "T-002.md").exists()
+
+    def test_migration_is_lossless(self, tmp_path: Path):
+        bp = self._write_v2(tmp_path)
+        original = self._v2_backlog()
+        v3.migrate_v2_to_v3(bp)
+        loaded = v3.load_v3(bp)
+        t1 = loaded["epics"][0]["tasks"][0]
+        orig_t1 = original["epics"][0]["tasks"][0]
+        assert t1["description"] == orig_t1["description"]
+        assert t1["notes"] == orig_t1["notes"]
+        assert t1["title"] == orig_t1["title"]
+        assert t1["status"] == orig_t1["status"]
+
+    def test_idempotent(self, tmp_path: Path):
+        bp = self._write_v2(tmp_path)
+        v3.migrate_v2_to_v3(bp)
+        summary2 = v3.migrate_v2_to_v3(bp)
+        assert summary2["status"] == "already_v3"
+        assert summary2["task_files_written"] == []
+
+    def test_summary_lists_written_files(self, tmp_path: Path):
+        bp = self._write_v2(tmp_path)
+        summary = v3.migrate_v2_to_v3(bp)
+        assert "tasks/T-001.md" in summary["task_files_written"][0].replace("\\", "/")
+        assert len(summary["task_files_written"]) == 1
