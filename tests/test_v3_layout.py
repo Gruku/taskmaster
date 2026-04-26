@@ -979,3 +979,139 @@ class TestLessons:
         v3.sync_lesson_index(data, bp)
         assert len(data["lessons_meta"]) == 2
         assert all("id" in e and "title" in e for e in data["lessons_meta"])
+
+
+class TestAutoState:
+    def _bp(self, tmp_path: Path) -> Path:
+        return tmp_path / ".taskmaster" / "backlog.yaml"
+
+    def test_init_writes_state(self, tmp_path: Path):
+        bp = self._bp(tmp_path)
+        state = v3.init_auto_run(bp, mode="task", target="T-001", pending_task_ids=["T-001"])
+        assert state["mode"] == "task"
+        assert state["target"] == "T-001"
+        assert state["cursor"]["task_id"] == "T-001"
+        assert state["cursor"]["stage"] == "PICK"
+        assert state["cursor"]["model"] == "sonnet"
+        assert state["pending"] == []
+        assert v3.auto_state_path(bp).exists()
+
+    def test_init_invalid_mode(self, tmp_path: Path):
+        bp = self._bp(tmp_path)
+        with pytest.raises(ValueError):
+            v3.init_auto_run(bp, mode="bogus", target="x", pending_task_ids=["T-1"])
+
+    def test_init_empty_tasks_rejected(self, tmp_path: Path):
+        bp = self._bp(tmp_path)
+        with pytest.raises(ValueError):
+            v3.init_auto_run(bp, mode="task", target="x", pending_task_ids=[])
+
+    def test_per_task_model(self, tmp_path: Path):
+        bp = self._bp(tmp_path)
+        state = v3.init_auto_run(
+            bp,
+            mode="epic",
+            target="features",
+            pending_task_ids=["T-1", "T-2", "T-3"],
+            model_for_task={"T-1": "opus", "T-3": "opus"},
+        )
+        assert state["cursor"]["model"] == "opus"
+        # Advance through T-1, T-2 should default to sonnet, T-3 should be opus
+        v3.complete_current_task(state, status="done", summary="ok")
+        assert state["cursor"]["task_id"] == "T-2"
+        assert state["cursor"]["model"] == "sonnet"
+        v3.complete_current_task(state, status="done", summary="ok")
+        assert state["cursor"]["task_id"] == "T-3"
+        assert state["cursor"]["model"] == "opus"
+
+    def test_advance_stage(self, tmp_path: Path):
+        bp = self._bp(tmp_path)
+        state = v3.init_auto_run(bp, mode="task", target="T-1", pending_task_ids=["T-1"])
+        v3.advance_stage(state, "SPEC_REVIEW")
+        assert state["cursor"]["stage"] == "SPEC_REVIEW"
+        v3.advance_stage(state, "IMPLEMENT")
+        assert state["cursor"]["stage"] == "IMPLEMENT"
+
+    def test_advance_invalid_stage(self, tmp_path: Path):
+        bp = self._bp(tmp_path)
+        state = v3.init_auto_run(bp, mode="task", target="T-1", pending_task_ids=["T-1"])
+        with pytest.raises(ValueError):
+            v3.advance_stage(state, "BOGUS")
+
+    def test_complete_done_advances(self, tmp_path: Path):
+        bp = self._bp(tmp_path)
+        state = v3.init_auto_run(
+            bp, mode="epic", target="e", pending_task_ids=["T-1", "T-2"]
+        )
+        v3.complete_current_task(state, status="done", summary="ok", commits=["abc"])
+        assert state["completed"][0]["task_id"] == "T-1"
+        assert state["completed"][0]["commits"] == ["abc"]
+        assert state["cursor"]["task_id"] == "T-2"
+        assert state["cursor"]["stage"] == "PICK"
+
+    def test_complete_done_with_no_pending_clears_cursor(self, tmp_path: Path):
+        bp = self._bp(tmp_path)
+        state = v3.init_auto_run(bp, mode="task", target="T-1", pending_task_ids=["T-1"])
+        v3.complete_current_task(state, status="done")
+        assert state["cursor"] is None
+        assert len(state["completed"]) == 1
+
+    def test_failure_halts_by_default(self, tmp_path: Path):
+        bp = self._bp(tmp_path)
+        state = v3.init_auto_run(
+            bp, mode="epic", target="e", pending_task_ids=["T-1", "T-2"]
+        )
+        v3.complete_current_task(state, status="failed", fail_reason="tests-failed", summary="x")
+        assert state["failed"][0]["task_id"] == "T-1"
+        # Cursor stays on failed task at HANDOVER_STUB so user can recover
+        assert state["cursor"]["task_id"] == "T-1"
+        assert state["cursor"]["stage"] == "HANDOVER_STUB"
+        assert state["pending"] == ["T-2"]
+
+    def test_failure_continues_with_continue_on_fail(self, tmp_path: Path):
+        bp = self._bp(tmp_path)
+        state = v3.init_auto_run(
+            bp,
+            mode="epic",
+            target="e",
+            pending_task_ids=["T-1", "T-2"],
+            config={"continue_on_fail": True},
+        )
+        v3.complete_current_task(state, status="failed", fail_reason="tests-failed")
+        assert state["cursor"]["task_id"] == "T-2"
+
+    def test_invalid_fail_reason(self, tmp_path: Path):
+        bp = self._bp(tmp_path)
+        state = v3.init_auto_run(bp, mode="task", target="T-1", pending_task_ids=["T-1"])
+        with pytest.raises(ValueError):
+            v3.complete_current_task(state, status="failed", fail_reason="weird")
+
+    def test_read_write_roundtrip(self, tmp_path: Path):
+        bp = self._bp(tmp_path)
+        state = v3.init_auto_run(bp, mode="task", target="T-1", pending_task_ids=["T-1"])
+        v3.advance_stage(state, "IMPLEMENT")
+        v3.write_auto_state(bp, state)
+        loaded = v3.read_auto_state(bp)
+        assert loaded == state
+
+    def test_read_state_missing(self, tmp_path: Path):
+        bp = self._bp(tmp_path)
+        assert v3.read_auto_state(bp) is None
+
+    def test_clear_state(self, tmp_path: Path):
+        bp = self._bp(tmp_path)
+        v3.init_auto_run(bp, mode="task", target="T-1", pending_task_ids=["T-1"])
+        assert v3.clear_auto_state(bp) is True
+        assert v3.read_auto_state(bp) is None
+        # Clearing nothing is a no-op (False)
+        assert v3.clear_auto_state(bp) is False
+
+    def test_summary_string(self, tmp_path: Path):
+        bp = self._bp(tmp_path)
+        state = v3.init_auto_run(
+            bp, mode="epic", target="features", pending_task_ids=["T-1", "T-2"]
+        )
+        out = v3.auto_run_summary(state)
+        assert "epic" in out
+        assert "T-1" in out
+        assert "PICK" in out

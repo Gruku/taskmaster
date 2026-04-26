@@ -1032,6 +1032,196 @@ def sync_lesson_index(
     return backlog_data
 
 
+# ── Auto mode (state machine) ──────────────────────────────────
+
+AUTO_MODES = ("task", "epic", "phase")
+AUTO_STAGES = (
+    "PICK",
+    "SPEC_REVIEW",
+    "WRITE_TESTS",
+    "IMPLEMENT",
+    "TEST",
+    "REVIEW_GATE",
+    "HANDOVER_STUB",
+    "END_SESSION",
+    "COMPLETE",
+)
+AUTO_TASK_STATUSES = ("done", "failed", "blocked")
+AUTO_FAIL_REASONS = ("tests-failed", "spec-rejected", "blocked", "crashed", "user-aborted")
+AUTO_MODELS = ("sonnet", "opus")
+
+
+def auto_state_path(backlog_path: Path) -> Path:
+    """Path to the auto-mode cursor file (gitignored)."""
+    return backlog_path.parent / "auto" / "state.json"
+
+
+def read_auto_state(backlog_path: Path) -> dict[str, Any] | None:
+    sp = auto_state_path(backlog_path)
+    if not sp.exists():
+        return None
+    try:
+        return json.loads(sp.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def write_auto_state(backlog_path: Path, state: dict[str, Any]) -> Path:
+    sp = auto_state_path(backlog_path)
+    atomic_write(sp, json.dumps(state, indent=2) + "\n")
+    return sp
+
+
+def clear_auto_state(backlog_path: Path) -> bool:
+    """Delete the state file. Returns True if a file was removed."""
+    sp = auto_state_path(backlog_path)
+    if sp.exists():
+        sp.unlink()
+        return True
+    return False
+
+
+def init_auto_run(
+    backlog_path: Path,
+    *,
+    mode: str,
+    target: str,
+    pending_task_ids: list[str],
+    model_for_task: dict[str, str] | None = None,
+    config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Initialize a fresh auto run, write state, and return the state dict.
+
+    `model_for_task` maps task_id → "sonnet"|"opus"; missing entries default
+    to sonnet. The first pending task becomes the cursor (stage=PICK).
+    """
+    if mode not in AUTO_MODES:
+        raise ValueError(f"mode must be one of {AUTO_MODES}, got {mode!r}")
+    if not pending_task_ids:
+        raise ValueError("pending_task_ids must not be empty")
+    model_for_task = model_for_task or {}
+    first = pending_task_ids[0]
+    state: dict[str, Any] = {
+        "mode": mode,
+        "target": target,
+        "started_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "cursor": {
+            "task_id": first,
+            "stage": "PICK",
+            "model": model_for_task.get(first, "sonnet"),
+        },
+        "completed": [],
+        "pending": list(pending_task_ids[1:]),
+        "failed": [],
+        "models": dict(model_for_task),
+        "config": {
+            "continue_on_fail": False,
+            "no_gate": False,
+            **(config or {}),
+        },
+    }
+    write_auto_state(backlog_path, state)
+    return state
+
+
+def advance_stage(state: dict[str, Any], new_stage: str) -> dict[str, Any]:
+    """Move the cursor to a new stage. Returns the same state dict (mutated)."""
+    if new_stage not in AUTO_STAGES:
+        raise ValueError(f"stage must be one of {AUTO_STAGES}, got {new_stage!r}")
+    cursor = state.get("cursor")
+    if not cursor:
+        raise ValueError("no active cursor — auto run is complete or not started")
+    cursor["stage"] = new_stage
+    return state
+
+
+def complete_current_task(
+    state: dict[str, Any],
+    *,
+    status: str,
+    summary: str = "",
+    commits: list[str] | None = None,
+    fail_reason: str = "",
+    handover_id: str = "",
+) -> dict[str, Any]:
+    """Finalize the current cursor task and advance to the next pending one.
+
+    On success: appends to `completed`, pops next from `pending` as new cursor.
+    On failure: appends to `failed`. If config.continue_on_fail, advance;
+    otherwise leave cursor in place (caller decides next step) but stage = COMPLETE.
+
+    When `pending` is empty after success, cursor becomes None and overall
+    state effectively reaches the COMPLETE phase for the orchestrator.
+    """
+    if status not in AUTO_TASK_STATUSES:
+        raise ValueError(f"status must be one of {AUTO_TASK_STATUSES}")
+    cursor = state.get("cursor")
+    if not cursor:
+        raise ValueError("no active cursor")
+    tid = cursor["task_id"]
+    record: dict[str, Any] = {
+        "task_id": tid,
+        "status": status,
+        "summary": summary,
+        "commits": list(commits or []),
+    }
+    if handover_id:
+        record["handover_id"] = handover_id
+
+    if status == "done":
+        state["completed"].append(record)
+        _advance_to_next(state)
+    else:
+        if fail_reason and fail_reason not in AUTO_FAIL_REASONS:
+            raise ValueError(f"fail_reason must be one of {AUTO_FAIL_REASONS}")
+        record["reason"] = fail_reason or status
+        state["failed"].append(record)
+        if state["config"].get("continue_on_fail"):
+            _advance_to_next(state)
+        else:
+            # Halt: keep cursor on the failed task at HANDOVER_STUB so the
+            # orchestrator can write a recovery handover and pause for user.
+            cursor["stage"] = "HANDOVER_STUB"
+    return state
+
+
+def _advance_to_next(state: dict[str, Any]) -> None:
+    pending = state.get("pending") or []
+    if not pending:
+        state["cursor"] = None
+        return
+    next_id = pending.pop(0)
+    state["pending"] = pending
+    state["cursor"] = {
+        "task_id": next_id,
+        "stage": "PICK",
+        "model": state.get("models", {}).get(next_id, "sonnet"),
+    }
+
+
+def auto_run_summary(state: dict[str, Any]) -> str:
+    """Compact human-readable summary of an auto run for status checks."""
+    if not state:
+        return "No auto run in progress."
+    lines = [
+        f"Auto run: mode={state['mode']}, target={state['target']}",
+        f"Started: {state.get('started_at', '?')}",
+    ]
+    cur = state.get("cursor")
+    if cur:
+        lines.append(
+            f"Current: {cur['task_id']} @ {cur['stage']} (model={cur.get('model','sonnet')})"
+        )
+    else:
+        lines.append("Current: (none — run complete)")
+    lines.append(f"Completed: {len(state.get('completed') or [])}")
+    lines.append(f"Pending:   {len(state.get('pending') or [])}")
+    failed = state.get("failed") or []
+    if failed:
+        lines.append(f"Failed:    {len(failed)} ({', '.join(f['task_id'] for f in failed)})")
+    return "\n".join(lines)
+
+
 def format_recap(diff: dict[str, Any]) -> str:
     """Render a recap diff as a compact human-readable string.
 

@@ -86,6 +86,17 @@ from taskmaster_v3 import (
     core_lessons as _core_lessons,
     sync_lesson_index as _sync_lesson_index,
     lesson_eligible_for_promotion as _lesson_eligible_for_promotion,
+    AUTO_MODES,
+    AUTO_STAGES,
+    AUTO_TASK_STATUSES,
+    AUTO_FAIL_REASONS,
+    init_auto_run as _init_auto_run,
+    read_auto_state as _read_auto_state,
+    write_auto_state as _write_auto_state,
+    clear_auto_state as _clear_auto_state,
+    advance_stage as _advance_stage,
+    complete_current_task as _complete_current_task,
+    auto_run_summary as _auto_run_summary,
 )
 
 
@@ -1819,6 +1830,190 @@ def backlog_lesson_digest() -> str:
     if not digest:
         return "No active lessons."
     return "\n".join(f"- {d['id']} [{d['kind']}] {d['title']}" for d in digest)
+
+
+@mcp.tool()
+def backlog_auto_start(
+    mode: str,
+    target: str,
+    continue_on_fail: bool = False,
+    no_gate: bool = False,
+) -> str:
+    """Start an auto run (skill-driven state machine).
+
+    The orchestrating skill (taskmaster:auto-task / auto-epic / auto-phase)
+    drives Claude through PICK → SPEC_REVIEW → IMPLEMENT → REVIEW_GATE →
+    HANDOVER_STUB → END_SESSION for each task. This tool seeds the run.
+
+    Args:
+        mode: 'task', 'epic', or 'phase'.
+        target: Task id (mode=task), epic id (mode=epic), or phase id (mode=phase).
+        continue_on_fail: If true, batch runs proceed past failed tasks.
+        no_gate: If true, skip user-approval gates (SPEC_REVIEW, REVIEW_GATE).
+
+    Per-task model selection:
+        Each task may declare `auto_model: sonnet|opus`. Missing → sonnet.
+        The orchestrator skill reads `state.cursor.model` to pick the
+        subagent model when dispatching.
+    """
+    if mode not in AUTO_MODES:
+        return f"Error: mode must be one of {AUTO_MODES}"
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+
+    data = _load()
+    pending: list[str] = []
+    model_for_task: dict[str, str] = {}
+
+    if mode == "task":
+        # target is a task id
+        if not _find_task(data, target):
+            return f"Error: task {target} not found"
+        task, _ = _find_task(data, target)
+        pending = [target]
+        model_for_task[target] = task.get("auto_model", "sonnet")
+    elif mode == "epic":
+        epic = next((e for e in data.get("epics") or [] if e.get("id") == target), None)
+        if not epic:
+            return f"Error: epic {target} not found"
+        for t in epic.get("tasks") or []:
+            if t.get("status") in (None, "todo"):
+                pending.append(t["id"])
+                model_for_task[t["id"]] = t.get("auto_model", "sonnet")
+    else:  # phase
+        for epic in data.get("epics") or []:
+            for t in epic.get("tasks") or []:
+                if t.get("phase") == target and t.get("status") in (None, "todo"):
+                    pending.append(t["id"])
+                    model_for_task[t["id"]] = t.get("auto_model", "sonnet")
+
+    if not pending:
+        return f"No todo tasks under {mode} {target} — nothing to do."
+
+    state = _init_auto_run(
+        bp,
+        mode=mode,
+        target=target,
+        pending_task_ids=pending,
+        model_for_task=model_for_task,
+        config={"continue_on_fail": continue_on_fail, "no_gate": no_gate},
+    )
+
+    cur = state["cursor"]
+    return (
+        f"Auto run started: mode={mode}, target={target}, tasks={len(pending)}.\n"
+        f"First task: {cur['task_id']} (model={cur['model']}).\n"
+        f"Cursor stage: PICK. The auto-{mode} skill should drive from here."
+    )
+
+
+@mcp.tool()
+def backlog_auto_status() -> str:
+    """Show current auto-run status (which task, which stage, completed/pending counts)."""
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    state = _read_auto_state(bp)
+    if not state:
+        return "No auto run in progress."
+    return _auto_run_summary(state)
+
+
+@mcp.tool()
+def backlog_auto_advance(stage: str) -> str:
+    """Move the cursor to a new stage. Used by orchestrating skills between steps.
+
+    Valid stages: PICK, SPEC_REVIEW, WRITE_TESTS, IMPLEMENT, TEST,
+    REVIEW_GATE, HANDOVER_STUB, END_SESSION, COMPLETE.
+    """
+    if stage not in AUTO_STAGES:
+        return f"Error: stage must be one of {AUTO_STAGES}"
+    bp = _backlog_path()
+    state = _read_auto_state(bp)
+    if not state:
+        return "No auto run in progress."
+    try:
+        _advance_stage(state, stage)
+    except ValueError as exc:
+        return f"Error: {exc}"
+    _write_auto_state(bp, state)
+    cur = state["cursor"]
+    return f"Stage → {stage} (task={cur['task_id']}, model={cur['model']})"
+
+
+@mcp.tool()
+def backlog_auto_complete_task(
+    status: str,
+    summary: str = "",
+    commits: list[str] | None = None,
+    fail_reason: str = "",
+    handover_id: str = "",
+) -> str:
+    """Finalize the current cursor task and advance to the next pending task.
+
+    Args:
+        status: 'done' | 'failed' | 'blocked'.
+        summary: One-paragraph summary returned by the task subagent.
+        commits: Commit shas produced by the task.
+        fail_reason: Required if status != 'done'. One of tests-failed |
+                     spec-rejected | blocked | crashed | user-aborted.
+        handover_id: If a per-task handover was written, its id.
+    """
+    if status not in AUTO_TASK_STATUSES:
+        return f"Error: status must be one of {AUTO_TASK_STATUSES}"
+    if status != "done" and not fail_reason:
+        return "Error: fail_reason is required when status != 'done'"
+    bp = _backlog_path()
+    state = _read_auto_state(bp)
+    if not state:
+        return "No auto run in progress."
+    try:
+        _complete_current_task(
+            state,
+            status=status,
+            summary=summary,
+            commits=commits or [],
+            fail_reason=fail_reason,
+            handover_id=handover_id,
+        )
+    except ValueError as exc:
+        return f"Error: {exc}"
+    _write_auto_state(bp, state)
+
+    if state["cursor"] is None:
+        return (
+            f"Task complete (status={status}). No more pending tasks — auto run is done.\n"
+            f"Completed: {len(state['completed'])}, Failed: {len(state['failed'])}.\n"
+            f"Use `backlog_auto_finish` to clear state and write run-level handover."
+        )
+    cur = state["cursor"]
+    return (
+        f"Task complete (status={status}). Next: {cur['task_id']} (model={cur['model']}, stage={cur['stage']}).\n"
+        f"Completed so far: {len(state['completed'])}, Pending: {len(state['pending'])}, Failed: {len(state['failed'])}."
+    )
+
+
+@mcp.tool()
+def backlog_auto_finish() -> str:
+    """Clear the auto state file. Call after the run-level handover is written."""
+    bp = _backlog_path()
+    state = _read_auto_state(bp)
+    if not state:
+        return "No auto run to finish."
+    cleared = _clear_auto_state(bp)
+    return f"Auto run cleared. Final: completed={len(state.get('completed') or [])}, failed={len(state.get('failed') or [])}." if cleared else "No state to clear."
+
+
+@mcp.tool()
+def backlog_auto_abort() -> str:
+    """Abort an in-progress auto run, leaving completed work intact."""
+    bp = _backlog_path()
+    state = _read_auto_state(bp)
+    if not state:
+        return "No auto run to abort."
+    cleared = _clear_auto_state(bp)
+    return f"Auto run aborted. Completed: {len(state.get('completed') or [])}." if cleared else "Nothing to abort."
 
 
 @mcp.tool()
