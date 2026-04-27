@@ -1059,7 +1059,7 @@ VIEWER_PREFS_DEFAULTS = {
     "use_v3": False,          # serve v3 viewer shell at root when True
     "theme": "dark",          # dark | light
     "card_density": "full",   # full | minimal
-    "zoom": 1.5,              # baked-in 150% per spec §3.4
+    "zoom": 1.0,              # 1.5x baked into source CSS as of T2.24α
     "screens": {
         # Per-screen view toggles (Variant A / B). Default A everywhere except dashboard which has no B.
         "task_detail": {"view": "A"},
@@ -1082,6 +1082,7 @@ VIEWER_PREFS_DEFAULTS = {
             "sort": {"by": "priority", "dir": "desc"},
             "search": "",
         },
+        "collapsed_columns": [],   # column keys (status / phase id / epic id) currently collapsed
     },
     "lessons": {
         "thresholds": {

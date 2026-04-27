@@ -42,7 +42,7 @@ def test_get_viewer_prefs_returns_defaults_on_first_call(running_server):
     body = json.loads(resp.read())
     assert body["theme"] == "dark"
     assert body["card_density"] == "full"
-    assert body["zoom"] == 1.5
+    assert body["zoom"] == 1.0
 
 
 def test_put_viewer_prefs_merges_patch(running_server):
