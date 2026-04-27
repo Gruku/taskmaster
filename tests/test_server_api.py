@@ -43,3 +43,36 @@ def test_get_viewer_prefs_returns_defaults_on_first_call(running_server):
     assert body["theme"] == "dark"
     assert body["card_density"] == "full"
     assert body["zoom"] == 1.5
+
+
+def test_put_viewer_prefs_merges_patch(running_server):
+    base, _ = running_server
+    body = json.dumps({"theme": "light", "kanban": {"filters": {"search": "auth"}}}).encode()
+    req = urllib.request.Request(
+        f"{base}/api/viewer/prefs",
+        data=body,
+        method="PUT",
+        headers={"Content-Type": "application/json"},
+    )
+    resp = urllib.request.urlopen(req)
+    assert resp.status == 200
+    assert json.loads(resp.read())["ok"] is True
+
+    # GET reflects the patch
+    after = json.loads(urllib.request.urlopen(f"{base}/api/viewer/prefs").read())
+    assert after["theme"] == "light"
+    assert after["kanban"]["filters"]["search"] == "auth"
+    assert after["card_density"] == "full"  # untouched
+
+
+def test_put_viewer_prefs_rejects_non_object(running_server):
+    base, _ = running_server
+    req = urllib.request.Request(
+        f"{base}/api/viewer/prefs",
+        data=b'"not an object"',
+        method="PUT",
+        headers={"Content-Type": "application/json"},
+    )
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        urllib.request.urlopen(req)
+    assert exc.value.code == 400

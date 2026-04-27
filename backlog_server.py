@@ -3960,6 +3960,56 @@ class ViewerHandler(BaseHTTPRequestHandler):
         except Exception as e:
             self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(e))
 
+    def do_PUT(self):
+        if self.path == "/api/viewer/prefs":
+            import json
+            from copy import deepcopy
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length).decode("utf-8") if length else ""
+            try:
+                patch = json.loads(raw)
+            except Exception as e:
+                self._send_json(400, {"ok": False, "error": f"invalid JSON: {e}"})
+                return
+            if not isinstance(patch, dict):
+                self._send_json(400, {"ok": False, "error": "patch must be a JSON object"})
+                return
+
+            def _deep_merge(base, patch):
+                for k, v in patch.items():
+                    if isinstance(v, dict) and isinstance(base.get(k), dict):
+                        _deep_merge(base[k], v)
+                    else:
+                        base[k] = deepcopy(v)
+                return base
+
+            prefs = load_viewer_prefs()
+            _deep_merge(prefs, patch)
+            save_viewer_prefs(prefs)
+            self._send_json(200, {"ok": True})
+            return
+
+        self.send_response(404)
+        self.end_headers()
+
+    def _send_json(self, status: int, payload: dict):
+        import json
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_OPTIONS(self):
+        """Allow PUT cross-origin."""
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, PUT, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+
     def log_message(self, format: str, *args: object) -> None:
         pass  # suppress HTTP logs in MCP stderr
 
