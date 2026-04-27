@@ -83,3 +83,28 @@ def test_api_endpoints_set_cors_header(running_server):
     for path in ["/api/identity", "/api/viewer/prefs"]:
         resp = urllib.request.urlopen(f"{base}{path}")
         assert resp.headers.get("Access-Control-Allow-Origin") == "*"
+
+
+def test_get_v3_returns_index_html(running_server):
+    base, _ = running_server
+    resp = urllib.request.urlopen(f"{base}/v3")
+    assert resp.status == 200
+    assert resp.headers.get("Content-Type", "").startswith("text/html")
+    body = resp.read().decode()
+    assert "<title>Taskmaster</title>" in body
+    assert 'src="js/main.js"' in body or "main.js" in body  # main JS referenced
+
+
+def test_get_static_v3_tokens_css(running_server):
+    base, _ = running_server
+    resp = urllib.request.urlopen(f"{base}/static/v3/css/tokens.css")
+    assert resp.status == 200
+    assert resp.headers.get("Content-Type", "").startswith("text/css")
+    assert "--bg-canvas" in resp.read().decode()
+
+
+def test_static_v3_path_traversal_blocked(running_server):
+    base, _ = running_server
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        urllib.request.urlopen(f"{base}/static/v3/../../etc/passwd")
+    assert exc.value.code in (400, 404)

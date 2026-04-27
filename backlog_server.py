@@ -3844,6 +3844,47 @@ class ViewerHandler(BaseHTTPRequestHandler):
 
         if clean_path in ("/", "/index.html"):
             self._serve_file(VIEWER_PATH, "text/html")
+        elif clean_path in ("/v3", "/v3/", "/v3/index.html"):
+            viewer_root = Path(__file__).parent / "viewer"
+            idx = viewer_root / "index.html"
+            if not idx.exists():
+                self.send_response(404); self.end_headers(); return
+            html = idx.read_text(encoding="utf-8")
+            # Make relative asset refs absolute under /static/v3/.
+            html = html.replace('href="css/', 'href="/static/v3/css/')
+            html = html.replace('src="js/', 'src="/static/v3/js/')
+            body = html.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        elif clean_path.startswith("/static/v3/"):
+            rel = clean_path[len("/static/v3/"):]
+            viewer_root = (Path(__file__).parent / "viewer").resolve()
+            target = (viewer_root / rel).resolve()
+            if not str(target).startswith(str(viewer_root) + os.sep) and target != viewer_root:
+                self.send_response(400); self.end_headers(); return
+            if not target.is_file():
+                self.send_response(404); self.end_headers(); return
+            ext = target.suffix.lower()
+            ctype = {
+                ".html": "text/html; charset=utf-8",
+                ".css":  "text/css; charset=utf-8",
+                ".js":   "application/javascript; charset=utf-8",
+                ".json": "application/json; charset=utf-8",
+                ".svg":  "image/svg+xml",
+            }.get(ext, "application/octet-stream")
+            body = target.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(body)
+            return
         elif clean_path == "/api/viewer/prefs":
             self._send_json(200, load_viewer_prefs())
             return
