@@ -1,5 +1,10 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Source+Serif+Pro:ital,wght@1,400&display=swap');
 
+:root {
+  /* Shell-specific behaviour vars (not design tokens — kept here, not in tokens.css) */
+  --shell-zoom: 1.5;  /* spec §3.4 — 150% baked in; behavioural, not a design token */
+}
+
 html, body {
   margin: 0;
   padding: 0;

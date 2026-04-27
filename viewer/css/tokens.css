@@ -32,12 +32,12 @@
   --amber:            #d6a45f;
   --red:              #d66b5f;
   --purple:           #a07fe0;
-  --gold:             #d6a45f;
+  --gold:             var(--amber); /* semantic alias — identical hue, keep --amber as canonical */
 
   /* Diff colors (Recap, Sessions detail) */
-  --diff-add:         #5fae6e;
-  --diff-mod:         #d6a45f;
-  --diff-del:         #d66b5f;
+  --diff-add:         var(--green);
+  --diff-mod:         var(--amber);
+  --diff-del:         var(--red);
 
   /* Epic palette — auto-assigned in order; see spec §5 */
   --epic-1:           #6ea8ff;
@@ -71,6 +71,8 @@
   --sp-7:             16px;
   --sp-8:             18px;
   --sp-9:             22px;
+  --sp-10:            24px;
+  --sp-12:            32px;
 
   /* Radius */
   --r-sm:             4px;
@@ -92,7 +94,6 @@
   --ease:             cubic-bezier(0.3, 0.7, 0.4, 1);
 
   /* Layout */
-  --shell-zoom:       1.5;             /* spec §3.4 — 150% baked in */
   --sidebar-w:        200px;
   --rail-w:           480px;            /* right-rail detail surface */
 }
