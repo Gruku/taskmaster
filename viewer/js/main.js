@@ -73,6 +73,7 @@ async function boot() {
 
   // Backlog polling loop
   pollBacklogForever();
+  pollAutoStateForever();
 }
 
 async function pollBacklogForever() {
@@ -126,6 +127,43 @@ function loadJsYaml() {
     });
   }
   return _jsYamlPromise;
+}
+
+const AUTO_STATE_POLL_MS = 3000;
+
+async function pollAutoStateForever() {
+  let consecutiveFailures = 0;
+  const MAX_BACKOFF_MS = 60_000;
+
+  while (true) {
+    // Pause polling when the tab is hidden; resume on visibility.
+    if (document.visibilityState === 'hidden') {
+      await new Promise(resolve => {
+        document.addEventListener('visibilitychange', function onVisible() {
+          if (document.visibilityState === 'visible') {
+            document.removeEventListener('visibilitychange', onVisible);
+            resolve();
+          }
+        });
+      });
+    }
+
+    try {
+      const auto = await api.autoState();
+      store.setAutoState(auto);
+      consecutiveFailures = 0;
+    } catch (e) {
+      consecutiveFailures++;
+      console.error('auto state poll failed', e);
+      store.setAutoState(null);
+    }
+
+    // Exponential backoff on consecutive failures, capped at MAX_BACKOFF_MS.
+    const delay = consecutiveFailures > 0
+      ? Math.min(AUTO_STATE_POLL_MS * 2 ** (consecutiveFailures - 1), MAX_BACKOFF_MS)
+      : AUTO_STATE_POLL_MS;
+    await sleep(delay);
+  }
 }
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
