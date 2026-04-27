@@ -51,11 +51,6 @@ export async function mount(root, { store, prefs }) {
   const head = document.createElement('div');
   head.className = 'kanban-head';
 
-  const title = document.createElement('span');
-  title.className = 'title';
-  title.textContent = 'Kanban';
-  head.appendChild(title);
-
   const subcount = document.createElement('span');
   subcount.className = 'subcount';
   subcount.textContent = '… tasks';
