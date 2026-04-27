@@ -45,3 +45,27 @@ test.describe('Viewer v3 smoke', () => {
     await expect(page.locator('#page-title')).toHaveText('Dashboard');
   });
 });
+
+test('prefs persist via the API and are reflected in store', async ({ page }) => {
+  await page.goto('/v3');
+
+  // Mutate via the same path screens will use.
+  await page.evaluate(async () => {
+    const resp = await fetch('/api/viewer/prefs', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ theme: 'light', kanban: { filters: { search: 'auth' } } }),
+    });
+    if (!resp.ok) throw new Error('PUT failed');
+  });
+
+  // Reload, then read prefs from /api/viewer/prefs.
+  await page.reload();
+  const prefs = await page.evaluate(async () => {
+    const resp = await fetch('/api/viewer/prefs');
+    return resp.json();
+  });
+
+  expect(prefs.theme).toBe('light');
+  expect(prefs.kanban.filters.search).toBe('auth');
+});
