@@ -119,13 +119,23 @@ html, body {
 
 .topbar {
   display: flex; align-items: center; gap: var(--sp-5);
-  margin-bottom: var(--sp-8);
+  margin-bottom: var(--sp-6);
+  flex-wrap: wrap;
+  min-height: 48px;
 }
 .topbar h1 {
   font-size: var(--text-2xl);
   margin: 0;
   font-weight: 600;
+  flex: 0 0 auto;
 }
+.topbar-actions {
+  display: flex; align-items: center; gap: var(--sp-3);
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.topbar-actions:empty { display: none; }
 
 .screen-mount {
   flex: 1;
