@@ -12,14 +12,7 @@
 /* ─────────── PAGE LAYOUT ─────────── */
 .kanban-page { display: flex; flex-direction: column; gap: var(--sp-5); min-width: 0; height: 100%; min-height: 0; }
 
-.kanban-head {
-  display: flex; align-items: center; gap: var(--sp-4);
-  padding-bottom: var(--sp-4);
-  border-bottom: 1px solid var(--border);
-  flex-wrap: wrap;
-}
-.kanban-head .title    { font-size: 27px; font-weight: 600; letter-spacing: -0.01em; }
-.kanban-head .subcount { font-size: var(--text-sm); color: var(--ink-3); padding-right: var(--sp-3); border-right: 1px solid var(--border); }
+.kanban-head-subcount { font-size: var(--text-sm); color: var(--ink-3); padding-right: var(--sp-3); border-right: 1px solid var(--border); }
 
 .kanban-search {
   display: inline-flex; align-items: center; gap: var(--sp-2);
