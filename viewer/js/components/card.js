@@ -156,7 +156,7 @@ export function renderCard({ task, density = 'full', epicColors = {}, autoState 
 
   const branch = document.createElement('span');
   branch.className = 'card-branch' + (task.branch ? '' : ' empty');
-  branch.innerHTML = `<span class="glyph">⎇</span>${escapeHtml(task.branch || '— no branch —')}`;
+  branch.innerHTML = `<span class="glyph">⎇</span><span class="branch-text">${escapeHtml(task.branch || '— no branch —')}</span>${task.branch ? '<span class="copy-glyph">⧉</span>' : ''}`;
   if (task.branch) bindCopy(branch, task.branch);
   footer.appendChild(branch);
 

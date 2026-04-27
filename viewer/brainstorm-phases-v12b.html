@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>V12B — interactive phase stepper (carousel)</title>
+<link rel="stylesheet" href="css/tokens.css">
+<style>
+  body { background: var(--bg-canvas); color: var(--ink); font-family: var(--font-sans);
+         margin: 0; padding: var(--sp-8); font-size: var(--text-base); line-height: 1.5; }
+  h1 { font-size: var(--text-2xl); margin: 0 0 var(--sp-2); }
+  .lede { color: var(--ink-3); margin-bottom: var(--sp-6); }
+  .panel { background: var(--bg-panel); border: 1px solid var(--border);
+           border-radius: var(--r-lg); padding: var(--sp-5); margin-bottom: var(--sp-5); }
+  .row {
+    display: flex; align-items: center; gap: 0;
+    position: relative; min-height: 100px;
+    overflow: hidden;
+  }
+
+  /* Generic transition for collapse/expand. Per-element --anim-dur lets us
+     pace the past-chip expand differently per phase (depends on label length). */
+  .row > * {
+    position: relative;
+    transition:
+      flex-basis  var(--anim-dur, 320ms) cubic-bezier(0.3,0.7,0.4,1),
+      flex-grow   var(--anim-dur, 320ms) cubic-bezier(0.3,0.7,0.4,1),
+      width       var(--anim-dur, 320ms) cubic-bezier(0.3,0.7,0.4,1),
+      max-width   var(--anim-dur, 320ms) cubic-bezier(0.3,0.7,0.4,1),
+      margin      var(--anim-dur, 320ms) cubic-bezier(0.3,0.7,0.4,1),
+      padding     var(--anim-dur, 320ms) cubic-bezier(0.3,0.7,0.4,1),
+      border-radius var(--anim-dur, 320ms) cubic-bezier(0.3,0.7,0.4,1),
+      gap         var(--anim-dur, 320ms) cubic-bezier(0.3,0.7,0.4,1),
+      opacity 220ms,
+      transform 220ms,
+      background 220ms,
+      border-color 220ms,
+      color 220ms;
+  }
+
+  /* Connector segment between adjacent items — short line + chevron */
+  .row > .item {
+    margin-left: 16px;
+  }
+  .row > .item.first { margin-left: 0; }
+  .row > .item::before {
+    content: '';
+    position: absolute;
+    left: -12px; top: 50%; width: 10px; height: 1px;
+    transform: translateY(-50%);
+    background: var(--border-strong);
+    opacity: 0.55;
+    transition: opacity 200ms;
+    pointer-events: none;
+  }
+  .row > .item::after {
+    content: '';
+    position: absolute;
+    left: -5px; top: 50%; width: 5px; height: 5px;
+    transform: translate(-50%, -50%) rotate(45deg);
+    border-top: 1px solid var(--border-strong);
+    border-right: 1px solid var(--border-strong);
+    opacity: 0.55;
+    transition: opacity 200ms;
+    pointer-events: none;
+  }
+  .row > .item.first::before,
+  .row > .item.first::after { display: none; }
+  .row > .item.hidden::before,
+  .row > .item.hidden::after { opacity: 0; }
+
+  /* HIDDEN state — collapse to zero width */
+  .row > .item.hidden {
+    flex: 0 0 0 !important;
+    width: 0 !important;
+    max-width: 0 !important;
+    min-width: 0 !important;
+    margin-left: 0 !important;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+    border-left-width: 0 !important;
+    border-right-width: 0 !important;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  /* ─── Past chip — circle by default, expands to pill on filter ─── */
+  .chip-mini {
+    flex: 0 0 auto;
+    min-width: 36px; height: 36px;
+    padding: 0;
+    border-radius: 50%;
+    display: inline-flex; align-items: center; justify-content: center; gap: 0;
+    font-family: var(--font-mono); font-size: 13px; font-weight: 700;
+    background: var(--green); color: var(--bg-canvas);
+    cursor: pointer; border: 0;
+    overflow: hidden; white-space: nowrap;
+    box-sizing: border-box;
+  }
+  .chip-mini .num { flex: 0 0 auto; color: var(--bg-canvas); }
+  .chip-mini .lbl {
+    max-width: 0; opacity: 0;
+    transition:
+      max-width var(--anim-dur, 320ms) cubic-bezier(0.3,0.7,0.4,1),
+      opacity 220ms;
+    overflow: hidden;
+    font-family: var(--font-sans);
+    font-size: var(--text-xs);
+    font-weight: 600;
+  }
+
+  .chip-mini.filtered {
+    padding: 0 14px;
+    gap: 8px;
+    border-radius: var(--r-md);
+    background: var(--amber);
+    color: var(--bg-canvas);
+    box-shadow: 0 0 0 3px rgba(214,164,95,0.25);
+    transform: scale(1.06);
+  }
+  .chip-mini.filtered .num { color: var(--bg-canvas); }
+  .chip-mini.filtered .lbl { max-width: 220px; opacity: 1; color: var(--bg-canvas); }
+
+  /* ─── Slide button — circle with corner badge ─── */
+  .slide-btn {
+    flex: 0 0 auto;
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    background: transparent;
+    border: 1px dashed var(--border-strong);
+    color: var(--ink-2);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; font-size: 18px; padding: 0;
+    overflow: visible;
+  }
+  .slide-btn:hover { border-style: solid; border-color: var(--accent); color: var(--accent); }
+  .slide-btn .badge {
+    position: absolute; top: -6px; right: -6px;
+    background: var(--bg-card); border: 1px solid var(--border);
+    color: var(--ink-3);
+    font-size: 9px; font-family: var(--font-mono);
+    padding: 1px 5px; border-radius: 8px;
+    pointer-events: none;
+    font-weight: 700;
+  }
+
+  /* ─── Active card — fixed width, no resize on filter ─── */
+  .active-card {
+    flex: 0 0 580px;
+    background: var(--bg-card);
+    border: 1px solid var(--accent);
+    border-radius: var(--r-md);
+    padding: 12px 18px 14px;
+    display: flex; flex-direction: column; gap: 8px;
+    cursor: pointer;
+    overflow: hidden; min-width: 0;
+  }
+  .active-card .head { display: flex; align-items: center; gap: var(--sp-3); }
+  .active-card .num {
+    width: 30px; height: 30px; border-radius: 50%; flex: 0 0 auto;
+    background: var(--accent); color: var(--bg-canvas);
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--font-mono); font-size: var(--text-sm); font-weight: 700;
+  }
+  .active-card .name { font-size: var(--text-md); font-weight: 700; letter-spacing: -0.01em; white-space: nowrap; }
+  .active-card .stat { font-variant-numeric: tabular-nums; color: var(--accent-2); margin-left: auto; font-weight: 600; white-space: nowrap; }
+  .active-card .when { font-size: var(--text-xs); color: var(--ink-3); white-space: nowrap; }
+  .active-card .pb { height: 5px; background: rgba(255,255,255,0.07); border-radius: 3px; overflow: hidden; }
+  .active-card .pb > i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+
+  .active-card.filtered {
+    background: rgba(214,164,95,0.18);
+    border-color: var(--amber);
+  }
+  .active-card.filtered .num { background: var(--amber); }
+  .active-card.filtered .stat { color: var(--amber); }
+  .active-card.filtered .pb > i { background: linear-gradient(90deg, var(--amber), #e8c896); }
+
+  /* ─── Future card — fixed flex-basis for smooth carousel; grows when filtered ─── */
+  .future-card {
+    flex: 0 0 290px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    padding: 10px var(--sp-3) 12px;
+    display: flex; flex-direction: column; gap: 8px;
+    opacity: 0.7;
+    cursor: pointer;
+    overflow: hidden;
+  }
+  .future-card:hover { opacity: 1; }
+  .future-card .head { display: flex; align-items: center; gap: 6px; }
+  .future-card .num {
+    width: 22px; height: 22px; border-radius: 50%;
+    background: var(--bg-canvas); border: 1px dashed var(--border-strong); color: var(--ink-3);
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--font-mono); font-size: 11px; font-weight: 700; flex: 0 0 auto;
+  }
+  .future-card .name { font-size: var(--text-sm); color: var(--ink-2); font-weight: 700;
+                       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .future-card .stat { font-size: var(--text-xs); color: var(--ink-3); margin-left: auto;
+                       font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .future-card .pb { height: 4px; background: rgba(255,255,255,0.04); border-radius: 2px; overflow: hidden; }
+  .future-card .pb > i { display: block; height: 100%; width: 0; background: var(--border-strong); }
+
+  .future-card.filtered {
+    flex: 0 0 360px;
+    background: rgba(214,164,95,0.18);
+    border-color: var(--amber); color: var(--ink); opacity: 1;
+  }
+  .future-card.filtered .name { color: var(--ink); }
+  .future-card.filtered .num { background: var(--amber); color: var(--bg-canvas); border-style: solid; border-color: var(--amber); }
+  .future-card.filtered .stat { color: var(--amber); }
+  .future-card.filtered .pb > i { background: var(--amber); }
+
+  .status-bar {
+    margin-top: var(--sp-5);
+    padding: var(--sp-3) var(--sp-4);
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: var(--r-md); font-size: var(--text-sm); color: var(--ink-3);
+    font-family: var(--font-mono);
+    display: flex; align-items: center; gap: var(--sp-4); flex-wrap: wrap;
+  }
+  .status-bar .label { color: var(--ink-2); }
+  .status-bar .value { color: var(--accent); }
+  .status-bar .reset {
+    margin-left: auto;
+    appearance: none; background: transparent; border: 1px solid var(--border);
+    color: var(--ink-2); padding: 4px 12px; border-radius: var(--r-sm);
+    cursor: pointer; font-family: var(--font-sans); font-size: var(--text-xs);
+  }
+  .status-bar .reset:hover { color: var(--ink); border-color: var(--border-strong); }
+</style>
+</head>
+<body>
+<h1>V12B — interactive phase stepper (carousel)</h1>
+<p class="lede">Single flex row, smooth carousel, past chips expand to reveal phase name. Each chip's expand-animation duration is keyed to its name length, so visually the reveal feels at the same per-character pace whether the phase name is "GA" or "Open Source Release".</p>
+
+<div class="panel">
+  <div class="row" id="row"></div>
+  <div class="status-bar">
+    <span class="label">Filter:</span> <span class="value" id="filter-display">none</span>
+    <span class="label">·</span>
+    <span class="label">Window:</span> <span class="value" id="window-display">past offset=0, future offset=0</span>
+    <button class="reset" id="reset">Reset all</button>
+  </div>
+</div>
+
+<script>
+const PHASES = [
+  { id: 'P-01', num: 1,  name: 'Discovery',            status: 'done',   done: 4, total: 4 },
+  { id: 'P-02', num: 2,  name: 'Spike',                status: 'done',   done: 3, total: 3 },
+  { id: 'P-03', num: 3,  name: 'Foundations',          status: 'done',   done: 5, total: 5 },
+  { id: 'P-04', num: 4,  name: 'Skeleton',             status: 'done',   done: 4, total: 4 },
+  { id: 'P-05', num: 5,  name: 'Migration v0',         status: 'done',   done: 6, total: 6 },
+  { id: 'P-06', num: 6,  name: 'Migration v1',         status: 'done',   done: 4, total: 4 },
+  { id: 'P-07', num: 7,  name: 'Schema',               status: 'done',   done: 6, total: 6 },
+  { id: 'P-08', num: 8,  name: 'Hardening',            status: 'done',   done: 3, total: 3 },
+  { id: 'P-09', num: 9,  name: 'Auth',                 status: 'done',   done: 5, total: 5 },
+  { id: 'P-10', num: 10, name: 'CLI',                  status: 'done',   done: 3, total: 3 },
+  { id: 'P-11', num: 11, name: 'Server APIs',          status: 'done',   done: 8, total: 8 },
+  { id: 'P-12', num: 12, name: 'Worker Pool',          status: 'done',   done: 4, total: 4 },
+  { id: 'P-13', num: 13, name: 'Persistence',          status: 'done',   done: 5, total: 5 },
+  { id: 'P-14', num: 14, name: 'Dashboard v0',         status: 'done',   done: 4, total: 4 },
+  { id: 'P-15', num: 15, name: 'Visual Redesign',      status: 'active', done: 3, total: 14, when: 'Active · 10d' },
+  { id: 'P-16', num: 16, name: 'Polish',               status: 'future', done: 0, total: 5 },
+  { id: 'P-17', num: 17, name: 'Launch',               status: 'future', done: 0, total: 4 },
+  { id: 'P-18', num: 18, name: 'Soak',                 status: 'future', done: 0, total: 3 },
+  { id: 'P-19', num: 19, name: 'GA',                   status: 'future', done: 0, total: 2 },
+  { id: 'P-20', num: 20, name: 'Beta Cohort',          status: 'future', done: 0, total: 6 },
+  { id: 'P-21', num: 21, name: 'Open Source Release',  status: 'future', done: 0, total: 5 },
+  { id: 'P-22', num: 22, name: 'Migration v2',         status: 'future', done: 0, total: 8 },
+  { id: 'P-23', num: 23, name: 'Documentation',        status: 'future', done: 0, total: 4 },
+  { id: 'P-24', num: 24, name: 'Performance Pass',     status: 'future', done: 0, total: 6 },
+  { id: 'P-25', num: 25, name: 'API Stabilization',    status: 'future', done: 0, total: 7 },
+  { id: 'P-26', num: 26, name: 'Onboarding Flow',      status: 'future', done: 0, total: 5 },
+  { id: 'P-27', num: 27, name: 'Mobile Adapter',       status: 'future', done: 0, total: 9 },
+  { id: 'P-28', num: 28, name: 'Telemetry',            status: 'future', done: 0, total: 4 },
+  { id: 'P-29', num: 29, name: 'Sunset Legacy',        status: 'future', done: 0, total: 3 },
+];
+
+const VISIBLE = 3;
+
+// Animation duration helper — keyed to phase-name length so longer names
+// take proportionally longer, keeping per-character pace constant.
+const MS_PER_CHAR = 16;
+const MS_BASE = 220;
+function chipDur(name) { return MS_BASE + name.length * MS_PER_CHAR; }
+
+const state = {
+  selected: null,
+  pastOffset: 0,
+  futureOffset: 0,
+};
+
+const row = document.getElementById('row');
+const filterDisplay = document.getElementById('filter-display');
+const windowDisplay = document.getElementById('window-display');
+const resetBtn = document.getElementById('reset');
+
+const activeIdx = PHASES.findIndex(p => p.status === 'active');
+const pastPhases = PHASES.slice(0, activeIdx);
+const futurePhases = PHASES.slice(activeIdx + 1);
+
+function makeSlideBtn(direction) {
+  const el = document.createElement('button');
+  el.className = 'slide-btn item';
+  const chev = direction === 'left' ? '‹' : '›';
+  el.innerHTML = `<span class="ico">${chev}</span><span class="badge">0</span>`;
+  return el;
+}
+const pastSlideOuter   = makeSlideBtn('left');
+const pastSlideInner   = makeSlideBtn('right');
+const futureSlideInner = makeSlideBtn('left');
+const futureSlideOuter = makeSlideBtn('right');
+
+pastSlideOuter.addEventListener('click', () => {
+  state.pastOffset = Math.min(pastPhases.length - VISIBLE, state.pastOffset + VISIBLE);
+  render();
+});
+pastSlideInner.addEventListener('click', () => {
+  state.pastOffset = Math.max(0, state.pastOffset - VISIBLE);
+  render();
+});
+futureSlideInner.addEventListener('click', () => {
+  state.futureOffset = Math.max(0, state.futureOffset - VISIBLE);
+  render();
+});
+futureSlideOuter.addEventListener('click', () => {
+  state.futureOffset = Math.min(futurePhases.length - VISIBLE, state.futureOffset + VISIBLE);
+  render();
+});
+
+row.appendChild(pastSlideOuter);
+
+const chipEls = pastPhases.map(p => {
+  const el = document.createElement('button');
+  el.className = 'chip-mini item';
+  el.dataset.id = p.id;
+  el.title = p.name + ' · ' + p.done + '/' + p.total;
+  el.style.setProperty('--anim-dur', chipDur(p.name) + 'ms');
+  el.innerHTML = `<span class="num">${p.num}</span><span class="lbl">${p.name}</span>`;
+  el.addEventListener('click', () => toggleSelect(p.id));
+  row.appendChild(el);
+  return el;
+});
+
+row.appendChild(pastSlideInner);
+
+const active = PHASES[activeIdx];
+const activeEl = document.createElement('div');
+activeEl.className = 'active-card item';
+const pct = Math.round((active.done / active.total) * 100);
+activeEl.innerHTML = `
+  <div class="head">
+    <div class="num">${active.num}</div>
+    <span class="name">${active.name}</span>
+    <span class="stat">${active.done}/${active.total} · ${pct}%</span>
+  </div>
+  <div class="when">${active.when}</div>
+  <div class="pb"><i style="width:${pct}%"></i></div>
+`;
+activeEl.addEventListener('click', () => toggleSelect(active.id));
+row.appendChild(activeEl);
+
+row.appendChild(futureSlideInner);
+
+const futureEls = futurePhases.map(p => {
+  const el = document.createElement('div');
+  el.className = 'future-card item';
+  el.dataset.id = p.id;
+  el.style.setProperty('--anim-dur', '320ms');
+  el.innerHTML = `
+    <div class="head">
+      <span class="num">${p.num}</span>
+      <span class="name">${p.name}</span>
+      <span class="stat">${p.done}/${p.total}</span>
+    </div>
+    <div class="pb"><i></i></div>
+  `;
+  el.addEventListener('click', () => toggleSelect(p.id));
+  row.appendChild(el);
+  return el;
+});
+
+row.appendChild(futureSlideOuter);
+
+function toggleSelect(id) {
+  state.selected = state.selected === id ? null : id;
+  render();
+}
+
+function render() {
+  const pastLen = pastPhases.length;
+  const visStartPast = Math.max(0, pastLen - VISIBLE - state.pastOffset);
+  const visEndPast   = Math.max(0, pastLen - state.pastOffset);
+  const olderHidden  = visStartPast;
+  const newerHidden  = pastLen - visEndPast;
+
+  chipEls.forEach((el, i) => {
+    const visible = i >= visStartPast && i < visEndPast;
+    el.classList.toggle('hidden', !visible);
+    el.classList.toggle('filtered', state.selected === pastPhases[i].id);
+  });
+
+  const futureLen = futurePhases.length;
+  const futureVisStart = state.futureOffset;
+  const futureVisEnd   = Math.min(futureLen, state.futureOffset + VISIBLE);
+  const earlierFutureHidden = futureVisStart;
+  const laterHidden         = Math.max(0, futureLen - futureVisEnd);
+
+  futureEls.forEach((el, i) => {
+    const visible = i >= futureVisStart && i < futureVisEnd;
+    el.classList.toggle('hidden', !visible);
+    el.classList.toggle('filtered', state.selected === futurePhases[i].id);
+  });
+
+  activeEl.classList.toggle('filtered', state.selected === active.id);
+
+  setBtn(pastSlideOuter,  olderHidden);
+  setBtn(pastSlideInner,  newerHidden);
+  setBtn(futureSlideInner, earlierFutureHidden);
+  setBtn(futureSlideOuter, laterHidden);
+
+  let foundFirst = false;
+  row.querySelectorAll(':scope > .item').forEach(el => {
+    if (el.classList.contains('hidden')) { el.classList.remove('first'); return; }
+    el.classList.toggle('first', !foundFirst);
+    foundFirst = true;
+  });
+
+  filterDisplay.textContent = state.selected
+    ? state.selected + ' · ' + (PHASES.find(p => p.id === state.selected) || {}).name
+    : 'none';
+  windowDisplay.textContent = `past offset=${state.pastOffset} (older=${olderHidden}, newer=${newerHidden}), future offset=${state.futureOffset} (earlier=${earlierFutureHidden}, later=${laterHidden})`;
+}
+
+function setBtn(btn, count) {
+  if (count > 0) {
+    btn.classList.remove('hidden');
+    btn.querySelector('.badge').textContent = count;
+  } else {
+    btn.classList.add('hidden');
+  }
+}
+
+resetBtn.addEventListener('click', () => {
+  state.selected = null;
+  state.pastOffset = 0;
+  state.futureOffset = 0;
+  render();
+});
+
+render();
+</script>
+</body>
+</html>

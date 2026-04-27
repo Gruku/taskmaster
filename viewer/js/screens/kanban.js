@@ -258,7 +258,11 @@ export async function mount(root, { store, prefs }) {
         if (state.collapsed.has(g.key)) state.collapsed.delete(g.key);
         else state.collapsed.add(g.key);
         prefs.patch({ kanban: { collapsed_columns: [...state.collapsed] } });
-        paint();
+        const nowCollapsed = state.collapsed.has(g.key);
+        col.classList.toggle('collapsed', nowCollapsed);
+        toggleBtn.textContent = nowCollapsed ? '›' : '‹';
+        toggleBtn.title = nowCollapsed ? 'Expand' : 'Collapse';
+        updateGridTemplate();
       });
       head.appendChild(toggleBtn);
       if (isCollapsed) col.classList.add('collapsed');
@@ -285,6 +289,33 @@ export async function mount(root, { store, prefs }) {
       col.appendChild(colBody);
       boardGrid.appendChild(col);
     }
+    updateGridTemplate();
+  }
+
+  function updateGridTemplate(animate = true) {
+    const cols = Array.from(boardGrid.querySelectorAll(':scope > .kanban-col'));
+    if (!cols.length) return;
+    const isInitial = cols.some(c => !c.style.width || c.style.width === '0px');
+    const skipAnim = !animate || isInitial;
+    const total = boardGrid.clientWidth;
+    const gapPx = parseFloat(getComputedStyle(boardGrid).gap) || 0;
+    const totalGap = gapPx * (cols.length - 1);
+    const collapsedWidth = 66;
+    const collapsedCount = cols.filter(c => c.classList.contains('collapsed')).length;
+    const expandedCount = cols.length - collapsedCount;
+    const expandedWidth = expandedCount > 0
+      ? Math.max(0, (total - totalGap - collapsedCount * collapsedWidth) / expandedCount)
+      : 0;
+    if (skipAnim) boardGrid.classList.add('no-anim');
+    for (const c of cols) {
+      const w = c.classList.contains('collapsed') ? collapsedWidth : expandedWidth;
+      c.style.width = w + 'px';
+    }
+    if (skipAnim) {
+      // force reflow then re-enable transitions
+      void boardGrid.offsetHeight;
+      boardGrid.classList.remove('no-anim');
+    }
   }
 
   // Persist filter changes via debounced prefs.patch
@@ -308,11 +339,16 @@ export async function mount(root, { store, prefs }) {
   // Initial paint
   paint();
 
+  // Recompute column widths on viewport resize without animation.
+  const resizeObs = new ResizeObserver(() => updateGridTemplate(false));
+  resizeObs.observe(boardGrid);
+
   // Cleanup
   return () => {
     if (searchTimer) clearTimeout(searchTimer);
     unsubBacklog();
     unsubAuto();
+    resizeObs.disconnect();
     destroyAutoModeStrip(strip);
     if (head) head.replaceChildren();
   };

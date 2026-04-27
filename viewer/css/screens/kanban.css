@@ -116,7 +116,9 @@
   display: flex; align-items: center; gap: var(--sp-2);
   font-size: var(--text-xs);
   margin-bottom: 8px;
+  padding-right: 100px; /* reserve room for absolute .card-pri (Critical chip is widest) */
 }
+.card-task .card-title { padding-right: 100px; }
 .card-id {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
@@ -128,12 +130,19 @@
   transition: background var(--t-fast) var(--ease);
 }
 .card-id:hover { background: var(--epic-soft, rgba(255,255,255,0.05)); }
-.card-id .copy-glyph { opacity: 0; font-size: 15px; transition: opacity var(--t-fast) var(--ease); }
-.card-id:hover .copy-glyph { opacity: 0.7; }
+.card-id .copy-glyph { opacity: 0.4; font-size: 15px; transition: opacity var(--t-fast) var(--ease); }
+.card-id:hover .copy-glyph { opacity: 0.9; }
+.card-branch .copy-glyph { opacity: 0.4; font-size: 15px; margin-left: auto; flex: 0 0 auto; transition: opacity var(--t-fast) var(--ease); }
+.card-branch:hover .copy-glyph { opacity: 0.9; }
+.card-branch .branch-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 
 .card-pri {
+  position: absolute;
+  top: 12px;
+  right: 12px;
   font-size: var(--text-xs); padding: 2px 9px; border-radius: var(--r-sm);
   font-weight: 600; letter-spacing: 0.02em;
+  z-index: 1;
 }
 .card-pri.critical { background: rgba(214,107,95,0.22); color: var(--red); }
 .card-pri.high     { background: rgba(214,164,95,0.22); color: var(--amber); }
@@ -214,6 +223,7 @@
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   padding: 2px 8px; border-radius: var(--r-sm);
   transition: background var(--t-fast) var(--ease);
+  user-select: none;
 }
 .card-branch:hover { background: rgba(74,158,255,0.10); }
 .card-branch.empty { color: var(--ink-3); }
@@ -381,34 +391,88 @@
 .kanban-pri-tog.medium.on   { background: rgba(74,158,255,0.18); border-color: var(--accent);color: var(--accent); }
 .kanban-pri-tog.low.on      { background: rgba(127,179,240,0.12); border-color: var(--accent-2); color: var(--accent-2); }
 
-/* ─────────── PHASE STEPPER ─────────── */
+/* ─────────── PHASE STEPPER ───────────
+   Each phase is a fully bordered cell. Connector arrows between phases
+   showcase the temporal progression (left-to-right time arrow). */
 .kanban-phase-stepper {
-  display: flex; align-items: stretch; gap: 0;
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  padding: 6px;
+  display: flex; align-items: stretch; gap: var(--sp-4);
+  background: transparent;
+  border: 0;
+  padding: 0;
 }
 .kanban-phase-step {
-  appearance: none; background: transparent; color: inherit; text-align: left;
+  appearance: none; background: var(--bg-card); color: inherit; text-align: left;
   flex: 1; min-width: 0;
-  padding: 12px var(--sp-5) 14px;
+  padding: 12px var(--sp-4) 14px;
   cursor: pointer;
-  border: 0;
+  border: 1px solid var(--border);
   border-radius: var(--r-md);
   position: relative;
   display: flex; flex-direction: column; gap: 8px;
-  transition: background var(--t-fast) var(--ease);
+  transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
   font-family: var(--font-sans);
 }
-.kanban-phase-step:hover  { background: rgba(255,255,255,0.02); }
-.kanban-phase-step.active { background: rgba(74,158,255,0.08); }
+.kanban-phase-step:hover  { background: var(--bg-card-hover, #2c2e34); border-color: var(--border-strong); }
+.kanban-phase-step.active { background: rgba(74,158,255,0.08); border-color: var(--accent); }
+/* Utility buttons (history / all / orphans) are visually distinct from
+   phase cards — pill-style, transparent background, no full border. */
 .kanban-phase-step.all-step,
 .kanban-phase-step.orphans-step,
-.kanban-phase-step.history-toggle { flex: 0 0 auto; min-width: 90px; }
-.kanban-phase-step + .kanban-phase-step::before {
-  content: ''; position: absolute; left: -1px; top: 21px; bottom: 21px; width: 1px;
-  background: var(--border-soft);
+.kanban-phase-step.history-toggle {
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 8px 14px;
+  background: transparent;
+  border: 1px dashed var(--border);
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-3);
+  font-size: var(--text-sm);
+}
+.kanban-phase-step.all-step:hover,
+.kanban-phase-step.orphans-step:hover,
+.kanban-phase-step.history-toggle:hover {
+  background: var(--shell-hover-overlay, rgba(255,255,255,0.03));
+  border-color: var(--border-strong);
+  color: var(--ink);
+}
+.kanban-phase-step.all-step.active {
+  background: rgba(74,158,255,0.08);
+  border-style: solid;
+  border-color: var(--accent);
+  color: var(--ink);
+}
+.kanban-phase-step .util-icon { font-size: 16px; opacity: 0.8; }
+.kanban-phase-step .util-text { font-weight: 500; }
+.kanban-phase-step .ph-stat { font-size: var(--text-xs); color: var(--ink-3); margin-left: var(--sp-2); }
+
+/* Time-arrow connector between two real phase cards.
+   Lives in the flex gap; uses solid ink-3 for clear contrast. */
+.kanban-phase-step[data-key] + .kanban-phase-step[data-key]::before {
+  content: '';
+  position: absolute;
+  left: calc(var(--sp-4) * -1);
+  top: 50%;
+  width: var(--sp-4);
+  height: 1px;
+  transform: translateY(-50%);
+  background: var(--ink-3);
+  opacity: 0.5;
+  pointer-events: none;
+}
+.kanban-phase-step[data-key] + .kanban-phase-step[data-key]::after {
+  content: '';
+  position: absolute;
+  left: calc(var(--sp-4) * -0.5 - 3px);
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  transform: translateY(-50%) rotate(45deg);
+  border-top: 1.5px solid var(--ink-3);
+  border-right: 1.5px solid var(--ink-3);
+  opacity: 0.65;
+  pointer-events: none;
 }
 .kanban-phase-step .ph-head { display: flex; align-items: baseline; gap: var(--sp-2); }
 .kanban-phase-step .ph-name { font-size: var(--text-base); font-weight: 500; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -479,10 +543,9 @@
 /* ─────────── BOARD SURFACE + COLUMNS ─────────── */
 .kanban-board {
   position: relative;
-  background: var(--kanban-board-bg);
-  border: 1px solid var(--kanban-board-border);
-  border-radius: var(--r-lg);
-  padding: var(--sp-4) var(--sp-5) var(--sp-5);
+  background: transparent;
+  border: 0;
+  padding: 0;
   flex: 1 1 auto;
   min-height: 0;
   overflow-x: auto;
@@ -501,13 +564,19 @@
 .kanban-col {
   background: var(--bg-board-col);
   border: 1px solid var(--border);
-  border-radius: var(--r-md);
+  border-radius: var(--r-lg);
   padding: var(--sp-3);
-  flex: 1 1 0;
+  flex: 0 0 auto;        /* width controlled explicitly by JS */
+  width: 0;              /* JS sets this on first paint */
   min-width: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  transition: width var(--t-slow) var(--ease), padding var(--t-slow) var(--ease);
+}
+.kanban-board-grid.no-anim .kanban-col { transition: none; }
+.kanban-col-body, .kanban-col-empty {
+  transition: opacity var(--t-base) var(--ease);
 }
 .kanban-col-head {
   display: flex; align-items: center; gap: 8px;
@@ -525,8 +594,10 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
   margin-top: var(--sp-2);
 }
+.kanban-col-body > .card-task { min-width: 0; max-width: 100%; }
 .kanban-col-body::-webkit-scrollbar { width: 6px; }
 .kanban-col-body::-webkit-scrollbar-track { background: transparent; }
 .kanban-col-body::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 3px; }
@@ -557,15 +628,16 @@
 
 /* ─────────── COLUMN COLLAPSE ─────────── */
 .kanban-col.collapsed {
-  flex: 0 0 66px;
-  min-width: 66px;
   padding: var(--sp-4) 6px;
   cursor: pointer;
 }
 .kanban-col.collapsed .kanban-col-body,
-.kanban-col.collapsed .card-task,
 .kanban-col.collapsed .kanban-col-empty {
-  display: none;
+  opacity: 0;
+  pointer-events: none;
+  height: 0;
+  margin: 0;
+  overflow: hidden;
 }
 .kanban-col.collapsed .kanban-col-head {
   flex-direction: column;

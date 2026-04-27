@@ -108,6 +108,80 @@ html, body {
 }
 .sidebar-footer.auto-running .pulse { display: inline-block; }
 
+/* Collapse toggle button */
+.sidebar-collapse-btn {
+  margin-left: auto;
+  width: 24px; height: 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--ink-3);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0;
+}
+.sidebar-collapse-btn:hover { color: var(--ink); background: var(--shell-hover-overlay); }
+
+/* Sidebar width animates between expanded and collapsed states. */
+.shell {
+  transition: grid-template-columns var(--t-slow) var(--ease);
+}
+.sidebar-logo .name,
+.sidebar-logo .ver,
+.sidebar-link .lbl,
+.sidebar-link .badge,
+.sidebar-footer span:last-child {
+  transition: opacity var(--t-base) var(--ease), max-width var(--t-slow) var(--ease);
+  white-space: nowrap;
+  overflow: hidden;
+  max-width: 200px;
+  opacity: 1;
+}
+
+/* Collapsed sidebar — icons-only.
+   Section labels become hairline dividers (text hidden, padding preserved).
+   Icon size + per-link vertical rhythm match the expanded layout. */
+.shell.sidebar-collapsed { grid-template-columns: 72px 1fr; }
+.shell.sidebar-collapsed .sidebar-logo {
+  padding: 0 0 var(--sp-6);
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.shell.sidebar-collapsed .sidebar-logo .name,
+.shell.sidebar-collapsed .sidebar-logo .ver,
+.shell.sidebar-collapsed .sidebar-link .lbl,
+.shell.sidebar-collapsed .sidebar-link .badge,
+.shell.sidebar-collapsed .sidebar-footer span:last-child {
+  opacity: 0;
+  max-width: 0;
+  margin: 0;
+  padding: 0;
+}
+.shell.sidebar-collapsed .sidebar-section-h {
+  /* Keep as horizontal divider — no text, hairline only. */
+  font-size: 0;
+  padding: var(--sp-3) var(--sp-4) 0;
+  border-bottom: 1px solid var(--border-soft);
+  margin-bottom: var(--sp-2);
+  height: 0;
+  line-height: 0;
+}
+.shell.sidebar-collapsed .sidebar-logo .mark { margin: 0 auto; }
+.shell.sidebar-collapsed .sidebar-collapse-btn { margin: 0 auto; }
+.shell.sidebar-collapsed .sidebar-link {
+  padding: var(--sp-2) 0;
+  justify-content: center;
+  gap: 0; /* prevent invisible .lbl / .badge from offsetting the centered icon */
+}
+.shell.sidebar-collapsed .sidebar-link .ic { display: inline-flex; align-items: center; justify-content: center; }
+.shell.sidebar-collapsed .sidebar-link.active { box-shadow: none; }
+.shell.sidebar-collapsed .sidebar-footer {
+  padding: var(--sp-4) 0;
+  justify-content: center;
+}
+
 /* Main */
 .main {
   display: flex; flex-direction: column;
@@ -120,7 +194,7 @@ html, body {
 .topbar {
   display: flex; align-items: center; gap: var(--sp-5);
   margin-bottom: var(--sp-6);
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   min-height: 48px;
 }
 .topbar h1 {
@@ -128,12 +202,14 @@ html, body {
   margin: 0;
   font-weight: 600;
   flex: 0 0 auto;
+  white-space: nowrap;
 }
 .topbar-actions {
   display: flex; align-items: center; gap: var(--sp-3);
-  flex: 1 1 auto;
+  flex: 1 1 0;
   flex-wrap: wrap;
   min-width: 0;
+  justify-content: flex-end;
 }
 .topbar-actions:empty { display: none; }
 

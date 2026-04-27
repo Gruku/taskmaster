@@ -1249,6 +1249,7 @@ def test_viewer_prefs_defaults_have_all_expected_keys():
         "zoom",
         "screens",
         "dashboard",
+        "ui",
         "kanban",
         "lessons",
         "issues",

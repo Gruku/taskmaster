@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>V12C — true-scroll carousel for future phases</title>
+<link rel="stylesheet" href="css/tokens.css">
+<style>
+  body { background: var(--bg-canvas); color: var(--ink); font-family: var(--font-sans);
+         margin: 0; padding: var(--sp-8); font-size: var(--text-base); line-height: 1.5; }
+  h1 { font-size: var(--text-2xl); margin: 0 0 var(--sp-2); }
+  .lede { color: var(--ink-3); margin-bottom: var(--sp-6); }
+  .panel { background: var(--bg-panel); border: 1px solid var(--border);
+           border-radius: var(--r-lg); padding: var(--sp-5); margin-bottom: var(--sp-5); }
+
+  /* ─── Row: 3 regions, full-width ─── */
+  .row {
+    display: flex; align-items: center; gap: var(--sp-3);
+    position: relative; min-height: 100px;
+    overflow: visible;
+  }
+
+  /* Past region — right-anchored, contains slide buttons + chips + inner slide */
+  .past-region {
+    flex: 0 0 380px; min-width: 0;
+    display: flex; align-items: center; justify-content: flex-end; gap: 0;
+    overflow: hidden;
+  }
+  .past-region > .item { margin-left: 16px; }
+  .past-region > .item.first { margin-left: 0; }
+
+  /* Active card — fixed center */
+  .active-card {
+    flex: 0 0 580px;
+    background: var(--bg-card);
+    border: 1px solid var(--accent);
+    border-radius: var(--r-md);
+    padding: 12px 18px 14px;
+    display: flex; flex-direction: column; gap: 8px;
+    cursor: pointer;
+    overflow: hidden; min-width: 0;
+  }
+  .active-card .head { display: flex; align-items: center; gap: var(--sp-3); }
+  .active-card .num {
+    width: 30px; height: 30px; border-radius: 50%; flex: 0 0 auto;
+    background: var(--accent); color: var(--bg-canvas);
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--font-mono); font-size: var(--text-sm); font-weight: 700;
+  }
+  .active-card .name { font-size: var(--text-md); font-weight: 700; letter-spacing: -0.01em; white-space: nowrap; }
+  .active-card .stat { font-variant-numeric: tabular-nums; color: var(--accent-2); margin-left: auto; font-weight: 600; }
+  .active-card .when { font-size: var(--text-xs); color: var(--ink-3); }
+  .active-card .pb { height: 5px; background: rgba(255,255,255,0.07); border-radius: 3px; overflow: hidden; }
+  .active-card .pb > i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+  .active-card.filtered {
+    background: rgba(214,164,95,0.18); border-color: var(--amber);
+  }
+  .active-card.filtered .num { background: var(--amber); }
+  .active-card.filtered .stat { color: var(--amber); }
+  .active-card.filtered .pb > i { background: linear-gradient(90deg, var(--amber), #e8c896); }
+
+  /* ─── Future region — fills the rest, real carousel inside ───
+     Internal layout: [slide-inner] [viewport (overflow hidden) [strip]] [slide-outer]
+     The strip translates horizontally; cards inside are fixed width set via --card-w (JS-computed). */
+  .future-region {
+    flex: 1 1 0; min-width: 0;
+    display: flex; align-items: center; gap: var(--sp-3);
+    overflow: visible;
+  }
+  .future-viewport {
+    flex: 1 1 0; min-width: 0;
+    overflow: hidden;
+    position: relative;
+  }
+  .future-strip {
+    display: flex; align-items: stretch; gap: var(--sp-3);
+    will-change: transform;
+    transition: transform 380ms cubic-bezier(0.3,0.7,0.4,1);
+  }
+
+  /* Future card — width comes from --card-w (JS computed to fit N visible per viewport) */
+  .future-card {
+    flex: 0 0 var(--card-w, 280px);
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    padding: 10px var(--sp-3) 12px;
+    display: flex; flex-direction: column; gap: 8px;
+    opacity: 0.7;
+    cursor: pointer;
+    overflow: hidden; min-width: 0;
+    transition:
+      background 220ms,
+      border-color 220ms,
+      color 220ms,
+      opacity 220ms,
+      transform 220ms;
+  }
+  .future-card:hover { opacity: 1; }
+  .future-card .head { display: flex; align-items: center; gap: 6px; }
+  .future-card .num {
+    width: 22px; height: 22px; border-radius: 50%;
+    background: var(--bg-canvas); border: 1px dashed var(--border-strong); color: var(--ink-3);
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--font-mono); font-size: 11px; font-weight: 700; flex: 0 0 auto;
+  }
+  .future-card .name { font-size: var(--text-sm); color: var(--ink-2); font-weight: 700;
+                       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .future-card .stat { font-size: var(--text-xs); color: var(--ink-3); margin-left: auto;
+                       font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .future-card .pb { height: 4px; background: rgba(255,255,255,0.04); border-radius: 2px; overflow: hidden; }
+  .future-card .pb > i { display: block; height: 100%; width: 0; background: var(--border-strong); }
+  .future-card.filtered {
+    background: rgba(214,164,95,0.18);
+    border-color: var(--amber); color: var(--ink); opacity: 1;
+    box-shadow: 0 0 0 2px rgba(214,164,95,0.22);
+  }
+  .future-card.filtered .name { color: var(--ink); }
+  .future-card.filtered .num { background: var(--amber); color: var(--bg-canvas); border-style: solid; border-color: var(--amber); }
+  .future-card.filtered .stat { color: var(--amber); }
+  .future-card.filtered .pb > i { background: var(--amber); }
+
+  /* Past chip — circle, expands to pill+name on filter */
+  .chip-mini {
+    flex: 0 0 auto;
+    min-width: 36px; height: 36px;
+    padding: 0;
+    border-radius: 50%;
+    display: inline-flex; align-items: center; justify-content: center; gap: 0;
+    font-family: var(--font-mono); font-size: 13px; font-weight: 700;
+    background: var(--green); color: var(--bg-canvas);
+    cursor: pointer; border: 0;
+    overflow: hidden; white-space: nowrap;
+    box-sizing: border-box;
+    transition:
+      padding var(--anim-dur, 320ms) cubic-bezier(0.3,0.7,0.4,1),
+      border-radius var(--anim-dur, 320ms) cubic-bezier(0.3,0.7,0.4,1),
+      gap var(--anim-dur, 320ms) cubic-bezier(0.3,0.7,0.4,1),
+      width var(--anim-dur, 320ms) cubic-bezier(0.3,0.7,0.4,1),
+      max-width var(--anim-dur, 320ms) cubic-bezier(0.3,0.7,0.4,1),
+      margin var(--anim-dur, 320ms) cubic-bezier(0.3,0.7,0.4,1),
+      flex-basis var(--anim-dur, 320ms) cubic-bezier(0.3,0.7,0.4,1),
+      background 220ms, color 220ms, opacity 220ms, transform 220ms;
+  }
+  .chip-mini .num { flex: 0 0 auto; color: var(--bg-canvas); }
+  .chip-mini .lbl {
+    max-width: 0; opacity: 0;
+    transition:
+      max-width var(--anim-dur, 320ms) cubic-bezier(0.3,0.7,0.4,1),
+      opacity 220ms;
+    overflow: hidden;
+    font-family: var(--font-sans);
+    font-size: var(--text-xs);
+    font-weight: 600;
+  }
+  .chip-mini.filtered {
+    padding: 0 14px; gap: 8px;
+    border-radius: var(--r-md);
+    background: var(--amber); color: var(--bg-canvas);
+    box-shadow: 0 0 0 3px rgba(214,164,95,0.25);
+  }
+  .chip-mini.filtered .lbl { max-width: 220px; opacity: 1; color: var(--bg-canvas); }
+
+  /* Slide button (circle with corner badge) */
+  .slide-btn {
+    flex: 0 0 auto;
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    background: transparent;
+    border: 1px dashed var(--border-strong);
+    color: var(--ink-2);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; font-size: 18px; padding: 0;
+    overflow: visible; position: relative;
+    transition: opacity 220ms, transform 220ms, border-color 200ms, color 200ms;
+  }
+  .slide-btn:hover { border-style: solid; border-color: var(--accent); color: var(--accent); }
+  .slide-btn.disabled { opacity: 0; pointer-events: none; transform: scale(0.4); }
+  .slide-btn .badge {
+    position: absolute; top: -6px; right: -6px;
+    background: var(--bg-card); border: 1px solid var(--border);
+    color: var(--ink-3);
+    font-size: 9px; font-family: var(--font-mono);
+    padding: 1px 5px; border-radius: 8px;
+    pointer-events: none; font-weight: 700;
+  }
+
+  /* Past region item collapse for hidden chips */
+  .past-region > .item.hidden {
+    flex: 0 0 0 !important;
+    width: 0 !important; max-width: 0 !important; min-width: 0 !important;
+    margin-left: 0 !important;
+    padding-left: 0 !important; padding-right: 0 !important;
+    border-left-width: 0 !important; border-right-width: 0 !important;
+    opacity: 0; pointer-events: none;
+  }
+
+  /* Connector segments (between siblings inside past-region, and between row-level items) */
+  .past-region > .item::before,
+  .row > .active-card::before {
+    content: ''; position: absolute; left: -14px; top: 50%; width: 12px; height: 1px;
+    transform: translateY(-50%);
+    background: var(--border-strong); opacity: 0.55;
+    pointer-events: none;
+  }
+  .past-region > .item::after,
+  .row > .active-card::after {
+    content: ''; position: absolute; left: -7px; top: 50%; width: 5px; height: 5px;
+    transform: translate(-50%, -50%) rotate(45deg);
+    border-top: 1px solid var(--border-strong);
+    border-right: 1px solid var(--border-strong);
+    opacity: 0.55;
+    pointer-events: none;
+  }
+  .past-region > .item.first::before,
+  .past-region > .item.first::after { display: none; }
+  .past-region > .item.hidden::before,
+  .past-region > .item.hidden::after { opacity: 0; }
+
+  .status-bar {
+    margin-top: var(--sp-5);
+    padding: var(--sp-3) var(--sp-4);
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: var(--r-md); font-size: var(--text-sm); color: var(--ink-3);
+    font-family: var(--font-mono);
+    display: flex; align-items: center; gap: var(--sp-4); flex-wrap: wrap;
+  }
+  .status-bar .label { color: var(--ink-2); }
+  .status-bar .value { color: var(--accent); }
+  .status-bar .reset {
+    margin-left: auto;
+    appearance: none; background: transparent; border: 1px solid var(--border);
+    color: var(--ink-2); padding: 4px 12px; border-radius: var(--r-sm);
+    cursor: pointer; font-family: var(--font-sans); font-size: var(--text-xs);
+  }
+</style>
+</head>
+<body>
+<h1>V12C — true-scroll carousel</h1>
+<p class="lede">Future region uses a real translateX strip (overflow:hidden viewport, all cards in one inner strip, slide = transform). Past keeps its 3-wrapper anchored layout. Future cards size dynamically to fill the available width — no empty space on the right.</p>
+
+<div class="panel">
+  <div class="row">
+    <div class="past-region" id="past-region"></div>
+    <div class="active-card item" id="active-card"></div>
+    <div class="future-region">
+      <button class="slide-btn" id="future-slide-inner"><span>‹</span><span class="badge">0</span></button>
+      <div class="future-viewport" id="future-viewport">
+        <div class="future-strip" id="future-strip"></div>
+      </div>
+      <button class="slide-btn" id="future-slide-outer"><span>›</span><span class="badge">0</span></button>
+    </div>
+  </div>
+  <div class="status-bar">
+    <span class="label">Filter:</span> <span class="value" id="filter-display">none</span>
+    <span class="label">·</span>
+    <span class="label">Window:</span> <span class="value" id="window-display">past offset=0, future offset=0</span>
+    <button class="reset" id="reset">Reset all</button>
+  </div>
+</div>
+
+<script>
+const PHASES = [
+  { id: 'P-01', num: 1,  name: 'Discovery',            status: 'done',   done: 4, total: 4 },
+  { id: 'P-02', num: 2,  name: 'Spike',                status: 'done',   done: 3, total: 3 },
+  { id: 'P-03', num: 3,  name: 'Foundations',          status: 'done',   done: 5, total: 5 },
+  { id: 'P-04', num: 4,  name: 'Skeleton',             status: 'done',   done: 4, total: 4 },
+  { id: 'P-05', num: 5,  name: 'Migration v0',         status: 'done',   done: 6, total: 6 },
+  { id: 'P-06', num: 6,  name: 'Migration v1',         status: 'done',   done: 4, total: 4 },
+  { id: 'P-07', num: 7,  name: 'Schema',               status: 'done',   done: 6, total: 6 },
+  { id: 'P-08', num: 8,  name: 'Hardening',            status: 'done',   done: 3, total: 3 },
+  { id: 'P-09', num: 9,  name: 'Auth',                 status: 'done',   done: 5, total: 5 },
+  { id: 'P-10', num: 10, name: 'CLI',                  status: 'done',   done: 3, total: 3 },
+  { id: 'P-11', num: 11, name: 'Server APIs',          status: 'done',   done: 8, total: 8 },
+  { id: 'P-12', num: 12, name: 'Worker Pool',          status: 'done',   done: 4, total: 4 },
+  { id: 'P-13', num: 13, name: 'Persistence',          status: 'done',   done: 5, total: 5 },
+  { id: 'P-14', num: 14, name: 'Dashboard v0',         status: 'done',   done: 4, total: 4 },
+  { id: 'P-15', num: 15, name: 'Visual Redesign',      status: 'active', done: 3, total: 14, when: 'Active · 10d' },
+  { id: 'P-16', num: 16, name: 'Polish',               status: 'future', done: 0, total: 5 },
+  { id: 'P-17', num: 17, name: 'Launch',               status: 'future', done: 0, total: 4 },
+  { id: 'P-18', num: 18, name: 'Soak',                 status: 'future', done: 0, total: 3 },
+  { id: 'P-19', num: 19, name: 'GA',                   status: 'future', done: 0, total: 2 },
+  { id: 'P-20', num: 20, name: 'Beta Cohort',          status: 'future', done: 0, total: 6 },
+  { id: 'P-21', num: 21, name: 'Open Source Release',  status: 'future', done: 0, total: 5 },
+  { id: 'P-22', num: 22, name: 'Migration v2',         status: 'future', done: 0, total: 8 },
+  { id: 'P-23', num: 23, name: 'Documentation',        status: 'future', done: 0, total: 4 },
+  { id: 'P-24', num: 24, name: 'Performance Pass',     status: 'future', done: 0, total: 6 },
+  { id: 'P-25', num: 25, name: 'API Stabilization',    status: 'future', done: 0, total: 7 },
+  { id: 'P-26', num: 26, name: 'Onboarding Flow',      status: 'future', done: 0, total: 5 },
+  { id: 'P-27', num: 27, name: 'Mobile Adapter',       status: 'future', done: 0, total: 9 },
+  { id: 'P-28', num: 28, name: 'Telemetry',            status: 'future', done: 0, total: 4 },
+  { id: 'P-29', num: 29, name: 'Sunset Legacy',        status: 'future', done: 0, total: 3 },
+];
+
+const VISIBLE_PAST = 3;
+const VISIBLE_FUTURE = 3;
+const STRIP_GAP = 12; // matches --sp-3
+
+const MS_PER_CHAR = 16;
+const MS_BASE = 220;
+function chipDur(name) { return MS_BASE + name.length * MS_PER_CHAR; }
+
+const state = { selected: null, pastOffset: 0, futureOffset: 0 };
+
+const pastRegion = document.getElementById('past-region');
+const activeCardEl = document.getElementById('active-card');
+const futureViewport = document.getElementById('future-viewport');
+const futureStrip = document.getElementById('future-strip');
+const futureSlideInner = document.getElementById('future-slide-inner');
+const futureSlideOuter = document.getElementById('future-slide-outer');
+const filterDisplay = document.getElementById('filter-display');
+const windowDisplay = document.getElementById('window-display');
+const resetBtn = document.getElementById('reset');
+
+const activeIdx = PHASES.findIndex(p => p.status === 'active');
+const pastPhases = PHASES.slice(0, activeIdx);
+const futurePhases = PHASES.slice(activeIdx + 1);
+const active = PHASES[activeIdx];
+
+// ── Past slide buttons ──
+function makeSlideBtn(direction) {
+  const el = document.createElement('button');
+  el.className = 'slide-btn item';
+  const chev = direction === 'left' ? '‹' : '›';
+  el.innerHTML = `<span>${chev}</span><span class="badge">0</span>`;
+  return el;
+}
+const pastSlideOuter = makeSlideBtn('left');
+const pastSlideInner = makeSlideBtn('right');
+pastSlideOuter.addEventListener('click', () => {
+  state.pastOffset = Math.min(pastPhases.length - VISIBLE_PAST, state.pastOffset + VISIBLE_PAST);
+  render();
+});
+pastSlideInner.addEventListener('click', () => {
+  state.pastOffset = Math.max(0, state.pastOffset - VISIBLE_PAST);
+  render();
+});
+pastRegion.appendChild(pastSlideOuter);
+
+// ── Past chips ──
+const chipEls = pastPhases.map(p => {
+  const el = document.createElement('button');
+  el.className = 'chip-mini item';
+  el.dataset.id = p.id;
+  el.title = p.name + ' · ' + p.done + '/' + p.total;
+  el.style.setProperty('--anim-dur', chipDur(p.name) + 'ms');
+  el.innerHTML = `<span class="num">${p.num}</span><span class="lbl">${p.name}</span>`;
+  el.addEventListener('click', () => toggleSelect(p.id));
+  pastRegion.appendChild(el);
+  return el;
+});
+pastRegion.appendChild(pastSlideInner);
+
+// ── Active card ──
+const pct = Math.round((active.done / active.total) * 100);
+activeCardEl.innerHTML = `
+  <div class="head">
+    <div class="num">${active.num}</div>
+    <span class="name">${active.name}</span>
+    <span class="stat">${active.done}/${active.total} · ${pct}%</span>
+  </div>
+  <div class="when">${active.when}</div>
+  <div class="pb"><i style="width:${pct}%"></i></div>
+`;
+activeCardEl.addEventListener('click', () => toggleSelect(active.id));
+
+// ── Future strip — all cards live in DOM, strip translates ──
+const futureEls = futurePhases.map(p => {
+  const el = document.createElement('div');
+  el.className = 'future-card';
+  el.dataset.id = p.id;
+  el.innerHTML = `
+    <div class="head">
+      <span class="num">${p.num}</span>
+      <span class="name">${p.name}</span>
+      <span class="stat">${p.done}/${p.total}</span>
+    </div>
+    <div class="pb"><i></i></div>
+  `;
+  el.addEventListener('click', () => toggleSelect(p.id));
+  futureStrip.appendChild(el);
+  return el;
+});
+
+futureSlideInner.addEventListener('click', () => {
+  state.futureOffset = Math.max(0, state.futureOffset - VISIBLE_FUTURE);
+  applyFutureScroll();
+  updateBadges();
+});
+futureSlideOuter.addEventListener('click', () => {
+  state.futureOffset = Math.min(Math.max(0, futurePhases.length - VISIBLE_FUTURE), state.futureOffset + VISIBLE_FUTURE);
+  applyFutureScroll();
+  updateBadges();
+});
+
+function toggleSelect(id) {
+  state.selected = state.selected === id ? null : id;
+  render();
+}
+
+// ── Layout: compute future card width so VISIBLE_FUTURE cards fill the viewport ──
+function relayoutFuture(animate = false) {
+  const vw = futureViewport.clientWidth;
+  if (vw === 0) return;
+  const cardW = (vw - STRIP_GAP * (VISIBLE_FUTURE - 1)) / VISIBLE_FUTURE;
+  futureEls.forEach(el => el.style.setProperty('--card-w', cardW + 'px'));
+  // Apply scroll without animation when we just resized.
+  if (!animate) {
+    futureStrip.style.transition = 'none';
+    applyFutureScroll();
+    void futureStrip.offsetHeight;
+    futureStrip.style.transition = '';
+  } else {
+    applyFutureScroll();
+  }
+}
+function applyFutureScroll() {
+  const vw = futureViewport.clientWidth;
+  if (vw === 0) return;
+  const cardW = (vw - STRIP_GAP * (VISIBLE_FUTURE - 1)) / VISIBLE_FUTURE;
+  const x = state.futureOffset * (cardW + STRIP_GAP);
+  futureStrip.style.transform = `translateX(-${x}px)`;
+}
+
+// ── Render past + active + badges ──
+function render() {
+  const pastLen = pastPhases.length;
+  const visStartPast = Math.max(0, pastLen - VISIBLE_PAST - state.pastOffset);
+  const visEndPast   = Math.max(0, pastLen - state.pastOffset);
+  chipEls.forEach((el, i) => {
+    const visible = i >= visStartPast && i < visEndPast;
+    el.classList.toggle('hidden', !visible);
+    el.classList.toggle('filtered', state.selected === pastPhases[i].id);
+  });
+  futureEls.forEach((el, i) => {
+    el.classList.toggle('filtered', state.selected === futurePhases[i].id);
+  });
+  activeCardEl.classList.toggle('filtered', state.selected === active.id);
+
+  let foundFirst = false;
+  pastRegion.querySelectorAll(':scope > .item').forEach(el => {
+    if (el.classList.contains('hidden')) { el.classList.remove('first'); return; }
+    el.classList.toggle('first', !foundFirst);
+    foundFirst = true;
+  });
+
+  updateBadges();
+
+  filterDisplay.textContent = state.selected
+    ? state.selected + ' · ' + (PHASES.find(p => p.id === state.selected) || {}).name
+    : 'none';
+  windowDisplay.textContent = `past offset=${state.pastOffset}, future offset=${state.futureOffset}`;
+}
+
+function updateBadges() {
+  const pastLen = pastPhases.length;
+  const visStartPast = Math.max(0, pastLen - VISIBLE_PAST - state.pastOffset);
+  const visEndPast   = Math.max(0, pastLen - state.pastOffset);
+  setBtn(pastSlideOuter, visStartPast);
+  setBtn(pastSlideInner, pastLen - visEndPast);
+
+  const earlierFutureHidden = state.futureOffset;
+  const laterHidden = Math.max(0, futurePhases.length - state.futureOffset - VISIBLE_FUTURE);
+  setBtnDisable(futureSlideInner, earlierFutureHidden);
+  setBtnDisable(futureSlideOuter, laterHidden);
+}
+
+function setBtn(btn, count) {
+  if (count > 0) {
+    btn.classList.remove('hidden');
+    btn.querySelector('.badge').textContent = count;
+  } else {
+    btn.classList.add('hidden');
+  }
+}
+function setBtnDisable(btn, count) {
+  btn.querySelector('.badge').textContent = count;
+  btn.classList.toggle('disabled', count <= 0);
+}
+
+resetBtn.addEventListener('click', () => {
+  state.selected = null;
+  state.pastOffset = 0;
+  state.futureOffset = 0;
+  applyFutureScroll();
+  render();
+});
+
+// Initial layout + resize observer
+relayoutFuture(false);
+new ResizeObserver(() => relayoutFuture(false)).observe(futureViewport);
+render();
+</script>
+</body>
+</html>

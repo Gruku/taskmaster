@@ -1,0 +1,1022 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>Phase visualization brainstorm</title>
+<link rel="stylesheet" href="css/tokens.css">
+<style>
+  body { background: var(--bg-canvas); color: var(--ink); font-family: var(--font-sans);
+         margin: 0; padding: var(--sp-8); font-size: var(--text-base); line-height: 1.5; }
+  h1 { font-size: var(--text-2xl); margin: 0 0 var(--sp-2); }
+  .lede { color: var(--ink-3); margin-bottom: var(--sp-8); }
+  .variant { background: var(--bg-panel); border: 1px solid var(--border);
+             border-radius: var(--r-lg); padding: var(--sp-5);
+             margin-bottom: var(--sp-6); }
+  .variant h2 { font-size: var(--text-lg); margin: 0 0 6px; font-weight: 600; }
+  .variant p.note { color: var(--ink-3); font-size: var(--text-sm); margin: 0 0 var(--sp-4); }
+  .row { display: flex; align-items: stretch; gap: var(--sp-4); position: relative; min-height: 78px; }
+
+  /* Shared "phase card" baseline used by some variants. */
+  .pc { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--r-md);
+        padding: 12px var(--sp-4) 14px; position: relative; flex: 1; min-width: 0;
+        display: flex; flex-direction: column; gap: 8px; }
+  .pc.done   { color: var(--ink-2); }
+  .pc.future { color: var(--ink-3); }
+  .pc.active { background: rgba(74,158,255,0.08); border-color: var(--accent); color: var(--ink); }
+  .pc-head { display: flex; align-items: baseline; gap: 8px; }
+  .pc-name { font-size: var(--text-base); font-weight: 500; }
+  .pc-stat { font-size: var(--text-xs); color: var(--ink-3); margin-left: auto;
+             font-variant-numeric: tabular-nums; }
+  .pc-bar  { height: 5px; background: rgba(255,255,255,0.05); border-radius: 3px; overflow: hidden; }
+  .pc-bar > i { display: block; height: 100%; }
+  .pc.done   .pc-bar > i { background: var(--green); width: 100%; }
+  .pc.active .pc-bar > i { background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+
+  /* ───── V1: continuous timeline rail ───── */
+  .v1 { padding: var(--sp-6) var(--sp-3); position: relative; }
+  .v1::before { content: ''; position: absolute; left: 30px; right: 30px; top: 50%;
+                height: 2px; background: var(--border); transform: translateY(-50%); }
+  .v1 .node { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 8px;
+              position: relative; z-index: 1; }
+  .v1 .dot  { width: 18px; height: 18px; border-radius: 50%; background: var(--bg-canvas);
+              border: 2px solid var(--ink-3); }
+  .v1 .node.done .dot   { background: var(--green); border-color: var(--green); }
+  .v1 .node.active .dot { background: var(--accent); border-color: var(--accent);
+                          box-shadow: 0 0 0 6px rgba(74,158,255,0.18); }
+  .v1 .node .lbl { font-size: var(--text-sm); }
+  .v1 .node.future .lbl { color: var(--ink-3); }
+  .v1 .node .sub { font-size: var(--text-xs); color: var(--ink-3); font-variant-numeric: tabular-nums; }
+
+  /* ───── V2: fill-progress cards (no separate progress bar) ───── */
+  .v2 .pc { background:
+              linear-gradient(to right,
+                rgba(74,158,255,0.18) 0%,
+                rgba(74,158,255,0.18) var(--p, 0%),
+                var(--bg-card) var(--p, 0%));
+            transition: background 0.2s ease; }
+  .v2 .pc.done { --p: 100%; background:
+              linear-gradient(to right,
+                rgba(95,174,110,0.20) 0%,
+                rgba(95,174,110,0.20) 100%,
+                var(--bg-card) 100%); }
+  .v2 .pc.future { --p: 0%; }
+  .v2 .pc-bar { display: none; }
+
+  /* ───── V3: active-dominant (past compact pills, active full, future dimmed) ───── */
+  .v3 .pc.done {
+    flex: 0 0 auto; padding: 6px var(--sp-3);
+    background: transparent; border: 1px dashed var(--border-soft);
+    flex-direction: row; gap: 6px; align-items: center;
+  }
+  .v3 .pc.done .pc-bar { display: none; }
+  .v3 .pc.done .pc-stat { display: none; }
+  .v3 .pc.done .pc-name { font-size: var(--text-sm); }
+  .v3 .pc.done .pc-name::before { content: '✓ '; color: var(--green); }
+  .v3 .pc.future {
+    flex: 1; opacity: 0.55;
+  }
+  .v3 .pc.active { flex: 2; }
+
+  /* ───── V4: numbered with built-in arrow ───── */
+  .v4 .pc { padding-left: 50px; }
+  .v4 .pc-num {
+    position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+    width: 28px; height: 28px; border-radius: 50%;
+    background: var(--bg-canvas); border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--font-mono); font-size: var(--text-sm); color: var(--ink-3);
+    font-weight: 600;
+  }
+  .v4 .pc.done   .pc-num { background: var(--green); color: var(--bg-canvas); border-color: var(--green); }
+  .v4 .pc.active .pc-num { background: var(--accent); color: var(--bg-canvas); border-color: var(--accent); }
+  .v4 .pc + .pc::before {
+    content: '→'; position: absolute; left: -22px; top: 50%; transform: translateY(-50%);
+    color: var(--ink-2); font-size: 22px;
+  }
+
+  /* ───── V5: phase + duration subline ───── */
+  .v5 .pc-when { font-size: var(--text-xs); color: var(--ink-3); font-style: italic; }
+  .v5 .pc.active .pc-when { color: var(--accent-2); font-style: normal; }
+
+  /* ─────────── HYBRID ITERATIONS (V7–V9): rail + numbered + dominant active ─────────── */
+
+  /* Shared rail under V7/V8/V9 */
+  .rail-row { padding: var(--sp-6) var(--sp-3); position: relative; min-height: 110px; }
+  .rail-row::before {
+    content: ''; position: absolute; left: 30px; right: 30px; top: 36px;
+    height: 2px; background: var(--border); z-index: 0;
+  }
+
+  /* ─── V7: rail + numbered circular nodes, active is a raised card anchored to the rail ─── */
+  .v7 .node { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 8px;
+              position: relative; z-index: 1; }
+  .v7 .node .num {
+    width: 32px; height: 32px; border-radius: 50%;
+    background: var(--bg-canvas); border: 2px solid var(--ink-3);
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--font-mono); font-size: var(--text-sm); color: var(--ink-3);
+    font-weight: 600;
+  }
+  .v7 .node.done .num   { background: var(--green); border-color: var(--green); color: var(--bg-canvas); }
+  .v7 .node.active .num { background: var(--accent); border-color: var(--accent); color: var(--bg-canvas);
+                          box-shadow: 0 0 0 6px rgba(74,158,255,0.18); }
+  .v7 .node .lbl { font-size: var(--text-sm); }
+  .v7 .node.future .lbl { color: var(--ink-3); }
+  .v7 .node.future .num { background: var(--bg-canvas); border-color: var(--border-strong); }
+  .v7 .node.active {
+    position: relative;
+  }
+  .v7 .node.active .card {
+    background: linear-gradient(to right,
+      rgba(74,158,255,0.22) 0%, rgba(74,158,255,0.22) var(--p,0%),
+      var(--bg-card) var(--p,0%));
+    border: 1px solid var(--accent);
+    border-radius: var(--r-md);
+    padding: 8px 14px;
+    margin-top: 2px;
+    display: flex; align-items: center; gap: 8px;
+    font-size: var(--text-sm);
+  }
+  .v7 .node.active .card .stat { color: var(--accent-2); font-variant-numeric: tabular-nums; margin-left: 6px; }
+
+  /* ─── V8: numbered pills on a connector line, active expands into a wider fill-card ─── */
+  .v8 { gap: var(--sp-2); }
+  .v8 .pill {
+    flex: 0 0 auto;
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 14px;
+    border-radius: 999px;
+    background: transparent; border: 1px solid var(--border);
+    font-size: var(--text-sm); color: var(--ink-3);
+    position: relative;
+  }
+  .v8 .pill .num {
+    font-family: var(--font-mono); font-size: 12px; font-weight: 600;
+    width: 22px; height: 22px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--bg-canvas); border: 1px solid var(--border);
+  }
+  .v8 .pill.done {
+    background: rgba(95,174,110,0.10); border-color: rgba(95,174,110,0.35);
+    color: var(--green);
+  }
+  .v8 .pill.done .num { background: var(--green); border-color: var(--green); color: var(--bg-canvas); }
+  .v8 .pill.active {
+    flex: 1;
+    border-color: var(--accent);
+    background: linear-gradient(to right,
+      rgba(74,158,255,0.22) 0%, rgba(74,158,255,0.22) var(--p,0%),
+      transparent var(--p,0%));
+    color: var(--ink);
+    padding: 12px 18px;
+    border-radius: var(--r-md);
+  }
+  .v8 .pill.active .num {
+    background: var(--accent); border-color: var(--accent); color: var(--bg-canvas);
+    width: 26px; height: 26px;
+  }
+  .v8 .pill.active .name { font-weight: 500; font-size: var(--text-base); }
+  .v8 .pill.active .stat { color: var(--accent-2); font-variant-numeric: tabular-nums; margin-left: auto; }
+  .v8 .pill.future { opacity: 0.6; }
+  .v8 .pill + .pill::before {
+    content: ''; position: absolute; left: calc(var(--sp-2) * -1 - 1px); top: 50%;
+    width: var(--sp-2); height: 1px;
+    background: var(--ink-3); opacity: 0.45;
+    transform: translateY(-50%);
+  }
+
+  /* ─── V9: extreme dominance — past collapses to tiny number-only chips, active gets generous space ─── */
+  .v9 { align-items: center; }
+  .v9 .chip-mini {
+    flex: 0 0 auto;
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--font-mono); font-size: 12px; font-weight: 600;
+    background: var(--green); color: var(--bg-canvas);
+    position: relative;
+  }
+  .v9 .chip-mini.future { background: var(--bg-card); color: var(--ink-3); border: 1px dashed var(--border); }
+  .v9 .chip-mini[title]::after {
+    content: attr(title);
+    position: absolute; bottom: -22px; left: 50%; transform: translateX(-50%);
+    font-size: 10px; color: var(--ink-3); font-family: var(--font-sans); white-space: nowrap;
+    font-weight: 400;
+  }
+  .v9 .active-card {
+    flex: 1;
+    background: linear-gradient(to right,
+      rgba(74,158,255,0.22) 0%, rgba(74,158,255,0.22) var(--p,0%),
+      var(--bg-card) var(--p,0%));
+    border: 1px solid var(--accent);
+    border-radius: var(--r-md);
+    padding: 14px 18px;
+    display: flex; align-items: center; gap: var(--sp-3);
+  }
+  .v9 .active-card .num {
+    width: 30px; height: 30px; border-radius: 50%;
+    background: var(--accent); color: var(--bg-canvas);
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--font-mono); font-size: var(--text-sm); font-weight: 600;
+  }
+  .v9 .active-card .name { font-size: var(--text-md); font-weight: 500; }
+  .v9 .active-card .stat { font-variant-numeric: tabular-nums; color: var(--accent-2); margin-left: auto; }
+  .v9 .active-card .when { font-size: var(--text-xs); color: var(--ink-3); margin-left: var(--sp-3); }
+  .v9 .arrow { color: var(--ink-3); opacity: 0.5; font-size: 16px; flex: 0 0 auto; }
+
+  /* ─── V10: V9 base + V6 future cards with progress bars ─── */
+  .v10 { align-items: center; }
+  .v10 .chip-mini {
+    flex: 0 0 auto;
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--font-mono); font-size: 13px; font-weight: 600;
+    background: var(--green); color: var(--bg-canvas);
+    position: relative;
+  }
+  .v10 .chip-mini[title]::after {
+    content: attr(title);
+    position: absolute; bottom: -22px; left: 50%; transform: translateX(-50%);
+    font-size: 10px; color: var(--ink-3); font-family: var(--font-sans); white-space: nowrap;
+    font-weight: 400;
+  }
+  .v10 .arrow { color: var(--ink-3); opacity: 0.5; font-size: 16px; flex: 0 0 auto; }
+
+  .v10 .active-card {
+    flex: 2;
+    background: linear-gradient(to right,
+      rgba(74,158,255,0.22) 0%, rgba(74,158,255,0.22) var(--p,0%),
+      var(--bg-card) var(--p,0%));
+    border: 1px solid var(--accent);
+    border-radius: var(--r-md);
+    padding: 14px 18px;
+    display: flex; align-items: center; gap: var(--sp-3);
+  }
+  .v10 .active-card .num {
+    width: 30px; height: 30px; border-radius: 50%; flex: 0 0 auto;
+    background: var(--accent); color: var(--bg-canvas);
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--font-mono); font-size: var(--text-sm); font-weight: 600;
+  }
+  .v10 .active-card .name { font-size: var(--text-md); font-weight: 500; }
+  .v10 .active-card .stat { font-variant-numeric: tabular-nums; color: var(--accent-2); margin-left: auto; }
+  .v10 .active-card .when { font-size: var(--text-xs); color: var(--ink-3); margin-left: var(--sp-3); }
+
+  /* Future = V6-style card with name + stat + progress bar */
+  .v10 .future-card {
+    flex: 1;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    padding: 12px var(--sp-4);
+    display: flex; flex-direction: column; gap: 8px;
+    opacity: 0.65;
+  }
+  .v10 .future-card .head { display: flex; align-items: center; gap: 8px; }
+  .v10 .future-card .num {
+    width: 22px; height: 22px; border-radius: 50%;
+    background: var(--bg-canvas); border: 1px dashed var(--border-strong); color: var(--ink-3);
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--font-mono); font-size: 11px; font-weight: 600; flex: 0 0 auto;
+  }
+  .v10 .future-card .name { font-size: var(--text-sm); color: var(--ink-2); }
+  .v10 .future-card .stat { font-size: var(--text-xs); color: var(--ink-3); margin-left: auto;
+                            font-variant-numeric: tabular-nums; }
+  .v10 .future-card .bar { height: 4px; background: rgba(255,255,255,0.05); border-radius: 2px; overflow: hidden; }
+  .v10 .future-card .bar > i { display: block; height: 100%; width: 0; background: var(--border-strong); }
+
+  /* ─── V11: V10 + active progress bar + slide overflow + bold names + filter highlight ─── */
+  .v11 { align-items: center; gap: var(--sp-2); }
+  .v11 .chip-mini {
+    flex: 0 0 auto;
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--font-mono); font-size: 13px; font-weight: 600;
+    background: var(--green); color: var(--bg-canvas);
+    position: relative;
+    cursor: pointer;
+    transition: transform var(--t-fast) var(--ease);
+  }
+  .v11 .chip-mini[title]::after {
+    content: attr(title);
+    position: absolute; bottom: -22px; left: 50%; transform: translateX(-50%);
+    font-size: 10px; color: var(--ink-3); font-family: var(--font-sans); white-space: nowrap;
+    font-weight: 600;
+  }
+
+  /* Slide-overflow history button */
+  .v11 .slide-btn {
+    flex: 0 0 auto;
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    background: transparent;
+    border: 1px dashed var(--border-strong);
+    color: var(--ink-2);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    font-size: 18px;
+    position: relative;
+    transition: all var(--t-fast) var(--ease);
+  }
+  .v11 .slide-btn:hover { border-style: solid; border-color: var(--accent); color: var(--accent); }
+  .v11 .slide-btn::after {
+    content: attr(data-count);
+    position: absolute; top: -6px; right: -6px;
+    background: var(--bg-card); border: 1px solid var(--border);
+    color: var(--ink-3);
+    font-size: 9px; font-family: var(--font-mono);
+    padding: 1px 5px; border-radius: 8px;
+  }
+
+  .v11 .arrow { color: var(--ink-3); opacity: 0.45; font-size: 16px; flex: 0 0 auto; }
+
+  .v11 .active-card {
+    flex: 2;
+    background: linear-gradient(to right,
+      rgba(74,158,255,0.22) 0%, rgba(74,158,255,0.22) var(--p,0%),
+      var(--bg-card) var(--p,0%));
+    border: 1px solid var(--accent);
+    border-radius: var(--r-md);
+    padding: 12px 18px 14px;
+    display: flex; flex-direction: column; gap: 8px;
+    cursor: pointer;
+  }
+  .v11 .active-card .head { display: flex; align-items: center; gap: var(--sp-3); }
+  .v11 .active-card .num {
+    width: 30px; height: 30px; border-radius: 50%; flex: 0 0 auto;
+    background: var(--accent); color: var(--bg-canvas);
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--font-mono); font-size: var(--text-sm); font-weight: 600;
+  }
+  .v11 .active-card .name { font-size: var(--text-md); font-weight: 700; letter-spacing: -0.01em; }
+  .v11 .active-card .stat { font-variant-numeric: tabular-nums; color: var(--accent-2); margin-left: auto; font-weight: 600; }
+  .v11 .active-card .when { font-size: var(--text-xs); color: var(--ink-3); }
+  .v11 .active-card .pb { height: 5px; background: rgba(255,255,255,0.07); border-radius: 3px; overflow: hidden; }
+  .v11 .active-card .pb > i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+
+  /* Future = mid-size card */
+  .v11 .future-card {
+    flex: 1;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    padding: 10px var(--sp-3) 12px;
+    display: flex; flex-direction: column; gap: 8px;
+    opacity: 0.7;
+    cursor: pointer;
+    transition: opacity var(--t-fast) var(--ease);
+  }
+  .v11 .future-card:hover { opacity: 1; }
+  .v11 .future-card .head { display: flex; align-items: center; gap: 6px; }
+  .v11 .future-card .num {
+    width: 22px; height: 22px; border-radius: 50%;
+    background: var(--bg-canvas); border: 1px dashed var(--border-strong); color: var(--ink-3);
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--font-mono); font-size: 11px; font-weight: 600; flex: 0 0 auto;
+  }
+  .v11 .future-card .name { font-size: var(--text-sm); color: var(--ink-2); font-weight: 700; }
+  .v11 .future-card .stat { font-size: var(--text-xs); color: var(--ink-3); margin-left: auto;
+                            font-variant-numeric: tabular-nums; }
+  .v11 .future-card .pb { height: 4px; background: rgba(255,255,255,0.04); border-radius: 2px; overflow: hidden; }
+  .v11 .future-card .pb > i { display: block; height: 100%; width: 0; background: var(--border-strong); }
+
+  /* Filtered (selected) state — distinct from "active" temporal phase. Treatment: bright outline ring + subtle bg, NO bg fill change. */
+  .v11 .filtered { outline: 2px solid var(--amber); outline-offset: 2px; }
+  .v11 .filtered.chip-mini::before {
+    content: ''; position: absolute; inset: -2px;
+    border-radius: 50%; pointer-events: none;
+  }
+  /* Selected + active combined — shows both treatments */
+  .v11 .filtered.active-card { outline: 2px solid var(--amber); outline-offset: 2px; }
+
+  /* ─── V12 base — shared between V12a (gradient fill bar) and V12b (regular bar only) ─── */
+  .v12 { align-items: center; gap: var(--sp-2); }
+  .v12 .chip-mini {
+    flex: 0 0 auto;
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--font-mono); font-size: 13px; font-weight: 700;
+    background: var(--green); color: var(--bg-canvas);
+    position: relative;
+    cursor: pointer;
+    transition: all var(--t-base) var(--ease);
+  }
+  .v12 .chip-mini[title]::after {
+    content: attr(title);
+    position: absolute; bottom: -22px; left: 50%; transform: translateX(-50%);
+    font-size: 10px; color: var(--ink-3); font-family: var(--font-sans); white-space: nowrap;
+    font-weight: 600;
+  }
+
+  .v12 .slide-btn {
+    flex: 0 0 auto;
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    background: transparent;
+    border: 1px dashed var(--border-strong);
+    color: var(--ink-2);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; font-size: 18px; position: relative;
+    transition: all var(--t-fast) var(--ease);
+  }
+  .v12 .slide-btn:hover { border-style: solid; border-color: var(--accent); color: var(--accent); }
+  .v12 .slide-btn::after {
+    content: attr(data-count);
+    position: absolute; top: -6px; right: -6px;
+    background: var(--bg-card); border: 1px solid var(--border);
+    color: var(--ink-3);
+    font-size: 9px; font-family: var(--font-mono);
+    padding: 1px 5px; border-radius: 8px;
+  }
+
+  .v12 .arrow { color: var(--ink-3); opacity: 0.45; font-size: 16px; flex: 0 0 auto; }
+
+  .v12 .active-card {
+    flex: 2;
+    background: var(--bg-card);
+    border: 1px solid var(--accent);
+    border-radius: var(--r-md);
+    padding: 12px 18px 14px;
+    display: flex; flex-direction: column; gap: 8px;
+    cursor: pointer;
+    transition: all var(--t-base) var(--ease);
+  }
+  .v12 .active-card .head { display: flex; align-items: center; gap: var(--sp-3); }
+  .v12 .active-card .num {
+    width: 30px; height: 30px; border-radius: 50%; flex: 0 0 auto;
+    background: var(--accent); color: var(--bg-canvas);
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--font-mono); font-size: var(--text-sm); font-weight: 700;
+  }
+  .v12 .active-card .name { font-size: var(--text-md); font-weight: 700; letter-spacing: -0.01em; }
+  .v12 .active-card .stat { font-variant-numeric: tabular-nums; color: var(--accent-2); margin-left: auto; font-weight: 600; }
+  .v12 .active-card .when { font-size: var(--text-xs); color: var(--ink-3); }
+  .v12 .active-card .pb { height: 5px; background: rgba(255,255,255,0.07); border-radius: 3px; overflow: hidden; }
+  .v12 .active-card .pb > i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+
+  .v12 .future-card {
+    flex: 1;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    padding: 10px var(--sp-3) 12px;
+    display: flex; flex-direction: column; gap: 8px;
+    opacity: 0.7;
+    cursor: pointer;
+    transition: all var(--t-base) var(--ease);
+  }
+  .v12 .future-card:hover { opacity: 1; }
+  .v12 .future-card .head { display: flex; align-items: center; gap: 6px; }
+  .v12 .future-card .num {
+    width: 22px; height: 22px; border-radius: 50%;
+    background: var(--bg-canvas); border: 1px dashed var(--border-strong); color: var(--ink-3);
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--font-mono); font-size: 11px; font-weight: 700; flex: 0 0 auto;
+  }
+  .v12 .future-card .name { font-size: var(--text-sm); color: var(--ink-2); font-weight: 700; }
+  .v12 .future-card .stat { font-size: var(--text-xs); color: var(--ink-3); margin-left: auto;
+                            font-variant-numeric: tabular-nums; }
+  .v12 .future-card .pb { height: 4px; background: rgba(255,255,255,0.04); border-radius: 2px; overflow: hidden; }
+  .v12 .future-card .pb > i { display: block; height: 100%; width: 0; background: var(--border-strong); }
+
+  /* ── Filtered (selected for filtering) — full BG swap to amber + scale up ── */
+  .v12 .filtered { z-index: 2; }
+  .v12 .chip-mini.filtered {
+    width: 56px; height: 56px;
+    background: var(--amber); color: var(--bg-canvas);
+    box-shadow: 0 0 0 4px rgba(214,164,95,0.25);
+    font-size: 16px;
+    opacity: 1;
+  }
+  .v12 .future-card.filtered {
+    flex: 1.4;
+    background: rgba(214,164,95,0.18);
+    border-color: var(--amber);
+    color: var(--ink);
+    opacity: 1;
+    transform: scale(1.04);
+  }
+  .v12 .future-card.filtered .name { color: var(--ink); }
+  .v12 .future-card.filtered .num {
+    background: var(--amber); color: var(--bg-canvas); border-style: solid; border-color: var(--amber);
+  }
+  .v12 .future-card.filtered .stat { color: var(--amber); }
+  .v12 .future-card.filtered .pb > i { background: var(--amber); }
+  .v12 .active-card.filtered {
+    background: rgba(214,164,95,0.18);
+    border-color: var(--amber);
+    transform: scale(1.03);
+    flex: 2.4;
+  }
+  .v12 .active-card.filtered .num { background: var(--amber); color: var(--bg-canvas); }
+  .v12 .active-card.filtered .stat { color: var(--amber); }
+  .v12 .active-card.filtered .pb > i { background: linear-gradient(90deg, var(--amber), #e8c896); }
+
+  /* V12a-only: gradient fill on active card (kept) */
+  .v12.gradient-fill .active-card:not(.filtered) {
+    background: linear-gradient(to right,
+      rgba(74,158,255,0.22) 0%, rgba(74,158,255,0.22) var(--p,0%),
+      var(--bg-card) var(--p,0%));
+  }
+
+  /* V12c-only: gradient-fill IS the progress indicator — hide the line bar */
+  .v12.gradient-only .active-card:not(.filtered) {
+    background: linear-gradient(to right,
+      rgba(74,158,255,0.22) 0%, rgba(74,158,255,0.22) var(--p,0%),
+      var(--bg-card) var(--p,0%));
+  }
+  .v12.gradient-only .active-card .pb { display: none; }
+
+  /* ───── V6: hybrid #2 + #3 (fill cards, active dominant, past compact) ───── */
+  .v6 .pc.done {
+    flex: 0 0 auto; padding: 6px var(--sp-3);
+    background: rgba(95,174,110,0.10);
+    border: 1px solid rgba(95,174,110,0.25);
+    color: var(--green);
+    flex-direction: row; gap: 6px; align-items: center;
+  }
+  .v6 .pc.done .pc-bar, .v6 .pc.done .pc-stat { display: none; }
+  .v6 .pc.done .pc-name { font-size: var(--text-sm); }
+  .v6 .pc.done .pc-name::before { content: '✓ '; }
+  .v6 .pc.active {
+    flex: 2;
+    background: linear-gradient(to right,
+      rgba(74,158,255,0.22) 0%,
+      rgba(74,158,255,0.22) var(--p),
+      var(--bg-card) var(--p));
+  }
+  .v6 .pc.active .pc-bar { display: none; }
+  .v6 .pc.future { flex: 1; opacity: 0.55; }
+  .v6 .pc.future .pc-bar > i { background: var(--border); width: 0; }
+  /* time markers between cards */
+  .v6 .pc + .pc::before {
+    content: ''; position: absolute; left: calc(var(--sp-4) * -1); top: 50%;
+    width: var(--sp-4); height: 1px; background: var(--ink-3); opacity: 0.45;
+    transform: translateY(-50%);
+  }
+</style>
+</head>
+<body>
+<h1>Phase visualization — brainstorm</h1>
+<p class="lede">Same data: P-01 Foundations (done), P-02 Migration (done), P-03 Visual Redesign (active 0/14 · 0%), P-04 Polish (future 0/5), P-05 Launch (future 0/0).</p>
+
+<div class="variant">
+  <h2>V1 — Continuous timeline rail</h2>
+  <p class="note">One thin horizontal line; phases are nodes on the line. Strongest "time arrow" reading. Trades stat density for clarity.</p>
+  <div class="row v1">
+    <div class="node done"><div class="dot"></div><div class="lbl">Foundations</div><div class="sub">3/3</div></div>
+    <div class="node done"><div class="dot"></div><div class="lbl">Migration</div><div class="sub">2/2</div></div>
+    <div class="node active"><div class="dot"></div><div class="lbl">Visual Redesign</div><div class="sub">0/14 · 0%</div></div>
+    <div class="node future"><div class="dot"></div><div class="lbl">Polish</div><div class="sub">0/5</div></div>
+    <div class="node future"><div class="dot"></div><div class="lbl">Launch</div><div class="sub">0/0</div></div>
+  </div>
+</div>
+
+<div class="variant">
+  <h2>V2 — Fill-progress cards</h2>
+  <p class="note">Card background fills left-to-right with progress. The fill IS the bar — drop the separate strip.</p>
+  <div class="row v2">
+    <div class="pc done"><div class="pc-head"><span class="pc-name">Foundations</span><span class="pc-stat">3/3</span></div></div>
+    <div class="pc done"><div class="pc-head"><span class="pc-name">Migration</span><span class="pc-stat">2/2</span></div></div>
+    <div class="pc active" style="--p: 0%"><div class="pc-head"><span class="pc-name">Visual Redesign</span><span class="pc-stat">0/14 · 0%</span></div></div>
+    <div class="pc future"><div class="pc-head"><span class="pc-name">Polish</span><span class="pc-stat">0/5</span></div></div>
+    <div class="pc future"><div class="pc-head"><span class="pc-name">Launch</span><span class="pc-stat">0/0</span></div></div>
+  </div>
+</div>
+
+<div class="variant">
+  <h2>V3 — Active-dominant</h2>
+  <p class="note">Past phases shrink to compact pills (✓ name only); active gets 2× width with full stats; future dims to 55% opacity.</p>
+  <div class="row v3">
+    <div class="pc done"><div class="pc-head"><span class="pc-name">Foundations</span></div></div>
+    <div class="pc done"><div class="pc-head"><span class="pc-name">Migration</span></div></div>
+    <div class="pc active"><div class="pc-head"><span class="pc-name">Visual Redesign</span><span class="pc-stat">0/14 · 0%</span></div><div class="pc-bar"><i style="width:0%"></i></div></div>
+    <div class="pc future"><div class="pc-head"><span class="pc-name">Polish</span><span class="pc-stat">0/5</span></div><div class="pc-bar"><i></i></div></div>
+    <div class="pc future"><div class="pc-head"><span class="pc-name">Launch</span><span class="pc-stat">0/0</span></div><div class="pc-bar"><i></i></div></div>
+  </div>
+</div>
+
+<div class="variant">
+  <h2>V4 — Numbered, arrow built-in</h2>
+  <p class="note">Each phase has a 1-2-3 numeric badge; large `→` between cards; colored badge encodes status.</p>
+  <div class="row v4">
+    <div class="pc done"><span class="pc-num">1</span><div class="pc-head"><span class="pc-name">Foundations</span><span class="pc-stat">3/3</span></div><div class="pc-bar"><i></i></div></div>
+    <div class="pc done"><span class="pc-num">2</span><div class="pc-head"><span class="pc-name">Migration</span><span class="pc-stat">2/2</span></div><div class="pc-bar"><i></i></div></div>
+    <div class="pc active"><span class="pc-num">3</span><div class="pc-head"><span class="pc-name">Visual Redesign</span><span class="pc-stat">0/14 · 0%</span></div><div class="pc-bar"><i style="width:0%"></i></div></div>
+    <div class="pc future"><span class="pc-num">4</span><div class="pc-head"><span class="pc-name">Polish</span><span class="pc-stat">0/5</span></div><div class="pc-bar"><i></i></div></div>
+    <div class="pc future"><span class="pc-num">5</span><div class="pc-head"><span class="pc-name">Launch</span><span class="pc-stat">0/0</span></div><div class="pc-bar"><i></i></div></div>
+  </div>
+</div>
+
+<div class="variant">
+  <h2>V5 — Phase + duration subline</h2>
+  <p class="note">Adds "started X ago / active Y" so the row also answers "where are we in time."</p>
+  <div class="row v5">
+    <div class="pc done"><div class="pc-head"><span class="pc-name">Foundations</span><span class="pc-stat">3/3</span></div><div class="pc-when">Mar 14 → Apr 02</div></div>
+    <div class="pc done"><div class="pc-head"><span class="pc-name">Migration</span><span class="pc-stat">2/2</span></div><div class="pc-when">Apr 03 → Apr 18</div></div>
+    <div class="pc active"><div class="pc-head"><span class="pc-name">Visual Redesign</span><span class="pc-stat">0/14 · 0%</span></div><div class="pc-when">Active · 10 days</div><div class="pc-bar"><i style="width:0%"></i></div></div>
+    <div class="pc future"><div class="pc-head"><span class="pc-name">Polish</span><span class="pc-stat">0/5</span></div><div class="pc-when">est. ~2 weeks</div></div>
+    <div class="pc future"><div class="pc-head"><span class="pc-name">Launch</span><span class="pc-stat">0/0</span></div><div class="pc-when">tbd</div></div>
+  </div>
+</div>
+
+<h1 style="margin-top:var(--sp-9)">Iterations on V1 + V4 + V6 hybrid</h1>
+<p class="lede">Three variants: rail + numbered nodes + dominant active. Pick a winner or call out the bits to mash up.</p>
+
+<div class="variant">
+  <h2>V7 — Rail with numbered nodes; active is a card on the rail</h2>
+  <p class="note">Continuous rail (V1 base). Each phase is a numbered circle (V4 numbering). Active phase has a fill-progress card hanging off its node with stats. Past = green ✓ circle + name; future = empty circle + dim name.</p>
+  <div class="row v7 rail-row">
+    <div class="node done">
+      <div class="num">✓</div><div class="lbl">Foundations</div>
+    </div>
+    <div class="node done">
+      <div class="num">✓</div><div class="lbl">Migration</div>
+    </div>
+    <div class="node active">
+      <div class="num">3</div>
+      <div class="card" style="--p:0%"><span>Visual Redesign</span><span class="stat">0/14 · 0%</span></div>
+    </div>
+    <div class="node future">
+      <div class="num">4</div><div class="lbl">Polish</div>
+    </div>
+    <div class="node future">
+      <div class="num">5</div><div class="lbl">Launch</div>
+    </div>
+  </div>
+</div>
+
+<div class="variant">
+  <h2>V8 — Numbered pills on a connector line; active expands into wide fill-card</h2>
+  <p class="note">All phases are pills with a numeric badge (V4 numbering). Done pills are green. Active expands into a wider rectangle with progress fill. Future are 60% dim. Thin connector tick between adjacent pills.</p>
+  <div class="row v8">
+    <div class="pill done"><span class="num">1</span><span class="name">Foundations</span></div>
+    <div class="pill done"><span class="num">2</span><span class="name">Migration</span></div>
+    <div class="pill active" style="--p:0%"><span class="num">3</span><span class="name">Visual Redesign</span><span class="stat">0/14 · 0%</span></div>
+    <div class="pill future"><span class="num">4</span><span class="name">Polish</span></div>
+    <div class="pill future"><span class="num">5</span><span class="name">Launch</span></div>
+  </div>
+</div>
+
+<div class="variant">
+  <h2>V9 — Extreme dominance: past = tiny number circles, active = full hero card</h2>
+  <p class="note">Maximum focus on the active phase. Done phases collapse to 32px green numbered circles (name appears below as caption). Active is a generous hero card with name, stats, and date/duration. Future similarly shrinks.</p>
+  <div class="row v9">
+    <div class="chip-mini" title="Foundations">1</div>
+    <span class="arrow">›</span>
+    <div class="chip-mini" title="Migration">2</div>
+    <span class="arrow">›</span>
+    <div class="active-card" style="--p:0%">
+      <div class="num">3</div>
+      <span class="name">Visual Redesign</span>
+      <span class="when">Active · 10d</span>
+      <span class="stat">0/14 · 0%</span>
+    </div>
+    <span class="arrow">›</span>
+    <div class="chip-mini future" title="Polish">4</div>
+    <span class="arrow">›</span>
+    <div class="chip-mini future" title="Launch">5</div>
+  </div>
+</div>
+
+<div class="variant">
+  <h2>V10 — V9 base + V6 future cards with progress bars (suggested next iteration)</h2>
+  <p class="note">Past phases stay tiny numbered green circles; active is the dominant hero fill-card; future phases get V6-style mid-size cards with name, stat, and an (empty) progress bar — no longer just dim circles.</p>
+  <div class="row v10">
+    <div class="chip-mini" title="Foundations">1</div>
+    <span class="arrow">›</span>
+    <div class="chip-mini" title="Migration">2</div>
+    <span class="arrow">›</span>
+    <div class="active-card" style="--p:0%">
+      <div class="num">3</div>
+      <span class="name">Visual Redesign</span>
+      <span class="when">Active · 10d</span>
+      <span class="stat">0/14 · 0%</span>
+    </div>
+    <span class="arrow">›</span>
+    <div class="future-card">
+      <div class="head"><span class="num">4</span><span class="name">Polish</span><span class="stat">0/5</span></div>
+      <div class="bar"><i></i></div>
+    </div>
+    <span class="arrow">›</span>
+    <div class="future-card">
+      <div class="head"><span class="num">5</span><span class="name">Launch</span><span class="stat">0/0</span></div>
+      <div class="bar"><i></i></div>
+    </div>
+  </div>
+</div>
+
+<div class="variant">
+  <h2>V11 — V10 + active progress bar + slide overflow + bold names + filter highlight</h2>
+  <p class="note">
+    <strong>Bold names</strong> on every phase. <strong>Active card</strong> now has its own gradient progress bar
+    in addition to the background fill. <strong>Slide-overflow buttons</strong> (dashed circle with `‹` / `›` and a
+    count badge) appear when there are more than 3 past or future phases — clicking would slide them into view.
+    <strong>Filter highlight</strong> = amber outline ring (separate from temporal accent blue), so a "selected
+    for filtering" past phase reads differently from the temporally active phase.
+  </p>
+
+  <p class="note" style="font-size: var(--text-xs); color: var(--ink-3);">Below: 3 past, active, 2 future, with overflow controls hinted on both sides. The selected/filtered phase here is P-02 Migration (amber ring on a past chip).</p>
+
+  <div class="row v11">
+    <button class="slide-btn" data-count="2" title="Show 2 earlier phases">‹</button>
+    <span class="arrow">›</span>
+    <div class="chip-mini" title="Foundations">1</div>
+    <span class="arrow">›</span>
+    <div class="chip-mini filtered" title="Migration ✓ filtering">2</div>
+    <span class="arrow">›</span>
+    <div class="chip-mini" title="Schema">3</div>
+    <span class="arrow">›</span>
+    <div class="active-card" style="--p:18%">
+      <div class="head">
+        <div class="num">4</div>
+        <span class="name">Visual Redesign</span>
+        <span class="stat">3/14 · 18%</span>
+      </div>
+      <div class="when">Active · 10d</div>
+      <div class="pb"><i style="width:18%"></i></div>
+    </div>
+    <span class="arrow">›</span>
+    <div class="future-card">
+      <div class="head"><span class="num">5</span><span class="name">Polish</span><span class="stat">0/5</span></div>
+      <div class="pb"><i></i></div>
+    </div>
+    <span class="arrow">›</span>
+    <div class="future-card">
+      <div class="head"><span class="num">6</span><span class="name">Launch</span><span class="stat">0/0</span></div>
+      <div class="pb"><i></i></div>
+    </div>
+    <span class="arrow">›</span>
+    <button class="slide-btn" data-count="2" title="Show 2 later phases">›</button>
+  </div>
+
+  <p class="note" style="font-size: var(--text-xs); color: var(--ink-3); margin-top: var(--sp-5);">Below: same row but the user has clicked the active phase to filter — accent blue + amber ring stack to show "this is BOTH the temporal-active phase AND the one being filtered."</p>
+
+  <div class="row v11">
+    <button class="slide-btn" data-count="2" title="Show 2 earlier phases">‹</button>
+    <span class="arrow">›</span>
+    <div class="chip-mini" title="Foundations">1</div>
+    <span class="arrow">›</span>
+    <div class="chip-mini" title="Migration">2</div>
+    <span class="arrow">›</span>
+    <div class="chip-mini" title="Schema">3</div>
+    <span class="arrow">›</span>
+    <div class="active-card filtered" style="--p:18%">
+      <div class="head">
+        <div class="num">4</div>
+        <span class="name">Visual Redesign</span>
+        <span class="stat">3/14 · 18%</span>
+      </div>
+      <div class="when">Active · 10d</div>
+      <div class="pb"><i style="width:18%"></i></div>
+    </div>
+    <span class="arrow">›</span>
+    <div class="future-card">
+      <div class="head"><span class="num">5</span><span class="name">Polish</span><span class="stat">0/5</span></div>
+      <div class="pb"><i></i></div>
+    </div>
+    <span class="arrow">›</span>
+    <div class="future-card">
+      <div class="head"><span class="num">6</span><span class="name">Launch</span><span class="stat">0/0</span></div>
+      <div class="pb"><i></i></div>
+    </div>
+    <span class="arrow">›</span>
+    <button class="slide-btn" data-count="2" title="Show 2 later phases">›</button>
+  </div>
+</div>
+
+<div class="variant">
+  <h2>V12a — gradient fill on active + dedicated progress bar</h2>
+  <p class="note">Active card keeps both the background gradient fill AND its own bar. Selected/filtered phase swaps to amber background and scales up ~4–6%.</p>
+
+  <p class="note" style="font-size: var(--text-xs); color: var(--ink-3);">Past phase P-02 selected for filter — full amber BG, larger size:</p>
+  <div class="row v12 gradient-fill">
+    <button class="slide-btn" data-count="2" title="Show 2 earlier phases">‹</button>
+    <span class="arrow">›</span>
+    <div class="chip-mini" title="Foundations">1</div>
+    <span class="arrow">›</span>
+    <div class="chip-mini filtered" title="Migration">2</div>
+    <span class="arrow">›</span>
+    <div class="chip-mini" title="Schema">3</div>
+    <span class="arrow">›</span>
+    <div class="active-card" style="--p:18%">
+      <div class="head"><div class="num">4</div><span class="name">Visual Redesign</span><span class="stat">3/14 · 18%</span></div>
+      <div class="when">Active · 10d</div>
+      <div class="pb"><i style="width:18%"></i></div>
+    </div>
+    <span class="arrow">›</span>
+    <div class="future-card">
+      <div class="head"><span class="num">5</span><span class="name">Polish</span><span class="stat">0/5</span></div>
+      <div class="pb"><i></i></div>
+    </div>
+    <span class="arrow">›</span>
+    <div class="future-card">
+      <div class="head"><span class="num">6</span><span class="name">Launch</span><span class="stat">0/0</span></div>
+      <div class="pb"><i></i></div>
+    </div>
+    <span class="arrow">›</span>
+    <button class="slide-btn" data-count="2" title="Show 2 later phases">›</button>
+  </div>
+
+  <p class="note" style="font-size: var(--text-xs); color: var(--ink-3); margin-top: var(--sp-5);">Future phase P-05 Polish selected for filter — full amber BG, larger card, amber bar:</p>
+  <div class="row v12 gradient-fill">
+    <button class="slide-btn" data-count="2" title="Show 2 earlier phases">‹</button>
+    <span class="arrow">›</span>
+    <div class="chip-mini" title="Foundations">1</div>
+    <span class="arrow">›</span>
+    <div class="chip-mini" title="Migration">2</div>
+    <span class="arrow">›</span>
+    <div class="chip-mini" title="Schema">3</div>
+    <span class="arrow">›</span>
+    <div class="active-card" style="--p:18%">
+      <div class="head"><div class="num">4</div><span class="name">Visual Redesign</span><span class="stat">3/14 · 18%</span></div>
+      <div class="when">Active · 10d</div>
+      <div class="pb"><i style="width:18%"></i></div>
+    </div>
+    <span class="arrow">›</span>
+    <div class="future-card filtered">
+      <div class="head"><span class="num">5</span><span class="name">Polish</span><span class="stat">0/5</span></div>
+      <div class="pb"><i></i></div>
+    </div>
+    <span class="arrow">›</span>
+    <div class="future-card">
+      <div class="head"><span class="num">6</span><span class="name">Launch</span><span class="stat">0/0</span></div>
+      <div class="pb"><i></i></div>
+    </div>
+    <span class="arrow">›</span>
+    <button class="slide-btn" data-count="2" title="Show 2 later phases">›</button>
+  </div>
+
+  <p class="note" style="font-size: var(--text-xs); color: var(--ink-3); margin-top: var(--sp-5);">Active phase selected for filter — amber takes over the active card:</p>
+  <div class="row v12 gradient-fill">
+    <button class="slide-btn" data-count="2" title="Show 2 earlier phases">‹</button>
+    <span class="arrow">›</span>
+    <div class="chip-mini" title="Foundations">1</div>
+    <span class="arrow">›</span>
+    <div class="chip-mini" title="Migration">2</div>
+    <span class="arrow">›</span>
+    <div class="chip-mini" title="Schema">3</div>
+    <span class="arrow">›</span>
+    <div class="active-card filtered" style="--p:18%">
+      <div class="head"><div class="num">4</div><span class="name">Visual Redesign</span><span class="stat">3/14 · 18%</span></div>
+      <div class="when">Active · 10d</div>
+      <div class="pb"><i style="width:18%"></i></div>
+    </div>
+    <span class="arrow">›</span>
+    <div class="future-card">
+      <div class="head"><span class="num">5</span><span class="name">Polish</span><span class="stat">0/5</span></div>
+      <div class="pb"><i></i></div>
+    </div>
+    <span class="arrow">›</span>
+    <div class="future-card">
+      <div class="head"><span class="num">6</span><span class="name">Launch</span><span class="stat">0/0</span></div>
+      <div class="pb"><i></i></div>
+    </div>
+    <span class="arrow">›</span>
+    <button class="slide-btn" data-count="2" title="Show 2 later phases">›</button>
+  </div>
+</div>
+
+<div class="variant">
+  <h2>V12b — regular progress bar only (no background fill)</h2>
+  <p class="note">Active card uses just the dedicated progress bar — no gradient background fill. Cleaner, less visual noise. Selected state same as V12a (amber takeover + scale up).</p>
+
+  <p class="note" style="font-size: var(--text-xs); color: var(--ink-3);">Past phase P-02 selected for filter:</p>
+  <div class="row v12">
+    <button class="slide-btn" data-count="2" title="Show 2 earlier phases">‹</button>
+    <span class="arrow">›</span>
+    <div class="chip-mini" title="Foundations">1</div>
+    <span class="arrow">›</span>
+    <div class="chip-mini filtered" title="Migration">2</div>
+    <span class="arrow">›</span>
+    <div class="chip-mini" title="Schema">3</div>
+    <span class="arrow">›</span>
+    <div class="active-card">
+      <div class="head"><div class="num">4</div><span class="name">Visual Redesign</span><span class="stat">3/14 · 18%</span></div>
+      <div class="when">Active · 10d</div>
+      <div class="pb"><i style="width:18%"></i></div>
+    </div>
+    <span class="arrow">›</span>
+    <div class="future-card">
+      <div class="head"><span class="num">5</span><span class="name">Polish</span><span class="stat">0/5</span></div>
+      <div class="pb"><i></i></div>
+    </div>
+    <span class="arrow">›</span>
+    <div class="future-card">
+      <div class="head"><span class="num">6</span><span class="name">Launch</span><span class="stat">0/0</span></div>
+      <div class="pb"><i></i></div>
+    </div>
+    <span class="arrow">›</span>
+    <button class="slide-btn" data-count="2" title="Show 2 later phases">›</button>
+  </div>
+
+  <p class="note" style="font-size: var(--text-xs); color: var(--ink-3); margin-top: var(--sp-5);">Active phase selected for filter:</p>
+  <div class="row v12">
+    <button class="slide-btn" data-count="2" title="Show 2 earlier phases">‹</button>
+    <span class="arrow">›</span>
+    <div class="chip-mini" title="Foundations">1</div>
+    <span class="arrow">›</span>
+    <div class="chip-mini" title="Migration">2</div>
+    <span class="arrow">›</span>
+    <div class="chip-mini" title="Schema">3</div>
+    <span class="arrow">›</span>
+    <div class="active-card filtered">
+      <div class="head"><div class="num">4</div><span class="name">Visual Redesign</span><span class="stat">3/14 · 18%</span></div>
+      <div class="when">Active · 10d</div>
+      <div class="pb"><i style="width:18%"></i></div>
+    </div>
+    <span class="arrow">›</span>
+    <div class="future-card">
+      <div class="head"><span class="num">5</span><span class="name">Polish</span><span class="stat">0/5</span></div>
+      <div class="pb"><i></i></div>
+    </div>
+    <span class="arrow">›</span>
+    <div class="future-card">
+      <div class="head"><span class="num">6</span><span class="name">Launch</span><span class="stat">0/0</span></div>
+      <div class="pb"><i></i></div>
+    </div>
+    <span class="arrow">›</span>
+    <button class="slide-btn" data-count="2" title="Show 2 later phases">›</button>
+  </div>
+</div>
+
+<div class="variant">
+  <h2>V12c — gradient fill only (no line progress bar)</h2>
+  <p class="note">Active card's gradient background IS the progress indicator. No dedicated line bar — minimum visual noise. Stat text still shows the percentage so the number is legible regardless of color.</p>
+
+  <p class="note" style="font-size: var(--text-xs); color: var(--ink-3);">Past phase P-02 selected for filter:</p>
+  <div class="row v12 gradient-only">
+    <button class="slide-btn" data-count="2" title="Show 2 earlier phases">‹</button>
+    <span class="arrow">›</span>
+    <div class="chip-mini" title="Foundations">1</div>
+    <span class="arrow">›</span>
+    <div class="chip-mini filtered" title="Migration">2</div>
+    <span class="arrow">›</span>
+    <div class="chip-mini" title="Schema">3</div>
+    <span class="arrow">›</span>
+    <div class="active-card" style="--p:18%">
+      <div class="head"><div class="num">4</div><span class="name">Visual Redesign</span><span class="stat">3/14 · 18%</span></div>
+      <div class="when">Active · 10d</div>
+    </div>
+    <span class="arrow">›</span>
+    <div class="future-card">
+      <div class="head"><span class="num">5</span><span class="name">Polish</span><span class="stat">0/5</span></div>
+      <div class="pb"><i></i></div>
+    </div>
+    <span class="arrow">›</span>
+    <div class="future-card">
+      <div class="head"><span class="num">6</span><span class="name">Launch</span><span class="stat">0/0</span></div>
+      <div class="pb"><i></i></div>
+    </div>
+    <span class="arrow">›</span>
+    <button class="slide-btn" data-count="2" title="Show 2 later phases">›</button>
+  </div>
+
+  <p class="note" style="font-size: var(--text-xs); color: var(--ink-3); margin-top: var(--sp-5);">Active phase selected for filter:</p>
+  <div class="row v12 gradient-only">
+    <button class="slide-btn" data-count="2" title="Show 2 earlier phases">‹</button>
+    <span class="arrow">›</span>
+    <div class="chip-mini" title="Foundations">1</div>
+    <span class="arrow">›</span>
+    <div class="chip-mini" title="Migration">2</div>
+    <span class="arrow">›</span>
+    <div class="chip-mini" title="Schema">3</div>
+    <span class="arrow">›</span>
+    <div class="active-card filtered" style="--p:18%">
+      <div class="head"><div class="num">4</div><span class="name">Visual Redesign</span><span class="stat">3/14 · 18%</span></div>
+      <div class="when">Active · 10d</div>
+    </div>
+    <span class="arrow">›</span>
+    <div class="future-card">
+      <div class="head"><span class="num">5</span><span class="name">Polish</span><span class="stat">0/5</span></div>
+      <div class="pb"><i></i></div>
+    </div>
+    <span class="arrow">›</span>
+    <div class="future-card">
+      <div class="head"><span class="num">6</span><span class="name">Launch</span><span class="stat">0/0</span></div>
+      <div class="pb"><i></i></div>
+    </div>
+    <span class="arrow">›</span>
+    <button class="slide-btn" data-count="2" title="Show 2 later phases">›</button>
+  </div>
+</div>
+
+<h1 style="margin-top:var(--sp-9)">Original V6 (for reference)</h1>
+
+<div class="variant">
+  <h2>V6 — Hybrid (recommended)</h2>
+  <p class="note">Past = compact green pills with ✓; active = wide fill-card; future = dim minimal; thin connector tick between. Gives temporal flow + dominant active state + low chrome.</p>
+  <div class="row v6">
+    <div class="pc done"><div class="pc-head"><span class="pc-name">Foundations</span></div></div>
+    <div class="pc done"><div class="pc-head"><span class="pc-name">Migration</span></div></div>
+    <div class="pc active" style="--p: 0%"><div class="pc-head"><span class="pc-name">Visual Redesign</span><span class="pc-stat">0/14 · 0%</span></div></div>
+    <div class="pc future"><div class="pc-head"><span class="pc-name">Polish</span><span class="pc-stat">0/5</span></div></div>
+    <div class="pc future"><div class="pc-head"><span class="pc-name">Launch</span><span class="pc-stat">0/0</span></div></div>
+  </div>
+</div>
+
+</body>
+</html>

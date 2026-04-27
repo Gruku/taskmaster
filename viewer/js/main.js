@@ -61,8 +61,13 @@ async function boot() {
   store.setIdentity(identity);
   store.setPrefs(prefsData);
 
+  // Apply persisted sidebar-collapsed before sidebar mounts so layout doesn't flicker.
+  if (prefsData?.ui?.sidebar_collapsed) {
+    document.querySelector('.shell')?.classList.add('sidebar-collapsed');
+  }
+
   // Mount sidebar
-  mountSidebar(document.getElementById('sidebar'), { store });
+  mountSidebar(document.getElementById('sidebar'), { store, prefs });
 
   // Init router
   routerInit({

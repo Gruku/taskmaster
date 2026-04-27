@@ -12,8 +12,9 @@ export function renderPhaseStepper({ phases = [], active = '__all__', onSelect, 
   const histBtn = document.createElement('button');
   histBtn.type = 'button';
   histBtn.className = 'kanban-phase-step history-toggle';
-  histBtn.title = 'Show past phases';
-  histBtn.innerHTML = `<div class="ph-head"><span class="ph-name">⤺</span></div>`;
+  histBtn.title = 'Show / hide past phases';
+  histBtn.setAttribute('aria-label', 'Toggle past phases');
+  histBtn.innerHTML = `<span class="util-icon">↺</span><span class="util-text">History</span>`;
   histBtn.addEventListener('click', () => {
     showHistory = !showHistory;
     wrap.querySelectorAll('.kanban-phase-step.done').forEach(el => {
@@ -30,10 +31,8 @@ export function renderPhaseStepper({ phases = [], active = '__all__', onSelect, 
   allBtn.type = 'button';
   allBtn.className = 'kanban-phase-step all-step' + (active === '__all__' ? ' active' : '');
   allBtn.dataset.key = '__all__';
-  allBtn.innerHTML = `
-    <div class="ph-head"><span class="ph-name">All phases</span><span class="ph-stat">${allDone}/${allTotal}</span></div>
-    <div class="ph-bar"><i style="background:var(--ink-3); width:${allPct}%"></i></div>
-  `;
+  allBtn.title = 'Show all phases';
+  allBtn.innerHTML = `<span class="util-icon">⌂</span><span class="util-text">All phases</span><span class="ph-stat">${allDone}/${allTotal} · ${allPct}%</span>`;
   allBtn.addEventListener('click', () => onSelect && onSelect('__all__'));
   wrap.appendChild(allBtn);
 
@@ -67,7 +66,8 @@ export function renderPhaseStepper({ phases = [], active = '__all__', onSelect, 
   orphansBtn.type = 'button';
   orphansBtn.className = 'kanban-phase-step orphans-step' + (active === '__orphans__' ? ' active' : '');
   orphansBtn.dataset.key = '__orphans__';
-  orphansBtn.innerHTML = `<div class="ph-head"><span class="ph-name">Orphans</span></div><div class="ph-bar"><i></i></div>`;
+  orphansBtn.title = 'Tasks with no phase';
+  orphansBtn.innerHTML = `<span class="util-icon">⚲</span><span class="util-text">Orphans</span>`;
   orphansBtn.addEventListener('click', () => onSelect && onSelect('__orphans__'));
   wrap.appendChild(orphansBtn);
 

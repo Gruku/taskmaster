@@ -1073,6 +1073,9 @@ VIEWER_PREFS_DEFAULTS = {
         # Widget catalog. Each entry: {id, type, size: small|medium|wide, rail: left|right|bottom, index: int}
         "layout": [],
     },
+    "ui": {
+        "sidebar_collapsed": False,   # icons-only sidebar when True
+    },
     "kanban": {
         "filters": {           # last applied; restored on viewer open
             "priorities": [],
