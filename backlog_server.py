@@ -103,6 +103,21 @@ from taskmaster_v3 import (
 )
 
 
+def _load_auto_state():
+    """Read .taskmaster/auto/state.json, return parsed dict or None.
+
+    Returns None when the file is missing OR contains invalid JSON.
+    Used by GET /api/auto/state. Mutating writes are out of scope for Plan 2.
+    """
+    p = Path(".taskmaster") / "auto" / "state.json"
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
 def _resolve_paths() -> tuple[Path, Path]:
     """Resolve backlog.yaml and PROGRESS.md paths from config or defaults.
 
