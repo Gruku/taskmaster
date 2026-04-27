@@ -11,7 +11,7 @@
 }
 
 /* ─────────── PAGE LAYOUT ─────────── */
-.kanban-page { display: flex; flex-direction: column; gap: var(--sp-5); min-width: 0; }
+.kanban-page { display: flex; flex-direction: column; gap: var(--sp-5); min-width: 0; height: 100%; min-height: 0; }
 
 .kanban-head {
   display: flex; align-items: center; gap: var(--sp-4);
@@ -456,6 +456,9 @@
   border-radius: var(--r-lg);
   padding: var(--sp-4) var(--sp-5) var(--sp-5);
   box-shadow: 0 0 0 1px rgba(74,158,255,0.04) inset, 0 12px 45px rgba(0,0,0,0.4);
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 .kanban-board::before {
   content: ''; position: absolute; inset: 0; pointer-events: none;
@@ -479,7 +482,7 @@
   border: 1px solid rgba(74,158,255,0.06);
   border-radius: var(--r-md);
   padding: var(--sp-3);
-  min-height: 510px;
+  min-height: 100%;
 }
 .kanban-col-head {
   display: flex; align-items: center; gap: 8px;
