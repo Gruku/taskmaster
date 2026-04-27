@@ -3845,14 +3845,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
         if clean_path in ("/", "/index.html"):
             self._serve_file(VIEWER_PATH, "text/html")
         elif clean_path == "/api/viewer/prefs":
-            import json
-            body = json.dumps(load_viewer_prefs()).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(body)
+            self._send_json(200, load_viewer_prefs())
             return
         elif clean_path == "/backlog.yaml":
             self._serve_file(_backlog_path(), "text/yaml")
@@ -3882,23 +3875,11 @@ class ViewerHandler(BaseHTTPRequestHandler):
     def _serve_session(self) -> None:
         session_data = dict(_session_task) if _session_task else {}
         session_data["session_id"] = SESSION_ID
-        body = json.dumps(session_data).encode("utf-8")
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.end_headers()
-        self.wfile.write(body)
+        self._send_json(200, session_data)
 
     def _serve_identity(self) -> None:
         """Return the project root and version so callers can verify which project this server serves."""
-        body = json.dumps({"root": str(ROOT.resolve()), "version": VERSION}).encode("utf-8")
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.end_headers()
-        self.wfile.write(body)
+        self._send_json(200, {"root": str(ROOT.resolve()), "version": VERSION})
 
     def _serve_repo_file(self, clean_path: str) -> None:
         """Serve a file from the repo root. Renders .md files as styled HTML."""
@@ -3950,13 +3931,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
         try:
             data = yaml.safe_load(_backlog_path().read_text(encoding="utf-8"))
             data.setdefault("meta", {})["_version"] = VERSION
-            body = json.dumps(data, default=str).encode("utf-8")
-            self.send_response(HTTPStatus.OK)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(body)
+            self._send_json(200, data)
         except Exception as e:
             self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(e))
 
@@ -3993,8 +3968,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def _send_json(self, status: int, payload: dict):
-        import json
-        body = json.dumps(payload).encode("utf-8")
+        body = json.dumps(payload, default=str).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))

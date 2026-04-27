@@ -76,3 +76,10 @@ def test_put_viewer_prefs_rejects_non_object(running_server):
     with pytest.raises(urllib.error.HTTPError) as exc:
         urllib.request.urlopen(req)
     assert exc.value.code == 400
+
+
+def test_api_endpoints_set_cors_header(running_server):
+    base, _ = running_server
+    for path in ["/api/identity", "/api/viewer/prefs"]:
+        resp = urllib.request.urlopen(f"{base}{path}")
+        assert resp.headers.get("Access-Control-Allow-Origin") == "*"
