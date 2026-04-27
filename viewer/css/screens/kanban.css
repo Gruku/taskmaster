@@ -215,3 +215,46 @@
 .card-status-pill.in_review .dot    { background: var(--amber); }
 .card-status-pill.done .dot         { background: var(--green); }
 .card-status-pill.blocked .dot      { background: var(--red); }
+
+/* ─────────── PER-CARD AUTO-MODE LIVE BLOCK ─────────── */
+.card-live {
+  margin-top: var(--sp-2);
+  padding: 7px 10px;
+  background: rgba(74, 158, 255, 0.05);
+  border-top: 1px solid rgba(74, 158, 255, 0.15);
+  border-radius: 0 0 var(--r-md) var(--r-md);
+}
+.card-live-row {
+  display: flex; align-items: center; gap: var(--sp-2);
+  font-size: var(--text-xs);
+  color: #8fb6e8;
+}
+.card-live-row .pulse {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: var(--accent);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+.card-live-row .step-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card-live-row .elapsed { margin-left: auto; color: var(--ink-3); font-family: var(--font-mono); }
+.card-live-bar {
+  margin-top: 5px; height: 3px;
+  background: rgba(255,255,255,0.06); border-radius: 2px; overflow: hidden;
+  position: relative;
+}
+.card-live-bar > i {
+  display: block; height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  transition: width var(--t-base) var(--ease);
+}
+/* Shimmer overlay — passes left → right every 2.4s. */
+.card-live-bar::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.18), transparent);
+  background-size: 40% 100%;
+  background-repeat: no-repeat;
+  animation: shimmer 2.4s ease-in-out infinite;
+}
+@keyframes shimmer {
+  0%   { background-position: -50% 0; }
+  100% { background-position: 150% 0; }
+}
