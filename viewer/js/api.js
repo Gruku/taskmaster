@@ -31,5 +31,6 @@ export const api = {
   backlogYaml:     ()    => http('GET', '/backlog.yaml'),
   prefs:           ()    => http('GET', '/api/viewer/prefs'),
   savePrefs:       (p)   => http('PUT', '/api/viewer/prefs', p),
-  // Plans 5/6 add: reinforceLesson, getRecap, putRecap, getAutoState, etc.
+  autoState:       ()    => http('GET', '/api/auto/state').then(r => r && r.state),
+  // Plans 5/6 add: reinforceLesson, getRecap, putRecap, putAutoState, etc.
 };
