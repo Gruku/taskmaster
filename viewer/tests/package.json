@@ -1,5 +1,6 @@
 {
   "name": "taskmaster-viewer-tests",
+  "type": "module",
   "private": true,
   "scripts": {
     "test": "playwright test"
