@@ -7,8 +7,11 @@ PORT=8765
 python -c "
 from backlog_server import _make_server
 s, p = _make_server(host='127.0.0.1', port=$PORT)
-import threading
+import threading, time
 threading.Thread(target=s.serve_forever, daemon=True).start()
+# Keep main thread alive so the daemon thread (server) runs until this
+# process is killed by the test harness (kill \$SERVER_PID).
+while True: time.sleep(3600)
 " &
 SERVER_PID=$!
 

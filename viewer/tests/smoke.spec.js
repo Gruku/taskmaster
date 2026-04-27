@@ -12,8 +12,8 @@ const ROUTES = [
   { hash: '#/task/T-148',         title: 'Task Detail',         sidebarKey: null },
 ];
 
-// Number of sidebar links is derived from ROUTES so the magic number stays in sync.
-const SIDEBAR_LINK_COUNT = ROUTES.filter(r => r.sidebarKey).length;
+// Number of sidebar links is derived from ROUTES (unique sidebarKeys) so it stays in sync.
+const SIDEBAR_LINK_COUNT = new Set(ROUTES.map(r => r.sidebarKey).filter(Boolean)).size;
 
 test.describe('Viewer v3 smoke', () => {
   test('boots and renders sidebar', async ({ page }) => {
