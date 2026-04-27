@@ -3844,6 +3844,16 @@ class ViewerHandler(BaseHTTPRequestHandler):
 
         if clean_path in ("/", "/index.html"):
             self._serve_file(VIEWER_PATH, "text/html")
+        elif clean_path == "/api/viewer/prefs":
+            import json
+            body = json.dumps(load_viewer_prefs()).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(body)
+            return
         elif clean_path == "/backlog.yaml":
             self._serve_file(_backlog_path(), "text/yaml")
         elif clean_path == "/api/backlog":
@@ -4050,6 +4060,12 @@ def _check_identity(port: int) -> bool:
         return Path(data.get("root", "")).resolve() == ROOT.resolve()
     except Exception:
         return False
+
+
+def _make_server(host: str = "127.0.0.1", port: int = 0):
+    """Build the HTTP server without starting it. Returns (server, bound_port)."""
+    server = ThreadingHTTPServer((host, port), ViewerHandler)
+    return server, server.server_address[1]
 
 
 def _start_viewer_server() -> int:
