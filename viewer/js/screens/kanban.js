@@ -153,13 +153,23 @@ export async function mount(root, { store, prefs }) {
 
   head.appendChild(right);
 
-  // 3) Phase stepper container (rendered in paint())
-  const stepperHost = document.createElement('div');
-  page.appendChild(stepperHost);
+  // 3) Unified filter bar — phase stepper + divider + epic chips
+  const filterBar = document.createElement('div');
+  filterBar.className = 'kanban-filterbar';
 
-  // 4) Epic chips container
+  const stepperHost = document.createElement('div');
+  stepperHost.className = 'kanban-filterbar-section phase';
+  filterBar.appendChild(stepperHost);
+
+  const filterDivider = document.createElement('div');
+  filterDivider.className = 'kanban-filterbar-divider';
+  filterBar.appendChild(filterDivider);
+
   const epicHost = document.createElement('div');
-  page.appendChild(epicHost);
+  epicHost.className = 'kanban-filterbar-section epic';
+  filterBar.appendChild(epicHost);
+
+  page.appendChild(filterBar);
 
   // 5) Board surface
   const board = document.createElement('div');
