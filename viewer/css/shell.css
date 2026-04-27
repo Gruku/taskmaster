@@ -1,8 +1,11 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Source+Serif+Pro:ital,wght@1,400&display=swap');
 
 :root {
-  /* Shell-specific behaviour vars (not design tokens — kept here, not in tokens.css) */
-  --shell-zoom: 1.5;  /* spec §3.4 — 150% baked in; behavioural, not a design token */
+  /* Shell-specific vars (behavioural + shell-scoped design values; not in tokens.css) */
+  --shell-zoom:         1.5;                       /* spec §3.4 — 150% baked in */
+  --shell-bg-sidebar:   #101116;                   /* sidebar surface, darker than --bg-shell */
+  --shell-label-size:   9px;                       /* section header caps, sub-text-xs */
+  --shell-hover-overlay: rgba(255,255,255,0.03);   /* near-invisible hover scrim */
 }
 
 html, body {
@@ -34,7 +37,7 @@ body {
 
 /* Sidebar */
 .sidebar {
-  background: #101116;
+  background: var(--shell-bg-sidebar);
   border-right: 1px solid var(--border);
   padding: var(--sp-6) 0;
   display: flex;
@@ -56,7 +59,7 @@ body {
 
 .sidebar-section-h {
   padding: var(--sp-4) var(--sp-6) var(--sp-2);
-  font-size: 9px; text-transform: uppercase; letter-spacing: 0.1em;
+  font-size: var(--shell-label-size); text-transform: uppercase; letter-spacing: 0.1em;
   color: var(--ink-3);
 }
 .sidebar-link {
@@ -67,11 +70,11 @@ body {
   text-decoration: none;
   font-size: var(--text-base);
 }
-.sidebar-link:hover { background: rgba(255,255,255,0.03); }
+.sidebar-link:hover { background: var(--shell-hover-overlay); }
 .sidebar-link.active {
   background: var(--accent-soft);
   color: var(--ink);
-  /* inset shadow on left, NOT a left ribbon — distinct per spec §3.7 / §3.11 */
+  /* inset shadow on left edge, not a left ribbon */
   box-shadow: inset 2px 0 0 var(--accent);
 }
 .sidebar-link .ic { width: 14px; height: 14px; opacity: 0.65; }
