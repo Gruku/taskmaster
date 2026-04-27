@@ -27,17 +27,34 @@ export function runsFromAutoState(autoState, backlog) {
   };
 }
 
-export function renderAutoModeStrip({ autoState, backlog, onViewAll, now = Date.now() }) {
+export function renderAutoModeStrip({ autoState, backlog, onViewAll }) {
   const wrap = document.createElement('div');
   wrap.className = 'kanban-strip';
   wrap.dataset.cmp = 'auto-mode-strip';
-  paintStrip(wrap, { autoState, backlog, onViewAll, now });
+
+  // Cache deps on the element so the per-second tick can use them.
+  wrap._deps = { autoState, backlog, onViewAll };
+  paintStrip(wrap, { ...wrap._deps, now: Date.now() });
+
+  // 1-Hz tick to keep the elapsed counters smooth.
+  const tick = setInterval(() => {
+    paintStrip(wrap, { ...wrap._deps, now: Date.now() });
+  }, 1000);
+  wrap._tick = tick;
   return wrap;
 }
 
-export function updateAutoModeStrip(el, { autoState, backlog, onViewAll, now = Date.now() }) {
+export function updateAutoModeStrip(el, { autoState, backlog, onViewAll }) {
   if (!el) return;
-  paintStrip(el, { autoState, backlog, onViewAll, now });
+  el._deps = { autoState, backlog, onViewAll };
+  paintStrip(el, { ...el._deps, now: Date.now() });
+}
+
+export function destroyAutoModeStrip(el) {
+  if (el && el._tick) {
+    clearInterval(el._tick);
+    el._tick = null;
+  }
 }
 
 function paintStrip(el, { autoState, backlog, onViewAll, now }) {
