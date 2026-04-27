@@ -36,10 +36,6 @@ export async function mount(root, { store, prefs }) {
     collapsed: new Set((store.getPrefs() && store.getPrefs().kanban && store.getPrefs().kanban.collapsed_columns) || []),
   };
 
-  const topbarH1 = document.querySelector('#page-title');
-  const prevTopbarDisplay = topbarH1 ? topbarH1.style.display : '';
-  if (topbarH1) topbarH1.style.display = 'none';
-
   // Layout
   const page = document.createElement('div');
   page.className = 'kanban-page';
@@ -52,17 +48,13 @@ export async function mount(root, { store, prefs }) {
   });
   page.appendChild(strip);
 
-  // 2) Page header
-  const head = document.createElement('div');
-  head.className = 'kanban-head';
-
-  const title = document.createElement('span');
-  title.className = 'title';
-  title.textContent = 'Kanban';
-  head.appendChild(title);
+  // 2) Page header — inject into topbar-actions slot
+  const head = document.getElementById('topbar-actions');
+  const prevHeadHTML = head ? head.innerHTML : '';
+  if (head) head.replaceChildren();
 
   const subcount = document.createElement('span');
-  subcount.className = 'subcount';
+  subcount.className = 'kanban-head-subcount';
   subcount.textContent = '… tasks';
   head.appendChild(subcount);
 
@@ -160,7 +152,6 @@ export async function mount(root, { store, prefs }) {
   right.appendChild(addBtn);
 
   head.appendChild(right);
-  page.appendChild(head);
 
   // 3) Phase stepper container (rendered in paint())
   const stepperHost = document.createElement('div');
@@ -313,11 +304,11 @@ export async function mount(root, { store, prefs }) {
 
   // Cleanup
   return () => {
-    if (topbarH1) topbarH1.style.display = prevTopbarDisplay;
     if (searchTimer) clearTimeout(searchTimer);
     unsubBacklog();
     unsubAuto();
     destroyAutoModeStrip(strip);
+    if (head) head.replaceChildren();
   };
 }
 
