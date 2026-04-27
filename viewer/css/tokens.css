@@ -3,23 +3,25 @@
    No new global tokens are added in screen-specific CSS files. */
 :root {
   /* Surfaces (dark theme — only theme implemented at this stage) */
-  --bg-canvas:        #14151a;
+  --bg-canvas:        #181a20;
   --bg-shell:         #0f1014;
   --bg-panel:         #17181d;
-  --bg-card:          #1f2025;
-  --bg-board-col:     #0f131c;
+  --bg-card:          #26262b;
+  --bg-card-hover:    #2c2e34;
+  --bg-board-col:     #1e2028;
   --bg-deep:          #0a0c11;          /* console / input recess */
   --bg-issue:         #181a20;          /* slightly cooler than bg-card, per spec §3.14 */
 
   /* Borders */
-  --border:           #2c2d33;
+  --border:           rgba(230,230,233,0.07);
   --border-soft:      rgba(255,255,255,0.05);
   --border-strong:    #3a3b42;
 
   /* Ink */
   --ink:              #e6e7eb;
-  --ink-2:            #bfc4cc;
+  --ink-2:            #a8a8ae;
   --ink-3:            #7c8290;
+  --ink-4:            #4d4d54;
   --ink-on-accent:    #0a1628;
 
   /* Accents */
