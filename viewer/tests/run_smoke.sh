@@ -8,7 +8,7 @@ python -c "
 from backlog_server import _make_server
 s, p = _make_server(host='127.0.0.1', port=$PORT)
 import threading
-threading.Thread(target=s.serve_forever, daemon=False).start()
+threading.Thread(target=s.serve_forever, daemon=True).start()
 " &
 SERVER_PID=$!
 

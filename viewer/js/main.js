@@ -45,10 +45,19 @@ function deepMerge(base, patch) {
 
 async function boot() {
   // Initial fetches in parallel
-  const [identity, prefsData] = await Promise.all([
-    api.identity().catch(e => { console.error('identity fetch failed', e); return null; }),
-    api.prefs().catch(e => { console.error('prefs fetch failed', e); return null; }),
-  ]);
+  let identity, prefsData;
+  try {
+    [identity, prefsData] = await Promise.all([
+      api.identity().catch(e => { console.error('identity fetch failed', e); return null; }),
+      api.prefs().catch(e => { console.error('prefs fetch failed', e); return null; }),
+    ]);
+  } catch (e) {
+    // Render boot error into the sidebar placeholder so the page isn't silently blank.
+    const sidebarEl = document.getElementById('sidebar');
+    if (sidebarEl) sidebarEl.innerHTML = `<div style="padding:16px;color:#d66b5f;font-size:11px">Boot failed: ${e.message}</div>`;
+    console.error('boot failed', e);
+    return;
+  }
   store.setIdentity(identity);
   store.setPrefs(prefsData);
 
@@ -67,28 +76,56 @@ async function boot() {
 }
 
 async function pollBacklogForever() {
+  let consecutiveFailures = 0;
+  const MAX_BACKOFF_MS = 60_000;
+
   while (true) {
+    // Pause polling when the tab is hidden; resume on visibility.
+    if (document.visibilityState === 'hidden') {
+      await new Promise(resolve => {
+        document.addEventListener('visibilitychange', function onVisible() {
+          if (document.visibilityState === 'visible') {
+            document.removeEventListener('visibilitychange', onVisible);
+            resolve();
+          }
+        });
+      });
+    }
+
     try {
       const yaml = await api.backlogYaml();
       // Server already returns YAML text; parse client-side via a worker-free approach.
       // Use jsyaml from CDN (matches existing viewer).
-      if (!window.jsyaml) await loadJsYaml();
+      await loadJsYaml();
       store.setBacklog(window.jsyaml.load(yaml));
+      consecutiveFailures = 0;
     } catch (e) {
+      consecutiveFailures++;
       console.error('backlog poll failed', e);
     }
-    await sleep(BACKLOG_POLL_MS);
+
+    // Exponential backoff on consecutive failures, capped at MAX_BACKOFF_MS.
+    const delay = consecutiveFailures > 0
+      ? Math.min(BACKLOG_POLL_MS * 2 ** (consecutiveFailures - 1), MAX_BACKOFF_MS)
+      : BACKLOG_POLL_MS;
+    await sleep(delay);
   }
 }
 
+// Deduplicated jsyaml loader — concurrent callers share the same promise.
+let _jsYamlPromise = null;
 function loadJsYaml() {
-  return new Promise((resolve, reject) => {
-    const s = document.createElement('script');
-    s.src = 'https://cdn.jsdelivr.net/npm/js-yaml@4/dist/js-yaml.min.js';
-    s.onload = resolve;
-    s.onerror = reject;
-    document.head.appendChild(s);
-  });
+  if (window.jsyaml) return Promise.resolve();
+  if (!_jsYamlPromise) {
+    _jsYamlPromise = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/js-yaml@4/dist/js-yaml.min.js';
+      s.onload = resolve;
+      s.onerror = (e) => { _jsYamlPromise = null; reject(e); };
+      document.head.appendChild(s);
+    });
+  }
+  return _jsYamlPromise;
 }
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));

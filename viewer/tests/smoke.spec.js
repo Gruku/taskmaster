@@ -12,13 +12,16 @@ const ROUTES = [
   { hash: '#/task/T-148',         title: 'Task Detail',         sidebarKey: null },
 ];
 
+// Number of sidebar links is derived from ROUTES so the magic number stays in sync.
+const SIDEBAR_LINK_COUNT = ROUTES.filter(r => r.sidebarKey).length;
+
 test.describe('Viewer v3 smoke', () => {
   test('boots and renders sidebar', async ({ page }) => {
     const errors = [];
     page.on('pageerror', e => errors.push(String(e)));
 
     await page.goto('/v3');
-    await expect(page.locator('#sidebar .sidebar-link')).toHaveCount(7);
+    await expect(page.locator('#sidebar .sidebar-link')).toHaveCount(SIDEBAR_LINK_COUNT);
     await expect(page.locator('#page-title')).not.toHaveText('Loading…');
     expect(errors).toEqual([]);
   });
@@ -44,28 +47,28 @@ test.describe('Viewer v3 smoke', () => {
     await page.evaluate(() => location.hash = '#/garbage');
     await expect(page.locator('#page-title')).toHaveText('Dashboard');
   });
-});
 
-test('prefs persist via the API and are reflected in store', async ({ page }) => {
-  await page.goto('/v3');
+  test('prefs persist via the API and are reflected in store', async ({ page }) => {
+    await page.goto('/v3');
 
-  // Mutate via the same path screens will use.
-  await page.evaluate(async () => {
-    const resp = await fetch('/api/viewer/prefs', {
-      method: 'PUT',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ theme: 'light', kanban: { filters: { search: 'auth' } } }),
+    // Mutate via the same path screens will use.
+    await page.evaluate(async () => {
+      const resp = await fetch('/api/viewer/prefs', {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ theme: 'light', kanban: { filters: { search: 'auth' } } }),
+      });
+      if (!resp.ok) throw new Error('PUT failed');
     });
-    if (!resp.ok) throw new Error('PUT failed');
-  });
 
-  // Reload, then read prefs from /api/viewer/prefs.
-  await page.reload();
-  const prefs = await page.evaluate(async () => {
-    const resp = await fetch('/api/viewer/prefs');
-    return resp.json();
-  });
+    // Reload, then read prefs from /api/viewer/prefs.
+    await page.reload();
+    const prefs = await page.evaluate(async () => {
+      const resp = await fetch('/api/viewer/prefs');
+      return resp.json();
+    });
 
-  expect(prefs.theme).toBe('light');
-  expect(prefs.kanban.filters.search).toBe('auth');
+    expect(prefs.theme).toBe('light');
+    expect(prefs.kanban.filters.search).toBe('auth');
+  });
 });

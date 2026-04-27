@@ -54,25 +54,39 @@ export function mountSidebar(el, { store }) {
   footer.innerHTML = `<span class="pulse"></span><span>idle</span>`;
   el.appendChild(footer);
 
-  // Active sync
-  document.addEventListener('route:changed', (e) => {
+  // Active sync + aria-current
+  const onRouteChanged = (e) => {
     const key = e.detail.sidebarKey;
     el.querySelectorAll('.sidebar-link').forEach(a => {
-      a.classList.toggle('active', a.dataset.key === key);
+      const isActive = a.dataset.key === key;
+      a.classList.toggle('active', isActive);
+      if (isActive) {
+        a.setAttribute('aria-current', 'page');
+      } else {
+        a.removeAttribute('aria-current');
+      }
     });
-  });
+  };
+  document.addEventListener('route:changed', onRouteChanged);
 
   // Identity → version
-  store.subscribe('identity', (id) => {
+  const unsubIdentity = store.subscribe('identity', (id) => {
     if (id?.version) el.querySelector('#sidebar-version').textContent = 'v' + id.version;
   });
 
   // Auto-mode live state → footer pulse + sidebar live-dot on auto_mode link
-  store.subscribe('autoState', (auto) => {
+  const unsubAutoState = store.subscribe('autoState', (auto) => {
     const running = !!(auto && auto.mode);
     footer.classList.toggle('auto-running', running);
     footer.querySelector('span:last-child').textContent = running ? 'auto-mode active' : 'idle';
     const link = el.querySelector('.sidebar-link[data-key="auto_mode"]');
     if (link) link.classList.toggle('live', running);
   });
+
+  // Return teardown function that removes all listeners and subscriptions.
+  return () => {
+    document.removeEventListener('route:changed', onRouteChanged);
+    if (typeof unsubIdentity === 'function') unsubIdentity();
+    if (typeof unsubAutoState === 'function') unsubAutoState();
+  };
 }
