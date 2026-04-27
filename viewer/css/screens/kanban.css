@@ -352,3 +352,45 @@
 .kanban-pri-tog.high.on     { background: rgba(214,164,95,0.22); border-color: var(--amber); color: var(--amber); }
 .kanban-pri-tog.medium.on   { background: rgba(74,158,255,0.18); border-color: var(--accent);color: var(--accent); }
 .kanban-pri-tog.low.on      { background: rgba(127,179,240,0.12); border-color: var(--accent-2); color: var(--accent-2); }
+
+/* ─────────── PHASE STEPPER ─────────── */
+.kanban-phase-stepper {
+  display: flex; align-items: stretch; gap: 0;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 4px;
+}
+.kanban-phase-step {
+  appearance: none; background: transparent; color: inherit; text-align: left;
+  flex: 1; min-width: 0;
+  padding: 8px var(--sp-5) 9px;
+  cursor: pointer;
+  border: 0;
+  border-radius: var(--r-md);
+  position: relative;
+  display: flex; flex-direction: column; gap: 5px;
+  transition: background var(--t-fast) var(--ease);
+  font-family: var(--font-sans);
+}
+.kanban-phase-step:hover  { background: rgba(255,255,255,0.02); }
+.kanban-phase-step.active { background: rgba(74,158,255,0.08); }
+.kanban-phase-step.all-step,
+.kanban-phase-step.orphans-step,
+.kanban-phase-step.history-toggle { flex: 0 0 auto; min-width: 60px; }
+.kanban-phase-step + .kanban-phase-step::before {
+  content: ''; position: absolute; left: -1px; top: 14px; bottom: 14px; width: 1px;
+  background: var(--border-soft);
+}
+.kanban-phase-step .ph-head { display: flex; align-items: baseline; gap: var(--sp-2); }
+.kanban-phase-step .ph-name { font-size: var(--text-base); font-weight: 500; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kanban-phase-step.done   .ph-name { color: var(--ink-2); }
+.kanban-phase-step.future .ph-name { color: var(--ink-3); }
+.kanban-phase-step .ph-stat { font-size: 9px; color: var(--ink-3); margin-left: auto; font-variant-numeric: tabular-nums; }
+.kanban-phase-step .ph-bar  { height: 3px; background: #262932; border-radius: 2px; overflow: hidden; }
+.kanban-phase-step .ph-bar > i { display: block; height: 100%; }
+.kanban-phase-step.done   .ph-bar > i { background: var(--green); width: 100%; }
+.kanban-phase-step.active .ph-bar > i { background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+.kanban-phase-step.future .ph-bar > i { background: var(--border); width: 0%; }
+.kanban-phase-step .check { color: var(--green); font-size: 10px; }
+.kanban-phase-step .dot   { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: pulse 1.6s ease-in-out infinite; }
