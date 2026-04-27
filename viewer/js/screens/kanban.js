@@ -36,6 +36,10 @@ export async function mount(root, { store, prefs }) {
     collapsed: new Set((store.getPrefs() && store.getPrefs().kanban && store.getPrefs().kanban.collapsed_columns) || []),
   };
 
+  const topbarH1 = document.querySelector('#page-title');
+  const prevTopbarDisplay = topbarH1 ? topbarH1.style.display : '';
+  if (topbarH1) topbarH1.style.display = 'none';
+
   // Layout
   const page = document.createElement('div');
   page.className = 'kanban-page';
@@ -51,6 +55,11 @@ export async function mount(root, { store, prefs }) {
   // 2) Page header
   const head = document.createElement('div');
   head.className = 'kanban-head';
+
+  const title = document.createElement('span');
+  title.className = 'title';
+  title.textContent = 'Kanban';
+  head.appendChild(title);
 
   const subcount = document.createElement('span');
   subcount.className = 'subcount';
@@ -301,6 +310,7 @@ export async function mount(root, { store, prefs }) {
 
   // Cleanup
   return () => {
+    if (topbarH1) topbarH1.style.display = prevTopbarDisplay;
     if (searchTimer) clearTimeout(searchTimer);
     unsubBacklog();
     unsubAuto();
