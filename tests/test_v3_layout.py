@@ -1296,3 +1296,37 @@ def test_viewer_prefs_unknown_keys_preserved_on_save(tmp_path, monkeypatch):
     save_viewer_prefs(prefs)
     saved = json.loads((tmp_path / ".taskmaster" / "viewer.json").read_text())
     assert saved["future_field"] == "preserve_me"
+
+
+def test_viewer_prefs_set_merges_patch(tmp_path, monkeypatch):
+    """viewer_prefs_set accepts a partial patch; unspecified keys retain prior values."""
+    import json
+    import sys
+    from unittest.mock import MagicMock
+    from taskmaster_v3 import save_viewer_prefs, load_viewer_prefs, VIEWER_PREFS_DEFAULTS
+    from copy import deepcopy
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".taskmaster").mkdir()
+    save_viewer_prefs(deepcopy(VIEWER_PREFS_DEFAULTS))
+
+    # backlog_server imports fastmcp which has a known mcp version mismatch in this
+    # environment (Icon not exported). Mock fastmcp with a passthrough decorator so the
+    # actual tool functions remain callable after the module loads.
+    if "backlog_server" not in sys.modules:
+        def _passthrough_tool():
+            def decorator(fn):
+                return fn
+            return decorator
+        fake_fastmcp = MagicMock()
+        fake_fastmcp.FastMCP.return_value.tool = _passthrough_tool
+        monkeypatch.setitem(sys.modules, "fastmcp", fake_fastmcp)
+    from backlog_server import viewer_prefs_set  # type: ignore
+
+    msg = viewer_prefs_set('{"theme": "light", "kanban": {"filters": {"search": "auth"}}}')
+    assert "ok" in msg.lower()
+
+    prefs = load_viewer_prefs()
+    assert prefs["theme"] == "light"
+    assert prefs["kanban"]["filters"]["search"] == "auth"
+    # unspecified key retains default
+    assert prefs["card_density"] == "full"

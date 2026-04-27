@@ -97,6 +97,8 @@ from taskmaster_v3 import (
     advance_stage as _advance_stage,
     complete_current_task as _complete_current_task,
     auto_run_summary as _auto_run_summary,
+    load_viewer_prefs,
+    save_viewer_prefs,
 )
 
 
@@ -1661,6 +1663,42 @@ def backlog_issue_resync() -> str:
     _save(data)
     n = len(data.get("issues") or [])
     return f"Issue index resynced — {n} entries."
+
+
+@mcp.tool()
+def viewer_prefs_get() -> str:
+    """Return current viewer prefs as JSON."""
+    import json
+    prefs = load_viewer_prefs()
+    return json.dumps(prefs, indent=2)
+
+
+@mcp.tool()
+def viewer_prefs_set(patch_json: str) -> str:
+    """Deep-merge a JSON patch into the persisted viewer prefs.
+    Patch is a JSON object; only the keys present are updated.
+    """
+    import json
+    from copy import deepcopy
+    try:
+        patch = json.loads(patch_json)
+    except Exception as e:
+        return f"error: invalid JSON ({e})"
+    if not isinstance(patch, dict):
+        return "error: patch must be a JSON object"
+
+    def _deep_merge(base, patch):
+        for k, v in patch.items():
+            if isinstance(v, dict) and isinstance(base.get(k), dict):
+                _deep_merge(base[k], v)
+            else:
+                base[k] = deepcopy(v)
+        return base
+
+    prefs = load_viewer_prefs()
+    _deep_merge(prefs, patch)
+    save_viewer_prefs(prefs)
+    return "ok"
 
 
 @mcp.tool()
