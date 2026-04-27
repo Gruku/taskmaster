@@ -1237,3 +1237,26 @@ class TestV3EndToEndRoundtrip:
             v3.save_v3(bp, loaded)
         final = v3.load_v3(bp)
         assert final["epics"][0]["tasks"][0]["description"] == "iteration 4"
+
+
+def test_viewer_prefs_defaults_have_all_expected_keys():
+    from taskmaster_v3 import VIEWER_PREFS_DEFAULTS
+    expected_top_keys = {
+        "schema_version",
+        "theme",
+        "card_density",
+        "zoom",
+        "screens",
+        "dashboard",
+        "kanban",
+        "lessons",
+        "issues",
+    }
+    assert set(VIEWER_PREFS_DEFAULTS.keys()) == expected_top_keys
+    assert VIEWER_PREFS_DEFAULTS["schema_version"] == 1
+    assert VIEWER_PREFS_DEFAULTS["theme"] == "dark"
+    assert VIEWER_PREFS_DEFAULTS["card_density"] == "full"
+    assert VIEWER_PREFS_DEFAULTS["zoom"] == 1.5
+    # screens.<name>.view holds A/B toggle per screen
+    assert "task_detail" in VIEWER_PREFS_DEFAULTS["screens"]
+    assert VIEWER_PREFS_DEFAULTS["screens"]["task_detail"]["view"] == "A"

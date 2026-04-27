@@ -1050,6 +1050,56 @@ AUTO_TASK_STATUSES = ("done", "failed", "blocked")
 AUTO_FAIL_REASONS = ("tests-failed", "spec-rejected", "blocked", "crashed", "user-aborted")
 AUTO_MODELS = ("sonnet", "opus")
 
+# ---- ViewerPrefs ---------------------------------------------------------
+
+VIEWER_PREFS_SCHEMA_VERSION = 1
+
+VIEWER_PREFS_DEFAULTS = {
+    "schema_version": VIEWER_PREFS_SCHEMA_VERSION,
+    "theme": "dark",          # dark | light
+    "card_density": "full",   # full | minimal
+    "zoom": 1.5,              # baked-in 150% per spec §3.4
+    "screens": {
+        # Per-screen view toggles (Variant A / B). Default A everywhere except dashboard which has no B.
+        "task_detail": {"view": "A"},
+        "kanban":      {"view": "A"},
+        "sessions":    {"view": "A"},   # diary | lanes | by_task; "A" maps to diary
+        "lessons":     {"view": "A"},   # shelves | flat | by_anchor
+        "issues":      {"view": "A"},   # hybrid | kanban | list
+        "auto_mode":   {"view": "A"},   # spine | log
+    },
+    "dashboard": {
+        # Widget catalog. Each entry: {id, type, size: small|medium|wide, rail: left|right|bottom, index: int}
+        "layout": [],
+    },
+    "kanban": {
+        "filters": {           # last applied; restored on viewer open
+            "priorities": [],
+            "epics": [],
+            "phase": None,
+            "group_by": "status",
+            "sort": {"by": "priority", "dir": "desc"},
+            "search": "",
+        },
+    },
+    "lessons": {
+        "thresholds": {
+            "core_count": 7,
+            "core_window_days": 60,
+            "core_recency_days": 14,
+            "retired_after_days": 30,
+        },
+    },
+    "issues": {
+        "aging": {             # base period in days, severity-tiered
+            "Critical": 14,
+            "High": 30,
+            "Medium": 60,
+            "Low": 120,
+        },
+    },
+}
+
 
 def auto_state_path(backlog_path: Path) -> Path:
     """Path to the auto-mode cursor file (gitignored)."""
