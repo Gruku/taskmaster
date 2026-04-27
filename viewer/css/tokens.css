@@ -52,40 +52,40 @@
   --font-mono:        'JetBrains Mono', ui-monospace, Menlo, monospace;
   --font-serif:       'Source Serif Pro', Georgia, serif;
 
-  --text-xs:          10px;
-  --text-sm:          11px;
-  --text-base:        12px;
-  --text-md:          13px;
-  --text-lg:          14px;
-  --text-xl:          16px;
-  --text-2xl:         20px;
-  --text-3xl:         22px;
+  --text-xs:          15px;
+  --text-sm:          17px;
+  --text-base:        18px;
+  --text-md:          20px;
+  --text-lg:          21px;
+  --text-xl:          24px;
+  --text-2xl:         30px;
+  --text-3xl:         33px;
 
   /* Spacing */
-  --sp-1:             4px;
-  --sp-2:             6px;
-  --sp-3:             8px;
-  --sp-4:             10px;
-  --sp-5:             12px;
-  --sp-6:             14px;
-  --sp-7:             16px;
-  --sp-8:             18px;
-  --sp-9:             22px;
-  --sp-10:            24px;
-  --sp-12:            32px;
-  --sp-13:            40px;
+  --sp-1:             6px;
+  --sp-2:             9px;
+  --sp-3:             12px;
+  --sp-4:             15px;
+  --sp-5:             18px;
+  --sp-6:             21px;
+  --sp-7:             24px;
+  --sp-8:             27px;
+  --sp-9:             33px;
+  --sp-10:            36px;
+  --sp-12:            48px;
+  --sp-13:            60px;
 
   /* Radius */
-  --r-sm:             4px;
-  --r-md:             6px;
-  --r-lg:             8px;
-  --r-xl:             10px;
-  --r-2xl:            12px;
+  --r-sm:             6px;
+  --r-md:             9px;
+  --r-lg:             12px;
+  --r-xl:             15px;
+  --r-2xl:            18px;
 
   /* Shadows + recess (graph frame language, Task Detail B / Auto Mode B) */
-  --shadow-card:      0 1px 0 rgba(255,255,255,0.02) inset, 0 4px 12px rgba(0,0,0,0.18);
-  --shadow-lifted:    0 4px 14px rgba(0,0,0,0.4);
-  --recess-inset:     inset 0 0 36px rgba(0,0,0,0.4);
+  --shadow-card:      0 2px 0 rgba(255,255,255,0.02) inset, 0 6px 18px rgba(0,0,0,0.18);
+  --shadow-lifted:    0 6px 21px rgba(0,0,0,0.4);
+  --recess-inset:     inset 0 0 54px rgba(0,0,0,0.4);
   --recess-bg:        radial-gradient(ellipse at 50% 50%, #181a22 0%, #0d0e13 100%);
 
   /* Motion */
@@ -95,6 +95,6 @@
   --ease:             cubic-bezier(0.3, 0.7, 0.4, 1);
 
   /* Layout */
-  --sidebar-w:        200px;
-  --rail-w:           480px;            /* right-rail detail surface */
+  --sidebar-w:        300px;
+  --rail-w:           720px;            /* right-rail detail surface */
 }
