@@ -69,3 +69,35 @@ def test_load_auto_state_returns_none_on_corrupt_json(tmp_path, monkeypatch):
     (auto_dir / "state.json").write_text("{ this is not json")
     from backlog_server import _load_auto_state
     assert _load_auto_state() is None
+
+
+def test_get_auto_state_returns_null_body_when_file_missing(running_server):
+    base, _ = running_server
+    resp = urllib.request.urlopen(f"{base}/api/auto/state")
+    assert resp.status == 200
+    assert resp.headers.get("Content-Type", "").startswith("application/json")
+    assert resp.headers.get("Access-Control-Allow-Origin") == "*"
+    body = json.loads(resp.read())
+    assert body == {"state": None}
+
+
+def test_get_auto_state_returns_state_object(running_server, tmp_path):
+    base, _ = running_server
+    auto_dir = tmp_path / ".taskmaster" / "auto"
+    auto_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "mode": "running",
+        "target": "v3-009",
+        "started_at": "2026-04-26T10:00:00Z",
+        "cursor": {"task_id": "v3-009", "stage": "IMPLEMENT", "model": "sonnet"},
+        "completed": ["v3-008"],
+        "pending": ["v3-011"],
+        "failed": [],
+        "models": {"sonnet": 1},
+        "config": {},
+    }
+    (auto_dir / "state.json").write_text(json.dumps(payload))
+    resp = urllib.request.urlopen(f"{base}/api/auto/state")
+    body = json.loads(resp.read())
+    assert body["state"]["mode"] == "running"
+    assert body["state"]["cursor"]["stage"] == "IMPLEMENT"

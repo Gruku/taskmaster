@@ -3920,6 +3920,9 @@ class ViewerHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        elif clean_path == "/api/auto/state":
+            self._send_json(200, {"state": _load_auto_state()})
+            return
         elif clean_path == "/api/viewer/prefs":
             self._send_json(200, load_viewer_prefs())
             return
