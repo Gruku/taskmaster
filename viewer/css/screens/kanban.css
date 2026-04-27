@@ -431,3 +431,19 @@
   background: rgba(74,158,255,0.15); color: var(--accent);
   padding: 1px 6px; border-radius: 8px; font-size: 10px; font-family: var(--font-mono);
 }
+
+/* ─────────── GROUP / SORT DROPDOWNS ─────────── */
+.kanban-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background: var(--bg-card) url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' stroke='%23bfc4cc' stroke-width='1.2' fill='none' stroke-linecap='round'/></svg>") no-repeat right 8px center;
+  border: 1px solid var(--border); color: var(--ink-2);
+  font-size: var(--text-sm);
+  font-family: var(--font-sans);
+  padding: 4px 22px 4px var(--sp-3);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  outline: none;
+}
+.kanban-select:hover { color: var(--ink); border-color: var(--border-strong); }
+.kanban-select:focus { border-color: var(--accent); }
