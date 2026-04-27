@@ -1243,6 +1243,7 @@ def test_viewer_prefs_defaults_have_all_expected_keys():
     from taskmaster_v3 import VIEWER_PREFS_DEFAULTS
     expected_top_keys = {
         "schema_version",
+        "use_v3",
         "theme",
         "card_density",
         "zoom",

@@ -115,3 +115,30 @@ def test_static_v3_path_traversal_url_encoded_blocked(running_server):
     with pytest.raises(urllib.error.HTTPError) as exc:
         urllib.request.urlopen(f"{base}/static/v3/%2e%2e/%2e%2e/etc/passwd")
     assert exc.value.code == 400
+
+
+def test_root_serves_v3_when_use_v3_flag_set(running_server, tmp_path):
+    base, _ = running_server
+    # Flip the prefs flag
+    body = json.dumps({"use_v3": True}).encode()
+    req = urllib.request.Request(f"{base}/api/viewer/prefs", data=body, method="PUT",
+                                 headers={"Content-Type": "application/json"})
+    urllib.request.urlopen(req)
+
+    resp = urllib.request.urlopen(f"{base}/")
+    assert resp.status == 200
+    body = resp.read().decode()
+    # When use_v3 is True, root serves the new shell, not the legacy file
+    assert "<title>Taskmaster</title>" in body
+    assert 'src="/static/v3/js/main.js"' in body or 'main.js' in body
+
+
+def test_root_serves_legacy_by_default(running_server):
+    base, _ = running_server
+    resp = urllib.request.urlopen(f"{base}/")
+    body = resp.read().decode()
+    # The legacy viewer; whatever is in backlog-viewer.html (we just check it's NOT the v3 shell).
+    # If the legacy file isn't present in the test fixture, this test should xfail rather than fail.
+    # Heuristic: legacy file is much larger and includes 'jsyaml' inline.
+    # If legacy isn't shipped to test fixture, accept either; but assert v3 marker is absent.
+    assert 'src="/static/v3/js/main.js"' not in body

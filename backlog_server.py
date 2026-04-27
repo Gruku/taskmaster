@@ -3843,6 +3843,13 @@ class ViewerHandler(BaseHTTPRequestHandler):
         clean_path = unquote(parsed.path)
 
         if clean_path in ("/", "/index.html"):
+            try:
+                prefs = load_viewer_prefs()
+                if prefs.get("use_v3"):
+                    self.path = "/v3"
+                    return self.do_GET()
+            except Exception:
+                pass
             self._serve_file(VIEWER_PATH, "text/html")
         elif clean_path in ("/v3", "/v3/", "/v3/index.html"):
             viewer_root = Path(__file__).parent / "viewer"
