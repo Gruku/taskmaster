@@ -28,33 +28,29 @@
 .kanban-search input::placeholder { color: var(--ink-3); }
 .kanban-search .icon { color: var(--ink-3); }
 
-/* ─────────── KANBAN FILTER BAR (phase + epic, unified) ─────────── */
+/* ─────────── KANBAN FILTER BAR (phases stacked over epics) ─────────── */
 .kanban-filterbar {
   display: flex;
-  align-items: stretch;
+  flex-direction: column;
   gap: var(--sp-3);
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
-  padding: 6px;
-  flex-wrap: wrap;
+  padding: var(--sp-3);
   min-width: 0;
 }
-.kanban-filterbar-section {
+.kanban-filterbar-row {
   display: flex;
   align-items: center;
   min-width: 0;
+  width: 100%;
 }
-.kanban-filterbar-section.phase { flex: 2 1 0; }
-.kanban-filterbar-section.epic  { flex: 3 1 0; }
-.kanban-filterbar-divider {
-  width: 1px;
-  background: var(--border);
-  margin: 6px 0;
-  flex: 0 0 auto;
+.kanban-filterbar-row.phase + .kanban-filterbar-row.epic {
+  border-top: 1px solid var(--border);
+  padding-top: var(--sp-3);
 }
 /* When the phase stepper / epic chips render INSIDE the filter bar,
-   strip their own panel chrome — the filter-bar surface owns it now. */
+   strip their own panel chrome — the filter-bar surface owns it. */
 .kanban-filterbar .kanban-phase-stepper {
   background: transparent;
   border: 0;
