@@ -3,9 +3,8 @@
    Per spec §3.7 (Variant E): NO edge stripes, NO body wash. Color goes on chip + ID only. */
 
 :root {
-  --kanban-board-bg-grad: radial-gradient(120% 100% at 0% 0%, rgba(74,158,255,0.05), transparent 60%),
-                          linear-gradient(180deg, #1a1f29 0%, #161a22 100%);
-  --kanban-board-border:  #2e3a4d;
+  --kanban-board-bg:      #101113;
+  --kanban-board-border:  var(--border);
   --card-bg-auto-grad:    linear-gradient(180deg, rgba(74,158,255,0.03), transparent 40%);
   --card-recent-glow:     0 0 0 1px rgba(127,179,240,0.4), 0 0 27px rgba(74,158,255,0.12);
 }
@@ -451,14 +450,15 @@
 /* ─────────── BOARD SURFACE + COLUMNS ─────────── */
 .kanban-board {
   position: relative;
-  background: var(--kanban-board-bg-grad);
+  background: var(--kanban-board-bg);
   border: 1px solid var(--kanban-board-border);
   border-radius: var(--r-lg);
   padding: var(--sp-4) var(--sp-5) var(--sp-5);
-  box-shadow: 0 0 0 1px rgba(74,158,255,0.04) inset, 0 12px 45px rgba(0,0,0,0.4);
   flex: 1 1 auto;
   min-height: 0;
   overflow-x: auto;
+  display: flex;
+  flex-direction: column;
 }
 .kanban-board-grid {
   position: relative;
@@ -466,11 +466,12 @@
   flex-direction: row;
   gap: var(--sp-3);
   align-items: stretch;
+  flex: 1 1 auto;
   min-height: 0;
 }
 .kanban-col {
   background: var(--bg-board-col);
-  border: 1px solid rgba(74,158,255,0.06);
+  border: 1px solid var(--border);
   border-radius: var(--r-md);
   padding: var(--sp-3);
   flex: 1 1 0;
