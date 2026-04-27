@@ -1050,7 +1050,7 @@ AUTO_TASK_STATUSES = ("done", "failed", "blocked")
 AUTO_FAIL_REASONS = ("tests-failed", "spec-rejected", "blocked", "crashed", "user-aborted")
 AUTO_MODELS = ("sonnet", "opus")
 
-# ---- ViewerPrefs ---------------------------------------------------------
+# ── ViewerPrefs ────────────────────────────────────────────────
 
 VIEWER_PREFS_SCHEMA_VERSION = 1
 
