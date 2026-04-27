@@ -2,9 +2,9 @@
 
 :root {
   /* Shell-specific vars (behavioural + shell-scoped design values; not in tokens.css) */
-  --shell-zoom:         1.5;                       /* spec §3.4 — 150% baked in */
+  /* spec §3.4 — 1.5x baked into source CSS values, not via CSS zoom */
   --shell-bg-sidebar:   #101116;                   /* sidebar surface, darker than --bg-shell */
-  --shell-label-size:   9px;                       /* section header caps, sub-text-xs */
+  --shell-label-size:   14px;                      /* section header caps, sub-text-xs */
   --shell-hover-overlay: rgba(255,255,255,0.03);   /* near-invisible hover scrim */
 }
 
@@ -17,10 +17,6 @@ html, body {
   color: var(--ink);
   font-size: var(--text-base);
   line-height: 1.5;
-}
-
-body {
-  zoom: var(--shell-zoom);
 }
 
 .mono { font-family: var(--font-mono); }
@@ -51,7 +47,7 @@ body {
   border-bottom: 1px solid var(--border-soft);
 }
 .sidebar-logo .mark {
-  width: 18px; height: 18px; border-radius: var(--r-sm);
+  width: 27px; height: 27px; border-radius: var(--r-sm);
   background: linear-gradient(135deg, var(--accent), var(--accent-2));
 }
 .sidebar-logo .name { font-weight: 600; font-size: var(--text-md); }
@@ -75,9 +71,9 @@ body {
   background: var(--accent-soft);
   color: var(--ink);
   /* inset shadow on left edge, not a left ribbon */
-  box-shadow: inset 2px 0 0 var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
 }
-.sidebar-link .ic { width: 14px; height: 14px; opacity: 0.65; }
+.sidebar-link .ic { width: 21px; height: 21px; opacity: 0.65; }
 .sidebar-link .badge {
   margin-left: auto;
   font-size: var(--text-xs);
@@ -87,7 +83,7 @@ body {
 .sidebar-link.live .badge::before {
   content: '●';
   color: var(--accent);
-  margin-right: 4px;
+  margin-right: 6px;
   animation: pulse 1.4s ease-in-out infinite;
 }
 
@@ -100,7 +96,7 @@ body {
   display: flex; align-items: center; gap: var(--sp-2);
 }
 .sidebar-footer .pulse {
-  width: 6px; height: 6px; border-radius: 50%;
+  width: 9px; height: 9px; border-radius: 50%;
   background: var(--green);
   display: none;
   animation: pulse 1.4s ease-in-out infinite;
