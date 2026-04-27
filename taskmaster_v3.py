@@ -1101,6 +1101,44 @@ VIEWER_PREFS_DEFAULTS = {
 }
 
 
+def viewer_prefs_path() -> Path:
+    return Path(".taskmaster") / "viewer.json"
+
+def load_viewer_prefs() -> dict:
+    """Load viewer prefs, creating the file with defaults on first call.
+    Unknown top-level keys are preserved across reads (forward-compat).
+    Missing keys are filled from VIEWER_PREFS_DEFAULTS (deep-merged).
+    """
+    import json
+    from copy import deepcopy
+    p = viewer_prefs_path()
+    if not p.exists():
+        prefs = deepcopy(VIEWER_PREFS_DEFAULTS)
+        atomic_write(p, json.dumps(prefs, indent=2))
+        return prefs
+    raw = json.loads(p.read_text())
+
+    # Deep-merge defaults under the loaded data so missing nested keys appear.
+    def _merge(default, loaded):
+        if isinstance(default, dict) and isinstance(loaded, dict):
+            out = dict(loaded)  # preserve unknown keys
+            for k, v in default.items():
+                if k not in out:
+                    out[k] = deepcopy(v)
+                else:
+                    out[k] = _merge(v, out[k])
+            return out
+        return loaded
+
+    return _merge(VIEWER_PREFS_DEFAULTS, raw)
+
+def save_viewer_prefs(prefs: dict) -> None:
+    import json
+    p = viewer_prefs_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write(p, json.dumps(prefs, indent=2))
+
+
 def auto_state_path(backlog_path: Path) -> Path:
     """Path to the auto-mode cursor file (gitignored)."""
     return backlog_path.parent / "auto" / "state.json"

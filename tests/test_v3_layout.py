@@ -1260,3 +1260,39 @@ def test_viewer_prefs_defaults_have_all_expected_keys():
     # screens.<name>.view holds A/B toggle per screen
     assert "task_detail" in VIEWER_PREFS_DEFAULTS["screens"]
     assert VIEWER_PREFS_DEFAULTS["screens"]["task_detail"]["view"] == "A"
+
+
+def test_viewer_prefs_round_trip(tmp_path, monkeypatch):
+    from taskmaster_v3 import (
+        load_viewer_prefs, save_viewer_prefs, VIEWER_PREFS_DEFAULTS,
+    )
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".taskmaster").mkdir()
+
+    # Empty first read returns defaults (and creates the file)
+    p1 = load_viewer_prefs()
+    assert p1 == VIEWER_PREFS_DEFAULTS
+    assert (tmp_path / ".taskmaster" / "viewer.json").exists()
+
+    # Mutate, save, re-read
+    p1["theme"] = "light"
+    p1["kanban"]["filters"]["search"] = "auth"
+    save_viewer_prefs(p1)
+
+    p2 = load_viewer_prefs()
+    assert p2["theme"] == "light"
+    assert p2["kanban"]["filters"]["search"] == "auth"
+
+def test_viewer_prefs_unknown_keys_preserved_on_save(tmp_path, monkeypatch):
+    """Forward-compat: don't strip keys we don't know about."""
+    import json
+    from taskmaster_v3 import load_viewer_prefs, save_viewer_prefs
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".taskmaster").mkdir()
+    (tmp_path / ".taskmaster" / "viewer.json").write_text(
+        json.dumps({"schema_version": 1, "future_field": "preserve_me", "theme": "dark"})
+    )
+    prefs = load_viewer_prefs()
+    save_viewer_prefs(prefs)
+    saved = json.loads((tmp_path / ".taskmaster" / "viewer.json").read_text())
+    assert saved["future_field"] == "preserve_me"
