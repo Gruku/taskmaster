@@ -33,6 +33,7 @@ export async function mount(root, { store, prefs }) {
   const state = {
     filters: { ...DEFAULT_FILTERS, ...persisted },
     density: (store.getPrefs() && store.getPrefs().card_density) || 'full',
+    collapsed: new Set((store.getPrefs() && store.getPrefs().kanban && store.getPrefs().kanban.collapsed_columns) || []),
   };
 
   // Layout
@@ -218,7 +219,14 @@ export async function mount(root, { store, prefs }) {
       active: state.filters.epics,
       filterCount,
       onToggle: (next) => { state.filters.epics = next; paint(); savePrefs(); },
-      onClear:  ()    => { state.filters = { ...DEFAULT_FILTERS }; searchInput.value = ''; updatePriorityChips(pri, { active: [] }); paint(); savePrefs(); },
+      onClear:  ()    => {
+        state.filters = { ...DEFAULT_FILTERS };
+        state.collapsed = new Set();
+        searchInput.value = '';
+        updatePriorityChips(pri, { active: [] });
+        prefs.patch({ kanban: { collapsed_columns: [] } });
+        paint(); savePrefs();
+      },
     }));
 
     // 5) Group + render columns
@@ -233,6 +241,21 @@ export async function mount(root, { store, prefs }) {
       const head = document.createElement('div');
       head.className = 'kanban-col-head ' + (state.filters.group_by === 'status' ? g.key : '');
       head.innerHTML = `<span class="dot"></span><span class="lbl">${escapeHtml(state.filters.group_by === 'status' ? STATUS_LABELS[g.key] : g.label)}</span><span class="tnum">${g.tasks.length}</span>`;
+      const toggleBtn = document.createElement('button');
+      toggleBtn.type = 'button';
+      toggleBtn.className = 'kanban-col-toggle';
+      const isCollapsed = state.collapsed.has(g.key);
+      toggleBtn.title = isCollapsed ? 'Expand' : 'Collapse';
+      toggleBtn.textContent = isCollapsed ? '›' : '‹';
+      toggleBtn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        if (state.collapsed.has(g.key)) state.collapsed.delete(g.key);
+        else state.collapsed.add(g.key);
+        prefs.patch({ kanban: { collapsed_columns: [...state.collapsed] } });
+        paint();
+      });
+      head.appendChild(toggleBtn);
+      if (isCollapsed) col.classList.add('collapsed');
       col.appendChild(head);
 
       if (!g.tasks.length) {
