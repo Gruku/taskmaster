@@ -267,14 +267,16 @@ export async function mount(root, { store, prefs }) {
       if (isCollapsed) col.classList.add('collapsed');
       col.appendChild(head);
 
+      const colBody = document.createElement('div');
+      colBody.className = 'kanban-col-body';
       if (!g.tasks.length) {
         const empty = document.createElement('div');
         empty.className = 'kanban-col-empty';
         empty.textContent = '— filtered out —';
-        col.appendChild(empty);
+        colBody.appendChild(empty);
       } else {
         for (const t of g.tasks) {
-          col.appendChild(renderCard({
+          colBody.appendChild(renderCard({
             task: t,
             density: state.density,
             epicColors,
@@ -283,6 +285,7 @@ export async function mount(root, { store, prefs }) {
           }));
         }
       }
+      col.appendChild(colBody);
       boardGrid.appendChild(col);
     }
   }
