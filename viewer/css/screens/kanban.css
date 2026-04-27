@@ -1,0 +1,53 @@
+/* Kanban screen — owns its layout, stepper, chips, board, and card visuals.
+   Per Plan 1 conventions: screen-local tokens use the --kanban-* / --card-* prefix.
+   Per spec §3.7 (Variant E): NO edge stripes, NO body wash. Color goes on chip + ID only. */
+
+:root {
+  --kanban-board-bg-grad: radial-gradient(120% 100% at 0% 0%, rgba(74,158,255,0.05), transparent 60%),
+                          linear-gradient(180deg, #1a1f29 0%, #161a22 100%);
+  --kanban-board-border:  #2e3a4d;
+  --card-bg-auto-grad:    linear-gradient(180deg, rgba(74,158,255,0.03), transparent 40%);
+  --card-recent-glow:     0 0 0 1px rgba(127,179,240,0.4), 0 0 18px rgba(74,158,255,0.12);
+}
+
+/* ─────────── PAGE LAYOUT ─────────── */
+.kanban-page { display: flex; flex-direction: column; gap: var(--sp-5); min-width: 0; }
+
+.kanban-head {
+  display: flex; align-items: center; gap: var(--sp-4);
+  padding-bottom: var(--sp-4);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.kanban-head .title    { font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
+.kanban-head .subcount { font-size: var(--text-sm); color: var(--ink-3); padding-right: var(--sp-3); border-right: 1px solid var(--border); }
+
+.kanban-search {
+  display: inline-flex; align-items: center; gap: var(--sp-2);
+  flex: 1 1 240px; min-width: 200px;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--r-md);
+  padding: 4px var(--sp-3);
+}
+.kanban-search input {
+  background: transparent; border: 0; outline: 0;
+  color: var(--ink); font-size: var(--text-base);
+  flex: 1; font-family: var(--font-sans);
+}
+.kanban-search input::placeholder { color: var(--ink-3); }
+.kanban-search .icon { color: var(--ink-3); }
+
+.kanban-head-right { margin-left: auto; display: flex; align-items: center; gap: var(--sp-2); }
+.kanban-group-btn,
+.kanban-sort-btn,
+.kanban-add-btn {
+  background: var(--bg-card); border: 1px solid var(--border); color: var(--ink-2);
+  font-size: var(--text-sm); padding: 4px var(--sp-3); border-radius: var(--r-md);
+  cursor: pointer; display: inline-flex; align-items: center; gap: var(--sp-1);
+  font-family: var(--font-sans);
+}
+.kanban-group-btn:hover,
+.kanban-sort-btn:hover { color: var(--ink); border-color: var(--border-strong); }
+.kanban-add-btn { background: var(--accent-soft); border-color: rgba(74,158,255,0.4); color: var(--accent); }
+
+.kanban-reset-link { color: var(--ink-3); cursor: pointer; font-size: var(--text-xs); }
+.kanban-reset-link:hover { color: var(--red); }
