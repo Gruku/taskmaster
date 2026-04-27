@@ -1,0 +1,98 @@
+/* Design tokens — single source of truth.
+   Subsequent CSS files reference these via var(--name).
+   No new global tokens are added in screen-specific CSS files. */
+:root {
+  /* Surfaces (dark theme — only theme implemented at this stage) */
+  --bg-canvas:        #14151a;
+  --bg-shell:         #0f1014;
+  --bg-panel:         #17181d;
+  --bg-card:          #1f2025;
+  --bg-board-col:     #0f131c;
+  --bg-deep:          #0a0c11;          /* console / input recess */
+  --bg-issue:         #181a20;          /* slightly cooler than bg-card, per spec §3.14 */
+
+  /* Borders */
+  --border:           #2c2d33;
+  --border-soft:      rgba(255,255,255,0.05);
+  --border-strong:    #3a3b42;
+
+  /* Ink */
+  --ink:              #e6e7eb;
+  --ink-2:            #bfc4cc;
+  --ink-3:            #7c8290;
+  --ink-on-accent:    #0a1628;
+
+  /* Accents */
+  --accent:           #4a9eff;
+  --accent-2:         #7fb3f0;
+  --accent-soft:      rgba(74,158,255,0.10);
+
+  /* Status */
+  --green:            #5fae6e;
+  --amber:            #d6a45f;
+  --red:              #d66b5f;
+  --purple:           #a07fe0;
+  --gold:             #d6a45f;
+
+  /* Diff colors (Recap, Sessions detail) */
+  --diff-add:         #5fae6e;
+  --diff-mod:         #d6a45f;
+  --diff-del:         #d66b5f;
+
+  /* Epic palette — auto-assigned in order; see spec §5 */
+  --epic-1:           #6ea8ff;
+  --epic-2:           #b585e8;
+  --epic-3:           #5fcdb8;
+  --epic-4:           #e8a34d;
+  --epic-5:           #e87a85;
+  --epic-6:           #a8c958;
+
+  /* Type */
+  --font-sans:        'Inter', -apple-system, system-ui, sans-serif;
+  --font-mono:        'JetBrains Mono', ui-monospace, Menlo, monospace;
+  --font-serif:       'Source Serif Pro', Georgia, serif;
+
+  --text-xs:          10px;
+  --text-sm:          11px;
+  --text-base:        12px;
+  --text-md:          13px;
+  --text-lg:          14px;
+  --text-xl:          16px;
+  --text-2xl:         20px;
+  --text-3xl:         22px;
+
+  /* Spacing */
+  --sp-1:             4px;
+  --sp-2:             6px;
+  --sp-3:             8px;
+  --sp-4:             10px;
+  --sp-5:             12px;
+  --sp-6:             14px;
+  --sp-7:             16px;
+  --sp-8:             18px;
+  --sp-9:             22px;
+
+  /* Radius */
+  --r-sm:             4px;
+  --r-md:             6px;
+  --r-lg:             8px;
+  --r-xl:             10px;
+  --r-2xl:            12px;
+
+  /* Shadows + recess (graph frame language, Task Detail B / Auto Mode B) */
+  --shadow-card:      0 1px 0 rgba(255,255,255,0.02) inset, 0 4px 12px rgba(0,0,0,0.18);
+  --shadow-lifted:    0 4px 14px rgba(0,0,0,0.4);
+  --recess-inset:     inset 0 0 36px rgba(0,0,0,0.4);
+  --recess-bg:        radial-gradient(ellipse at 50% 50%, #181a22 0%, #0d0e13 100%);
+
+  /* Motion */
+  --t-fast:           120ms;
+  --t-base:           180ms;
+  --t-slow:           320ms;
+  --ease:             cubic-bezier(0.3, 0.7, 0.4, 1);
+
+  /* Layout */
+  --shell-zoom:       1.5;             /* spec §3.4 — 150% baked in */
+  --sidebar-w:        200px;
+  --rail-w:           480px;            /* right-rail detail surface */
+}
