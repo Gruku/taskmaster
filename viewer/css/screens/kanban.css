@@ -51,3 +51,167 @@
 
 .kanban-reset-link { color: var(--ink-3); cursor: pointer; font-size: var(--text-xs); }
 .kanban-reset-link:hover { color: var(--red); }
+
+/* ─────────── CARD (Minimal + Full) ───────────
+   Variant E: no edge stripes, no body wash.
+   The epic color paints ONLY the .card-chip (epic chip swatch + bg) and the .card-id text.
+   --epic + --epic-soft are set inline per-card by JS (see lib/epics.js). */
+
+.card-task {
+  position: relative;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  margin-bottom: var(--sp-2);
+  cursor: pointer;
+  transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+}
+.card-task:hover {
+  background: #23252b;
+  border-color: var(--border-strong);
+  /* Spec §3.6: no movement / no transform on hover. */
+}
+.card-task.recent { box-shadow: var(--card-recent-glow); }
+
+.card-task.auto {
+  border-color: rgba(74, 158, 255, 0.35);
+}
+.card-task.auto .card-body {
+  background: var(--card-bg-auto-grad);
+  border-radius: var(--r-md) var(--r-md) 0 0;
+}
+
+.card-body { padding: 8px 10px 9px; }
+
+/* Header band: id · priority · size · time-in-status */
+.card-meta {
+  display: flex; align-items: center; gap: var(--sp-2);
+  font-size: var(--text-xs);
+  margin-bottom: 5px;
+}
+.card-id {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--epic, var(--ink-3));   /* Variant E: ID picks up epic color */
+  padding: 1px 5px;
+  border-radius: var(--r-sm);
+  user-select: none;
+  display: inline-flex; align-items: center; gap: 4px;
+  transition: background var(--t-fast) var(--ease);
+}
+.card-id:hover { background: var(--epic-soft, rgba(255,255,255,0.05)); }
+.card-id .copy-glyph { opacity: 0; font-size: 10px; transition: opacity var(--t-fast) var(--ease); }
+.card-id:hover .copy-glyph { opacity: 0.7; }
+
+.card-pri {
+  font-size: var(--text-xs); padding: 1px 6px; border-radius: var(--r-sm);
+  font-weight: 600; letter-spacing: 0.02em;
+}
+.card-pri.critical { background: rgba(214,107,95,0.22); color: var(--red); }
+.card-pri.high     { background: rgba(214,164,95,0.22); color: var(--amber); }
+.card-pri.medium   { background: rgba(74,158,255,0.18); color: var(--accent); }
+.card-pri.low      { background: rgba(127,179,240,0.12); color: var(--accent-2); }
+
+.card-size {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs); color: var(--ink-3);
+  border: 1px solid var(--border); padding: 1px 5px; border-radius: var(--r-sm);
+}
+.card-tis {
+  margin-left: auto;
+  font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-3);
+}
+.card-tis.stale { color: var(--amber); }
+
+/* Title */
+.card-title {
+  font-size: var(--text-md);
+  font-weight: 500;
+  color: var(--ink);
+  line-height: 1.35;
+  letter-spacing: -0.005em;
+  margin: 0;
+}
+
+/* ─── FULL-only rows ─── */
+.card-task.full .card-title { margin-bottom: var(--sp-2); }
+
+.card-chip-row {
+  display: flex; align-items: center; gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
+  flex-wrap: wrap;
+}
+.card-epic-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 7px;
+  background: var(--epic-soft, rgba(124,130,144,0.14));
+  color: var(--epic, var(--ink-2));
+  border-radius: 999px;
+  font-size: var(--text-xs);
+}
+.card-epic-chip .swatch {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--epic, var(--ink-3));
+}
+.card-spec-badge {
+  font-size: var(--text-xs); padding: 2px 6px; border-radius: var(--r-sm);
+  font-weight: 600; display: inline-flex; align-items: center; gap: 3px;
+}
+.card-spec-badge.pass { background: rgba(95,174,110,0.18); color: var(--green); }
+.card-spec-badge.warn { background: rgba(214,164,95,0.22); color: var(--amber); }
+.card-spec-badge.fail { background: rgba(214,107,95,0.22); color: var(--red); }
+.card-dep-badge {
+  font-size: var(--text-xs); color: var(--ink-3);
+  display: inline-flex; align-items: center; gap: 3px;
+}
+.card-dep-badge.blocking { color: var(--red); font-weight: 500; }
+.card-subrepo-chip {
+  font-size: var(--text-xs); padding: 2px 6px; border-radius: var(--r-sm);
+  background: rgba(255,255,255,0.04); color: var(--ink-3);
+  font-family: var(--font-mono);
+}
+
+.card-footer {
+  display: flex; align-items: center; gap: var(--sp-2);
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--border-soft);
+  font-size: var(--text-xs);
+}
+.card-branch {
+  color: var(--accent-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  display: inline-flex; align-items: center; gap: 4px;
+  min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 1px 5px; border-radius: var(--r-sm);
+  transition: background var(--t-fast) var(--ease);
+}
+.card-branch:hover { background: rgba(74,158,255,0.10); }
+.card-branch.empty { color: var(--ink-3); }
+.card-branch .glyph { opacity: 0.7; flex: 0 0 auto; }
+
+.card-actions { margin-left: auto; display: flex; align-items: center; gap: var(--sp-2); }
+
+.card-callout {
+  margin: var(--sp-2) -10px -9px;
+  padding: 5px 10px;
+  font-size: var(--text-xs);
+  display: flex; align-items: center; gap: 5px;
+  border-top: 1px solid var(--border-soft);
+}
+.card-callout.warn { background: rgba(214,107,95,0.10); color: var(--red); }
+
+/* Status label rendered when grouped by phase or epic (per spec §3.8 — drop on status grouping). */
+.card-status-pill {
+  font-size: var(--text-xs);
+  padding: 1px 6px; border-radius: 999px;
+  background: rgba(255,255,255,0.04); color: var(--ink-2);
+  display: inline-flex; align-items: center; gap: 4px;
+}
+.card-status-pill .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--ink-3); }
+.card-status-pill.todo .dot         { background: var(--ink-3); }
+.card-status-pill.in_progress .dot  { background: var(--accent); }
+.card-status-pill.in_review .dot    { background: var(--amber); }
+.card-status-pill.done .dot         { background: var(--green); }
+.card-status-pill.blocked .dot      { background: var(--red); }
