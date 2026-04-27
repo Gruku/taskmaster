@@ -458,24 +458,22 @@
   box-shadow: 0 0 0 1px rgba(74,158,255,0.04) inset, 0 12px 45px rgba(0,0,0,0.4);
   flex: 1 1 auto;
   min-height: 0;
-  overflow-y: auto;
-}
-.kanban-board::before {
-  content: ''; position: absolute; inset: 0; pointer-events: none;
-  border-radius: var(--r-lg);
-  background-image: linear-gradient(rgba(255,255,255,0.012) 1px, transparent 1px),
-                    linear-gradient(90deg, rgba(255,255,255,0.012) 1px, transparent 1px);
-  background-size: 18px 18px;
-  -webkit-mask-image: radial-gradient(120% 80% at 50% 0%, #000 30%, transparent 80%);
-          mask-image: radial-gradient(120% 80% at 50% 0%, #000 30%, transparent 80%);
+  overflow: auto;
 }
 .kanban-board-grid {
   position: relative;
-  display: grid; gap: var(--sp-3);
+  display: flex;
+  flex-direction: row;
+  gap: var(--sp-3);
+  align-items: stretch;
+  min-height: 0;
 }
-.kanban-board-grid.status { grid-template-columns: repeat(5, 1fr); }
-.kanban-board-grid.phase  { grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); }
-.kanban-board-grid.epic   { grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); }
+.kanban-board-grid.status > .kanban-col,
+.kanban-board-grid.phase  > .kanban-col,
+.kanban-board-grid.epic   > .kanban-col {
+  flex: 1 1 0;
+  min-width: 220px;
+}
 
 .kanban-col {
   background: var(--bg-board-col);
