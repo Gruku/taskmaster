@@ -488,7 +488,8 @@
   border-bottom: 1px solid var(--border-soft);
 }
 .kanban-col-head .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--ink-3); }
-.kanban-col-head .lbl { font-size: var(--text-sm); font-weight: 500; flex: 1; }
+.kanban-col-head .dot { box-shadow: 0 0 0 4px color-mix(in oklch, currentColor 18%, transparent); }
+.kanban-col-head .lbl { font-size: 18px; font-weight: 600; color: var(--ink); flex: 1; }
 .kanban-col-head .tnum { color: var(--ink-3); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
 .kanban-col-empty { text-align: center; color: var(--ink-3); font-size: var(--text-sm); padding: 45px 0; }
 
