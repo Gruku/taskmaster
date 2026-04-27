@@ -1,0 +1,61 @@
+/* Shared inline components used across screens.
+   Pattern: .cmp-<name> for shared elements; screen-specific variants live in screens/<screen>.css. */
+
+/* Chips — id, epic, priority, severity */
+.cmp-chip {
+  display: inline-flex; align-items: center; gap: var(--sp-1);
+  padding: 2px var(--sp-2);
+  border-radius: var(--r-sm);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-family: var(--font-sans);
+}
+.cmp-chip.id      { font-family: var(--font-mono); text-transform: none; letter-spacing: 0; color: var(--ink); background: rgba(255,255,255,0.04); }
+.cmp-chip.high    { background: rgba(214,107,95,0.15); color: var(--red); }
+.cmp-chip.med     { background: rgba(214,164,95,0.15); color: var(--amber); }
+.cmp-chip.low     { background: rgba(124,130,144,0.15); color: var(--ink-3); }
+.cmp-chip.crit    { background: rgba(214,107,95,0.22); color: var(--red); }
+
+/* Pills — kind/status pills with leading dot */
+.cmp-pill {
+  display: inline-flex; align-items: center; gap: var(--sp-2);
+  padding: 3px var(--sp-3);
+  border-radius: 999px;
+  font-size: var(--text-xs);
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border);
+  color: var(--ink-2);
+}
+.cmp-pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-3); }
+.cmp-pill.live .dot { background: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
+
+/* Buttons */
+.cmp-btn {
+  appearance: none;
+  padding: var(--sp-2) var(--sp-4);
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--ink-2);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  font-family: var(--font-sans);
+  display: inline-flex; align-items: center; gap: var(--sp-2);
+  transition: color var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+}
+.cmp-btn:hover { color: var(--ink); border-color: var(--border-strong); }
+.cmp-btn.primary { background: var(--accent-soft); border-color: rgba(74,158,255,0.35); color: var(--accent); }
+.cmp-btn.icon { width: 28px; height: 28px; padding: 0; justify-content: center; }
+
+/* Kbd */
+.cmp-kbd {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  padding: 1px var(--sp-2);
+  background: rgba(255,255,255,0.06);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--ink-2);
+}
