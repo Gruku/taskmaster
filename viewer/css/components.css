@@ -60,3 +60,31 @@
   border-radius: var(--r-sm);
   color: var(--ink-2);
 }
+
+/* ────── click-to-copy flash + small icon button ────── */
+.cmp-flash-copied {
+  background: rgba(95, 174, 110, 0.18) !important;
+  color: var(--green) !important;
+}
+.cmp-flash-copied::after {
+  content: ' copied';
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+}
+
+.cmp-icon-btn {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: var(--ink-3);
+  font-size: var(--text-md);
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: var(--r-sm);
+  transition: color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+}
+.cmp-icon-btn:hover {
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.05);
+}
