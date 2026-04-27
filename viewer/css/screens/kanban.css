@@ -333,3 +333,22 @@
   flex: 0 0 auto;
 }
 .kanban-strip-action:hover { color: var(--ink-2); }
+
+/* ─────────── PRIORITY CHIPS ─────────── */
+.kanban-pri-row { display: inline-flex; gap: 4px; flex: 0 0 auto; }
+.kanban-pri-tog {
+  appearance: none;
+  padding: 3px 9px;
+  font-size: var(--text-sm);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  font-weight: 500;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--ink-3);
+  font-family: var(--font-sans);
+}
+.kanban-pri-tog.critical.on { background: rgba(214,107,95,0.22); border-color: var(--red);   color: var(--red); }
+.kanban-pri-tog.high.on     { background: rgba(214,164,95,0.22); border-color: var(--amber); color: var(--amber); }
+.kanban-pri-tog.medium.on   { background: rgba(74,158,255,0.18); border-color: var(--accent);color: var(--accent); }
+.kanban-pri-tog.low.on      { background: rgba(127,179,240,0.12); border-color: var(--accent-2); color: var(--accent-2); }
