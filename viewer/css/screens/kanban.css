@@ -258,3 +258,78 @@
   0%   { background-position: -50% 0; }
   100% { background-position: 150% 0; }
 }
+
+/* ─────────── AUTO-MODE STRIP (light, top of page) ─────────── */
+.kanban-strip {
+  display: flex; align-items: center; gap: var(--sp-5);
+  padding: var(--sp-2) var(--sp-3) var(--sp-3);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-base);
+  flex-wrap: wrap;
+}
+.kanban-strip[hidden] { display: none; }
+
+.kanban-strip-title {
+  display: inline-flex; align-items: center; gap: var(--sp-2);
+  font-size: var(--text-sm); text-transform: uppercase; letter-spacing: 0.08em;
+  color: #8fb6e8;
+}
+.kanban-strip-title .live-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+/* Conic-gradient sweep spinner — 12px, smooth (spec §3.3). */
+.kanban-strip-spinner {
+  width: 12px; height: 12px; border-radius: 50%;
+  background: conic-gradient(from 0deg, transparent 0deg, var(--accent) 280deg, transparent 359deg);
+  -webkit-mask: radial-gradient(circle at center, transparent 4px, #000 5px);
+          mask: radial-gradient(circle at center, transparent 4px, #000 5px);
+  animation: spin 1.4s linear infinite;
+  flex: 0 0 auto;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.kanban-strip-session-time {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+}
+
+.kanban-strip-runs {
+  display: flex; gap: var(--sp-6);
+  flex: 1 1 auto; overflow: hidden;
+  min-width: 0;
+}
+.kanban-strip-run {
+  display: flex; align-items: center; gap: var(--sp-2);
+  font-size: var(--text-base); color: var(--ink-2);
+  min-width: 0;
+}
+.kanban-strip-run + .kanban-strip-run { border-left: 1px solid var(--border); padding-left: var(--sp-5); }
+.kanban-strip-run .id   { color: var(--ink-3); font-family: var(--font-mono); font-size: var(--text-sm); }
+.kanban-strip-run .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 180px; }
+.kanban-strip-run .pct  { color: #8fb6e8; font-variant-numeric: tabular-nums; font-size: var(--text-sm); }
+.kanban-strip-run .mini-bar {
+  width: 64px; height: 3px; background: rgba(255,255,255,0.06); border-radius: 2px; overflow: hidden;
+  position: relative;
+}
+.kanban-strip-run .mini-bar > i {
+  display: block; height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+}
+.kanban-strip-run .mini-bar::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.18), transparent);
+  background-size: 40% 100%;
+  background-repeat: no-repeat;
+  animation: shimmer 2.4s ease-in-out infinite;
+}
+.kanban-strip-run .elapsed { color: var(--ink-3); font-family: var(--font-mono); font-size: var(--text-xs); }
+
+.kanban-strip-action {
+  font-size: var(--text-sm); color: var(--ink-3); cursor: pointer;
+  flex: 0 0 auto;
+}
+.kanban-strip-action:hover { color: var(--ink-2); }
