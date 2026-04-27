@@ -107,4 +107,11 @@ def test_static_v3_path_traversal_blocked(running_server):
     base, _ = running_server
     with pytest.raises(urllib.error.HTTPError) as exc:
         urllib.request.urlopen(f"{base}/static/v3/../../etc/passwd")
-    assert exc.value.code in (400, 404)
+    assert exc.value.code == 400
+
+
+def test_static_v3_path_traversal_url_encoded_blocked(running_server):
+    base, _ = running_server
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        urllib.request.urlopen(f"{base}/static/v3/%2e%2e/%2e%2e/etc/passwd")
+    assert exc.value.code == 400

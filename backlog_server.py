@@ -3857,12 +3857,14 @@ class ViewerHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(body)
             return
         elif clean_path.startswith("/static/v3/"):
-            rel = clean_path[len("/static/v3/"):]
+            from urllib.parse import unquote as _unquote
+            rel = _unquote(clean_path[len("/static/v3/"):])
             viewer_root = (Path(__file__).parent / "viewer").resolve()
             target = (viewer_root / rel).resolve()
             if not str(target).startswith(str(viewer_root) + os.sep) and target != viewer_root:
@@ -3881,6 +3883,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(body)
