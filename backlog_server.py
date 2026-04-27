@@ -17,6 +17,7 @@ import webbrowser
 from datetime import date, datetime
 from functools import partial
 from http import HTTPStatus
+from copy import deepcopy
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from pathlib import Path
 
@@ -532,6 +533,20 @@ def _mutate_and_save(data: dict) -> None:
     regenerate_context(data)
     _save(data)
     regenerate_progress_dashboard(data)
+
+
+def _deep_merge(dst: dict, src: dict) -> dict:
+    """Recursively merge *src* into *dst* in-place and return *dst*.
+
+    Dict-valued keys are merged recursively; all other values are replaced
+    with a deep copy of the source value.
+    """
+    for k, v in src.items():
+        if isinstance(v, dict) and isinstance(dst.get(k), dict):
+            _deep_merge(dst[k], v)
+        else:
+            dst[k] = deepcopy(v)
+    return dst
 
 
 def _task_context(data: dict, task: dict, epic: dict) -> str:
@@ -1679,21 +1694,12 @@ def viewer_prefs_set(patch_json: str) -> str:
     Patch is a JSON object; only the keys present are updated.
     """
     import json
-    from copy import deepcopy
     try:
         patch = json.loads(patch_json)
     except Exception as e:
         return f"error: invalid JSON ({e})"
     if not isinstance(patch, dict):
         return "error: patch must be a JSON object"
-
-    def _deep_merge(base, patch):
-        for k, v in patch.items():
-            if isinstance(v, dict) and isinstance(base.get(k), dict):
-                _deep_merge(base[k], v)
-            else:
-                base[k] = deepcopy(v)
-        return base
 
     prefs = load_viewer_prefs()
     _deep_merge(prefs, patch)
@@ -3855,7 +3861,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
             viewer_root = Path(__file__).parent / "viewer"
             idx = viewer_root / "index.html"
             if not idx.exists():
-                self.send_response(404); self.end_headers(); return
+                self.send_response(404); self.send_header("Content-Length", "0"); self.end_headers(); return
             html = idx.read_text(encoding="utf-8")
             # Make relative asset refs absolute under /static/v3/.
             html = html.replace('href="css/', 'href="/static/v3/css/')
@@ -3875,16 +3881,20 @@ class ViewerHandler(BaseHTTPRequestHandler):
             viewer_root = (Path(__file__).parent / "viewer").resolve()
             target = (viewer_root / rel).resolve()
             if not str(target).startswith(str(viewer_root) + os.sep) and target != viewer_root:
-                self.send_response(400); self.end_headers(); return
+                self.send_response(400); self.send_header("Content-Length", "0"); self.end_headers(); return
             if not target.is_file():
-                self.send_response(404); self.end_headers(); return
+                self.send_response(404); self.send_header("Content-Length", "0"); self.end_headers(); return
             ext = target.suffix.lower()
             ctype = {
-                ".html": "text/html; charset=utf-8",
-                ".css":  "text/css; charset=utf-8",
-                ".js":   "application/javascript; charset=utf-8",
-                ".json": "application/json; charset=utf-8",
-                ".svg":  "image/svg+xml",
+                ".html":  "text/html; charset=utf-8",
+                ".css":   "text/css; charset=utf-8",
+                ".js":    "application/javascript; charset=utf-8",
+                ".json":  "application/json; charset=utf-8",
+                ".svg":   "image/svg+xml",
+                ".woff2": "font/woff2",
+                ".woff":  "font/woff",
+                ".png":   "image/png",
+                ".ico":   "image/x-icon",
             }.get(ext, "application/octet-stream")
             body = target.read_bytes()
             self.send_response(200)
@@ -3988,8 +3998,6 @@ class ViewerHandler(BaseHTTPRequestHandler):
 
     def do_PUT(self):
         if self.path == "/api/viewer/prefs":
-            import json
-            from copy import deepcopy
             length = int(self.headers.get("Content-Length") or 0)
             raw = self.rfile.read(length).decode("utf-8") if length else ""
             try:
@@ -4001,14 +4009,6 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 self._send_json(400, {"ok": False, "error": "patch must be a JSON object"})
                 return
 
-            def _deep_merge(base, patch):
-                for k, v in patch.items():
-                    if isinstance(v, dict) and isinstance(base.get(k), dict):
-                        _deep_merge(base[k], v)
-                    else:
-                        base[k] = deepcopy(v)
-                return base
-
             prefs = load_viewer_prefs()
             _deep_merge(prefs, patch)
             save_viewer_prefs(prefs)
@@ -4019,16 +4019,25 @@ class ViewerHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def _send_json(self, status: int, payload: dict):
+        """Serialize *payload* as JSON and write the complete HTTP response."""
         body = json.dumps(payload, default=str).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        # JSON API responses are intentionally uncached — no Cache-Control header
+        # means browsers apply their default heuristic (usually no-store for XHR).
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(body)
 
     def do_OPTIONS(self):
-        """Allow PUT cross-origin."""
+        """Allow cross-origin preflight for /api/* endpoints only."""
+        from urllib.parse import urlparse
+        clean_path = urlparse(self.path).path
+        if not clean_path.startswith("/api/"):
+            self.send_response(404)
+            self.end_headers()
+            return
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, PUT, POST, OPTIONS")
