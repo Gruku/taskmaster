@@ -3852,6 +3852,66 @@ def _format_evidence(analysis: dict) -> str:
     return "\n".join(lines)
 
 
+def _load_task_full(task_id: str) -> dict | None:
+    """Merge backlog.yaml index entry with the per-task markdown file body.
+    Returns None if the task id is not in the index.
+    """
+    import re
+    import yaml
+    from pathlib import Path
+
+    backlog_path = Path("backlog.yaml")
+    if not backlog_path.exists():
+        return None
+    backlog = yaml.safe_load(backlog_path.read_text()) or {}
+    tasks = backlog.get("tasks") or []
+    index_entry = next((t for t in tasks if t.get("id") == task_id), None)
+    if index_entry is None:
+        return None
+
+    out = dict(index_entry)
+    out.setdefault("docs", {})
+    out.setdefault("description", "")
+    out.setdefault("notes", "")
+    out.setdefault("review_instructions", "")
+    out.setdefault("_body", "")
+
+    md_path = Path(".taskmaster") / "tasks" / f"{task_id}.md"
+    if md_path.exists():
+        raw = md_path.read_text()
+        fm_match = re.match(r"^---\n(.*?)\n---\n(.*)$", raw, re.DOTALL)
+        if fm_match:
+            try:
+                fm = yaml.safe_load(fm_match.group(1)) or {}
+            except Exception:
+                fm = {}
+            body = fm_match.group(2)
+            for k in ("docs", "review_instructions", "patchnote", "release",
+                      "worktree", "spec_review", "locked_by"):
+                if k in fm:
+                    out[k] = fm[k]
+        else:
+            body = raw
+        out["_body"] = body
+
+        sections: dict[str, list[str]] = {}
+        current: str | None = None
+        for line in body.splitlines():
+            m = re.match(r"^## +(.+?)\s*$", line)
+            if m:
+                current = m.group(1).strip().lower()
+                sections[current] = []
+                continue
+            if current is not None:
+                sections[current].append(line)
+        for key in ("description", "notes", "specification", "plan",
+                    "review instructions", "activity", "patchnote"):
+            if key in sections:
+                out_key = key.replace(" ", "_")
+                out[out_key] = "\n".join(sections[key]).strip()
+    return out
+
+
 # ── HTTP Viewer Server ───────────────────────────────────
 
 
@@ -3928,6 +3988,16 @@ class ViewerHandler(BaseHTTPRequestHandler):
             return
         elif clean_path == "/backlog.yaml":
             self._serve_file(_backlog_path(), "text/yaml")
+        elif clean_path.startswith("/api/task/"):
+            rest = clean_path[len("/api/task/"):].rstrip("/")
+            if "/" not in rest and rest:
+                full = _load_task_full(rest)
+                if full is None:
+                    self._send_json(404, {"ok": False, "error": f"task {rest} not found"})
+                    return
+                self._send_json(200, full)
+                return
+            self.send_error(HTTPStatus.NOT_FOUND)
         elif clean_path == "/api/backlog":
             self._serve_json()
         elif clean_path == "/api/session":
