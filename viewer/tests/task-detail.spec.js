@@ -35,4 +35,13 @@ test.describe('Task Detail screen', () => {
     await expect(page.locator('[data-test="sec-spec"]')).toBeVisible();
     await expect(page.locator('[data-test="sec-notes"]')).toBeVisible();
   });
+
+  test('Variant B renders compact head, graph frame, and tabs', async ({ page }) => {
+    await page.goto(`/v3/#/task/${TASK_ID}?view=B`);
+    await page.request.put('/api/viewer/prefs', { data: { screens: { task_detail: { view: 'B' } } } });
+    await page.reload();
+    await expect(page.locator('[data-test="compact-head"]')).toBeVisible();
+    await expect(page.locator('[data-test="graph-frame"]')).toBeVisible();
+    await expect(page.locator('[data-test="tabs"]')).toBeVisible();
+  });
 });
