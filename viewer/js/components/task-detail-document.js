@@ -63,7 +63,19 @@ function renderBody({ task }) {
   }
   children.push(renderChips(task));
   children.push(renderSpecReview(task));
+  children.push(renderAutoBanner(task));
   return h('main', { class: 'td-body' }, children.filter(Boolean));
+}
+
+function renderAutoBanner(task) {
+  const am = task.auto_mode;
+  if (!am || !am.running) return null;
+  const pct = Math.max(0, Math.min(100, Math.round((am.progress || 0) * 100)));
+  return h('div', { class: 'td-auto-banner', 'data-test': 'auto-banner' }, [
+    h('span', { class: 'td-auto-step' }, am.step || 'auto-mode running'),
+    h('div', { class: 'td-auto-bar' }, h('span', { style: `width:${pct}%` })),
+    h('span', { class: 'td-auto-elapsed' }, am.elapsed || ''),
+  ]);
 }
 
 function renderSpecReview(task) {
