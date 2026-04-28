@@ -115,3 +115,20 @@ def test_get_task_returns_full_payload(running_server):
     assert "## Notes" in body["_body"]
     assert "Build the Task Detail screen" in body["description"]
     assert "marked" in body["notes"]
+
+
+def test_get_task_404_for_unknown_id(running_server):
+    base, _ = running_server
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        urllib.request.urlopen(f"{base}/api/task/T-9999")
+    assert exc.value.code == 404
+    body = json.loads(exc.value.read())
+    assert body["ok"] is False
+    assert "T-9999" in body["error"]
+
+
+def test_get_task_404_for_empty_id(running_server):
+    base, _ = running_server
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        urllib.request.urlopen(f"{base}/api/task/")
+    assert exc.value.code == 404
