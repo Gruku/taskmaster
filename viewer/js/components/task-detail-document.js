@@ -62,7 +62,20 @@ function renderBody({ task }) {
       [h('span', {}, '🔒 '), h('span', {}, `locked by ${task.locked_by}`)]));
   }
   children.push(renderChips(task));
+  children.push(renderSpecReview(task));
   return h('main', { class: 'td-body' }, children.filter(Boolean));
+}
+
+function renderSpecReview(task) {
+  const sr = task.spec_review;
+  if (!sr || !sr.verdict) return null;
+  const note = sr.codex_note || '';
+  return h('div', { class: 'td-spec-block', 'data-test': 'spec-review' }, [
+    h('span', { class: `td-spec-badge ${sr.verdict}`,
+                on: { click: (e) => e.currentTarget.nextElementSibling?.classList.toggle('open') } },
+      sr.verdict.toUpperCase()),
+    h('span', { class: 'td-codex-note serif' }, note),
+  ]);
 }
 
 function renderChips(task) {
