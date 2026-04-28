@@ -168,6 +168,35 @@ function renderNode(n, onNavigate) {
 }
 
 function truncate(s, n) { s = s || ''; return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+function renderContextBand({ related, onNavigate }) {
+  const lessons   = related?.lessons || [];
+  const handovers = related?.handovers || [];
+  const issues    = related?.issues || [];
+  const band = h('div', { class: 'td-graph-context-band', 'data-test': 'context-band' });
+  if (lessons.length) {
+    band.appendChild(h('span', { class: 'lbl' }, 'Lessons'));
+    for (const l of lessons.slice(0, 4)) {
+      band.appendChild(h('span', { class: 'ctx-pill lesson' },
+        [h('span', { class: 'glyph' }, '✦'), h('span', { class: 'mono' }, l.id)]));
+    }
+  }
+  if (handovers.length) {
+    band.appendChild(h('span', { class: 'lbl' }, 'Handovers'));
+    for (const ho of handovers.slice(0, 3)) {
+      band.appendChild(h('span', { class: 'ctx-pill handover' },
+        [h('span', { class: 'glyph' }, '§'), h('span', {}, ho.id)]));
+    }
+  }
+  if (issues.length) {
+    band.appendChild(h('span', { class: 'lbl' }, 'Issues'));
+    for (const i of issues.slice(0, 4)) {
+      band.appendChild(h('span', { class: 'ctx-pill issue' },
+        [h('span', { class: 'glyph' }, '!'), h('span', { class: 'mono' }, i.id)]));
+    }
+  }
+  return band;
+}
+
 function renderTabs(ctx) {
   return h('div', { class: 'td-tabs-placeholder', 'data-test': 'tabs' }, '');
 }
