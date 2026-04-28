@@ -138,3 +138,76 @@
 .td-issue-sev { font-size: var(--text-xs); color: var(--ink-3); margin-left: 4px; }
 .td-issue-critical .td-issue-sev { color: var(--red); }
 .td-issue-high .td-issue-sev    { color: var(--amber); }
+
+/* Variant B */
+.td-page-B .td-head-block { padding: 10px 0 var(--sp-5); border-bottom: 1px solid var(--border-soft); margin-bottom: var(--sp-5); }
+.td-page-B .td-head-title { font-size: var(--text-xl); font-weight: 600; letter-spacing: -0.01em; color: var(--ink); margin: 5px 0 var(--sp-3); line-height: 1.25; }
+
+.td-graph-frame {
+  background: var(--graph-frame-bg);
+  border: 1px solid var(--graph-frame-border);
+  border-radius: var(--r-md);
+  margin-bottom: var(--sp-7);
+  position: relative;
+  overflow: hidden;
+  box-shadow: var(--graph-frame-shadow);
+}
+.td-graph-rail {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border-soft);
+  font-size: var(--text-xs); color: var(--ink-3);
+  background: rgba(255,255,255,0.015);
+}
+.td-graph-rail .axis { letter-spacing: 0.1em; text-transform: uppercase; }
+.td-graph-rail .legend { display: flex; gap: 12px; font-size: var(--text-xs); color: var(--ink-3); }
+.td-graph-rail .legend .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; margin-right: 4px; vertical-align: middle; }
+.td-graph-rail .legend .dot.s-done { background: var(--green); }
+.td-graph-rail .legend .dot.s-progress { background: var(--accent); }
+.td-graph-rail .legend .dot.s-backlog { background: var(--ink-3); }
+.td-graph-svg { width: 100%; height: var(--graph-canvas-h); display: block; }
+.td-graph-context-band {
+  border-top: 1px solid var(--border-soft);
+  padding: 8px 14px;
+  display: flex; align-items: center; gap: 14px;
+  font-size: var(--text-xs); color: var(--ink-3);
+  background: rgba(255,255,255,0.015);
+  flex-wrap: wrap;
+}
+.td-graph-context-band .lbl { letter-spacing: 0.08em; text-transform: uppercase; flex: 0 0 auto; }
+.td-graph-context-band .ctx-pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 8px; font-size: var(--text-sm); border-radius: 3px;
+  background: var(--bg-card); border: 1px solid var(--border-soft);
+  cursor: pointer; color: var(--ink-2);
+}
+.td-graph-context-band .ctx-pill.lesson .glyph { color: var(--green); }
+.td-graph-context-band .ctx-pill.issue .glyph { color: var(--red); }
+.td-graph-context-band .ctx-pill.handover { font-style: italic; font-family: var(--font-serif); font-size: 11.5px; }
+
+.td-graph-controls {
+  display: flex; gap: 6px; padding: 8px 14px;
+  border-top: 1px solid var(--border-soft);
+  background: rgba(255,255,255,0.015);
+}
+.td-graph-controls .gc-btn {
+  background: rgba(0,0,0,0.4); border: 1px solid var(--border-soft);
+  color: var(--ink-2); font-size: var(--text-xs); padding: 3px 8px; border-radius: 4px;
+  cursor: pointer; backdrop-filter: blur(4px);
+}
+.td-graph-controls .gc-btn.on { background: rgba(74,158,255,0.18); color: var(--accent); border-color: rgba(74,158,255,0.4); }
+
+/* SVG: column guides + nodes */
+.td-graph-svg .col-guide { stroke: var(--graph-col-guide); stroke-dasharray: 3 4; }
+.td-graph-svg .col-label { fill: var(--ink-3); font-size: 9px; font-family: var(--font-mono); text-transform: uppercase; }
+.td-graph-svg .node-rect { fill: var(--bg-card); stroke: var(--border); filter: drop-shadow(0 4px 14px rgba(0,0,0,0.5)); }
+.td-graph-svg .node-rect.center { stroke: var(--accent); }
+.td-graph-svg .node-rect.faded { opacity: 0.6; }
+.td-graph-svg .node-id { fill: var(--epic-1); font-family: var(--font-mono); font-size: 10px; }
+.td-graph-svg .node-title { fill: var(--ink); font-size: 11px; font-weight: 600; }
+.td-graph-svg .node-meta { fill: var(--ink-3); font-size: 9px; font-family: var(--font-mono); }
+.td-graph-svg .edge-path { fill: none; stroke: var(--graph-edge-stroke); stroke-width: 1.4; }
+.td-graph-svg .edge-path.active { stroke: var(--graph-edge-stroke-active); }
+.td-graph-svg .status-dot.s-done { fill: var(--green); }
+.td-graph-svg .status-dot.s-progress { fill: var(--accent); }
+.td-graph-svg .status-dot.s-backlog { fill: var(--ink-3); }

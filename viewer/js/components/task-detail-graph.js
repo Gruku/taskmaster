@@ -81,8 +81,93 @@ function renderRail(ctx) {
 }
 
 function renderGraphFrame(ctx) {
-  return h('div', { class: 'td-graph-placeholder', 'data-test': 'graph-frame' }, '');
+  const frame = h('div', { class: 'td-graph-frame', 'data-test': 'graph-frame' });
+  frame.appendChild(renderGraphRail());
+  frame.appendChild(renderGraphSvg(ctx));
+  frame.appendChild(renderContextBand(ctx));
+  frame.appendChild(renderGraphControls(ctx));
+  return frame;
 }
+
+function renderGraphRail() {
+  return h('div', { class: 'td-graph-rail' }, [
+    h('span', { class: 'axis' }, '← Dependencies | This task | Unblocks →'),
+    h('span', { class: 'legend' }, [
+      h('span', {}, [h('span', { class: 'dot s-done' }), 'done']),
+      h('span', {}, [h('span', { class: 'dot s-progress' }), 'in progress']),
+      h('span', {}, [h('span', { class: 'dot s-backlog' }), 'backlog']),
+    ]),
+  ]);
+}
+
+function renderGraphSvg({ task, related, onNavigate }) {
+  const upstream = (related?.dependencies || []).map((d) => ({
+    id: d.id, title: d.title, status: d.status, depth: 1,
+  }));
+  const downstream = (related?.unblocks || []).map((d) => ({
+    id: d.id, title: d.title, status: d.status, depth: 1,
+  }));
+  const layout = computeGraphLayout({
+    center: { id: task.id, title: task.title, status: task.status,
+              priority: task.priority, estimate: task.estimate,
+              time_in_status: task.time_in_status,
+              progress: task.auto_mode?.progress ?? null,
+              step: task.auto_mode?.step ?? null },
+    upstream, downstream,
+    width: 820, height: 320,
+  });
+
+  const svg = h('svg', {
+    class: 'td-graph-svg', viewBox: '0 0 820 320',
+    preserveAspectRatio: 'xMidYMid meet',
+    'data-test': 'graph-svg',
+  });
+
+  for (const col of layout.columns) {
+    svg.appendChild(h('line', { class: 'col-guide', x1: col.x, y1: 14, x2: col.x, y2: 314 }));
+    svg.appendChild(h('text', { class: 'col-label', x: col.x, y: 14, 'text-anchor': 'middle' }, col.label));
+  }
+  for (const e of layout.edges) {
+    svg.appendChild(h('path', { class: 'edge-path', d: e.path }));
+  }
+  for (const n of layout.nodes) {
+    svg.appendChild(renderNode(n, onNavigate));
+  }
+  return svg;
+}
+
+function renderNode(n, onNavigate) {
+  const g = h('g', { class: 'node', 'data-id': n.id, on: { click: () => onNavigate?.(n.id) } });
+  g.appendChild(h('rect', {
+    class: `node-rect ${n.isCenter ? 'center' : ''} ${n.faded ? 'faded' : ''}`,
+    x: n.x, y: n.y, width: n.w, height: n.h, rx: 6, ry: 6,
+  }));
+  g.appendChild(h('circle', {
+    class: `status-dot s-${(n.status || '').replace(/[^a-z]/gi, '')}`,
+    cx: n.x + 10, cy: n.y + 12, r: 4,
+  }));
+  g.appendChild(h('text', { class: 'node-id', x: n.x + 20, y: n.y + 16 }, n.id));
+  if (n.time_in_status) {
+    g.appendChild(h('text', { class: 'node-meta', x: n.x + n.w - 8, y: n.y + 16, 'text-anchor': 'end' }, n.time_in_status));
+  }
+  g.appendChild(h('text', { class: 'node-title', x: n.x + 10, y: n.y + 36 }, truncate(n.title, n.isCenter ? 20 : 14)));
+  if (n.priority || n.estimate) {
+    g.appendChild(h('text', { class: 'node-meta', x: n.x + 10, y: n.y + n.h - 8 },
+      [n.priority, n.estimate].filter(Boolean).join(' · ')));
+  }
+  if (n.isCenter && (n.progress != null || n.step)) {
+    const barW = n.w - 20;
+    const pct = Math.max(0, Math.min(1, n.progress || 0));
+    g.appendChild(h('rect', { x: n.x + 10, y: n.y + n.h - 22, width: barW, height: 3, fill: 'rgba(255,255,255,0.05)' }));
+    g.appendChild(h('rect', { x: n.x + 10, y: n.y + n.h - 22, width: barW * pct, height: 3, fill: 'var(--accent)' }));
+    if (n.step) {
+      g.appendChild(h('text', { class: 'node-meta', x: n.x + 10, y: n.y + n.h - 26 }, truncate(n.step, 22)));
+    }
+  }
+  return g;
+}
+
+function truncate(s, n) { s = s || ''; return s.length > n ? s.slice(0, n - 1) + '…' : s; }
 function renderTabs(ctx) {
   return h('div', { class: 'td-tabs-placeholder', 'data-test': 'tabs' }, '');
 }
