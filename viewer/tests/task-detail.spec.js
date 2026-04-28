@@ -4,6 +4,10 @@ import { test, expect } from '@playwright/test';
 const TASK_ID = process.env.TM_TEST_TASK_ID || 'T-148';
 
 test.describe('Task Detail screen', () => {
+  test.beforeEach(async ({ request }) => {
+    await request.put('/api/viewer/prefs', { data: { screens: { task_detail: { view: 'A' } } } });
+  });
+
   test('Variant A renders header, meta, and title', async ({ page }) => {
     await page.goto(`/v3/#/task/${TASK_ID}`);
     await expect(page.locator('[data-test="view-toggle"]')).toBeVisible();
@@ -64,11 +68,15 @@ test.describe('Task Detail screen', () => {
   test('right rail panels match between Variant A and Variant B', async ({ page }) => {
     await page.request.put('/api/viewer/prefs', { data: { screens: { task_detail: { view: 'A' } } } });
     await page.goto(`/v3/#/task/${TASK_ID}`);
-    const aPanels = await page.locator('[data-test="rail"] .td-panel').count();
+    const aRail = page.locator('[data-test="rail"] .td-panel');
+    await expect(aRail.first()).toBeVisible();
+    const aPanels = await aRail.count();
 
     await page.request.put('/api/viewer/prefs', { data: { screens: { task_detail: { view: 'B' } } } });
     await page.reload();
-    const bPanels = await page.locator('[data-test="rail"] .td-panel').count();
+    const bRail = page.locator('[data-test="rail"] .td-panel');
+    await expect(bRail.first()).toBeVisible();
+    const bPanels = await bRail.count();
     expect(aPanels).toBe(bPanels);
     expect(aPanels).toBeGreaterThanOrEqual(6);
   });

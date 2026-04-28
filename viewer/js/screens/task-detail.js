@@ -30,14 +30,15 @@ export async function mount(root, { params, store, api, prefs, subpath }) {
     location.reload();
   };
 
+  const prefsData = store?.getPrefs?.() || null;
   const urlView = params?.view === 'A' || params?.view === 'B' ? params.view : null;
-  const view = urlView || (prefs?.screens?.task_detail?.view === 'B' ? 'B' : 'A');
+  const view = urlView || (prefsData?.screens?.task_detail?.view === 'B' ? 'B' : 'A');
   let cleanup;
   if (view === 'B') {
     const mod = await import('../components/task-detail-graph.js');
-    cleanup = mod.mountTaskDetailGraph(root, { task, related, prefs, onNavigate, onToggleVariant });
+    cleanup = mod.mountTaskDetailGraph(root, { task, related, prefs: prefsData, onNavigate, onToggleVariant });
   } else {
-    cleanup = mountTaskDetailDocument(root, { task, related, prefs, onNavigate, onToggleVariant });
+    cleanup = mountTaskDetailDocument(root, { task, related, prefs: prefsData, onNavigate, onToggleVariant });
   }
   return cleanup;
 }
