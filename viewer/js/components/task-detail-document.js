@@ -52,13 +52,16 @@ function renderGrid(ctx) {
 }
 
 function renderBody({ task }) {
-  if (!task) {
-    return h('div', { class: 'td-body td-empty' }, 'task not found');
-  }
-  return h('main', { class: 'td-body' }, [
+  if (!task) return h('div', { class: 'td-body td-empty' }, 'task not found');
+  const children = [
     renderMeta(task),
     renderTitle(task),
-  ]);
+  ];
+  if (task.locked_by) {
+    children.push(h('div', { class: 'td-lock-banner', 'data-test': 'lock-banner' },
+      [h('span', {}, '🔒 '), h('span', {}, `locked by ${task.locked_by}`)]));
+  }
+  return h('main', { class: 'td-body' }, children.filter(Boolean));
 }
 
 function renderMeta(task) {
