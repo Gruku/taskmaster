@@ -25,6 +25,24 @@ async function http(method, path, body) {
   return resp.text();
 }
 
+export async function getTask(id) {
+  const resp = await fetch(`/api/task/${encodeURIComponent(id)}`);
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => ({}));
+    throw new Error(body.error || `task ${id} not found`);
+  }
+  return resp.json();
+}
+
+export async function getTaskRelated(id) {
+  const resp = await fetch(`/api/task/${encodeURIComponent(id)}/related`);
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => ({}));
+    throw new Error(body.error || `related for ${id} not found`);
+  }
+  return resp.json();
+}
+
 export const api = {
   identity:        ()    => http('GET', '/api/identity'),
   backlog:         ()    => http('GET', '/api/backlog'),
@@ -32,5 +50,7 @@ export const api = {
   prefs:           ()    => http('GET', '/api/viewer/prefs'),
   savePrefs:       (p)   => http('PUT', '/api/viewer/prefs', p),
   autoState:       ()    => http('GET', '/api/auto/state').then(r => r && r.state),
+  getTask,
+  getTaskRelated,
   // Plans 5/6 add: reinforceLesson, getRecap, putRecap, putAutoState, etc.
 };
