@@ -95,3 +95,17 @@ test('mixed graph: stack siblings vertically inside a column, no overlap', () =>
     assert.equal(edge.to, 'C');
   }
 });
+
+test('cycle handling: a task appearing in both upstream and downstream renders once', () => {
+  // Pathological input: T-X is both an upstream and a downstream of center.
+  const out = computeGraphLayout({
+    center: { id: 'C', title: 'Center', status: 'in-progress' },
+    upstream:   [{ id: 'X', title: 'Both', status: 'done', depth: 1 }],
+    downstream: [{ id: 'X', title: 'Both', status: 'done', depth: 1 }],
+    width: 800, height: 320,
+  });
+  const xs = out.nodes.filter(n => n.id === 'X');
+  assert.equal(xs.length, 1, 'duplicate task id should be deduplicated');
+  // Convention: upstream wins (placed at column -1)
+  assert.equal(xs[0].column, -1);
+});

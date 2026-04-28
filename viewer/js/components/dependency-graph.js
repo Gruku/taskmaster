@@ -69,9 +69,17 @@ export function computeGraphLayout(input) {
     step: input.center.step ?? null,
   });
 
-  // Upstream and downstream lanes
-  placeSide(input.upstream || [], -1, nodes, edges, columns, centerY, input.center.id);
-  placeSide(input.downstream || [], +1, nodes, edges, columns, centerY, input.center.id);
+  // Upstream and downstream lanes — dedupe ids that appear on both sides
+  // (upstream wins) and drop any ref that collides with the center.
+  const upstreamIds = new Set((input.upstream || []).map((n) => n.id));
+  const downstreamFiltered = (input.downstream || []).filter(
+    (n) => !upstreamIds.has(n.id) && n.id !== input.center.id
+  );
+  const upstreamFiltered = (input.upstream || []).filter(
+    (n) => n.id !== input.center.id
+  );
+  placeSide(upstreamFiltered, -1, nodes, edges, columns, centerY, input.center.id);
+  placeSide(downstreamFiltered, +1, nodes, edges, columns, centerY, input.center.id);
 
   return { columns, nodes, edges };
 }
