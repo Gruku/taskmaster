@@ -40,3 +40,23 @@ test('deep upstream chain: L-2 connects through L-1, not directly to center', ()
   const u2Edge = out.edges.find(e => e.from === 'U2');
   assert.equal(u2Edge.to, 'U1', 'U2 should chain through U1, not directly to center');
 });
+
+test('deep downstream chain: L+2 connects through L+1', () => {
+  const out = computeGraphLayout({
+    center: { id: 'C', title: 'Center', status: 'in-progress' },
+    upstream: [],
+    downstream: [
+      { id: 'D1', title: 'Dn 1', status: 'backlog', depth: 1 },
+      { id: 'D2', title: 'Dn 2', status: 'backlog', depth: 2 },
+    ],
+    width: 800, height: 320,
+  });
+  const d2 = out.nodes.find(n => n.id === 'D2');
+  const d1 = out.nodes.find(n => n.id === 'D1');
+  assert.equal(d2.column, 2);
+  assert.equal(d1.column, 1);
+  assert.ok(d2.faded);
+
+  const d2Edge = out.edges.find(e => e.from === 'D2');
+  assert.equal(d2Edge.to, 'D1', 'D2 should chain through D1');
+});
