@@ -61,7 +61,33 @@ function renderBody({ task }) {
     children.push(h('div', { class: 'td-lock-banner', 'data-test': 'lock-banner' },
       [h('span', {}, '🔒 '), h('span', {}, `locked by ${task.locked_by}`)]));
   }
+  children.push(renderChips(task));
   return h('main', { class: 'td-body' }, children.filter(Boolean));
+}
+
+function renderChips(task) {
+  const epicColorVar = `--epic-1`;
+  const priClass = (task.priority || '').toLowerCase();
+  const chips = [
+    h('span', { class: 'td-status-pill' }, task.status || 'unknown'),
+    h('span', { class: `td-pri-pill ${priClass === 'critical' ? 'crit' : priClass}` }, task.priority || ''),
+    task.estimate ? h('span', { class: 'td-size-chip' }, task.estimate) : null,
+    task.epic ? h('span', { class: 'td-epic-chip', style: `--epic-1: var(${epicColorVar})` },
+      [h('span', { class: 'td-swatch' }), h('span', {}, task.epic)]) : null,
+    task.branch ? h('span', { class: 'td-branch', 'data-test': 'branch', on: { click: (e) => copyToChip(e.currentTarget, task.branch) } },
+      [h('span', { class: 'td-id-text' }, `⎇ ${task.branch}`)]) : null,
+    task.worktree ? h('span', { class: 'td-worktree', on: { click: (e) => copyToChip(e.currentTarget, task.worktree) } },
+      [h('span', { class: 'td-id-text' }, `⌂ ${task.worktree}`)]) : null,
+    task.release ? h('span', { class: 'td-release' }, task.release) : null,
+    task.sub_repo ? h('span', { class: 'td-subrepo' }, `· ${task.sub_repo}`) : null,
+  ].filter(Boolean);
+  return h('div', { class: 'td-chips', 'data-test': 'chips' }, chips);
+}
+
+async function copyToChip(el, value) {
+  try { await navigator.clipboard.writeText(value); } catch {}
+  el.classList.add('copied');
+  setTimeout(() => el.classList.remove('copied'), 900);
 }
 
 function renderMeta(task) {

@@ -19,4 +19,14 @@ test.describe('Task Detail screen', () => {
       await expect(banner).toContainText(/locked/i);
     }
   });
+
+  test('chip row contains status, priority, size, epic', async ({ page }) => {
+    await page.goto(`/v3/#/task/${TASK_ID}`);
+    const chips = page.locator('[data-test="chips"]');
+    await expect(chips).toBeVisible();
+    await expect(chips.locator('.td-status-pill')).toBeVisible();
+    await expect(chips.locator('.td-pri-pill')).toBeVisible();
+    await expect(chips.locator('.td-size-chip')).toBeVisible();
+    await expect(chips.locator('.td-epic-chip')).toBeVisible();
+  });
 });
