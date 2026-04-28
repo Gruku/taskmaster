@@ -3912,6 +3912,114 @@ def _load_task_full(task_id: str) -> dict | None:
     return out
 
 
+def _load_related_for_task(task_id: str) -> dict | None:
+    """Build the related-entities payload for a task: lessons (anchor-matched),
+    handovers (task_ids), issues (task_ids), forward deps, reverse deps.
+    Returns None if the task is unknown.
+    """
+    import fnmatch
+    import re
+    import yaml
+    from pathlib import Path
+
+    backlog_path = Path("backlog.yaml")
+    if not backlog_path.exists():
+        return None
+    backlog = yaml.safe_load(backlog_path.read_text()) or {}
+    tasks = backlog.get("tasks") or []
+    me = next((t for t in tasks if t.get("id") == task_id), None)
+    if me is None:
+        return None
+
+    my_anchors = list(me.get("anchors") or [])
+
+    def _read_fm(p: Path) -> tuple[dict, str]:
+        raw = p.read_text()
+        m = re.match(r"^---\n(.*?)\n---\n(.*)$", raw, re.DOTALL)
+        if not m:
+            return {}, raw
+        try:
+            fm = yaml.safe_load(m.group(1)) or {}
+        except Exception:
+            fm = {}
+        return fm, m.group(2)
+
+    def _anchors_overlap(a: list, b: list) -> bool:
+        for pat in a:
+            for other in b:
+                if fnmatch.fnmatch(other, pat) or fnmatch.fnmatch(pat, other):
+                    return True
+                if pat == other:
+                    return True
+        return False
+
+    lessons: list[dict] = []
+    lessons_dir = Path(".taskmaster") / "lessons"
+    if lessons_dir.is_dir():
+        for f in sorted(lessons_dir.glob("*.md")):
+            fm, body = _read_fm(f)
+            their_anchors = list(fm.get("anchors") or [])
+            if _anchors_overlap(my_anchors, their_anchors):
+                lessons.append({
+                    "id": fm.get("id") or f.stem,
+                    "kind": fm.get("kind"),
+                    "title": fm.get("title") or "",
+                    "anchors": their_anchors,
+                    "summary": body.strip().splitlines()[0] if body.strip() else "",
+                    "_path": str(f),
+                })
+
+    handovers: list[dict] = []
+    handovers_dir = Path(".taskmaster") / "handovers"
+    if handovers_dir.is_dir():
+        for f in sorted(handovers_dir.glob("*.md")):
+            fm, body = _read_fm(f)
+            tids = list(fm.get("task_ids") or [])
+            if task_id in tids:
+                handovers.append({
+                    "id": fm.get("id") or f.stem,
+                    "kind": fm.get("kind"),
+                    "session": fm.get("session"),
+                    "created": fm.get("created"),
+                    "quote": body.strip().splitlines()[0] if body.strip() else "",
+                    "_path": str(f),
+                })
+
+    issues: list[dict] = []
+    issues_dir = Path(".taskmaster") / "issues"
+    if issues_dir.is_dir():
+        for f in sorted(issues_dir.glob("*.md")):
+            fm, body = _read_fm(f)
+            tids = list(fm.get("task_ids") or [])
+            if task_id in tids:
+                issues.append({
+                    "id": fm.get("id") or f.stem,
+                    "severity": fm.get("severity"),
+                    "status": fm.get("status"),
+                    "title": fm.get("title") or "",
+                    "_path": str(f),
+                })
+
+    dep_ids = list(me.get("depends_on") or [])
+    dependencies = [
+        {"id": t["id"], "title": t.get("title", ""), "status": t.get("status", "")}
+        for t in tasks if t.get("id") in dep_ids
+    ]
+    unblocks = [
+        {"id": t["id"], "title": t.get("title", ""), "status": t.get("status", "")}
+        for t in tasks if task_id in (t.get("depends_on") or [])
+    ]
+
+    return {
+        "task_id": task_id,
+        "lessons": lessons,
+        "handovers": handovers,
+        "issues": issues,
+        "dependencies": dependencies,
+        "unblocks": unblocks,
+    }
+
+
 # ── HTTP Viewer Server ───────────────────────────────────
 
 
@@ -3990,6 +4098,14 @@ class ViewerHandler(BaseHTTPRequestHandler):
             self._serve_file(_backlog_path(), "text/yaml")
         elif clean_path.startswith("/api/task/"):
             rest = clean_path[len("/api/task/"):].rstrip("/")
+            if rest.endswith("/related"):
+                task_id = rest[: -len("/related")]
+                related = _load_related_for_task(task_id)
+                if related is None:
+                    self._send_json(404, {"ok": False, "error": f"task {task_id} not found"})
+                    return
+                self._send_json(200, related)
+                return
             if "/" not in rest and rest:
                 full = _load_task_full(rest)
                 if full is None:

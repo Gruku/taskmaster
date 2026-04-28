@@ -132,3 +132,61 @@ def test_get_task_404_for_empty_id(running_server):
     with pytest.raises(urllib.error.HTTPError) as exc:
         urllib.request.urlopen(f"{base}/api/task/")
     assert exc.value.code == 404
+
+
+def test_get_task_related_returns_lessons_handovers_issues_and_deps(running_server, tmp_path):
+    base, _ = running_server
+
+    (tmp_path / ".taskmaster" / "lessons" / "LSN-01.md").write_text(
+        "---\n"
+        "id: LSN-01\n"
+        "kind: pattern\n"
+        "anchors: ['plugins/taskmaster/viewer/**/*.js']\n"
+        "title: Use ES modules without bundler\n"
+        "---\n"
+        "Vanilla ES modules load without a build step.\n"
+    )
+    (tmp_path / ".taskmaster" / "lessons" / "LSN-02.md").write_text(
+        "---\n"
+        "id: LSN-02\n"
+        "kind: gotcha\n"
+        "anchors: ['scripts/**/*.sh']\n"
+        "title: Unrelated\n"
+        "---\nNot in scope.\n"
+    )
+    (tmp_path / ".taskmaster" / "handovers" / "2026-04-25-detail.md").write_text(
+        "---\n"
+        "id: HOV-0001a\n"
+        "task_ids: [T-148]\n"
+        "kind: mid-task\n"
+        "session: SES-0010\n"
+        "created: '2026-04-25T16:48:00Z'\n"
+        "---\n"
+        "Paused at variant B graph layout.\n"
+    )
+    (tmp_path / ".taskmaster" / "issues" / "ISS-01.md").write_text(
+        "---\n"
+        "id: ISS-01\n"
+        "severity: Medium\n"
+        "status: open\n"
+        "task_ids: [T-148]\n"
+        "title: Bezier control points off on row offset\n"
+        "---\nSymptom: edges look kinked.\n"
+    )
+
+    resp = urllib.request.urlopen(f"{base}/api/task/T-148/related")
+    assert resp.status == 200
+    body = json.loads(resp.read())
+
+    lesson_ids = [l["id"] for l in body["lessons"]]
+    assert "LSN-01" in lesson_ids
+    assert "LSN-02" not in lesson_ids
+
+    handover_ids = [h["id"] for h in body["handovers"]]
+    assert "HOV-0001a" in handover_ids
+
+    issue_ids = [i["id"] for i in body["issues"]]
+    assert "ISS-01" in issue_ids
+
+    assert any(t["id"] == "T-100" for t in body["dependencies"])
+    assert any(t["id"] == "T-200" for t in body["unblocks"])
