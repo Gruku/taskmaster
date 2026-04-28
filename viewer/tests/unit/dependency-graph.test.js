@@ -60,3 +60,38 @@ test('deep downstream chain: L+2 connects through L+1', () => {
   const d2Edge = out.edges.find(e => e.from === 'D2');
   assert.equal(d2Edge.to, 'D1', 'D2 should chain through D1');
 });
+
+test('mixed graph: stack siblings vertically inside a column, no overlap', () => {
+  const out = computeGraphLayout({
+    center: { id: 'C', title: 'Center', status: 'in-progress' },
+    upstream: [
+      { id: 'U1a', title: 'Up 1a', status: 'done', depth: 1 },
+      { id: 'U1b', title: 'Up 1b', status: 'done', depth: 1 },
+    ],
+    downstream: [
+      { id: 'D1a', title: 'Dn 1a', status: 'backlog', depth: 1 },
+      { id: 'D1b', title: 'Dn 1b', status: 'backlog', depth: 1 },
+      { id: 'D1c', title: 'Dn 1c', status: 'backlog', depth: 1 },
+    ],
+    width: 800, height: 320,
+  });
+  const upCol = out.nodes.filter(n => n.column === -1).sort((a, b) => a.y - b.y);
+  assert.equal(upCol.length, 2);
+  // No vertical overlap
+  assert.ok(upCol[0].y + upCol[0].h <= upCol[1].y, 'upstream siblings must not overlap');
+
+  const downCol = out.nodes.filter(n => n.column === 1).sort((a, b) => a.y - b.y);
+  assert.equal(downCol.length, 3);
+  assert.ok(downCol[0].y + downCol[0].h <= downCol[1].y);
+  assert.ok(downCol[1].y + downCol[1].h <= downCol[2].y);
+
+  // Edges to center exist for every L-1 node
+  for (const n of upCol) {
+    const edge = out.edges.find(e => e.from === n.id);
+    assert.equal(edge.to, 'C');
+  }
+  for (const n of downCol) {
+    const edge = out.edges.find(e => e.from === n.id);
+    assert.equal(edge.to, 'C');
+  }
+});
