@@ -30,7 +30,8 @@ export async function mount(root, { params, store, api, prefs, subpath }) {
     location.reload();
   };
 
-  const view = prefs?.screens?.task_detail?.view === 'B' ? 'B' : 'A';
+  const urlView = params?.view === 'A' || params?.view === 'B' ? params.view : null;
+  const view = urlView || (prefs?.screens?.task_detail?.view === 'B' ? 'B' : 'A');
   let cleanup;
   if (view === 'B') {
     const mod = await import('../components/task-detail-graph.js');
