@@ -190,3 +190,27 @@ def test_get_task_related_returns_lessons_handovers_issues_and_deps(running_serv
 
     assert any(t["id"] == "T-100" for t in body["dependencies"])
     assert any(t["id"] == "T-200" for t in body["unblocks"])
+
+
+def test_get_task_surfaces_forward_compat_fields(running_server, tmp_path):
+    base, _ = running_server
+    (tmp_path / ".taskmaster" / "tasks" / "T-148.md").write_text(
+        "---\n"
+        "id: T-148\n"
+        "worktree: ../wt-task-detail\n"
+        "spec_review: {verdict: pass, codex_note: 'Looks clean.'}\n"
+        "patchnote: 'Adds Variant A and B detail views.'\n"
+        "release: v2.1.0\n"
+        "locked_by: 'session SES-0010'\n"
+        "docs:\n"
+        "  spec: docs/spec.md\n"
+        "---\n"
+        "## Description\nbody.\n"
+    )
+    body = json.loads(urllib.request.urlopen(f"{base}/api/task/T-148").read())
+    assert body["worktree"] == "../wt-task-detail"
+    assert body["spec_review"]["verdict"] == "pass"
+    assert "Looks clean" in body["spec_review"]["codex_note"]
+    assert body["patchnote"].startswith("Adds Variant A")
+    assert body["release"] == "v2.1.0"
+    assert body["locked_by"] == "session SES-0010"
