@@ -16,10 +16,12 @@
 
 .kanban-search {
   display: inline-flex; align-items: center; gap: var(--sp-2);
-  flex: 1 1 360px; min-width: 300px;
+  flex: 1 1 280px; min-width: 0;
   background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--r-md);
   padding: 6px var(--sp-3);
 }
+.kanban-search input { min-width: 0; }
+.kanban-search .kbd { flex: 0 0 auto; }
 .kanban-search input {
   background: transparent; border: 0; outline: 0;
   color: var(--ink); font-size: var(--text-base);
@@ -72,6 +74,8 @@
   font-size: var(--text-sm); padding: 6px var(--sp-3); border-radius: var(--r-md);
   cursor: pointer; display: inline-flex; align-items: center; gap: var(--sp-1);
   font-family: var(--font-sans);
+  white-space: nowrap;
+  flex: 0 0 auto;
 }
 .kanban-group-btn:hover,
 .kanban-sort-btn:hover { color: var(--ink); border-color: var(--border-strong); }
@@ -390,102 +394,252 @@
 .kanban-pri-tog.high.on     { background: rgba(214,164,95,0.22); border-color: var(--amber); color: var(--amber); }
 .kanban-pri-tog.medium.on   { background: rgba(74,158,255,0.18); border-color: var(--accent);color: var(--accent); }
 .kanban-pri-tog.low.on      { background: rgba(127,179,240,0.12); border-color: var(--accent-2); color: var(--accent-2); }
+/* Always-short 2-letter labels keep the priority row compact. */
+.kanban-pri-tog { padding: 5px 10px; min-width: 36px; text-align: center; }
 
-/* ─────────── PHASE STEPPER ───────────
-   Each phase is a fully bordered cell. Connector arrows between phases
-   showcase the temporal progression (left-to-right time arrow). */
+/* ─────────── PHASE STEPPER (V12C 3-region timeline) ───────────
+   Layout: [All-pill] [past-region: ‹  chips  ›] [active-card] [future-region: ‹  strip  ›] [Orphans-pill]
+   Past chips are circles that morph to amber pills on selection (name reveal).
+   Future cards live in a translateX strip; card width is JS-set so VISIBLE_FUTURE fit. */
 .kanban-phase-stepper {
-  display: flex; align-items: stretch; gap: var(--sp-4);
-  background: transparent;
-  border: 0;
-  padding: 0;
-}
-.kanban-phase-step {
-  appearance: none; background: var(--bg-card); color: inherit; text-align: left;
-  flex: 1; min-width: 0;
-  padding: 12px var(--sp-4) 14px;
-  cursor: pointer;
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  position: relative;
-  display: flex; flex-direction: column; gap: 8px;
-  transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+  display: flex; align-items: center; gap: var(--sp-3);
+  background: transparent; border: 0; padding: 0;
+  position: relative; min-height: 64px;
+  overflow: visible;
   font-family: var(--font-sans);
 }
-.kanban-phase-step:hover  { background: var(--bg-card-hover, #2c2e34); border-color: var(--border-strong); }
-.kanban-phase-step.active { background: rgba(74,158,255,0.08); border-color: var(--accent); }
-/* Utility buttons (history / all / orphans) are visually distinct from
-   phase cards — pill-style, transparent background, no full border. */
-.kanban-phase-step.all-step,
-.kanban-phase-step.orphans-step,
-.kanban-phase-step.history-toggle {
+
+/* Bookend utility pills (All / Orphans). */
+.kanban-phase-stepper .phs-util {
+  appearance: none;
   flex: 0 0 auto;
-  min-width: 0;
-  padding: 8px 14px;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 12px;
   background: transparent;
   border: 1px dashed var(--border);
-  flex-direction: row;
-  align-items: center;
-  gap: 8px;
+  border-radius: var(--r-md);
   color: var(--ink-3);
-  font-size: var(--text-sm);
+  font-size: var(--text-sm); font-family: var(--font-sans);
+  cursor: pointer;
+  transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
-.kanban-phase-step.all-step:hover,
-.kanban-phase-step.orphans-step:hover,
-.kanban-phase-step.history-toggle:hover {
+.kanban-phase-stepper .phs-util:hover {
   background: var(--shell-hover-overlay, rgba(255,255,255,0.03));
   border-color: var(--border-strong);
   color: var(--ink);
 }
-.kanban-phase-step.all-step.active {
+.kanban-phase-stepper .phs-util.active {
   background: rgba(74,158,255,0.08);
   border-style: solid;
   border-color: var(--accent);
   color: var(--ink);
 }
-.kanban-phase-step .util-icon { font-size: 16px; opacity: 0.8; }
-.kanban-phase-step .util-text { font-weight: 500; }
-.kanban-phase-step .ph-stat { font-size: var(--text-xs); color: var(--ink-3); margin-left: var(--sp-2); }
+.kanban-phase-stepper .phs-util .util-icon { font-size: 15px; opacity: 0.8; }
+.kanban-phase-stepper .phs-util .util-text { font-weight: 500; }
+.kanban-phase-stepper .phs-util .util-stat { font-size: var(--text-xs); color: var(--ink-3); font-variant-numeric: tabular-nums; }
 
-/* Time-arrow connector between two real phase cards.
-   Lives in the flex gap; uses solid ink-3 for clear contrast. */
-.kanban-phase-step[data-key] + .kanban-phase-step[data-key]::before {
-  content: '';
-  position: absolute;
-  left: calc(var(--sp-4) * -1);
-  top: 50%;
-  width: var(--sp-4);
-  height: 1px;
+/* Past region — content-sized, holds chips between two slide buttons. */
+.kanban-phase-stepper .phs-past-region {
+  flex: 0 0 auto; min-width: 0;
+  display: flex; align-items: center; gap: 0;
+  overflow: hidden;
+}
+.kanban-phase-stepper .phs-past-region > .item        { margin-left: 16px; }
+.kanban-phase-stepper .phs-past-region > .item.first  { margin-left: 0; }
+.kanban-phase-stepper .phs-past-region > .item.hidden {
+  flex: 0 0 0 !important;
+  width: 0 !important; max-width: 0 !important; min-width: 0 !important;
+  margin-left: 0 !important;
+  padding-left: 0 !important; padding-right: 0 !important;
+  border-left-width: 0 !important; border-right-width: 0 !important;
+  opacity: 0; pointer-events: none;
+}
+
+/* Past chip — circle that expands to amber pill on selection. */
+.kanban-phase-stepper .phs-chip {
+  appearance: none;
+  flex: 0 0 auto;
+  min-width: 36px; height: 36px;
+  padding: 0;
+  border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center; gap: 0;
+  font-family: var(--font-mono); font-size: 13px; font-weight: 700;
+  background: var(--green); color: var(--bg-canvas);
+  cursor: pointer; border: 0;
+  overflow: hidden; white-space: nowrap;
+  box-sizing: border-box;
+  transition:
+    padding       var(--anim-dur, 320ms) cubic-bezier(0.3,0.7,0.4,1),
+    border-radius var(--anim-dur, 320ms) cubic-bezier(0.3,0.7,0.4,1),
+    gap           var(--anim-dur, 320ms) cubic-bezier(0.3,0.7,0.4,1),
+    width         var(--anim-dur, 320ms) cubic-bezier(0.3,0.7,0.4,1),
+    max-width     var(--anim-dur, 320ms) cubic-bezier(0.3,0.7,0.4,1),
+    margin        var(--anim-dur, 320ms) cubic-bezier(0.3,0.7,0.4,1),
+    flex-basis    var(--anim-dur, 320ms) cubic-bezier(0.3,0.7,0.4,1),
+    background 220ms, color 220ms, opacity 220ms, box-shadow 220ms;
+}
+.kanban-phase-stepper .phs-chip .num { flex: 0 0 auto; color: var(--bg-canvas); }
+.kanban-phase-stepper .phs-chip .lbl {
+  max-width: 0; opacity: 0;
+  overflow: hidden;
+  font-family: var(--font-sans); font-size: var(--text-xs); font-weight: 600;
+  transition:
+    max-width var(--anim-dur, 320ms) cubic-bezier(0.3,0.7,0.4,1),
+    opacity   220ms;
+}
+.kanban-phase-stepper .phs-chip.filtered {
+  padding: 0 14px; gap: 8px;
+  border-radius: var(--r-md);
+  background: var(--amber); color: var(--bg-canvas);
+  box-shadow: 0 0 0 3px rgba(214,164,95,0.25);
+}
+.kanban-phase-stepper .phs-chip.filtered .lbl { max-width: 220px; opacity: 1; color: var(--bg-canvas); }
+
+/* Slide button — circle with corner badge counting hidden cards. */
+.kanban-phase-stepper .phs-slide-btn {
+  appearance: none;
+  flex: 0 0 auto;
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  background: transparent;
+  border: 1px dashed var(--border-strong);
+  color: var(--ink-2);
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; font-size: 16px; padding: 0;
+  overflow: visible; position: relative;
+  transition: opacity 220ms, transform 220ms, border-color 200ms, color 200ms;
+}
+.kanban-phase-stepper .phs-slide-btn:hover  { border-style: solid; border-color: var(--accent); color: var(--accent); }
+.kanban-phase-stepper .phs-slide-btn.disabled { opacity: 0; pointer-events: none; transform: scale(0.4); }
+.kanban-phase-stepper .phs-slide-btn .badge {
+  position: absolute; top: -6px; right: -6px;
+  background: var(--bg-card); border: 1px solid var(--border);
+  color: var(--ink-3);
+  font-size: 9px; font-family: var(--font-mono); font-weight: 700;
+  padding: 1px 5px; border-radius: 8px;
+  pointer-events: none;
+}
+
+/* Active card — center, fixed-width, amber when filtered. */
+.kanban-phase-stepper .phs-active-card {
+  appearance: none; text-align: left;
+  flex: 0 0 480px;
+  background: var(--bg-card);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-md);
+  padding: 10px 16px 12px;
+  display: flex; flex-direction: column; gap: 6px;
+  cursor: pointer; color: inherit;
+  overflow: hidden; min-width: 0;
+  transition: background 220ms, border-color 220ms, box-shadow 220ms;
+}
+.kanban-phase-stepper .phs-active-card .head { display: flex; align-items: center; gap: var(--sp-3); }
+.kanban-phase-stepper .phs-active-card .num {
+  width: 26px; height: 26px; border-radius: 50%; flex: 0 0 auto;
+  background: var(--accent); color: var(--bg-canvas);
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--font-mono); font-size: 12px; font-weight: 700;
+}
+.kanban-phase-stepper .phs-active-card .name {
+  font-size: var(--text-base); font-weight: 700; letter-spacing: -0.01em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.kanban-phase-stepper .phs-active-card .stat {
+  font-variant-numeric: tabular-nums; color: var(--accent-2);
+  margin-left: auto; font-weight: 600; font-size: var(--text-sm);
+}
+.kanban-phase-stepper .phs-active-card .pb { height: 5px; background: rgba(255,255,255,0.07); border-radius: 3px; overflow: hidden; }
+.kanban-phase-stepper .phs-active-card .pb > i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+.kanban-phase-stepper .phs-active-card.filtered {
+  background: rgba(214,164,95,0.18); border-color: var(--amber);
+  box-shadow: 0 0 0 2px rgba(214,164,95,0.22);
+}
+.kanban-phase-stepper .phs-active-card.filtered .num  { background: var(--amber); }
+.kanban-phase-stepper .phs-active-card.filtered .stat { color: var(--amber); }
+.kanban-phase-stepper .phs-active-card.filtered .pb > i { background: linear-gradient(90deg, var(--amber), #e8c896); }
+
+/* Future region — translateX carousel.
+   [‹]  [viewport (overflow:hidden) [strip]]  [›]   strip width = N cards × cardW + gaps. */
+.kanban-phase-stepper .phs-future-region {
+  flex: 1 1 0; min-width: 0;
+  display: flex; align-items: center; gap: var(--sp-3);
+  overflow: visible;
+}
+.kanban-phase-stepper .phs-future-viewport {
+  flex: 1 1 0; min-width: 0;
+  overflow: hidden;
+  position: relative;
+}
+.kanban-phase-stepper .phs-future-strip {
+  display: flex; align-items: stretch; gap: var(--sp-3);
+  will-change: transform;
+  transition: transform 380ms cubic-bezier(0.3,0.7,0.4,1);
+}
+
+/* Future card. Width comes from --card-w (JS-computed). */
+.kanban-phase-stepper .phs-future-card {
+  appearance: none; text-align: left;
+  flex: 0 0 var(--card-w, 240px);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 10px var(--sp-3) 12px;
+  display: flex; flex-direction: column; gap: 6px;
+  opacity: 0.7; cursor: pointer; color: inherit;
+  overflow: hidden; min-width: 0;
+  transition: background 220ms, border-color 220ms, color 220ms, opacity 220ms, box-shadow 220ms;
+}
+.kanban-phase-stepper .phs-future-card:hover { opacity: 1; }
+.kanban-phase-stepper .phs-future-card .head { display: flex; align-items: center; gap: 6px; }
+.kanban-phase-stepper .phs-future-card .num {
+  width: 22px; height: 22px; border-radius: 50%;
+  background: var(--bg-canvas); border: 1px dashed var(--border-strong); color: var(--ink-3);
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--font-mono); font-size: 11px; font-weight: 700; flex: 0 0 auto;
+}
+.kanban-phase-stepper .phs-future-card .name {
+  font-size: var(--text-sm); color: var(--ink-2); font-weight: 700;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.kanban-phase-stepper .phs-future-card .stat {
+  font-size: var(--text-xs); color: var(--ink-3); margin-left: auto;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.kanban-phase-stepper .phs-future-card .pb { height: 4px; background: rgba(255,255,255,0.04); border-radius: 2px; overflow: hidden; }
+.kanban-phase-stepper .phs-future-card .pb > i { display: block; height: 100%; background: var(--border-strong); }
+.kanban-phase-stepper .phs-future-card.filtered {
+  background: rgba(214,164,95,0.18); border-color: var(--amber);
+  color: var(--ink); opacity: 1;
+  box-shadow: 0 0 0 2px rgba(214,164,95,0.22);
+}
+.kanban-phase-stepper .phs-future-card.filtered .name { color: var(--ink); }
+.kanban-phase-stepper .phs-future-card.filtered .num  { background: var(--amber); color: var(--bg-canvas); border-style: solid; border-color: var(--amber); }
+.kanban-phase-stepper .phs-future-card.filtered .stat { color: var(--amber); }
+.kanban-phase-stepper .phs-future-card.filtered .pb > i { background: var(--amber); }
+
+/* Connector arrow segments between past chips (and into the active card). */
+.kanban-phase-stepper .phs-past-region > .item::before,
+.kanban-phase-stepper .phs-active-card::before {
+  content: ''; position: absolute; left: -14px; top: 50%; width: 12px; height: 1px;
   transform: translateY(-50%);
-  background: var(--ink-3);
-  opacity: 0.5;
+  background: var(--ink-3); opacity: 0.45;
   pointer-events: none;
 }
-.kanban-phase-step[data-key] + .kanban-phase-step[data-key]::after {
-  content: '';
-  position: absolute;
-  left: calc(var(--sp-4) * -0.5 - 3px);
-  top: 50%;
-  width: 7px;
-  height: 7px;
-  transform: translateY(-50%) rotate(45deg);
-  border-top: 1.5px solid var(--ink-3);
-  border-right: 1.5px solid var(--ink-3);
-  opacity: 0.65;
+.kanban-phase-stepper .phs-past-region > .item::after,
+.kanban-phase-stepper .phs-active-card::after {
+  content: ''; position: absolute; left: -7px; top: 50%; width: 5px; height: 5px;
+  transform: translate(-50%, -50%) rotate(45deg);
+  border-top: 1px solid var(--ink-3);
+  border-right: 1px solid var(--ink-3);
+  opacity: 0.55;
   pointer-events: none;
 }
-.kanban-phase-step .ph-head { display: flex; align-items: baseline; gap: var(--sp-2); }
-.kanban-phase-step .ph-name { font-size: var(--text-base); font-weight: 500; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.kanban-phase-step.done   .ph-name { color: var(--ink-2); }
-.kanban-phase-step.future .ph-name { color: var(--ink-3); }
-.kanban-phase-step .ph-stat { font-size: 14px; color: var(--ink-3); margin-left: auto; font-variant-numeric: tabular-nums; }
-.kanban-phase-step .ph-bar  { height: 5px; background: #262932; border-radius: 3px; overflow: hidden; }
-.kanban-phase-step .ph-bar > i { display: block; height: 100%; }
-.kanban-phase-step.done   .ph-bar > i { background: var(--green); width: 100%; }
-.kanban-phase-step.active .ph-bar > i { background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
-.kanban-phase-step.future .ph-bar > i { background: var(--border); width: 0%; }
-.kanban-phase-step .check { color: var(--green); font-size: 15px; }
-.kanban-phase-step .dot   { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); animation: pulse 1.6s ease-in-out infinite; }
+.kanban-phase-stepper .phs-past-region > .item.first::before,
+.kanban-phase-stepper .phs-past-region > .item.first::after { display: none; }
+.kanban-phase-stepper .phs-past-region > .item.hidden::before,
+.kanban-phase-stepper .phs-past-region > .item.hidden::after { opacity: 0; }
+.kanban-phase-stepper .phs-past-region > .item,
+.kanban-phase-stepper .phs-active-card { position: relative; }
 
 /* ─────────── EPIC CHIPS ROW ─────────── */
 .kanban-epic-row {
@@ -548,7 +702,8 @@
   padding: 0;
   flex: 1 1 auto;
   min-height: 0;
-  overflow-x: auto;
+  min-width: 0;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
 }
@@ -560,8 +715,11 @@
   align-items: stretch;
   flex: 1 1 auto;
   min-height: 0;
+  min-width: 0;
+  width: 100%;
 }
 .kanban-col {
+  box-sizing: border-box;
   background: var(--bg-board-col);
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
@@ -596,11 +754,25 @@
   overflow-y: auto;
   overflow-x: hidden;
   margin-top: var(--sp-2);
+  /* Reserve gutter so cards don't shift when content overflows. */
+  scrollbar-gutter: stable;
+  /* Push the scrollbar into a deliberate rail to the right of cards. */
+  padding-right: 4px;
 }
 .kanban-col-body > .card-task { min-width: 0; max-width: 100%; }
-.kanban-col-body::-webkit-scrollbar { width: 6px; }
-.kanban-col-body::-webkit-scrollbar-track { background: transparent; }
-.kanban-col-body::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 3px; }
+.kanban-col-body::-webkit-scrollbar { width: 8px; }
+.kanban-col-body::-webkit-scrollbar-track {
+  background: rgba(255,255,255,0.02);
+  border-radius: 4px;
+  margin: 2px 0;
+}
+.kanban-col-body::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.kanban-col-body::-webkit-scrollbar-thumb:hover { background: var(--ink-3); background-clip: padding-box; border: 2px solid transparent; }
 
 .kanban-col-head.blocked     .dot { background: var(--red); }
 .kanban-col-head.todo        .dot { background: var(--ink-3); }
@@ -617,7 +789,9 @@
 }
 .kanban-density button {
   appearance: none; background: transparent; border: 0; color: var(--ink-3);
-  padding: 6px var(--sp-3); font-size: var(--text-sm); cursor: pointer;
+  width: 32px; height: 32px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 16px; line-height: 1; cursor: pointer;
   font-family: var(--font-sans);
 }
 .kanban-density button + button { border-left: 1px solid var(--border); }

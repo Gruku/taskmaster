@@ -1,77 +1,236 @@
-// Phase stepper. Reads phases from backlog + a doneCount/total per phase.
-//   phases: [{id, name, status: 'done'|'active'|'future', done, total}]
-//   active: phase id (string), '__all__', or '__orphans__'
-//   onSelect(phaseKey): callback when a cell is clicked.
+// Phase stepper — V12C 3-region timeline (past carousel · active card · future carousel).
+//   phases:  [{ id, name, status: 'done'|'active'|'future', done, total }]
+//   active:  selected filter key — phase id, '__all__', or '__orphans__'.
+//   onSelect(phaseKey): callback when a chip / card / utility button is clicked.
+//
+// Layout:
+//   [All-pill] [past-region: ‹ slide | chips | ›] [active-card] [future-region: ‹ | strip | ›] [Orphans-pill]
+// Past chips are circles that morph into amber pills on selection (name reveal,
+// duration scales with name length). Future cards live in a translateX strip;
+// the visible card width is JS-computed so exactly VISIBLE_FUTURE cards fit.
 
-export function renderPhaseStepper({ phases = [], active = '__all__', onSelect, showHistory = false }) {
+const VISIBLE_PAST   = 3;
+const VISIBLE_FUTURE = 3;
+const STRIP_GAP      = 12;          // matches --sp-3
+const MS_BASE        = 220;
+const MS_PER_CHAR    = 16;
+
+const chipDur = (name) => MS_BASE + String(name || '').length * MS_PER_CHAR;
+
+export function renderPhaseStepper({ phases = [], active = '__all__', onSelect }) {
   const wrap = document.createElement('div');
-  wrap.className = 'kanban-phase-stepper';
+  wrap.className = 'kanban-phase-stepper v12c';
   wrap.dataset.cmp = 'phase-stepper';
 
-  // Optional history toggle (leftmost). Plan 2 wires only the toggle visual; behaviour is best-effort.
-  const histBtn = document.createElement('button');
-  histBtn.type = 'button';
-  histBtn.className = 'kanban-phase-step history-toggle';
-  histBtn.title = 'Show / hide past phases';
-  histBtn.setAttribute('aria-label', 'Toggle past phases');
-  histBtn.innerHTML = `<span class="util-icon">↺</span><span class="util-text">History</span>`;
-  histBtn.addEventListener('click', () => {
-    showHistory = !showHistory;
-    wrap.querySelectorAll('.kanban-phase-step.done').forEach(el => {
-      el.style.display = showHistory ? '' : 'none';
-    });
+  // Split phases by status. The first 'active' phase wins; if none, the row
+  // becomes past chips + future cards with no center card.
+  const activeIdx = phases.findIndex(p => (p.status || '').toLowerCase() === 'active');
+  const pastPhases   = activeIdx >= 0 ? phases.slice(0, activeIdx) : phases.filter(p => (p.status || '').toLowerCase() === 'done');
+  const futurePhases = activeIdx >= 0 ? phases.slice(activeIdx + 1) : phases.filter(p => (p.status || '').toLowerCase() === 'future');
+  const activePhase  = activeIdx >= 0 ? phases[activeIdx] : null;
+
+  // Local view state — offsets for the past + future carousels.
+  const view = { pastOffset: 0, futureOffset: 0 };
+
+  // ── Past region: outer slide ‹  chips  inner slide › ──
+  const pastRegion = document.createElement('div');
+  pastRegion.className = 'phs-past-region';
+  wrap.appendChild(pastRegion);
+
+  const pastSlideOuter = makeSlideBtn('left');
+  const pastSlideInner = makeSlideBtn('right');
+  pastRegion.appendChild(pastSlideOuter);
+
+  const chipEls = pastPhases.map((p) => {
+    const el = document.createElement('button');
+    el.type = 'button';
+    el.className = 'phs-chip item';
+    el.dataset.key = p.id;
+    el.title = `${p.name || p.id} · ${p.done || 0}/${p.total || 0}`;
+    el.style.setProperty('--anim-dur', chipDur(p.name) + 'ms');
+    const num = phaseNum(p);
+    el.innerHTML = `<span class="num">${escapeHtml(num)}</span><span class="lbl">${escapeHtml(p.name || p.id)}</span>`;
+    el.addEventListener('click', () => onSelect && onSelect(p.id));
+    pastRegion.appendChild(el);
+    return el;
   });
-  wrap.appendChild(histBtn);
+  pastRegion.appendChild(pastSlideInner);
 
-  // All-phases cell
-  const allDone  = phases.reduce((s, p) => s + (p.done || 0), 0);
-  const allTotal = phases.reduce((s, p) => s + (p.total || 0), 0);
-  const allPct   = allTotal ? Math.round((allDone / allTotal) * 100) : 0;
-  const allBtn = document.createElement('button');
-  allBtn.type = 'button';
-  allBtn.className = 'kanban-phase-step all-step' + (active === '__all__' ? ' active' : '');
-  allBtn.dataset.key = '__all__';
-  allBtn.title = 'Show all phases';
-  allBtn.innerHTML = `<span class="util-icon">⌂</span><span class="util-text">All phases</span><span class="ph-stat">${allDone}/${allTotal} · ${allPct}%</span>`;
-  allBtn.addEventListener('click', () => onSelect && onSelect('__all__'));
-  wrap.appendChild(allBtn);
+  pastSlideOuter.addEventListener('click', () => {
+    view.pastOffset = Math.min(Math.max(0, pastPhases.length - VISIBLE_PAST), view.pastOffset + VISIBLE_PAST);
+    repaint();
+  });
+  pastSlideInner.addEventListener('click', () => {
+    view.pastOffset = Math.max(0, view.pastOffset - VISIBLE_PAST);
+    repaint();
+  });
 
-  for (const ph of phases) {
-    const cls = ph.status || 'future';
-    const isActive = active === ph.id;
-    const cell = document.createElement('button');
-    cell.type = 'button';
-    cell.className = 'kanban-phase-step ' + cls + (isActive ? ' active' : '');
-    cell.dataset.key = ph.id;
-    if (cls === 'done' && !showHistory) cell.style.display = 'none';
-    const lead =
-      cls === 'done'   ? '<span class="check">✓</span>'
-    : cls === 'active' ? '<span class="dot"></span>'
-    : '';
-    const pct = (ph.total ? Math.round(((ph.done || 0) / ph.total) * 100) : 0);
-    const statText =
-      cls === 'active' ? `${ph.done || 0}/${ph.total || 0} · ${pct}%`
-                       : `${ph.done || 0}/${ph.total || 0}`;
-    const widthAttr = cls === 'active' ? ` style="width:${pct}%"` : '';
-    cell.innerHTML = `
-      <div class="ph-head">${lead}<span class="ph-name">${escapeHtml(ph.name || ph.id)}</span><span class="ph-stat">${statText}</span></div>
-      <div class="ph-bar"><i${widthAttr}></i></div>
+  // ── Active card (center) ──
+  let activeCardEl = null;
+  if (activePhase) {
+    activeCardEl = document.createElement('button');
+    activeCardEl.type = 'button';
+    activeCardEl.className = 'phs-active-card' + (active === activePhase.id ? ' filtered' : '');
+    activeCardEl.dataset.key = activePhase.id;
+    const pct = activePhase.total ? Math.round(((activePhase.done || 0) / activePhase.total) * 100) : 0;
+    activeCardEl.innerHTML = `
+      <div class="head">
+        <span class="num">${escapeHtml(phaseNum(activePhase))}</span>
+        <span class="name">${escapeHtml(activePhase.name || activePhase.id)}</span>
+        <span class="stat">${activePhase.done || 0}/${activePhase.total || 0} · ${pct}%</span>
+      </div>
+      <div class="pb"><i style="width:${pct}%"></i></div>
     `;
-    cell.addEventListener('click', () => onSelect && onSelect(ph.id));
-    wrap.appendChild(cell);
+    activeCardEl.addEventListener('click', () => onSelect && onSelect(activePhase.id));
+    wrap.appendChild(activeCardEl);
   }
 
-  // Orphans cell (rightmost)
+  // ── Future region: outer slide ‹  viewport[strip]  inner slide › ──
+  const futureRegion = document.createElement('div');
+  futureRegion.className = 'phs-future-region';
+  wrap.appendChild(futureRegion);
+
+  const futureSlideInner = makeSlideBtn('left');
+  const futureSlideOuter = makeSlideBtn('right');
+  const futureViewport   = document.createElement('div');
+  futureViewport.className = 'phs-future-viewport';
+  const futureStrip      = document.createElement('div');
+  futureStrip.className  = 'phs-future-strip';
+  futureViewport.appendChild(futureStrip);
+  futureRegion.appendChild(futureSlideInner);
+  futureRegion.appendChild(futureViewport);
+  futureRegion.appendChild(futureSlideOuter);
+
+  const futureEls = futurePhases.map((p) => {
+    const el = document.createElement('button');
+    el.type = 'button';
+    el.className = 'phs-future-card';
+    el.dataset.key = p.id;
+    el.title = `${p.name || p.id} · ${p.done || 0}/${p.total || 0}`;
+    const pct = p.total ? Math.round(((p.done || 0) / p.total) * 100) : 0;
+    el.innerHTML = `
+      <div class="head">
+        <span class="num">${escapeHtml(phaseNum(p))}</span>
+        <span class="name">${escapeHtml(p.name || p.id)}</span>
+        <span class="stat">${p.done || 0}/${p.total || 0}</span>
+      </div>
+      <div class="pb"><i style="width:${pct}%"></i></div>
+    `;
+    el.addEventListener('click', () => onSelect && onSelect(p.id));
+    futureStrip.appendChild(el);
+    return el;
+  });
+
+  futureSlideInner.addEventListener('click', () => {
+    view.futureOffset = Math.max(0, view.futureOffset - VISIBLE_FUTURE);
+    applyFutureScroll(); updateBadges();
+  });
+  futureSlideOuter.addEventListener('click', () => {
+    view.futureOffset = Math.min(Math.max(0, futurePhases.length - VISIBLE_FUTURE), view.futureOffset + VISIBLE_FUTURE);
+    applyFutureScroll(); updateBadges();
+  });
+
+  // ── Orphans pill (right bookend) ──
   const orphansBtn = document.createElement('button');
   orphansBtn.type = 'button';
-  orphansBtn.className = 'kanban-phase-step orphans-step' + (active === '__orphans__' ? ' active' : '');
+  orphansBtn.className = 'phs-util orphans-pill' + (active === '__orphans__' ? ' active' : '');
   orphansBtn.dataset.key = '__orphans__';
   orphansBtn.title = 'Tasks with no phase';
   orphansBtn.innerHTML = `<span class="util-icon">⚲</span><span class="util-text">Orphans</span>`;
   orphansBtn.addEventListener('click', () => onSelect && onSelect('__orphans__'));
   wrap.appendChild(orphansBtn);
 
+  // ── Layout: future card width fits VISIBLE_FUTURE cards in the viewport ──
+  function relayoutFuture(animate = false) {
+    const vw = futureViewport.clientWidth;
+    if (vw <= 0) return;
+    const cardW = (vw - STRIP_GAP * (VISIBLE_FUTURE - 1)) / VISIBLE_FUTURE;
+    futureEls.forEach(el => el.style.setProperty('--card-w', cardW + 'px'));
+    if (!animate) {
+      futureStrip.style.transition = 'none';
+      applyFutureScroll();
+      void futureStrip.offsetHeight;   // flush
+      futureStrip.style.transition = '';
+    } else {
+      applyFutureScroll();
+    }
+  }
+  function applyFutureScroll() {
+    const vw = futureViewport.clientWidth;
+    if (vw <= 0) return;
+    const cardW = (vw - STRIP_GAP * (VISIBLE_FUTURE - 1)) / VISIBLE_FUTURE;
+    const x = view.futureOffset * (cardW + STRIP_GAP);
+    futureStrip.style.transform = `translateX(-${x}px)`;
+  }
+
+  function repaint() {
+    const pastLen = pastPhases.length;
+    const visStart = Math.max(0, pastLen - VISIBLE_PAST - view.pastOffset);
+    const visEnd   = Math.max(0, pastLen - view.pastOffset);
+    chipEls.forEach((el, i) => {
+      el.classList.toggle('hidden',   !(i >= visStart && i < visEnd));
+      el.classList.toggle('filtered', active === pastPhases[i].id);
+    });
+    futureEls.forEach((el, i) => el.classList.toggle('filtered', active === futurePhases[i].id));
+    if (activeCardEl) activeCardEl.classList.toggle('filtered', active === activePhase.id);
+
+    let foundFirst = false;
+    pastRegion.querySelectorAll(':scope > .item').forEach(el => {
+      if (el.classList.contains('hidden')) { el.classList.remove('first'); return; }
+      el.classList.toggle('first', !foundFirst);
+      foundFirst = true;
+    });
+
+    updateBadges();
+  }
+
+  function updateBadges() {
+    const pastLen = pastPhases.length;
+    const visStart = Math.max(0, pastLen - VISIBLE_PAST - view.pastOffset);
+    const visEnd   = Math.max(0, pastLen - view.pastOffset);
+    setBtn(pastSlideOuter, visStart);
+    setBtn(pastSlideInner, pastLen - visEnd);
+
+    const earlier = view.futureOffset;
+    const later   = Math.max(0, futurePhases.length - view.futureOffset - VISIBLE_FUTURE);
+    setBtn(futureSlideInner, earlier);
+    setBtn(futureSlideOuter, later);
+  }
+
+  function setBtn(btn, count) {
+    btn.querySelector('.badge').textContent = String(count);
+    btn.classList.toggle('disabled', count <= 0);
+  }
+
+  // First paint after the node is in the DOM (so clientWidth is real).
+  // We schedule via rAF and also wire a ResizeObserver for live resizes.
+  requestAnimationFrame(() => {
+    relayoutFuture(false);
+    repaint();
+  });
+  const ro = new ResizeObserver(() => relayoutFuture(false));
+  ro.observe(futureViewport);
+  // Initial paint with the current state so the structural classes are correct
+  // even before the rAF fires (avoids a flash of all chips visible).
+  repaint();
+
   return wrap;
+}
+
+function makeSlideBtn(direction) {
+  const el = document.createElement('button');
+  el.type = 'button';
+  el.className = 'phs-slide-btn';
+  const chev = direction === 'left' ? '‹' : '›';
+  el.innerHTML = `<span class="chev">${chev}</span><span class="badge">0</span>`;
+  return el;
+}
+
+function phaseNum(p) {
+  if (p == null) return '';
+  if (p.num != null) return p.num;
+  const m = String(p.id || '').match(/(\d+)/);
+  return m ? m[1] : '';
 }
 
 function escapeHtml(s) {

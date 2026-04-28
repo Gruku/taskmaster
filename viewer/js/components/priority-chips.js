@@ -1,8 +1,8 @@
 const PRIORITIES = [
-  { key: 'critical', label: 'Critical' },
-  { key: 'high',     label: 'High' },
-  { key: 'medium',   label: 'Medium' },
-  { key: 'low',      label: 'Low' },
+  { key: 'critical', label: 'Critical', short: 'Cr' },
+  { key: 'high',     label: 'High',     short: 'Hi' },
+  { key: 'medium',   label: 'Medium',   short: 'Me' },
+  { key: 'low',      label: 'Low',      short: 'Lo' },
 ];
 
 export function renderPriorityChips({ active = [], onToggle }) {
@@ -16,7 +16,8 @@ export function renderPriorityChips({ active = [], onToggle }) {
     btn.type = 'button';
     btn.className = `kanban-pri-tog ${p.key}` + (wrap._active.has(p.key) ? ' on' : '');
     btn.dataset.key = p.key;
-    btn.textContent = p.label;
+    btn.title = p.label;
+    btn.textContent = p.short;
     btn.addEventListener('click', () => {
       if (wrap._active.has(p.key)) wrap._active.delete(p.key);
       else                          wrap._active.add(p.key);

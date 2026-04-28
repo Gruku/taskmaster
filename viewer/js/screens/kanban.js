@@ -91,7 +91,9 @@ export async function mount(root, { store, prefs }) {
     const b = document.createElement('button');
     b.type = 'button';
     b.dataset.key = k;
-    b.textContent = k === 'minimal' ? '▤ minimal' : '▦ full';
+    b.title = k === 'minimal' ? 'Minimal cards' : 'Full cards';
+    b.setAttribute('aria-label', b.title);
+    b.textContent = k === 'minimal' ? '▤' : '▦';
     if (state.density === k) b.classList.add('on');
     b.addEventListener('click', () => {
       state.density = k;
@@ -205,7 +207,12 @@ export async function mount(root, { store, prefs }) {
     stepperHost.replaceChildren(renderPhaseStepper({
       phases: phaseRows,
       active: state.filters.phase,
-      onSelect: (key) => { state.filters.phase = key; paint(); savePrefs(); },
+      // Clicking the currently-selected phase clears the filter back to all-phases.
+      onSelect: (key) => {
+        const next = (state.filters.phase === key) ? '__all__' : key;
+        state.filters.phase = next;
+        paint(); savePrefs();
+      },
     }));
 
     // 4) Epic chips data
@@ -253,8 +260,7 @@ export async function mount(root, { store, prefs }) {
       const isCollapsed = state.collapsed.has(g.key);
       toggleBtn.title = isCollapsed ? 'Expand' : 'Collapse';
       toggleBtn.textContent = isCollapsed ? '›' : '‹';
-      toggleBtn.addEventListener('click', (ev) => {
-        ev.stopPropagation();
+      const toggleCollapsed = () => {
         if (state.collapsed.has(g.key)) state.collapsed.delete(g.key);
         else state.collapsed.add(g.key);
         prefs.patch({ kanban: { collapsed_columns: [...state.collapsed] } });
@@ -263,6 +269,14 @@ export async function mount(root, { store, prefs }) {
         toggleBtn.textContent = nowCollapsed ? '›' : '‹';
         toggleBtn.title = nowCollapsed ? 'Expand' : 'Collapse';
         updateGridTemplate();
+      };
+      toggleBtn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        toggleCollapsed();
+      });
+      // Click anywhere on a collapsed column body re-expands it.
+      col.addEventListener('click', () => {
+        if (col.classList.contains('collapsed')) toggleCollapsed();
       });
       head.appendChild(toggleBtn);
       if (isCollapsed) col.classList.add('collapsed');
@@ -307,9 +321,26 @@ export async function mount(root, { store, prefs }) {
       ? Math.max(0, (total - totalGap - collapsedCount * collapsedWidth) / expandedCount)
       : 0;
     if (skipAnim) boardGrid.classList.add('no-anim');
-    for (const c of cols) {
-      const w = c.classList.contains('collapsed') ? collapsedWidth : expandedWidth;
+    // Floor each width so the running sum never exceeds `total - totalGap`.
+    let allotted = 0;
+    for (let i = 0; i < cols.length; i++) {
+      const c = cols[i];
+      const isLast = i === cols.length - 1;
+      let w;
+      if (c.classList.contains('collapsed')) {
+        w = collapsedWidth;
+      } else if (isLast) {
+        // Give the last expanded column the leftover so rounding never overflows.
+        const remainingExpanded = cols.slice(i).filter(x => !x.classList.contains('collapsed')).length;
+        const remainingCollapsed = cols.slice(i).filter(x => x.classList.contains('collapsed')).length;
+        const usedAfter = remainingCollapsed * collapsedWidth;
+        const stillFor = total - totalGap - allotted - usedAfter;
+        w = Math.max(0, Math.floor(stillFor / Math.max(1, remainingExpanded)));
+      } else {
+        w = Math.floor(expandedWidth);
+      }
       c.style.width = w + 'px';
+      allotted += w;
     }
     if (skipAnim) {
       // force reflow then re-enable transitions

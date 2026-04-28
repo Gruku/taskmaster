@@ -17,7 +17,7 @@ export function applyFilters(tasks, f) {
   return tasks.filter(t => {
     if (pri.length && !pri.includes(String(t.priority || '').toLowerCase())) return false;
     if (epics.length && !epics.includes(t.epic || '__none__')) return false;
-    if (phase) {
+    if (phase && phase !== '__all__') {
       if (phase === '__orphans__') {
         if (t.phase) return false;
       } else if (t.phase !== phase) {
