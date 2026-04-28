@@ -1,6 +1,8 @@
 // In-memory store. Screens read via getters and subscribe to keys.
 // Polling is initiated by main.js, not here.
 
+import { getTask, getTaskRelated } from './api.js';
+
 const state = {
   backlog: null,    // parsed backlog YAML object
   prefs: null,      // viewer prefs
@@ -34,4 +36,30 @@ export const store = {
     subscribers.get(key).add(cb);
     return () => subscribers.get(key).delete(cb);
   },
+
+  getTaskFull,
+  getTaskRelatedFull,
+  invalidateTask,
 };
+
+const _taskCache = new Map();
+const _relatedCache = new Map();
+
+export async function getTaskFull(id, { force = false } = {}) {
+  if (!force && _taskCache.has(id)) return _taskCache.get(id);
+  const data = await getTask(id);
+  _taskCache.set(id, data);
+  return data;
+}
+
+export async function getTaskRelatedFull(id, { force = false } = {}) {
+  if (!force && _relatedCache.has(id)) return _relatedCache.get(id);
+  const data = await getTaskRelated(id);
+  _relatedCache.set(id, data);
+  return data;
+}
+
+export function invalidateTask(id) {
+  _taskCache.delete(id);
+  _relatedCache.delete(id);
+}
