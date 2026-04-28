@@ -19,3 +19,24 @@ test('empty graph: only the center node, columns shape correct', () => {
   const col0 = out.columns.find(c => c.depth === 0);
   assert.ok(Math.abs(col0.x - 400) < 1, `center column x ~ 400, got ${col0.x}`);
 });
+
+test('deep upstream chain: L-2 connects through L-1, not directly to center', () => {
+  const out = computeGraphLayout({
+    center: { id: 'C', title: 'Center', status: 'in-progress' },
+    upstream: [
+      { id: 'U1', title: 'Up 1', status: 'done', depth: 1 },
+      { id: 'U2', title: 'Up 2', status: 'done', depth: 2 },
+    ],
+    downstream: [],
+    width: 800, height: 320,
+  });
+  const u2 = out.nodes.find(n => n.id === 'U2');
+  const u1 = out.nodes.find(n => n.id === 'U1');
+  assert.equal(u2.column, -2);
+  assert.equal(u1.column, -1);
+  assert.ok(u2.faded, 'L-2 nodes should be faded');
+  assert.equal(u1.faded, false, 'L-1 nodes should not be faded');
+
+  const u2Edge = out.edges.find(e => e.from === 'U2');
+  assert.equal(u2Edge.to, 'U1', 'U2 should chain through U1, not directly to center');
+});
