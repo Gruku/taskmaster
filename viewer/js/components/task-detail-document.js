@@ -73,7 +73,35 @@ function renderBody({ task }) {
   }
   children.push(renderActivity(task));
   children.push(renderPatchnote(task));
+  children.push(renderDates(task));
   return h('main', { class: 'td-body' }, children.filter(Boolean));
+}
+
+function renderDates(task) {
+  const cells = [
+    ['Created',   task.created],
+    ['Started',   task.started],
+    ['Completed', task.completed],
+  ];
+  return h('section', { class: 'td-dates', 'data-test': 'dates' },
+    cells.map(([lbl, abs]) =>
+      h('div', { class: 'td-date-cell' }, [
+        h('span', { class: 'lbl' }, lbl),
+        h('span', { class: 'abs mono' }, abs || '—'),
+        h('span', { class: 'rel' }, abs ? relativeFromNow(abs) : ''),
+      ])));
+}
+
+function relativeFromNow(iso) {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  const ms = Date.now() - d.getTime();
+  const days = Math.floor(ms / 86400000);
+  if (days < 1) return 'today';
+  if (days < 30) return `${days}d ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months}mo ago`;
+  return `${Math.floor(days / 365)}y ago`;
 }
 
 function renderActivity(task) {
