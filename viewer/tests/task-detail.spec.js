@@ -72,4 +72,20 @@ test.describe('Task Detail screen', () => {
     expect(aPanels).toBe(bPanels);
     expect(aPanels).toBeGreaterThanOrEqual(6);
   });
+
+  test('clicking the view toggle persists prefs and re-renders the other variant', async ({ page }) => {
+    await page.request.put('/api/viewer/prefs', { data: { screens: { task_detail: { view: 'A' } } } });
+    await page.goto(`/v3/#/task/${TASK_ID}`);
+    await expect(page.locator('[data-test="meta"]')).toBeVisible();
+    await page.locator('[data-view="B"]').click();
+    await expect(page.locator('[data-test="graph-frame"]')).toBeVisible();
+
+    await page.reload();
+    await expect(page.locator('[data-test="graph-frame"]')).toBeVisible();
+  });
+
+  test('unknown task id renders an error message, not a crash', async ({ page }) => {
+    await page.goto('/v3/#/task/T-DOES-NOT-EXIST');
+    await expect(page.locator('.td-empty')).toContainText(/T-DOES-NOT-EXIST|not found/);
+  });
 });
