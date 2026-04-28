@@ -191,7 +191,8 @@ async function copyToChip(el, value) {
 
 function renderMeta(task) {
   return h('div', { class: 'td-doc-meta', 'data-test': 'meta' }, [
-    h('span', { class: 'td-id', 'data-test': 'task-id' },
+    h('span', { class: 'td-id', 'data-test': 'task-id',
+                on: { click: (e) => copyToChip(e.currentTarget, task.id || '') } },
       [h('span', { class: 'td-id-text' }, task.id || '—')]),
     h('span', { class: 'td-sep' }, '·'),
     h('span', {}, task.epic || ''),
