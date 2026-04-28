@@ -71,7 +71,25 @@ function renderBody({ task }) {
   if (task.status === 'in-review') {
     children.push(renderMdSection('Review instructions', task.review_instructions, 'sec-review-instructions'));
   }
+  children.push(renderActivity(task));
+  children.push(renderPatchnote(task));
   return h('main', { class: 'td-body' }, children.filter(Boolean));
+}
+
+function renderActivity(task) {
+  const lines = task.activity || task.activity_lines;
+  if (!lines || !lines.length) return null;
+  return h('section', { class: 'td-section', 'data-test': 'sec-activity' }, [
+    h('div', { class: 'td-section-h' }, 'Latest activity'),
+    h('ul', { class: 'td-activity' },
+      lines.slice(0, 8).map((l) => h('li', { class: 'mono' }, l))),
+  ]);
+}
+
+function renderPatchnote(task) {
+  if (task.status !== 'done') return null;
+  if (!task.patchnote) return null;
+  return renderMdSection('Patchnote', task.patchnote, 'sec-patchnote');
 }
 
 function renderDocsSection(task) {
