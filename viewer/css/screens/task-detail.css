@@ -211,3 +211,5 @@
 .td-graph-svg .status-dot.s-done { fill: var(--green); }
 .td-graph-svg .status-dot.s-progress { fill: var(--accent); }
 .td-graph-svg .status-dot.s-backlog { fill: var(--ink-3); }
+
+.td-graph-context-band.hidden { display: none; }

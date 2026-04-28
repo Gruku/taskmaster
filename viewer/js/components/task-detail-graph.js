@@ -197,6 +197,29 @@ function renderContextBand({ related, onNavigate }) {
   return band;
 }
 
+function renderGraphControls(ctx) {
+  const wrap = h('div', { class: 'td-graph-controls', 'data-test': 'graph-controls' });
+  const buttons = [
+    { id: 'depth', label: 'Depth: 2', toggle: () => {} },
+    { id: 'show-all', label: 'Show all', toggle: () => {} },
+    { id: 'hide-context', label: 'Hide context', toggle: (el) => el.classList.toggle('on') },
+    { id: 'fullscreen', label: 'Fullscreen', toggle: (el) => {
+        const f = el.closest('.td-graph-frame');
+        if (!document.fullscreenElement) f.requestFullscreen?.();
+        else document.exitFullscreen?.();
+      } },
+  ];
+  for (const b of buttons) {
+    const btn = h('button', { class: 'gc-btn', 'data-id': b.id, on: { click: (e) => b.toggle(e.currentTarget) } }, b.label);
+    wrap.appendChild(btn);
+  }
+  wrap.querySelector('[data-id="hide-context"]').addEventListener('click', (e) => {
+    const frame = e.currentTarget.closest('.td-graph-frame');
+    frame.querySelector('.td-graph-context-band')?.classList.toggle('hidden');
+  });
+  return wrap;
+}
+
 function renderTabs(ctx) {
   return h('div', { class: 'td-tabs-placeholder', 'data-test': 'tabs' }, '');
 }
