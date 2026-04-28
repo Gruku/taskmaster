@@ -64,7 +64,35 @@ function renderBody({ task }) {
   children.push(renderChips(task));
   children.push(renderSpecReview(task));
   children.push(renderAutoBanner(task));
+  children.push(renderDocsSection(task));
+  children.push(renderMdSection('Specification', task.specification || task.description, 'sec-spec'));
+  children.push(renderMdSection('Plan', task.plan, 'sec-plan'));
+  children.push(renderMdSection('Notes', task.notes, 'sec-notes'));
+  if (task.status === 'in-review') {
+    children.push(renderMdSection('Review instructions', task.review_instructions, 'sec-review-instructions'));
+  }
   return h('main', { class: 'td-body' }, children.filter(Boolean));
+}
+
+function renderDocsSection(task) {
+  const docs = task.docs || {};
+  const entries = Object.entries(docs);
+  if (!entries.length) return null;
+  return h('section', { class: 'td-section', 'data-test': 'sec-docs' }, [
+    h('div', { class: 'td-section-h' }, 'Docs'),
+    h('div', { class: 'td-doc-chips' },
+      entries.map(([type, href]) =>
+        h('a', { class: 'td-doc-chip', href, target: '_blank', rel: 'noopener' },
+          [h('span', { class: 'type' }, type), h('span', {}, href)]))),
+  ]);
+}
+
+function renderMdSection(label, body, dataTest) {
+  if (!body || !String(body).trim()) return null;
+  return h('section', { class: 'td-section', 'data-test': dataTest }, [
+    h('div', { class: 'td-section-h' }, label),
+    h('div', { class: 'md-body', html: renderMarkdown(body) }),
+  ]);
 }
 
 function renderAutoBanner(task) {

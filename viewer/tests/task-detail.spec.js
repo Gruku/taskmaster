@@ -29,4 +29,10 @@ test.describe('Task Detail screen', () => {
     await expect(chips.locator('.td-size-chip')).toBeVisible();
     await expect(chips.locator('.td-epic-chip')).toBeVisible();
   });
+
+  test('document sections render description and notes', async ({ page }) => {
+    await page.goto(`/v3/#/task/${TASK_ID}`);
+    await expect(page.locator('[data-test="sec-spec"]')).toBeVisible();
+    await expect(page.locator('[data-test="sec-notes"]')).toBeVisible();
+  });
 });
