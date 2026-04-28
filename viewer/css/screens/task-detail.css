@@ -213,3 +213,11 @@
 .td-graph-svg .status-dot.s-backlog { fill: var(--ink-3); }
 
 .td-graph-context-band.hidden { display: none; }
+
+.td-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border-soft); margin-bottom: var(--sp-5); }
+.td-tabs .td-tab { padding: 6px 12px; font-size: var(--text-sm); color: var(--ink-3); background: transparent; border: 0; cursor: pointer; border-bottom: 2px solid transparent; }
+.td-tabs .td-tab.on { color: var(--ink); border-bottom-color: var(--accent); }
+.td-tab-panel { display: none; }
+.td-tab-panel.on { display: block; }
+.td-tab-panel pre { background: var(--bg-deep); padding: 10px 12px; border-radius: 4px; overflow-x: auto; font-family: var(--font-mono); font-size: 11px; color: var(--ink-2); }
+.td-anchor-pill { display: inline-block; padding: 2px 8px; margin-right: 6px; font-family: var(--font-mono); background: var(--bg-card); border: 1px solid var(--border-soft); border-radius: 3px; font-size: var(--text-sm); color: var(--ink-2); }

@@ -220,6 +220,64 @@ function renderGraphControls(ctx) {
   return wrap;
 }
 
-function renderTabs(ctx) {
-  return h('div', { class: 'td-tabs-placeholder', 'data-test': 'tabs' }, '');
+function renderTabs({ task, related }) {
+  const tabs = [
+    ['spec',     'Spec',     () => renderMd(task.specification || task.description)],
+    ['plan',     'Plan',     () => renderMd(task.plan)],
+    ['notes',    'Notes',    () => renderMd(task.notes)],
+    ['activity', 'Activity', () => renderActivityList(task.activity || [])],
+    ['anchors',  'Anchors',  () => renderAnchors(task.anchors || [])],
+    ['raw',      'Raw YAML', () => renderRaw(task)],
+  ];
+  const wrap = h('div', { class: 'td-tabs-wrap', 'data-test': 'tabs' });
+  const bar = h('div', { class: 'td-tabs' });
+  const panels = h('div', { class: 'td-tab-panels' });
+  tabs.forEach(([id, label, build], idx) => {
+    const tab = h('button', { class: `td-tab ${idx === 0 ? 'on' : ''}`, 'data-tab': id }, label);
+    const panel = h('div', { class: `td-tab-panel ${idx === 0 ? 'on' : ''}`, 'data-tab-panel': id });
+    panel.appendChild(build());
+    tab.addEventListener('click', () => {
+      bar.querySelectorAll('.td-tab').forEach((t) => t.classList.toggle('on', t === tab));
+      panels.querySelectorAll('.td-tab-panel').forEach((p) => p.classList.toggle('on', p.dataset.tabPanel === id));
+    });
+    bar.appendChild(tab);
+    panels.appendChild(panel);
+  });
+  wrap.appendChild(bar);
+  wrap.appendChild(panels);
+  return wrap;
+}
+
+function renderMd(src) {
+  const div = document.createElement('div');
+  div.className = 'md-body';
+  div.innerHTML = renderMarkdown(src || '_(empty)_');
+  return div;
+}
+function renderActivityList(lines) {
+  const ul = document.createElement('ul');
+  for (const l of (lines || []).slice(0, 30)) {
+    const li = document.createElement('li');
+    li.className = 'mono';
+    li.textContent = l;
+    ul.appendChild(li);
+  }
+  if (!ul.children.length) ul.innerHTML = '<li class="td-empty">no activity</li>';
+  return ul;
+}
+function renderAnchors(anchors) {
+  const wrap = document.createElement('div');
+  if (!anchors.length) { wrap.className = 'td-empty'; wrap.textContent = 'no anchors'; return wrap; }
+  for (const a of anchors) {
+    const pill = document.createElement('span');
+    pill.className = 'td-anchor-pill';
+    pill.textContent = a;
+    wrap.appendChild(pill);
+  }
+  return wrap;
+}
+function renderRaw(task) {
+  const pre = document.createElement('pre');
+  pre.textContent = JSON.stringify(task, null, 2);
+  return pre;
 }
