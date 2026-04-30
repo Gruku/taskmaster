@@ -4336,6 +4336,32 @@ class ViewerHandler(BaseHTTPRequestHandler):
             self._send_json(200, {"ok": True})
             return
 
+        if self.path.startswith("/api/recap/"):
+            import json as _json
+            sid = self.path[len("/api/recap/"):]
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length).decode("utf-8") if length else ""
+            try:
+                payload = _json.loads(raw)
+            except Exception as e:
+                self._send_json(400, {"ok": False, "error": f"invalid JSON: {e}"})
+                return
+            required = {"frontmatter", "title", "what_happened", "what_landed", "whats_next"}
+            if not required.issubset(payload.keys()):
+                self._send_json(400, {"ok": False,
+                    "error": f"payload missing keys: {sorted(required - set(payload.keys()))}"})
+                return
+            save_recap(
+                session_id=sid,
+                frontmatter=payload["frontmatter"],
+                title=payload["title"],
+                what_happened=payload["what_happened"],
+                what_landed=payload["what_landed"],
+                whats_next=payload["whats_next"],
+            )
+            self._send_json(200, {"ok": True})
+            return
+
         self.send_response(404)
         self.end_headers()
 
