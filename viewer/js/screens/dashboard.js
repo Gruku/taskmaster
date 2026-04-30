@@ -52,8 +52,13 @@ export async function mount(root, { store, api, prefs }) {
 
   root.replaceChildren(headerRow, briefing.root, autoSlot, bento, bottom);
 
-  // Seed layout if empty.
-  let layout = (prefs && prefs.dashboard && prefs.dashboard.layout) || [];
+  // Seed layout if empty. Source-of-truth is the store; the injected `prefs`
+  // dep is the patch helper, not data (same gotcha as task-detail.js — fix e74c521).
+  const prefsData = store?.getPrefs?.() || {};
+  let layout = (prefsData.dashboard && prefsData.dashboard.layout) || [];
+  // Mirror onto the patcher so subsequent in-session reads via `prefs.dashboard.layout` still work.
+  prefs.dashboard = prefs.dashboard || {};
+  prefs.dashboard.layout = layout;
   if (!layout.length) {
     layout = defaultLayout();
     await api.savePrefs({ dashboard: { layout } });

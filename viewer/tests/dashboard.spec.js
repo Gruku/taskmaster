@@ -3,6 +3,13 @@ import { test, expect } from '@playwright/test';
 const BASE = process.env.VIEWER_BASE || 'http://127.0.0.1:8765';
 
 test.describe('dashboard', () => {
+  test.beforeEach(async ({ request }) => {
+    // Reset dashboard layout so each test starts from the seeded default.
+    await request.put(`${BASE}/api/viewer/prefs`, {
+      data: { dashboard: { layout: [] } },
+    });
+  });
+
   test('mounts the briefing strip and bento', async ({ page }) => {
     await page.goto(`${BASE}/v3#/dashboard`);
     await expect(page.locator('.dash-briefing')).toBeVisible();

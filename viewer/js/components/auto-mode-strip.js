@@ -115,3 +115,30 @@ function paintStrip(el, { autoState, backlog, onViewAll, now }) {
 function escapeHtml(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
+
+// Plan 4 dashboard expects a factory that owns its own DOM + store subscription.
+// Returns { root, destroy }. Re-renders on autoState / backlog changes.
+export function createAutoModeStrip({ store, onViewAll } = {}) {
+  const getCtx = () => ({
+    autoState: store?.getAutoState?.() || null,
+    backlog:   store?.getBacklog?.()   || null,
+    onViewAll,
+  });
+  let root = renderAutoModeStrip(getCtx());
+  const repaint = () => {
+    const next = renderAutoModeStrip(getCtx());
+    if (root && root.parentNode) root.replaceWith(next);
+    root = next;
+  };
+  const unsub = [
+    store?.subscribe?.('autoState', repaint),
+    store?.subscribe?.('backlog',   repaint),
+  ].filter(Boolean);
+  return {
+    get root() { return root; },
+    destroy() {
+      unsub.forEach((fn) => { try { fn(); } catch {} });
+      destroyAutoModeStrip(root);
+    },
+  };
+}
