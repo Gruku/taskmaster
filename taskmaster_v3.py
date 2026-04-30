@@ -909,6 +909,43 @@ def save_lesson(lesson: dict) -> None:
     lesson["_body"] = body
 
 
+LESSON_REINFORCE_SOURCES = {"user", "claude", "skill"}
+
+
+def lesson_reinforce(lesson_id: str, source: str = "user", note: str = "") -> dict:
+    """Append a reinforcement event to a lesson and persist.
+
+    Returns the updated lesson summary (frontmatter dict, including
+    reinforce_count, last_reinforced, and the appended reinforce_events list).
+
+    Raises:
+        FileNotFoundError: if the lesson file doesn't exist.
+        ValueError: if `source` is not in LESSON_REINFORCE_SOURCES.
+    """
+    if source not in LESSON_REINFORCE_SOURCES:
+        raise ValueError(
+            f"source must be one of {sorted(LESSON_REINFORCE_SOURCES)}, got {source!r}"
+        )
+
+    from datetime import datetime, timezone
+
+    p = Path(".taskmaster") / "lessons" / f"{lesson_id}.md"
+    if not p.exists():
+        raise FileNotFoundError(p)
+
+    lesson = load_lesson(lesson_id)
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    event = {"at": now_iso, "source": source, "note": note or ""}
+    lesson.setdefault("reinforce_events", []).append(event)
+    lesson["reinforce_count"] = int(lesson.get("reinforce_count") or 0) + 1
+    lesson["last_reinforced"] = now_iso
+
+    save_lesson(lesson)
+    # Strip body from the returned summary
+    summary = {k: v for k, v in lesson.items() if k != "_body"}
+    return summary
+
+
 def update_lesson(
     backlog_path: Path,
     lesson_id: str,
