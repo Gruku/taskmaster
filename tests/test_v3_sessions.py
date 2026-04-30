@@ -70,3 +70,41 @@ def test_list_sessions_marks_parallel_when_overlapping(tmp_path, monkeypatch):
     a, b = sessions
     assert a["id"] in b["parallel_with"]
     assert b["id"] in a["parallel_with"]
+
+
+def test_get_session_detail_bundles_handovers_recap(tmp_path, monkeypatch):
+    from taskmaster_v3 import get_session_detail, save_recap
+    monkeypatch.chdir(tmp_path)
+
+    _write_handover(tmp_path, "2026-04-26-1640-foo.md", {
+        "id": "2026-04-26-1640-foo",
+        "date": "2026-04-26T16:40:00Z",
+        "tldr": "Stitched the gate", "next_action": "Rebase",
+        "task_ids": ["T-148"], "session_kind": "context-handoff",
+        "context_size_at_write": 0.8,
+    }, body_md="Resume by running pytest -k gate.")
+    save_recap(
+        session_id="SES-0001",
+        frontmatter={"snapshot_before": "SNAP-0000", "snapshot_after": "SNAP-0001",
+                     "generator": "claude", "generated_at": "2026-04-26T16:48Z",
+                     "token_cost": 1840},
+        title="Stitched", what_happened="A", what_landed="B", whats_next="C",
+    )
+
+    detail = get_session_detail("SES-0001")
+    assert detail["session"]["id"] == "SES-0001"
+    assert len(detail["handovers"]) == 1
+    h = detail["handovers"][0]
+    assert h["id"] == "2026-04-26-1640-foo"
+    assert h["viewer_kind"] == "mid-task"  # context-handoff → mid-task
+    assert h["tldr"] == "Stitched the gate"
+    assert h["resume_prompt"].startswith("Resume by running")
+    assert detail["recap"]["frontmatter"]["session_id"] == "SES-0001"
+    assert detail["task_ids"] == ["T-148"]
+
+
+def test_get_session_detail_returns_none_when_missing(tmp_path, monkeypatch):
+    from taskmaster_v3 import get_session_detail
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".taskmaster").mkdir()
+    assert get_session_detail("SES-9999") is None

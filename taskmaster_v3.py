@@ -1671,3 +1671,41 @@ def list_sessions() -> list[dict]:
 
     sessions.sort(key=lambda s: s["start"], reverse=True)
     return sessions
+
+
+def _load_handover_full(handover_id: str) -> dict | None:
+    """Load a handover's frontmatter + body_md by id."""
+    p = Path(".taskmaster") / "handovers" / f"{handover_id}.md"
+    if not p.exists():
+        return None
+    text = p.read_text(encoding="utf-8")
+    m = _RECAP_FM_RE.match(text)
+    if not m:
+        return None
+    fm = yaml.safe_load(m.group(1)) or {}
+    body = text[m.end():].strip()
+    fm["resume_prompt"] = body          # body is the resume prompt artifact
+    fm["viewer_kind"] = HANDOVER_KIND_TO_VIEWER_KIND.get(
+        fm.get("session_kind"), "standalone"
+    )
+    return fm
+
+
+def get_session_detail(session_id: str) -> dict | None:
+    """Bundle one session with its handovers, recap, and task ids."""
+    sessions = list_sessions()
+    target = next((s for s in sessions if s["id"] == session_id), None)
+    if target is None:
+        return None
+    handovers = []
+    for hid in target["handover_ids"]:
+        h = _load_handover_full(hid)
+        if h is not None:
+            handovers.append(h)
+    recap = load_recap(session_id)
+    return {
+        "session": target,
+        "handovers": handovers,
+        "recap": recap,
+        "task_ids": target["task_ids"],
+    }
