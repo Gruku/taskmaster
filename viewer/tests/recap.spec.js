@@ -50,4 +50,11 @@ test.describe('Recap screen', () => {
     await expect(page.locator('.rcard:has-text("Lessons fired")')).toBeHidden();
     await expect(page.locator('.rcard:has-text("Issues")')).toBeHidden();
   });
+
+  test('hero stat strip has exactly 5 cells (Handovers excluded per spec §3.16)', async ({ page }) => {
+    await page.goto('/v3#/recap/SES-0001');
+    const labels = await page.locator('.recap-stat-label').allTextContents();
+    expect(labels.length).toBe(5);
+    expect(labels.map(s => s.toLowerCase())).not.toContain('handovers');
+  });
 });
