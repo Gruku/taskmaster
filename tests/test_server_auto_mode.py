@@ -153,3 +153,27 @@ def test_get_auto_events_missing_sid_400(running_server):
     with pytest.raises(urllib.error.HTTPError) as exc:
         urllib.request.urlopen(f"{base}/api/auto/events")
     assert exc.value.code == 400
+
+
+def test_get_auto_budget(running_server, tmp_path):
+    base, _ = running_server
+    _seed_session(tmp_path, sid="v3-014")
+    body = json.loads(urllib.request.urlopen(f"{base}/api/auto/budget/v3-014").read())
+    assert body["meters"]["tokens"]["used"] == 12000
+    assert body["meters"]["tokens"]["limit"] == 200000
+    assert body["meters"]["tokens"]["pct"] == pytest.approx(12000 / 200000)
+    assert body["meters"]["tokens"]["tier"] == "ok"   # under 60%
+
+
+def test_get_auto_budget_tiers(running_server, tmp_path):
+    base, _ = running_server
+    _seed_session(tmp_path, sid="v3-014",
+                  budget={
+                      "tokens": {"used": 65, "limit": 100},  # 65% → warn
+                      "time_seconds": {"used": 95, "limit": 100},  # 95% → crit
+                      "context": {"used": 0.10, "limit": 1.0},
+                      "cost_usd": {"used": 0.0, "limit": 5.0},
+                  })
+    body = json.loads(urllib.request.urlopen(f"{base}/api/auto/budget/v3-014").read())
+    assert body["meters"]["tokens"]["tier"] == "warn"
+    assert body["meters"]["time_seconds"]["tier"] == "crit"

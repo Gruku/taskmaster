@@ -1218,6 +1218,24 @@ def read_auto_events(sid: str, since: "str | None" = None) -> "list[dict]":
     return out
 
 
+def compute_budget(state: dict) -> dict:
+    """Compute pct + tier for each meter. Tier: ok < 0.6 <= warn < 0.9 <= crit."""
+    raw = state.get("budget") or {}
+    out = {}
+    for key, meter in raw.items():
+        used = meter.get("used", 0)
+        limit = meter.get("limit", 0) or 1
+        pct = used / limit if limit else 0
+        if pct >= 0.9:
+            tier = "crit"
+        elif pct >= 0.6:
+            tier = "warn"
+        else:
+            tier = "ok"
+        out[key] = {"used": used, "limit": limit, "pct": pct, "tier": tier}
+    return out
+
+
 def read_hook_events(sid: str) -> "dict[str, int]":
     """Return {hook_name: count} for events tagged with the given session_id.
 
