@@ -42,6 +42,9 @@ export async function mount(root, { store, prefs }) {
   root.appendChild(screen);
 
   let currentView = lessonsPrefs.view || 'A';
+  // Track reinforced lesson IDs so re-render can re-apply is-fired state.
+  const _reinforcedIds = new Set();
+
   function setView(v) {
     currentView = v;
     prefs.patch({ screens: { lessons: { view: v } } });
@@ -50,7 +53,9 @@ export async function mount(root, { store, prefs }) {
 
   async function reinforce(id) {
     const summary = await api.reinforceLesson(id, { source: 'user', note: '' });
-    // Refetch to get the updated shelf placement from server
+    // Track the reinforced id before re-render so the card can show is-fired.
+    _reinforcedIds.add(id);
+    // Refetch to get the updated shelf placement from server.
     const fresh = await api.getLessons();
     store.setLessons(fresh.lessons);
     render();
@@ -64,6 +69,8 @@ export async function mount(root, { store, prefs }) {
     }
     shelvesEl.innerHTML = '';
     const lessons = store.getLessons() || [];
+    // Capture reinforced IDs snapshot for post-render re-application.
+    const reinforcedSnapshot = new Set(_reinforcedIds);
 
     if (currentView === 'A') {
       renderShelves(shelvesEl, lessons);
@@ -71,6 +78,20 @@ export async function mount(root, { store, prefs }) {
       renderFlat(shelvesEl, lessons);
     } else {
       renderByAnchor(shelvesEl, lessons);
+    }
+    // Re-apply is-fired state to cards that were reinforced this session.
+    if (reinforcedSnapshot.size > 0) {
+      for (const id of reinforcedSnapshot) {
+        const card = shelvesEl.querySelector(`[data-lesson-id="${id}"]`);
+        if (card) {
+          const btn = card.querySelector('.lesson-card__reinforce');
+          if (btn) {
+            btn.classList.add('is-fired');
+            btn.textContent = '✓ Reinforced now';
+            btn.disabled = true;
+          }
+        }
+      }
     }
   }
 
