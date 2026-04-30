@@ -4177,6 +4177,36 @@ class ViewerHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        elif clean_path == "/api/auto/sessions":
+            import json as _json
+            from taskmaster_v3 import list_auto_sessions
+            body = _json.dumps({"sessions": list_auto_sessions()}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        elif clean_path.startswith("/api/auto/sessions/"):
+            import json as _json
+            from taskmaster_v3 import load_auto_session
+            sid = clean_path[len("/api/auto/sessions/"):]
+            state = load_auto_session(sid)
+            if state is None:
+                self.send_response(404)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"ok":false,"error":"not found"}')
+                return
+            body = _json.dumps(state).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(body)
+            return
         elif clean_path == "/api/auto/state":
             self._send_json(200, {"state": _load_auto_state()})
             return
