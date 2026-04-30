@@ -81,3 +81,51 @@ def test_auto_state_no_sessions(running_server):
     base, _ = running_server
     body = json.loads(urllib.request.urlopen(f"{base}/api/auto/state").read())
     assert body == {"running": False}
+
+
+def test_post_auto_pause_sets_state_and_appends_event(running_server, tmp_path):
+    from taskmaster_v3 import load_auto_session, read_auto_events
+    base, _ = running_server
+    _seed_session(tmp_path, sid="v3-014")
+
+    body = json.dumps({"session_id": "v3-014"}).encode()
+    req = urllib.request.Request(
+        f"{base}/api/auto/pause", data=body, method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    resp = urllib.request.urlopen(req)
+    assert resp.status == 200
+    assert json.loads(resp.read())["ok"] is True
+
+    state = load_auto_session("v3-014")
+    assert state["paused"] is True
+    events = read_auto_events("v3-014")
+    assert any(e["kind"] == "control_pause" for e in events)
+
+
+def test_post_auto_stop_sets_state_and_appends_event(running_server, tmp_path):
+    from taskmaster_v3 import load_auto_session, read_auto_events
+    base, _ = running_server
+    _seed_session(tmp_path, sid="v3-014")
+
+    req = urllib.request.Request(
+        f"{base}/api/auto/stop",
+        data=json.dumps({"session_id": "v3-014"}).encode(),
+        method="POST", headers={"Content-Type": "application/json"},
+    )
+    urllib.request.urlopen(req)
+    state = load_auto_session("v3-014")
+    assert state["stopped"] is True
+    assert any(e["kind"] == "control_stop" for e in read_auto_events("v3-014"))
+
+
+def test_post_auto_pause_unknown_session_404(running_server):
+    base, _ = running_server
+    req = urllib.request.Request(
+        f"{base}/api/auto/pause",
+        data=json.dumps({"session_id": "nope"}).encode(),
+        method="POST", headers={"Content-Type": "application/json"},
+    )
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        urllib.request.urlopen(req)
+    assert exc.value.code == 404

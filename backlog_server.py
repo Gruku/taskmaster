@@ -4429,6 +4429,35 @@ class ViewerHandler(BaseHTTPRequestHandler):
         import re
         from taskmaster_v3 import lesson_reinforce as _reinforce
 
+        if self.path in ("/api/auto/pause", "/api/auto/stop"):
+            from datetime import datetime, timezone
+            from taskmaster_v3 import load_auto_session, save_auto_session, append_auto_event
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+            except Exception as e:
+                self._send_json(400, {"ok": False, "error": f"invalid JSON: {e}"})
+                return
+            sid = payload.get("session_id")
+            if not sid:
+                self._send_json(400, {"ok": False, "error": "session_id required"})
+                return
+            state = load_auto_session(sid)
+            if state is None:
+                self._send_json(404, {"ok": False, "error": "not found"})
+                return
+            kind = "control_pause" if self.path.endswith("/pause") else "control_stop"
+            flag = "paused" if kind == "control_pause" else "stopped"
+            state[flag] = True
+            save_auto_session(sid, state)
+            append_auto_event(sid, {
+                "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "kind": kind, "stage": state.get("cursor", {}).get("stage"),
+                "msg": f"{kind} via /api/auto",
+            })
+            self._send_json(200, {"ok": True})
+            return
+
         m = re.fullmatch(r"/api/lessons/([A-Za-z0-9_\-]+)/reinforce", self.path)
         if m:
             lesson_id = m.group(1)
