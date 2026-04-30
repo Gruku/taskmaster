@@ -1332,3 +1332,15 @@ def test_viewer_prefs_set_merges_patch(tmp_path, monkeypatch):
     assert prefs["kanban"]["filters"]["search"] == "auth"
     # unspecified key retains default
     assert prefs["card_density"] == "full"
+
+
+def test_auto_storage_constants():
+    from taskmaster_v3 import (
+        AUTO_DIR, AUTO_SESSIONS_DIR, AUTO_HOOKS_LOG, auto_session_path, auto_events_path,
+    )
+    from pathlib import Path
+    assert AUTO_DIR == Path(".taskmaster") / "auto"
+    assert AUTO_SESSIONS_DIR == Path(".taskmaster") / "auto" / "sessions"
+    assert AUTO_HOOKS_LOG == Path(".taskmaster") / "auto" / "hooks.jsonl"
+    assert auto_session_path("v3-014") == AUTO_SESSIONS_DIR / "v3-014.json"
+    assert auto_events_path("v3-014") == AUTO_SESSIONS_DIR / "v3-014.events.jsonl"

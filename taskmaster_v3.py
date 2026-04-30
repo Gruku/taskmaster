@@ -1138,6 +1138,22 @@ AUTO_TASK_STATUSES = ("done", "failed", "blocked")
 AUTO_FAIL_REASONS = ("tests-failed", "spec-rejected", "blocked", "crashed", "user-aborted")
 AUTO_MODELS = ("sonnet", "opus")
 
+# ---- Auto-mode storage layout -------------------------------------------
+
+AUTO_DIR = Path(".taskmaster") / "auto"
+AUTO_SESSIONS_DIR = AUTO_DIR / "sessions"
+AUTO_HOOKS_LOG = AUTO_DIR / "hooks.jsonl"
+AUTO_LEGACY_STATE = AUTO_DIR / "state.json"  # pre-Plan-6 single-session file
+
+
+def auto_session_path(sid: str) -> Path:
+    return AUTO_SESSIONS_DIR / f"{sid}.json"
+
+
+def auto_events_path(sid: str) -> Path:
+    return AUTO_SESSIONS_DIR / f"{sid}.events.jsonl"
+
+
 # ── ViewerPrefs ────────────────────────────────────────────────
 
 VIEWER_PREFS_SCHEMA_VERSION = 1
