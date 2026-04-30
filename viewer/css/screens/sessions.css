@@ -1,0 +1,145 @@
+/* Sessions / Handovers screen — Hybrid C diary.
+   Reads tokens.css; no new global tokens introduced. */
+
+.sessions-page { padding-bottom: var(--sp-9); }
+
+.sessions-topbar {
+  display: flex; align-items: center; gap: var(--sp-5);
+  margin-bottom: var(--sp-7);
+}
+.sessions-topbar h2 { margin: 0; font-size: var(--text-2xl); font-weight: 600; }
+.sessions-topbar .right { margin-left: auto; display: flex; gap: var(--sp-3); align-items: center; }
+
+.sessions-search {
+  background: var(--bg-card); border: 1px solid var(--border);
+  color: var(--ink-2); font-size: var(--text-sm);
+  padding: 3px var(--sp-4); border-radius: var(--r-sm); width: 180px;
+}
+
+.sessions-view-toggle {
+  display: inline-flex; background: var(--bg-card);
+  border: 1px solid var(--border); border-radius: var(--r-sm); overflow: hidden;
+}
+.sessions-view-toggle .seg {
+  padding: 3px var(--sp-4); font-size: var(--text-sm); color: var(--ink-3);
+  cursor: pointer; border-right: 1px solid var(--border);
+}
+.sessions-view-toggle .seg:last-child { border-right: 0; }
+.sessions-view-toggle .seg.on { background: var(--accent-soft); color: var(--accent); }
+
+.sessions-newnote {
+  background: var(--bg-card); border: 1px solid var(--border);
+  color: var(--ink-2); font-size: var(--text-sm);
+  padding: 3px var(--sp-4); border-radius: var(--r-sm); cursor: pointer;
+}
+.sessions-newnote:hover { color: var(--ink); border-color: var(--border-strong); }
+
+/* Kind filter row */
+.sessions-kinds {
+  display: flex; align-items: center; gap: var(--sp-3); margin-bottom: var(--sp-7);
+}
+.sessions-kind-chip {
+  font-size: var(--text-xs); padding: 3px var(--sp-4); border-radius: 12px;
+  cursor: pointer; border: 1px solid var(--border);
+  color: var(--ink-3);
+  display: inline-flex; align-items: center; gap: 5px;
+}
+.sessions-kind-chip .dot { width: 7px; height: 7px; border-radius: 50%; }
+.sessions-kind-chip.session .dot { background: var(--accent); }
+.sessions-kind-chip.handover .dot { background: var(--purple); }
+.sessions-kind-chip.recap .dot { background: var(--green); }
+.sessions-kind-chip.on { color: var(--ink); background: var(--accent-soft);
+  border-color: rgba(74,158,255,0.3); }
+.sessions-kind-chip .ct { color: var(--ink-3); font-family: var(--font-mono); font-size: 9px; }
+
+/* Group/day header */
+.sessions-day {
+  display: flex; align-items: baseline; gap: var(--sp-4);
+  margin: var(--sp-3) 0 var(--sp-4); padding: 0 2px;
+}
+.sessions-day .label {
+  font-family: var(--font-serif); font-size: var(--text-md); color: var(--ink-2);
+}
+.sessions-day .meta { color: var(--ink-3); font-size: var(--text-sm); }
+.sessions-day .rule { flex: 1; height: 1px; background: var(--border-soft); margin-left: 6px; }
+
+/* timeline.js renders into `.tl` */
+.tl { display: flex; flex-direction: column; gap: var(--sp-5); }
+
+.ses-container { margin-bottom: var(--sp-6); }
+
+.ho {
+  background: var(--bg-panel); border: 1px solid var(--border);
+  border-radius: var(--r-md); padding: var(--sp-4) var(--sp-5);
+  cursor: pointer; transition: background var(--t-fast) var(--ease);
+}
+.ho:hover { background: #1c1d23; }
+.ho.selected { background: rgba(160,127,224,0.10); border-color: rgba(160,127,224,0.45); }
+.ho-head { display: flex; align-items: center; gap: var(--sp-3); margin-bottom: var(--sp-2); }
+.ho-kind {
+  font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em;
+  padding: 1px 6px; border-radius: 3px; font-weight: 600;
+}
+.ho-kind.session  { background: var(--accent-soft); color: var(--accent); }
+.ho-kind.handover { background: rgba(160,127,224,0.15); color: var(--purple); }
+.ho-kind.recap    { background: rgba(95,174,110,0.15); color: var(--green); }
+.ho-kind.handover.mid-task   { background: rgba(160,127,224,0.20); }
+.ho-kind.handover.checkpoint { background: rgba(160,127,224,0.12); }
+.ho-kind.handover.wrap       { background: rgba(95,174,110,0.15); color: var(--green); }
+.ho-kind.handover.standalone { background: transparent;
+  border: 1px dashed rgba(160,127,224,0.45); color: var(--purple); }
+.ho-time { color: var(--ink-3); font-size: 10px; }
+.ho-title { font-size: var(--text-md); color: var(--ink); margin-bottom: var(--sp-1); }
+.ho-summary { color: var(--ink-2); font-size: var(--text-sm); line-height: 1.5; }
+.ho-foot { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; }
+.ho-foot .pill {
+  font-size: 9px; color: var(--ink-3);
+  background: var(--bg-card); border: 1px solid var(--border-soft);
+  padding: 1px 6px; border-radius: 3px;
+}
+
+/* Nested children: connector line + L bracket */
+.ses-children {
+  position: relative; margin: 0 0 0 14px; padding: var(--sp-1) 0 0 16px;
+  border-left: 1px solid var(--border);
+}
+.ses-children::before {
+  content: ''; position: absolute; left: -1px; top: 0; height: 8px; width: 12px;
+  border-left: 1px solid var(--border); border-bottom: 1px solid var(--border);
+  border-bottom-left-radius: 6px;
+}
+.ho-child {
+  background: var(--bg-card); border: 1px solid var(--border-soft);
+  border-radius: 5px; padding: var(--sp-2) var(--sp-4); margin-top: var(--sp-2);
+  cursor: pointer; position: relative;
+}
+.ho-child::before {
+  content: ''; position: absolute; left: -16px; top: 14px;
+  width: 12px; height: 1px; background: var(--border);
+}
+.ho-child:hover { background: #25262c; }
+
+/* Parallel block */
+.par-block {
+  border: 1px dashed rgba(160,127,224,0.35); border-radius: var(--r-lg);
+  padding: var(--sp-4) var(--sp-4) var(--sp-1);
+  margin: var(--sp-2) 0 var(--sp-7);
+  background: rgba(160,127,224,0.04); position: relative;
+}
+.par-label {
+  position: absolute; top: -7px; left: 12px;
+  font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em;
+  background: var(--bg-canvas); padding: 0 6px;
+  color: var(--purple); font-weight: 600;
+}
+.par-grid { display: grid; gap: var(--sp-4); align-items: start; }
+
+/* Standalone (independent) handover row */
+.ho-standalone {
+  border: 1px dashed rgba(160,127,224,0.45);
+  background: rgba(160,127,224,0.05);
+}
+
+/* Right-rail dimming when open */
+body.rail-open .tl { opacity: 0.5; pointer-events: none; }
+body.rail-open .tl .selected { opacity: 1; pointer-events: auto; }
