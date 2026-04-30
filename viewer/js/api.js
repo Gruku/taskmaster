@@ -161,3 +161,28 @@ export async function savePrefs(patch) {
   if (!r.ok) throw new Error(`savePrefs: ${r.status}`);
   return r.json();
 }
+
+// --- Lessons ---------------------------------------------------------------
+export async function getLessons() {
+  const r = await fetch('/api/lessons');
+  if (!r.ok) throw new Error(`getLessons failed: ${r.status}`);
+  return r.json();
+}
+
+export async function reinforceLesson(lessonId, { source = 'user', note = '' } = {}) {
+  const r = await fetch(`/api/lessons/${encodeURIComponent(lessonId)}/reinforce`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ source, note }),
+  });
+  if (!r.ok) throw new Error(`reinforceLesson failed: ${r.status}`);
+  return r.json();
+}
+
+// --- Issues ----------------------------------------------------------------
+export async function getIssues({ includeResolved = true } = {}) {
+  const qs = includeResolved ? '' : '?include_resolved=false';
+  const r = await fetch(`/api/issues${qs}`);
+  if (!r.ok) throw new Error(`getIssues failed: ${r.status}`);
+  return r.json();
+}
