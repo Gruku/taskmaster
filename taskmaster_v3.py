@@ -1218,6 +1218,31 @@ def read_auto_events(sid: str, since: "str | None" = None) -> "list[dict]":
     return out
 
 
+def read_hook_events(sid: str) -> "dict[str, int]":
+    """Return {hook_name: count} for events tagged with the given session_id.
+
+    Tolerates malformed lines silently (skip). Missing file → {}.
+    """
+    import json
+    if not AUTO_HOOKS_LOG.exists():
+        return {}
+    counts: "dict[str, int]" = {}
+    for line in AUTO_HOOKS_LOG.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            ev = json.loads(line)
+        except Exception:
+            continue
+        if ev.get("session_id") != sid:
+            continue
+        h = ev.get("hook")
+        if not h:
+            continue
+        counts[h] = counts.get(h, 0) + 1
+    return counts
+
+
 def migrate_auto_state_to_sessions() -> bool:
     """One-time migration: wrap pre-Plan-6 single state.json into sessions/<task_id>.json.
 

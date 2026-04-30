@@ -1458,3 +1458,22 @@ def test_read_auto_events_missing_session_returns_empty(tmp_path, monkeypatch):
     from taskmaster_v3 import read_auto_events
     monkeypatch.chdir(tmp_path)
     assert read_auto_events("nope") == []
+
+
+def test_read_hook_events_counts_by_hook(tmp_path, monkeypatch):
+    from taskmaster_v3 import read_hook_events, AUTO_HOOKS_LOG
+    monkeypatch.chdir(tmp_path)
+    AUTO_HOOKS_LOG.parent.mkdir(parents=True, exist_ok=True)
+    AUTO_HOOKS_LOG.write_text(
+        '{"ts":"2026-04-26T18:00:00Z","hook":"PostToolUse","session_id":"v3-014","tool":"Edit","ok":true}\n'
+        '{"ts":"2026-04-26T18:00:01Z","hook":"PostToolUse","session_id":"v3-014","tool":"Edit","ok":true}\n'
+        '{"ts":"2026-04-26T18:00:02Z","hook":"PreCompact","session_id":"v3-014","ok":true}\n'
+    )
+    counts = read_hook_events("v3-014")
+    assert counts == {"PostToolUse": 2, "PreCompact": 1}
+
+
+def test_read_hook_events_missing_log_returns_empty(tmp_path, monkeypatch):
+    from taskmaster_v3 import read_hook_events
+    monkeypatch.chdir(tmp_path)
+    assert read_hook_events("v3-014") == {}
