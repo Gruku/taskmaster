@@ -32,3 +32,38 @@ test('computePlacements assigns deterministic order for missing index', () => {
   const out = computePlacements(layout);
   assert.deepEqual(out.map(p => p.instance.id), ['a', 'b']);
 });
+
+test('addWidget appends to end of target rail and assigns new index', () => {
+  const layout = [
+    { id: 'a', type: 'suggested-next', size: 'medium', rail: 'left', index: 0 },
+  ];
+  const out = addWidget(layout, 'open-issues', { rail: 'left', id: 'b' });
+  assert.equal(out.length, 2);
+  assert.equal(out[1].id, 'b');
+  assert.equal(out[1].rail, 'left');
+  assert.equal(out[1].index, 1);
+});
+
+test('removeWidget drops the instance and re-indexes survivors', () => {
+  const layout = [
+    { id: 'a', type: 'x', size: 'medium', rail: 'left', index: 0 },
+    { id: 'b', type: 'y', size: 'medium', rail: 'left', index: 1 },
+    { id: 'c', type: 'z', size: 'medium', rail: 'left', index: 2 },
+  ];
+  const out = removeWidget(layout, 'b');
+  assert.deepEqual(out.map(i => i.id), ['a', 'c']);
+  assert.deepEqual(out.map(i => i.index), [0, 1]);
+});
+
+test('moveWidget across rails reorders both rails consistently', () => {
+  const layout = [
+    { id: 'a', type: 'x', size: 'medium', rail: 'left',  index: 0 },
+    { id: 'b', type: 'y', size: 'medium', rail: 'left',  index: 1 },
+    { id: 'c', type: 'z', size: 'medium', rail: 'right', index: 0 },
+  ];
+  const out = moveWidget(layout, 'a', { rail: 'right', index: 0 });
+  const right = out.filter(i => i.rail === 'right').sort((p, q) => p.index - q.index).map(i => i.id);
+  assert.deepEqual(right, ['a', 'c']);
+  const left = out.filter(i => i.rail === 'left').sort((p, q) => p.index - q.index).map(i => i.id);
+  assert.deepEqual(left, ['b']);
+});
