@@ -109,10 +109,21 @@ export async function mount(root, { store, api, prefs }) {
   attachRailDropTarget(railRight, 'right',  edit.onMove);
   attachRailDropTarget(bottom,    'bottom', edit.onMove);
 
+  // Stamp the previous "last looked" timestamp so the next visit sees this session's events.
+  // Capture-on-cleanup so this visit's briefing reflects the prior timestamp.
+  const prevSeen = (prefs.dashboard && prefs.dashboard.last_seen_at) || null;
+  const stampOnLeave = async () => {
+    try {
+      await api.savePrefs({ dashboard: { last_seen_at: new Date().toISOString() } });
+    } catch (_) { /* ignore */ }
+  };
+
   return async () => {
+    await stampOnLeave();
     briefing.destroy();
     board.destroy();
     autoStrip && autoStrip.destroy && autoStrip.destroy();
     for (const fn of widgetCleanups) await fn?.();
+    void prevSeen;
   };
 }
