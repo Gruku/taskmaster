@@ -88,3 +88,98 @@
   color: var(--ink);
   background: rgba(255, 255, 255, 0.05);
 }
+
+/* RightRail (shared with task-detail in Plan 3) */
+.right-rail {
+  position: fixed; top: 0; right: 0; height: 100vh; width: var(--rail-w, 480px);
+  background: var(--bg-panel); border-left: 1px solid var(--border);
+  box-shadow: -8px 0 24px rgba(0,0,0,0.30);
+  overflow-y: auto;
+  z-index: 50;
+  padding: var(--sp-7) var(--sp-7);
+}
+.right-rail .rr-h {
+  display: flex; align-items: center; gap: var(--sp-3);
+  margin-bottom: var(--sp-5);
+}
+.right-rail .rr-h .kind-pill {
+  font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em;
+  padding: 2px 7px; border-radius: 3px; font-weight: 600;
+}
+.right-rail .rr-h .kind-pill.handover { background: rgba(160,127,224,0.15); color: var(--purple); }
+.right-rail .rr-h .kind-pill.session  { background: var(--accent-soft); color: var(--accent); }
+.right-rail .rr-h .kind-pill.recap    { background: rgba(95,174,110,0.15); color: var(--green); }
+.right-rail .rr-h .ts { color: var(--ink-3); font-family: var(--font-mono); font-size: 10px; }
+.right-rail .rr-h .actions { margin-left: auto; display: flex; gap: 4px; }
+.right-rail .rr-h .ic-btn {
+  width: 24px; height: 24px; border-radius: 4px; background: transparent;
+  border: 1px solid var(--border); color: var(--ink-3); cursor: pointer;
+  display: flex; align-items: center; justify-content: center; font-size: 12px;
+}
+.right-rail .rr-h .ic-btn:hover { color: var(--ink); border-color: var(--border-strong); }
+
+.right-rail .rr-title { font-size: var(--text-lg); color: var(--ink); margin-bottom: var(--sp-2); }
+.right-rail .rr-meta {
+  color: var(--ink-3); font-size: var(--text-sm); margin-bottom: var(--sp-5);
+  display: flex; flex-wrap: wrap; gap: var(--sp-3);
+}
+.right-rail .rr-meta .filepath { font-family: var(--font-mono); font-size: 10px; cursor: pointer; }
+.right-rail .rr-meta .filepath:hover { color: var(--ink-2); }
+
+.right-rail .rr-resume {
+  background: linear-gradient(180deg, rgba(74,158,255,0.06), rgba(74,158,255,0.02));
+  border: 1px solid rgba(74,158,255,0.25); border-radius: var(--r-lg);
+  padding: var(--sp-5) var(--sp-5) var(--sp-5) var(--sp-7);
+  position: relative; margin-bottom: var(--sp-6);
+}
+.right-rail .rr-resume .label {
+  position: absolute; top: -7px; left: 12px;
+  background: var(--bg-panel); padding: 0 6px;
+  font-size: 9px; text-transform: uppercase; letter-spacing: 0.10em;
+  color: var(--accent); font-weight: 600;
+}
+.right-rail .rr-resume .copy {
+  position: absolute; top: 8px; right: 8px;
+  background: transparent; border: 1px solid var(--border);
+  color: var(--ink-3); font-size: 10px; padding: 2px 6px;
+  border-radius: 4px; cursor: pointer;
+}
+.right-rail .rr-resume .copy:hover { color: var(--ink); }
+.right-rail .rr-resume .body {
+  font-family: var(--font-serif); font-size: var(--text-md);
+  line-height: 1.55; color: var(--ink); white-space: pre-wrap;
+}
+
+.right-rail .rr-section { margin-bottom: var(--sp-6); }
+.right-rail .rr-section h4 {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.10em;
+  color: var(--ink-3); margin: 0 0 var(--sp-3); display: flex; align-items: center; gap: var(--sp-3);
+}
+.right-rail .rr-section h4 .ct { font-family: var(--font-mono); font-size: 9px; opacity: 0.8; }
+
+.right-rail .checkitem {
+  display: flex; align-items: flex-start; gap: var(--sp-3);
+  padding: 3px 0; font-size: var(--text-sm); color: var(--ink-2);
+}
+.right-rail .checkitem .mark { width: 14px; flex: 0 0 14px; padding-top: 2px; }
+.right-rail .checkitem.done .mark { color: var(--green); }
+.right-rail .checkitem.open .mark { color: var(--ink-3); }
+
+.right-rail .related-row {
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-2) 0; font-size: var(--text-sm); color: var(--ink-2);
+  border-bottom: 1px solid var(--border-soft);
+}
+.right-rail .related-row .id { font-family: var(--font-mono); font-size: 10px; color: var(--ink-3); }
+.right-rail .related-row .status { margin-left: auto; font-size: 9px; color: var(--ink-3); }
+
+.right-rail .files-list { font-family: var(--font-mono); font-size: 10px; }
+.right-rail .files-list .files-row {
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: 3px 0; color: var(--ink-2);
+}
+.right-rail .files-list .files-row .pre { width: 12px; text-align: center; font-weight: 700; }
+.right-rail .files-list .files-row.add .pre { color: var(--diff-add); }
+.right-rail .files-list .files-row.mod .pre { color: var(--diff-mod); }
+.right-rail .files-list .files-row.del .pre { color: var(--diff-del); }
+.right-rail .files-list .more { color: var(--ink-3); font-style: italic; padding-top: var(--sp-2); }
