@@ -48,3 +48,21 @@ def test_get_auto_sessions_lists_all(running_server, tmp_path, monkeypatch):
     payload = json.loads(resp.read())
     ids = sorted(s["session_id"] for s in payload["sessions"])
     assert ids == ["v3-014", "v3-022"]
+
+
+def test_get_auto_session_detail(running_server, tmp_path):
+    base, _ = running_server
+    _seed_session(tmp_path, sid="v3-014")
+
+    resp = urllib.request.urlopen(f"{base}/api/auto/sessions/v3-014")
+    assert resp.status == 200
+    body = json.loads(resp.read())
+    assert body["session_id"] == "v3-014"
+    assert body["cursor"]["stage"] == "IMPLEMENT"
+
+
+def test_get_auto_session_detail_404(running_server):
+    base, _ = running_server
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        urllib.request.urlopen(f"{base}/api/auto/sessions/missing")
+    assert exc.value.code == 404
