@@ -115,3 +115,47 @@ function panelBlockers(blockers) {
            blockers.map((b) => h('li', { class: 'td-blocker' }, typeof b === 'string' ? b : (b.text || JSON.stringify(b)))))
        : h('div', { class: 'td-empty' }, 'none')]);
 }
+
+// ---------------------------------------------------------------------------
+// Generic right-rail. Used by Plan 3 (task-detail) and Plan 5a (session-detail).
+// Construct once per screen, call open/close as the user picks rows.
+// ---------------------------------------------------------------------------
+
+const ATTACH_PARENT_SEL = '.right-rail-host';
+
+export class RightRail {
+  /** @param {{width?: number}} opts */
+  constructor(opts = {}) {
+    this.width = opts.width || 480;
+    this.el = null;
+    this._cleanup = null;
+  }
+
+  /** @param {{render: () => string, onMount?: (root: HTMLElement) => () => void, kind?: string}} args */
+  open(args) {
+    this.close();
+    const host = document.querySelector(ATTACH_PARENT_SEL) || document.body;
+    const el = document.createElement('aside');
+    el.className = `right-rail right-rail-${args.kind || 'plain'}`;
+    el.style.setProperty('--rail-w', this.width + 'px');
+    el.innerHTML = args.render();
+    host.appendChild(el);
+    document.body.classList.add('rail-open');
+    this.el = el;
+    if (args.onMount) {
+      this._cleanup = args.onMount(el) || null;
+    }
+  }
+
+  close() {
+    if (this._cleanup) {
+      try { this._cleanup(); } catch {}
+      this._cleanup = null;
+    }
+    if (this.el && this.el.parentNode) this.el.parentNode.removeChild(this.el);
+    this.el = null;
+    document.body.classList.remove('rail-open');
+  }
+
+  isOpen() { return !!this.el; }
+}
