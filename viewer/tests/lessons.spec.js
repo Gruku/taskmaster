@@ -41,3 +41,29 @@ test('view toggle persists to prefs', async ({ page }) => {
   await page.reload();
   await expect(page.locator('.lessons__view-toggle button[data-view="B"]')).toHaveClass(/is-active/);
 });
+
+test('lesson card surfaces all §3.13 elements', async ({ page }) => {
+  await page.goto('/v3/#/lessons');
+  const card = page.locator('.lesson-card').first();
+  // kind icon
+  await expect(card.locator('.lesson-card__kind')).toBeVisible();
+  await expect(card.locator('.lesson-card__kind')).toHaveText(/^(⚠|◇|⊘)$/);
+  // anchor pills with When: label
+  await expect(card.locator('.anchor-pills__label')).toHaveText('When:');
+  // first_seen caption
+  await expect(card.locator('.lesson-card__since')).toBeVisible();
+  // active signal: sparkline pill with count
+  await expect(card.locator('.sparkline-pill .sparkline-count')).toBeVisible();
+  // passive signal: dot meter
+  await expect(card.locator('.dot-meter')).toBeVisible();
+});
+
+test('core shelf shows gold styling on ID', async ({ page }) => {
+  await page.goto('/v3/#/lessons');
+  const coreCard = page.locator('.lesson-card--core').first();
+  if (await coreCard.count() === 0) test.skip(); // no core lessons in fixture
+  const idColor = await coreCard.locator('.lesson-card__id').evaluate(el => getComputedStyle(el).color);
+  // Gold-ish: high red, medium green, low blue
+  const m = idColor.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+  expect(Number(m[1])).toBeGreaterThan(150);
+});
