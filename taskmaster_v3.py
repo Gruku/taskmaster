@@ -1499,3 +1499,26 @@ def list_recaps() -> list[str]:
     ids = [p.stem for p in d.glob("*.md") if not p.name.startswith("_")]
     ids.sort(reverse=True)
     return ids
+
+
+# ---- Session snapshots ---------------------------------------------------
+
+
+def save_session_snapshot(snapshot_id: str, payload: dict) -> Path:
+    """Write `.taskmaster/snapshots/<snapshot-id>.json` (atomic). The rolling
+    `last.json` is unaffected; per-session files coexist alongside it.
+    """
+    import json as _json
+    p = Path(".taskmaster") / "snapshots" / f"{snapshot_id}.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write(p, _json.dumps(payload, indent=2))
+    return p
+
+
+def load_session_snapshot(snapshot_id: str) -> dict | None:
+    """Load `.taskmaster/snapshots/<snapshot-id>.json`. None when missing."""
+    import json as _json
+    p = Path(".taskmaster") / "snapshots" / f"{snapshot_id}.json"
+    if not p.exists():
+        return None
+    return _json.loads(p.read_text(encoding="utf-8"))
