@@ -95,3 +95,26 @@ def test_get_issues_excludes_resolved_when_query_param_set(running_server, tmp_p
     ids = [i["id"] for i in payload["issues"]]
     assert "ISS-010" in ids
     assert "ISS-011" not in ids
+
+
+def test_aging_override_changes_tier(running_server, tmp_path):
+    base, _ = running_server
+    discovered = (datetime.now(timezone.utc) - timedelta(days=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _write_issue(tmp_path, "ISS-AG1", severity="P1", discovered=discovered)
+
+    # Default High base = 30d → 5d ≈ 17% → Fresh
+    payload = json.loads(urllib.request.urlopen(f"{base}/api/issues").read())
+    by_id = {i["id"]: i for i in payload["issues"]}
+    assert by_id["ISS-AG1"]["aging"]["tier"] == "Fresh"
+
+    # Override High base to 5 days → 5d == 100% → Stale
+    body = json.dumps({"issues": {"aging": {"High": 5}}}).encode()
+    req = urllib.request.Request(
+        f"{base}/api/viewer/prefs", data=body, method="PUT",
+        headers={"Content-Type": "application/json"},
+    )
+    urllib.request.urlopen(req)
+
+    payload = json.loads(urllib.request.urlopen(f"{base}/api/issues").read())
+    by_id = {i["id"]: i for i in payload["issues"]}
+    assert by_id["ISS-AG1"]["aging"]["tier"] == "Stale"
