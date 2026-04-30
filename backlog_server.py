@@ -4203,6 +4203,42 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 return
             self._send_json(200, events)
             return
+        elif clean_path == "/api/sessions":
+            self._send_json(200, list_sessions())
+            return
+        elif clean_path.startswith("/api/sessions/"):
+            sid = clean_path[len("/api/sessions/"):]
+            detail = get_session_detail(sid)
+            if detail is None:
+                self._send_json(404, {"ok": False, "error": f"unknown session {sid}"})
+                return
+            self._send_json(200, detail)
+            return
+        elif clean_path.startswith("/api/recap/"):
+            sid = clean_path[len("/api/recap/"):]
+            rec = load_recap(sid)
+            if rec is None:
+                self._send_json(404, {"ok": False, "error": f"no recap for {sid}"})
+                return
+            self._send_json(200, rec)
+            return
+        elif clean_path.startswith("/api/snapshots/diff"):
+            from urllib.parse import urlsplit, parse_qs
+            qs = parse_qs(urlsplit(self.path).query)
+            a = (qs.get("from") or [None])[0]
+            b = (qs.get("to")   or [None])[0]
+            if not a or not b:
+                self._send_json(400, {"ok": False,
+                    "error": "both 'from' and 'to' query params required"})
+                return
+            snap_a = load_session_snapshot(a)
+            snap_b = load_session_snapshot(b)
+            if snap_a is None or snap_b is None:
+                self._send_json(404, {"ok": False,
+                    "error": f"missing snapshot(s): from={snap_a is not None} to={snap_b is not None}"})
+                return
+            self._send_json(200, _snapshot_diff(snap_a, snap_b))
+            return
         else:
             self.send_error(HTTPStatus.NOT_FOUND)
 

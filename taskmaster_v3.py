@@ -1574,8 +1574,12 @@ def snapshot_diff(a: dict, b: dict) -> dict:
 # ---- Sessions ------------------------------------------------------------
 
 
-def _parse_iso8601(s: str) -> "datetime":
+def _parse_iso8601(s) -> "datetime":
     from datetime import datetime, timezone
+    if isinstance(s, datetime):
+        if s.tzinfo is None:
+            return s.replace(tzinfo=timezone.utc)
+        return s
     if s.endswith("Z"):
         s = s[:-1] + "+00:00"
     dt = datetime.fromisoformat(s)
