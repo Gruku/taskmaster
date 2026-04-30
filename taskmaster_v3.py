@@ -1479,3 +1479,13 @@ def save_recap(
     p.parent.mkdir(parents=True, exist_ok=True)
     atomic_write(p, md)
     return p
+
+
+def load_recap(session_id: str) -> dict | None:
+    """Load and parse a recap file. Returns None when missing.
+    Returned dict: {frontmatter, title, what_happened, what_landed, whats_next}.
+    """
+    p = recap_path(session_id)
+    if not p.exists():
+        return None
+    return _parse_recap_markdown(p.read_text(encoding="utf-8"))

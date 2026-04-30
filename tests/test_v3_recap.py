@@ -89,3 +89,31 @@ def test_save_recap_writes_file_with_expected_shape(tmp_path, monkeypatch):
     assert "## What happened" in text
     assert "## What landed" in text
     assert "## What's next" in text
+
+
+def test_load_recap_returns_none_when_missing(tmp_path, monkeypatch):
+    from taskmaster_v3 import load_recap
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".taskmaster").mkdir()
+    assert load_recap("SES-9999") is None
+
+
+def test_load_recap_round_trip(tmp_path, monkeypatch):
+    from taskmaster_v3 import save_recap, load_recap
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".taskmaster").mkdir()
+    save_recap(
+        session_id="SES-0184",
+        frontmatter={"snapshot_before": "SNAP-0183", "snapshot_after": "SNAP-0184",
+                     "generator": "claude", "generated_at": "2026-04-26T16:48:00Z",
+                     "token_cost": 1840},
+        title="Hero",
+        what_happened="A", what_landed="B", whats_next="C",
+    )
+    rec = load_recap("SES-0184")
+    assert rec["frontmatter"]["session_id"] == "SES-0184"
+    assert rec["frontmatter"]["snapshot_before"] == "SNAP-0183"
+    assert rec["title"] == "Hero"
+    assert rec["what_happened"] == "A"
+    assert rec["what_landed"] == "B"
+    assert rec["whats_next"] == "C"
