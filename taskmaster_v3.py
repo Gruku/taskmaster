@@ -1489,3 +1489,13 @@ def load_recap(session_id: str) -> dict | None:
     if not p.exists():
         return None
     return _parse_recap_markdown(p.read_text(encoding="utf-8"))
+
+
+def list_recaps() -> list[str]:
+    """Return session ids of all on-disk recaps, sorted descending (newest first)."""
+    d = Path(".taskmaster") / "recaps"
+    if not d.exists():
+        return []
+    ids = [p.stem for p in d.glob("*.md") if not p.name.startswith("_")]
+    ids.sort(reverse=True)
+    return ids

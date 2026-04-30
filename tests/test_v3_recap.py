@@ -117,3 +117,26 @@ def test_load_recap_round_trip(tmp_path, monkeypatch):
     assert rec["what_happened"] == "A"
     assert rec["what_landed"] == "B"
     assert rec["whats_next"] == "C"
+
+
+def test_list_recaps_returns_session_ids_sorted_desc(tmp_path, monkeypatch):
+    from taskmaster_v3 import save_recap, list_recaps
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".taskmaster").mkdir()
+    for sid in ("SES-0182", "SES-0185", "SES-0184"):
+        save_recap(
+            session_id=sid,
+            frontmatter={"snapshot_before": "SNAP-A", "snapshot_after": "SNAP-B",
+                         "generator": "claude", "generated_at": "2026-04-26T16:00Z",
+                         "token_cost": 100},
+            title="x", what_happened="x", what_landed="x", whats_next="x",
+        )
+    ids = list_recaps()
+    assert ids == ["SES-0185", "SES-0184", "SES-0182"]
+
+
+def test_list_recaps_empty_when_dir_missing(tmp_path, monkeypatch):
+    from taskmaster_v3 import list_recaps
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".taskmaster").mkdir()
+    assert list_recaps() == []
