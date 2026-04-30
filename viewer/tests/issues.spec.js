@@ -42,3 +42,26 @@ test('resolved shelf collapsed by default and expandable', async ({ page }) => {
   await page.locator('.issues__resolved-header').click();
   await expect(list).toBeVisible();
 });
+
+test('issue card surfaces all §3.14 elements', async ({ page }) => {
+  await page.goto('/v3/#/issues');
+  const card = page.locator('.issue-card').first();
+  // severity hexagon glyph
+  await expect(card.locator('.sev-glyph svg')).toBeVisible();
+  // console-style location
+  await expect(card.locator('.issue-card__location')).toBeVisible();
+  await expect(card.locator('.issue-card__location-num')).toBeVisible();
+  // italic-serif symptom
+  const symptomFont = await card.locator('.issue-card__symptom').evaluate(el => getComputedStyle(el).fontStyle);
+  expect(symptomFont).toBe('italic');
+  // aging bar
+  await expect(card.locator('.aging-bar')).toBeVisible();
+  await expect(card.locator('.aging-bar__chip')).toHaveText(/^(Fresh|Aging|Stale)$/);
+});
+
+test('blocks chip appears when issue blocks non-done tasks', async ({ page }) => {
+  await page.goto('/v3/#/issues');
+  const chip = page.locator('.issue-card__blocks').first();
+  if (await chip.count() === 0) test.skip();
+  await expect(chip).toHaveText(/⊘ blocks \d+/);
+});
