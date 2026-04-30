@@ -1186,6 +1186,38 @@ def list_auto_sessions() -> "list[dict]":
     return out
 
 
+def append_auto_event(sid: str, event: dict) -> None:
+    """Append a single event to <sid>.events.jsonl. Creates parent dirs."""
+    import json
+    p = auto_events_path(sid)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps(event, separators=(",", ":")) + "\n"
+    with p.open("a", encoding="utf-8") as f:
+        f.write(line)
+
+
+def read_auto_events(sid: str, since: "str | None" = None) -> "list[dict]":
+    """Return events for sid, optionally filtered to ts >= since (ISO 8601 strings).
+    Lex order on ISO 8601 UTC matches chronological order, so a string compare suffices.
+    """
+    import json
+    p = auto_events_path(sid)
+    if not p.exists():
+        return []
+    out = []
+    for line in p.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            ev = json.loads(line)
+        except Exception:
+            continue
+        if since is not None and ev.get("ts", "") < since:
+            continue
+        out.append(ev)
+    return out
+
+
 def migrate_auto_state_to_sessions() -> bool:
     """One-time migration: wrap pre-Plan-6 single state.json into sessions/<task_id>.json.
 

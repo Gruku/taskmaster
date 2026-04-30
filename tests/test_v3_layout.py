@@ -1427,3 +1427,34 @@ def test_server_init_runs_auto_migration(tmp_path, monkeypatch):
 
     assert (tmp_path / AUTO_DIR / "sessions" / "v3-014.json").exists()
     assert not (tmp_path / AUTO_LEGACY_STATE).exists()
+
+
+def test_auto_events_append_and_read(tmp_path, monkeypatch):
+    from taskmaster_v3 import append_auto_event, read_auto_events
+    monkeypatch.chdir(tmp_path)
+    append_auto_event("v3-014", {
+        "ts": "2026-04-26T18:42:09Z", "stage": "PICK",
+        "kind": "stage_enter", "msg": "picked v3-014",
+    })
+    append_auto_event("v3-014", {
+        "ts": "2026-04-26T18:43:11Z", "stage": "PICK",
+        "kind": "stage_exit", "msg": "PICK done",
+    })
+    append_auto_event("v3-014", {
+        "ts": "2026-04-26T18:43:12Z", "stage": "IMPLEMENT",
+        "kind": "stage_enter", "msg": "starting implementation",
+    })
+    all_events = read_auto_events("v3-014")
+    assert len(all_events) == 3
+    assert all_events[0]["kind"] == "stage_enter"
+
+    since = read_auto_events("v3-014", since="2026-04-26T18:43:00Z")
+    assert len(since) == 2
+    assert since[0]["stage"] == "PICK"  # exit
+    assert since[1]["stage"] == "IMPLEMENT"
+
+
+def test_read_auto_events_missing_session_returns_empty(tmp_path, monkeypatch):
+    from taskmaster_v3 import read_auto_events
+    monkeypatch.chdir(tmp_path)
+    assert read_auto_events("nope") == []
