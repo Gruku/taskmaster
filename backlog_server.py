@@ -100,6 +100,13 @@ from taskmaster_v3 import (
     auto_run_summary as _auto_run_summary,
     load_viewer_prefs,
     save_viewer_prefs,
+    load_recap,
+    save_recap,
+    list_recaps,
+    list_sessions,
+    get_session_detail,
+    load_session_snapshot,
+    snapshot_diff as _snapshot_diff,
 )
 
 
@@ -4478,6 +4485,61 @@ def backlog_open_viewer() -> str:
     url = f"http://127.0.0.1:{port}/"
     webbrowser.open(url)
     return f"Opened backlog viewer at {url}"
+
+
+@mcp.tool()
+def recap_get(session_id: str) -> str:
+    """Return the recap for a session as JSON, or `null` when missing."""
+    import json as _json
+    rec = load_recap(session_id)
+    return _json.dumps(rec)
+
+
+@mcp.tool()
+def recap_set(
+    session_id: str,
+    frontmatter_json: str,
+    title: str,
+    what_happened: str,
+    what_landed: str,
+    whats_next: str,
+) -> str:
+    """Write a recap. `frontmatter_json` is a JSON object holding
+    snapshot_before / snapshot_after / generator / generated_at / token_cost.
+    `session_id` and `schema_version` are auto-injected.
+    """
+    import json as _json
+    try:
+        fm = _json.loads(frontmatter_json)
+    except Exception as e:
+        return f"error: invalid frontmatter JSON ({e})"
+    if not isinstance(fm, dict):
+        return "error: frontmatter must be a JSON object"
+    save_recap(
+        session_id=session_id,
+        frontmatter=fm,
+        title=title,
+        what_happened=what_happened,
+        what_landed=what_landed,
+        whats_next=whats_next,
+    )
+    return "ok"
+
+
+@mcp.tool()
+def recap_list() -> str:
+    """List session ids that have a recap on disk (newest first)."""
+    import json as _json
+    return _json.dumps(list_recaps())
+
+
+@mcp.tool()
+def snapshot_diff(snapshot_a_json: str, snapshot_b_json: str) -> str:
+    """Compute structured diff between two snapshot payloads, returned as JSON."""
+    import json as _json
+    a = _json.loads(snapshot_a_json)
+    b = _json.loads(snapshot_b_json)
+    return _json.dumps(_snapshot_diff(a, b))
 
 
 if __name__ == "__main__":
