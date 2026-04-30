@@ -4208,7 +4208,19 @@ class ViewerHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
         elif clean_path == "/api/auto/state":
-            self._send_json(200, {"state": _load_auto_state()})
+            import json as _json
+            from taskmaster_v3 import list_auto_sessions
+            sessions = list_auto_sessions()
+            body = (
+                _json.dumps(sessions[0]).encode("utf-8") if sessions
+                else b'{"running":false}'
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(body)
             return
         elif clean_path == "/api/viewer/prefs":
             self._send_json(200, load_viewer_prefs())

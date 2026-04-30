@@ -66,3 +66,18 @@ def test_get_auto_session_detail_404(running_server):
     with pytest.raises(urllib.error.HTTPError) as exc:
         urllib.request.urlopen(f"{base}/api/auto/sessions/missing")
     assert exc.value.code == 404
+
+
+def test_auto_state_returns_most_recent_session(running_server, tmp_path):
+    base, _ = running_server
+    _seed_session(tmp_path, sid="v3-014", started_at="2026-04-26T17:00:00Z")
+    _seed_session(tmp_path, sid="v3-022", started_at="2026-04-26T18:30:00Z")
+
+    body = json.loads(urllib.request.urlopen(f"{base}/api/auto/state").read())
+    assert body["session_id"] == "v3-022"
+
+
+def test_auto_state_no_sessions(running_server):
+    base, _ = running_server
+    body = json.loads(urllib.request.urlopen(f"{base}/api/auto/state").read())
+    assert body == {"running": False}
