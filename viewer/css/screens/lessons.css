@@ -1,0 +1,169 @@
+/* Lessons screen — three shelves: Core / Active / Retired.
+   Tokens scoped under --lessons-* live here; global tokens come from tokens.css. */
+
+.lessons {
+  --lessons-shelf-gap: 28px;
+  --lessons-card-gap: 12px;
+  --lessons-gold: #d9b35a;
+  --lessons-gold-soft: rgba(217, 179, 90, 0.18);
+  --lessons-retired-rest: 0.55;
+  --lessons-retired-hover: 0.85;
+
+  display: flex;
+  flex-direction: column;
+  gap: var(--lessons-shelf-gap);
+  padding: 24px 28px;
+}
+
+.lessons__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.lessons__view-toggle {
+  display: inline-flex;
+  gap: 4px;
+}
+.lessons__view-toggle button {
+  padding: 4px 10px;
+  background: var(--bg-card);
+  color: var(--ink-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  font: inherit;
+}
+.lessons__view-toggle button.is-active {
+  background: var(--bg-active);
+  color: var(--ink);
+}
+
+/* ---- shelves ---- */
+
+.lessons-shelf { display: flex; flex-direction: column; gap: 10px; }
+.lessons-shelf__header {
+  display: flex; align-items: baseline; gap: 12px;
+  font-family: 'Source Serif Pro', Georgia, serif;
+  font-style: italic;
+  font-size: 16px;
+}
+.lessons-shelf--core    .lessons-shelf__header { color: var(--lessons-gold); }
+.lessons-shelf--active  .lessons-shelf__header { color: var(--ink); }
+.lessons-shelf--retired .lessons-shelf__header { color: var(--ink-3); }
+.lessons-shelf__tagline { font-size: 12px; color: var(--ink-3); font-style: italic; }
+.lessons-shelf__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: var(--lessons-card-gap);
+}
+
+/* ---- card ---- */
+
+.lesson-card {
+  position: relative;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 14px 12px;
+  display: flex; flex-direction: column; gap: 10px;
+  transition: background 120ms ease;
+}
+.lesson-card:hover { background: var(--bg-card-hover); }
+
+/* core: subtle gold gradient at top, NO edge ribbon */
+.lesson-card--core {
+  background:
+    linear-gradient(to bottom, var(--lessons-gold-soft) 0%, transparent 56px),
+    var(--bg-card);
+}
+.lesson-card--core .lesson-card__id { color: var(--lessons-gold); }
+
+/* retired: faded at rest, brightens on hover */
+.lesson-card--retired { opacity: var(--lessons-retired-rest); }
+.lesson-card--retired:hover { opacity: var(--lessons-retired-hover); }
+.lesson-card--retired .lesson-card__title { color: var(--ink-2); }
+.lesson-card--retired .lesson-card__summary { color: var(--ink-3); }
+
+/* head row */
+.lesson-card__head {
+  display: flex; align-items: center; gap: 8px;
+}
+.lesson-card__kind {
+  font-size: 13px;
+  color: var(--ink-2);
+  opacity: 0.6;
+}
+.lesson-card__id {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.lesson-card__title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink);
+  flex: 1;
+}
+
+.lesson-card__since {
+  font-size: 11px;
+  color: var(--ink-3);
+}
+
+/* signals: gold pill (active) on right; dot meter (passive) on anchors row */
+.lesson-card__signals {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px;
+}
+.sparkline-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--lessons-gold-soft);
+  font-size: 11px;
+  color: var(--lessons-gold);
+}
+.sparkline-count { font-weight: 600; }
+.sparkline-last { color: var(--ink-3); }
+
+.dot-meter { display: inline-flex; align-items: center; gap: 4px; }
+.dot-meter__dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--ink-3); opacity: 0.3;
+}
+.dot-meter__dot.is-on { background: var(--ink-2); opacity: 1; }
+.dot-meter__caption { font-size: 10px; color: var(--ink-3); margin-left: 4px; }
+
+.anchor-pills { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.anchor-pills__label { font-size: 11px; color: var(--ink-3); }
+.anchor-pills__pill {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  background: var(--bg-deep);
+  color: var(--ink-2);
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+.anchor-pills__empty { font-size: 11px; color: var(--ink-3); font-style: italic; }
+
+/* reinforce button — bottom-right on hover */
+.lesson-card__reinforce {
+  position: absolute; right: 10px; bottom: 10px;
+  opacity: 0;
+  transition: opacity 100ms ease;
+  background: transparent;
+  border: 1px solid var(--lessons-gold);
+  color: var(--lessons-gold);
+  padding: 3px 10px;
+  border-radius: 4px;
+  font: 600 11px/1 inherit;
+  cursor: pointer;
+}
+.lesson-card:hover .lesson-card__reinforce { opacity: 1; }
+.lesson-card__reinforce.is-fired {
+  opacity: 1;
+  color: var(--accent-green, #5fcdb8);
+  border-color: var(--accent-green, #5fcdb8);
+}
