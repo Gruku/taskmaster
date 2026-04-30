@@ -3852,6 +3852,65 @@ def _format_evidence(analysis: dict) -> str:
     return "\n".join(lines)
 
 
+def _compute_recent_events(since_iso: str) -> list:
+    """Synthesize a 'since you last looked' event stream from the backlog.
+
+    Plan 4 stub: derive events from backlog state. Plan 5+ may swap in a
+    persisted event log.
+    Event shape: {kind, at, summary, ref?}
+    Kinds: task_closed, task_moved, issue_opened, lesson_promoted, phase_advanced.
+    """
+    from datetime import datetime
+    try:
+        since = datetime.fromisoformat(since_iso.replace("Z", "+00:00"))
+    except Exception as e:
+        raise ValueError(f"invalid since: {e}")
+
+    backlog = yaml.safe_load(_backlog_path().read_text(encoding="utf-8")) or {}  # existing helper from Plan 1
+    events: list = []
+
+    def _parse(s):
+        if not s:
+            return None
+        try:
+            return datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+    for t in (backlog.get("tasks") or []):
+        completed = _parse(t.get("completed"))
+        if completed and completed >= since and t.get("status") in ("done", "completed"):
+            events.append({
+                "kind": "task_closed",
+                "at": t["completed"],
+                "summary": f"{t.get('id','')}: {t.get('title','')}",
+                "ref": t.get("id"),
+            })
+        started = _parse(t.get("started"))
+        if started and started >= since and t.get("status") in ("in-progress", "in_progress"):
+            events.append({
+                "kind": "task_moved",
+                "at": t["started"],
+                "summary": f"{t.get('id','')} → in progress",
+                "ref": t.get("id"),
+            })
+
+    for ph in (backlog.get("phases") or []):
+        advanced = _parse(ph.get("advanced_at") or ph.get("started"))
+        if advanced and advanced >= since and ph.get("status") == "active":
+            events.append({
+                "kind": "phase_advanced",
+                "at": ph.get("advanced_at") or ph.get("started"),
+                "summary": f"phase {ph.get('id','')}: {ph.get('name','')}",
+                "ref": ph.get("id"),
+            })
+
+    # Sort newest first, drop None ats.
+    events = [e for e in events if e.get("at")]
+    events.sort(key=lambda e: e["at"], reverse=True)
+    return events
+
+
 def _load_task_full(task_id: str) -> dict | None:
     """Merge backlog.yaml index entry with the per-task markdown file body.
     Returns None if the task id is not in the index.
@@ -4122,6 +4181,21 @@ class ViewerHandler(BaseHTTPRequestHandler):
             self._serve_identity()
         elif clean_path.startswith("/file/"):
             self._serve_repo_file(clean_path)
+        elif self.path.startswith("/api/dashboard/recent-events"):
+            import urllib.parse
+            parsed = urllib.parse.urlparse(self.path)
+            qs = urllib.parse.parse_qs(parsed.query)
+            since = (qs.get("since") or [None])[0]
+            if not since:
+                self._send_json(400, {"ok": False, "error": "missing 'since' query param"})
+                return
+            try:
+                events = _compute_recent_events(since)
+            except ValueError as e:
+                self._send_json(400, {"ok": False, "error": str(e)})
+                return
+            self._send_json(200, events)
+            return
         else:
             self.send_error(HTTPStatus.NOT_FOUND)
 
