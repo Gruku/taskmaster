@@ -1826,6 +1826,48 @@ def list_issue_ids_cwd() -> list[str]:
     return [p.stem for p in sorted(d.glob("ISS-*.md"), key=_rank)]
 
 
+SEVERITY_LABEL = {"P0": "Critical", "P1": "High", "P2": "Medium", "P3": "Low"}
+
+
+def severity_label(p: str) -> str:
+    """Map raw severity code to user-facing word."""
+    return SEVERITY_LABEL.get(p, p)
+
+
+def compute_issue_aging(issue: dict, aging_cfg: dict, now=None) -> dict:
+    """Return {'percent': float, 'tier': 'Fresh'|'Aging'|'Stale'} given issue + cfg.
+
+    Tier rules (per spec §3.14):
+        Fresh:  0 <= pct < 25
+        Aging: 25 <= pct < 60
+        Stale: pct >= 60
+
+    `percent` may exceed 100 for very stale issues; clamp at 200 for display.
+    """
+    from datetime import datetime, timezone
+
+    if now is None:
+        now = datetime.now(timezone.utc)
+
+    label = severity_label(issue.get("severity", "P2"))
+    base_days = float(aging_cfg.get(label, 60))
+    discovered_raw = issue.get("discovered")
+    if not discovered_raw:
+        return {"percent": 0.0, "tier": "Fresh"}
+    discovered = datetime.strptime(discovered_raw, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    age_days = (now - discovered).total_seconds() / 86400.0
+
+    pct = (age_days / base_days) * 100.0 if base_days > 0 else 0.0
+    pct = max(0.0, min(pct, 200.0))
+    if pct < 25:
+        tier = "Fresh"
+    elif pct < 60:
+        tier = "Aging"
+    else:
+        tier = "Stale"
+    return {"percent": pct, "tier": tier}
+
+
 def compute_lesson_shelf(lesson: dict, thresholds: dict, now=None) -> str:
     """Compute shelf placement: 'core' | 'active' | 'retired'.
 
