@@ -174,3 +174,9 @@ async function pollAutoStateForever() {
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 boot();
+
+// Plan 5a — sessions screen fires this when its view toggle changes.
+// Plan 5b will reuse the same convention.
+window.addEventListener('viewer:prefs-patch', (ev) => {
+  prefs.patch(ev.detail);
+});

@@ -151,3 +151,13 @@ export async function getSnapshotDiff(fromId, toId) {
   if (!r.ok) throw new Error(`getSnapshotDiff(${fromId}→${toId}): ${r.status}`);
   return r.json();
 }
+
+export async function savePrefs(patch) {
+  const r = await fetch('/api/viewer/prefs', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  if (!r.ok) throw new Error(`savePrefs: ${r.status}`);
+  return r.json();
+}
