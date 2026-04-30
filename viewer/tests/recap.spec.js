@@ -57,4 +57,26 @@ test.describe('Recap screen', () => {
     expect(labels.length).toBe(5);
     expect(labels.map(s => s.toLowerCase())).not.toContain('handovers');
   });
+
+  test('spec §3.16 coverage: picker, hero, narrative-3, stats-5, receipts-4, footer, edit', async ({ page, request }) => {
+    await request.put('/api/recap/SES-0001', {
+      headers: { 'Content-Type': 'application/json' },
+      data: {
+        frontmatter: { snapshot_before: 'SNAP-0000', snapshot_after: 'SNAP-0001',
+                       generator: 'claude', generated_at: '2026-04-26T16:48Z', token_cost: 1840 },
+        title: 't', what_happened: 'a', what_landed: 'b', whats_next: 'c',
+      },
+    });
+    await page.goto('/v3#/recap/SES-0001');
+
+    await expect(page.locator('.recap-picker')).toBeVisible();
+    await expect(page.locator('.recap-hero-kind')).toHaveText('RECAP');
+    await expect(page.locator('.narr-section')).toHaveCount(3);
+    await expect(page.locator('.recap-stat')).toHaveCount(5);
+    await expect(page.locator('.rcard')).toHaveCount(4);
+    await expect(page.locator('[data-role=copy-resume]')).toBeVisible();
+    await expect(page.locator('[data-role=open-sessions]')).toBeVisible();
+    await expect(page.locator('[data-role=edit]')).toBeVisible();
+    await expect(page.locator('.recap-footer')).toContainText('1840');
+  });
 });
