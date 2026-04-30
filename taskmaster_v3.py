@@ -1450,3 +1450,32 @@ def _parse_recap_markdown(text: str) -> dict:
         "what_landed":   _grab("What landed"),
         "whats_next":    _grab("What's next"),
     }
+
+
+def save_recap(
+    *,
+    session_id: str,
+    frontmatter: dict,
+    title: str,
+    what_happened: str,
+    what_landed: str,
+    whats_next: str,
+) -> Path:
+    """Write `.taskmaster/recaps/<session-id>.md`. `session_id` and
+    `schema_version` are auto-injected into the frontmatter; the rest is
+    passed through verbatim.
+    """
+    fm = dict(frontmatter)
+    fm["session_id"] = session_id
+    fm["schema_version"] = RECAP_SCHEMA_VERSION
+    md = _format_recap_markdown(
+        frontmatter=fm,
+        title=title,
+        what_happened=what_happened,
+        what_landed=what_landed,
+        whats_next=whats_next,
+    )
+    p = recap_path(session_id)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write(p, md)
+    return p

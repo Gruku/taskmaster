@@ -58,3 +58,34 @@ def test_format_recap_markdown_round_trip():
     assert parsed["what_happened"].startswith("Started in <em>worktree-shadow</em>")
     assert parsed["what_landed"].startswith("Three tasks closed.")
     assert parsed["whats_next"].startswith("Pick up the rebased branch")
+
+
+def test_save_recap_writes_file_with_expected_shape(tmp_path, monkeypatch):
+    from taskmaster_v3 import save_recap, recap_path, RECAP_SCHEMA_VERSION
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".taskmaster").mkdir()
+
+    save_recap(
+        session_id="SES-0184",
+        frontmatter={
+            "snapshot_before": "SNAP-0183",
+            "snapshot_after":  "SNAP-0184",
+            "generator":       "claude",
+            "generated_at":    "2026-04-26T16:48:00Z",
+            "token_cost":      1840,
+        },
+        title="Stitched the worktree review gate",
+        what_happened="Started in worktree-shadow.",
+        what_landed="Three tasks closed.",
+        whats_next="Rebase tomorrow.",
+    )
+    p = recap_path("SES-0184")
+    assert p.exists()
+    text = p.read_text(encoding="utf-8")
+    # Frontmatter pinned: session_id and schema_version are auto-injected.
+    assert "session_id: SES-0184" in text
+    assert f"schema_version: {RECAP_SCHEMA_VERSION}" in text
+    assert "snapshot_before: SNAP-0183" in text
+    assert "## What happened" in text
+    assert "## What landed" in text
+    assert "## What's next" in text
