@@ -67,3 +67,16 @@ test('moveWidget across rails reorders both rails consistently', () => {
   const left = out.filter(i => i.rail === 'left').sort((p, q) => p.index - q.index).map(i => i.id);
   assert.deepEqual(left, ['b']);
 });
+
+test('defaultLayout: every entry has rail, type, and unique id', async () => {
+  const { defaultLayout } = await import('../../js/components/widget-catalog.js');
+  const seed = defaultLayout();
+  assert.ok(seed.length >= 10);
+  const ids = new Set(seed.map(i => i.id));
+  assert.equal(ids.size, seed.length);
+  for (const inst of seed) {
+    assert.ok(inst.type, `instance missing type: ${JSON.stringify(inst)}`);
+    assert.ok(['left', 'right', 'bottom'].includes(inst.rail), `bad rail: ${inst.rail}`);
+    assert.ok(['small', 'medium', 'wide'].includes(inst.size), `bad size: ${inst.size}`);
+  }
+});
