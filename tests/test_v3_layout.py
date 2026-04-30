@@ -1344,3 +1344,40 @@ def test_auto_storage_constants():
     assert AUTO_HOOKS_LOG == Path(".taskmaster") / "auto" / "hooks.jsonl"
     assert auto_session_path("v3-014") == AUTO_SESSIONS_DIR / "v3-014.json"
     assert auto_events_path("v3-014") == AUTO_SESSIONS_DIR / "v3-014.events.jsonl"
+
+
+def test_auto_session_round_trip(tmp_path, monkeypatch):
+    import json
+    from taskmaster_v3 import (
+        save_auto_session, load_auto_session, list_auto_sessions, AUTO_SESSIONS_DIR,
+    )
+    monkeypatch.chdir(tmp_path)
+
+    state = {
+        "session_id": "v3-014",
+        "task_id": "v3-014",
+        "title": "Auto-mode status indicator",
+        "mode": "walk",
+        "started_at": "2026-04-26T18:42:09Z",
+        "cursor": {"task_id": "v3-014", "stage": "IMPLEMENT", "model": "sonnet"},
+        "completed": ["PICK"],
+        "pending": ["REVIEW", "HANDOVER_STUB", "COMPLETE"],
+        "failed": [],
+        "models": {},
+        "config": {},
+    }
+    save_auto_session("v3-014", state)
+    assert (tmp_path / AUTO_SESSIONS_DIR / "v3-014.json").exists()
+
+    got = load_auto_session("v3-014")
+    assert got["cursor"]["stage"] == "IMPLEMENT"
+
+    save_auto_session("v3-022", {**state, "session_id": "v3-022", "task_id": "v3-022"})
+    sessions = list_auto_sessions()
+    assert sorted(s["session_id"] for s in sessions) == ["v3-014", "v3-022"]
+
+
+def test_load_auto_session_missing_returns_none(tmp_path, monkeypatch):
+    from taskmaster_v3 import load_auto_session
+    monkeypatch.chdir(tmp_path)
+    assert load_auto_session("nope") is None

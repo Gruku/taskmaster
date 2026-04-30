@@ -1154,6 +1154,38 @@ def auto_events_path(sid: str) -> Path:
     return AUTO_SESSIONS_DIR / f"{sid}.events.jsonl"
 
 
+def save_auto_session(sid: str, state: dict) -> None:
+    import json
+    p = auto_session_path(sid)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write(p, json.dumps(state, indent=2))
+
+
+def load_auto_session(sid: str) -> "dict | None":
+    import json
+    p = auto_session_path(sid)
+    if not p.exists():
+        return None
+    return json.loads(p.read_text())
+
+
+def list_auto_sessions() -> "list[dict]":
+    """Return all sessions, newest started_at first. Skips malformed files."""
+    import json
+    out = []
+    if not AUTO_SESSIONS_DIR.exists():
+        return out
+    for p in AUTO_SESSIONS_DIR.glob("*.json"):
+        if p.name.endswith(".events.jsonl"):
+            continue
+        try:
+            out.append(json.loads(p.read_text()))
+        except Exception:
+            continue
+    out.sort(key=lambda s: s.get("started_at", ""), reverse=True)
+    return out
+
+
 # ── ViewerPrefs ────────────────────────────────────────────────
 
 VIEWER_PREFS_SCHEMA_VERSION = 1
