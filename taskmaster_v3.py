@@ -1785,3 +1785,41 @@ def get_session_detail(session_id: str) -> dict | None:
         "recap": recap,
         "task_ids": target["task_ids"],
     }
+
+
+def compute_lesson_shelf(lesson: dict, thresholds: dict, now=None) -> str:
+    """Compute shelf placement: 'core' | 'active' | 'retired'.
+
+    Rules (driven by reinforce_events only — passive anchor matches are ignored):
+        core      — count(events within core_window_days) >= core_count
+                    AND at least one event within core_recency_days
+        retired   — no events within retired_after_days
+        active    — otherwise (any event within retired_after_days that
+                    doesn't qualify as core)
+    """
+    from datetime import datetime, timedelta, timezone
+
+    if now is None:
+        now = datetime.now(timezone.utc)
+
+    events = lesson.get("reinforce_events") or []
+
+    def _parse(e):
+        return datetime.strptime(e["at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+
+    parsed = [_parse(e) for e in events]
+
+    core_count = int(thresholds.get("core_count", 7))
+    core_window = timedelta(days=int(thresholds.get("core_window_days", 60)))
+    core_recency = timedelta(days=int(thresholds.get("core_recency_days", 14)))
+    retired_after = timedelta(days=int(thresholds.get("retired_after_days", 30)))
+
+    in_window = [t for t in parsed if (now - t) <= core_window]
+    in_recency = [t for t in parsed if (now - t) <= core_recency]
+    in_active = [t for t in parsed if (now - t) <= retired_after]
+
+    if len(in_window) >= core_count and len(in_recency) >= 1:
+        return "core"
+    if not in_active:
+        return "retired"
+    return "active"

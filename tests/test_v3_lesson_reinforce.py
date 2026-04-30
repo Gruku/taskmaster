@@ -116,3 +116,57 @@ def test_lesson_reinforce_mcp_tool_returns_json_summary(tmp_path, monkeypatch):
     assert "L-020" in out
     payload = json.loads(out)
     assert payload["reinforce_count"] == 4
+
+
+def test_compute_lesson_shelf_core_when_recent_and_volume(tmp_path):
+    from datetime import datetime, timedelta, timezone
+    from taskmaster_v3 import compute_lesson_shelf
+
+    now = datetime(2026, 4, 26, tzinfo=timezone.utc)
+    events = [
+        {"at": (now - timedelta(days=d)).strftime("%Y-%m-%dT%H:%M:%SZ"), "source": "user", "note": ""}
+        for d in [1, 3, 5, 10, 20, 35, 45]
+    ]
+    thresholds = {
+        "core_count": 7, "core_window_days": 60,
+        "core_recency_days": 14, "retired_after_days": 30,
+    }
+    assert compute_lesson_shelf({"reinforce_events": events}, thresholds, now=now) == "core"
+
+
+def test_compute_lesson_shelf_active_when_recent_but_low_volume(tmp_path):
+    from datetime import datetime, timedelta, timezone
+    from taskmaster_v3 import compute_lesson_shelf
+
+    now = datetime(2026, 4, 26, tzinfo=timezone.utc)
+    events = [
+        {"at": (now - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ"), "source": "user", "note": ""}
+    ]
+    thresholds = {"core_count": 7, "core_window_days": 60, "core_recency_days": 14, "retired_after_days": 30}
+    assert compute_lesson_shelf({"reinforce_events": events}, thresholds, now=now) == "active"
+
+
+def test_compute_lesson_shelf_retired_when_no_recent(tmp_path):
+    from datetime import datetime, timedelta, timezone
+    from taskmaster_v3 import compute_lesson_shelf
+
+    now = datetime(2026, 4, 26, tzinfo=timezone.utc)
+    events = [
+        {"at": (now - timedelta(days=45)).strftime("%Y-%m-%dT%H:%M:%SZ"), "source": "user", "note": ""}
+    ]
+    thresholds = {"core_count": 7, "core_window_days": 60, "core_recency_days": 14, "retired_after_days": 30}
+    assert compute_lesson_shelf({"reinforce_events": events}, thresholds, now=now) == "retired"
+
+
+def test_compute_lesson_shelf_active_when_high_volume_but_no_recent_fire(tmp_path):
+    """High volume in window but nothing in last 14d → active, not core."""
+    from datetime import datetime, timedelta, timezone
+    from taskmaster_v3 import compute_lesson_shelf
+
+    now = datetime(2026, 4, 26, tzinfo=timezone.utc)
+    events = [
+        {"at": (now - timedelta(days=d)).strftime("%Y-%m-%dT%H:%M:%SZ"), "source": "user", "note": ""}
+        for d in [16, 18, 20, 22, 24, 26, 28, 29]
+    ]
+    thresholds = {"core_count": 7, "core_window_days": 60, "core_recency_days": 14, "retired_after_days": 30}
+    assert compute_lesson_shelf({"reinforce_events": events}, thresholds, now=now) == "active"
