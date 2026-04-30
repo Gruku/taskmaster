@@ -177,3 +177,37 @@ def test_get_auto_budget_tiers(running_server, tmp_path):
     body = json.loads(urllib.request.urlopen(f"{base}/api/auto/budget/v3-014").read())
     assert body["meters"]["tokens"]["tier"] == "warn"
     assert body["meters"]["time_seconds"]["tier"] == "crit"
+
+
+def test_mcp_auto_history_returns_recent_completed(tmp_path, monkeypatch):
+    """auto_history returns sessions with stopped or completed cursor, newest first."""
+    monkeypatch.chdir(tmp_path)
+    from taskmaster_v3 import save_auto_session
+    save_auto_session("v3-001", {"session_id":"v3-001","task_id":"v3-001",
+        "started_at":"2026-04-20T10:00:00Z","stopped":True,
+        "cursor":{"stage":"COMPLETE"}})
+    save_auto_session("v3-002", {"session_id":"v3-002","task_id":"v3-002",
+        "started_at":"2026-04-21T10:00:00Z",
+        "cursor":{"stage":"IMPLEMENT"}})
+
+    from backlog_server import auto_history
+    result = json.loads(auto_history(limit=10))
+    ids = [s["session_id"] for s in result["sessions"]]
+    assert "v3-001" in ids
+    # Currently-running v3-002 also returned (caller filters)
+    assert "v3-002" in ids
+    # Newest first
+    assert ids[0] == "v3-002"
+
+
+def test_mcp_auto_state_get_round_trip(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    from taskmaster_v3 import save_auto_session
+    save_auto_session("v3-014", {
+        "session_id":"v3-014","task_id":"v3-014",
+        "started_at":"2026-04-26T18:42:09Z",
+        "cursor":{"stage":"IMPLEMENT","model":"sonnet","task_id":"v3-014"},
+    })
+    from backlog_server import auto_state_get
+    result = json.loads(auto_state_get())
+    assert result["session_id"] == "v3-014"

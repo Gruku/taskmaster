@@ -4847,5 +4847,69 @@ def issue_list_extended(include_resolved: bool = True) -> str:
     return _json.dumps({"issues": out}, indent=2, default=str)
 
 
+@mcp.tool()
+def auto_state_get() -> str:
+    """Return the most-recent auto-mode session state as JSON. {} if none running."""
+    import json
+    from taskmaster_v3 import list_auto_sessions
+    sessions = list_auto_sessions()
+    return json.dumps(sessions[0] if sessions else {})
+
+
+@mcp.tool()
+def auto_pause(session_id: str) -> str:
+    """Mark a running auto-mode session as paused. Returns 'ok' or 'error: ...'."""
+    from datetime import datetime, timezone
+    from taskmaster_v3 import load_auto_session, save_auto_session, append_auto_event
+    state = load_auto_session(session_id)
+    if state is None:
+        return f"error: session {session_id} not found"
+    state["paused"] = True
+    save_auto_session(session_id, state)
+    append_auto_event(session_id, {
+        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "kind": "control_pause",
+        "stage": state.get("cursor", {}).get("stage"),
+        "msg": "paused via MCP",
+    })
+    return "ok"
+
+
+@mcp.tool()
+def auto_stop(session_id: str) -> str:
+    """Mark a running auto-mode session as stopped. Returns 'ok' or 'error: ...'."""
+    from datetime import datetime, timezone
+    from taskmaster_v3 import load_auto_session, save_auto_session, append_auto_event
+    state = load_auto_session(session_id)
+    if state is None:
+        return f"error: session {session_id} not found"
+    state["stopped"] = True
+    save_auto_session(session_id, state)
+    append_auto_event(session_id, {
+        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "kind": "control_stop",
+        "stage": state.get("cursor", {}).get("stage"),
+        "msg": "stopped via MCP",
+    })
+    return "ok"
+
+
+@mcp.tool()
+def auto_history(limit: int = 50) -> str:
+    """Return recent auto-mode sessions as JSON, newest first."""
+    import json
+    from taskmaster_v3 import list_auto_sessions
+    sessions = list_auto_sessions()[: max(1, int(limit))]
+    return json.dumps({"sessions": sessions}, indent=2)
+
+
+@mcp.tool()
+def auto_event_log(session_id: str, since: str | None = None) -> str:
+    """Return events for a session, optionally filtered by ISO 8601 timestamp."""
+    import json
+    from taskmaster_v3 import read_auto_events
+    return json.dumps({"events": read_auto_events(session_id, since=since)}, indent=2)
+
+
 if __name__ == "__main__":
     mcp.run()
