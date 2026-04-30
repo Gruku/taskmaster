@@ -9,6 +9,7 @@ const state = {
   identity: null,   // {root, version}
   autoState: null,  // populated by Plan 6
   lessons: null,    // lesson list; populated by lessons.js
+  issues: null,     // issue list; populated by issues.js
 };
 
 const subscribers = new Map(); // key → Set<callback>
@@ -27,12 +28,14 @@ export const store = {
   getIdentity: () => state.identity,
   getAutoState:() => state.autoState,
   getLessons:  () => state.lessons,
+  getIssues:   () => state.issues,
 
   setBacklog:  (b) => { state.backlog = b;  emit('backlog'); },
   setPrefs:    (p) => { state.prefs = p;    emit('prefs'); },
   setIdentity: (i) => { state.identity = i; emit('identity'); },
   setAutoState:(a) => { state.autoState = a; emit('autoState'); },
   setLessons:  (v) => { state.lessons = v || []; emit('lessons'); },
+  setIssues:   (v) => { state.issues = v || [];  emit('issues'); },
 
   subscribe(key, cb) {
     if (!subscribers.has(key)) subscribers.set(key, new Set());
