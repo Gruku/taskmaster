@@ -4262,6 +4262,48 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 return
             self._send_json(200, _snapshot_diff(snap_a, snap_b))
             return
+        elif clean_path == "/api/lessons":
+            import json
+            from taskmaster_v3 import (
+                list_lesson_ids_cwd, load_lesson, compute_lesson_shelf, load_viewer_prefs,
+            )
+            prefs = load_viewer_prefs()
+            thresholds = prefs.get("lessons", {}).get("thresholds", {})
+            lessons = []
+            for lid in list_lesson_ids_cwd():
+                try:
+                    lesson = load_lesson(lid)
+                except Exception:
+                    continue
+                summary = {k: v for k, v in lesson.items() if k != "_body"}
+                summary["shelf"] = compute_lesson_shelf(lesson, thresholds)
+                lessons.append(summary)
+            self._send_json(200, {"lessons": lessons})
+            return
+        elif clean_path.startswith("/api/issues"):
+            import json
+            from urllib.parse import urlparse, parse_qs
+            from taskmaster_v3 import (
+                list_issue_ids_cwd, load_issue, compute_issue_aging, severity_label, load_viewer_prefs,
+            )
+            qs = parse_qs(urlparse(self.path).query)
+            include_resolved = qs.get("include_resolved", ["true"])[0].lower() != "false"
+            prefs = load_viewer_prefs()
+            aging_cfg = prefs.get("issues", {}).get("aging", {})
+            issues = []
+            for iid in list_issue_ids_cwd():
+                try:
+                    issue = load_issue(iid)
+                except Exception:
+                    continue
+                if not include_resolved and issue.get("status") in ("fixed", "wontfix"):
+                    continue
+                summary = {k: v for k, v in issue.items() if k != "_body"}
+                summary["severity_label"] = severity_label(summary.get("severity", "P2"))
+                summary["aging"] = compute_issue_aging(issue, aging_cfg)
+                issues.append(summary)
+            self._send_json(200, {"issues": issues})
+            return
         else:
             self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -4656,6 +4698,53 @@ def snapshot_diff(snapshot_a_json: str, snapshot_b_json: str) -> str:
     a = _json.loads(snapshot_a_json)
     b = _json.loads(snapshot_b_json)
     return _json.dumps(_snapshot_diff(a, b))
+
+
+@mcp.tool()
+def lesson_list_extended() -> str:
+    """List all lessons with computed shelf placement using current viewer thresholds."""
+    import json as _json
+    from taskmaster_v3 import (
+        list_lesson_ids_cwd, load_lesson, compute_lesson_shelf, load_viewer_prefs,
+    )
+
+    prefs = load_viewer_prefs()
+    thresholds = prefs.get("lessons", {}).get("thresholds", {})
+    out = []
+    for lid in list_lesson_ids_cwd():
+        try:
+            lesson = load_lesson(lid)
+        except Exception:
+            continue
+        summary = {k: v for k, v in lesson.items() if k != "_body"}
+        summary["shelf"] = compute_lesson_shelf(lesson, thresholds)
+        out.append(summary)
+    return _json.dumps({"lessons": out}, indent=2, default=str)
+
+
+@mcp.tool()
+def issue_list_extended(include_resolved: bool = True) -> str:
+    """List all issues with computed aging tier per severity base."""
+    import json as _json
+    from taskmaster_v3 import (
+        list_issue_ids_cwd, load_issue, compute_issue_aging, severity_label, load_viewer_prefs,
+    )
+
+    prefs = load_viewer_prefs()
+    aging_cfg = prefs.get("issues", {}).get("aging", {})
+    out = []
+    for iid in list_issue_ids_cwd():
+        try:
+            issue = load_issue(iid)
+        except Exception:
+            continue
+        if not include_resolved and issue.get("status") in ("fixed", "wontfix"):
+            continue
+        summary = {k: v for k, v in issue.items() if k != "_body"}
+        summary["severity_label"] = severity_label(summary.get("severity", "P2"))
+        summary["aging"] = compute_issue_aging(issue, aging_cfg)
+        out.append(summary)
+    return _json.dumps({"issues": out}, indent=2, default=str)
 
 
 if __name__ == "__main__":

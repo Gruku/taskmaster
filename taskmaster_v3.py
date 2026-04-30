@@ -1787,6 +1787,45 @@ def get_session_detail(session_id: str) -> dict | None:
     }
 
 
+def list_lesson_ids_cwd() -> list[str]:
+    """List lesson ids from .taskmaster/lessons/ in the current working directory."""
+    d = Path(".taskmaster") / "lessons"
+    if not d.exists():
+        return []
+
+    def _rank(p: Path) -> int:
+        import re as _re
+        m = _re.search(r"(\d+)$", p.stem)
+        return int(m.group(1)) if m else -1
+
+    return [p.stem for p in sorted(d.glob("*.md"), key=_rank)]
+
+
+def load_issue(issue_id: str) -> dict:
+    """Load an issue by id from .taskmaster/issues/<id>.md in CWD.
+
+    Returns a dict with frontmatter fields plus '_body'.
+    """
+    p = Path(".taskmaster") / "issues" / f"{issue_id}.md"
+    fm, body = parse_frontmatter(p.read_text(encoding="utf-8"))
+    fm["_body"] = body
+    return fm
+
+
+def list_issue_ids_cwd() -> list[str]:
+    """List issue ids from .taskmaster/issues/ in the current working directory."""
+    import re as _re
+    d = Path(".taskmaster") / "issues"
+    if not d.exists():
+        return []
+
+    def _rank(p: Path) -> int:
+        m = _re.search(r"(\d+)$", p.stem)
+        return int(m.group(1)) if m else -1
+
+    return [p.stem for p in sorted(d.glob("ISS-*.md"), key=_rank)]
+
+
 def compute_lesson_shelf(lesson: dict, thresholds: dict, now=None) -> str:
     """Compute shelf placement: 'core' | 'active' | 'retired'.
 
