@@ -107,3 +107,16 @@ test('satellites alternate sides of the spine', () => {
   assert.ok(layout.satellites[0].node.x > cx, 'first satellite right of spine');
   assert.ok(layout.satellites[1].node.x < cx, 'second satellite left of spine');
 });
+
+test('null cursorStage produces all-pending or all-done nodes (no active)', () => {
+  const layout = computeSpineLayout({
+    cursorStage: null, completed: ['PICK', 'IMPLEMENT'], subagents: [],
+    width: 240, height: 480, padding: 40,
+  });
+  const active = layout.nodes.find((n) => n.state === 'active');
+  assert.equal(active, undefined);
+  // Done where listed, pending elsewhere
+  assert.equal(layout.nodes[0].state, 'done');
+  assert.equal(layout.nodes[1].state, 'done');
+  assert.equal(layout.nodes[2].state, 'pending');
+});
