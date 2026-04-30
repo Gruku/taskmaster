@@ -1569,3 +1569,105 @@ def snapshot_diff(a: dict, b: dict) -> dict:
         "issues_transitioned": issues_transitioned,
         "files_touched":       list((b or {}).get("files_touched", []) or []),
     }
+
+
+# ---- Sessions ------------------------------------------------------------
+
+
+def _parse_iso8601(s: str) -> "datetime":
+    from datetime import datetime, timezone
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    dt = datetime.fromisoformat(s)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def list_sessions() -> list[dict]:
+    """Synthesise sessions from on-disk handover files.
+
+    Algorithm: load every handover, sort by date asc, then greedily group
+    consecutive handovers that share at least one task_id AND occur within
+    SESSION_GAP_MINUTES (default 30). Each group becomes one session.
+
+    Returns: list of dicts (newest first):
+      {id, start, end, duration, handover_ids[], recap_id, task_ids[], parallel_with[]}
+    """
+    from datetime import timedelta
+    SESSION_GAP_MINUTES = 30
+    handovers_dir = Path(".taskmaster") / "handovers"
+    if not handovers_dir.exists():
+        return []
+    raw: list[dict] = []
+    for p in sorted(handovers_dir.glob("*.md")):
+        try:
+            text = p.read_text(encoding="utf-8")
+            m = _RECAP_FM_RE.match(text)
+            if not m:
+                continue
+            fm = yaml.safe_load(m.group(1)) or {}
+            if "id" not in fm or "date" not in fm:
+                continue
+            raw.append(fm)
+        except Exception:
+            continue
+    raw.sort(key=lambda h: _parse_iso8601(h["date"]))
+
+    groups: list[list[dict]] = []
+    for h in raw:
+        h_t = _parse_iso8601(h["date"])
+        h_tids = set(h.get("task_ids") or [])
+        attached = False
+        if groups:
+            tail = groups[-1][-1]
+            tail_t = _parse_iso8601(tail["date"])
+            tail_tids = set(tail.get("task_ids") or [])
+            within_gap = (h_t - tail_t) <= timedelta(minutes=SESSION_GAP_MINUTES)
+            shared_tasks = bool(h_tids & tail_tids)
+            if within_gap and shared_tasks:
+                groups[-1].append(h)
+                attached = True
+        if not attached:
+            groups.append([h])
+
+    sessions: list[dict] = []
+    recap_ids = set(list_recaps())
+    for idx, group in enumerate(groups, start=1):
+        sid = f"SES-{idx:04d}"
+        start = _parse_iso8601(group[0]["date"])
+        end = _parse_iso8601(group[-1]["date"])
+        tids: list[str] = []
+        for h in group:
+            for t in (h.get("task_ids") or []):
+                if t not in tids:
+                    tids.append(t)
+        sessions.append({
+            "id": sid,
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "duration": int((end - start).total_seconds()),
+            "handover_ids": [h["id"] for h in group],
+            "recap_id": sid if sid in recap_ids else None,
+            "task_ids": tids,
+            "parallel_with": [],   # filled below
+        })
+
+    # Mark parallel sessions: any pair with overlapping [start,end] windows.
+    # Windows are expanded by SESSION_GAP_MINUTES so that two single-handover
+    # sessions that were close in time but different in task scope are flagged.
+    from datetime import timedelta as _td
+    _gap = _td(minutes=SESSION_GAP_MINUTES)
+    for i, s in enumerate(sessions):
+        s_start = _parse_iso8601(s["start"])
+        s_end = _parse_iso8601(s["end"]) + _gap
+        for j, o in enumerate(sessions):
+            if i == j:
+                continue
+            o_start = _parse_iso8601(o["start"])
+            o_end = _parse_iso8601(o["end"]) + _gap
+            if s_start <= o_end and o_start <= s_end:
+                s["parallel_with"].append(o["id"])
+
+    sessions.sort(key=lambda s: s["start"], reverse=True)
+    return sessions
