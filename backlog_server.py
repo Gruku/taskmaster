@@ -1901,6 +1901,29 @@ def backlog_lesson_reinforce(lesson_id: str) -> str:
 
 
 @mcp.tool()
+def lesson_reinforce(lesson_id: str, source: str = "user", note: str = "") -> str:
+    """Record a reinforcement event for a lesson.
+
+    Args:
+        lesson_id: e.g. "L-014"
+        source: one of "user" | "claude" | "skill"
+        note: optional free-text annotation
+
+    Returns the updated lesson summary as a JSON string.
+    """
+    import json as _json
+    from taskmaster_v3 import lesson_reinforce as _impl
+
+    try:
+        summary = _impl(lesson_id, source=source, note=note)
+    except FileNotFoundError:
+        return _json.dumps({"ok": False, "error": f"lesson {lesson_id} not found"})
+    except ValueError as e:
+        return _json.dumps({"ok": False, "error": str(e)})
+    return _json.dumps(summary, indent=2, default=str)
+
+
+@mcp.tool()
 def backlog_lesson_digest() -> str:
     """Return the slim digest of active-tier lessons for session-start injection.
 
