@@ -51,3 +51,30 @@ test('y-positions are evenly spaced and inside padding', () => {
     assert.ok(layout.nodes[i].y > layout.nodes[i - 1].y);
   }
 });
+
+test('connectors start at the bottom edge of node N and end at the top edge of N+1', () => {
+  const layout = computeSpineLayout({
+    cursorStage: 'IMPLEMENT', completed: ['PICK'], subagents: [],
+    width: 240, height: 480, padding: 40,
+  });
+  for (let i = 0; i < layout.connectors.length; i += 1) {
+    const c = layout.connectors[i];
+    const a = layout.nodes[i];
+    const b = layout.nodes[i + 1];
+    assert.equal(c.x1, a.x);
+    assert.equal(c.y1, a.y + a.r);
+    assert.equal(c.x2, b.x);
+    assert.equal(c.y2, b.y - b.r);
+  }
+});
+
+test('connector.fromState mirrors the upper node state (drives line color)', () => {
+  const layout = computeSpineLayout({
+    cursorStage: 'IMPLEMENT', completed: ['PICK'], subagents: [],
+    width: 240, height: 480, padding: 40,
+  });
+  // Done above active → fromState 'done'; below active → 'active' for the line below cursor.
+  assert.equal(layout.connectors[0].fromState, 'done');         // PICK → IMPLEMENT
+  assert.equal(layout.connectors[1].fromState, 'active');       // IMPLEMENT → REVIEW
+  assert.equal(layout.connectors[2].fromState, 'pending');      // REVIEW → HANDOVER_STUB
+});
