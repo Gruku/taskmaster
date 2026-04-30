@@ -1522,3 +1522,50 @@ def load_session_snapshot(snapshot_id: str) -> dict | None:
     if not p.exists():
         return None
     return _json.loads(p.read_text(encoding="utf-8"))
+
+
+def snapshot_diff(a: dict, b: dict) -> dict:
+    """Compute a structured diff from snapshot `a` (before) to `b` (after).
+
+    Returned shape (mirrors the client-side helper):
+      {
+        tasks_added:        [{id, ...task}],
+        tasks_removed:      [{id, ...task}],
+        tasks_changed:      [{id, from, to}],   # whole-task before/after
+        lessons_fired:      [{id, fires, first_time}],
+        issues_opened:      [{id, ...issue}],
+        issues_transitioned:[{id, from, to}],
+        files_touched:      [path, ...],
+      }
+    """
+    a_tasks = (a or {}).get("tasks", {}) or {}
+    b_tasks = (b or {}).get("tasks", {}) or {}
+
+    added   = [{"id": tid, **b_tasks[tid]} for tid in b_tasks if tid not in a_tasks]
+    removed = [{"id": tid, **a_tasks[tid]} for tid in a_tasks if tid not in b_tasks]
+    changed = [
+        {"id": tid, "from": a_tasks[tid], "to": b_tasks[tid]}
+        for tid in a_tasks if tid in b_tasks and a_tasks[tid] != b_tasks[tid]
+    ]
+
+    a_iss = (a or {}).get("issues", {}) or {}
+    b_iss = (b or {}).get("issues", {}) or {}
+    issues_opened = [
+        {"id": iid, **b_iss[iid]} for iid in b_iss if iid not in a_iss
+    ]
+    issues_transitioned = [
+        {"id": iid, "from": a_iss[iid].get("status"),
+                    "to":   b_iss[iid].get("status")}
+        for iid in a_iss if iid in b_iss
+        and a_iss[iid].get("status") != b_iss[iid].get("status")
+    ]
+
+    return {
+        "tasks_added":         added,
+        "tasks_removed":       removed,
+        "tasks_changed":       changed,
+        "lessons_fired":       list((b or {}).get("lessons_fired", []) or []),
+        "issues_opened":       issues_opened,
+        "issues_transitioned": issues_transitioned,
+        "files_touched":       list((b or {}).get("files_touched", []) or []),
+    }
