@@ -41,4 +41,13 @@ test.describe('Recap screen', () => {
     await expect(page.locator('[data-role=cancel]')).toBeVisible();
     await expect(page.locator('[data-role=regenerate]')).toBeVisible();
   });
+
+  test('clicking a receipt filter chip hides non-matching cards', async ({ page }) => {
+    await page.goto('/v3#/recap/SES-0001');
+    await page.locator('[data-filt=tasks]').click();
+    await expect(page.locator('.rcard:has-text("Tasks")')).toBeVisible();
+    await expect(page.locator('.rcard:has-text("Files touched")')).toBeHidden();
+    await expect(page.locator('.rcard:has-text("Lessons fired")')).toBeHidden();
+    await expect(page.locator('.rcard:has-text("Issues")')).toBeHidden();
+  });
 });
