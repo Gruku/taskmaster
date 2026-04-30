@@ -77,6 +77,17 @@ export async function mount(root, { store, api, prefs }) {
         instance,
         label: mod.meta.label,
         onRemove: async (id) => { await edit.onRemove(id); },
+        onSizeCycle: async (id) => {
+          const layout = (prefs.dashboard.layout || []).map(i => ({ ...i }));
+          const inst = layout.find(x => x.id === id);
+          if (!inst) return;
+          const sizes = (mod.meta.sizes && mod.meta.sizes.length) ? mod.meta.sizes : ['small', 'medium', 'wide'];
+          const cur = sizes.indexOf(inst.size);
+          inst.size = sizes[(cur + 1) % sizes.length];
+          await api.savePrefs({ dashboard: { layout } });
+          prefs.dashboard.layout = layout;
+          render();
+        },
       });
       const target =
         instance.rail === 'right'  ? railRight :
