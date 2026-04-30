@@ -1381,3 +1381,35 @@ def test_load_auto_session_missing_returns_none(tmp_path, monkeypatch):
     from taskmaster_v3 import load_auto_session
     monkeypatch.chdir(tmp_path)
     assert load_auto_session("nope") is None
+
+
+def test_migrate_legacy_state_to_sessions(tmp_path, monkeypatch):
+    import json
+    from taskmaster_v3 import (
+        migrate_auto_state_to_sessions, AUTO_DIR, AUTO_LEGACY_STATE,
+    )
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / AUTO_DIR).mkdir(parents=True)
+    legacy = {
+        "task_id": "v3-014",
+        "mode": "walk",
+        "started_at": "2026-04-26T18:42:09Z",
+        "cursor": {"task_id": "v3-014", "stage": "IMPLEMENT"},
+    }
+    (tmp_path / AUTO_LEGACY_STATE).write_text(json.dumps(legacy))
+
+    moved = migrate_auto_state_to_sessions()
+    assert moved is True
+    sess = json.loads((tmp_path / AUTO_DIR / "sessions" / "v3-014.json").read_text())
+    assert sess["session_id"] == "v3-014"
+    assert sess["task_id"] == "v3-014"
+    # legacy file renamed, not deleted, so we keep an audit trail
+    assert (tmp_path / AUTO_DIR / "state.legacy.json").exists()
+    assert not (tmp_path / AUTO_LEGACY_STATE).exists()
+
+
+def test_migrate_idempotent(tmp_path, monkeypatch):
+    from taskmaster_v3 import migrate_auto_state_to_sessions
+    monkeypatch.chdir(tmp_path)
+    # No legacy file → no-op, returns False
+    assert migrate_auto_state_to_sessions() is False

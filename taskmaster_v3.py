@@ -1186,6 +1186,25 @@ def list_auto_sessions() -> "list[dict]":
     return out
 
 
+def migrate_auto_state_to_sessions() -> bool:
+    """One-time migration: wrap pre-Plan-6 single state.json into sessions/<task_id>.json.
+
+    Returns True if a migration ran, False if nothing to do. Idempotent.
+    """
+    import json
+    if not AUTO_LEGACY_STATE.exists():
+        return False
+    raw = json.loads(AUTO_LEGACY_STATE.read_text())
+    sid = raw.get("task_id") or raw.get("session_id") or "legacy"
+    state = dict(raw)
+    state.setdefault("session_id", sid)
+    state.setdefault("task_id", sid)
+    save_auto_session(sid, state)
+    audit = AUTO_LEGACY_STATE.with_name("state.legacy.json")
+    AUTO_LEGACY_STATE.rename(audit)
+    return True
+
+
 # ── ViewerPrefs ────────────────────────────────────────────────
 
 VIEWER_PREFS_SCHEMA_VERSION = 1
