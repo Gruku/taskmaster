@@ -37,4 +37,16 @@ test.describe('Sessions screen', () => {
     await chip.click();
     await expect(chip).not.toHaveClass(/\bon\b/);
   });
+
+  test('Escape closes the right-rail', async ({ page }) => {
+    await page.goto('/v3#/sessions');
+    // Force-open via a synthetic click on the first session card if present.
+    const card = page.locator('.ho').first();
+    if (await card.count()) {
+      await card.click();
+      await expect(page.locator('.right-rail')).toBeVisible();
+      await page.keyboard.press('Escape');
+      await expect(page.locator('.right-rail')).toHaveCount(0);
+    }
+  });
 });

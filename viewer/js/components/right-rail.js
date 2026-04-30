@@ -142,12 +142,18 @@ export class RightRail {
     host.appendChild(el);
     document.body.classList.add('rail-open');
     this.el = el;
-    if (args.onMount) {
-      this._cleanup = args.onMount(el) || null;
-    }
+    if (args.onMount) this._cleanup = args.onMount(el) || null;
+
+    // Escape closes the rail.
+    this._onKey = (e) => { if (e.key === 'Escape') this.close(); };
+    document.addEventListener('keydown', this._onKey);
   }
 
   close() {
+    if (this._onKey) {
+      document.removeEventListener('keydown', this._onKey);
+      this._onKey = null;
+    }
     if (this._cleanup) {
       try { this._cleanup(); } catch {}
       this._cleanup = null;
