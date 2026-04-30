@@ -70,3 +70,28 @@ def test_compute_issue_aging_critical_decays_faster_than_low():
     crit = compute_issue_aging({"discovered": discovered, "severity": "P0"}, {"Critical": 14, "High": 30, "Medium": 60, "Low": 120}, now=now)
     low = compute_issue_aging({"discovered": discovered, "severity": "P3"}, {"Critical": 14, "High": 30, "Medium": 60, "Low": 120}, now=now)
     assert crit["percent"] > low["percent"]
+
+
+def test_get_issues_returns_list_with_aging_and_label(running_server, tmp_path):
+    base, _ = running_server
+    _write_issue(tmp_path, "ISS-001", severity="P0", discovered=(datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    _write_issue(tmp_path, "ISS-002", severity="P3", status="fixed", resolved=(datetime.now(timezone.utc)).strftime("%Y-%m-%dT%H:%M:%SZ"))
+
+    resp = urllib.request.urlopen(f"{base}/api/issues")
+    payload = json.loads(resp.read())
+    by_id = {i["id"]: i for i in payload["issues"]}
+    assert by_id["ISS-001"]["severity_label"] == "Critical"
+    assert by_id["ISS-001"]["aging"]["tier"] in {"Fresh", "Aging", "Stale"}
+    assert by_id["ISS-002"]["severity_label"] == "Low"
+
+
+def test_get_issues_excludes_resolved_when_query_param_set(running_server, tmp_path):
+    base, _ = running_server
+    _write_issue(tmp_path, "ISS-010", status="open")
+    _write_issue(tmp_path, "ISS-011", status="fixed", resolved="2026-04-20T00:00:00Z")
+
+    resp = urllib.request.urlopen(f"{base}/api/issues?include_resolved=false")
+    payload = json.loads(resp.read())
+    ids = [i["id"] for i in payload["issues"]]
+    assert "ISS-010" in ids
+    assert "ISS-011" not in ids
