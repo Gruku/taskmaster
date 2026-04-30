@@ -456,6 +456,22 @@ HANDOVER_KINDS = ("end-of-day", "context-handoff", "crash-recovery", "auto-stage
 # Index cap — `handovers:` array in backlog.yaml is bounded.
 HANDOVER_INDEX_CAP = 30
 
+# ---- Recap ---------------------------------------------------------------
+
+RECAP_SCHEMA_VERSION = 1
+
+# Map storage-side handover kinds to viewer-side display kinds (spec §3.12).
+# Storage kinds live in handover frontmatter (`session_kind`); the viewer renders
+# them via this mapping for kind-pill colour, kind-filter chips, and right-rail header.
+HANDOVER_KIND_TO_VIEWER_KIND = {
+    "end-of-day":      "wrap",
+    "context-handoff": "mid-task",
+    "crash-recovery":  "checkpoint",
+    "auto-stage":      "standalone",
+}
+
+VIEWER_HANDOVER_KINDS = ("mid-task", "checkpoint", "wrap", "standalone")
+
 
 def slugify(text: str, max_len: int = 40) -> str:
     """Reduce arbitrary text to a URL-safe slug.
