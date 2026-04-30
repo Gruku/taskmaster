@@ -52,5 +52,64 @@ export const api = {
   autoState:       ()    => http('GET', '/api/auto/state').then(r => r && r.state),
   getTask,
   getTaskRelated,
+
+  async getRecentEvents(since) {
+    const u = new URL('/api/dashboard/recent-events', location.origin);
+    u.searchParams.set('since', since);
+    const r = await fetch(u);
+    if (!r.ok) throw new Error(`recent-events: ${r.status}`);
+    return r.json();
+  },
+
+  async getLastSession() {
+    const r = await fetch('/api/sessions/last');
+    if (!r.ok) return null;
+    return r.json();
+  },
+
+  async listIssues(filter = {}) {
+    const u = new URL('/api/issues', location.origin);
+    for (const [k, v] of Object.entries(filter)) u.searchParams.set(k, v);
+    const r = await fetch(u);
+    if (!r.ok) return [];
+    return r.json();
+  },
+
+  async listLessons(filter = {}) {
+    const u = new URL('/api/lessons', location.origin);
+    for (const [k, v] of Object.entries(filter)) u.searchParams.set(k, v);
+    const r = await fetch(u);
+    if (!r.ok) return [];
+    return r.json();
+  },
+
+  async getRecentCommits({ limit = 8 } = {}) {
+    const r = await fetch(`/api/git/commits?limit=${limit}`);
+    if (!r.ok) return [];
+    return r.json();
+  },
+
+  async getBuildTestPulse() {
+    const r = await fetch('/api/build-test-pulse');
+    if (!r.ok) return { build: 'unknown', tests: { passed: 0, failed: 0, total: 0 }, ts: null };
+    return r.json();
+  },
+
+  async getAutoState() {
+    const r = await fetch('/api/auto/state');
+    if (!r.ok) return { running: [], hooks: {} };
+    return r.json();
+  },
+
+  async quickCapture(text) {
+    const r = await fetch('/api/quick-capture', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    if (!r.ok) throw new Error(`quick-capture: ${r.status}`);
+    return r.json();
+  },
+
   // Plans 5/6 add: reinforceLesson, getRecap, putRecap, putAutoState, etc.
 };
