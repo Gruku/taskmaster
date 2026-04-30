@@ -103,3 +103,51 @@ def test_get_lessons_returns_list_with_shelf_placement(running_server, tmp_path)
     by_id = {l["id"]: l for l in payload["lessons"]}
     assert by_id["L-CORE"]["shelf"] == "core"
     assert by_id["L-COLD"]["shelf"] == "retired"
+
+
+def test_thresholds_override_changes_shelf_placement(running_server, tmp_path):
+    """If user lowers core_count to 2, lessons with 3 events go to 'core'."""
+    base, _ = running_server
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    events = [
+        {"at": (now - timedelta(days=d)).strftime("%Y-%m-%dT%H:%M:%SZ"), "source": "user", "note": ""}
+        for d in [1, 5, 10]
+    ]
+    _write_lesson(tmp_path, "L-T1", reinforce_count=3, reinforce_events=events)
+
+    # Default thresholds → 3 events is below core_count=7 → 'active'
+    payload = json.loads(urllib.request.urlopen(f"{base}/api/lessons").read())
+    by_id = {l["id"]: l for l in payload["lessons"]}
+    assert by_id["L-T1"]["shelf"] == "active"
+
+    # Lower the threshold via PUT /api/viewer/prefs
+    body = json.dumps({"lessons": {"thresholds": {"core_count": 2}}}).encode()
+    req = urllib.request.Request(
+        f"{base}/api/viewer/prefs", data=body, method="PUT",
+        headers={"Content-Type": "application/json"},
+    )
+    urllib.request.urlopen(req)
+
+    # Now the same lesson should be 'core'
+    payload = json.loads(urllib.request.urlopen(f"{base}/api/lessons").read())
+    by_id = {l["id"]: l for l in payload["lessons"]}
+    assert by_id["L-T1"]["shelf"] == "core"
+
+
+def test_reinforce_records_event_with_correct_source_and_note(running_server, tmp_path):
+    base, _ = running_server
+    _write_lesson(tmp_path, "L-300")
+    body = json.dumps({"source": "claude", "note": "applied during refactor"}).encode()
+    req = urllib.request.Request(
+        f"{base}/api/lessons/L-300/reinforce", data=body, method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    urllib.request.urlopen(req)
+
+    # Read back via API
+    payload = json.loads(urllib.request.urlopen(f"{base}/api/lessons").read())
+    by_id = {l["id"]: l for l in payload["lessons"]}
+    events = by_id["L-300"]["reinforce_events"]
+    assert events[-1]["source"] == "claude"
+    assert events[-1]["note"] == "applied during refactor"
