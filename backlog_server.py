@@ -4222,6 +4222,27 @@ class ViewerHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        elif clean_path.startswith("/api/auto/events"):
+            from urllib.parse import urlsplit, parse_qs
+            from taskmaster_v3 import read_auto_events
+            qs = parse_qs(urlsplit(self.path).query)
+            sid = (qs.get("sid") or [None])[0]
+            since = (qs.get("since") or [None])[0]
+            if not sid:
+                self._send_json(400, {"ok": False, "error": "sid required"})
+                return
+            events = read_auto_events(sid, since=since)
+            self._send_json(200, {"events": events})
+            return
+        elif clean_path.startswith("/api/auto/budget/"):
+            from taskmaster_v3 import load_auto_session, compute_budget
+            sid = clean_path[len("/api/auto/budget/"):]
+            state = load_auto_session(sid)
+            if state is None:
+                self._send_json(404, {"ok": False, "error": "not found"})
+                return
+            self._send_json(200, {"session_id": sid, "meters": compute_budget(state)})
+            return
         elif clean_path == "/api/viewer/prefs":
             self._send_json(200, load_viewer_prefs())
             return

@@ -129,3 +129,27 @@ def test_post_auto_pause_unknown_session_404(running_server):
     with pytest.raises(urllib.error.HTTPError) as exc:
         urllib.request.urlopen(req)
     assert exc.value.code == 404
+
+
+def test_get_auto_events_filtered_by_since(running_server, tmp_path):
+    from taskmaster_v3 import append_auto_event
+    base, _ = running_server
+    _seed_session(tmp_path, sid="v3-014")
+    append_auto_event("v3-014", {"ts":"2026-04-26T18:00:00Z","kind":"stage_enter","stage":"PICK","msg":"a"})
+    append_auto_event("v3-014", {"ts":"2026-04-26T19:00:00Z","kind":"stage_enter","stage":"IMPLEMENT","msg":"b"})
+
+    resp = urllib.request.urlopen(f"{base}/api/auto/events?sid=v3-014")
+    body = json.loads(resp.read())
+    assert len(body["events"]) == 2
+
+    resp = urllib.request.urlopen(f"{base}/api/auto/events?sid=v3-014&since=2026-04-26T18:30:00Z")
+    body = json.loads(resp.read())
+    assert len(body["events"]) == 1
+    assert body["events"][0]["stage"] == "IMPLEMENT"
+
+
+def test_get_auto_events_missing_sid_400(running_server):
+    base, _ = running_server
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        urllib.request.urlopen(f"{base}/api/auto/events")
+    assert exc.value.code == 400
