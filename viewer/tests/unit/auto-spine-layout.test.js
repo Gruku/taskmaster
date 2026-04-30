@@ -78,3 +78,32 @@ test('connector.fromState mirrors the upper node state (drives line color)', () 
   assert.equal(layout.connectors[1].fromState, 'active');       // IMPLEMENT → REVIEW
   assert.equal(layout.connectors[2].fromState, 'pending');      // REVIEW → HANDOVER_STUB
 });
+
+test('satellite bezier has horizontal in/out tangents (control points share y with anchors)', () => {
+  const layout = computeSpineLayout({
+    cursorStage: 'IMPLEMENT', completed: ['PICK'],
+    subagents: [{ type: 'G', status: 'running' }, { type: 'E', status: 'done' }],
+    width: 240, height: 480, padding: 40,
+  });
+  assert.equal(layout.satellites.length, 2);
+  for (const sat of layout.satellites) {
+    assert.equal(sat.bezier.c1y, sat.bezier.startY,
+      'first control point must share y with start (horizontal tangent at active node)');
+    assert.equal(sat.bezier.c2y, sat.bezier.endY,
+      'second control point must share y with end (horizontal tangent at satellite)');
+  }
+});
+
+test('satellites alternate sides of the spine', () => {
+  const layout = computeSpineLayout({
+    cursorStage: 'IMPLEMENT', completed: ['PICK'],
+    subagents: [
+      { type: 'G', status: 'running' },
+      { type: 'E', status: 'running' },
+    ],
+    width: 240, height: 480, padding: 40,
+  });
+  const cx = 240 / 2;
+  assert.ok(layout.satellites[0].node.x > cx, 'first satellite right of spine');
+  assert.ok(layout.satellites[1].node.x < cx, 'second satellite left of spine');
+});
