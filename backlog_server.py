@@ -4340,6 +4340,37 @@ class ViewerHandler(BaseHTTPRequestHandler):
         except Exception as e:
             self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(e))
 
+    def do_POST(self):
+        import json
+        import re
+        from taskmaster_v3 import lesson_reinforce as _reinforce
+
+        m = re.fullmatch(r"/api/lessons/([A-Za-z0-9_\-]+)/reinforce", self.path)
+        if m:
+            lesson_id = m.group(1)
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length).decode("utf-8") if length else ""
+            try:
+                data = json.loads(raw) if raw else {}
+            except Exception as e:
+                self._send_json(400, {"ok": False, "error": f"invalid JSON: {e}"})
+                return
+            source = data.get("source", "user")
+            note = data.get("note", "")
+            try:
+                summary = _reinforce(lesson_id, source=source, note=note)
+            except FileNotFoundError:
+                self._send_json(404, {"ok": False, "error": f"lesson {lesson_id} not found"})
+                return
+            except ValueError as e:
+                self._send_json(400, {"ok": False, "error": str(e)})
+                return
+            self._send_json(200, summary)
+            return
+
+        self.send_response(404)
+        self.end_headers()
+
     def do_PUT(self):
         if self.path == "/api/viewer/prefs":
             length = int(self.headers.get("Content-Length") or 0)
