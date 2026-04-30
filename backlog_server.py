@@ -4265,7 +4265,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
         elif clean_path == "/api/lessons":
             import json
             from taskmaster_v3 import (
-                list_lesson_ids_cwd, load_lesson, compute_lesson_shelf, load_viewer_prefs,
+                list_lesson_ids_cwd, load_lesson, compute_lesson_shelf,
             )
             prefs = load_viewer_prefs()
             thresholds = prefs.get("lessons", {}).get("thresholds", {})
@@ -4284,7 +4284,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
             import json
             from urllib.parse import urlparse, parse_qs
             from taskmaster_v3 import (
-                list_issue_ids_cwd, load_issue, compute_issue_aging, severity_label, load_viewer_prefs,
+                list_issue_ids_cwd, load_issue, compute_issue_aging, severity_label,
             )
             qs = parse_qs(urlparse(self.path).query)
             include_resolved = qs.get("include_resolved", ["true"])[0].lower() != "false"
