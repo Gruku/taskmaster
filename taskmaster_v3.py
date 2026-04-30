@@ -1387,3 +1387,66 @@ def save_v3(backlog_path: Path, data: dict[str, Any]) -> None:
         backlog_path,
         yaml.dump(slim_data, default_flow_style=False, sort_keys=False, allow_unicode=True),
     )
+
+
+# ---- Recap helpers -------------------------------------------------------
+
+
+def recap_path(session_id: str) -> Path:
+    """Path on disk for the recap file of a given session."""
+    return Path(".taskmaster") / "recaps" / f"{session_id}.md"
+
+
+def _format_recap_markdown(
+    *,
+    frontmatter: dict,
+    title: str,
+    what_happened: str,
+    what_landed: str,
+    whats_next: str,
+) -> str:
+    """Render a recap file: YAML frontmatter + H1 title + three H2 sections.
+    Section order is fixed per spec §3.16: What happened / What landed / What's next.
+    """
+    fm_text = yaml.safe_dump(frontmatter, sort_keys=False).rstrip()
+    return (
+        f"---\n{fm_text}\n---\n\n"
+        f"# {title}\n\n"
+        f"## What happened\n\n{what_happened.rstrip()}\n\n"
+        f"## What landed\n\n{what_landed.rstrip()}\n\n"
+        f"## What's next\n\n{whats_next.rstrip()}\n"
+    )
+
+
+_RECAP_FM_RE = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
+
+
+def _parse_recap_markdown(text: str) -> dict:
+    """Inverse of `_format_recap_markdown`. Returns
+    `{frontmatter, title, what_happened, what_landed, whats_next}`.
+    Missing sections come back as empty strings.
+    """
+    m = _RECAP_FM_RE.match(text)
+    if not m:
+        raise ValueError("recap is missing YAML frontmatter")
+    fm = yaml.safe_load(m.group(1)) or {}
+    body = text[m.end():]
+
+    title_m = re.search(r"^#\s+(.+?)\s*$", body, re.MULTILINE)
+    title = title_m.group(1).strip() if title_m else ""
+
+    def _grab(label: str) -> str:
+        pat = re.compile(
+            rf"^##\s+{re.escape(label)}\s*\n+(.*?)(?=^##\s+|\Z)",
+            re.DOTALL | re.MULTILINE,
+        )
+        m2 = pat.search(body)
+        return m2.group(1).strip() if m2 else ""
+
+    return {
+        "frontmatter": fm,
+        "title": title,
+        "what_happened": _grab("What happened"),
+        "what_landed":   _grab("What landed"),
+        "whats_next":    _grab("What's next"),
+    }
