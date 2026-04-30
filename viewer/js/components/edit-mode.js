@@ -85,3 +85,29 @@ function showPicker(anchor, rail, onAdd) {
     });
   }, 0);
 }
+
+export function attachRailDropTarget(railEl, rail, onMove) {
+  railEl.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    railEl.classList.add('is-drop-target');
+  });
+  railEl.addEventListener('dragleave', () => {
+    railEl.classList.remove('is-drop-target');
+  });
+  railEl.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    railEl.classList.remove('is-drop-target');
+    const id = e.dataTransfer.getData('text/plain');
+    if (!id) return;
+    // Find drop index by counting widgets above the cursor.
+    const widgets = Array.from(railEl.querySelectorAll('.widget'));
+    const cursorY = e.clientY;
+    let index = widgets.length;
+    for (let i = 0; i < widgets.length; i++) {
+      const r = widgets[i].getBoundingClientRect();
+      if (cursorY < r.top + r.height / 2) { index = i; break; }
+    }
+    await onMove(id, { rail, index });
+  });
+}

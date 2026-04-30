@@ -193,3 +193,10 @@
 .dash-picker__item:hover { background: var(--bg-deep); }
 .dash-picker__item-label { font-size: 12px; }
 .dash-picker__item-sub { font-size: 10px; color: var(--ink-3); }
+
+.dash[data-edit='1'] .dash-bento__rail.is-drop-target,
+.dash[data-edit='1'] .dash-bottom.is-drop-target {
+  outline: 2px dashed var(--accent-edit, #6ea8ff);
+  outline-offset: 4px;
+  border-radius: 8px;
+}

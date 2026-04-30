@@ -4,7 +4,7 @@ import { createBoardSurface } from '../components/board-surface.js';
 import { createWidgetFrame } from '../components/widget-frame.js';
 import { getWidget, defaultLayout } from '../components/widget-catalog.js';
 import { createAutoModeStrip } from '../components/auto-mode-strip.js';
-import { createEditMode, createAddTile } from '../components/edit-mode.js';
+import { createEditMode, createAddTile, attachRailDropTarget } from '../components/edit-mode.js';
 
 import './../components/widgets/suggested-next.js';
 import './../components/widgets/phase-deliverables.js';
@@ -93,6 +93,10 @@ export async function mount(root, { store, api, prefs }) {
   }
 
   await render();
+
+  attachRailDropTarget(railLeft,  'left',   edit.onMove);
+  attachRailDropTarget(railRight, 'right',  edit.onMove);
+  attachRailDropTarget(bottom,    'bottom', edit.onMove);
 
   return async () => {
     briefing.destroy();
