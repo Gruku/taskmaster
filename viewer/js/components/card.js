@@ -206,3 +206,7 @@ function appendLiveBlock(card, autoState) {
 function escapeHtml(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
+
+// Plan 4 dashboard widgets import these by name; thin density-bound aliases over renderCard.
+export const renderMinimalCard = (task, opts = {}) => renderCard({ task, density: 'minimal', ...opts });
+export const renderFullCard    = (task, opts = {}) => renderCard({ task, density: 'full',    ...opts });
