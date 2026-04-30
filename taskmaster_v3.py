@@ -874,6 +874,41 @@ def read_lesson(backlog_path: Path, lesson_id: str) -> tuple[dict[str, Any], str
     return read_task_file(lesson_path(backlog_path, lesson_id))
 
 
+# ── CWD-relative lesson helpers (used by MCP tools and HTTP endpoints) ────────
+
+
+def _ensure_reinforce_events(lesson: dict) -> dict:
+    """One-time migration: legacy lesson files don't carry reinforce_events.
+    Backfill an empty list so downstream code can append unconditionally.
+    Idempotent: if the key is already present, it's left untouched.
+    """
+    if "reinforce_events" not in lesson or lesson["reinforce_events"] is None:
+        lesson["reinforce_events"] = []
+    return lesson
+
+
+def load_lesson(lesson_id: str) -> dict:
+    """Load a lesson by id from .taskmaster/lessons/<id>.md in CWD.
+
+    Returns a dict with frontmatter fields plus '_body'. Backfills
+    reinforce_events if not present (migration shim).
+    """
+    p = Path(".taskmaster") / "lessons" / f"{lesson_id}.md"
+    fm, body = parse_frontmatter(p.read_text(encoding="utf-8"))
+    fm["_body"] = body
+    _ensure_reinforce_events(fm)
+    return fm
+
+
+def save_lesson(lesson: dict) -> None:
+    """Persist a lesson dict (with '_body') back to .taskmaster/lessons/<id>.md."""
+    lesson_id = lesson["id"]
+    p = Path(".taskmaster") / "lessons" / f"{lesson_id}.md"
+    body = lesson.pop("_body", "")
+    atomic_write(p, render_frontmatter(lesson, body))
+    lesson["_body"] = body
+
+
 def update_lesson(
     backlog_path: Path,
     lesson_id: str,
