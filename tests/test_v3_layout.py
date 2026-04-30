@@ -1413,3 +1413,17 @@ def test_migrate_idempotent(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     # No legacy file → no-op, returns False
     assert migrate_auto_state_to_sessions() is False
+
+
+def test_server_init_runs_auto_migration(tmp_path, monkeypatch):
+    import json
+    from taskmaster_v3 import AUTO_DIR, AUTO_LEGACY_STATE
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / AUTO_DIR).mkdir(parents=True)
+    (tmp_path / AUTO_LEGACY_STATE).write_text(json.dumps({"task_id": "v3-014"}))
+
+    from backlog_server import _init_storage  # added in this task
+    _init_storage()
+
+    assert (tmp_path / AUTO_DIR / "sessions" / "v3-014.json").exists()
+    assert not (tmp_path / AUTO_LEGACY_STATE).exists()

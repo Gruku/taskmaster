@@ -4595,6 +4595,13 @@ def _make_server(host: str = "127.0.0.1", port: int = 0):
     return server, server.server_address[1]
 
 
+def _init_storage() -> None:
+    """One-time storage migrations / dir setup. Called by server entry + tests."""
+    from taskmaster_v3 import migrate_auto_state_to_sessions, AUTO_SESSIONS_DIR
+    AUTO_SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+    migrate_auto_state_to_sessions()
+
+
 def _start_viewer_server() -> int:
     """Start the viewer HTTP server on a deterministic per-project port.
 
@@ -4626,6 +4633,7 @@ def _start_viewer_server() -> int:
         server = _ExclusiveServer(("127.0.0.1", 0), ViewerHandler)
         VIEWER_PORT = server.server_address[1]
 
+    _init_storage()
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     _viewer_started = True

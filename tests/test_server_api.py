@@ -16,8 +16,9 @@ def running_server(tmp_path, monkeypatch):
         "meta:\n  project: test\nepics: []\nphases: []\n"
     )
 
-    from backlog_server import _make_server  # added in this task
+    from backlog_server import _make_server, _init_storage  # added in this task
     server, port = _make_server(host="127.0.0.1", port=0)
+    _init_storage()
     t = threading.Thread(target=server.serve_forever, daemon=True)
     t.start()
     base = f"http://127.0.0.1:{port}"
