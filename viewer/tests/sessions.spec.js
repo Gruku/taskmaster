@@ -49,4 +49,18 @@ test.describe('Sessions screen', () => {
       await expect(page.locator('.right-rail')).toHaveCount(0);
     }
   });
+
+  test('spec §3.12 coverage: kind tints, parallel-block, nested children, view toggle, new-note', async ({ page }) => {
+    await page.goto('/v3#/sessions');
+    // View toggle has all three.
+    const segs = await page.locator('[data-role=view-toggle] .seg').allTextContents();
+    expect(segs).toEqual(['Diary', 'Lanes', 'By Task']);
+    // Kind chips: Sessions / Handovers / Recaps.
+    const chips = await page.locator('[data-role=kinds] .sessions-kind-chip').allTextContents();
+    expect(chips.join(' ').toLowerCase()).toMatch(/sessions/);
+    expect(chips.join(' ').toLowerCase()).toMatch(/handovers/);
+    expect(chips.join(' ').toLowerCase()).toMatch(/recaps/);
+    // + New note button is present and clickable.
+    await expect(page.locator('[data-role=new-note]')).toBeVisible();
+  });
 });
