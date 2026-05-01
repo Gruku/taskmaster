@@ -24,10 +24,13 @@ export function renderQuestSpine(root, state) {
   const head = document.createElement('div');
   head.className = 'spine-head';
   if (state) {
+    const sid = state.session_id ?? state.task_id ?? '—';
+    const title = state.title ?? '';
+    const wt = state.worktree ?? '';
     head.innerHTML = `
-      <span class="spine-head-id">${escape(state.session_id ?? state.task_id ?? '—')}</span>
-      <span class="spine-head-title">${escape(state.title ?? '')}</span>
-      <span class="spine-head-wt">${escape(state.worktree ?? '')}</span>
+      <span class="spine-head-id" title="${escape(sid)}">${escape(sid)}</span>
+      <span class="spine-head-title" title="${escape(title)}">${escape(title)}</span>
+      <span class="spine-head-wt" title="${escape(wt)}">${escape(wt)}</span>
     `;
   } else {
     head.innerHTML = '<span class="spine-head-empty">No auto-mode session running.</span>';
