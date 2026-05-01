@@ -79,7 +79,12 @@ export async function mount(root, ctx) {
   });
 
   // Pause/stop button handlers
-  header.querySelector('[data-action="pause"]').addEventListener('click', async () => {
+  const pauseBtn = header.querySelector('[data-action="pause"]');
+  const stopBtn  = header.querySelector('[data-action="stop"]');
+  pauseBtn.setAttribute('aria-label', 'Pause auto-mode session');
+  stopBtn.setAttribute('aria-label', 'Stop auto-mode session');
+
+  pauseBtn.addEventListener('click', async () => {
     const sid = store?.getAutoState?.()?.session_id;
     if (!sid) return;
     try {
@@ -90,7 +95,7 @@ export async function mount(root, ctx) {
     }
   });
 
-  header.querySelector('[data-action="stop"]').addEventListener('click', async () => {
+  stopBtn.addEventListener('click', async () => {
     const sid = store?.getAutoState?.()?.session_id;
     if (!sid) return;
     if (!confirm(`Stop auto-mode session ${sid}?`)) return;
