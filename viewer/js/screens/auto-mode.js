@@ -111,9 +111,10 @@ export async function mount(root, ctx) {
   if (!(prefsData.screens?.auto_mode?.helper_dismissed)) {
     const note = document.createElement('div');
     note.className = 'auto-helper-note';
+    note.setAttribute('aria-live', 'polite');
     note.innerHTML = `
       <span>Spine is the live view. Log swaps to chronological waterfall — same data, denser. Use Log when debugging.</span>
-      <span class="dismiss" role="button" aria-label="Dismiss">✕</span>
+      <span class="dismiss" role="button" aria-label="Dismiss helper note">✕</span>
     `;
     root.insertBefore(note, root.children[1] || null);
     note.querySelector('.dismiss').addEventListener('click', () => {
