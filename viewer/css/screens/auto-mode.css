@@ -221,3 +221,20 @@
 .sstrip-elapsed {
   font-family: 'JetBrains Mono', ui-monospace, monospace; color: var(--ink-3); font-size: 10px;
 }
+
+/* ── Budget meter ── */
+.bmeter { padding: 6px 0; }
+.bmeter-row { display: flex; align-items: baseline; gap: 6px; font-size: 11px; }
+.bmeter-label {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  color: var(--ink-2);
+}
+.bmeter-vals { margin-left: auto; font-family: 'JetBrains Mono', ui-monospace, monospace; color: var(--ink); font-size: 10px; }
+.bmeter-sep { color: var(--ink-3); }
+.bmeter-track {
+  margin-top: 4px; height: 4px; border-radius: 2px;
+  background: var(--bg-card); overflow: hidden;
+}
+.bmeter-fill { height: 100%; background: var(--accent); transition: width .25s ease; }
+.bmeter--warn .bmeter-fill { background: var(--amber); }
+.bmeter--crit .bmeter-fill { background: var(--red); }
