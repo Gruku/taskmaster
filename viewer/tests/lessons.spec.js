@@ -68,3 +68,21 @@ test('core shelf shows gold styling on ID', async ({ page }) => {
   const m = idColor.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
   expect(Number(m[1])).toBeGreaterThan(150);
 });
+
+test('lesson card click navigates to lesson detail', async ({ page }) => {
+  await page.goto('/v3/#/lessons');
+  const card = page.locator('.lesson-card').first();
+  const id = await card.getAttribute('data-lesson-id');
+  await card.click();
+  await page.waitForURL(`**/#/lesson/${id}`);
+  await expect(page.locator('.lesson-detail .ld-title')).toBeVisible();
+  await expect(page.locator('.lesson-detail .ld-id')).toHaveText(id);
+});
+
+test('lesson detail back link returns to lessons list', async ({ page }) => {
+  await page.goto('/v3/#/lesson/L-001');
+  await expect(page.locator('.lesson-detail')).toBeVisible();
+  await page.locator('#topbar-actions a.tm-action[href="#/lessons"]').click();
+  await page.waitForURL('**/#/lessons');
+  await expect(page.locator('.lessons')).toBeVisible();
+});

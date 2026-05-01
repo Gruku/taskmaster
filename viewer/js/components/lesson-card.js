@@ -15,6 +15,17 @@ export function lessonCard(lesson, { onReinforce } = {}) {
   const card = document.createElement('article');
   card.className = `lesson-card lesson-card--${shelf}`;
   card.setAttribute('data-lesson-id', lesson.id);
+  card.setAttribute('role', 'link');
+  card.setAttribute('tabindex', '0');
+
+  const navigate = () => { location.hash = `#/lesson/${encodeURIComponent(lesson.id)}`; };
+  card.addEventListener('click', (ev) => {
+    if (ev.target.closest('.lesson-card__reinforce') || ev.target.closest('a')) return;
+    navigate();
+  });
+  card.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); navigate(); }
+  });
 
   // ---- head: kind · id · sparkline (right)
   const head = document.createElement('div');

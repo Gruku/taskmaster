@@ -14,6 +14,7 @@ registerScreen('/table',      () => import('./screens/table.js'));
 registerScreen('/task',       () => import('./screens/task-detail.js'));
 registerScreen('/sessions',   () => import('./screens/sessions.js'));
 registerScreen('/lessons',    () => import('./screens/lessons.js'));
+registerScreen('/lesson',     () => import('./screens/lesson-detail.js'));
 registerScreen('/issues',     () => import('./screens/issues.js'));
 registerScreen('/auto',       () => import('./screens/auto-mode.js'));
 registerScreen('/recap',      () => import('./screens/recap.js'));
