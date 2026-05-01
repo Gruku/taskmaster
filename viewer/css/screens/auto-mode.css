@@ -3,14 +3,14 @@
    Tokens come from tokens.css; no local color literals where a token exists.
    ────────────────────────────────────────────────────────────────────────── */
 
-.auto-page { padding: 14px 18px; }
+.auto-page { padding: var(--page-pad); }
 
 .auto-header {
   display: flex; align-items: center; gap: 10px;
   padding-bottom: 10px; margin-bottom: 14px;
   border-bottom: 1px solid var(--border);
 }
-.auto-title { font-size: 16px; font-weight: 600; color: var(--ink); }
+.auto-title { font-size: var(--text-base); font-weight: 600; color: var(--ink); }
 .auto-controls { display: inline-flex; gap: 6px; margin-left: 8px; }
 .auto-control-btn {
   padding: 3px 8px; border-radius: 4px;
@@ -45,7 +45,7 @@
 .auto-grid {
   display: grid;
   grid-template-columns: 220px 1fr 240px;
-  gap: 14px;
+  gap: var(--page-gap);
   align-items: stretch;
 }
 

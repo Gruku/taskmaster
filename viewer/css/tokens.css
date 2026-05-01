@@ -99,6 +99,8 @@
   /* Layout */
   --sidebar-w:        300px;
   --rail-w:           720px;            /* right-rail detail surface */
+  --page-pad:         20px;
+  --page-gap:         16px;
 }
 
 @keyframes pulse {

@@ -1,9 +1,7 @@
 /* ===== Dashboard screen ===== */
 .dash {
   --dash-rail-w: 280px;
-  --dash-gap: 16px;
   --dash-board-min: 520px;
-  --dash-pad: 20px;
   --dash-card-bg: var(--bg-card);
   --dash-card-bg-edit: color-mix(in oklab, var(--bg-card) 92%, transparent);
   --dash-card-border: var(--line-1);
@@ -16,8 +14,8 @@
   );
   display: flex;
   flex-direction: column;
-  gap: var(--dash-gap);
-  padding: var(--dash-pad);
+  gap: var(--dash-gap, var(--page-gap));
+  padding: var(--dash-pad, var(--page-pad));
 }
 
 .dash-briefing {
