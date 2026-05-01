@@ -150,12 +150,19 @@ export async function mount(root, { store, prefs }) {
     for (const key of sortedKeys) {
       const sec = document.createElement('section');
       sec.className = 'lessons-shelf';
-      sec.innerHTML = `
-        <header class="lessons-shelf__header">
-          <code class="lessons-shelf__name">${key}</code>
-          <span class="lessons-shelf__tagline"></span>
-          <span class="lessons-shelf__count">${groups.get(key).length} lesson${groups.get(key).length === 1 ? '' : 's'}</span>
-        </header>`;
+      const header = document.createElement('header');
+      header.className = 'lessons-shelf__header';
+      const nameEl = document.createElement('code');
+      nameEl.className = 'lessons-shelf__name';
+      nameEl.textContent = key;
+      const taglineEl = document.createElement('span');
+      taglineEl.className = 'lessons-shelf__tagline';
+      const count = groups.get(key).length;
+      const countEl = document.createElement('span');
+      countEl.className = 'lessons-shelf__count';
+      countEl.textContent = `${count} lesson${count === 1 ? '' : 's'}`;
+      header.append(nameEl, taglineEl, countEl);
+      sec.appendChild(header);
       const grid = document.createElement('div');
       grid.className = 'lessons-shelf__grid';
       for (const l of groups.get(key)) grid.appendChild(lessonCard(l, { onReinforce: reinforce }));

@@ -57,26 +57,26 @@
 
 .lesson-card {
   position: relative;
-  background: var(--bg-card);
+  background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 11px 13px 12px;
   display: flex; flex-direction: column; gap: 8px;
   transition: background 120ms ease;
 }
-.lesson-card:hover { background: var(--bg-card-hover); }
+.lesson-card:hover { background: var(--bg-card); }
 
 /* core: gold tint border + gradient */
 .lesson-card--core {
   border-color: var(--lessons-gold-border);
   background:
     linear-gradient(180deg, var(--lessons-gold-soft), transparent 60%),
-    var(--bg-card);
+    var(--bg-panel);
 }
 .lesson-card--core:hover {
   background:
     linear-gradient(180deg, var(--lessons-gold-tint), transparent 60%),
-    var(--bg-card-hover);
+    var(--bg-card);
 }
 .lesson-card--core .lesson-card__id { color: var(--lessons-gold); }
 
@@ -189,7 +189,7 @@
 .lesson-card__task-pill {
   font-family: 'JetBrains Mono', ui-monospace, monospace;
   font-size: 9px;
-  color: var(--epic-viewer, #6ea8ff);
+  color: var(--accent-blue);
   background: rgba(110, 168, 255, 0.08);
   border: 1px solid var(--lessons-border-soft);
   padding: 1px 6px;

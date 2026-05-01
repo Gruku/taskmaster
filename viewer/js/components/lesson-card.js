@@ -98,10 +98,9 @@ export function lessonCard(lesson, { onReinforce } = {}) {
     if (btn.classList.contains('is-fired')) return;
     btn.disabled = true;
     try {
-      const summary = await onReinforce?.(lesson.id);
+      await onReinforce?.(lesson.id);
       btn.classList.add('is-fired');
       btn.textContent = '✓ Reinforced now';
-      if (summary) Object.assign(lesson, summary);
     } catch (e) {
       btn.disabled = false;
       btn.textContent = 'Failed — retry';
