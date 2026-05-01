@@ -89,3 +89,20 @@ test('sidebar Auto Mode link shows live badge when a session is active', async (
   const count = await badge.count();
   expect(count).toBeGreaterThanOrEqual(0);
 });
+
+test('helper note shows on first visit and disappears after dismiss', async ({ page, context }) => {
+  // Reset prefs by clearing the helper_dismissed key via PUT /api/viewer/prefs
+  await page.request.put('http://127.0.0.1:8765/api/viewer/prefs', {
+    data: { screens: { auto_mode: { helper_dismissed: false } } },
+  });
+
+  await page.goto('http://127.0.0.1:8765/v3/#/auto');
+  const note = page.locator('.auto-helper-note');
+  await expect(note).toBeVisible();
+  await note.locator('.dismiss').click();
+  await expect(note).toHaveCount(0);
+
+  // Reload — should not re-appear
+  await page.goto('http://127.0.0.1:8765/v3/#/auto');
+  await expect(page.locator('.auto-helper-note')).toHaveCount(0);
+});
