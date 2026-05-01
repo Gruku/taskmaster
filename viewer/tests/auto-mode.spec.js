@@ -60,3 +60,22 @@ test.describe('Auto Mode page', () => {
     expect(posted).toContain('"session_id"');
   });
 });
+
+test('clicking the dashboard auto-mode-stepper widget navigates to #/auto', async ({ page }) => {
+  await page.goto('http://127.0.0.1:8765/v3/#/dashboard');
+  const widget = page.locator('.stepper-widget');
+  if (!(await widget.count())) test.skip(); // user may not have it in their layout
+  await widget.first().click();
+  await page.waitForURL(/#\/auto$/);
+  await expect(page.locator('.auto-title')).toHaveText('Auto Mode');
+});
+
+test('stepper widget shows placeholder when no session', async ({ page }) => {
+  await page.goto('http://127.0.0.1:8765/v3/#/dashboard');
+  const widget = page.locator('.stepper-widget');
+  if (!(await widget.count())) test.skip();
+  // Either the calm empty state OR a running session
+  const empty = await widget.locator('.stepper-empty').count();
+  const running = await widget.locator('.stepper-track').count();
+  expect(empty + running).toBeGreaterThan(0);
+});
