@@ -238,3 +238,58 @@
 .bmeter-fill { height: 100%; background: var(--accent); transition: width .25s ease; }
 .bmeter--warn .bmeter-fill { background: var(--amber); }
 .bmeter--crit .bmeter-fill { background: var(--red); }
+
+/* ── Side panels ── */
+.aside {
+  background: var(--bg-panel); border: 1px solid var(--border);
+  border-radius: 8px; padding: 10px 12px; font-size: 11px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.aside-h {
+  font-size: 9px; text-transform: uppercase; letter-spacing: 0.1em;
+  color: var(--ink-3); font-weight: 600;
+  padding-top: 6px;
+}
+.aside-h:first-child { padding-top: 0; }
+.aside-empty { color: var(--ink-3); font-size: 11px; padding: 2px 0; }
+
+.aside-sub {
+  display: grid; grid-template-columns: auto auto 1fr; gap: 6px;
+  align-items: center; padding: 2px 0;
+}
+.aside-sub.done { opacity: 0.5; }
+.aside-sub-dot {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--green);
+}
+.aside-sub-dot[data-status="running"] { animation: spine-pulse 1.6s ease-in-out infinite; }
+.aside-sub-dot[data-status="failed"]  { background: var(--red); }
+.aside-sub-type {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  color: var(--accent); width: 12px; text-align: center;
+}
+.aside-sub-msg { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.aside-hook {
+  display: flex; gap: 6px; padding: 1px 0;
+}
+.aside-hook-name {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  color: var(--ink-2);
+}
+.aside-hook-n {
+  margin-left: auto; color: var(--ink-3);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+.aside-tool {
+  display: grid; grid-template-columns: auto 1fr auto; gap: 6px;
+  padding: 2px 0; font-size: 11px;
+}
+.aside-tool-name {
+  font-family: 'JetBrains Mono', ui-monospace, monospace; color: var(--accent);
+}
+.aside-tool-args { color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.aside-tool-ts {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  color: var(--ink-3); font-size: 10px;
+}
