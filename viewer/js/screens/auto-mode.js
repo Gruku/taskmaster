@@ -42,7 +42,11 @@ export async function mount(root, ctx) {
   prefs.screens.auto_mode.view = initialView;
 
   const segs = header.querySelectorAll('.auto-toggle-seg');
-  segs.forEach((s) => s.classList.toggle('on', s.dataset.view === initialView));
+  segs.forEach((s) => {
+    s.classList.toggle('on', s.dataset.view === initialView);
+    s.setAttribute('role', 'tab');
+    s.setAttribute('aria-selected', s.dataset.view === initialView ? 'true' : 'false');
+  });
 
   let currentView = initialView;
   let cleanup;
@@ -65,7 +69,10 @@ export async function mount(root, ctx) {
       if (v === currentView) return;
       currentView = v;
       prefs.screens.auto_mode.view = v;
-      segs.forEach((s) => s.classList.toggle('on', s.dataset.view === v));
+      segs.forEach((s) => {
+        s.classList.toggle('on', s.dataset.view === v);
+        s.setAttribute('aria-selected', s.dataset.view === v ? 'true' : 'false');
+      });
       prefs.patch({ screens: { auto_mode: { view: v } } });
       renderActiveView();
     });
