@@ -57,16 +57,15 @@ export async function mount(root, { params, store, prefs, subpath }) {
     return () => { root.classList.remove('lesson-detail'); };
   }
 
-  // Topbar: back arrow + reinforce action.
+  // Topbar: just the reinforce action (back lives in the page header crumb row).
   const topbar = claimTopbar();
-  const backBtn = tmAction({ icon: '‹', label: 'Back', title: 'Back to Lessons', href: '#/lessons' });
   const reinforceBtn = tmAction({
     icon: '↑',
     label: lesson.shelf === 'retired' ? 'Revive' : 'Reinforce',
     variant: 'primary',
     title: 'Add a reinforcement event',
   });
-  topbar?.append(backBtn, reinforceBtn);
+  topbar?.append(reinforceBtn);
 
   reinforceBtn.addEventListener('click', async () => {
     if (reinforceBtn.classList.contains('is-fired')) return;
@@ -87,6 +86,22 @@ export async function mount(root, { params, store, prefs, subpath }) {
 
   function render() {
     root.replaceChildren();
+
+    // Crumb row: ‹ Lessons / shelf-name
+    const crumb = document.createElement('div');
+    crumb.className = 'ld-crumb';
+    const back = document.createElement('a');
+    back.className = 'ld-back';
+    back.href = '#/lessons';
+    back.textContent = '‹ Lessons';
+    const sep = document.createElement('span');
+    sep.className = 'ld-crumb-sep';
+    sep.textContent = '/';
+    const shelfCrumb = document.createElement('span');
+    shelfCrumb.className = 'ld-crumb-shelf';
+    shelfCrumb.textContent = (lesson.shelf || 'active').replace(/^./, c => c.toUpperCase());
+    crumb.append(back, sep, shelfCrumb);
+    root.appendChild(crumb);
 
     // Header: kind icon · id · created
     const head = document.createElement('header');

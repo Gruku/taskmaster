@@ -82,7 +82,7 @@ test('lesson card click navigates to lesson detail', async ({ page }) => {
 test('lesson detail back link returns to lessons list', async ({ page }) => {
   await page.goto('/v3/#/lesson/L-001');
   await expect(page.locator('.lesson-detail')).toBeVisible();
-  await page.locator('#topbar-actions a.tm-action[href="#/lessons"]').click();
+  await page.locator('.lesson-detail .ld-back').click();
   await page.waitForURL('**/#/lessons');
   await expect(page.locator('.lessons')).toBeVisible();
 });

@@ -233,11 +233,23 @@
 /* ─── Lesson detail (full-screen) ─── */
 
 .lesson-detail {
-  padding: 18px 28px 28px;
-  display: flex; flex-direction: column; gap: 18px;
-  max-width: 1200px;
-  margin: 0 auto;
+  padding: 14px 28px 28px;
+  display: flex; flex-direction: column; gap: 14px;
 }
+
+.ld-crumb {
+  display: flex; align-items: center; gap: 8px;
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+}
+.ld-back {
+  color: var(--ink-3);
+  text-decoration: none;
+  cursor: pointer;
+}
+.ld-back:hover { color: var(--ink); }
+.ld-crumb-sep { opacity: 0.5; }
+.ld-crumb-shelf { color: var(--ink-2); }
 
 .ld-empty {
   padding: 40px;
