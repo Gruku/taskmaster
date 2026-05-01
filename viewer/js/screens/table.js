@@ -2,6 +2,8 @@
 // Reads /api/backlog (via store), renders a sortable+filterable table.
 // Persisted state lives under prefs.table.
 
+import { claimTopbar, tmSubcount, tmSearch, tmAction } from '../lib/topbar.js';
+
 export const meta = { title: 'Table', icon: '▭', sidebarKey: 'table' };
 
 const COLUMNS = [
@@ -53,21 +55,21 @@ export async function mount(root, { store, prefs }) {
   const screen = document.createElement('section');
   screen.className = 'tbl-screen';
 
-  // ── Header ────────────────────────────────────────────────────
-  const header = document.createElement('header');
-  header.className = 'tbl-header';
-  const subcount = document.createElement('div');
-  subcount.className = 'tbl-subcount';
-  header.appendChild(subcount);
-
-  // Search input
-  const search = document.createElement('input');
-  search.type = 'search';
-  search.className = 'tbl-search';
-  search.placeholder = 'Filter by title, id, or branch…';
-  header.appendChild(search);
-
-  screen.appendChild(header);
+  // ── Topbar (#topbar-actions) ─────────────────────────────────
+  const topbar = claimTopbar();
+  const subcount = tmSubcount('… tasks');
+  const searchBuilt = tmSearch({
+    placeholder: 'Filter by title, id, or branch…',
+    onInput: (v) => { state.search = v; paint(); persist(); },
+  });
+  const search = searchBuilt.input;
+  const newTaskBtn = tmAction({
+    icon: '+', label: 'Task', variant: 'primary', title: 'Add task',
+    onClick: () => { window.location.hash = '#/task/new'; },
+  });
+  topbar?.appendChild(subcount);
+  topbar?.appendChild(searchBuilt.el);
+  topbar?.appendChild(newTaskBtn);
 
   // ── Filter chip rail ──────────────────────────────────────────
   const chipRail = document.createElement('div');
@@ -98,11 +100,6 @@ export async function mount(root, { store, prefs }) {
     if (!prefs?.patch) return;
     prefs.patch({ table: state });
   }
-
-  search.addEventListener('input', () => {
-    state.search = search.value;
-    paint(); persist();
-  });
 
   function rowClick(taskId) {
     window.location.hash = '#/task/' + encodeURIComponent(taskId);
@@ -259,6 +256,8 @@ export async function mount(root, { store, prefs }) {
     const sorted   = sortTasks(filtered);
 
     subcount.textContent = `${tasks.length} tasks · ${filtered.length} visible`;
+    // Reflect external state changes (e.g. clear button) into the topbar input.
+    if (search.value !== state.search) search.value = state.search;
     renderChipRail(backlog);
     renderTable(sorted);
   }

@@ -228,27 +228,43 @@ html, body {
   min-width: 0;
 }
 
-/* ── Header auto-status pill ── */
+/* ── Header auto-status pill ──
+   Visually aligned with .tm-action so it sits cleanly in the topbar cluster:
+   same height, radius, padding, font; tinted green to keep its live-state semantics.
+   It's pinned to the LEFT of the cluster (margin-right:auto) so it's the first
+   thing the eye lands on whenever auto-mode is running. */
 .auto-status-pill {
-  display: inline-flex; align-items: center; gap: 6px;
-  background: rgba(95, 174, 110, 0.10);
-  border: 1px solid rgba(95, 174, 110, 0.30);
+  order: -1;                 /* pin to the left of the cluster */
+  margin-right: auto;        /* push subsequent siblings to the right */
+  display: inline-flex; align-items: center; gap: var(--sp-2);
+  background: color-mix(in srgb, var(--green) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--green) 32%, transparent);
   color: var(--ink);
-  border-radius: 999px;
-  padding: 4px 10px 4px 8px;
-  font-size: 11px;
-  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  border-radius: var(--r-md);
+  padding: 6px var(--sp-3);
+  font-size: var(--text-sm);
+  font-family: var(--font-sans);
+  line-height: 1;
   cursor: pointer;
-  transition: background 0.12s ease, border-color 0.12s ease;
+  transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
 }
-.auto-status-pill:hover  { background: rgba(95,174,110,0.16); border-color: rgba(95,174,110,0.45); }
-.auto-status-pill:focus-visible { outline: 1px solid var(--green); outline-offset: 2px; }
+.auto-status-pill:hover  {
+  background: color-mix(in srgb, var(--green) 18%, transparent);
+  border-color: color-mix(in srgb, var(--green) 48%, transparent);
+}
+.auto-status-pill:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
 .auto-status-pill[hidden] { display: none; }
 .auto-status-dot {
   width: 6px; height: 6px; border-radius: 50%;
   background: var(--green);
   animation: pulse 1.6s ease-in-out infinite;
+  flex: 0 0 auto;
 }
-.auto-status-text { color: var(--ink); }
+.auto-status-text {
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.02em;
+}
 
 /* Stub screen — see _placeholders.css */

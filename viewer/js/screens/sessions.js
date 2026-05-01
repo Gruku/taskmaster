@@ -1,6 +1,7 @@
 import { renderTimeline } from '../components/timeline.js';
 import { RightRail } from '../components/right-rail.js';
 import { listSessions, getSessionDetail } from '../api.js';
+import { claimTopbar, tmSubcount, tmSearch, tmSegmented, tmAction } from '../lib/topbar.js';
 
 export const meta = { title: 'Sessions', icon: '⊕', sidebarKey: 'sessions' };
 
@@ -18,19 +19,6 @@ export async function mount(root, { params, store, prefs }) {
 
   root.innerHTML = `
     <div class="sessions-page">
-      <div class="sessions-topbar">
-        <h2>Sessions / Handovers</h2>
-        <span class="sessions-count" data-role="count"></span>
-        <div class="right">
-          <input class="sessions-search" placeholder="Search sessions…">
-          <div class="sessions-view-toggle" data-role="view-toggle">
-            <span class="seg" data-view="A">Diary</span>
-            <span class="seg" data-view="B">Lanes</span>
-            <span class="seg" data-view="C">By Task</span>
-          </div>
-          <button class="sessions-newnote" data-role="new-note">+ New note</button>
-        </div>
-      </div>
       <div class="sessions-kinds" data-role="kinds">
         <span class="sessions-kind-chip session on" data-kind="session">
           <span class="dot"></span> Sessions <span class="ct">0</span>
@@ -47,6 +35,43 @@ export async function mount(root, { params, store, prefs }) {
     </div>
   `;
 
+  // ── Topbar (#topbar-actions) ───────────────────────────────
+  const topbar = claimTopbar();
+  const subcount = tmSubcount('… sessions');
+  const searchBuilt = tmSearch({
+    placeholder: 'Search sessions…',
+    onInput: (v) => {
+      // Search hookup is owned by the timeline; this is a placeholder pass-through.
+      window.dispatchEvent(new CustomEvent('viewer:sessions-search', { detail: { q: v } }));
+    },
+  });
+  const initialSessionsView = prefs.screens.sessions.view || 'A';
+  const viewToggle = tmSegmented(
+    [
+      { key: 'A', label: 'Diary' },
+      { key: 'B', label: 'Lanes' },
+      { key: 'C', label: 'By Task' },
+    ],
+    {
+      value: initialSessionsView,
+      onChange: (v) => {
+        state.view = v;
+        window.dispatchEvent(new CustomEvent('viewer:prefs-patch', {
+          detail: { screens: { sessions: { view: v } } },
+        }));
+        render(root, state, rail);
+      },
+    },
+  );
+  const newNoteBtn = tmAction({
+    icon: '+', label: 'New note', variant: 'primary', title: 'New note',
+    onClick: () => { window.location.hash = '#/sessions?new=1'; },
+  });
+  topbar?.appendChild(subcount);
+  topbar?.appendChild(searchBuilt.el);
+  topbar?.appendChild(viewToggle);
+  topbar?.appendChild(newNoteBtn);
+
   const rail = new RightRail({ width: 480 });
   const state = {
     sessions: [],
@@ -56,34 +81,15 @@ export async function mount(root, { params, store, prefs }) {
     selectedSessionId: params && params.id || null,
   };
 
-  bindViewToggle(root, state);
   bindKindChips(root, state, () => render(root, state, rail));
-  bindNewNote(root);
 
   state.sessions = await listSessions();
-  refreshKindCounts(root, state.sessions);
+  refreshKindCounts(root, state.sessions, subcount);
   render(root, state, rail);
 
   if (state.selectedSessionId) openSessionDetail(rail, state.selectedSessionId, state);
 
   return () => { rail.close(); };
-}
-
-function bindViewToggle(root, state) {
-  const tg = root.querySelector('[data-role=view-toggle]');
-  for (const seg of tg.querySelectorAll('.seg')) {
-    if (seg.dataset.view === state.view) seg.classList.add('on');
-    seg.addEventListener('click', () => {
-      tg.querySelectorAll('.seg').forEach(s => s.classList.remove('on'));
-      seg.classList.add('on');
-      state.view = seg.dataset.view;
-      // Sticky pref persistence is owned by store.setPref/api.savePrefs (Plan 1).
-      // We only update local state here; the store wires the PUT call.
-      window.dispatchEvent(new CustomEvent('viewer:prefs-patch', {
-        detail: { screens: { sessions: { view: state.view } } },
-      }));
-    });
-  }
 }
 
 function bindKindChips(root, state, onChange) {
@@ -98,13 +104,7 @@ function bindKindChips(root, state, onChange) {
   }
 }
 
-function bindNewNote(root) {
-  root.querySelector('[data-role=new-note]').addEventListener('click', () => {
-    window.location.hash = '#/sessions?new=1';
-  });
-}
-
-function refreshKindCounts(root, sessions) {
+function refreshKindCounts(root, sessions, subcount) {
   const sCount = sessions.length;
   const hCount = sessions.reduce((n, s) => n + (s.handover_ids || []).length, 0);
   const rCount = sessions.filter(s => s.recap_id).length;
@@ -112,7 +112,7 @@ function refreshKindCounts(root, sessions) {
   chips[0].querySelector('.ct').textContent = sCount;
   chips[1].querySelector('.ct').textContent = hCount;
   chips[2].querySelector('.ct').textContent = rCount;
-  root.querySelector('[data-role=count]').textContent = `${sCount} sessions · ${hCount} handovers · ${rCount} recaps`;
+  if (subcount) subcount.textContent = `${sCount} sessions · ${hCount} handovers · ${rCount} recaps`;
 }
 
 function render(root, state, rail) {

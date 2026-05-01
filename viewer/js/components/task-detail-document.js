@@ -3,15 +3,33 @@
 
 import { renderMarkdown } from './markdown.js';
 import { mountRightRail } from './right-rail.js';
+import { claimTopbar, tmSegmented, tmAction } from '../lib/topbar.js';
 
 export function mountTaskDetailDocument(root, ctx) {
   root.innerHTML = '';
   root.classList.add('td-page', 'td-page-A');
 
+  mountTopbar(ctx);
   root.appendChild(renderHeader(ctx));
   root.appendChild(renderGrid(ctx));
 
   return () => { root.innerHTML = ''; };
+}
+
+function mountTopbar({ prefs, onToggleVariant }) {
+  const topbar = claimTopbar();
+  if (!topbar) return;
+  const view = prefs?.screens?.task_detail?.view === 'B' ? 'B' : 'A';
+  const seg = tmSegmented(
+    [
+      { key: 'A', label: 'Document' },
+      { key: 'B', label: 'Graph' },
+    ],
+    { value: view, onChange: (v) => onToggleVariant?.(v) },
+  );
+  const editBtn = tmAction({ icon: '✎', label: 'Edit', title: 'Edit task' });
+  const archiveBtn = tmAction({ icon: '✕', label: 'Archive', title: 'Archive task' });
+  topbar.append(seg, editBtn, archiveBtn);
 }
 
 function h(tag, attrs = {}, children = []) {
@@ -29,18 +47,10 @@ function h(tag, attrs = {}, children = []) {
   return el;
 }
 
-function renderHeader({ task, prefs, onToggleVariant }) {
+function renderHeader({ task }) {
   return h('div', { class: 'td-ph' }, [
     h('span', { class: 'td-back', on: { click: () => history.back() } }, '‹ back'),
     h('span', { class: 'td-crumb' }, `Tasks / ${task?.epic || ''}`),
-    h('div', { class: 'td-right' }, [
-      h('div', { class: 'td-seg', 'data-test': 'view-toggle' }, [
-        h('button', { class: 'td-seg-btn ' + (prefs?.screens?.task_detail?.view === 'A' ? 'on' : ''), 'data-view': 'A', on: { click: () => onToggleVariant?.('A') } }, 'Document'),
-        h('button', { class: 'td-seg-btn ' + (prefs?.screens?.task_detail?.view === 'B' ? 'on' : ''), 'data-view': 'B', on: { click: () => onToggleVariant?.('B') } }, 'Graph'),
-      ]),
-      h('button', { class: 'td-action' }, 'Edit'),
-      h('button', { class: 'td-action' }, 'Archive'),
-    ]),
   ]);
 }
 

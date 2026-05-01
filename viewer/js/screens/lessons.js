@@ -1,5 +1,6 @@
 import { lessonCard } from '../components/lesson-card.js';
 import * as api from '../api.js';
+import { claimTopbar, tmSubcount, tmSegmented, tmAction } from '../lib/topbar.js';
 
 export const meta = { title: 'Lessons', icon: '✦', sidebarKey: 'lessons' };
 
@@ -19,20 +20,25 @@ export async function mount(root, { store, prefs }) {
   const screen = document.createElement('section');
   screen.className = 'lessons';
 
-  // ---- header
-  const header = document.createElement('header');
-  header.className = 'lessons__header';
-  header.innerHTML = `<h1 class="lessons__title">Lessons</h1>`;
-  const toggle = document.createElement('div');
-  toggle.className = 'lessons__view-toggle';
-  for (const v of [['A', 'Shelves'], ['B', 'Flat'], ['C', 'By Anchor']]) {
-    const b = document.createElement('button');
-    b.dataset.view = v[0]; b.textContent = v[1];
-    b.addEventListener('click', () => setView(v[0]));
-    toggle.appendChild(b);
-  }
-  header.appendChild(toggle);
-  screen.appendChild(header);
+  // ---- topbar (#topbar-actions)
+  const topbar = claimTopbar();
+  const subcount = tmSubcount('… lessons');
+  const initialView = lessonsPrefs.view || 'A';
+  const toggle = tmSegmented(
+    [
+      { key: 'A', label: 'Shelves' },
+      { key: 'B', label: 'Flat' },
+      { key: 'C', label: 'By Anchor' },
+    ],
+    { value: initialView, onChange: setView },
+  );
+  const newBtn = tmAction({
+    icon: '+', label: 'Lesson', variant: 'primary', title: 'New lesson',
+    onClick: () => { /* Layer 3 follow-up: hook up new-lesson modal */ },
+  });
+  topbar?.appendChild(subcount);
+  topbar?.appendChild(toggle);
+  topbar?.appendChild(newBtn);
 
   // ---- shelves container
   const shelvesEl = document.createElement('div');
@@ -41,7 +47,7 @@ export async function mount(root, { store, prefs }) {
 
   root.appendChild(screen);
 
-  let currentView = lessonsPrefs.view || 'A';
+  let currentView = initialView;
   // Track reinforced lesson IDs so re-render can re-apply is-fired state.
   const _reinforcedIds = new Set();
 
@@ -63,12 +69,9 @@ export async function mount(root, { store, prefs }) {
   }
 
   function render() {
-    // Highlight the active toggle button
-    for (const b of toggle.querySelectorAll('button')) {
-      b.classList.toggle('is-active', b.dataset.view === currentView);
-    }
     shelvesEl.innerHTML = '';
     const lessons = store.getLessons() || [];
+    subcount.textContent = `${lessons.length} lessons`;
     // Capture reinforced IDs snapshot for post-render re-application.
     const reinforcedSnapshot = new Set(_reinforcedIds);
 

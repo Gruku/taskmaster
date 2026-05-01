@@ -5,6 +5,7 @@ import { createWidgetFrame } from '../components/widget-frame.js';
 import { getWidget, defaultLayout } from '../components/widget-catalog.js';
 import { createAutoModeStrip } from '../components/auto-mode-strip.js';
 import { createEditMode, createAddTile, attachRailDropTarget } from '../components/edit-mode.js';
+import { claimTopbar } from '../lib/topbar.js';
 
 import './../components/widgets/suggested-next.js';
 import './../components/widgets/phase-deliverables.js';
@@ -45,12 +46,11 @@ export async function mount(root, { store, api, prefs }) {
     refresh: () => render(),
   });
 
-  // Header row holds the edit toggle.
-  const headerRow = document.createElement('header');
-  headerRow.style.cssText = 'display:flex;justify-content:flex-end;';
-  headerRow.appendChild(edit.toggle);
+  // Mount edit toggle into the global topbar slot.
+  const topbar = claimTopbar();
+  topbar?.appendChild(edit.toggle);
 
-  root.replaceChildren(headerRow, briefing.root, autoSlot, bento, bottom);
+  root.replaceChildren(briefing.root, autoSlot, bento, bottom);
 
   // Seed layout if empty. Source-of-truth is the store; the injected `prefs`
   // dep is the patch helper, not data (same gotcha as task-detail.js — fix e74c521).

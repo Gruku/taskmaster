@@ -1,6 +1,7 @@
 import { issueCard, issueRow } from '../components/issue-card.js';
 import { severityLabel } from '../util/severity-label.js';
 import * as api from '../api.js';
+import { claimTopbar, tmSubcount, tmSegmented, tmAction } from '../lib/topbar.js';
 
 export const meta = { title: 'Issues', icon: '!', sidebarKey: 'issues' };
 
@@ -13,12 +14,14 @@ export async function mount(root, { store, prefs }) {
   const screen = document.createElement('section');
   screen.className = 'issues';
 
-  // ---- header
-  const header = document.createElement('header');
-  header.className = 'issues__header';
-  header.innerHTML = '<h1>Issues</h1>';
+  // ---- topbar (#topbar-actions)
+  const topbar = claimTopbar();
+  const subcount = tmSubcount('… issues');
+
+  // Severity chip row stays as a screen-local element (filters, not a top-level
+  // control) but we move it into the topbar visually so it sits with the rest.
   const filters = document.createElement('div');
-  filters.className = 'issues__filters';
+  filters.className = 'tm-chip-row issues__filters';
   for (const sev of SEVERITIES) {
     const c = document.createElement('span');
     c.className = 'issues__sev-chip';
@@ -30,18 +33,25 @@ export async function mount(root, { store, prefs }) {
     });
     filters.appendChild(c);
   }
-  header.appendChild(filters);
 
-  const toggle = document.createElement('div');
-  toggle.className = 'lessons__view-toggle';     // reuse same toggle style
-  for (const v of [['A', 'Hybrid'], ['B', 'Kanban'], ['C', 'List']]) {
-    const b = document.createElement('button');
-    b.dataset.view = v[0]; b.textContent = v[1];
-    b.addEventListener('click', () => setView(v[0]));
-    toggle.appendChild(b);
-  }
-  header.appendChild(toggle);
-  screen.appendChild(header);
+  // Fix: read persisted view from store.getPrefs(), not prefs.getPrefs()
+  const initialView = (store.getPrefs()?.screens?.issues?.view) || 'A';
+  const toggle = tmSegmented(
+    [
+      { key: 'A', label: 'Hybrid' },
+      { key: 'B', label: 'Kanban' },
+      { key: 'C', label: 'List' },
+    ],
+    { value: initialView, onChange: setView },
+  );
+  const newBtn = tmAction({
+    icon: '+', label: 'Issue', variant: 'primary', title: 'New issue',
+    onClick: () => { /* Layer 3 follow-up: hook up new-issue modal */ },
+  });
+  topbar?.appendChild(subcount);
+  topbar?.appendChild(filters);
+  topbar?.appendChild(toggle);
+  topbar?.appendChild(newBtn);
 
   // ---- columns + resolved shelf
   const columns = document.createElement('div');
@@ -79,8 +89,7 @@ export async function mount(root, { store, prefs }) {
 
   root.appendChild(screen);
 
-  // Fix: read persisted view from store.getPrefs(), not prefs.getPrefs()
-  let currentView = (store.getPrefs()?.screens?.issues?.view) || 'A';
+  let currentView = initialView;
   function setView(v) {
     currentView = v;
     prefs.patch({ screens: { issues: { view: v } } });
@@ -92,10 +101,9 @@ export async function mount(root, { store, prefs }) {
   }
 
   function render() {
-    for (const b of toggle.querySelectorAll('button')) {
-      b.classList.toggle('is-active', b.dataset.view === currentView);
-    }
-    const issues = (store.getIssues() || []).filter(i => {
+    const allIssues = store.getIssues() || [];
+    subcount.textContent = `${allIssues.length} issues`;
+    const issues = allIssues.filter(i => {
       const sevs = activeFilters();
       if (sevs.length === 0) return true;
       return sevs.includes(i.severity_label || severityLabel(i.severity));

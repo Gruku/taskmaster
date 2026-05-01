@@ -6,13 +6,24 @@ export function createEditMode({ root, api, prefs, refresh }) {
 
   const toggle = document.createElement('button');
   toggle.type = 'button';
-  toggle.className = 'dash-edit-toggle';
-  toggle.textContent = '✎ Edit layout';
+  toggle.className = 'tm-action';
   toggle.setAttribute('aria-pressed', 'false');
+  toggle.setAttribute('aria-label', 'Edit layout');
+  const setLabel = () => {
+    toggle.replaceChildren();
+    const i = document.createElement('span');
+    i.className = 'tm-action__icon';
+    i.textContent = editing ? '✓' : '✎';
+    const t = document.createElement('span');
+    t.textContent = editing ? 'Done' : 'Edit layout';
+    toggle.append(i, t);
+  };
+  setLabel();
   toggle.addEventListener('click', () => {
     editing = !editing;
     toggle.setAttribute('aria-pressed', String(editing));
-    toggle.textContent = editing ? '✓ Done' : '✎ Edit layout';
+    toggle.classList.toggle('tm-action--primary', editing);
+    setLabel();
     root.dataset.edit = editing ? '1' : '0';
   });
 
@@ -49,7 +60,13 @@ export function createAddTile({ rail, onAdd }) {
   const tile = document.createElement('button');
   tile.type = 'button';
   tile.className = 'dash-add-tile';
-  tile.textContent = '＋ Add widget';
+  const i = document.createElement('span');
+  i.className = 'tm-action__icon';
+  i.textContent = '+';
+  const t = document.createElement('span');
+  t.textContent = 'Add widget';
+  tile.append(i, t);
+  tile.setAttribute('aria-label', 'Add widget');
   tile.addEventListener('click', () => {
     showPicker(tile, rail, onAdd);
   });

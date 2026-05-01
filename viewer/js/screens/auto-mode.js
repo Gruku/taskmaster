@@ -3,6 +3,7 @@ import { renderFlightLog } from '../components/flight-log.js';
 import { renderSessionsStrip } from '../components/sessions-strip.js';
 import { autoListSessions, autoEvents, autoSession, autoBudget, autoPause as apiAutoPause, autoStop as apiAutoStop } from '../api.js';
 import { renderLeftPanel, renderRightPanel } from '../components/auto-side-panels.js';
+import { claimTopbar, tmSegmented, tmAction } from '../lib/topbar.js';
 
 export const meta = { title: 'Auto Mode', icon: '◐', sidebarKey: 'auto_mode' };
 
@@ -11,23 +12,6 @@ export async function mount(root, ctx) {
   root.classList.add('auto-page');
 
   const { store, prefs } = ctx;
-
-  const header = document.createElement('div');
-  header.className = 'auto-header';
-  header.innerHTML = `
-    <div class="auto-title">Auto Mode</div>
-    <div class="auto-controls">
-      <button class="auto-control-btn auto-control-btn--pause" data-action="pause" title="Pause">⏸</button>
-      <button class="auto-control-btn auto-control-btn--stop"  data-action="stop"  title="Stop">■</button>
-    </div>
-    <div class="auto-header-right">
-      <div class="auto-toggle" role="tablist">
-        <div class="auto-toggle-seg on"  data-view="A">Spine</div>
-        <div class="auto-toggle-seg"     data-view="B">Log</div>
-      </div>
-    </div>
-  `;
-  root.appendChild(header);
 
   const stripRoot = document.createElement('div');
   root.appendChild(stripRoot);
@@ -48,12 +32,33 @@ export async function mount(root, ctx) {
   prefs.screens.auto_mode = prefs.screens.auto_mode || {};
   prefs.screens.auto_mode.view = initialView;
 
-  const segs = header.querySelectorAll('.auto-toggle-seg');
-  segs.forEach((s) => {
-    s.classList.toggle('on', s.dataset.view === initialView);
-    s.setAttribute('role', 'tab');
-    s.setAttribute('aria-selected', s.dataset.view === initialView ? 'true' : 'false');
+  // Topbar (#topbar-actions): Spine/Log segmented + Pause/Stop control buttons
+  const topbar = claimTopbar();
+  const viewToggle = tmSegmented(
+    [
+      { key: 'A', label: 'Spine' },
+      { key: 'B', label: 'Log' },
+    ],
+    {
+      value: initialView,
+      onChange: (v) => {
+        if (v === currentView) return;
+        currentView = v;
+        prefs.screens.auto_mode.view = v;
+        prefs.patch({ screens: { auto_mode: { view: v } } });
+        renderActiveView();
+      },
+    },
+  );
+  const pauseBtn = tmAction({
+    icon: '⏸', label: 'Pause', title: 'Pause auto-mode session',
   });
+  const stopBtn = tmAction({
+    icon: '■', label: 'Stop', title: 'Stop auto-mode session',
+  });
+  topbar?.appendChild(viewToggle);
+  topbar?.appendChild(pauseBtn);
+  topbar?.appendChild(stopBtn);
 
   let currentView = initialView;
   let cleanup;
@@ -128,27 +133,6 @@ export async function mount(root, ctx) {
     }
   }
 
-  segs.forEach((seg) => {
-    seg.addEventListener('click', () => {
-      const v = seg.dataset.view;
-      if (v === currentView) return;
-      currentView = v;
-      prefs.screens.auto_mode.view = v;
-      segs.forEach((s) => {
-        s.classList.toggle('on', s.dataset.view === v);
-        s.setAttribute('aria-selected', s.dataset.view === v ? 'true' : 'false');
-      });
-      prefs.patch({ screens: { auto_mode: { view: v } } });
-      renderActiveView();
-    });
-  });
-
-  // Pause/stop button handlers
-  const pauseBtn = header.querySelector('[data-action="pause"]');
-  const stopBtn  = header.querySelector('[data-action="stop"]');
-  pauseBtn.setAttribute('aria-label', 'Pause auto-mode session');
-  stopBtn.setAttribute('aria-label', 'Stop auto-mode session');
-
   pauseBtn.addEventListener('click', async () => {
     const sid = activeSid ?? store?.getAutoState?.()?.session_id;
     if (!sid) return;
@@ -181,7 +165,7 @@ export async function mount(root, ctx) {
       <span>Spine is the live view. Log swaps to chronological waterfall — same data, denser. Use Log when debugging.</span>
       <span class="dismiss" role="button" aria-label="Dismiss helper note">✕</span>
     `;
-    root.insertBefore(note, root.children[1] || null);
+    root.insertBefore(note, root.firstChild);
     note.querySelector('.dismiss').addEventListener('click', () => {
       prefs.patch({ screens: { auto_mode: { helper_dismissed: true } } });
       note.remove();

@@ -7,7 +7,7 @@ const PRIORITIES = [
 
 export function renderPriorityChips({ active = [], onToggle }) {
   const wrap = document.createElement('div');
-  wrap.className = 'kanban-pri-row';
+  wrap.className = 'tm-chip-row kanban-pri-row';
   wrap.dataset.cmp = 'priority-chips';
   wrap._active = new Set(active);
 

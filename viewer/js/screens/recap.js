@@ -1,5 +1,6 @@
 import { listSessions, getRecap, putRecap, getSnapshotDiff } from '../api.js';
 import { renderReceiptsGrid } from '../components/recap-receipts-grid.js';
+import { claimTopbar, tmAction } from '../lib/topbar.js';
 
 export const meta = { title: 'Recap', icon: '⚯', sidebarKey: 'recap' };
 
@@ -39,84 +40,87 @@ export async function mount(root, { params }) {
     }
   }
 
-  renderRecapPage(root, { cur, prev, next, recap, diff, editing: false });
-  bindNav(root, prev, next);
-  bindActions(root, cur, recap, diff);
-  bindFilterChips(root);
+  let editing = false;
+  function paint() {
+    renderRecapPage(root, { cur, prev, next, recap, diff, editing });
+    bindFilterChips(root);
+    mountTopbar();
+  }
+
+  function mountTopbar() {
+    const topbar = claimTopbar();
+    if (!topbar) return;
+    if (prev) topbar.appendChild(tmAction({
+      icon: '‹', variant: 'icon', title: 'Previous recap',
+      onClick: () => { window.location.hash = `#/recap/${prev.id}`; },
+    }));
+    if (next) topbar.appendChild(tmAction({
+      icon: '›', variant: 'icon', title: 'Next recap',
+      onClick: () => { window.location.hash = `#/recap/${next.id}`; },
+    }));
+    if (editing) {
+      const cancelBtn = tmAction({
+        label: 'Cancel', title: 'Cancel edits',
+        onClick: () => { editing = false; paint(); },
+      });
+      const saveBtn = tmAction({
+        icon: '✓', label: 'Save', variant: 'primary', title: 'Save recap',
+        onClick: async () => {
+          const wh = root.querySelector('[data-role=ed-what-happened]').value;
+          const wl = root.querySelector('[data-role=ed-what-landed]').value;
+          const wn = root.querySelector('[data-role=ed-whats-next]').value;
+          const title = root.querySelector('[data-role=ed-title]').value;
+          const fm = (recap && recap.frontmatter) || {};
+          await putRecap(cur.id, {
+            frontmatter: {
+              snapshot_before: fm.snapshot_before, snapshot_after: fm.snapshot_after,
+              generator: 'manual', generated_at: new Date().toISOString(),
+              token_cost: 0,
+            },
+            title, what_happened: wh, what_landed: wl, whats_next: wn,
+          });
+          recap = await getRecap(cur.id);
+          editing = false; paint();
+        },
+      });
+      const regenBtn = tmAction({
+        icon: '↻', label: 'Regenerate', title: 'Restore draft from disk',
+        onClick: async () => {
+          const fresh = await getRecap(cur.id);
+          root.querySelector('[data-role=ed-title]').value = (fresh && fresh.title) || '';
+          root.querySelector('[data-role=ed-what-happened]').value = (fresh && fresh.what_happened) || '';
+          root.querySelector('[data-role=ed-what-landed]').value = (fresh && fresh.what_landed) || '';
+          root.querySelector('[data-role=ed-whats-next]').value = (fresh && fresh.whats_next) || '';
+        },
+      });
+      topbar.append(cancelBtn, saveBtn, regenBtn);
+    } else {
+      const copyBtn = tmAction({
+        icon: '⧉', label: 'Copy resume', title: 'Copy resume to clipboard',
+        onClick: () => {
+          const text = `${recap?.what_happened || ''}\n\n${recap?.whats_next || ''}`;
+          navigator.clipboard?.writeText(text);
+          copyBtn.replaceChildren();
+          const i = document.createElement('span'); i.className = 'tm-action__icon'; i.textContent = '✓';
+          const t = document.createElement('span'); t.textContent = 'Copied';
+          copyBtn.append(i, t);
+          setTimeout(() => mountTopbar(), 1200);
+        },
+      });
+      const openBtn = tmAction({
+        icon: '↗', label: 'Open in Sessions', title: 'Open the owning session',
+        onClick: () => { window.location.hash = `#/sessions/${cur.id}`; },
+      });
+      const editBtn = tmAction({
+        icon: '✎', label: 'Edit recap', variant: 'primary', title: 'Edit recap',
+        onClick: () => { editing = true; paint(); },
+      });
+      topbar.append(copyBtn, openBtn, editBtn);
+    }
+  }
+
+  paint();
   return () => {};
-}
-
-function bindNav(root, prev, next) {
-  const p = root.querySelector('[data-role=prev]');
-  const n = root.querySelector('[data-role=next]');
-  p && p.addEventListener('click', () => prev && (window.location.hash = `#/recap/${prev.id}`));
-  n && n.addEventListener('click', () => next && (window.location.hash = `#/recap/${next.id}`));
-}
-
-function bindActions(root, cur, recap, diff) {
-  const editBtn = root.querySelector('[data-role=edit]');
-  if (editBtn) editBtn.addEventListener('click', () => {
-    renderRecapPage(root, { cur,
-      prev: null, next: null,
-      recap, diff, editing: true });
-    bindEditing(root, cur, recap, diff);
-    bindFilterChips(root);
-  });
-  const copyBtn = root.querySelector('[data-role=copy-resume]');
-  if (copyBtn && recap) copyBtn.addEventListener('click', () => {
-    const text = `${recap.what_happened || ''}\n\n${recap.whats_next || ''}`;
-    navigator.clipboard?.writeText(text);
-    copyBtn.textContent = '✓ copied';
-    setTimeout(() => { copyBtn.textContent = '⧉ copy resume'; }, 1500);
-  });
-  const openBtn = root.querySelector('[data-role=open-sessions]');
-  if (openBtn) openBtn.addEventListener('click', () =>
-    window.location.hash = `#/sessions/${cur.id}`);
-}
-
-function bindEditing(root, cur, recap, diff) {
-  const save = root.querySelector('[data-role=save]');
-  const cancel = root.querySelector('[data-role=cancel]');
-  const regen = root.querySelector('[data-role=regenerate]');
-
-  cancel && cancel.addEventListener('click', () => {
-    renderRecapPage(root, { cur, prev: null, next: null, recap, diff, editing: false });
-    bindNav(root, null, null);
-    bindActions(root, cur, recap, diff);
-    bindFilterChips(root);
-  });
-
-  save && save.addEventListener('click', async () => {
-    const wh = root.querySelector('[data-role=ed-what-happened]').value;
-    const wl = root.querySelector('[data-role=ed-what-landed]').value;
-    const wn = root.querySelector('[data-role=ed-whats-next]').value;
-    const title = root.querySelector('[data-role=ed-title]').value;
-    const fm = (recap && recap.frontmatter) || {};
-    await putRecap(cur.id, {
-      frontmatter: {
-        snapshot_before: fm.snapshot_before, snapshot_after: fm.snapshot_after,
-        generator: 'manual', generated_at: new Date().toISOString(),
-        token_cost: 0,
-      },
-      title, what_happened: wh, what_landed: wl, whats_next: wn,
-    });
-    const fresh = await getRecap(cur.id);
-    renderRecapPage(root, { cur, prev: null, next: null, recap: fresh, diff, editing: false });
-    bindActions(root, cur, fresh, diff);
-    bindFilterChips(root);
-  });
-
-  regen && regen.addEventListener('click', () => {
-    // Restore the on-disk draft into the edit fields. Generation itself happens server-side
-    // (Plan 5b owns the regenerate hook); for now we re-fetch the saved recap to drop
-    // unsaved edits and signal "draft restored".
-    getRecap(cur.id).then(fresh => {
-      root.querySelector('[data-role=ed-title]').value = (fresh && fresh.title) || '';
-      root.querySelector('[data-role=ed-what-happened]').value = (fresh && fresh.what_happened) || '';
-      root.querySelector('[data-role=ed-what-landed]').value = (fresh && fresh.what_landed) || '';
-      root.querySelector('[data-role=ed-whats-next]').value = (fresh && fresh.whats_next) || '';
-    });
-  });
 }
 
 function renderRecapPage(root, { cur, prev, next, recap, diff, editing }) {
@@ -128,24 +132,6 @@ function renderRecapPage(root, { cur, prev, next, recap, diff, editing }) {
 
   root.innerHTML = (
     `<div class="recap-page">`
-    + `<div class="recap-topbar">`
-    + (prev !== null ? `<button class="recap-nav-arrow" data-role="prev" ${prev?'':'disabled'}>‹</button>` : '')
-    + `<div class="recap-picker">`
-    + `<span class="pid mono">${escapeHtml(cur.id)}</span>`
-    + `<span class="ptitle">${escapeHtml((recap && recap.title) || '—')}</span>`
-    + `<span class="pdate">${escapeHtml(String(cur.start).slice(0, 10))}</span>`
-    + `<span class="chev">▾</span>`
-    + `</div>`
-    + (next !== null ? `<button class="recap-nav-arrow" data-role="next" ${next?'':'disabled'}>›</button>` : '')
-    + `<div class="spacer"></div>`
-    + (editing
-        ? `<button class="recap-action" data-role="cancel">Cancel</button>`
-          + `<button class="recap-action primary" data-role="save">Save</button>`
-          + `<button class="recap-action" data-role="regenerate">↺ regenerate</button>`
-        : `<button class="recap-action" data-role="copy-resume">⧉ copy resume</button>`
-          + `<button class="recap-action" data-role="open-sessions">Open in Sessions</button>`
-          + `<button class="recap-action primary" data-role="edit">✎ edit recap</button>`)
-    + `</div>`
     + `<div class="recap-hero">`
     + `<div class="recap-hero-top">`
     + `<span class="recap-hero-kind">RECAP</span>`

@@ -12,6 +12,7 @@ import { renderPhaseStepper }                from '../components/phase-stepper.j
 import { renderEpicChips }                   from '../components/epic-chips.js';
 import { applyFilters, sortTasks, groupTasks, STATUS_LABELS } from '../lib/filters.js';
 import { assignEpicColors }                  from '../lib/epics.js';
+import { claimTopbar, tmAction } from '../lib/topbar.js';
 
 export const meta = { title: 'Kanban', icon: '▦', sidebarKey: 'kanban' };
 
@@ -48,19 +49,17 @@ export async function mount(root, { store, prefs }) {
   });
   page.appendChild(strip);
 
-  // 2) Page header — inject into topbar-actions slot
-  const head = document.getElementById('topbar-actions');
-  const prevHeadHTML = head ? head.innerHTML : '';
-  if (head) head.replaceChildren();
+  // 2) Page header — inject into topbar-actions slot (preserves auto-status pill)
+  const head = claimTopbar();
 
   const subcount = document.createElement('span');
-  subcount.className = 'kanban-head-subcount';
+  subcount.className = 'tm-subcount';
   subcount.textContent = '… tasks';
   head.appendChild(subcount);
 
   // Search
   const search = document.createElement('div');
-  search.className = 'kanban-search';
+  search.className = 'tm-search';
   search.innerHTML = `<span class="icon">⌕</span><input placeholder="Find by title, id, or branch…" /><span class="cmp-kbd">⌘K</span>`;
   const searchInput = search.querySelector('input');
   searchInput.value = state.filters.search || '';
@@ -84,9 +83,9 @@ export async function mount(root, { store, prefs }) {
   const right = document.createElement('div');
   right.className = 'kanban-head-right';
 
-  // Density toggle
+  // Density toggle (▤ minimal / ▦ full)
   const dens = document.createElement('div');
-  dens.className = 'kanban-density';
+  dens.className = 'tm-segmented tm-segmented--icon';
   for (const k of ['minimal', 'full']) {
     const b = document.createElement('button');
     b.type = 'button';
@@ -145,12 +144,11 @@ export async function mount(root, { store, prefs }) {
   });
   right.appendChild(sort);
 
-  // + Task button (Plan 2 stub: navigates to a hash that future plans will handle).
-  const addBtn = document.createElement('button');
-  addBtn.className = 'kanban-add-btn';
-  addBtn.type = 'button';
-  addBtn.textContent = '＋ Task';
-  addBtn.addEventListener('click', () => { location.hash = '#/task/new'; });
+  // + Task button — uses shared .tm-action--primary (Layer 3 unifies primary actions).
+  const addBtn = tmAction({
+    icon: '+', label: 'Task', variant: 'primary', title: 'Add task',
+    onClick: () => { location.hash = '#/task/new'; },
+  });
   right.appendChild(addBtn);
 
   head.appendChild(right);
@@ -381,7 +379,8 @@ export async function mount(root, { store, prefs }) {
     unsubAuto();
     resizeObs.disconnect();
     destroyAutoModeStrip(strip);
-    if (head) head.replaceChildren();
+    // Don't wipe the topbar on cleanup — the next screen's claimTopbar() handles
+    // teardown while preserving the auto-status pill. Wiping here would drop the pill.
   };
 }
 
