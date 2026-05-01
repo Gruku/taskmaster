@@ -1,5 +1,6 @@
 // In-memory store. Screens read via getters and subscribe to keys.
 // Polling is initiated by main.js, not here.
+// setAutoState fires 'autoState' subscribers: sidebar live-dot, auto-mode screen.
 
 import { getTask, getTaskRelated } from './api.js';
 
@@ -68,4 +69,10 @@ export async function getTaskRelatedFull(id, { force = false } = {}) {
 export function invalidateTask(id) {
   _taskCache.delete(id);
   _relatedCache.delete(id);
+}
+
+// Named export so callers outside the store object can also fire subscribers.
+// The store.setAutoState method is the canonical setter; this is an alias.
+export function setAutoState(next) {
+  store.setAutoState(next);
 }
