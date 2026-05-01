@@ -183,3 +183,120 @@
 .right-rail .files-list .files-row.mod .pre { color: var(--diff-mod); }
 .right-rail .files-list .files-row.del .pre { color: var(--diff-del); }
 .right-rail .files-list .more { color: var(--ink-3); font-style: italic; padding-top: var(--sp-2); }
+
+/* ────── Shared topbar primitives (canonical, modeled on Kanban) ──────
+   These live alongside screen-local classes (.kanban-search, .lessons__view-toggle, etc.)
+   so screens can adopt them incrementally. Layer 2 of v3-control-consistency relocates
+   the corresponding DOM into #topbar-actions; Layer 3 drops the per-screen classes. */
+
+/* Subcount — muted "X items · Y visible" line in topbar */
+.tm-subcount {
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+  padding-right: var(--sp-3);
+  border-right: 1px solid var(--border);
+}
+
+/* Search — input shell with icon slot and optional ⌘K kbd hint */
+.tm-search {
+  display: inline-flex; align-items: center; gap: var(--sp-2);
+  flex: 1 1 280px; min-width: 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 6px var(--sp-3);
+}
+.tm-search > .icon { color: var(--ink-3); flex: 0 0 auto; }
+.tm-search > input {
+  background: transparent; border: 0; outline: 0;
+  color: var(--ink); font-size: var(--text-base);
+  flex: 1 1 auto; min-width: 0;
+  font-family: var(--font-sans);
+}
+.tm-search > input::placeholder { color: var(--ink-3); }
+.tm-search > .cmp-kbd { flex: 0 0 auto; }
+
+/* Segmented — grouped icon buttons (▤ ▦ density, Spine/Log, Document/Graph, etc.) */
+.tm-segmented {
+  display: inline-flex; gap: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-card);
+  overflow: hidden;
+}
+.tm-segmented > button {
+  appearance: none; background: transparent; border: 0; color: var(--ink-3);
+  min-width: 32px; height: 32px; padding: 0 var(--sp-3);
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: var(--text-sm); line-height: 1; cursor: pointer;
+  font-family: var(--font-sans);
+}
+.tm-segmented > button + button { border-left: 1px solid var(--border); }
+.tm-segmented > button:hover { color: var(--ink-2); }
+.tm-segmented > button.on,
+.tm-segmented > button.is-active,
+.tm-segmented > button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+/* Icon-only segment variant — fixed square */
+.tm-segmented.tm-segmented--icon > button { width: 32px; padding: 0; font-size: 16px; }
+
+/* Action — primary in-context button (replaces .recap-action, .td-action,
+   .dash-edit-toggle, .sessions-newnote, .lesson-card__reinforce). */
+.tm-action {
+  appearance: none;
+  display: inline-flex; align-items: center; gap: var(--sp-2);
+  padding: 6px var(--sp-3);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--ink-2);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  font-family: var(--font-sans);
+  white-space: nowrap;
+  transition: color var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+}
+.tm-action:hover { color: var(--ink); border-color: var(--border-strong); }
+.tm-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.tm-action[disabled] { opacity: 0.5; cursor: not-allowed; }
+
+/* Primary variant — accent fill (e.g. + Task, + New note) */
+.tm-action.tm-action--primary {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  color: var(--accent);
+}
+.tm-action.tm-action--primary:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  color: var(--accent);
+}
+
+/* Ghost variant — bare, no border (for inline secondary actions) */
+.tm-action.tm-action--ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--ink-3);
+}
+.tm-action.tm-action--ghost:hover { color: var(--ink); background: rgba(255,255,255,0.04); }
+
+/* Icon-only variant — square, centered glyph */
+.tm-action.tm-action--icon {
+  width: 32px; height: 32px; padding: 0; justify-content: center;
+}
+
+/* Leading icon glyph (✎ + ⧉ ↑ ↻ ✕) — kept in line with text */
+.tm-action__icon {
+  flex: 0 0 auto;
+  font-size: var(--text-sm);
+  line-height: 1;
+  opacity: 0.85;
+}
+
+/* Chip row — wraps priority/category chips in topbar */
+.tm-chip-row {
+  display: inline-flex;
+  gap: var(--sp-1);
+  flex: 0 0 auto;
+}
