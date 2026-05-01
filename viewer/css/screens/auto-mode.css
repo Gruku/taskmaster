@@ -293,3 +293,114 @@
   font-family: 'JetBrains Mono', ui-monospace, monospace;
   color: var(--ink-3); font-size: 10px;
 }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Dashboard widget: auto-mode-stepper
+   Connector lines must START at right edge of circle and END at left edge of next.
+   Per spec: left: calc(50% + 10px); right: calc(-50% + 10px).
+   ────────────────────────────────────────────────────────────────────────── */
+
+.stepper-widget {
+  background: var(--bg-panel); border: 1px solid var(--border);
+  border-radius: 8px; padding: 12px 14px; cursor: pointer;
+  transition: background .12s ease;
+}
+.stepper-widget:hover { background: #1c1d23; }
+.stepper-widget:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+
+.stepper-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.stepper-h {
+  font-size: 9px; text-transform: uppercase; letter-spacing: 0.1em;
+  color: var(--ink-3); font-weight: 600;
+}
+.stepper-running { color: var(--accent); text-transform: none; letter-spacing: 0; font-weight: 500; }
+.stepper-link { margin-left: auto; font-size: 10px; color: var(--accent); }
+.stepper-link::after { content: ' →'; }
+
+.stepper-task { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.stepper-id {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10px; color: var(--accent);
+  padding: 1px 5px; border-radius: 3px;
+  background: rgba(74,158,255,0.08);
+}
+.stepper-title { font-size: 12px; color: var(--ink); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stepper-wt {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 9px; color: var(--ink-3);
+}
+
+.stepper-empty {
+  padding: 20px 0; text-align: center;
+  color: var(--ink-3); font-size: 11px;
+}
+
+.stepper-track { display: flex; align-items: flex-start; gap: 0; padding: 4px 0 0; }
+.stepper-step {
+  flex: 1; display: flex; flex-direction: column; align-items: center;
+  gap: 4px; position: relative;
+}
+
+/* Edge-to-edge connector — does NOT pass beneath circles. */
+.stepper-step::before {
+  content: '';
+  position: absolute;
+  top: 8px;                              /* vertical-center on a 16px circle */
+  left:  calc(50% + 10px);               /* start at right edge of THIS circle */
+  right: calc(-50% + 10px);              /* end at left edge of NEXT circle */
+  height: 1.5px;
+  background: var(--border);             /* default: pending — gray */
+  z-index: 1;
+}
+.stepper-step:last-child::before { display: none; }
+
+/* Per spec correction: done connectors stay GRAY (not green) — only the active
+   circle gets the blue gradient lead-in. */
+.stepper-step--done::before    { background: var(--border); }
+.stepper-step--active::before  { background: linear-gradient(90deg, var(--accent), var(--border)); }
+
+.stepper-circle {
+  width: 16px; height: 16px; border-radius: 50%;
+  border: 1.5px solid var(--border); background: var(--bg-card);
+  z-index: 2; position: relative;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 8px;
+}
+.stepper-step--done .stepper-circle {
+  background: rgba(95,174,110,0.15); border-color: var(--green); color: var(--green);
+}
+.stepper-step--done .stepper-circle::after { content: '✓'; font-weight: 700; }
+
+.stepper-step--active .stepper-circle {
+  background: rgba(74,158,255,0.2); border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(74,158,255,0.12);
+  animation: spine-pulse 1.6s ease-in-out infinite;
+}
+.stepper-step--active .stepper-circle::after { content: '●'; color: var(--accent); }
+
+.stepper-label {
+  font-size: 8px; color: var(--ink-3); text-align: center; line-height: 1.1;
+  margin-top: 2px;
+}
+.stepper-step--active .stepper-label { color: var(--ink); }
+
+.stepper-foot {
+  display: flex; align-items: center; gap: 6px;
+  margin-top: 12px; font-size: 11px; color: var(--ink-3);
+}
+.stepper-foot-sep { color: var(--ink-3); opacity: 0.5; }
+.stepper-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--green); animation: spine-pulse 1.6s ease-in-out infinite;
+}
+.stepper-elapsed, .stepper-tokens {
+  font-family: 'JetBrains Mono', ui-monospace, monospace; color: var(--ink-2);
+}
+.stepper-sub { color: var(--ink-2); }
+
+.stepper-more {
+  font-size: 9px; padding: 1px 6px; border-radius: 9px;
+  background: rgba(74,158,255,0.10); color: var(--accent);
+  margin-left: 6px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
