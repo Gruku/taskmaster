@@ -2,6 +2,7 @@ import { renderQuestSpine } from '../components/quest-spine.js';
 import { renderFlightLog } from '../components/flight-log.js';
 import { renderSessionsStrip } from '../components/sessions-strip.js';
 import { autoListSessions, autoEvents, autoSession, autoBudget, autoPause as apiAutoPause, autoStop as apiAutoStop } from '../api.js';
+import { renderLeftPanel, renderRightPanel } from '../components/auto-side-panels.js';
 
 export const meta = { title: 'Auto Mode', icon: '◐', sidebarKey: 'auto_mode' };
 
@@ -191,7 +192,6 @@ export async function mount(root, ctx) {
   let leftCleanup = null, rightCleanup = null;
 
   async function refreshSidePanels() {
-    const { renderLeftPanel, renderRightPanel } = await import('../components/auto-side-panels.js');
     const sid = activeSid ?? store?.getAutoState?.()?.session_id;
     if (!sid) {
       leftCleanup?.(); rightCleanup?.();
