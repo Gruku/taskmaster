@@ -30,7 +30,7 @@
   color: var(--ink-2);
 }
 .cmp-pill__dot { width: 9px; height: 9px; border-radius: 50%; background: var(--ink-3); }
-.cmp-pill.live .cmp-pill__dot { background: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
+.cmp-pill.live .cmp-pill__dot { background: var(--accent); animation: pulse 1.6s ease-in-out infinite; }
 
 /* Buttons */
 .cmp-btn {

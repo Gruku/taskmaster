@@ -89,7 +89,7 @@ html, body {
   content: '●';
   color: var(--accent);
   margin-right: 6px;
-  animation: pulse 1.4s ease-in-out infinite;
+  animation: pulse 1.6s ease-in-out infinite;
 }
 
 .sidebar-footer {
@@ -104,7 +104,7 @@ html, body {
   width: 9px; height: 9px; border-radius: 50%;
   background: var(--green);
   display: none;
-  animation: pulse 1.4s ease-in-out infinite;
+  animation: pulse 1.6s ease-in-out infinite;
 }
 .sidebar-footer.auto-running .pulse { display: inline-block; }
 
@@ -226,11 +226,6 @@ html, body {
   flex: 1;
   min-height: 0;
   min-width: 0;
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 0.4; }
-  50%      { opacity: 1; }
 }
 
 /* Stub screen — see _placeholders.css */

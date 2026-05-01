@@ -87,7 +87,7 @@
 .spine-node--active .spine-node-circle {
   fill: rgba(74,158,255,0.18); stroke: var(--accent); stroke-width: 2px;
   filter: drop-shadow(0 0 6px rgba(74,158,255,0.55));
-  animation: spine-pulse 1.6s ease-in-out infinite;
+  animation: pulse 1.6s ease-in-out infinite;
 }
 .spine-node--pending .spine-node-circle { opacity: 0.4; }
 .spine-node-label {
@@ -95,11 +95,6 @@
   font-family: 'JetBrains Mono', ui-monospace, monospace;
 }
 .spine-node--pending .spine-node-label { fill: var(--ink-3); opacity: 0.6; }
-
-@keyframes spine-pulse {
-  0%, 100% { r: 18; opacity: 1; }
-  50%      { r: 20; opacity: 0.85; }
-}
 
 /* ── Satellites ── */
 .spine-satellite-edge {
@@ -178,7 +173,7 @@
 .flog-active-badge {
   font-size: 9px; padding: 1px 6px; border-radius: 9px;
   background: rgba(74,158,255,0.18); color: var(--accent);
-  animation: spine-pulse 1.6s ease-in-out infinite;
+  animation: pulse 1.6s ease-in-out infinite;
 }
 
 .flog-subruns { grid-column: 2 / -1; margin-top: 4px; padding-left: 12px;
@@ -212,7 +207,7 @@
 .sstrip-tab.on { background: rgba(74,158,255,0.10); border-color: var(--accent); color: var(--ink); }
 .sstrip-dot {
   width: 6px; height: 6px; border-radius: 50%;
-  background: var(--green); animation: spine-pulse 1.6s ease-in-out infinite;
+  background: var(--green); animation: pulse 1.6s ease-in-out infinite;
 }
 .sstrip-id {
   font-family: 'JetBrains Mono', ui-monospace, monospace; color: var(--accent);
@@ -261,7 +256,7 @@
 .aside-sub-dot {
   width: 6px; height: 6px; border-radius: 50%; background: var(--green);
 }
-.aside-sub-dot[data-status="running"] { animation: spine-pulse 1.6s ease-in-out infinite; }
+.aside-sub-dot[data-status="running"] { animation: pulse 1.6s ease-in-out infinite; }
 .aside-sub-dot[data-status="failed"]  { background: var(--red); }
 .aside-sub-type {
   font-family: 'JetBrains Mono', ui-monospace, monospace;
@@ -374,7 +369,7 @@
 .stepper-step--active .stepper-circle {
   background: rgba(74,158,255,0.2); border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(74,158,255,0.12);
-  animation: spine-pulse 1.6s ease-in-out infinite;
+  animation: pulse 1.6s ease-in-out infinite;
 }
 .stepper-step--active .stepper-circle::after { content: '●'; color: var(--accent); }
 
@@ -391,7 +386,7 @@
 .stepper-foot-sep { color: var(--ink-3); opacity: 0.5; }
 .stepper-dot {
   width: 6px; height: 6px; border-radius: 50%;
-  background: var(--green); animation: spine-pulse 1.6s ease-in-out infinite;
+  background: var(--green); animation: pulse 1.6s ease-in-out infinite;
 }
 .stepper-elapsed, .stepper-tokens {
   font-family: 'JetBrains Mono', ui-monospace, monospace; color: var(--ink-2);

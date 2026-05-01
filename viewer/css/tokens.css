@@ -100,3 +100,8 @@
   --sidebar-w:        300px;
   --rail-w:           720px;            /* right-rail detail surface */
 }
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.5; }
+  50%      { opacity: 1; }
+}

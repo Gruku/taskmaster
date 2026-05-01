@@ -177,9 +177,8 @@
 .issue-card__investigating::before {
   content: ''; width: 6px; height: 6px; border-radius: 50%;
   background: var(--issues-investigating);
-  animation: issue-pulse 1.6s ease-in-out infinite;
+  animation: pulse 1.6s ease-in-out infinite;
 }
-@keyframes issue-pulse { 0%,100% { opacity: 0.4; } 50% { opacity: 1; } }
 
 /* ---- resolved shelf (one-line cards) ---- */
 
