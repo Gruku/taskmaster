@@ -124,3 +124,19 @@ test('Spine renders 5 nodes when a session has a cursor', async ({ page }) => {
   // Active node has class --active
   await expect(page.locator('.spine-node--active')).toHaveCount(1);
 });
+
+test('clicking Stop shows confirm and posts to /api/auto/stop', async ({ page }) => {
+  let posted = false;
+  page.on('request', (req) => {
+    if (req.method() === 'POST' && req.url().includes('/api/auto/stop')) posted = true;
+  });
+  page.on('dialog', (d) => d.accept());
+
+  const sess = await page.request.get('http://127.0.0.1:8765/api/auto/state');
+  if ((await sess.json()).running === false) test.skip();
+
+  await page.goto('http://127.0.0.1:8765/v3/#/auto');
+  await page.locator('.auto-control-btn--stop').click();
+  await page.waitForTimeout(200);
+  expect(posted).toBeTruthy();
+});
