@@ -10,6 +10,7 @@ const PREFS_DEBOUNCE_MS = 400;
 // Register screens (lazy-loaded modules).
 registerScreen('/dashboard',  () => import('./screens/dashboard.js'));
 registerScreen('/kanban',     () => import('./screens/kanban.js'));
+registerScreen('/table',      () => import('./screens/table.js'));
 registerScreen('/task',       () => import('./screens/task-detail.js'));
 registerScreen('/sessions',   () => import('./screens/sessions.js'));
 registerScreen('/lessons',    () => import('./screens/lessons.js'));

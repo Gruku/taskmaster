@@ -119,13 +119,13 @@
 }
 .widget__head {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 10px 12px 6px;
+  padding: 10px 12px;
 }
 .widget__label {
   font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.08em;
   text-transform: uppercase; color: var(--ink-3);
 }
-.widget__body { padding: 4px 12px 12px; }
+.widget__body { padding: 0 12px 12px; }
 .widget--small { /* sized by grid; visual density tightening lives here */ }
 .widget--medium { }
 .widget--wide { }

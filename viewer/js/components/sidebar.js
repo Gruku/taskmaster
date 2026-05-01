@@ -4,6 +4,7 @@ const SECTIONS = [
   { label: 'Frontdoor', items: [
     { key: 'dashboard', icon: '▤', label: 'Dashboard', hash: '#/dashboard' },
     { key: 'kanban',    icon: '▦', label: 'Kanban',    hash: '#/kanban' },
+    { key: 'table',     icon: '▭', label: 'Table',     hash: '#/table' },
   ]},
   { label: 'Structural', items: [
     { key: 'auto_mode', icon: '⌬', label: 'Auto Mode', hash: '#/auto', live: true },
