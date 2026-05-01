@@ -45,9 +45,10 @@ export async function mount(root, { store, prefs }) {
     { value: initialView, onChange: setView },
   );
   const newBtn = tmAction({
-    icon: '+', label: 'Issue', variant: 'primary', title: 'New issue',
-    onClick: () => { /* Layer 3 follow-up: hook up new-issue modal */ },
+    icon: '+', label: 'Issue', variant: 'primary',
+    title: 'New issue — coming soon',
   });
+  newBtn.setAttribute('aria-disabled', 'true');
   topbar?.appendChild(subcount);
   topbar?.appendChild(filters);
   topbar?.appendChild(toggle);

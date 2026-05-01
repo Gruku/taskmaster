@@ -17,10 +17,8 @@
   padding: 24px 28px;
 }
 
-.issues__header {
-  display: flex; align-items: center; justify-content: space-between;
-}
-.issues__filters { display: flex; gap: 8px; flex-wrap: wrap; }
+/* Severity chip — emitted by issues.js into the topbar via `.tm-chip-row`.
+   The wrapper layout is owned by `.tm-chip-row`; only chip visuals live here. */
 .issues__sev-chip {
   padding: 3px 10px;
   border-radius: 999px;

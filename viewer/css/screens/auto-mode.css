@@ -5,23 +5,6 @@
 
 .auto-page { padding: var(--page-pad); }
 
-.auto-header {
-  display: flex; align-items: center; gap: 10px;
-  padding-bottom: 10px; margin-bottom: 14px;
-  border-bottom: 1px solid var(--border);
-}
-.auto-title { font-size: var(--text-base); font-weight: 600; color: var(--ink); }
-.auto-controls { display: inline-flex; gap: 6px; margin-left: 8px; }
-.auto-control-btn {
-  padding: 3px 8px; border-radius: 4px;
-  background: var(--bg-card); border: 1px solid var(--border);
-  color: var(--ink-2); font-size: 11px; cursor: pointer;
-}
-.auto-control-btn--pause { color: var(--amber); }
-.auto-control-btn--stop  { color: var(--red); }
-.auto-control-btn[aria-pressed="true"] { background: rgba(214, 164, 95, 0.15); }
-
-.auto-header-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 .auto-helper-note {
   margin-top: 4px; font-size: 11px; color: var(--ink-3);
   display: flex; align-items: center; gap: 6px;
@@ -30,16 +13,17 @@
   margin-left: auto; cursor: pointer; color: var(--ink-3);
 }
 
-.auto-toggle { /* segmented Spine | Log */
-  display: inline-flex; background: var(--bg-card);
-  border: 1px solid var(--border); border-radius: 5px; overflow: hidden;
+/* Topbar Pause/Stop colour accents — narrow targeting via title attr so we don't
+   hard-couple to a screen-local class. The shared .tm-action shell handles layout. */
+.tm-action[title^="Pause"]  .tm-action__icon { color: var(--amber); }
+.tm-action[title^="Stop"]   .tm-action__icon { color: var(--red); }
+.tm-action[title^="Pause"][aria-disabled="true"] .tm-action__icon,
+.tm-action[title^="Stop"][aria-disabled="true"]  .tm-action__icon { color: var(--ink-4); }
+.tm-action[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: not-allowed;
+  pointer-events: none;
 }
-.auto-toggle-seg {
-  padding: 3px 10px; font-size: 11px; color: var(--ink-3); cursor: pointer;
-  border-right: 1px solid var(--border);
-}
-.auto-toggle-seg:last-child { border-right: 0; }
-.auto-toggle-seg.on { background: rgba(74, 158, 255, 0.15); color: var(--accent); }
 
 /* ── 3-col page layout (left panel | spine | right panel) ── */
 .auto-grid {

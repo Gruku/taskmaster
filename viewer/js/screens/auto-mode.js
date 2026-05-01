@@ -60,6 +60,26 @@ export async function mount(root, ctx) {
   topbar?.appendChild(pauseBtn);
   topbar?.appendChild(stopBtn);
 
+  // Reflect run-state on pause/stop. The auto-state schema doesn't carry an
+  // explicit status, so we infer: a state with a cursor on the active session
+  // is "running"; an explicit "paused" flag suppresses pause; otherwise we
+  // disable both. No active session → both disabled.
+  function syncRunControls() {
+    const state = store?.getAutoState?.() ?? null;
+    const sid = activeSid ?? state?.session_id ?? null;
+    const stateForActive = state && state.session_id === sid ? state : null;
+    const noSession = !sid;
+    const paused = !!(stateForActive && stateForActive.paused);
+    const running = !!(stateForActive && stateForActive.cursor && !paused);
+    pauseBtn.setAttribute('aria-disabled', String(noSession || !running));
+    pauseBtn.title = noSession ? 'No active auto-mode session'
+                   : paused   ? 'Already paused'
+                   : 'Pause auto-mode session';
+    stopBtn.setAttribute('aria-disabled', String(noSession || (!running && !paused)));
+    stopBtn.title = noSession ? 'No active auto-mode session' : 'Stop auto-mode session';
+  }
+  syncRunControls();
+
   let currentView = initialView;
   let cleanup;
   let logPoll = null;
@@ -71,6 +91,7 @@ export async function mount(root, ctx) {
   async function refreshSessions() {
     sessionsList = await autoListSessions().catch(() => []);
     if (!activeSid && sessionsList[0]) activeSid = sessionsList[0].session_id;
+    syncRunControls();
     renderSessionsStrip(stripRoot, {
       sessions: sessionsList,
       activeSid,
@@ -200,6 +221,7 @@ export async function mount(root, ctx) {
 
   const unsub = store?.subscribe?.('autoState', () => {
     renderActiveView();
+    syncRunControls();
   });
 
   startLogPolling();

@@ -28,13 +28,6 @@
 .td-ph .td-back { color: var(--ink-3); font-size: var(--text-sm); cursor: pointer; }
 .td-ph .td-back:hover { color: var(--ink); }
 .td-ph .td-crumb { color: var(--ink-3); font-size: var(--text-sm); }
-.td-ph .td-right { margin-left: auto; display: flex; align-items: center; gap: var(--sp-4); }
-.td-seg { display: inline-flex; background: var(--bg-card); border: 1px solid var(--border); border-radius: 5px; overflow: hidden; }
-.td-seg .td-seg-btn { padding: 3px 10px; font-size: var(--text-sm); color: var(--ink-3); cursor: pointer; border-right: 1px solid var(--border); background: transparent; }
-.td-seg .td-seg-btn:last-child { border-right: 0; }
-.td-seg .td-seg-btn.on { background: rgba(74,158,255,0.15); color: var(--accent); }
-.td-action { background: var(--bg-card); border: 1px solid var(--border); color: var(--ink-2); font-size: var(--text-sm); padding: 3px 9px; border-radius: 4px; cursor: pointer; }
-.td-action:hover { border-color: var(--accent); color: var(--ink); }
 
 .td-grid {
   display: grid;

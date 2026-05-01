@@ -33,9 +33,10 @@ export async function mount(root, { store, prefs }) {
     { value: initialView, onChange: setView },
   );
   const newBtn = tmAction({
-    icon: '+', label: 'Lesson', variant: 'primary', title: 'New lesson',
-    onClick: () => { /* Layer 3 follow-up: hook up new-lesson modal */ },
+    icon: '+', label: 'Lesson', variant: 'primary',
+    title: 'New lesson — coming soon',
   });
+  newBtn.setAttribute('aria-disabled', 'true');
   topbar?.appendChild(subcount);
   topbar?.appendChild(toggle);
   topbar?.appendChild(newBtn);

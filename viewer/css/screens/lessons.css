@@ -15,32 +15,6 @@
   padding: 24px 28px;
 }
 
-.lessons__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 4px;
-}
-
-.lessons__view-toggle {
-  display: inline-flex;
-  gap: 4px;
-}
-.lessons__view-toggle button {
-  padding: 4px 10px;
-  background: var(--bg-card);
-  color: var(--ink-2);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  cursor: pointer;
-  font: inherit;
-}
-.lessons__view-toggle button.is-active {
-  background: var(--accent-soft);
-  color: var(--ink);
-  border-color: var(--accent);
-}
-
 /* ---- shelves ---- */
 
 .lessons-shelf { display: flex; flex-direction: column; gap: 10px; }

@@ -6,30 +6,6 @@
   gap: var(--page-gap);
 }
 
-.tbl-header {
-  display: flex; align-items: center; gap: var(--sp-4);
-  flex: 0 0 auto;
-}
-.tbl-header h1 { margin: 0; }
-
-.tbl-subcount {
-  font-size: var(--text-sm);
-  color: var(--ink-3);
-  font-family: var(--font-mono);
-}
-
-.tbl-search {
-  flex: 1 1 360px;
-  max-width: 480px;
-  padding: 6px 10px;
-  background: var(--bg-card, var(--surface, #1f2025));
-  color: var(--ink);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  font: inherit; font-size: var(--text-sm);
-}
-.tbl-search:focus { outline: none; border-color: var(--accent); }
-
 .tbl-chips {
   display: flex; align-items: center; flex-wrap: wrap;
   gap: 6px var(--sp-4);

@@ -3,37 +3,6 @@
 
 .sessions-page { padding-bottom: var(--sp-9); }
 
-.sessions-topbar {
-  display: flex; align-items: center; gap: var(--sp-5);
-  margin-bottom: var(--sp-7);
-}
-.sessions-topbar h2 { margin: 0; font-size: var(--text-2xl); font-weight: 600; }
-.sessions-topbar .right { margin-left: auto; display: flex; gap: var(--sp-3); align-items: center; }
-
-.sessions-search {
-  background: var(--bg-card); border: 1px solid var(--border);
-  color: var(--ink-2); font-size: var(--text-sm);
-  padding: 3px var(--sp-4); border-radius: var(--r-sm); width: 180px;
-}
-
-.sessions-view-toggle {
-  display: inline-flex; background: var(--bg-card);
-  border: 1px solid var(--border); border-radius: var(--r-sm); overflow: hidden;
-}
-.sessions-view-toggle .seg {
-  padding: 3px var(--sp-4); font-size: var(--text-sm); color: var(--ink-3);
-  cursor: pointer; border-right: 1px solid var(--border);
-}
-.sessions-view-toggle .seg:last-child { border-right: 0; }
-.sessions-view-toggle .seg.on { background: var(--accent-soft); color: var(--accent); }
-
-.sessions-newnote {
-  background: var(--bg-card); border: 1px solid var(--border);
-  color: var(--ink-2); font-size: var(--text-sm);
-  padding: 3px var(--sp-4); border-radius: var(--r-sm); cursor: pointer;
-}
-.sessions-newnote:hover { color: var(--ink); border-color: var(--border-strong); }
-
 /* Kind filter row */
 .sessions-kinds {
   display: flex; align-items: center; gap: var(--sp-3); margin-bottom: var(--sp-7);

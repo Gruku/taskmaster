@@ -12,24 +12,6 @@
 /* ─────────── PAGE LAYOUT ─────────── */
 .kanban-page { display: flex; flex-direction: column; gap: var(--sp-5); min-width: 0; height: 100%; min-height: 0; }
 
-.kanban-head-subcount { font-size: var(--text-sm); color: var(--ink-3); padding-right: var(--sp-3); border-right: 1px solid var(--border); }
-
-.kanban-search {
-  display: inline-flex; align-items: center; gap: var(--sp-2);
-  flex: 1 1 280px; min-width: 0;
-  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--r-md);
-  padding: 6px var(--sp-3);
-}
-.kanban-search input { min-width: 0; }
-.kanban-search .kbd { flex: 0 0 auto; }
-.kanban-search input {
-  background: transparent; border: 0; outline: 0;
-  color: var(--ink); font-size: var(--text-base);
-  flex: 1; font-family: var(--font-sans);
-}
-.kanban-search input::placeholder { color: var(--ink-3); }
-.kanban-search .icon { color: var(--ink-3); }
-
 /* ─────────── KANBAN FILTER BAR (phases stacked over epics) ─────────── */
 .kanban-filterbar {
   display: flex;
@@ -68,8 +50,7 @@
 
 .kanban-head-right { margin-left: auto; display: flex; align-items: center; gap: var(--sp-2); }
 .kanban-group-btn,
-.kanban-sort-btn,
-.kanban-add-btn {
+.kanban-sort-btn {
   background: var(--bg-card); border: 1px solid var(--border); color: var(--ink-2);
   font-size: var(--text-sm); padding: 6px var(--sp-3); border-radius: var(--r-md);
   cursor: pointer; display: inline-flex; align-items: center; gap: var(--sp-1);
@@ -79,7 +60,6 @@
 }
 .kanban-group-btn:hover,
 .kanban-sort-btn:hover { color: var(--ink); border-color: var(--border-strong); }
-.kanban-add-btn { background: var(--accent-soft); border-color: rgba(74,158,255,0.4); color: var(--accent); }
 
 .kanban-reset-link { color: var(--ink-3); cursor: pointer; font-size: var(--text-xs); }
 .kanban-reset-link:hover { color: var(--red); }
@@ -779,26 +759,6 @@
 .kanban-col-head.in_progress .dot { background: var(--accent); }
 .kanban-col-head.in_review   .dot { background: var(--amber); }
 .kanban-col-head.done        .dot { background: var(--green); }
-
-/* ─────────── DENSITY TOGGLE (icon segmented) ─────────── */
-.kanban-density {
-  display: inline-flex; gap: 0;
-  border: 1px solid var(--border); border-radius: var(--r-md);
-  background: var(--bg-card);
-  overflow: hidden;
-}
-.kanban-density button {
-  appearance: none; background: transparent; border: 0; color: var(--ink-3);
-  width: 32px; height: 32px;
-  display: inline-flex; align-items: center; justify-content: center;
-  font-size: 16px; line-height: 1; cursor: pointer;
-  font-family: var(--font-sans);
-}
-.kanban-density button + button { border-left: 1px solid var(--border); }
-.kanban-density button.on {
-  background: rgba(74,158,255,0.12);
-  color: var(--accent);
-}
 
 /* ─────────── COLUMN COLLAPSE ─────────── */
 .kanban-col.collapsed {

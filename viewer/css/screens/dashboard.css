@@ -176,19 +176,6 @@
 .dash[data-edit='1'] .dash-add-tile { display: flex; }
 .dash-add-tile:hover { color: var(--ink); border-color: var(--ink); }
 
-.dash-edit-toggle {
-  align-self: flex-end;
-  padding: 6px 10px; border-radius: 6px;
-  background: transparent; color: var(--ink-2);
-  border: 1px solid var(--border-strong);
-  font-size: 12px; cursor: pointer;
-}
-.dash-edit-toggle[aria-pressed='true'] {
-  color: var(--ink);
-  border-color: var(--accent-edit, #6ea8ff);
-  background: color-mix(in oklab, var(--accent-edit, #6ea8ff) 12%, transparent);
-}
-
 /* ===== Add-widget picker ===== */
 .dash-picker {
   position: absolute; z-index: 30;

@@ -1,32 +1,5 @@
 .recap-page { padding-bottom: var(--sp-9); }
 
-.recap-topbar {
-  display: flex; align-items: center; gap: var(--sp-4); margin-bottom: var(--sp-7);
-}
-.recap-picker {
-  display: flex; align-items: center; gap: var(--sp-3);
-  padding: 6px 10px; background: var(--bg-card); border: 1px solid var(--border);
-  border-radius: var(--r-lg); cursor: pointer;
-}
-.recap-picker .pid { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--accent); }
-.recap-picker .pdate { color: var(--ink-3); font-size: var(--text-sm); }
-.recap-picker .chev { color: var(--ink-3); }
-.recap-nav-arrow {
-  width: 28px; height: 28px; border-radius: var(--r-md);
-  background: var(--bg-card); border: 1px solid var(--border); color: var(--ink-2);
-  display: flex; align-items: center; justify-content: center; cursor: pointer;
-}
-.recap-nav-arrow:hover { color: var(--ink); border-color: var(--border-strong); }
-.recap-nav-arrow:disabled { opacity: 0.4; cursor: default; }
-.recap-topbar .spacer { flex: 1; }
-.recap-action {
-  padding: 6px 10px; background: transparent; border: 1px solid var(--border);
-  color: var(--ink-2); border-radius: var(--r-md); cursor: pointer; font-size: var(--text-sm);
-}
-.recap-action.primary {
-  background: var(--accent-soft); border-color: rgba(74,158,255,0.35); color: var(--accent);
-}
-
 .recap-hero {
   background: linear-gradient(180deg, #1a1c22 0%, var(--bg-card) 100%);
   border: 1px solid var(--border); border-radius: var(--r-2xl);
