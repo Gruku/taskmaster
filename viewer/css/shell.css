@@ -194,7 +194,7 @@ html, body {
   height: 100vh;
   min-height: 0;
   min-width: 0;
-  padding: var(--sp-8) var(--sp-9);
+  padding: var(--page-pad);
   overflow: hidden;
 }
 

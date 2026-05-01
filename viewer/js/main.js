@@ -88,26 +88,11 @@ async function boot() {
 async function pollBacklogForever() {
   let consecutiveFailures = 0;
   const MAX_BACKOFF_MS = 60_000;
+  let isFirst = true;
 
   while (true) {
-    // Pause polling when the tab is hidden; resume on visibility.
-    if (document.visibilityState === 'hidden') {
-      await new Promise(resolve => {
-        document.addEventListener('visibilitychange', function onVisible() {
-          if (document.visibilityState === 'visible') {
-            document.removeEventListener('visibilitychange', onVisible);
-            resolve();
-          }
-        });
-      });
-    }
-
     try {
-      const yaml = await api.backlogYaml();
-      // Server already returns YAML text; parse client-side via a worker-free approach.
-      // Use jsyaml from CDN (matches existing viewer).
-      await loadJsYaml();
-      store.setBacklog(window.jsyaml.load(yaml));
+      store.setBacklog(await api.backlog());
       consecutiveFailures = 0;
     } catch (e) {
       consecutiveFailures++;
@@ -119,34 +104,9 @@ async function pollBacklogForever() {
       ? Math.min(BACKLOG_POLL_MS * 2 ** (consecutiveFailures - 1), MAX_BACKOFF_MS)
       : BACKLOG_POLL_MS;
     await sleep(delay);
-  }
-}
 
-// Deduplicated jsyaml loader — concurrent callers share the same promise.
-let _jsYamlPromise = null;
-function loadJsYaml() {
-  if (window.jsyaml) return Promise.resolve();
-  if (!_jsYamlPromise) {
-    _jsYamlPromise = new Promise((resolve, reject) => {
-      const s = document.createElement('script');
-      s.src = 'https://cdn.jsdelivr.net/npm/js-yaml@4/dist/js-yaml.min.js';
-      s.onload = resolve;
-      s.onerror = (e) => { _jsYamlPromise = null; reject(e); };
-      document.head.appendChild(s);
-    });
-  }
-  return _jsYamlPromise;
-}
-
-const AUTO_STATE_POLL_MS = 3000;
-
-async function pollAutoStateForever() {
-  let consecutiveFailures = 0;
-  const MAX_BACKOFF_MS = 60_000;
-
-  while (true) {
-    // Pause polling when the tab is hidden; resume on visibility.
-    if (document.visibilityState === 'hidden') {
+    // After the first poll, pause subsequent polls when the tab is hidden.
+    if (!isFirst && document.visibilityState === 'hidden') {
       await new Promise(resolve => {
         document.addEventListener('visibilitychange', function onVisible() {
           if (document.visibilityState === 'visible') {
@@ -156,7 +116,18 @@ async function pollAutoStateForever() {
         });
       });
     }
+    isFirst = false;
+  }
+}
 
+const AUTO_STATE_POLL_MS = 3000;
+
+async function pollAutoStateForever() {
+  let consecutiveFailures = 0;
+  const MAX_BACKOFF_MS = 60_000;
+  let isFirst = true;
+
+  while (true) {
     try {
       const auto = await api.autoState();
       store.setAutoState(auto);
@@ -172,6 +143,19 @@ async function pollAutoStateForever() {
       ? Math.min(AUTO_STATE_POLL_MS * 2 ** (consecutiveFailures - 1), MAX_BACKOFF_MS)
       : AUTO_STATE_POLL_MS;
     await sleep(delay);
+
+    // After the first poll, pause subsequent polls when the tab is hidden.
+    if (!isFirst && document.visibilityState === 'hidden') {
+      await new Promise(resolve => {
+        document.addEventListener('visibilitychange', function onVisible() {
+          if (document.visibilityState === 'visible') {
+            document.removeEventListener('visibilitychange', onVisible);
+            resolve();
+          }
+        });
+      });
+    }
+    isFirst = false;
   }
 }
 

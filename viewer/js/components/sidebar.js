@@ -69,7 +69,8 @@ export function mountSidebar(el, { store, prefs }) {
   // Footer
   const footer = document.createElement('div');
   footer.className = 'sidebar-footer';
-  footer.innerHTML = `<span class="pulse"></span><span>idle</span>`;
+  footer.innerHTML = `<span class="pulse"></span><span></span>`;
+  footer.hidden = true;
   el.appendChild(footer);
 
   // Active sync + aria-current
@@ -94,9 +95,10 @@ export function mountSidebar(el, { store, prefs }) {
 
   // Auto-mode live state → footer pulse + sidebar live-dot on auto_mode link
   const unsubAutoState = store.subscribe('autoState', (auto) => {
-    const running = !!(auto && auto.mode);
+    const running = !!(auto && auto.mode && !auto.stopped);
+    footer.hidden = !running;
     footer.classList.toggle('auto-running', running);
-    footer.querySelector('span:last-child').textContent = running ? 'auto-mode active' : 'idle';
+    footer.querySelector('span:last-child').textContent = running ? 'auto-mode active' : '';
     const link = el.querySelector('.sidebar-link[data-key="auto_mode"]');
     if (link) link.classList.toggle('live', running);
   });

@@ -54,14 +54,14 @@
   --font-mono:        'JetBrains Mono', ui-monospace, Menlo, monospace;
   --font-serif:       'Source Serif Pro', Georgia, serif;
 
-  --text-xs:          15px;
-  --text-sm:          17px;
-  --text-base:        18px;
-  --text-md:          20px;
-  --text-lg:          21px;
-  --text-xl:          24px;
-  --text-2xl:         30px;
-  --text-3xl:         33px;
+  --text-xs:          12px;
+  --text-sm:          14px;
+  --text-base:        16px;
+  --text-md:          17px;
+  --text-lg:          19px;
+  --text-xl:          22px;
+  --text-2xl:         24px;
+  --text-3xl:         28px;
 
   /* Spacing */
   --sp-1:             6px;

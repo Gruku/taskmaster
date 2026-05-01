@@ -46,7 +46,6 @@ export async function getTaskRelated(id) {
 export const api = {
   identity:        ()    => http('GET', '/api/identity'),
   backlog:         ()    => http('GET', '/api/backlog'),
-  backlogYaml:     ()    => http('GET', '/backlog.yaml'),
   prefs:           ()    => http('GET', '/api/viewer/prefs'),
   savePrefs:       (p)   => http('PUT', '/api/viewer/prefs', p),
   autoState:       ()    => http('GET', '/api/auto/state'),
