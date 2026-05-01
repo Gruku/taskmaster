@@ -23,7 +23,9 @@ export async function mount(el, { store }) {
     const list = document.createElement('ul');
     list.style.cssText = 'list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:6px;';
     const tasks = (backlog.tasks || []).filter(t => t.phase === active.id);
-    for (const t of tasks) {
+    const MAX = 8;
+    const shown = tasks.slice(0, MAX);
+    for (const t of shown) {
       const li = document.createElement('li');
       const done = t.status === 'done' || t.status === 'completed';
       li.style.cssText = 'display:flex;gap:8px;align-items:baseline;font-size:12px;';
@@ -31,6 +33,13 @@ export async function mount(el, { store }) {
       list.appendChild(li);
     }
     el.appendChild(list);
+    if (tasks.length > MAX) {
+      const more = document.createElement('a');
+      more.href = '#/kanban';
+      more.style.cssText = 'display:block;margin-top:8px;color:var(--ink-3);font-size:11px;text-decoration:none;';
+      more.textContent = `+${tasks.length - MAX} more →`;
+      el.appendChild(more);
+    }
   }
   render();
   const unsub = store.subscribe ? store.subscribe('backlog', render) : () => {};
