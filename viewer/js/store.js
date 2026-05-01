@@ -5,12 +5,13 @@
 import { getTask, getTaskRelated } from './api.js';
 
 const state = {
-  backlog: null,    // parsed backlog YAML object
-  prefs: null,      // viewer prefs
-  identity: null,   // {root, version}
-  autoState: null,  // populated by Plan 6
-  lessons: null,    // lesson list; populated by lessons.js
-  issues: null,     // issue list; populated by issues.js
+  backlog: null,           // parsed backlog YAML object
+  prefs: null,             // viewer prefs
+  identity: null,          // {root, version}
+  autoState: null,         // populated by Plan 6
+  activeAutoSessionId: null, // currently inspected session in auto-mode page
+  lessons: null,           // lesson list; populated by lessons.js
+  issues: null,            // issue list; populated by issues.js
 };
 
 const subscribers = new Map(); // key → Set<callback>
@@ -23,18 +24,28 @@ function emit(key) {
   }
 }
 
+function emitValue(key, value) {
+  const subs = subscribers.get(key);
+  if (!subs) return;
+  for (const cb of subs) {
+    try { cb(value); } catch (e) { console.error('store sub error', key, e); }
+  }
+}
+
 export const store = {
   getBacklog:  () => state.backlog,
   getPrefs:    () => state.prefs,
   getIdentity: () => state.identity,
-  getAutoState:() => state.autoState,
-  getLessons:  () => state.lessons,
-  getIssues:   () => state.issues,
+  getAutoState:        () => state.autoState,
+  getActiveAutoSession:() => state.activeAutoSessionId,
+  getLessons:          () => state.lessons,
+  getIssues:           () => state.issues,
 
   setBacklog:  (b) => { state.backlog = b;  emit('backlog'); },
   setPrefs:    (p) => { state.prefs = p;    emit('prefs'); },
   setIdentity: (i) => { state.identity = i; emit('identity'); },
   setAutoState:(a) => { state.autoState = a; emit('autoState'); },
+  setActiveAutoSession:(sid) => { state.activeAutoSessionId = sid; emitValue('activeAutoSession', sid); },
   setLessons:  (v) => { state.lessons = v || []; emit('lessons'); },
   setIssues:   (v) => { state.issues = v || [];  emit('issues'); },
 
@@ -75,4 +86,12 @@ export function invalidateTask(id) {
 // The store.setAutoState method is the canonical setter; this is an alias.
 export function setAutoState(next) {
   store.setAutoState(next);
+}
+
+// Named exports for active auto session helpers (Plan 6 M6).
+export function setActiveAutoSession(sid) {
+  store.setActiveAutoSession(sid);
+}
+export function getActiveAutoSession() {
+  return store.getActiveAutoSession();
 }
