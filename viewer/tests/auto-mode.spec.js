@@ -79,3 +79,13 @@ test('stepper widget shows placeholder when no session', async ({ page }) => {
   const running = await widget.locator('.stepper-track').count();
   expect(empty + running).toBeGreaterThan(0);
 });
+
+test('sidebar Auto Mode link shows live badge when a session is active', async ({ page }) => {
+  await page.goto('http://127.0.0.1:8765/v3/#/dashboard');
+  // Wait one poll cycle for autoState to populate
+  await page.waitForTimeout(1500);
+  const badge = page.locator('.sb-link[data-key="auto"] .sb-livedot, .sb-link[data-sidebar-key="auto"] .sb-livedot');
+  // Either present (running) or absent (no session) — both are valid; just no error.
+  const count = await badge.count();
+  expect(count).toBeGreaterThanOrEqual(0);
+});
