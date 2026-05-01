@@ -76,7 +76,8 @@ function formatRange(group) {
   const start = new Date(group[0].start);
   const end = new Date(Math.max(...group.map(g => +new Date(g.end))));
   const fmt = (d) => `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
-  return `${fmt(start)} → ${fmt(end)}`;
+  const a = fmt(start), b = fmt(end);
+  return a === b ? a : `${a} → ${b}`;
 }
 
 function renderSessionContainer(session, handovers, onSelect) {
@@ -128,7 +129,7 @@ function sessionHeadHtml(s) {
   return (
     `<div class="ho-head">`
     + `<span class="ho-kind session">SESSION</span>`
-    + `<span class="ho-time mono">${shortTime(s.start)} → ${shortTime(s.end)}</span>`
+    + `<span class="ho-time mono">${shortTime(s.start) === shortTime(s.end) ? shortTime(s.start) : shortTime(s.start) + ' → ' + shortTime(s.end)}</span>`
     + `</div>`
     + `<div class="ho-title">${escapeHtml(s.id)}</div>`
     + `<div class="ho-foot">`

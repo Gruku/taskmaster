@@ -188,7 +188,7 @@ function renderSessionRail(detail) {
   return (
     `<div class="rr-h">`
     + `<span class="kind-pill session">SESSION</span>`
-    + `<span class="ts">${escapeHtml(s.start)} → ${escapeHtml(s.end)}</span>`
+    + `<span class="ts">${s.start === s.end ? escapeHtml(s.start) : escapeHtml(s.start) + ' → ' + escapeHtml(s.end)}</span>`
     + `<span class="actions">`
     + `<button class="ic-btn" data-role="rail-close" title="Close">✕</button>`
     + `</span></div>`

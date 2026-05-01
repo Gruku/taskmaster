@@ -3,12 +3,12 @@
    No new global tokens are added in screen-specific CSS files. */
 :root {
   /* Surfaces (dark theme — only theme implemented at this stage) */
-  --bg-canvas:        #181a20;
+  --bg-canvas:        #14151a;
   --bg-shell:         #0f1014;
   --bg-panel:         #17181d;
-  --bg-card:          #26262b;
-  --bg-card-hover:    #2c2e34;
-  --bg-board-col:     #1c1d22;
+  --bg-card:          #1f2025;
+  --bg-card-hover:    #25262c;
+  --bg-board-col:     #0f131c;
   --bg-deep:          #0a0c11;          /* console / input recess */
   --bg-issue:         #181a20;          /* slightly cooler than bg-card, per spec §3.14 */
 
@@ -97,7 +97,7 @@
   --ease:             cubic-bezier(0.3, 0.7, 0.4, 1);
 
   /* Layout */
-  --sidebar-w:        300px;
+  --sidebar-w:        220px;
   --rail-w:           720px;            /* right-rail detail surface */
   --page-pad:         20px;
   --page-gap:         16px;
