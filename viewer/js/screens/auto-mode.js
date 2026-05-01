@@ -1,5 +1,7 @@
 import { renderQuestSpine } from '../components/quest-spine.js';
 import { renderFlightLog } from '../components/flight-log.js';
+import { renderSessionsStrip } from '../components/sessions-strip.js';
+import { autoListSessions, autoEvents, autoSession, autoBudget, autoPause as apiAutoPause, autoStop as apiAutoStop } from '../api.js';
 
 export const meta = { title: 'Auto Mode', icon: '◐', sidebarKey: 'auto_mode' };
 
@@ -7,7 +9,7 @@ export async function mount(root, ctx) {
   root.innerHTML = '';
   root.classList.add('auto-page');
 
-  const { store, api, prefs } = ctx;
+  const { store, prefs } = ctx;
 
   const header = document.createElement('div');
   header.className = 'auto-header';
@@ -25,6 +27,9 @@ export async function mount(root, ctx) {
     </div>
   `;
   root.appendChild(header);
+
+  const stripRoot = document.createElement('div');
+  root.appendChild(stripRoot);
 
   const grid = document.createElement('div');
   grid.className = 'auto-grid';
@@ -53,14 +58,46 @@ export async function mount(root, ctx) {
   let cleanup;
   let logPoll = null;
 
+  // Sessions strip state
+  let sessionsList = [];
+  let activeSid = null;
+
+  async function refreshSessions() {
+    sessionsList = await autoListSessions().catch(() => []);
+    if (!activeSid && sessionsList[0]) activeSid = sessionsList[0].session_id;
+    renderSessionsStrip(stripRoot, {
+      sessions: sessionsList,
+      activeSid,
+      onSelect: (sid) => {
+        activeSid = sid;
+        store?.setActiveAutoSession?.(sid);
+        renderSessionsStrip(stripRoot, {
+          sessions: sessionsList,
+          activeSid,
+          onSelect: (s) => {
+            activeSid = s;
+            store?.setActiveAutoSession?.(s);
+            renderSessionsStrip(stripRoot, { sessions: sessionsList, activeSid, onSelect: null });
+            renderActiveView();
+            refreshSidePanels();
+          },
+        });
+        renderActiveView();
+        refreshSidePanels();
+      },
+    });
+  }
+  refreshSessions();
+  const sessionsPoll = setInterval(refreshSessions, 5000);
+
   function startLogPolling() {
     if (logPoll) return;
     logPoll = setInterval(() => {
       if (currentView !== 'B') return;
-      const sid = ctx.store.getAutoState?.()?.session_id;
+      const sid = activeSid ?? store?.getAutoState?.()?.session_id;
       if (!sid) return;
-      ctx.api.autoEvents(sid).then((events) => {
-        const cursorStage = ctx.store.getAutoState?.()?.cursor?.stage ?? null;
+      autoEvents(sid).then((events) => {
+        const cursorStage = store?.getAutoState?.()?.cursor?.stage ?? null;
         cleanup?.();
         cleanup = renderFlightLog(center, { events, cursorStage });
       }).catch(() => {});
@@ -74,14 +111,14 @@ export async function mount(root, ctx) {
     if (currentView === 'A') {
       cleanup = renderQuestSpine(center, state);
     } else {
-      const sid = ctx.store.getAutoState?.()?.session_id;
-      const cursorStage = ctx.store.getAutoState?.()?.cursor?.stage ?? null;
+      const sid = activeSid ?? store?.getAutoState?.()?.session_id;
+      const cursorStage = store?.getAutoState?.()?.cursor?.stage ?? null;
       if (!sid) {
         center.innerHTML = '<div class="flog-empty">No auto-mode session.</div>';
         cleanup = () => { center.innerHTML = ''; };
         return;
       }
-      ctx.api.autoEvents(sid).then((events) => {
+      autoEvents(sid).then((events) => {
         cleanup = renderFlightLog(center, { events, cursorStage });
       }).catch((e) => {
         center.innerHTML = `<div class="flog-empty">Error loading events: ${e.message}</div>`;
@@ -112,10 +149,10 @@ export async function mount(root, ctx) {
   stopBtn.setAttribute('aria-label', 'Stop auto-mode session');
 
   pauseBtn.addEventListener('click', async () => {
-    const sid = store?.getAutoState?.()?.session_id;
+    const sid = activeSid ?? store?.getAutoState?.()?.session_id;
     if (!sid) return;
     try {
-      await api.autoPause(sid);
+      await apiAutoPause(sid);
       store?.refresh?.('autoState');
     } catch (e) {
       console.error('autoPause failed', e);
@@ -123,11 +160,11 @@ export async function mount(root, ctx) {
   });
 
   stopBtn.addEventListener('click', async () => {
-    const sid = store?.getAutoState?.()?.session_id;
+    const sid = activeSid ?? store?.getAutoState?.()?.session_id;
     if (!sid) return;
     if (!confirm(`Stop auto-mode session ${sid}?`)) return;
     try {
-      await api.autoStop(sid);
+      await apiAutoStop(sid);
       store?.refresh?.('autoState');
     } catch (e) {
       console.error('autoStop failed', e);
@@ -150,6 +187,30 @@ export async function mount(root, ctx) {
     });
   }
 
+  // Side panels
+  let leftCleanup = null, rightCleanup = null;
+
+  async function refreshSidePanels() {
+    const { renderLeftPanel, renderRightPanel } = await import('../components/auto-side-panels.js');
+    const sid = activeSid ?? store?.getAutoState?.()?.session_id;
+    if (!sid) {
+      leftCleanup?.(); rightCleanup?.();
+      left.innerHTML = ''; right.innerHTML = '';
+      return;
+    }
+    const [detail, budget] = await Promise.all([
+      autoSession(sid),
+      autoBudget(sid).catch(() => null),
+    ]);
+    if (!detail) return;
+    leftCleanup?.();
+    leftCleanup = renderLeftPanel(left, { state: detail });
+    rightCleanup?.();
+    rightCleanup = renderRightPanel(right, { state: detail, meters: budget?.meters ?? {} });
+  }
+  refreshSidePanels();
+  const panelsPoll = setInterval(refreshSidePanels, 4000);
+
   // Initial render
   renderActiveView();
 
@@ -163,6 +224,10 @@ export async function mount(root, ctx) {
     cleanup?.();
     unsub?.();
     stopLogPolling();
+    clearInterval(sessionsPoll);
+    clearInterval(panelsPoll);
+    leftCleanup?.();
+    rightCleanup?.();
     root.classList.remove('auto-page');
   };
 }
