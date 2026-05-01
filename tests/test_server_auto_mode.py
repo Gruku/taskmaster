@@ -211,3 +211,17 @@ def test_mcp_auto_state_get_round_trip(tmp_path, monkeypatch):
     from backlog_server import auto_state_get
     result = json.loads(auto_state_get())
     assert result["session_id"] == "v3-014"
+
+
+def test_session_detail_includes_hook_counts(running_server, tmp_path):
+    from taskmaster_v3 import AUTO_HOOKS_LOG
+    base, _ = running_server
+    _seed_session(tmp_path, sid="v3-014")
+    AUTO_HOOKS_LOG.parent.mkdir(parents=True, exist_ok=True)
+    AUTO_HOOKS_LOG.write_text(
+        '{"ts":"2026-04-26T18:00:00Z","hook":"PostToolUse","session_id":"v3-014","tool":"Edit","ok":true}\n'
+        '{"ts":"2026-04-26T18:00:01Z","hook":"PreCompact","session_id":"v3-014","ok":true}\n'
+    )
+    body = json.loads(urllib.request.urlopen(f"{base}/api/auto/sessions/v3-014").read())
+    assert body["hook_counts"]["PostToolUse"] == 1
+    assert body["hook_counts"]["PreCompact"] == 1

@@ -107,6 +107,7 @@ from taskmaster_v3 import (
     get_session_detail,
     load_session_snapshot,
     snapshot_diff as _snapshot_diff,
+    read_hook_events as _read_hook_events,
 )
 
 
@@ -4199,6 +4200,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(b'{"ok":false,"error":"not found"}')
                 return
+            state["hook_counts"] = _read_hook_events(sid)
             body = _json.dumps(state).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
