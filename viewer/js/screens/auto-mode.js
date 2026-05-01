@@ -51,6 +51,22 @@ export async function mount(root, ctx) {
 
   let currentView = initialView;
   let cleanup;
+  let logPoll = null;
+
+  function startLogPolling() {
+    if (logPoll) return;
+    logPoll = setInterval(() => {
+      if (currentView !== 'B') return;
+      const sid = ctx.store.getAutoState?.()?.session_id;
+      if (!sid) return;
+      ctx.api.autoEvents(sid).then((events) => {
+        const cursorStage = ctx.store.getAutoState?.()?.cursor?.stage ?? null;
+        cleanup?.();
+        cleanup = renderFlightLog(center, { events, cursorStage });
+      }).catch(() => {});
+    }, 3000);
+  }
+  function stopLogPolling() { clearInterval(logPoll); logPoll = null; }
 
   function renderActiveView() {
     cleanup?.();
@@ -141,9 +157,12 @@ export async function mount(root, ctx) {
     renderActiveView();
   });
 
+  startLogPolling();
+
   return () => {
     cleanup?.();
     unsub?.();
+    stopLogPolling();
     root.classList.remove('auto-page');
   };
 }
