@@ -28,6 +28,9 @@
   --accent:           #4a9eff;
   --accent-2:         #7fb3f0;
   --accent-soft:      rgba(74,158,255,0.10);
+  --accent-blue:      #6ea8ff;            /* secondary blue used in issue card location nums */
+  --accent-edit:      #6ea8ff;            /* dashboard edit-mode chrome */
+  --accent-green:     #5fcdb8;            /* brighter green than --green; used for fresh aging + fixed marks */
 
   /* Status */
   --green:            #5fae6e;

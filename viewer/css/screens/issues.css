@@ -32,7 +32,7 @@
 .issues__sev-chip[data-sev="High"]     { color: var(--sev-high); }
 .issues__sev-chip[data-sev="Medium"]   { color: var(--sev-medium); }
 .issues__sev-chip[data-sev="Low"]      { color: var(--sev-low); }
-.issues__sev-chip.is-active { background: var(--bg-active); }
+.issues__sev-chip.is-active { background: var(--accent-soft); color: var(--ink); border-color: var(--accent); }
 
 .issues__columns {
   display: grid;
@@ -40,7 +40,7 @@
   gap: 16px;
 }
 .issues__column {
-  background: var(--bg-pane);
+  background: var(--bg-panel);
   border-radius: 6px;
   padding: 12px;
   display: flex; flex-direction: column; gap: 10px;
