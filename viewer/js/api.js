@@ -49,7 +49,7 @@ export const api = {
   backlogYaml:     ()    => http('GET', '/backlog.yaml'),
   prefs:           ()    => http('GET', '/api/viewer/prefs'),
   savePrefs:       (p)   => http('PUT', '/api/viewer/prefs', p),
-  autoState:       ()    => http('GET', '/api/auto/state').then(r => r && r.state),
+  autoState:       ()    => http('GET', '/api/auto/state'),
   getTask,
   getTaskRelated,
 

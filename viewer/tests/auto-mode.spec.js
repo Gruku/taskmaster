@@ -106,3 +106,21 @@ test('helper note shows on first visit and disappears after dismiss', async ({ p
   await page.goto('http://127.0.0.1:8765/v3/#/auto');
   await expect(page.locator('.auto-helper-note')).toHaveCount(0);
 });
+
+test('Spine renders 5 nodes when a session has a cursor', async ({ page }) => {
+  // Seed via the API
+  await page.request.put('http://127.0.0.1:8765/api/viewer/prefs', {
+    data: { screens: { auto_mode: { view: 'A', helper_dismissed: true } } },
+  });
+  // The dev fixture must include a session for this assertion. If not present, skip.
+  const sess = await page.request.get('http://127.0.0.1:8765/api/auto/state');
+  const body = await sess.json();
+  if (body.running === false) test.skip();
+
+  await page.goto('http://127.0.0.1:8765/v3/#/auto');
+  const nodes = page.locator('.spine-node');
+  await expect(nodes).toHaveCount(5);
+
+  // Active node has class --active
+  await expect(page.locator('.spine-node--active')).toHaveCount(1);
+});
