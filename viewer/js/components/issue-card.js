@@ -32,6 +32,20 @@ export function issueCard(issue, { tasksIndex = {}, agingCfg, onTaskClick } = {}
   card.className = 'issue-card';
   card.setAttribute('data-issue-id', issue.id);
   card.setAttribute('data-status', issue.status || 'open');
+  card.setAttribute('role', 'link');
+  card.setAttribute('tabindex', '0');
+
+  const navigate = () => { location.hash = `#/issue/${encodeURIComponent(issue.id)}`; };
+  card.addEventListener('click', (ev) => {
+    if (ev.target.closest('.issue-card__task-pill')) return;
+    if (ev.target.closest('summary')) return;
+    if (ev.target.closest('a')) return;
+    navigate();
+  });
+  card.addEventListener('keydown', (ev) => {
+    if (ev.target !== card) return;
+    if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); navigate(); }
+  });
 
   // ---- head: glyph · id · title · sev chip · blocks chip
   const head = document.createElement('div');
@@ -115,7 +129,7 @@ export function issueCard(issue, { tasksIndex = {}, agingCfg, onTaskClick } = {}
     const p = document.createElement('span');
     p.className = 'issue-card__task-pill';
     p.textContent = tid;
-    p.addEventListener('click', () => onTaskClick?.(tid));
+    p.addEventListener('click', (ev) => { ev.stopPropagation(); onTaskClick?.(tid); });
     pills.appendChild(p);
   }
   footer.appendChild(pills);

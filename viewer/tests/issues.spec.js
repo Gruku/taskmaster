@@ -65,3 +65,32 @@ test('blocks chip appears when issue blocks non-done tasks', async ({ page }) =>
   if (await chip.count() === 0) test.skip();
   await expect(chip).toHaveText(/⊘ blocks \d+/);
 });
+
+test('issue card click navigates to issue detail', async ({ page }) => {
+  await page.goto('/v3/#/issues');
+  const card = page.locator('.issue-card').first();
+  const id = await card.getAttribute('data-issue-id');
+  await card.locator('.issue-card__title').click();
+  await page.waitForURL(`**/#/issue/${id}`);
+  await expect(page.locator('.issue-detail .id-title')).toBeVisible();
+  await expect(page.locator('.issue-detail .id-id')).toHaveText(id);
+});
+
+test('issue card task pill click does NOT trigger card-level navigation', async ({ page }) => {
+  await page.goto('/v3/#/issues');
+  const pill = page.locator('.issue-card__task-pill').first();
+  if (await pill.count() === 0) test.skip();
+  const tid = (await pill.textContent()).trim();
+  await pill.click();
+  await expect(page).toHaveURL(new RegExp(`#/task/${tid}`));
+});
+
+test('issue detail back link returns to issues list', async ({ page }) => {
+  await page.goto('/v3/#/issues');
+  const id = await page.locator('.issue-card').first().getAttribute('data-issue-id');
+  await page.goto(`/v3/#/issue/${id}`);
+  await expect(page.locator('.issue-detail')).toBeVisible();
+  await page.locator('.issue-detail .id-back').click();
+  await page.waitForURL('**/#/issues');
+  await expect(page.locator('.issues')).toBeVisible();
+});

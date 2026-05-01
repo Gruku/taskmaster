@@ -4367,6 +4367,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 summary = {k: v for k, v in issue.items() if k != "_body"}
                 summary["severity_label"] = severity_label(summary.get("severity", "P2"))
                 summary["aging"] = compute_issue_aging(issue, aging_cfg)
+                summary["summary"] = (issue.get("_body") or "").strip()
                 issues.append(summary)
             self._send_json(200, {"issues": issues})
             return
@@ -4847,6 +4848,7 @@ def issue_list_extended(include_resolved: bool = True) -> str:
         summary = {k: v for k, v in issue.items() if k != "_body"}
         summary["severity_label"] = severity_label(summary.get("severity", "P2"))
         summary["aging"] = compute_issue_aging(issue, aging_cfg)
+        summary["summary"] = (issue.get("_body") or "").strip()
         out.append(summary)
     return _json.dumps({"issues": out}, indent=2, default=str)
 
