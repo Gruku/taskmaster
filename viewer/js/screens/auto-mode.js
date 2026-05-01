@@ -1,4 +1,5 @@
 import { renderQuestSpine } from '../components/quest-spine.js';
+import { renderFlightLog } from '../components/flight-log.js';
 
 export const meta = { title: 'Auto Mode', icon: '◐', sidebarKey: 'auto_mode' };
 
@@ -57,9 +58,19 @@ export async function mount(root, ctx) {
     if (currentView === 'A') {
       cleanup = renderQuestSpine(center, state);
     } else {
-      // Log view added in Task 31. Empty placeholder for now.
-      center.innerHTML = '<div class="flog-empty">Log view loading…</div>';
-      cleanup = () => { center.innerHTML = ''; };
+      const sid = ctx.store.getAutoState?.()?.session_id;
+      const cursorStage = ctx.store.getAutoState?.()?.cursor?.stage ?? null;
+      if (!sid) {
+        center.innerHTML = '<div class="flog-empty">No auto-mode session.</div>';
+        cleanup = () => { center.innerHTML = ''; };
+        return;
+      }
+      ctx.api.autoEvents(sid).then((events) => {
+        cleanup = renderFlightLog(center, { events, cursorStage });
+      }).catch((e) => {
+        center.innerHTML = `<div class="flog-empty">Error loading events: ${e.message}</div>`;
+        cleanup = () => { center.innerHTML = ''; };
+      });
     }
   }
 
