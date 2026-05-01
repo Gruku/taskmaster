@@ -2,9 +2,11 @@
 .dash {
   --dash-rail-w: 220px;
   --dash-board-min: 520px;
-  --dash-card-bg: var(--bg-card);
-  --dash-card-bg-edit: color-mix(in oklab, var(--bg-card) 92%, transparent);
-  --dash-card-border: var(--line-1);
+  --dash-gap: var(--page-gap);
+  --dash-pad: var(--page-pad);
+  --dash-card-bg: var(--bg-panel);
+  --dash-card-bg-edit: color-mix(in oklab, var(--bg-panel) 92%, transparent);
+  --dash-card-border: #2c2d33;
   --dash-card-border-edit: 1px dashed var(--accent-edit, #6ea8ff);
   --dash-board-bg: linear-gradient(180deg, #161b24 0%, #181d28 100%);
   --dash-board-grid-mask: repeating-linear-gradient(
@@ -26,10 +28,10 @@
   font-family: var(--font-serif, 'Source Serif Pro', Georgia, serif);
   font-style: italic;
   font-size: 16px;
-  color: var(--ink-1);
+  color: var(--ink);
   padding: 10px 4px;
 }
-.dash-briefing__sentence em { color: var(--ink-0); font-style: italic; }
+.dash-briefing__sentence em { color: var(--ink); font-style: italic; }
 .dash-briefing__meta {
   font-family: var(--font-mono);
   font-style: normal;
@@ -43,7 +45,7 @@
   padding: 2px 8px; border-radius: 4px;
   background: var(--bg-deep); color: var(--ink-2);
   font-family: var(--font-mono); font-size: 11px; font-style: normal;
-  border: 1px solid var(--line-1);
+  border: 1px solid var(--border-strong);
 }
 
 .dash-automode { /* Slot for Plan 2's auto-mode-strip; only renders when ≥1 task running */ }
@@ -64,7 +66,7 @@
   position: relative;
   border-radius: 12px;
   background: var(--dash-board-bg);
-  border: 1px solid var(--line-1);
+  border: 1px solid var(--border-strong);
   padding: 14px 14px 18px;
   min-height: 320px;
   isolation: isolate;
@@ -84,7 +86,7 @@
 }
 .dash-board__title {
   font-family: var(--font-serif); font-style: italic;
-  font-size: 14px; color: var(--ink-1);
+  font-size: 14px; color: var(--ink);
 }
 .dash-board__cols {
   display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
@@ -95,12 +97,12 @@
 }
 .dash-board__expand,
 .dash-board__open {
-  background: transparent; border: 1px solid var(--line-1);
+  background: transparent; border: 1px solid var(--border-strong);
   color: var(--ink-2); font-size: 11px; padding: 4px 8px; border-radius: 6px;
   cursor: pointer;
 }
 .dash-board__expand:hover,
-.dash-board__open:hover { color: var(--ink-0); border-color: var(--ink-3); }
+.dash-board__open:hover { color: var(--ink); border-color: var(--ink-3); }
 
 .dash-bottom {
   display: grid;
@@ -119,7 +121,7 @@
 .widget {
   background: var(--dash-card-bg);
   border: 1px solid var(--dash-card-border);
-  border-radius: 10px;
+  border-radius: 8px;
   display: flex; flex-direction: column;
   min-height: 80px;
   position: relative;
@@ -155,7 +157,7 @@
   display: none; align-items: center; justify-content: center;
   border-radius: 4px; cursor: grab;
   font-size: 11px; color: var(--ink-2);
-  background: var(--bg-deep); border: 1px solid var(--line-1);
+  background: var(--bg-deep); border: 1px solid var(--border-strong);
 }
 .widget__drag { left: 6px; }
 .widget__remove { right: 6px; cursor: pointer; color: #e87a85; }
@@ -172,17 +174,17 @@
   font-family: var(--font-sans);
 }
 .dash[data-edit='1'] .dash-add-tile { display: flex; }
-.dash-add-tile:hover { color: var(--ink-1); border-color: var(--ink-1); }
+.dash-add-tile:hover { color: var(--ink); border-color: var(--ink); }
 
 .dash-edit-toggle {
   align-self: flex-end;
   padding: 6px 10px; border-radius: 6px;
   background: transparent; color: var(--ink-2);
-  border: 1px solid var(--line-1);
+  border: 1px solid var(--border-strong);
   font-size: 12px; cursor: pointer;
 }
 .dash-edit-toggle[aria-pressed='true'] {
-  color: var(--ink-0);
+  color: var(--ink);
   border-color: var(--accent-edit, #6ea8ff);
   background: color-mix(in oklab, var(--accent-edit, #6ea8ff) 12%, transparent);
 }
@@ -190,7 +192,7 @@
 /* ===== Add-widget picker ===== */
 .dash-picker {
   position: absolute; z-index: 30;
-  background: var(--bg-card); border: 1px solid var(--line-1);
+  background: var(--bg-card); border: 1px solid var(--border-strong);
   border-radius: 8px; padding: 6px;
   display: grid; grid-template-columns: repeat(2, 200px); gap: 4px;
   box-shadow: 0 8px 24px rgba(0,0,0,0.45);
@@ -198,7 +200,7 @@
 .dash-picker__item {
   display: flex; flex-direction: column; gap: 2px;
   padding: 8px 10px; border-radius: 6px;
-  background: transparent; color: var(--ink-1); cursor: pointer;
+  background: transparent; color: var(--ink); cursor: pointer;
   border: none; text-align: left; font-family: var(--font-sans);
 }
 .dash-picker__item:hover { background: var(--bg-deep); }
