@@ -87,7 +87,7 @@ html, body {
 }
 .sidebar-link.live .badge::before {
   content: '●';
-  color: var(--accent);
+  color: var(--green);
   margin-right: 6px;
   animation: pulse 1.6s ease-in-out infinite;
 }
