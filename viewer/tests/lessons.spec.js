@@ -34,12 +34,13 @@ test('reinforce button bumps count via API', async ({ page }) => {
 
 test('view toggle persists to prefs', async ({ page }) => {
   await page.goto('/v3/#/lessons');
-  await page.locator('.lessons__view-toggle button[data-view="B"]').click();
-  await expect(page.locator('.lessons__view-toggle button[data-view="B"]')).toHaveClass(/is-active/);
+  // Topbar segmented control (tm-segmented uses data-key, not data-view)
+  await page.locator('.tm-segmented button[data-key="B"]').click();
+  await expect(page.locator('.tm-segmented button[data-key="B"]')).toHaveClass(/on|is-active/);
   // Wait for the 400ms prefs debounce to flush before reload
   await page.waitForTimeout(600);
   await page.reload();
-  await expect(page.locator('.lessons__view-toggle button[data-view="B"]')).toHaveClass(/is-active/);
+  await expect(page.locator('.tm-segmented button[data-key="B"]')).toHaveClass(/on|is-active/);
 });
 
 test('lesson card surfaces all §3.13 elements', async ({ page }) => {
@@ -50,12 +51,12 @@ test('lesson card surfaces all §3.13 elements', async ({ page }) => {
   await expect(card.locator('.lesson-card__kind')).toHaveText(/^(⚠|◇|⊘)$/);
   // anchor pills with When: label
   await expect(card.locator('.anchor-pills__label')).toHaveText('When:');
-  // first_seen caption
-  await expect(card.locator('.lesson-card__since')).toBeVisible();
-  // active signal: sparkline pill with count
-  await expect(card.locator('.sparkline-pill .sparkline-count')).toBeVisible();
-  // passive signal: dot meter
-  await expect(card.locator('.dot-meter')).toBeVisible();
+  // active signal: sparkline pill with count, in head row
+  await expect(card.locator('.lesson-card__head .sparkline-pill .sparkline-count')).toBeVisible();
+  // passive signal: dot meter, on anchors row
+  await expect(card.locator('.lesson-card__anchors-row .dot-meter')).toBeVisible();
+  // foot row: reinforce-count
+  await expect(card.locator('.lesson-card__foot .lesson-card__fired')).toBeVisible();
 });
 
 test('core shelf shows gold styling on ID', async ({ page }) => {

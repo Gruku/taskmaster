@@ -4342,6 +4342,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
                     continue
                 summary = {k: v for k, v in lesson.items() if k != "_body"}
                 summary["shelf"] = compute_lesson_shelf(lesson, thresholds)
+                summary["summary"] = (lesson.get("_body") or "").strip()
                 lessons.append(summary)
             self._send_json(200, {"lessons": lessons})
             return
@@ -4820,6 +4821,7 @@ def lesson_list_extended() -> str:
             continue
         summary = {k: v for k, v in lesson.items() if k != "_body"}
         summary["shelf"] = compute_lesson_shelf(lesson, thresholds)
+        summary["summary"] = (lesson.get("_body") or "").strip()
         out.append(summary)
     return _json.dumps({"lessons": out}, indent=2, default=str)
 

@@ -4,15 +4,9 @@ import { anchorPills } from './anchor-pills.js';
 
 const KIND_ICON = { gotcha: '⚠', pattern: '◇', 'anti-pattern': '⊘' };
 const KIND_TOOLTIP = { gotcha: 'gotcha', pattern: 'pattern', 'anti-pattern': 'anti-pattern' };
-
-function _fmtSince(iso) {
-  if (!iso) return '';
-  const d = new Date(iso);
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-}
+const FOOT_PILLS_MAX = 3;
 
 function _matches7d(lesson) {
-  // Best-effort passive count if the server provides it; fall back to 0.
   return Number(lesson.anchor_matches_7d || 0);
 }
 
@@ -22,7 +16,7 @@ export function lessonCard(lesson, { onReinforce } = {}) {
   card.className = `lesson-card lesson-card--${shelf}`;
   card.setAttribute('data-lesson-id', lesson.id);
 
-  // ---- head: kind icon · id · title · since
+  // ---- head: kind · id · sparkline (right)
   const head = document.createElement('div');
   head.className = 'lesson-card__head';
 
@@ -37,30 +31,64 @@ export function lessonCard(lesson, { onReinforce } = {}) {
   id.textContent = lesson.id;
   head.appendChild(id);
 
-  const title = document.createElement('span');
-  title.className = 'lesson-card__title';
-  title.textContent = lesson.title || '(untitled)';
-  head.appendChild(title);
+  const spark = sparkline(lesson);
+  spark.classList.add('lesson-card__spark');
+  head.appendChild(spark);
 
   card.appendChild(head);
 
-  // first_seen caption
-  const since = document.createElement('div');
-  since.className = 'lesson-card__since';
-  since.textContent = lesson.created ? `since ${_fmtSince(lesson.created)}` : '';
-  card.appendChild(since);
+  // ---- title (own row)
+  const title = document.createElement('div');
+  title.className = 'lesson-card__title';
+  title.textContent = lesson.title || '(untitled)';
+  card.appendChild(title);
 
-  // ---- signals row: passive (left, dot meter) · active (right, sparkline pill)
-  const signals = document.createElement('div');
-  signals.className = 'lesson-card__signals';
-  signals.appendChild(dotMeter(_matches7d(lesson)));
-  signals.appendChild(sparkline(lesson));
-  card.appendChild(signals);
+  // ---- summary (only if present)
+  const summaryText = (lesson.summary || '').trim();
+  if (summaryText) {
+    const summary = document.createElement('div');
+    summary.className = 'lesson-card__summary';
+    summary.textContent = summaryText;
+    card.appendChild(summary);
+  }
 
-  // ---- anchors row
-  card.appendChild(anchorPills(lesson));
+  // ---- anchors row: pills (left) + passive dot-meter (right)
+  const anchorsRow = document.createElement('div');
+  anchorsRow.className = 'lesson-card__anchors-row';
+  anchorsRow.appendChild(anchorPills(lesson));
+  const meter = dotMeter(_matches7d(lesson));
+  meter.classList.add('lesson-card__passive');
+  anchorsRow.appendChild(meter);
+  card.appendChild(anchorsRow);
 
-  // ---- reinforce button
+  // ---- foot: related_tasks pills + "N× fired"
+  const foot = document.createElement('div');
+  foot.className = 'lesson-card__foot';
+
+  const tasks = Array.isArray(lesson.related_tasks) ? lesson.related_tasks : [];
+  const visibleTasks = tasks.slice(0, FOOT_PILLS_MAX);
+  for (const t of visibleTasks) {
+    const pill = document.createElement('span');
+    pill.className = 'lesson-card__task-pill';
+    pill.textContent = typeof t === 'string' ? t : (t.id || '');
+    foot.appendChild(pill);
+  }
+  if (tasks.length > FOOT_PILLS_MAX) {
+    const more = document.createElement('span');
+    more.className = 'lesson-card__task-more';
+    more.textContent = `+${tasks.length - FOOT_PILLS_MAX} more`;
+    foot.appendChild(more);
+  }
+
+  const fired = document.createElement('span');
+  fired.className = 'lesson-card__fired';
+  const ct = lesson.reinforce_count || 0;
+  fired.innerHTML = `<strong>${ct}</strong>× fired`;
+  foot.appendChild(fired);
+
+  card.appendChild(foot);
+
+  // ---- reinforce button (hover-revealed corner action)
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'lesson-card__reinforce';
@@ -73,10 +101,7 @@ export function lessonCard(lesson, { onReinforce } = {}) {
       const summary = await onReinforce?.(lesson.id);
       btn.classList.add('is-fired');
       btn.textContent = '✓ Reinforced now';
-      if (summary) {
-        // Update local lesson view in-place
-        Object.assign(lesson, summary);
-      }
+      if (summary) Object.assign(lesson, summary);
     } catch (e) {
       btn.disabled = false;
       btn.textContent = 'Failed — retry';

@@ -106,8 +106,9 @@ export async function mount(root, { store, prefs }) {
       sec.className = `lessons-shelf lessons-shelf--${shelf.key}`;
       sec.innerHTML = `
         <header class="lessons-shelf__header">
-          <span>${shelf.title} · ${items.length}</span>
+          <span class="lessons-shelf__name">${shelf.title}</span>
           <span class="lessons-shelf__tagline">${shelf.tagline}</span>
+          <span class="lessons-shelf__count">${items.length} lesson${items.length === 1 ? '' : 's'}</span>
         </header>`;
       const grid = document.createElement('div');
       grid.className = 'lessons-shelf__grid';
@@ -124,7 +125,9 @@ export async function mount(root, { store, prefs }) {
     sec.className = 'lessons-shelf lessons-shelf--flat';
     sec.innerHTML = `
       <header class="lessons-shelf__header">
-        <span>All lessons · ${lessons.length}</span>
+        <span class="lessons-shelf__name">All lessons</span>
+        <span class="lessons-shelf__tagline"></span>
+        <span class="lessons-shelf__count">${lessons.length} lesson${lessons.length === 1 ? '' : 's'}</span>
       </header>`;
     const grid = document.createElement('div');
     grid.className = 'lessons-shelf__grid';
@@ -149,7 +152,9 @@ export async function mount(root, { store, prefs }) {
       sec.className = 'lessons-shelf';
       sec.innerHTML = `
         <header class="lessons-shelf__header">
-          <code>${key}</code><span class="lessons-shelf__tagline">${groups.get(key).length} lessons</span>
+          <code class="lessons-shelf__name">${key}</code>
+          <span class="lessons-shelf__tagline"></span>
+          <span class="lessons-shelf__count">${groups.get(key).length} lesson${groups.get(key).length === 1 ? '' : 's'}</span>
         </header>`;
       const grid = document.createElement('div');
       grid.className = 'lessons-shelf__grid';
