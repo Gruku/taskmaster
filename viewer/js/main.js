@@ -2,6 +2,7 @@ import { api } from './api.js';
 import { store } from './store.js';
 import { init as routerInit, registerScreen } from './router.js';
 import { mountSidebar } from './components/sidebar.js';
+import { mountAutoStatus } from './components/auto-status.js';
 
 const BACKLOG_POLL_MS = 3000;
 const PREFS_DEBOUNCE_MS = 400;
@@ -68,6 +69,9 @@ async function boot() {
 
   // Mount sidebar
   mountSidebar(document.getElementById('sidebar'), { store, prefs });
+
+  // Mount header auto-status pill (visible on every screen when auto-mode is running)
+  mountAutoStatus(document.getElementById('topbar-actions'), { store });
 
   // Init router
   routerInit({

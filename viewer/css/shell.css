@@ -228,4 +228,27 @@ html, body {
   min-width: 0;
 }
 
+/* ── Header auto-status pill ── */
+.auto-status-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: rgba(95, 174, 110, 0.10);
+  border: 1px solid rgba(95, 174, 110, 0.30);
+  color: var(--ink);
+  border-radius: 999px;
+  padding: 4px 10px 4px 8px;
+  font-size: 11px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.auto-status-pill:hover  { background: rgba(95,174,110,0.16); border-color: rgba(95,174,110,0.45); }
+.auto-status-pill:focus-visible { outline: 1px solid var(--green); outline-offset: 2px; }
+.auto-status-pill[hidden] { display: none; }
+.auto-status-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--green);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+.auto-status-text { color: var(--ink); }
+
 /* Stub screen — see _placeholders.css */

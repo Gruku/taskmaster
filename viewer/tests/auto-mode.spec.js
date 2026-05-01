@@ -140,3 +140,16 @@ test('clicking Stop shows confirm and posts to /api/auto/stop', async ({ page })
   await page.waitForTimeout(200);
   expect(posted).toBeTruthy();
 });
+
+test('header auto-status pill is hidden when no session and visible when running', async ({ page }) => {
+  await page.goto('http://127.0.0.1:8765/v3/#/dashboard');
+  const pill = page.locator('.auto-status-pill');
+  // Either hidden (no session) or visible (fixture session running) — assert state matches /api/auto/state
+  const sess = await page.request.get('http://127.0.0.1:8765/api/auto/state');
+  const body = await sess.json();
+  if (body.running === false || !body.cursor) {
+    await expect(pill).toBeHidden();
+  } else {
+    await expect(pill).toBeVisible();
+  }
+});
