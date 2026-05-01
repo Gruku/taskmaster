@@ -40,6 +40,7 @@ export function renderQuestSpine(root, state) {
   if (!state || !state.cursor) {
     const empty = document.createElement('div');
     empty.className = 'spine-empty';
+    empty.setAttribute('role', 'status');
     empty.textContent = 'No auto-mode session is running.';
     root.appendChild(empty);
     return () => { root.innerHTML = ''; };
