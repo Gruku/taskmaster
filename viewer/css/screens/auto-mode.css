@@ -87,7 +87,14 @@
 .spine-node--active .spine-node-circle {
   fill: rgba(74,158,255,0.18); stroke: var(--accent); stroke-width: 2px;
   filter: drop-shadow(0 0 6px rgba(74,158,255,0.55));
-  animation: pulse 1.6s ease-in-out infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: spine-active-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes spine-active-pulse {
+  0%, 100% { transform: scale(1);    opacity: 1; }
+  50%      { transform: scale(1.11); opacity: 0.85; }
 }
 .spine-node--pending .spine-node-circle { opacity: 0.4; }
 .spine-node-label {
