@@ -146,7 +146,7 @@ At any stage, you may halt with `backlog_auto_complete_task(status="failed", fai
 | `crashed` | Tooling/environment broke; investigation needed |
 | `user-aborted` | User explicitly said stop |
 
-After failure, write a handover stub via `backlog_handover_create(session_kind="crash-recovery")` describing where you stopped and what's broken, so the next session can resume. Halt — don't attempt the next stage.
+After failure, invoke `taskmaster:handover` with `session_kind="context-handoff"` describing where you stopped and what's broken, so the next session can resume. Halt — don't attempt the next stage.
 
 ## What this skill does NOT do
 

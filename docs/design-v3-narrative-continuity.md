@@ -209,7 +209,7 @@ tldr: "Login page wired up; OAuth pending; blocked on legal review of session st
 next_action: "Resume T-001 IMPLEMENT once legal confirms cookie scope."
 task_ids: [features-001]
 context_size_at_write: "320k"      # optional — flags handovers written near compaction
-session_kind: end-of-day           # end-of-day | context-handoff | crash-recovery | auto-stage
+session_kind: end-of-day           # end-of-day | context-handoff | milestone-complete | pivot | exploration | auto-stage
 ---
 
 ## Decisions

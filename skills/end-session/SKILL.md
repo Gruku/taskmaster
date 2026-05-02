@@ -27,7 +27,8 @@ Check `backlog_status` for `schema_version`. If `>= 3`, run these BEFORE the exi
    - A task is still in flight (status `in-progress` or `auto/state.json` cursor non-null).
    - User said anything like "for tomorrow", "remind me next time", "context handoff", "pick this up later".
 
-If offering, present:
+If offering, ask:
+
    ```
    AskUserQuestion({
      questions: [{
@@ -35,20 +36,16 @@ If offering, present:
        header: "Handover",
        multiSelect: false,
        options: [
-         { label: "Yes, end-of-day handover", description: "Standard wrap-up, latest will surface on next start-session" },
-         { label: "Yes, context handoff", description: "I'm near compaction or hitting context limit — flag this as such" },
+         { label: "Yes, end-of-day handover", description: "Standard wrap-up" },
+         { label: "Yes, context handoff", description: "Near compaction — flag this as such" },
+         { label: "Yes, milestone-complete", description: "Chunk done, next chunk ready to dispatch" },
          { label: "Skip", description: "Lightweight session, no handover needed" }
        ]
      }]
    })
    ```
 
-If user picks yes:
-   - Generate a draft body with four sections (## Decisions, ## Blockers, ## Where I'd start, ## Open threads) from conversation context.
-   - Generate tldr (one line) and next_action (one line).
-   - Show draft to user, ask for confirmation/edits.
-   - Call `backlog_handover_create(tldr=..., next_action=..., body=..., task_ids=[...], session_kind=<chosen>)`.
-   - The created handover id will surface at the next session start via `backlog_handover_latest`.
+If user picks yes, **invoke the `taskmaster:handover` skill** with the chosen `session_kind`. End-session does NOT draft the body itself — the handover skill owns tier selection, auto-extraction, and supersession chaining. End-session continues regardless of the handover skill's outcome.
 
 ### Existing flow
 
@@ -146,4 +143,4 @@ See `references/task-lifecycle.md` for the full state machine. Key point: `in-re
 
 If `backlog_auto_status` reports an active run, do NOT call `backlog_complete_task` directly — that's the auto-task skill's job at its END_SESSION stage. Instead, defer to the auto run:
 - If auto-task is currently driving the session, end-session is being called as part of that flow. Proceed with the v3-pre-steps above (snapshot + handover) and otherwise let auto-task handle the task transition.
-- If the user invokes /end-session manually mid-auto-run, ask: "There's an active auto run on `<target>`. Pause and write a handover, or abort the run?" — `backlog_auto_abort` clears the state, `backlog_handover_create(session_kind="crash-recovery")` preserves it.
+- If the user invokes /end-session manually mid-auto-run, ask: "There's an active auto run on `<target>`. Pause and write a handover, or abort the run?" — `backlog_auto_abort` clears the state, invoking `taskmaster:handover` with `session_kind="context-handoff"` preserves it.
