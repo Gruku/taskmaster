@@ -60,6 +60,16 @@ export async function mount(root, ctx) {
   topbar?.appendChild(pauseBtn);
   topbar?.appendChild(stopBtn);
 
+  let currentView = initialView;
+  let cleanup;
+  let logPoll = null;
+
+  // Sessions strip state — declared BEFORE syncRunControls reads activeSid.
+  // Otherwise the initial syncRunControls() call below hits a TDZ
+  // ReferenceError that aborts mount and leaves the auto-page blank.
+  let sessionsList = [];
+  let activeSid = null;
+
   // Reflect run-state on pause/stop. The auto-state schema doesn't carry an
   // explicit status, so we infer: a state with a cursor on the active session
   // is "running"; an explicit "paused" flag suppresses pause; otherwise we
@@ -79,14 +89,6 @@ export async function mount(root, ctx) {
     stopBtn.title = noSession ? 'No active auto-mode session' : 'Stop auto-mode session';
   }
   syncRunControls();
-
-  let currentView = initialView;
-  let cleanup;
-  let logPoll = null;
-
-  // Sessions strip state
-  let sessionsList = [];
-  let activeSid = null;
 
   async function refreshSessions() {
     sessionsList = await autoListSessions().catch(() => []);
