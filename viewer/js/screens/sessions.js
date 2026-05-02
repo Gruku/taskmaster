@@ -139,10 +139,15 @@ function render(root, state, rail) {
     return;
   }
 
-  // Filter + map for timeline.
-  const filtered = _filteredSessions(state);
+  // Search dims non-matching sessions so the timeline keeps its rhythm;
+  // kind-chip toggles still hide rows entirely.
+  const matched = _filteredSessions(state);
+  const matchedIds = new Set(matched.map(s => s.id));
+  const dimmedIds = state.searchTerm
+    ? state.sessions.filter(s => !matchedIds.has(s.id)).map(s => s.id)
+    : [];
   const visibleSessions = state.kinds.session
-    ? filtered.map(s => ({
+    ? state.sessions.map(s => ({
         ...s,
         handover_ids: state.kinds.handover ? (s.handover_ids || []) : [],
         recap_id: state.kinds.recap ? s.recap_id : null,
@@ -150,7 +155,7 @@ function render(root, state, rail) {
     : [];
 
   const handovers = {}; // id → {viewer_kind, tldr}
-  for (const s of filtered) {
+  for (const s of state.sessions) {
     for (const hid of s.handover_ids || []) {
       handovers[hid] = handovers[hid] || { id: hid, viewer_kind: 'standalone', tldr: '' };
     }
@@ -162,6 +167,7 @@ function render(root, state, rail) {
     sessions: visibleSessions,
     handovers,
     independent,
+    dimmedIds,
     onSelect: ({ kind, id }) => {
       if (kind === 'session')  return openSessionDetail(rail, id, state);
       if (kind === 'handover') return openHandoverDetail(rail, id, state);

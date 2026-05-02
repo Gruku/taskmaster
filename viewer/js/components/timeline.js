@@ -39,10 +39,11 @@ export function clusterParallelSessions(sessions) {
  *    independent: flat handover items not tied to a session
  *  Returns a cleanup function.
  */
-export function renderTimeline(root, { sessions, handovers, independent, onSelect }) {
+export function renderTimeline(root, { sessions, handovers, independent, onSelect, dimmedIds }) {
   root.innerHTML = '';
   const wrapper = document.createElement('div');
   wrapper.className = 'tl';
+  const dim = dimmedIds instanceof Set ? dimmedIds : new Set(dimmedIds || []);
   const groups = clusterParallelSessions(sessions);
 
   for (const group of groups) {
@@ -56,11 +57,11 @@ export function renderTimeline(root, { sessions, handovers, independent, onSelec
       const grid = document.createElement('div');
       grid.className = 'par-grid';
       grid.style.gridTemplateColumns = `repeat(${group.length}, 1fr)`;
-      for (const s of group) grid.appendChild(renderSessionContainer(s, handovers, onSelect));
+      for (const s of group) grid.appendChild(renderSessionContainer(s, handovers, onSelect, dim.has(s.id)));
       par.appendChild(grid);
       wrapper.appendChild(par);
     } else {
-      wrapper.appendChild(renderSessionContainer(group[0], handovers, onSelect));
+      wrapper.appendChild(renderSessionContainer(group[0], handovers, onSelect, dim.has(group[0].id)));
     }
   }
 
@@ -80,9 +81,9 @@ function formatRange(group) {
   return a === b ? a : `${a} → ${b}`;
 }
 
-function renderSessionContainer(session, handovers, onSelect) {
+function renderSessionContainer(session, handovers, onSelect, dimmed) {
   const c = document.createElement('div');
-  c.className = 'ses-container';
+  c.className = 'ses-container' + (dimmed ? ' is-dimmed' : '');
 
   const ho = document.createElement('div');
   ho.className = 'ho';

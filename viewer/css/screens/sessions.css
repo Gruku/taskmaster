@@ -35,7 +35,9 @@
 /* timeline.js renders into `.tl` */
 .tl { display: flex; flex-direction: column; gap: var(--sp-5); }
 
-.ses-container { margin-bottom: var(--sp-6); }
+.ses-container { margin-bottom: var(--sp-6); transition: opacity 120ms ease; }
+.ses-container.is-dimmed { opacity: 0.28; }
+.ses-container.is-dimmed .ho { pointer-events: none; }
 
 .ho {
   background: var(--bg-panel); border: 1px solid var(--border);
