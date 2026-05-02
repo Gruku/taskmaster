@@ -1,6 +1,17 @@
 // Italic-serif "Welcome back…" strip per spec §3.4.
 // Pulls counts from /api/dashboard/recent-events; falls back to a calm placeholder while loading.
 
+const escapeAttr = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+function renderPhasePips(phases) {
+  if (!phases || !phases.length) return '';
+  return phases.map(p => {
+    const status = p.status || 'future';
+    return `<span class="dash-briefing__pip dash-briefing__pip--${escapeAttr(status)}" title="${escapeAttr(p.name)} · ${escapeAttr(status)}"></span>`;
+  }).join('');
+}
+
 export function createBriefingStrip({ store, api, prefs }) {
   const root = document.createElement('section');
   root.className = 'dash-briefing';
@@ -11,7 +22,7 @@ export function createBriefingStrip({ store, api, prefs }) {
 
   const meta = document.createElement('div');
   meta.className = 'dash-briefing__meta';
-  meta.innerHTML = '<span class="dash-briefing__project"></span> · <span class="dash-briefing__phase"></span> · <span class="dash-briefing__kbd">⌘K</span>';
+  meta.innerHTML = '<span class="dash-briefing__project"></span> · <span class="dash-briefing__phase"></span><span class="dash-briefing__phases" aria-hidden="true"></span> · <span class="dash-briefing__kbd">⌘K</span>';
 
   root.append(sentence, meta);
 
@@ -28,9 +39,11 @@ export function createBriefingStrip({ store, api, prefs }) {
     }
     const backlog = (store.getBacklog && store.getBacklog()) || {};
     const project = (backlog.meta && backlog.meta.project) || 'untitled';
-    const activePhase = (backlog.phases || []).find(p => p.status === 'active');
+    const phases = backlog.phases || [];
+    const activePhase = phases.find(p => p.status === 'active');
     root.querySelector('.dash-briefing__project').textContent = project;
     root.querySelector('.dash-briefing__phase').textContent = activePhase ? activePhase.name : 'no active phase';
+    root.querySelector('.dash-briefing__phases').innerHTML = renderPhasePips(phases);
   }
 
   refresh();

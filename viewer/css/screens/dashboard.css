@@ -47,6 +47,28 @@
   font-family: var(--font-mono); font-size: 11px; font-style: normal;
   border: 1px solid var(--border-strong);
 }
+.dash-briefing__phases {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  vertical-align: middle;
+}
+.dash-briefing__pip {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: transparent;
+  border: 1px solid var(--ink-4);
+  box-sizing: border-box;
+}
+.dash-briefing__pip--done        { background: var(--ink-3); border-color: var(--ink-3); }
+.dash-briefing__pip--in_progress { background: var(--accent-green); border-color: var(--accent-green); }
+.dash-briefing__pip--active {
+  background: var(--accent);
+  border-color: var(--accent);
+  outline: 2px solid color-mix(in oklab, var(--accent) 35%, transparent);
+  outline-offset: 1px;
+}
 
 .dash-automode { /* Slot for Plan 2's auto-mode-strip; only renders when ≥1 task running */ }
 

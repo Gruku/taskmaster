@@ -3,7 +3,7 @@
 //
 // Render-only: takes a normalized list of runs. Updates in place via update().
 
-import { formatElapsed, isoToMs } from '../lib/time.js';
+import { formatElapsed, formatTimeInStatus, isoToMs } from '../lib/time.js';
 
 const STAGE_ORDER = ['PICK', 'IMPLEMENT', 'REVIEW', 'HANDOVER_STUB', 'COMPLETE'];
 
@@ -79,7 +79,10 @@ function paintStrip(el, { autoState, backlog, onViewAll, now }) {
   if (sessionStartedMs) {
     const t = document.createElement('div');
     t.className = 'kanban-strip-session-time';
-    t.textContent = `running ${formatElapsed(now - sessionStartedMs)}`;
+    // Compact relative-time ("5m" / "7h" / "2d") instead of HH:MM:SS duration —
+    // dashboard reads "running 1d" much faster than "running 35:36:05".
+    t.textContent = `running ${formatTimeInStatus(sessionStartedMs, now)}`;
+    t.title = new Date(sessionStartedMs).toLocaleString();
     el.appendChild(t);
   }
 

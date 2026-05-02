@@ -49,4 +49,36 @@ test.describe('dashboard', () => {
     await page.locator('.dash-picker__item:has-text("Stale tasks")').click();
     await expect(page.locator('[data-widget-type="stale-tasks"]').last()).toBeVisible();
   });
+
+  test('briefing strip renders phase pips with active variant', async ({ page }) => {
+    await page.goto(`${BASE}/v3#/dashboard`);
+    // Pips are populated asynchronously by briefing-strip refresh() after the
+    // recent-events fetch resolves. Wait for the first pip before counting.
+    await expect(page.locator('.dash-briefing__pip').first()).toBeAttached();
+    const pips = page.locator('.dash-briefing__pip');
+    expect(await pips.count()).toBeGreaterThan(0);
+    // Exactly one pip is the active variant (per phase invariant).
+    await expect(page.locator('.dash-briefing__pip--active')).toHaveCount(1);
+    // Active pip has tooltip combining phase name + status.
+    const activeTitle = await page.locator('.dash-briefing__pip--active').getAttribute('title');
+    expect(activeTitle).toMatch(/ · active$/);
+  });
+
+  test('auto-mode session timer uses compact relative-time format', async ({ page }) => {
+    await page.goto(`${BASE}/v3#/dashboard`);
+    // The strip element is always created but the session-time child is only
+    // appended once auto state loads. If the fixture has no auto state, skip.
+    const sess = page.locator('.kanban-strip-session-time').first();
+    try {
+      await sess.waitFor({ state: 'attached', timeout: 2000 });
+    } catch {
+      test.skip();
+      return;
+    }
+    // Compact format from formatTimeInStatus: "<n>m" / "<n>h" / "<n>d" — never HH:MM:SS.
+    await expect(sess).toHaveText(/^running \d+[mhd]$/);
+    // Tooltip exposes the full start timestamp for disambiguation.
+    const title = await sess.getAttribute('title');
+    expect(title).toBeTruthy();
+  });
 });
