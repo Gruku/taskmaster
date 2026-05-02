@@ -4,6 +4,16 @@ const escapeHtml = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 export function renderReceiptsGrid(diff) {
+  if (diff && diff._unavailable) {
+    return (
+      `<div class="receipts-grid receipts-grid--unavailable">`
+      + `<div class="rcard rcard--note">`
+      + `<div class="rcard-h"><span class="ttl">Receipts</span></div>`
+      + `<div class="rcard-body"><div class="empty">Snapshots unavailable for this recap — file-level changes can't be shown.</div></div>`
+      + `</div>`
+      + `</div>`
+    );
+  }
   return (
     `<div class="receipts-grid">`
     + tasksCard(diff)
