@@ -588,7 +588,29 @@ def latest_handover_id(backlog_path: Path) -> str | None:
     return ids[0] if ids else None
 
 
-_SUPERSESSION_CALLOUT_PREFIX = "> **SUPERSEDED"
+_SUPERSESSION_CALLOUT_RE = re.compile(
+    r"^> \*\*SUPERSEDED \d{4}-\d{2}-\d{2} by \["
+)
+
+
+def _strip_supersession_callout(body: str) -> str:
+    """Return `body` with any leading SUPERSEDED callout block stripped.
+
+    A callout block is one or more contiguous lines starting with `>` whose
+    first line matches `_SUPERSESSION_CALLOUT_RE`, optionally followed by a
+    single blank line. If no callout matches, the body is returned unchanged.
+    """
+    if not body:
+        return body
+    body_lines = body.splitlines(keepends=True)
+    if not body_lines or not _SUPERSESSION_CALLOUT_RE.match(body_lines[0]):
+        return body
+    end = 0
+    while end < len(body_lines) and body_lines[end].startswith(">"):
+        end += 1
+    if end < len(body_lines) and body_lines[end].strip() == "":
+        end += 1
+    return "".join(body_lines[end:])
 
 
 def apply_supersession(backlog_path: Path, *, old_id: str, new_id: str) -> Path:
@@ -620,20 +642,7 @@ def apply_supersession(backlog_path: Path, *, old_id: str, new_id: str) -> Path:
         f"This file kept as a checkpoint reference.\n\n"
     )
 
-    body_lines = body.splitlines(keepends=True) if body else []
-    if body_lines and body_lines[0].startswith(_SUPERSESSION_CALLOUT_PREFIX):
-        # Replace the existing callout in place rather than stacking.
-        end = 0
-        while end < len(body_lines) and body_lines[end].startswith(">"):
-            end += 1
-        # Skip the trailing blank line if present.
-        if end < len(body_lines) and body_lines[end].strip() == "":
-            end += 1
-        body_after = "".join(body_lines[end:])
-    else:
-        body_after = body
-
-    write_task_file(old_path, fm, callout + body_after)
+    write_task_file(old_path, fm, callout + _strip_supersession_callout(body))
     return old_path
 
 

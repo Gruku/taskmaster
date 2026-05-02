@@ -115,3 +115,14 @@ def test_apply_supersession_idempotent_on_already_superseded(tmp_path):
     fm, body = read_handover(bp, old_id)
     assert fm["superseded_by"] == new_id
     assert body.count("> **SUPERSEDED") == 1
+    assert new_id in body                # callout was updated to point at new_id
+    assert mid_id not in body            # old pointer was replaced, not stacked
+
+
+def test_apply_supersession_raises_for_missing_ids(tmp_path):
+    bp = _make_backlog(tmp_path)
+    hid, _ = write_handover(bp, tldr="existing", session_kind="end-of-day")
+    with pytest.raises(FileNotFoundError):
+        apply_supersession(bp, old_id=hid, new_id="nonexistent")
+    with pytest.raises(FileNotFoundError):
+        apply_supersession(bp, old_id="nonexistent", new_id=hid)
