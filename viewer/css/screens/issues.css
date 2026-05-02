@@ -6,10 +6,7 @@
   --issues-card-bg: #181a20;          /* slightly cooler than other cards */
   --issues-card-border: var(--border);
   --issues-investigating: #6ea8ff;
-  --sev-critical: #e87a85;
-  --sev-high:     #e8a34d;
-  --sev-medium:   #c8b75a;
-  --sev-low:      #888c95;
+  /* --sev-* hoisted to :root in tokens.css so issue-detail (not under .issues) inherits them. */
 
   display: flex;
   flex-direction: column;

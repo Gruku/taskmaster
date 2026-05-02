@@ -44,6 +44,12 @@
   --diff-mod:         var(--amber);
   --diff-del:         var(--red);
 
+  /* Issue severity — used across Issues + Issue detail screens. */
+  --sev-critical:     #e87a85;
+  --sev-high:         #e8a34d;
+  --sev-medium:       #c8b75a;
+  --sev-low:          #888c95;
+
   /* Epic palette — auto-assigned in order; see spec §5 */
   --epic-1:           #6ea8ff;
   --epic-2:           #b585e8;
