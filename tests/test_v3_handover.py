@@ -6,6 +6,8 @@ import yaml
 from taskmaster_v3 import (
     HANDOVER_KINDS,
     HANDOVER_KIND_TO_VIEWER_KIND,
+    apply_supersession,
+    read_handover,
     write_handover,
 )
 
@@ -47,3 +49,69 @@ def test_write_handover_accepts_each_known_kind(tmp_path):
         hid, path = write_handover(bp, tldr=f"test {kind}", session_kind=kind)
         assert isinstance(hid, str) and hid
         assert path.exists()
+
+
+def test_write_handover_records_supersedes_in_frontmatter(tmp_path):
+    bp = _make_backlog(tmp_path)
+    old_id, _ = write_handover(bp, tldr="old work", session_kind="milestone-complete")
+    new_id, _ = write_handover(
+        bp, tldr="newer work",
+        session_kind="milestone-complete",
+        supersedes=old_id,
+    )
+    fm, _ = read_handover(bp, new_id)
+    assert fm["supersedes"] == old_id
+    assert fm.get("superseded_by") is None
+
+
+def test_write_handover_records_branch_and_tip_commit(tmp_path):
+    bp = _make_backlog(tmp_path)
+    hid, _ = write_handover(
+        bp, tldr="branch test",
+        branch="feature/taskmaster-v3",
+        tip_commit="abc1234",
+    )
+    fm, _ = read_handover(bp, hid)
+    assert fm["branch"] == "feature/taskmaster-v3"
+    assert fm["tip_commit"] == "abc1234"
+
+
+def test_write_handover_omits_optional_fields_when_unset(tmp_path):
+    bp = _make_backlog(tmp_path)
+    hid, _ = write_handover(bp, tldr="minimal")
+    fm, _ = read_handover(bp, hid)
+    assert "branch" not in fm
+    assert "tip_commit" not in fm
+    assert "supersedes" not in fm
+    assert "superseded_by" not in fm
+
+
+def test_apply_supersession_edits_old_file(tmp_path):
+    bp = _make_backlog(tmp_path)
+    old_id, _ = write_handover(bp, tldr="old work", session_kind="milestone-complete",
+                               body="Original body content.")
+    new_id, _ = write_handover(bp, tldr="newer work", session_kind="milestone-complete")
+
+    apply_supersession(bp, old_id=old_id, new_id=new_id)
+
+    fm, body = read_handover(bp, old_id)
+    assert fm["superseded_by"] == new_id
+    assert body.startswith("> **SUPERSEDED")
+    assert new_id in body
+    # Original body must be preserved after the callout.
+    assert "Original body content." in body
+
+
+def test_apply_supersession_idempotent_on_already_superseded(tmp_path):
+    bp = _make_backlog(tmp_path)
+    old_id, _ = write_handover(bp, tldr="old", session_kind="milestone-complete")
+    mid_id, _ = write_handover(bp, tldr="mid", session_kind="milestone-complete")
+    new_id, _ = write_handover(bp, tldr="new", session_kind="milestone-complete")
+
+    apply_supersession(bp, old_id=old_id, new_id=mid_id)
+    # Re-applying with a newer id should update the pointer, not stack callouts.
+    apply_supersession(bp, old_id=old_id, new_id=new_id)
+
+    fm, body = read_handover(bp, old_id)
+    assert fm["superseded_by"] == new_id
+    assert body.count("> **SUPERSEDED") == 1
