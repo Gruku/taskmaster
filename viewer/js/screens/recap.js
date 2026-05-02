@@ -7,12 +7,12 @@ export const meta = { title: 'Recap', icon: '⚯', sidebarKey: 'recap' };
 const escapeHtml = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
-export async function mount(root, { params }) {
+export async function mount(root, { params, subpath }) {
   root.innerHTML = `<div class="recap-page" data-role="root"><div class="stub">Loading recap…</div></div>`;
   const sessions = await listSessions();
   const recapSessions = sessions.filter(s => s.recap_id);
 
-  const targetId = (params && params.id) || (recapSessions[0] && recapSessions[0].id);
+  const targetId = (subpath && subpath[0]) || (params && params.id) || (recapSessions[0] && recapSessions[0].id);
   if (!targetId) {
     root.querySelector('[data-role=root]').innerHTML =
       `<div class="stub">No recaps yet. Close a session to generate one.</div>`;
@@ -32,13 +32,18 @@ export async function mount(root, { params }) {
   const recap = await getRecap(cur.id);
   let diff = { tasks_added:[], tasks_changed:[], tasks_removed:[],
                files_touched:[], lessons_fired:[], issues_opened:[], issues_transitioned:[] };
+  let snapshotsUnavailable = false;
   if (recap && recap.frontmatter && recap.frontmatter.snapshot_before && recap.frontmatter.snapshot_after) {
     try {
       diff = await getSnapshotDiff(recap.frontmatter.snapshot_before, recap.frontmatter.snapshot_after);
     } catch (e) {
       console.warn('snapshot diff failed', e);
+      snapshotsUnavailable = true;
     }
+  } else {
+    snapshotsUnavailable = true;
   }
+  diff._unavailable = snapshotsUnavailable;
 
   let editing = false;
   function paint() {
