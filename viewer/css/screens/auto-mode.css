@@ -71,14 +71,14 @@
 .spine-node--active .spine-node-circle {
   fill: rgba(74,158,255,0.18); stroke: var(--accent); stroke-width: 2px;
   filter: drop-shadow(0 0 6px rgba(74,158,255,0.55));
-  transform-box: fill-box;
-  transform-origin: center;
   animation: spine-active-pulse 1.6s ease-in-out infinite;
 }
 
+/* Pulse via opacity + halo glow — no transform (project rule: no motion on
+   solid surfaces). The filter swap drives the heartbeat instead of scale. */
 @keyframes spine-active-pulse {
-  0%, 100% { transform: scale(1);    opacity: 1; }
-  50%      { transform: scale(1.11); opacity: 0.85; }
+  0%, 100% { opacity: 1;   filter: drop-shadow(0 0 6px  rgba(74,158,255,0.55)); }
+  50%      { opacity: 0.7; filter: drop-shadow(0 0 12px rgba(74,158,255,0.85)); }
 }
 .spine-node--pending .spine-node-circle { opacity: 0.4; }
 .spine-node-label {
