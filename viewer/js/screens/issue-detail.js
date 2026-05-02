@@ -51,14 +51,24 @@ export async function mount(root, { params, store, prefs, subpath }) {
       issues = data.issues || [];
       store?.setIssues?.(issues);
     } catch (e) {
-      root.innerHTML = `<div class="id-empty">Could not load issues: ${e.message}</div>`;
+      const empty = document.createElement('div');
+      empty.className = 'id-empty';
+      empty.textContent = `Could not load issues: ${e.message}`;
+      root.replaceChildren(empty);
       claimTopbar();
       return () => { root.classList.remove('issue-detail'); };
     }
   }
   const issue = issues.find(i => i.id === id);
   if (!issue) {
-    root.innerHTML = `<div class="id-empty">Issue ${id} not found. <a href="#/issues">Back to Issues</a>.</div>`;
+    const empty = document.createElement('div');
+    empty.className = 'id-empty';
+    empty.textContent = `Issue ${id} not found. `;
+    const back = document.createElement('a');
+    back.href = '#/issues';
+    back.textContent = 'Back to Issues';
+    empty.append(back, '.');
+    root.replaceChildren(empty);
     claimTopbar();
     return () => { root.classList.remove('issue-detail'); };
   }

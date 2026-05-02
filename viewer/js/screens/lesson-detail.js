@@ -45,14 +45,24 @@ export async function mount(root, { params, store, prefs, subpath }) {
       lessons = data.lessons || [];
       store?.setLessons?.(lessons);
     } catch (e) {
-      root.innerHTML = `<div class="ld-empty">Could not load lessons: ${e.message}</div>`;
+      const empty = document.createElement('div');
+      empty.className = 'ld-empty';
+      empty.textContent = `Could not load lessons: ${e.message}`;
+      root.replaceChildren(empty);
       claimTopbar();
       return () => { root.classList.remove('lesson-detail'); };
     }
   }
   let lesson = lessons.find(l => l.id === id);
   if (!lesson) {
-    root.innerHTML = `<div class="ld-empty">Lesson ${id} not found. <a href="#/lessons">Back to Lessons</a>.</div>`;
+    const empty = document.createElement('div');
+    empty.className = 'ld-empty';
+    empty.textContent = `Lesson ${id} not found. `;
+    const back = document.createElement('a');
+    back.href = '#/lessons';
+    back.textContent = 'Back to Lessons';
+    empty.append(back, '.');
+    root.replaceChildren(empty);
     claimTopbar();
     return () => { root.classList.remove('lesson-detail'); };
   }

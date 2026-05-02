@@ -37,7 +37,10 @@ export async function mount(root, { params, store, api, prefs, subpath }) {
       getTaskRelatedFull(id),
     ]);
   } catch (e) {
-    root.innerHTML = `<div class="td-page td-empty">Could not load ${id}: ${e.message}</div>`;
+    const empty = document.createElement('div');
+    empty.className = 'td-page td-empty';
+    empty.textContent = `Could not load ${id}: ${e.message}`;
+    root.replaceChildren(empty);
     return () => {};
   }
 
