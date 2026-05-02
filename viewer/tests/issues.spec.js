@@ -100,6 +100,22 @@ test('issue search filters cards by title', async ({ page }) => {
   await expect(page.locator('.tm-subcount')).toHaveText(/of \d+ issues/);
 });
 
+test('issue component chip filters cards', async ({ page }) => {
+  await page.goto('/v3/#/issues');
+  await expect(page.locator('.issue-card').first()).toBeVisible();
+  const chips = page.locator('.issues__comp-chip');
+  expect(await chips.count()).toBeGreaterThan(0);
+  await expect(chips.filter({ hasText: 'viewer' })).toBeVisible();
+  const totalBefore = await page.locator('.issue-card').count();
+  // Click a non-viewer chip (e.g., 'server') so we get fewer cards
+  await chips.filter({ hasText: 'server' }).click();
+  await page.waitForTimeout(80);
+  const filtered = await page.locator('.issue-card').count();
+  expect(filtered).toBeLessThan(totalBefore);
+  expect(filtered).toBeGreaterThan(0);
+  await expect(page.locator('.tm-subcount')).toHaveText(/of \d+ issues/);
+});
+
 test('issue detail back link returns to issues list', async ({ page }) => {
   await page.goto('/v3/#/issues');
   const id = await page.locator('.issue-card').first().getAttribute('data-issue-id');

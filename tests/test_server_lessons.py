@@ -135,6 +135,20 @@ def test_thresholds_override_changes_shelf_placement(running_server, tmp_path):
     assert by_id["L-T1"]["shelf"] == "core"
 
 
+def test_get_lessons_surfaces_category_field(running_server, tmp_path):
+    """B3 — `category` field flows through frontmatter to /api/lessons."""
+    base, _ = running_server
+    _write_lesson(tmp_path, "L-CAT-1", category="testing")
+    _write_lesson(tmp_path, "L-CAT-2", category="ui")
+    _write_lesson(tmp_path, "L-NONE")  # no category — surfaces as None/missing
+
+    payload = json.loads(urllib.request.urlopen(f"{base}/api/lessons").read())
+    by_id = {l["id"]: l for l in payload["lessons"]}
+    assert by_id["L-CAT-1"]["category"] == "testing"
+    assert by_id["L-CAT-2"]["category"] == "ui"
+    assert by_id.get("L-NONE", {}).get("category") in (None, "")
+
+
 def test_reinforce_records_event_with_correct_source_and_note(running_server, tmp_path):
     base, _ = running_server
     _write_lesson(tmp_path, "L-300")

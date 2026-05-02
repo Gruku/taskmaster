@@ -53,9 +53,15 @@ export async function mount(root, { store, prefs }) {
     title: 'New issue — coming soon',
   });
   newBtn.setAttribute('aria-disabled', 'true');
+
+  // Component chip-row (populated dynamically once issues load).
+  const compRow = document.createElement('div');
+  compRow.className = 'tm-chip-row issues__components';
+
   topbar?.appendChild(subcount);
   topbar?.appendChild(searchBuilt.el);
   topbar?.appendChild(filters);
+  topbar?.appendChild(compRow);
   topbar?.appendChild(toggle);
   topbar?.appendChild(newBtn);
 
@@ -97,6 +103,32 @@ export async function mount(root, { store, prefs }) {
 
   let currentView = initialView;
   let searchTerm = '';
+  const activeComponents = new Set();
+
+  function _renderComponentChips() {
+    const issues = store.getIssues() || [];
+    const comps = [...new Set(issues.map(i => i.component).filter(Boolean))].sort();
+    compRow.innerHTML = '';
+    for (const c of comps) {
+      const chip = document.createElement('span');
+      chip.className = 'issues__comp-chip';
+      chip.dataset.comp = c;
+      chip.textContent = c;
+      if (activeComponents.has(c)) chip.classList.add('is-active');
+      chip.addEventListener('click', () => {
+        if (activeComponents.has(c)) activeComponents.delete(c);
+        else activeComponents.add(c);
+        chip.classList.toggle('is-active');
+        render();
+      });
+      compRow.appendChild(chip);
+    }
+  }
+
+  function _matchesComponent(i) {
+    if (activeComponents.size === 0) return true;
+    return activeComponents.has(i.component);
+  }
 
   function _matchesSearch(i) {
     if (!searchTerm) return true;
@@ -125,11 +157,13 @@ export async function mount(root, { store, prefs }) {
     const allIssues = store.getIssues() || [];
     const issues = allIssues.filter(i => {
       if (!_matchesSearch(i)) return false;
+      if (!_matchesComponent(i)) return false;
       const sevs = activeFilters();
       if (sevs.length === 0) return true;
       return sevs.includes(i.severity_label || severityLabel(i.severity));
     });
-    subcount.textContent = (searchTerm || activeFilters().length)
+    const filterActive = !!searchTerm || activeFilters().length > 0 || activeComponents.size > 0;
+    subcount.textContent = filterActive
       ? `${issues.length} of ${allIssues.length} issues`
       : `${allIssues.length} issues`;
 
@@ -179,6 +213,7 @@ export async function mount(root, { store, prefs }) {
     const data = await api.getIssues({ includeResolved: true });
     store.setIssues(data.issues);
   }
+  _renderComponentChips();
   render();
   return () => {};
 }

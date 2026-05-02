@@ -97,6 +97,23 @@ test('lesson search filters cards by title', async ({ page }) => {
   await expect(page.locator('.tm-subcount')).toHaveText(/of \d+ lessons/);
 });
 
+test('lesson category chip filters cards', async ({ page }) => {
+  await page.goto('/v3/#/lessons');
+  await expect(page.locator('.lesson-card').first()).toBeVisible();
+  const chips = page.locator('.lessons__cat-chip');
+  expect(await chips.count()).toBeGreaterThan(0);
+  // Chips populated from fixture: workflow, testing, ui (sorted)
+  await expect(chips.filter({ hasText: 'workflow' })).toBeVisible();
+  await expect(chips.filter({ hasText: 'testing' })).toBeVisible();
+  const totalBefore = await page.locator('.lesson-card').count();
+  await chips.filter({ hasText: 'ui' }).click();
+  await page.waitForTimeout(80);
+  const filtered = await page.locator('.lesson-card').count();
+  expect(filtered).toBeLessThan(totalBefore);
+  expect(filtered).toBeGreaterThan(0);
+  await expect(page.locator('.tm-subcount')).toHaveText(/of \d+ lessons/);
+});
+
 test('lesson detail back link returns to lessons list', async ({ page }) => {
   await page.goto('/v3/#/lesson/L-001');
   await expect(page.locator('.lesson-detail')).toBeVisible();

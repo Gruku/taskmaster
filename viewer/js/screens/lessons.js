@@ -41,8 +41,12 @@ export async function mount(root, { store, prefs }) {
     title: 'New lesson — coming soon',
   });
   newBtn.setAttribute('aria-disabled', 'true');
+  const catRow = document.createElement('div');
+  catRow.className = 'tm-chip-row lessons__cats';
+
   topbar?.appendChild(subcount);
   topbar?.appendChild(searchBuilt.el);
+  topbar?.appendChild(catRow);
   topbar?.appendChild(toggle);
   topbar?.appendChild(newBtn);
 
@@ -55,6 +59,32 @@ export async function mount(root, { store, prefs }) {
 
   let currentView = initialView;
   let searchTerm = '';
+  const activeCategories = new Set();
+
+  function _renderCategoryChips() {
+    const lessons = store.getLessons() || [];
+    const cats = [...new Set(lessons.map(l => l.category).filter(Boolean))].sort();
+    catRow.innerHTML = '';
+    for (const c of cats) {
+      const chip = document.createElement('span');
+      chip.className = 'lessons__cat-chip';
+      chip.dataset.cat = c;
+      chip.textContent = c;
+      if (activeCategories.has(c)) chip.classList.add('is-active');
+      chip.addEventListener('click', () => {
+        if (activeCategories.has(c)) activeCategories.delete(c);
+        else activeCategories.add(c);
+        chip.classList.toggle('is-active');
+        render();
+      });
+      catRow.appendChild(chip);
+    }
+  }
+
+  function _matchesCategory(l) {
+    if (activeCategories.size === 0) return true;
+    return activeCategories.has(l.category);
+  }
   // Track reinforced lesson IDs so re-render can re-apply is-fired state.
   const _reinforcedIds = new Set();
 
@@ -90,8 +120,9 @@ export async function mount(root, { store, prefs }) {
   function render() {
     shelvesEl.innerHTML = '';
     const allLessons = store.getLessons() || [];
-    const lessons = allLessons.filter(_matchesSearch);
-    subcount.textContent = searchTerm
+    const lessons = allLessons.filter(l => _matchesSearch(l) && _matchesCategory(l));
+    const filterActive = !!searchTerm || activeCategories.size > 0;
+    subcount.textContent = filterActive
       ? `${lessons.length} of ${allLessons.length} lessons`
       : `${allLessons.length} lessons`;
     // Capture reinforced IDs snapshot for post-render re-application.
@@ -197,6 +228,7 @@ export async function mount(root, { store, prefs }) {
     const data = await api.getLessons();
     store.setLessons(data.lessons);
   }
+  _renderCategoryChips();
   render();
 
   // Cleanup function

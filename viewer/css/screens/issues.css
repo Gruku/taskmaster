@@ -32,6 +32,17 @@
 .issues__sev-chip[data-sev="Low"]      { color: var(--sev-low); }
 .issues__sev-chip.is-active { background: var(--accent-soft); color: var(--ink); border-color: var(--accent); }
 
+.issues__comp-chip {
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: 12px;
+  font-family: var(--font-mono, monospace);
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.issues__comp-chip.is-active { background: var(--accent-soft); color: var(--ink); border-color: var(--accent); }
+
 .issues__columns {
   display: grid;
   grid-template-columns: 1fr 1.6fr;
