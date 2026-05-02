@@ -2,6 +2,7 @@ import * as api from '../api.js';
 import { claimTopbar } from '../lib/topbar.js';
 import { severityGlyph, injectSeverityDefs } from '../components/severity-glyph.js';
 import { severityLabel } from '../util/severity-label.js';
+import { pluralize } from '../util/pluralize.js';
 import { agingBar } from '../components/aging-bar.js';
 
 export const meta = { title: 'Issue', icon: '!', sidebarKey: 'issues' };
@@ -159,7 +160,7 @@ export async function mount(root, { params, store, prefs, subpath }) {
       reproSec.className = 'id-repro';
       const h = document.createElement('h2');
       h.className = 'id-h';
-      h.textContent = `Reproduction · ${issue.repro.length} steps`;
+      h.textContent = `Reproduction · ${issue.repro.length} ${pluralize(issue.repro.length, 'step', 'steps')}`;
       reproSec.appendChild(h);
       const ol = document.createElement('ol');
       ol.className = 'id-repro-list';

@@ -13,6 +13,7 @@ import { renderEpicChips }                   from '../components/epic-chips.js';
 import { applyFilters, sortTasks, groupTasks, STATUS_LABELS } from '../lib/filters.js';
 import { assignEpicColors }                  from '../lib/epics.js';
 import { claimTopbar, tmAction } from '../lib/topbar.js';
+import { pluralize } from '../util/pluralize.js';
 
 export const meta = { title: 'Kanban', icon: '▦', sidebarKey: 'kanban' };
 
@@ -192,7 +193,7 @@ export async function mount(root, { store, prefs }) {
     const sorted   = sortTasks(filtered, state.filters.sort);
 
     // 2) Subcount
-    subcount.textContent = `${tasks.length} tasks · ${filtered.length} visible`;
+    subcount.textContent = `${tasks.length} ${pluralize(tasks.length, 'task', 'tasks')} · ${filtered.length} visible`;
 
     // 3) Phase stepper data
     const phaseRows = phasesArr.map(ph => {

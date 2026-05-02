@@ -2,6 +2,7 @@
 // Replaces the Plan-4 stub. See spec §3.15 (Compact Horizontal Stepper).
 
 import { registerWidget } from '../widget-catalog.js';
+import { pluralize } from '../../util/pluralize.js';
 
 export const meta = {
   id: 'auto-mode-stepper',
@@ -84,7 +85,7 @@ export async function mount(root, ctx) {
         <span class="stepper-dot"></span>
         <span class="stepper-elapsed">${elapsed(state.started_at)}</span>
         <span class="stepper-foot-sep">·</span>
-        <span class="stepper-sub">${subagentCount} subagent${subagentCount === 1 ? '' : 's'}</span>
+        <span class="stepper-sub">${subagentCount} ${pluralize(subagentCount, 'subagent', 'subagents')}</span>
         ${tokens ? `<span class="stepper-foot-sep">·</span><span class="stepper-tokens">${formatTokens(tokens.used)} / ${formatTokens(tokens.limit)}</span>` : ''}
       </div>
     `;

@@ -2,6 +2,7 @@ import { renderTimeline } from '../components/timeline.js';
 import { RightRail } from '../components/right-rail.js';
 import { listSessions, getSessionDetail } from '../api.js';
 import { claimTopbar, tmSubcount, tmSearch, tmSegmented, tmAction } from '../lib/topbar.js';
+import { pluralize } from '../util/pluralize.js';
 
 export const meta = { title: 'Sessions', icon: '⊕', sidebarKey: 'sessions' };
 
@@ -132,9 +133,12 @@ function refreshKindCounts(root, sessions, subcount, totalCount) {
   chips[2].querySelector('.ct').textContent = rCount;
   if (subcount) {
     const filtered = totalCount != null && totalCount !== sCount;
+    const sLabel = pluralize(sCount, 'session', 'sessions');
+    const hLabel = pluralize(hCount, 'handover', 'handovers');
+    const rLabel = pluralize(rCount, 'recap', 'recaps');
     subcount.textContent = filtered
-      ? `${sCount} of ${totalCount} sessions · ${hCount} handovers · ${rCount} recaps`
-      : `${sCount} sessions · ${hCount} handovers · ${rCount} recaps`;
+      ? `${sCount} of ${totalCount} ${pluralize(totalCount, 'session', 'sessions')} · ${hCount} ${hLabel} · ${rCount} ${rLabel}`
+      : `${sCount} ${sLabel} · ${hCount} ${hLabel} · ${rCount} ${rLabel}`;
   }
 }
 

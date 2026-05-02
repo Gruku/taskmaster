@@ -1,4 +1,5 @@
 import { registerWidget } from '../widget-catalog.js';
+import { pluralize } from '../../util/pluralize.js';
 
 export const meta = {
   id: 'agent-activity',
@@ -16,7 +17,7 @@ export async function mount(el, { api }) {
   const summary = document.createElement('div');
   summary.style.cssText = 'font-size:12px;color:var(--ink-1);margin-bottom:6px;';
   summary.innerHTML = total
-    ? `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#6ea8ff;margin-right:6px;"></span>${total} auto-mode session${total === 1 ? '' : 's'} running`
+    ? `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#6ea8ff;margin-right:6px;"></span>${total} auto-mode ${pluralize(total, 'session', 'sessions')} running`
     : 'No agents running.';
   el.appendChild(summary);
 

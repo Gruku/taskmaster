@@ -1,6 +1,7 @@
 import { severityGlyph, injectSeverityDefs } from './severity-glyph.js';
 import { agingBar } from './aging-bar.js';
 import { severityLabel } from '../util/severity-label.js';
+import { pluralize } from '../util/pluralize.js';
 import { computeBlocksCount } from '../util/issue-blocks.js';
 
 const LOCATION_RE = /^(.*?):(\d+)(?::\d+)?$/;
@@ -94,7 +95,7 @@ export function issueCard(issue, { tasksIndex = {}, agingCfg, onTaskClick } = {}
     det.className = 'issue-card__repro';
     const sum = document.createElement('summary');
     sum.className = 'issue-card__repro-summary';
-    sum.textContent = `Repro · ${issue.repro.length} steps · click to expand`;
+    sum.textContent = `Repro · ${issue.repro.length} ${pluralize(issue.repro.length, 'step', 'steps')} · click to expand`;
     det.appendChild(sum);
     const ol = document.createElement('ol');
     ol.className = 'issue-card__repro-list';

@@ -3,6 +3,7 @@
 // Persisted state lives under prefs.table.
 
 import { claimTopbar, tmSubcount, tmSearch, tmAction } from '../lib/topbar.js';
+import { pluralize } from '../util/pluralize.js';
 
 export const meta = { title: 'Table', icon: '▭', sidebarKey: 'table' };
 
@@ -255,7 +256,7 @@ export async function mount(root, { store, prefs }) {
     const filtered = applyFilters(tasks);
     const sorted   = sortTasks(filtered);
 
-    subcount.textContent = `${tasks.length} tasks · ${filtered.length} visible`;
+    subcount.textContent = `${tasks.length} ${pluralize(tasks.length, 'task', 'tasks')} · ${filtered.length} visible`;
     // Reflect external state changes (e.g. clear button) into the topbar input.
     if (search.value !== state.search) search.value = state.search;
     renderChipRail(backlog);

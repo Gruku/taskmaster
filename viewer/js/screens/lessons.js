@@ -1,6 +1,7 @@
 import { lessonCard } from '../components/lesson-card.js';
 import * as api from '../api.js';
 import { claimTopbar, tmSubcount, tmSearch, tmSegmented, tmAction } from '../lib/topbar.js';
+import { pluralize } from '../util/pluralize.js';
 
 export const meta = { title: 'Lessons', icon: '✦', sidebarKey: 'lessons' };
 
@@ -130,8 +131,8 @@ export async function mount(root, { store, prefs }) {
     const lessons = allLessons.filter(l => _matchesSearch(l) && _matchesCategory(l));
     const filterActive = !!searchTerm || activeCategories.size > 0;
     subcount.textContent = filterActive
-      ? `${lessons.length} of ${allLessons.length} lessons`
-      : `${allLessons.length} lessons`;
+      ? `${lessons.length} of ${allLessons.length} ${pluralize(allLessons.length, 'lesson', 'lessons')}`
+      : `${allLessons.length} ${pluralize(allLessons.length, 'lesson', 'lessons')}`;
     // Capture reinforced IDs snapshot for post-render re-application.
     const reinforcedSnapshot = new Set(_reinforcedIds);
 
@@ -167,7 +168,7 @@ export async function mount(root, { store, prefs }) {
         <header class="lessons-shelf__header">
           <span class="lessons-shelf__name">${shelf.title}</span>
           <span class="lessons-shelf__tagline">${shelf.tagline}</span>
-          <span class="lessons-shelf__count">${items.length} lesson${items.length === 1 ? '' : 's'}</span>
+          <span class="lessons-shelf__count">${items.length} ${pluralize(items.length, 'lesson', 'lessons')}</span>
         </header>`;
       const grid = document.createElement('div');
       grid.className = 'lessons-shelf__grid';
@@ -186,7 +187,7 @@ export async function mount(root, { store, prefs }) {
       <header class="lessons-shelf__header">
         <span class="lessons-shelf__name">All lessons</span>
         <span class="lessons-shelf__tagline"></span>
-        <span class="lessons-shelf__count">${lessons.length} lesson${lessons.length === 1 ? '' : 's'}</span>
+        <span class="lessons-shelf__count">${lessons.length} ${pluralize(lessons.length, 'lesson', 'lessons')}</span>
       </header>`;
     const grid = document.createElement('div');
     grid.className = 'lessons-shelf__grid';
@@ -219,7 +220,7 @@ export async function mount(root, { store, prefs }) {
       const count = groups.get(key).length;
       const countEl = document.createElement('span');
       countEl.className = 'lessons-shelf__count';
-      countEl.textContent = `${count} lesson${count === 1 ? '' : 's'}`;
+      countEl.textContent = `${count} ${pluralize(count, 'lesson', 'lessons')}`;
       header.append(nameEl, taglineEl, countEl);
       sec.appendChild(header);
       const grid = document.createElement('div');

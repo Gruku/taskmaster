@@ -1,4 +1,5 @@
 import { epicCssVar } from '../lib/epics.js';
+import { pluralize } from '../util/pluralize.js';
 
 /**
  * epics: [{id, name, color, count}]
@@ -46,7 +47,7 @@ export function renderEpicChips({ epics = [], active = [], filterCount = 0, onTo
   if (filterCount > 0) {
     const fc = document.createElement('span');
     fc.className = 'filter-count';
-    fc.textContent = `${filterCount} filters`;
+    fc.textContent = `${filterCount} ${pluralize(filterCount, 'filter', 'filters')}`;
     right.appendChild(fc);
 
     const clr = document.createElement('span');

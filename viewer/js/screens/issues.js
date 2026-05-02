@@ -1,5 +1,6 @@
 import { issueCard, issueRow } from '../components/issue-card.js';
 import { severityLabel } from '../util/severity-label.js';
+import { pluralize } from '../util/pluralize.js';
 import * as api from '../api.js';
 import { claimTopbar, tmSubcount, tmSearch, tmSegmented, tmAction } from '../lib/topbar.js';
 
@@ -170,8 +171,8 @@ export async function mount(root, { store, prefs }) {
     });
     const filterActive = !!searchTerm || activeFilters().length > 0 || activeComponents.size > 0;
     subcount.textContent = filterActive
-      ? `${issues.length} of ${allIssues.length} issues`
-      : `${allIssues.length} issues`;
+      ? `${issues.length} of ${allIssues.length} ${pluralize(allIssues.length, 'issue', 'issues')}`
+      : `${allIssues.length} ${pluralize(allIssues.length, 'issue', 'issues')}`;
 
     const tasksIndex = store.getTasksIndex ? store.getTasksIndex() : {};
     // Fix: read aging config from store.getPrefs(), not prefs.getPrefs()
@@ -194,7 +195,7 @@ export async function mount(root, { store, prefs }) {
     for (const i of resolved) {
       resolvedList.appendChild(issueRow(i));
     }
-    resolvedHeader.innerHTML = `<span class="caret">▾</span> Resolved · ${resolved.length} issues`;
+    resolvedHeader.innerHTML = `<span class="caret">▾</span> Resolved · ${resolved.length} ${pluralize(resolved.length, 'issue', 'issues')}`;
 
     // View B/C: just collapse columns into a single list (lightweight pass)
     if (currentView === 'C') {
