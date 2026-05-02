@@ -530,6 +530,10 @@ def write_handover(
     """
     if not tldr or not tldr.strip():
         raise ValueError("handover tldr is required")
+    if session_kind not in HANDOVER_KINDS:
+        raise ValueError(
+            f"session_kind must be one of {HANDOVER_KINDS}, got {session_kind!r}"
+        )
     when = when or date.today().isoformat()
     base_id = make_handover_id(when, tldr)
     target = handover_path(backlog_path, base_id)
