@@ -65,6 +65,7 @@ from taskmaster_v3 import (
     format_recap as _format_recap,
     write_handover as _write_handover,
     read_handover as _read_handover,
+    apply_supersession as _apply_supersession,
     list_handover_ids as _list_handover_ids,
     latest_handover_id as _latest_handover_id,
     sync_handover_index as _sync_handover_index,
@@ -1393,6 +1394,9 @@ def backlog_handover_create(
     task_ids: list[str] | None = None,
     session_kind: str = "end-of-day",
     context_size_at_write: str = "",
+    supersedes: str = "",
+    branch: str = "",
+    tip_commit: str = "",
 ) -> str:
     """Write a session handover — committed markdown artifact for cross-session
     continuity.
@@ -1406,8 +1410,16 @@ def backlog_handover_create(
         next_action: One-line "where to start next session." Optional but useful.
         body: Markdown body (the four-section narrative).
         task_ids: Tasks this handover relates to (surfaces in pick-task).
-        session_kind: One of {", ".join(HANDOVER_KINDS)}, or any custom string.
+        session_kind: One of HANDOVER_KINDS.
         context_size_at_write: Optional marker for compaction-prompted handovers.
+        supersedes: Optional id of an older handover this one supersedes. When
+            set, the new handover records `supersedes:` in its frontmatter and
+            the old handover gets a `superseded_by:` field plus a SUPERSEDED
+            callout prepended to its body. Use for milestone-complete or pivot
+            chains.
+        branch: Optional git branch name. Lands in frontmatter when set.
+        tip_commit: Optional tip commit SHA (short or long). Lands in
+            frontmatter when set.
     """
     bp = _backlog_path()
     if not bp.exists():
@@ -1421,20 +1433,37 @@ def backlog_handover_create(
             task_ids=task_ids or [],
             session_kind=session_kind,
             context_size_at_write=context_size_at_write or None,
+            supersedes=supersedes or None,
+            branch=branch or None,
+            tip_commit=tip_commit or None,
         )
     except ValueError as exc:
         return f"Error: {exc}"
 
-    # Refresh index in backlog.yaml so the new handover is discoverable.
+    superseded_warning = None
+    if supersedes:
+        try:
+            _apply_supersession(bp, old_id=supersedes, new_id=hid)
+        except FileNotFoundError:
+            superseded_warning = (
+                f"WARNING: supersedes={supersedes} not found on disk; old "
+                f"handover not updated."
+            )
+
     data = _load()
     _sync_handover_index(data, bp)
     _save(data)
 
-    return (
-        f"Handover written: {hid}\n"
-        f"- File: {target.relative_to(ROOT)}\n"
-        f"- Index entries: {len(data.get('handovers') or [])}"
-    )
+    lines = [
+        f"Handover written: {hid}",
+        f"- File: {target.relative_to(ROOT)}",
+        f"- Index entries: {len(data.get('handovers') or [])}",
+    ]
+    if supersedes and not superseded_warning:
+        lines.append(f"- Superseded: {supersedes}")
+    if superseded_warning:
+        lines.append(f"- {superseded_warning}")
+    return "\n".join(lines)
 
 
 @mcp.tool()
@@ -1524,6 +1553,29 @@ def backlog_handover_resync() -> str:
     _save(data)
     n = len(data.get("handovers") or [])
     return f"Handover index resynced — {n} entries in `backlog.yaml`."
+
+
+@mcp.tool()
+def backlog_handover_supersede(old_id: str, new_id: str) -> str:
+    """Mark an existing handover as superseded by another.
+
+    Edits the old handover in place: prepends a SUPERSEDED callout, sets
+    `superseded_by: <new_id>` in its frontmatter. Use this to repair a
+    supersession chain after the fact (e.g., a handover was written without
+    `supersedes=`, but should chain off a prior one).
+
+    Both ids must exist on disk. Idempotent on the same `old_id` — calling it
+    again with a newer `new_id` updates the pointer instead of stacking
+    callouts.
+    """
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    try:
+        old_path = _apply_supersession(bp, old_id=old_id, new_id=new_id)
+    except FileNotFoundError as exc:
+        return f"Error: handover not found ({exc})."
+    return f"Superseded {old_id} → {new_id} ({old_path.name} updated)."
 
 
 @mcp.tool()

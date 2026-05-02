@@ -32,7 +32,7 @@ def test_viewer_kind_mapping_covers_all_storage_kinds():
 
 def _make_backlog(tmp_path: Path) -> Path:
     bp = tmp_path / "backlog.yaml"
-    bp.write_text(yaml.safe_dump({"epics": []}))
+    bp.write_text(yaml.safe_dump({"meta": {"updated": "2026-01-01"}, "epics": []}))
     (tmp_path / "handovers").mkdir()
     return bp
 
@@ -126,3 +126,59 @@ def test_apply_supersession_raises_for_missing_ids(tmp_path):
         apply_supersession(bp, old_id=hid, new_id="nonexistent")
     with pytest.raises(FileNotFoundError):
         apply_supersession(bp, old_id="nonexistent", new_id=hid)
+
+
+import sys
+
+# Import the MCP server module the same way other tests do.
+PLUGIN_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PLUGIN_ROOT))
+
+import backlog_server  # noqa: E402
+
+
+def _set_backlog_root(monkeypatch, bp: Path):
+    monkeypatch.setattr(backlog_server, "ROOT", bp.parent)
+    monkeypatch.setattr(backlog_server, "_backlog_path", lambda: bp)
+
+
+def test_backlog_handover_create_with_supersedes(tmp_path, monkeypatch):
+    bp = _make_backlog(tmp_path)
+    _set_backlog_root(monkeypatch, bp)
+
+    out_old = backlog_server.backlog_handover_create(
+        tldr="old milestone", session_kind="milestone-complete",
+    )
+    old_id = out_old.splitlines()[0].split(": ", 1)[1].strip()
+
+    out_new = backlog_server.backlog_handover_create(
+        tldr="new milestone",
+        session_kind="milestone-complete",
+        supersedes=old_id,
+    )
+    assert "Handover written" in out_new
+
+    # Old file should now have superseded_by + callout in body.
+    fm, body = read_handover(bp, old_id)
+    assert fm.get("superseded_by")  # set by the create call
+    assert body.startswith("> **SUPERSEDED")
+
+
+def test_backlog_handover_supersede_tool(tmp_path, monkeypatch):
+    bp = _make_backlog(tmp_path)
+    _set_backlog_root(monkeypatch, bp)
+
+    out_old = backlog_server.backlog_handover_create(
+        tldr="A", session_kind="milestone-complete",
+    )
+    old_id = out_old.splitlines()[0].split(": ", 1)[1].strip()
+    out_new = backlog_server.backlog_handover_create(
+        tldr="B", session_kind="milestone-complete",
+    )
+    new_id = out_new.splitlines()[0].split(": ", 1)[1].strip()
+
+    msg = backlog_server.backlog_handover_supersede(old_id=old_id, new_id=new_id)
+    assert old_id in msg and new_id in msg
+
+    fm, _ = read_handover(bp, old_id)
+    assert fm["superseded_by"] == new_id
