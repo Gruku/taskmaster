@@ -26,8 +26,8 @@ export function injectSeverityDefs(doc = document) {
     <defs>
       <symbol id="sev-hex" viewBox="0 0 20 20">
         <polygon points="10,2 17,6 17,14 10,18 3,14 3,6"
-                 fill="currentColor" fill-opacity="0.18"
-                 stroke="currentColor" stroke-width="1.4"
+                 fill="currentColor" fill-opacity="0.55"
+                 stroke="currentColor" stroke-width="1.8"
                  stroke-linejoin="round"/>
       </symbol>
     </defs>`;
