@@ -3953,7 +3953,7 @@ def _load_task_full(task_id: str) -> dict | None:
     backlog_path = Path("backlog.yaml")
     if not backlog_path.exists():
         return None
-    backlog = yaml.safe_load(backlog_path.read_text()) or {}
+    backlog = yaml.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
     tasks = backlog.get("tasks") or []
     index_entry = next((t for t in tasks if t.get("id") == task_id), None)
     if index_entry is None:
@@ -3968,7 +3968,7 @@ def _load_task_full(task_id: str) -> dict | None:
 
     md_path = Path(".taskmaster") / "tasks" / f"{task_id}.md"
     if md_path.exists():
-        raw = md_path.read_text()
+        raw = md_path.read_text(encoding="utf-8")
         fm_match = re.match(r"^---\n(.*?)\n---\n(.*)$", raw, re.DOTALL)
         if fm_match:
             try:
@@ -4015,7 +4015,7 @@ def _load_related_for_task(task_id: str) -> dict | None:
     backlog_path = Path("backlog.yaml")
     if not backlog_path.exists():
         return None
-    backlog = yaml.safe_load(backlog_path.read_text()) or {}
+    backlog = yaml.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
     tasks = backlog.get("tasks") or []
     me = next((t for t in tasks if t.get("id") == task_id), None)
     if me is None:
@@ -4024,7 +4024,7 @@ def _load_related_for_task(task_id: str) -> dict | None:
     my_anchors = list(me.get("anchors") or [])
 
     def _read_fm(p: Path) -> tuple[dict, str]:
-        raw = p.read_text()
+        raw = p.read_text(encoding="utf-8")
         m = re.match(r"^---\n(.*?)\n---\n(.*)$", raw, re.DOTALL)
         if not m:
             return {}, raw
@@ -4561,7 +4561,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
         """Serialize *payload* as JSON and write the complete HTTP response."""
         body = json.dumps(payload, default=str).encode("utf-8")
         self.send_response(status)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         # JSON API responses are intentionally uncached — no Cache-Control header
         # means browsers apply their default heuristic (usually no-store for XHR).
