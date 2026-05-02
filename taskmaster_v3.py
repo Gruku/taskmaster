@@ -451,7 +451,14 @@ def diff_against_snapshot(
 
 # Canonical session_kind values (free-form string in storage; these are
 # the well-known ones that may get special treatment elsewhere).
-HANDOVER_KINDS = ("end-of-day", "context-handoff", "crash-recovery", "auto-stage")
+HANDOVER_KINDS = (
+    "end-of-day",
+    "context-handoff",
+    "milestone-complete",
+    "pivot",
+    "exploration",
+    "auto-stage",
+)
 
 # Index cap — `handovers:` array in backlog.yaml is bounded.
 HANDOVER_INDEX_CAP = 30
@@ -464,10 +471,12 @@ RECAP_SCHEMA_VERSION = 1
 # Storage kinds live in handover frontmatter (`session_kind`); the viewer renders
 # them via this mapping for kind-pill colour, kind-filter chips, and right-rail header.
 HANDOVER_KIND_TO_VIEWER_KIND = {
-    "end-of-day":      "wrap",
-    "context-handoff": "mid-task",
-    "crash-recovery":  "checkpoint",
-    "auto-stage":      "standalone",
+    "end-of-day":         "wrap",
+    "context-handoff":    "mid-task",
+    "milestone-complete": "checkpoint",
+    "pivot":              "mid-task",
+    "exploration":        "standalone",
+    "auto-stage":         "standalone",
 }
 
 VIEWER_HANDOVER_KINDS = ("mid-task", "checkpoint", "wrap", "standalone")
