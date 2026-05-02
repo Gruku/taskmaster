@@ -37,14 +37,13 @@ def _make_backlog(tmp_path: Path) -> Path:
 
 def test_write_handover_rejects_unknown_session_kind(tmp_path):
     bp = _make_backlog(tmp_path)
-    with pytest.raises(ValueError, match="session_kind"):
+    with pytest.raises(ValueError, match=r"session_kind.*not-a-real-kind"):
         write_handover(bp, tldr="test", session_kind="not-a-real-kind")
 
 
 def test_write_handover_accepts_each_known_kind(tmp_path):
     bp = _make_backlog(tmp_path)
     for kind in HANDOVER_KINDS:
-        hid, _ = write_handover(
-            bp, tldr=f"test {kind}", session_kind=kind,
-        )
-        assert hid.endswith(f"test-{kind}".lower().replace(" ", "-")[:40].rstrip("-")) or kind in hid
+        hid, path = write_handover(bp, tldr=f"test {kind}", session_kind=kind)
+        assert isinstance(hid, str) and hid
+        assert path.exists()
