@@ -25,14 +25,14 @@ test.describe('dashboard', () => {
 
   test('edit toggle reveals add tiles and remove buttons', async ({ page }) => {
     await page.goto(`${BASE}/v3#/dashboard`);
-    await page.locator('.dash-edit-toggle').click();
+    await page.locator('[aria-label="Edit layout"]').click();
     await expect(page.locator('.dash-add-tile').first()).toBeVisible();
     await expect(page.locator('.widget__remove').first()).toBeVisible();
   });
 
   test('removing a widget persists across reload', async ({ page }) => {
     await page.goto(`${BASE}/v3#/dashboard`);
-    await page.locator('.dash-edit-toggle').click();
+    await page.locator('[aria-label="Edit layout"]').click();
     const before = await page.locator('.widget').count();
     await page.locator('.widget__remove').first().click();
     await page.waitForTimeout(300);
@@ -44,7 +44,7 @@ test.describe('dashboard', () => {
 
   test('add tile picker adds a stale-tasks widget', async ({ page }) => {
     await page.goto(`${BASE}/v3#/dashboard`);
-    await page.locator('.dash-edit-toggle').click();
+    await page.locator('[aria-label="Edit layout"]').click();
     await page.locator('.dash-add-tile').first().click();
     await page.locator('.dash-picker__item:has-text("Stale tasks")').click();
     await expect(page.locator('[data-widget-type="stale-tasks"]').last()).toBeVisible();

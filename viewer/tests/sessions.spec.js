@@ -13,10 +13,11 @@ test.describe('Sessions screen', () => {
 
     await page.goto('/v3#/sessions');
     await expect(page.locator('.sessions-page')).toBeVisible();
-    await expect(page.locator('.sessions-topbar h2')).toHaveText('Sessions / Handovers');
-    await expect(page.locator('[data-role=view-toggle] .seg')).toHaveCount(3);
+    // View toggle lives in the global topbar (.tm-segmented) post-redesign;
+    // the old per-screen <h2> header was retired.
+    await expect(page.locator('.tm-segmented button')).toHaveCount(3);
     await expect(page.locator('[data-role=kinds] .sessions-kind-chip')).toHaveCount(3);
-    await expect(page.locator('[data-role=new-note]')).toBeVisible();
+    await expect(page.locator('[aria-label="New note — coming soon"]')).toBeVisible();
 
     // No JS errors during initial mount.
     expect(errors).toEqual([]);
@@ -24,7 +25,7 @@ test.describe('Sessions screen', () => {
 
   test('view toggle switches active segment', async ({ page }) => {
     await page.goto('/v3#/sessions');
-    const segs = page.locator('[data-role=view-toggle] .seg');
+    const segs = page.locator('.tm-segmented button');
     await segs.nth(1).click();
     await expect(segs.nth(1)).toHaveClass(/\bon\b/);
     await expect(segs.nth(0)).not.toHaveClass(/\bon\b/);
@@ -52,15 +53,15 @@ test.describe('Sessions screen', () => {
 
   test('spec §3.12 coverage: kind tints, parallel-block, nested children, view toggle, new-note', async ({ page }) => {
     await page.goto('/v3#/sessions');
-    // View toggle has all three.
-    const segs = await page.locator('[data-role=view-toggle] .seg').allTextContents();
+    // View toggle has all three (now in global topbar via tmSegmented).
+    const segs = await page.locator('.tm-segmented button').allTextContents();
     expect(segs).toEqual(['Diary', 'Lanes', 'By Task']);
     // Kind chips: Sessions / Handovers / Recaps.
     const chips = await page.locator('[data-role=kinds] .sessions-kind-chip').allTextContents();
     expect(chips.join(' ').toLowerCase()).toMatch(/sessions/);
     expect(chips.join(' ').toLowerCase()).toMatch(/handovers/);
     expect(chips.join(' ').toLowerCase()).toMatch(/recaps/);
-    // + New note button is present and clickable.
-    await expect(page.locator('[data-role=new-note]')).toBeVisible();
+    // "+ New note" button is present (currently disabled with "coming soon" affordance).
+    await expect(page.locator('[aria-label="New note — coming soon"]')).toBeVisible();
   });
 });
