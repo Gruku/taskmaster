@@ -85,6 +85,21 @@ test('issue card task pill click does NOT trigger card-level navigation', async 
   await expect(page).toHaveURL(new RegExp(`#/task/${tid}`));
 });
 
+test('issue search filters cards by title', async ({ page }) => {
+  await page.goto('/v3/#/issues');
+  await expect(page.locator('.issue-card').first()).toBeVisible();
+  const initial = await page.locator('.issue-card').count();
+  expect(initial).toBeGreaterThan(0);
+  const firstTitle = (await page.locator('.issue-card__title').first().textContent()).trim();
+  const probe = firstTitle.split(/\s+/).find(w => w.length > 4) || firstTitle.slice(0, 5);
+  await page.locator('.tm-search input').fill(probe);
+  await page.waitForTimeout(300);
+  const filtered = await page.locator('.issue-card').count();
+  expect(filtered).toBeLessThanOrEqual(initial);
+  expect(filtered).toBeGreaterThan(0);
+  await expect(page.locator('.tm-subcount')).toHaveText(/of \d+ issues/);
+});
+
 test('issue detail back link returns to issues list', async ({ page }) => {
   await page.goto('/v3/#/issues');
   const id = await page.locator('.issue-card').first().getAttribute('data-issue-id');

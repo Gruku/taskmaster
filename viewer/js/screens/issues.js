@@ -1,7 +1,7 @@
 import { issueCard, issueRow } from '../components/issue-card.js';
 import { severityLabel } from '../util/severity-label.js';
 import * as api from '../api.js';
-import { claimTopbar, tmSubcount, tmSegmented, tmAction } from '../lib/topbar.js';
+import { claimTopbar, tmSubcount, tmSearch, tmSegmented, tmAction } from '../lib/topbar.js';
 
 export const meta = { title: 'Issues', icon: '!', sidebarKey: 'issues' };
 
@@ -17,6 +17,10 @@ export async function mount(root, { store, prefs }) {
   // ---- topbar (#topbar-actions)
   const topbar = claimTopbar();
   const subcount = tmSubcount('… issues');
+  const searchBuilt = tmSearch({
+    placeholder: 'Search issues…',
+    onInput: (v) => { searchTerm = v.trim().toLowerCase(); render(); },
+  });
 
   // Severity chip row stays as a screen-local element (filters, not a top-level
   // control) but we move it into the topbar visually so it sits with the rest.
@@ -50,6 +54,7 @@ export async function mount(root, { store, prefs }) {
   });
   newBtn.setAttribute('aria-disabled', 'true');
   topbar?.appendChild(subcount);
+  topbar?.appendChild(searchBuilt.el);
   topbar?.appendChild(filters);
   topbar?.appendChild(toggle);
   topbar?.appendChild(newBtn);
@@ -91,6 +96,21 @@ export async function mount(root, { store, prefs }) {
   root.appendChild(screen);
 
   let currentView = initialView;
+  let searchTerm = '';
+
+  function _matchesSearch(i) {
+    if (!searchTerm) return true;
+    const hay = [
+      i.id || '',
+      i.title || '',
+      i.symptom || '',
+      i.component || '',
+      ...(i.location || []),
+      ...(i.related_tasks || []).map(t => typeof t === 'string' ? t : (t.id || '')),
+    ].join(' ').toLowerCase();
+    return hay.includes(searchTerm);
+  }
+
   function setView(v) {
     currentView = v;
     prefs.patch({ screens: { issues: { view: v } } });
@@ -103,12 +123,15 @@ export async function mount(root, { store, prefs }) {
 
   function render() {
     const allIssues = store.getIssues() || [];
-    subcount.textContent = `${allIssues.length} issues`;
     const issues = allIssues.filter(i => {
+      if (!_matchesSearch(i)) return false;
       const sevs = activeFilters();
       if (sevs.length === 0) return true;
       return sevs.includes(i.severity_label || severityLabel(i.severity));
     });
+    subcount.textContent = (searchTerm || activeFilters().length)
+      ? `${issues.length} of ${allIssues.length} issues`
+      : `${allIssues.length} issues`;
 
     const tasksIndex = store.getTasksIndex ? store.getTasksIndex() : {};
     // Fix: read aging config from store.getPrefs(), not prefs.getPrefs()

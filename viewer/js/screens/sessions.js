@@ -41,8 +41,9 @@ export async function mount(root, { params, store, prefs }) {
   const searchBuilt = tmSearch({
     placeholder: 'Search sessions…',
     onInput: (v) => {
-      // Search hookup is owned by the timeline; this is a placeholder pass-through.
-      window.dispatchEvent(new CustomEvent('viewer:sessions-search', { detail: { q: v } }));
+      state.searchTerm = v.trim().toLowerCase();
+      refreshKindCounts(root, _filteredSessions(state), subcount);
+      render(root, state, rail);
     },
   });
   const initialSessionsView = prefs.screens.sessions.view || 'A';
@@ -78,6 +79,7 @@ export async function mount(root, { params, store, prefs }) {
     detailCache: new Map(),
     view: prefs.screens.sessions.view,
     kinds: { session: true, handover: true, recap: true },
+    searchTerm: '',
     selectedSessionId: params && params.id || null,
   };
 
@@ -90,6 +92,21 @@ export async function mount(root, { params, store, prefs }) {
   if (state.selectedSessionId) openSessionDetail(rail, state.selectedSessionId, state);
 
   return () => { rail.close(); };
+}
+
+function _filteredSessions(state) {
+  const q = state.searchTerm;
+  if (!q) return state.sessions;
+  return state.sessions.filter(s => {
+    const hay = [
+      s.id || '',
+      ...(s.task_ids || []),
+      ...(s.handover_ids || []),
+      s.recap_id || '',
+      s.tldr || '',
+    ].join(' ').toLowerCase();
+    return hay.includes(q);
+  });
 }
 
 function bindKindChips(root, state, onChange) {
@@ -123,8 +140,9 @@ function render(root, state, rail) {
   }
 
   // Filter + map for timeline.
+  const filtered = _filteredSessions(state);
   const visibleSessions = state.kinds.session
-    ? state.sessions.map(s => ({
+    ? filtered.map(s => ({
         ...s,
         handover_ids: state.kinds.handover ? (s.handover_ids || []) : [],
         recap_id: state.kinds.recap ? s.recap_id : null,
@@ -132,7 +150,7 @@ function render(root, state, rail) {
     : [];
 
   const handovers = {}; // id → {viewer_kind, tldr}
-  for (const s of state.sessions) {
+  for (const s of filtered) {
     for (const hid of s.handover_ids || []) {
       handovers[hid] = handovers[hid] || { id: hid, viewer_kind: 'standalone', tldr: '' };
     }

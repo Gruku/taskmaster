@@ -1,6 +1,6 @@
 import { lessonCard } from '../components/lesson-card.js';
 import * as api from '../api.js';
-import { claimTopbar, tmSubcount, tmSegmented, tmAction } from '../lib/topbar.js';
+import { claimTopbar, tmSubcount, tmSearch, tmSegmented, tmAction } from '../lib/topbar.js';
 
 export const meta = { title: 'Lessons', icon: '✦', sidebarKey: 'lessons' };
 
@@ -23,6 +23,10 @@ export async function mount(root, { store, prefs }) {
   // ---- topbar (#topbar-actions)
   const topbar = claimTopbar();
   const subcount = tmSubcount('… lessons');
+  const searchBuilt = tmSearch({
+    placeholder: 'Search lessons…',
+    onInput: (v) => { searchTerm = v.trim().toLowerCase(); render(); },
+  });
   const initialView = lessonsPrefs.view || 'A';
   const toggle = tmSegmented(
     [
@@ -38,6 +42,7 @@ export async function mount(root, { store, prefs }) {
   });
   newBtn.setAttribute('aria-disabled', 'true');
   topbar?.appendChild(subcount);
+  topbar?.appendChild(searchBuilt.el);
   topbar?.appendChild(toggle);
   topbar?.appendChild(newBtn);
 
@@ -49,8 +54,21 @@ export async function mount(root, { store, prefs }) {
   root.appendChild(screen);
 
   let currentView = initialView;
+  let searchTerm = '';
   // Track reinforced lesson IDs so re-render can re-apply is-fired state.
   const _reinforcedIds = new Set();
+
+  function _matchesSearch(l) {
+    if (!searchTerm) return true;
+    const hay = [
+      l.title || '',
+      l.summary || '',
+      l.id || '',
+      ...((l.triggers && l.triggers.files) || []),
+      ...((l.triggers && l.triggers.symbols) || []),
+    ].join(' ').toLowerCase();
+    return hay.includes(searchTerm);
+  }
 
   function setView(v) {
     currentView = v;
@@ -71,8 +89,11 @@ export async function mount(root, { store, prefs }) {
 
   function render() {
     shelvesEl.innerHTML = '';
-    const lessons = store.getLessons() || [];
-    subcount.textContent = `${lessons.length} lessons`;
+    const allLessons = store.getLessons() || [];
+    const lessons = allLessons.filter(_matchesSearch);
+    subcount.textContent = searchTerm
+      ? `${lessons.length} of ${allLessons.length} lessons`
+      : `${allLessons.length} lessons`;
     // Capture reinforced IDs snapshot for post-render re-application.
     const reinforcedSnapshot = new Set(_reinforcedIds);
 

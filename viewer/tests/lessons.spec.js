@@ -79,6 +79,24 @@ test('lesson card click navigates to lesson detail', async ({ page }) => {
   await expect(page.locator('.lesson-detail .ld-id')).toHaveText(id);
 });
 
+test('lesson search filters cards by title', async ({ page }) => {
+  await page.goto('/v3/#/lessons');
+  await expect(page.locator('.lesson-card').first()).toBeVisible();
+  const initial = await page.locator('.lesson-card').count();
+  expect(initial).toBeGreaterThan(0);
+  const firstTitle = (await page.locator('.lesson-card__title').first().textContent()).trim();
+  // Use a distinctive substring of the first lesson's title
+  const probe = firstTitle.split(/\s+/).find(w => w.length > 4) || firstTitle.slice(0, 5);
+  await page.locator('.tm-search input').fill(probe);
+  // Debounce 180ms
+  await page.waitForTimeout(300);
+  const filtered = await page.locator('.lesson-card').count();
+  expect(filtered).toBeLessThanOrEqual(initial);
+  expect(filtered).toBeGreaterThan(0);
+  // Subcount reflects filter
+  await expect(page.locator('.tm-subcount')).toHaveText(/of \d+ lessons/);
+});
+
 test('lesson detail back link returns to lessons list', async ({ page }) => {
   await page.goto('/v3/#/lesson/L-001');
   await expect(page.locator('.lesson-detail')).toBeVisible();
