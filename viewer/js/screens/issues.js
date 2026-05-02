@@ -51,8 +51,8 @@ export async function mount(root, { store, prefs }) {
   const newBtn = tmAction({
     icon: '+', label: 'Issue', variant: 'primary',
     title: 'New issue — coming soon',
+    disabled: true,
   });
-  newBtn.setAttribute('aria-disabled', 'true');
 
   // Component chip-row (populated dynamically once issues load).
   const compRow = document.createElement('div');

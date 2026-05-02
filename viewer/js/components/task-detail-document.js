@@ -30,8 +30,8 @@ function mountTopbar({ prefs, onToggleVariant }) {
     ],
     { value: view, onChange: (v) => onToggleVariant?.(v) },
   );
-  const editBtn = tmAction({ icon: '✎', label: 'Edit', title: 'Edit task' });
-  const archiveBtn = tmAction({ icon: '✕', label: 'Archive', title: 'Archive task' });
+  const editBtn = tmAction({ icon: '✎', label: 'Edit', title: 'Edit task — coming soon', disabled: true });
+  const archiveBtn = tmAction({ icon: '✕', label: 'Archive', title: 'Archive task — coming soon', disabled: true });
   topbar.append(seg, editBtn, archiveBtn);
 }
 

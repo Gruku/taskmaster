@@ -39,8 +39,8 @@ export async function mount(root, { store, prefs }) {
   const newBtn = tmAction({
     icon: '+', label: 'Lesson', variant: 'primary',
     title: 'New lesson — coming soon',
+    disabled: true,
   });
-  newBtn.setAttribute('aria-disabled', 'true');
   const catRow = document.createElement('div');
   catRow.className = 'tm-chip-row lessons__cats';
 

@@ -65,8 +65,9 @@ export async function mount(root, { params, store, prefs }) {
     },
   );
   const newNoteBtn = tmAction({
-    icon: '+', label: 'New note', variant: 'primary', title: 'New note',
-    onClick: () => { window.location.hash = '#/sessions?new=1'; },
+    icon: '+', label: 'New note', variant: 'primary',
+    title: 'New note — coming soon',
+    disabled: true,
   });
   topbar?.appendChild(subcount);
   topbar?.appendChild(searchBuilt.el);
@@ -236,8 +237,8 @@ function renderHandoverRail(h, owner) {
     + `<span class="kind-pill handover">${escapeHtml(h.viewer_kind.toUpperCase())}</span>`
     + `<span class="ts">${escapeHtml(h.date || '')}</span>`
     + `<span class="actions">`
-    + `<button class="ic-btn" title="Edit">✎</button>`
-    + `<button class="ic-btn" title="Open file">↗</button>`
+    + `<button class="ic-btn" title="Edit — coming soon" disabled>✎</button>`
+    + `<button class="ic-btn" title="Open file — coming soon" disabled>↗</button>`
     + `<button class="ic-btn" data-role="rail-close" title="Close">✕</button>`
     + `</span></div>`
     + `<div class="rr-title">${escapeHtml(h.tldr || h.id)}</div>`
