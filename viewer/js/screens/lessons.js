@@ -117,9 +117,16 @@ export async function mount(root, { store, prefs }) {
     return summary;
   }
 
+  let _lastChipKey = '';
   function render() {
     shelvesEl.innerHTML = '';
     const allLessons = store.getLessons() || [];
+    // Re-render chips when the set of categories actually changes (cheap key).
+    const chipKey = [...new Set(allLessons.map(l => l.category).filter(Boolean))].sort().join('|');
+    if (chipKey !== _lastChipKey) {
+      _renderCategoryChips();
+      _lastChipKey = chipKey;
+    }
     const lessons = allLessons.filter(l => _matchesSearch(l) && _matchesCategory(l));
     const filterActive = !!searchTerm || activeCategories.size > 0;
     subcount.textContent = filterActive
@@ -228,7 +235,6 @@ export async function mount(root, { store, prefs }) {
     const data = await api.getLessons();
     store.setLessons(data.lessons);
   }
-  _renderCategoryChips();
   render();
 
   // Cleanup function

@@ -116,6 +116,20 @@ test('issue component chip filters cards', async ({ page }) => {
   await expect(page.locator('.tm-subcount')).toHaveText(/of \d+ issues/);
 });
 
+test('issue search + component chip combine via AND', async ({ page }) => {
+  await page.goto('/v3/#/issues');
+  await expect(page.locator('.issue-card').first()).toBeVisible();
+  await page.locator('.issues__comp-chip').filter({ hasText: 'viewer' }).click();
+  await page.waitForTimeout(80);
+  const afterChip = await page.locator('.issue-card').count();
+  expect(afterChip).toBeGreaterThan(0);
+  await page.locator('.tm-search input').fill('zzznoSuchIssue');
+  await page.waitForTimeout(300);
+  const afterBoth = await page.locator('.issue-card').count();
+  expect(afterBoth).toBe(0);
+  await expect(page.locator('.tm-subcount')).toHaveText(/0 of \d+ issues/);
+});
+
 test('issue detail back link returns to issues list', async ({ page }) => {
   await page.goto('/v3/#/issues');
   const id = await page.locator('.issue-card').first().getAttribute('data-issue-id');

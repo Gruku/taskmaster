@@ -153,8 +153,14 @@ export async function mount(root, { store, prefs }) {
     return [...filters.querySelectorAll('.is-active')].map(el => el.dataset.sev);
   }
 
+  let _lastChipKey = '';
   function render() {
     const allIssues = store.getIssues() || [];
+    const chipKey = [...new Set(allIssues.map(i => i.component).filter(Boolean))].sort().join('|');
+    if (chipKey !== _lastChipKey) {
+      _renderComponentChips();
+      _lastChipKey = chipKey;
+    }
     const issues = allIssues.filter(i => {
       if (!_matchesSearch(i)) return false;
       if (!_matchesComponent(i)) return false;
@@ -213,7 +219,6 @@ export async function mount(root, { store, prefs }) {
     const data = await api.getIssues({ includeResolved: true });
     store.setIssues(data.issues);
   }
-  _renderComponentChips();
   render();
   return () => {};
 }

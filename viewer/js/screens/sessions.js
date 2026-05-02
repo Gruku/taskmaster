@@ -42,7 +42,7 @@ export async function mount(root, { params, store, prefs }) {
     placeholder: 'Search sessions…',
     onInput: (v) => {
       state.searchTerm = v.trim().toLowerCase();
-      refreshKindCounts(root, _filteredSessions(state), subcount);
+      refreshKindCounts(root, _filteredSessions(state), subcount, state.sessions.length);
       render(root, state, rail);
     },
   });
@@ -121,7 +121,7 @@ function bindKindChips(root, state, onChange) {
   }
 }
 
-function refreshKindCounts(root, sessions, subcount) {
+function refreshKindCounts(root, sessions, subcount, totalCount) {
   const sCount = sessions.length;
   const hCount = sessions.reduce((n, s) => n + (s.handover_ids || []).length, 0);
   const rCount = sessions.filter(s => s.recap_id).length;
@@ -129,7 +129,12 @@ function refreshKindCounts(root, sessions, subcount) {
   chips[0].querySelector('.ct').textContent = sCount;
   chips[1].querySelector('.ct').textContent = hCount;
   chips[2].querySelector('.ct').textContent = rCount;
-  if (subcount) subcount.textContent = `${sCount} sessions · ${hCount} handovers · ${rCount} recaps`;
+  if (subcount) {
+    const filtered = totalCount != null && totalCount !== sCount;
+    subcount.textContent = filtered
+      ? `${sCount} of ${totalCount} sessions · ${hCount} handovers · ${rCount} recaps`
+      : `${sCount} sessions · ${hCount} handovers · ${rCount} recaps`;
+  }
 }
 
 function render(root, state, rail) {

@@ -137,6 +137,23 @@ test('lesson category chip filters cards', async ({ page }) => {
   await expect(page.locator('.tm-subcount')).toHaveText(/of \d+ lessons/);
 });
 
+test('lesson search + category chip combine via AND', async ({ page }) => {
+  await page.goto('/v3/#/lessons');
+  await expect(page.locator('.lesson-card').first()).toBeVisible();
+  // Activate `workflow` chip → narrows to workflow lessons.
+  await page.locator('.lessons__cat-chip').filter({ hasText: 'workflow' }).click();
+  await page.waitForTimeout(80);
+  const afterChip = await page.locator('.lesson-card').count();
+  expect(afterChip).toBeGreaterThan(0);
+  // Apply a search term that no workflow lesson matches → expect 0 results.
+  await page.locator('.tm-search input').fill('zzznoSuchLesson');
+  await page.waitForTimeout(300);
+  const afterBoth = await page.locator('.lesson-card').count();
+  expect(afterBoth).toBe(0);
+  // Subcount reflects "0 of N".
+  await expect(page.locator('.tm-subcount')).toHaveText(/0 of \d+ lessons/);
+});
+
 test('lesson detail back link returns to lessons list', async ({ page }) => {
   await page.goto('/v3/#/lesson/L-001');
   await expect(page.locator('.lesson-detail')).toBeVisible();
