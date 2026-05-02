@@ -214,7 +214,8 @@ html, body {
 .topbar-actions {
   display: flex; align-items: center; gap: var(--sp-3);
   flex: 1 1 0;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
+  row-gap: var(--sp-2);
   min-width: 0;
   justify-content: flex-end;
   container-type: inline-size;

@@ -219,6 +219,7 @@
 /* Segmented — grouped icon buttons (▤ ▦ density, Spine/Log, Document/Graph, etc.) */
 .tm-segmented {
   display: inline-flex; gap: 0;
+  flex-shrink: 0;
   border: 1px solid var(--border);
   border-radius: var(--r-md);
   background: var(--bg-card);
@@ -297,6 +298,23 @@
 /* Chip row — wraps priority/category chips in topbar */
 .tm-chip-row {
   display: inline-flex;
+  flex-wrap: wrap;
+  row-gap: var(--sp-1);
   gap: var(--sp-1);
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+/* Card primitive — shared base for screen-level card variants
+   (issue-card, lesson-card, kanban card, side-rail blocks).
+   Variants override background, border-color, padding, and gap as needed
+   but inherit the foundation here so card structure stays consistent. */
+.tm-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
 }
