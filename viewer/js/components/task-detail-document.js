@@ -13,7 +13,10 @@ export function mountTaskDetailDocument(root, ctx) {
   root.appendChild(renderHeader(ctx));
   root.appendChild(renderGrid(ctx));
 
-  return () => { root.innerHTML = ''; };
+  return () => {
+    root.innerHTML = '';
+    root.classList.remove('td-page', 'td-page-A');
+  };
 }
 
 function mountTopbar({ prefs, onToggleVariant }) {

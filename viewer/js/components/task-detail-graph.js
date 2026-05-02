@@ -14,7 +14,10 @@ export function mountTaskDetailGraph(root, ctx) {
   mountTopbar(ctx);
   root.appendChild(renderHeader(ctx));
   root.appendChild(renderGrid(ctx));
-  return () => { root.innerHTML = ''; };
+  return () => {
+    root.innerHTML = '';
+    root.classList.remove('td-page', 'td-page-B');
+  };
 }
 
 function mountTopbar({ prefs, onToggleVariant }) {
