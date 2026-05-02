@@ -1410,7 +1410,7 @@ def backlog_handover_create(
         next_action: One-line "where to start next session." Optional but useful.
         body: Markdown body (the four-section narrative).
         task_ids: Tasks this handover relates to (surfaces in pick-task).
-        session_kind: One of HANDOVER_KINDS.
+        session_kind: One of {", ".join(HANDOVER_KINDS)}.
         context_size_at_write: Optional marker for compaction-prompted handovers.
         supersedes: Optional id of an older handover this one supersedes. When
             set, the new handover records `supersedes:` in its frontmatter and
@@ -1574,7 +1574,7 @@ def backlog_handover_supersede(old_id: str, new_id: str) -> str:
     try:
         old_path = _apply_supersession(bp, old_id=old_id, new_id=new_id)
     except FileNotFoundError as exc:
-        return f"Error: handover not found ({exc})."
+        return f"Error: handover not found: {exc}."
     return f"Superseded {old_id} → {new_id} ({old_path.name} updated)."
 
 

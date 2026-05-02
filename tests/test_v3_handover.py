@@ -1,7 +1,15 @@
 """Tests for v3 handover write/validate/supersession plumbing."""
-import pytest
+import sys
 from pathlib import Path
+
+import pytest
 import yaml
+
+# Make `import backlog_server` work the same way other tests in this directory do.
+PLUGIN_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PLUGIN_ROOT))
+
+import backlog_server  # noqa: E402
 
 from taskmaster_v3 import (
     HANDOVER_KINDS,
@@ -128,15 +136,6 @@ def test_apply_supersession_raises_for_missing_ids(tmp_path):
         apply_supersession(bp, old_id="nonexistent", new_id=hid)
 
 
-import sys
-
-# Import the MCP server module the same way other tests do.
-PLUGIN_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PLUGIN_ROOT))
-
-import backlog_server  # noqa: E402
-
-
 def _set_backlog_root(monkeypatch, bp: Path):
     monkeypatch.setattr(backlog_server, "ROOT", bp.parent)
     monkeypatch.setattr(backlog_server, "_backlog_path", lambda: bp)
@@ -157,10 +156,11 @@ def test_backlog_handover_create_with_supersedes(tmp_path, monkeypatch):
         supersedes=old_id,
     )
     assert "Handover written" in out_new
+    new_id = out_new.splitlines()[0].split(": ", 1)[1].strip()
 
     # Old file should now have superseded_by + callout in body.
     fm, body = read_handover(bp, old_id)
-    assert fm.get("superseded_by")  # set by the create call
+    assert fm.get("superseded_by") == new_id
     assert body.startswith("> **SUPERSEDED")
 
 
