@@ -1,6 +1,7 @@
 import { issueCard, issueRow } from '../components/issue-card.js';
 import { severityLabel } from '../util/severity-label.js';
 import { pluralize } from '../util/pluralize.js';
+import { emptyState } from '../components/empty-state.js';
 import * as api from '../api.js';
 import { claimTopbar, tmSubcount, tmSearch, tmSegmented, tmAction } from '../lib/topbar.js';
 
@@ -194,6 +195,18 @@ export async function mount(root, { store, prefs }) {
     }
     for (const i of resolved) {
       resolvedList.appendChild(issueRow(i));
+    }
+
+    if (investigating.length === 0 && open.length === 0 && filterActive) {
+      openList.appendChild(emptyState({
+        headline: 'No open issues match your filters',
+        hint: 'Try clearing a severity chip or the search box.',
+      }));
+    } else if (investigating.length === 0 && open.length === 0 && resolved.length === 0) {
+      openList.appendChild(emptyState({
+        headline: 'No issues yet',
+        hint: 'Issues appear here as you investigate or fix bugs.',
+      }));
     }
     resolvedHeader.innerHTML = `<span class="caret">▾</span> Resolved · ${resolved.length} ${pluralize(resolved.length, 'issue', 'issues')}`;
 

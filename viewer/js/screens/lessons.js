@@ -2,6 +2,7 @@ import { lessonCard } from '../components/lesson-card.js';
 import * as api from '../api.js';
 import { claimTopbar, tmSubcount, tmSearch, tmSegmented, tmAction } from '../lib/topbar.js';
 import { pluralize } from '../util/pluralize.js';
+import { emptyState } from '../components/empty-state.js';
 
 export const meta = { title: 'Lessons', icon: '✦', sidebarKey: 'lessons' };
 
@@ -136,7 +137,19 @@ export async function mount(root, { store, prefs }) {
     // Capture reinforced IDs snapshot for post-render re-application.
     const reinforcedSnapshot = new Set(_reinforcedIds);
 
-    if (currentView === 'A') {
+    if (lessons.length === 0 && filterActive) {
+      shelvesEl.innerHTML = '';
+      shelvesEl.appendChild(emptyState({
+        headline: 'No lessons match your filters',
+        hint: 'Try clearing the search box or a category chip.',
+      }));
+    } else if (lessons.length === 0) {
+      shelvesEl.innerHTML = '';
+      shelvesEl.appendChild(emptyState({
+        headline: 'No lessons yet',
+        hint: 'Lessons appear here as you reinforce patterns from your sessions.',
+      }));
+    } else if (currentView === 'A') {
       renderShelves(shelvesEl, lessons);
     } else if (currentView === 'B') {
       renderFlat(shelvesEl, lessons);

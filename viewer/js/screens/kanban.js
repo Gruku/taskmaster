@@ -14,6 +14,7 @@ import { applyFilters, sortTasks, groupTasks, STATUS_LABELS } from '../lib/filte
 import { assignEpicColors }                  from '../lib/epics.js';
 import { claimTopbar, tmAction } from '../lib/topbar.js';
 import { pluralize } from '../util/pluralize.js';
+import { emptyState } from '../components/empty-state.js';
 
 export const meta = { title: 'Kanban', icon: '▦', sidebarKey: 'kanban' };
 
@@ -284,10 +285,12 @@ export async function mount(root, { store, prefs }) {
       const colBody = document.createElement('div');
       colBody.className = 'kanban-col-body';
       if (!g.tasks.length) {
-        const empty = document.createElement('div');
-        empty.className = 'kanban-col-empty';
-        empty.textContent = '— filtered out —';
-        colBody.appendChild(empty);
+        // Honest text: only call out filters if any are active. Otherwise the
+        // column is just empty (e.g. nothing in "Done" yet).
+        const hasFilters = (state.filters.priorities?.length || state.filters.epics?.length || state.filters.search);
+        colBody.appendChild(emptyState({
+          headline: hasFilters ? 'No tasks match your filters' : 'Nothing here',
+        }));
       } else {
         for (const t of g.tasks) {
           colBody.appendChild(renderCard({

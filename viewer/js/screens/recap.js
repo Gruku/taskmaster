@@ -1,6 +1,7 @@
 import { listSessions, getRecap, putRecap, getSnapshotDiff } from '../api.js';
 import { renderReceiptsGrid } from '../components/recap-receipts-grid.js';
 import { claimTopbar, tmAction } from '../lib/topbar.js';
+import { emptyState } from '../components/empty-state.js';
 
 export const meta = { title: 'Recap', icon: '⚯', sidebarKey: 'recap' };
 
@@ -14,16 +15,24 @@ export async function mount(root, { params, subpath }) {
 
   const targetId = (subpath && subpath[0]) || (params && params.id) || (recapSessions[0] && recapSessions[0].id);
   if (!targetId) {
-    root.querySelector('[data-role=root]').innerHTML =
-      `<div class="stub">No recaps yet. Close a session to generate one.</div>`;
+    const host = root.querySelector('[data-role=root]');
+    host.innerHTML = '';
+    host.appendChild(emptyState({
+      headline: 'No recaps yet',
+      hint: 'Close a session to generate one.',
+    }));
     return () => {};
   }
 
   const idx = recapSessions.findIndex(s => s.id === targetId);
   const cur = recapSessions[idx];
   if (!cur) {
-    root.querySelector('[data-role=root]').innerHTML =
-      `<div class="stub">No recap found for ${escapeHtml(targetId)}.</div>`;
+    const host = root.querySelector('[data-role=root]');
+    host.innerHTML = '';
+    host.appendChild(emptyState({
+      headline: `No recap found for ${targetId}`,
+      hint: 'It may have been deleted, or the id is wrong.',
+    }));
     return () => {};
   }
   const prev = recapSessions[idx + 1] || null;

@@ -5,6 +5,7 @@
 import { claimTopbar, tmSubcount, tmSearch, tmAction } from '../lib/topbar.js';
 import { pluralize } from '../util/pluralize.js';
 import { formatAbsolute } from '../lib/time.js';
+import { emptyState } from '../components/empty-state.js';
 
 export const meta = { title: 'Table', icon: '▭', sidebarKey: 'table' };
 
@@ -220,11 +221,15 @@ export async function mount(root, { store, prefs }) {
     // Body
     const tbody = document.createElement('tbody');
     if (!tasks.length) {
+      const hasFilters = state.filters.status.length || state.filters.priority.length || state.filters.epic.length || state.search;
       const tr = document.createElement('tr');
       const td = document.createElement('td');
       td.colSpan = COLUMNS.length;
       td.className = 'tbl-empty';
-      td.textContent = 'No tasks match your filters.';
+      td.appendChild(emptyState({
+        headline: hasFilters ? 'No tasks match your filters' : 'No tasks yet',
+        hint: hasFilters ? 'Try clearing a chip or the search box.' : null,
+      }));
       tr.appendChild(td);
       tbody.appendChild(tr);
     } else {

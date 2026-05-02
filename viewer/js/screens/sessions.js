@@ -3,6 +3,7 @@ import { RightRail } from '../components/right-rail.js';
 import { listSessions, getSessionDetail } from '../api.js';
 import { claimTopbar, tmSubcount, tmSearch, tmSegmented, tmAction } from '../lib/topbar.js';
 import { pluralize } from '../util/pluralize.js';
+import { emptyState } from '../components/empty-state.js';
 
 export const meta = { title: 'Sessions', icon: '⊕', sidebarKey: 'sessions' };
 
@@ -172,6 +173,25 @@ function render(root, state, rail) {
   }
 
   const independent = []; // standalone handovers come from a Plan 5b feed; empty here.
+
+  // Empty-state: no sessions in the data, OR search dimmed everything out and
+  // the user can't see anything. Kind-chip-only filters leave the rail visible.
+  if (state.sessions.length === 0) {
+    mount.innerHTML = '';
+    mount.appendChild(emptyState({
+      headline: 'No sessions yet',
+      hint: 'Sessions appear here as you start and end your work cycles.',
+    }));
+    return;
+  }
+  if (state.searchTerm && matched.length === 0) {
+    mount.innerHTML = '';
+    mount.appendChild(emptyState({
+      headline: 'No sessions match your search',
+      hint: 'Try a different term or clear the search box.',
+    }));
+    return;
+  }
 
   renderTimeline(mount, {
     sessions: visibleSessions,
