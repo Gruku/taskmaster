@@ -467,7 +467,7 @@ HANDOVER_INDEX_CAP = 30
 
 RECAP_SCHEMA_VERSION = 1
 
-# Map storage-side handover kinds to viewer-side display kinds (spec §3.12).
+# Map storage-side handover kinds to viewer-side display kinds (spec §5).
 # Storage kinds live in handover frontmatter (`session_kind`); the viewer renders
 # them via this mapping for kind-pill colour, kind-filter chips, and right-rail header.
 HANDOVER_KIND_TO_VIEWER_KIND = {
