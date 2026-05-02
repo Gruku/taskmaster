@@ -36,11 +36,11 @@ test('view toggle persists to prefs', async ({ page }) => {
   await page.goto('/v3/#/lessons');
   // Topbar segmented control (tm-segmented uses data-key, not data-view)
   await page.locator('.tm-segmented button[data-key="B"]').click();
-  await expect(page.locator('.tm-segmented button[data-key="B"]')).toHaveClass(/on|is-active/);
+  await expect(page.locator('.tm-segmented button[data-key="B"]')).toHaveClass(/\bon\b/);
   // Wait for the 400ms prefs debounce to flush before reload
   await page.waitForTimeout(600);
   await page.reload();
-  await expect(page.locator('.tm-segmented button[data-key="B"]')).toHaveClass(/on|is-active/);
+  await expect(page.locator('.tm-segmented button[data-key="B"]')).toHaveClass(/\bon\b/);
 });
 
 test('lesson card surfaces all §3.13 elements', async ({ page }) => {
@@ -77,6 +77,29 @@ test('lesson card click navigates to lesson detail', async ({ page }) => {
   await page.waitForURL(`**/#/lesson/${id}`);
   await expect(page.locator('.lesson-detail .ld-title')).toBeVisible();
   await expect(page.locator('.lesson-detail .ld-id')).toHaveText(id);
+});
+
+test('lesson card without summary does not render summary block', async ({ page }) => {
+  // Negative-case companion to the §3.13 surface test:
+  // a card whose underlying lesson has empty body should not render
+  // .lesson-card__summary at all (rather than render an empty div).
+  await page.goto('/v3/#/lessons');
+  await expect(page.locator('.lesson-card').first()).toBeVisible();
+  // Spy: every rendered .lesson-card__summary should have non-empty text.
+  const counts = await page.evaluate(() => {
+    const cards = [...document.querySelectorAll('.lesson-card')];
+    let withSummary = 0, emptySummary = 0;
+    for (const c of cards) {
+      const s = c.querySelector('.lesson-card__summary');
+      if (!s) continue;
+      withSummary++;
+      if (!s.textContent.trim()) emptySummary++;
+    }
+    return { total: cards.length, withSummary, emptySummary };
+  });
+  expect(counts.total).toBeGreaterThan(0);
+  // Whatever subset has summary blocks, none of them is empty.
+  expect(counts.emptySummary).toBe(0);
 });
 
 test('lesson search filters cards by title', async ({ page }) => {
