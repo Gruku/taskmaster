@@ -4,6 +4,7 @@
 
 import { claimTopbar, tmSubcount, tmSearch, tmAction } from '../lib/topbar.js';
 import { pluralize } from '../util/pluralize.js';
+import { formatAbsolute } from '../lib/time.js';
 
 export const meta = { title: 'Table', icon: '▭', sidebarKey: 'table' };
 
@@ -40,9 +41,8 @@ function prettyStatus(s) { return STATUS_LABELS[s] || s || ''; }
 function esc(v) { return String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function formatDate(iso) {
   if (!iso) return '—';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return esc(iso);
-  return d.toISOString().slice(0, 10);
+  const out = formatAbsolute(iso, { time: false, year: true });
+  return out || esc(iso);
 }
 
 const DEFAULT_STATE = {

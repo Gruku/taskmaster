@@ -3,6 +3,7 @@
 
 import { registerWidget } from '../widget-catalog.js';
 import { pluralize } from '../../util/pluralize.js';
+import { isoToMs, formatDurationCompact } from '../../lib/time.js';
 
 export const meta = {
   id: 'auto-mode-stepper',
@@ -108,14 +109,8 @@ export async function mount(root, ctx) {
 }
 
 function elapsed(iso) {
-  if (!iso) return '';
-  const ms = Date.now() - new Date(iso).getTime();
-  if (Number.isNaN(ms) || ms < 0) return '';
-  const s = Math.floor(ms / 1000);
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  if (h) return `${h}h ${m}m`;
-  return `${m}m`;
+  const startMs = isoToMs(iso);
+  return startMs == null ? '' : formatDurationCompact(Date.now() - startMs);
 }
 
 function formatTokens(n) {

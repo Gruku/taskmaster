@@ -1,6 +1,8 @@
 // Header status pill — visible on every screen when auto-mode is running.
 // Mounts into #topbar-actions, subscribes to store.autoState.
 
+import { isoToMs, formatDurationCompact } from '../lib/time.js';
+
 const STAGE_LABELS = {
   PICK: 'Pick', PLAN: 'Plan', SPEC_REVIEW: 'Review',
   TESTS: 'Tests', IMPLEMENT: 'Implement',
@@ -21,7 +23,8 @@ export function mountAutoStatus(root, ctx) {
     if (!state || !state.cursor) { pill.hidden = true; return; }
     pill.hidden = false;
     const stage = STAGE_LABELS[state.cursor.stage] || state.cursor.stage || '';
-    const elapsed = formatElapsed(state.started_at);
+    const startMs = isoToMs(state.started_at);
+    const elapsed = startMs != null ? formatDurationCompact(Date.now() - startMs) : '';
     pill.innerHTML = `
       <span class="auto-status-dot"></span>
       <span class="auto-status-text">Auto Mode${stage ? ` · ${stage}` : ''}${elapsed ? ` · ${elapsed}` : ''}</span>
@@ -31,16 +34,4 @@ export function mountAutoStatus(root, ctx) {
   paint(ctx.store.getAutoState?.() ?? null);
   const unsub = ctx.store.subscribe?.('autoState', paint);
   return () => { unsub?.(); pill.remove(); };
-}
-
-function formatElapsed(iso) {
-  if (!iso) return '';
-  const ms = Date.now() - new Date(iso).getTime();
-  if (Number.isNaN(ms) || ms < 0) return '';
-  const s = Math.floor(ms / 1000);
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  if (h) return `${h}h${m}m`;
-  if (m) return `${m}m`;
-  return `${s}s`;
 }

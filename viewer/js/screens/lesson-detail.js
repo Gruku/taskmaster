@@ -1,5 +1,6 @@
 import * as api from '../api.js';
 import { claimTopbar, tmAction } from '../lib/topbar.js';
+import { formatRelative, formatAbsolute } from '../lib/time.js';
 
 export const meta = { title: 'Lesson', icon: '✦', sidebarKey: 'lessons' };
 
@@ -7,20 +8,11 @@ const KIND_ICON = { gotcha: '⚠', pattern: '◇', 'anti-pattern': '⊘' };
 const KIND_LABEL = { gotcha: 'Gotcha', pattern: 'Pattern', 'anti-pattern': 'Anti-pattern' };
 
 function _fmtDate(iso) {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  return iso ? formatAbsolute(iso, { time: false, year: true }) : '—';
 }
 
-function _fmtRel(iso, now = new Date()) {
-  if (!iso) return '—';
-  const ms = now.getTime() - new Date(iso).getTime();
-  const d = Math.floor(ms / 86_400_000);
-  if (d <= 0) {
-    const h = Math.floor(ms / 3_600_000);
-    return h <= 0 ? 'now' : `${h}h ago`;
-  }
-  return `${d}d ago`;
+function _fmtRel(iso, now) {
+  return iso ? formatRelative(iso, { now: now ? (now instanceof Date ? now.getTime() : now) : Date.now() }) : '—';
 }
 
 export async function mount(root, { params, store, prefs, subpath }) {

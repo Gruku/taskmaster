@@ -3,6 +3,8 @@
 // [start, end] windows overlap (transitively). Independent flat handovers can be
 // passed alongside; they render outside any cluster as standalone rows.
 
+import { formatAbsolute } from '../lib/time.js';
+
 /**
  * @typedef {{id:string, start:string, end:string, kind?:string, parent_id?:string|null}} TimelineItem
  */
@@ -160,8 +162,7 @@ function recapChildHtml(id) {
 }
 
 function shortTime(iso) {
-  const d = new Date(iso);
-  return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+  return formatAbsolute(iso, { date: false });
 }
 
 function escapeHtml(s) {

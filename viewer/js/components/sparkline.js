@@ -2,6 +2,8 @@
 // reinforce_events over the last N days, plus the lifetime count and
 // the relative "last fired" timestamp.
 
+import { formatRelative } from '../lib/time.js';
+
 const DEFAULT_DAYS = 30;
 const W = 64;
 const H = 16;
@@ -18,14 +20,7 @@ function _bucket(events, days, now) {
 }
 
 function _relTime(iso, now) {
-  if (!iso) return '—';
-  const ms = now.getTime() - new Date(iso).getTime();
-  const d = Math.floor(ms / 86_400_000);
-  if (d <= 0) {
-    const h = Math.floor(ms / 3_600_000);
-    return h <= 0 ? 'now' : `${h}h`;
-  }
-  return `${d}d`;
+  return iso ? formatRelative(iso, { now: now.getTime(), suffix: '' }) : '—';
 }
 
 export function sparkline(lesson, { days = DEFAULT_DAYS, now = new Date() } = {}) {

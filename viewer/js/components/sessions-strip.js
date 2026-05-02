@@ -1,3 +1,5 @@
+import { isoToMs, formatDurationCompact } from '../lib/time.js';
+
 /**
  * Render a tab strip of parallel auto-mode sessions.
  * @param {HTMLElement} root
@@ -30,13 +32,8 @@ export function renderSessionsStrip(root, { sessions = [], activeSid, onSelect }
 }
 
 function elapsed(iso) {
-  if (!iso) return '';
-  const ms = Date.now() - new Date(iso).getTime();
-  if (Number.isNaN(ms) || ms < 0) return '';
-  const m = Math.floor(ms / 60000);
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  return `${h}h${m % 60}m`;
+  const startMs = isoToMs(iso);
+  return startMs == null ? '' : formatDurationCompact(Date.now() - startMs);
 }
 
 function escape(s) {

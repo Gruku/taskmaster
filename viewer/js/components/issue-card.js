@@ -3,6 +3,7 @@ import { agingBar } from './aging-bar.js';
 import { severityLabel } from '../util/severity-label.js';
 import { pluralize } from '../util/pluralize.js';
 import { computeBlocksCount } from '../util/issue-blocks.js';
+import { formatRelative } from '../lib/time.js';
 
 const LOCATION_RE = /^(.*?):(\d+)(?::\d+)?$/;
 
@@ -179,8 +180,8 @@ export function issueRow(issue) {
   const when = document.createElement('span');
   when.className = 'issue-row__when';
   if (issue.resolved) {
-    const days = Math.max(0, Math.floor((Date.now() - new Date(issue.resolved).getTime()) / 86_400_000));
-    when.textContent = issue.status === 'fixed' ? `fixed ${days}d ago` : `closed ${days}d ago`;
+    const rel = formatRelative(issue.resolved);
+    when.textContent = `${issue.status === 'fixed' ? 'fixed' : 'closed'} ${rel}`;
   }
   row.appendChild(when);
 
