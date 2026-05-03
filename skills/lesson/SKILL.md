@@ -78,6 +78,7 @@ Walk `references/auto-extraction.md` for the per-field source rules:
 - **`kind`** — candidate `kind` attr if set, else inferred (corrections → `anti-pattern`; "we always" / "always do" → `pattern`; "watch out" / "got burned" → `gotcha`).
 - **`triggers.files`** — `git diff --name-only HEAD~5` collapsed to globs (e.g. `src/auth/login.ts` + `src/auth/session.ts` → `src/auth/**`).
 - **`triggers.task_titles_match`** — keyword extraction (3–5 nouns/verbs) from current and recent task titles.
+- **`triggers.task_kinds`** — currently-in-progress task's `kind` field if set; else `[]`.
 - **Body `## Why`** — drafted from candidate body + bug/correction context.
 - **Body `## What to do`** — numbered steps drafted from the resolution path.
 - **Body `## Examples`** — task ids of session-touched tasks + commit SHAs from `git log --oneline HEAD~5`.

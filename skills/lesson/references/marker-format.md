@@ -19,6 +19,8 @@ Recurred on cb6927c0; fix is chatId === activeTabId early-return.
 
 **Body:** 1–3 sentences — what it is and why it matters. No file paths or commits required at the time of emit; auto-extraction fills those later.
 
+**Attrs are optional.** An attrless `<lesson-candidate>...</lesson-candidate>` is valid — it scans as `kind=""`, `topic=""`, `scope="point"` (defaults). The sweep will prompt for `kind` during review since it can't be inferred from the tag alone. Prefer including at least `kind` when you have it.
+
 ## Grep-optimized conventions
 
 These conventions exist so a literal `grep '<lesson-candidate '` over chat logs Just Works. Follow them exactly:

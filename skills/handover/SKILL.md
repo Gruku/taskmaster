@@ -107,6 +107,8 @@ backlog_handover_create(
 
 The server writes the file, syncs the index, and (if `supersedes` is set) edits the old handover in place.
 
+If the lesson skill (via end-session's v3-pre-2a sweep) buffered a `pending_review_flag`, forward both `flag_for_review=true` and `review_reason=<buffered reason>` to `backlog_handover_create` unchanged. The flag lands in the new handover's frontmatter so future `session-retro` runs can find it.
+
 ### 10. Confirm
 
 Echo back: *"Handover written: `<id>`. Next session can resume from this with `backlog_handover_latest`."*

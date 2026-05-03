@@ -27,7 +27,7 @@ When end-session's sweep encounters a `scope="session"` candidate (either in-con
 4. The new handover lands with `flag_for_review: true` + `review_reason: <text>` in its frontmatter.
 5. If end-session is skipped (user wraps without writing a handover), the flag is **dropped silently**. There is no orphan handover to attach a flag to.
 
-If the user writes the handover *first* and then promotes a `scope="session"` candidate later in the same session, the candidate's promotion calls `apply_handover_review_flag(handover_id=<just-written-id>, review_reason=...)` directly — same effect, different ordering.
+If the user writes the handover *first* and then promotes a `scope="session"` candidate later in the same session, the flag is **dropped silently** — there is no MCP tool to retroactively stamp an existing handover. The user can either re-run end-session (which will write a fresh handover with the flag) or invoke `session-retro` manually against the un-flagged handover later.
 
 ## Session-retro entry point — invocation
 
