@@ -1272,7 +1272,11 @@ def lesson_candidates_defer(
     scope: str = "point",
     context: str = "",
 ) -> int:
-    """Append a new candidate. Returns the new entry's 0-based list index."""
+    """Append a new candidate. Returns the new entry's 0-based list index.
+
+    Validates kind (if provided) and scope. Empty `kind` is allowed — it lets
+    the user defer a candidate before classifying it.
+    """
     if not title or not title.strip():
         raise ValueError("candidate title is required")
     if kind and kind not in LESSON_CANDIDATE_KINDS:
@@ -1299,7 +1303,11 @@ def lesson_candidates_defer(
 
 
 def lesson_candidates_clear(backlog_path: Path, *, indices: list[int]) -> int:
-    """Drop the entries at `indices` (0-based). Returns the number actually removed."""
+    """Drop the entries at `indices` (0-based). Returns the number actually removed.
+
+    Out-of-range indices are silently ignored. Re-writes the file with the
+    remaining entries; deletes the file if the list is now empty.
+    """
     items = lesson_candidates_read(backlog_path)
     if not items:
         return 0
