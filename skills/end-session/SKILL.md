@@ -21,6 +21,52 @@ Check `backlog_status` for `schema_version`. If `>= 3`, run these BEFORE the exi
 
 **v3-pre-1: Snapshot.** Call `backlog_snapshot(quiet=true)` to capture pre-end-of-session state. This makes the next session's `backlog_recap` show what changed across the session boundary, not just from now to the next snapshot. Cheap (~50ms), no token cost.
 
+**v3-pre-2a: Lesson candidate sweep.** Decide whether to invoke `taskmaster:lesson` for an end-session sweep. Auto-offer when ANY of:
+   - Any `<lesson-candidate>` tag visible in the current conversation context.
+   - Any entries in `.taskmaster/lessons/_candidates.md` (check via `backlog_lesson_candidates_list`).
+   - Any feedback-memory cluster with 2+ entries scoped to this project (auto-suggestion source — separate from candidate scans).
+
+   Inputs (gathered in this order, then merged for review):
+
+   1. **Candidate-discovery scans** (routine):
+      - In-context scan: grep Claude's own conversation memory for `<lesson-candidate `.
+      - Deferred-file read: `backlog_lesson_candidates_list`.
+   2. **Auto-suggestion source** (routine, separate input — not a candidate scan):
+      - Scan auto-memory `feedback/*.md` for 2+ similar entries this project. These are *promotion suggestions*, not pre-flagged candidates.
+   3. **Disk-transcript scan** (on-demand only): if this session had a `/compact` event, offer `backlog_lesson_candidates_scan(days=7)` as a recovery option. Skip otherwise.
+
+   If any candidates or suggestions exist, ask:
+
+   > *"Found N lesson candidates from this session. Review now?"* (user-confirmed; default skip)
+
+   If the user accepts, invoke `taskmaster:lesson` with each candidate. Per-candidate options:
+
+   | Action | What runs |
+   |---|---|
+   | Promote | Lesson skill's write subflow (auto-extract + user review + `backlog_lesson_create`). |
+   | Defer | `backlog_lesson_candidate_defer(...)` — the candidate stays in `_candidates.md` for next session. |
+   | Discard | Drop without persisting (no tool call). |
+
+   For any promoted candidate with `scope="session"`: the lesson skill **buffers** a `flag_for_review` for the upcoming handover write (next sub-step). Do not modify any existing handover here.
+
+   Then: list lessons that were trigger-loaded at start-session OR cited mid-session by Claude. Multi-select prompt: "which actually applied this session?" For each pick:
+
+   ```
+   backlog_lesson_reinforce(lesson_id="L-NNN")
+   ```
+
+   After all reinforcements: if any return surfaces "Eligible for promotion to core tier", ask the user once:
+
+   > *"L-NNN is eligible for core tier (auto-loaded every session). Promote?"* (yes → `backlog_lesson_update(lesson_id, tier="core")`; respect the core cap from references/promotion-decay.md)
+
+   Finally: if any lessons auto-retired this session (server-side), emit one info line:
+
+   > *"Retired N stale lessons (review with `backlog_lesson_list --tier retired`)."*
+
+   No prompt, signal only.
+
+   If none of the auto-offer conditions apply, skip this whole sub-step silently — no prompt.
+
 **v3-pre-2: Handover offer.** Decide whether to offer a session handover. Auto-offer when ANY of:
    - Session length > 60 turns of conversation.
    - Conversation context estimate > 200k tokens.
@@ -46,6 +92,7 @@ If offering, ask:
    ```
 
 If user picks yes, **invoke the `taskmaster:handover` skill** with the chosen `session_kind`. End-session does NOT draft the body itself — the handover skill owns tier selection, auto-extraction, and supersession chaining. End-session continues regardless of the handover skill's outcome.
+If v3-pre-2a buffered a `pending_review_flag` (any `scope="session"` candidate was promoted in this session), pass `flag_for_review=true` and `review_reason=<buffered reason>` through to the handover skill's call. The handover skill forwards both kwargs to `backlog_handover_create`. If the user skipped the handover write, the flag is dropped silently.
 
 ### Existing flow
 
