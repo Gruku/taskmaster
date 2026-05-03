@@ -132,6 +132,7 @@ def test_clear_on_empty_file_is_noop(tmp_path):
 
 
 import json as _json
+import os as _os
 from datetime import datetime, timedelta, timezone
 
 from taskmaster_v3 import scan_transcripts_for_candidates
@@ -176,7 +177,7 @@ def test_scan_finds_inline_candidate_in_jsonl(tmp_path):
     assert item["topic"] == "auth-session"
     assert "auth/session.ts must be read" in item["body"]
     assert item["source_file"].endswith("session-aaa.jsonl")
-    assert item["source_line"] >= 1
+    assert item["source_line"] == 2
 
 
 def test_scan_filters_by_kind(tmp_path):
@@ -205,7 +206,6 @@ def test_scan_respects_days_window(tmp_path):
         {"role": "assistant", "content": '<lesson-candidate>new</lesson-candidate>'}
     ])
     cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).timestamp()
-    import os as _os
     _os.utime(old, (cutoff, cutoff))
 
     out = scan_transcripts_for_candidates(project_dir, days=7)
@@ -236,3 +236,31 @@ def test_scan_handles_malformed_jsonl_lines(tmp_path):
     out = scan_transcripts_for_candidates(project_dir, days=7)
     assert len(out) == 1
     assert "survivor" in out[0]["body"]
+
+
+def test_scan_extracts_from_claude_code_jsonl_shape(tmp_path):
+    """Real Claude Code transcripts wrap content under message.content as a
+    list of typed blocks. The scanner must recover tags from text blocks."""
+    project_dir = tmp_path / "real"
+    project_dir.mkdir()
+    p = project_dir / "session-real.jsonl"
+    p.write_text(
+        _json.dumps({
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "text",
+                     "text": 'Heads up.\n<lesson-candidate kind="gotcha" topic="x">\nReal-shape body.\n</lesson-candidate>\nDone.'},
+                    {"type": "thinking", "thinking": "ignore me"},
+                ],
+            },
+        }) + "\n",
+        encoding="utf-8",
+    )
+    out = scan_transcripts_for_candidates(project_dir, days=7)
+    assert len(out) == 1
+    assert out[0]["kind"] == "gotcha"
+    assert out[0]["topic"] == "x"
+    assert "Real-shape body" in out[0]["body"]
+    assert "ignore me" not in out[0]["body"]

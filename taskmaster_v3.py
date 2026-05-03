@@ -1319,10 +1319,11 @@ def lesson_candidates_clear(backlog_path: Path, *, indices: list[int]) -> int:
     return len(drop)
 
 
-# Stable opening anchor per spec §3.2 — `<lesson-candidate ` (trailing space)
-# with double-quoted attrs. Multiline body, captured up to the matching close.
+# Matches <lesson-candidate> and <lesson-candidate key="val" ...> forms.
+# Attrless form is supported (test coverage requires it). Attrs must use
+# double-quoted values per spec §3.2 grep convention.
 _LESSON_CANDIDATE_RE = re.compile(
-    r"<lesson-candidate"                    # opening tag (no trailing space yet)
+    r"<lesson-candidate"                    # opening tag
     r"(?P<attrs>(?:\s+\w+=\"[^\"]*\")*)"   # 0+ key="value" attribute pairs
     r"\s*>"                                  # > terminator (allow attrless)
     r"(?P<body>.*?)"                         # body, non-greedy
@@ -1335,6 +1336,30 @@ _LESSON_CANDIDATE_ATTR_RE = re.compile(r'(\w+)="([^"]*)"')
 
 def _parse_candidate_attrs(attr_text: str) -> dict[str, str]:
     return {k: v for k, v in _LESSON_CANDIDATE_ATTR_RE.findall(attr_text or "")}
+
+
+def _extract_jsonl_text(obj: Any) -> str:
+    """Pull text from a Claude Code JSONL line (real format) or a flat
+    `{"content": "..."}` test fixture. Returns "" when there's no text to scan.
+    """
+    message = obj.get("message") if isinstance(obj, dict) else None
+    if isinstance(message, dict) and "content" in message:
+        content = message["content"]
+    elif isinstance(obj, dict):
+        content = obj.get("content", "")
+    else:
+        return ""
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                t = block.get("text", "")
+                if isinstance(t, str):
+                    parts.append(t)
+        return "\n".join(parts)
+    if isinstance(content, str):
+        return content
+    return ""
 
 
 def scan_transcripts_for_candidates(
@@ -1375,8 +1400,8 @@ def scan_transcripts_for_candidates(
                 obj = json.loads(raw)
             except json.JSONDecodeError:
                 continue
-            content = obj.get("content", "")
-            if not isinstance(content, str):
+            content = _extract_jsonl_text(obj)
+            if not content:
                 continue
             for m in _LESSON_CANDIDATE_RE.finditer(content):
                 attrs = _parse_candidate_attrs(m.group("attrs"))
