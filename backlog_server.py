@@ -20,6 +20,7 @@ from http import HTTPStatus
 from copy import deepcopy
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 
 import yaml
 from fastmcp import FastMCP
@@ -66,6 +67,7 @@ from taskmaster_v3 import (
     write_handover as _write_handover,
     read_handover as _read_handover,
     apply_supersession as _apply_supersession,
+    apply_handover_review_flag as _apply_handover_review_flag,
     list_handover_ids as _list_handover_ids,
     latest_handover_id as _latest_handover_id,
     sync_handover_index as _sync_handover_index,
@@ -88,6 +90,12 @@ from taskmaster_v3 import (
     core_lessons as _core_lessons,
     sync_lesson_index as _sync_lesson_index,
     lesson_eligible_for_promotion as _lesson_eligible_for_promotion,
+    LESSON_CANDIDATE_KINDS,
+    LESSON_CANDIDATE_SCOPES,
+    lesson_candidates_defer as _lesson_candidates_defer,
+    lesson_candidates_read as _lesson_candidates_read,
+    lesson_candidates_clear as _lesson_candidates_clear,
+    scan_transcripts_for_candidates as _scan_transcripts_for_candidates,
     AUTO_MODES,
     AUTO_STAGES,
     AUTO_TASK_STATUSES,
@@ -1397,6 +1405,8 @@ def backlog_handover_create(
     supersedes: str = "",
     branch: str = "",
     tip_commit: str = "",
+    flag_for_review: bool = False,
+    review_reason: str = "",
 ) -> str:
     """Write a session handover — committed markdown artifact for cross-session
     continuity.
@@ -1420,6 +1430,11 @@ def backlog_handover_create(
         branch: Optional git branch name. Lands in frontmatter when set.
         tip_commit: Optional tip commit SHA (short or long). Lands in
             frontmatter when set.
+        flag_for_review: When True, marks this handover for retro extraction in
+            the next lesson-sweep session. Sets `flag_for_review: true` and
+            `review_reason` in the handover's frontmatter.
+        review_reason: Free-text reason for the review flag (e.g. "multi-tab
+            fanout retro"). Only used when `flag_for_review` is True.
     """
     bp = _backlog_path()
     if not bp.exists():
@@ -1450,6 +1465,14 @@ def backlog_handover_create(
                 f"handover not updated."
             )
 
+    if flag_for_review:
+        try:
+            _apply_handover_review_flag(
+                bp, handover_id=hid, review_reason=review_reason or ""
+            )
+        except FileNotFoundError as exc:
+            return f"Error: handover not found: {exc}."
+
     data = _load()
     _sync_handover_index(data, bp)
     _save(data)
@@ -1463,6 +1486,8 @@ def backlog_handover_create(
         lines.append(f"- Superseded: {supersedes}")
     if superseded_warning:
         lines.append(f"- {superseded_warning}")
+    if flag_for_review:
+        lines.append(f"- Flagged for review: {review_reason}")
     return "\n".join(lines)
 
 
@@ -1990,6 +2015,136 @@ def backlog_lesson_digest() -> str:
     if not digest:
         return "No active lessons."
     return "\n".join(f"- {d['id']} [{d['kind']}] {d['title']}" for d in digest)
+
+
+def _transcripts_dir() -> Path:
+    """Resolve the Claude project transcripts directory.
+
+    Override with `TASKMASTER_TRANSCRIPTS_DIR` for tests. Default is
+    `~/.claude/projects/<encoded-cwd>/` per Claude Code's storage layout.
+    """
+    override = os.environ.get("TASKMASTER_TRANSCRIPTS_DIR")
+    if override:
+        return Path(override)
+    home = Path.home() / ".claude" / "projects"
+    encoded = str(ROOT.resolve()).replace("\\", "-").replace("/", "-").replace(":", "")
+    return home / encoded
+
+
+@mcp.tool()
+def backlog_lesson_candidate_defer(
+    title: str,
+    kind: str = "",
+    topic: str = "",
+    scope: str = "point",
+    context: str = "",
+) -> str:
+    """Defer a lesson candidate to `.taskmaster/lessons/_candidates.md`.
+
+    Use mid-session when Claude wants to flag a candidate but the user isn't
+    ready to write a full lesson. End-session sweep reads this file.
+
+    Args:
+        title: One-line summary. Required.
+        kind: pattern | anti-pattern | gotcha. Optional — leave empty to
+            classify later during the sweep.
+        topic: One-word handle for grouping in the sweep UI.
+        scope: 'point' (default) or 'session' (flags the active handover for
+            retro-extraction; see references/session-retro.md).
+        context: Free text — session id, commit sha, anything traceable.
+    """
+    bp = _backlog_path()
+    if not bp.exists():
+        return f"Error: no backlog found at {bp}. Run `backlog_init` first."
+    try:
+        idx = _lesson_candidates_defer(
+            bp,
+            title=title,
+            kind=kind,
+            topic=topic,
+            scope=scope,
+            context=context,
+        )
+    except ValueError as exc:
+        return f"Error: {exc}"
+    return f"Deferred candidate #{idx}: {title.strip()}"
+
+
+@mcp.tool()
+def backlog_lesson_candidates_list() -> str:
+    """List deferred lesson candidates (markdown bullet list, indexed)."""
+    bp = _backlog_path()
+    if not bp.exists():
+        return f"Error: no backlog found at {bp}."
+    items = _lesson_candidates_read(bp)
+    if not items:
+        return "No deferred candidates."
+    lines = []
+    for idx, it in enumerate(items):
+        kind = it.get("kind") or "?"
+        topic = it.get("topic") or ""
+        scope = it.get("scope") or "point"
+        head = f"- [#{idx}] [{kind}/{scope}]"
+        if topic:
+            head += f" ({topic})"
+        head += f" — {it.get('title', '')}"
+        lines.append(head)
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def backlog_lesson_candidate_drop(index: int) -> str:
+    """Drop the deferred candidate at `index` (0-based)."""
+    bp = _backlog_path()
+    if not bp.exists():
+        return f"Error: no backlog found at {bp}."
+    items = _lesson_candidates_read(bp)
+    if index < 0 or index >= len(items):
+        return f"Error: candidate #{index} not found (have {len(items)} entries)."
+    title = items[index].get("title", "")
+    n = _lesson_candidates_clear(bp, indices=[index])
+    if not n:
+        return f"Error: candidate #{index} not found."
+    return f"Dropped candidate #{index}: {title}"
+
+
+@mcp.tool()
+def backlog_lesson_candidates_scan(days: int = 7, kind: str = "") -> str:
+    """Grep this project's transcript jsonl for `<lesson-candidate>` tags.
+
+    Recovery path for tags lost to compaction (until the PreCompact hook in
+    v3-skills-006 lands, this is the only such path). Reads
+    `~/.claude/projects/<this-project>/*.jsonl` within the last `days` days.
+
+    Args:
+        days: Window in days (default 7).
+        kind: Filter to a single kind (gotcha / pattern / anti-pattern).
+
+    Returns markdown grouped by source jsonl filename.
+    """
+    transcripts = _transcripts_dir()
+    if not transcripts.exists():
+        return f"No transcripts directory at {transcripts}."
+    matches = _scan_transcripts_for_candidates(
+        transcripts, days=days, kind_filter=kind
+    )
+    if not matches:
+        return f"No `<lesson-candidate>` tags found in last {days} days."
+    by_file: dict[str, list[dict[str, Any]]] = {}
+    for m in matches:
+        by_file.setdefault(Path(m["source_file"]).name, []).append(m)
+    lines: list[str] = []
+    for fname, items in by_file.items():
+        lines.append(f"## {fname}")
+        for it in items:
+            tag = f"[{it.get('kind') or '?'}]"
+            topic = f" ({it['topic']})" if it.get("topic") else ""
+            preview = (it.get("body") or "").splitlines()[0][:100]
+            lines.append(
+                f"- L{it['source_line']} {tag}{topic} — {preview}"
+            )
+        lines.append("")
+    return "\n".join(lines).rstrip()
 
 
 @mcp.tool()

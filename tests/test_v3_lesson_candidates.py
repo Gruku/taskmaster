@@ -305,3 +305,110 @@ def test_apply_handover_review_flag_raises_for_missing(tmp_path):
         apply_handover_review_flag(
             bp, handover_id="2099-01-01-nope", review_reason="x"
         )
+
+
+# ---------------------------------------------------------------------------
+# MCP-level tests (Task 4)
+# ---------------------------------------------------------------------------
+
+import sys as _sys
+from pathlib import Path as _Path
+
+PLUGIN_ROOT = _Path(__file__).resolve().parents[1]
+_sys.path.insert(0, str(PLUGIN_ROOT))
+
+import backlog_server  # noqa: E402
+
+
+def _set_backlog_root(monkeypatch, bp: Path):
+    monkeypatch.setattr(backlog_server, "ROOT", bp.parent)
+    monkeypatch.setattr(backlog_server, "_backlog_path", lambda: bp)
+
+
+def test_mcp_candidate_defer_returns_index_and_title(tmp_path, monkeypatch):
+    bp = _make_backlog(tmp_path)
+    _set_backlog_root(monkeypatch, bp)
+    out = backlog_server.backlog_lesson_candidate_defer(
+        title="multi-tab fanout: useEffect reads useLocation()",
+        kind="gotcha",
+        topic="multi-tab fanout",
+    )
+    assert "Deferred candidate #0" in out
+    assert "multi-tab fanout" in out
+
+
+def test_mcp_candidates_list_renders_bullets(tmp_path, monkeypatch):
+    bp = _make_backlog(tmp_path)
+    _set_backlog_root(monkeypatch, bp)
+    backlog_server.backlog_lesson_candidate_defer(title="A", kind="gotcha")
+    backlog_server.backlog_lesson_candidate_defer(title="B", kind="pattern")
+    out = backlog_server.backlog_lesson_candidates_list()
+    assert "- [#0]" in out and "A" in out
+    assert "- [#1]" in out and "B" in out
+
+
+def test_mcp_candidates_list_empty(tmp_path, monkeypatch):
+    bp = _make_backlog(tmp_path)
+    _set_backlog_root(monkeypatch, bp)
+    out = backlog_server.backlog_lesson_candidates_list()
+    assert "No deferred candidates" in out
+
+
+def test_mcp_candidate_drop_removes_entry(tmp_path, monkeypatch):
+    bp = _make_backlog(tmp_path)
+    _set_backlog_root(monkeypatch, bp)
+    backlog_server.backlog_lesson_candidate_defer(title="A")
+    backlog_server.backlog_lesson_candidate_defer(title="B")
+    out = backlog_server.backlog_lesson_candidate_drop(index=0)
+    assert "Dropped candidate #0" in out
+    remaining = lesson_candidates_read(bp)
+    assert [i["title"] for i in remaining] == ["B"]
+
+
+def test_mcp_candidate_drop_out_of_range(tmp_path, monkeypatch):
+    bp = _make_backlog(tmp_path)
+    _set_backlog_root(monkeypatch, bp)
+    out = backlog_server.backlog_lesson_candidate_drop(index=99)
+    assert "Error" in out and "99" in out
+
+
+def test_mcp_candidates_scan_groups_by_session(tmp_path, monkeypatch):
+    bp = _make_backlog(tmp_path)
+    _set_backlog_root(monkeypatch, bp)
+    project_dir = tmp_path / "projects" / "demo"
+    project_dir.mkdir(parents=True)
+    (project_dir / "session-1.jsonl").write_text(
+        '{"role":"assistant","content":"<lesson-candidate kind=\\"gotcha\\">x</lesson-candidate>"}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("TASKMASTER_TRANSCRIPTS_DIR", str(project_dir))
+    out = backlog_server.backlog_lesson_candidates_scan(days=7)
+    assert "session-1.jsonl" in out
+    assert "gotcha" in out
+
+
+def test_mcp_handover_create_with_review_flag(tmp_path, monkeypatch):
+    bp = _make_backlog(tmp_path)
+    _set_backlog_root(monkeypatch, bp)
+    out = backlog_server.backlog_handover_create(
+        tldr="flag-me",
+        session_kind="end-of-day",
+        flag_for_review=True,
+        review_reason="multi-tab retro",
+    )
+    hid = out.splitlines()[0].split(": ", 1)[1].strip()
+    fm, _ = read_handover(bp, hid)
+    assert fm["flag_for_review"] is True
+    assert fm["review_reason"] == "multi-tab retro"
+
+
+def test_mcp_handover_create_without_review_flag_omits_fields(tmp_path, monkeypatch):
+    bp = _make_backlog(tmp_path)
+    _set_backlog_root(monkeypatch, bp)
+    out = backlog_server.backlog_handover_create(
+        tldr="no-flag", session_kind="end-of-day",
+    )
+    hid = out.splitlines()[0].split(": ", 1)[1].strip()
+    fm, _ = read_handover(bp, hid)
+    assert "flag_for_review" not in fm
+    assert "review_reason" not in fm
