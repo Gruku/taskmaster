@@ -16,17 +16,26 @@ If multiple priors qualify, pick the **newest** by `date`.
 
 ## How to find the prior
 
+> **Note:** The clean iteration shown below depends on `v3-skills-015` shipping `backlog_handover_list` with structured (`task_id`, `session_kind`) filter args. Until then, fall back to the **interim algorithm** further down.
+
 ```
-candidates = backlog_handover_list(limit=10)
-prior = None
-for entry in candidates:                     # newest-first
-    if entry["session_kind"] not in {"milestone-complete", "pivot"}:
-        continue
-    if not (set(entry["task_ids"]) & set(new_task_ids)):
-        continue
-    prior = entry["id"]
-    break
+candidates = backlog_handover_list(limit=10, session_kind="milestone-complete pivot", task_id=new_task_ids[0])
+prior = candidates[0] if candidates else None
 ```
+
+If multiple priors qualify, pick the **newest** by `date`.
+
+### Interim algorithm (until v3-skills-015 lands)
+
+`backlog_handover_list` currently returns a markdown-bullet string and does not surface `task_ids`. So:
+
+1. Call `backlog_handover_latest` to get the most-recent handover's id and session_kind.
+2. If its `session_kind` is not `milestone-complete` or `pivot`, **no chain** — set `supersedes` to empty and stop.
+3. Otherwise call `backlog_handover_get(id)` and read `task_ids` from the returned frontmatter block.
+4. If `set(task_ids) & set(new_task_ids)` is non-empty, set `supersedes = id` and stop.
+5. Otherwise, the latest handover is for unrelated work — set `supersedes` to empty.
+
+This interim path only checks the single most-recent handover, not the top-10. That's an acceptable approximation: if a chained `milestone-complete` is more than one handover behind the head, it's likely already superseded by something else. v3-skills-015 will replace this with a proper filter.
 
 If no prior matches, do **not** set `supersedes`. The chain starts fresh.
 

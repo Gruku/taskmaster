@@ -1,11 +1,11 @@
 ---
 name: handover
-description: "Write a Claude-drafted session handover into .taskmaster/handovers/. Invoke when the user says 'write a handover', 'save context', 'wrap up', 'for tomorrow', 'next time', 'remind future me', 'i'm at 300k', 'before compaction', 'context handoff', or 'continue where we left off' (writing context). Auto-extracts files of interest, what shipped, what's next; user reviews and approves; chained supersession for milestone-complete. This is the only correct way to write a handover — do not call backlog_handover_create directly."
+description: "Write a Claude-drafted session handover into .claude/handovers/. Invoke when the user says 'write a handover', 'save context', 'wrap up', 'for tomorrow', 'next time', 'remind future me', 'i'm at 300k', 'before compaction', 'context handoff', or 'continue where we left off' (writing context). Auto-extracts files of interest, what shipped, what's next; user reviews and approves; chained supersession for milestone-complete. This is the only correct way to write a handover — do not call backlog_handover_create directly."
 ---
 
 # Handover
 
-Capture a session into `.taskmaster/handovers/{date}-{slug}.md` so the next Claude session can resume without re-exploration.
+Capture a session into `.claude/handovers/{date}-{slug}.md` so the next Claude session can resume without re-exploration.
 
 ## Why this skill exists
 
