@@ -32,6 +32,17 @@ function emitValue(key, value) {
   }
 }
 
+// Cheap structural equality for plain JSON shapes returned by the API.
+// Used to skip emit when a poll returns the same data — otherwise every
+// 3s poll triggers screen subscribers (e.g. kanban paint() →
+// boardGrid.replaceChildren()) and destroys scroll position / focus.
+function jsonEqual(a, b) {
+  if (a === b) return true;
+  if (a == null || b == null) return false;
+  try { return JSON.stringify(a) === JSON.stringify(b); }
+  catch { return false; }
+}
+
 export const store = {
   getBacklog:  () => state.backlog,
   getPrefs:    () => state.prefs,
@@ -41,10 +52,10 @@ export const store = {
   getLessons:          () => state.lessons,
   getIssues:           () => state.issues,
 
-  setBacklog:  (b) => { state.backlog = b;  emit('backlog'); },
+  setBacklog:  (b) => { if (jsonEqual(state.backlog, b)) return; state.backlog = b; emit('backlog'); },
   setPrefs:    (p) => { state.prefs = p;    emit('prefs'); },
   setIdentity: (i) => { state.identity = i; emit('identity'); },
-  setAutoState:(a) => { state.autoState = a; emit('autoState'); },
+  setAutoState:(a) => { if (jsonEqual(state.autoState, a)) return; state.autoState = a; emit('autoState'); },
   setActiveAutoSession:(sid) => { state.activeAutoSessionId = sid; emitValue('activeAutoSession', sid); },
   setLessons:  (v) => { state.lessons = v || []; emit('lessons'); },
   setIssues:   (v) => { state.issues = v || [];  emit('issues'); },

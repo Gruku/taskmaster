@@ -14,6 +14,7 @@
 import { formatTimeInStatus, classifyTimeInStatus, isoToMs, formatElapsed } from '../lib/time.js';
 import { epicColor, epicCssVar } from '../lib/epics.js';
 import { bindCopy } from '../lib/copy.js';
+import { isAutoRunning } from '../lib/auto-state.js';
 import { renderAutoModeLiveBlock } from './auto-mode-live-block.js';
 
 const PRIORITY_LABELS = { critical: 'Critical', high: 'High', medium: 'Medium', low: 'Low' };
@@ -26,7 +27,7 @@ export function renderCard({ task, density = 'full', epicColors = {}, autoState 
   card.className = 'card-task ' + density;
   card.dataset.taskId = task.id;
 
-  const isAuto = !!(autoState && autoState.mode && autoState.cursor && autoState.cursor.task_id === task.id);
+  const isAuto = !!(isAutoRunning(autoState) && autoState.cursor && autoState.cursor.task_id === task.id);
   if (isAuto) card.classList.add('auto');
 
   // Recently-moved highlight: 24h after status change (spec §3.6).

@@ -2,6 +2,7 @@
 // Mounts into #topbar-actions, subscribes to store.autoState.
 
 import { isoToMs, formatDurationCompact } from '../lib/time.js';
+import { isAutoRunning } from '../lib/auto-state.js';
 
 const STAGE_LABELS = {
   PICK: 'Pick', PLAN: 'Plan', SPEC_REVIEW: 'Review',
@@ -20,7 +21,7 @@ export function mountAutoStatus(root, ctx) {
   root.appendChild(pill);
 
   function paint(state) {
-    if (!state || !state.cursor) { pill.hidden = true; return; }
+    if (!isAutoRunning(state) || !state.cursor) { pill.hidden = true; return; }
     pill.hidden = false;
     const stage = STAGE_LABELS[state.cursor.stage] || state.cursor.stage || '';
     const startMs = isoToMs(state.started_at);

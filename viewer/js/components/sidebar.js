@@ -1,5 +1,7 @@
 // Sidebar renderer. Sections + entries are static here; live counts come from the store.
 
+import { isAutoRunning } from '../lib/auto-state.js';
+
 const SECTIONS = [
   { label: 'Frontdoor', items: [
     { key: 'dashboard', icon: '▤', label: 'Dashboard', hash: '#/dashboard' },
@@ -97,7 +99,7 @@ export function mountSidebar(el, { store, prefs }) {
 
   // Auto-mode live state → footer pulse + sidebar live-dot on auto_mode link
   const unsubAutoState = store.subscribe('autoState', (auto) => {
-    const running = !!(auto && auto.mode && !auto.stopped);
+    const running = isAutoRunning(auto);
     footer.hidden = !running;
     footer.classList.toggle('auto-running', running);
     footer.querySelector('span:last-child').textContent = running ? 'auto-mode active' : '';

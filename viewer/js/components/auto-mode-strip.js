@@ -4,6 +4,7 @@
 // Render-only: takes a normalized list of runs. Updates in place via update().
 
 import { formatElapsed, formatTimeInStatus, isoToMs, formatAbsolute } from '../lib/time.js';
+import { isAutoRunning } from '../lib/auto-state.js';
 
 const STAGE_ORDER = ['PICK', 'IMPLEMENT', 'REVIEW', 'HANDOVER_STUB', 'COMPLETE'];
 
@@ -61,7 +62,7 @@ function paintStrip(el, { autoState, backlog, onViewAll, now }) {
   const { runs, sessionStartedMs } = runsFromAutoState(autoState, backlog);
   el.replaceChildren();
 
-  if (!autoState || !autoState.mode || !runs.length) {
+  if (!isAutoRunning(autoState) || !runs.length) {
     el.hidden = true;
     return;
   }
