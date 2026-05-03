@@ -1200,6 +1200,117 @@ def sync_lesson_index(
     return backlog_data
 
 
+# ── Lesson candidates (deferred + scanning) ───────────────────
+
+LESSON_CANDIDATE_KINDS = ("pattern", "anti-pattern", "gotcha")
+LESSON_CANDIDATE_SCOPES = ("point", "session")
+
+_LESSON_CANDIDATES_HEADER = (
+    "# Lesson Candidates (deferred)\n\n"
+    "> Auto-managed by `taskmaster:lesson`. "
+    "Edit by hand only if the file is corrupt.\n\n"
+)
+_LESSON_CANDIDATES_FENCE_OPEN = "```yaml\n"
+_LESSON_CANDIDATES_FENCE_CLOSE = "```\n"
+
+
+def lesson_candidates_path(backlog_path: Path) -> Path:
+    """Path to the `_candidates.md` file under the lessons directory."""
+    return backlog_path.parent / "lessons" / "_candidates.md"
+
+
+def lesson_candidates_read(backlog_path: Path) -> list[dict[str, Any]]:
+    """Return the deferred candidates list, or [] if the file is missing/empty.
+
+    The file format is a markdown header followed by a fenced YAML block with
+    a `candidates:` list. Anything outside the fenced block is ignored.
+    Tolerates a missing or malformed file by returning [].
+    """
+    p = lesson_candidates_path(backlog_path)
+    if not p.exists():
+        return []
+    raw = p.read_text(encoding="utf-8")
+    m = re.search(r"```yaml\n(.*?)```", raw, re.DOTALL)
+    if not m:
+        return []
+    try:
+        doc = yaml.safe_load(m.group(1)) or {}
+    except yaml.YAMLError:
+        return []
+    items = doc.get("candidates") if isinstance(doc, dict) else None
+    if not isinstance(items, list):
+        return []
+    return [i for i in items if isinstance(i, dict)]
+
+
+def _write_lesson_candidates(backlog_path: Path, items: list[dict[str, Any]]) -> None:
+    """Render the candidates list back to disk as the canonical markdown+YAML file."""
+    p = lesson_candidates_path(backlog_path)
+    if not items:
+        if p.exists():
+            p.unlink()
+        return
+    p.parent.mkdir(parents=True, exist_ok=True)
+    yaml_text = yaml.safe_dump(
+        {"candidates": items}, default_flow_style=False, sort_keys=False, allow_unicode=True
+    )
+    body = (
+        _LESSON_CANDIDATES_HEADER
+        + _LESSON_CANDIDATES_FENCE_OPEN
+        + yaml_text
+        + _LESSON_CANDIDATES_FENCE_CLOSE
+    )
+    atomic_write(p, body)
+
+
+def lesson_candidates_defer(
+    backlog_path: Path,
+    *,
+    title: str,
+    kind: str = "",
+    topic: str = "",
+    scope: str = "point",
+    context: str = "",
+) -> int:
+    """Append a new candidate. Returns the new entry's 0-based list index."""
+    if not title or not title.strip():
+        raise ValueError("candidate title is required")
+    if kind and kind not in LESSON_CANDIDATE_KINDS:
+        raise ValueError(
+            f"kind must be one of {LESSON_CANDIDATE_KINDS}, got {kind!r}"
+        )
+    if scope not in LESSON_CANDIDATE_SCOPES:
+        raise ValueError(
+            f"scope must be one of {LESSON_CANDIDATE_SCOPES}, got {scope!r}"
+        )
+
+    items = lesson_candidates_read(backlog_path)
+    entry: dict[str, Any] = {
+        "title": title.strip(),
+        "kind": kind,
+        "topic": topic,
+        "scope": scope,
+        "context": context,
+        "deferred_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M"),
+    }
+    items.append(entry)
+    _write_lesson_candidates(backlog_path, items)
+    return len(items) - 1
+
+
+def lesson_candidates_clear(backlog_path: Path, *, indices: list[int]) -> int:
+    """Drop the entries at `indices` (0-based). Returns the number actually removed."""
+    items = lesson_candidates_read(backlog_path)
+    if not items:
+        return 0
+    drop = {i for i in indices if 0 <= i < len(items)}
+    if not drop:
+        return 0
+    remaining = [it for idx, it in enumerate(items) if idx not in drop]
+    _write_lesson_candidates(backlog_path, remaining)
+    return len(drop)
+
+
 # ── Auto mode (state machine) ──────────────────────────────────
 
 AUTO_MODES = ("task", "epic", "phase")
