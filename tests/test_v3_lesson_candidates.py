@@ -264,3 +264,44 @@ def test_scan_extracts_from_claude_code_jsonl_shape(tmp_path):
     assert out[0]["topic"] == "x"
     assert "Real-shape body" in out[0]["body"]
     assert "ignore me" not in out[0]["body"]
+
+
+import pytest as _pytest
+
+from taskmaster_v3 import (
+    apply_handover_review_flag,
+    read_handover,
+    write_handover,
+)
+
+
+def test_apply_handover_review_flag_sets_fields(tmp_path):
+    bp = _make_backlog(tmp_path)
+    (tmp_path / "handovers").mkdir(exist_ok=True)
+    hid, _ = write_handover(bp, tldr="some session", session_kind="end-of-day")
+    apply_handover_review_flag(bp, handover_id=hid, review_reason="multi-tab fanout retro")
+    fm, body = read_handover(bp, hid)
+    assert fm["flag_for_review"] is True
+    assert fm["review_reason"] == "multi-tab fanout retro"
+    # Body must be unchanged.
+    assert "SUPERSEDED" not in body
+
+
+def test_apply_handover_review_flag_idempotent(tmp_path):
+    bp = _make_backlog(tmp_path)
+    (tmp_path / "handovers").mkdir(exist_ok=True)
+    hid, _ = write_handover(bp, tldr="s", session_kind="end-of-day")
+    apply_handover_review_flag(bp, handover_id=hid, review_reason="first")
+    apply_handover_review_flag(bp, handover_id=hid, review_reason="updated")
+    fm, _ = read_handover(bp, hid)
+    assert fm["flag_for_review"] is True
+    assert fm["review_reason"] == "updated"
+
+
+def test_apply_handover_review_flag_raises_for_missing(tmp_path):
+    bp = _make_backlog(tmp_path)
+    (tmp_path / "handovers").mkdir(exist_ok=True)
+    with _pytest.raises(FileNotFoundError):
+        apply_handover_review_flag(
+            bp, handover_id="2099-01-01-nope", review_reason="x"
+        )

@@ -646,6 +646,30 @@ def apply_supersession(backlog_path: Path, *, old_id: str, new_id: str) -> Path:
     return old_path
 
 
+def apply_handover_review_flag(
+    backlog_path: Path,
+    *,
+    handover_id: str,
+    review_reason: str,
+) -> Path:
+    """Stamp `flag_for_review: true` + `review_reason` onto an existing handover.
+
+    Used by `taskmaster:lesson` when a `<lesson-candidate scope="session">` is
+    promoted: the active handover for the session gets flagged so a future
+    invocation can retro-extract lessons against it. Idempotent — re-applying
+    overwrites the `review_reason` and leaves the body untouched. Raises
+    FileNotFoundError if the handover doesn't exist on disk.
+    """
+    target = handover_path(backlog_path, handover_id)
+    if not target.exists():
+        raise FileNotFoundError(handover_id)
+    fm, body = read_handover(backlog_path, handover_id)
+    fm["flag_for_review"] = True
+    fm["review_reason"] = review_reason or ""
+    write_task_file(target, fm, body)
+    return target
+
+
 # Fields kept in the backlog.yaml `handovers:` index entry.
 _HANDOVER_INDEX_FIELDS = ("id", "date", "tldr", "next_action", "task_ids", "session_kind")
 
