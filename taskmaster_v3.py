@@ -15,7 +15,7 @@ import hashlib
 import json
 import os
 import re
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -1317,6 +1317,81 @@ def lesson_candidates_clear(backlog_path: Path, *, indices: list[int]) -> int:
     remaining = [it for idx, it in enumerate(items) if idx not in drop]
     _write_lesson_candidates(backlog_path, remaining)
     return len(drop)
+
+
+# Stable opening anchor per spec §3.2 — `<lesson-candidate ` (trailing space)
+# with double-quoted attrs. Multiline body, captured up to the matching close.
+_LESSON_CANDIDATE_RE = re.compile(
+    r"<lesson-candidate"                    # opening tag (no trailing space yet)
+    r"(?P<attrs>(?:\s+\w+=\"[^\"]*\")*)"   # 0+ key="value" attribute pairs
+    r"\s*>"                                  # > terminator (allow attrless)
+    r"(?P<body>.*?)"                         # body, non-greedy
+    r"</lesson-candidate>",                  # closing tag
+    re.DOTALL,
+)
+
+_LESSON_CANDIDATE_ATTR_RE = re.compile(r'(\w+)="([^"]*)"')
+
+
+def _parse_candidate_attrs(attr_text: str) -> dict[str, str]:
+    return {k: v for k, v in _LESSON_CANDIDATE_ATTR_RE.findall(attr_text or "")}
+
+
+def scan_transcripts_for_candidates(
+    project_dir: Path,
+    *,
+    days: int = 7,
+    kind_filter: str = "",
+) -> list[dict[str, Any]]:
+    """Grep all `*.jsonl` files in `project_dir` for `<lesson-candidate>` tags.
+
+    Each line of a JSONL file is decoded as JSON; the `content` field (a str)
+    is searched with `_LESSON_CANDIDATE_RE`. Malformed lines are skipped.
+
+    Filters:
+      - `days`: only files whose mtime is within the last N days.
+      - `kind_filter`: only matches whose `kind` attr equals this string.
+
+    Returns a list of dicts with keys: `kind`, `topic`, `scope`, `body`,
+    `source_file`, `source_line`. `source_line` is the 1-based line number
+    in the `.jsonl` file where the match was found.
+    """
+    if not project_dir.exists() or not project_dir.is_dir():
+        return []
+    cutoff_ts = (datetime.now(timezone.utc) - timedelta(days=days)).timestamp()
+    out: list[dict[str, Any]] = []
+    for jsonl in sorted(project_dir.glob("*.jsonl")):
+        try:
+            if jsonl.stat().st_mtime < cutoff_ts:
+                continue
+            raw_lines = jsonl.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        for line_no, raw in enumerate(raw_lines, start=1):
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                obj = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            content = obj.get("content", "")
+            if not isinstance(content, str):
+                continue
+            for m in _LESSON_CANDIDATE_RE.finditer(content):
+                attrs = _parse_candidate_attrs(m.group("attrs"))
+                kind = attrs.get("kind", "")
+                if kind_filter and kind != kind_filter:
+                    continue
+                out.append({
+                    "kind": kind,
+                    "topic": attrs.get("topic", ""),
+                    "scope": attrs.get("scope", "point"),
+                    "body": m.group("body").strip(),
+                    "source_file": str(jsonl),
+                    "source_line": line_no,
+                })
+    return out
 
 
 # ── Auto mode (state machine) ──────────────────────────────────
