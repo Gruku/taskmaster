@@ -4155,13 +4155,18 @@ def _load_task_full(task_id: str) -> dict | None:
     """
     import re
     import yaml
-    from pathlib import Path
 
-    backlog_path = Path("backlog.yaml")
+    backlog_path = _backlog_path()
     if not backlog_path.exists():
         return None
     backlog = yaml.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
-    tasks = backlog.get("tasks") or []
+    tasks = backlog.get("tasks")
+    if not isinstance(tasks, list):
+        tasks = [
+            {**t, "epic": t.get("epic", e.get("id"))}
+            for e in (backlog.get("epics") or [])
+            for t in (e.get("tasks") or [])
+        ]
     index_entry = next((t for t in tasks if t.get("id") == task_id), None)
     if index_entry is None:
         return None
@@ -4173,7 +4178,7 @@ def _load_task_full(task_id: str) -> dict | None:
     out.setdefault("review_instructions", "")
     out.setdefault("_body", "")
 
-    md_path = Path(".taskmaster") / "tasks" / f"{task_id}.md"
+    md_path = backlog_path.parent / "tasks" / f"{task_id}.md"
     if md_path.exists():
         raw = md_path.read_text(encoding="utf-8")
         fm_match = re.match(r"^---\n(.*?)\n---\n(.*)$", raw, re.DOTALL)
@@ -4217,13 +4222,18 @@ def _load_related_for_task(task_id: str) -> dict | None:
     import fnmatch
     import re
     import yaml
-    from pathlib import Path
 
-    backlog_path = Path("backlog.yaml")
+    backlog_path = _backlog_path()
     if not backlog_path.exists():
         return None
     backlog = yaml.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
-    tasks = backlog.get("tasks") or []
+    tasks = backlog.get("tasks")
+    if not isinstance(tasks, list):
+        tasks = [
+            {**t, "epic": t.get("epic", e.get("id"))}
+            for e in (backlog.get("epics") or [])
+            for t in (e.get("tasks") or [])
+        ]
     me = next((t for t in tasks if t.get("id") == task_id), None)
     if me is None:
         return None
@@ -4250,8 +4260,10 @@ def _load_related_for_task(task_id: str) -> dict | None:
                     return True
         return False
 
+    sidecar_root = backlog_path.parent
+
     lessons: list[dict] = []
-    lessons_dir = Path(".taskmaster") / "lessons"
+    lessons_dir = sidecar_root / "lessons"
     if lessons_dir.is_dir():
         for f in sorted(lessons_dir.glob("*.md")):
             fm, body = _read_fm(f)
@@ -4267,7 +4279,7 @@ def _load_related_for_task(task_id: str) -> dict | None:
                 })
 
     handovers: list[dict] = []
-    handovers_dir = Path(".taskmaster") / "handovers"
+    handovers_dir = sidecar_root / "handovers"
     if handovers_dir.is_dir():
         for f in sorted(handovers_dir.glob("*.md")):
             fm, body = _read_fm(f)
@@ -4283,7 +4295,7 @@ def _load_related_for_task(task_id: str) -> dict | None:
                 })
 
     issues: list[dict] = []
-    issues_dir = Path(".taskmaster") / "issues"
+    issues_dir = sidecar_root / "issues"
     if issues_dir.is_dir():
         for f in sorted(issues_dir.glob("*.md")):
             fm, body = _read_fm(f)
@@ -4652,6 +4664,12 @@ class ViewerHandler(BaseHTTPRequestHandler):
         try:
             data = yaml.safe_load(_backlog_path().read_text(encoding="utf-8"))
             data.setdefault("meta", {})["_version"] = VERSION
+            if not isinstance(data.get("tasks"), list):
+                data["tasks"] = [
+                    {**t, "epic": t.get("epic", e.get("id"))}
+                    for e in (data.get("epics") or [])
+                    for t in (e.get("tasks") or [])
+                ]
             self._send_json(200, data)
         except Exception as e:
             self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(e))
