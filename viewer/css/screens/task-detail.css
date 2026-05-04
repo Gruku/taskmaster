@@ -34,6 +34,7 @@
   grid-template-columns: 1fr var(--task-rail-w);
   gap: var(--task-grid-gap);
 }
+.td-grid > .td-body { min-width: 0; }
 
 /* ---------- Variant A — Document body ---------- */
 .td-doc-meta { color: var(--ink-3); font-size: var(--text-sm); display: flex; gap: var(--sp-3); align-items: center; flex-wrap: wrap; }
@@ -90,7 +91,7 @@
 /* sections */
 .td-section { margin-bottom: var(--task-section-mb); }
 .td-section-h { font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.1em; color: var(--ink-3); margin-bottom: var(--task-section-h); }
-.td-section .md-body { color: var(--ink); font-size: var(--text-md); line-height: 1.55; }
+.td-section .md-body { color: var(--ink); font-size: var(--text-md); line-height: 1.55; min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
 .td-section .md-body h1 { font-size: var(--text-xl); margin: 14px 0 8px; }
 .td-section .md-body h2 { font-size: var(--text-lg); margin: 12px 0 6px; }
 .td-section .md-body h3 { font-size: var(--text-md); margin: 10px 0 4px; color: var(--ink-2); }
