@@ -151,6 +151,23 @@ If v3-pre-2a buffered a `pending_review_flag` (any `scope="session"` candidate w
    For OTHER tasks that also need transitions (not the primary task):
    - Use `backlog_update_task` for individual status changes — these won't get changelog entries, which is fine for secondary tasks.
 
+**v3-post-complete-1: Issue-close-on-task-complete hook.** (v3 backlogs only — schema_version >= 3)
+
+After `backlog_complete_task` succeeds, check whether the just-completed task has any `related_issues`. For each issue whose current `status` is `open` or `investigating`, prompt:
+
+> *"ISS-XXX is still open — close it as fixed in `<task_id>`, or leave for follow-up?"*
+
+| Choice | Action |
+|---|---|
+| Close as fixed | `backlog_issue_update(issue_id="ISS-XXX", status="fixed", fixed_in_task="<task_id>")` |
+| Leave for follow-up | No tool call — issue remains open |
+
+If the task has no `related_issues`, or all related issues are already `fixed` / `closed` / `wont-fix`, skip this sub-step silently — no prompt.
+
+If multiple issues are open, prompt for each in sequence (or offer a multi-select if the skill implementation supports it).
+
+Reference: `taskmaster:issue` skill, entry point `close-on-task-complete`.
+
 7. **Worktree cleanup (done tasks only):**
    - If the task was marked **done** and has a worktree, offer cleanup:
      "Clean up the worktree for `{task_id}`? This removes the isolated working directory."

@@ -1,0 +1,105 @@
+"""Lint checks for the taskmaster:issue skill scaffolding."""
+from pathlib import Path
+import re
+
+import yaml
+
+SKILL_DIR = Path(__file__).resolve().parents[1] / "skills" / "issue"
+
+
+def _read_frontmatter(path: Path) -> dict:
+    text = path.read_text(encoding="utf-8")
+    m = re.match(r"^---\n(.*?)\n---\n", text, re.DOTALL)
+    if not m:
+        return {}
+    return yaml.safe_load(m.group(1)) or {}
+
+
+def test_skill_dir_exists():
+    assert SKILL_DIR.exists() and SKILL_DIR.is_dir()
+
+
+def test_skill_md_exists():
+    assert (SKILL_DIR / "SKILL.md").exists()
+
+
+def test_frontmatter_has_required_fields():
+    fm = _read_frontmatter(SKILL_DIR / "SKILL.md")
+    assert fm.get("name") == "issue"
+    assert "description" in fm and isinstance(fm["description"], str)
+    # Description must be >= 200 chars to actually convey the trigger surface.
+    assert len(fm["description"]) >= 200
+
+
+def test_description_contains_trigger_phrases():
+    fm = _read_frontmatter(SKILL_DIR / "SKILL.md")
+    desc = fm["description"].lower()
+    must_have = [
+        "log a bug",
+        "found an issue",
+        "this is broken",
+        "track this defect",
+        "log this defect",
+        "file a bug",
+        "report a bug",
+        "this is a bug",
+        "mark issue fixed",
+        "close iss-xx",
+        "investigating iss-xx",
+        "list open issues",
+        "what bugs are open",
+        "triage issues",
+    ]
+    missing = [p for p in must_have if p not in desc]
+    assert not missing, f"description is missing trigger phrases: {missing}"
+
+
+def test_skill_md_contains_canonical_sentence():
+    text = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+    expected = (
+        "This is the ONLY correct way to write or transition a project issue"
+        " — do not call backlog_issue_create or backlog_issue_update directly."
+    )
+    assert expected in text, "SKILL.md is missing the canonical 'ONLY correct way' sentence"
+
+
+def test_skill_md_documents_all_five_entry_points():
+    text = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8").lower()
+    must_have = [
+        "log-issue",
+        "flag-from-conversation",
+        "update-status",
+        "close-on-task-complete",
+        "triage-review",
+    ]
+    missing = [p for p in must_have if p not in text]
+    assert not missing, f"SKILL.md missing entry-point slugs: {missing}"
+
+
+def test_all_referenced_files_exist():
+    expected_refs = [
+        SKILL_DIR / "references" / "severity-heuristics.md",
+        SKILL_DIR / "references" / "lifecycle.md",
+        SKILL_DIR / "references" / "auto-extraction.md",
+        SKILL_DIR / "templates" / "issue-body.md",
+    ]
+    missing = [p for p in expected_refs if not p.exists()]
+    assert not missing, f"missing referenced files: {missing}"
+
+
+def test_references_are_not_stubs():
+    # Each reference > 20 non-blank lines; each template > 5 (per spec).
+    for ref in (SKILL_DIR / "references").iterdir():
+        non_blank = [ln for ln in ref.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        assert len(non_blank) > 20, f"reference looks like a stub: {ref}"
+    for tpl in (SKILL_DIR / "templates").iterdir():
+        non_blank = [ln for ln in tpl.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        assert len(non_blank) > 5, f"template looks like a stub: {tpl}"
+
+
+def test_skill_md_links_resolve():
+    text = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+    refs = re.findall(r"`(references/[A-Za-z0-9_-]+\.md|templates/[A-Za-z0-9_-]+\.md)`", text)
+    assert refs, "SKILL.md does not reference any references/ or templates/ files"
+    missing = [r for r in refs if not (SKILL_DIR / r).exists()]
+    assert not missing, f"SKILL.md links do not resolve: {missing}"

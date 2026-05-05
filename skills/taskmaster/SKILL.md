@@ -33,7 +33,7 @@ Read the user's message and match it to one of these intents:
 | (v3) "Write a handover", "wrap up for tomorrow", "context handoff", "save where I left off", "for tomorrow", "remind future me", "before compaction" | `taskmaster:handover` |
 | (v3) "Show last handover", "where did I leave off" | Direct tool call — `backlog_handover_latest` (then `backlog_handover_get` for full body if requested) |
 | (v3) "List handovers", "recent handovers" | Direct tool call — `backlog_handover_list` |
-| (v3) "Log a bug", "found an issue", "this is broken", "track this defect" | Direct tool call — `backlog_issue_create` (ask for severity P0–P3 if not provided) |
+| (v3) "Log a bug", "found an issue", "this is broken", "track this defect" | `taskmaster:issue` |
 | (v3) "List issues", "open bugs", "what's broken" | Direct tool call — `backlog_issue_list` (filter by `status=open` for active) |
 | (v3) "Mark issue fixed", "close ISS-XX" | Direct tool call — `backlog_issue_update` with `status=fixed` and `fixed_in_task=<id>` |
 | (v3) "Remember this", "save as a lesson", "learn this lesson", "memorize this", "this keeps happening", "we always do X here", "we got burned by this last time", "promote candidate to lesson", "review lesson candidates", "flag this session for retro" | `taskmaster:lesson` |
@@ -69,7 +69,7 @@ This ensures nothing falls through the cracks.
 Several v3 routes are easy to confuse — pick correctly:
 
 - **handover vs end-session:** end-session is a *task transition* (status → done/in-review with changelog). A handover is a *narrative continuity artifact* — it can be written without ending a task ("context handoff" mid-flow) or alongside one (end-of-day handover at end-session). When the user says "wrap up", route to `taskmaster:end-session` which itself offers handover write. When they say "context handoff" or "for tomorrow", invoke `taskmaster:handover` directly — it writes the handover without transitioning any task.
-- **issue vs task:** an issue is a *bug record*; a task is a *unit of work*. "Track this bug" → `backlog_issue_create`. "Add a task to fix this bug" → `backlog_add_task` with `related_issues: [ISS-XX]`. Both can coexist for the same defect.
+- **issue vs task:** an issue is a *bug record*; a task is a *unit of work*. "Track this bug" → `taskmaster:issue` (skill — handles severity prompt, related-task linking, and dedup). "Add a task to fix this bug" → `backlog_add_task` with `related_issues: [ISS-XX]`. Both can coexist for the same defect.
 - **lesson vs note:** task notes are scratch space for one task. A lesson is project-wide guidance that triggers across many future tasks. "Note this for the task" → task notes field. "Remember this for next time you touch auth" → `taskmaster:lesson` (which writes the lesson + handles candidate review + reinforcement).
 - **recap vs last_session:** `last_session` shows what *you* did. `recap` shows what changed in the *project state* (could include changes from other sessions, manual backlog edits, auto runs). At session start, both render — they're not redundant.
 - **auto-task vs pick-task:** `pick-task` is interactive — user drives every step. `auto-task` is the state machine driving every stage with optional gates. If user wants to drive manually, route to pick-task. If they want hands-off (or scripted), auto-task.
