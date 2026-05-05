@@ -1,0 +1,76 @@
+/* viewer/css/components/entity-modal.css */
+body.em-open { overflow: hidden; }
+
+.em-overlay {
+  position: fixed; inset: 0; z-index: 100;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex; align-items: center; justify-content: center;
+  animation: em-fade-in 0.18s ease-out;
+}
+@keyframes em-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.em-modal {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  width: min(640px, calc(100vw - 32px));
+  max-height: calc(100vh - 64px);
+  display: flex; flex-direction: column;
+  animation: em-scale-in 0.18s ease-out;
+}
+@keyframes em-scale-in {
+  from { transform: scale(0.96); opacity: 0; }
+  to   { transform: scale(1); opacity: 1; }
+}
+
+.em-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.em-title { font-size: var(--text-lg); font-weight: 600; color: var(--ink); }
+.em-close {
+  background: none; border: none; color: var(--ink-3);
+  cursor: pointer; font-size: var(--text-md); padding: 4px;
+}
+.em-close:hover { color: var(--ink); }
+
+.em-body {
+  padding: 16px;
+  overflow-y: auto;
+  flex: 1;
+  display: flex; flex-direction: column; gap: 14px;
+}
+.em-field { display: flex; flex-direction: column; gap: 4px; }
+.em-label {
+  font-size: var(--text-xs); text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--ink-3);
+}
+.em-field-error {
+  font-size: var(--text-xs); color: var(--red); display: none;
+}
+
+.em-footer {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border-soft);
+  background: var(--bg-deep);
+}
+.em-error-summary { font-size: var(--text-xs); color: var(--red); }
+.em-footer-actions { display: flex; gap: 8px; }
+.em-cancel, .em-save {
+  font: inherit; padding: 5px 14px; border-radius: 4px; cursor: pointer;
+  border: 1px solid var(--border);
+}
+.em-cancel { background: transparent; color: var(--ink-2); }
+.em-cancel:hover { background: var(--bg-card); color: var(--ink); }
+.em-save {
+  background: var(--accent); color: white; border-color: var(--accent);
+}
+.em-save:disabled {
+  opacity: 0.5; cursor: not-allowed;
+  background: var(--bg-card); color: var(--ink-3); border-color: var(--border);
+}
