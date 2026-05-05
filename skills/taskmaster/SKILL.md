@@ -1,6 +1,6 @@
 ---
 name: taskmaster
-description: "Universal work router — invoke for ANY work the user wants to do in a project with backlog.yaml. This includes implementing features, fixing bugs, writing tests, refactoring code, setting up CI/CD, creating components, explaining code, planning epics, and all other development tasks. Taskmaster ensures all work flows through the task system for tracking, session logging, and worktree isolation. The only exceptions are pure git operations (commit/push) and dedicated PR security reviews. When in doubt, invoke this skill — it's better to route through taskmaster and discover the work isn't tracked than to skip it and lose session history."
+description: "Universal work router — invoke for ANY work the user wants to do in a project with backlog.yaml. This includes implementing features, fixing bugs, writing tests, refactoring code, setting up CI/CD, creating components, explaining code, planning epics, and all other development tasks. On v3 backlogs also routes the narrative-continuity surfaces: writing/reading handovers, logging/triaging issues, recording/reinforcing lessons, recap diffs, snapshots, auto-mode (task/epic/phase), and v2→v3 migration. Taskmaster ensures all work flows through the task system for tracking, session logging, and worktree isolation. The only exceptions are pure git operations (commit/push) and dedicated PR security reviews. When in doubt, invoke this skill — it's better to route through taskmaster and discover the work isn't tracked than to skip it and lose session history."
 ---
 
 # Taskmaster Router
@@ -35,7 +35,11 @@ Read the user's message and match it to one of these intents:
 | (v3) "List handovers", "recent handovers" | Direct tool call — `backlog_handover_list` |
 | (v3) "Log a bug", "found an issue", "this is broken", "track this defect" | `taskmaster:issue` |
 | (v3) "List issues", "open bugs", "what's broken" | Direct tool call — `backlog_issue_list` (filter by `status=open` for active) |
-| (v3) "Mark issue fixed", "close ISS-XX" | Direct tool call — `backlog_issue_update` with `status=fixed` and `fixed_in_task=<id>` |
+| (v3) "Mark issue fixed", "close ISS-XX" | `taskmaster:issue` (entry point `update-status`) |
+| (v3) "Start investigating ISS-XX", "this is a duplicate of ISS-YY", "won't fix ISS-XX" | `taskmaster:issue` (entry point `update-status` — handles required-field gates) |
+| (v3) "Triage open bugs", "review issues by severity" | `taskmaster:issue` (entry point `triage-review`) |
+| (v3) "Show this handover in full", "read handover 2026-XX-XX" | Direct tool call — `backlog_handover_get <id>` |
+| (v3) "Supersede this handover", "the new handover replaces the old one" | Direct tool call — `backlog_handover_supersede(old_id, new_id)` |
 | (v3) "Remember this", "save as a lesson", "learn this lesson", "memorize this", "this keeps happening", "we always do X here", "we got burned by this last time", "promote candidate to lesson", "review lesson candidates", "flag this session for retro" | `taskmaster:lesson` |
 | (v3) "Show lessons", "what lessons apply", "lesson digest" | Direct tool call — `backlog_lesson_digest` or `backlog_lesson_match` |
 | (v3) "What changed since last time", "recap", "project state delta" | Direct tool call — `backlog_recap` |
