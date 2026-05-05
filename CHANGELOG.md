@@ -8,9 +8,11 @@ indicate schema breaks or removed surfaces.
 
 ---
 
-## 2.0.0 — V3 release
+## 3.0.0 — v3 release
 
-The largest release since v1.0. Two themes:
+Major version aligned with the schema name (`schema_version: 3`,
+`taskmaster:migrate-v3`, the `/v3` viewer URL). Skips 2.x entirely; the
+last shipped major was 1.11.x. Two themes:
 
 1. **Narrative continuity.** Sessions, decisions, gotchas, and bugs are now first-class entities — handovers, lessons, and issues each have their own MCP surface, viewer screens, and skill layer. Recap tells you what changed in project state since the last snapshot. Auto-mode drives single tasks, whole epics, or entire phases through the full lifecycle as a state machine, with PreCompact-safe cursor persistence.
 2. **Edit-in-UI.** Every entity (task, epic, phase, handover, lesson, issue) is editable from the viewer with inline-field autosave, ETag/If-Match concurrency, conflict banners, and server-side schema validation. The kanban dashboard, task detail, and entity modals all share one component system.
@@ -20,7 +22,7 @@ v2 backlogs keep working unchanged. The v3 schema is opt-in via the new `taskmas
 ### Breaking changes
 
 - **Schema break (opt-in).** v3 backlogs move heavy task fields (`description`, `notes`, `docs`, `review_instructions`) out of `backlog.yaml` into per-task files at `.taskmaster/tasks/<task-id>.md`. The slim index in `backlog.yaml` keeps id/title/status/priority/etc. for fast dashboard renders. **In-memory shape is unchanged** — every existing tool/skill keeps working on both schemas. v2 backlogs are untouched until the user explicitly opts in.
-- **Major version bump.** Plugins or scripts pinning `taskmaster@1.x` will not auto-upgrade. The viewer URL paths are unchanged but the data shape returned by `/api/backlog` differs on v3 — third-party integrations against the v2 API need a switch on `schema_version`.
+- **Major version bump.** Plugins or scripts pinning `taskmaster@^1.0.0` will not auto-upgrade. The viewer URL paths are unchanged but the data shape returned by `/api/backlog` differs on v3 — third-party integrations against the v2 API need a switch on `schema_version`.
 - **Some v1.x viewer assets removed.** The HTML-only viewer (`backlog-viewer.html`) is replaced by the v3 viewer (`viewer/`). The old file remains in the repo for v2 compatibility but the dashboard `backlog_open_viewer` tool now opens the v3 surface.
 
 ### Migration

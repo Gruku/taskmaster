@@ -1,10 +1,10 @@
-# Smoke-test checklist — taskmaster 2.0.0 (v3)
+# Smoke-test checklist — taskmaster 3.0.0 (v3)
 
 This is the user-driven companion to `tests/test_e2e_v3_smoke.py`. The test
 exercises the programmatic surface; this checklist covers what only a real
 install + Claude Code session + browser can verify.
 
-**Pre-requisite:** taskmaster 2.0.0 installed via `/plugin install gruku-tools/taskmaster`
+**Pre-requisite:** taskmaster 3.0.0 installed via `/plugin install gruku-tools/taskmaster`
 (or marketplace install). Restart Claude Code after install.
 
 ## 1. Fresh project, v2 init → v3 migration
@@ -103,5 +103,5 @@ Open `backlog_open_viewer`:
 ## Reporting
 
 If any item fails, file as a `taskmaster:issue` (severity per impact) with
-the failure details. The 2.0.0 release should be considered "verified
+the failure details. The 3.0.0 release should be considered "verified
 operational" only when all 10 sections check out.
