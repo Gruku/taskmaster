@@ -4734,10 +4734,45 @@ class ViewerHandler(BaseHTTPRequestHandler):
             self._send_json(200, summary)
             return
 
+        # Edit-in-UI: create task, archive task
+        if self.path == "/api/tasks":
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length).decode("utf-8") if length else ""
+            try:
+                payload = json.loads(raw)
+            except Exception as e:
+                self._send_json(400, {"ok": False, "error": f"invalid JSON: {e}"})
+                return
+            try:
+                from taskmaster_v3 import create_task
+                new_id = create_task(payload)
+                # Look up the new task to return.
+                task = _load_task_full(new_id) or {"id": new_id}
+                self._send_json(201, {"ok": True, "task": task})
+            except (KeyError, ValueError) as e:
+                self._send_json(400, {"ok": False, "error": str(e)})
+            except Exception as e:
+                self._send_json(500, {"ok": False, "error": str(e)})
+            return
+
+        m = re.fullmatch(r"/api/tasks/([A-Za-z0-9_\-]+)/archive", self.path)
+        if m:
+            task_id = m.group(1)
+            try:
+                from taskmaster_v3 import archive_task
+                archive_task(task_id)
+                self._send_json(200, {"ok": True})
+            except KeyError as e:
+                self._send_json(404, {"ok": False, "error": str(e)})
+            except Exception as e:
+                self._send_json(500, {"ok": False, "error": str(e)})
+            return
+
         self.send_response(404)
         self.end_headers()
 
     def do_PUT(self):
+        import re
         if self.path == "/api/viewer/prefs":
             length = int(self.headers.get("Content-Length") or 0)
             raw = self.rfile.read(length).decode("utf-8") if length else ""
@@ -4782,8 +4817,55 @@ class ViewerHandler(BaseHTTPRequestHandler):
             self._send_json(200, {"ok": True})
             return
 
+        if m := re.fullmatch(r"/api/tasks/([A-Za-z0-9_\-]+)", self.path):
+            task_id = m.group(1)
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length).decode("utf-8") if length else ""
+            try:
+                full = json.loads(raw)
+            except Exception as e:
+                self._send_json(400, {"ok": False, "error": f"invalid JSON: {e}"})
+                return
+            if not isinstance(full, dict):
+                self._send_json(400, {"ok": False, "error": "body must be object"})
+                return
+            try:
+                from taskmaster_v3 import update_task
+                task = update_task(task_id, full)
+                self._send_json(200, {"ok": True, "task": task})
+            except KeyError as e:
+                self._send_json(404, {"ok": False, "error": str(e)})
+            return
+
         self.send_response(404)
         self.end_headers()
+
+    def do_PATCH(self):
+        import json
+        import re
+        if m := re.fullmatch(r"/api/tasks/([A-Za-z0-9_\-]+)", self.path):
+            task_id = m.group(1)
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length).decode("utf-8") if length else ""
+            try:
+                patch = json.loads(raw)
+            except Exception as e:
+                self._send_json(400, {"ok": False, "error": f"invalid JSON: {e}"})
+                return
+            if not isinstance(patch, dict):
+                self._send_json(400, {"ok": False, "error": "patch must be object"})
+                return
+            try:
+                from taskmaster_v3 import update_task
+                task = update_task(task_id, patch)
+                self._send_json(200, {"ok": True, "task": task})
+            except KeyError as e:
+                self._send_json(404, {"ok": False, "error": str(e)})
+            except Exception as e:
+                self._send_json(500, {"ok": False, "error": str(e)})
+            return
+
+        self.send_error(404)
 
     def _send_json(self, status: int, payload: dict):
         """Serialize *payload* as JSON and write the complete HTTP response."""

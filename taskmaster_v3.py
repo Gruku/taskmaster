@@ -2369,3 +2369,120 @@ def compute_lesson_shelf(lesson: dict, thresholds: dict, now=None) -> str:
     if not in_active:
         return "retired"
     return "active"
+
+
+# ── Edit-in-UI write primitives (v3-edit Phase A) ──────────────────
+
+import contextlib
+
+_threadlocal_locks: dict[str, "threading.Lock"] = {}
+
+
+@contextlib.contextmanager
+def with_file_lock(path: Path):
+    """Per-file mutex for write paths.
+
+    Uses a `.lock` sidecar adjacent to the target file. Falls back to a
+    threading-local lock if the `filelock` package isn't available — local
+    use is single-process so this is acceptable; future cross-process
+    safety lands when filelock becomes a hard dep.
+    """
+    try:
+        from filelock import FileLock
+        lock = FileLock(str(path) + ".lock", timeout=5)
+        with lock:
+            yield
+    except ImportError:
+        import threading
+        lock = _threadlocal_locks.setdefault(str(path), threading.Lock())
+        with lock:
+            yield
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _find_task_in_yaml(data: dict, task_id: str) -> tuple[dict, dict] | None:
+    """Return (epic_dict, task_dict) for a v2-nested layout, or None."""
+    for epic in data.get("epics") or []:
+        for t in epic.get("tasks") or []:
+            if t.get("id") == task_id:
+                return epic, t
+    return None
+
+
+def update_task(task_id: str, patch: dict, backlog_path: Path | None = None) -> dict:
+    """Apply a partial update to a task. Returns the new task dict.
+
+    - Auto-stamps `started` on first transition into `in-progress` (or any
+      non-todo state from `todo`).
+    - Auto-stamps `completed` on transition into `done`.
+    - Never overwrites `started`/`completed` once set.
+    """
+    bp = backlog_path or _resolve_backlog_path()
+    with with_file_lock(bp):
+        data = yaml.safe_load(bp.read_text(encoding="utf-8")) or {}
+        found = _find_task_in_yaml(data, task_id)
+        if found is None:
+            raise KeyError(f"task {task_id} not found")
+        epic, task = found
+        before_status = task.get("status")
+        for k, v in patch.items():
+            task[k] = v
+        after_status = task.get("status")
+        if after_status != before_status:
+            if after_status == "in-progress" and not task.get("started"):
+                task["started"] = _now_iso()
+            if after_status == "done" and not task.get("completed"):
+                task["completed"] = _now_iso()
+        task["last_referenced"] = _now_iso()
+        atomic_write(bp, yaml.safe_dump(data, sort_keys=False))
+        return dict(task)
+
+
+def create_task(payload: dict, backlog_path: Path | None = None) -> str:
+    """Create a new task under the given epic. Returns assigned id."""
+    bp = backlog_path or _resolve_backlog_path()
+    epic_id = payload.get("epic")
+    if not epic_id:
+        raise ValueError("epic is required")
+    with with_file_lock(bp):
+        data = yaml.safe_load(bp.read_text(encoding="utf-8")) or {}
+        epic = next((e for e in (data.get("epics") or []) if e.get("id") == epic_id), None)
+        if epic is None:
+            raise KeyError(f"epic {epic_id} not found")
+        existing_ids = {t.get("id") for t in (epic.get("tasks") or [])}
+        # Generate next id like e1-002.
+        n = 1
+        while f"{epic_id}-{n:03d}" in existing_ids:
+            n += 1
+        new_id = f"{epic_id}-{n:03d}"
+        new_task = {
+            "id": new_id,
+            "title": payload.get("title", ""),
+            "status": payload.get("status", "todo"),
+            "priority": payload.get("priority", "medium"),
+            "created": _now_iso(),
+            "last_referenced": _now_iso(),
+        }
+        # Pass through other supplied fields (phase, anchors, depends_on, etc).
+        for k, v in payload.items():
+            if k not in ("epic", "id"):
+                new_task[k] = v
+        epic.setdefault("tasks", []).append(new_task)
+        atomic_write(bp, yaml.safe_dump(data, sort_keys=False))
+        return new_id
+
+
+def archive_task(task_id: str, backlog_path: Path | None = None) -> None:
+    """Soft-delete: set status to 'archived'. The existing
+    backlog_archive_task MCP tool already does this for v2 backlogs;
+    we mirror the behavior here so HTTP shares the code path."""
+    update_task(task_id, {"status": "archived"}, backlog_path=backlog_path)
+
+
+def _resolve_backlog_path() -> Path:
+    """Lazy import of backlog_server's resolver to avoid circular import."""
+    from backlog_server import _backlog_path
+    return _backlog_path()

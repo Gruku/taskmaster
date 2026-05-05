@@ -51,6 +51,10 @@ export const api = {
   autoState:       ()    => http('GET', '/api/auto/state'),
   getTask,
   getTaskRelated,
+  patchTask:    (id, patch) => http('PATCH', `/api/tasks/${encodeURIComponent(id)}`, patch),
+  putTask:      (id, full)  => http('PUT',   `/api/tasks/${encodeURIComponent(id)}`, full),
+  createTask:   (payload)   => http('POST',  '/api/tasks', payload),
+  archiveTask:  (id)        => http('POST',  `/api/tasks/${encodeURIComponent(id)}/archive`, {}),
 
   async getRecentEvents(since) {
     const u = new URL('/api/dashboard/recent-events', location.origin);
