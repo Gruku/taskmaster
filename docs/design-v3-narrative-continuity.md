@@ -510,9 +510,9 @@ The "[you]" / "[auto]" tags help separate user-driven backlog edits from in-sess
 
 ### PreCompact hook
 
-Runs `backlog_snapshot --quiet` before context compaction so post-compact `recap` reflects pre-compaction state. Cost: zero in-context tokens, ~100ms wall time.
+Runs the snapshot writer before context compaction so post-compact `recap` reflects pre-compaction state. Cost: zero in-context tokens, ~100ms wall time.
 
-Settings.json snippet (auto-installed by `init-taskmaster` v3):
+The hook ships with the plugin — no per-project `settings.json` mutation required. Registered in `plugins/taskmaster/hooks/hooks.json`:
 
 ```json
 {
@@ -520,14 +520,16 @@ Settings.json snippet (auto-installed by `init-taskmaster` v3):
     "PreCompact": [{
       "matcher": "",
       "hooks": [
-        { "type": "command", "command": "taskmaster snapshot --quiet" }
+        { "type": "command", "command": "python \"${CLAUDE_PLUGIN_ROOT}/hooks/snapshot.py\"", "async": true }
       ]
     }]
   }
 }
 ```
 
-Also runs on `end-session` and explicitly via `taskmaster snapshot`.
+The script (`hooks/snapshot.py`) walks up from `cwd` to find `.taskmaster/backlog.yaml`, `.claude/backlog.yaml`, or `backlog.yaml`, calls `taskmaster_v3.take_snapshot`, and writes `<backlog_dir>/snapshots/last.json`. It exits 0 on every code path — a broken hook never blocks the user. Test coverage in `tests/test_precompact_hook.py`.
+
+Also runs on `end-session` (via `backlog_snapshot` MCP tool) and on demand via the same MCP tool.
 
 ### Composition with `last_session`
 

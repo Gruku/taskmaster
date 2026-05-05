@@ -151,13 +151,13 @@ If the user chose analyze:
 If v3 was chosen in step 2, also tell the user about the new capabilities they just unlocked:
 
 > **You're on v3. New capabilities available:**
-> - **Handovers** — `backlog_handover_create` to capture session continuity. Auto-offered at end-session for big sessions.
-> - **Lessons** — `backlog_lesson_create` to record patterns/anti-patterns/gotchas; reinforces compound across sessions.
-> - **Issues** — `backlog_issue_create` for bug tracking separate from work tasks.
+> - **Handovers** — `taskmaster:handover` skill captures session continuity. Auto-offered at end-session for heavy sessions.
+> - **Lessons** — `taskmaster:lesson` skill records patterns/anti-patterns/gotchas; reinforces compound across sessions.
+> - **Issues** — `taskmaster:issue` skill for bug tracking separate from work tasks.
 > - **Recap** — `backlog_recap` shows what changed in the project since last snapshot.
 > - **Auto modes** — `taskmaster:auto-task`, `auto-epic`, `auto-phase` for state-machine-driven execution.
 >
-> The PreCompact hook (`hooks.json`) will auto-snapshot before context compaction so recap stays accurate. No setup needed.
+> The PreCompact hook ships with this plugin and runs automatically before context compaction (writes `.taskmaster/snapshots/last.json` so the next `recap` reflects pre-compaction state). No per-project setup required.
 
 ### v2 → v3 upgrade later
 
