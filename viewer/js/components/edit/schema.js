@@ -7,7 +7,8 @@ export function runValidation(entity, schema) {
   const errors = {};
   for (const f of schema.fields || []) {
     const value = entity[f.key];
-    const err = f.renderer?.validate?.(value, f);
+    // Field-level validate takes precedence; falls back to renderer validate.
+    const err = f.validate ? f.validate(value, f) : f.renderer?.validate?.(value, f);
     if (err) errors[f.key] = err;
   }
   for (const rule of schema.crossField || []) {
