@@ -15,4 +15,7 @@ for (const { name, mountFn } of sections) {
   mountFn(sec);
 }
 import './../components/edit/fields/text-field-demo.js';
-// Subsequent tasks add `import './fields/text-field-demo.js'` etc. above.
+import './../components/edit/fields/md-field-demo.js';
+import './../components/edit/fields/enum-select-demo.js';
+import './../components/edit/fields/number-field-demo.js';
+import './../components/edit/fields/date-field-demo.js';

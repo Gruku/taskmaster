@@ -45,3 +45,42 @@
 .ef-text-input:focus {
   border-color: var(--accent);
 }
+
+.ef-md {
+  color: var(--ink);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ef-md-textarea {
+  font: inherit;
+  color: var(--ink);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px 10px;
+  width: 100%;
+  resize: vertical;
+  outline: none;
+  font-family: var(--font-sans);
+}
+.ef-md-textarea:focus {
+  border-color: var(--accent);
+}
+
+.ef-enum-select {
+  font: inherit;
+  color: var(--ink);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 6px;
+  outline: none;
+}
+.ef-enum-select:focus { border-color: var(--accent); }
+
+.ef-num-input { font: inherit; color: var(--ink); background: var(--bg-card); border: 1px solid var(--border); border-radius: 3px; padding: 1px 6px; width: 80px; outline: none; }
+.ef-num-input:focus { border-color: var(--accent); }
+
+.ef-date-input { font: inherit; color: var(--ink); background: var(--bg-card); border: 1px solid var(--border); border-radius: 3px; padding: 1px 6px; outline: none; }
+.ef-date-input:focus { border-color: var(--accent); }
