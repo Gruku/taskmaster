@@ -125,3 +125,19 @@
 .ef-chip-dd-row.ef-chip-dd-active { background: color-mix(in oklch, var(--accent) 20%, transparent); color: var(--ink); }
 .ef-chip-dd-row:hover { background: var(--bg-card); }
 .ef-chip-dd-hint { color: var(--ink-3); font-size: var(--text-xs); margin-left: auto; }
+
+.if-wrap { display: inline-block; }
+.if-status {
+  display: inline-block; margin-left: 6px;
+  font-size: var(--text-xs); vertical-align: middle;
+}
+.if-status-saving {
+  color: var(--accent);
+  animation: if-pulse 0.9s ease-in-out infinite;
+}
+@keyframes if-pulse {
+  0%, 100% { opacity: 0.4; }
+  50%      { opacity: 1.0; }
+}
+.if-status-ok    { color: var(--green); }
+.if-status-error { color: var(--red); cursor: help; }
