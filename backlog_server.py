@@ -247,6 +247,51 @@ def _save(data: dict) -> None:
             )
 
 
+def _has_v3_content(data: dict) -> bool:
+    """True when the backlog has any v3 narrative-continuity entity content.
+
+    Independent of `schema_version` marker — used by the heuristic that lets
+    skill auto-offers fire on backlogs whose marker was never bumped (ISS-001).
+    """
+    return bool(
+        data.get("handovers")
+        or data.get("issues")
+        or data.get("lessons_meta")
+    )
+
+
+def _effective_schema_version(data: dict) -> int:
+    """schema_version, but treats 'v3 content present, marker missing' as v3.
+
+    Skill gates compare against this so they don't silently skip on backlogs
+    that were created with v3 entities before the marker invariant existed.
+    """
+    declared = _detect_schema_version(data)
+    if declared >= SCHEMA_V3:
+        return declared
+    if _has_v3_content(data):
+        return SCHEMA_V3
+    return declared
+
+
+def _ensure_v3_marker(bp: Path) -> None:
+    """Set `meta.schema_version: 3` in backlog.yaml when missing.
+
+    Marker-only — does NOT split tasks into per-task files. Called from
+    v3 entity-write paths so the marker stays consistent with reality.
+    Idempotent. Subsequent saves may migrate task storage via the normal
+    v3 dispatch.
+    """
+    raw = yaml.safe_load(bp.read_text(encoding="utf-8")) or {}
+    if _detect_schema_version(raw) >= SCHEMA_V3:
+        return
+    raw.setdefault("meta", {})["schema_version"] = SCHEMA_V3
+    _atomic_write(
+        bp,
+        yaml.dump(raw, default_flow_style=False, sort_keys=False, allow_unicode=True),
+    )
+
+
 def _find_task(data: dict, task_id: str) -> tuple[dict, dict] | None:
     """Returns (task, epic) or None."""
     for epic in data["epics"]:
@@ -624,7 +669,8 @@ def backlog_status() -> str:
     regenerate_context(data)  # ensure fresh stats without writing
     ctx = data["context"]
 
-    lines = ["## Dashboard\n"]
+    lines = [f"**Schema:** v{_effective_schema_version(data)}\n"]
+    lines.append("## Dashboard\n")
     lines.append("| Workstream | Status | Progress | Current Focus |")
     lines.append("|-----------|--------|----------|---------------|")
 
@@ -1477,6 +1523,7 @@ def backlog_handover_create(
     data = _load()
     _sync_handover_index(data, bp)
     _save(data)
+    _ensure_v3_marker(bp)
 
     lines = [
         f"Handover written: {hid}",
@@ -1688,6 +1735,7 @@ def backlog_issue_create(
     data = _load()
     _sync_issue_index(data, bp)
     _save(data)
+    _ensure_v3_marker(bp)
     return f"Issue created: {iid} ({severity}) — {title}\nFile: {target.relative_to(ROOT)}"
 
 
@@ -1905,6 +1953,7 @@ def backlog_lesson_create(
     data = _load()
     _sync_lesson_index(data, bp)
     _save(data)
+    _ensure_v3_marker(bp)
     return f"Lesson created: {lid} ({kind}, {tier}) — {title}\nFile: {target.relative_to(ROOT)}"
 
 

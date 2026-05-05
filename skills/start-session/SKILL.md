@@ -11,7 +11,7 @@ The user is arriving at the start of a conversation — they've lost context sin
 
 ## Steps
 
-1. **Call `backlog_status` tool** to get the current dashboard. The output includes a `schema_version` field — note it. Steps 2a–2d below activate only when `schema_version >= 3`. On v2 backlogs, skip them and behave as before.
+1. **Call `backlog_status` tool** to get the current dashboard. The first line of output is `**Schema:** v<N>` — note it. Steps 2a–2d below activate only when `Schema: v3` (or higher). On v2 backlogs, skip them and behave as before. The schema line reflects the *effective* version: a backlog with v3 entity content (handovers/lessons/issues) reports v3 even if the `schema_version` marker was never written, so auto-offers fire on legacy projects too.
 
 2. **Call `backlog_last_session` tool** to get the most recent changelog entry for continuity.
 

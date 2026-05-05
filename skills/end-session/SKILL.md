@@ -17,7 +17,7 @@ Log the current work session, transition tasks, and commit tracking files.
 
 ### v3 pre-steps (skip on v2 backlogs)
 
-Check `backlog_status` for `schema_version`. If `>= 3`, run these BEFORE the existing flow:
+Check the first line of `backlog_status` output (`**Schema:** v<N>`). If `v3` or higher, run these BEFORE the existing flow. The Schema line is the *effective* version — a backlog with v3 entity content reports v3 even when the `schema_version` marker is missing.
 
 **v3-pre-1: Snapshot.** Call `backlog_snapshot(quiet=true)` to capture pre-end-of-session state. This makes the next session's `backlog_recap` show what changed across the session boundary, not just from now to the next snapshot. Cheap (~50ms), no token cost.
 
@@ -153,7 +153,7 @@ If v3-pre-2a buffered a `pending_review_flag` (any `scope="session"` candidate w
    For OTHER tasks that also need transitions (not the primary task):
    - Use `backlog_update_task` for individual status changes — these won't get changelog entries, which is fine for secondary tasks.
 
-**v3-post-complete-1: Issue-close-on-task-complete hook.** (v3 backlogs only — schema_version >= 3)
+**v3-post-complete-1: Issue-close-on-task-complete hook.** (v3 backlogs only — Schema: v3+)
 
 After `backlog_complete_task` succeeds, check whether the just-completed task has any `related_issues`. For each issue whose current `status` is `open` or `investigating`, prompt:
 

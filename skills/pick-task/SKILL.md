@@ -50,7 +50,7 @@ Select a task to work on and set it to in-progress.
 5. **Once a task is selected:**
    - Call `backlog_pick_task(task_id)` — this sets status to `in-progress`, records `started` date, locks to session, and regenerates context + dashboard.
    - The tool returns task details, epic context, and recently completed tasks in the same epic.
-   - **Note the schema_version** in `backlog_status` output. Steps 5a–5c below activate only when `schema_version >= 3`. On v2 backlogs, skip them and proceed to step 6.
+   - **Note the Schema line** at the top of `backlog_status` output (`**Schema:** v<N>`). Steps 5a–5c below activate only when `Schema: v3` (or higher). On v2 backlogs, skip them and proceed to step 6. The Schema line is the *effective* version — a backlog with v3 entity content reports v3 even when the `schema_version` marker is missing.
 
 5a. **(v3) Related handovers.** Call `backlog_handover_list(task_id=<task_id>, limit=3)` to get tldrs (not full bodies) for up to the 3 most recent handovers that referenced this task. The list output is one line per handover with id + tldr — keep all 3 in working context (~150 tokens total).
 
