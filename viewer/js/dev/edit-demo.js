@@ -19,3 +19,4 @@ import './../components/edit/fields/md-field-demo.js';
 import './../components/edit/fields/enum-select-demo.js';
 import './../components/edit/fields/number-field-demo.js';
 import './../components/edit/fields/date-field-demo.js';
+import './../components/edit/fields/chip-input-demo.js';
