@@ -8,6 +8,26 @@ indicate schema breaks or removed surfaces.
 
 ---
 
+## 3.0.1 — patch (2026-05-06)
+
+Two release-blocker fixes surfaced during 3.0.0 smoke testing.
+
+### Fixed
+
+- **Migrated tasks no longer show empty Description / Notes.** The v3 reader (`_load_task_full`) was only copying `("docs", "review_instructions", "patchnote", "release", "worktree", "spec_review", "locked_by")` from per-task `.md` frontmatter — silently dropping `description` and `notes` even though the migration writer puts them there. The reader now imports `HEAVY_FIELDS` from `taskmaster_v3` and concatenates with the other fm-only fields, so any future addition to `HEAVY_FIELDS` is automatically respected. Closes ISS-003.
+- **Skill auto-offers fire on legacy v3 backlogs without the `schema_version` marker.** Two-pronged fix: (1) `_ensure_v3_marker` runs after each v3 entity create (handover/lesson/issue), promoting `meta.schema_version` to 3 in `backlog.yaml`. Marker-only — does not split tasks. Idempotent. (2) `_effective_schema_version` heuristic — `backlog_status` now emits `**Schema:** v<N>` as its first line, reporting v3 when entity content (`handovers`/`issues`/`lessons_meta`) exists even without the marker. The three retrofit skill gates (`start-session`, `pick-task`, `end-session`) read this line. Closes ISS-001.
+
+### Test count
+
+460+ Python tests (10 new ISS-001 regression tests, 2 new ISS-003 regression tests). E2E smoke and full suite green.
+
+### Upgrade notes
+
+- No action required. After `/plugin update gruku-tools/taskmaster` and an MCP reconnect, both fixes apply retroactively to existing migrated tasks and existing v3-content backlogs without re-migration.
+- The `**Schema:** v<N>` line is now the canonical read site for skill schema gates; if you authored custom skills that grep for `schema_version` in `backlog_status` output, switch to the `Schema:` line.
+
+---
+
 ## 3.0.0 — v3 release
 
 Major version aligned with the schema name (`schema_version: 3`,
