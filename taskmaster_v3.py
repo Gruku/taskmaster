@@ -2486,3 +2486,19 @@ def _resolve_backlog_path() -> Path:
     """Lazy import of backlog_server's resolver to avoid circular import."""
     from backlog_server import _backlog_path
     return _backlog_path()
+
+
+def compute_etag(path: Path) -> str:
+    """Stable, cheap ETag derived from file mtime + content hash.
+
+    Returns an 16-hex-char string suitable for HTTP ETag headers.
+    """
+    if not path.exists():
+        return ""
+    st = path.stat()
+    h = hashlib.sha1()
+    h.update(str(st.st_mtime_ns).encode())
+    # Also hash content so two writes with identical content (e.g. same byte
+    # body) collapse to the same etag — desirable for cache stability.
+    h.update(path.read_bytes())
+    return h.hexdigest()[:16]

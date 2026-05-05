@@ -12,6 +12,7 @@ const state = {
   activeAutoSessionId: null, // currently inspected session in auto-mode page
   lessons: null,           // lesson list; populated by lessons.js
   issues: null,            // issue list; populated by issues.js
+  etags: {},               // keyed by `task:<id>` or `backlog`
 };
 
 const subscribers = new Map(); // key → Set<callback>
@@ -59,6 +60,8 @@ export const store = {
   setActiveAutoSession:(sid) => { state.activeAutoSessionId = sid; emitValue('activeAutoSession', sid); },
   setLessons:  (v) => { state.lessons = v || []; emit('lessons'); },
   setIssues:   (v) => { state.issues = v || [];  emit('issues'); },
+  setEtag: (key, etag) => { state.etags[key] = etag; },
+  getEtag: (key) => state.etags[key] || null,
 
   subscribe(key, cb) {
     if (!subscribers.has(key)) subscribers.set(key, new Set());

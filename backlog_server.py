@@ -4487,7 +4487,9 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 if full is None:
                     self._send_json(404, {"ok": False, "error": f"task {rest} not found"})
                     return
-                self._send_json(200, full)
+                from taskmaster_v3 import compute_etag
+                etag = compute_etag(_backlog_path())
+                self._send_json(200, full, etag=etag)
                 return
             self.send_error(HTTPStatus.NOT_FOUND)
         elif clean_path == "/api/backlog":
@@ -4673,7 +4675,9 @@ class ViewerHandler(BaseHTTPRequestHandler):
                     for e in (data.get("epics") or [])
                     for t in (e.get("tasks") or [])
                 ]
-            self._send_json(200, data)
+            from taskmaster_v3 import compute_etag
+            etag = compute_etag(_backlog_path())
+            self._send_json(200, data, etag=etag)
         except Exception as e:
             self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(e))
 
@@ -4758,10 +4762,24 @@ class ViewerHandler(BaseHTTPRequestHandler):
         m = re.fullmatch(r"/api/tasks/([A-Za-z0-9_\-]+)/archive", self.path)
         if m:
             task_id = m.group(1)
+            # If-Match check
+            from taskmaster_v3 import compute_etag, archive_task
+            if_match = self.headers.get("If-Match")
+            if if_match:
+                if_match = if_match.strip('"')
+                current_etag = compute_etag(_backlog_path())
+                if if_match != current_etag:
+                    current = _load_task_full(task_id)
+                    self._send_json(409, {
+                        "ok": False, "error": "stale",
+                        "current_etag": current_etag,
+                        "current": current,
+                    })
+                    return
             try:
-                from taskmaster_v3 import archive_task
                 archive_task(task_id)
-                self._send_json(200, {"ok": True})
+                new_etag = compute_etag(_backlog_path())
+                self._send_json(200, {"ok": True}, etag=new_etag)
             except KeyError as e:
                 self._send_json(404, {"ok": False, "error": str(e)})
             except Exception as e:
@@ -4829,10 +4847,24 @@ class ViewerHandler(BaseHTTPRequestHandler):
             if not isinstance(full, dict):
                 self._send_json(400, {"ok": False, "error": "body must be object"})
                 return
+            # If-Match check
+            from taskmaster_v3 import compute_etag, update_task
+            if_match = self.headers.get("If-Match")
+            if if_match:
+                if_match = if_match.strip('"')
+                current_etag = compute_etag(_backlog_path())
+                if if_match != current_etag:
+                    current = _load_task_full(task_id)
+                    self._send_json(409, {
+                        "ok": False, "error": "stale",
+                        "current_etag": current_etag,
+                        "current": current,
+                    })
+                    return
             try:
-                from taskmaster_v3 import update_task
                 task = update_task(task_id, full)
-                self._send_json(200, {"ok": True, "task": task})
+                new_etag = compute_etag(_backlog_path())
+                self._send_json(200, {"ok": True, "task": task}, etag=new_etag)
             except KeyError as e:
                 self._send_json(404, {"ok": False, "error": str(e)})
             return
@@ -4843,6 +4875,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
     def do_PATCH(self):
         import json
         import re
+        from taskmaster_v3 import compute_etag, update_task
         if m := re.fullmatch(r"/api/tasks/([A-Za-z0-9_\-]+)", self.path):
             task_id = m.group(1)
             length = int(self.headers.get("Content-Length") or 0)
@@ -4855,10 +4888,23 @@ class ViewerHandler(BaseHTTPRequestHandler):
             if not isinstance(patch, dict):
                 self._send_json(400, {"ok": False, "error": "patch must be object"})
                 return
+            # If-Match check
+            if_match = self.headers.get("If-Match")
+            if if_match:
+                if_match = if_match.strip('"')
+                current_etag = compute_etag(_backlog_path())
+                if if_match != current_etag:
+                    current = _load_task_full(task_id)
+                    self._send_json(409, {
+                        "ok": False, "error": "stale",
+                        "current_etag": current_etag,
+                        "current": current,
+                    })
+                    return
             try:
-                from taskmaster_v3 import update_task
                 task = update_task(task_id, patch)
-                self._send_json(200, {"ok": True, "task": task})
+                new_etag = compute_etag(_backlog_path())
+                self._send_json(200, {"ok": True, "task": task}, etag=new_etag)
             except KeyError as e:
                 self._send_json(404, {"ok": False, "error": str(e)})
             except Exception as e:
@@ -4867,12 +4913,14 @@ class ViewerHandler(BaseHTTPRequestHandler):
 
         self.send_error(404)
 
-    def _send_json(self, status: int, payload: dict):
+    def _send_json(self, status: int, payload: dict, etag: str | None = None):
         """Serialize *payload* as JSON and write the complete HTTP response."""
         body = json.dumps(payload, default=str).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        if etag:
+            self.send_header("ETag", f'"{etag}"')
         # JSON API responses are intentionally uncached — no Cache-Control header
         # means browsers apply their default heuristic (usually no-store for XHR).
         self.send_header("Access-Control-Allow-Origin", "*")

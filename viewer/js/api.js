@@ -8,7 +8,34 @@ async function http(method, path, body) {
     init.headers['Content-Type'] = 'application/json';
     init.body = JSON.stringify(body);
   }
+  // Attach If-Match for write methods if we have an etag for this resource.
+  if (method === 'PATCH' || method === 'PUT') {
+    const m = path.match(/^\/api\/tasks\/([^/]+)/);
+    if (m) {
+      const { store } = await import('./store.js');
+      const et = store.getEtag(`task:${decodeURIComponent(m[1])}`);
+      if (et) init.headers['If-Match'] = et;
+    }
+  }
   const resp = await fetch(BASE + path, init);
+  // Capture returned ETag for next time.
+  const et = resp.headers.get('ETag');
+  if (et) {
+    const { store } = await import('./store.js');
+    const m1 = path.match(/^\/api\/task\/([^/]+)$/);  // GET single task
+    const m2 = path.match(/^\/api\/tasks\/([^/]+)/);   // PATCH/PUT
+    const id = (m1 || m2)?.[1];
+    if (id) store.setEtag(`task:${decodeURIComponent(id)}`, et.replace(/^"|"$/g, ''));
+    if (path === '/api/backlog') store.setEtag('backlog', et.replace(/^"|"$/g, ''));
+  }
+  if (resp.status === 409) {
+    const j = await resp.json();
+    const err = new Error('stale');
+    err.code = 409;
+    err.current = j.current;
+    err.current_etag = j.current_etag;
+    throw err;
+  }
   if (!resp.ok) {
     const text = await resp.text().catch(() => '');
     throw new Error(`${method} ${path} → ${resp.status}: ${text}`);
