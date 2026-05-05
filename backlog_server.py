@@ -3889,9 +3889,11 @@ def backlog_batch_update(operations: str) -> str:
 
 
 @mcp.tool()
-def backlog_snapshot(operations: str) -> str:
-    """Preview what would change without writing to disk. Dry-run mode for batch planning.
-    Describes the current state of the specified tasks/epics and what the requested operations would do.
+def backlog_batch_preview(operations: str) -> str:
+    """Preview what a batch of task operations would do without writing to disk.
+
+    Distinct from `backlog_snapshot` (which captures backlog state for `recap`
+    diffing) — this is a planning aid for batch operations.
 
     Args:
         operations: Newline-separated list of operations to preview. Each line is:

@@ -13,8 +13,8 @@ tests prevent that regression.
 
 from __future__ import annotations
 
-import asyncio
-import importlib.util
+import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -22,27 +22,46 @@ import pytest
 
 _PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 
-
-def _load_server_module():
-    """Import backlog_server.py as a module without touching sys.modules state.
-
-    We use spec_from_file_location so the import is hermetic — no risk of
-    a cached older version masking the current source.
-    """
-    if str(_PLUGIN_ROOT) not in sys.path:
-        sys.path.insert(0, str(_PLUGIN_ROOT))
-    spec = importlib.util.spec_from_file_location(
-        "_test_backlog_server", _PLUGIN_ROOT / "backlog_server.py"
-    )
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+# Cache the tool list across tests in this module — list_tools is invariant
+# for a given source tree, and one subprocess spawn beats 32.
+_CACHED_TOOL_NAMES: list[str] | None = None
 
 
 def _list_tool_names() -> list[str]:
-    mod = _load_server_module()
-    tools = asyncio.run(mod.mcp.list_tools())
-    return sorted(t.name for t in tools)
+    """Enumerate registered MCP tools by spawning a fresh Python process.
+
+    Subprocess isolation matters: other test modules in this suite mock
+    `FastMCP` (e.g. via unittest.mock.patch), and those mocks survive in the
+    parent interpreter even after the patch context exits. Re-importing
+    backlog_server in-process picks up the leaked mock and `list_tools()`
+    returns a MagicMock instead of a coroutine.
+
+    The subprocess runs with a clean module cache, gets the real FastMCP,
+    and returns the tool names as JSON on stdout.
+    """
+    global _CACHED_TOOL_NAMES
+    if _CACHED_TOOL_NAMES is not None:
+        return _CACHED_TOOL_NAMES
+
+    script = (
+        "import asyncio, json, sys, importlib.util\n"
+        f"sys.path.insert(0, r'{_PLUGIN_ROOT}')\n"
+        f"spec = importlib.util.spec_from_file_location('bs', r'{_PLUGIN_ROOT / 'backlog_server.py'}')\n"
+        "mod = importlib.util.module_from_spec(spec)\n"
+        "spec.loader.exec_module(mod)\n"
+        "tools = asyncio.run(mod.mcp.list_tools())\n"
+        "print(json.dumps(sorted(t.name for t in tools)))\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True, text=True, timeout=30,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"tool-enumeration subprocess failed: {result.stderr}")
+    # The script may emit FastMCP startup warnings on stderr; tool list is the LAST stdout line.
+    last_line = result.stdout.strip().splitlines()[-1]
+    _CACHED_TOOL_NAMES = json.loads(last_line)
+    return _CACHED_TOOL_NAMES
 
 
 # v3-release-001 — the original blocker

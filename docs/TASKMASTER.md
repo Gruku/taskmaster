@@ -215,7 +215,7 @@ All tools are prefixed with `backlog_`. These are the low-level building blocks 
 | `backlog_validate` | Integrity check: dangling deps, circular deps, missing dates, status inconsistencies |
 | `backlog_last_session` | Most recent changelog entry from `PROGRESS.md` |
 | `backlog_phase_status(id?)` | Phase progress with bar, task breakdown; defaults to active phase |
-| `backlog_snapshot(ops)` | Dry-run preview of batch operations without writing to disk |
+| `backlog_batch_preview(ops)` | Dry-run preview of batch operations without writing to disk |
 
 ### Mutating
 
