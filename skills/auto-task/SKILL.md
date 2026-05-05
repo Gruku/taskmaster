@@ -21,10 +21,12 @@ Run `backlog_auto_status`.
 
 When `cursor.stage == "PICK"`:
 
-1. Call `backlog_get_task(<task_id>)` and read the task body via `backlog_handover_get` for any linked handovers (`related_handovers` field).
-2. Call `backlog_lesson_match(task_title=<title>)` and load matching lessons in full into your working context. (≤3 hits expected.)
-3. Set the task status to `in-progress` via `backlog_update_task(status="in-progress")`.
-4. Call `backlog_auto_advance("SPEC_REVIEW")`.
+1. Call `backlog_get_task(<task_id>)` to load the task frontmatter + body.
+2. Call `backlog_handover_list(task_id=<task_id>, limit=3)` to get tldrs for prior handovers that referenced this task. Keep all 3 in working context (~150 tokens). Only fetch a full body via `backlog_handover_get <id>` when the latest one's `session_kind` is `context-handoff` AND `next_action` is non-trivial — that's the recovery anchor.
+3. Call `backlog_lesson_match(task_title=<title>, touched_files=<task.anchors>)` and fetch the full body of each match via `backlog_lesson_get`. Cap 3 hits, ~900 tokens worst case.
+4. Surface open `related_issues` from the task frontmatter — read full body of any P0/P1 entries via `backlog_issue_get` so the implementation knows what defects this work intersects.
+5. Set the task status: `backlog_update_task(<task_id>, "status", "in-progress")`. (Don't use `backlog_pick_task` here — that's for interactive picking; auto-task drives status directly so cursor stays consistent.)
+6. Call `backlog_auto_advance("SPEC_REVIEW")`.
 
 ## Step 2: SPEC_REVIEW (gated)
 
@@ -38,7 +40,7 @@ When `cursor.stage == "SPEC_REVIEW"`:
    - "Reject" → call backlog_auto_complete_task(status="failed", fail_reason="spec-rejected"), stop.
    ```
 3. If `no_gate=true`, skip the user gate (use only when running batch jobs unattended — emit a warning in the handover stub).
-4. Save the spec back into the task body with `backlog_update_task(spec="...")` (or however the task body is updated in this codebase — check existing pick-task skill for the canonical write path).
+4. Persist the approved spec into `tasks/<task_id>.md` body's `## Spec / Plan` section. The canonical writer is the `taskmaster:spec-review` skill (its step 7a) — invoke it with the drafted plan if it isn't already running. For an unattended path (no_gate=true), use the Edit tool directly on `tasks/<task_id>.md` to insert/replace the `## Spec / Plan` block. There is no `backlog_update_task(spec=...)` MCP field — frontmatter only carries metadata.
 5. Call `backlog_auto_advance("WRITE_TESTS")` if this is a feature/bug task with tests; otherwise skip to `IMPLEMENT`.
 
 ## Step 3: WRITE_TESTS (optional, TDD)
@@ -109,8 +111,8 @@ Then `backlog_auto_advance("END_SESSION")`.
 
 When `cursor.stage == "END_SESSION"`:
 
-1. Transition the task: `backlog_complete_task(<task_id>)` (or whatever the canonical close path is — see end-session skill).
-2. Optionally call `backlog_snapshot --quiet` to update the snapshot for `recap`.
+1. Transition the task: `backlog_complete_task(<task_id>, ...)`. Pass session_title, done, decisions, issues, tasks_touched, target_status, patchnote, release per the end-session skill's signature. The session record is what the next start-session reads.
+2. Call `backlog_snapshot(quiet=true)` to refresh the snapshot for the next session's `recap`. (The PreCompact hook covers compaction-triggered snapshots; this one covers task-completion-triggered ones.)
 3. Call:
    ```
    backlog_auto_complete_task(
