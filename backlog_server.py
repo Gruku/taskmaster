@@ -54,6 +54,7 @@ from taskmaster_v3 import (
     SCHEMA_V3,
     SCHEMA_DEFAULT,
     HANDOVER_KINDS,
+    HEAVY_FIELDS as _HEAVY_FIELDS,
     detect_schema_version as _detect_schema_version,
     atomic_write as _atomic_write,
     load_v3 as _load_v3,
@@ -4225,7 +4226,7 @@ def _load_task_full(task_id: str) -> dict | None:
             except Exception:
                 fm = {}
             body = fm_match.group(2)
-            for k in ("docs", "review_instructions", "patchnote", "release",
+            for k in (*_HEAVY_FIELDS, "patchnote", "release",
                       "worktree", "spec_review", "locked_by"):
                 if k in fm:
                     out[k] = fm[k]
