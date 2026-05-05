@@ -4397,6 +4397,9 @@ class ViewerHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        elif clean_path == "/v3/dev/edit-demo" or clean_path == "/v3/dev/edit-demo/":
+            viewer_root = Path(__file__).parent / "viewer"
+            self._serve_file(viewer_root / "dev" / "edit-demo.html", "text/html")
         elif clean_path == "/api/auto/sessions":
             import json as _json
             from taskmaster_v3 import list_auto_sessions
