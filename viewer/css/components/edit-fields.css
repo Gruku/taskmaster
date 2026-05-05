@@ -1,0 +1,47 @@
+/* viewer/css/components/edit-fields.css
+   Shared styling for all field renderers. Per spec §UX patterns: dotted
+   underline at all times for editable fields, hover solidifies + reveals
+   pencil. Read-only fields get no underline. */
+
+.ef-text {
+  color: var(--ink);
+  font-size: inherit;
+}
+.ef-text.ef-placeholder {
+  color: var(--ink-3);
+  font-style: italic;
+}
+.ef-editable {
+  border-bottom: 1px dotted var(--border-soft);
+  padding-bottom: 1px;
+  cursor: text;
+  position: relative;
+  display: inline-block;
+}
+.ef-editable:hover {
+  border-bottom-style: solid;
+  border-bottom-color: var(--border);
+}
+.ef-editable:hover::after {
+  content: '✎';
+  position: absolute;
+  right: -16px;
+  top: 0;
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+  opacity: 0.7;
+}
+
+.ef-text-input {
+  font: inherit;
+  color: var(--ink);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 2px 6px;
+  min-width: 120px;
+  outline: none;
+}
+.ef-text-input:focus {
+  border-color: var(--accent);
+}

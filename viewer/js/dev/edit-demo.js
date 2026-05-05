@@ -14,4 +14,5 @@ for (const { name, mountFn } of sections) {
   mount.appendChild(sec);
   mountFn(sec);
 }
+import './../components/edit/fields/text-field-demo.js';
 // Subsequent tasks add `import './fields/text-field-demo.js'` etc. above.
