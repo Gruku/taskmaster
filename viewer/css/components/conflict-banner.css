@@ -1,0 +1,25 @@
+/* viewer/css/components/conflict-banner.css */
+.cb-banner {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 90;
+  background: color-mix(in oklch, var(--amber) 15%, var(--bg-deep));
+  border-bottom: 1px solid var(--amber);
+  color: var(--ink);
+  padding: 10px 16px;
+  font-size: var(--text-sm);
+}
+.cb-headline { font-weight: 600; margin-bottom: 6px; color: var(--amber); }
+.cb-diff, .cb-rows { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+.cb-row, .cb-multi-row { display: flex; gap: 8px; align-items: baseline; }
+.cb-label, .cb-key { color: var(--ink-3); min-width: 60px; }
+.cb-val { color: var(--ink); overflow-wrap: anywhere; }
+.cb-val-mine   { background: color-mix(in oklch, var(--green) 20%, transparent); padding: 1px 6px; border-radius: 3px; }
+.cb-val-server { background: color-mix(in oklch, var(--red)   20%, transparent); padding: 1px 6px; border-radius: 3px; }
+.cb-multi-actions { display: flex; gap: 12px; margin-left: auto; }
+.cb-radio { display: inline-flex; gap: 4px; align-items: center; cursor: pointer; }
+.cb-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.cb-actions button {
+  font: inherit; padding: 4px 12px; border-radius: 3px; cursor: pointer;
+  border: 1px solid var(--border);
+}
+.cb-keep-mine, .cb-resolve { background: var(--accent); color: white; border-color: var(--accent); }
+.cb-use-server { background: transparent; color: var(--ink-2); }

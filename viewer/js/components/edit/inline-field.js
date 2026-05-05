@@ -97,6 +97,34 @@ export function mountInlineField(parent, {
       setStatus('ok');
       setTimeout(() => setStatus(''), 800);
     } catch (e) {
+      if (e && e.code === 409) {
+        // Stale write — surface conflict banner.
+        const { showFieldConflict } = await import('./conflict-banner.js');
+        showFieldConflict({
+          entityKind: schema.entity || 'entity',
+          entityId: currentEntity.id || '?',
+          fieldKey, fieldLabel: fieldSpec.label || fieldKey,
+          localValue: v,
+          currentValue: e.current?.[fieldKey],
+          currentEtag: e.current_etag,
+          onKeepMine: async () => {
+            // Update local etag and re-PATCH.
+            const { store } = await import('../../store.js');
+            store.setEtag(`task:${currentEntity.id}`, e.current_etag);
+            try { await onSave(v); } catch (e2) { setStatus('error', e2.message); return; }
+            currentEntity[fieldKey] = v;
+            paint();
+          },
+          onUseServer: async () => {
+            currentEntity[fieldKey] = e.current?.[fieldKey];
+            const { store } = await import('../../store.js');
+            store.setEtag(`task:${currentEntity.id}`, e.current_etag);
+            paint();
+          },
+        });
+        setStatus('error', 'stale — see banner');
+        return;
+      }
       setStatus('error', e.message || String(e));
     } finally {
       inFlight = false;
