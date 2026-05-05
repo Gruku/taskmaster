@@ -170,9 +170,12 @@ Total auto-phase orchestrator main context: ~1,950 tokens. Each epic subagent co
 
 ## Failure aggregation policy
 
-By default, a failed task in epic A halts that epic but auto-phase still advances to epic B. To halt the entire phase on first failure, pass `continue_on_fail=false` AND check `backlog_auto_status` between epics — if `failed` count > 0 and the user wanted strict halting, exit before dispatching the next epic.
+The auto state machine treats `mode="phase"` as a single flat queue of tasks across all epics in epic-then-task order — there is no per-epic boundary inside `auto/state.json`. Consequence:
 
-If the user wants strict "halt entire phase on first failure," that's a flag the orchestrator skill enforces, not the state machine. State-machine `continue_on_fail` only governs within-epic continuation.
+- **`continue_on_fail=false` (default in "Run with gates" / "Run unattended"):** the cursor halts on the first failed task. Auto-phase exits the loop and writes the phase-level handover with whatever was completed before the halt. Failures stop the whole phase, not just the current epic.
+- **`continue_on_fail=true` ("Continue past failures"):** the cursor advances to the next pending task regardless of the failure. The phase walks every task to completion or failure; the run ends when the queue empties.
+
+There is no separate "halt this epic, advance to next epic" mode — that distinction would need to live in the state machine (it doesn't). If you want that semantic, run `auto-epic` per epic by hand instead of `auto-phase`.
 
 ## Why this is not yet auto-roadmap
 

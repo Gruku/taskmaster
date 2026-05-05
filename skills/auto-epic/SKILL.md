@@ -163,7 +163,9 @@ After the loop exits (cursor None, or halt due to unrecoverable failure):
 backlog_auto_finish
 ```
 
-This clears `auto/state.json`. The per-task stage handovers (auto-stage kind) get auto-archived to `handovers/_archive/auto/` on the next index sync.
+This clears `auto/state.json`. The per-task stage handovers (`session_kind="auto-stage"`) remain on disk under `handovers/`; they are subject to the same 30-entry index cap as any other handover and roll to `handovers/_archive/<year>/` only when the cap is exceeded. The aggregated **epic-level** handover written in step 3 is the durable record — auto-stage stubs are recovery anchors and intentionally noisy.
+
+If you want to prune auto-stage stubs more aggressively after a successful run (so they don't dominate the next session's `backlog_handover_list` output), call `backlog_handover_resync()` — it re-reads from disk and re-applies the cap. Optional.
 
 Tell the user a one-line summary: "Auto-epic <id> complete: N done, M failed. Run-level handover: <handover-id>."
 
