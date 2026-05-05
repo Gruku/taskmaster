@@ -91,3 +91,54 @@ def test_post_archive_sets_status(server_with_backlog):
     # Verify
     detail = urllib.request.urlopen(f"{base}/api/task/e1-001").read()
     assert json.loads(detail)["status"] == "archived"
+
+
+# ── 422 validation integration tests ───────────────────────────────────────
+
+def test_patch_unknown_epic_returns_422(server_with_backlog):
+    base = server_with_backlog
+    resp = _request("PATCH", f"{base}/api/tasks/e1-001", {"epic": "nope"})
+    assert resp.status == 422
+    body = json.loads(resp.read())
+    assert body["ok"] is False
+    assert "epic" in body["errors"]
+
+
+def test_patch_dep_cycle_returns_422(server_with_backlog):
+    """Fixture has only e1-001; depends_on self is a cycle."""
+    base = server_with_backlog
+    resp = _request("PATCH", f"{base}/api/tasks/e1-001", {"depends_on": ["e1-001"]})
+    assert resp.status == 422
+    body = json.loads(resp.read())
+    assert body["ok"] is False
+    assert "depends_on" in body["errors"]
+
+
+def test_post_create_unknown_epic_returns_422(server_with_backlog):
+    base = server_with_backlog
+    resp = _request("POST", f"{base}/api/tasks",
+                    {"epic": "no-such-epic", "title": "T", "priority": "medium"})
+    assert resp.status == 422
+    body = json.loads(resp.read())
+    assert body["ok"] is False
+    assert "epic" in body["errors"]
+
+
+def test_validate_endpoint_valid(server_with_backlog):
+    base = server_with_backlog
+    resp = _request("POST", f"{base}/api/tasks/validate",
+                    {"task_id": "e1-001", "patch": {"title": "OK"}})
+    assert resp.status == 200
+    body = json.loads(resp.read())
+    assert body["ok"] is True
+    assert body["errors"] == {}
+
+
+def test_validate_endpoint_invalid(server_with_backlog):
+    base = server_with_backlog
+    resp = _request("POST", f"{base}/api/tasks/validate",
+                    {"task_id": "e1-001", "patch": {"epic": "ghost"}})
+    assert resp.status == 200
+    body = json.loads(resp.read())
+    assert body["ok"] is False
+    assert "epic" in body["errors"]

@@ -4738,6 +4738,21 @@ class ViewerHandler(BaseHTTPRequestHandler):
             self._send_json(200, summary)
             return
 
+        if self.path == "/api/tasks/validate":
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length).decode("utf-8") if length else ""
+            try:
+                payload = json.loads(raw)
+            except Exception as e:
+                self._send_json(400, {"ok": False, "error": f"invalid JSON: {e}"})
+                return
+            tid = payload.get("task_id") or "<new>"
+            patch = payload.get("patch") or {}
+            from taskmaster_v3 import validate_task_write
+            errors = validate_task_write(tid, patch)
+            self._send_json(200, {"ok": len(errors) == 0, "errors": errors})
+            return
+
         # Edit-in-UI: create task, archive task
         if self.path == "/api/tasks":
             length = int(self.headers.get("Content-Length") or 0)
@@ -4748,7 +4763,11 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 self._send_json(400, {"ok": False, "error": f"invalid JSON: {e}"})
                 return
             try:
-                from taskmaster_v3 import create_task
+                from taskmaster_v3 import validate_task_write, create_task
+                errors = validate_task_write("<new>", payload)
+                if errors:
+                    self._send_json(422, {"ok": False, "errors": errors})
+                    return
                 new_id = create_task(payload)
                 # Look up the new task to return.
                 task = _load_task_full(new_id) or {"id": new_id}
@@ -4862,6 +4881,14 @@ class ViewerHandler(BaseHTTPRequestHandler):
                     })
                     return
             try:
+                from taskmaster_v3 import validate_task_write, update_task
+                errors = validate_task_write(task_id, full)
+                if "_task" in errors:
+                    self._send_json(404, {"ok": False, "error": errors["_task"]})
+                    return
+                if errors:
+                    self._send_json(422, {"ok": False, "errors": errors})
+                    return
                 task = update_task(task_id, full)
                 new_etag = compute_etag(_backlog_path())
                 self._send_json(200, {"ok": True, "task": task}, etag=new_etag)
@@ -4902,6 +4929,14 @@ class ViewerHandler(BaseHTTPRequestHandler):
                     })
                     return
             try:
+                from taskmaster_v3 import validate_task_write, update_task
+                errors = validate_task_write(task_id, patch)
+                if "_task" in errors:
+                    self._send_json(404, {"ok": False, "error": errors["_task"]})
+                    return
+                if errors:
+                    self._send_json(422, {"ok": False, "errors": errors})
+                    return
                 task = update_task(task_id, patch)
                 new_etag = compute_etag(_backlog_path())
                 self._send_json(200, {"ok": True, "task": task}, etag=new_etag)

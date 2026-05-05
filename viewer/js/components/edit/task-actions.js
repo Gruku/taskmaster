@@ -18,6 +18,10 @@ export function openTaskCreateModal({ store, api, prefillEpic }) {
         await api.createTask(draft);
         store.setBacklog(await api.backlog());
       } catch (e) {
+        if (e && e.code === 422 && e.errors) {
+          const msgs = Object.entries(e.errors).map(([k, v]) => `${k}: ${v}`).join(' · ');
+          return { error: msgs };
+        }
         return { error: e.message || String(e) };
       }
     },
@@ -57,6 +61,10 @@ export function openTaskEditModal({ store, api, task }) {
             },
           });
           return { error: 'Conflict — see banner' };
+        }
+        if (e && e.code === 422 && e.errors) {
+          const msgs = Object.entries(e.errors).map(([k, v]) => `${k}: ${v}`).join(' · ');
+          return { error: msgs };
         }
         return { error: e.message || String(e) };
       }

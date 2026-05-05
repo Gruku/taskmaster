@@ -2488,6 +2488,77 @@ def _resolve_backlog_path() -> Path:
     return _backlog_path()
 
 
+def validate_task_write(task_id: str, patch: dict, backlog_path: Path | None = None) -> dict[str, str]:
+    """Run cross-entity validation for a proposed task write.
+
+    Returns a dict { field: error_message }. Empty dict means valid.
+    Pure function — does not persist.
+    """
+    bp = backlog_path or _resolve_backlog_path()
+    data = yaml.safe_load(bp.read_text(encoding="utf-8")) or {}
+    errors: dict[str, str] = {}
+
+    # Build helper maps.
+    epic_ids = {e.get("id") for e in (data.get("epics") or []) if e.get("id")}
+    phase_ids = {p.get("id") for p in (data.get("phases") or []) if p.get("id")}
+    all_tasks: list[dict] = []
+    for e in data.get("epics") or []:
+        for t in e.get("tasks") or []:
+            all_tasks.append(t)
+    task_ids = {t.get("id") for t in all_tasks if t.get("id")}
+
+    # Locate the task being patched.
+    me = next((t for t in all_tasks if t.get("id") == task_id), None)
+    if me is None and task_id != "<new>":
+        errors["_task"] = f"task {task_id} not found"
+        return errors
+
+    # Compose the proposed state.
+    proposed = {**(me or {}), **patch}  # noqa: F841 — kept for future cross-field rules
+
+    # Epic must exist.
+    if "epic" in patch and patch["epic"] and patch["epic"] not in epic_ids:
+        errors["epic"] = f"unknown epic: {patch['epic']}"
+
+    # Phase must exist if set.
+    if "phase" in patch and patch["phase"] and patch["phase"] not in phase_ids:
+        errors["phase"] = f"unknown phase: {patch['phase']}"
+
+    # Deps: each must exist; no self-dep; no cycle.
+    if "depends_on" in patch:
+        deps = patch["depends_on"] or []
+        for d in deps:
+            if d == task_id:
+                errors["depends_on"] = "cannot depend on itself"
+                break
+            if d not in task_ids:
+                errors["depends_on"] = f"unknown task in depends_on: {d}"
+                break
+        if "depends_on" not in errors:
+            # Cycle detection: BFS from each dep — if any path reaches task_id, cycle.
+            adj = {t.get("id"): list(t.get("depends_on") or []) for t in all_tasks if t.get("id")}
+            adj[task_id] = list(deps)  # simulate the proposed state
+            if _has_cycle_to(adj, task_id):
+                errors["depends_on"] = "introduces a dependency cycle"
+
+    return errors
+
+
+def _has_cycle_to(adj: dict, target: str) -> bool:
+    """True if `target` is reachable from any of its own deps under `adj`."""
+    seen = set()
+    stack = list(adj.get(target, []))
+    while stack:
+        cur = stack.pop()
+        if cur == target:
+            return True
+        if cur in seen:
+            continue
+        seen.add(cur)
+        stack.extend(adj.get(cur, []))
+    return False
+
+
 def compute_etag(path: Path) -> str:
     """Stable, cheap ETag derived from file mtime + content hash.
 

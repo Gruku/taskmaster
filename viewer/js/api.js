@@ -36,6 +36,13 @@ async function http(method, path, body) {
     err.current_etag = j.current_etag;
     throw err;
   }
+  if (resp.status === 422) {
+    const j = await resp.json();
+    const err = new Error('validation failed');
+    err.code = 422;
+    err.errors = j.errors || {};
+    throw err;
+  }
   if (!resp.ok) {
     const text = await resp.text().catch(() => '');
     throw new Error(`${method} ${path} → ${resp.status}: ${text}`);
@@ -82,6 +89,7 @@ export const api = {
   putTask:      (id, full)  => http('PUT',   `/api/tasks/${encodeURIComponent(id)}`, full),
   createTask:   (payload)   => http('POST',  '/api/tasks', payload),
   archiveTask:  (id)        => http('POST',  `/api/tasks/${encodeURIComponent(id)}/archive`, {}),
+  validateTask: (taskId, patch) => http('POST', '/api/tasks/validate', { task_id: taskId, patch }),
 
   async getRecentEvents(since) {
     const u = new URL('/api/dashboard/recent-events', location.origin);
