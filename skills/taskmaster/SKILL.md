@@ -43,7 +43,7 @@ Read the user's message and match it to one of these intents:
 | (v3) "Auto this task", "autopilot T-001", "run task auto" | `taskmaster:auto-task` |
 | (v3) "Auto-epic <id>", "run the whole epic", "batch this epic" | `taskmaster:auto-epic` |
 | (v3) "Auto-phase <id>", "run all of phase X", "batch phase" | `taskmaster:auto-phase` |
-| (v3) "Migrate to v3", "upgrade backlog", "switch to per-task files" | Direct tool call — `backlog_migrate_v3` |
+| (v3) "Upgrade to v3", "migrate to v3", "switch to v3", "enable handovers and lessons", "enable narrative continuity", "turn on auto-mode", "I want recap", "switch to per-task files" | `taskmaster:migrate-v3` |
 
 ## Do NOT Route Through Taskmaster
 
