@@ -94,6 +94,8 @@ If offering, ask:
 If user picks yes, **invoke the `taskmaster:handover` skill** with the chosen `session_kind`. End-session does NOT draft the body itself — the handover skill owns tier selection, auto-extraction, and supersession chaining. End-session continues regardless of the handover skill's outcome.
 If v3-pre-2a buffered a `pending_review_flag` (any `scope="session"` candidate was promoted in this session), pass `flag_for_review=true` and `review_reason=<buffered reason>` through to the handover skill's call. The handover skill forwards both kwargs to `backlog_handover_create`. If the user skipped the handover write, the flag is dropped silently.
 
+**v3-pre-2b: Handover archive sweep.** Call `backlog_handover_resync()` quietly to enforce the 30-entry index cap and move any overflow into `handovers/_archive/<year>/`. `backlog_handover_create` already runs the sync, so this sub-step only matters when (a) no handover was written this session but the user manually edited the `handovers/` directory between sessions, or (b) the cap was lowered. Cheap (~30ms), no token cost. Skip silently on v2.
+
 ### Existing flow
 
 0. **Determine summary mode.** Check the session weight:
