@@ -6,6 +6,7 @@ import { claimTopbar, tmSubcount, tmSearch, tmAction } from '../lib/topbar.js';
 import { pluralize } from '../util/pluralize.js';
 import { formatAbsolute } from '../lib/time.js';
 import { emptyState } from '../components/empty-state.js';
+import { openTaskCreateModal } from '../components/edit/task-actions.js';
 
 export const meta = { title: 'Table', icon: '▭', sidebarKey: 'table' };
 
@@ -52,7 +53,7 @@ const DEFAULT_STATE = {
   filters: { status: [], priority: [], epic: [] },
 };
 
-export async function mount(root, { store, prefs }) {
+export async function mount(root, { store, api, prefs }) {
   root.innerHTML = '';
   const screen = document.createElement('section');
   screen.className = 'tbl-screen';
@@ -67,7 +68,7 @@ export async function mount(root, { store, prefs }) {
   const search = searchBuilt.input;
   const newTaskBtn = tmAction({
     icon: '+', label: 'Task', variant: 'primary', title: 'Add task',
-    onClick: () => { window.location.hash = '#/task/new'; },
+    onClick: () => openTaskCreateModal({ store, api }),
   });
   topbar?.appendChild(subcount);
   topbar?.appendChild(searchBuilt.el);

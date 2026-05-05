@@ -15,6 +15,7 @@ import { assignEpicColors }                  from '../lib/epics.js';
 import { claimTopbar, tmAction } from '../lib/topbar.js';
 import { pluralize } from '../util/pluralize.js';
 import { emptyState } from '../components/empty-state.js';
+import { openTaskCreateModal } from '../components/edit/task-actions.js';
 
 export const meta = { title: 'Kanban', icon: '▦', sidebarKey: 'kanban' };
 
@@ -27,7 +28,7 @@ const DEFAULT_FILTERS = {
   search: '',
 };
 
-export async function mount(root, { store, prefs }) {
+export async function mount(root, { store, api, prefs }) {
   // ──────────────────────────────────────────────────────────────
   // Local state — sourced from prefs but mutated by UI events.
   // Persisted via prefs.patch({...}) (debounced).
@@ -149,7 +150,7 @@ export async function mount(root, { store, prefs }) {
   // + Task button — uses shared .tm-action--primary (Layer 3 unifies primary actions).
   const addBtn = tmAction({
     icon: '+', label: 'Task', variant: 'primary', title: 'Add task',
-    onClick: () => { location.hash = '#/task/new'; },
+    onClick: () => openTaskCreateModal({ store, api }),
   });
   right.appendChild(addBtn);
 

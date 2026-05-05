@@ -10,7 +10,15 @@ export function mountTaskDetailDocument(root, ctx) {
   root.innerHTML = '';
   root.classList.add('td-page', 'td-page-A');
 
-  mountTopbar(ctx);
+  mountTopbar({
+    ...ctx,
+    onEdit: () => {
+      // Late-import to avoid loading edit code on every viewer boot.
+      import('./edit/task-actions.js').then(({ openTaskEditModal }) => {
+        openTaskEditModal({ store: ctx.store, api: ctx.api, task: ctx.task });
+      });
+    },
+  });
   root.appendChild(renderHeader(ctx));
   root.appendChild(renderGrid(ctx));
 
@@ -20,7 +28,7 @@ export function mountTaskDetailDocument(root, ctx) {
   };
 }
 
-function mountTopbar({ prefs, onToggleVariant }) {
+function mountTopbar({ prefs, onToggleVariant, task, onEdit }) {
   const topbar = claimTopbar();
   if (!topbar) return;
   const view = prefs?.screens?.task_detail?.view === 'B' ? 'B' : 'A';
@@ -31,7 +39,10 @@ function mountTopbar({ prefs, onToggleVariant }) {
     ],
     { value: view, onChange: (v) => onToggleVariant?.(v) },
   );
-  const editBtn = tmAction({ icon: '✎', label: 'Edit', title: 'Edit task — coming soon', disabled: true });
+  const editBtn = tmAction({
+    icon: '✎', label: 'Edit', title: 'Edit task',
+    onClick: () => onEdit?.(),
+  });
   const archiveBtn = tmAction({ icon: '✕', label: 'Archive', title: 'Archive task — coming soon', disabled: true });
   topbar.append(seg, editBtn, archiveBtn);
 }

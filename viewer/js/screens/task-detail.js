@@ -59,7 +59,7 @@ export async function mount(root, { params, store, api, prefs, subpath }) {
     const mod = await import('../components/task-detail-graph.js');
     cleanup = mod.mountTaskDetailGraph(root, { task, related, prefs: prefsData, onNavigate, onToggleVariant });
   } else {
-    cleanup = mountTaskDetailDocument(root, { task, related, prefs: prefsData, onNavigate, onToggleVariant });
+    cleanup = mountTaskDetailDocument(root, { task, related, prefs: prefsData, store, api, onNavigate, onToggleVariant });
   }
   return cleanup;
 }
