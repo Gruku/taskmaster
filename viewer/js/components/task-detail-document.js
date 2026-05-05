@@ -5,6 +5,22 @@ import { renderMarkdown } from './markdown.js';
 import { mountRightRail } from './right-rail.js';
 import { claimTopbar, tmSegmented, tmAction } from '../lib/topbar.js';
 import { formatRelative } from '../lib/time.js';
+import { mountInlineField } from './edit/inline-field.js';
+import { taskSchema } from './edit/forms/task-form.js';
+
+// Inline-edit save callback. Returns either undefined (success) or { error }.
+function inlineSave(taskId, fieldKey, ctx) {
+  return async (newValue) => {
+    try {
+      await ctx.api.patchTask(taskId, { [fieldKey]: newValue });
+      // Refresh backlog so the change is reflected in store + other screens.
+      ctx.store.setBacklog(await ctx.api.backlog());
+    } catch (e) {
+      if (e && e.code === 409) throw e; // re-throw so inline-field can show conflict banner
+      return { error: e.message || String(e) };
+    }
+  };
+}
 
 export function mountTaskDetailDocument(root, ctx) {
   root.innerHTML = '';
@@ -76,25 +92,26 @@ function renderGrid(ctx) {
   ]);
 }
 
-function renderBody({ task }) {
+function renderBody(ctx) {
+  const { task } = ctx;
   if (!task) return h('div', { class: 'td-body td-empty' }, 'task not found');
   const children = [
     renderMeta(task),
-    renderTitle(task),
+    renderTitle(task, ctx),
   ];
   if (task.locked_by) {
     children.push(h('div', { class: 'td-lock-banner', 'data-test': 'lock-banner' },
       [h('span', {}, '🔒 '), h('span', {}, `locked by ${task.locked_by}`)]));
   }
-  children.push(renderChips(task));
+  children.push(renderChips(task, ctx));
   children.push(renderSpecReview(task));
   children.push(renderAutoBanner(task));
   children.push(renderDocsSection(task));
-  children.push(renderMdSection('Specification', task.specification || task.description, 'sec-spec'));
-  children.push(renderMdSection('Plan', task.plan, 'sec-plan'));
-  children.push(renderMdSection('Notes', task.notes, 'sec-notes'));
+  children.push(renderMdSectionEditable('Specification', 'specification', task, ctx, 'sec-spec'));
+  children.push(renderMdSectionEditable('Plan', 'plan', task, ctx, 'sec-plan'));
+  children.push(renderMdSectionEditable('Notes', 'notes', task, ctx, 'sec-notes'));
   if (task.status === 'in-review') {
-    children.push(renderMdSection('Review instructions', task.review_instructions, 'sec-review-instructions'));
+    children.push(renderMdSectionEditable('Review instructions', 'review_instructions', task, ctx, 'sec-review-instructions'));
   }
   children.push(renderActivity(task));
   children.push(renderPatchnote(task));
@@ -158,6 +175,17 @@ function renderMdSection(label, body, dataTest) {
   ]);
 }
 
+function renderMdSectionEditable(label, fieldKey, task, ctx, dataTest) {
+  const schema = taskSchema({ getBacklog: () => ctx.store?.getBacklog() });
+  const wrap = h('section', { class: 'td-section td-inline-host', 'data-test': dataTest });
+  wrap.appendChild(h('div', { class: 'td-section-h' }, label));
+  mountInlineField(wrap, {
+    schema, fieldKey, entity: task,
+    onSave: inlineSave(task.id, fieldKey, ctx),
+  });
+  return wrap;
+}
+
 function renderAutoBanner(task) {
   const am = task.auto_mode;
   if (!am || !am.running) return null;
@@ -181,12 +209,29 @@ function renderSpecReview(task) {
   ]);
 }
 
-function renderChips(task) {
+function renderChips(task, ctx) {
   const epicColorVar = `--epic-1`;
   const priClass = (task.priority || '').toLowerCase();
+
+  const schema = taskSchema({ getBacklog: () => ctx.store?.getBacklog() });
+
+  // Status pill — now editable via EnumSelect inline
+  const statusWrap = h('span', { class: 'td-status-pill td-inline-host' });
+  mountInlineField(statusWrap, {
+    schema, fieldKey: 'status', entity: task,
+    onSave: inlineSave(task.id, 'status', ctx),
+  });
+
+  // Priority pill — same pattern
+  const priWrap = h('span', { class: `td-pri-pill ${priClass === 'critical' ? 'crit' : priClass} td-inline-host` });
+  mountInlineField(priWrap, {
+    schema, fieldKey: 'priority', entity: task,
+    onSave: inlineSave(task.id, 'priority', ctx),
+  });
+
   const chips = [
-    h('span', { class: 'td-status-pill' }, task.status || 'unknown'),
-    h('span', { class: `td-pri-pill ${priClass === 'critical' ? 'crit' : priClass}` }, task.priority || ''),
+    statusWrap,
+    priWrap,
     task.estimate ? h('span', { class: 'td-size-chip' }, task.estimate) : null,
     task.epic ? h('span', { class: 'td-epic-chip', style: `--epic-1: var(${epicColorVar})` },
       [h('span', { class: 'td-swatch' }), h('span', {}, task.epic)]) : null,
@@ -220,8 +265,14 @@ function renderMeta(task) {
   ]);
 }
 
-function renderTitle(task) {
-  return h('h1', { class: 'td-title', 'data-test': 'title' }, task.title || '');
+function renderTitle(task, ctx) {
+  const wrap = h('h1', { class: 'td-title', 'data-test': 'title' });
+  const schema = taskSchema({ getBacklog: () => ctx.store?.getBacklog() });
+  mountInlineField(wrap, {
+    schema, fieldKey: 'title', entity: task,
+    onSave: inlineSave(task.id, 'title', ctx),
+  });
+  return wrap;
 }
 
 function renderRail(ctx) {
