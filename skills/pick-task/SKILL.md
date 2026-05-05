@@ -1,6 +1,6 @@
 ---
 name: pick-task
-description: "Select a task to work on. Invoke when the user says 'pick a task', 'let's work on X', 'start task auth-003', 'what should I tackle next', or names a specific task ID. Sets status to in-progress, checks dependencies, creates a git worktree for isolation, and loads task context."
+description: "Select a task to work on. Invoke when the user says 'pick a task', 'let's work on X', 'start task auth-003', 'what should I tackle next', 'continue this task', 'continue where we left off', 'resume the work', 'pick up from yesterday', or names a specific task ID. Sets status to in-progress, checks dependencies, creates a git worktree for isolation, and loads task context. On v3 backlogs, the continue-style triggers auto-resolve to the most-recently-touched in-progress task with a handover."
 ---
 
 # Pick Task
@@ -9,9 +9,16 @@ Select a task to work on and set it to in-progress.
 
 ## Arguments
 
-- `task_id` (optional) — specific task ID (e.g., `auth-003`). If omitted, presents top priorities to choose from.
+- `task_id` (optional) — specific task ID (e.g., `auth-003`). If omitted, presents top priorities to choose from — or, on v3 backlogs with a continue-style trigger, auto-resolves via the latest handover (see step 0).
 
 ## Steps
+
+0. **(v3) "Continue this task" auto-resolve.** If the user said "continue this task", "continue where we left off", "resume the work", "pick up from yesterday", or similar, AND no explicit `task_id` was given, attempt to auto-resolve before prompting:
+   - Call `backlog_handover_latest()`. If it returns "No handovers yet.", fall through to step 1 (treat as a regular pick).
+   - From the latest handover frontmatter, take the first id in `task_ids`. If none, fall through to step 1.
+   - Call `backlog_get_task(<that id>)`. If status is `done` or `archived`, fall through to step 1 (the handover's task is already finished — better to surface the picker than reopen it).
+   - Otherwise: confirm with the user once — "Continuing `<task_id>` from the `<YYYY-MM-DD>` handover (\"<tldr>\"). Right task?" Default Yes. On confirmation, jump straight to step 5 (call `backlog_pick_task`).
+   - On v2 backlogs (no handover index), skip this step silently.
 
 1. **If no task ID provided:**
    - Call `backlog_next_available` to get tasks ready to work on. When a phase is active, this only returns tasks from that phase — keeping you focused on the current block of work.
@@ -45,7 +52,11 @@ Select a task to work on and set it to in-progress.
    - The tool returns task details, epic context, and recently completed tasks in the same epic.
    - **Note the schema_version** in `backlog_status` output. Steps 5a–5c below activate only when `schema_version >= 3`. On v2 backlogs, skip them and proceed to step 6.
 
-5a. **(v3) Related handovers.** If the task's frontmatter has `related_handovers: [...]`, those are session handovers from prior work that touched this task or area. For each, call `backlog_handover_get <id>` and read the body. Don't dump them at the user — extract relevant decisions and constraints into your working context. Example surface to user: "Two prior handovers touched this task: 2026-04-25 (auth refactor decisions) and 2026-04-22 (cookie scope alignment with legal). Highlights loaded."
+5a. **(v3) Related handovers.** Call `backlog_handover_list(task_id=<task_id>, limit=3)` to get tldrs (not full bodies) for up to the 3 most recent handovers that referenced this task. The list output is one line per handover with id + tldr — keep all 3 in working context (~150 tokens total).
+
+   Surface to user briefly: "3 prior handovers reference this task. Latest: 2026-04-25 — `<tldr>`. Fetch a full body with `backlog_handover_get <id>` if you need the decisions in detail."
+
+   Only fetch a full body via `backlog_handover_get` when (a) the user asks for it, or (b) the latest handover's `session_kind` is `context-handoff` AND `next_action` is non-trivial (in which case load that one body so you know exactly where to resume). Don't preload all 3 bodies — that's the 600-token foot-gun the budget block guards against.
 
 5b. **(v3) Related issues.** If the task's frontmatter has `related_issues: [...]`, surface them so the user knows what bugs this task is intended to fix or interacts with:
    ```
@@ -112,11 +123,11 @@ If `backlog_pick_task` returns a lock conflict (task locked by another session),
 ### v3 token budget
 
 When v3 features activate (steps 5a–5c), the additional cost on top of `backlog_pick_task` should be roughly:
-- Related handovers: ≤2 bodies × ~200 tokens = ~400 tokens
+- Related handovers: ≤3 tldrs × ~50 tokens = ~150 tokens (one optional full body adds ~200 when warranted)
 - Related issues: top 3 summaries × ~50 tokens = ~150 tokens
-- Trigger-matched lessons: ≤3 bodies × ~150 tokens = ~450 tokens
+- Trigger-matched lessons: ≤3 bodies × ~300 tokens = ~900 tokens worst case
 
-Soft target: ~1,500 tokens additive. If a task accumulates more than this, prune `related_handovers` to the most recent 2 and let older ones live in the archive.
+**Soft target ~1,500 tokens additive. Warn at 3,000.** If a task accumulates more than the warn threshold, prune lessons (drop the lowest reinforce_count match), then drop optional handover-body fetches. Never prune related_issues — bug context is load-bearing for not re-introducing fixed defects.
 
 ### When auto modes call this skill
 
