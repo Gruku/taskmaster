@@ -25,6 +25,8 @@ The user is arriving at the start of a conversation — they've lost context sin
 
 2d. **Latest handover.** Call `backlog_handover_latest` to get the previous session's handover frontmatter (tldr + next_action + linked task ids). If it exists, surface it prominently in the briefing — it's the "where I left off" anchor. If the frontmatter shows `session_kind: context-handoff`, this was a deliberate handoff written near compaction; offer to fetch the full body via `backlog_handover_get <id>` if the user wants the long version.
 
+2e. **Open issues by severity.** Call `backlog_issue_list(status="open", limit=10)`. The list is already pre-sorted P0 → P3 by the index sync. Keep all returned entries in working context — they're the "what's broken right now" anchor. P0/P1 entries get a visual flag in the briefing (step 3). If the list is empty ("No issues yet."), skip silently and don't render the section.
+
 3. **Present a structured briefing to the user:**
 
    Lead with the most actionable information first:
@@ -34,7 +36,7 @@ The user is arriving at the start of a conversation — they've lost context sin
    - **If there are in-review items:** "**Needs your testing:** These are implemented but waiting for you to confirm they work:" — in-review tasks are equally important as in-progress. They represent finished work the user hasn't verified yet. Don't let them be forgotten between sessions.
    - **Last session summary** — what was accomplished last time, for continuity.
    - **(v3) Recap diff** — if step 2a returned changes, show them as a "**Since last snapshot:**" block. This is project-state delta (tasks added by you or others, status moves, issues fixed, phase advances). Compact format — do not expand it into prose.
-   - **(v3) Open issues** — if `backlog_status` shows top issues (P0/P1 surfaced), include them: "**Open issues (top by severity):**" with id + severity + title. P0 entries should be visually flagged.
+   - **(v3) Open issues** — if step 2e returned any open issues, render them as "**Open issues (top by severity):**" with id + severity + title, in the order returned (P0 first). P0/P1 entries should be visually flagged. Cap visible at 10; mention `backlog_issue_list status=open` for the full list if there are more.
    - **Phase progress** — if an active phase exists, show it prominently: "**Phase: {name}** — {done}/{total} tasks done". This gives the user a sense of where they are in the project's arc.
    - **Stale tasks** — if the `backlog_status` output includes stale tasks (tasks not referenced in 14+ days), show them:
      ```
@@ -82,12 +84,12 @@ If the `backlog_status` tool fails (MCP server not running, backlog.yaml missing
 
 ### v3 token budget
 
-When v3 features activate (steps 2a–2d), the briefing carries:
+When v3 features activate (steps 2a–2e), the briefing carries:
 - Latest handover frontmatter: ~250 tokens
 - Recap diff: ~250 tokens (often less)
 - Lesson digest: ~300 tokens (≤30 × 10)
 - Core lessons in full: ~500 tokens (≤5 × 100)
-- Top issues: ~150 tokens
+- Top issues: ~200 tokens (≤10 × 20)
 
 Plus the dashboard + last-session log (~1,000 tokens combined). Soft target for the whole start-session injection: ~3,000 tokens. If the project regularly blows past 5,000, trim digest count or core cap in `.taskmaster/config.yaml` (future feature). For now, surface a brief warning to the user: "Session-start context is large — consider retiring stale lessons via `backlog_lesson_list tier=active` and reviewing low-reinforce entries."
 
