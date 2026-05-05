@@ -1492,20 +1492,55 @@ def backlog_handover_create(
 
 
 @mcp.tool()
-def backlog_handover_list(limit: int = 10) -> str:
+def backlog_handover_list(
+    task_id: str = "",
+    session_kind: str = "",
+    since: str = "",
+    limit: int = 10,
+) -> str:
     """List recent handovers (slim metadata only — no bodies).
 
     Reads from the backlog.yaml index, which is bounded to the most recent 30.
     Older handovers are still on disk under handovers/_archive/ but not listed
     here — fetch by id with `backlog_handover_get` if needed.
+
+    Args:
+        task_id: If set, only entries whose `task_ids` list contains this id.
+        session_kind: If set, only entries with this session_kind
+            (e.g. "end-of-day", "context-handoff", "milestone-complete").
+        since: ISO date string (YYYY-MM-DD). If set, only entries whose
+            date prefix is >= since. Raises ValueError for invalid formats.
+        limit: Maximum number of entries to return after filtering (default 10).
     """
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
     data = _load()
-    entries = (data.get("handovers") or [])[: max(1, limit)]
+    entries = list(data.get("handovers") or [])
+
+    # Validate `since` before filtering so we fail fast on bad input.
+    if since:
+        from datetime import date as _date
+        try:
+            _date.fromisoformat(since)
+        except ValueError:
+            return f"Error: `since` must be a date in YYYY-MM-DD format, got {since!r}."
+
+    # Apply filters in spec order.
+    if task_id:
+        entries = [e for e in entries if task_id in e.get("task_ids", [])]
+    if session_kind:
+        entries = [e for e in entries if e.get("session_kind") == session_kind]
+    if since:
+        entries = [e for e in entries if e.get("id", "") >= since]
+
+    # Truncate to limit after all filters.
+    entries = entries[: max(1, limit)]
+
     if not entries:
-        return "No handovers yet."
+        filtered = any([task_id, session_kind, since])
+        return "No handovers match those filters." if filtered else "No handovers yet."
+
     lines = []
     for e in entries:
         kind = e.get("session_kind", "")
