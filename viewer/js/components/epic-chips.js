@@ -1,5 +1,6 @@
 import { epicCssVar } from '../lib/epics.js';
 import { pluralize } from '../util/pluralize.js';
+import { chipClickNext, CHIP_CLICK_HINT } from '../util/chip-toggle.js';
 
 /**
  * epics: [{id, name, color, count}]
@@ -32,12 +33,12 @@ export function renderEpicChips({ epics = [], active = [], filterCount = 0, onTo
     btn.type = 'button';
     btn.className = 'kanban-epic-chip' + (set.has(ep.id) ? ' on' : '');
     btn.dataset.key = ep.id;
+    btn.title = CHIP_CLICK_HINT;
     btn.setAttribute('style', epicCssVar(ep.color).replace(/--epic:/g, '--ec:').replace(/--epic-soft:/g, '--ec-soft:'));
     btn.innerHTML = `<span class="marker"></span>${escapeHtml(ep.name || ep.id)}<span class="count">${ep.count || 0}</span>`;
-    btn.addEventListener('click', () => {
-      if (set.has(ep.id)) set.delete(ep.id);
-      else                set.add(ep.id);
-      if (onToggle) onToggle([...set]);
+    btn.addEventListener('click', (ev) => {
+      const next = chipClickNext(ev, set, ep.id);
+      if (onToggle) onToggle(next);
     });
     wrap.appendChild(btn);
   }

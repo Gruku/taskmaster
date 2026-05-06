@@ -1,3 +1,5 @@
+import { chipClickNext, CHIP_CLICK_HINT } from '../util/chip-toggle.js';
+
 const PRIORITIES = [
   { key: 'critical', label: 'Critical', short: 'Cr' },
   { key: 'high',     label: 'High',     short: 'Hi' },
@@ -16,13 +18,17 @@ export function renderPriorityChips({ active = [], onToggle }) {
     btn.type = 'button';
     btn.className = `kanban-pri-tog ${p.key}` + (wrap._active.has(p.key) ? ' on' : '');
     btn.dataset.key = p.key;
-    btn.title = p.label;
+    btn.title = `${p.label} — ${CHIP_CLICK_HINT}`;
     btn.textContent = p.short;
-    btn.addEventListener('click', () => {
-      if (wrap._active.has(p.key)) wrap._active.delete(p.key);
-      else                          wrap._active.add(p.key);
-      btn.classList.toggle('on');
-      if (onToggle) onToggle([...wrap._active]);
+    btn.addEventListener('click', (ev) => {
+      const next = chipClickNext(ev, wrap._active, p.key);
+      wrap._active = new Set(next);
+      // Sync visual state on every chip in this row, since plain-click
+      // collapses the selection and may turn off other chips.
+      wrap.querySelectorAll('.kanban-pri-tog').forEach(b => {
+        b.classList.toggle('on', wrap._active.has(b.dataset.key));
+      });
+      if (onToggle) onToggle(next);
     });
     wrap.appendChild(btn);
   }

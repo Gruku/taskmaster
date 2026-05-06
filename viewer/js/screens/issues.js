@@ -4,6 +4,7 @@ import { pluralize } from '../util/pluralize.js';
 import { emptyState } from '../components/empty-state.js';
 import * as api from '../api.js';
 import { claimTopbar, tmSubcount, tmSearch, tmSegmented, tmAction } from '../lib/topbar.js';
+import { chipClickNext, CHIP_CLICK_HINT } from '../util/chip-toggle.js';
 
 export const meta = { title: 'Issues', icon: '!', sidebarKey: 'issues' };
 
@@ -32,9 +33,14 @@ export async function mount(root, { store, prefs }) {
     const c = document.createElement('span');
     c.className = 'issues__sev-chip';
     c.dataset.sev = sev;
+    c.title = CHIP_CLICK_HINT;
     c.textContent = sev;
-    c.addEventListener('click', () => {
-      c.classList.toggle('is-active');
+    c.addEventListener('click', (ev) => {
+      const current = [...filters.querySelectorAll('.is-active')].map(el => el.dataset.sev);
+      const next = new Set(chipClickNext(ev, current, sev));
+      filters.querySelectorAll('.issues__sev-chip').forEach(el => {
+        el.classList.toggle('is-active', next.has(el.dataset.sev));
+      });
       render();
     });
     filters.appendChild(c);
@@ -115,12 +121,16 @@ export async function mount(root, { store, prefs }) {
       const chip = document.createElement('span');
       chip.className = 'issues__comp-chip';
       chip.dataset.comp = c;
+      chip.title = CHIP_CLICK_HINT;
       chip.textContent = c;
       if (activeComponents.has(c)) chip.classList.add('is-active');
-      chip.addEventListener('click', () => {
-        if (activeComponents.has(c)) activeComponents.delete(c);
-        else activeComponents.add(c);
-        chip.classList.toggle('is-active');
+      chip.addEventListener('click', (ev) => {
+        const next = new Set(chipClickNext(ev, activeComponents, c));
+        activeComponents.clear();
+        for (const k of next) activeComponents.add(k);
+        compRow.querySelectorAll('.issues__comp-chip').forEach(el => {
+          el.classList.toggle('is-active', activeComponents.has(el.dataset.comp));
+        });
         render();
       });
       compRow.appendChild(chip);

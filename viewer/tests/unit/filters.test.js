@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyFilters, sortTasks, groupTasks, STATUS_ORDER } from '../../js/lib/filters.js';
+import { applyFilters, sortTasks, groupTasks, epicsForPhase, STATUS_ORDER } from '../../js/lib/filters.js';
 
 const TASKS = [
   { id: 'v3-001', title: 'A',          status: 'done',        priority: 'low',      estimate: 'S', phase: 'P-01', epic: 'viewer-redesign',     started: '2026-04-25T10:00:00Z' },
@@ -77,4 +77,51 @@ test('groupTasks — by epic with __none__ bucket for missing epic', () => {
 test('groupTasks — by phase keeps phase order from input list', () => {
   const groups = groupTasks(TASKS, 'phase', ['P-01', 'P-02', 'P-03']);
   assert.deepEqual(groups.map(g => g.key), ['P-01', 'P-02', 'P-03', '__orphans__']);
+});
+
+const EPICS = [
+  { id: 'viewer-redesign',      name: 'Viewer Redesign' },
+  { id: 'narrative-continuity', name: 'Narrative Continuity' },
+  { id: 'unused-epic',          name: 'Unused' },
+];
+
+test('epicsForPhase — phase null/__all__ returns full epic list (copy)', () => {
+  const a = epicsForPhase(EPICS, TASKS, null);
+  assert.equal(a.length, 3);
+  assert.notStrictEqual(a, EPICS); // copy, not same ref
+  const b = epicsForPhase(EPICS, TASKS, '__all__');
+  assert.equal(b.length, 3);
+});
+
+test('epicsForPhase — scopes to epics with tasks in the active phase', () => {
+  // P-01 only contains v3-001 → only viewer-redesign has a task there.
+  const out = epicsForPhase(EPICS, TASKS, 'P-01');
+  assert.deepEqual(out.map(e => e.id), ['viewer-redesign']);
+});
+
+test('epicsForPhase — multiple epics in a phase preserve input order', () => {
+  // P-03 has v3-002 (viewer-redesign) and v3-003 (narrative-continuity).
+  const out = epicsForPhase(EPICS, TASKS, 'P-03');
+  assert.deepEqual(out.map(e => e.id), ['viewer-redesign', 'narrative-continuity']);
+});
+
+test('epicsForPhase — __orphans__ matches tasks with no phase set', () => {
+  // v3-004 has phase null and no epic; no epic should appear.
+  const out = epicsForPhase(EPICS, TASKS, '__orphans__');
+  assert.deepEqual(out.map(e => e.id), []);
+
+  // Add a phaseless task with an epic.
+  const moreTasks = [...TASKS, { id: 'v3-005', phase: null, epic: 'viewer-redesign' }];
+  const out2 = epicsForPhase(EPICS, moreTasks, '__orphans__');
+  assert.deepEqual(out2.map(e => e.id), ['viewer-redesign']);
+});
+
+test('epicsForPhase — phase with no tasks returns empty list', () => {
+  const out = epicsForPhase(EPICS, TASKS, 'P-99');
+  assert.deepEqual(out, []);
+});
+
+test('epicsForPhase — guards against non-array inputs', () => {
+  assert.deepEqual(epicsForPhase(null, TASKS, 'P-01'), []);
+  assert.deepEqual(epicsForPhase(EPICS, null, 'P-01'), []);
 });

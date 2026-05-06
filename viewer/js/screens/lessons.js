@@ -3,6 +3,7 @@ import * as api from '../api.js';
 import { claimTopbar, tmSubcount, tmSearch, tmSegmented, tmAction } from '../lib/topbar.js';
 import { pluralize } from '../util/pluralize.js';
 import { emptyState } from '../components/empty-state.js';
+import { chipClickNext, CHIP_CLICK_HINT } from '../util/chip-toggle.js';
 
 export const meta = { title: 'Lessons', icon: '✦', sidebarKey: 'lessons' };
 
@@ -71,12 +72,16 @@ export async function mount(root, { store, prefs }) {
       const chip = document.createElement('span');
       chip.className = 'lessons__cat-chip';
       chip.dataset.cat = c;
+      chip.title = CHIP_CLICK_HINT;
       chip.textContent = c;
       if (activeCategories.has(c)) chip.classList.add('is-active');
-      chip.addEventListener('click', () => {
-        if (activeCategories.has(c)) activeCategories.delete(c);
-        else activeCategories.add(c);
-        chip.classList.toggle('is-active');
+      chip.addEventListener('click', (ev) => {
+        const next = new Set(chipClickNext(ev, activeCategories, c));
+        activeCategories.clear();
+        for (const k of next) activeCategories.add(k);
+        catRow.querySelectorAll('.lessons__cat-chip').forEach(el => {
+          el.classList.toggle('is-active', activeCategories.has(el.dataset.cat));
+        });
         render();
       });
       catRow.appendChild(chip);
