@@ -10,7 +10,7 @@ import { renderPriorityChips,
          updatePriorityChips }               from '../components/priority-chips.js';
 import { renderPhaseStepper }                from '../components/phase-stepper.js';
 import { renderEpicChips }                   from '../components/epic-chips.js';
-import { applyFilters, sortTasks, groupTasks, STATUS_LABELS } from '../lib/filters.js';
+import { applyFilters, sortTasks, groupTasks, epicsForPhase, STATUS_LABELS } from '../lib/filters.js';
 import { assignEpicColors }                  from '../lib/epics.js';
 import { claimTopbar, tmAction } from '../lib/topbar.js';
 import { pluralize } from '../util/pluralize.js';
@@ -190,6 +190,20 @@ export async function mount(root, { store, api, prefs }) {
     const phasesArr = Array.isArray(backlog.phases) ? backlog.phases : [];
     const epicColors = assignEpicColors(epicsArr);
 
+    // Prune persisted/stale epic selections that don't apply to the active
+    // phase scope. Catches initial mount with stale prefs as well as backlog
+    // changes that remove the last task linking an epic to the active phase.
+    const phaseFilter = state.filters.phase;
+    const phaseScoped = phaseFilter && phaseFilter !== '__all__';
+    if (phaseScoped && state.filters.epics.length) {
+      const allowed = new Set(epicsForPhase(epicsArr, tasks, phaseFilter).map(e => e.id));
+      const pruned = state.filters.epics.filter(id => allowed.has(id));
+      if (pruned.length !== state.filters.epics.length) {
+        state.filters.epics = pruned;
+        savePrefs();
+      }
+    }
+
     // 1) Apply filters
     const filtered = applyFilters(tasks, state.filters);
     const sorted   = sortTasks(filtered, state.filters.sort);
@@ -209,6 +223,7 @@ export async function mount(root, { store, api, prefs }) {
       phases: phaseRows,
       active: state.filters.phase,
       // Clicking the currently-selected phase clears the filter back to all-phases.
+      // paint() will prune any selected epics that don't apply to the new phase.
       onSelect: (key) => {
         const next = (state.filters.phase === key) ? '__all__' : key;
         state.filters.phase = next;
@@ -216,12 +231,17 @@ export async function mount(root, { store, api, prefs }) {
       },
     }));
 
-    // 4) Epic chips data
-    const epicRows = epicsArr.map(ep => ({
+    // 4) Epic chips data — when a phase is active, scope to epics that have tasks in that phase.
+    const tasksInPhase = phaseScoped
+      ? (phaseFilter === '__orphans__' ? tasks.filter(t => !t.phase) : tasks.filter(t => t.phase === phaseFilter))
+      : tasks;
+    const visibleEpics = epicsForPhase(epicsArr, tasks, phaseFilter);
+
+    const epicRows = visibleEpics.map(ep => ({
       id:    ep.id,
       name:  ep.name || ep.id,
       color: epicColors[ep.id],
-      count: tasks.filter(t => t.epic === ep.id).length,
+      count: tasksInPhase.filter(t => t.epic === ep.id).length,
     }));
     const filterCount =
       state.filters.priorities.length +

@@ -115,3 +115,20 @@ export const STATUS_LABELS = {
   in_review: 'In Review',
   done: 'Done',
 };
+
+/**
+ * Restrict an epic list to those that have at least one task matching the active phase filter.
+ * - phase null/undefined/'__all__' → returns epics unchanged.
+ * - phase '__orphans__' → epics that have a task with no phase set.
+ * - phase '<id>' → epics that have a task with t.phase === id.
+ */
+export function epicsForPhase(epics, tasks, phase) {
+  if (!Array.isArray(epics)) return [];
+  if (!phase || phase === '__all__') return epics.slice();
+  const taskList = Array.isArray(tasks) ? tasks : [];
+  const matches = phase === '__orphans__'
+    ? taskList.filter(t => !t.phase)
+    : taskList.filter(t => t.phase === phase);
+  const inScope = new Set(matches.map(t => t.epic).filter(Boolean));
+  return epics.filter(ep => inScope.has(ep.id));
+}
