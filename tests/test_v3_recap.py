@@ -24,8 +24,16 @@ def test_handover_kind_to_viewer_kind_maps_all_six():
     }
 
 
-def test_recap_path_resolves_under_taskmaster_recaps():
+def test_recap_path_resolves_under_taskmaster_recaps(tmp_path, monkeypatch):
+    """In a canonical v3 layout (.taskmaster/backlog.yaml present), recap_path
+    resolves under .taskmaster/recaps/. ISS-004: prior to the fix, recap_path
+    always returned a literal Path(".taskmaster")/recaps/... regardless of
+    actual layout, which silently diverged from the writer on .claude/ and
+    root-layout projects."""
     from taskmaster_v3 import recap_path
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".taskmaster").mkdir()
+    (tmp_path / ".taskmaster" / "backlog.yaml").write_text("meta:\n  schema_version: 3\n")
     p = recap_path("SES-0184")
     assert str(p).replace("\\", "/").endswith(".taskmaster/recaps/SES-0184.md")
 

@@ -11,7 +11,9 @@ import pytest
 def running_server(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".taskmaster").mkdir()
-    (tmp_path / "backlog.yaml").write_text(
+    # Canonical v3 layout: backlog.yaml lives next to its artifact subdirs
+    # (handovers/, recaps/, ...). ISS-004.
+    (tmp_path / ".taskmaster" / "backlog.yaml").write_text(
         "meta:\n  project: test\nepics: []\nphases: []\n"
     )
     from backlog_server import _make_server

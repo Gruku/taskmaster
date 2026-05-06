@@ -46,6 +46,30 @@ def atomic_write(path: Path, content: str) -> None:
     os.replace(tmp, path)
 
 
+def _resolve_artifact_root() -> Path:
+    """Resolve the parent directory of backlog.yaml (and its artifact subdirs)
+    from CWD, using the same priority chain as `backlog_server._resolve_paths()`.
+
+    Why this exists (ISS-004): the writer functions take `backlog_path` and use
+    `bp.parent / "<artifact>"`. The CWD-flavor reader functions (`load_lesson`,
+    `list_sessions`, `recap_path`, `load_issue`, etc.) used to hard-code
+    `Path(".taskmaster") / "<artifact>"` — silently diverging from the writer
+    on `.claude/`-layout and root-layout projects. This helper returns the same
+    parent dir the writer's resolver would, so readers and writers agree.
+
+    Resolution order matches `backlog_server._resolve_paths()`:
+      `.claude/` → `.taskmaster/` → project root → fallback `.taskmaster/`.
+    """
+    cwd = Path.cwd()
+    if (cwd / ".claude" / "backlog.yaml").exists():
+        return cwd / ".claude"
+    if (cwd / ".taskmaster" / "backlog.yaml").exists():
+        return cwd / ".taskmaster"
+    if (cwd / "backlog.yaml").exists():
+        return cwd
+    return cwd / ".taskmaster"
+
+
 # ── Markdown + YAML frontmatter ─────────────────────────────────
 
 _FRONTMATTER_FENCE = "---"
@@ -274,6 +298,205 @@ def migrate_v2_to_v3(backlog_path: Path) -> dict[str, Any]:
         "schema_before": before,
         "schema_after": SCHEMA_V3,
     }
+
+
+# ── v3 layout canonicalization (.claude/ or root → .taskmaster/) ─────────
+
+# Items the canonicalizer moves. Anything outside this list is left alone —
+# .claude/ in particular holds Claude Code's own files (settings.json, hooks/,
+# etc.) which must never be touched.
+_CANONICALIZE_ITEMS: tuple[str, ...] = (
+    "backlog.yaml",
+    "PROGRESS.md",
+    "viewer.json",
+    "tasks",
+    "handovers",
+    "lessons",
+    "issues",
+    "recaps",
+    "snapshots",
+    "auto",
+)
+
+
+def _detect_layout_sources(project_root: Path) -> list[tuple[str, Path]]:
+    """Return all layouts that hold a backlog.yaml. Order: claude, canonical, root."""
+    found: list[tuple[str, Path]] = []
+    if (project_root / ".claude" / "backlog.yaml").exists():
+        found.append(("claude", project_root / ".claude"))
+    if (project_root / ".taskmaster" / "backlog.yaml").exists():
+        found.append(("canonical", project_root / ".taskmaster"))
+    if (project_root / "backlog.yaml").exists():
+        found.append(("root", project_root))
+    return found
+
+
+def _enumerate_moves(
+    source_dir: Path, canonical_dir: Path, project_root: Path
+) -> list[tuple[Path, Path]]:
+    """Walk every file under each known artifact item and pair with its canonical
+    target. Directories aren't moved as wholes — we descend so that auto/ and
+    other dirs that already exist at the destination merge cleanly.
+    """
+    moves: list[tuple[Path, Path]] = []
+    for item in _CANONICALIZE_ITEMS:
+        src = source_dir / item
+        if not src.exists():
+            continue
+        if src.is_file():
+            moves.append((src, canonical_dir / item))
+            continue
+        for sub in src.rglob("*"):
+            if sub.is_file():
+                rel = sub.relative_to(src)
+                moves.append((sub, canonical_dir / item / rel))
+    return moves
+
+
+def canonicalize_layout(
+    project_root: Path,
+    *,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Migrate a v3 backlog from `.claude/` or root layout into canonical `.taskmaster/`.
+
+    Moves only the artifact items in `_CANONICALIZE_ITEMS` — other files in
+    `.claude/` (Claude Code's own settings.json, hooks/, etc.) are untouched.
+
+    Behavior:
+      - Idempotent: re-running on an already-canonical layout is a no-op.
+      - Refuses to clobber: a destination file with different content from the
+        source aborts the migration with a `conflicts` summary; nothing moves.
+      - When source and destination already hold the same bytes, the source
+        copy is removed (cleanup of a partially-completed prior run).
+      - `.taskmaster/auto/` may already exist (e.g. from before the migrator
+        landed); enumeration is per-file so the merge is automatic.
+      - `.claude/taskmaster.json` is deleted after a successful migration —
+        the config it held (`backlog_path`, `progress_path`) is now redundant.
+
+    Returns a summary dict with keys: status, source, destination, moved,
+    skipped_already_at_dst, conflicts, deleted_config, removed_source_dir,
+    dry_run. `status` is one of: no_backlog, already_canonical, ambiguous,
+    conflicts, would_migrate (dry_run), migrated.
+    """
+    project_root = Path(project_root).resolve()
+    canonical_dir = project_root / ".taskmaster"
+
+    summary: dict[str, Any] = {
+        "status": None,
+        "source": None,
+        "destination": str(canonical_dir),
+        "moved": [],
+        "skipped_already_at_dst": [],
+        "conflicts": [],
+        "deleted_config": None,
+        "removed_source_dir": None,
+        "dry_run": dry_run,
+    }
+
+    sources = _detect_layout_sources(project_root)
+    if not sources:
+        summary["status"] = "no_backlog"
+        return summary
+
+    legacy = [(kind, path) for kind, path in sources if kind != "canonical"]
+    canonical_present = any(kind == "canonical" for kind, _ in sources)
+
+    if canonical_present and not legacy:
+        summary["status"] = "already_canonical"
+        return summary
+
+    if len(legacy) > 1:
+        summary["status"] = "ambiguous"
+        summary["sources_found"] = [k for k, _ in legacy]
+        return summary
+
+    if canonical_present and legacy:
+        # Both layouts hold a backlog.yaml — refuse, the caller has to pick one.
+        summary["status"] = "ambiguous"
+        summary["sources_found"] = ["canonical"] + [k for k, _ in legacy]
+        return summary
+
+    source_kind, source_dir = legacy[0]
+    summary["source"] = source_kind
+
+    moves = _enumerate_moves(source_dir, canonical_dir, project_root)
+
+    # Conflict + already-at-dst pass.
+    plan: list[tuple[Path, Path]] = []
+    for src, dst in moves:
+        if dst.exists():
+            try:
+                same = src.read_bytes() == dst.read_bytes()
+            except OSError:
+                same = False
+            rel_dst = str(dst.relative_to(project_root))
+            if same:
+                summary["skipped_already_at_dst"].append(rel_dst)
+            else:
+                summary["conflicts"].append({
+                    "src": str(src.relative_to(project_root)),
+                    "dst": rel_dst,
+                })
+        else:
+            plan.append((src, dst))
+
+    if summary["conflicts"]:
+        summary["status"] = "conflicts"
+        return summary
+
+    if dry_run:
+        summary["status"] = "would_migrate"
+        summary["would_move"] = [
+            {
+                "src": str(s.relative_to(project_root)),
+                "dst": str(d.relative_to(project_root)),
+            }
+            for s, d in plan
+        ]
+        return summary
+
+    # Execute: move new files, delete duplicates already at dst.
+    for src, dst in plan:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(str(src), str(dst))
+        summary["moved"].append({
+            "src": str(src.relative_to(project_root)),
+            "dst": str(dst.relative_to(project_root)),
+        })
+    for rel_dst in summary["skipped_already_at_dst"]:
+        src_path = source_dir / Path(rel_dst).relative_to(canonical_dir.relative_to(project_root))
+        if src_path.exists() and src_path.is_file():
+            src_path.unlink()
+
+    # Cleanup: remove now-empty artifact subdirs in source, then the source dir
+    # itself if it still has only foreign content (or none).
+    for item in _CANONICALIZE_ITEMS:
+        d = source_dir / item
+        if d.exists() and d.is_dir():
+            for child in sorted(d.rglob("*"), reverse=True):
+                if child.is_dir():
+                    try:
+                        child.rmdir()
+                    except OSError:
+                        pass
+            try:
+                d.rmdir()
+            except OSError:
+                pass
+
+    if source_kind == "claude":
+        config = source_dir / "taskmaster.json"
+        if config.exists():
+            config.unlink()
+            summary["deleted_config"] = str(config.relative_to(project_root))
+        # Don't try to remove .claude/ itself — Claude Code keeps settings here.
+    elif source_kind == "root":
+        # Root layout had no wrapping dir; nothing more to clean up.
+        pass
+
+    summary["status"] = "migrated"
+    return summary
 
 
 # ── Snapshots (for recap diff) ─────────────────────────────────
@@ -992,12 +1215,12 @@ def _ensure_reinforce_events(lesson: dict) -> dict:
 
 
 def load_lesson(lesson_id: str) -> dict:
-    """Load a lesson by id from .taskmaster/lessons/<id>.md in CWD.
+    """Load a lesson by id from <backlog-parent>/lessons/<id>.md in CWD.
 
     Returns a dict with frontmatter fields plus '_body'. Backfills
     reinforce_events if not present (migration shim).
     """
-    p = Path(".taskmaster") / "lessons" / f"{lesson_id}.md"
+    p = _resolve_artifact_root() / "lessons" / f"{lesson_id}.md"
     fm, body = parse_frontmatter(p.read_text(encoding="utf-8"))
     fm["_body"] = body
     _ensure_reinforce_events(fm)
@@ -1005,9 +1228,9 @@ def load_lesson(lesson_id: str) -> dict:
 
 
 def save_lesson(lesson: dict) -> None:
-    """Persist a lesson dict (with '_body') back to .taskmaster/lessons/<id>.md."""
+    """Persist a lesson dict (with '_body') back to <backlog-parent>/lessons/<id>.md."""
     lesson_id = lesson["id"]
-    p = Path(".taskmaster") / "lessons" / f"{lesson_id}.md"
+    p = _resolve_artifact_root() / "lessons" / f"{lesson_id}.md"
     body = lesson.pop("_body", "")
     atomic_write(p, render_frontmatter(lesson, body))
     lesson["_body"] = body
@@ -1033,7 +1256,7 @@ def lesson_reinforce(lesson_id: str, source: str = "user", note: str = "") -> di
 
     from datetime import datetime, timezone
 
-    p = Path(".taskmaster") / "lessons" / f"{lesson_id}.md"
+    p = _resolve_artifact_root() / "lessons" / f"{lesson_id}.md"
     if not p.exists():
         raise FileNotFoundError(p)
 
@@ -1660,7 +1883,7 @@ VIEWER_PREFS_DEFAULTS = {
 
 
 def viewer_prefs_path() -> Path:
-    return Path(".taskmaster") / "viewer.json"
+    return _resolve_artifact_root() / "viewer.json"
 
 def load_viewer_prefs() -> dict:
     """Load viewer prefs, creating the file with defaults on first call.
@@ -1931,7 +2154,7 @@ def save_v3(backlog_path: Path, data: dict[str, Any]) -> None:
 
 def recap_path(session_id: str) -> Path:
     """Path on disk for the recap file of a given session."""
-    return Path(".taskmaster") / "recaps" / f"{session_id}.md"
+    return _resolve_artifact_root() / "recaps" / f"{session_id}.md"
 
 
 def _format_recap_markdown(
@@ -2030,7 +2253,7 @@ def load_recap(session_id: str) -> dict | None:
 
 def list_recaps() -> list[str]:
     """Return session ids of all on-disk recaps, sorted descending (newest first)."""
-    d = Path(".taskmaster") / "recaps"
+    d = _resolve_artifact_root() / "recaps"
     if not d.exists():
         return []
     ids = [p.stem for p in d.glob("*.md") if not p.name.startswith("_")]
@@ -2042,20 +2265,20 @@ def list_recaps() -> list[str]:
 
 
 def save_session_snapshot(snapshot_id: str, payload: dict) -> Path:
-    """Write `.taskmaster/snapshots/<snapshot-id>.json` (atomic). The rolling
+    """Write `<backlog-parent>/snapshots/<snapshot-id>.json` (atomic). The rolling
     `last.json` is unaffected; per-session files coexist alongside it.
     """
     import json as _json
-    p = Path(".taskmaster") / "snapshots" / f"{snapshot_id}.json"
+    p = _resolve_artifact_root() / "snapshots" / f"{snapshot_id}.json"
     p.parent.mkdir(parents=True, exist_ok=True)
     atomic_write(p, _json.dumps(payload, indent=2))
     return p
 
 
 def load_session_snapshot(snapshot_id: str) -> dict | None:
-    """Load `.taskmaster/snapshots/<snapshot-id>.json`. None when missing."""
+    """Load `<backlog-parent>/snapshots/<snapshot-id>.json`. None when missing."""
     import json as _json
-    p = Path(".taskmaster") / "snapshots" / f"{snapshot_id}.json"
+    p = _resolve_artifact_root() / "snapshots" / f"{snapshot_id}.json"
     if not p.exists():
         return None
     return _json.loads(p.read_text(encoding="utf-8"))
@@ -2137,7 +2360,7 @@ def list_sessions() -> list[dict]:
     """
     from datetime import timedelta
     SESSION_GAP_MINUTES = 30
-    handovers_dir = Path(".taskmaster") / "handovers"
+    handovers_dir = _resolve_artifact_root() / "handovers"
     if not handovers_dir.exists():
         return []
     raw: list[dict] = []
@@ -2216,7 +2439,7 @@ def list_sessions() -> list[dict]:
 
 def _load_handover_full(handover_id: str) -> dict | None:
     """Load a handover's frontmatter + body_md by id."""
-    p = Path(".taskmaster") / "handovers" / f"{handover_id}.md"
+    p = _resolve_artifact_root() / "handovers" / f"{handover_id}.md"
     if not p.exists():
         return None
     text = p.read_text(encoding="utf-8")
@@ -2253,8 +2476,8 @@ def get_session_detail(session_id: str) -> dict | None:
 
 
 def list_lesson_ids_cwd() -> list[str]:
-    """List lesson ids from .taskmaster/lessons/ in the current working directory."""
-    d = Path(".taskmaster") / "lessons"
+    """List lesson ids from <backlog-parent>/lessons/ in the current working directory."""
+    d = _resolve_artifact_root() / "lessons"
     if not d.exists():
         return []
 
@@ -2267,20 +2490,20 @@ def list_lesson_ids_cwd() -> list[str]:
 
 
 def load_issue(issue_id: str) -> dict:
-    """Load an issue by id from .taskmaster/issues/<id>.md in CWD.
+    """Load an issue by id from <backlog-parent>/issues/<id>.md in CWD.
 
     Returns a dict with frontmatter fields plus '_body'.
     """
-    p = Path(".taskmaster") / "issues" / f"{issue_id}.md"
+    p = _resolve_artifact_root() / "issues" / f"{issue_id}.md"
     fm, body = parse_frontmatter(p.read_text(encoding="utf-8"))
     fm["_body"] = body
     return fm
 
 
 def list_issue_ids_cwd() -> list[str]:
-    """List issue ids from .taskmaster/issues/ in the current working directory."""
+    """List issue ids from <backlog-parent>/issues/ in the current working directory."""
     import re as _re
-    d = Path(".taskmaster") / "issues"
+    d = _resolve_artifact_root() / "issues"
     if not d.exists():
         return []
 

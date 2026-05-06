@@ -122,12 +122,17 @@ from taskmaster_v3 import (
 
 
 def _load_auto_state():
-    """Read .taskmaster/auto/state.json, return parsed dict or None.
+    """Read <backlog-parent>/auto/state.json, return parsed dict or None.
 
     Returns None when the file is missing OR contains invalid JSON.
     Used by GET /api/auto/state. Mutating writes are out of scope for Plan 2.
+
+    Uses the CWD-fresh resolver from taskmaster_v3 (not _backlog_path()) so the
+    path stays in sync with the writer's `bp.parent / "auto"` even when ROOT
+    is frozen at import (e.g. under pytest with monkeypatch.chdir). ISS-004.
     """
-    p = Path(".taskmaster") / "auto" / "state.json"
+    from taskmaster_v3 import _resolve_artifact_root
+    p = _resolve_artifact_root() / "auto" / "state.json"
     if not p.exists():
         return None
     try:
@@ -1391,6 +1396,75 @@ def backlog_migrate_v3() -> str:
         f"\nv3 features (handovers, lessons, issues, recap, auto modes) will land in "
         f"subsequent slices."
     )
+
+
+@mcp.tool()
+def backlog_canonicalize_layout(dry_run: bool = False) -> str:
+    """Migrate the v3 backlog from `.claude/` or root layout into canonical `.taskmaster/`.
+
+    Moves backlog.yaml + the artifact subdirs (tasks, handovers, lessons, issues,
+    recaps, snapshots, auto, PROGRESS.md, viewer.json) into `.taskmaster/`.
+    Idempotent: re-running on a canonical layout is a no-op. Refuses to clobber:
+    if a destination file already holds different content, nothing moves and the
+    conflicts are reported. After a successful `.claude/` migration, the redundant
+    `.claude/taskmaster.json` config is deleted.
+
+    Use this once per project to fix ISS-004 silent divergence between the v3
+    handover writer (which uses `bp.parent / "handovers"`) and readers that
+    historically hard-coded `.taskmaster/`.
+
+    Args:
+        dry_run: When true, returns the move plan without modifying anything.
+    """
+    from taskmaster_v3 import canonicalize_layout
+    summary = canonicalize_layout(ROOT, dry_run=dry_run)
+    status = summary["status"]
+
+    if status == "no_backlog":
+        return "No backlog.yaml found — nothing to canonicalize."
+    if status == "already_canonical":
+        return f"Already canonical at `{summary['destination']}` — no changes."
+    if status == "ambiguous":
+        srcs = ", ".join(summary.get("sources_found", []))
+        return (
+            f"Ambiguous: multiple backlog.yaml files exist ({srcs}). Resolve by "
+            f"keeping only one before canonicalizing."
+        )
+    if status == "conflicts":
+        lines = [
+            f"  {c['src']}  →  {c['dst']}" for c in summary["conflicts"]
+        ]
+        return (
+            f"Conflicts — destination already holds different content. "
+            f"Nothing moved. Resolve manually:\n" + "\n".join(lines)
+        )
+    if status == "would_migrate":
+        moves = summary.get("would_move", [])
+        lines = [f"  {m['src']}  →  {m['dst']}" for m in moves]
+        head = (
+            f"Dry run: would move {len(moves)} file(s) from `{summary['source']}` "
+            f"layout into `{summary['destination']}`."
+        )
+        if summary["skipped_already_at_dst"]:
+            head += (
+                f"\n{len(summary['skipped_already_at_dst'])} file(s) already at "
+                f"destination would be cleaned up."
+            )
+        return head + ("\n" + "\n".join(lines) if lines else "")
+    # status == "migrated"
+    moved = summary["moved"]
+    out = [
+        f"Canonicalized v3 layout: `{summary['source']}` → `.taskmaster/`.",
+        f"Moved {len(moved)} file(s).",
+    ]
+    if summary["skipped_already_at_dst"]:
+        out.append(
+            f"Cleaned up {len(summary['skipped_already_at_dst'])} duplicate file(s) "
+            f"already at destination."
+        )
+    if summary["deleted_config"]:
+        out.append(f"Deleted redundant config: `{summary['deleted_config']}`.")
+    return "\n".join(out)
 
 
 @mcp.tool()
