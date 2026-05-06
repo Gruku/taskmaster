@@ -7,6 +7,7 @@ import { pluralize } from '../util/pluralize.js';
 import { formatAbsolute } from '../lib/time.js';
 import { emptyState } from '../components/empty-state.js';
 import { openTaskCreateModal } from '../components/edit/task-actions.js';
+import { chipClickNext, CHIP_CLICK_HINT } from '../util/chip-toggle.js';
 
 export const meta = { title: 'Table', icon: '▭', sidebarKey: 'table' };
 
@@ -157,11 +158,10 @@ export async function mount(root, { store, api, prefs }) {
         chip.dataset.value = opt;
         const active = state.filters[g.kind].includes(opt);
         chip.classList.toggle('is-active', active);
+        chip.title = CHIP_CLICK_HINT;
         chip.textContent = g.pretty(opt);
-        chip.addEventListener('click', () => {
-          const arr = state.filters[g.kind];
-          const i = arr.indexOf(opt);
-          if (i >= 0) arr.splice(i, 1); else arr.push(opt);
+        chip.addEventListener('click', (ev) => {
+          state.filters[g.kind] = chipClickNext(ev, state.filters[g.kind], opt);
           paint(); persist();
         });
         wrap.appendChild(chip);
