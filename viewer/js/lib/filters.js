@@ -75,7 +75,7 @@ export function groupTasks(tasks, by, phaseOrder) {
     return STATUS_ORDER.map(key => ({
       key,
       label: STATUS_LABELS[key],
-      tasks: (tasks || []).filter(t => (t.status || 'todo') === key),
+      tasks: (tasks || []).filter(t => String(t.status || 'todo').replace(/-/g, '_') === key),
     }));
   }
   if (by === 'phase') {
