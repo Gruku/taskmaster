@@ -33,6 +33,8 @@ def _find_backlog(start: Path) -> Path | None:
         for rel in (".taskmaster/backlog.yaml", ".claude/backlog.yaml", "backlog.yaml"):
             p = cur / rel
             if p.exists():
+                if rel == ".claude/backlog.yaml":
+                    v3.warn_legacy_layout("snapshot hook found backlog at .claude/")
                 return p
         if cur.parent == cur:
             break

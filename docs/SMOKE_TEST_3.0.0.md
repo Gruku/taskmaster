@@ -13,8 +13,8 @@ In a fresh empty directory:
 
 - [ ] Open Claude Code in the directory
 - [ ] Say "set up taskmaster" → `init-taskmaster` skill triggers
-- [ ] Pick `Hidden` location, `v2 (Default)` schema, `Clean start` mode
-- [ ] Verify `.claude/backlog.yaml` exists and is v2 (no `schema_version` key)
+- [ ] Pick `v2 (Default)` schema, `Clean start` mode (location no longer asked — always `.taskmaster/`)
+- [ ] Verify `.taskmaster/backlog.yaml` exists and is v2 (no `schema_version` key)
 - [ ] Add an epic + 3 tasks via the skill flow
 - [ ] Say "migrate to v3" → `migrate-v3` skill triggers
 - [ ] Verify pre-flight summary shows correct task counts and reversibility note
@@ -27,7 +27,7 @@ In a fresh empty directory:
 In a fresh empty directory:
 
 - [ ] Say "set up taskmaster"
-- [ ] Pick `Hidden`, `v3 (Narrative continuity)`, `Clean start`
+- [ ] Pick `v3 (Narrative continuity)`, `Clean start`
 - [ ] Verify backlog is v3 from the start
 - [ ] Verify `.taskmaster/snapshots/` and `.taskmaster/auto/` are in `.gitignore`
 - [ ] Verify the v3 capabilities tour message appears
@@ -36,7 +36,7 @@ In a fresh empty directory:
 
 - [ ] Say "write a handover" → `handover` skill triggers
 - [ ] Confirm draft is shown with auto-extracted file list, decisions, next-action
-- [ ] Approve write → file appears under `.claude/handovers/<id>.md`
+- [ ] Approve write → file appears under `.taskmaster/handovers/<id>.md`
 - [ ] In a NEW Claude Code session, say "what should I work on" → `start-session` triggers
 - [ ] Verify the briefing leads with "Where you left off:" referencing the handover
 - [ ] Say "continue this task" → `pick-task` auto-resolves to the handover's first task
@@ -90,7 +90,7 @@ Open `backlog_open_viewer`:
 ## 9. Migration safety
 
 - [ ] On a v3 backlog, run `backlog_migrate_v3` again → verify "already on v3" no-op response
-- [ ] On a v3 backlog, `git restore .claude/backlog.yaml && rm -rf .taskmaster/tasks/` → verify backlog is back to v2 form (rollback works)
+- [ ] On a v3 backlog, `git restore .taskmaster/backlog.yaml && rm -rf .taskmaster/tasks/` → verify backlog is back to v2 form (rollback works)
 
 ## 10. No regressions vs 1.11
 

@@ -8,6 +8,22 @@ indicate schema breaks or removed surfaces.
 
 ---
 
+## Unreleased — `.claude/` → `.taskmaster/` consolidation
+
+### Changed
+
+- `backlog_init` now writes everything (config, backlog.yaml, PROGRESS.md, artifact subdirs) into `.taskmaster/` regardless of project. The `location` parameter is retained for backwards-compat but accepts only `"tracked"`; passing `"hidden"` returns an error pointing at `backlog_canonicalize_layout`.
+- `CONFIG_PATH` moved from `.claude/taskmaster.json` to `.taskmaster/taskmaster.json`. Existing projects with config at the legacy path keep working — the resolver reads `.taskmaster/taskmaster.json` first, then falls back to `.claude/taskmaster.json` and emits a one-shot deprecation warning per process.
+- The path resolvers in `backlog_server._resolve_paths`, `taskmaster_v3._resolve_artifact_root`, and `hooks/snapshot.py` now check `.taskmaster/` before `.claude/`. When the legacy layout is matched, a deprecation warning fires once per detail.
+- `init-taskmaster` skill no longer asks where to store the backlog — `.taskmaster/` is the only target.
+- Skill copy in `handover` and `end-session` updated to reference `.taskmaster/handovers/` (the actual writer location for canonical-layout v3 projects).
+
+### Migration
+
+Existing `.claude/`-layout projects (both v2 and v3) keep working under the deprecation shim. Run `backlog_canonicalize_layout` (already shipping) to consolidate. The shim will be removed in a future major release.
+
+---
+
 ## 3.0.1 — patch (2026-05-06)
 
 Two release-blocker fixes surfaced during 3.0.0 smoke testing.

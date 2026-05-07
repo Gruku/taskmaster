@@ -6,7 +6,7 @@ Reference for understanding what the v2 → v3 migration changes on disk. See `.
 
 ## Heavy fields that move
 
-These fields are stripped from the task entries in `backlog.yaml` and written into per-task files at `tasks/<task-id>.md` (or `.claude/tasks/<task-id>.md` for hidden-mode backlogs). Any task that has one or more of these fields populated gets a file written; tasks with none of these fields populated are unaffected.
+These fields are stripped from the task entries in `backlog.yaml` and written into per-task files at `tasks/<task-id>.md` (under `.taskmaster/`, or `.claude/` for legacy-layout projects). Any task that has one or more of these fields populated gets a file written; tasks with none of these fields populated are unaffected.
 
 | Field | v2 location | v3 location |
 |---|---|---|
@@ -49,7 +49,7 @@ Three new top-level sections appear in `backlog.yaml` after migration. Each is a
 
 ## New on-disk subdirectories
 
-All paths relative to the backlog directory (`.taskmaster/` or `.claude/`):
+All paths relative to the backlog directory (`.taskmaster/`; `.claude/` for legacy-layout projects):
 
 | Directory | Contents | Gitignored? |
 |---|---|---|
@@ -76,7 +76,7 @@ The migration is idempotent — running `backlog_migrate_v3` again on an already
 
 To roll back to v2:
 
-1. `git restore .taskmaster/backlog.yaml` (or `.claude/backlog.yaml`) — restores the v2 single-file backup
-2. Delete the new `tasks/` directory: `rm -rf .taskmaster/tasks/` (or `.claude/tasks/`)
+1. `git restore .taskmaster/backlog.yaml` (or `.claude/backlog.yaml` for legacy-layout projects) — restores the v2 single-file backup
+2. Delete the new `tasks/` directory: `rm -rf .taskmaster/tasks/` (or `.claude/tasks/` for legacy)
 
 Heavy-field content written to per-task files during migration is not present in the v2 `backlog.yaml`; the git-restore step recovers it from the pre-migration commit. If no git history exists, the v2 backup is not available and roll-back is not possible — this is the main reason to commit before migrating.

@@ -43,7 +43,8 @@ def v3_project(tmp_path, monkeypatch):
 
     import backlog_server
     monkeypatch.setattr(backlog_server, "ROOT", tmp_path)
-    monkeypatch.setattr(backlog_server, "CONFIG_PATH", tmp_path / ".claude" / "missing.json")
+    monkeypatch.setattr(backlog_server, "CONFIG_PATH", tmp_path / ".taskmaster" / "missing.json")
+    monkeypatch.setattr(backlog_server, "LEGACY_CONFIG_PATH", tmp_path / ".claude" / "missing.json")
     return tmp_path
 
 

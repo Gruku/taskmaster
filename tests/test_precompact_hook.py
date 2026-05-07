@@ -142,8 +142,10 @@ def test_hook_writes_snapshot_for_v3_backlog(tmp_path: Path):
     assert snap["phase_active"] == "phase-1"
 
 
-def test_hook_writes_snapshot_for_v2_backlog(tmp_path: Path):
-    """Hook writes last.json next to a v2 backlog located in .claude/."""
+def test_hook_writes_snapshot_for_v2_backlog_in_legacy_claude_dir(tmp_path: Path):
+    """Legacy `.claude/`-layout v2 backlog: hook still finds it and writes the
+    snapshot, AND emits a deprecation warning to stderr pointing at the migrator.
+    """
     backlog_dir = tmp_path / ".claude"
     backlog_dir.mkdir()
     bp = backlog_dir / "backlog.yaml"
@@ -155,6 +157,8 @@ def test_hook_writes_snapshot_for_v2_backlog(tmp_path: Path):
     )
 
     assert result.returncode == 0, f"hook exited non-zero: {result.stderr!r}"
+    assert "deprecated" in result.stderr.lower()
+    assert "backlog_canonicalize_layout" in result.stderr
 
     snap_path = tmp_path / ".claude" / "snapshots" / "last.json"
     assert snap_path.exists(), "snapshot file was not created for v2 backlog"

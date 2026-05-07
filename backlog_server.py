@@ -36,7 +36,11 @@ mcp = FastMCP("taskmaster")
 SCRIPT_DIR = Path(__file__).parent
 ROOT = Path(os.environ.get("TASKMASTER_ROOT", Path.cwd()))
 VIEWER_PATH = SCRIPT_DIR / "backlog-viewer.html"
-CONFIG_PATH = ROOT / ".claude" / "taskmaster.json"
+CONFIG_PATH = ROOT / ".taskmaster" / "taskmaster.json"
+# Legacy location read-only fallback. Pre-consolidation projects wrote config
+# to `.claude/taskmaster.json`; the resolver still honors it so those servers
+# keep working until the user runs `backlog_canonicalize_layout`.
+LEGACY_CONFIG_PATH = ROOT / ".claude" / "taskmaster.json"
 
 # Version from plugin.json
 _plugin_json = SCRIPT_DIR / ".claude-plugin" / "plugin.json"
@@ -144,25 +148,32 @@ def _load_auto_state():
 def _resolve_paths() -> tuple[Path, Path]:
     """Resolve backlog.yaml and PROGRESS.md paths from config or defaults.
 
-    Priority: .claude/taskmaster.json config > .claude/backlog.yaml > ./backlog.yaml
+    Priority: .taskmaster/taskmaster.json > .claude/taskmaster.json (legacy)
+    > .taskmaster/backlog.yaml > .claude/backlog.yaml (legacy) > ./backlog.yaml
     """
-    if CONFIG_PATH.exists():
-        try:
-            config = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-            return (
-                ROOT / config.get("backlog_path", "backlog.yaml"),
-                ROOT / config.get("progress_path", "PROGRESS.md"),
-            )
-        except (json.JSONDecodeError, KeyError):
-            pass
+    for cfg_path in (CONFIG_PATH, LEGACY_CONFIG_PATH):
+        if cfg_path.exists():
+            try:
+                config = json.loads(cfg_path.read_text(encoding="utf-8"))
+                if cfg_path is LEGACY_CONFIG_PATH:
+                    _warn_legacy_layout("config at .claude/taskmaster.json")
+                return (
+                    ROOT / config.get("backlog_path", "backlog.yaml"),
+                    ROOT / config.get("progress_path", "PROGRESS.md"),
+                )
+            except (json.JSONDecodeError, KeyError):
+                pass
 
-    # Auto-detect: check .claude/ first, then .taskmaster/, then project root
-    if (ROOT / ".claude" / "backlog.yaml").exists():
-        return ROOT / ".claude" / "backlog.yaml", ROOT / ".claude" / "PROGRESS.md"
     if (ROOT / ".taskmaster" / "backlog.yaml").exists():
         return ROOT / ".taskmaster" / "backlog.yaml", ROOT / ".taskmaster" / "PROGRESS.md"
+    if (ROOT / ".claude" / "backlog.yaml").exists():
+        _warn_legacy_layout("backlog at .claude/backlog.yaml")
+        return ROOT / ".claude" / "backlog.yaml", ROOT / ".claude" / "PROGRESS.md"
     # Legacy: project root (before .taskmaster/ was introduced)
     return ROOT / "backlog.yaml", ROOT / "PROGRESS.md"
+
+
+from taskmaster_v3 import warn_legacy_layout as _warn_legacy_layout
 
 
 # Module-level accessors (resolved fresh each call via _load/_save)
@@ -1262,21 +1273,29 @@ def backlog_validate() -> str:
 
 
 @mcp.tool()
-def backlog_init(project_name: str = "", location: str = "hidden", schema_version: int = 0) -> str:
+def backlog_init(project_name: str = "", location: str = "tracked", schema_version: int = 0) -> str:
     """Initialize taskmaster in the current project. Creates config, backlog.yaml, and PROGRESS.md.
 
     Args:
         project_name: Name for the project. Defaults to the directory name.
-        location: Where to store backlog files.
-                  "hidden" — .claude/ directory (won't pollute repo, gitignored by default).
-                  "tracked" — project root (visible, can be committed to git for team visibility).
+        location: Retained for backwards-compatibility. Only "tracked" is accepted —
+                  taskmaster always writes to `.taskmaster/` now. Existing
+                  `.claude/`-layout projects keep working via the resolver shim;
+                  run `backlog_canonicalize_layout` to migrate them.
         schema_version: 2 (stable, single backlog.yaml) or 3 (latest, slim index +
                   per-task files + handovers/issues/lessons/auto). 0 → use SCHEMA_DEFAULT.
                   v3 init creates the directory layout up front (tasks/, handovers/,
                   lessons/, issues/, snapshots/, auto/).
     """
-    if location not in ("hidden", "tracked"):
-        return f"Error: location must be 'hidden' or 'tracked', got '{location}'"
+    if location == "hidden":
+        return (
+            "Error: 'hidden' location is no longer supported — taskmaster writes "
+            "to `.taskmaster/` now. Re-run with location='tracked' (default), or "
+            "if you have an existing `.claude/`-layout project, run "
+            "`backlog_canonicalize_layout` to migrate it."
+        )
+    if location != "tracked":
+        return f"Error: location must be 'tracked', got '{location}'"
     if schema_version == 0:
         schema_version = SCHEMA_DEFAULT
     if schema_version not in (SCHEMA_V2, SCHEMA_V3):
@@ -1285,22 +1304,23 @@ def backlog_init(project_name: str = "", location: str = "hidden", schema_versio
     if not project_name:
         project_name = ROOT.name
 
-    # Check if already initialized (check all locations)
-    for check_path in [ROOT / ".claude" / "backlog.yaml", ROOT / ".taskmaster" / "backlog.yaml", ROOT / "backlog.yaml"]:
+    # Check if already initialized (check all locations, including legacy .claude/)
+    for check_path in [ROOT / ".taskmaster" / "backlog.yaml", ROOT / ".claude" / "backlog.yaml", ROOT / "backlog.yaml"]:
         if check_path.exists():
             rel = check_path.relative_to(ROOT)
+            hint = ""
+            if check_path.parts[-2:] == (".claude", "backlog.yaml"):
+                hint = (
+                    "\nNote: this is a legacy `.claude/`-layout project. "
+                    "Run `backlog_canonicalize_layout` to migrate it into `.taskmaster/`."
+                )
             return (
                 f"Already initialized — `backlog.yaml` exists at `{rel}`.\n"
-                f"Use `backlog_status` to see the current state."
+                f"Use `backlog_status` to see the current state.{hint}"
             )
 
-    # Determine paths based on location choice
-    if location == "hidden":
-        backlog_rel = ".claude/backlog.yaml"
-        progress_rel = ".claude/PROGRESS.md"
-    else:
-        backlog_rel = ".taskmaster/backlog.yaml"
-        progress_rel = ".taskmaster/PROGRESS.md"
+    backlog_rel = ".taskmaster/backlog.yaml"
+    progress_rel = ".taskmaster/PROGRESS.md"
 
     backlog_abs = ROOT / backlog_rel
     progress_abs = ROOT / progress_rel
@@ -1311,7 +1331,7 @@ def backlog_init(project_name: str = "", location: str = "hidden", schema_versio
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     config = {"backlog_path": backlog_rel, "progress_path": progress_rel}
     CONFIG_PATH.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
-    created.append(".claude/taskmaster.json")
+    created.append(".taskmaster/taskmaster.json")
 
     # Create backlog.yaml
     backlog_abs.parent.mkdir(parents=True, exist_ok=True)
@@ -1352,10 +1372,9 @@ def backlog_init(project_name: str = "", location: str = "hidden", schema_versio
     progress_abs.write_text(progress_content, encoding="utf-8")
     created.append(progress_rel)
 
-    location_label = "`.claude/` (hidden from repo)" if location == "hidden" else "`.taskmaster/` (trackable in git)"
     schema_label = "v3 (latest — narrative continuity)" if schema_version >= SCHEMA_V3 else "v2 (stable)"
     return (
-        f"Initialized taskmaster for **{project_name}** in {location_label} on schema {schema_label}.\n"
+        f"Initialized taskmaster for **{project_name}** in `.taskmaster/` (trackable in git) on schema {schema_label}.\n"
         f"Created: {', '.join(created)}"
     )
 

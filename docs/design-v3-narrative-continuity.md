@@ -527,7 +527,7 @@ The hook ships with the plugin — no per-project `settings.json` mutation requi
 }
 ```
 
-The script (`hooks/snapshot.py`) walks up from `cwd` to find `.taskmaster/backlog.yaml`, `.claude/backlog.yaml`, or `backlog.yaml`, calls `taskmaster_v3.take_snapshot`, and writes `<backlog_dir>/snapshots/last.json`. It exits 0 on every code path — a broken hook never blocks the user. Test coverage in `tests/test_precompact_hook.py`.
+The script (`hooks/snapshot.py`) walks up from `cwd` to find `.taskmaster/backlog.yaml`, then `.claude/backlog.yaml` (legacy, with deprecation warning), then `backlog.yaml`, calls `taskmaster_v3.take_snapshot`, and writes `<backlog_dir>/snapshots/last.json`. It exits 0 on every code path — a broken hook never blocks the user. Test coverage in `tests/test_precompact_hook.py`.
 
 Also runs on `end-session` (via `backlog_snapshot` MCP tool) and on demand via the same MCP tool.
 

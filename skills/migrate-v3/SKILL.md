@@ -24,7 +24,8 @@ Call `backlog_list_tasks` and `backlog_status` to gather counts. Synthesize and 
 **Migration summary:**
 - Total tasks: N
 - Active tasks (in-progress or in-review): N — these are mid-flight; migration is safe, but the user should know
-- Heavy fields moving out of `backlog.yaml`: `description`, `notes`, `docs`, `review_instructions` — for any task that has these populated, the content moves into a per-task file at `.taskmaster/tasks/<task-id>.md` (or `.claude/tasks/<task-id>.md` if the backlog is in hidden mode). The index retains only slim metadata.
+- Heavy fields moving out of `backlog.yaml`: `description`, `notes`, `docs`, `review_instructions` — for any task that has these populated, the content moves into a per-task file at `.taskmaster/tasks/<task-id>.md`. The index retains only slim metadata.
+- If this is a legacy `.claude/`-layout project, the migrator writes back into `.claude/`; consider running `backlog_canonicalize_layout` afterwards to consolidate everything under `.taskmaster/`.
 - No data is lost. The in-memory shape is identical on v2 and v3 — existing tools and skills continue to work without changes.
 - Reversibility: the migration is idempotent — running it again is a no-op. If you want to roll back, `git restore` your `backlog.yaml` and delete the new `tasks/` directory.
 
@@ -52,7 +53,7 @@ AskUserQuestion({
 ```
 
 - **"Migrate"** → proceed to Step 4.
-- **"Show diff first"** → stop. Tell the user: "Open `.taskmaster/backlog.yaml` (or `.claude/backlog.yaml`) to review the current content. When you're ready, re-invoke `taskmaster:migrate-v3` to proceed."
+- **"Show diff first"** → stop. Tell the user: "Open `.taskmaster/backlog.yaml` to review the current content (or `.claude/backlog.yaml` for legacy-layout projects). When you're ready, re-invoke `taskmaster:migrate-v3` to proceed."
 - **"Cancel"** → stop. Tell the user they can run `taskmaster:migrate-v3` later whenever they're ready.
 
 ## Step 4: Run the migration

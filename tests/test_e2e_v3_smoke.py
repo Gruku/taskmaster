@@ -42,10 +42,12 @@ def _redirect(monkeypatch, tmp_path: Path, bp: Path | None = None) -> Path:
     Returns the backlog path that will be used.
     """
     if bp is None:
-        bp = tmp_path / ".claude" / "backlog.yaml"
-    cfg = tmp_path / ".claude" / "taskmaster.json"
+        bp = tmp_path / ".taskmaster" / "backlog.yaml"
+    cfg = tmp_path / ".taskmaster" / "taskmaster.json"
+    legacy_cfg = tmp_path / ".claude" / "taskmaster.json"
     monkeypatch.setattr(backlog_server, "ROOT", tmp_path)
     monkeypatch.setattr(backlog_server, "CONFIG_PATH", cfg)
+    monkeypatch.setattr(backlog_server, "LEGACY_CONFIG_PATH", legacy_cfg)
     monkeypatch.setattr(backlog_server, "_backlog_path", lambda: bp)
     monkeypatch.setattr(backlog_server, "_progress_path", lambda: bp.parent / "PROGRESS.md")
     return bp
@@ -96,11 +98,11 @@ def _v3_backlog_with_epic_and_task(tmp_path: Path) -> tuple[Path, str, str]:
 def test_fresh_project_init_v2_then_migrate_to_v3(tmp_path, monkeypatch):
     """Init → v2 backlog → add epic + tasks → migrate → idempotent migrate."""
     monkeypatch.chdir(tmp_path)
-    bp = tmp_path / ".claude" / "backlog.yaml"
+    bp = tmp_path / ".taskmaster" / "backlog.yaml"
     _redirect(monkeypatch, tmp_path, bp)
 
     # 1. Init with schema v2
-    result = backlog_server.backlog_init(project_name="smoke-test", location="hidden", schema_version=2)
+    result = backlog_server.backlog_init(project_name="smoke-test", location="tracked", schema_version=2)
     assert "Initialized" in result
     assert bp.exists()
     raw = yaml.safe_load(bp.read_text(encoding="utf-8"))
@@ -116,7 +118,7 @@ def test_fresh_project_init_v2_then_migrate_to_v3(tmp_path, monkeypatch):
     raw2 = yaml.safe_load(bp.read_text(encoding="utf-8"))
     assert len(raw2["epics"][0]["tasks"]) == 3
 
-    # 3. Migrate to v3 — must redirect _backlog_path to same .claude/backlog.yaml
+    # 3. Migrate to v3 — must redirect _backlog_path to same .taskmaster/backlog.yaml
     r3 = backlog_server.backlog_migrate_v3()
     assert "Migrated v2" in r3 or "v3" in r3.lower()
     assert v3.detect_schema_version(yaml.safe_load(bp.read_text(encoding="utf-8"))) == v3.SCHEMA_V3

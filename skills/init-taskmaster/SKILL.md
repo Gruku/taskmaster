@@ -15,20 +15,13 @@ Call `backlog_init` with no arguments — if it reports "already initialized", c
 
 ## Step 2: Ask setup questions — MANDATORY, do NOT skip
 
-Use the `AskUserQuestion` tool with all three questions in a single call. Do NOT call `backlog_init` or create any files until you have the answers.
+Use the `AskUserQuestion` tool with both questions in a single call. Do NOT call `backlog_init` or create any files until you have the answers.
+
+> Storage location is no longer asked — taskmaster always writes to `.taskmaster/`. Existing `.claude/`-layout projects keep working under a deprecation shim; recommend `backlog_canonicalize_layout` to migrate them.
 
 ```
 AskUserQuestion({
   questions: [
-    {
-      question: "Where should I store the backlog?",
-      header: "Location",
-      multiSelect: false,
-      options: [
-        { label: "Hidden (Recommended)", description: ".claude/ directory — stays out of your repo, good for personal tracking" },
-        { label: "Tracked", description: ".taskmaster/ directory — visible files you can commit to git, good for team visibility" }
-      ]
-    },
     {
       question: "Which schema version?",
       header: "Schema",
@@ -52,7 +45,6 @@ AskUserQuestion({
 ```
 
 Map the answers:
-- Location: "Hidden" → `location="hidden"`, "Tracked" → `location="tracked"`
 - Schema: "v2" → standard `backlog_init` flow. "v3" → after `backlog_init`, immediately call `backlog_migrate_v3` to upgrade the freshly-initialized backlog to v3 layout (this also creates `.taskmaster/tasks/`, `handovers/`, `lessons/`, `issues/` subdirectories ready to receive content).
 - Init mode: "Analyze project" → Step 3b, "Clean start" → Step 3a
 
@@ -67,7 +59,7 @@ These directories hold runtime state that shouldn't be committed.
 
 If the user chose clean start:
 
-1. Call `backlog_init(project_name, location)` with their chosen location.
+1. Call `backlog_init(project_name)` (defaults to `.taskmaster/`).
 2. Guide them to create their first epic: "What are the main workstreams? For example: `auth-system`, `api`, `frontend`"
 3. Help them add tasks under those epics.
 4. Suggest creating a phase to organize the first batch of work.
@@ -77,7 +69,7 @@ If the user chose clean start:
 
 If the user chose analyze:
 
-1. Call `backlog_init(project_name, location)` first to create the files.
+1. Call `backlog_init(project_name)` first to create the files.
 2. **Scan for existing work items:**
    - Search for `TODO`, `FIXME`, `HACK`, `XXX` comments across the codebase using Grep
    - Read `README.md` for any roadmap, planned features, or task lists

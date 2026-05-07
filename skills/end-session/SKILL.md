@@ -186,7 +186,7 @@ Reference: `taskmaster:issue` skill, entry point `close-on-task-complete`.
    ```
 
    **(v3) Also stage these directories if they have changes:**
-   - `.claude/handovers/` (handovers written this session)
+   - `.taskmaster/handovers/` (handovers written this session)
    - `.taskmaster/issues/` (issues created or updated)
    - `.taskmaster/lessons/` (lessons reinforced — last_reinforced field updates)
    - `.taskmaster/tasks/` (per-task body updates from spec-review or notes)

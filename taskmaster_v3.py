@@ -46,6 +46,26 @@ def atomic_write(path: Path, content: str) -> None:
     os.replace(tmp, path)
 
 
+_legacy_warned: set[str] = set()
+
+
+def warn_legacy_layout(detail: str) -> None:
+    """Emit a one-shot deprecation warning for `.claude/`-layout projects.
+
+    Each detail tag fires once per process so a long-running server doesn't
+    spam stderr. The warning points at `backlog_canonicalize_layout`, the
+    existing migrator that moves the layout into canonical `.taskmaster/`.
+    """
+    import sys
+    if detail in _legacy_warned:
+        return
+    _legacy_warned.add(detail)
+    sys.stderr.write(
+        f"taskmaster: deprecated {detail} — run `backlog_canonicalize_layout` "
+        f"to migrate; .claude/ support will be removed in a future release.\n"
+    )
+
+
 def _resolve_artifact_root() -> Path:
     """Resolve the parent directory of backlog.yaml (and its artifact subdirs)
     from CWD, using the same priority chain as `backlog_server._resolve_paths()`.
@@ -57,14 +77,15 @@ def _resolve_artifact_root() -> Path:
     on `.claude/`-layout and root-layout projects. This helper returns the same
     parent dir the writer's resolver would, so readers and writers agree.
 
-    Resolution order matches `backlog_server._resolve_paths()`:
-      `.claude/` → `.taskmaster/` → project root → fallback `.taskmaster/`.
+    Resolution order: `.taskmaster/` → `.claude/` (legacy, with warning)
+    → project root → fallback `.taskmaster/`.
     """
     cwd = Path.cwd()
-    if (cwd / ".claude" / "backlog.yaml").exists():
-        return cwd / ".claude"
     if (cwd / ".taskmaster" / "backlog.yaml").exists():
         return cwd / ".taskmaster"
+    if (cwd / ".claude" / "backlog.yaml").exists():
+        warn_legacy_layout("artifact root at .claude/")
+        return cwd / ".claude"
     if (cwd / "backlog.yaml").exists():
         return cwd
     return cwd / ".taskmaster"

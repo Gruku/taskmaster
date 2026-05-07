@@ -44,7 +44,7 @@ Initialize Taskmaster in any project:
 
 This invokes the `taskmaster:init-taskmaster` skill, which:
 
-1. Asks where to store the backlog — **hidden** (`.claude/backlog.yaml`) or **tracked** (`.taskmaster/backlog.yaml`)
+1. Creates the backlog at `.taskmaster/backlog.yaml` (committable to git for team visibility)
 2. Asks how to initialize — **analyze** the project (scan TODOs, README, git log) or **clean start**
 3. Creates the backlog, config, and `PROGRESS.md`
 4. Opens the kanban board in your browser
@@ -221,7 +221,7 @@ All tools are prefixed with `backlog_`. These are the low-level building blocks 
 
 | Tool | Description |
 |------|-------------|
-| `backlog_init(project, location)` | Initialize Taskmaster. Location: `hidden` or `tracked` |
+| `backlog_init(project)` | Initialize Taskmaster at `.taskmaster/`. The `location` param is retained but only `tracked` is accepted; legacy `.claude/` projects keep working under a deprecation shim and should run `backlog_canonicalize_layout` |
 | `backlog_add_task(title, epic, ...)` | Create task. ID auto-generated as `{epic}-{NNN}`. New params: `anchors` (comma-separated globs/URLs), tasks get `last_referenced` auto-set |
 | `backlog_update_task(task_id, field, value)` | Update one field. Validates enums, parses docs/depends_on/stage |
 | `backlog_pick_task(task_id, force?)` | Lock to session, set in-progress, set timestamps |
