@@ -97,6 +97,7 @@ from taskmaster_v3 import (
     tracker_dir as _tracker_dir,
     linked_tasks_for_tracker as _linked_tasks_for_tracker,
     linked_issues_for_tracker as _linked_issues_for_tracker,
+    _validate_tracker as _validate_tracker_fm,
     LESSON_KINDS,
     LESSON_TIERS,
     write_lesson as _write_lesson,
@@ -1494,7 +1495,6 @@ def backlog_validate() -> str:
 
     # 9. Tracker validation: each tracker file's frontmatter is well-formed.
     bp = _backlog_path()
-    from taskmaster_v3 import _validate_tracker as _vt
     on_disk_tracker_ids: set[str] = set(_list_tracker_ids(bp))
     for trk_id in on_disk_tracker_ids:
         try:
@@ -1502,8 +1502,11 @@ def backlog_validate() -> str:
         except OSError as e:
             issues.append(f"tracker `{trk_id}`: cannot read file ({e})")
             continue
+        except yaml.YAMLError as e:
+            issues.append(f"tracker `{trk_id}`: malformed YAML ({e})")
+            continue
         try:
-            _vt(fm)
+            _validate_tracker_fm(fm)
         except ValueError as e:
             issues.append(f"tracker `{trk_id}`: {e}")
 

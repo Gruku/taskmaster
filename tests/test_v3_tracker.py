@@ -369,3 +369,88 @@ def test_write_issue_with_tracker_id_persists(tmp_path):
     )
     fm, _ = read_issue(bp, iid)
     assert fm["tracker_id"] == "jira-cm-cm-101"
+
+
+# ── Edge-case hardening (post-review) ──────────────────────────
+
+
+def test_sync_tracker_index_skips_malformed_yaml(tmp_path):
+    """A corrupt tracker file shouldn't crash sync — it should be skipped."""
+    bp = _make_backlog(tmp_path)
+    write_tracker(
+        bp,
+        external_system="jira",
+        instance_alias="cm",
+        external_key="CM-1",
+        title="Good",
+        status="To Do",
+    )
+    # Drop a syntactically broken tracker file alongside the good one.
+    bad = tracker_dir(bp) / "jira-cm-cm-2.md"
+    bad.write_text("---\nid: jira-cm-cm-2\nbroken yaml: [unclosed\n---\n", encoding="utf-8")
+
+    backlog: dict = {"epics": []}
+    sync_tracker_index(backlog, bp)
+    # Good entry survived, bad one was skipped without raising.
+    ids = [e["id"] for e in backlog["trackers"]]
+    assert ids == ["jira-cm-cm-1"]
+
+
+def test_update_tracker_can_clear_nullable_field_with_explicit_none(tmp_path):
+    """Passing assignee=None must clear it (the post-review fix to the
+    'silent drop None' bug). Required fields would still be caught by the
+    validator, so accidentally Noning a required field fails loudly."""
+    bp = _make_backlog(tmp_path)
+    write_tracker(
+        bp,
+        external_system="jira",
+        instance_alias="cm",
+        external_key="CM-1",
+        title="t",
+        status="To Do",
+        assignee="Alice",
+        url="https://example/CM-1",
+    )
+    fm, _ = update_tracker(bp, "jira-cm-cm-1", assignee=None, url=None)
+    assert fm["assignee"] is None
+    assert fm["url"] is None
+
+
+def test_update_tracker_omitted_field_is_left_untouched(tmp_path):
+    """Confirm 'omit' semantics: not passing a field leaves it as-is."""
+    bp = _make_backlog(tmp_path)
+    write_tracker(
+        bp,
+        external_system="jira",
+        instance_alias="cm",
+        external_key="CM-1",
+        title="t",
+        status="To Do",
+        assignee="Alice",
+    )
+    update_tracker(bp, "jira-cm-cm-1", status="Done")  # assignee not passed
+    fm, _ = read_tracker(bp, "jira-cm-cm-1")
+    assert fm["assignee"] == "Alice"
+    assert fm["status"] == "Done"
+
+
+def test_update_tracker_rejects_id_mismatch(tmp_path):
+    """If a caller passes a tracker_id that doesn't match the file's
+    frontmatter id, raise rather than write to a ghost path."""
+    bp = _make_backlog(tmp_path)
+    # Manually craft a file whose path stem disagrees with its frontmatter id.
+    tracker_dir(bp).mkdir(parents=True, exist_ok=True)
+    rogue = tracker_dir(bp) / "jira-cm-cm-1.md"
+    rogue.write_text(
+        "---\n"
+        "id: jira-cm-cm-99\n"  # mismatches the path stem
+        "external_system: jira\n"
+        "instance_alias: cm\n"
+        "external_key: CM-99\n"
+        "title: Hi\n"
+        "status: To Do\n"
+        "---\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="does not match requested"):
+        update_tracker(bp, "jira-cm-cm-1", status="Done")

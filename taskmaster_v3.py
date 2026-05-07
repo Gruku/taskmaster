@@ -2172,8 +2172,16 @@ def sync_issue_index(
 # It is NOT an epic and carries no epic semantics — just a reference + cache.
 # The reverse map (tracker → linked tasks/issues) is derived on demand from
 # the index, never stored on the tracker, to eliminate sync-drift bugs.
+#
+# `external_key` is stored verbatim from the source (e.g. "CM-101"). The id
+# lowercases it for determinism. Always reconstruct ids via make_tracker_id,
+# never by string-joining stored frontmatter fields directly.
 
 EXTERNAL_SYSTEMS: tuple[str, ...] = ("jira",)
+
+# Sentinel for update_tracker: distinguishes "field not passed" from
+# "field passed as None to clear it".
+_TRACKER_UNSET: Any = object()
 
 _TRACKER_INDEX_FIELDS = (
     "id",
@@ -2291,12 +2299,19 @@ def update_tracker(
     Body is preserved unchanged unless `body=` is passed. The id and the three
     fields it derives from (external_system, external_key, instance_alias) are
     immutable — passing them in updates is silently ignored.
+
+    Passing a field as None clears it (for nullable fields like assignee, url,
+    last_synced, synced_hash). To leave a field untouched, omit it entirely.
     """
     fm, body = read_tracker(backlog_path, tracker_id)
+    if fm.get("id") != tracker_id:
+        raise ValueError(
+            f"on-disk tracker id {fm.get('id')!r} does not match requested {tracker_id!r}"
+        )
     new_body = updates.pop("body", body)
     for immutable in ("id", "external_system", "external_key", "instance_alias"):
         updates.pop(immutable, None)
-    fm.update({k: v for k, v in updates.items() if v is not None})
+    fm.update(updates)
     _validate_tracker(fm)
     write_task_file(tracker_path(backlog_path, tracker_id), fm, new_body)
     return fm, new_body
@@ -2319,7 +2334,7 @@ def sync_tracker_index(
     for tid in list_tracker_ids(backlog_path):
         try:
             fm, _ = read_tracker(backlog_path, tid)
-        except (OSError, ValueError):
+        except (OSError, ValueError, yaml.YAMLError):
             continue
         entries.append(_tracker_index_entry(fm))
     entries.sort(key=lambda e: e.get("id", ""))
