@@ -109,6 +109,7 @@ from taskmaster_v3 import (
     read_auto_state as _read_auto_state,
     write_auto_state as _write_auto_state,
     clear_auto_state as _clear_auto_state,
+    append_auto_event_bp as _append_auto_event_bp,
     advance_stage as _advance_stage,
     complete_current_task as _complete_current_task,
     auto_run_summary as _auto_run_summary,
@@ -2426,11 +2427,21 @@ def backlog_auto_advance(stage: str) -> str:
     state = _read_auto_state(bp)
     if not state:
         return "No auto run in progress."
+    prev_stage = (state.get("cursor") or {}).get("stage")
     try:
         _advance_stage(state, stage)
     except ValueError as exc:
         return f"Error: {exc}"
     _write_auto_state(bp, state)
+    from datetime import datetime as _dt, timezone as _tz
+    _append_auto_event_bp(bp, state["session_id"], {
+        "ts": _dt.now(_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "session_id": state["session_id"],
+        "kind": "stage_advanced",
+        "task_id": state["cursor"]["task_id"],
+        "from": prev_stage,
+        "stage": stage,
+    })
     cur = state["cursor"]
     return f"Stage → {stage} (task={cur['task_id']}, model={cur['model']})"
 
@@ -2461,6 +2472,7 @@ def backlog_auto_complete_task(
     state = _read_auto_state(bp)
     if not state:
         return "No auto run in progress."
+    completed_tid = (state.get("cursor") or {}).get("task_id")
     try:
         _complete_current_task(
             state,
@@ -2473,6 +2485,18 @@ def backlog_auto_complete_task(
     except ValueError as exc:
         return f"Error: {exc}"
     _write_auto_state(bp, state)
+    from datetime import datetime as _dt, timezone as _tz
+    _append_auto_event_bp(bp, state["session_id"], {
+        "ts": _dt.now(_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "session_id": state["session_id"],
+        "kind": "task_completed" if status == "done" else "task_failed",
+        "task_id": completed_tid,
+        "status": status,
+        "summary": summary,
+        "commits": commits or [],
+        "fail_reason": fail_reason,
+        "handover_id": handover_id,
+    })
 
     if state["cursor"] is None:
         return (

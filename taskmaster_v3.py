@@ -1829,18 +1829,25 @@ def read_hook_events(sid: str) -> "dict[str, int]":
 
 
 def migrate_auto_state_to_sessions() -> bool:
-    """One-time migration: wrap pre-Plan-6 single state.json into sessions/<task_id>.json.
+    """One-time migration: wrap pre-Plan-6 single state.json into sessions/<sid>.json.
 
     Returns True if a migration ran, False if nothing to do. Idempotent.
+    Synthesizes a session_id from `target` + compact `started_at` for run-level
+    states that predate Plan 6 (mode=epic|phase, no top-level task_id).
     """
     import json
     if not AUTO_LEGACY_STATE.exists():
         return False
     raw = json.loads(AUTO_LEGACY_STATE.read_text())
-    sid = raw.get("task_id") or raw.get("session_id") or "legacy"
+    sid = raw.get("session_id") or raw.get("task_id")
+    if not sid:
+        target = raw.get("target") or "legacy"
+        compact = (raw.get("started_at") or "").replace(":", "").replace("-", "")
+        sid = f"{target}-{compact[:13]}" if compact else target
     state = dict(raw)
     state.setdefault("session_id", sid)
-    state.setdefault("task_id", sid)
+    cur = state.get("cursor") or {}
+    state.setdefault("task_id", cur.get("task_id") or sid)
     save_auto_session(sid, state)
     audit = AUTO_LEGACY_STATE.with_name("state.legacy.json")
     AUTO_LEGACY_STATE.rename(audit)
@@ -1941,34 +1948,124 @@ def save_viewer_prefs(prefs: dict) -> None:
     atomic_write(p, json.dumps(prefs, indent=2))
 
 
+def auto_sessions_dir(backlog_path: Path) -> Path:
+    """Sessions directory anchored on the project's backlog path.
+    Used by the bp-aware writers/readers in this module so the MCP-driven
+    auto-run state lands where the HTTP server's /api/auto/state and
+    /api/auto/sessions endpoints already look.
+    """
+    return backlog_path.parent / "auto" / "sessions"
+
+
+def auto_session_path_bp(backlog_path: Path, sid: str) -> Path:
+    return auto_sessions_dir(backlog_path) / f"{sid}.json"
+
+
+def auto_events_path_bp(backlog_path: Path, sid: str) -> Path:
+    return auto_sessions_dir(backlog_path) / f"{sid}.events.jsonl"
+
+
+def append_auto_event_bp(backlog_path: Path, sid: str, event: dict) -> None:
+    p = auto_events_path_bp(backlog_path, sid)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps(event, separators=(",", ":")) + "\n"
+    with p.open("a", encoding="utf-8") as f:
+        f.write(line)
+
+
+def _migrate_legacy_state_for_bp(backlog_path: Path) -> bool:
+    """Move <bp.parent>/auto/state.json into the sessions/ layout.
+
+    Idempotent: returns False when no legacy file exists. Synthesizes a
+    session_id when the legacy state predates Plan 6 (run-level cursor
+    only, no top-level session_id/task_id).
+    """
+    legacy = backlog_path.parent / "auto" / "state.json"
+    if not legacy.exists():
+        return False
+    try:
+        raw = json.loads(legacy.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return False
+    sid = raw.get("session_id") or raw.get("task_id")
+    if not sid:
+        target = raw.get("target") or "legacy"
+        # 2026-05-07T20:38:15Z → 20260507T2038
+        compact = (raw.get("started_at") or "").replace(":", "").replace("-", "")
+        sid = f"{target}-{compact[:13]}" if compact else target
+    state = dict(raw)
+    state.setdefault("session_id", sid)
+    cur = state.get("cursor") or {}
+    state.setdefault("task_id", cur.get("task_id") or sid)
+    p = auto_session_path_bp(backlog_path, sid)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write(p, json.dumps(state, indent=2) + "\n")
+    legacy.rename(legacy.with_name("state.legacy.json"))
+    return True
+
+
 def auto_state_path(backlog_path: Path) -> Path:
-    """Path to the auto-mode cursor file (gitignored)."""
-    return backlog_path.parent / "auto" / "state.json"
+    """Path to the active auto-run session file. Kept for back-compat.
+    Returns a sessions/ path even when no run is active (callers that need
+    existence should check `.exists()` after this call).
+    """
+    state = read_auto_state(backlog_path)
+    sid = state["session_id"] if state else "_no_active"
+    return auto_session_path_bp(backlog_path, sid)
 
 
 def read_auto_state(backlog_path: Path) -> dict[str, Any] | None:
-    sp = auto_state_path(backlog_path)
-    if not sp.exists():
+    """Return the active auto-run session (newest with cursor != None and
+    not stopped). Auto-migrates the legacy single-state file on first call.
+    """
+    _migrate_legacy_state_for_bp(backlog_path)
+    sd = auto_sessions_dir(backlog_path)
+    if not sd.exists():
         return None
-    try:
-        return json.loads(sp.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return None
+    candidates: list[dict[str, Any]] = []
+    for p in sd.glob("*.json"):
+        if p.name.endswith(".events.jsonl"):
+            continue
+        try:
+            candidates.append(json.loads(p.read_text(encoding="utf-8")))
+        except (json.JSONDecodeError, OSError):
+            continue
+    candidates.sort(key=lambda s: s.get("started_at", ""), reverse=True)
+    for s in candidates:
+        if s.get("cursor") is not None and not s.get("stopped"):
+            return s
+    return None
 
 
 def write_auto_state(backlog_path: Path, state: dict[str, Any]) -> Path:
-    sp = auto_state_path(backlog_path)
-    atomic_write(sp, json.dumps(state, indent=2) + "\n")
-    return sp
+    sid = state.get("session_id")
+    if not sid:
+        raise ValueError("auto state missing session_id; call init_auto_run first")
+    p = auto_session_path_bp(backlog_path, sid)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write(p, json.dumps(state, indent=2) + "\n")
+    return p
 
 
 def clear_auto_state(backlog_path: Path) -> bool:
-    """Delete the state file. Returns True if a file was removed."""
-    sp = auto_state_path(backlog_path)
-    if sp.exists():
-        sp.unlink()
-        return True
-    return False
+    """Mark the active session ended (cursor=None, stopped=True, ended_at).
+    Keeps the file so the UI retains run history. Returns True if a session
+    was active, else False.
+    """
+    state = read_auto_state(backlog_path)
+    if not state:
+        return False
+    ended_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    state["cursor"] = None
+    state["stopped"] = True
+    state["ended_at"] = ended_at
+    write_auto_state(backlog_path, state)
+    append_auto_event_bp(backlog_path, state["session_id"], {
+        "ts": ended_at,
+        "session_id": state["session_id"],
+        "kind": "run_ended",
+    })
+    return True
 
 
 def init_auto_run(
@@ -1991,10 +2088,16 @@ def init_auto_run(
         raise ValueError("pending_task_ids must not be empty")
     model_for_task = model_for_task or {}
     first = pending_task_ids[0]
+    started_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # 2026-05-07T20:38:15Z → 20260507T2038 — collision-free for runs >1min apart.
+    sid_compact = started_at.replace(":", "").replace("-", "")[:13]
+    sid = f"{target}-{sid_compact}"
     state: dict[str, Any] = {
+        "session_id": sid,
+        "task_id": first,
         "mode": mode,
         "target": target,
-        "started_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "started_at": started_at,
         "cursor": {
             "task_id": first,
             "stage": "PICK",
@@ -2009,8 +2112,18 @@ def init_auto_run(
             "no_gate": False,
             **(config or {}),
         },
+        "subagents": [],
+        "tool_log": [],
     }
     write_auto_state(backlog_path, state)
+    append_auto_event_bp(backlog_path, sid, {
+        "ts": started_at,
+        "session_id": sid,
+        "kind": "run_started",
+        "mode": mode,
+        "target": target,
+        "pending": list(pending_task_ids),
+    })
     return state
 
 

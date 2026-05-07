@@ -994,7 +994,11 @@ class TestAutoState:
         assert state["cursor"]["stage"] == "PICK"
         assert state["cursor"]["model"] == "sonnet"
         assert state["pending"] == []
+        # Plan 6 layout: file lives under sessions/<sid>.json, not the legacy
+        # auto/state.json. auto_state_path() resolves to the active session.
+        assert "session_id" in state
         assert v3.auto_state_path(bp).exists()
+        assert v3.auto_session_path_bp(bp, state["session_id"]).exists()
 
     def test_init_invalid_mode(self, tmp_path: Path):
         bp = self._bp(tmp_path)
