@@ -86,6 +86,17 @@ from taskmaster_v3 import (
     update_issue as _update_issue,
     list_issue_ids as _list_issue_ids,
     sync_issue_index as _sync_issue_index,
+    EXTERNAL_SYSTEMS,
+    write_tracker as _write_tracker,
+    read_tracker as _read_tracker,
+    update_tracker as _update_tracker,
+    list_tracker_ids as _list_tracker_ids,
+    sync_tracker_index as _sync_tracker_index,
+    make_tracker_id as _make_tracker_id,
+    tracker_path as _tracker_path,
+    tracker_dir as _tracker_dir,
+    linked_tasks_for_tracker as _linked_tasks_for_tracker,
+    linked_issues_for_tracker as _linked_issues_for_tracker,
     LESSON_KINDS,
     LESSON_TIERS,
     write_lesson as _write_lesson,
@@ -1480,6 +1491,38 @@ def backlog_validate() -> str:
         task_ph = task.get("phase")
         if task_ph and not _find_phase(data, task_ph):
             issues.append(f"`{tid}`: phase `{task_ph}` does not exist")
+
+    # 9. Tracker validation: each tracker file's frontmatter is well-formed.
+    bp = _backlog_path()
+    from taskmaster_v3 import _validate_tracker as _vt
+    on_disk_tracker_ids: set[str] = set(_list_tracker_ids(bp))
+    for trk_id in on_disk_tracker_ids:
+        try:
+            fm, _ = _read_tracker(bp, trk_id)
+        except OSError as e:
+            issues.append(f"tracker `{trk_id}`: cannot read file ({e})")
+            continue
+        try:
+            _vt(fm)
+        except ValueError as e:
+            issues.append(f"tracker `{trk_id}`: {e}")
+
+    # 10. Task tracker_id references: must point at a tracker that exists on disk.
+    #     Closed-in-Jira trackers stay on disk so this catches typos and bit-rot.
+    for task, _epic in all_tasks:
+        ref = task.get("tracker_id")
+        if ref and ref not in on_disk_tracker_ids:
+            issues.append(
+                f"`{task['id']}`: tracker_id `{ref}` does not match any tracker file"
+            )
+
+    # 11. Issue tracker_id references: same rule as tasks.
+    for iss in data.get("issues", []) or []:
+        ref = iss.get("tracker_id")
+        if ref and ref not in on_disk_tracker_ids:
+            issues.append(
+                f"issue `{iss.get('id', '?')}`: tracker_id `{ref}` does not match any tracker file"
+            )
 
     # Stats summary
     stats = {"total": len(all_tasks), "issues": len(issues)}
