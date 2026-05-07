@@ -141,3 +141,59 @@
 }
 .if-status-ok    { color: var(--green); }
 .if-status-error { color: var(--red); cursor: help; }
+
+/* ---- Mobile (< 768px) — full-width inputs, popover clamp ---- */
+@media (max-width: 768px) {
+  /* Text inputs: fill full container width */
+  .ef-text-input {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+  }
+
+  /* Textarea: already width: 100%, ensure box-sizing */
+  .ef-md-textarea {
+    box-sizing: border-box;
+    max-width: 100%;
+  }
+
+  /* Enum select: fill width */
+  .ef-enum-select {
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  /* Number input: allow narrower */
+  .ef-num-input {
+    width: 100%;
+    max-width: 160px;
+    box-sizing: border-box;
+  }
+
+  /* Date input: fill width */
+  .ef-date-input {
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  /* ChipInput container: fill width */
+  .ef-chip-input {
+    min-width: 0;
+    width: 100%;
+  }
+
+  /* Chip dropdown (ChipInput + RelationPicker): clamp to viewport width */
+  .ef-chip-dropdown {
+    min-width: 0;
+    max-width: calc(100vw - 24px);
+    left: 0;
+    right: auto;
+    /* Clamp so the popover doesn't extend past the right edge */
+    width: min(360px, calc(100vw - 24px));
+  }
+
+  /* Editable inline fields: disable hover pencil icon (touch has no hover) */
+  .ef-editable:hover::after {
+    display: none;
+  }
+}

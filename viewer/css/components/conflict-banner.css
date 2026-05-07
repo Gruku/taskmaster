@@ -23,3 +23,48 @@
 }
 .cb-keep-mine, .cb-resolve { background: var(--accent); color: white; border-color: var(--accent); }
 .cb-use-server { background: transparent; color: var(--ink-2); }
+
+/* ---- Mobile (< 768px) — above modal, vertical-stack rows ---- */
+@media (max-width: 768px) {
+  /* Bump z-index above the modal overlay (z-index: 100) */
+  .cb-banner {
+    z-index: 105;
+  }
+
+  /* Multi-row: stack vertically so label + values + actions don't overflow */
+  .cb-multi-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .cb-multi-row:last-child {
+    border-bottom: none;
+    padding-bottom: 0;
+  }
+
+  /* Actions row inside multi-row: stay horizontal, full width */
+  .cb-multi-actions {
+    margin-left: 0;
+    width: 100%;
+    justify-content: flex-start;
+    gap: 16px;
+  }
+
+  /* Single-field diff rows: also allow wrapping */
+  .cb-row {
+    flex-wrap: wrap;
+  }
+
+  /* Action buttons: full width on narrow screens */
+  .cb-actions {
+    flex-wrap: wrap;
+  }
+  .cb-actions button {
+    flex: 1;
+    text-align: center;
+    padding: 8px 12px;
+    min-height: 44px;
+  }
+}

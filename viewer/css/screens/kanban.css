@@ -929,4 +929,72 @@
     padding-top: 0;
     padding-bottom: 0;
   }
+
+  /* ── Task cards: mobile touch optimizations ──────────────────────────────
+     - Hide low-signal metadata (estimate .card-size, age bar .card-tis)
+     - Bump card-title to min 44px tap target
+     - Bump action icon buttons to min 44px × 44px
+     - Tighten horizontal card padding to use full width
+     Decision: estimate and age bar hidden — priority + status kept (high signal).
+     No motion-on-hover, no colored left rail, no box-shadow introduced. */
+
+  /* Hide estimate chip and time-in-status age bar on mobile */
+  .card-size,
+  .card-tis {
+    display: none;
+  }
+
+  /* Card title: minimum 44px tap target (card click navigates to task detail) */
+  .card-title {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    /* Remove desktop padding-right (the 100px absolute-pri reserve still applies via card-meta) */
+    padding-right: 100px;
+  }
+
+  /* Card body: tighten horizontal padding on narrow screens */
+  .card-body {
+    padding: 12px 12px 12px;
+  }
+
+  /* Action icon buttons (docs-open, etc.): 44px × 44px touch target */
+  .card-actions .cmp-icon-btn {
+    min-height: 44px;
+    min-width: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* ── Auto-mode strip: compact on mobile ──────────────────────────────────
+     Hide session-time (saves ~80px). Shrink run name and progress bar.
+     Make "view all" action a full-width tappable row (44px min).
+     Strip stays as a flex row that wraps naturally. */
+
+  /* Hide the session elapsed time to save width */
+  .kanban-strip-session-time {
+    display: none;
+  }
+
+  /* Shorten run name max-width so it fits on narrow screens */
+  .kanban-strip-run .name {
+    max-width: 130px;
+  }
+
+  /* Shrink mini progress bar */
+  .kanban-strip-run .mini-bar {
+    width: 56px;
+  }
+
+  /* "view all →" action: full row, 44px min-height for tap target */
+  .kanban-strip-action {
+    flex-basis: 100%;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    padding: 0 var(--sp-1);
+    border-top: 1px solid var(--border-soft, rgba(255,255,255,0.06));
+    margin-top: var(--sp-1);
+  }
 }

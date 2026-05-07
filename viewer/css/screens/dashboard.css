@@ -222,3 +222,46 @@
   outline-offset: 4px;
   border-radius: 8px;
 }
+
+/* ─────────── MOBILE LAYOUT (< 768px = --bp-md) ─────────────────────────────
+   Dashboard widgets stack vertically on mobile.
+   Desktop layout (≥ 768px) completely unchanged.
+   No motion-on-hover, no colored left rails, no box-shadow elevation. */
+@media (max-width: 768px) {
+  /* Bento grid: 3-col (left-rail / board / right-rail) → single column stack */
+  .dash-bento {
+    grid-template-columns: 1fr;
+    grid-auto-rows: min-content;
+  }
+
+  /* Rails: lose fixed positioning, stack above the board */
+  .dash-bento__rail--left  { grid-column: 1; }
+  .dash-bento__rail--right { grid-column: 1; }
+  .dash-board              { grid-column: 1; }
+
+  /* Bottom widget grid: 4-col → single column */
+  .dash-bottom {
+    grid-template-columns: 1fr;
+  }
+
+  /* Reset multi-col span variants — all become single column on mobile */
+  .dash-bottom > .widget,
+  .dash-bottom > .widget.widget--medium,
+  .dash-bottom > .widget.widget--wide,
+  .dash-bottom > .widget.widget--hero,
+  .dash-bottom > .dash-add-tile {
+    grid-column: span 1;
+  }
+
+  /* Board mini-grid: 2-col → single column */
+  .dash-board__cols {
+    grid-template-columns: 1fr;
+  }
+
+  /* Briefing: stack sentence and meta vertically on narrow screens */
+  .dash-briefing {
+    flex-direction: column;
+    gap: 8px;
+    align-items: flex-start;
+  }
+}

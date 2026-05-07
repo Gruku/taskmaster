@@ -215,3 +215,60 @@
 .td-tab-panel.on { display: block; }
 .td-tab-panel pre { background: var(--bg-deep); padding: 10px 12px; border-radius: 4px; overflow-x: auto; font-family: var(--font-mono); font-size: 11px; color: var(--ink-2); }
 .td-anchor-pill { display: inline-block; padding: 2px 8px; margin-right: 6px; font-family: var(--font-mono); background: var(--bg-card); border: 1px solid var(--border-soft); border-radius: 3px; font-size: var(--text-sm); color: var(--ink-2); }
+
+/* ---- Mobile (< 768px) — collapse right rail beneath main column ---- */
+@media (max-width: 768px) {
+  /* Single-column: rail stacks below body */
+  .td-grid {
+    grid-template-columns: 1fr;
+  }
+
+  /* Reduce page padding to use more horizontal space */
+  .td-page {
+    padding: 10px 12px;
+  }
+
+  /* Title: scale down on narrow viewports */
+  .td-title {
+    font-size: var(--text-2xl);
+  }
+
+  /* Dates footer: 2-column on mobile (3 cols is too cramped) */
+  .td-dates {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  /* Auto-mode progress bar: shrink to fit */
+  .td-auto-banner .td-auto-bar {
+    width: 120px;
+  }
+
+  /* Chips: ensure wrapping doesn't cause horizontal overflow */
+  .td-chips {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  /* Graph canvas: cap height on mobile for usability */
+  .td-graph-svg {
+    height: 200px;
+  }
+
+  /* Graph context band: allow full wrap */
+  .td-graph-context-band {
+    gap: 8px;
+  }
+
+  /* MdField horizontal overflow prevention (pair with v3-polish-031) */
+  .td-section .md-body pre {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+  .td-section .md-body code {
+    word-break: break-all;
+  }
+  .td-tab-panel pre {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+}
