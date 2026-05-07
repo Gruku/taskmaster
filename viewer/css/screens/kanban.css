@@ -801,3 +801,132 @@
   font-family: var(--font-sans);
 }
 .kanban-col-toggle:hover { color: var(--ink); }
+
+/* ─────────── MOBILE LAYOUT (< 768px = --bp-md) ─────────── */
+/* Stack kanban columns vertically — one full-width column per row, posts-like feed.
+   Desktop layout (≥ 768px) is completely unchanged.
+   JS updateGridTemplate() skips width assignment when this breakpoint is active. */
+@media (max-width: 768px) {
+  /* Board grid: vertical stack, no horizontal scroll */
+  .kanban-board-grid {
+    flex-direction: column;
+    gap: var(--sp-5);
+    overflow: visible;
+    min-height: unset;
+    height: auto;
+  }
+
+  /* Each column: full width, natural height — no inner independent scroll */
+  .kanban-col {
+    width: 100% !important;  /* override any residual JS inline style */
+    flex: 0 0 auto;
+    height: auto;
+    overflow: visible;
+    transition: none;        /* no collapse width animation on mobile */
+  }
+
+  /* Column body: expand fully, let page scroll drive vertical navigation */
+  .kanban-col-body {
+    overflow-y: visible;
+    overflow-x: hidden;
+    height: auto;
+    min-height: 0;
+    padding-right: 0;
+    scrollbar-gutter: auto;
+  }
+  /* Hide per-column scrollbar on mobile (page scrolls instead) */
+  .kanban-col-body::-webkit-scrollbar { display: none; }
+
+  /* Sticky column header — stays visible while scrolling through its column's cards */
+  .kanban-col-head {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: var(--bg-board-col);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+    border-radius: var(--r-lg) var(--r-lg) 0 0;
+  }
+
+  /* Board container: natural height, no overflow clipping */
+  .kanban-board {
+    overflow: visible;
+    height: auto;
+    min-height: 0;
+    flex: 0 0 auto;
+  }
+
+  /* Kanban page: allow natural document flow */
+  .kanban-page {
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+  }
+
+  /* ── Filter bar: horizontal scroll-snap row ──────────────────────────────
+     Choice: scroll-snap row (not wrap). Rationale: the phase stepper and epic
+     chips each have many items — wrapping pushes the board too far down the
+     viewport. A single-row scroll-snap strip lets users flick horizontally. */
+  .kanban-filterbar {
+    flex-direction: row;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scroll-snap-type: x mandatory;
+    gap: var(--sp-2);
+    /* Hide scrollbar track — snap feel implies swipeable */
+    scrollbar-width: none;
+  }
+  .kanban-filterbar::-webkit-scrollbar { display: none; }
+
+  .kanban-filterbar-row {
+    flex: 0 0 auto;
+    scroll-snap-align: start;
+    width: max-content;
+    min-width: 100%;        /* each "page" is at least full viewport width */
+  }
+  /* Remove the inter-row top border in horizontal layout */
+  .kanban-filterbar-row.phase + .kanban-filterbar-row.epic {
+    border-top: 0;
+    padding-top: 0;
+    border-left: 1px solid var(--border);
+    padding-left: var(--sp-3);
+  }
+
+  /* Phase stepper: allow horizontal scroll within its row */
+  .kanban-phase-stepper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scroll-snap-type: x proximity;
+    scrollbar-width: none;
+    min-height: unset;
+  }
+  .kanban-phase-stepper::-webkit-scrollbar { display: none; }
+
+  /* Active card: shrink from 480px fixed to viewport-relative */
+  .kanban-phase-stepper .phs-active-card {
+    flex: 0 0 85vw;
+    max-width: 85vw;
+  }
+
+  /* Future cards: shrink from 240px fixed to viewport-relative */
+  .kanban-phase-stepper .phs-future-card {
+    flex: 0 0 72vw;
+    max-width: 72vw;
+  }
+
+  /* ── Tap targets: minimum 44px height for all filter controls ───────────── */
+  .kanban-epic-chip,
+  .kanban-pri-tog,
+  .kanban-phase-stepper .phs-util,
+  .kanban-phase-stepper .phs-chip {
+    min-height: 44px;
+  }
+
+  .kanban-select,
+  .kanban-group-btn,
+  .kanban-sort-btn {
+    min-height: 44px;
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+}

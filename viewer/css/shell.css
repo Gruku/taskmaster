@@ -269,3 +269,128 @@ html, body {
 }
 
 /* Stub screen — see _placeholders.css */
+
+/* ─────────── MOBILE SHELL (< 768px = --bp-md) ─────────── */
+/* Open up scroll so kanban columns can stack vertically as a scrollable feed.
+   Sidebar becomes a slide-in drawer triggered by a hamburger button.
+   Desktop layout (≥ 768px) is completely unchanged. */
+@media (max-width: 768px) {
+  /* Allow page-level scroll (body/html locked overflow is the main blocker on mobile) */
+  html, body {
+    overflow-x: hidden;
+    overflow-y: auto;
+    height: auto;
+    min-height: 100%;
+  }
+
+  /* Shell: single column — sidebar is a fixed drawer overlay, not in flow */
+  .shell {
+    grid-template-columns: 1fr;
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
+    transition: none;
+  }
+
+  /* ── Sidebar as slide-in drawer ──
+     Removed: display:none from task-002.
+     The sidebar is now a fixed overlay that slides in from the left. */
+  .sidebar {
+    display: flex;               /* always rendered, just off-screen */
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100%;
+    width: var(--sidebar-w);
+    z-index: 200;
+    transform: translateX(-100%);
+    transition: transform var(--t-slow) var(--ease);
+    /* Elevation via border, no box-shadow (design rule) */
+    border-right: 1px solid var(--border-strong);
+  }
+
+  /* When the drawer is open, slide in from left */
+  .shell.sidebar-drawer-open .sidebar {
+    transform: translateX(0);
+  }
+
+  /* Backdrop scrim — covers main content when drawer is open */
+  .sidebar-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    z-index: 199;
+  }
+  .shell.sidebar-drawer-open .sidebar-backdrop {
+    display: block;
+  }
+
+  /* Hamburger button — injected by sidebar.js before topbar h1 */
+  .topbar-hamburger {
+    appearance: none;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--ink-2);
+    border-radius: var(--r-md);
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0;
+    order: -1;
+  }
+  .topbar-hamburger:hover {
+    color: var(--ink);
+    border-color: var(--border-strong);
+  }
+  .topbar-hamburger:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  /* Topbar: compact row — title shrinks, row wraps if needed */
+  .topbar {
+    flex-wrap: wrap;
+    gap: var(--sp-3);
+    margin-bottom: var(--sp-4);
+    min-height: 44px;
+  }
+  .topbar h1 {
+    font-size: var(--text-md);
+    flex: 1 1 auto;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Actions: take full width on wrap, stack below title row */
+  .topbar-actions {
+    flex: 1 1 100%;
+    justify-content: flex-start;
+    row-gap: var(--sp-2);
+  }
+
+  /* Main: natural height, vertical scroll */
+  .main {
+    height: auto;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: visible;
+    padding: var(--sp-3);
+  }
+
+  /* Screen mount: natural flow */
+  .screen-mount {
+    flex: 0 0 auto;
+    min-height: 0;
+    overflow: visible;
+  }
+}

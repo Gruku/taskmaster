@@ -359,3 +359,34 @@
   background: var(--bg-card-hover, var(--bg-card));
   border-color: var(--ink-3);
 }
+
+/* ─────────── MOBILE TAP TARGETS (< 768px = --bp-md) ─────────── */
+/* Shared topbar primitives: min 44px height per WCAG touch-target guidance. */
+@media (max-width: 768px) {
+  /* Search: full width, 44px min-height */
+  .tm-search {
+    width: 100%;
+    flex: 1 1 auto;
+    min-height: 44px;
+  }
+  .tm-search > input {
+    /* Preserve clear-button work (v3-polish-038) — just ensure adequate vertical space */
+    min-height: 44px;
+  }
+
+  /* Action buttons: 44px min-height */
+  .tm-action {
+    min-height: 44px;
+  }
+
+  /* Segmented control buttons: 44px min-height */
+  .tm-segmented > button {
+    min-height: 44px;
+    height: auto;
+  }
+
+  /* Subcount: larger readable size */
+  .tm-subcount {
+    font-size: var(--text-base);
+  }
+}

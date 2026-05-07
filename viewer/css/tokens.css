@@ -110,6 +110,14 @@
   --rail-w:           720px;            /* right-rail detail surface */
   --page-pad:         20px;
   --page-gap:         16px;
+
+  /* Breakpoints — documentation anchors for the mobile-dash epic.
+     CSS custom properties cannot be used inside @media at-rules, so screen-
+     specific CSS files use the matching literal px value (e.g. 768px for --bp-md).
+     Convention: mobile styles go inside @media (max-width: 768px) { … } blocks. */
+  --bp-sm:            480px;            /* small phones (portrait) */
+  --bp-md:            768px;            /* tablet / large phone (landscape) — primary mobile breakpoint */
+  --bp-lg:            1024px;           /* small desktop / large tablet */
 }
 
 @keyframes pulse {

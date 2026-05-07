@@ -330,6 +330,9 @@ export async function mount(root, { store, api, prefs }) {
   }
 
   function updateGridTemplate(animate = true) {
+    // On mobile (< 768px = --bp-md), CSS handles the stacked layout;
+    // skip all JS width logic so inline styles don't fight the media query.
+    if (window.matchMedia('(max-width: 768px)').matches) return;
     const cols = Array.from(boardGrid.querySelectorAll(':scope > .kanban-col'));
     if (!cols.length) return;
     const isInitial = cols.some(c => !c.style.width || c.style.width === '0px');

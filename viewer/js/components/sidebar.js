@@ -1,4 +1,7 @@
 // Sidebar renderer. Sections + entries are static here; live counts come from the store.
+// On mobile (< 768px), the sidebar becomes a slide-in drawer triggered by a hamburger
+// button injected into #topbar. The drawer is dismissed by clicking the backdrop scrim
+// or the hamburger button again.
 
 import { isAutoRunning } from '../lib/auto-state.js';
 
@@ -107,10 +110,95 @@ export function mountSidebar(el, { store, prefs }) {
     if (link) link.classList.toggle('live', running);
   });
 
+  // ── Mobile hamburger drawer (< 768px) ──────────────────────────────────────
+  // The sidebar becomes a fixed overlay; a hamburger button is injected into
+  // #topbar and a backdrop scrim is appended to the shell. Both are torn down
+  // when the screen widens past --bp-md or when the sidebar is unmounted.
+
+  const mql = window.matchMedia('(max-width: 768px)');
+  let hamburger = null;
+  let backdrop  = null;
+
+  function openDrawer() {
+    shell.classList.add('sidebar-drawer-open');
+    if (hamburger) {
+      hamburger.textContent = '✕';
+      hamburger.setAttribute('aria-label', 'Close navigation');
+      hamburger.title = 'Close navigation';
+    }
+  }
+
+  function closeDrawer() {
+    shell.classList.remove('sidebar-drawer-open');
+    if (hamburger) {
+      hamburger.textContent = '☰';
+      hamburger.setAttribute('aria-label', 'Open navigation');
+      hamburger.title = 'Open navigation';
+    }
+  }
+
+  function toggleDrawer() {
+    if (shell.classList.contains('sidebar-drawer-open')) {
+      closeDrawer();
+    } else {
+      openDrawer();
+    }
+  }
+
+  function attachMobileChrome() {
+    if (hamburger) return;   // already attached
+
+    // Hamburger button — prepended to #topbar
+    const topbarEl = document.getElementById('topbar');
+    if (topbarEl) {
+      hamburger = document.createElement('button');
+      hamburger.type = 'button';
+      hamburger.className = 'topbar-hamburger';
+      hamburger.textContent = '☰';
+      hamburger.setAttribute('aria-label', 'Open navigation');
+      hamburger.title = 'Open navigation';
+      hamburger.addEventListener('click', toggleDrawer);
+      topbarEl.prepend(hamburger);
+    }
+
+    // Backdrop scrim — appended to shell
+    backdrop = document.createElement('div');
+    backdrop.className = 'sidebar-backdrop';
+    backdrop.addEventListener('click', closeDrawer);
+    shell.appendChild(backdrop);
+  }
+
+  function detachMobileChrome() {
+    closeDrawer();
+    if (hamburger) {
+      hamburger.removeEventListener('click', toggleDrawer);
+      hamburger.remove();
+      hamburger = null;
+    }
+    if (backdrop) {
+      backdrop.removeEventListener('click', closeDrawer);
+      backdrop.remove();
+      backdrop = null;
+    }
+  }
+
+  function onMqlChange(e) {
+    if (e.matches) {
+      attachMobileChrome();
+    } else {
+      detachMobileChrome();
+    }
+  }
+
+  mql.addEventListener('change', onMqlChange);
+  if (mql.matches) attachMobileChrome();
+
   // Return teardown function that removes all listeners and subscriptions.
   return () => {
     document.removeEventListener('route:changed', onRouteChanged);
     if (typeof unsubIdentity === 'function') unsubIdentity();
     if (typeof unsubAutoState === 'function') unsubAutoState();
+    mql.removeEventListener('change', onMqlChange);
+    detachMobileChrome();
   };
 }
