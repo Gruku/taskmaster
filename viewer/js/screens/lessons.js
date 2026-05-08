@@ -69,11 +69,14 @@ export async function mount(root, { store, prefs }) {
     const cats = [...new Set(lessons.map(l => l.category).filter(Boolean))].sort();
     catRow.innerHTML = '';
     for (const c of cats) {
+      // Count lessons that pass the current search but ignore the category filter
+      // so inactive chips show their potential hit count.
+      const count = lessons.filter(l => l.category === c && _matchesSearch(l)).length;
       const chip = document.createElement('span');
       chip.className = 'lessons__cat-chip';
       chip.dataset.cat = c;
       chip.title = CHIP_CLICK_HINT;
-      chip.textContent = c;
+      chip.textContent = `${c} · ${count}`;
       if (activeCategories.has(c)) chip.classList.add('is-active');
       chip.addEventListener('click', (ev) => {
         const next = new Set(chipClickNext(ev, activeCategories, c));
@@ -128,8 +131,8 @@ export async function mount(root, { store, prefs }) {
   function render() {
     shelvesEl.innerHTML = '';
     const allLessons = store.getLessons() || [];
-    // Re-render chips when the set of categories actually changes (cheap key).
-    const chipKey = [...new Set(allLessons.map(l => l.category).filter(Boolean))].sort().join('|');
+    // Re-render chips when categories change OR when search changes (counts depend on search).
+    const chipKey = [...new Set(allLessons.map(l => l.category).filter(Boolean))].sort().join('|') + '::' + searchTerm;
     if (chipKey !== _lastChipKey) {
       _renderCategoryChips();
       _lastChipKey = chipKey;

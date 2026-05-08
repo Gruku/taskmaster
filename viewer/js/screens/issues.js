@@ -117,12 +117,20 @@ export async function mount(root, { store, prefs }) {
     const issues = store.getIssues() || [];
     const comps = [...new Set(issues.map(i => i.component).filter(Boolean))].sort();
     compRow.innerHTML = '';
+    const sevs = activeFilters();
     for (const c of comps) {
+      // Count issues that pass the current search + severity filters but ignore the
+      // component filter so inactive chips show their potential hit count.
+      const count = issues.filter(i => {
+        if (!_matchesSearch(i)) return false;
+        if (sevs.length > 0 && !sevs.includes(i.severity_label || severityLabel(i.severity))) return false;
+        return i.component === c;
+      }).length;
       const chip = document.createElement('span');
       chip.className = 'issues__comp-chip';
       chip.dataset.comp = c;
       chip.title = CHIP_CLICK_HINT;
-      chip.textContent = c;
+      chip.textContent = `${c} · ${count}`;
       if (activeComponents.has(c)) chip.classList.add('is-active');
       chip.addEventListener('click', (ev) => {
         const next = new Set(chipClickNext(ev, activeComponents, c));
@@ -168,7 +176,9 @@ export async function mount(root, { store, prefs }) {
   let _lastChipKey = '';
   function render() {
     const allIssues = store.getIssues() || [];
-    const chipKey = [...new Set(allIssues.map(i => i.component).filter(Boolean))].sort().join('|');
+    // Re-render chips when components change, OR when search/severity changes (counts depend on both).
+    const chipKey = [...new Set(allIssues.map(i => i.component).filter(Boolean))].sort().join('|')
+      + '::' + searchTerm + '::' + activeFilters().join(',');
     if (chipKey !== _lastChipKey) {
       _renderComponentChips();
       _lastChipKey = chipKey;
