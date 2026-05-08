@@ -1397,6 +1397,18 @@ def backlog_migrate_v3() -> str:
     if not bp.exists():
         return f"Error: no backlog found at {bp}. Run `backlog_init` first."
     summary = _migrate_v2_to_v3(bp)
+
+    # Flip the viewer to v3 mode. Both freshly migrated and already-v3 projects
+    # should serve the v3 viewer — otherwise the migration completes but the
+    # user still sees the v2 UI (no Issues / Lessons / Sessions tabs).
+    try:
+        prefs = load_viewer_prefs()
+        if not prefs.get("use_v3"):
+            prefs["use_v3"] = True
+            save_viewer_prefs(prefs)
+    except Exception:
+        pass
+
     if summary["status"] == "already_v3":
         return (
             f"Already on v3 — {summary['tasks_total']} tasks, no changes made.\n"
@@ -1413,6 +1425,7 @@ def backlog_migrate_v3() -> str:
         f"- Tasks: {summary['tasks_total']}\n"
         f"- {files_msg}\n"
         f"- Index: {bp.relative_to(ROOT)}\n"
+        f"- Viewer: switched to v3 UI (use_v3=true)\n"
         f"\nv3 features (handovers, lessons, issues, recap, auto modes) will land in "
         f"subsequent slices."
     )
@@ -2043,6 +2056,15 @@ def backlog_lesson_create(
         )
     except ValueError as exc:
         return f"Error: {exc}"
+
+    # Seed an initial reinforce event so the lesson lands on the "active" shelf
+    # immediately. Without this, compute_lesson_shelf sees zero events within
+    # retired_after_days and classifies a brand-new lesson as "retired".
+    try:
+        from taskmaster_v3 import lesson_reinforce as _impl_reinforce
+        _impl_reinforce(lid, source="user", note="initial")
+    except Exception:
+        pass
 
     data = _load()
     _sync_lesson_index(data, bp)
@@ -4792,11 +4814,15 @@ class ViewerHandler(BaseHTTPRequestHandler):
                     continue
                 if not include_resolved and issue.get("status") in ("fixed", "wontfix"):
                     continue
-                summary = {k: v for k, v in issue.items() if k != "_body"}
-                summary["severity_label"] = severity_label(summary.get("severity", "P2"))
-                summary["aging"] = compute_issue_aging(issue, aging_cfg)
-                summary["summary"] = (issue.get("_body") or "").strip()
-                issues.append(summary)
+                try:
+                    summary = {k: v for k, v in issue.items() if k != "_body"}
+                    summary["severity_label"] = severity_label(summary.get("severity", "P2"))
+                    summary["aging"] = compute_issue_aging(issue, aging_cfg)
+                    summary["summary"] = (issue.get("_body") or "").strip()
+                    issues.append(summary)
+                except Exception:
+                    # One bad issue must not blank the whole screen. ISS-005.
+                    continue
             self._send_json(200, {"issues": issues})
             return
         else:

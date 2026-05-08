@@ -1059,6 +1059,8 @@ def write_issue(
     if not title or not title.strip():
         raise ValueError("issue title is required")
     iid = issue_id or next_issue_id(backlog_path)
+    from datetime import datetime, timezone
+    default_discovered = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     fm: dict[str, Any] = {
         "id": iid,
         "title": title.strip(),
@@ -1067,7 +1069,7 @@ def write_issue(
         "components": list(components or []),
         "impact": impact.strip(),
         "location": list(location or []),
-        "discovered": discovered or date.today().isoformat(),
+        "discovered": discovered or default_discovered,
         "discovered_by": discovered_by,
         "resolved": None,
         "related_tasks": list(related_tasks or []),
@@ -2676,7 +2678,18 @@ def compute_issue_aging(issue: dict, aging_cfg: dict, now=None) -> dict:
     discovered_raw = issue.get("discovered")
     if not discovered_raw:
         return {"percent": 0.0, "tier": "Fresh"}
-    discovered = datetime.strptime(discovered_raw, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    # Accept both ISO datetime ("YYYY-MM-DDTHH:MM:SSZ") and date-only
+    # ("YYYY-MM-DD"); the writer's default emits date-only, so we must tolerate
+    # it here. ISS-005.
+    discovered = None
+    for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%d"):
+        try:
+            discovered = datetime.strptime(discovered_raw, fmt).replace(tzinfo=timezone.utc)
+            break
+        except (ValueError, TypeError):
+            continue
+    if discovered is None:
+        return {"percent": 0.0, "tier": "Fresh"}
     age_days = (now - discovered).total_seconds() / 86400.0
 
     pct = (age_days / base_days) * 100.0 if base_days > 0 else 0.0
