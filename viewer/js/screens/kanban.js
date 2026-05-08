@@ -275,6 +275,22 @@ export async function mount(root, { store, api, prefs }) {
     boardGrid.className = 'kanban-board-grid ' + state.filters.group_by;
     boardGrid.replaceChildren();
 
+    const hasFilters = !!(state.filters.priorities?.length || state.filters.epics?.length ||
+      state.filters.search || (state.filters.phase && state.filters.phase !== '__all__'));
+    // When the whole board is empty (all tasks filtered out), show count context
+    // only in the first non-collapsed column so the message appears once.
+    const allEmpty = filtered.length === 0 && hasFilters;
+    let countShown = false;
+
+    const clearAllFilters = () => {
+      state.filters = { ...DEFAULT_FILTERS };
+      state.collapsed = new Set();
+      searchInput.value = '';
+      updatePriorityChips(pri, { active: [] });
+      prefs.patch({ kanban: { collapsed_columns: [] } });
+      paint(); savePrefs();
+    };
+
     for (const g of groups) {
       const col = document.createElement('div');
       col.className = 'kanban-col';
@@ -312,12 +328,30 @@ export async function mount(root, { store, api, prefs }) {
       const colBody = document.createElement('div');
       colBody.className = 'kanban-col-body';
       if (!g.tasks.length) {
-        // Honest text: only call out filters if any are active. Otherwise the
-        // column is just empty (e.g. nothing in "Done" yet).
-        const hasFilters = (state.filters.priorities?.length || state.filters.epics?.length || state.filters.search);
-        colBody.appendChild(emptyState({
-          headline: hasFilters ? 'No tasks match your filters' : 'Nothing here',
-        }));
+        // When the whole board is empty due to filters, show a count message in
+        // the first non-collapsed column so the user knows how many tasks are hidden.
+        // Other columns just show 'Nothing here' to avoid repetition.
+        if (allEmpty && !countShown && !isCollapsed) {
+          countShown = true;
+          const filterParts = [];
+          if (state.filters.search) filterParts.push(`search "${state.filters.search}"`);
+          if (state.filters.priorities?.length) filterParts.push(`priority: ${state.filters.priorities.join(', ')}`);
+          if (state.filters.epics?.length) filterParts.push(`epic: ${state.filters.epics.join(', ')}`);
+          if (state.filters.phase && state.filters.phase !== '__all__') filterParts.push(`phase: ${state.filters.phase}`);
+          const hidden = tasks.length;
+          const filterDesc = filterParts.length ? filterParts.join(' · ') : 'active filters';
+          colBody.appendChild(emptyState({
+            headline: `0 of ${tasks.length} ${pluralize(tasks.length, 'task', 'tasks')} match`,
+            hint: `${filterDesc} — ${hidden} ${pluralize(hidden, 'task', 'tasks')} hidden`,
+            action: { label: 'Clear filters', onClick: clearAllFilters },
+          }));
+        } else {
+          // Honest text: only call out filters if any are active. Otherwise the
+          // column is just empty (e.g. nothing in "Done" yet).
+          colBody.appendChild(emptyState({
+            headline: hasFilters ? 'No tasks match your filters' : 'Nothing here',
+          }));
+        }
       } else {
         for (const t of g.tasks) {
           colBody.appendChild(renderCard({

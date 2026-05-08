@@ -185,7 +185,25 @@ export async function mount(root, { store, api, prefs }) {
     }
   }
 
-  function renderTable(tasks) {
+  function buildFilterHint(totalCount) {
+    const parts = [];
+    if (state.search) parts.push(`search "${state.search}"`);
+    if (state.filters.status.length)   parts.push(`status: ${state.filters.status.map(prettyStatus).join(', ')}`);
+    if (state.filters.priority.length) parts.push(`priority: ${state.filters.priority.map(s => s[0].toUpperCase() + s.slice(1)).join(', ')}`);
+    if (state.filters.epic.length)     parts.push(`epic: ${state.filters.epic.join(', ')}`);
+    const hidden = totalCount;
+    const filterDesc = parts.length ? parts.join(' · ') : 'active filters';
+    return `${filterDesc} — ${hidden} ${pluralize(hidden, 'task', 'tasks')} hidden`;
+  }
+
+  function clearFilters() {
+    state.filters = { status: [], priority: [], epic: [] };
+    state.search = '';
+    search.value = '';
+    paint(); persist();
+  }
+
+  function renderTable(tasks, totalCount) {
     tableHost.innerHTML = '';
     const tbl = document.createElement('table');
     tbl.className = 'tbl';
@@ -228,8 +246,9 @@ export async function mount(root, { store, api, prefs }) {
       td.colSpan = COLUMNS.length;
       td.className = 'tbl-empty';
       td.appendChild(emptyState({
-        headline: hasFilters ? 'No tasks match your filters' : 'No tasks yet',
-        hint: hasFilters ? 'Try clearing a chip or the search box.' : null,
+        headline: hasFilters ? `0 of ${totalCount} ${pluralize(totalCount, 'task', 'tasks')} match` : 'No tasks yet',
+        hint: hasFilters ? buildFilterHint(totalCount) : null,
+        action: hasFilters ? { label: 'Clear filters', onClick: clearFilters } : null,
       }));
       tr.appendChild(td);
       tbody.appendChild(tr);
@@ -266,7 +285,7 @@ export async function mount(root, { store, api, prefs }) {
     // Reflect external state changes (e.g. clear button) into the topbar input.
     if (search.value !== state.search) search.value = state.search;
     renderChipRail(backlog);
-    renderTable(sorted);
+    renderTable(sorted, tasks.length);
   }
 
   paint();
