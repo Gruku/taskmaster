@@ -67,10 +67,23 @@ function panelHandovers(handovers) {
   }
   return h('section', { class: 'td-panel td-panel-handovers' },
     [panelHeader('Handovers'),
-     ...handovers.map((ho) =>
-       h('div', { class: `td-handover td-handover-${ho.kind || 'mid-task'}` },
-         [h('div', { class: 'mono td-handover-id' }, `${ho.id} · ${ho.kind || ''}`),
-          h('blockquote', { class: 'serif td-handover-quote' }, `"${ho.quote || ''}"`)]))]);
+     ...handovers.map((ho) => {
+       const when = formatHandoverTime(ho.created);
+       const idLine = `${ho.id} · ${ho.kind || ''}${when ? ` · ${when}` : ''}`;
+       return h('div', { class: `td-handover td-handover-${ho.kind || 'mid-task'}` },
+         [h('div', { class: 'mono td-handover-id' }, idLine),
+          h('blockquote', { class: 'serif td-handover-quote' }, `"${ho.quote || ''}"`)]);
+     })]);
+}
+
+function formatHandoverTime(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleString(undefined, {
+    year: 'numeric', month: 'short', day: '2-digit',
+    hour: '2-digit', minute: '2-digit',
+  });
 }
 
 function panelIssues(issues, onNavigate) {

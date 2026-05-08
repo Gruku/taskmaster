@@ -1700,7 +1700,9 @@ def backlog_handover_list(
     for e in entries:
         kind = e.get("session_kind", "")
         tag = f" [{kind}]" if kind else ""
-        lines.append(f"- {e['id']}{tag} — {e.get('tldr', '')}")
+        when = e.get("created") or e.get("date") or ""
+        when_tag = f" ({when})" if when else ""
+        lines.append(f"- {e['id']}{when_tag}{tag} — {e.get('tldr', '')}")
     return "\n".join(lines)
 
 
@@ -1743,8 +1745,10 @@ def backlog_handover_latest() -> str:
     if not hid:
         return "No handovers yet."
     fm, _ = _read_handover(bp, hid)
+    when_line = fm.get("created") or fm.get("date") or ""
+    when_label = f" ({when_line})" if when_line else ""
     return (
-        f"Latest handover: {hid}\n"
+        f"Latest handover: {hid}{when_label}\n"
         f"- TLDR: {fm.get('tldr', '')}\n"
         f"- Next: {fm.get('next_action', '(none)')}\n"
         f"- Tasks: {', '.join(fm.get('task_ids') or []) or '(none)'}\n"
@@ -2057,12 +2061,21 @@ def backlog_lesson_create(
     except ValueError as exc:
         return f"Error: {exc}"
 
-    # Seed an initial reinforce event so the lesson lands on the "active" shelf
+    # Seed an initial event so the lesson lands on the "active" shelf
     # immediately. Without this, compute_lesson_shelf sees zero events within
     # retired_after_days and classifies a brand-new lesson as "retired".
+    # We add the event directly rather than going through lesson_reinforce —
+    # creation is not a reinforcement, so reinforce_count must stay at 0
+    # until the user actually applies the lesson.
     try:
-        from taskmaster_v3 import lesson_reinforce as _impl_reinforce
-        _impl_reinforce(lid, source="user", note="initial")
+        from datetime import datetime as _dt, timezone as _tz
+        from taskmaster_v3 import load_lesson as _load_lesson, save_lesson as _save_lesson
+        _l = _load_lesson(lid)
+        _seed_at = _dt.now(_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        _l.setdefault("reinforce_events", []).append(
+            {"at": _seed_at, "source": "user", "note": "created"}
+        )
+        _save_lesson(_l)
     except Exception:
         pass
 

@@ -112,6 +112,29 @@ def test_handover_latest_returns_empty_message_when_no_handovers(tmp_path, monke
     assert "No handovers" in result
 
 
+def test_handover_latest_breaks_same_day_ties_by_creation_time(tmp_path, monkeypatch):
+    """Two handovers on the same date should order by `created`, not slug alpha.
+
+    Regression: prior behavior sorted handover ids alphabetically, so on a
+    same-day collision the slug that sorted later beat the one written later
+    in time. The fix records `created` on every handover and sorts by it.
+    """
+    bp = _make_backlog(tmp_path)
+    _set_backlog_root(monkeypatch, bp)
+
+    # Slug "regenerated-..." sorts AFTER "asset-studio-..." alphabetically,
+    # but is written FIRST chronologically. The actual latest is the second
+    # write (asset-studio).
+    write_handover(bp, tldr="regenerated mcp tool catalog",
+                   session_kind="end-of-day", when="2026-05-08")
+    write_handover(bp, tldr="asset-studio modal polish",
+                   session_kind="context-handoff", when="2026-05-08")
+
+    result = backlog_server.backlog_handover_latest()
+    assert "asset-studio modal polish" in result
+    assert "regenerated mcp tool catalog" not in result
+
+
 # ── backlog_handover_list ──────────────────────────────────────────────────────
 
 

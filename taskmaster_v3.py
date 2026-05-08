@@ -794,6 +794,8 @@ def write_handover(
     fm: dict[str, Any] = {
         "id": final_id,
         "date": when,
+        # Microsecond precision so same-second writes order deterministically.
+        "created": datetime.now(timezone.utc).isoformat(timespec="microseconds"),
         "tldr": tldr.strip(),
         "next_action": (next_action or "").strip(),
         "task_ids": list(task_ids or []),
@@ -818,13 +820,33 @@ def read_handover(backlog_path: Path, handover_id: str) -> tuple[dict[str, Any],
 
 
 def list_handover_ids(backlog_path: Path) -> list[str]:
-    """List handover ids on disk, sorted newest-first by id (date-prefixed)."""
+    """List handover ids on disk, newest-first.
+
+    Sort key per file: (`created` ISO timestamp from frontmatter, file mtime,
+    id) — descending. The frontmatter timestamp is authoritative when present;
+    mtime is the fallback for legacy handovers written before `created` was
+    recorded; id alpha is the final tiebreaker. This avoids the same-day
+    alphabetical-by-slug bug where a handover written earlier in the day
+    would beat one written later if its slug sorted later.
+    """
     d = handover_dir(backlog_path)
     if not d.exists():
         return []
-    ids = [p.stem for p in d.glob("*.md")]
-    ids.sort(reverse=True)
-    return ids
+    entries: list[tuple[str, float, str]] = []
+    for p in d.glob("*.md"):
+        created = ""
+        try:
+            fm, _ = read_task_file(p)
+            created = str(fm.get("created") or "")
+        except (OSError, ValueError):
+            pass
+        try:
+            mtime = p.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        entries.append((created, mtime, p.stem))
+    entries.sort(reverse=True)
+    return [stem for _, _, stem in entries]
 
 
 def latest_handover_id(backlog_path: Path) -> str | None:
@@ -915,7 +937,7 @@ def apply_handover_review_flag(
 
 
 # Fields kept in the backlog.yaml `handovers:` index entry.
-_HANDOVER_INDEX_FIELDS = ("id", "date", "tldr", "next_action", "task_ids", "session_kind")
+_HANDOVER_INDEX_FIELDS = ("id", "date", "created", "tldr", "next_action", "task_ids", "session_kind")
 
 
 def _handover_index_entry(fm: dict[str, Any]) -> dict[str, Any]:
