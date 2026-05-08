@@ -215,3 +215,29 @@ test('unmount cleanup does not throw', () => {
   assert.doesNotThrow(() => unmount(), 'unmount function does not throw');
   root.remove();
 });
+
+test('right rail mounts 6 panels synchronously for an all-empty task', () => {
+  // Regression guard for v3-bugs-004: rail must be populated immediately
+  // on mount (no queueMicrotask deferral) so navigation-before-microtask
+  // cannot leave the aside detached with 0 children.
+  const emptyTask = {
+    id: 'T-EMPTY', title: 'Empty task', status: 'todo', priority: 'low', epic: '',
+    phase: '', estimate: '', branch: '', worktree: '', release: '', sub_repo: '',
+    specification: '', plan: '', notes: '', review_instructions: '', patchnote: '',
+    docs: {}, anchors: [], depends_on: [], blockers: [],
+    created: '2026-01-01', started: '', completed: '',
+  };
+  const ctx = makeCtx(emptyTask);
+  ctx.related = { lessons: [], handovers: [], issues: [], dependencies: [], unblocks: [] };
+  const root = document.createElement('div');
+  document.body.appendChild(root);
+  mountTaskDetailDocument(root, ctx);
+
+  const rail = root.querySelector('[data-test="rail"]');
+  assert.ok(rail, 'rail aside exists');
+  // Must be synchronous — no await/microtask flush needed
+  assert.equal(rail.children.length, 6, 'rail has exactly 6 panel children synchronously');
+  const panels = rail.querySelectorAll('.td-panel');
+  assert.equal(panels.length, 6, 'all 6 children carry .td-panel class');
+  root.remove();
+});

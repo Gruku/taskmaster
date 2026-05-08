@@ -89,7 +89,7 @@ function renderCompactHead(task) {
 
 function renderRail(ctx) {
   const aside = h('aside', { class: 'td-rail-mount', 'data-test': 'rail' });
-  queueMicrotask(() => mountRightRail(aside, ctx));
+  mountRightRail(aside, ctx);
   return aside;
 }
 
