@@ -17,7 +17,11 @@ def running_server(tmp_path, monkeypatch):
     (tmp_path / ".taskmaster" / "handovers").mkdir()
     (tmp_path / ".taskmaster" / "issues").mkdir()
 
-    (tmp_path / "backlog.yaml").write_text(
+    # Canonical v3 layout: backlog.yaml lives inside .taskmaster/ next to its
+    # artifact subdirs (tasks/, lessons/, issues/, handovers/).  The old layout
+    # placed backlog.yaml at the project root, which caused a path mismatch when
+    # the server resolved sidecar files relative to backlog_path.parent.
+    (tmp_path / ".taskmaster" / "backlog.yaml").write_text(
         "meta:\n  project: test\n"
         "epics:\n  - {id: viewer, name: Viewer, color: '#6ea8ff'}\n"
         "phases:\n  - {id: 'P-01', name: Foundations}\n"
@@ -70,8 +74,16 @@ def running_server(tmp_path, monkeypatch):
         "Use the `marked` library from CDN.\n"
     )
 
-    from backlog_server import _make_server
-    server, port = _make_server(host="127.0.0.1", port=0)
+    import backlog_server
+    # Redirect the server's path resolution to the test tree so every call to
+    # _resolve_paths() (which uses the module-level ROOT, CONFIG_PATH, and
+    # LEGACY_CONFIG_PATH) reads fixture data instead of the real project.
+    monkeypatch.setattr(backlog_server, "ROOT", tmp_path)
+    monkeypatch.setattr(backlog_server, "CONFIG_PATH",
+                        tmp_path / ".taskmaster" / "missing.json")
+    monkeypatch.setattr(backlog_server, "LEGACY_CONFIG_PATH",
+                        tmp_path / ".claude" / "missing.json")
+    server, port = backlog_server._make_server(host="127.0.0.1", port=0)
     t = threading.Thread(target=server.serve_forever, daemon=True)
     t.start()
     base = f"http://127.0.0.1:{port}"
