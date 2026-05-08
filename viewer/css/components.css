@@ -218,6 +218,22 @@
 .tm-search > input::placeholder { color: var(--ink-3); }
 .tm-search > .cmp-kbd { flex: 0 0 auto; }
 
+/* Clear button — hidden until the field has content */
+.tm-search__clear {
+  display: none;
+  flex: 0 0 auto;
+  background: transparent;
+  border: 0;
+  padding: 0 2px;
+  cursor: pointer;
+  color: var(--ink-3);
+  font-size: var(--text-base);
+  line-height: 1;
+  border-radius: var(--r-sm);
+}
+.tm-search__clear:hover { background: rgba(255,255,255,0.08); color: var(--ink); }
+.tm-search--has-value .tm-search__clear { display: inline-flex; align-items: center; }
+
 /* Segmented — grouped icon buttons (▤ ▦ density, Spine/Log, Document/Graph, etc.) */
 .tm-segmented {
   display: inline-flex; gap: 0;
@@ -370,8 +386,12 @@
     min-height: 44px;
   }
   .tm-search > input {
-    /* Preserve clear-button work (v3-polish-038) — just ensure adequate vertical space */
     min-height: 44px;
+  }
+  .tm-search__clear {
+    min-width: 44px;
+    min-height: 44px;
+    justify-content: center;
   }
 
   /* Action buttons: 44px min-height */

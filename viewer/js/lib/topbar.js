@@ -26,24 +26,66 @@ export function tmSearch({ placeholder = 'Search…', value = '', onInput, kbd =
   icon.className = 'icon';
   icon.textContent = '⌕';
   const input = document.createElement('input');
-  input.type = 'search';
+  // Use type="text" to suppress the WebKit-native clear pseudo-element which is
+  // unstyleable and fires inconsistent events. We provide our own clear button.
+  input.type = 'text';
   input.placeholder = placeholder;
   input.value = value || '';
   if (ariaLabel) input.setAttribute('aria-label', ariaLabel);
-  wrap.append(icon, input);
+
+  // Clear button — visible only when the field has content.
+  const clearBtn = document.createElement('button');
+  clearBtn.type = 'button';
+  clearBtn.className = 'tm-search__clear';
+  clearBtn.setAttribute('aria-label', 'Clear search');
+  clearBtn.textContent = '×';
+
+  function syncClearVisibility() {
+    wrap.classList.toggle('tm-search--has-value', input.value.length > 0);
+  }
+
+  function clearSearch() {
+    input.value = '';
+    syncClearVisibility();
+    // Dispatch a real input event so debounced handlers and chip-count guards fire.
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.focus();
+  }
+
+  clearBtn.addEventListener('click', clearSearch);
+
+  // Escape on a focused input is a standard clear shortcut.
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && input.value.length > 0) {
+      e.preventDefault();
+      clearSearch();
+    }
+  });
+
+  wrap.append(icon, input, clearBtn);
+
   if (kbd) {
     const k = document.createElement('span');
     k.className = 'cmp-kbd';
     k.textContent = kbd;
     wrap.appendChild(k);
   }
+
   if (typeof onInput === 'function') {
     let t = null;
     input.addEventListener('input', () => {
+      syncClearVisibility();
       if (t) clearTimeout(t);
       t = setTimeout(() => onInput(input.value), debounceMs);
     });
+  } else {
+    // Even without an onInput callback, keep the clear-button visibility in sync.
+    input.addEventListener('input', syncClearVisibility);
   }
+
+  // Sync initial state if a value was pre-filled.
+  syncClearVisibility();
+
   return { el: wrap, input };
 }
 
