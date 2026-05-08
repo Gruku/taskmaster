@@ -4905,6 +4905,15 @@ class ViewerHandler(BaseHTTPRequestHandler):
                     for e in (data.get("epics") or [])
                     for t in (e.get("tasks") or [])
                 ]
+            # Sort phases by order so the viewer always receives them in logical
+            # sequence, regardless of YAML insertion order. Phases added out of
+            # order (e.g. inserting "1.5" after "2" was written) would otherwise
+            # appear in the wrong position in the phase stepper / board grouping.
+            if isinstance(data.get("phases"), list):
+                data["phases"] = sorted(
+                    data["phases"],
+                    key=lambda p: (p.get("order") if p.get("order") is not None else 999),
+                )
             from taskmaster_v3 import compute_etag
             etag = compute_etag(_backlog_path())
             self._send_json(200, data, etag=etag)

@@ -229,7 +229,10 @@ function makeSlideBtn(direction) {
 function phaseNum(p) {
   if (p == null) return '';
   if (p.num != null) return p.num;
-  const m = String(p.id || '').match(/(\d+)/);
+  // Match an integer or decimal number at the start of the id (e.g. "1", "1.5", "2").
+  // Without the decimal capture, "1.5" would return "1" — indistinguishable from
+  // phase "1" and misleading about the phase's position in the sequence.
+  const m = String(p.id || '').match(/(\d+(?:\.\d+)?)/);
   return m ? m[1] : '';
 }
 

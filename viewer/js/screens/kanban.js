@@ -211,8 +211,14 @@ export async function mount(root, { store, api, prefs }) {
     // 2) Subcount
     subcount.textContent = `${tasks.length} ${pluralize(tasks.length, 'task', 'tasks')} · ${filtered.length} visible`;
 
-    // 3) Phase stepper data
-    const phaseRows = phasesArr.map(ph => {
+    // 3) Phase stepper data — sort by order so non-sequential insertion in
+    // the YAML (e.g. phase "1.5" added after "2") doesn't scramble the stepper.
+    const phasesOrdered = phasesArr.slice().sort((a, b) => {
+      const oa = a.order != null ? a.order : 999;
+      const ob = b.order != null ? b.order : 999;
+      return oa - ob;
+    });
+    const phaseRows = phasesOrdered.map(ph => {
       const total = tasks.filter(t => t.phase === ph.id).length;
       const done  = tasks.filter(t => t.phase === ph.id && t.status === 'done').length;
       let stat = (ph.status || '').toLowerCase();
@@ -263,8 +269,8 @@ export async function mount(root, { store, api, prefs }) {
       },
     }));
 
-    // 5) Group + render columns
-    const groupKeyArg = state.filters.group_by === 'phase' ? phasesArr.map(p => p.id) : undefined;
+    // 5) Group + render columns — use phasesOrdered so swimlanes respect logical order
+    const groupKeyArg = state.filters.group_by === 'phase' ? phasesOrdered.map(p => p.id) : undefined;
     const groups = groupTasks(sorted, state.filters.group_by, groupKeyArg);
     boardGrid.className = 'kanban-board-grid ' + state.filters.group_by;
     boardGrid.replaceChildren();
