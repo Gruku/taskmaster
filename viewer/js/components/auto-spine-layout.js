@@ -3,6 +3,35 @@
 
 export const AUTO_STAGES = ['PICK', 'IMPLEMENT', 'REVIEW', 'HANDOVER_STUB', 'COMPLETE'];
 
+// State-machine stages (taskmaster_v3.AUTO_STAGES) collapsed onto the 5
+// spine buckets. Anything not listed falls through to itself.
+const STATE_TO_SPINE = {
+  PICK: 'PICK',
+  SPEC_REVIEW: 'PICK',
+  WRITE_TESTS: 'PICK',
+  IMPLEMENT: 'IMPLEMENT',
+  TEST: 'IMPLEMENT',
+  REVIEW_GATE: 'REVIEW',
+  REVIEW: 'REVIEW',
+  HANDOVER_STUB: 'HANDOVER_STUB',
+  END_SESSION: 'HANDOVER_STUB',
+  COMPLETE: 'COMPLETE',
+};
+
+/** Map a state-machine cursor stage onto the 5-stage spine bucket. */
+export function spineStageFor(cursorStage) {
+  if (!cursorStage) return null;
+  return STATE_TO_SPINE[cursorStage] ?? cursorStage;
+}
+
+/** Stages strictly before the cursor's spine bucket — i.e. the ones already done. */
+export function doneStagesForCursor(cursorStage) {
+  const bucket = spineStageFor(cursorStage);
+  if (!bucket) return [];
+  const idx = AUTO_STAGES.indexOf(bucket);
+  return idx > 0 ? AUTO_STAGES.slice(0, idx) : [];
+}
+
 /**
  * Compute spine geometry.
  * @param {object} opts
@@ -21,11 +50,14 @@ export function computeSpineLayout(opts) {
   const step = AUTO_STAGES.length > 1 ? usableH / (AUTO_STAGES.length - 1) : 0;
 
   const completedSet = new Set(completed);
+  // Cursor may be a finer-grained state stage (WRITE_TESTS, TEST, …) — map to
+  // the spine bucket so the active-node compare actually matches.
+  const activeBucket = spineStageFor(cursorStage);
 
   const nodes = AUTO_STAGES.map((stage, i) => {
     let state;
     if (completedSet.has(stage)) state = 'done';
-    else if (stage === cursorStage) state = 'active';
+    else if (stage === activeBucket) state = 'active';
     else state = 'pending';
     return {
       stage,

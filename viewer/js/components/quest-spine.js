@@ -1,7 +1,7 @@
 // Quest Spine — vertical SVG chain with active node + satellites.
 // Reads layout from auto-spine-layout.js; pure render.
 
-import { computeSpineLayout } from './auto-spine-layout.js';
+import { computeSpineLayout, AUTO_STAGES, doneStagesForCursor } from './auto-spine-layout.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -55,7 +55,10 @@ export function renderQuestSpine(root, state) {
   const padding = 50;
 
   const cursorStage = state?.cursor?.stage ?? null;
-  const completed = state?.completed ?? [];
+  // state.completed is per-task completion records (task_id, status, ...) — not
+  // stage names. Derive the per-stage progress for the current task from where
+  // the cursor sits in the lifecycle instead.
+  const completed = doneStagesForCursor(cursorStage);
   const subagents = (state?.subagents ?? []).filter((s) => s.status === 'running');
 
   const layout = computeSpineLayout({

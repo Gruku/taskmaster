@@ -4,6 +4,8 @@ import assert from 'node:assert/strict';
 import {
   AUTO_STAGES,
   computeSpineLayout,
+  spineStageFor,
+  doneStagesForCursor,
 } from '../../js/components/auto-spine-layout.js';
 
 test('AUTO_STAGES is the canonical 5-stage list', () => {
@@ -119,4 +121,45 @@ test('null cursorStage produces all-pending or all-done nodes (no active)', () =
   assert.equal(layout.nodes[0].state, 'done');
   assert.equal(layout.nodes[1].state, 'done');
   assert.equal(layout.nodes[2].state, 'pending');
+});
+
+test('spineStageFor maps state-machine stages onto the 5 spine buckets', () => {
+  assert.equal(spineStageFor('PICK'),          'PICK');
+  assert.equal(spineStageFor('SPEC_REVIEW'),   'PICK');
+  assert.equal(spineStageFor('WRITE_TESTS'),   'PICK');
+  assert.equal(spineStageFor('IMPLEMENT'),     'IMPLEMENT');
+  assert.equal(spineStageFor('TEST'),          'IMPLEMENT');
+  assert.equal(spineStageFor('REVIEW_GATE'),   'REVIEW');
+  assert.equal(spineStageFor('HANDOVER_STUB'), 'HANDOVER_STUB');
+  assert.equal(spineStageFor('END_SESSION'),   'HANDOVER_STUB');
+  assert.equal(spineStageFor('COMPLETE'),      'COMPLETE');
+  assert.equal(spineStageFor(null),            null);
+});
+
+test('doneStagesForCursor returns spine stages strictly before the cursor bucket', () => {
+  assert.deepEqual(doneStagesForCursor('PICK'),          []);
+  assert.deepEqual(doneStagesForCursor('SPEC_REVIEW'),   []); // still in PICK bucket
+  assert.deepEqual(doneStagesForCursor('IMPLEMENT'),     ['PICK']);
+  assert.deepEqual(doneStagesForCursor('TEST'),          ['PICK']); // collapses to IMPLEMENT
+  assert.deepEqual(doneStagesForCursor('REVIEW_GATE'),   ['PICK', 'IMPLEMENT']);
+  assert.deepEqual(doneStagesForCursor('HANDOVER_STUB'), ['PICK', 'IMPLEMENT', 'REVIEW']);
+  assert.deepEqual(doneStagesForCursor('COMPLETE'),      ['PICK', 'IMPLEMENT', 'REVIEW', 'HANDOVER_STUB']);
+  assert.deepEqual(doneStagesForCursor(null),            []);
+});
+
+test('computeSpineLayout: state-machine cursor stages light up the right spine bucket', () => {
+  // cursor at WRITE_TESTS — collapses to PICK bucket; that should be the active node.
+  const layout = computeSpineLayout({
+    cursorStage: 'WRITE_TESTS', completed: [], subagents: [],
+    width: 240, height: 480, padding: 40,
+  });
+  const active = layout.nodes.find((n) => n.state === 'active');
+  assert.equal(active.stage, 'PICK');
+  // cursor at TEST — collapses to IMPLEMENT bucket.
+  const layout2 = computeSpineLayout({
+    cursorStage: 'TEST', completed: ['PICK'], subagents: [],
+    width: 240, height: 480, padding: 40,
+  });
+  const active2 = layout2.nodes.find((n) => n.state === 'active');
+  assert.equal(active2.stage, 'IMPLEMENT');
 });

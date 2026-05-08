@@ -196,10 +196,17 @@
   font-size: 11px; color: var(--ink-2); cursor: pointer;
 }
 .sstrip-tab.on { background: rgba(74,158,255,0.10); border-color: var(--accent); color: var(--ink); }
+.sstrip-tab--done { color: var(--ink-3); }
+.sstrip-tab--done .sstrip-id { color: var(--ink-2); }
+.sstrip-tab--failed .sstrip-id { color: var(--red, #ff6b6b); }
 .sstrip-dot {
   width: 6px; height: 6px; border-radius: 50%;
-  background: var(--green); animation: pulse 1.6s ease-in-out infinite;
+  background: var(--ink-3);
 }
+.sstrip-dot--running { background: var(--green); animation: pulse 1.6s ease-in-out infinite; }
+.sstrip-dot--partial { background: var(--amber, #f5b400); animation: pulse 1.6s ease-in-out infinite; }
+.sstrip-dot--done    { background: var(--ink-3); opacity: 0.55; }
+.sstrip-dot--failed  { background: var(--red, #ff6b6b); }
 .sstrip-id {
   font-family: 'JetBrains Mono', ui-monospace, monospace; color: var(--accent);
 }
