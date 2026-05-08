@@ -4,9 +4,25 @@ const MIN_MS  = 60 * 1000;
 const HOUR_MS = 60 * MIN_MS;
 const DAY_MS  = 24 * HOUR_MS;
 
-/** Parse an ISO8601 timestamp to ms; null/undefined/empty → null. */
+// Matches bare date strings like "2026-05-08" (no time component).
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Parse an ISO8601 timestamp to ms; null/undefined/empty → null.
+ *
+ * Date-only strings ("YYYY-MM-DD") are parsed as LOCAL midnight, not UTC
+ * midnight. ECMAScript treats Date.parse("2026-05-08") as UTC 00:00, which
+ * then shifts to "May 7" when rendered in a western timezone. Parsing as local
+ * midnight preserves the calendar date the backend intended.
+ */
 export function isoToMs(iso) {
   if (!iso) return null;
+  if (DATE_ONLY_RE.test(iso)) {
+    // Parse as local midnight: new Date(year, month-1, day).
+    const [y, mo, d] = iso.split('-').map(Number);
+    const t = new Date(y, mo - 1, d).getTime();
+    return Number.isFinite(t) ? t : null;
+  }
   const t = Date.parse(iso);
   return Number.isFinite(t) ? t : null;
 }
@@ -77,7 +93,12 @@ export function formatRelative(input, opts = {}) {
  * Canonical absolute-time formatter. Accepts iso string, ms number, or Date.
  * Defaults to "May 2, 2026 · 10:30". Toggle parts off via opts.
  * Year auto-suppresses when same as current.
+ *
+ * When given a date-only string ("YYYY-MM-DD"), `time` defaults to false so
+ * that "12:00 AM" is never shown for a date that had no time component.
+ *
  *   formatAbsolute(iso)                       → "May 2, 2026 · 10:30"
+ *   formatAbsolute('2026-05-08')              → "May 8, 2026"  (no time)
  *   formatAbsolute(iso, { time: false })      → "May 2, 2026"
  *   formatAbsolute(iso, { date: false })      → "10:30"
  *   formatAbsolute(iso, { year: false })      → "May 2 · 10:30"
@@ -86,7 +107,9 @@ export function formatRelative(input, opts = {}) {
 export function formatAbsolute(input, opts = {}) {
   const ms = _toMs(input);
   if (ms == null) return '';
-  const { date = true, time = true, year = 'auto', now = Date.now() } = opts;
+  // Date-only strings have no meaningful time — default time to false.
+  const isDateOnly = typeof input === 'string' && DATE_ONLY_RE.test(input);
+  const { date = true, time = isDateOnly ? false : true, year = 'auto', now = Date.now() } = opts;
   const d = new Date(ms);
   const showYear = year === true ? true
                   : year === false ? false
