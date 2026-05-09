@@ -12,6 +12,7 @@ import { renderPhaseStepper }                from '../components/phase-stepper.j
 import { renderEpicChips }                   from '../components/epic-chips.js';
 import { applyFilters, sortTasks, groupTasks, epicsForPhase, STATUS_LABELS } from '../lib/filters.js';
 import { assignEpicColors }                  from '../lib/epics.js';
+import { countActiveTasksByEpic, rankEpics } from '../lib/epic-ranking.js';
 import { claimTopbar, tmAction } from '../lib/topbar.js';
 import { pluralize } from '../util/pluralize.js';
 import { emptyState } from '../components/empty-state.js';
@@ -39,6 +40,11 @@ export async function mount(root, { store, api, prefs }) {
     density: (store.getPrefs() && store.getPrefs().card_density) || 'full',
     collapsed: new Set((store.getPrefs() && store.getPrefs().kanban && store.getPrefs().kanban.collapsed_columns) || []),
   };
+
+  // Pinned epics (in order) and dropdown sort key — persisted under prefs.kanban
+  const persistedKan = (store.getPrefs() && store.getPrefs().kanban) || {};
+  state.pinnedEpics = Array.isArray(persistedKan.pinnedEpics) ? persistedKan.pinnedEpics.slice() : [];
+  state.epicSort    = (typeof persistedKan.epicSort === 'string') ? persistedKan.epicSort : 'count';
 
   // Carousel offsets that survive re-renders (filter changes, backlog refresh).
   const stepperViewState = { pastOffset: 0, futureOffset: 0 };
@@ -247,23 +253,46 @@ export async function mount(root, { store, api, prefs }) {
       : tasks;
     const visibleEpics = epicsForPhase(epicsArr, tasks, phaseFilter);
 
-    const epicRows = visibleEpics.map(ep => ({
-      id:    ep.id,
-      name:  ep.name || ep.id,
-      color: epicColors[ep.id],
-      count: tasksInPhase.filter(t => t.epic === ep.id).length,
-    }));
     const filterCount =
       state.filters.priorities.length +
       state.filters.epics.length +
       (state.filters.phase && state.filters.phase !== '__all__' ? 1 : 0) +
       (state.filters.search ? 1 : 0);
+
+    // Compute active-task counts using full task list (NOT phase-scoped — counts
+    // are global to give pinning a stable signal, while the chip's `count` field
+    // remains phase-scoped so quick chips reflect the current view's volume).
+    const activeCounts = countActiveTasksByEpic(tasks);
+    const ranked = rankEpics(epicsArr.map(ep => ({
+      id: ep.id,
+      name: ep.name || ep.id,
+      color: epicColors[ep.id],
+      status: ep.status || 'active',
+      last_referenced: ep.last_referenced,
+      count: tasksInPhase.filter(t => t.epic === ep.id).length,
+    })), activeCounts);
+
     epicHost.replaceChildren(renderEpicChips({
-      epics: epicRows,
-      active: state.filters.epics,
+      epics: ranked,
+      selectedIds: state.filters.epics,
+      pinnedIds: state.pinnedEpics,
+      activeCounts,
+      sort: state.epicSort,
       filterCount,
-      onToggle: (next) => { state.filters.epics = next; paint(); savePrefs(); },
-      onClear:  ()    => {
+      onToggleEpics: (next) => { state.filters.epics = next; paint(); savePrefs(); },
+      onPinToggle: (id, pinned) => {
+        const list = state.pinnedEpics.filter(x => x !== id);
+        if (pinned) list.push(id);
+        state.pinnedEpics = list;
+        prefs.patch({ kanban: { pinnedEpics: list } });
+        paint();
+      },
+      onSortChange: (next) => {
+        state.epicSort = next;
+        prefs.patch({ kanban: { epicSort: next } });
+        paint();
+      },
+      onClearFilters: () => {
         state.filters = { ...DEFAULT_FILTERS };
         state.collapsed = new Set();
         searchInput.value = '';
