@@ -5093,6 +5093,33 @@ class ViewerHandler(BaseHTTPRequestHandler):
             self._send_json(200, summary)
             return
 
+        m = re.fullmatch(r"/api/handover/([A-Za-z0-9_\-\.]+)/status", self.path)
+        if m:
+            handover_id = m.group(1)
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length).decode("utf-8") if length else ""
+            try:
+                payload = json.loads(raw) if raw else {}
+            except Exception as e:
+                self._send_json(400, {"ok": False, "error": f"invalid JSON: {e}"})
+                return
+            status = payload.get("status", "")
+            reason = payload.get("reason", "")
+            try:
+                from taskmaster_v3 import update_handover_status as _update
+                fm, _ = _update(_backlog_path(), handover_id=handover_id, status=status, reason=reason)
+            except ValueError as exc:
+                self._send_json(400, {"ok": False, "error": str(exc)})
+                return
+            except FileNotFoundError:
+                self._send_json(404, {"ok": False, "error": f"handover not found: {handover_id}"})
+                return
+            data = _load()
+            _sync_handover_index(data, _backlog_path())
+            _save(data)
+            self._send_json(200, {"ok": True, "id": handover_id, "status": fm["status"]})
+            return
+
         if self.path == "/api/tasks/validate":
             length = int(self.headers.get("Content-Length") or 0)
             raw = self.rfile.read(length).decode("utf-8") if length else ""
