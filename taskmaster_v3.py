@@ -1553,16 +1553,14 @@ def _idea_index_line(fm: dict[str, Any]) -> str:
     """Render one IDEAS.md line for an idea record."""
     iid = fm["id"]
     title = fm["title"]
-    status = fm.get("status") or ""
     created = fm.get("created", "")
     # "2026-05-09T14:30:00Z" → "2026-05-09 14:30"
     short = created[:16].replace("T", " ") if isinstance(created, str) else ""
-    suffix = f" _({status})_" if status else ""
-    text = f"- {short} — [{iid}]({iid}.md) — {title}{suffix}"
     if fm.get("archived"):
-        # Strike through title; keep status suffix readable
-        text = f"- {short} — [{iid}]({iid}.md) — ~~{title}~~ _(archived)_"
-    return text
+        return f"- {short} — [{iid}]({iid}.md) — ~~{title}~~ _(archived)_"
+    status = fm.get("status") or ""
+    suffix = f" _({status})_" if status else ""
+    return f"- {short} — [{iid}]({iid}.md) — {title}{suffix}"
 
 
 def _read_ideas_index(backlog_path: Path) -> list[str]:
@@ -1570,7 +1568,7 @@ def _read_ideas_index(backlog_path: Path) -> list[str]:
     p = ideas_index_path(backlog_path)
     if not p.exists():
         return []
-    return [l for l in p.read_text(encoding="utf-8").splitlines() if l.startswith("- ")]
+    return [line for line in p.read_text(encoding="utf-8").splitlines() if line.startswith("- ")]
 
 
 def _write_ideas_index(backlog_path: Path, lines: list[str]) -> None:
@@ -1585,12 +1583,12 @@ def _index_upsert_line(lines: list[str], idea_id: str, new_line: str) -> list[st
     """Replace the line for `idea_id` if present; otherwise prepend (newest first)."""
     out: list[str] = []
     found = False
-    for l in lines:
-        if f"[{idea_id}]" in l:
+    for line in lines:
+        if f"[{idea_id}](" in line:
             out.append(new_line)
             found = True
         else:
-            out.append(l)
+            out.append(line)
     if not found:
         out.insert(0, new_line)
     return out
@@ -1617,7 +1615,6 @@ def write_idea(
     if not title or not title.strip():
         raise ValueError("idea title is required")
     iid = idea_id or next_idea_id(backlog_path)
-    from datetime import datetime, timezone
     created = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     fm: dict[str, Any] = {
         "id": iid,
