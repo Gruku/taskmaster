@@ -20,8 +20,9 @@ const SECTIONS = [
     { key: 'sessions', icon: '⌕', label: 'Sessions', hash: '#/sessions' },
   ]},
   { label: 'Knowledge', items: [
-    { key: 'lessons', icon: '✦', label: 'Lessons', hash: '#/lessons' },
-    { key: 'issues',  icon: '⚠', label: 'Issues',  hash: '#/issues' },
+    { key: 'lessons',  icon: '✦', label: 'Lessons',  hash: '#/lessons' },
+    { key: 'issues',   icon: '⚠', label: 'Issues',   hash: '#/issues' },
+    { key: 'archived', icon: '⌫', label: 'Archived', hash: '#/archived' },
   ]},
 ];
 

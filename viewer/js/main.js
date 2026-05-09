@@ -19,6 +19,7 @@ registerScreen('/issues',     () => import('./screens/issues.js'));
 registerScreen('/issue',      () => import('./screens/issue-detail.js'));
 registerScreen('/auto',       () => import('./screens/auto-mode.js'));
 registerScreen('/recap',      () => import('./screens/recap.js'));
+registerScreen('/archived',   () => import('./screens/archived.js'));
 
 // Prefs writer with debounce — screens call `prefs.patch({...})`.
 let prefsDebounce = null;
