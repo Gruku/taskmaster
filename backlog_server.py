@@ -105,7 +105,6 @@ from taskmaster_v3 import (
     read_idea as _read_idea,
     update_idea as _update_idea,
     list_ideas as _list_ideas,
-    idea_path as _idea_path,
     AUTO_MODES,
     AUTO_STAGES,
     AUTO_TASK_STATUSES,
