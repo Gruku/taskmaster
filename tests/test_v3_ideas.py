@@ -137,3 +137,65 @@ def test_write_idea_sequential_ids(tmp_path):
     b, _ = write_idea(bp, title="b")
     c, _ = write_idea(bp, title="c")
     assert (a, b, c) == ("IDEA-001", "IDEA-002", "IDEA-003")
+
+
+def test_update_idea_status(tmp_path):
+    from taskmaster_v3 import write_idea, update_idea, read_idea
+    bp = tmp_path / ".taskmaster" / "backlog.yaml"
+    bp.parent.mkdir(parents=True)
+    iid, _ = write_idea(bp, title="An idea")
+    update_idea(bp, iid, status="parking-lot")
+    fm, _ = read_idea(bp, iid)
+    assert fm["status"] == "parking-lot"
+
+
+def test_update_idea_archive_sets_flag_and_strikes_index(tmp_path):
+    from taskmaster_v3 import write_idea, update_idea, read_idea, ideas_index_path
+    bp = tmp_path / ".taskmaster" / "backlog.yaml"
+    bp.parent.mkdir(parents=True)
+    iid, _ = write_idea(bp, title="Drop-this idea")
+    update_idea(bp, iid, archived=True)
+    fm, _ = read_idea(bp, iid)
+    assert fm["archived"] is True
+    idx = ideas_index_path(bp).read_text()
+    assert "~~Drop-this idea~~" in idx
+    assert "_(archived)_" in idx
+
+
+def test_update_idea_promote_records_task_id(tmp_path):
+    from taskmaster_v3 import write_idea, update_idea, read_idea
+    bp = tmp_path / ".taskmaster" / "backlog.yaml"
+    bp.parent.mkdir(parents=True)
+    iid, _ = write_idea(bp, title="Becomes a task")
+    update_idea(bp, iid, promoted_to="T-XYZ")
+    fm, _ = read_idea(bp, iid)
+    assert fm["promoted_to"] == "T-XYZ"
+
+
+def test_update_idea_body_replacement(tmp_path):
+    from taskmaster_v3 import write_idea, update_idea, read_idea
+    bp = tmp_path / ".taskmaster" / "backlog.yaml"
+    bp.parent.mkdir(parents=True)
+    iid, _ = write_idea(bp, title="An idea", body="old body")
+    update_idea(bp, iid, body="new body")
+    _, body = read_idea(bp, iid)
+    assert body == "new body"
+
+
+def test_update_idea_preserves_body_when_not_passed(tmp_path):
+    from taskmaster_v3 import write_idea, update_idea, read_idea
+    bp = tmp_path / ".taskmaster" / "backlog.yaml"
+    bp.parent.mkdir(parents=True)
+    iid, _ = write_idea(bp, title="Keep me", body="original body")
+    update_idea(bp, iid, status="exploring")
+    _, body = read_idea(bp, iid)
+    assert body == "original body"
+
+
+def test_update_idea_unknown_id_raises(tmp_path):
+    import pytest as _pytest
+    from taskmaster_v3 import update_idea
+    bp = tmp_path / ".taskmaster" / "backlog.yaml"
+    bp.parent.mkdir(parents=True)
+    with _pytest.raises(FileNotFoundError):
+        update_idea(bp, "IDEA-999", status="exploring")

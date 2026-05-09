@@ -1639,7 +1639,34 @@ def write_idea(
 
 
 def read_idea(backlog_path: Path, idea_id: str) -> tuple[dict[str, Any], str]:
-    return read_task_file(idea_path(backlog_path, idea_id))
+    fm, body = read_task_file(idea_path(backlog_path, idea_id))
+    return fm, body.rstrip("\n")
+
+
+def update_idea(
+    backlog_path: Path,
+    idea_id: str,
+    **updates: Any,
+) -> tuple[dict[str, Any], str]:
+    """Patch an idea's frontmatter and/or body. Returns (fm, body) post-write.
+
+    Body is preserved unchanged unless `body=` is passed. The IDEAS.md line
+    for this idea is rewritten in place to reflect the new title / status /
+    archived flag.
+    """
+    target = idea_path(backlog_path, idea_id)
+    if not target.exists():
+        raise FileNotFoundError(f"Idea not found: {idea_id}")
+    fm, body = read_idea(backlog_path, idea_id)
+    new_body = updates.pop("body", body)
+    # Pass-through merge — accepts None values for promoted_to (un-promote).
+    for k, v in updates.items():
+        fm[k] = v
+    _validate_idea(fm)
+    write_task_file(target, fm, new_body)
+    lines = _index_upsert_line(_read_ideas_index(backlog_path), idea_id, _idea_index_line(fm))
+    _write_ideas_index(backlog_path, lines)
+    return fm, new_body
 
 
 # ── Lesson candidates (deferred + scanning) ───────────────────
