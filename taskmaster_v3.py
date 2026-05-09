@@ -1492,6 +1492,53 @@ def sync_lesson_index(
     return backlog_data
 
 
+# ── Ideas ────────────────────────────────────────────────────
+
+# Required frontmatter fields validated on every write.
+_IDEA_REQUIRED_FIELDS = ("id", "title", "created", "created_by")
+
+# Fields surfaced in the IDEAS.md line + viewer summary list.
+_IDEA_INDEX_LINE_STATUS_KEY = "status"
+
+
+def idea_path(backlog_path: Path, idea_id: str) -> Path:
+    return backlog_path.parent / "ideas" / f"{idea_id}.md"
+
+
+def idea_dir(backlog_path: Path) -> Path:
+    return backlog_path.parent / "ideas"
+
+
+def ideas_index_path(backlog_path: Path) -> Path:
+    return backlog_path.parent / "ideas" / "IDEAS.md"
+
+
+def list_idea_ids(backlog_path: Path) -> list[str]:
+    """List idea ids on disk, sorted numerically by trailing number."""
+    d = idea_dir(backlog_path)
+    if not d.exists():
+        return []
+
+    def _rank(p: Path) -> int:
+        m = re.search(r"(\d+)$", p.stem)
+        return int(m.group(1)) if m else -1
+
+    files = sorted(d.glob("IDEA-*.md"), key=_rank)
+    return [p.stem for p in files]
+
+
+def next_idea_id(backlog_path: Path) -> str:
+    """Allocate the next IDEA-NNN id (zero-padded, 3+ digits)."""
+    existing = list_idea_ids(backlog_path)
+    nums: list[int] = []
+    for ident in existing:
+        m = re.search(r"(\d+)$", ident)
+        if m:
+            nums.append(int(m.group(1)))
+    n = (max(nums) + 1) if nums else 1
+    return f"IDEA-{n:03d}"
+
+
 # ── Lesson candidates (deferred + scanning) ───────────────────
 
 LESSON_CANDIDATE_KINDS = ("pattern", "anti-pattern", "gotcha")
