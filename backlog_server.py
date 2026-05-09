@@ -3002,6 +3002,17 @@ def backlog_complete_task(
     if target_status == "done":
         _clear_session_task(task_id)
 
+    if target_status == "done":
+        try:
+            from taskmaster_v3 import mark_task_handovers_complete as _mark_complete
+            flipped_handovers = _mark_complete(_backlog_path(), task_id)
+        except Exception:
+            flipped_handovers = []
+        if flipped_handovers:
+            data2 = _load()
+            _sync_handover_index(data2, _backlog_path())
+            _save(data2)
+
     # Append changelog entry if session summary provided
     changelog_msg = ""
     if auto_summary:

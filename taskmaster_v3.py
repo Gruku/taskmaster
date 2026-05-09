@@ -984,6 +984,33 @@ def update_handover_status(
     return fm, target
 
 
+def mark_task_handovers_complete(backlog_path: Path, task_id: str) -> list[str]:
+    """Flip every todo handover whose primary task (`task_ids[0]`) is `task_id`
+    to `done`. Skips user-set, already-done, and handovers where task_id is
+    only a secondary reference. Returns the list of handover ids modified."""
+    if not task_id:
+        return []
+    flipped: list[str] = []
+    for hid in list_handover_ids(backlog_path):
+        try:
+            fm, body = read_handover(backlog_path, hid)
+        except (OSError, ValueError):
+            continue
+        ids = fm.get("task_ids") or []
+        if not ids or ids[0] != task_id:
+            continue
+        if fm.get("status_user_set"):
+            continue
+        if fm.get("status") == "done":
+            continue
+        fm["status"] = "done"
+        fm["status_changed"] = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+        fm["status_reason"] = f"task {task_id} completed"
+        write_task_file(handover_path(backlog_path, hid), fm, body)
+        flipped.append(hid)
+    return flipped
+
+
 # Fields kept in the backlog.yaml `handovers:` index entry.
 _HANDOVER_INDEX_FIELDS = (
     "id", "date", "created", "tldr", "next_action",
