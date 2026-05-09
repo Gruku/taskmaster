@@ -410,3 +410,74 @@
     font-size: var(--text-base);
   }
 }
+
+/* -------------------------------------------------------------------------
+   Handover status pill — three states with tinted backgrounds + tinted
+   full-perimeter borders.
+   No left-border stripes (per project UI rules); no transform on hover.
+   Token fallbacks use literal RGBA since --amber-tint-bg etc. are not in
+   tokens.css; existing tokens --amber, --green, --ink-3 are referenced for
+   foreground where available.
+   ------------------------------------------------------------------------- */
+.ho-status-pill {
+  display: inline-block;
+  padding: 1px 8px;
+  margin-right: 8px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  cursor: pointer;
+  background: transparent;
+  vertical-align: middle;
+  line-height: 1.6;
+}
+.ho-status-pill-todo {
+  background: rgba(214, 164, 95, 0.10);   /* --amber hue tint */
+  border-color: rgba(214, 164, 95, 0.35);
+  color: var(--amber, #d6a45f);
+}
+.ho-status-pill-in-progress {
+  background: rgba(74, 158, 255, 0.10);   /* --accent blue tint */
+  border-color: rgba(74, 158, 255, 0.35);
+  color: var(--accent, #4a9eff);
+}
+.ho-status-pill-done {
+  background: rgba(136, 136, 136, 0.10);  /* neutral muted tint */
+  border-color: rgba(136, 136, 136, 0.30);
+  color: var(--ink-3, #7c8290);
+}
+.ho-status-pill:hover {
+  filter: brightness(1.15);
+}
+
+/* Status override dropdown menu */
+.ho-status-menu {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-card, #1f2025);
+  border: 1px solid var(--border-strong, #3a3b42);
+  border-radius: var(--r-sm, 6px);
+  z-index: 1000;
+  min-width: 140px;
+  padding: 4px 0;
+}
+.ho-status-menu-item {
+  padding: 6px 12px;
+  text-align: left;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--text-xs, 12px);
+  color: var(--ink, #e6e7eb);
+}
+.ho-status-menu-item:hover {
+  background: var(--bg-card-hover, #25262c);
+}
+.ho-status-menu-item.is-current {
+  font-weight: 600;
+  color: var(--accent, #4a9eff);
+}

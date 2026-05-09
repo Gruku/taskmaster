@@ -717,9 +717,14 @@ class TestHandoverIndex:
         data: dict = {}
         v3.sync_handover_index(data, bp)
         entry = data["handovers"][0]
-        # id, date, tldr, next_action, task_ids, session_kind
-        assert set(entry.keys()) <= {"id", "date", "tldr", "next_action", "task_ids", "session_kind"}
+        # id, date, tldr, next_action, task_ids, session_kind, status, created
+        # status and created were added by the handover-status feature (Tasks 1-12)
+        assert set(entry.keys()) <= {
+            "id", "date", "tldr", "next_action", "task_ids", "session_kind",
+            "status", "created",
+        }
         assert entry["session_kind"] == "end-of-day"
+        assert entry["status"] in {"todo", "in-progress", "done"}
 
     def test_archive_year_inferred(self, tmp_path: Path):
         bp = self._bp(tmp_path)

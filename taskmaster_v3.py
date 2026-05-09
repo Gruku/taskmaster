@@ -704,6 +704,16 @@ HANDOVER_KINDS = (
     "auto-stage",
 )
 
+# Three-state lifecycle for handovers — see specs/2026-05-09-handover-status-design.md
+HANDOVER_STATUSES = ("todo", "in-progress", "done")
+
+
+def _default_handover_status(session_kind: str) -> str:
+    """auto-stage handovers are bookkeeping checkpoints — born done. All other
+    kinds default to todo so the user explicitly clears their backlog."""
+    return "done" if session_kind == "auto-stage" else "todo"
+
+
 # Index cap — `handovers:` array in backlog.yaml is bounded.
 HANDOVER_INDEX_CAP = 30
 
@@ -801,6 +811,9 @@ def write_handover(
         "task_ids": list(task_ids or []),
         "session_kind": session_kind,
     }
+    fm["status"] = _default_handover_status(session_kind)
+    fm["status_changed"] = fm["created"]
+    fm["status_user_set"] = False
     if context_size_at_write:
         fm["context_size_at_write"] = context_size_at_write
     if supersedes:
@@ -901,6 +914,11 @@ def apply_supersession(backlog_path: Path, *, old_id: str, new_id: str) -> Path:
     fm, body = read_handover(backlog_path, old_id)
     fm["superseded_by"] = new_id
 
+    if not fm.get("status_user_set"):
+        fm["status"] = "done"
+        fm["status_changed"] = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+        fm["status_reason"] = f"superseded by {new_id}"
+
     today = date.today().isoformat()
     callout = (
         f"> **SUPERSEDED {today} by [{new_id}](./{new_id}.md).**\n"
@@ -936,8 +954,135 @@ def apply_handover_review_flag(
     return target
 
 
+def update_handover_status(
+    backlog_path: Path,
+    *,
+    handover_id: str,
+    status: str,
+    reason: str = "",
+) -> tuple[dict[str, Any], Path]:
+    """Explicit user-driven status change. Sets status_user_set: true so
+    subsequent auto-transitions skip this handover.
+
+    Passing an empty `reason` preserves any existing `status_reason` rather
+    than clearing it. Pass an explicit non-empty value to overwrite.
+
+    Raises ValueError on bad enum, FileNotFoundError if missing.
+    """
+    if status not in HANDOVER_STATUSES:
+        raise ValueError(f"status must be one of {HANDOVER_STATUSES}, got {status!r}")
+    target = handover_path(backlog_path, handover_id)
+    if not target.exists():
+        raise FileNotFoundError(handover_id)
+    fm, body = read_handover(backlog_path, handover_id)
+    fm["status"] = status
+    fm["status_changed"] = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+    fm["status_user_set"] = True
+    if reason:
+        fm["status_reason"] = reason
+    write_task_file(target, fm, body)
+    return fm, target
+
+
+def mark_task_handovers_complete(backlog_path: Path, task_id: str) -> list[str]:
+    """Flip every todo handover whose primary task (`task_ids[0]`) is `task_id`
+    to `done`. Skips user-set, already-done, and handovers where task_id is
+    only a secondary reference. Returns the list of handover ids modified."""
+    if not task_id:
+        return []
+    flipped: list[str] = []
+    for hid in list_handover_ids(backlog_path):
+        try:
+            fm, body = read_handover(backlog_path, hid)
+        except (OSError, ValueError):
+            continue
+        ids = fm.get("task_ids") or []
+        if not ids or ids[0] != task_id:
+            continue
+        if fm.get("status_user_set"):
+            continue
+        if fm.get("status") == "done":
+            continue
+        fm["status"] = "done"
+        fm["status_changed"] = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+        fm["status_reason"] = f"task {task_id} completed"
+        write_task_file(handover_path(backlog_path, hid), fm, body)
+        flipped.append(hid)
+    return flipped
+
+
+def mark_task_handovers_resumed(backlog_path: Path, task_id: str) -> list[str]:
+    """Flip todo handovers whose primary task is `task_id` to `in-progress`.
+    Conservative: only the latest todo handover for that task is touched, so
+    incidental views don't churn unrelated history. Skips user-set and any
+    already-non-todo entries. Returns the list of ids modified."""
+    if not task_id:
+        return []
+    for hid in list_handover_ids(backlog_path):  # newest-first
+        try:
+            fm, body = read_handover(backlog_path, hid)
+        except (OSError, ValueError):
+            continue
+        ids = fm.get("task_ids") or []
+        if not ids or ids[0] != task_id:
+            continue
+        if fm.get("status_user_set"):
+            return []
+        if fm.get("status") != "todo":
+            return []  # latest is already in-progress or done — leave history alone
+        fm["status"] = "in-progress"
+        fm["status_changed"] = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+        fm["status_reason"] = "resumed in session"
+        write_task_file(handover_path(backlog_path, hid), fm, body)
+        return [hid]
+    return []
+
+
+def backfill_handover_status(backlog_data: dict[str, Any], backlog_path: Path) -> list[str]:
+    """One-time pass: stamp `status: done` on every handover lacking the field,
+    plus archived handovers, then mark the backlog as backfilled.
+
+    No-op if `handover_status_backfilled` is already truthy. Returns the list
+    of handover ids that were modified.
+    """
+    if backlog_data.get("handover_status_backfilled"):
+        return []
+    flipped: list[str] = []
+    handovers_root = handover_dir(backlog_path)
+    archive_root = handovers_root / "_archive"
+    candidates: list[Path] = []
+    if handovers_root.exists():
+        candidates.extend(p for p in handovers_root.glob("*.md"))
+    if archive_root.exists():
+        candidates.extend(archive_root.rglob("*.md"))
+    for path in candidates:
+        try:
+            fm, body = read_task_file(path)
+        except (OSError, ValueError):
+            continue
+        if "status" in fm:
+            continue
+        try:
+            mtime_iso = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat(
+                timespec="microseconds"
+            )
+        except OSError:
+            mtime_iso = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+        fm["status"] = "done"
+        fm["status_changed"] = mtime_iso
+        fm["status_reason"] = "backfilled by handover-status migration"
+        fm["status_user_set"] = False
+        write_task_file(path, fm, body)
+        flipped.append(path.stem)
+    backlog_data["handover_status_backfilled"] = True
+    return flipped
+
+
 # Fields kept in the backlog.yaml `handovers:` index entry.
-_HANDOVER_INDEX_FIELDS = ("id", "date", "created", "tldr", "next_action", "task_ids", "session_kind")
+_HANDOVER_INDEX_FIELDS = (
+    "id", "date", "created", "tldr", "next_action",
+    "task_ids", "session_kind", "status",
+)
 
 
 def _handover_index_entry(fm: dict[str, Any]) -> dict[str, Any]:
@@ -2570,6 +2715,15 @@ def list_sessions() -> list[dict]:
             "end": end.isoformat(),
             "duration": int((end - start).total_seconds()),
             "handover_ids": [h["id"] for h in group],
+            "handovers": [
+                {
+                    "id": h["id"],
+                    "status": h.get("status", "todo"),
+                    "viewer_kind": HANDOVER_KIND_TO_VIEWER_KIND.get(h.get("session_kind"), "standalone"),
+                    "tldr": h.get("tldr", ""),
+                }
+                for h in group
+            ],
             "recap_id": sid if sid in recap_ids else None,
             "task_ids": tids,
             "parallel_with": [],   # filled below

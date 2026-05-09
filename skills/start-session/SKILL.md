@@ -25,6 +25,14 @@ The user is arriving at the start of a conversation — they've lost context sin
 
 2d. **Latest handover.** Call `backlog_handover_latest` to get the previous session's handover frontmatter (tldr + next_action + linked task ids). If it exists, surface it prominently in the briefing — it's the "where I left off" anchor. If the frontmatter shows `session_kind: context-handoff`, this was a deliberate handoff written near compaction; offer to fetch the full body via `backlog_handover_get <id>` if the user wants the long version.
 
+2d-bis. **Stale-todo handover counter.** Call `backlog_handover_list(status="todo", limit=30)`. If the count is **≥ 2**, surface a single line below the latest-handover line in the briefing:
+
+> **N todo handovers** — oldest from `<YYYY-MM-DD from earliest id>`. Run `taskmaster:handover triage` to clear.
+
+If the count is 0 or 1, skip silently — the latest-handover line already covers the single-todo case. The threshold avoids noise when only the active handover is `todo`.
+
+The list returns slim entries (no bodies); the date prefix on the oldest id is the user-visible "how stale" anchor.
+
 2e. **Open issues by severity.** Call `backlog_issue_list(status="open", limit=10)`. The list is already pre-sorted P0 → P3 by the index sync. Keep all returned entries in working context — they're the "what's broken right now" anchor. P0/P1 entries get a visual flag in the briefing (step 3). If the list is empty ("No issues yet."), skip silently and don't render the section.
 
 3. **Present a structured briefing to the user:**

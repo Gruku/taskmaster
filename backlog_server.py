@@ -73,6 +73,7 @@ from taskmaster_v3 import (
     read_handover as _read_handover,
     apply_supersession as _apply_supersession,
     apply_handover_review_flag as _apply_handover_review_flag,
+    update_handover_status as _update_handover_status,
     list_handover_ids as _list_handover_ids,
     latest_handover_id as _latest_handover_id,
     sync_handover_index as _sync_handover_index,
@@ -124,6 +125,31 @@ from taskmaster_v3 import (
     snapshot_diff as _snapshot_diff,
     read_hook_events as _read_hook_events,
 )
+
+
+_HANDOVER_STATUS_BACKFILL_RAN = False
+
+
+def _ensure_handover_status_backfilled() -> None:
+    global _HANDOVER_STATUS_BACKFILL_RAN
+    if _HANDOVER_STATUS_BACKFILL_RAN:
+        return
+    bp = _backlog_path()
+    if not bp.exists():
+        return
+    try:
+        data = _load()
+    except Exception:
+        return
+    if data.get("handover_status_backfilled"):
+        _HANDOVER_STATUS_BACKFILL_RAN = True
+        return
+    from taskmaster_v3 import backfill_handover_status as _bf
+    flipped = _bf(data, bp)
+    if flipped or "handover_status_backfilled" in data:
+        _sync_handover_index(data, bp)
+        _save(data)
+    _HANDOVER_STATUS_BACKFILL_RAN = True
 
 
 def _load_auto_state():
@@ -1593,6 +1619,7 @@ def backlog_handover_create(
     bp = _backlog_path()
     if not bp.exists():
         return f"Error: no backlog found at {bp}. Run `backlog_init` first."
+    _ensure_handover_status_backfilled()
     try:
         hid, target = _write_handover(
             bp,
@@ -1651,6 +1678,7 @@ def backlog_handover_list(
     task_id: str = "",
     session_kind: str = "",
     since: str = "",
+    status: str = "all",
     limit: int = 10,
 ) -> str:
     """List recent handovers (slim metadata only — no bodies).
@@ -1665,11 +1693,14 @@ def backlog_handover_list(
             (e.g. "end-of-day", "context-handoff", "milestone-complete").
         since: ISO date string (YYYY-MM-DD). If set, only entries whose
             date prefix is >= since. Raises ValueError for invalid formats.
+        status: One of todo, in-progress, done, or "all" (default). Filters
+            against the index entry — does not read every file.
         limit: Maximum number of entries to return after filtering (default 10).
     """
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
+    _ensure_handover_status_backfilled()
     data = _load()
     entries = list(data.get("handovers") or [])
 
@@ -1689,11 +1720,17 @@ def backlog_handover_list(
     if since:
         entries = [e for e in entries if e.get("id", "") >= since]
 
+    from taskmaster_v3 import HANDOVER_STATUSES as _STATUSES
+    if status and status != "all":
+        if status not in _STATUSES:
+            return f"Error: status must be one of {_STATUSES} or 'all', got {status!r}."
+        entries = [e for e in entries if e.get("status") == status]
+
     # Truncate to limit after all filters.
     entries = entries[: max(1, limit)]
 
     if not entries:
-        filtered = any([task_id, session_kind, since])
+        filtered = any([task_id, session_kind, since, status != "all"])
         return "No handovers match those filters." if filtered else "No handovers yet."
 
     lines = []
@@ -1716,6 +1753,7 @@ def backlog_handover_get(handover_id: str) -> str:
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
+    _ensure_handover_status_backfilled()
     try:
         fm, body = _read_handover(bp, handover_id)
     except FileNotFoundError:
@@ -1741,6 +1779,7 @@ def backlog_handover_latest() -> str:
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
+    _ensure_handover_status_backfilled()
     hid = _latest_handover_id(bp)
     if not hid:
         return "No handovers yet."
@@ -1767,6 +1806,7 @@ def backlog_handover_resync() -> str:
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
+    _ensure_handover_status_backfilled()
     data = _load()
     _sync_handover_index(data, bp)
     _save(data)
@@ -1790,11 +1830,44 @@ def backlog_handover_supersede(old_id: str, new_id: str) -> str:
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
+    _ensure_handover_status_backfilled()
     try:
         old_path = _apply_supersession(bp, old_id=old_id, new_id=new_id)
     except FileNotFoundError as exc:
         return f"Error: handover not found: {exc}."
     return f"Superseded {old_id} → {new_id} ({old_path.name} updated)."
+
+
+@mcp.tool()
+def backlog_handover_update_status(
+    handover_id: str,
+    status: str,
+    reason: str = "",
+) -> str:
+    """Manually set a handover's status (todo / in-progress / done).
+
+    Marks status_user_set: true — subsequent auto-transitions (supersession,
+    task-complete, resume) will skip this handover.
+
+    Args:
+        handover_id: The handover id (e.g. "2026-05-09-shipped-x").
+        status: One of todo, in-progress, done.
+        reason: Optional free-text rationale stored as `status_reason`.
+    """
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    _ensure_handover_status_backfilled()
+    try:
+        fm, _ = _update_handover_status(bp, handover_id=handover_id, status=status, reason=reason)
+    except ValueError as exc:
+        return f"Error: {exc}"
+    except FileNotFoundError:
+        return f"Handover not found: {handover_id}"
+    data = _load()
+    _sync_handover_index(data, bp)
+    _save(data)
+    return f"Handover {handover_id} → status={fm['status']} (user-set)."
 
 
 @mcp.tool()
@@ -2779,6 +2852,15 @@ def backlog_pick_task(task_id: str, force: bool = False) -> str:
         branch = task.get("branch", "")
         worktree = task.get("worktree", "")
         worktree_instruction = _build_worktree_instruction(task_id, sub_repo, branch, worktree)
+        try:
+            from taskmaster_v3 import mark_task_handovers_resumed as _mark_resumed
+            flipped = _mark_resumed(_backlog_path(), task_id)
+            if flipped:
+                data2 = _load()
+                _sync_handover_index(data2, _backlog_path())
+                _save(data2)
+        except Exception:
+            pass
         return f"Already in progress: `{task_id}` — {task['title']}\n\n" + _task_context(data, task, epic) + worktree_instruction
 
     if status not in ("todo", "in-review"):
@@ -2797,6 +2879,16 @@ def backlog_pick_task(task_id: str, force: bool = False) -> str:
     branch = task.get("branch", "")
     worktree = task.get("worktree", "")
     worktree_instruction = _build_worktree_instruction(task_id, sub_repo, branch, worktree)
+
+    try:
+        from taskmaster_v3 import mark_task_handovers_resumed as _mark_resumed
+        flipped = _mark_resumed(_backlog_path(), task_id)
+        if flipped:
+            data2 = _load()
+            _sync_handover_index(data2, _backlog_path())
+            _save(data2)
+    except Exception:
+        pass
 
     return f"Picked `{task_id}` — {task['title']} (locked to this session)\n\n" + _task_context(data, task, epic) + worktree_instruction
 
@@ -2960,6 +3052,17 @@ def backlog_complete_task(
     _mutate_and_save(data)
     if target_status == "done":
         _clear_session_task(task_id)
+
+    if target_status == "done":
+        try:
+            from taskmaster_v3 import mark_task_handovers_complete as _mark_complete
+            flipped_handovers = _mark_complete(_backlog_path(), task_id)
+        except Exception:
+            flipped_handovers = []
+        if flipped_handovers:
+            data2 = _load()
+            _sync_handover_index(data2, _backlog_path())
+            _save(data2)
 
     # Append changelog entry if session summary provided
     changelog_msg = ""
@@ -4529,6 +4632,7 @@ def _load_related_for_task(task_id: str) -> dict | None:
                     "kind": fm.get("kind"),
                     "session": fm.get("session"),
                     "created": fm.get("created"),
+                    "status": fm.get("status", "todo"),
                     "quote": body.strip().splitlines()[0] if body.strip() else "",
                     "_path": str(f),
                 })
@@ -4988,6 +5092,33 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 self._send_json(400, {"ok": False, "error": str(e)})
                 return
             self._send_json(200, summary)
+            return
+
+        m = re.fullmatch(r"/api/handover/([A-Za-z0-9_\-\.]+)/status", self.path)
+        if m:
+            handover_id = m.group(1)
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length).decode("utf-8") if length else ""
+            try:
+                payload = json.loads(raw) if raw else {}
+            except Exception as e:
+                self._send_json(400, {"ok": False, "error": f"invalid JSON: {e}"})
+                return
+            status = payload.get("status", "")
+            reason = payload.get("reason", "")
+            try:
+                from taskmaster_v3 import update_handover_status as _update
+                fm, _ = _update(_backlog_path(), handover_id=handover_id, status=status, reason=reason)
+            except ValueError as exc:
+                self._send_json(400, {"ok": False, "error": str(exc)})
+                return
+            except FileNotFoundError:
+                self._send_json(404, {"ok": False, "error": f"handover not found: {handover_id}"})
+                return
+            data = _load()
+            _sync_handover_index(data, _backlog_path())
+            _save(data)
+            self._send_json(200, {"ok": True, "id": handover_id, "status": fm["status"]})
             return
 
         if self.path == "/api/tasks/validate":

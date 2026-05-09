@@ -4,6 +4,7 @@ import { listSessions, getSessionDetail } from '../api.js';
 import { claimTopbar, tmSubcount, tmSearch, tmSegmented, tmAction } from '../lib/topbar.js';
 import { pluralize } from '../util/pluralize.js';
 import { emptyState } from '../components/empty-state.js';
+import { chipClickNext } from '../util/chip-toggle.js';
 
 export const meta = { title: 'Sessions', icon: '⊕', sidebarKey: 'sessions' };
 
@@ -31,6 +32,11 @@ export async function mount(root, { params, store, prefs }) {
         <span class="sessions-kind-chip recap on" data-kind="recap">
           <span class="dot"></span> Recaps <span class="ct">0</span>
         </span>
+      </div>
+      <div class="handover-status-chips" data-role="ho-status">
+        <span class="status-chip on" data-status="todo">todo <span class="ct">0</span></span>
+        <span class="status-chip on" data-status="in-progress">in-progress <span class="ct">0</span></span>
+        <span class="status-chip" data-status="done">done <span class="ct">0</span></span>
       </div>
       <div class="right-rail-host" data-role="rail-host"></div>
       <div class="sessions-mount" data-role="mount"></div>
@@ -77,16 +83,24 @@ export async function mount(root, { params, store, prefs }) {
   topbar?.appendChild(newNoteBtn);
 
   const rail = new RightRail({ width: 480 });
+  const persistedStatus = (prefsData.screens?.sessions?.handoverStatus) || ['todo', 'in-progress'];
   const state = {
     sessions: [],
     detailCache: new Map(),
     view: prefs.screens.sessions.view,
     kinds: { session: true, handover: true, recap: true },
+    handoverStatus: new Set(persistedStatus),
     searchTerm: '',
     selectedSessionId: params && params.id || null,
   };
 
   bindKindChips(root, state, () => render(root, state, rail));
+  bindStatusChips(root, state, () => {
+    window.dispatchEvent(new CustomEvent('viewer:prefs-patch', {
+      detail: { screens: { sessions: { handoverStatus: [...state.handoverStatus] } } },
+    }));
+    render(root, state, rail);
+  });
 
   state.sessions = await listSessions();
   refreshKindCounts(root, state.sessions, subcount);
@@ -121,6 +135,34 @@ function bindKindChips(root, state, onChange) {
       chip.classList.toggle('on', state.kinds[k]);
       onChange();
     });
+  }
+}
+
+function bindStatusChips(root, state, onChange) {
+  const row = root.querySelector('[data-role=ho-status]');
+  for (const chip of row.querySelectorAll('.status-chip')) {
+    chip.addEventListener('click', (ev) => {
+      const next = new Set(chipClickNext(ev, [...state.handoverStatus], chip.dataset.status));
+      state.handoverStatus = next;
+      for (const c of row.querySelectorAll('.status-chip')) {
+        c.classList.toggle('on', next.has(c.dataset.status));
+      }
+      onChange();
+    });
+  }
+}
+
+function refreshStatusChipCounts(root, handovers) {
+  const counts = { todo: 0, 'in-progress': 0, done: 0 };
+  for (const meta of Object.values(handovers)) {
+    const s = meta.status || 'todo';
+    if (counts[s] != null) counts[s] += 1;
+  }
+  const row = root.querySelector('[data-role=ho-status]');
+  if (!row) return;
+  for (const chip of row.querySelectorAll('.status-chip')) {
+    const ct = chip.querySelector('.ct');
+    if (ct) ct.textContent = String(counts[chip.dataset.status] || 0);
   }
 }
 
@@ -165,10 +207,30 @@ function render(root, state, rail) {
       }))
     : [];
 
-  const handovers = {}; // id → {viewer_kind, tldr}
+  const handovers = {}; // id → {viewer_kind, tldr, status}
   for (const s of state.sessions) {
     for (const hid of s.handover_ids || []) {
-      handovers[hid] = handovers[hid] || { id: hid, viewer_kind: 'standalone', tldr: '' };
+      if (!handovers[hid]) {
+        // Look up status from session metadata if available; default to 'todo' for legacy entries.
+        const meta = (s.handovers || []).find(h => h.id === hid) || {};
+        handovers[hid] = {
+          id: hid,
+          viewer_kind: meta.viewer_kind || 'standalone',
+          tldr: meta.tldr || '',
+          status: meta.status || 'todo',
+        };
+      }
+    }
+  }
+
+  // Refresh chip counts using the unfiltered map.
+  refreshStatusChipCounts(root, handovers);
+
+  // Apply status filter — handovers whose status is not in the active set are excluded.
+  const filteredHandovers = {};
+  for (const [hid, meta] of Object.entries(handovers)) {
+    if (state.handoverStatus.has(meta.status || 'todo')) {
+      filteredHandovers[hid] = meta;
     }
   }
 
@@ -195,7 +257,7 @@ function render(root, state, rail) {
 
   renderTimeline(mount, {
     sessions: visibleSessions,
-    handovers,
+    handovers: filteredHandovers,
     independent,
     dimmedIds,
     onSelect: ({ kind, id }) => {
@@ -227,7 +289,18 @@ async function openHandoverDetail(rail, hid, state) {
   rail.open({
     kind: 'handover',
     render: () => renderHandoverRail(h, owner),
-    onMount: (el) => bindRailClose(el, rail),
+    onMount: (el) => {
+      const cleanup = bindRailClose(el, rail);
+      const pill = el.querySelector('.ho-status-pill');
+      if (pill) {
+        pill.addEventListener('click', () => {
+          import('../components/right-rail.js').then(({ openStatusMenu }) => {
+            openStatusMenu(pill, h.id, h.status || 'todo');
+          });
+        });
+      }
+      return cleanup;
+    },
   });
 }
 
@@ -256,9 +329,13 @@ function renderSessionRail(detail) {
 
 function renderHandoverRail(h, owner) {
   const fp = `.taskmaster/handovers/${h.id}.md`;
+  const status = h.status || 'todo';
   return (
     `<div class="rr-h">`
     + `<span class="kind-pill handover">${escapeHtml(h.viewer_kind.toUpperCase())}</span>`
+    + `<span class="ho-status-pill ho-status-pill-${escapeHtml(status)}" `
+    +   `data-handover-id="${escapeHtml(h.id)}" data-status="${escapeHtml(status)}" `
+    +   `title="Status: ${escapeHtml(status)} — click to change">${escapeHtml(status)}</span>`
     + `<span class="ts">${escapeHtml(h.date || '')}</span>`
     + `<span class="actions">`
     + `<button class="ic-btn" title="Edit — coming soon" disabled>✎</button>`

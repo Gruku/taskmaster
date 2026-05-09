@@ -70,10 +70,66 @@ function panelHandovers(handovers) {
      ...handovers.map((ho) => {
        const when = formatHandoverTime(ho.created);
        const idLine = `${ho.id} · ${ho.kind || ''}${when ? ` · ${when}` : ''}`;
+       const status = ho.status || 'todo';
        return h('div', { class: `td-handover td-handover-${ho.kind || 'mid-task'}` },
-         [h('div', { class: 'mono td-handover-id' }, idLine),
+         [statusPill(ho.id, status),
+          h('div', { class: 'mono td-handover-id' }, idLine),
           h('blockquote', { class: 'serif td-handover-quote' }, `"${ho.quote || ''}"`)]);
      })]);
+}
+
+export function statusPill(handoverId, status) {
+  return h('button', {
+    class: `ho-status-pill ho-status-pill-${status}`,
+    'data-handover-id': handoverId,
+    'data-status': status,
+    title: `Status: ${status} — click to change`,
+    on: { click: (ev) => openStatusMenu(ev.currentTarget, handoverId, ev.currentTarget.dataset.status) },
+  }, status);
+}
+
+export function openStatusMenu(anchor, handoverId, currentStatus) {
+  document.querySelectorAll('.ho-status-menu').forEach((m) => m.remove());
+  const menu = document.createElement('div');
+  menu.className = 'ho-status-menu';
+  for (const opt of ['todo', 'in-progress', 'done']) {
+    const item = document.createElement('button');
+    item.className = `ho-status-menu-item${opt === currentStatus ? ' is-current' : ''}`;
+    item.textContent = opt;
+    item.addEventListener('click', async () => {
+      menu.remove();
+      try {
+        await fetch(`/api/handover/${encodeURIComponent(handoverId)}/status`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ status: opt, reason: 'viewer-override' }),
+        });
+        // Patch every pill rendered for this handover (right-rail panel and session-detail rail)
+        for (const pill of document.querySelectorAll(`.ho-status-pill[data-handover-id="${CSS.escape(handoverId)}"]`)) {
+          pill.classList.remove('ho-status-pill-todo', 'ho-status-pill-in-progress', 'ho-status-pill-done');
+          pill.classList.add(`ho-status-pill-${opt}`);
+          pill.setAttribute('data-status', opt);
+          pill.textContent = opt;
+          pill.title = `Status: ${opt} — click to change`;
+        }
+        window.dispatchEvent(new CustomEvent('viewer:handover-status-changed', {
+          detail: { id: handoverId, status: opt },
+        }));
+      } catch {}
+    });
+    menu.appendChild(item);
+  }
+  const rect = anchor.getBoundingClientRect();
+  menu.style.position = 'absolute';
+  menu.style.top = `${rect.bottom + window.scrollY}px`;
+  menu.style.left = `${rect.left + window.scrollX}px`;
+  document.body.appendChild(menu);
+  setTimeout(() => {
+    const off = (e) => {
+      if (!menu.contains(e.target)) { menu.remove(); document.removeEventListener('click', off); }
+    };
+    document.addEventListener('click', off);
+  }, 0);
 }
 
 function formatHandoverTime(iso) {
