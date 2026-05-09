@@ -25,3 +25,18 @@ If a handover is `milestone-complete` or `pivot` and you're triaging it, prefer
 the supersede path — it preserves the chain plus the SUPERSEDED callout in
 the old file. The auto-flip-to-done in `apply_supersession` makes this a
 single-step operation from the user's perspective.
+
+## Triage order
+
+Process newest handovers first. The most recent context is the most likely to
+be in-progress or still relevant; stale ones at the bottom of the list are the
+safest to mark done automatically. This ordering also means that if the user
+aborts triage mid-session, the most valuable decisions have already been made.
+
+## Status semantics during triage
+
+- `todo` → the handover has not been resumed. If it's older than 14 days, offer
+  `done` (if the work shipped), `in-progress` (if still being worked), or skip.
+- `in-progress` → already picked up. Skip unless the user explicitly wants to
+  revisit.
+- `done` → already resolved. Never surface these during triage.
