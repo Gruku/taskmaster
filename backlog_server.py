@@ -4632,6 +4632,7 @@ def _load_related_for_task(task_id: str) -> dict | None:
                     "kind": fm.get("kind"),
                     "session": fm.get("session"),
                     "created": fm.get("created"),
+                    "status": fm.get("status", "todo"),
                     "quote": body.strip().splitlines()[0] if body.strip() else "",
                     "_path": str(f),
                 })

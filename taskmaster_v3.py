@@ -2715,6 +2715,15 @@ def list_sessions() -> list[dict]:
             "end": end.isoformat(),
             "duration": int((end - start).total_seconds()),
             "handover_ids": [h["id"] for h in group],
+            "handovers": [
+                {
+                    "id": h["id"],
+                    "status": h.get("status", "todo"),
+                    "viewer_kind": HANDOVER_KIND_TO_VIEWER_KIND.get(h.get("session_kind"), "standalone"),
+                    "tldr": h.get("tldr", ""),
+                }
+                for h in group
+            ],
             "recap_id": sid if sid in recap_ids else None,
             "task_ids": tids,
             "parallel_with": [],   # filled below
