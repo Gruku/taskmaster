@@ -50,10 +50,14 @@ export function renderArchivedPhasesDropdown({ phases = [], active = '__all__', 
     pop.hidden = !pop.hidden;
   });
 
-  // Close popover on outside click.
+  // Close popover on outside click. Self-removes when this component's root
+  // node is detached (next paint replaces the stepper subtree). Mirrors the
+  // ResizeObserver self-disconnect pattern in phase-stepper.js.
+  const ctrl = new AbortController();
   document.addEventListener('click', (e) => {
+    if (!root.isConnected) { ctrl.abort(); return; }
     if (!root.contains(e.target)) pop.hidden = true;
-  });
+  }, { signal: ctrl.signal });
 
   return root;
 }

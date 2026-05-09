@@ -1014,15 +1014,15 @@
   gap: var(--sp-2);
   padding: 4px 10px;
   height: 28px;
-  border: 1px dashed var(--bl);
-  border-radius: var(--radius-pill);
+  border: 1px dashed var(--border);
+  border-radius: 999px;
   background: transparent;
   color: var(--ink-3);
   font-size: var(--text-xs);
   cursor: pointer;
 }
 .kanban-phase-stepper .phs-archived-trigger:hover {
-  color: var(--ink-1);
+  color: var(--ink);
   border-style: solid;
 }
 .kanban-phase-stepper .phs-archived-trigger.filtered {
@@ -1033,8 +1033,8 @@
 .kanban-phase-stepper .phs-archived-trigger .ic { opacity: 0.7; }
 .kanban-phase-stepper .phs-archived-trigger .count {
   font-variant-numeric: tabular-nums;
-  background: var(--s2);
-  border-radius: var(--radius-pill);
+  background: var(--bg-card-hover);
+  border-radius: 999px;
   padding: 0 6px;
   min-width: 18px;
   text-align: center;
@@ -1048,9 +1048,9 @@
   min-width: 280px;
   max-height: 360px;
   overflow-y: auto;
-  background: var(--s3);
-  border: 1px solid var(--bl);
-  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
   padding: 4px;
   display: flex;
   flex-direction: column;
@@ -1066,10 +1066,10 @@
   text-align: left;
   color: var(--ink-2);
   cursor: pointer;
-  border-radius: var(--radius-sm);
+  border-radius: var(--r-sm);
 }
-.kanban-phase-stepper .phs-archived-row:hover  { background: var(--s2); color: var(--ink-1); }
-.kanban-phase-stepper .phs-archived-row.on     { background: var(--s2); color: var(--amber); }
+.kanban-phase-stepper .phs-archived-row:hover  { background: var(--bg-card-hover); color: var(--ink); }
+.kanban-phase-stepper .phs-archived-row.on     { background: var(--bg-card-hover); color: var(--amber); }
 .kanban-phase-stepper .phs-archived-row .name  { font-size: var(--text-sm); font-weight: 500; }
 .kanban-phase-stepper .phs-archived-row .meta  { display: flex; gap: var(--sp-2); font-size: var(--text-xs); color: var(--ink-3); }
 .kanban-phase-stepper .phs-archived-row .reason {
