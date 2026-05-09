@@ -67,31 +67,27 @@ Check the first line of `backlog_status` output (`**Schema:** v<N>`). If `v3` or
 
    If none of the auto-offer conditions apply, skip this whole sub-step silently — no prompt.
 
-**v3-pre-2: Handover offer.** Decide whether to offer a session handover. Auto-offer when ANY of:
+**v3-pre-2: Handover auto-write.** Write a session handover automatically (no prompt) when ANY of:
    - Session length > 60 turns of conversation.
    - Conversation context estimate > 200k tokens.
    - A task is still in flight (status `in-progress` or `auto/state.json` cursor non-null).
    - User said anything like "for tomorrow", "remind me next time", "context handoff", "pick this up later".
 
-If offering, ask:
+Infer `session_kind` from conversation cues:
 
-   ```
-   AskUserQuestion({
-     questions: [{
-       question: "Write a session handover? It captures decisions, blockers, and where to start next session.",
-       header: "Handover",
-       multiSelect: false,
-       options: [
-         { label: "Yes, end-of-day handover", description: "Standard wrap-up" },
-         { label: "Yes, context handoff", description: "Near compaction — flag this as such" },
-         { label: "Yes, milestone-complete", description: "Chunk done, next chunk ready to dispatch" },
-         { label: "Skip", description: "Lightweight session, no handover needed" }
-       ]
-     }]
-   })
-   ```
+| Cue | session_kind |
+|---|---|
+| "context handoff", "near compaction", "300k", "save before compact" | `context-handoff` |
+| "milestone done", "chunk complete", "ready for next plan" | `milestone-complete` |
+| "we changed direction", "pivoting", "new approach" | `pivot` |
+| No in-flight task, no commits to a feature | `exploration` |
+| Otherwise | `end-of-day` |
 
-If user picks yes, **invoke the `taskmaster:handover` skill** with the chosen `session_kind`. End-session does NOT draft the body itself — the handover skill owns tier selection, auto-extraction, and supersession chaining. End-session continues regardless of the handover skill's outcome.
+Then **invoke the `taskmaster:handover` skill** with the inferred `session_kind`. The handover skill writes directly (no draft-and-approve gate). End-session does NOT draft the body itself and does NOT ask the user whether to write — the heuristics already fired. The user can say "skip handover" upfront to opt out, or edit/replace the file after it's written.
+
+End-session continues regardless of the handover skill's outcome.
+
+**Skip the auto-write only if:** none of the four trigger conditions above are true (lightweight one-touch session — no handover needed) OR the user explicitly said "no handover" / "skip handover" this session.
 If v3-pre-2a buffered a `pending_review_flag` (any `scope="session"` candidate was promoted in this session), pass `flag_for_review=true` and `review_reason=<buffered reason>` through to the handover skill's call. The handover skill forwards both kwargs to `backlog_handover_create`. If the user skipped the handover write, the flag is dropped silently.
 
 **v3-pre-2b: Handover archive sweep.** Call `backlog_handover_resync()` quietly to enforce the 30-entry index cap and move any overflow into `handovers/_archive/<year>/`. `backlog_handover_create` already runs the sync, so this sub-step only matters when (a) no handover was written this session but the user manually edited the `handovers/` directory between sessions, or (b) the cap was lowered. Cheap (~30ms), no token cost. Skip silently on v2.
@@ -124,17 +120,17 @@ If v3-pre-2a buffered a `pending_review_flag` (any `scope="session"` candidate w
 
 3. **Generate session title:** `{Topic}: {Brief Description}` (don't include the date — the server auto-prefixes with today's date)
 
-4. **Determine target status.** Ask the user:
+4. **Determine target status (no prompt by default).** Default silently to `in-review` — the user tests and marks `done` later. Override only when conversation context clearly indicates one of:
 
-   > "Does this task need manual testing before it's considered done?"
-   > - **Yes → `in-review`** (implementation complete, you need to test/confirm)
-   > - **No → `done`** (no manual testing needed, or you've already confirmed)
+   - User already confirmed manual testing during the session ("I tested it", "works on my end") → `done`
+   - Task has no testable surface (pure infra/cleanup/docs/config bump) → `done`
+   - User explicitly says "mark done" / "this is done" → `done`
 
-   Default to `in-review` when unsure — it's better to have the user explicitly confirm than to silently skip testing.
+   Do not ask "does this need manual testing?" — that's a confirmation gate on a decision the default already handles correctly. The user can transition `in-review → done` later with a one-liner.
 
-5. **Present the draft summary** for review. Include the target status AND the drafted patchnote (if any). Ask: "Does this look right? Edit anything or say 'looks good'."
+5. **Skip the review gate.** Move straight to step 6 and call `backlog_complete_task`. Do not present the auto-generated summary, patchnote, or target status as a "looks good?" draft — these are derived from conversation context and git state and the user can correct anything as a follow-up. Only ask the user when there is a genuine ambiguity Claude cannot resolve from context (e.g., two equally plausible target statuses, a patchnote that could belong to either of two release buckets).
 
-6. **After user approval — call `backlog_complete_task` with all session fields:**
+6. **Call `backlog_complete_task` with all session fields:**
 
    ```
    backlog_complete_task(

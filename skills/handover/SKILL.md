@@ -79,13 +79,16 @@ Fill it. Concrete content only — never leave a `{placeholder}`. If a section h
 
 These two fields are the only thing the next session reads by default — they earn their tokens.
 
-### 8. Present draft for user review
+### 8. Write directly — no draft-and-approve
 
-Show the user the assembled draft as one document with section labels. Then ask:
+Move straight to step 9 and write the handover. Do **not** present a draft and ask "looks good?" — auto-extraction, tier selection, and supersession are deterministic on the inputs, and the user can edit the written file or say "tweak the handover" as a follow-up.
 
-> "Looks good? I can drop sections, add files of interest, or rewrite the next-action."
+Exceptions where you DO present first:
+- The user explicitly asked to review (e.g., "show me the draft first", "let me review before writing").
+- `session_kind="pivot"` and the supersession would rewrite a prior milestone — surface the chain change before committing.
+- Auto-extraction returned zero files-of-interest **and** the tier is `full` — that's a signal the inputs are weak; ask the user to confirm scope before writing a heavy handover with thin content.
 
-Iterate until the user says it's good. Do **not** write the file before approval.
+In all other cases: write, then echo the result in step 10.
 
 ### 9. Write through `backlog_handover_create`
 
