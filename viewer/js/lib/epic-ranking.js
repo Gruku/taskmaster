@@ -45,10 +45,14 @@ export function splitQuickAndDropdown(rankedEpics, pinnedIds, capacity) {
     pinSet.add(id);
   }
 
-  // 2. Fill remaining slots with top-ranked non-pinned.
+  // 2. Fill remaining slots with top-ranked non-pinned, excluding done/archived
+  // (spec: done/archived only enter quick via explicit pinning).
+  const NEVER_AUTOFILL = new Set(['done', 'archived']);
+  const norm = (s) => String(s || '').toLowerCase();
   for (const e of all) {
     if (quick.length >= cap) break;
     if (pinSet.has(e.id)) continue;
+    if (NEVER_AUTOFILL.has(norm(e.status))) continue;
     quick.push(e);
   }
 
@@ -65,7 +69,12 @@ export function sortEpicsForDropdown(epics, sortKey, activeCounts) {
   const norm = (s) => String(s || '').toLowerCase();
 
   if (sortKey === 'count') {
-    arr.sort((a, b) => (counts.get(b.id) || 0) - (counts.get(a.id) || 0));
+    const nm = (e) => String(e.name || e.id || '').toLowerCase();
+    arr.sort((a, b) => {
+      const diff = (counts.get(b.id) || 0) - (counts.get(a.id) || 0);
+      if (diff !== 0) return diff;
+      return nm(a).localeCompare(nm(b));
+    });
     return arr;
   }
   if (sortKey === 'status') {

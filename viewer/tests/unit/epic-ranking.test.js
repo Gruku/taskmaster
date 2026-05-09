@@ -55,9 +55,11 @@ test('splitQuickAndDropdown — pinned first (in pin order), then top-N by ranki
   const counts = countActiveTasksByEpic(TASKS);
   const ranked = rankEpics(EPICS, counts);
   const out = splitQuickAndDropdown(ranked, ['e', 'b'], 5);
-  // Quick: pinned e, b first; then ranked filling remaining slots with non-pinned: a, c, d
-  assert.deepEqual(out.quick.map(e => e.id), ['e', 'b', 'a', 'c', 'd']);
-  assert.deepEqual(out.dropdown.map(e => e.id), []);
+  // Quick: pinned e (archived — pinning wins), b first; then ranked filling remaining slots
+  // with non-pinned active epics only (c=done and e=archived excluded from auto-fill).
+  // Ranked order: a, c, b, d, e → skip c (done), skip b (pinned), add a then d.
+  assert.deepEqual(out.quick.map(e => e.id), ['e', 'b', 'a', 'd']);
+  assert.deepEqual(out.dropdown.map(e => e.id), ['c']);
 });
 
 test('splitQuickAndDropdown — overflow goes to dropdown', () => {
@@ -97,4 +99,46 @@ test('sortEpicsForDropdown — recent: last_referenced desc; missing goes last',
 test('sortEpicsForDropdown — alpha by name (case-insensitive)', () => {
   const out = sortEpicsForDropdown(EPICS, 'alpha', new Map());
   assert.deepEqual(out.map(e => e.id), ['a', 'b', 'c', 'd', 'e']);
+});
+
+test('splitQuickAndDropdown — archived and done epics never auto-fill (only via pinning)', () => {
+  const epics = [
+    { id: 'a', status: 'done' },        // would rank first by activeCounts, but excluded from auto-fill
+    { id: 'b', status: 'archived' },    // ditto
+    { id: 'c', status: 'active' },
+    { id: 'd', status: 'active' },
+  ];
+  const out = splitQuickAndDropdown(epics, [], 5);
+  // a, b excluded from auto-fill; only c, d enter quick. a, b still surface in dropdown.
+  assert.deepEqual(out.quick.map(e => e.id),    ['c', 'd']);
+  assert.deepEqual(out.dropdown.map(e => e.id), ['a', 'b']);
+});
+
+test('splitQuickAndDropdown — pinned archived/done epic still appears in quick', () => {
+  const epics = [
+    { id: 'a', status: 'archived' },
+    { id: 'b', status: 'active' },
+  ];
+  const out = splitQuickAndDropdown(epics, ['a'], 5);
+  // Pinning explicitly opts in — pinned 'a' (archived) is in quick along with active 'b'.
+  assert.deepEqual(out.quick.map(e => e.id), ['a', 'b']);
+});
+
+test('splitQuickAndDropdown — capacity 0 yields empty quick, all in dropdown', () => {
+  const epics = [{ id: 'a', status: 'active' }, { id: 'b', status: 'active' }];
+  const out = splitQuickAndDropdown(epics, ['a'], 0);
+  assert.deepEqual(out.quick, []);
+  assert.deepEqual(out.dropdown.map(e => e.id), ['a', 'b']);
+});
+
+test('sortEpicsForDropdown — count ties broken alphabetically by name', () => {
+  const counts = new Map([['a', 3], ['b', 3], ['c', 1]]);
+  const epics = [
+    { id: 'b', name: 'Bravo' },
+    { id: 'a', name: 'Alpha' },
+    { id: 'c', name: 'Charlie' },
+  ];
+  const out = sortEpicsForDropdown(epics, 'count', counts);
+  // a and b both 3; tie broken alpha → a before b. c (1) last.
+  assert.deepEqual(out.map(e => e.id), ['a', 'b', 'c']);
 });
