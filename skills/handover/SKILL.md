@@ -115,6 +115,41 @@ Echo back: *"Handover written: `<id>`. Next session can resume from this with `b
 
 If the response includes a `WARNING` line about `supersedes` not found, surface that to the user — do not hide it.
 
+## Manual status entry points
+
+The default skill flow is "write a handover." Four additional invocations let the user (or auto routes) move an existing handover through the lifecycle.
+
+### `taskmaster:handover mark-done <id> [reason]`
+
+Resolve `<id>` (accept partial slug — fuzzy-match against `backlog_handover_list`). Call:
+
+```
+backlog_handover_update_status(<id>, "done", reason)
+```
+
+Echo the result. The `status_user_set: true` lock is set automatically — subsequent supersession or task-complete signals will leave this handover alone.
+
+### `taskmaster:handover mark-in-progress <id> [reason]`
+
+Same shape as `mark-done` with `status="in-progress"`. Use when the user is actively using the handover as working context but wants to keep it out of the auto-resume churn.
+
+### `taskmaster:handover mark-todo <id> [reason]`
+
+Same shape with `status="todo"`. Use to undo an erroneous mark-done.
+
+### `taskmaster:handover triage`
+
+Walk every `todo` handover older than 14 days (default), one at a time. For each:
+
+1. Display `id`, `tldr`, age, `next_action`.
+2. Ask the user via `AskUserQuestion`: **mark done** / **supersede with new handover** / **skip / leave as todo** / **stop triage**.
+3. On `mark done`: call `backlog_handover_update_status(id, "done", reason="triaged")`.
+4. On `supersede`: invoke the existing write flow with `supersedes=<id>` and `session_kind="milestone-complete"` (the `apply_supersession` auto-flip in step 3 of the write flow will mark the old as done).
+5. On `skip`: leave the handover untouched.
+6. On `stop`: end the loop and report what was processed.
+
+Pull the candidate set with `backlog_handover_list(status="todo")` then filter by date prefix older than 14 days from today. Cap the loop at 20 entries per invocation; print a "more available" notice if there are leftovers.
+
 ## Edge cases
 
 - **Multiple in-progress tasks** — list them, ask the user which is the primary; use that as `task_ids[0]` and append the others.
