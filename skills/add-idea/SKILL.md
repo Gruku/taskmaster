@@ -56,11 +56,11 @@ The user can also say "save this as an idea: <text>" and you should treat it the
 
 ## Auto-log path (Claude-initiated)
 
-When you detect a sharp idea mid-conversation (heuristics in `start-session/SKILL.md`), don't invoke this skill — call `backlog_idea_create` directly with `created_by="Claude"`. Then announce inline:
+This skill governs **user-initiated** idea logging. For Claude-initiated auto-log — when you detect a sharp idea mid-conversation per the heuristics in `start-session/SKILL.md` — call `backlog_idea_create` directly with `created_by="Claude"` instead of invoking this skill. Then announce inline:
 
 > _Logged as IDEA-NNN — "<title>"_
 
-This skill is the user-driven write path; the auto-log direct call is the Claude-driven path. Both go through the same MCP tool.
+Both paths go through the same MCP tool. The frontmatter `description` "only correct way to write an idea" applies to user-initiated writes; the auto-log direct call is the Claude-driven complement, not a violation.
 
 ## Template
 
