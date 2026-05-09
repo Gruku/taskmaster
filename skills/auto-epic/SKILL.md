@@ -82,6 +82,7 @@ taskmaster:auto-task skill (load it explicitly via the Skill tool).
 Constraints:
 - The auto state machine is already initialized. Cursor is at task <task-id>, stage <cursor.stage>.
 - Follow taskmaster:auto-task exactly. Do not deviate.
+- **TDD is the opinionated default.** The WRITE_TESTS stage is mandatory unless the task is a pure chore/docs/refactor with no behavior change AND existing coverage exists for the touched surface. If you skip WRITE_TESTS, record the explicit reason in the handover stub. Auto runs are unsupervised — failing tests are the only thing standing between a "done" stage and a silent regression.
 - When done (or halted), return ONLY a structured JSON-style summary as your final message:
   {
     "task_id": "<id>",

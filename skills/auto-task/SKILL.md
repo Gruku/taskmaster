@@ -41,26 +41,33 @@ When `cursor.stage == "SPEC_REVIEW"`:
    ```
 3. If `no_gate=true`, skip the user gate (use only when running batch jobs unattended — emit a warning in the handover stub).
 4. Persist the approved spec into `tasks/<task_id>.md` body's `## Spec / Plan` section. The canonical writer is the `taskmaster:spec-review` skill (its step 7a) — invoke it with the drafted plan if it isn't already running. For an unattended path (no_gate=true), use the Edit tool directly on `tasks/<task_id>.md` to insert/replace the `## Spec / Plan` block. There is no `backlog_update_task(spec=...)` MCP field — frontmatter only carries metadata.
-5. Call `backlog_auto_advance("WRITE_TESTS")` if this is a feature/bug task with tests; otherwise skip to `IMPLEMENT`.
+5. **Default: advance to `WRITE_TESTS`.** TDD is the opinionated default for this skill — auto runs are unsupervised, so tests are the only thing standing between a green stage transition and a regression that doesn't surface until the next session. Skip directly to `IMPLEMENT` **only when all three of these hold**:
+   - Task `kind` is `chore`, `docs`, or `refactor-pure` (pure rename / move / formatting with no behavior change)
+   - No observable behavior change in any code path
+   - Existing tests already cover the surface being touched
+   When in doubt, write the tests. If you skip, record the explicit reason ("skipped TDD: pure-refactor, behavior unchanged, existing coverage at <path>") in the Step 7 handover stub.
 
-## Step 3: WRITE_TESTS (optional, TDD)
+## Step 3: WRITE_TESTS
 
 When `cursor.stage == "WRITE_TESTS"`:
 
-1. Use the `superpowers:test-driven-development` skill to write failing tests for the new behavior.
-2. Run the test suite — confirm only the new tests fail and existing tests still pass.
-3. Call `backlog_auto_advance("IMPLEMENT")`.
-
-If the task is a refactor / docs / chore where TDD doesn't apply, skip this stage entirely from `SPEC_REVIEW` to `IMPLEMENT`.
+1. Invoke `superpowers:test-driven-development`. Write failing tests that pin down the **acceptance criteria from the spec** — one test per observable behavior, not per function. Tests should fail for the right reason (the behavior doesn't exist yet), not because of a missing import or typo.
+2. Run the full suite. Confirm:
+   - Only the new tests fail.
+   - Every previously-passing test still passes.
+   If existing tests break before you've written a line of implementation, **stop** — either the spec is wrong about the surface, or the surface is unstable. Halt with `backlog_auto_complete_task(status="blocked", fail_reason="blocked", summary="existing tests broke during test-authoring; spec or surface needs review")`.
+3. **Commit the failing tests as their own commit** with message `test: add failing tests for <task_id> <short title>`. The red→green transition must be visible in git history — this is a hard requirement, not a suggestion. Capture this sha; it goes in the final `commits` list at END_SESSION.
+4. Call `backlog_auto_advance("IMPLEMENT")`.
 
 ## Step 4: IMPLEMENT
 
 When `cursor.stage == "IMPLEMENT"`:
 
-1. Do the work. Read files before editing, check for matched lessons before writing, follow existing project conventions.
-2. **Reinforce lessons** that you actually applied: `backlog_lesson_reinforce(<lesson_id>)`. Skip lessons that didn't end up being relevant.
-3. Commit logically — small, scoped commits per change. Capture the commit shas in a list (you'll pass them to `complete_task`).
-4. Call `backlog_auto_advance("TEST")`.
+1. Do the work **against the failing tests from Step 3**. Re-run the test suite (or the relevant subset) after each logical chunk; the loop is red → impl → green, repeat until all Step-3 tests pass. Read files before editing, check for matched lessons before writing, follow existing project conventions.
+2. **If you find yourself wanting to change a test to make it pass, stop.** Either the test was wrong (fix it deliberately, note the reason in the commit message — e.g. `test: correct expected behavior for X — original assertion contradicted spec line 42`) or the implementation is wrong. Do **not** silently relax assertions to get green.
+3. **Reinforce lessons** that you actually applied: `backlog_lesson_reinforce(<lesson_id>)`. Skip lessons that didn't end up being relevant.
+4. Commit logically — small, scoped commits per change. Capture all commit shas (including the test commit from Step 3) in a list (you'll pass them to `complete_task`).
+5. Call `backlog_auto_advance("TEST")`.
 
 ## Step 5: TEST
 
