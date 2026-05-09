@@ -914,6 +914,11 @@ def apply_supersession(backlog_path: Path, *, old_id: str, new_id: str) -> Path:
     fm, body = read_handover(backlog_path, old_id)
     fm["superseded_by"] = new_id
 
+    if not fm.get("status_user_set"):
+        fm["status"] = "done"
+        fm["status_changed"] = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+        fm["status_reason"] = f"superseded by {new_id}"
+
     today = date.today().isoformat()
     callout = (
         f"> **SUPERSEDED {today} by [{new_id}](./{new_id}.md).**\n"
