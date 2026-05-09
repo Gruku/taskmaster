@@ -101,6 +101,11 @@ from taskmaster_v3 import (
     lesson_candidates_read as _lesson_candidates_read,
     lesson_candidates_clear as _lesson_candidates_clear,
     scan_transcripts_for_candidates as _scan_transcripts_for_candidates,
+    write_idea as _write_idea,
+    read_idea as _read_idea,
+    update_idea as _update_idea,
+    list_ideas as _list_ideas,
+    idea_path as _idea_path,
     AUTO_MODES,
     AUTO_STAGES,
     AUTO_TASK_STATUSES,
@@ -1973,6 +1978,157 @@ def backlog_issue_resync() -> str:
     _save(data)
     n = len(data.get("issues") or [])
     return f"Issue index resynced — {n} entries."
+
+
+@mcp.tool()
+def backlog_idea_create(
+    title: str,
+    body: str = "",
+    tags: list[str] | None = None,
+    status: str = "",
+    related_tasks: list[str] | None = None,
+    related_issues: list[str] | None = None,
+    related_lessons: list[str] | None = None,
+    created_by: str = "Claude",
+) -> str:
+    """Log an idea — a lightweight, unvalidated thought. Lighter than a task.
+
+    An *idea* is a parking lot for things you might want to do, explore, or
+    revisit. It can grow into a task / lesson / issue later via linkage.
+    Title is required; everything else is optional. Status is freeform.
+
+    Args:
+        title: Required. Short summary.
+        body: Markdown body — anything goes (sketches, code blocks, prose).
+        tags: Freeform tag strings.
+        status: Freeform status ("exploring", "parking-lot", "candidate", "").
+        related_tasks: Task ids this idea relates to.
+        related_issues: Issue ids this idea relates to.
+        related_lessons: Lesson ids this idea relates to.
+        created_by: Who logged it ("Claude" by default; "user" when
+            invoked via /add-idea).
+    """
+    bp = _backlog_path()
+    if not bp.exists():
+        return f"Error: no backlog found at {bp}. Run `backlog_init` first."
+    try:
+        iid, target = _write_idea(
+            bp,
+            title=title,
+            body=body,
+            tags=tags or [],
+            status=status,
+            related_tasks=related_tasks or [],
+            related_issues=related_issues or [],
+            related_lessons=related_lessons or [],
+            created_by=created_by,
+        )
+    except ValueError as exc:
+        return f"Error: {exc}"
+    try:
+        rel = target.relative_to(ROOT)
+    except ValueError:
+        rel = target
+    return f"Idea created: {iid} — {title}\nFile: {rel}"
+
+
+@mcp.tool()
+def backlog_idea_list(
+    idea_id: str = "",
+    status: str = "",
+    tag: str = "",
+    archived: bool = False,
+    related_task: str = "",
+    related_issue: str = "",
+    related_lesson: str = "",
+    limit: int = 50,
+) -> str:
+    """List ideas, optionally filtered. With `idea_id`, returns one full record.
+
+    Without `idea_id`, returns summary lines (no body) — newest first.
+    Filters compose as AND. By default archived ideas are excluded.
+    """
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    if idea_id:
+        out = _list_ideas(bp, idea_id=idea_id)
+        if not out:
+            return f"Idea not found: {idea_id}"
+        rec = out[0]
+        body = rec.pop("body", "")
+        fm_lines = [f"  {k}: {v}" for k, v in rec.items()]
+        return "---\n" + "\n".join(fm_lines) + "\n---\n" + body
+
+    entries = _list_ideas(
+        bp,
+        status=status or None,
+        tag=tag or None,
+        archived=archived,
+        related_task=related_task or None,
+        related_issue=related_issue or None,
+        related_lesson=related_lesson or None,
+        limit=max(1, limit),
+    )
+    if not entries:
+        return "No ideas match."
+    lines = []
+    for e in entries:
+        st = e.get("status") or ""
+        st_tag = f" [{st}]" if st else ""
+        lines.append(f"- {e['id']} — {e.get('title', '')}{st_tag}")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def backlog_idea_update(
+    idea_id: str,
+    title: str = "",
+    body: str = "",
+    status: str = "",
+    tags: list[str] | None = None,
+    related_tasks: list[str] | None = None,
+    related_issues: list[str] | None = None,
+    related_lessons: list[str] | None = None,
+    promoted_to: str = "",
+    archived: bool | None = None,
+) -> str:
+    """Patch an idea's frontmatter and/or body.
+
+    Pass empty strings / None to skip a field. To promote an idea into a
+    task, pass `promoted_to="T-XYZ"` and optionally `archived=True`. To
+    archive without promotion, pass `archived=True`.
+    """
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    updates: dict[str, Any] = {}
+    if title:
+        updates["title"] = title
+    if body:
+        updates["body"] = body
+    if status:
+        updates["status"] = status
+    if tags is not None:
+        updates["tags"] = tags
+    if related_tasks is not None:
+        updates["related_tasks"] = related_tasks
+    if related_issues is not None:
+        updates["related_issues"] = related_issues
+    if related_lessons is not None:
+        updates["related_lessons"] = related_lessons
+    if promoted_to:
+        updates["promoted_to"] = promoted_to
+    if archived is not None:
+        updates["archived"] = archived
+
+    try:
+        fm, _ = _update_idea(bp, idea_id, **updates)
+    except FileNotFoundError:
+        return f"Idea not found: {idea_id}"
+    except ValueError as exc:
+        return f"Error: {exc}"
+    return f"Idea updated: {idea_id} — {fm.get('title', '')}"
 
 
 @mcp.tool()

@@ -103,6 +103,19 @@ def test_issue_tools_exposed(tool_name):
     assert tool_name in _list_tool_names()
 
 
+# Idea surface (ideas feature)
+@pytest.mark.parametrize(
+    "tool_name",
+    [
+        "backlog_idea_create",
+        "backlog_idea_list",
+        "backlog_idea_update",
+    ],
+)
+def test_idea_tools_exposed(tool_name):
+    assert tool_name in _list_tool_names()
+
+
 # Lesson surface (v3-skills-003)
 @pytest.mark.parametrize(
     "tool_name",
@@ -161,6 +174,6 @@ def test_full_v3_surface_count():
     names = _list_tool_names()
     v3_tools = [
         n for n in names
-        if any(k in n for k in ("migrate", "handover", "lesson", "issue", "recap", "snapshot", "auto_"))
+        if any(k in n for k in ("migrate", "handover", "lesson", "issue", "idea", "recap", "snapshot", "auto_"))
     ]
-    assert len(v3_tools) >= 35, f"v3 surface shrank to {len(v3_tools)} tools (was 43)"
+    assert len(v3_tools) >= 38, f"v3 surface shrank to {len(v3_tools)} tools (was 46)"
