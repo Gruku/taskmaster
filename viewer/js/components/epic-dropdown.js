@@ -7,7 +7,7 @@ import { epicCssVar } from '../lib/epics.js';
 
 const SORT_OPTIONS = [
   { key: 'count',  label: 'Task count' },
-  { key: 'status', label: 'Status (active → archived)' },
+  { key: 'status', label: 'Status (active → done → archived)' },
   { key: 'recent', label: 'Recent activity' },
   { key: 'alpha',  label: 'Alphabetical' },
 ];
@@ -123,6 +123,7 @@ export function renderEpicDropdown({
       pin.type = 'button';
       pin.className = 'ed-pin' + (pinnedSet.has(ep.id) ? ' on' : '');
       pin.title = pinnedSet.has(ep.id) ? 'Unpin' : 'Pin';
+      pin.setAttribute('aria-label', pin.title);
       pin.textContent = pinnedSet.has(ep.id) ? '★' : '☆';
       pin.addEventListener('click', () => onPinToggle && onPinToggle(ep.id, !pinnedSet.has(ep.id)));
       row.appendChild(pin);
