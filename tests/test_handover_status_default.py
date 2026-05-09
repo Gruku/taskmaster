@@ -50,6 +50,7 @@ def test_other_kinds_default_to_todo(tmp_path, kind):
     fm, _ = read_handover(bp, hid)
     assert fm["status"] == "todo"
     assert fm["status_user_set"] is False
+    assert fm.get("status_changed")
 
 
 def test_index_entry_includes_status_after_sync(tmp_path):
