@@ -1079,7 +1079,11 @@
 /* ── Epic row: enforce single row, never wrap ────────────────────────── */
 .kanban-filterbar .kanban-epic-row {
   flex-wrap: nowrap;
-  overflow-x: auto;
+  /* overflow-x: clip + overflow-y: visible lets the absolutely-positioned
+     dropdown panel extend below the row without being clipped, while still
+     preventing the chip strip from spilling sideways. */
+  overflow-x: clip;
+  overflow-y: visible;
 }
 
 /* Dropdown trigger */
