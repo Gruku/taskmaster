@@ -1011,6 +1011,33 @@ def mark_task_handovers_complete(backlog_path: Path, task_id: str) -> list[str]:
     return flipped
 
 
+def mark_task_handovers_resumed(backlog_path: Path, task_id: str) -> list[str]:
+    """Flip todo handovers whose primary task is `task_id` to `in-progress`.
+    Conservative: only the latest todo handover for that task is touched, so
+    incidental views don't churn unrelated history. Skips user-set and any
+    already-non-todo entries. Returns the list of ids modified."""
+    if not task_id:
+        return []
+    for hid in list_handover_ids(backlog_path):  # newest-first
+        try:
+            fm, body = read_handover(backlog_path, hid)
+        except (OSError, ValueError):
+            continue
+        ids = fm.get("task_ids") or []
+        if not ids or ids[0] != task_id:
+            continue
+        if fm.get("status_user_set"):
+            return []
+        if fm.get("status") != "todo":
+            return []  # latest is already in-progress or done — leave history alone
+        fm["status"] = "in-progress"
+        fm["status_changed"] = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+        fm["status_reason"] = "resumed in session"
+        write_task_file(handover_path(backlog_path, hid), fm, body)
+        return [hid]
+    return []
+
+
 # Fields kept in the backlog.yaml `handovers:` index entry.
 _HANDOVER_INDEX_FIELDS = (
     "id", "date", "created", "tldr", "next_action",
