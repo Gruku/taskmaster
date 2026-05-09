@@ -44,6 +44,7 @@ def test_backfill_sets_done_on_legacy_handovers(tmp_path):
         assert fm["status"] == "done"
         assert fm["status_user_set"] is False
         assert "backfilled" in fm["status_reason"].lower()
+        assert fm.get("status_changed")
     assert data["handover_status_backfilled"] is True
 
 
@@ -72,3 +73,13 @@ def test_backfill_leaves_already_statused_handovers_alone(tmp_path):
     backfill_handover_status(data, bp)
     fm_after, _ = read_handover(bp, "2026-05-09-modern")
     assert fm_after["status"] == "todo"
+
+
+def test_backfill_stamps_marker_even_on_empty_backlog(tmp_path):
+    """Empty backlog with no handover files still gets the marker stamped on
+    first run, so subsequent process starts skip the scan via the on-disk flag."""
+    bp, _ = _setup(tmp_path)  # no handover files written
+    data = yaml.safe_load(bp.read_text())
+    flipped = backfill_handover_status(data, bp)
+    assert flipped == []
+    assert data["handover_status_backfilled"] is True
