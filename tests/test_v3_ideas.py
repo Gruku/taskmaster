@@ -199,3 +199,98 @@ def test_update_idea_unknown_id_raises(tmp_path):
     bp.parent.mkdir(parents=True)
     with _pytest.raises(FileNotFoundError):
         update_idea(bp, "IDEA-999", status="exploring")
+
+
+def test_list_ideas_empty(tmp_path):
+    from taskmaster_v3 import list_ideas
+    bp = tmp_path / ".taskmaster" / "backlog.yaml"
+    bp.parent.mkdir(parents=True)
+    assert list_ideas(bp) == []
+
+
+def test_list_ideas_returns_summaries_newest_first(tmp_path):
+    from taskmaster_v3 import write_idea, list_ideas
+    bp = tmp_path / ".taskmaster" / "backlog.yaml"
+    bp.parent.mkdir(parents=True)
+    write_idea(bp, title="oldest")
+    write_idea(bp, title="middle")
+    write_idea(bp, title="newest")
+    out = list_ideas(bp)
+    assert [e["title"] for e in out] == ["newest", "middle", "oldest"]
+    assert out[0]["id"] == "IDEA-003"
+    # Body is omitted in summaries
+    assert "body" not in out[0]
+
+
+def test_list_ideas_excludes_archived_by_default(tmp_path):
+    from taskmaster_v3 import write_idea, update_idea, list_ideas
+    bp = tmp_path / ".taskmaster" / "backlog.yaml"
+    bp.parent.mkdir(parents=True)
+    a, _ = write_idea(bp, title="active")
+    b, _ = write_idea(bp, title="archived")
+    update_idea(bp, b, archived=True)
+    ids = [e["id"] for e in list_ideas(bp)]
+    assert a in ids
+    assert b not in ids
+
+
+def test_list_ideas_includes_archived_when_requested(tmp_path):
+    from taskmaster_v3 import write_idea, update_idea, list_ideas
+    bp = tmp_path / ".taskmaster" / "backlog.yaml"
+    bp.parent.mkdir(parents=True)
+    write_idea(bp, title="active")
+    b, _ = write_idea(bp, title="archived")
+    update_idea(bp, b, archived=True)
+    ids = [e["id"] for e in list_ideas(bp, archived=True)]
+    assert "IDEA-001" in ids and "IDEA-002" in ids
+
+
+def test_list_ideas_filter_by_status(tmp_path):
+    from taskmaster_v3 import write_idea, list_ideas
+    bp = tmp_path / ".taskmaster" / "backlog.yaml"
+    bp.parent.mkdir(parents=True)
+    write_idea(bp, title="exploring one", status="exploring")
+    write_idea(bp, title="parked one", status="parking-lot")
+    out = list_ideas(bp, status="exploring")
+    assert [e["title"] for e in out] == ["exploring one"]
+
+
+def test_list_ideas_filter_by_tag(tmp_path):
+    from taskmaster_v3 import write_idea, list_ideas
+    bp = tmp_path / ".taskmaster" / "backlog.yaml"
+    bp.parent.mkdir(parents=True)
+    write_idea(bp, title="perf", tags=["perf", "automation"])
+    write_idea(bp, title="ux", tags=["ux"])
+    out = list_ideas(bp, tag="perf")
+    assert [e["title"] for e in out] == ["perf"]
+
+
+def test_list_ideas_filter_by_related_task(tmp_path):
+    from taskmaster_v3 import write_idea, list_ideas
+    bp = tmp_path / ".taskmaster" / "backlog.yaml"
+    bp.parent.mkdir(parents=True)
+    write_idea(bp, title="linked", related_tasks=["v3-release-007"])
+    write_idea(bp, title="unlinked")
+    out = list_ideas(bp, related_task="v3-release-007")
+    assert [e["title"] for e in out] == ["linked"]
+
+
+def test_list_ideas_idea_id_returns_full_record(tmp_path):
+    from taskmaster_v3 import write_idea, list_ideas
+    bp = tmp_path / ".taskmaster" / "backlog.yaml"
+    bp.parent.mkdir(parents=True)
+    iid, _ = write_idea(bp, title="single", body="full body content")
+    out = list_ideas(bp, idea_id=iid)
+    assert len(out) == 1
+    # Single-id returns body too
+    assert out[0]["body"] == "full body content"
+
+
+def test_list_ideas_limit(tmp_path):
+    from taskmaster_v3 import write_idea, list_ideas
+    bp = tmp_path / ".taskmaster" / "backlog.yaml"
+    bp.parent.mkdir(parents=True)
+    for i in range(5):
+        write_idea(bp, title=f"idea {i}")
+    out = list_ideas(bp, limit=3)
+    assert len(out) == 3

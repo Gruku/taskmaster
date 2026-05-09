@@ -1669,6 +1669,66 @@ def update_idea(
     return fm, new_body
 
 
+def list_ideas(
+    backlog_path: Path,
+    *,
+    idea_id: str | None = None,
+    status: str | None = None,
+    tag: str | None = None,
+    archived: bool = False,
+    related_task: str | None = None,
+    related_issue: str | None = None,
+    related_lesson: str | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    """List ideas with optional filters.
+
+    Default sort is newest-first by `created`. Pass `idea_id` to fetch one
+    record (body included). Without `idea_id`, results are summaries —
+    the markdown body is omitted to keep payloads small.
+
+    Filters compose as AND. `archived` defaults to False; pass True to
+    include archived ideas in the result set.
+    """
+    if idea_id:
+        target = idea_path(backlog_path, idea_id)
+        if not target.exists():
+            return []
+        fm, body = read_idea(backlog_path, idea_id)
+        return [{**fm, "body": body}]
+
+    out: list[dict[str, Any]] = []
+    for iid in list_idea_ids(backlog_path):
+        try:
+            fm, _ = read_idea(backlog_path, iid)
+        except (OSError, ValueError):
+            continue
+        if not archived and fm.get("archived"):
+            continue
+        if status is not None and (fm.get("status") or "") != status:
+            continue
+        if tag is not None and tag not in (fm.get("tags") or []):
+            continue
+        if related_task is not None and related_task not in (fm.get("related_tasks") or []):
+            continue
+        if related_issue is not None and related_issue not in (fm.get("related_issues") or []):
+            continue
+        if related_lesson is not None and related_lesson not in (fm.get("related_lessons") or []):
+            continue
+        out.append(fm)
+
+    def _sort_key(e: dict[str, Any]) -> tuple[str, int]:
+        iid = e.get("id", "")
+        m = re.search(r"(\d+)$", iid)
+        num = int(m.group(1)) if m else 0
+        return (e.get("created", ""), num)
+
+    out.sort(key=_sort_key, reverse=True)
+    if limit is not None:
+        out = out[: max(0, limit)]
+    return out
+
+
 # ── Lesson candidates (deferred + scanning) ───────────────────
 
 LESSON_CANDIDATE_KINDS = ("pattern", "anti-pattern", "gotcha")
