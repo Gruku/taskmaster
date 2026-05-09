@@ -227,7 +227,18 @@ async function openHandoverDetail(rail, hid, state) {
   rail.open({
     kind: 'handover',
     render: () => renderHandoverRail(h, owner),
-    onMount: (el) => bindRailClose(el, rail),
+    onMount: (el) => {
+      const cleanup = bindRailClose(el, rail);
+      const pill = el.querySelector('.ho-status-pill');
+      if (pill) {
+        pill.addEventListener('click', () => {
+          import('../components/right-rail.js').then(({ openStatusMenu }) => {
+            openStatusMenu(pill, h.id, h.status || 'todo');
+          });
+        });
+      }
+      return cleanup;
+    },
   });
 }
 
@@ -256,9 +267,13 @@ function renderSessionRail(detail) {
 
 function renderHandoverRail(h, owner) {
   const fp = `.taskmaster/handovers/${h.id}.md`;
+  const status = h.status || 'todo';
   return (
     `<div class="rr-h">`
     + `<span class="kind-pill handover">${escapeHtml(h.viewer_kind.toUpperCase())}</span>`
+    + `<span class="ho-status-pill ho-status-pill-${escapeHtml(status)}" `
+    +   `data-handover-id="${escapeHtml(h.id)}" data-status="${escapeHtml(status)}" `
+    +   `title="Status: ${escapeHtml(status)} — click to change">${escapeHtml(status)}</span>`
     + `<span class="ts">${escapeHtml(h.date || '')}</span>`
     + `<span class="actions">`
     + `<button class="ic-btn" title="Edit — coming soon" disabled>✎</button>`
