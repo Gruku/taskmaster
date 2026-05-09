@@ -127,6 +127,31 @@ from taskmaster_v3 import (
 )
 
 
+_HANDOVER_STATUS_BACKFILL_RAN = False
+
+
+def _ensure_handover_status_backfilled() -> None:
+    global _HANDOVER_STATUS_BACKFILL_RAN
+    if _HANDOVER_STATUS_BACKFILL_RAN:
+        return
+    bp = _backlog_path()
+    if not bp.exists():
+        return
+    try:
+        data = _load()
+    except Exception:
+        return
+    if data.get("handover_status_backfilled"):
+        _HANDOVER_STATUS_BACKFILL_RAN = True
+        return
+    from taskmaster_v3 import backfill_handover_status as _bf
+    flipped = _bf(data, bp)
+    if flipped or "handover_status_backfilled" in data:
+        _sync_handover_index(data, bp)
+        _save(data)
+    _HANDOVER_STATUS_BACKFILL_RAN = True
+
+
 def _load_auto_state():
     """Read <backlog-parent>/auto/state.json, return parsed dict or None.
 
@@ -1594,6 +1619,7 @@ def backlog_handover_create(
     bp = _backlog_path()
     if not bp.exists():
         return f"Error: no backlog found at {bp}. Run `backlog_init` first."
+    _ensure_handover_status_backfilled()
     try:
         hid, target = _write_handover(
             bp,
@@ -1674,6 +1700,7 @@ def backlog_handover_list(
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
+    _ensure_handover_status_backfilled()
     data = _load()
     entries = list(data.get("handovers") or [])
 
@@ -1726,6 +1753,7 @@ def backlog_handover_get(handover_id: str) -> str:
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
+    _ensure_handover_status_backfilled()
     try:
         fm, body = _read_handover(bp, handover_id)
     except FileNotFoundError:
@@ -1751,6 +1779,7 @@ def backlog_handover_latest() -> str:
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
+    _ensure_handover_status_backfilled()
     hid = _latest_handover_id(bp)
     if not hid:
         return "No handovers yet."
@@ -1777,6 +1806,7 @@ def backlog_handover_resync() -> str:
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
+    _ensure_handover_status_backfilled()
     data = _load()
     _sync_handover_index(data, bp)
     _save(data)
@@ -1800,6 +1830,7 @@ def backlog_handover_supersede(old_id: str, new_id: str) -> str:
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
+    _ensure_handover_status_backfilled()
     try:
         old_path = _apply_supersession(bp, old_id=old_id, new_id=new_id)
     except FileNotFoundError as exc:
@@ -1826,6 +1857,7 @@ def backlog_handover_update_status(
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
+    _ensure_handover_status_backfilled()
     try:
         fm, _ = _update_handover_status(bp, handover_id=handover_id, status=status, reason=reason)
     except ValueError as exc:

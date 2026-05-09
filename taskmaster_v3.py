@@ -1038,6 +1038,46 @@ def mark_task_handovers_resumed(backlog_path: Path, task_id: str) -> list[str]:
     return []
 
 
+def backfill_handover_status(backlog_data: dict[str, Any], backlog_path: Path) -> list[str]:
+    """One-time pass: stamp `status: done` on every handover lacking the field,
+    plus archived handovers, then mark the backlog as backfilled.
+
+    No-op if `handover_status_backfilled` is already truthy. Returns the list
+    of handover ids that were modified.
+    """
+    if backlog_data.get("handover_status_backfilled"):
+        return []
+    flipped: list[str] = []
+    handovers_root = handover_dir(backlog_path)
+    archive_root = handovers_root / "_archive"
+    candidates: list[Path] = []
+    if handovers_root.exists():
+        candidates.extend(p for p in handovers_root.glob("*.md"))
+    if archive_root.exists():
+        candidates.extend(archive_root.rglob("*.md"))
+    for path in candidates:
+        try:
+            fm, body = read_task_file(path)
+        except (OSError, ValueError):
+            continue
+        if "status" in fm:
+            continue
+        try:
+            mtime_iso = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat(
+                timespec="microseconds"
+            )
+        except OSError:
+            mtime_iso = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+        fm["status"] = "done"
+        fm["status_changed"] = mtime_iso
+        fm["status_reason"] = "backfilled by handover-status migration"
+        fm["status_user_set"] = False
+        write_task_file(path, fm, body)
+        flipped.append(path.stem)
+    backlog_data["handover_status_backfilled"] = True
+    return flipped
+
+
 # Fields kept in the backlog.yaml `handovers:` index entry.
 _HANDOVER_INDEX_FIELDS = (
     "id", "date", "created", "tldr", "next_action",
