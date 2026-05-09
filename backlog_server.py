@@ -1652,6 +1652,7 @@ def backlog_handover_list(
     task_id: str = "",
     session_kind: str = "",
     since: str = "",
+    status: str = "all",
     limit: int = 10,
 ) -> str:
     """List recent handovers (slim metadata only — no bodies).
@@ -1666,6 +1667,8 @@ def backlog_handover_list(
             (e.g. "end-of-day", "context-handoff", "milestone-complete").
         since: ISO date string (YYYY-MM-DD). If set, only entries whose
             date prefix is >= since. Raises ValueError for invalid formats.
+        status: One of todo, in-progress, done, or "all" (default). Filters
+            against the index entry — does not read every file.
         limit: Maximum number of entries to return after filtering (default 10).
     """
     bp = _backlog_path()
@@ -1690,11 +1693,17 @@ def backlog_handover_list(
     if since:
         entries = [e for e in entries if e.get("id", "") >= since]
 
+    from taskmaster_v3 import HANDOVER_STATUSES as _STATUSES
+    if status and status != "all":
+        if status not in _STATUSES:
+            return f"Error: status must be one of {_STATUSES} or 'all', got {status!r}."
+        entries = [e for e in entries if e.get("status") == status]
+
     # Truncate to limit after all filters.
     entries = entries[: max(1, limit)]
 
     if not entries:
-        filtered = any([task_id, session_kind, since])
+        filtered = any([task_id, session_kind, since, status != "all"])
         return "No handovers match those filters." if filtered else "No handovers yet."
 
     lines = []
