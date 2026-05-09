@@ -84,7 +84,7 @@ export function statusPill(handoverId, status) {
     'data-handover-id': handoverId,
     'data-status': status,
     title: `Status: ${status} — click to change`,
-    on: { click: (ev) => openStatusMenu(ev.currentTarget, handoverId, status) },
+    on: { click: (ev) => openStatusMenu(ev.currentTarget, handoverId, ev.currentTarget.dataset.status) },
   }, status);
 }
 
@@ -104,6 +104,14 @@ export function openStatusMenu(anchor, handoverId, currentStatus) {
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ status: opt, reason: 'viewer-override' }),
         });
+        // Patch every pill rendered for this handover (right-rail panel and session-detail rail)
+        for (const pill of document.querySelectorAll(`.ho-status-pill[data-handover-id="${CSS.escape(handoverId)}"]`)) {
+          pill.classList.remove('ho-status-pill-todo', 'ho-status-pill-in-progress', 'ho-status-pill-done');
+          pill.classList.add(`ho-status-pill-${opt}`);
+          pill.setAttribute('data-status', opt);
+          pill.textContent = opt;
+          pill.title = `Status: ${opt} — click to change`;
+        }
         window.dispatchEvent(new CustomEvent('viewer:handover-status-changed', {
           detail: { id: handoverId, status: opt },
         }));
