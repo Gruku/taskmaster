@@ -822,17 +822,18 @@ def read_handover(backlog_path: Path, handover_id: str) -> tuple[dict[str, Any],
 def list_handover_ids(backlog_path: Path) -> list[str]:
     """List handover ids on disk, newest-first.
 
-    Sort key per file: (`created` ISO timestamp from frontmatter, file mtime,
-    id) — descending. The frontmatter timestamp is authoritative when present;
-    mtime is the fallback for legacy handovers written before `created` was
-    recorded; id alpha is the final tiebreaker. This avoids the same-day
-    alphabetical-by-slug bug where a handover written earlier in the day
-    would beat one written later if its slug sorted later.
+    Sort key per file: (id date-prefix, `created` ISO timestamp, file mtime,
+    id) — descending. The id's `YYYY-MM-DD` prefix is the authoritative
+    user-supplied `when=` date and leads the sort so that batch writes
+    sharing a `created` timestamp still order by their intended date
+    rather than falling back to alphabetical-by-slug (ISS-010). `created`
+    and mtime remain as tiebreakers for same-day writes; id alpha is the
+    final fallback.
     """
     d = handover_dir(backlog_path)
     if not d.exists():
         return []
-    entries: list[tuple[str, float, str]] = []
+    entries: list[tuple[str, str, float, str]] = []
     for p in d.glob("*.md"):
         created = ""
         try:
@@ -844,9 +845,10 @@ def list_handover_ids(backlog_path: Path) -> list[str]:
             mtime = p.stat().st_mtime
         except OSError:
             mtime = 0.0
-        entries.append((created, mtime, p.stem))
+        date_prefix = p.stem[:10]
+        entries.append((date_prefix, created, mtime, p.stem))
     entries.sort(reverse=True)
-    return [stem for _, _, stem in entries]
+    return [stem for _, _, _, stem in entries]
 
 
 def latest_handover_id(backlog_path: Path) -> str | None:
