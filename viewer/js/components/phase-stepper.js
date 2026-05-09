@@ -1,4 +1,5 @@
 import { bucketPhases } from '../lib/phase-buckets.js';
+import { renderArchivedPhasesDropdown } from './archived-phases-dropdown.js';
 
 // Phase stepper — V12C 3-region timeline (past carousel · active card · future carousel).
 //   phases:  [{ id, name, status: 'done'|'active'|'future', done, total }]
@@ -29,9 +30,6 @@ export function renderPhaseStepper({ phases = [], active = '__all__', viewState,
   const pastPhases     = buckets.past;
   const futurePhases   = buckets.future;
   const activePhase    = buckets.active;
-  // archivedPhases is consumed by the archived-phases dropdown component (Task 5);
-  // declared here so the bucketing logic stays colocated with the rest of the split.
-  // eslint-disable-next-line no-unused-vars
   const archivedPhases = buckets.archived;
 
   // Carousel offsets — owned by caller via `viewState` so re-renders preserve scroll.
@@ -43,6 +41,14 @@ export function renderPhaseStepper({ phases = [], active = '__all__', viewState,
   // Clamp offsets in case the phase set shrank between renders.
   view.pastOffset   = Math.max(0, Math.min(view.pastOffset,   Math.max(0, pastPhases.length   - VISIBLE_PAST)));
   view.futureOffset = Math.max(0, Math.min(view.futureOffset, Math.max(0, futurePhases.length - VISIBLE_FUTURE)));
+
+  // ── Archived dropdown (left bookend, before past region) ──
+  const archivedEl = renderArchivedPhasesDropdown({
+    phases: archivedPhases,
+    active,
+    onSelect: (id) => onSelect && onSelect(id),
+  });
+  wrap.appendChild(archivedEl);
 
   // ── Past region: outer slide ‹  chips  inner slide › ──
   const pastRegion = document.createElement('div');
