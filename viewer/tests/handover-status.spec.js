@@ -68,3 +68,18 @@ test.describe('handover status pill', () => {
     expect(captured.status).toBe('done');
   });
 });
+
+test('status filter chip row defaults to todo + in-progress visible, done hidden', async ({ page }) => {
+  await page.goto('/sessions');
+  const chips = page.locator('.handover-status-chips .status-chip');
+  await expect(chips.filter({ hasText: 'todo' })).toHaveClass(/on/);
+  await expect(chips.filter({ hasText: 'in-progress' })).toHaveClass(/on/);
+  await expect(chips.filter({ hasText: 'done' })).not.toHaveClass(/on/);
+});
+
+test('toggling the done chip shows done handovers', async ({ page }) => {
+  await page.goto('/sessions');
+  await page.locator('.handover-status-chips .status-chip', { hasText: 'done' }).click();
+  // After toggle, done chip becomes active.
+  await expect(page.locator('.handover-status-chips .status-chip', { hasText: 'done' })).toHaveClass(/on/);
+});

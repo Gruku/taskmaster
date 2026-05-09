@@ -115,3 +115,38 @@
 /* Right-rail dimming when open */
 body.rail-open .tl { opacity: 0.5; pointer-events: none; }
 body.rail-open .tl .selected { opacity: 1; pointer-events: auto; }
+
+/* Handover status filter chip row */
+.handover-status-chips {
+  display: flex;
+  gap: 6px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--bl, rgba(0, 0, 0, 0.08));
+}
+.handover-status-chips .status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--bl, rgba(0, 0, 0, 0.18));
+  background: var(--surface-1, transparent);
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+.handover-status-chips .status-chip.on[data-status="todo"] {
+  background: var(--amber-tint-bg, rgba(255, 191, 0, 0.15));
+  border-color: var(--amber-tint-border, rgba(255, 191, 0, 0.45));
+}
+.handover-status-chips .status-chip.on[data-status="in-progress"] {
+  background: var(--blue-tint-bg, rgba(60, 130, 246, 0.15));
+  border-color: var(--blue-tint-border, rgba(60, 130, 246, 0.45));
+}
+.handover-status-chips .status-chip.on[data-status="done"] {
+  background: var(--muted-tint-bg, rgba(136, 136, 136, 0.15));
+  border-color: var(--muted-tint-border, rgba(136, 136, 136, 0.45));
+}
+.handover-status-chips .status-chip:hover {
+  filter: brightness(1.05);
+}
