@@ -40,6 +40,9 @@ export async function mount(root, { store, api, prefs }) {
     collapsed: new Set((store.getPrefs() && store.getPrefs().kanban && store.getPrefs().kanban.collapsed_columns) || []),
   };
 
+  // Carousel offsets that survive re-renders (filter changes, backlog refresh).
+  const stepperViewState = { pastOffset: 0, futureOffset: 0 };
+
   // Layout
   const page = document.createElement('div');
   page.className = 'kanban-page';
@@ -228,6 +231,7 @@ export async function mount(root, { store, api, prefs }) {
     stepperHost.replaceChildren(renderPhaseStepper({
       phases: phaseRows,
       active: state.filters.phase,
+      viewState: stepperViewState,
       // Clicking the currently-selected phase clears the filter back to all-phases.
       // paint() will prune any selected epics that don't apply to the new phase.
       onSelect: (key) => {

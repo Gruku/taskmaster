@@ -1,3 +1,5 @@
+import { bucketPhases } from '../lib/phase-buckets.js';
+
 // Phase stepper — V12C 3-region timeline (past carousel · active card · future carousel).
 //   phases:  [{ id, name, status: 'done'|'active'|'future', done, total }]
 //   active:  selected filter key — phase id, '__all__', or '__orphans__'.
@@ -17,20 +19,27 @@ const MS_PER_CHAR    = 16;
 
 const chipDur = (name) => MS_BASE + String(name || '').length * MS_PER_CHAR;
 
-export function renderPhaseStepper({ phases = [], active = '__all__', onSelect }) {
+export function renderPhaseStepper({ phases = [], active = '__all__', viewState, onSelect }) {
   const wrap = document.createElement('div');
   wrap.className = 'kanban-phase-stepper v12c';
   wrap.dataset.cmp = 'phase-stepper';
 
-  // Split phases by status. The first 'active' phase wins; if none, the row
-  // becomes past chips + future cards with no center card.
-  const activeIdx = phases.findIndex(p => (p.status || '').toLowerCase() === 'active');
-  const pastPhases   = activeIdx >= 0 ? phases.slice(0, activeIdx) : phases.filter(p => (p.status || '').toLowerCase() === 'done');
-  const futurePhases = activeIdx >= 0 ? phases.slice(activeIdx + 1) : phases.filter(p => (p.status || '').toLowerCase() === 'future');
-  const activePhase  = activeIdx >= 0 ? phases[activeIdx] : null;
+  // Split phases by status using the shared bucketing lib (also handles archived).
+  const buckets = bucketPhases(phases);
+  const pastPhases     = buckets.past;
+  const futurePhases   = buckets.future;
+  const activePhase    = buckets.active;
+  const archivedPhases = buckets.archived;
 
-  // Local view state — offsets for the past + future carousels.
-  const view = { pastOffset: 0, futureOffset: 0 };
+  // Carousel offsets — owned by caller via `viewState` so re-renders preserve scroll.
+  // Falls back to a fresh local object when no caller state is provided (tests / standalone use).
+  const view = viewState || { pastOffset: 0, futureOffset: 0 };
+  if (typeof view.pastOffset !== 'number')   view.pastOffset = 0;
+  if (typeof view.futureOffset !== 'number') view.futureOffset = 0;
+
+  // Clamp offsets in case the phase set shrank between renders.
+  view.pastOffset   = Math.max(0, Math.min(view.pastOffset,   Math.max(0, pastPhases.length   - VISIBLE_PAST)));
+  view.futureOffset = Math.max(0, Math.min(view.futureOffset, Math.max(0, futurePhases.length - VISIBLE_FUTURE)));
 
   // ── Past region: outer slide ‹  chips  inner slide › ──
   const pastRegion = document.createElement('div');
