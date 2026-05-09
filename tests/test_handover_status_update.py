@@ -3,7 +3,6 @@ enum, and is idempotent."""
 import sys
 from pathlib import Path
 
-import pytest
 import yaml
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
@@ -55,12 +54,16 @@ def test_update_status_reason_is_optional(tmp_path, monkeypatch):
     backlog_server.backlog_handover_update_status(hid, "done")
     fm, _ = read_handover(bp, hid)
     assert fm["status"] == "done"
-    assert fm.get("status_reason", "") == ""
+    assert "status_reason" not in fm
 
 
-def test_update_status_persists_user_set_lock(tmp_path, monkeypatch):
+def test_update_status_empty_reason_preserves_previous(tmp_path, monkeypatch):
+    """Passing reason='' on a follow-up update keeps any existing
+    status_reason intact (the if-reason guard is intentional, not a bug)."""
     bp = _make_backlog(tmp_path, monkeypatch)
     hid, _ = write_handover(bp, tldr="t", session_kind="end-of-day")
-    backlog_server.backlog_handover_update_status(hid, "done")
+    backlog_server.backlog_handover_update_status(hid, "in-progress", reason="initial")
+    backlog_server.backlog_handover_update_status(hid, "done")  # no reason passed
     fm, _ = read_handover(bp, hid)
-    assert fm["status_user_set"] is True
+    assert fm["status"] == "done"
+    assert fm["status_reason"] == "initial"  # preserved, not cleared

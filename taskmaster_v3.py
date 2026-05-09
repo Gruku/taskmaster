@@ -959,6 +959,9 @@ def update_handover_status(
     """Explicit user-driven status change. Sets status_user_set: true so
     subsequent auto-transitions skip this handover.
 
+    Passing an empty `reason` preserves any existing `status_reason` rather
+    than clearing it. Pass an explicit non-empty value to overwrite.
+
     Raises ValueError on bad enum, FileNotFoundError if missing.
     """
     if status not in HANDOVER_STATUSES:
