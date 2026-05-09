@@ -251,8 +251,6 @@ export async function mount(root, { store, api, prefs }) {
     const tasksInPhase = phaseScoped
       ? (phaseFilter === '__orphans__' ? tasks.filter(t => !t.phase) : tasks.filter(t => t.phase === phaseFilter))
       : tasks;
-    const visibleEpics = epicsForPhase(epicsArr, tasks, phaseFilter);
-
     const filterCount =
       state.filters.priorities.length +
       state.filters.epics.length +
