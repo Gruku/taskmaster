@@ -4,6 +4,11 @@
 // Then the first 'active' phase wins; everything before it (still done) is past,
 // everything after is future. With no active phase, done → past, planned/future → future.
 
+/**
+ * Bucket phases by status.
+ * @param {Array<{id: string, status?: string}>} phases
+ * @returns {{ past: Array, active: Object|null, future: Array, archived: Array }}
+ */
 export function bucketPhases(phases) {
   const list = Array.isArray(phases) ? phases : [];
   const norm = (s) => String(s || '').toLowerCase();
