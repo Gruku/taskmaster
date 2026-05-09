@@ -175,7 +175,40 @@ export function renderPhaseStepper({ phases = [], active = '__all__', viewState,
     futureStrip.style.transform = `translateX(-${x}px)`;
   }
 
+  function ensureSelectedVisible() {
+    if (!active || active === '__all__' || active === '__orphans__') return;
+
+    // Past region: window covers indices [pastLen - VISIBLE_PAST - pastOffset, pastLen - pastOffset)
+    const pastIdx = pastPhases.findIndex(p => p.id === active);
+    if (pastIdx >= 0) {
+      const pastLen = pastPhases.length;
+      const visStart = Math.max(0, pastLen - VISIBLE_PAST - view.pastOffset);
+      const visEnd   = Math.max(0, pastLen - view.pastOffset);
+      if (pastIdx < visStart || pastIdx >= visEnd) {
+        // Centre the index in the window when possible.
+        const desiredVisStart = Math.max(0, pastIdx - Math.floor(VISIBLE_PAST / 2));
+        const newOffset = Math.max(0, pastLen - VISIBLE_PAST - desiredVisStart);
+        view.pastOffset = Math.max(0, Math.min(newOffset, Math.max(0, pastLen - VISIBLE_PAST)));
+      }
+      return;
+    }
+
+    // Future region: window covers indices [futureOffset, futureOffset + VISIBLE_FUTURE)
+    const futureIdx = futurePhases.findIndex(p => p.id === active);
+    if (futureIdx >= 0) {
+      const visStart = view.futureOffset;
+      const visEnd   = view.futureOffset + VISIBLE_FUTURE;
+      if (futureIdx < visStart || futureIdx >= visEnd) {
+        const newOffset = Math.max(0, futureIdx - Math.floor(VISIBLE_FUTURE / 2));
+        const maxOffset = Math.max(0, futurePhases.length - VISIBLE_FUTURE);
+        view.futureOffset = Math.max(0, Math.min(newOffset, maxOffset));
+        applyFutureScroll();
+      }
+    }
+  }
+
   function repaint() {
+    ensureSelectedVisible();
     const pastLen = pastPhases.length;
     const visStart = Math.max(0, pastLen - VISIBLE_PAST - view.pastOffset);
     const visEnd   = Math.max(0, pastLen - view.pastOffset);
