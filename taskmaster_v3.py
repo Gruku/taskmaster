@@ -1494,13 +1494,6 @@ def sync_lesson_index(
 
 # ── Ideas ────────────────────────────────────────────────────
 
-# Required frontmatter fields validated on every write.
-_IDEA_REQUIRED_FIELDS = ("id", "title", "created", "created_by")
-
-# Fields surfaced in the IDEAS.md line + viewer summary list.
-_IDEA_INDEX_LINE_STATUS_KEY = "status"
-
-
 def idea_path(backlog_path: Path, idea_id: str) -> Path:
     return backlog_path.parent / "ideas" / f"{idea_id}.md"
 
