@@ -704,6 +704,16 @@ HANDOVER_KINDS = (
     "auto-stage",
 )
 
+# Three-state lifecycle for handovers — see specs/2026-05-09-handover-status-design.md
+HANDOVER_STATUSES = ("todo", "in-progress", "done")
+
+
+def _default_handover_status(session_kind: str) -> str:
+    """auto-stage handovers are bookkeeping checkpoints — born done. All other
+    kinds default to todo so the user explicitly clears their backlog."""
+    return "done" if session_kind == "auto-stage" else "todo"
+
+
 # Index cap — `handovers:` array in backlog.yaml is bounded.
 HANDOVER_INDEX_CAP = 30
 
@@ -801,6 +811,9 @@ def write_handover(
         "task_ids": list(task_ids or []),
         "session_kind": session_kind,
     }
+    fm["status"] = _default_handover_status(session_kind)
+    fm["status_changed"] = fm["created"]
+    fm["status_user_set"] = False
     if context_size_at_write:
         fm["context_size_at_write"] = context_size_at_write
     if supersedes:
@@ -937,7 +950,10 @@ def apply_handover_review_flag(
 
 
 # Fields kept in the backlog.yaml `handovers:` index entry.
-_HANDOVER_INDEX_FIELDS = ("id", "date", "created", "tldr", "next_action", "task_ids", "session_kind")
+_HANDOVER_INDEX_FIELDS = (
+    "id", "date", "created", "tldr", "next_action",
+    "task_ids", "session_kind", "status",
+)
 
 
 def _handover_index_entry(fm: dict[str, Any]) -> dict[str, Any]:
