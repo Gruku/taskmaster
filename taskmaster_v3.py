@@ -949,6 +949,33 @@ def apply_handover_review_flag(
     return target
 
 
+def update_handover_status(
+    backlog_path: Path,
+    *,
+    handover_id: str,
+    status: str,
+    reason: str = "",
+) -> tuple[dict[str, Any], Path]:
+    """Explicit user-driven status change. Sets status_user_set: true so
+    subsequent auto-transitions skip this handover.
+
+    Raises ValueError on bad enum, FileNotFoundError if missing.
+    """
+    if status not in HANDOVER_STATUSES:
+        raise ValueError(f"status must be one of {HANDOVER_STATUSES}, got {status!r}")
+    target = handover_path(backlog_path, handover_id)
+    if not target.exists():
+        raise FileNotFoundError(handover_id)
+    fm, body = read_handover(backlog_path, handover_id)
+    fm["status"] = status
+    fm["status_changed"] = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+    fm["status_user_set"] = True
+    if reason:
+        fm["status_reason"] = reason
+    write_task_file(target, fm, body)
+    return fm, target
+
+
 # Fields kept in the backlog.yaml `handovers:` index entry.
 _HANDOVER_INDEX_FIELDS = (
     "id", "date", "created", "tldr", "next_action",

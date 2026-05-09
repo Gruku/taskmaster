@@ -73,6 +73,7 @@ from taskmaster_v3 import (
     read_handover as _read_handover,
     apply_supersession as _apply_supersession,
     apply_handover_review_flag as _apply_handover_review_flag,
+    update_handover_status as _update_handover_status,
     list_handover_ids as _list_handover_ids,
     latest_handover_id as _latest_handover_id,
     sync_handover_index as _sync_handover_index,
@@ -1795,6 +1796,37 @@ def backlog_handover_supersede(old_id: str, new_id: str) -> str:
     except FileNotFoundError as exc:
         return f"Error: handover not found: {exc}."
     return f"Superseded {old_id} → {new_id} ({old_path.name} updated)."
+
+
+@mcp.tool()
+def backlog_handover_update_status(
+    handover_id: str,
+    status: str,
+    reason: str = "",
+) -> str:
+    """Manually set a handover's status (todo / in-progress / done).
+
+    Marks status_user_set: true — subsequent auto-transitions (supersession,
+    task-complete, resume) will skip this handover.
+
+    Args:
+        handover_id: The handover id (e.g. "2026-05-09-shipped-x").
+        status: One of todo, in-progress, done.
+        reason: Optional free-text rationale stored as `status_reason`.
+    """
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    try:
+        fm, _ = _update_handover_status(bp, handover_id=handover_id, status=status, reason=reason)
+    except ValueError as exc:
+        return f"Error: {exc}"
+    except FileNotFoundError:
+        return f"Handover not found: {handover_id}"
+    data = _load()
+    _sync_handover_index(data, bp)
+    _save(data)
+    return f"Handover {handover_id} → status={fm['status']} (user-set)."
 
 
 @mcp.tool()
