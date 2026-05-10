@@ -62,7 +62,48 @@ Call `backlog_migrate_v3()`. Surface the response verbatim — do not paraphrase
 
 If the tool returns an error, surface it as-is and stop. Do not retry automatically.
 
-## Step 5: Post-flight — gitignore
+## Step 5: Verify the viewer flipped to v3 (and tell the user to refresh)
+
+`backlog_migrate_v3` flips `use_v3: true` internally as part of the migration, but its inner flip is wrapped in a `try/except: pass` that silently swallows errors. Verify it actually took, and prompt the user to refresh their viewer tab so they see the new shell.
+
+1. Call `viewer_prefs_get` and parse the JSON response.
+2. If `use_v3` is `true`: tell the user "Viewer is on the v3 shell — **hard-refresh any open viewer tab** (Ctrl+Shift+R / Cmd+Shift+R) to load it. The viewer reads `use_v3` per-request, but the browser may have cached the v2 page."
+3. If `use_v3` is `false` or missing: the inner flip silently failed. Call `viewer_prefs_set('{"use_v3": true}')` explicitly. If it returns anything other than `ok`, surface the error and tell the user the schema migrated cleanly but the viewer toggle needs manual fixing — they can call `viewer_prefs_set('{"use_v3": true}')` themselves later. Continue with the remaining steps either way.
+
+## Step 6: Offer to canonicalize layout (legacy `.claude/` projects only)
+
+If the project's backlog lives at `.claude/backlog.yaml` rather than `.taskmaster/backlog.yaml`, the migration completed in-place but artifacts (tasks, handovers, lessons, issues, snapshots, auto state) are now scattered under `.claude/`. v3 conventions, gitignore guidance, and most documentation assume `.taskmaster/`. Offer to consolidate.
+
+Detect by checking whether `.claude/backlog.yaml` exists in the project root and `.taskmaster/backlog.yaml` does not. If so, ask:
+
+```
+AskUserQuestion({
+  questions: [
+    {
+      question: "Consolidate v3 artifacts under .taskmaster/ instead of .claude/?",
+      header: "Canonicalize",
+      multiSelect: false,
+      options: [
+        { label: "Yes, canonicalize", description: "Run backlog_canonicalize_layout — moves backlog.yaml + artifact subdirs into .taskmaster/. Idempotent; refuses to clobber." },
+        { label: "Show plan first", description: "Run backlog_canonicalize_layout(dry_run=true) so I can see exactly what would move" },
+        { label: "Skip", description: "Leave artifacts under .claude/. I can canonicalize later." }
+      ]
+    }
+  ]
+})
+```
+
+- **"Yes, canonicalize"** → call `backlog_canonicalize_layout()`. Surface the response verbatim.
+- **"Show plan first"** → call `backlog_canonicalize_layout(dry_run=true)` and surface the plan. Then re-ask whether to proceed for real.
+- **"Skip"** → acknowledge and move on.
+
+If `.taskmaster/backlog.yaml` already exists (already canonical), skip this step entirely without asking.
+
+## Step 7: Seed the recap baseline
+
+`backlog_recap` diffs the current backlog against the last snapshot in `<artifact_root>/snapshots/last.json`. Until one exists, recap output won't be useful. Seed it now by calling `backlog_snapshot()`. Surface its one-line response. No confirmation question — this is harmless and unblocks recap immediately.
+
+## Step 8: Post-flight — gitignore
 
 After a successful migration, check whether `.gitignore` in the project root contains entries for `.taskmaster/snapshots/` and `.taskmaster/auto/`. These directories hold runtime state (snapshot diffs, auto-mode cursor) that should not be committed.
 
@@ -94,7 +135,7 @@ If the user selects "Yes, add them": append the following block to `.gitignore` 
 
 If the user selects "Skip": acknowledge and move on.
 
-## Step 6: Tour the v3 surfaces
+## Step 9: Tour the v3 surfaces
 
 Tell the user what they just unlocked:
 
