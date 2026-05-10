@@ -12,6 +12,7 @@ const state = {
   activeAutoSessionId: null, // currently inspected session in auto-mode page
   lessons: null,           // lesson list; populated by lessons.js
   issues: null,            // issue list; populated by issues.js
+  ideas: null,             // idea list; populated by ideas.js
   etags: {},               // keyed by `task:<id>` or `backlog`
 };
 
@@ -52,6 +53,7 @@ export const store = {
   getActiveAutoSession:() => state.activeAutoSessionId,
   getLessons:          () => state.lessons,
   getIssues:           () => state.issues,
+  getIdeas:            () => state.ideas,
 
   setBacklog:  (b) => { if (jsonEqual(state.backlog, b)) return; state.backlog = b; emit('backlog'); },
   setPrefs:    (p) => { state.prefs = p;    emit('prefs'); },
@@ -60,6 +62,7 @@ export const store = {
   setActiveAutoSession:(sid) => { state.activeAutoSessionId = sid; emitValue('activeAutoSession', sid); },
   setLessons:  (v) => { state.lessons = v || []; emit('lessons'); },
   setIssues:   (v) => { state.issues = v || [];  emit('issues'); },
+  setIdeas:    (v) => { state.ideas  = v || [];  emit('ideas');  },
   setEtag: (key, etag) => { state.etags[key] = etag; },
   getEtag: (key) => state.etags[key] || null,
 
