@@ -42,6 +42,9 @@ Read the user's message and match it to one of these intents:
 | (v3) "Supersede this handover", "the new handover replaces the old one" | Direct tool call — `backlog_handover_supersede(old_id, new_id)` |
 | (v3) "Remember this", "save as a lesson", "learn this lesson", "memorize this", "this keeps happening", "we always do X here", "we got burned by this last time", "promote candidate to lesson", "review lesson candidates", "flag this session for retro" | `taskmaster:lesson` |
 | (v3) "Show lessons", "what lessons apply", "lesson digest" | Direct tool call — `backlog_lesson_digest` or `backlog_lesson_match` |
+| User said "save this as an idea", "remember this idea", "/add-idea ...", or described an idea explicitly | `taskmaster:add-idea` |
+| (v3) "List ideas", "what ideas have I logged", "show parking lot" | Direct tool call — `backlog_idea_list` (filter by `status` or `tag` as needed) |
+| (v3) "Archive that idea", "promote IDEA-NNN to a task" | Direct tool call — `backlog_idea_update` (set `archived=True` and/or `promoted_to="<task-id>"`) |
 | (v3) "What changed since last time", "recap", "project state delta" | Direct tool call — `backlog_recap` |
 | (v3) "Snapshot the backlog", "save state for later" | Direct tool call — `backlog_snapshot` |
 | (v3) "Auto this task", "autopilot T-001", "run task auto" | `taskmaster:auto-task` |
