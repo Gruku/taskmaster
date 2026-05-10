@@ -294,3 +294,45 @@ def test_list_ideas_limit(tmp_path):
         write_idea(bp, title=f"idea {i}")
     out = list_ideas(bp, limit=3)
     assert len(out) == 3
+
+
+def test_list_ideas_summary_false_includes_body(tmp_path):
+    """summary=False augments each summary record with its full body."""
+    from taskmaster_v3 import write_idea, list_ideas
+    bp = tmp_path / ".taskmaster" / "backlog.yaml"
+    bp.parent.mkdir(parents=True)
+    write_idea(bp, title="A", body="alpha body")
+    write_idea(bp, title="B", body="beta body")
+    out = list_ideas(bp, summary=False)
+    bodies_by_title = {e["title"]: e["body"] for e in out}
+    assert bodies_by_title == {"A": "alpha body", "B": "beta body"}
+
+
+def test_list_ideas_summary_true_omits_body(tmp_path):
+    """summary=True (default) omits body to keep payloads small."""
+    from taskmaster_v3 import write_idea, list_ideas
+    bp = tmp_path / ".taskmaster" / "backlog.yaml"
+    bp.parent.mkdir(parents=True)
+    write_idea(bp, title="solo", body="some body content")
+    out = list_ideas(bp)  # default summary=True
+    assert "body" not in out[0]
+
+
+def test_write_idea_concurrent_allocations_unique(tmp_path):
+    """Two interleaved write_idea calls must not collide on the same IDEA-NNN.
+
+    Simulates the race by pre-touching IDEA-001 (as if another writer just
+    won the race) and then calling write_idea — it should bump to IDEA-002
+    rather than overwriting.
+    """
+    from taskmaster_v3 import write_idea, idea_path
+    bp = tmp_path / ".taskmaster" / "backlog.yaml"
+    bp.parent.mkdir(parents=True)
+    # Pre-create IDEA-001 to simulate another writer holding the slot.
+    pre = idea_path(bp, "IDEA-001")
+    pre.parent.mkdir(parents=True, exist_ok=True)
+    pre.touch()
+    iid, _ = write_idea(bp, title="should-bump")
+    assert iid == "IDEA-002"
+    # The pre-touched IDEA-001 file is left untouched (empty).
+    assert pre.read_text(encoding="utf-8") == ""

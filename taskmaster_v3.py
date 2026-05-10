@@ -1614,8 +1614,27 @@ def write_idea(
     """
     if not title or not title.strip():
         raise ValueError("idea title is required")
-    iid = idea_id or next_idea_id(backlog_path)
     created = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if idea_id:
+        # Caller-supplied id — overwrite-friendly, single attempt.
+        iid = idea_id
+        target = idea_path(backlog_path, iid)
+        target.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        # Race-safe id allocation: bump-and-retry until exclusive create
+        # succeeds. Two concurrent writers can't both grab the same IDEA-NNN.
+        idea_dir(backlog_path).mkdir(parents=True, exist_ok=True)
+        for _ in range(64):
+            candidate = next_idea_id(backlog_path)
+            candidate_target = idea_path(backlog_path, candidate)
+            try:
+                candidate_target.touch(exist_ok=False)
+                iid, target = candidate, candidate_target
+                break
+            except FileExistsError:
+                continue
+        else:
+            raise RuntimeError("could not allocate IDEA-NNN id after 64 attempts")
     fm: dict[str, Any] = {
         "id": iid,
         "title": title.strip(),
@@ -1630,8 +1649,6 @@ def write_idea(
         "archived": False,
     }
     _validate_idea(fm)
-    target = idea_path(backlog_path, iid)
-    target.parent.mkdir(parents=True, exist_ok=True)
     write_task_file(target, fm, body)
     lines = _index_upsert_line(_read_ideas_index(backlog_path), iid, _idea_index_line(fm))
     _write_ideas_index(backlog_path, lines)
@@ -1680,12 +1697,15 @@ def list_ideas(
     related_issue: str | None = None,
     related_lesson: str | None = None,
     limit: int | None = None,
+    summary: bool = True,
 ) -> list[dict[str, Any]]:
     """List ideas with optional filters.
 
     Default sort is newest-first by `created`. Pass `idea_id` to fetch one
-    record (body included). Without `idea_id`, results are summaries —
-    the markdown body is omitted to keep payloads small.
+    record (body always included). Without `idea_id`, `summary=True` (the
+    default) omits the body to keep list payloads small; pass `summary=False`
+    to include body on every entry — useful for callers that want to render
+    detail without a second fetch (e.g. the viewer).
 
     Filters compose as AND. `archived` defaults to False; pass True to
     include archived ideas in the result set.
@@ -1700,7 +1720,7 @@ def list_ideas(
     out: list[dict[str, Any]] = []
     for iid in list_idea_ids(backlog_path):
         try:
-            fm, _ = read_idea(backlog_path, iid)
+            fm, body = read_idea(backlog_path, iid)
         except (OSError, ValueError):
             continue
         if not archived and fm.get("archived"):
@@ -1715,7 +1735,10 @@ def list_ideas(
             continue
         if related_lesson is not None and related_lesson not in (fm.get("related_lessons") or []):
             continue
-        out.append(fm)
+        if summary:
+            out.append(fm)
+        else:
+            out.append({**fm, "body": body})
 
     def _sort_key(e: dict[str, Any]) -> tuple[str, int]:
         iid = e.get("id", "")

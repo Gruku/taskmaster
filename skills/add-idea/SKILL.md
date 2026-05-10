@@ -30,7 +30,7 @@ Optional flags (any subset):
 
 ## Natural-language form
 
-The user can also say "save this as an idea: <text>" and you should treat it the same as a slash call with the text as the body.
+The user can also say "save this as an idea: <text>" — treat it the same as a slash call. The full `<text>` becomes the body. Derive the **title** from the first sentence/clause of `<text>` (truncate to ~60 chars if it runs long); the same `<text>` (verbatim) is the body. Pass the derived title to the required `title` parameter of `backlog_idea_create`.
 
 ## Procedure
 

@@ -768,7 +768,10 @@ export async function mount(root, { store, prefs }) {
   // ─── API helpers ────────────────────────────────────────────────────────────
 
   async function getIdeas() {
-    const r = await fetch('/api/ideas');
+    // archived=true so the in-screen archived toggle filters over the full
+    // dataset; summary=false so the detail pane has the body without a
+    // second fetch.
+    const r = await fetch('/api/ideas?archived=true&summary=false');
     if (!r.ok) {
       if (r.status === 404) return { ideas: [] };
       throw new Error(`getIdeas failed: ${r.status}`);
@@ -790,15 +793,30 @@ export async function mount(root, { store, prefs }) {
   }
 
   // ─── initial load ────────────────────────────────────────────────────────────
-  if (!store.getIdeas() || store.getIdeas().length === 0) {
-    try {
-      const data = await getIdeas();
-      store.setIdeas(data.ideas || data || []);
-    } catch (e) {
-      console.error('Ideas: initial load failed', e);
-      store.setIdeas([]);
-    }
+  // Always refetch on mount — `store` is a soft cache, not the source of
+  // truth. Without this, navigating away and back shows stale data after
+  // ideas are created/archived elsewhere (CLI, another tab).
+  let loadError = null;
+  try {
+    const data = await getIdeas();
+    store.setIdeas(data.ideas || data || []);
+  } catch (e) {
+    console.error('Ideas: initial load failed', e);
+    loadError = e;
+    // Preserve any cached data so the user still sees something; if the
+    // cache is also empty, render() will show the empty state on top of
+    // the error banner below.
+    if (!store.getIdeas()) store.setIdeas([]);
   }
+
+  if (loadError) {
+    const banner = document.createElement('div');
+    banner.className = 'ideas-error-banner';
+    banner.setAttribute('role', 'alert');
+    banner.textContent = `Failed to load ideas: ${loadError.message}. Showing cached data.`;
+    screen.insertBefore(banner, screen.firstChild);
+  }
+
   render();
 
   return () => {};

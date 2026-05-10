@@ -80,7 +80,7 @@ def test_backlog_idea_update_unknown_id_returns_error(tmp_path, monkeypatch):
 
 # ── HTTP tests for GET /api/ideas ────────────────────────────────────────────
 
-def _write_idea_file(root: Path, idea_id: str, title: str, **overrides):
+def _write_idea_file(root: Path, idea_id: str, title: str, body: str = "", **overrides):
     """Write an idea .md file directly into tmp_path (mirrors _write_issue)."""
     import yaml
     from datetime import datetime, timezone
@@ -101,7 +101,7 @@ def _write_idea_file(root: Path, idea_id: str, title: str, **overrides):
     ideas_dir = root / ".taskmaster" / "ideas"
     ideas_dir.mkdir(parents=True, exist_ok=True)
     p = ideas_dir / f"{idea_id}.md"
-    fm = "---\n" + yaml.safe_dump(base, sort_keys=False).rstrip() + "\n---\n"
+    fm = "---\n" + yaml.safe_dump(base, sort_keys=False).rstrip() + "\n---\n" + (body + "\n" if body else "")
     p.write_text(fm)
 
 
@@ -152,6 +152,24 @@ def test_get_ideas_excludes_archived_by_default(running_server, tmp_path):
     resp2 = urllib.request.urlopen(f"{base}/api/ideas?archived=true")
     titles2 = [i["title"] for i in json.loads(resp2.read())["ideas"]]
     assert "archived-one" in titles2
+
+
+def test_get_ideas_summary_false_includes_body(running_server, tmp_path):
+    """The viewer fetches with summary=false so the detail pane has body."""
+    import json
+    import urllib.request
+    base, _ = running_server
+    _write_idea_file(tmp_path, "IDEA-030", "with-body", body="this is the body")
+    # Default GET (summary defaults false on HTTP) should include body
+    resp = urllib.request.urlopen(f"{base}/api/ideas?summary=false")
+    payload = json.loads(resp.read())
+    record = next(i for i in payload["ideas"] if i["id"] == "IDEA-030")
+    assert record["body"].strip() == "this is the body"
+    # summary=true keeps body out
+    resp2 = urllib.request.urlopen(f"{base}/api/ideas?summary=true")
+    payload2 = json.loads(resp2.read())
+    record2 = next(i for i in payload2["ideas"] if i["id"] == "IDEA-030")
+    assert "body" not in record2
 
 
 def test_post_ideas_creates_idea(running_server, tmp_path):
