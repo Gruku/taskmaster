@@ -1,6 +1,8 @@
 """HTTP + MCP wrapper tests for ideas."""
 from pathlib import Path
 
+from tests.test_server_api import running_server  # noqa: F401
+
 
 def test_backlog_idea_create_writes_file_and_returns_id(tmp_path, monkeypatch):
     import backlog_server
@@ -74,3 +76,79 @@ def test_backlog_idea_update_unknown_id_returns_error(tmp_path, monkeypatch):
     monkeypatch.setattr(backlog_server, "_backlog_path", lambda: bp)
     out = backlog_server.backlog_idea_update(idea_id="IDEA-999", status="x")
     assert out.startswith("Idea not found")
+
+
+# ── HTTP tests for GET /api/ideas ────────────────────────────────────────────
+
+def _write_idea_file(root: Path, idea_id: str, title: str, **overrides):
+    """Write an idea .md file directly into tmp_path (mirrors _write_issue)."""
+    import yaml
+    from datetime import datetime, timezone
+    base = {
+        "id": idea_id,
+        "title": title,
+        "created": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "created_by": "Claude",
+        "status": "",
+        "tags": [],
+        "related_tasks": [],
+        "related_issues": [],
+        "related_lessons": [],
+        "promoted_to": None,
+        "archived": False,
+    }
+    base.update(overrides)
+    ideas_dir = root / ".taskmaster" / "ideas"
+    ideas_dir.mkdir(parents=True, exist_ok=True)
+    p = ideas_dir / f"{idea_id}.md"
+    fm = "---\n" + yaml.safe_dump(base, sort_keys=False).rstrip() + "\n---\n"
+    p.write_text(fm)
+
+
+def test_get_ideas_returns_list(running_server, tmp_path):
+    """Verify /api/ideas serves the JSON the viewer expects."""
+    import json
+    import time
+    import urllib.request
+    base, _ = running_server
+    _write_idea_file(tmp_path, "IDEA-001", "A", status="exploring", tags=["perf"])
+    time.sleep(0.01)  # ensure distinct created timestamps for ordering
+    _write_idea_file(tmp_path, "IDEA-002", "B")
+    resp = urllib.request.urlopen(f"{base}/api/ideas")
+    payload = json.loads(resp.read())
+    assert "ideas" in payload
+    titles = [i["title"] for i in payload["ideas"]]
+    assert "A" in titles
+    assert "B" in titles
+    # Newest first (by id number since timestamps may be equal in fast runs)
+    ids = [i["id"] for i in payload["ideas"]]
+    assert ids.index("IDEA-002") < ids.index("IDEA-001")
+
+
+def test_get_ideas_filter_by_status(running_server, tmp_path):
+    import json
+    import urllib.request
+    base, _ = running_server
+    _write_idea_file(tmp_path, "IDEA-010", "A", status="exploring")
+    _write_idea_file(tmp_path, "IDEA-011", "B", status="parking-lot")
+    resp = urllib.request.urlopen(f"{base}/api/ideas?status=exploring")
+    payload = json.loads(resp.read())
+    titles = [i["title"] for i in payload["ideas"]]
+    assert "A" in titles
+    assert "B" not in titles
+
+
+def test_get_ideas_excludes_archived_by_default(running_server, tmp_path):
+    import json
+    import urllib.request
+    base, _ = running_server
+    _write_idea_file(tmp_path, "IDEA-020", "active")
+    _write_idea_file(tmp_path, "IDEA-021", "archived-one", archived=True)
+    resp = urllib.request.urlopen(f"{base}/api/ideas")
+    titles = [i["title"] for i in json.loads(resp.read())["ideas"]]
+    assert "active" in titles
+    assert "archived-one" not in titles
+    # Explicit opt-in returns archived
+    resp2 = urllib.request.urlopen(f"{base}/api/ideas?archived=true")
+    titles2 = [i["title"] for i in json.loads(resp2.read())["ideas"]]
+    assert "archived-one" in titles2

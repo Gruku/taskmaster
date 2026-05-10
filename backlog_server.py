@@ -4993,6 +4993,33 @@ class ViewerHandler(BaseHTTPRequestHandler):
                     continue
             self._send_json(200, {"issues": issues})
             return
+        elif clean_path.startswith("/api/ideas"):
+            from urllib.parse import urlparse, parse_qs
+            from taskmaster_v3 import _resolve_artifact_root
+            artifact_root = _resolve_artifact_root()
+            bp = artifact_root / "backlog.yaml"
+            if not bp.exists():
+                self._send_json(200, {"ideas": []})
+                return
+            qs = parse_qs(urlparse(self.path).query)
+            archived = qs.get("archived", ["false"])[0].lower() == "true"
+            status = qs.get("status", [""])[0] or None
+            tag = qs.get("tag", [""])[0] or None
+            related_task = qs.get("related_task", [""])[0] or None
+            try:
+                limit = int(qs.get("limit", ["100"])[0])
+            except (TypeError, ValueError):
+                limit = 100
+            entries = _list_ideas(
+                bp,
+                status=status,
+                tag=tag,
+                archived=archived,
+                related_task=related_task,
+                limit=max(1, limit),
+            )
+            self._send_json(200, {"ideas": entries})
+            return
         else:
             self.send_error(HTTPStatus.NOT_FOUND)
 
