@@ -152,3 +152,52 @@ def test_get_ideas_excludes_archived_by_default(running_server, tmp_path):
     resp2 = urllib.request.urlopen(f"{base}/api/ideas?archived=true")
     titles2 = [i["title"] for i in json.loads(resp2.read())["ideas"]]
     assert "archived-one" in titles2
+
+
+def test_post_ideas_creates_idea(running_server, tmp_path):
+    """POST /api/ideas creates an idea and the GET endpoint returns it."""
+    import json
+    import urllib.request
+    base, _ = running_server
+    payload = json.dumps({
+        "title": "Created from viewer",
+        "body": "body content",
+        "status": "exploring",
+        "tags": ["perf"],
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        f"{base}/api/ideas",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    resp = urllib.request.urlopen(req)
+    assert resp.status == 201
+    out = json.loads(resp.read())
+    assert out["ok"] is True
+    assert out["id"].startswith("IDEA-")
+    # Confirm round-trip via GET
+    resp2 = urllib.request.urlopen(f"{base}/api/ideas")
+    titles = [i["title"] for i in json.loads(resp2.read())["ideas"]]
+    assert "Created from viewer" in titles
+
+
+def test_post_ideas_rejects_missing_title(running_server, tmp_path):
+    """POST without title returns 400."""
+    import json
+    import urllib.request
+    base, _ = running_server
+    req = urllib.request.Request(
+        f"{base}/api/ideas",
+        data=json.dumps({"body": "no title"}).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        urllib.request.urlopen(req)
+        assert False, "expected HTTPError 400"
+    except urllib.error.HTTPError as e:
+        assert e.code == 400
+        body = json.loads(e.read())
+        assert body["ok"] is False
+        assert "title" in body["error"]

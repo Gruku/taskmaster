@@ -5120,6 +5120,42 @@ class ViewerHandler(BaseHTTPRequestHandler):
         import re
         from taskmaster_v3 import lesson_reinforce as _reinforce
 
+        if self.path == "/api/ideas":
+            from taskmaster_v3 import _resolve_artifact_root
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length).decode("utf-8") if length else ""
+            try:
+                payload = json.loads(raw) if raw else {}
+            except Exception as e:
+                self._send_json(400, {"ok": False, "error": f"invalid JSON: {e}"})
+                return
+            title = (payload.get("title") or "").strip()
+            if not title:
+                self._send_json(400, {"ok": False, "error": "title is required"})
+                return
+            artifact_root = _resolve_artifact_root()
+            bp = artifact_root / "backlog.yaml"
+            if not bp.exists():
+                self._send_json(400, {"ok": False, "error": f"no backlog at {bp}"})
+                return
+            try:
+                iid, target = _write_idea(
+                    bp,
+                    title=title,
+                    body=payload.get("body", ""),
+                    tags=payload.get("tags") or [],
+                    status=payload.get("status", ""),
+                    related_tasks=payload.get("related_tasks") or [],
+                    related_issues=payload.get("related_issues") or [],
+                    related_lessons=payload.get("related_lessons") or [],
+                    created_by=payload.get("created_by", "user"),
+                )
+            except ValueError as e:
+                self._send_json(400, {"ok": False, "error": str(e)})
+                return
+            self._send_json(201, {"ok": True, "id": iid, "path": str(target)})
+            return
+
         if self.path in ("/api/auto/pause", "/api/auto/stop"):
             from datetime import datetime, timezone
             from taskmaster_v3 import load_auto_session, save_auto_session, append_auto_event
