@@ -325,6 +325,18 @@ select.em-input {
   font-weight: normal;
 }
 
+/* ---- error banner (load failure) ---- */
+
+.ideas-error-banner {
+  padding: 10px 14px;
+  margin: 0 0 12px;
+  border: 1px solid var(--danger-border, var(--border));
+  border-radius: 4px;
+  background: var(--danger-bg, var(--s2));
+  color: var(--danger-ink, var(--ink-1));
+  font-size: 13px;
+}
+
 /* ---- narrow screens ---- */
 
 @media (max-width: 768px) {

@@ -2114,11 +2114,14 @@ def backlog_idea_list(
     related_issue: str = "",
     related_lesson: str = "",
     limit: int = 50,
+    summary: bool = True,
 ) -> str:
     """List ideas, optionally filtered. With `idea_id`, returns one full record.
 
-    Without `idea_id`, returns summary lines (no body) — newest first.
-    Filters compose as AND. By default archived ideas are excluded.
+    Without `idea_id`, returns summary lines (no body) — newest first. Pass
+    `summary=False` to render full record per entry (heavier payload, useful
+    when scripting). Filters compose as AND. By default archived ideas are
+    excluded.
     """
     bp = _backlog_path()
     if not bp.exists():
@@ -2141,9 +2144,18 @@ def backlog_idea_list(
         related_issue=related_issue or None,
         related_lesson=related_lesson or None,
         limit=max(1, limit),
+        summary=summary,
     )
     if not entries:
         return "No ideas match."
+    if not summary:
+        # Full-record mode: render each as a frontmatter+body block.
+        blocks = []
+        for e in entries:
+            body = e.pop("body", "")
+            fm_lines = [f"  {k}: {v}" for k, v in e.items()]
+            blocks.append("---\n" + "\n".join(fm_lines) + "\n---\n" + body)
+        return "\n\n".join(blocks)
     lines = []
     for e in entries:
         st = e.get("status") or ""
@@ -5110,6 +5122,10 @@ class ViewerHandler(BaseHTTPRequestHandler):
             status = qs.get("status", [""])[0] or None
             tag = qs.get("tag", [""])[0] or None
             related_task = qs.get("related_task", [""])[0] or None
+            # Default summary=False on HTTP so the viewer can render detail
+            # without a second fetch. MCP callers via backlog_idea_list still
+            # default to summary=True (they don't need every body in the list).
+            summary = qs.get("summary", ["false"])[0].lower() == "true"
             try:
                 limit = int(qs.get("limit", ["100"])[0])
             except (TypeError, ValueError):
@@ -5121,6 +5137,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 archived=archived,
                 related_task=related_task,
                 limit=max(1, limit),
+                summary=summary,
             )
             self._send_json(200, {"ideas": entries})
             return
