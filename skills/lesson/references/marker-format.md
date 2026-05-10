@@ -56,3 +56,29 @@ The risk: when Claude `/compact`s, the literal `<lesson-candidate>` tags in past
 - `scope="session"`: the *whole session* is interesting and worth retro-extracting later. The sweep does NOT propose a single lesson — instead, it stamps the next handover with `flag_for_review: true`. Days or weeks later, the user can run `taskmaster:lesson` with that handover id to batch-extract candidates from the session's commits + transcript.
 
 If you can name one specific gotcha, use `point`. If the value is "this whole session was a learning experience and I'll want to come back to it", use `session`.
+
+## `<idea-candidate>` (sister tag)
+
+Mirrors `<lesson-candidate>` but for ideas — lightweight thoughts, parking-lot items, future-work observations not yet ready to be a task.
+
+### Schema
+
+```xml
+<idea-candidate title="<short title>" tags="<comma-separated>" status="<freeform>" related-task="<task-id>">
+Optional one-paragraph context. Keep it short — the body of the resulting IDEA-NNN.md will be roughly this paragraph plus any quoted user phrasing that triggered the tag.
+</idea-candidate>
+```
+
+### Attributes
+
+- `title` (required) — short title for the idea (becomes IDEA-NNN.md title field)
+- `tags` (optional) — comma-separated freeform tags
+- `status` (optional) — freeform status. End-session sets `status="candidate"` automatically when committing tags it found, so don't pre-fill it unless you have a specific value in mind ("parking-lot", "exploring", etc.)
+- `related-task` (optional) — task id this idea attaches to (e.g. the active task at the moment of emission)
+- `related-issue`, `related-lesson` — same pattern, optional
+
+### When to emit
+
+When the user expresses an *ambient* idea — hedged ("hmm could be cool…"), tangential to the current task, low confidence. End-session sweeps these tags and commits each as IDEA-NNN.md with `status="candidate"`.
+
+If the idea is *sharp* (explicit framing, direct request, concrete-and-named), do NOT emit a tag — call `backlog_idea_create` directly and announce inline. See the start-session skill's "Mid-session behavior" section for the heuristic.

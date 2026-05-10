@@ -1639,6 +1639,243 @@ def sync_lesson_index(
     return backlog_data
 
 
+# ── Ideas ────────────────────────────────────────────────────
+
+def idea_path(backlog_path: Path, idea_id: str) -> Path:
+    return backlog_path.parent / "ideas" / f"{idea_id}.md"
+
+
+def idea_dir(backlog_path: Path) -> Path:
+    return backlog_path.parent / "ideas"
+
+
+def ideas_index_path(backlog_path: Path) -> Path:
+    return backlog_path.parent / "ideas" / "IDEAS.md"
+
+
+def list_idea_ids(backlog_path: Path) -> list[str]:
+    """List idea ids on disk, sorted numerically by trailing number."""
+    d = idea_dir(backlog_path)
+    if not d.exists():
+        return []
+
+    def _rank(p: Path) -> int:
+        m = re.search(r"(\d+)$", p.stem)
+        return int(m.group(1)) if m else -1
+
+    files = sorted(d.glob("IDEA-*.md"), key=_rank)
+    return [p.stem for p in files]
+
+
+def next_idea_id(backlog_path: Path) -> str:
+    """Allocate the next IDEA-NNN id (zero-padded, 3+ digits)."""
+    existing = list_idea_ids(backlog_path)
+    nums: list[int] = []
+    for ident in existing:
+        m = re.search(r"(\d+)$", ident)
+        if m:
+            nums.append(int(m.group(1)))
+    n = (max(nums) + 1) if nums else 1
+    return f"IDEA-{n:03d}"
+
+
+# Required frontmatter fields validated on every write.
+_IDEA_REQUIRED_FIELDS = ("id", "title", "created", "created_by")
+
+
+def _validate_idea(fm: dict[str, Any]) -> None:
+    """Raise ValueError if frontmatter violates idea invariants.
+
+    Idea schema is intentionally minimal — only id/title/created/created_by
+    are required. Everything else is optional, freeform passthrough.
+    """
+    for key in _IDEA_REQUIRED_FIELDS:
+        if key not in fm or fm[key] in (None, ""):
+            raise ValueError(f"idea field {key!r} is required")
+    if not isinstance(fm.get("title"), str) or not fm["title"].strip():
+        raise ValueError("idea title must be a non-empty string")
+
+
+def _idea_index_line(fm: dict[str, Any]) -> str:
+    """Render one IDEAS.md line for an idea record."""
+    iid = fm["id"]
+    title = fm["title"]
+    created = fm.get("created", "")
+    # "2026-05-09T14:30:00Z" → "2026-05-09 14:30"
+    short = created[:16].replace("T", " ") if isinstance(created, str) else ""
+    if fm.get("archived"):
+        return f"- {short} — [{iid}]({iid}.md) — ~~{title}~~ _(archived)_"
+    status = fm.get("status") or ""
+    suffix = f" _({status})_" if status else ""
+    return f"- {short} — [{iid}]({iid}.md) — {title}{suffix}"
+
+
+def _read_ideas_index(backlog_path: Path) -> list[str]:
+    """Return the data lines (non-header) of IDEAS.md, newest-first preserved."""
+    p = ideas_index_path(backlog_path)
+    if not p.exists():
+        return []
+    return [line for line in p.read_text(encoding="utf-8").splitlines() if line.startswith("- ")]
+
+
+def _write_ideas_index(backlog_path: Path, lines: list[str]) -> None:
+    """Write IDEAS.md with the canonical header + the supplied data lines."""
+    p = ideas_index_path(backlog_path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    body = "# Ideas\n\n" + "\n".join(lines) + ("\n" if lines else "")
+    atomic_write(p, body)
+
+
+def _index_upsert_line(lines: list[str], idea_id: str, new_line: str) -> list[str]:
+    """Replace the line for `idea_id` if present; otherwise prepend (newest first)."""
+    out: list[str] = []
+    found = False
+    for line in lines:
+        if f"[{idea_id}](" in line:
+            out.append(new_line)
+            found = True
+        else:
+            out.append(line)
+    if not found:
+        out.insert(0, new_line)
+    return out
+
+
+def write_idea(
+    backlog_path: Path,
+    *,
+    title: str,
+    body: str = "",
+    tags: list[str] | None = None,
+    status: str = "",
+    related_tasks: list[str] | None = None,
+    related_issues: list[str] | None = None,
+    related_lessons: list[str] | None = None,
+    created_by: str = "Claude",
+    idea_id: str | None = None,
+) -> tuple[str, Path]:
+    """Create a new idea file. Returns (id, path).
+
+    All fields beyond `title` are optional. `created` is auto-stamped as
+    ISO-8601 UTC. Side effect: appends/updates the IDEAS.md index line.
+    """
+    if not title or not title.strip():
+        raise ValueError("idea title is required")
+    iid = idea_id or next_idea_id(backlog_path)
+    created = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    fm: dict[str, Any] = {
+        "id": iid,
+        "title": title.strip(),
+        "created": created,
+        "created_by": created_by or "Claude",
+        "status": status or "",
+        "tags": list(tags or []),
+        "related_tasks": list(related_tasks or []),
+        "related_issues": list(related_issues or []),
+        "related_lessons": list(related_lessons or []),
+        "promoted_to": None,
+        "archived": False,
+    }
+    _validate_idea(fm)
+    target = idea_path(backlog_path, iid)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    write_task_file(target, fm, body)
+    lines = _index_upsert_line(_read_ideas_index(backlog_path), iid, _idea_index_line(fm))
+    _write_ideas_index(backlog_path, lines)
+    return iid, target
+
+
+def read_idea(backlog_path: Path, idea_id: str) -> tuple[dict[str, Any], str]:
+    fm, body = read_task_file(idea_path(backlog_path, idea_id))
+    return fm, body.rstrip("\n")
+
+
+def update_idea(
+    backlog_path: Path,
+    idea_id: str,
+    **updates: Any,
+) -> tuple[dict[str, Any], str]:
+    """Patch an idea's frontmatter and/or body. Returns (fm, body) post-write.
+
+    Body is preserved unchanged unless `body=` is passed. The IDEAS.md line
+    for this idea is rewritten in place to reflect the new title / status /
+    archived flag.
+    """
+    target = idea_path(backlog_path, idea_id)
+    if not target.exists():
+        raise FileNotFoundError(f"Idea not found: {idea_id}")
+    fm, body = read_idea(backlog_path, idea_id)
+    new_body = updates.pop("body", body)
+    # Pass-through merge — accepts None values for promoted_to (un-promote).
+    for k, v in updates.items():
+        fm[k] = v
+    _validate_idea(fm)
+    write_task_file(target, fm, new_body)
+    lines = _index_upsert_line(_read_ideas_index(backlog_path), idea_id, _idea_index_line(fm))
+    _write_ideas_index(backlog_path, lines)
+    return fm, new_body
+
+
+def list_ideas(
+    backlog_path: Path,
+    *,
+    idea_id: str | None = None,
+    status: str | None = None,
+    tag: str | None = None,
+    archived: bool = False,
+    related_task: str | None = None,
+    related_issue: str | None = None,
+    related_lesson: str | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    """List ideas with optional filters.
+
+    Default sort is newest-first by `created`. Pass `idea_id` to fetch one
+    record (body included). Without `idea_id`, results are summaries —
+    the markdown body is omitted to keep payloads small.
+
+    Filters compose as AND. `archived` defaults to False; pass True to
+    include archived ideas in the result set.
+    """
+    if idea_id:
+        target = idea_path(backlog_path, idea_id)
+        if not target.exists():
+            return []
+        fm, body = read_idea(backlog_path, idea_id)
+        return [{**fm, "body": body}]
+
+    out: list[dict[str, Any]] = []
+    for iid in list_idea_ids(backlog_path):
+        try:
+            fm, _ = read_idea(backlog_path, iid)
+        except (OSError, ValueError):
+            continue
+        if not archived and fm.get("archived"):
+            continue
+        if status is not None and (fm.get("status") or "") != status:
+            continue
+        if tag is not None and tag not in (fm.get("tags") or []):
+            continue
+        if related_task is not None and related_task not in (fm.get("related_tasks") or []):
+            continue
+        if related_issue is not None and related_issue not in (fm.get("related_issues") or []):
+            continue
+        if related_lesson is not None and related_lesson not in (fm.get("related_lessons") or []):
+            continue
+        out.append(fm)
+
+    def _sort_key(e: dict[str, Any]) -> tuple[str, int]:
+        iid = e.get("id", "")
+        m = re.search(r"(\d+)$", iid)
+        num = int(m.group(1)) if m else 0
+        return (e.get("created", ""), num)
+
+    out.sort(key=_sort_key, reverse=True)
+    if limit is not None:
+        out = out[: max(0, limit)]
+    return out
+
+
 # ── Lesson candidates (deferred + scanning) ───────────────────
 
 LESSON_CANDIDATE_KINDS = ("pattern", "anti-pattern", "gotcha")

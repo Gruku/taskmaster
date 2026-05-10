@@ -348,3 +348,62 @@ def test_v3_pick_complete_full_lifecycle(tmp_path, monkeypatch):
     if progress.exists():
         text = progress.read_text(encoding="utf-8")
         assert "Smoke" in text or "smoke" in text.lower()
+
+
+def test_e2e_ideas_full_lifecycle(tmp_path, monkeypatch):
+    """Capture → list → filter → archive → promote round-trip via the MCP wrappers."""
+    monkeypatch.chdir(tmp_path)
+    bp, _epic_id, _task_id = _v3_backlog_with_epic_and_task(tmp_path)
+    _redirect(monkeypatch, tmp_path, bp)
+
+    # Sharp capture (path C — auto-log style)
+    out1 = backlog_server.backlog_idea_create(
+        title="Per-task spike budgets",
+        body="track effort vs estimate",
+        status="exploring",
+        tags=["perf"],
+        created_by="Claude",
+    )
+    assert "IDEA-001" in out1
+
+    # Fuzzy capture (simulating end-session committing an <idea-candidate>)
+    out2 = backlog_server.backlog_idea_create(
+        title="Auto-tag from git diff",
+        body="link ideas to recent files",
+        status="candidate",
+        created_by="Claude",
+    )
+    assert "IDEA-002" in out2
+
+    # Listing returns both
+    listed = backlog_server.backlog_idea_list()
+    assert "IDEA-002" in listed
+    assert "IDEA-001" in listed
+
+    # Filter by status
+    only_candidate = backlog_server.backlog_idea_list(status="candidate")
+    assert "IDEA-002" in only_candidate
+    assert "IDEA-001" not in only_candidate
+
+    # Archive idea 1
+    arch = backlog_server.backlog_idea_update(idea_id="IDEA-001", archived=True)
+    assert "IDEA-001" in arch
+    listed_default = backlog_server.backlog_idea_list()
+    assert "IDEA-001" not in listed_default  # archived excluded by default
+    listed_with_arch = backlog_server.backlog_idea_list(archived=True)
+    assert "IDEA-001" in listed_with_arch
+    assert "IDEA-002" in listed_with_arch
+
+    # Promote idea 2
+    prom = backlog_server.backlog_idea_update(idea_id="IDEA-002", promoted_to="T-XYZ", archived=True)
+    assert "IDEA-002" in prom
+
+    # Verify on disk
+    idea2_text = (tmp_path / ".taskmaster" / "ideas" / "IDEA-002.md").read_text()
+    assert "promoted_to: T-XYZ" in idea2_text
+    assert "archived: true" in idea2_text
+
+    # IDEAS.md index reflects archive marks
+    idx = (tmp_path / ".taskmaster" / "ideas" / "IDEAS.md").read_text()
+    assert "~~Per-task spike budgets~~" in idx
+    assert "~~Auto-tag from git diff~~" in idx

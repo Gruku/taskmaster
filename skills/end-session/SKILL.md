@@ -92,6 +92,41 @@ If v3-pre-2a buffered a `pending_review_flag` (any `scope="session"` candidate w
 
 **v3-pre-2b: Handover archive sweep.** Call `backlog_handover_resync()` quietly to enforce the 30-entry index cap and move any overflow into `handovers/_archive/<year>/`. `backlog_handover_create` already runs the sync, so this sub-step only matters when (a) no handover was written this session but the user manually edited the `handovers/` directory between sessions, or (b) the cap was lowered. Cheap (~30ms), no token cost. Skip silently on v2.
 
+**v3-pre-2c: Idea-candidate sweep.**
+
+After completing the work-summary phase, scan the in-context transcript for `<idea-candidate>` XML tags emitted earlier in the session. For each tag found:
+
+1. Parse the `title` attribute (required), `tags`, `status`, `related-task`, `related-issue`, `related-lesson` (all optional).
+2. Use the tag's text content as the body. If empty, use the title as the body.
+3. Call:
+   ```
+   backlog_idea_create(
+       title=<title>,
+       body=<tag-body-or-title>,
+       tags=<parsed tags or []>,
+       status=<parsed status or "candidate">,   # default to "candidate" so they're filterable in the viewer
+       related_tasks=<[task] if related-task else []>,
+       related_issues=<[issue] if related-issue else []>,
+       related_lessons=<[lesson] if related-lesson else []>,
+       created_by="Claude",
+   )
+   ```
+4. Collect the returned IDEA-NNN ids.
+
+**Commit directly — do NOT prompt the user per item.** The user's standing rule is no draft-and-approve gates in end-session.
+
+After all candidates are committed, also tally the IDEA-NNNs that were auto-logged this session via path C (look at the IDEAS.md index for entries with `created` timestamps within the session window — alternatively, just call `backlog_idea_list(limit=10)` and filter to entries newer than the session start).
+
+Report the result inline in the wrap-up summary as a separate bullet:
+
+> **Ideas captured this session:** N total
+> - From `<idea-candidate>` tags (committed as `status: "candidate"`): IDEA-009, IDEA-010
+> - Auto-logged sharp ideas: IDEA-011
+
+If both counts are zero, omit the bullet entirely.
+
+The user can then review/edit/archive captured ideas at their leisure via the Ideas viewer screen.
+
 ### Existing flow
 
 0. **Determine summary mode.** Check the session weight:

@@ -22,6 +22,7 @@ const SECTIONS = [
   { label: 'Knowledge', items: [
     { key: 'lessons',  icon: '✦', label: 'Lessons',  hash: '#/lessons' },
     { key: 'issues',   icon: '⚠', label: 'Issues',   hash: '#/issues' },
+    { key: 'ideas',    icon: '💡', label: 'Ideas',    hash: '#/ideas' },
     { key: 'archived', icon: '⌫', label: 'Archived', hash: '#/archived' },
   ]},
 ];
