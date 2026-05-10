@@ -8,6 +8,30 @@ indicate schema breaks or removed surfaces.
 
 ---
 
+## 3.1.0 — Ideas surface (2026-05-10)
+
+### Added
+
+- **New `Ideas` surface** — a lightweight per-project parking-lot for unvalidated thoughts, lighter than tasks. Per-idea YAML+markdown files at `<backlog parent>/ideas/IDEA-NNN.md` plus an append-only `IDEAS.md` chronological index. Three capture paths: explicit `/add-idea` slash skill (user-driven), inline `<idea-candidate>` XML tag for ambient capture (swept by end-session, committed with `status="candidate"`), and confidence-threshold auto-log when the user states a sharp idea (Claude calls `backlog_idea_create` directly and announces inline).
+- **Three new MCP tools**: `backlog_idea_create`, `backlog_idea_list` (also serves as get when filtered by `idea_id`), `backlog_idea_update` (covers archive, promote, body edits, status changes). Deliberately minimal surface — no separate get/archive/promote/resync wrappers.
+- **HTTP endpoints** `GET /api/ideas` and `POST /api/ideas` for the viewer. `GET` accepts `status`, `tag`, `archived`, `related_task`, `limit`, `summary` query params; `POST` validates `title` and accepts the same write-side fields as the MCP wrapper.
+- **Viewer Ideas screen** (`viewer/js/screens/ideas.js`) — new top-level screen alongside Issues / Lessons. Status + tag chip filters (freeform values discovered from data, `chipClickNext` helper per L-001), archived toggle off by default, list/detail toggle, frontmatter sidebar with click-through links to related tasks/issues/lessons and `promoted_to`. Topbar carries a primary "+ New Idea" button that opens a modal posting to `/api/ideas`.
+- **`taskmaster:add-idea` skill** for explicit user-driven capture. Slash form (`/add-idea …`) and natural-language form ("save this as an idea: …"). Optional flags `--tags`, `--status`, `--related-task`, `--related-issue`, `--related-lesson`.
+- **End-session sweep** for `<idea-candidate>` tags. Scans the in-context transcript and commits each tag directly via `backlog_idea_create` with `status="candidate"` (no per-item draft-and-approve gate per the standing project rule). Reports counts in the wrap-up summary.
+
+### Fixed
+
+- **Lesson-candidate flow no longer fires silently.** Root cause: the emit guidance for `<lesson-candidate>` lived only in `lesson/SKILL.md`, which is loaded only when the lesson skill is explicitly invoked. During ordinary coding, Claude never saw the trigger heuristic. Fix: a new top-level `## Mid-session behavior` section in `start-session/SKILL.md` (loaded for every v3 session) documents both the lesson-emit heuristics (repeated correction / bug second-encounter / architectural ground rule) and the idea-emit heuristics (path A skip / path B fuzzy candidate / path C sharp auto-log) with a one-line decision tree. Same edit shipped both halves.
+- **Race-safe `IDEA-NNN` allocation.** `write_idea` now uses `Path.touch(exist_ok=False)` bump-and-retry to atomically reserve the next id, eliminating the read-then-write race. Bounded at 64 attempts.
+- **Viewer detail body / archived toggle.** Caught in post-merge cross-cutting review by Codex: `/api/ideas` GET returned summaries (no body) and defaulted `archived=false`, so the viewer's detail pane was always empty and the archived toggle filtered over data it didn't have. Fix: `list_ideas` gains a `summary: bool = True` kwarg (also closes a spec drift), HTTP GET defaults `summary=False` for the viewer, viewer fetches with `?archived=true&summary=false`. MCP `backlog_idea_list` keeps `summary=True` default to preserve its compact string output for scripted callers.
+- **Viewer cache freshness + error UI.** Ideas screen now always refetches on `mount()` (cache is soft fallback only), and surfaces an inline error banner on initial-load failures instead of silently rendering an empty state.
+
+### Tracked follow-ups
+
+- `ISS-011` — `parse_frontmatter`/`render_frontmatter` body trailing-newline asymmetry. The local rstrip in `read_idea` is the workaround until the parse helper is normalized.
+
+---
+
 ## Unreleased — `.claude/` → `.taskmaster/` consolidation
 
 ### Changed
