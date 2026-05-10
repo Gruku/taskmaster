@@ -96,3 +96,63 @@ Plus the dashboard + last-session log (~1,000 tokens combined). Soft target for 
 ### Lesson digest does NOT mean apply lessons
 
 Loading the digest at session start is *priming* — keep these in mind. The actual *application* of a lesson happens during work (most often surfaced via `pick-task` trigger matching). When you successfully apply a lesson, call `backlog_lesson_reinforce <id>` to bump its count. Don't reinforce on session start (that would inflate counts without actual application).
+
+## Mid-session behavior
+
+While working in a v3 project, watch for two kinds of moments and respond inline — no separate tool call required for the candidate paths.
+
+### Lesson-candidate emission
+
+Emit a `<lesson-candidate>` XML tag inline in your reply (not a tool call) when ANY of these fire:
+
+- **Repeated correction** — the user has corrected you on the same thing twice or more in this session, OR you notice you've corrected yourself on the same pattern multiple times.
+- **Bug second-encounter** — you (or the user) hit a bug, gotcha, or surprising behavior that you've already encountered before in this codebase.
+- **Architectural ground rule** — the user states a non-obvious "we always do X here" / "we never do Y here" / "in this codebase we…" rule.
+
+Schema: see `plugins/taskmaster/skills/lesson/references/marker-format.md` for the `<lesson-candidate>` tag.
+
+End-session sweeps these tags and either offers them for triage (default behavior) or commits them per the user's preferred flow.
+
+### Idea-candidate emission and idea auto-log
+
+When you detect an *idea* in the user's message — a thought, parking-lot item, future-work observation, or "we could try X" — pick ONE of three paths:
+
+**Path A — Skip entirely.** When:
+- User is thinking out loud about the immediate task (not a separable idea).
+- Idea is already covered by an existing task or idea (when in doubt, call `backlog_idea_list(limit=20)` first).
+- User explicitly said not to capture.
+
+**Path B — Emit `<idea-candidate>` tag (fuzzy capture).** When:
+- Hedged / ambient framing: "hmm could be cool…", "maybe at some point", "we could think about", "interesting thought".
+- Tangential to the current task — user is mid-flow on something else.
+- Concept is fuzzy or speculative.
+
+Don't make a tool call. Inline-emit:
+```xml
+<idea-candidate title="Auto-tag from git diff" tags="automation,viewer">
+User mentioned in passing that linking ideas to recent files would be useful — flagging for end-session.
+</idea-candidate>
+```
+
+End-session will commit these with `status="candidate"` for later triage in the viewer.
+
+**Path C — Auto-log via `backlog_idea_create` (sharp capture).** When ANY fire:
+- Explicit framing: "idea:", "future work:", "for later:", "I want to try", "we should explore", "let's eventually".
+- Direct request: "remember this idea", "save this idea", "that's a good idea, log it".
+- Concrete-and-named: a specific feature/change with a clear noun and verb that's separable from the current task.
+
+Call `backlog_idea_create(title=..., body=..., created_by="Claude")` and announce inline (single line, no summary):
+
+> _Logged as IDEA-NNN — "<title>"_
+
+Schema for the `<idea-candidate>` tag: see `plugins/taskmaster/skills/lesson/references/marker-format.md`.
+
+### One-line decision tree
+
+```
+User said something that might be an idea/lesson?
+├─ Lesson trigger fires (correction / bug-twice / ground rule)? → emit <lesson-candidate>
+├─ Sharp idea? (explicit framing OR direct request OR concrete-and-named) → call backlog_idea_create + announce
+├─ Fuzzy/ambient idea? → emit <idea-candidate>
+└─ Otherwise → skip
+```
