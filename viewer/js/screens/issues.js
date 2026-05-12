@@ -11,7 +11,8 @@ export const meta = { title: 'Issues', icon: '!', sidebarKey: 'issues' };
 const SEVERITIES = ['Critical', 'High', 'Medium', 'Low'];
 
 function _renderSeverityChips(filters, counts, activeSet, onChange) {
-  filters.innerHTML = '';
+  // Remove only our own chips — the "Severity:" label sibling is preserved.
+  filters.querySelectorAll('.issues__sev-chip').forEach(el => el.remove());
 
   const allChip = document.createElement('button');
   allChip.type = 'button';
@@ -63,6 +64,11 @@ export async function mount(root, { store, prefs }) {
   // control) but we move it into the topbar visually so it sits with the rest.
   const filters = document.createElement('div');
   filters.className = 'tm-chip-row issues__filters';
+  // Persistent label — _renderSeverityChips() removes only its own chips, keeping this label.
+  const sevLabel = document.createElement('span');
+  sevLabel.className = 'issues__chip-row-label';
+  sevLabel.textContent = 'Severity:';
+  filters.appendChild(sevLabel);
   // Chips are built (and rebuilt on each render) by _renderSeverityChips() below.
 
   // Fix: read persisted view from store.getPrefs(), not prefs.getPrefs()
@@ -84,6 +90,11 @@ export async function mount(root, { store, prefs }) {
   // Component chip-row (populated dynamically once issues load).
   const compRow = document.createElement('div');
   compRow.className = 'tm-chip-row issues__components';
+  // Persistent label — _renderComponentChips() removes only its own chips, keeping this label.
+  const compLabel = document.createElement('span');
+  compLabel.className = 'issues__chip-row-label';
+  compLabel.textContent = 'Components:';
+  compRow.appendChild(compLabel);
 
   topbar?.appendChild(subcount);
   topbar?.appendChild(searchBuilt.el);
@@ -151,7 +162,8 @@ export async function mount(root, { store, prefs }) {
   function _renderComponentChips() {
     const issues = store.getIssues() || [];
     const comps = [...new Set(issues.map(i => i.component).filter(Boolean))].sort();
-    compRow.innerHTML = '';
+    // Remove only our own chips — the "Components:" label is preserved.
+    compRow.querySelectorAll('.issues__comp-chip').forEach(el => el.remove());
     const sevs = activeFilters();
     for (const c of comps) {
       // Count issues that pass the current search + severity filters but ignore the
@@ -165,6 +177,8 @@ export async function mount(root, { store, prefs }) {
       chip.className = 'issues__comp-chip';
       chip.dataset.comp = c;
       chip.title = CHIP_CLICK_HINT;
+      chip.setAttribute('role', 'button');
+      chip.setAttribute('aria-pressed', String(activeComponents.has(c)));
       chip.textContent = `${c} · ${count}`;
       if (activeComponents.has(c)) chip.classList.add('is-active');
       chip.addEventListener('click', (ev) => {
@@ -172,7 +186,9 @@ export async function mount(root, { store, prefs }) {
         activeComponents.clear();
         for (const k of next) activeComponents.add(k);
         compRow.querySelectorAll('.issues__comp-chip').forEach(el => {
-          el.classList.toggle('is-active', activeComponents.has(el.dataset.comp));
+          const isActive = activeComponents.has(el.dataset.comp);
+          el.classList.toggle('is-active', isActive);
+          el.setAttribute('aria-pressed', String(isActive));
         });
         render();
       });

@@ -47,6 +47,14 @@
 .issues__sev-chip.is-active .count { color: var(--ink); }
 .issues__sev-chip--all .count { /* no dot before count; align with siblings */ }
 
+.issues__chip-row-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-3);
+  margin-right: 4px;
+}
+
 .issues__comp-chip {
   padding: 3px 10px;
   border-radius: 999px;
