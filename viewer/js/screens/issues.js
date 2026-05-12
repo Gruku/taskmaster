@@ -299,12 +299,11 @@ export async function mount(root, { store, prefs }) {
     }
     resolvedHeader.innerHTML = `<span class="caret">▾</span> Resolved · ${resolved.length} ${pluralize(resolved.length, 'issue', 'issues')}`;
 
-    // View B/C: just collapse columns into a single list (lightweight pass)
     if (currentView === 'C') {
+      // List view: collapse to a single column
       columns.style.gridTemplateColumns = '1fr';
       openCol.querySelector('.issues__column-name').textContent = 'All open';
       investigatingCol.style.display = 'none';
-      // append investigating + open to a single list visually via openList
       for (const i of investigating) {
         openList.insertBefore(
           issueCard(i, { tasksIndex, agingCfg, onTaskClick: id => location.hash = `#/task/${id}` }),
@@ -312,6 +311,8 @@ export async function mount(root, { store, prefs }) {
         );
       }
     } else {
+      // Hybrid view (default): Investigating + Open columns side by side.
+      // View B (Status) and view D (Severity) are added in subsequent tasks.
       columns.style.gridTemplateColumns = '1fr 1.6fr';
       investigatingCol.style.display = '';
       openCol.querySelector('.issues__column-name').textContent = 'Open';
