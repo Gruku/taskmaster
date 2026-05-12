@@ -140,7 +140,13 @@ export function tmAction({ icon, label, variant, title, onClick, href, disabled 
     t.textContent = label;
     el.appendChild(t);
   }
-  if (disabled) el.disabled = true;
+  if (disabled) {
+    el.disabled = true;
+    el.setAttribute('aria-disabled', 'true');
+  } else {
+    el.disabled = false;
+    el.removeAttribute('aria-disabled');
+  }
   if (onClick) el.addEventListener('click', onClick);
   return el;
 }
