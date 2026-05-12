@@ -30,23 +30,19 @@ function _renderLocation(loc) {
 export function issueCard(issue, { tasksIndex = {}, agingCfg, onTaskClick } = {}) {
   injectSeverityDefs();
   const label = issue.severity_label || severityLabel(issue.severity);
-  const card = document.createElement('article');
+  const url = `#/issue/${encodeURIComponent(issue.id)}`;
+  const card = document.createElement('a');
   card.className = 'issue-card';
+  card.href = url;
   card.setAttribute('data-issue-id', issue.id);
   card.setAttribute('data-status', issue.status || 'open');
-  card.setAttribute('role', 'link');
-  card.setAttribute('tabindex', '0');
 
-  const navigate = () => { location.hash = `#/issue/${encodeURIComponent(issue.id)}`; };
   card.addEventListener('click', (ev) => {
-    if (ev.target.closest('.issue-card__task-pill')) return;
-    if (ev.target.closest('summary')) return;
-    if (ev.target.closest('a')) return;
-    navigate();
-  });
-  card.addEventListener('keydown', (ev) => {
-    if (ev.target !== card) return;
-    if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); navigate(); }
+    // Let real link behavior take over for modified clicks (new tab, etc.)
+    if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey || ev.button !== 0) return;
+    if (ev.target.closest('.issue-card__task-pill')) { ev.preventDefault(); return; }
+    if (ev.target.closest('summary')) { ev.preventDefault(); return; }
+    // Default anchor navigation handles the rest; do nothing here.
   });
 
   // ---- head: glyph · id · title · sev chip · blocks chip
@@ -132,7 +128,7 @@ export function issueCard(issue, { tasksIndex = {}, agingCfg, onTaskClick } = {}
     const p = document.createElement('span');
     p.className = 'issue-card__task-pill';
     p.textContent = tid;
-    p.addEventListener('click', (ev) => { ev.stopPropagation(); onTaskClick?.(tid); });
+    p.addEventListener('click', (ev) => { ev.preventDefault(); ev.stopPropagation(); onTaskClick?.(tid); });
     pills.appendChild(p);
   }
   footer.appendChild(pills);

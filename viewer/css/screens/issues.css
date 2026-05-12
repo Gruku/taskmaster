@@ -113,6 +113,8 @@
   padding: 12px;
   display: flex; flex-direction: column; gap: 10px;
   cursor: pointer;
+  text-decoration: none;
+  color: inherit;
 }
 .issue-card:hover { border-color: var(--ink-3); }
 .issue-card:focus-visible {
