@@ -77,7 +77,8 @@ export async function mount(root, { store, prefs }) {
   const toggle = tmSegmented(
     [
       { key: 'A', label: 'Hybrid' },
-      { key: 'B', label: 'Kanban' },
+      { key: 'B', label: 'Status' },
+      { key: 'D', label: 'Severity' },
       { key: 'C', label: 'List' },
     ],
     { value: initialView, onChange: setView },
@@ -132,6 +133,42 @@ export async function mount(root, { store, prefs }) {
   columns.appendChild(investigatingCol);
   columns.appendChild(openCol);
   screen.appendChild(columns);
+
+  // ---- Status kanban shell (view B) — built once, toggled per render
+  const kanban = document.createElement('div');
+  kanban.className = 'issues__columns issues__columns--kanban';
+  kanban.style.display = 'none';
+  screen.appendChild(kanban);
+
+  const KANBAN_STATUS_COLS = [
+    { key: 'open',          label: 'Open',          tagline: '— confirmed, not yet started', density: 'card' },
+    { key: 'investigating', label: 'Investigating',  tagline: '— actively under triage',     density: 'card' },
+    { key: 'fixed',         label: 'Fixed',          tagline: '— resolved',                  density: 'row'  },
+    { key: 'wontfix',       label: 'Wontfix',        tagline: '— closed without fix',        density: 'row'  },
+  ];
+
+  function _buildKanbanCol({ key, label, tagline }) {
+    const col = document.createElement('div');
+    col.className = 'issues__kanban-col';
+    col.dataset.key = key;
+    col.innerHTML = `
+      <h2 class="issues__column-header">
+        <span class="issues__column-name">${label}</span>
+        <span class="issues__column-tagline">${tagline}</span>
+        <span class="issues__column-count" data-count></span>
+      </h2>`;
+    const body = document.createElement('div');
+    body.className = 'issues__kanban-col-body';
+    col.appendChild(body);
+    return { col, body };
+  }
+
+  const statusKanbanCols = {};
+  for (const desc of KANBAN_STATUS_COLS) {
+    const { col, body } = _buildKanbanCol(desc);
+    statusKanbanCols[desc.key] = { col, body, density: desc.density };
+    kanban.appendChild(col);
+  }
 
   const resolvedShelf = document.createElement('section');
   resolvedShelf.className = 'issues__resolved-shelf';
@@ -300,6 +337,40 @@ export async function mount(root, { store, prefs }) {
     }
     resolvedHeader.innerHTML = `<span class="caret">▾</span> Resolved · ${resolved.length} ${pluralize(resolved.length, 'issue', 'issues')}`;
 
+    if (currentView === 'B') {
+      // Status kanban: 4 columns (Open / Investigating / Fixed / Wontfix).
+      columns.style.display = 'none';
+      kanban.style.display = '';
+      // Clear bodies
+      for (const k of Object.keys(statusKanbanCols)) {
+        statusKanbanCols[k].body.innerHTML = '';
+      }
+      const grouped = groupByStatus(issues);
+      for (const desc of KANBAN_STATUS_COLS) {
+        const { body, density } = statusKanbanCols[desc.key];
+        const items = grouped[desc.key];
+        body.parentElement.querySelector('[data-count]').textContent = String(items.length);
+        if (items.length === 0) {
+          body.appendChild(emptyState({ headline: 'None', hint: '' }));
+          continue;
+        }
+        for (const i of items) {
+          if (density === 'card') {
+            body.appendChild(issueCard(i, { tasksIndex, agingCfg, onTaskClick: id => location.hash = `#/task/${id}` }));
+          } else {
+            body.appendChild(issueRow(i));
+          }
+        }
+      }
+      resolvedShelf.style.display = 'none'; // resolved is inline as own columns
+      return;
+    }
+
+    // Restore defaults for Hybrid / List paths
+    columns.style.display = '';
+    kanban.style.display = 'none';
+    resolvedShelf.style.display = '';
+
     if (currentView === 'C') {
       // List view: collapse to a single column
       columns.style.gridTemplateColumns = '1fr';
@@ -313,7 +384,6 @@ export async function mount(root, { store, prefs }) {
       }
     } else {
       // Hybrid view (default): Investigating + Open columns side by side.
-      // View B (Status) and view D (Severity) are added in subsequent tasks.
       columns.style.gridTemplateColumns = '1fr 1.6fr';
       investigatingCol.style.display = '';
       openCol.querySelector('.issues__column-name').textContent = 'Open';
