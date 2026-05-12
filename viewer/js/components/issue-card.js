@@ -119,7 +119,8 @@ export function issueCard(issue, { tasksIndex = {}, agingCfg, onTaskClick } = {}
 
   // ---- aging bar
   if (agingCfg) {
-    card.appendChild(agingBar({ ...issue, severity_label: label }, agingCfg));
+    const bar = agingBar({ ...issue, severity_label: label }, agingCfg);
+    if (bar) card.appendChild(bar);
   }
 
   // ---- footer: task pills + investigating tag

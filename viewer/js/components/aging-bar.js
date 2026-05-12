@@ -5,9 +5,10 @@
 export function computeAgingTier(issue, cfg, now = new Date()) {
   const label = issue.severity_label || 'Medium';
   const baseDays = Number(cfg[label] ?? 60);
-  if (!issue.discovered) return { percent: 0, tier: 'Fresh' };
-  const discovered = new Date(issue.discovered);
-  const ageDays = (now.getTime() - discovered.getTime()) / 86_400_000;
+  const start = issue.discovered || issue.created;
+  if (!start) return null;
+  const started = new Date(start);
+  const ageDays = (now.getTime() - started.getTime()) / 86_400_000;
   let percent = baseDays > 0 ? (ageDays / baseDays) * 100 : 0;
   percent = Math.max(0, Math.min(percent, 200));
   let tier;
@@ -18,7 +19,9 @@ export function computeAgingTier(issue, cfg, now = new Date()) {
 }
 
 export function agingBar(issue, cfg) {
-  const { percent, tier } = computeAgingTier(issue, cfg);
+  const result = computeAgingTier(issue, cfg);
+  if (!result) return null;
+  const { percent, tier } = result;
   const wrap = document.createElement('div');
   wrap.className = `aging-bar aging-bar--${tier.toLowerCase()}`;
   wrap.setAttribute('data-tier', tier);

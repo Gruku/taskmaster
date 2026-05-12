@@ -35,3 +35,24 @@ test('computeAgingTier: Critical decays faster than Low at same age', () => {
   const low  = computeAgingTier({ discovered, severity_label: 'Low' }, cfg, now);
   assert.ok(crit.percent > low.percent, `crit=${crit.percent} low=${low.percent}`);
 });
+
+test('computeAgingTier: falls back to created when discovered is absent', () => {
+  const now = new Date('2026-04-26T00:00:00Z');
+  const created = new Date('2026-04-23T00:00:00Z').toISOString();
+  const out = computeAgingTier({ created, severity_label: 'High' }, cfg, now);
+  assert.equal(out.tier, 'Fresh');
+  assert.ok(out.percent >= 0 && out.percent < 25, `percent=${out.percent}`);
+});
+
+test('computeAgingTier: returns null when both discovered and created are missing', () => {
+  const out = computeAgingTier({ severity_label: 'High' }, cfg);
+  assert.equal(out, null);
+});
+
+test('computeAgingTier: discovered wins when both fields are present', () => {
+  const now = new Date('2026-04-26T00:00:00Z');
+  const discovered = new Date('2026-04-01T00:00:00Z').toISOString(); // Stale
+  const created    = new Date('2026-04-25T00:00:00Z').toISOString(); // Fresh
+  const out = computeAgingTier({ discovered, created, severity_label: 'High' }, cfg, now);
+  assert.equal(out.tier, 'Stale');
+});
