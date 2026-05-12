@@ -440,6 +440,7 @@ export async function mount(root, { store, prefs }) {
           openList.firstChild,
         );
       }
+      openCol.querySelector('[data-count]').textContent = String(investigating.length + open.length);
     } else {
       // Hybrid view (default): Investigating + Open columns side by side.
       columns.style.gridTemplateColumns = '1fr 1.6fr';
