@@ -27,7 +27,7 @@ function _renderLocation(loc) {
   return el;
 }
 
-export function issueCard(issue, { tasksIndex = {}, agingCfg, onTaskClick } = {}) {
+export function issueCard(issue, { tasksIndex = {}, agingCfg, onTaskClick, suppressSeverityChip = false } = {}) {
   injectSeverityDefs();
   const label = issue.severity_label || severityLabel(issue.severity);
   const url = `#/issue/${encodeURIComponent(issue.id)}`;
@@ -58,11 +58,13 @@ export function issueCard(issue, { tasksIndex = {}, agingCfg, onTaskClick } = {}
   title.className = 'issue-card__title';
   title.textContent = issue.title;
   head.appendChild(title);
-  const sev = document.createElement('span');
-  sev.className = 'issue-card__sev-chip';
-  sev.dataset.sev = label;
-  sev.textContent = label;
-  head.appendChild(sev);
+  if (!suppressSeverityChip) {
+    const sev = document.createElement('span');
+    sev.className = 'issue-card__sev-chip';
+    sev.dataset.sev = label;
+    sev.textContent = label;
+    head.appendChild(sev);
+  }
 
   const blocks = computeBlocksCount(issue, tasksIndex);
   if (blocks > 0) {

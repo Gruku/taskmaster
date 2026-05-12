@@ -170,6 +170,30 @@ export async function mount(root, { store, prefs }) {
     kanban.appendChild(col);
   }
 
+  const KANBAN_SEVERITY_COLS = [
+    { key: 'Critical', label: 'Critical', tagline: '— must-fix' },
+    { key: 'High',     label: 'High',     tagline: '— prioritize' },
+    { key: 'Medium',   label: 'Medium',   tagline: '— upcoming' },
+    { key: 'Low',      label: 'Low',      tagline: '— backlog' },
+  ];
+
+  const sevKanbanCols = {};
+  for (const desc of KANBAN_SEVERITY_COLS) {
+    const { col, body } = _buildKanbanCol(desc);
+    col.style.display = 'none';
+    sevKanbanCols[desc.key] = { col, body };
+    kanban.appendChild(col);
+  }
+
+  function _showKanbanCols(active /* 'status' | 'severity' */) {
+    for (const k of Object.keys(statusKanbanCols)) {
+      statusKanbanCols[k].col.style.display = (active === 'status') ? '' : 'none';
+    }
+    for (const k of Object.keys(sevKanbanCols)) {
+      sevKanbanCols[k].col.style.display = (active === 'severity') ? '' : 'none';
+    }
+  }
+
   const resolvedShelf = document.createElement('section');
   resolvedShelf.className = 'issues__resolved-shelf';
   const resolvedHeader = document.createElement('header');
@@ -337,10 +361,44 @@ export async function mount(root, { store, prefs }) {
     }
     resolvedHeader.innerHTML = `<span class="caret">▾</span> Resolved · ${resolved.length} ${pluralize(resolved.length, 'issue', 'issues')}`;
 
+    if (currentView === 'D') {
+      // Severity kanban: 4 columns (Critical / High / Medium / Low).
+      // Resolved (fixed + wontfix) rendered in the resolved shelf below, not as columns.
+      columns.style.display = 'none';
+      kanban.style.display = '';
+      _showKanbanCols('severity');
+      const activeIssues = issues.filter(i => i.status === 'open' || i.status === 'investigating');
+      const grouped = groupBySeverity(activeIssues);
+      for (const desc of KANBAN_SEVERITY_COLS) {
+        const { body } = sevKanbanCols[desc.key];
+        body.innerHTML = '';
+        const items = grouped[desc.key];
+        body.parentElement.querySelector('[data-count]').textContent = String(items.length);
+        if (items.length === 0) {
+          body.appendChild(emptyState({ headline: 'None', hint: '' }));
+          continue;
+        }
+        for (const i of items) {
+          body.appendChild(issueCard(i, {
+            tasksIndex, agingCfg,
+            onTaskClick: id => location.hash = `#/task/${id}`,
+            suppressSeverityChip: true,
+          }));
+        }
+      }
+      // Resolved shelf renders fixed + wontfix issues.
+      resolvedShelf.style.display = '';
+      resolvedList.innerHTML = '';
+      for (const i of resolved) resolvedList.appendChild(issueRow(i));
+      resolvedHeader.innerHTML = `<span class="caret">${resolvedList.hidden ? '▾' : '▴'}</span> Resolved · ${resolved.length} ${pluralize(resolved.length, 'issue', 'issues')}`;
+      return;
+    }
+
     if (currentView === 'B') {
       // Status kanban: 4 columns (Open / Investigating / Fixed / Wontfix).
       columns.style.display = 'none';
       kanban.style.display = '';
+      _showKanbanCols('status');
       // Clear bodies
       for (const k of Object.keys(statusKanbanCols)) {
         statusKanbanCols[k].body.innerHTML = '';
