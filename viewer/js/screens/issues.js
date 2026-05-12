@@ -78,13 +78,23 @@ export async function mount(root, { store, prefs }) {
   columns.className = 'issues__columns';
   const investigatingCol = document.createElement('div');
   investigatingCol.className = 'issues__column';
-  investigatingCol.innerHTML = '<header class="issues__column-header">Investigating</header>';
+  investigatingCol.innerHTML = `
+  <h2 class="issues__column-header">
+    <span class="issues__column-name">Investigating</span>
+    <span class="issues__column-tagline">— actively under triage</span>
+    <span class="issues__column-count" data-count></span>
+  </h2>`;
   const investigatingList = document.createElement('div');
   investigatingCol.appendChild(investigatingList);
 
   const openCol = document.createElement('div');
   openCol.className = 'issues__column';
-  openCol.innerHTML = '<header class="issues__column-header">Open</header>';
+  openCol.innerHTML = `
+  <h2 class="issues__column-header">
+    <span class="issues__column-name">Open</span>
+    <span class="issues__column-tagline">— confirmed, not yet started</span>
+    <span class="issues__column-count" data-count></span>
+  </h2>`;
   const openList = document.createElement('div');
   openCol.appendChild(openList);
 
@@ -234,7 +244,7 @@ export async function mount(root, { store, prefs }) {
     // View B/C: just collapse columns into a single list (lightweight pass)
     if (currentView === 'C') {
       columns.style.gridTemplateColumns = '1fr';
-      openCol.querySelector('.issues__column-header').textContent = 'All open';
+      openCol.querySelector('.issues__column-name').textContent = 'All open';
       investigatingCol.style.display = 'none';
       // append investigating + open to a single list visually via openList
       for (const i of investigating) {
@@ -246,7 +256,9 @@ export async function mount(root, { store, prefs }) {
     } else {
       columns.style.gridTemplateColumns = '1fr 1.6fr';
       investigatingCol.style.display = '';
-      openCol.querySelector('.issues__column-header').textContent = 'Open';
+      openCol.querySelector('.issues__column-name').textContent = 'Open';
+      investigatingCol.querySelector('[data-count]').textContent = String(investigating.length);
+      openCol.querySelector('[data-count]').textContent = String(open.length);
     }
   }
 
