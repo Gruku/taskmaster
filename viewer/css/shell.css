@@ -227,6 +227,13 @@ html, body {
   flex: 1;
   min-height: 0;
   min-width: 0;
+  /* Universal scroll fallback. Screens that manage their own internal scroll
+     (Kanban, Ideas) set `height: 100%` on their root so they fit screen-mount
+     exactly and this scrollbar never activates. Screens that don't (Issues,
+     Lessons, Dashboard, …) get natural overflow scroll here instead of
+     bleeding past .main's overflow:hidden boundary and getting clipped. */
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 /* ── Header auto-status pill ──
