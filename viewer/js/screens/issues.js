@@ -139,9 +139,17 @@ export async function mount(root, { store, prefs }) {
   const resolvedList = document.createElement('div');
   resolvedList.className = 'issues__resolved-list';
   resolvedList.hidden = true;
-  resolvedHeader.addEventListener('click', () => {
+  resolvedHeader.setAttribute('role', 'button');
+  resolvedHeader.setAttribute('tabindex', '0');
+  resolvedHeader.setAttribute('aria-expanded', 'false');
+  const toggleResolved = () => {
     resolvedList.hidden = !resolvedList.hidden;
+    resolvedHeader.setAttribute('aria-expanded', String(!resolvedList.hidden));
     resolvedHeader.querySelector('.caret').textContent = resolvedList.hidden ? '▾' : '▴';
+  };
+  resolvedHeader.addEventListener('click', toggleResolved);
+  resolvedHeader.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); toggleResolved(); }
   });
   resolvedShelf.appendChild(resolvedHeader);
   resolvedShelf.appendChild(resolvedList);
