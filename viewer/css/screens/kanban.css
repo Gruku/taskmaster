@@ -1052,9 +1052,14 @@
   border: 1px solid var(--border);
   border-radius: var(--r-md);
   padding: 4px;
-  display: flex;
   flex-direction: column;
   gap: 2px;
+}
+/* Scope `display: flex` to the visible state so the HTML `hidden` attribute
+   (set by archived-phases-dropdown.js) actually hides the popover. An
+   unconditional `display: flex` would defeat the UA `[hidden]{display:none}`. */
+.kanban-phase-stepper .phs-archived-pop:not([hidden]) {
+  display: flex;
 }
 .kanban-phase-stepper .phs-archived-row {
   display: flex;
