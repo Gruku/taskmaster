@@ -10,6 +10,40 @@ export const meta = { title: 'Issues', icon: '!', sidebarKey: 'issues' };
 
 const SEVERITIES = ['Critical', 'High', 'Medium', 'Low'];
 
+function _renderSeverityChips(filters, counts, activeSet, onChange) {
+  filters.innerHTML = '';
+
+  const allChip = document.createElement('button');
+  allChip.type = 'button';
+  allChip.className = 'issues__sev-chip issues__sev-chip--all' + (activeSet.size === 0 ? ' is-active' : '');
+  allChip.setAttribute('role', 'button');
+  allChip.setAttribute('aria-pressed', String(activeSet.size === 0));
+  allChip.title = 'Show all severities';
+  allChip.innerHTML = `<span class="lbl">All</span><span class="count">${counts.__all}</span>`;
+  allChip.addEventListener('click', () => onChange(new Set()));
+  filters.appendChild(allChip);
+
+  for (const sev of SEVERITIES) {
+    const c = document.createElement('button');
+    c.type = 'button';
+    c.className = 'issues__sev-chip' + (activeSet.has(sev) ? ' is-active' : '');
+    c.dataset.sev = sev;
+    c.setAttribute('role', 'button');
+    c.setAttribute('aria-pressed', String(activeSet.has(sev)));
+    c.title = CHIP_CLICK_HINT;
+    c.innerHTML = `
+      <span class="dot" aria-hidden="true"></span>
+      <span class="lbl">${sev}</span>
+      <span class="count">${counts[sev] || 0}</span>`;
+    c.addEventListener('click', (ev) => {
+      const current = [...activeSet];
+      const next = new Set(chipClickNext(ev, current, sev));
+      onChange(next);
+    });
+    filters.appendChild(c);
+  }
+}
+
 export async function mount(root, { store, prefs }) {
   // Gotcha: `prefs` is the patch helper, NOT the data object.
   // Read persisted state from store.getPrefs(), then use prefs.patch() to save.
@@ -29,22 +63,7 @@ export async function mount(root, { store, prefs }) {
   // control) but we move it into the topbar visually so it sits with the rest.
   const filters = document.createElement('div');
   filters.className = 'tm-chip-row issues__filters';
-  for (const sev of SEVERITIES) {
-    const c = document.createElement('span');
-    c.className = 'issues__sev-chip';
-    c.dataset.sev = sev;
-    c.title = CHIP_CLICK_HINT;
-    c.textContent = sev;
-    c.addEventListener('click', (ev) => {
-      const current = [...filters.querySelectorAll('.is-active')].map(el => el.dataset.sev);
-      const next = new Set(chipClickNext(ev, current, sev));
-      filters.querySelectorAll('.issues__sev-chip').forEach(el => {
-        el.classList.toggle('is-active', next.has(el.dataset.sev));
-      });
-      render();
-    });
-    filters.appendChild(c);
-  }
+  // Chips are built (and rebuilt on each render) by _renderSeverityChips() below.
 
   // Fix: read persisted view from store.getPrefs(), not prefs.getPrefs()
   const initialView = (store.getPrefs()?.screens?.issues?.view) || 'A';
@@ -122,6 +141,12 @@ export async function mount(root, { store, prefs }) {
   let currentView = initialView;
   let searchTerm = '';
   const activeComponents = new Set();
+  const activeSevs = new Set();
+  function setActiveSevs(next) {
+    activeSevs.clear();
+    for (const v of next) activeSevs.add(v);
+    render();
+  }
 
   function _renderComponentChips() {
     const issues = store.getIssues() || [];
@@ -180,12 +205,21 @@ export async function mount(root, { store, prefs }) {
   }
 
   function activeFilters() {
-    return [...filters.querySelectorAll('.is-active')].map(el => el.dataset.sev);
+    return [...activeSevs];
   }
 
   let _lastChipKey = '';
   function render() {
     const allIssues = store.getIssues() || [];
+
+    // Compute per-severity counts from allIssues (pre-filter) and rebuild chips.
+    const counts = { __all: allIssues.length, Critical: 0, High: 0, Medium: 0, Low: 0 };
+    for (const i of allIssues) {
+      const lbl = i.severity_label || severityLabel(i.severity);
+      if (lbl in counts) counts[lbl]++;
+    }
+    _renderSeverityChips(filters, counts, activeSevs, setActiveSevs);
+
     // Re-render chips when components change, OR when search/severity changes (counts depend on both).
     const chipKey = [...new Set(allIssues.map(i => i.component).filter(Boolean))].sort().join('|')
       + '::' + searchTerm + '::' + activeFilters().join(',');

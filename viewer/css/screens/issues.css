@@ -17,17 +17,35 @@
 /* Severity chip — emitted by issues.js into the topbar via `.tm-chip-row`.
    The wrapper layout is owned by `.tm-chip-row`; only chip visuals live here. */
 .issues__sev-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   padding: 3px 10px;
   border-radius: 999px;
   border: 1px solid var(--border);
+  background: transparent;
   font-size: 12px;
   cursor: pointer;
+  user-select: none;
+  color: var(--ink-2);
 }
-.issues__sev-chip[data-sev="Critical"] { color: var(--sev-critical); }
-.issues__sev-chip[data-sev="High"]     { color: var(--sev-high); }
-.issues__sev-chip[data-sev="Medium"]   { color: var(--sev-medium); }
-.issues__sev-chip[data-sev="Low"]      { color: var(--sev-low); }
+.issues__sev-chip:hover { border-color: var(--border-strong); color: var(--ink); }
 .issues__sev-chip.is-active { background: var(--accent-soft); color: var(--ink); border-color: var(--accent); }
+.issues__sev-chip .dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--ink-3);
+}
+.issues__sev-chip[data-sev="Critical"] .dot { background: var(--sev-critical); }
+.issues__sev-chip[data-sev="High"]     .dot { background: var(--sev-high); }
+.issues__sev-chip[data-sev="Medium"]   .dot { background: var(--sev-medium); }
+.issues__sev-chip[data-sev="Low"]      .dot { background: var(--sev-low); }
+.issues__sev-chip .count {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-3);
+}
+.issues__sev-chip.is-active .count { color: var(--ink); }
+.issues__sev-chip--all .count { /* no dot before count; align with siblings */ }
 
 .issues__comp-chip {
   padding: 3px 10px;
