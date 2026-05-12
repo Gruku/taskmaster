@@ -139,3 +139,44 @@ test('issue detail back link returns to issues list', async ({ page }) => {
   await page.waitForURL('**/#/issues');
   await expect(page.locator('.issues')).toBeVisible();
 });
+
+test('view B renders 4 status kanban columns', async ({ page }) => {
+  await page.goto('/v3/#/issues');
+  await page.getByRole('button', { name: 'Status' }).click();
+  // After switching to view B, the kanban shell is visible and status columns
+  // are un-hidden. Severity columns are hidden (display:none), so :visible gives us 4.
+  const visibleCols = page.locator('.issues__kanban-col').filter({ visible: true });
+  await expect(visibleCols).toHaveCount(4);
+  // Each expected status key is represented by exactly one column.
+  for (const key of ['open', 'investigating', 'fixed', 'wontfix']) {
+    await expect(page.locator(`.issues__kanban-col[data-key="${key}"]`)).toBeVisible();
+  }
+});
+
+test('view D renders 4 severity kanban columns and suppresses sev chip on cards', async ({ page }) => {
+  await page.goto('/v3/#/issues');
+  await page.getByRole('button', { name: 'Severity' }).click();
+  // Four severity columns should be visible; status columns are hidden.
+  const visibleCols = page.locator('.issues__kanban-col').filter({ visible: true });
+  await expect(visibleCols).toHaveCount(4);
+  // Column names match the four severity labels.
+  const colNames = page.locator('.issues__kanban-col:visible .issues__column-name');
+  await expect(colNames.filter({ hasText: 'Critical' })).toHaveCount(1);
+  await expect(colNames.filter({ hasText: 'High' })).toHaveCount(1);
+  await expect(colNames.filter({ hasText: 'Medium' })).toHaveCount(1);
+  await expect(colNames.filter({ hasText: 'Low' })).toHaveCount(1);
+  // Cards in view D should not carry .issue-card__sev-chip (suppressSeverityChip=true).
+  const chipsInKanban = page.locator('.issues__columns--kanban .issue-card__sev-chip');
+  await expect(chipsInKanban).toHaveCount(0);
+});
+
+test('severity "All" chip resets active filters', async ({ page }) => {
+  await page.goto('/v3/#/issues');
+  // Activate the Critical filter chip.
+  await page.locator('.issues__sev-chip[data-sev="Critical"]').click();
+  await expect(page.locator('.issues__sev-chip[data-sev="Critical"]')).toHaveAttribute('aria-pressed', 'true');
+  // Click "All" to clear all active severity filters.
+  await page.locator('.issues__sev-chip--all').click();
+  await expect(page.locator('.issues__sev-chip--all')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.issues__sev-chip[data-sev="Critical"]')).toHaveAttribute('aria-pressed', 'false');
+});
