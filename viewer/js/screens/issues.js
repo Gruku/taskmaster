@@ -195,7 +195,8 @@ export async function mount(root, { store, prefs }) {
       ? `${issues.length} of ${allIssues.length} ${pluralize(allIssues.length, 'issue', 'issues')}`
       : `${allIssues.length} ${pluralize(allIssues.length, 'issue', 'issues')}`;
 
-    const tasksIndex = store.getTasksIndex ? store.getTasksIndex() : {};
+    const backlogTasks = store.getBacklog()?.tasks || [];
+    const tasksIndex = Object.fromEntries(backlogTasks.map(t => [t.id, t]));
     // Fix: read aging config from store.getPrefs(), not prefs.getPrefs()
     const agingCfg = store.getPrefs()?.issues?.aging || {};
 
