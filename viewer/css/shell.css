@@ -23,10 +23,13 @@ html, body {
 .mono { font-family: var(--font-mono); }
 .serif { font-family: var(--font-serif); font-style: italic; }
 
-/* Shell grid: sidebar + main */
+/* Shell grid: sidebar + main.
+   Explicit row track of 100vh + box-sizing:border-box on .main below
+   ensures the grid fits the viewport exactly even with padding on .main. */
 .shell {
   display: grid;
   grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+  grid-template-rows: 100vh;
   background: var(--bg-shell);
   height: 100vh;
   min-height: 0;
@@ -188,21 +191,37 @@ html, body {
   justify-content: center;
 }
 
-/* Main */
+/* Main — fills its grid row exactly.
+   box-sizing:border-box folds the padding into the 100% height so the box
+   never overflows the row track. (Without this, content-box height + padding
+   = 100% + 40px, the bottom 40px gets clipped by .shell overflow:hidden,
+   and the page looks "off by the size of the sidebar".) */
 .main {
   display: flex; flex-direction: column;
-  height: 100vh;
+  height: 100%;
   min-height: 0;
   min-width: 0;
   padding: var(--page-pad);
   overflow: hidden;
+  box-sizing: border-box;
 }
 
+/* Topbar pinned to the top of .main. Structurally it's already outside the
+   scroll region (siblings: .topbar + .screen-mount, .main overflow:hidden),
+   but position:sticky + matching background defend against any future screen
+   that puts its own scroll on the wrong element. z-index:5 keeps it above
+   any screen-internal sticky chrome. Background matches .shell so the bar
+   reads as part of the surrounding chrome rather than a separate strip. */
 .topbar {
   display: flex; align-items: center; gap: var(--sp-5);
   margin-bottom: var(--sp-6);
   flex-wrap: nowrap;
+  flex: 0 0 auto;
   min-height: 48px;
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--bg-shell);
 }
 .topbar h1 {
   font-size: var(--text-2xl);
@@ -223,17 +242,109 @@ html, body {
 }
 .topbar-actions:empty { display: none; }
 
+/* Screen mount slot — fills the space below the sticky topbar. It does NOT
+   scroll itself; scrolling lives inside whichever element of the mounted
+   screen claims it via the .tm-scroll primitive below. The slot is flex so
+   the screen root can flex:1 itself into the remaining height. */
 .screen-mount {
   flex: 1;
   min-height: 0;
   min-width: 0;
-  /* Universal scroll fallback. Screens that manage their own internal scroll
-     (Kanban, Ideas) set `height: 100%` on their root so they fit screen-mount
-     exactly and this scrollbar never activates. Screens that don't (Issues,
-     Lessons, Dashboard, …) get natural overflow scroll here instead of
-     bleeding past .main's overflow:hidden boundary and getting clipped. */
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ─────────── UNIFIED SCROLL PRIMITIVE ───────────
+   Drop-in classes any screen (or any nested component) can compose to get
+   consistent viewport-fitting scroll. The pattern: a flex-column parent
+   that fits its slot, with one or more .tm-scroll children claiming the
+   scrollable region. Sticky chrome (filter bars, section heads) lives
+   between the parent and the .tm-scroll child as a normal flex-0 sibling.
+
+   Rules of the road:
+   - The parent never grows past its slot (min-height:0 + overflow:hidden).
+   - Exactly ONE descendant per axis owns the scroll — usually .tm-scroll.
+   - For boards that delegate scroll to grandchildren (e.g. Kanban: only
+     .kanban-col-body scrolls), use .tm-page with no .tm-scroll child.
+
+   Every screen root in this viewer should adopt .tm-page (or its behaviour
+   via screen-local CSS) so the layout works the same everywhere. */
+
+.tm-page {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.tm-scroll {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
   overflow-y: auto;
   overflow-x: hidden;
+}
+
+/* All viewer screen roots get .tm-page behaviour: fill the slot, flex-column,
+   never grow past it. Two mount patterns exist in the codebase and both work
+   because .screen-mount is also flex-column with overflow:hidden:
+     (a) screen JS adds the class directly to .screen-mount
+         (dashboard:.dash, auto-mode:.auto-page, issue-detail, lesson-detail)
+     (b) screen JS appends a child <div> with the class to .screen-mount
+         (kanban:.kanban-page, issues, lessons, ideas, recap:.recap-page,
+         archived:.archived-page, task-detail:.td-page)
+
+   Adding a new screen: append its root class to BOTH the shared base list
+   below AND one of the two scroll-policy lists. */
+
+.kanban-page,
+.tbl-screen,
+.dash,
+.issues,
+.lessons,
+.ideas,
+.recap-page,
+.archived-page,
+.auto-page,
+.td-page,
+.issue-detail,
+.lesson-detail,
+.sessions-page {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* Scroll policy A — entire body scrolls vertically. Topbar stays put because
+   it sits in .main, outside this scroll region. Use when content is one
+   continuous column and no internal sticky chrome is needed. */
+.dash,
+.issues,
+.lessons,
+.recap-page,
+.archived-page,
+.auto-page,
+.td-page,
+.issue-detail,
+.lesson-detail,
+.sessions-page {
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* Scroll policy B — root never scrolls; one or more descendants own the
+   vertical scroll (Kanban's per-column bodies, Ideas' list/detail panes,
+   Table's .tbl-host). The root must clip so the scrolling descendants get
+   a real bounded slot instead of growing the page. */
+.kanban-page,
+.ideas,
+.tbl-screen {
+  overflow: hidden;
 }
 
 /* ── Header auto-status pill ──
@@ -293,6 +404,7 @@ html, body {
   /* Shell: single column — sidebar is a fixed drawer overlay, not in flow */
   .shell {
     grid-template-columns: 1fr;
+    grid-template-rows: auto;          /* override desktop's 100vh row */
     height: auto;
     min-height: 100vh;
     overflow: visible;
