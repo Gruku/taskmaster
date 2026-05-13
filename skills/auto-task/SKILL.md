@@ -45,7 +45,7 @@ When `cursor.stage == "SPEC_REVIEW"`:
    - Task `kind` is `chore`, `docs`, or `refactor-pure` (pure rename / move / formatting with no behavior change)
    - No observable behavior change in any code path
    - Existing tests already cover the surface being touched
-   When in doubt, write the tests. If you skip, record the explicit reason ("skipped TDD: pure-refactor, behavior unchanged, existing coverage at <path>") in the Step 7 handover stub.
+   When in doubt, write the tests. When skipping, record the explicit reason ("skipped TDD: pure-refactor, behavior unchanged, existing coverage at <path>") in the Step 7 handover stub.
 
 ## Step 3: WRITE_TESTS
 
@@ -55,7 +55,7 @@ When `cursor.stage == "WRITE_TESTS"`:
 2. Run the full suite. Confirm:
    - Only the new tests fail.
    - Every previously-passing test still passes.
-   If existing tests break before you've written a line of implementation, **stop** — either the spec is wrong about the surface, or the surface is unstable. Halt with `backlog_auto_complete_task(status="blocked", fail_reason="blocked", summary="existing tests broke during test-authoring; spec or surface needs review")`.
+   When existing tests break before any implementation has been written, **stop** — either the spec is wrong about the surface, or the surface is unstable. Halt with `backlog_auto_complete_task(status="blocked", fail_reason="blocked", summary="existing tests broke during test-authoring; spec or surface needs review")`.
 3. **Commit the failing tests as their own commit** with message `test: add failing tests for <task_id> <short title>`. The red→green transition must be visible in git history — this is a hard requirement, not a suggestion. Capture this sha; it goes in the final `commits` list at END_SESSION.
 4. Call `backlog_auto_advance("IMPLEMENT")`.
 
@@ -64,9 +64,9 @@ When `cursor.stage == "WRITE_TESTS"`:
 When `cursor.stage == "IMPLEMENT"`:
 
 1. Do the work **against the failing tests from Step 3**. Re-run the test suite (or the relevant subset) after each logical chunk; the loop is red → impl → green, repeat until all Step-3 tests pass. Read files before editing, check for matched lessons before writing, follow existing project conventions.
-2. **If you find yourself wanting to change a test to make it pass, stop.** Either the test was wrong (fix it deliberately, note the reason in the commit message — e.g. `test: correct expected behavior for X — original assertion contradicted spec line 42`) or the implementation is wrong. Do **not** silently relax assertions to get green.
-3. **Reinforce lessons** that you actually applied: `backlog_lesson_reinforce(<lesson_id>)`. Skip lessons that didn't end up being relevant.
-4. Commit logically — small, scoped commits per change. Capture all commit shas (including the test commit from Step 3) in a list (you'll pass them to `complete_task`).
+2. **Never change a test to make it pass.** Either the test was wrong (fix it deliberately, note the reason in the commit message — e.g. `test: correct expected behavior for X — original assertion contradicted spec line 42`) or the implementation is wrong. Do **not** silently relax assertions to get green.
+3. **Reinforce lessons that actually applied** during the work: `backlog_lesson_reinforce(<lesson_id>)`. Skip lessons that didn't end up being relevant.
+4. Commit logically — small, scoped commits per change. Capture all commit shas (including the test commit from Step 3) in a list to pass to `complete_task`.
 5. Call `backlog_auto_advance("TEST")`.
 
 ## Step 5: TEST
@@ -143,34 +143,7 @@ When `cursor.stage == "END_SESSION"`:
    }
    ```
 
-## Failure escape hatches
+## Additional Resources
 
-At any stage, you may halt with `backlog_auto_complete_task(status="failed", fail_reason=..., summary=...)`. Valid reasons:
-
-| Reason | When |
-|---|---|
-| `tests-failed` | Test suite went red and you couldn't fix it |
-| `spec-rejected` | User rejected plan or review |
-| `blocked` | External dependency, missing access, decision needed |
-| `crashed` | Tooling/environment broke; investigation needed |
-| `user-aborted` | User explicitly said stop |
-
-After failure, invoke `taskmaster:handover` with `session_kind="context-handoff"` describing where you stopped and what's broken, so the next session can resume. Halt — don't attempt the next stage.
-
-## What this skill does NOT do
-
-- Does not pick which task to work on. The orchestrator (or `backlog_auto_start`) decides.
-- Does not dispatch subagents. That's the auto-epic / auto-phase orchestrator's job.
-- Does not write run-level (epic/phase) handovers — only per-task stage handovers.
-- Does not call `backlog_auto_finish` on the run — orchestrator owns lifecycle.
-
-## Token discipline
-
-- Do not load all handovers at PICK — only those listed in `task.related_handovers`.
-- Do not load all lessons — only `match_lessons_for_task` results.
-- Do not include full file contents in handover bodies — reference paths.
-- Stage handover stubs cap at ~200 words; the *task body* in `tasks/<id>.md` is where long narrative goes.
-
-## Resume semantics
-
-If you wake up mid-run (e.g., after compaction), `backlog_auto_status` tells you exactly where to pick up. Read it first, then jump to the matching step above. Do not redo earlier stages. The PreCompact hook + atomic state writes mean the cursor is always trustworthy — if it says `IMPLEMENT`, the implement work is in progress, not done.
+- **`references/recovery.md`** — failure escape hatches (when and how to halt with `fail_reason`) and resume semantics (how to wake up mid-run after compaction or restart).
+- **`references/scope-and-budget.md`** — what auto-task does NOT do (boundaries vs. orchestrator), and per-stage token discipline limits.

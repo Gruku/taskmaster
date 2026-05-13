@@ -69,7 +69,7 @@ Select a task to work on and set it to in-progress.
 5c. **(v3) Trigger-matched lessons.** Call `backlog_lesson_match(task_title=<title>, touched_files=<files>)` where `touched_files` is informed by `task.anchors` (file globs the task is expected to touch). The tool returns up to 3 best-match lessons (sorted by reinforce_count desc).
    - For each match, fetch the full body via `backlog_lesson_get <id>` and keep it in working context for the duration of this task.
    - Surface to user briefly: "3 lessons match this task: L-007 (gotcha) auth/session.ts read-before-edit, L-014 (anti-pattern) avoid raw SQL, L-022 (pattern) test names format. Loaded."
-   - **When you actually apply a lesson during work, call `backlog_lesson_reinforce <id>`** to bump its count. Don't reinforce on load — only on successful application. If a lesson didn't end up being relevant, don't reinforce it.
+   - **Call `backlog_lesson_reinforce <id>` only on successful application** during work — not on load, and not for lessons that didn't end up being relevant.
 
 6. **Read linked docs:**
    - If the task has a `docs` field (plan, spec, etc.), read those files to understand the existing context before writing any code.
@@ -77,58 +77,49 @@ Select a task to work on and set it to in-progress.
 
 7. **Git worktree creation (REQUIRED):**
 
-   **Why worktrees?** When multiple tasks are in-flight, work on different branches can bleed together if everything happens in the same working tree. A dedicated worktree per task means you can switch tasks instantly, the review gate can diff the correct branch cleanly, and there's no risk of committing task B's changes onto task A's branch. This is the foundation of safe parallel task work.
+   **Why worktrees?** When multiple tasks are in-flight, work on different branches can bleed together if everything happens in the same working tree. A dedicated worktree per task means switching tasks is instant, the review gate can diff the correct branch cleanly, and there's no risk of committing task B's changes onto task A's branch. This is the foundation of safe parallel task work.
 
    - The `backlog_pick_task` response includes worktree instructions. Follow them.
-   - If a worktree already exists: verify the directory actually exists on disk and contains a `.git` file. If not, the worktree is orphaned — delete the stale reference with `git worktree prune` and recreate.
+   - If a worktree already exists: verify the directory exists on disk and contains a `.git` file. If not, the worktree is orphaned — `git worktree prune` and recreate.
    - If no worktree exists: create one before writing any code.
 
    **Creating a worktree:**
    1. Determine the repo root. If the task has a `sub_repo` field, use that directory. Otherwise use the project root.
-   2. Create: `git worktree add .worktrees/{task-id} -b feature/{task-id}` (run from the repo root)
+   2. Create: `git worktree add .worktrees/{task-id} -b feature/{task-id}` (run from the repo root).
    3. Call `backlog_update_task(task_id, "branch", "feature/{task-id}")` to record the branch.
    4. Call `backlog_update_task(task_id, "worktree", ".worktrees/{task-id}")` to record the worktree path.
 
-   **Submodules:** A PostToolUse hook (`worktree-submodule-init.sh`) automatically initializes submodules and fetches from the main checkout after `git worktree add`. You don't need to do this manually. However, **before removing the worktree or merging**, you MUST fetch submodule commits back to the main checkout:
+   **Submodules:** A PostToolUse hook (`worktree-submodule-init.sh`) automatically initialises submodules and fetches from the main checkout after `git worktree add`. No manual init needed here. However, **before removing the worktree or merging**, submodule commits must be fetched back to the main checkout:
    ```
    git -C <main-checkout>/<submodule> fetch <worktree>/<submodule>
    ```
-   The hook will remind you of this. If there are no submodules, nothing happens.
+   The hook prints a reminder of this command at remove-time. If there are no submodules, the hook is a no-op.
 
    **If `git worktree add` fails:**
-   - "branch already exists" — the branch was left behind from a previous attempt. Either check it out in a new worktree (`git worktree add .worktrees/{task-id} feature/{task-id}` without `-b`), or ask the user if they want to delete the stale branch and start fresh.
-   - Other errors — report to the user and ask how to proceed. Don't silently skip worktree creation.
+   - "branch already exists" — the branch was left behind from a previous attempt. Either check it out in a new worktree (`git worktree add .worktrees/{task-id} feature/{task-id}` without `-b`), or ask the user to confirm deleting the stale branch and restart with `-b`.
+   - Other errors — report verbatim to the user and ask how to proceed. Never silently skip worktree creation; that breaks the isolation invariant the rest of the flow depends on.
 
 ## Task Lifecycle
-
-See `references/task-lifecycle.md` for the full state machine and transition rules. The key flow:
 
 ```
 todo → in-progress → in-review → done → archived
 ```
 
+`in-review` means "Claude is done, user tests now." `done` means "user confirmed it works."
+
 ## Reclaiming a locked task
 
-If `backlog_pick_task` returns a lock conflict (task locked by another session), the previous session likely ended without releasing the lock. **Do not** manually edit `backlog.yaml` or use `backlog_update_task` to change `locked_by` — instead:
+When `backlog_pick_task` returns a lock conflict (task locked by another session), the previous session likely ended without releasing the lock. **Do not** manually edit `backlog.yaml` or call `backlog_update_task` to change `locked_by` — that bypasses the atomic guarantee. Instead:
 
 1. Call `backlog_pick_task(task_id, force=true)` — this reclaims the lock in a single atomic call.
-2. Verify the existing worktree is still valid (directory exists, `.git` file present). If orphaned, prune and recreate.
+2. Verify the existing worktree is still valid (directory exists, `.git` file present). If orphaned, `git worktree prune` and recreate.
 
 ## Notes
 
 - `backlog_pick_task` is idempotent for already in-progress tasks in the same session.
-- If a task is `in-review`, picking it moves it back to `in-progress` — confirm this demotion with the user first, as it means they found issues during testing and want to reopen the work.
-- If a task is `blocked`, the tool will reject it. Help the user resolve blockers or change status first.
+- When a task is `in-review`, picking it moves it back to `in-progress` — confirm this demotion with the user first, since it means they found issues during testing and want to reopen the work.
+- When a task is `blocked`, the tool rejects it. Help the user resolve blockers or change status first.
 
-### v3 token budget
+## Additional Resources
 
-When v3 features activate (steps 5a–5c), the additional cost on top of `backlog_pick_task` should be roughly:
-- Related handovers: ≤3 tldrs × ~50 tokens = ~150 tokens (one optional full body adds ~200 when warranted)
-- Related issues: top 3 summaries × ~50 tokens = ~150 tokens
-- Trigger-matched lessons: ≤3 bodies × ~300 tokens = ~900 tokens worst case
-
-**Soft target ~1,500 tokens additive. Warn at 3,000.** If a task accumulates more than the warn threshold, prune lessons (drop the lowest reinforce_count match), then drop optional handover-body fetches. Never prune related_issues — bug context is load-bearing for not re-introducing fixed defects.
-
-### When auto modes call this skill
-
-If `backlog_auto_status` reports an active run with cursor at this task at stage `PICK`, the auto-task skill is the orchestrator. This skill still runs as normal — auto-task explicitly invokes pick-task as its PICK stage. After step 7 (worktree), auto-task takes over for SPEC_REVIEW.
+- **`references/v3-context-loading.md`** — token budget for steps 5a–5c, and how this skill composes with active auto-mode runs.
