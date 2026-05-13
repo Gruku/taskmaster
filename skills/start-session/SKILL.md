@@ -21,7 +21,7 @@ The user is arriving at the start of a conversation — they've lost context sin
 
 2b. **Lesson digest.** Call `backlog_lesson_digest` to load the slim digest of active project lessons (id + kind + title only, ≤30 entries). These are project-specific behavioral guidance Claude should keep in mind during this session.
 
-2c. **Core lessons.** Look at the digest output. If any lesson is in the `core` tier (denoted by `[core/...]`), you should fetch it in full now via `backlog_lesson_get <id>` and keep its body in working context for the whole session. Cap: 5 core lessons.
+2c. **Core lessons.** Look at the digest output. For any lesson in the `core` tier (denoted by `[core/...]`), fetch it in full via `backlog_lesson_get <id>` and keep its body in working context for the whole session. Cap: 5 core lessons.
 
 2d. **Latest handover.** Call `backlog_handover_latest` to get the previous session's handover frontmatter (tldr + next_action + linked task ids). If it exists, surface it prominently in the briefing — it's the "where I left off" anchor. If the frontmatter shows `session_kind: context-handoff`, this was a deliberate handoff written near compaction; offer to fetch the full body via `backlog_handover_get <id>` if the user wants the long version.
 

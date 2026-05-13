@@ -9,7 +9,7 @@ Log the current work session, transition tasks, and commit tracking files.
 
 ## Why This Skill Exists
 
-`backlog_complete_task` atomically writes the changelog entry AND transitions the task status. If you use `backlog_update_task` directly to set status to "done", the PROGRESS.md changelog stays silent — the next `/start-session` will have no "last session" context, and the project loses its work history. This skill ensures every status transition comes with a session record.
+`backlog_complete_task` atomically writes the changelog entry AND transitions the task status. Calling `backlog_update_task` directly to set status to "done" leaves the PROGRESS.md changelog silent — the next `/start-session` will have no "last session" context, and the project loses its work history. This skill ensures every status transition comes with a session record.
 
 **This is the ONLY way to mark tasks as done or in-review with proper session logging.**
 
@@ -226,18 +226,11 @@ Reference: `taskmaster:issue` skill, entry point `close-on-task-complete`.
 
 9. **Confirm:** "Session logged and committed. Task is now `{target_status}`."
 
-## Edge Cases
-
-- **No in-progress task:** If the session was exploratory (planning, research, no task picked), you can still log a session by calling `backlog_complete_task` on any task that changed, or skip the tool and just manually append to PROGRESS.md. Ask the user what they'd prefer.
-- **Not in a git repo:** Skip step 8 (commit) and tell the user the tracking files were updated but not committed.
-- **Multiple tasks changed:** Use `backlog_complete_task` for the primary task (gets the full changelog entry), and `backlog_update_task` for secondary status changes.
-
 ## Task Lifecycle
 
-See `references/task-lifecycle.md` for the full state machine. Key point: `in-review` means "Claude is done, user tests now." `done` means "user confirmed it works."
+`in-review` means "Claude is done, user tests now." `done` means "user confirmed it works." Full flow: `todo → in-progress → in-review → done → archived`.
 
-## Auto-mode interaction (v3)
+## Additional Resources
 
-If `backlog_auto_status` reports an active run, do NOT call `backlog_complete_task` directly — that's the auto-task skill's job at its END_SESSION stage. Instead, defer to the auto run:
-- If auto-task is currently driving the session, end-session is being called as part of that flow. Proceed with the v3-pre-steps above (snapshot + handover) and otherwise let auto-task handle the task transition.
-- If the user invokes /end-session manually mid-auto-run, ask: "There's an active auto run on `<target>`. Pause and write a handover, or abort the run?" — `backlog_auto_abort` clears the state, invoking `taskmaster:handover` with `session_kind="context-handoff"` preserves it.
+- **`references/edge-cases.md`** — no in-progress task, not in a git repo, multiple tasks changed.
+- **`references/auto-mode.md`** — how to behave when `backlog_auto_status` reports an active run.
