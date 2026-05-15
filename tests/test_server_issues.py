@@ -97,6 +97,66 @@ def test_get_issues_excludes_resolved_when_query_param_set(running_server, tmp_p
     assert "ISS-011" not in ids
 
 
+def test_compute_issue_aging_accepts_date_only_format():
+    """ISS-005: compute_issue_aging must accept YYYY-MM-DD without crashing."""
+    from taskmaster_v3 import compute_issue_aging
+    now = datetime(2026, 5, 15, tzinfo=timezone.utc)
+    # 5 days ago in date-only format
+    issue = {"discovered": "2026-05-10", "severity": "P1"}
+    aging_cfg = {"Critical": 14, "High": 30, "Medium": 60, "Low": 120}
+    out = compute_issue_aging(issue, aging_cfg, now=now)
+    # 5 days / 30 days High base = ~16.7% → Fresh
+    assert out["tier"] == "Fresh"
+    assert 0 <= out["percent"] < 25
+
+
+def test_compute_issue_aging_date_only_stale():
+    """ISS-005: date-only format should still produce correct tier (Stale)."""
+    from taskmaster_v3 import compute_issue_aging
+    now = datetime(2026, 5, 15, tzinfo=timezone.utc)
+    # 60 days ago in date-only format → P1/High base=30 → 200% → Stale
+    issue = {"discovered": "2026-03-16", "severity": "P1"}
+    aging_cfg = {"Critical": 14, "High": 30, "Medium": 60, "Low": 120}
+    out = compute_issue_aging(issue, aging_cfg, now=now)
+    assert out["tier"] == "Stale"
+    assert out["percent"] >= 60
+
+
+def test_compute_issue_aging_invalid_format_returns_fresh():
+    """ISS-005: completely malformed discovered should degrade gracefully to Fresh."""
+    from taskmaster_v3 import compute_issue_aging
+    issue = {"discovered": "not-a-date", "severity": "P1"}
+    aging_cfg = {"Critical": 14, "High": 30, "Medium": 60, "Low": 120}
+    out = compute_issue_aging(issue, aging_cfg)
+    assert out["tier"] == "Fresh"
+    assert out["percent"] == 0.0
+
+
+def test_api_issues_date_only_discovered_included(running_server, tmp_path):
+    """ISS-005: /api/issues must include issues with date-only discovered field, not skip them."""
+    base, _ = running_server
+    _write_issue(tmp_path, "ISS-D01", discovered="2026-05-10")
+    _write_issue(tmp_path, "ISS-D02", discovered="2026-05-01T00:00:00Z")
+
+    payload = json.loads(urllib.request.urlopen(f"{base}/api/issues").read())
+    ids = [i["id"] for i in payload["issues"]]
+    # Both should appear — date-only must not be silently dropped
+    assert "ISS-D01" in ids
+    assert "ISS-D02" in ids
+
+
+def test_api_issues_malformed_discovered_does_not_blank_others(running_server, tmp_path):
+    """ISS-005: one issue with completely invalid discovered must not blank the whole response."""
+    base, _ = running_server
+    _write_issue(tmp_path, "ISS-BAD", discovered="not-a-date")
+    _write_issue(tmp_path, "ISS-GOOD", discovered="2026-05-01T00:00:00Z")
+
+    payload = json.loads(urllib.request.urlopen(f"{base}/api/issues").read())
+    ids = [i["id"] for i in payload["issues"]]
+    # ISS-GOOD must be present regardless of ISS-BAD
+    assert "ISS-GOOD" in ids
+
+
 def test_aging_override_changes_tier(running_server, tmp_path):
     base, _ = running_server
     discovered = (datetime.now(timezone.utc) - timedelta(days=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
