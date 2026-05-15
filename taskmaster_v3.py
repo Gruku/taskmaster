@@ -1230,6 +1230,24 @@ def decision_path(backlog_path: Path, decision_id: str) -> Path:
     return decision_dir(backlog_path) / f"{decision_id}.md"
 
 
+def _validate_decision(fm: dict[str, Any]) -> None:
+    """Raise ValueError if frontmatter violates decision invariants."""
+    status = fm.get("status")
+    if status not in DECISION_STATUSES:
+        raise ValueError(f"status must be one of {DECISION_STATUSES}, got {status!r}")
+    opts = fm.get("options") or []
+    if not isinstance(opts, list) or len(opts) < 2:
+        raise ValueError("decision must have at least 2 options")
+    rec = fm.get("recommendation")
+    if rec is not None:
+        if not isinstance(rec, int) or not (1 <= rec <= len(opts)):
+            raise ValueError(f"recommendation must be 1..{len(opts)}, got {rec!r}")
+    if status == "resolved" and not fm.get("resolved_with"):
+        raise ValueError("status=resolved requires resolved_with to be set (1..N)")
+    if status == "dropped" and not fm.get("dropped_reason"):
+        raise ValueError("status=dropped requires dropped_reason")
+
+
 def _validate_issue(fm: dict[str, Any]) -> None:
     """Raise ValueError if frontmatter violates the issue invariants."""
     status = fm.get("status")
