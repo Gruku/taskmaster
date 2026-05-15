@@ -1195,6 +1195,41 @@ def next_issue_id(backlog_path: Path) -> str:
     return f"ISS-{n:03d}"
 
 
+DECISION_STATUSES = ("open", "resolved", "dropped")
+
+
+def decision_dir(backlog_path: Path) -> Path:
+    """Return the `decisions/` dir alongside backlog.yaml."""
+    return backlog_path.parent / "decisions"
+
+
+def list_decision_ids(backlog_path: Path) -> list[str]:
+    """List decision ids on disk, sorted numerically by trailing number."""
+    d = decision_dir(backlog_path)
+    if not d.exists():
+        return []
+
+    def _rank(p: Path) -> int:
+        m = re.search(r"(\d+)$", p.stem)
+        return int(m.group(1)) if m else -1
+
+    files = sorted(d.glob("DEC-*.md"), key=_rank)
+    return [p.stem for p in files]
+
+
+def next_decision_id(backlog_path: Path) -> str:
+    """Allocate the next DEC-NNN id (zero-padded, 3+ digits)."""
+    existing = list_decision_ids(backlog_path)
+    nums = [int(re.search(r"(\d+)$", x).group(1)) for x in existing
+            if re.search(r"(\d+)$", x)]
+    n = (max(nums) + 1) if nums else 1
+    return f"DEC-{n:03d}"
+
+
+def decision_path(backlog_path: Path, decision_id: str) -> Path:
+    return decision_dir(backlog_path) / f"{decision_id}.md"
+
+
 def _validate_issue(fm: dict[str, Any]) -> None:
     """Raise ValueError if frontmatter violates the issue invariants."""
     status = fm.get("status")
