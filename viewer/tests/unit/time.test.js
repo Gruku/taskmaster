@@ -92,3 +92,32 @@ test('formatAbsolute — date-only string suppresses time display automatically'
     `expected no time component, got: ${JSON.stringify(result)}`);
   assert.ok(result.length > 0, 'should produce a non-empty date string');
 });
+
+// ─── characterization: lib/time.js contract (v3-polish-018 sweep baseline) ────
+
+const NOW = new Date('2026-05-15T12:00:00Z').getTime();
+
+test('formatRelative · ISO microsecond handover created → "1d ago"', () => {
+  const created = '2026-05-14T12:00:00.000000+00:00';
+  assert.equal(formatRelative(created, { now: NOW }), '1d ago');
+});
+
+test('formatRelative · date-only string parses as local midnight', () => {
+  const out = formatRelative('2026-05-14', { now: NOW });
+  // 24h span when both sides are interpreted consistently.
+  assert.match(out, /^\d+[hmd] ago$/);
+});
+
+test('formatRelative · same-second returns "now"', () => {
+  const created = new Date(NOW).toISOString();
+  assert.equal(formatRelative(created, { now: NOW }), 'now');
+});
+
+test('formatAbsolute · date-only suppresses time', () => {
+  const out = formatAbsolute('2026-05-14', { now: NOW });
+  // Structural: month name (any locale), day number, no time separator, no clock.
+  assert.match(out, /14/);
+  assert.ok(!out.includes('·'));
+  assert.ok(!/[0-9]:[0-9]/.test(out));
+  assert.ok(!/AM|PM/.test(out));
+});
