@@ -125,3 +125,44 @@ test('epicsForPhase — guards against non-array inputs', () => {
   assert.deepEqual(epicsForPhase(null, TASKS, 'P-01'), []);
   assert.deepEqual(epicsForPhase(EPICS, null, 'P-01'), []);
 });
+
+// ISS-006: hyphenated status convergence tests (v3-polish-054)
+// These tests verify Option A: viewer constants use wire-format hyphenated keys.
+
+test('STATUS_ORDER contains hyphenated in-progress and in-review (ISS-006)', () => {
+  // STATUS_ORDER must use wire-format hyphenated values
+  assert.ok(STATUS_ORDER.includes('in-progress'), 'STATUS_ORDER must contain in-progress (hyphenated)');
+  assert.ok(STATUS_ORDER.includes('in-review'), 'STATUS_ORDER must contain in-review (hyphenated)');
+  assert.ok(!STATUS_ORDER.includes('in_progress'), 'STATUS_ORDER must NOT contain in_progress (underscored)');
+  assert.ok(!STATUS_ORDER.includes('in_review'), 'STATUS_ORDER must NOT contain in_review (underscored)');
+});
+
+test('groupTasks — hyphenated in-progress status buckets into correct column (ISS-006)', () => {
+  const tasks = [
+    { id: 'T-001', status: 'in-progress', priority: 'high' },
+    { id: 'T-002', status: 'in-review',   priority: 'medium' },
+    { id: 'T-003', status: 'todo',         priority: 'low' },
+    { id: 'T-004', status: 'done',         priority: 'low' },
+  ];
+  const groups = groupTasks(tasks, 'status');
+  const inProg = groups.find(g => g.key === 'in-progress');
+  const inReview = groups.find(g => g.key === 'in-review');
+  assert.ok(inProg, 'in-progress group must exist in groupTasks output');
+  assert.ok(inReview, 'in-review group must exist in groupTasks output');
+  assert.deepEqual(inProg.tasks.map(t => t.id), ['T-001'], 'in-progress task must appear in its column');
+  assert.deepEqual(inReview.tasks.map(t => t.id), ['T-002'], 'in-review task must appear in its column');
+});
+
+test('groupTasks — no normalization patch: underscored statuses do NOT match hyphenated keys (ISS-006)', () => {
+  // After the fix, groupTasks should do exact-match — underscored values should fall through unmatched.
+  const tasks = [
+    { id: 'T-BAD', status: 'in_progress', priority: 'high' },
+  ];
+  const groups = groupTasks(tasks, 'status');
+  // After Option A: STATUS_ORDER uses 'in-progress', so the group key is 'in-progress'
+  const inProg = groups.find(g => g.key === 'in-progress');
+  assert.ok(inProg !== undefined, 'in-progress group must exist in groups (STATUS_ORDER uses hyphenated)');
+  // With Option A fully applied, underscored statuses come from bad data — they should not be found
+  // in the in-progress bucket (no normalization). This asserts the patch is REMOVED.
+  assert.deepEqual(inProg.tasks, [], 'underscored in_progress must NOT match in-progress bucket after Option A');
+});
