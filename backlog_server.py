@@ -5856,11 +5856,15 @@ def issue_list_extended(include_resolved: bool = True) -> str:
             continue
         if not include_resolved and issue.get("status") in ("fixed", "wontfix"):
             continue
-        summary = {k: v for k, v in issue.items() if k != "_body"}
-        summary["severity_label"] = severity_label(summary.get("severity", "P2"))
-        summary["aging"] = compute_issue_aging(issue, aging_cfg)
-        summary["summary"] = (issue.get("_body") or "").strip()
-        out.append(summary)
+        try:
+            summary = {k: v for k, v in issue.items() if k != "_body"}
+            summary["severity_label"] = severity_label(summary.get("severity", "P2"))
+            summary["aging"] = compute_issue_aging(issue, aging_cfg)
+            summary["summary"] = (issue.get("_body") or "").strip()
+            out.append(summary)
+        except Exception:
+            # One bad issue must not blank the whole list. ISS-005.
+            continue
     return _json.dumps({"issues": out}, indent=2, default=str)
 
 
