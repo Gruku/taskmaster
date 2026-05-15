@@ -3601,6 +3601,101 @@ def _handover_to_item(fm: dict[str, Any], now: datetime | None = None) -> dict[s
     }
 
 
+def _decision_to_item(fm: dict[str, Any], now: datetime | None = None) -> dict[str, Any]:
+    age = _age_days(fm.get("created_at"), now)
+    status = fm.get("status", "open")
+    action_class = "decide" if status == "open" else "ambient"
+    rec = fm.get("recommendation")
+    rec_str = ""
+    if rec and fm.get("options"):
+        try:
+            rec_str = f"rec: {fm['options'][int(rec) - 1]}"
+        except (IndexError, ValueError):
+            rec_str = ""
+    return {
+        "id": fm.get("id"),
+        "type": "decision",
+        "title": fm.get("title") or "",
+        "where": fm.get("task_id") or fm.get("branch") or "",
+        "next": rec_str or f"{len(fm.get('options') or [])} options",
+        "action_class": action_class,
+        "timestamp": fm.get("created_at") or "",
+        "age_days": age,
+        "task_id": fm.get("task_id"),
+        "branch": fm.get("branch"),
+    }
+
+
+def _task_to_item(task: dict[str, Any], task_id: str, now: datetime | None = None) -> dict[str, Any]:
+    last = task.get("last_referenced") or task.get("started") or task.get("created")
+    age = _age_days(last, now)
+    status = task.get("status", "todo")
+    if status == "in-review":
+        action_class = "review"
+    elif status == "in-progress" and age <= 3:
+        action_class = "resume"
+    elif status == "in-progress" and age >= 7:
+        action_class = "clean-up"
+    else:
+        action_class = "ambient"
+    return {
+        "id": task_id,
+        "type": "task",
+        "title": task.get("title") or task_id,
+        "where": task.get("epic") or "",
+        "next": task.get("status") or "",
+        "action_class": action_class,
+        "timestamp": last or "",
+        "age_days": age,
+        "task_id": task_id,
+        "branch": task.get("branch") or "",
+    }
+
+
+def _issue_to_item(issue: dict[str, Any], now: datetime | None = None) -> dict[str, Any]:
+    sev = issue.get("severity", "P3")
+    age = _age_days(issue.get("discovered"), now)
+    status = issue.get("status", "open")
+    if status != "open":
+        action_class = "ambient"
+    elif sev in ("P0", "P1"):
+        action_class = "review"
+    elif age >= 14:
+        action_class = "clean-up"
+    else:
+        action_class = "ambient"
+    return {
+        "id": issue.get("id"),
+        "type": "issue",
+        "title": issue.get("title") or "",
+        "where": ",".join(issue.get("components") or []),
+        "next": f"{sev} · {status}",
+        "action_class": action_class,
+        "timestamp": issue.get("discovered") or "",
+        "age_days": age,
+        "task_id": None,
+        "branch": None,
+    }
+
+
+def _idea_to_item(idea: dict[str, Any], now: datetime | None = None) -> dict[str, Any]:
+    age = _age_days(idea.get("created"), now)
+    status = idea.get("status", "raw")
+    action_class = "clean-up" if status == "brainstorm" and age >= 7 else "ambient"
+    return {
+        "id": idea.get("id"),
+        "type": "idea",
+        "title": idea.get("title") or "",
+        "where": status,
+        "next": status,
+        "action_class": action_class,
+        "timestamp": idea.get("created") or "",
+        "age_days": age,
+        "task_id": None,
+        "branch": None,
+    }
+
+
 def continuity_items(
     backlog_path: Path,
     *,
@@ -3609,6 +3704,8 @@ def continuity_items(
 ) -> list[dict[str, Any]]:
     """Project all backlog entities to a unified ContinuityItem list."""
     items: list[dict[str, Any]] = []
+
+    # Handovers.
     for hid in list_handover_ids(backlog_path):
         try:
             fm, _ = read_handover(backlog_path, hid)
@@ -3617,4 +3714,41 @@ def continuity_items(
         if not include_auto_stage and fm.get("session_kind") == "auto-stage":
             continue
         items.append(_handover_to_item(fm, now))
+
+    # Decisions.
+    for did in list_decision_ids(backlog_path):
+        try:
+            fm, _ = read_decision(backlog_path, did)
+        except (OSError, ValueError):
+            continue
+        items.append(_decision_to_item(fm, now))
+
+    # Tasks (from backlog.yaml epics).
+    try:
+        data = yaml.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        data = {}
+    for epic in data.get("epics", []) or []:
+        for t in epic.get("tasks", []) or []:
+            tid = t.get("id")
+            if not tid:
+                continue
+            items.append(_task_to_item(t, tid, now))
+
+    # Issues.
+    for iid in list_issue_ids(backlog_path):
+        try:
+            fm, _ = read_issue(backlog_path, iid)
+        except (OSError, ValueError):
+            continue
+        items.append(_issue_to_item(fm, now))
+
+    # Ideas.
+    for idid in list_idea_ids(backlog_path):
+        try:
+            fm, _ = read_idea(backlog_path, idid)
+        except (OSError, ValueError):
+            continue
+        items.append(_idea_to_item(fm, now))
+
     return items
