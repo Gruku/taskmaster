@@ -1248,6 +1248,53 @@ def _validate_decision(fm: dict[str, Any]) -> None:
         raise ValueError("status=dropped requires dropped_reason")
 
 
+def write_decision(
+    backlog_path: Path,
+    *,
+    title: str,
+    options: list[str],
+    recommendation: int | None = None,
+    task_id: str | None = None,
+    related_issues: list[str] | None = None,
+    branch: str | None = None,
+    raised_in: str | None = None,
+    body: str = "",
+    decision_id: str | None = None,
+    status: str = "open",
+) -> tuple[str, Path]:
+    """Create a new decision file. Returns (id, path)."""
+    if not title or not title.strip():
+        raise ValueError("decision title is required")
+    did = decision_id or next_decision_id(backlog_path)
+    fm: dict[str, Any] = {
+        "id": did,
+        "title": title.strip(),
+        "status": status,
+        "options": list(options),
+        "recommendation": recommendation,
+        "task_id": task_id,
+        "related_issues": list(related_issues or []),
+        "branch": branch,
+        "resolved_with": None,
+        "resolved_rationale": None,
+        "dropped_reason": None,
+        "created_at": datetime.now(timezone.utc).isoformat(timespec="microseconds"),
+        "resolved_at": None,
+        "raised_in": raised_in,
+        "referenced_in": [],
+        "resolved_in": None,
+    }
+    _validate_decision(fm)
+    target = decision_path(backlog_path, did)
+    write_task_file(target, fm, body)
+    return did, target
+
+
+def read_decision(backlog_path: Path, decision_id: str) -> tuple[dict[str, Any], str]:
+    """Read a decision file by id. Raises FileNotFoundError if missing."""
+    return read_task_file(decision_path(backlog_path, decision_id))
+
+
 def _validate_issue(fm: dict[str, Any]) -> None:
     """Raise ValueError if frontmatter violates the issue invariants."""
     status = fm.get("status")
