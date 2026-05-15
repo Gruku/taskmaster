@@ -72,7 +72,7 @@ export async function mount(root, { store, api, prefs }) {
   // Search
   const search = document.createElement('div');
   search.className = 'tm-search';
-  search.innerHTML = `<span class="icon">⌕</span><input placeholder="Find by title, id, or branch…" /><span class="cmp-kbd">⌘K</span>`;
+  search.innerHTML = `<span class="icon">⌕</span><input placeholder="Find… (prefix ! to exclude)" /><span class="cmp-kbd">⌘K</span>`;
   const searchInput = search.querySelector('input');
   searchInput.value = state.filters.search || '';
   let searchTimer = null;

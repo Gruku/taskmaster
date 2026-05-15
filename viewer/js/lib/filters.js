@@ -12,7 +12,9 @@ export function applyFilters(tasks, f) {
   const pri    = Array.isArray(f.priorities) ? f.priorities : [];
   const epics  = Array.isArray(f.epics) ? f.epics : [];
   const phase  = f.phase || null;
-  const search = (f.search || '').trim().toLowerCase();
+  const rawSearch = (f.search || '').trim().toLowerCase();
+  const negate = rawSearch.startsWith('!');
+  const search = negate ? rawSearch.slice(1).trimStart() : rawSearch;
 
   return tasks.filter(t => {
     if (pri.length && !pri.includes(String(t.priority || '').toLowerCase())) return false;
@@ -26,7 +28,8 @@ export function applyFilters(tasks, f) {
     }
     if (search) {
       const hay = [t.id, t.title, t.branch].filter(Boolean).join(' ').toLowerCase();
-      if (!hay.includes(search)) return false;
+      const matches = hay.includes(search);
+      if (negate ? matches : !matches) return false;
     }
     return true;
   });
