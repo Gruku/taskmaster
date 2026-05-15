@@ -4,7 +4,7 @@ import { applyFilters, sortTasks, groupTasks, epicsForPhase, STATUS_ORDER } from
 
 const TASKS = [
   { id: 'v3-001', title: 'A',          status: 'done',        priority: 'low',      estimate: 'S', phase: 'P-01', epic: 'viewer-redesign',     started: '2026-04-25T10:00:00Z' },
-  { id: 'v3-002', title: 'B',          status: 'in_progress', priority: 'critical', estimate: 'L', phase: 'P-03', epic: 'viewer-redesign',     started: '2026-04-26T10:00:00Z' },
+  { id: 'v3-002', title: 'B',          status: 'in-progress', priority: 'critical', estimate: 'L', phase: 'P-03', epic: 'viewer-redesign',     started: '2026-04-26T10:00:00Z' },
   { id: 'v3-003', title: 'Auth thing', status: 'todo',        priority: 'high',     estimate: 'M', phase: 'P-03', epic: 'narrative-continuity',started: null },
   { id: 'v3-004', title: 'Other',      status: 'blocked',     priority: 'medium',   estimate: 'S', phase: null,   epic: null,                  started: null },
 ];
@@ -62,7 +62,7 @@ test('sortTasks — started desc puts most recent first; null last', () => {
 test('groupTasks — by status uses STATUS_ORDER', () => {
   const groups = groupTasks(TASKS, 'status');
   assert.deepEqual(groups.map(g => g.key), STATUS_ORDER);
-  const inProg = groups.find(g => g.key === 'in_progress');
+  const inProg = groups.find(g => g.key === 'in-progress');
   assert.deepEqual(inProg.tasks.map(t => t.id), ['v3-002']);
 });
 

@@ -10,9 +10,9 @@ import {
 
 const TASKS = [
   { epic: 'a', status: 'todo' },
-  { epic: 'a', status: 'in_progress' },
+  { epic: 'a', status: 'in-progress' },
   { epic: 'a', status: 'done' },        // doesn't count
-  { epic: 'b', status: 'in_review' },
+  { epic: 'b', status: 'in-review' },
   { epic: 'b', status: 'archived' },    // doesn't count
   { epic: 'c', status: 'todo' },
   { epic: null, status: 'todo' },       // orphan, ignored
@@ -26,8 +26,8 @@ const EPICS = [
   { id: 'e', name: 'Echo',    status: 'archived' },
 ];
 
-test('ACTIVE_TASK_STATUSES — todo, in_progress, in_review (not done, not archived)', () => {
-  assert.deepEqual([...ACTIVE_TASK_STATUSES].sort(), ['in_progress', 'in_review', 'todo']);
+test('ACTIVE_TASK_STATUSES — todo, in-progress, in-review (not done, not archived)', () => {
+  assert.deepEqual([...ACTIVE_TASK_STATUSES].sort(), ['in-progress', 'in-review', 'todo']);
 });
 
 test('countActiveTasksByEpic — counts only todo+in-progress+in-review per epic', () => {

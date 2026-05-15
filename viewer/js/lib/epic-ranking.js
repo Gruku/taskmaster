@@ -1,14 +1,12 @@
 // Pure helpers for the Kanban epic chip row. No DOM.
 
-export const ACTIVE_TASK_STATUSES = new Set(['todo', 'in_progress', 'in_review']);
-
-const normStatus = (s) => String(s || '').toLowerCase().replace(/-/g, '_');
+export const ACTIVE_TASK_STATUSES = new Set(['todo', 'in-progress', 'in-review']);
 
 export function countActiveTasksByEpic(tasks) {
   const counts = new Map();
   for (const t of (tasks || [])) {
     if (!t.epic) continue;
-    if (!ACTIVE_TASK_STATUSES.has(normStatus(t.status))) continue;
+    if (!ACTIVE_TASK_STATUSES.has(t.status)) continue;
     counts.set(t.epic, (counts.get(t.epic) || 0) + 1);
   }
   return counts;

@@ -18,7 +18,7 @@ import { isAutoRunning } from '../lib/auto-state.js';
 import { renderAutoModeLiveBlock } from './auto-mode-live-block.js';
 
 const PRIORITY_LABELS = { critical: 'Critical', high: 'High', medium: 'Medium', low: 'Low' };
-const STATUS_LABELS   = { blocked: 'Blocked', todo: 'Todo', in_progress: 'In Progress', in_review: 'In Review', done: 'Done' };
+const STATUS_LABELS   = { blocked: 'Blocked', todo: 'Todo', 'in-progress': 'In Progress', 'in-review': 'In Review', done: 'Done' };
 
 export function renderCard({ task, density = 'full', epicColors = {}, autoState = null, groupBy = 'status', now = Date.now() } = {}) {
   if (!task || !task.id) return document.createComment('empty card');

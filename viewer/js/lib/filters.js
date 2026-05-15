@@ -1,7 +1,7 @@
 // Pure-logic filter / sort / group for the kanban board.
 // No DOM. Tested via node --test.
 
-export const STATUS_ORDER = ['blocked', 'todo', 'in_progress', 'in_review', 'done'];
+export const STATUS_ORDER = ['blocked', 'todo', 'in-progress', 'in-review', 'done'];
 
 const PRIORITY_RANK = { critical: 4, high: 3, medium: 2, low: 1 };
 const SIZE_RANK     = { XS: 1, S: 2, M: 3, L: 4, XL: 5 };
@@ -75,7 +75,7 @@ export function groupTasks(tasks, by, phaseOrder) {
     return STATUS_ORDER.map(key => ({
       key,
       label: STATUS_LABELS[key],
-      tasks: (tasks || []).filter(t => String(t.status || 'todo').replace(/-/g, '_') === key),
+      tasks: (tasks || []).filter(t => (t.status || 'todo') === key),
     }));
   }
   if (by === 'phase') {
@@ -111,8 +111,8 @@ export function groupTasks(tasks, by, phaseOrder) {
 export const STATUS_LABELS = {
   blocked: 'Blocked',
   todo: 'Todo',
-  in_progress: 'In Progress',
-  in_review: 'In Review',
+  'in-progress': 'In Progress',
+  'in-review': 'In Review',
   done: 'Done',
 };
 

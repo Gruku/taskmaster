@@ -233,8 +233,8 @@
 }
 .card-status-pill .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ink-3); }
 .card-status-pill.todo .dot         { background: var(--ink-3); }
-.card-status-pill.in_progress .dot  { background: var(--accent); }
-.card-status-pill.in_review .dot    { background: var(--amber); }
+.card-status-pill.in-progress .dot  { background: var(--accent); }
+.card-status-pill.in-review .dot    { background: var(--amber); }
 .card-status-pill.done .dot         { background: var(--green); }
 .card-status-pill.blocked .dot      { background: var(--red); }
 
@@ -756,8 +756,8 @@
 
 .kanban-col-head.blocked     .dot { background: var(--red); }
 .kanban-col-head.todo        .dot { background: var(--ink-3); }
-.kanban-col-head.in_progress .dot { background: var(--accent); }
-.kanban-col-head.in_review   .dot { background: var(--amber); }
+.kanban-col-head.in-progress .dot { background: var(--accent); }
+.kanban-col-head.in-review   .dot { background: var(--amber); }
 .kanban-col-head.done        .dot { background: var(--green); }
 
 /* ─────────── COLUMN COLLAPSE ─────────── */

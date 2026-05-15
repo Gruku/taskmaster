@@ -21,7 +21,7 @@ export async function mount(el, { store }) {
   function render() {
     const backlog = (store.getBacklog && store.getBacklog()) || {};
     const stale = (backlog.tasks || [])
-      .filter(t => t.status === 'in-progress' || t.status === 'in_progress')
+      .filter(t => t.status === 'in-progress')
       .map(t => ({ t, age: daysSince(t.started || t.touched || t.created) }))
       .filter(x => x.age >= STALE_DAYS)
       .sort((a, b) => b.age - a.age)
