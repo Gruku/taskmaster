@@ -41,6 +41,33 @@ test('applyFilters — search matches id, title, branch (case-insensitive)', () 
   assert.deepEqual(out2.map(t => t.id), ['v3-002']);
 });
 
+// v3-polish-046: negate/exclude filter tests (failing pre-implementation)
+test('applyFilters — !prefix excludes tasks matching the term (ISS-046)', () => {
+  // TASKS has v3-003 with title 'Auth thing'; !auth should exclude it
+  const out = applyFilters(TASKS, { search: '!auth' });
+  assert.ok(!out.find(t => t.id === 'v3-003'), '!auth must exclude the Auth task');
+  assert.ok(out.find(t => t.id === 'v3-001'), 'non-auth tasks must still appear');
+  assert.ok(out.find(t => t.id === 'v3-002'), 'non-auth tasks must still appear');
+  assert.ok(out.find(t => t.id === 'v3-004'), 'non-auth tasks must still appear');
+});
+
+test('applyFilters — !prefix keeps tasks that do NOT match the term (ISS-046)', () => {
+  // !V3-002 should exclude v3-002 (id matches) but keep the rest
+  const out = applyFilters(TASKS, { search: '!V3-002' });
+  assert.ok(!out.find(t => t.id === 'v3-002'), '!V3-002 must exclude v3-002');
+  assert.equal(out.length, 3, 'three other tasks must remain');
+});
+
+test('applyFilters — ! alone (empty term) applies no filter (ISS-046)', () => {
+  const out = applyFilters(TASKS, { search: '!' });
+  assert.equal(out.length, 4, '! with no term should return all tasks');
+});
+
+test('applyFilters — !prefix is case-insensitive (ISS-046)', () => {
+  const out = applyFilters(TASKS, { search: '!AUTH' });
+  assert.ok(!out.find(t => t.id === 'v3-003'), '!AUTH must exclude Auth task (case-insensitive)');
+});
+
 test('sortTasks — priority desc puts critical first', () => {
   const out = sortTasks(TASKS, { by: 'priority', dir: 'desc' });
   assert.equal(out[0].id, 'v3-002');
