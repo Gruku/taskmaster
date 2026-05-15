@@ -3554,3 +3554,67 @@ def compute_etag(path: Path) -> str:
     # body) collapse to the same etag — desirable for cache stability.
     h.update(path.read_bytes())
     return h.hexdigest()[:16]
+
+
+# ----------------------------------------------------------------------------
+# Continuity adapter — projects all entities onto a single ContinuityItem shape.
+# ----------------------------------------------------------------------------
+
+CONTINUITY_TYPES = ("decision", "handover", "task", "branch", "idea", "issue")
+ACTION_CLASSES = ("decide", "resume", "review", "clean-up", "ambient")
+
+
+def _age_days(iso_ts: str | None, now: datetime | None = None) -> float:
+    if not iso_ts:
+        return 0.0
+    try:
+        ts = datetime.fromisoformat(iso_ts.replace("Z", "+00:00"))
+    except ValueError:
+        return 0.0
+    now = now or datetime.now(timezone.utc)
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return (now - ts).total_seconds() / 86400.0
+
+
+def _handover_to_item(fm: dict[str, Any], now: datetime | None = None) -> dict[str, Any]:
+    age = _age_days(fm.get("created"), now)
+    status = fm.get("status", "todo")
+    # Action class: fresh todo handover → resume; older or done → ambient (won't surface
+    # on action view but still available for time/entity views).
+    if status == "todo" and age <= 7:
+        action_class = "resume"
+    else:
+        action_class = "ambient"
+    task_ids = fm.get("task_ids") or []
+    return {
+        "id": fm.get("id"),
+        "type": "handover",
+        "title": fm.get("tldr") or "",
+        "where": fm.get("branch") or (task_ids[0] if task_ids else ""),
+        "next": fm.get("next_action") or "",
+        "action_class": action_class,
+        "timestamp": fm.get("created") or fm.get("date") or "",
+        "age_days": age,
+        "task_id": task_ids[0] if task_ids else None,
+        "branch": fm.get("branch"),
+    }
+
+
+def continuity_items(
+    backlog_path: Path,
+    *,
+    include_auto_stage: bool = False,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Project all backlog entities to a unified ContinuityItem list."""
+    items: list[dict[str, Any]] = []
+    for hid in list_handover_ids(backlog_path):
+        try:
+            fm, _ = read_handover(backlog_path, hid)
+        except (OSError, ValueError):
+            continue
+        if not include_auto_stage and fm.get("session_kind") == "auto-stage":
+            continue
+        items.append(_handover_to_item(fm, now))
+    return items
