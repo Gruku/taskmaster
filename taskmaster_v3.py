@@ -1295,6 +1295,79 @@ def read_decision(backlog_path: Path, decision_id: str) -> tuple[dict[str, Any],
     return read_task_file(decision_path(backlog_path, decision_id))
 
 
+def update_decision(
+    backlog_path: Path,
+    decision_id: str,
+    patch: dict[str, Any],
+) -> dict[str, Any]:
+    """Apply a field-level patch to a decision. Returns the new frontmatter."""
+    fm, body = read_decision(backlog_path, decision_id)
+    if fm["status"] in ("resolved", "dropped") and patch.get("status") == "open":
+        raise ValueError(f"cannot reopen terminal decision {decision_id}")
+    fm.update(patch)
+    _validate_decision(fm)
+    write_task_file(decision_path(backlog_path, decision_id), fm, body)
+    return fm
+
+
+def resolve_decision(
+    backlog_path: Path,
+    decision_id: str,
+    *,
+    resolved_with: int,
+    rationale: str | None = None,
+    resolved_in: str | None = None,
+) -> dict[str, Any]:
+    """Flip a decision to resolved with a chosen option (1-indexed)."""
+    fm, body = read_decision(backlog_path, decision_id)
+    if not (1 <= int(resolved_with) <= len(fm.get("options") or [])):
+        raise ValueError(
+            f"resolved_with must be 1..{len(fm['options'])}, got {resolved_with}"
+        )
+    fm["status"] = "resolved"
+    fm["resolved_with"] = int(resolved_with)
+    fm["resolved_rationale"] = (rationale or "").strip() or None
+    fm["resolved_at"] = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+    if resolved_in:
+        fm["resolved_in"] = resolved_in
+    _validate_decision(fm)
+    write_task_file(decision_path(backlog_path, decision_id), fm, body)
+    return fm
+
+
+def drop_decision(
+    backlog_path: Path,
+    decision_id: str,
+    *,
+    reason: str,
+) -> dict[str, Any]:
+    """Mark a decision as dropped with a reason."""
+    if not reason or not reason.strip():
+        raise ValueError("drop reason is required")
+    fm, body = read_decision(backlog_path, decision_id)
+    fm["status"] = "dropped"
+    fm["dropped_reason"] = reason.strip()
+    fm["resolved_at"] = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+    _validate_decision(fm)
+    write_task_file(decision_path(backlog_path, decision_id), fm, body)
+    return fm
+
+
+def link_decision_to_handover(
+    backlog_path: Path,
+    decision_id: str,
+    handover_id: str,
+) -> dict[str, Any]:
+    """Append a handover id to the decision's referenced_in (idempotent)."""
+    fm, body = read_decision(backlog_path, decision_id)
+    refs = list(fm.get("referenced_in") or [])
+    if handover_id not in refs:
+        refs.append(handover_id)
+        fm["referenced_in"] = refs
+        write_task_file(decision_path(backlog_path, decision_id), fm, body)
+    return fm
+
+
 def _validate_issue(fm: dict[str, Any]) -> None:
     """Raise ValueError if frontmatter violates the issue invariants."""
     status = fm.get("status")
