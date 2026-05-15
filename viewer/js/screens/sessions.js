@@ -5,6 +5,7 @@ import { claimTopbar, tmSubcount, tmSearch, tmSegmented, tmAction } from '../lib
 import { pluralize } from '../util/pluralize.js';
 import { emptyState } from '../components/empty-state.js';
 import { chipClickNext } from '../util/chip-toggle.js';
+import { formatRelative } from '../lib/time.js';
 
 export const meta = { title: 'Sessions', icon: '⊕', sidebarKey: 'sessions' };
 
@@ -336,7 +337,7 @@ function renderHandoverRail(h, owner) {
     + `<span class="ho-status-pill ho-status-pill-${escapeHtml(status)}" `
     +   `data-handover-id="${escapeHtml(h.id)}" data-status="${escapeHtml(status)}" `
     +   `title="Status: ${escapeHtml(status)} — click to change">${escapeHtml(status)}</span>`
-    + `<span class="ts">${escapeHtml(h.date || '')}</span>`
+    + `<span class="ts">${escapeHtml(formatRelative(h.created || h.date))}</span>`
     + `<span class="actions">`
     + `<button class="ic-btn" title="Edit — coming soon" disabled>✎</button>`
     + `<button class="ic-btn" title="Open file — coming soon" disabled>↗</button>`

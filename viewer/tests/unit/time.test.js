@@ -121,3 +121,13 @@ test('formatAbsolute · date-only suppresses time', () => {
   assert.ok(!/[0-9]:[0-9]/.test(out));
   assert.ok(!/AM|PM/.test(out));
 });
+
+test('formatRelative · handover.created drives "Xd ago" not handover.date', () => {
+  const handover = {
+    date: '2026-05-14',                          // date-only (local midnight)
+    created: '2026-05-14T23:59:00.000000+00:00', // late-night UTC write
+  };
+  // From NOW=2026-05-15T12:00Z, late-night-prior should be "12h ago", not "1d ago".
+  const out = formatRelative(handover.created, { now: NOW });
+  assert.equal(out, '12h ago');
+});
