@@ -106,6 +106,14 @@ from taskmaster_v3 import (
     read_idea as _read_idea,
     update_idea as _update_idea,
     list_ideas as _list_ideas,
+    write_decision as _write_decision,
+    read_decision as _read_decision,
+    update_decision as _update_decision,
+    resolve_decision as _resolve_decision,
+    drop_decision as _drop_decision,
+    list_decision_ids as _list_decision_ids,
+    decision_path as _decision_path,
+    write_task_file as _write_task_file,
     AUTO_MODES,
     AUTO_STAGES,
     AUTO_TASK_STATUSES,
@@ -2050,6 +2058,152 @@ def backlog_issue_resync() -> str:
     _save(data)
     n = len(data.get("issues") or [])
     return f"Issue index resynced — {n} entries."
+
+
+@mcp.tool()
+def backlog_decision_create(
+    title: str,
+    options: list[str],
+    recommendation: int | None = None,
+    task_id: str | None = None,
+    related_issues: list[str] | None = None,
+    branch: str | None = None,
+    raised_in: str | None = None,
+    body: str = "",
+) -> str:
+    """Write a decision menu as a first-class entity (`DEC-NNN`).
+
+    Use when ≥2 mutually exclusive paths need user input. Replaces inline
+    option lists in chat — the decision survives the session.
+
+    Args:
+        title: Short summary (≤80 chars).
+        options: At least 2 mutually exclusive paths.
+        recommendation: 1-indexed pick from `options`. None if no preference.
+        task_id: Optional link to the task this decision blocks.
+        related_issues: Optional ISS-NNN list.
+        branch: Optional branch context.
+        raised_in: Optional handover id that surfaced this decision.
+        body: Free-form context (rationale, constraints, links).
+    """
+    bp = _backlog_path()
+    if not bp.exists():
+        return f"Error: no backlog found at {bp}. Run `backlog_init` first."
+    try:
+        did, target = _write_decision(
+            bp,
+            title=title,
+            options=options,
+            recommendation=recommendation,
+            task_id=task_id,
+            related_issues=related_issues or [],
+            branch=branch,
+            raised_in=raised_in,
+            body=body,
+        )
+    except ValueError as exc:
+        return f"Error: {exc}"
+    _ensure_v3_marker(bp)
+    return f"Decision created: {did} — {title}\nFile: {target.relative_to(ROOT)}"
+
+
+@mcp.tool()
+def backlog_decision_list(status: str = "open", task_id: str = "", limit: int = 20) -> str:
+    """List decisions filtered by status. `status='all'` returns every state."""
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    ids = _list_decision_ids(bp)
+    rows: list[str] = []
+    for did in ids:
+        try:
+            fm, _ = _read_decision(bp, did)
+        except (OSError, ValueError):
+            continue
+        if status != "all" and fm.get("status") != status:
+            continue
+        if task_id and fm.get("task_id") != task_id:
+            continue
+        rec = fm.get("recommendation")
+        rec_str = f" [rec={rec}]" if rec else ""
+        rows.append(f"{did} · {fm.get('status')} · {fm.get('title')}{rec_str}")
+        if len(rows) >= limit:
+            break
+    return "\n".join(rows) if rows else f"No decisions matching status={status}."
+
+
+@mcp.tool()
+def backlog_decision_get(decision_id: str) -> str:
+    """Return full decision frontmatter + body as readable text."""
+    bp = _backlog_path()
+    try:
+        fm, body = _read_decision(bp, decision_id)
+    except FileNotFoundError:
+        return f"Decision not found: {decision_id}"
+    lines = [f"{k}: {v}" for k, v in fm.items()]
+    return "\n".join(lines) + "\n\n---\n" + body
+
+
+@mcp.tool()
+def backlog_decision_resolve(
+    decision_id: str,
+    resolved_with: int,
+    rationale: str = "",
+    resolved_in: str = "",
+) -> str:
+    """Resolve a decision with a chosen option (1-indexed)."""
+    bp = _backlog_path()
+    try:
+        fm = _resolve_decision(
+            bp, decision_id,
+            resolved_with=int(resolved_with),
+            rationale=rationale,
+            resolved_in=resolved_in or None,
+        )
+    except (ValueError, FileNotFoundError) as exc:
+        return f"Error: {exc}"
+    return (
+        f"Decision {decision_id} resolved with option {fm['resolved_with']}: "
+        f"\"{fm['options'][fm['resolved_with'] - 1]}\""
+    )
+
+
+@mcp.tool()
+def backlog_decision_drop(decision_id: str, reason: str) -> str:
+    """Drop a decision with a reason (no option picked)."""
+    bp = _backlog_path()
+    try:
+        _drop_decision(bp, decision_id, reason=reason)
+    except (ValueError, FileNotFoundError) as exc:
+        return f"Error: {exc}"
+    return f"Decision {decision_id} dropped: {reason}"
+
+
+@mcp.tool()
+def backlog_decision_update(
+    decision_id: str,
+    title: str = "",
+    options: list[str] | None = None,
+    recommendation: int | None = None,
+    body: str = "",
+) -> str:
+    """Edit a decision in place (pre-resolution fields only)."""
+    bp = _backlog_path()
+    patch: dict = {}
+    if title:
+        patch["title"] = title
+    if options:
+        patch["options"] = options
+    if recommendation is not None:
+        patch["recommendation"] = recommendation
+    try:
+        fm = _update_decision(bp, decision_id, patch)
+    except (ValueError, FileNotFoundError) as exc:
+        return f"Error: {exc}"
+    if body:
+        cur_fm, _ = _read_decision(bp, decision_id)
+        _write_task_file(_decision_path(bp, decision_id), cur_fm, body)
+    return f"Decision {decision_id} updated."
 
 
 @mcp.tool()
