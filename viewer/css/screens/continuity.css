@@ -1,0 +1,38 @@
+/* Continuity dashboard — shell, topbar, view switcher, and type chips.
+   Token mapping from plan spec:
+     --ground-0  → --bg-canvas      (darkest surface)
+     --ground-5  → --bg-shell
+     --ground-15 → --border
+     --ground-50 → --ink-3
+     --ground-80 → --ink-2
+     --ground-95 → --ink
+*/
+
+.co-dash { background: var(--bg-canvas); color: var(--ink-2); }
+.co-dash__topbar { display: flex; align-items: center; gap: 10px;
+  padding: 12px 18px; background: var(--bg-shell);
+  border-bottom: 1px solid var(--border); }
+.co-dash__body { padding: 18px; }
+.co-dash__layout { display: grid; grid-template-columns: 1.55fr 1fr; gap: 18px; }
+.co-dash__footer { padding: 9px 18px; background: var(--bg-canvas);
+  border-top: 1px solid var(--bg-shell); display: flex; gap: 18px;
+  font-size: 0.825rem; color: var(--ink-3); }
+
+.co-view-switcher { margin-left: auto; display: flex; gap: 1px;
+  background: var(--bg-canvas); border: 1px solid var(--border);
+  border-radius: 5px; padding: 2px; }
+.co-view-switcher__btn { padding: 4px 10px; font-size: 0.78rem;
+  border-radius: 3px; color: var(--ink-3); background: transparent;
+  border: 0; cursor: pointer; }
+.co-view-switcher__btn.is-active { background: rgba(230,230,233,0.10);
+  color: var(--ink); }
+
+/* Type chips (decision / handover / task / branch / idea / issue). */
+.co-chip { display: inline-block; padding: 1px 6px; font-size: 0.66rem;
+  letter-spacing: 0.12em; text-transform: uppercase; border-radius: 2px; font-weight: 600; }
+.co-chip--dec { color: var(--red);    background: color-mix(in srgb, var(--red) 12%, transparent); }
+.co-chip--han { color: var(--accent); background: var(--accent-soft); }
+.co-chip--tsk { color: var(--green);  background: color-mix(in srgb, var(--green) 12%, transparent); }
+.co-chip--brn { color: var(--amber);  background: color-mix(in srgb, var(--amber) 12%, transparent); }
+.co-chip--ide { color: var(--ink-3);  background: rgba(160,156,149,0.10); }
+.co-chip--iss { color: var(--amber);  background: color-mix(in srgb, var(--amber) 12%, transparent); }
