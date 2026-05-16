@@ -8,8 +8,7 @@ const BACKLOG_POLL_MS = 3000;
 const PREFS_DEBOUNCE_MS = 400;
 
 // Register screens (lazy-loaded modules).
-registerScreen('/dashboard',    () => import('./screens/dashboard.js'));
-registerScreen('/v2/dashboard', () => import('./screens/continuity.js'));
+registerScreen('/dashboard', () => import('./screens/continuity.js'));
 registerScreen('/kanban',     () => import('./screens/kanban.js'));
 registerScreen('/table',      () => import('./screens/table.js'));
 registerScreen('/task',       () => import('./screens/task-detail.js'));
