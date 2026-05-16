@@ -33,6 +33,20 @@ If the count is 0 or 1, skip silently — the latest-handover line already cover
 
 The list returns slim entries (no bodies); the date prefix on the oldest id is the user-visible "how stale" anchor.
 
+### Surface open decisions
+
+After loading the latest handover, also call:
+
+```
+backlog_decision_list(status="open")
+```
+
+Report the count to the user as part of the dashboard summary:
+
+> "3 open decisions: DEC-001 (Land ue-plugin-086), DEC-003 (Voice billing semantics), DEC-005 (…)"
+
+If a decision blocks the user's top-of-mind task, mention it inline in the "where you left off" recap. The continuity dashboard surfaces them visually; this is the chat-side echo.
+
 2e. **Open issues by severity.** Call `backlog_issue_list(status="open", limit=10)`. The list is already pre-sorted P0 → P3 by the index sync. Keep all returned entries in working context — they're the "what's broken right now" anchor. P0/P1 entries get a visual flag in the briefing (step 3). If the list is empty ("No issues yet."), skip silently and don't render the section.
 
 3. **Present a structured briefing to the user:**
