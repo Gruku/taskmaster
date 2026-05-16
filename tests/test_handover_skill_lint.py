@@ -42,25 +42,31 @@ def test_description_contains_key_trigger_phrases():
 
 
 def test_all_referenced_files_exist():
+    # After 6→4 simplification: tier-selection.md removed; light/standard/full → body.md only.
     expected_refs = [
         SKILL_DIR / "references" / "session-kinds.md",
-        SKILL_DIR / "references" / "tier-selection.md",
         SKILL_DIR / "references" / "auto-extraction.md",
         SKILL_DIR / "references" / "supersession.md",
+        SKILL_DIR / "templates" / "body.md",
+    ]
+    missing = [p for p in expected_refs if not p.exists()]
+    assert not missing, f"missing referenced files: {missing}"
+    # Old files must not exist.
+    removed = [
         SKILL_DIR / "templates" / "light.md",
         SKILL_DIR / "templates" / "standard.md",
         SKILL_DIR / "templates" / "full.md",
     ]
-    missing = [p for p in expected_refs if not p.exists()]
-    assert not missing, f"missing referenced files: {missing}"
+    present = [p for p in removed if p.exists()]
+    assert not present, f"old template files should be removed: {present}"
 
 
 def test_references_are_not_stubs():
-    # Each reference / template should be > 20 non-blank lines --
-    # a one-line stub means Task 7/8 wasn't completed.
+    # Each reference should be > 5 non-blank lines.
+    # session-kinds.md is intentionally concise after 6→4 simplification.
     for ref in (SKILL_DIR / "references").iterdir():
         non_blank = [ln for ln in ref.read_text(encoding="utf-8").splitlines() if ln.strip()]
-        assert len(non_blank) > 20, f"reference looks like a stub: {ref}"
+        assert len(non_blank) > 5, f"reference looks like a stub: {ref}"
     for tpl in (SKILL_DIR / "templates").iterdir():
         non_blank = [ln for ln in tpl.read_text(encoding="utf-8").splitlines() if ln.strip()]
         assert len(non_blank) > 5, f"template looks like a stub: {tpl}"

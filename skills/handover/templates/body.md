@@ -1,6 +1,8 @@
+<!-- Reference decisions with [[DEC-NNN]] in any section.
+     Open and resolved decisions are tracked via frontmatter, not body text. -->
+
 <!--
-STANDARD TIER TEMPLATE — target ~60–130 lines.
-Default for milestone-complete / context-handoff, or 30–100-turn sessions with an in-flight task.
+HANDOVER BODY TEMPLATE — target ~60–130 lines.
 Drop any section with no content. Never leave {placeholders}.
 -->
 
