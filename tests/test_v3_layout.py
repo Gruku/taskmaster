@@ -624,7 +624,7 @@ class TestWriteHandover:
         assert fm["tldr"] == "Login impl, OAuth pending"
         assert fm["next_action"] == "Resume IMPLEMENT once legal confirms."
         assert fm["task_ids"] == ["features-001"]
-        assert fm["session_kind"] == "end-of-day"
+        assert fm["session_kind"] == "continuity"  # "end-of-day" normalized to "continuity" on write
         assert fm["date"] == "2026-04-26"
         assert "Decisions" in body
 
@@ -723,7 +723,7 @@ class TestHandoverIndex:
             "id", "date", "tldr", "next_action", "task_ids", "session_kind",
             "status", "created",
         }
-        assert entry["session_kind"] == "end-of-day"
+        assert entry["session_kind"] == "continuity"  # "end-of-day" normalized to "continuity" on write
         assert entry["status"] in {"todo", "in-progress", "done"}
 
     def test_archive_year_inferred(self, tmp_path: Path):

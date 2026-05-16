@@ -695,14 +695,19 @@ def diff_against_snapshot(
 
 # Canonical session_kind values (free-form string in storage; these are
 # the well-known ones that may get special treatment elsewhere).
-HANDOVER_KINDS = (
-    "end-of-day",
-    "context-handoff",
-    "milestone-complete",
-    "pivot",
-    "exploration",
-    "auto-stage",
-)
+HANDOVER_KINDS = ("continuity", "deep-context", "milestone", "auto-stage")
+
+_LEGACY_KIND_MAP = {
+    "end-of-day": "continuity",
+    "exploration": "continuity",
+    "context-handoff": "deep-context",
+    "milestone-complete": "milestone",
+    "pivot": "milestone",
+}
+
+
+def _normalize_session_kind(kind: str) -> str:
+    return _LEGACY_KIND_MAP.get(kind, kind)
 
 # Three-state lifecycle for handovers — see specs/2026-05-09-handover-status-design.md
 HANDOVER_STATUSES = ("todo", "in-progress", "done")
@@ -725,12 +730,10 @@ RECAP_SCHEMA_VERSION = 1
 # Storage kinds live in handover frontmatter (`session_kind`); the viewer renders
 # them via this mapping for kind-pill colour, kind-filter chips, and right-rail header.
 HANDOVER_KIND_TO_VIEWER_KIND = {
-    "end-of-day":         "wrap",
-    "context-handoff":    "mid-task",
-    "milestone-complete": "checkpoint",
-    "pivot":              "mid-task",
-    "exploration":        "standalone",
-    "auto-stage":         "standalone",
+    "continuity":   "wrap",
+    "deep-context": "mid-task",
+    "milestone":    "checkpoint",
+    "auto-stage":   "standalone",
 }
 
 VIEWER_HANDOVER_KINDS = ("mid-task", "checkpoint", "wrap", "standalone")
@@ -772,12 +775,14 @@ def write_handover(
     next_action: str = "",
     body: str = "",
     task_ids: list[str] | None = None,
-    session_kind: str = "end-of-day",
+    session_kind: str = "continuity",
     when: str | None = None,
     context_size_at_write: str | None = None,
     supersedes: str | None = None,
     branch: str | None = None,
     tip_commit: str | None = None,
+    open_decisions: list[str] | None = None,
+    resolved_this_session: list[str] | None = None,
 ) -> tuple[str, Path]:
     """Write a new handover file.
 
@@ -787,6 +792,7 @@ def write_handover(
     """
     if not tldr or not tldr.strip():
         raise ValueError("handover tldr is required")
+    session_kind = _normalize_session_kind(session_kind)
     if session_kind not in HANDOVER_KINDS:
         raise ValueError(
             f"session_kind must be one of {HANDOVER_KINDS}, got {session_kind!r}"
@@ -822,8 +828,15 @@ def write_handover(
         fm["branch"] = branch
     if tip_commit:
         fm["tip_commit"] = tip_commit
+    fm["open_decisions"] = list(open_decisions or [])
+    fm["resolved_this_session"] = list(resolved_this_session or [])
 
     write_task_file(target, fm, body)
+    for did in fm["open_decisions"]:
+        try:
+            link_decision_to_handover(backlog_path, did, final_id)
+        except FileNotFoundError:
+            pass  # decision was deleted; don't fail the handover write
     return final_id, target
 
 
