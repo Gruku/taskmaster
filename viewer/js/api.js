@@ -78,6 +78,11 @@ export async function getTaskRelated(id) {
 }
 
 export const api = {
+  // Generic HTTP helpers — screens needing arbitrary endpoints (e.g. continuity
+  // dashboard hitting /api/continuity, /api/decisions/*) route through these
+  // instead of growing the named-method surface.
+  get:             (path)        => http('GET', path),
+  post:            (path, body)  => http('POST', path, body ?? {}),
   identity:        ()    => http('GET', '/api/identity'),
   backlog:         ()    => http('GET', '/api/backlog'),
   prefs:           ()    => http('GET', '/api/viewer/prefs'),

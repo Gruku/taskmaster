@@ -109,3 +109,61 @@ def test_route_action_class_for_issue_uses_severity_and_age():
     old = (tm.datetime.now(tm.timezone.utc) - tm.timedelta(days=20)).isoformat()
     p3 = {"severity": "P3", "status": "open", "discovered": old, "id": "ISS-2", "title": "t"}
     assert tm._issue_to_item(p3)["action_class"] == "clean-up"
+
+
+def test_age_days_accepts_datetime_and_date():
+    """PyYAML auto-parses ISO timestamps into datetime/date objects when reading
+    frontmatter. _age_days must accept them, not just strings."""
+    now = tm.datetime(2026, 5, 16, 12, 0, 0, tzinfo=tm.timezone.utc)
+    # datetime input
+    ts_dt = tm.datetime(2026, 5, 14, 12, 0, 0, tzinfo=tm.timezone.utc)
+    assert tm._age_days(ts_dt, now=now) == pytest.approx(2.0)
+    # naive datetime input (assume UTC)
+    ts_naive = tm.datetime(2026, 5, 14, 12, 0, 0)
+    assert tm._age_days(ts_naive, now=now) == pytest.approx(2.0)
+    # date input
+    from datetime import date as _date
+    assert tm._age_days(_date(2026, 5, 14), now=now) == pytest.approx(2.5)
+    # str input still works
+    assert tm._age_days("2026-05-14T12:00:00+00:00", now=now) == pytest.approx(2.0)
+    # None / empty
+    assert tm._age_days(None) == 0.0
+    assert tm._age_days("") == 0.0
+
+
+def test_continuity_items_survives_yaml_parsed_decision_timestamp(tmp_path):
+    """Regression: a decision file written by the standard writer and read back
+    via yaml.safe_load produces a datetime object for created_at. The projector
+    must not crash."""
+    import yaml
+    bp = tmp_path / ".taskmaster" / "backlog.yaml"
+    bp.parent.mkdir()
+    bp.write_text("meta:\n  schema_version: 3\n", encoding="utf-8")
+    decisions_dir = bp.parent / "decisions"
+    decisions_dir.mkdir()
+    fm = {
+        "id": "DEC-001",
+        "title": "smoke",
+        "status": "open",
+        "options": ["a", "b"],
+        "recommendation": 1,
+        "task_id": None,
+        "related_issues": [],
+        "branch": None,
+        "resolved_with": None,
+        "resolved_rationale": None,
+        "dropped_reason": None,
+        "created_at": tm.datetime.now(tm.timezone.utc).isoformat(timespec="microseconds"),
+        "resolved_at": None,
+        "raised_in": None,
+        "referenced_in": [],
+        "resolved_in": None,
+    }
+    # Write the way write_task_file does (bare yaml.dump, no string-forcing).
+    fm_text = yaml.dump(fm, default_flow_style=False, sort_keys=False, allow_unicode=True)
+    (decisions_dir / "DEC-001.md").write_text(f"---\n{fm_text}---\n\nbody\n", encoding="utf-8")
+    # Must not raise.
+    items = tm.continuity_items(bp)
+    decs = [i for i in items if i["type"] == "decision"]
+    assert decs and decs[0]["id"] == "DEC-001"
+    assert isinstance(decs[0]["age_days"], (int, float))

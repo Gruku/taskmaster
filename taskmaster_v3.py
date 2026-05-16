@@ -3577,13 +3577,18 @@ CONTINUITY_TYPES = ("decision", "handover", "task", "branch", "idea", "issue")
 ACTION_CLASSES = ("decide", "resume", "review", "clean-up", "ambient")
 
 
-def _age_days(iso_ts: str | None, now: datetime | None = None) -> float:
+def _age_days(iso_ts: "str | datetime | date | None", now: datetime | None = None) -> float:
     if not iso_ts:
         return 0.0
-    try:
-        ts = datetime.fromisoformat(iso_ts.replace("Z", "+00:00"))
-    except ValueError:
-        return 0.0
+    if isinstance(iso_ts, datetime):
+        ts = iso_ts
+    elif isinstance(iso_ts, date):
+        ts = datetime(iso_ts.year, iso_ts.month, iso_ts.day, tzinfo=timezone.utc)
+    else:
+        try:
+            ts = datetime.fromisoformat(iso_ts.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            return 0.0
     now = now or datetime.now(timezone.utc)
     if ts.tzinfo is None:
         ts = ts.replace(tzinfo=timezone.utc)
