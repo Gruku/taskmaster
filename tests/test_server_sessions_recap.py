@@ -82,7 +82,7 @@ def test_http_get_sessions_returns_list(running_server, tmp_path):
     (tmp_path / ".taskmaster" / "handovers" / "2026-04-26-1640-x.md").write_text(
         "---\nid: 2026-04-26-1640-x\ndate: 2026-04-26T16:40:00Z\n"
         "tldr: x\nnext_action: y\ntask_ids: [T-1]\n"
-        "session_kind: end-of-day\ncontext_size_at_write: 0.5\n---\n\nbody\n",
+        "session_kind: continuity\ncontext_size_at_write: 0.5\n---\n\nbody\n",
         encoding="utf-8",
     )
     resp = urllib.request.urlopen(f"{base}/api/sessions")

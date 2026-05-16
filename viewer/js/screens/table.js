@@ -29,7 +29,7 @@ const COLUMNS = [
   { key: 'branch',    label: 'Branch',   width: '180px', sortable: false,
     get: t => t.branch || '', render: t => t.branch ? `<code class="t-branch">${esc(t.branch)}</code>` : '—' },
   { key: 'started',   label: 'Started',  width: '110px', sortable: true,
-    get: t => t.started || '', render: t => t.started ? formatDate(t.started) : '—' },
+    get: t => t.started || '', render: t => t.started ? (formatAbsolute(t.started, { time: false, year: true }) || esc(t.started)) : '—' },
 ];
 
 const STATUS_LABELS = { todo: 'Todo', in_progress: 'In Progress', in_review: 'In Review', done: 'Done', blocked: 'Blocked' };
@@ -42,11 +42,6 @@ function priorityOrder(p){ return PRIORITY_ORDER[(p||'').toLowerCase()] ?? 99; }
 function sizeOrder(s)    { return SIZE_ORDER[s] ?? 99; }
 function prettyStatus(s) { return STATUS_LABELS[s] || s || ''; }
 function esc(v) { return String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-function formatDate(iso) {
-  if (!iso) return '—';
-  const out = formatAbsolute(iso, { time: false, year: true });
-  return out || esc(iso);
-}
 
 const DEFAULT_STATE = {
   sort: { by: 'priority', dir: 'asc' },   // priority asc → critical first

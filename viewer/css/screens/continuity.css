@@ -1,0 +1,257 @@
+/* Continuity dashboard — shell, topbar, view switcher, and type chips.
+   Token mapping from plan spec:
+     --ground-0  → --bg-canvas      (darkest surface)
+     --ground-5  → --bg-shell
+     --ground-15 → --border
+     --ground-50 → --ink-3
+     --ground-80 → --ink-2
+     --ground-95 → --ink
+*/
+
+.co-dash { background: var(--bg-canvas); color: var(--ink-2); }
+.co-dash__topbar { display: flex; align-items: center; gap: 10px;
+  padding: 12px 18px; background: var(--bg-shell);
+  border-bottom: 1px solid var(--border); }
+.co-dash__body { padding: 18px; }
+.co-dash__layout { display: grid; grid-template-columns: 1.55fr 1fr; gap: 18px; }
+.co-dash__footer { padding: 9px 18px; background: var(--bg-canvas);
+  border-top: 1px solid var(--bg-shell); display: flex; gap: 18px;
+  font-size: 0.825rem; color: var(--ink-3); }
+
+.co-view-switcher { margin-left: auto; display: flex; gap: 1px;
+  background: var(--bg-canvas); border: 1px solid var(--border);
+  border-radius: 5px; padding: 2px; }
+.co-view-switcher__btn { padding: 4px 10px; font-size: 0.78rem;
+  border-radius: 3px; color: var(--ink-3); background: transparent;
+  border: 0; cursor: pointer; }
+.co-view-switcher__btn.is-active { background: rgba(230,230,233,0.10);
+  color: var(--ink); }
+
+/* Type chips (decision / handover / task / branch / idea / issue). */
+.co-chip { display: inline-block; padding: 1px 6px; font-size: 0.66rem;
+  letter-spacing: 0.12em; text-transform: uppercase; border-radius: 2px; font-weight: 600; }
+.co-chip--dec { color: var(--red);    background: color-mix(in srgb, var(--red) 12%, transparent); }
+.co-chip--han { color: var(--accent); background: var(--accent-soft); }
+.co-chip--tsk { color: var(--green);  background: color-mix(in srgb, var(--green) 12%, transparent); }
+.co-chip--brn { color: var(--amber);  background: color-mix(in srgb, var(--amber) 12%, transparent); }
+.co-chip--ide { color: var(--ink-3);  background: rgba(160,156,149,0.10); }
+.co-chip--iss { color: var(--amber);  background: color-mix(in srgb, var(--amber) 12%, transparent); }
+
+/* ── Decision card (hero + rails) ──────────────────────────────────────── */
+/* Token mapping (Task 14):
+     --ground-10  → --bg-panel      (#17181d mid-dark surface)
+     --ground-20  → --bg-card       (#1f2025)
+     --ground-30  → --bg-card-hover (#25262c)
+     --ground-60  → --ink-4         (#4d4d54 low-emphasis)
+     --ground-70  → --ink-3         (#7c8290)
+     --ground-90  → --ink-2         (#a8a8ae high-emphasis)
+     --pastel-lime → color-mix(in srgb, var(--green) 15%, transparent)
+     --accent-lime → --green
+     --pastel-orange → color-mix(in srgb, var(--amber) 15%, transparent)
+     --accent-orange → --amber
+     --signature   → --accent
+*/
+.co-decision {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.co-decision__rail {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.78rem;
+  color: var(--ink-3);
+}
+.co-decision__id { color: var(--ink-3); }
+.co-decision__title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--ink);
+  line-height: 1.3;
+}
+.co-decision__opts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.co-decision__opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: var(--r-sm);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  color: var(--ink-2);
+  font-size: 0.88rem;
+}
+.co-decision__opt:hover { background: var(--bg-card-hover); border-color: var(--border-strong); }
+.co-decision__opt.is-rec {
+  background: color-mix(in srgb, var(--green) 8%, var(--bg-card));
+  border-color: color-mix(in srgb, var(--green) 25%, transparent);
+  color: var(--ink);
+}
+.co-decision__opt-num { color: var(--ink-4); font-size: 0.78rem; min-width: 16px; }
+.co-decision__opt-text { flex: 1; }
+.co-decision__opt-star {
+  font-size: 0.72rem;
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 15%, transparent);
+  padding: 1px 6px;
+  border-radius: 2px;
+  font-weight: 600;
+}
+.co-decision__actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding-top: 4px;
+}
+.co-decision__primary {
+  padding: 7px 16px;
+  border-radius: var(--r-sm);
+  background: var(--accent);
+  color: var(--ink-on-accent);
+  border: 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.co-decision__primary:hover { background: var(--accent-2); }
+.co-decision__drop {
+  padding: 7px 14px;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--ink-3);
+  border: 1px solid var(--border);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.co-decision__drop:hover { color: var(--ink-2); border-color: var(--border-strong); }
+
+/* ── Item row ──────────────────────────────────────────────────────────── */
+.co-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 14px;
+  border-radius: var(--r-sm);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  color: var(--ink-2);
+}
+.co-row:hover { background: var(--bg-card-hover); border-color: var(--border-strong); }
+.co-row__line1 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.88rem;
+}
+.co-row__title {
+  flex: 1;
+  color: var(--ink);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.co-row__when { color: var(--ink-3); font-size: 0.78rem; white-space: nowrap; }
+.co-row__next { font-size: 0.82rem; color: var(--ink-3); padding-left: 2px; }
+.co-row__where { font-size: 0.78rem; color: var(--ink-4); padding-left: 2px; font-family: var(--font-mono); }
+
+/* ── Spine rail ─────────────────────────────────────────────────────────── */
+.co-spine {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.co-spine__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 2px 4px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 2px;
+}
+.co-spine__label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.10em;
+  color: var(--ink-3);
+}
+.co-spine__count {
+  font-size: 0.72rem;
+  color: var(--ink-4);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0 6px;
+  min-width: 18px;
+  text-align: center;
+}
+.co-spine__list { display: flex; flex-direction: column; gap: 4px; }
+.co-spine__empty { font-size: 0.82rem; color: var(--ink-4); padding: 8px 2px; }
+
+/* ── Hero surface ───────────────────────────────────────────────────────── */
+.co-hero { margin-bottom: 18px; }
+.co-hero--empty {
+  padding: 24px 18px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  text-align: center;
+}
+.co-hero__empty-msg { color: var(--ink-3); font-size: 0.9rem; margin: 0; }
+.co-hero--resume {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.co-hero__resume-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.co-hero__resume-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+.co-hero__resume-next { margin: 0; font-size: 0.88rem; color: var(--ink-2); }
+.co-hero__resume-where { margin: 0; font-size: 0.78rem; color: var(--ink-3); font-family: var(--font-mono); }
+
+/* ── Action / Time / Entity view layouts ───────────────────────────────── */
+.co-action-view { display: flex; flex-direction: column; gap: 18px; }
+.co-action-view__rails {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 18px;
+}
+
+.co-time-view { display: flex; flex-direction: column; gap: 18px; }
+.co-time-view__bucket { display: flex; flex-direction: column; gap: 6px; }
+.co-time-view__bucket-head {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.10em;
+  color: var(--ink-3);
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.co-entity-view { display: flex; flex-direction: column; gap: 18px; }
+.co-entity-view__section { display: flex; flex-direction: column; gap: 6px; }

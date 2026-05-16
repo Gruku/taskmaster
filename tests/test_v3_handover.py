@@ -21,15 +21,12 @@ from taskmaster_v3 import (
 
 
 def test_handover_kinds_match_spec():
-    assert set(HANDOVER_KINDS) == {
-        "end-of-day",
-        "context-handoff",
-        "milestone-complete",
-        "pivot",
-        "exploration",
-        "auto-stage",
-    }
-    # crash-recovery was removed — it never shipped to skills.
+    # 6→4 simplification: legacy names mapped on write, new canonical names only.
+    assert set(HANDOVER_KINDS) == {"continuity", "deep-context", "milestone", "auto-stage"}
+    # Legacy names are not canonical storage kinds.
+    assert "end-of-day" not in HANDOVER_KINDS
+    assert "context-handoff" not in HANDOVER_KINDS
+    assert "milestone-complete" not in HANDOVER_KINDS
     assert "crash-recovery" not in HANDOVER_KINDS
 
 

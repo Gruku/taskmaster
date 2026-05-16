@@ -67,6 +67,23 @@ Check the first line of `backlog_status` output (`**Schema:** v<N>`). If `v3` or
 
    If none of the auto-offer conditions apply, skip this whole sub-step silently — no prompt.
 
+### Decision sweep (before handover write)
+
+Before invoking `taskmaster:handover`, sweep open decisions linked to the in-progress task so the handover frontmatter is accurate.
+
+1. Call `backlog_decision_list(status="open", task_id=<current>)`.
+2. If the list is non-empty, for **each** decision:
+   - Ask via `AskUserQuestion`:
+     - **Carry forward** — leave open; will land in handover `open_decisions`.
+     - **Resolve now** — present options; on pick, call `backlog_decision_resolve(id, resolved_with=N, rationale="<short>")`.
+     - **Drop** — capture one-line reason; call `backlog_decision_drop(id, reason=...)`.
+3. Build two arrays:
+   - `open_decisions` — all decisions still in `status=open` after the sweep.
+   - `resolved_this_session` — every decision flipped during the sweep (or earlier this session via `taskmaster:decision`).
+4. Pass both arrays to `taskmaster:handover` as additional kwargs.
+
+Auto-resolved decisions (via commit message `Resolves: DEC-NNN with option N`) need no prompting — they're already `status=resolved`; include them in `resolved_this_session` by querying `backlog_decision_list(status="resolved", resolved_in=session_window)`.
+
 **v3-pre-2: Handover auto-write.** Write a session handover automatically (no prompt) when ANY of:
    - Session length > 60 turns of conversation.
    - Conversation context estimate > 200k tokens.

@@ -695,14 +695,19 @@ def diff_against_snapshot(
 
 # Canonical session_kind values (free-form string in storage; these are
 # the well-known ones that may get special treatment elsewhere).
-HANDOVER_KINDS = (
-    "end-of-day",
-    "context-handoff",
-    "milestone-complete",
-    "pivot",
-    "exploration",
-    "auto-stage",
-)
+HANDOVER_KINDS = ("continuity", "deep-context", "milestone", "auto-stage")
+
+_LEGACY_KIND_MAP = {
+    "end-of-day": "continuity",
+    "exploration": "continuity",
+    "context-handoff": "deep-context",
+    "milestone-complete": "milestone",
+    "pivot": "milestone",
+}
+
+
+def _normalize_session_kind(kind: str) -> str:
+    return _LEGACY_KIND_MAP.get(kind, kind)
 
 # Three-state lifecycle for handovers — see specs/2026-05-09-handover-status-design.md
 HANDOVER_STATUSES = ("todo", "in-progress", "done")
@@ -725,12 +730,10 @@ RECAP_SCHEMA_VERSION = 1
 # Storage kinds live in handover frontmatter (`session_kind`); the viewer renders
 # them via this mapping for kind-pill colour, kind-filter chips, and right-rail header.
 HANDOVER_KIND_TO_VIEWER_KIND = {
-    "end-of-day":         "wrap",
-    "context-handoff":    "mid-task",
-    "milestone-complete": "checkpoint",
-    "pivot":              "mid-task",
-    "exploration":        "standalone",
-    "auto-stage":         "standalone",
+    "continuity":   "wrap",
+    "deep-context": "mid-task",
+    "milestone":    "checkpoint",
+    "auto-stage":   "standalone",
 }
 
 VIEWER_HANDOVER_KINDS = ("mid-task", "checkpoint", "wrap", "standalone")
@@ -772,12 +775,14 @@ def write_handover(
     next_action: str = "",
     body: str = "",
     task_ids: list[str] | None = None,
-    session_kind: str = "end-of-day",
+    session_kind: str = "continuity",
     when: str | None = None,
     context_size_at_write: str | None = None,
     supersedes: str | None = None,
     branch: str | None = None,
     tip_commit: str | None = None,
+    open_decisions: list[str] | None = None,
+    resolved_this_session: list[str] | None = None,
 ) -> tuple[str, Path]:
     """Write a new handover file.
 
@@ -787,6 +792,7 @@ def write_handover(
     """
     if not tldr or not tldr.strip():
         raise ValueError("handover tldr is required")
+    session_kind = _normalize_session_kind(session_kind)
     if session_kind not in HANDOVER_KINDS:
         raise ValueError(
             f"session_kind must be one of {HANDOVER_KINDS}, got {session_kind!r}"
@@ -822,8 +828,15 @@ def write_handover(
         fm["branch"] = branch
     if tip_commit:
         fm["tip_commit"] = tip_commit
+    fm["open_decisions"] = list(open_decisions or [])
+    fm["resolved_this_session"] = list(resolved_this_session or [])
 
     write_task_file(target, fm, body)
+    for did in fm["open_decisions"]:
+        try:
+            link_decision_to_handover(backlog_path, did, final_id)
+        except FileNotFoundError:
+            pass  # decision was deleted; don't fail the handover write
     return final_id, target
 
 
@@ -1193,6 +1206,179 @@ def next_issue_id(backlog_path: Path) -> str:
             nums.append(int(m.group(1)))
     n = (max(nums) + 1) if nums else 1
     return f"ISS-{n:03d}"
+
+
+DECISION_STATUSES = ("open", "resolved", "dropped")
+
+
+def decision_dir(backlog_path: Path) -> Path:
+    """Return the `decisions/` dir alongside backlog.yaml."""
+    return backlog_path.parent / "decisions"
+
+
+def list_decision_ids(backlog_path: Path) -> list[str]:
+    """List decision ids on disk, sorted numerically by trailing number."""
+    d = decision_dir(backlog_path)
+    if not d.exists():
+        return []
+
+    def _rank(p: Path) -> int:
+        m = re.search(r"(\d+)$", p.stem)
+        return int(m.group(1)) if m else -1
+
+    files = sorted(d.glob("DEC-*.md"), key=_rank)
+    return [p.stem for p in files]
+
+
+def next_decision_id(backlog_path: Path) -> str:
+    """Allocate the next DEC-NNN id (zero-padded, 3+ digits)."""
+    existing = list_decision_ids(backlog_path)
+    nums = [int(re.search(r"(\d+)$", x).group(1)) for x in existing
+            if re.search(r"(\d+)$", x)]
+    n = (max(nums) + 1) if nums else 1
+    return f"DEC-{n:03d}"
+
+
+def decision_path(backlog_path: Path, decision_id: str) -> Path:
+    return decision_dir(backlog_path) / f"{decision_id}.md"
+
+
+def _validate_decision(fm: dict[str, Any]) -> None:
+    """Raise ValueError if frontmatter violates decision invariants."""
+    status = fm.get("status")
+    if status not in DECISION_STATUSES:
+        raise ValueError(f"status must be one of {DECISION_STATUSES}, got {status!r}")
+    opts = fm.get("options") or []
+    if not isinstance(opts, list) or len(opts) < 2:
+        raise ValueError("decision must have at least 2 options")
+    rec = fm.get("recommendation")
+    if rec is not None:
+        if not isinstance(rec, int) or not (1 <= rec <= len(opts)):
+            raise ValueError(f"recommendation must be 1..{len(opts)}, got {rec!r}")
+    if status == "resolved" and not fm.get("resolved_with"):
+        raise ValueError("status=resolved requires resolved_with to be set (1..N)")
+    if status == "dropped" and not fm.get("dropped_reason"):
+        raise ValueError("status=dropped requires dropped_reason")
+
+
+def write_decision(
+    backlog_path: Path,
+    *,
+    title: str,
+    options: list[str],
+    recommendation: int | None = None,
+    task_id: str | None = None,
+    related_issues: list[str] | None = None,
+    branch: str | None = None,
+    raised_in: str | None = None,
+    body: str = "",
+    decision_id: str | None = None,
+    status: str = "open",
+) -> tuple[str, Path]:
+    """Create a new decision file. Returns (id, path)."""
+    if not title or not title.strip():
+        raise ValueError("decision title is required")
+    did = decision_id or next_decision_id(backlog_path)
+    fm: dict[str, Any] = {
+        "id": did,
+        "title": title.strip(),
+        "status": status,
+        "options": list(options),
+        "recommendation": recommendation,
+        "task_id": task_id,
+        "related_issues": list(related_issues or []),
+        "branch": branch,
+        "resolved_with": None,
+        "resolved_rationale": None,
+        "dropped_reason": None,
+        "created_at": datetime.now(timezone.utc).isoformat(timespec="microseconds"),
+        "resolved_at": None,
+        "raised_in": raised_in,
+        "referenced_in": [],
+        "resolved_in": None,
+    }
+    _validate_decision(fm)
+    target = decision_path(backlog_path, did)
+    write_task_file(target, fm, body)
+    return did, target
+
+
+def read_decision(backlog_path: Path, decision_id: str) -> tuple[dict[str, Any], str]:
+    """Read a decision file by id. Raises FileNotFoundError if missing."""
+    return read_task_file(decision_path(backlog_path, decision_id))
+
+
+def update_decision(
+    backlog_path: Path,
+    decision_id: str,
+    patch: dict[str, Any],
+) -> dict[str, Any]:
+    """Apply a field-level patch to a decision. Returns the new frontmatter."""
+    fm, body = read_decision(backlog_path, decision_id)
+    if fm["status"] in ("resolved", "dropped") and patch.get("status") == "open":
+        raise ValueError(f"cannot reopen terminal decision {decision_id}")
+    fm.update(patch)
+    _validate_decision(fm)
+    write_task_file(decision_path(backlog_path, decision_id), fm, body)
+    return fm
+
+
+def resolve_decision(
+    backlog_path: Path,
+    decision_id: str,
+    *,
+    resolved_with: int,
+    rationale: str | None = None,
+    resolved_in: str | None = None,
+) -> dict[str, Any]:
+    """Flip a decision to resolved with a chosen option (1-indexed)."""
+    fm, body = read_decision(backlog_path, decision_id)
+    if not (1 <= int(resolved_with) <= len(fm.get("options") or [])):
+        raise ValueError(
+            f"resolved_with must be 1..{len(fm['options'])}, got {resolved_with}"
+        )
+    fm["status"] = "resolved"
+    fm["resolved_with"] = int(resolved_with)
+    fm["resolved_rationale"] = (rationale or "").strip() or None
+    fm["resolved_at"] = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+    if resolved_in:
+        fm["resolved_in"] = resolved_in
+    _validate_decision(fm)
+    write_task_file(decision_path(backlog_path, decision_id), fm, body)
+    return fm
+
+
+def drop_decision(
+    backlog_path: Path,
+    decision_id: str,
+    *,
+    reason: str,
+) -> dict[str, Any]:
+    """Mark a decision as dropped with a reason."""
+    if not reason or not reason.strip():
+        raise ValueError("drop reason is required")
+    fm, body = read_decision(backlog_path, decision_id)
+    fm["status"] = "dropped"
+    fm["dropped_reason"] = reason.strip()
+    fm["resolved_at"] = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+    _validate_decision(fm)
+    write_task_file(decision_path(backlog_path, decision_id), fm, body)
+    return fm
+
+
+def link_decision_to_handover(
+    backlog_path: Path,
+    decision_id: str,
+    handover_id: str,
+) -> dict[str, Any]:
+    """Append a handover id to the decision's referenced_in (idempotent)."""
+    fm, body = read_decision(backlog_path, decision_id)
+    refs = list(fm.get("referenced_in") or [])
+    if handover_id not in refs:
+        refs.append(handover_id)
+        fm["referenced_in"] = refs
+        write_task_file(decision_path(backlog_path, decision_id), fm, body)
+    return fm
 
 
 def _validate_issue(fm: dict[str, Any]) -> None:
@@ -3381,3 +3567,206 @@ def compute_etag(path: Path) -> str:
     # body) collapse to the same etag — desirable for cache stability.
     h.update(path.read_bytes())
     return h.hexdigest()[:16]
+
+
+# ----------------------------------------------------------------------------
+# Continuity adapter — projects all entities onto a single ContinuityItem shape.
+# ----------------------------------------------------------------------------
+
+CONTINUITY_TYPES = ("decision", "handover", "task", "branch", "idea", "issue")
+ACTION_CLASSES = ("decide", "resume", "review", "clean-up", "ambient")
+
+
+def _age_days(iso_ts: "str | datetime | date | None", now: datetime | None = None) -> float:
+    if not iso_ts:
+        return 0.0
+    if isinstance(iso_ts, datetime):
+        ts = iso_ts
+    elif isinstance(iso_ts, date):
+        ts = datetime(iso_ts.year, iso_ts.month, iso_ts.day, tzinfo=timezone.utc)
+    else:
+        try:
+            ts = datetime.fromisoformat(iso_ts.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            return 0.0
+    now = now or datetime.now(timezone.utc)
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return (now - ts).total_seconds() / 86400.0
+
+
+def _handover_to_item(fm: dict[str, Any], now: datetime | None = None) -> dict[str, Any]:
+    age = _age_days(fm.get("created"), now)
+    status = fm.get("status", "todo")
+    # Action class: fresh todo handover → resume; older or done → ambient (won't surface
+    # on action view but still available for time/entity views).
+    if status == "todo" and age <= 7:
+        action_class = "resume"
+    else:
+        action_class = "ambient"
+    task_ids = fm.get("task_ids") or []
+    return {
+        "id": fm.get("id"),
+        "type": "handover",
+        "title": fm.get("tldr") or "",
+        "where": fm.get("branch") or (task_ids[0] if task_ids else ""),
+        "next": fm.get("next_action") or "",
+        "action_class": action_class,
+        "timestamp": fm.get("created") or fm.get("date") or "",
+        "age_days": age,
+        "task_id": task_ids[0] if task_ids else None,
+        "branch": fm.get("branch"),
+    }
+
+
+def _decision_to_item(fm: dict[str, Any], now: datetime | None = None) -> dict[str, Any]:
+    age = _age_days(fm.get("created_at"), now)
+    status = fm.get("status", "open")
+    action_class = "decide" if status == "open" else "ambient"
+    rec = fm.get("recommendation")
+    rec_str = ""
+    if rec and fm.get("options"):
+        try:
+            rec_str = f"rec: {fm['options'][int(rec) - 1]}"
+        except (IndexError, ValueError):
+            rec_str = ""
+    return {
+        "id": fm.get("id"),
+        "type": "decision",
+        "title": fm.get("title") or "",
+        "where": fm.get("task_id") or fm.get("branch") or "",
+        "next": rec_str or f"{len(fm.get('options') or [])} options",
+        "action_class": action_class,
+        "timestamp": fm.get("created_at") or "",
+        "age_days": age,
+        "task_id": fm.get("task_id"),
+        "branch": fm.get("branch"),
+    }
+
+
+def _task_to_item(task: dict[str, Any], task_id: str, now: datetime | None = None) -> dict[str, Any]:
+    last = task.get("last_referenced") or task.get("started") or task.get("created")
+    age = _age_days(last, now)
+    status = task.get("status", "todo")
+    if status == "in-review":
+        action_class = "review"
+    elif status == "in-progress" and age <= 3:
+        action_class = "resume"
+    elif status == "in-progress" and age >= 7:
+        action_class = "clean-up"
+    else:
+        action_class = "ambient"
+    return {
+        "id": task_id,
+        "type": "task",
+        "title": task.get("title") or task_id,
+        "where": task.get("epic") or "",
+        "next": task.get("status") or "",
+        "action_class": action_class,
+        "timestamp": last or "",
+        "age_days": age,
+        "task_id": task_id,
+        "branch": task.get("branch") or "",
+    }
+
+
+def _issue_to_item(issue: dict[str, Any], now: datetime | None = None) -> dict[str, Any]:
+    sev = issue.get("severity", "P3")
+    age = _age_days(issue.get("discovered"), now)
+    status = issue.get("status", "open")
+    if status != "open":
+        action_class = "ambient"
+    elif sev in ("P0", "P1"):
+        action_class = "review"
+    elif age >= 14:
+        action_class = "clean-up"
+    else:
+        action_class = "ambient"
+    return {
+        "id": issue.get("id"),
+        "type": "issue",
+        "title": issue.get("title") or "",
+        "where": ",".join(issue.get("components") or []),
+        "next": f"{sev} · {status}",
+        "action_class": action_class,
+        "timestamp": issue.get("discovered") or "",
+        "age_days": age,
+        "task_id": None,
+        "branch": None,
+    }
+
+
+def _idea_to_item(idea: dict[str, Any], now: datetime | None = None) -> dict[str, Any]:
+    age = _age_days(idea.get("created"), now)
+    status = idea.get("status", "raw")
+    action_class = "clean-up" if status == "brainstorm" and age >= 7 else "ambient"
+    return {
+        "id": idea.get("id"),
+        "type": "idea",
+        "title": idea.get("title") or "",
+        "where": status,
+        "next": status,
+        "action_class": action_class,
+        "timestamp": idea.get("created") or "",
+        "age_days": age,
+        "task_id": None,
+        "branch": None,
+    }
+
+
+def continuity_items(
+    backlog_path: Path,
+    *,
+    include_auto_stage: bool = False,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Project all backlog entities to a unified ContinuityItem list."""
+    items: list[dict[str, Any]] = []
+
+    # Handovers.
+    for hid in list_handover_ids(backlog_path):
+        try:
+            fm, _ = read_handover(backlog_path, hid)
+        except (OSError, ValueError):
+            continue
+        if not include_auto_stage and fm.get("session_kind") == "auto-stage":
+            continue
+        items.append(_handover_to_item(fm, now))
+
+    # Decisions.
+    for did in list_decision_ids(backlog_path):
+        try:
+            fm, _ = read_decision(backlog_path, did)
+        except (OSError, ValueError):
+            continue
+        items.append(_decision_to_item(fm, now))
+
+    # Tasks (from backlog.yaml epics).
+    try:
+        data = yaml.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        data = {}
+    for epic in data.get("epics", []) or []:
+        for t in epic.get("tasks", []) or []:
+            tid = t.get("id")
+            if not tid:
+                continue
+            items.append(_task_to_item(t, tid, now))
+
+    # Issues.
+    for iid in list_issue_ids(backlog_path):
+        try:
+            fm, _ = read_issue(backlog_path, iid)
+        except (OSError, ValueError):
+            continue
+        items.append(_issue_to_item(fm, now))
+
+    # Ideas.
+    for idid in list_idea_ids(backlog_path):
+        try:
+            fm, _ = read_idea(backlog_path, idid)
+        except (OSError, ValueError):
+            continue
+        items.append(_idea_to_item(fm, now))
+
+    return items

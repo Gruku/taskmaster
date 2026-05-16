@@ -101,7 +101,7 @@ def test_handover_latest_returns_newest_handover_summary(tmp_path, monkeypatch):
     assert "may first work" in result
     assert "review PR" in result
     assert "TASK-99" in result
-    assert "milestone-complete" in result
+    assert "milestone" in result  # normalized from "milestone-complete"
 
 
 def test_handover_latest_returns_empty_message_when_no_handovers(tmp_path, monkeypatch):
@@ -183,16 +183,16 @@ def test_handover_list_filters_by_session_kind(tmp_path, monkeypatch):
     bp = _make_backlog(tmp_path)
     _set_backlog_root(monkeypatch, bp)
 
-    hid_eod, _ = write_handover(bp, tldr="eod session", session_kind="end-of-day",
+    hid_eod, _ = write_handover(bp, tldr="eod session", session_kind="continuity",
                                   when="2026-04-01")
-    hid_ctx, _ = write_handover(bp, tldr="context handoff", session_kind="context-handoff",
+    hid_ctx, _ = write_handover(bp, tldr="context handoff", session_kind="deep-context",
                                   when="2026-04-02")
-    hid_ms, _ = write_handover(bp, tldr="milestone done", session_kind="milestone-complete",
+    hid_ms, _ = write_handover(bp, tldr="milestone done", session_kind="milestone",
                                  when="2026-04-03")
 
     _sync_and_save(bp)
 
-    result = backlog_server.backlog_handover_list(session_kind="context-handoff")
+    result = backlog_server.backlog_handover_list(session_kind="deep-context")
     assert hid_ctx in result
     assert hid_eod not in result
     assert hid_ms not in result
@@ -221,21 +221,21 @@ def test_handover_list_combines_filters(tmp_path, monkeypatch):
     bp = _make_backlog(tmp_path)
     _set_backlog_root(monkeypatch, bp)
 
-    # TASK-1 + context-handoff: should appear
-    hid_match1, _ = write_handover(bp, tldr="match 1", session_kind="context-handoff",
+    # TASK-1 + deep-context: should appear
+    hid_match1, _ = write_handover(bp, tldr="match 1", session_kind="deep-context",
                                     task_ids=["TASK-1"], when="2026-04-01")
-    hid_match2, _ = write_handover(bp, tldr="match 2", session_kind="context-handoff",
+    hid_match2, _ = write_handover(bp, tldr="match 2", session_kind="deep-context",
                                     task_ids=["TASK-1"], when="2026-04-02")
     # TASK-1 but wrong kind: should NOT appear
-    hid_wrong_kind, _ = write_handover(bp, tldr="wrong kind", session_kind="end-of-day",
+    hid_wrong_kind, _ = write_handover(bp, tldr="wrong kind", session_kind="continuity",
                                         task_ids=["TASK-1"], when="2026-04-03")
     # right kind but wrong task: should NOT appear
-    hid_wrong_task, _ = write_handover(bp, tldr="wrong task", session_kind="context-handoff",
+    hid_wrong_task, _ = write_handover(bp, tldr="wrong task", session_kind="deep-context",
                                         task_ids=["TASK-2"], when="2026-04-04")
 
     _sync_and_save(bp)
 
-    result = backlog_server.backlog_handover_list(task_id="TASK-1", session_kind="context-handoff")
+    result = backlog_server.backlog_handover_list(task_id="TASK-1", session_kind="deep-context")
     assert hid_match1 in result
     assert hid_match2 in result
     assert hid_wrong_kind not in result

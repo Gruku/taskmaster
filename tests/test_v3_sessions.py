@@ -80,7 +80,7 @@ def test_get_session_detail_bundles_handovers_recap(tmp_path, monkeypatch):
         "id": "2026-04-26-1640-foo",
         "date": "2026-04-26T16:40:00Z",
         "tldr": "Stitched the gate", "next_action": "Rebase",
-        "task_ids": ["T-148"], "session_kind": "context-handoff",
+        "task_ids": ["T-148"], "session_kind": "deep-context",
         "context_size_at_write": 0.8,
     }, body_md="Resume by running pytest -k gate.")
     save_recap(
@@ -96,7 +96,7 @@ def test_get_session_detail_bundles_handovers_recap(tmp_path, monkeypatch):
     assert len(detail["handovers"]) == 1
     h = detail["handovers"][0]
     assert h["id"] == "2026-04-26-1640-foo"
-    assert h["viewer_kind"] == "mid-task"  # context-handoff → mid-task
+    assert h["viewer_kind"] == "mid-task"  # deep-context → mid-task
     assert h["tldr"] == "Stitched the gate"
     assert h["resume_prompt"].startswith("Resume by running")
     assert detail["recap"]["frontmatter"]["session_id"] == "SES-0001"
