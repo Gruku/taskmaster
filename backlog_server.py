@@ -113,6 +113,7 @@ from taskmaster_v3 import (
     drop_decision as _drop_decision,
     list_decision_ids as _list_decision_ids,
     decision_path as _decision_path,
+    continuity_items as _continuity_items,
     write_task_file as _write_task_file,
     AUTO_MODES,
     AUTO_STAGES,
@@ -2204,6 +2205,28 @@ def backlog_decision_update(
         cur_fm, _ = _read_decision(bp, decision_id)
         _write_task_file(_decision_path(bp, decision_id), cur_fm, body)
     return f"Decision {decision_id} updated."
+
+
+@mcp.tool()
+def backlog_continuity_items(
+    view: str = "action",
+    include_auto_stage: bool = False,
+) -> str:
+    """Return all continuity items as JSON: {"items": [...], "view": "..."}.
+
+    `view` is informational only — the server returns the full set; the client
+    decides grouping (Action / Time / Entity).
+
+    Args:
+        view: "action" | "time" | "entity" (echoed in the response).
+        include_auto_stage: When True, include auto-stage handovers (debug).
+    """
+    import json
+    bp = _backlog_path()
+    if not bp.exists():
+        return json.dumps({"items": [], "view": view, "error": "no backlog"})
+    items = _continuity_items(bp, include_auto_stage=include_auto_stage)
+    return json.dumps({"items": items, "view": view}, default=str)
 
 
 @mcp.tool()
@@ -5294,6 +5317,14 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 summary=summary,
             )
             self._send_json(200, {"ideas": entries})
+            return
+        elif clean_path == "/api/continuity":
+            import json
+            from urllib.parse import urlparse, parse_qs
+            qs = parse_qs(urlparse(self.path).query)
+            include_auto = qs.get("include_auto_stage", ["0"])[0] in ("1", "true")
+            payload = json.loads(backlog_continuity_items(include_auto_stage=include_auto))
+            self._send_json(200, payload)
             return
         else:
             self.send_error(HTTPStatus.NOT_FOUND)
