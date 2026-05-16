@@ -5023,6 +5023,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
     """Serves the backlog viewer HTML and YAML data."""
 
     def do_GET(self) -> None:
+        import re
         from urllib.parse import unquote, urlparse
         parsed = urlparse(self.path)
         clean_path = unquote(parsed.path)
@@ -5326,6 +5327,15 @@ class ViewerHandler(BaseHTTPRequestHandler):
             payload = json.loads(backlog_continuity_items(include_auto_stage=include_auto))
             self._send_json(200, payload)
             return
+        elif m := re.fullmatch(r"/api/decisions/([A-Za-z0-9_\-]+)", clean_path):
+            decision_id = m.group(1)
+            bp = _backlog_path()
+            try:
+                fm, body = _read_decision(bp, decision_id)
+                self._send_json(200, {**fm, "body": body})
+            except FileNotFoundError:
+                self._send_json(404, {"ok": False, "error": f"decision {decision_id} not found"})
+            return
         else:
             self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -5606,6 +5616,52 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 self._send_json(404, {"ok": False, "error": str(e)})
             except Exception as e:
                 self._send_json(500, {"ok": False, "error": str(e)})
+            return
+
+        m = re.fullmatch(r"/api/decisions/([A-Za-z0-9_\-]+)/resolve", self.path)
+        if m:
+            decision_id = m.group(1)
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length).decode("utf-8") if length else ""
+            try:
+                payload = json.loads(raw) if raw else {}
+            except Exception as e:
+                self._send_json(400, {"ok": False, "error": f"invalid JSON: {e}"})
+                return
+            resolved_with = payload.get("resolved_with")
+            rationale = payload.get("rationale", "")
+            if resolved_with is None:
+                self._send_json(400, {"ok": False, "error": "resolved_with is required"})
+                return
+            bp = _backlog_path()
+            try:
+                fm = _resolve_decision(bp, decision_id, resolved_with=int(resolved_with), rationale=rationale)
+                self._send_json(200, {"ok": True, "id": decision_id, "status": fm.get("status")})
+            except FileNotFoundError:
+                self._send_json(404, {"ok": False, "error": f"decision {decision_id} not found"})
+            except ValueError as e:
+                self._send_json(400, {"ok": False, "error": str(e)})
+            return
+
+        m = re.fullmatch(r"/api/decisions/([A-Za-z0-9_\-]+)/drop", self.path)
+        if m:
+            decision_id = m.group(1)
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length).decode("utf-8") if length else ""
+            try:
+                payload = json.loads(raw) if raw else {}
+            except Exception as e:
+                self._send_json(400, {"ok": False, "error": f"invalid JSON: {e}"})
+                return
+            reason = payload.get("reason", "")
+            bp = _backlog_path()
+            try:
+                fm = _drop_decision(bp, decision_id, reason=reason)
+                self._send_json(200, {"ok": True, "id": decision_id, "status": fm.get("status")})
+            except FileNotFoundError:
+                self._send_json(404, {"ok": False, "error": f"decision {decision_id} not found"})
+            except ValueError as e:
+                self._send_json(400, {"ok": False, "error": str(e)})
             return
 
         self.send_response(404)
