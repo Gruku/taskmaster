@@ -1,0 +1,56 @@
+# Taskmaster Router — Full Routing Table
+
+This file contains the complete intent→skill routing table for `taskmaster:taskmaster`.
+The SKILL.md body carries only the ~15 highest-frequency rows.
+
+## All Routes
+
+| Intent Signal | Route To |
+|---|---|
+| Starting a new conversation, "what's going on", "orient me", "show the backlog", "let's get started" | `taskmaster:start-session` |
+| "Pick task X", "let's work on X", "what should I tackle", names a task ID, "start task" | `taskmaster:pick-task` |
+| Any implementation request when a task is in-progress | Work in current task's worktree — no routing needed |
+| Any implementation request when NO task is in-progress | `taskmaster:pick-task` first |
+| "Review this spec", "challenge this design", "is this the right approach?", "spec review" | `taskmaster:spec-review` |
+| "Is this ready?", "run the review", "check my work", "I think this is done", "quality check" | `taskmaster:review-gate` |
+| "End session", "I'm done", "wrap up", "log this", "mark task done", "save progress" | `taskmaster:end-session` |
+| "Set up taskmaster", "initialize", "create backlog", first time in project without backlog.yaml | `taskmaster:init-taskmaster` |
+| "Add a task", "create a task for X", "plan out this epic" | `backlog_add_task` / `backlog_add_epic` |
+| "Show task X", "task details", "what's the status of X" | `backlog_get_task` / `backlog_status` |
+| "Search for X", "find tasks about X" | `backlog_search` |
+| "Create a phase", "plan the next phase", "set up phases" | `backlog_add_phase` |
+| "Show phase progress", "where are we in the phase?" | `backlog_phase_status` |
+| "Advance to next phase", "this phase is done" | `backlog_advance_phase` |
+| "Check TODOs", "scan for TODOs", "are my TODOs tracked", "todo audit" | `taskmaster:check-todos` |
+| (v3) "Write a handover", "wrap up for tomorrow", "context handoff", "save where I left off", "for tomorrow", "remind future me", "before compaction" | `taskmaster:handover` |
+| (v3) "Show last handover", "where did I leave off" | `backlog_handover_latest` |
+| (v3) "List handovers", "recent handovers" | `backlog_handover_list` |
+| (v3) "Show this handover in full", "read handover 2026-XX-XX" | `backlog_handover_get <id>` |
+| (v3) "Supersede this handover", "the new handover replaces the old one" | `backlog_handover_supersede(old_id, new_id)` |
+| (v3) "Log a bug", "found an issue", "this is broken", "track this defect" | `taskmaster:issue` |
+| (v3) "List issues", "open bugs", "what's broken" | `backlog_issue_list(status=open)` |
+| (v3) "Mark issue fixed", "close ISS-XX" | `taskmaster:issue` (entry point `update-status`) |
+| (v3) "Start investigating ISS-XX", "this is a duplicate of ISS-YY", "won't fix ISS-XX" | `taskmaster:issue` (entry point `update-status`) |
+| (v3) "Triage open bugs", "review issues by severity" | `taskmaster:issue` (entry point `triage-review`) |
+| (v3) "Remember this", "save as a lesson", "learn this lesson", "memorize this", "this keeps happening", "we always do X here", "we got burned by this last time", "promote candidate to lesson", "review lesson candidates", "flag this session for retro" | `taskmaster:lesson` |
+| (v3) "Show lessons", "what lessons apply", "lesson digest" | `backlog_lesson_digest` / `backlog_lesson_match` |
+| (v3) "Save this as an idea", "remember this idea", "/add-idea ..." | `taskmaster:add-idea` |
+| (v3) "List ideas", "show parking lot" | `backlog_idea_list` |
+| (v3) "Archive that idea", "promote IDEA-NNN to a task" | `backlog_idea_update` |
+| (v3) "What changed since last time", "recap", "project state delta" | `backlog_recap` |
+| (v3) "Snapshot the backlog" | `backlog_snapshot` |
+| (v3) "Auto this task", "autopilot T-001", "run task auto" | `taskmaster:auto-task` |
+| (v3) "Auto-epic <id>", "run the whole epic", "batch this epic" | `taskmaster:auto-epic` |
+| (v3) "Auto-phase <id>", "run all of phase X", "batch phase" | `taskmaster:auto-phase` |
+| (v3) "Upgrade to v3", "migrate to v3", "switch to v3", "enable handovers and lessons" | `taskmaster:migrate-v3` |
+
+## Implementation Work Without a Task
+
+If the user asks to implement something and there's no task for it yet:
+
+1. Call `backlog_status` to check what's in-progress.
+2. If the work fits an existing task, pick that task.
+3. If not, suggest creating a new task: "This looks like new work. Want me to add a task for it under epic X?"
+4. Once a task is picked, work proceeds in its worktree.
+
+This ensures nothing falls through the cracks.
