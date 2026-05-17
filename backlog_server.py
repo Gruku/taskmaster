@@ -57,6 +57,8 @@ from taskmaster_v3 import (
     SCHEMA_V2,
     SCHEMA_V3,
     SCHEMA_DEFAULT,
+    TLDR_MAX_CHARS,
+    extract_tldr,
     HANDOVER_KINDS,
     HEAVY_FIELDS as _HEAVY_FIELDS,
     detect_schema_version as _detect_schema_version,
@@ -3019,8 +3021,9 @@ def backlog_add_task(
     docs: str = "", depends_on: str = "", sub_repo: str = "",
     stage: int | None = None, estimate: str = "", phase: str = "",
     anchors: str = "",
+    tldr: str = "", next_step: str = "", task_id: str = "",
 ) -> str:
-    """Create a new task under an epic. Auto-generates the task ID.
+    """Create a new task under an epic. Auto-generates the task ID unless task_id is supplied.
 
     Args:
         title: Short imperative description of the task
@@ -3034,6 +3037,9 @@ def backlog_add_task(
         estimate: Optional size estimate (e.g., "S", "M", "L")
         phase: Optional phase ID to assign this task to
         anchors: Optional comma-separated glob patterns or URLs declaring target files/systems (e.g., "src/auth/**,localhost:3000/api/auth")
+        tldr: One-sentence essence of the task. Auto-generated from notes or title when omitted.
+        next_step: Concrete immediate action to take on this task.
+        task_id: Override the auto-generated task ID. Must be unique. Defaults to {epic}-{NNN}.
     """
     priority = _normalize_priority(priority)
     if priority not in VALID_PRIORITIES:
@@ -3044,29 +3050,47 @@ def backlog_add_task(
     if not epic_obj:
         return f"Error: epic `{epic}` not found. Valid epics: {_epic_names(data)}"
 
-    # Generate ID: {epic-id}-{NNN}
-    tasks = epic_obj.get("tasks", [])
-    max_suffix = 0
-    prefix = f"{epic}-"
-    for t in tasks:
-        tid = t["id"]
-        if tid.startswith(prefix):
-            suffix_str = tid[len(prefix):]
-            try:
-                max_suffix = max(max_suffix, int(suffix_str))
-            except ValueError:
-                pass
-    new_id = f"{epic}-{max_suffix + 1:03d}"
+    # Resolve task ID: caller-supplied or auto-generated
+    if task_id:
+        if _find_task(data, task_id):
+            return f"Error: task ID `{task_id}` already exists"
+        new_id = task_id
+    else:
+        # Generate ID: {epic-id}-{NNN}
+        tasks = epic_obj.get("tasks", [])
+        max_suffix = 0
+        prefix = f"{epic}-"
+        for t in tasks:
+            tid = t["id"]
+            if tid.startswith(prefix):
+                suffix_str = tid[len(prefix):]
+                try:
+                    max_suffix = max(max_suffix, int(suffix_str))
+                except ValueError:
+                    pass
+        new_id = f"{epic}-{max_suffix + 1:03d}"
+
+    # tldr: use supplied value, or auto-generate from notes/title
+    tldr_autogen = False
+    if not tldr:
+        body_source = notes or title
+        tldr = extract_tldr(body_source) or title[:TLDR_MAX_CHARS]
+        tldr_autogen = True
 
     new_task: dict = {
         "id": new_id,
         "title": title,
+        "tldr": tldr,
         "status": "todo",
         "priority": priority,
         "created": _now(),
         "last_referenced": _now(),
         "notes": notes,
     }
+    if tldr_autogen:
+        new_task["tldr_autogen"] = True
+    if next_step:
+        new_task["next_step"] = next_step
 
     # Optional fields
     if depends_on:
@@ -3611,19 +3635,28 @@ def _clear_session_task(task_id: str) -> None:
         _session_task = None
 
 
-ALLOWED_FIELDS = {"title", "status", "priority", "notes", "branch", "worktree", "blockers", "docs", "depends_on", "sub_repo", "stage", "estimate", "locked_by", "review_instructions", "phase", "anchors", "blast_radius_depth", "patchnote", "release"}
+ALLOWED_FIELDS = {"title", "status", "priority", "notes", "branch", "worktree", "blockers", "docs", "depends_on", "sub_repo", "stage", "estimate", "locked_by", "review_instructions", "phase", "anchors", "blast_radius_depth", "patchnote", "release", "tldr", "next_step"}
 VALID_STATUSES = {"todo", "in-progress", "in-review", "done", "archived", "blocked"}
 VALID_PRIORITIES = {"critical", "high", "medium", "low"}
 VALID_DOC_KEYS = {"plan", "spec", "roadmap", "design", "analysis"}
 
 
 @mcp.tool()
-def backlog_update_task(task_id: str, field: str, value: str) -> str:
+def backlog_update_task(
+    task_id: str, field: str = "", value: str = "",
+    tldr: str = "", next_step: str = "",
+) -> str:
     """Update a single field on a task. Status changes trigger appropriate date updates.
+
+    Two calling styles are supported:
+    - Field/value style: backlog_update_task(task_id, field, value) — the classic API.
+    - Keyword style: backlog_update_task(task_id, tldr="...", next_step="...") — for tldr/next_step.
 
     Args:
         task_id: The task ID (e.g., "ue-plugin-003")
-        field: Field to update — one of: title, status, priority, notes, branch, worktree, blockers, docs, depends_on, sub_repo, stage, estimate, locked_by, review_instructions, phase, patchnote, release
+        field: Field to update — one of: title, status, priority, notes, branch, worktree, blockers,
+            docs, depends_on, sub_repo, stage, estimate, locked_by, review_instructions, phase,
+            patchnote, release, tldr, next_step
         value: New value. Format varies by field:
             - docs: "key:path" (e.g., "plan:docs/plans/foo.md")
             - depends_on: comma-separated task IDs (e.g., "cpp-parser-002,cpp-parser-003")
@@ -3635,7 +3668,31 @@ def backlog_update_task(task_id: str, field: str, value: str) -> str:
             - anchors: comma-separated glob patterns/URLs, or "" to clear
             - patchnote: 1-2 sentence user-facing release-note line, or "" to clear
             - release: release bucket this task ships in (e.g., "pre-alpha", "alpha-1.0"), or "" to clear
+        tldr: One-sentence essence of the task (keyword style only).
+        next_step: Concrete immediate action to take on this task (keyword style only).
     """
+    # Keyword style: tldr= / next_step= kwargs take precedence over field/value.
+    if tldr or next_step:
+        data = _load()
+        result = _find_task(data, task_id)
+        if not result:
+            return f"Error: task `{task_id}` not found"
+        task, epic = result
+        _touch_task(task)
+        updated = []
+        if tldr:
+            task["tldr"] = tldr
+            task.pop("tldr_autogen", None)  # caller-supplied tldr is no longer auto-generated
+            updated.append(f"tldr → {tldr}")
+        if next_step:
+            task["next_step"] = next_step
+            updated.append(f"next_step → {next_step}")
+        _mutate_and_save(data)
+        return f"Updated `{task_id}`: " + "; ".join(updated)
+
+    # Classic field/value style
+    if not field:
+        return "Error: provide either `field`/`value` or keyword args `tldr`/`next_step`"
     if field not in ALLOWED_FIELDS:
         return f"Error: field `{field}` not allowed. Allowed: {', '.join(sorted(ALLOWED_FIELDS))}"
 
@@ -3718,6 +3775,15 @@ def backlog_update_task(task_id: str, field: str, value: str) -> str:
             task["blast_radius_depth"] = value
         else:
             return f"Error: `blast_radius_depth` must be 'shallow', 'deep', or '' to clear. Got: `{value}`"
+    elif field == "tldr":
+        # Caller-supplied tldr clears the autogen flag
+        task["tldr"] = value
+        task.pop("tldr_autogen", None)
+    elif field == "next_step":
+        if value == "" or value.lower() == "none":
+            task.pop("next_step", None)
+        else:
+            task["next_step"] = value
     else:
         task[field] = value
 

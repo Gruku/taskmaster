@@ -43,11 +43,19 @@ def tmp_taskmaster(tmp_path, monkeypatch):
     for subdir in ("tasks", "handovers", "issues", "lessons", "ideas"):
         (tm_dir / subdir).mkdir(parents=True, exist_ok=True)
 
-    # Write a minimal v3 backlog
+    # PROGRESS.md must exist so regenerate_progress_dashboard() can read it.
+    (tm_dir / "PROGRESS.md").write_text("## Changelog\n", encoding="utf-8")
+
+    # Write a minimal v3 backlog.
+    # meta.updated is required by _save(); meta.schema_version is the v3 marker
+    # that _detect_schema_version reads to dispatch to load_v3/save_v3.
     backlog = {
         "version": 3,
         "project": "test-project",
+        "meta": {"updated": "", "schema_version": 3},
         "epics": [],
+        "phases": [],
+        "context": {},
     }
     (tm_dir / "backlog.yaml").write_text(yaml.dump(backlog), encoding="utf-8")
 
