@@ -89,6 +89,23 @@ def extract_tldr(body: str | None) -> str | None:
     return first or None
 
 
+def backfill_tldr(frontmatter: dict[str, Any], body: str = "") -> tuple[dict[str, Any], bool]:
+    """If frontmatter lacks a tldr, generate one and mark tldr_autogen=True.
+
+    Returns (frontmatter, changed). Source priority: body → title. Never overwrites
+    an existing tldr. Idempotent.
+    """
+    if frontmatter.get("tldr"):
+        return frontmatter, False
+    new_fm = dict(frontmatter)
+    tldr = extract_tldr(body) or (frontmatter.get("title") or "")[:TLDR_MAX_CHARS]
+    if not tldr:
+        return frontmatter, False
+    new_fm["tldr"] = tldr
+    new_fm["tldr_autogen"] = True
+    return new_fm, True
+
+
 _legacy_warned: set[str] = set()
 
 
