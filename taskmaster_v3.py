@@ -918,7 +918,8 @@ def diff_against_snapshot(
 
 # Canonical session_kind values (free-form string in storage; these are
 # the well-known ones that may get special treatment elsewhere).
-HANDOVER_KINDS = ("continuity", "deep-context", "milestone", "auto-stage")
+# "task-complete" is eligible for smart auto-close (all task_ids done + no live next_action).
+HANDOVER_KINDS = ("continuity", "deep-context", "milestone", "auto-stage", "task-complete")
 
 _LEGACY_KIND_MAP = {
     "end-of-day": "continuity",
@@ -1223,9 +1224,14 @@ def update_handover_status(
 
 
 def mark_task_handovers_complete(backlog_path: Path, task_id: str) -> list[str]:
-    """Flip every todo handover whose primary task (`task_ids[0]`) is `task_id`
-    to `done`. Skips user-set, already-done, and handovers where task_id is
-    only a secondary reference. Returns the list of handover ids modified."""
+    """Flip every open handover whose primary task (`task_ids[0]`) is `task_id`
+    to `closed`. Skips user-set, already-closed, and handovers where task_id is
+    only a secondary reference. Returns the list of handover ids modified.
+
+    .. deprecated::
+        Use smart_auto_close_handovers() instead — it applies the three-criteria
+        rule and keeps context-rich handovers alive when needed.
+    """
     if not task_id:
         return []
     flipped: list[str] = []
@@ -1239,14 +1245,106 @@ def mark_task_handovers_complete(backlog_path: Path, task_id: str) -> list[str]:
             continue
         if fm.get("status_user_set"):
             continue
-        if fm.get("status") == "done":
+        if fm.get("status") == "closed":
             continue
-        fm["status"] = "done"
+        fm["status"] = "closed"
         fm["status_changed"] = datetime.now(timezone.utc).isoformat(timespec="microseconds")
         fm["status_reason"] = f"task {task_id} completed"
         write_task_file(handover_path(backlog_path, hid), fm, body)
         flipped.append(hid)
     return flipped
+
+
+# ── Parallel-handover smart-close ─────────────────────────────────────────────
+
+_TASK_ID_RE = re.compile(r"\bT-\d+\b")
+
+# session_kinds that are eligible for auto-close when all criteria met.
+_AUTO_CLOSE_ELIGIBLE_KINDS: frozenset[str] = frozenset({"task-complete", ""})
+
+
+def _next_action_references_live_tasks(
+    next_action: str, done_or_archived_ids: set[str]
+) -> bool:
+    """Return True if `next_action` mentions any task ID not in
+    `done_or_archived_ids`. Empty string → no live references → False."""
+    if not next_action or not next_action.strip():
+        return False
+    mentioned = set(_TASK_ID_RE.findall(next_action))
+    live = mentioned - done_or_archived_ids
+    return bool(live)
+
+
+def smart_auto_close_handovers(
+    backlog_path: Path,
+    *,
+    triggering_task_id: str,
+    done_or_archived_ids: set[str],
+) -> dict[str, list[str]]:
+    """Apply the smart auto-close rule to open handovers that include
+    `triggering_task_id` in their task_ids.
+
+    Auto-close only when ALL true:
+      1. All task_ids in the handover are in done_or_archived_ids.
+      2. next_action is empty OR mentions only done/archived task IDs.
+      3. session_kind is "task-complete" or null/absent.
+
+    Otherwise: leave open and flag with a reason.
+
+    Returns:
+        {"closed": [...list of ids auto-closed...],
+         "flagged": [...list of ids kept open with flag_reason stamped...]}
+    """
+    closed: list[str] = []
+    flagged: list[str] = []
+
+    for hid in list_handover_ids(backlog_path):
+        try:
+            fm, body = read_handover(backlog_path, hid)
+        except (OSError, ValueError):
+            continue
+
+        # Only consider open handovers that include the triggering task.
+        if fm.get("status") != "open":
+            continue
+        task_ids: list[str] = fm.get("task_ids") or []
+        if triggering_task_id not in task_ids:
+            continue
+        if fm.get("status_user_set"):
+            continue
+
+        # Evaluate the three criteria.
+        all_tasks_terminal = all(t in done_or_archived_ids for t in task_ids)
+        next_action: str = (fm.get("next_action") or "").strip()
+        next_action_live = _next_action_references_live_tasks(next_action, done_or_archived_ids)
+        session_kind: str = fm.get("session_kind") or ""
+        kind_eligible = session_kind in _AUTO_CLOSE_ELIGIBLE_KINDS
+
+        if all_tasks_terminal and not next_action_live and kind_eligible:
+            # All criteria met — auto-close.
+            fm["status"] = "closed"
+            fm["status_changed"] = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+            fm["status_reason"] = f"auto-closed: all task_ids done, triggering task {triggering_task_id}"
+            fm.pop("flag_reason", None)
+            write_task_file(handover_path(backlog_path, hid), fm, body)
+            closed.append(hid)
+        else:
+            # Build a human-readable flag reason for start-session surfacing.
+            reasons: list[str] = []
+            if not all_tasks_terminal:
+                live_ids = [t for t in task_ids if t not in done_or_archived_ids]
+                reasons.append(f"task_ids still open: {', '.join(live_ids)}")
+            if next_action_live:
+                live_refs = set(_TASK_ID_RE.findall(next_action)) - done_or_archived_ids
+                reasons.append(f"next_action references {', '.join(sorted(live_refs))}")
+            if not kind_eligible:
+                reasons.append(f"session_kind={session_kind!r} preserved for context")
+            flag_reason = "; ".join(reasons)
+            fm["flag_reason"] = flag_reason
+            write_task_file(handover_path(backlog_path, hid), fm, body)
+            flagged.append(hid)
+
+    return {"closed": closed, "flagged": flagged}
 
 
 
