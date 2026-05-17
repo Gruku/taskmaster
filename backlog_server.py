@@ -2141,12 +2141,20 @@ def backlog_issue_list(
     severity: str = "",
     status: str = "",
     limit: int = 20,
+    verbose: bool = False,
 ) -> str:
     """List issues, optionally filtered by severity and/or status.
 
     Reads from the backlog.yaml index (sorted P0 → P3). Default lists the
     top 20 active issues regardless of status — pass `status=open` to
     focus on what still needs work.
+
+    Args:
+        severity: Filter by severity: P0, P1, P2, P3.
+        status: Filter by status: open, investigating, fixed, wontfix, duplicate.
+        limit: Maximum number of entries to return (default 20).
+        verbose: If True, include body content (repro steps) per entry. Slim
+            (default) shows id, severity, status, title, and tldr.
     """
     bp = _backlog_path()
     if not bp.exists():
@@ -2164,10 +2172,29 @@ def backlog_issue_list(
     for e in entries:
         comps = ", ".join(e.get("components") or [])
         comps_tag = f" [{comps}]" if comps else ""
-        lines.append(
+        line = (
             f"- {e['id']} {e.get('severity', '?')} {e.get('status', '?'):14} "
             f"— {e.get('title', '')}{comps_tag}"
         )
+        # In slim mode, enrich with tldr from file (index omits tldr)
+        if not verbose:
+            try:
+                fm, _ = _read_issue(bp, e["id"])
+                tldr = fm.get("tldr", "")
+                if tldr:
+                    line += f" — {tldr}"
+            except (FileNotFoundError, OSError):
+                pass
+        lines.append(line)
+        if verbose:
+            try:
+                fm, body = _read_issue(bp, e["id"])
+                if fm.get("tldr"):
+                    lines.append(f"  tldr: {fm['tldr']}")
+                if body and body.strip():
+                    lines.append(f"  body: {body.strip()[:200]}")
+            except (FileNotFoundError, OSError):
+                pass
     return "\n".join(lines)
 
 
@@ -2816,8 +2843,19 @@ def backlog_lesson_create(
 
 
 @mcp.tool()
-def backlog_lesson_list(tier: str = "", kind: str = "") -> str:
-    """List lessons, optionally filtered by tier and/or kind."""
+def backlog_lesson_list(
+    tier: str = "",
+    kind: str = "",
+    verbose: bool = False,
+) -> str:
+    """List lessons, optionally filtered by tier and/or kind.
+
+    Args:
+        tier: Filter by tier: active, core, retired.
+        kind: Filter by kind: pattern, anti-pattern, gotcha.
+        verbose: If True, include reinforce_count and tier/kind metadata per
+            entry. Slim (default) shows id, title, and tldr only.
+    """
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
@@ -2831,8 +2869,20 @@ def backlog_lesson_list(tier: str = "", kind: str = "") -> str:
             continue
         if kind and fm.get("kind") != kind:
             continue
-        rc = fm.get("reinforce_count", 0)
-        lines.append(f"- {fm['id']} [{fm.get('tier','active')}/{fm.get('kind','?')}] x{rc} — {fm.get('title','')}")
+        if verbose:
+            rc = fm.get("reinforce_count", 0)
+            lines.append(
+                f"- {fm['id']} [{fm.get('tier','active')}/{fm.get('kind','?')}] x{rc} — {fm.get('title','')}"
+            )
+            if fm.get("tldr"):
+                lines.append(f"  tldr: {fm['tldr']}")
+        else:
+            # Slim: id, title, and tldr pill (omit heavy fields)
+            tldr = fm.get("tldr", "")
+            entry = f"- {fm['id']} — {fm.get('title', '')}"
+            if tldr:
+                entry += f" — {tldr}"
+            lines.append(entry)
     return "\n".join(lines) if lines else "No lessons match."
 
 
