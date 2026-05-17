@@ -2251,6 +2251,7 @@ def backlog_idea_create(
     related_issues: list[str] | None = None,
     related_lessons: list[str] | None = None,
     created_by: str = "Claude",
+    tldr: str = "",
 ) -> str:
     """Log an idea — a lightweight, unvalidated thought. Lighter than a task.
 
@@ -2268,10 +2269,17 @@ def backlog_idea_create(
         related_lessons: Lesson ids this idea relates to.
         created_by: Who logged it ("Claude" by default; "user" when
             invoked via /add-idea).
+        tldr: One-line essence of the idea. Auto-generated from body or
+            title if omitted.
     """
     bp = _backlog_path()
     if not bp.exists():
         return f"Error: no backlog found at {bp}. Run `backlog_init` first."
+    # tldr: use supplied value, or auto-generate from body/title
+    tldr_autogen = False
+    if not tldr:
+        tldr = extract_tldr(body) or title[:TLDR_MAX_CHARS]
+        tldr_autogen = True
     try:
         iid, target = _write_idea(
             bp,
@@ -2283,6 +2291,8 @@ def backlog_idea_create(
             related_issues=related_issues or [],
             related_lessons=related_lessons or [],
             created_by=created_by,
+            tldr=tldr,
+            tldr_autogen=tldr_autogen,
         )
     except ValueError as exc:
         return f"Error: {exc}"
@@ -2442,6 +2452,7 @@ def backlog_lesson_create(
     related_tasks: list[str] | None = None,
     related_issues: list[str] | None = None,
     tier: str = "active",
+    tldr: str = "",
 ) -> str:
     """Create a project-scoped lesson — a reusable pattern, anti-pattern, or gotcha.
 
@@ -2463,6 +2474,8 @@ def backlog_lesson_create(
         task_kinds: Task kinds for trigger matching.
         related_tasks / related_issues: Cross-refs.
         tier: active (default) | core | retired.
+        tldr: One-line essence of the lesson. Auto-generated from body or
+            title if omitted.
     """
     bp = _backlog_path()
     if not bp.exists():
@@ -2471,6 +2484,11 @@ def backlog_lesson_create(
         return f"Error: kind must be one of {LESSON_KINDS}"
     if tier not in LESSON_TIERS:
         return f"Error: tier must be one of {LESSON_TIERS}"
+    # tldr: use supplied value, or auto-generate from body/title
+    tldr_autogen = False
+    if not tldr:
+        tldr = extract_tldr(body) or title[:TLDR_MAX_CHARS]
+        tldr_autogen = True
     triggers = {
         "files": files or [],
         "task_titles_match": task_titles_match or [],
@@ -2486,6 +2504,8 @@ def backlog_lesson_create(
             tier=tier,
             related_tasks=related_tasks or [],
             related_issues=related_issues or [],
+            tldr=tldr,
+            tldr_autogen=tldr_autogen,
         )
     except ValueError as exc:
         return f"Error: {exc}"

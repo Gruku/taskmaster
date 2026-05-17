@@ -182,3 +182,52 @@ def test_issue_create_autogen_tldr_from_impact(tmp_taskmaster):
     issue = _load_issue(tmp_taskmaster, "ISS-001")
     assert "Auth middleware crashes" in issue["tldr"]
     assert issue.get("tldr_autogen") is True
+
+
+# ── Task 5: backlog_lesson_create + backlog_idea_create ───────────────────────
+
+
+def _load_lesson(tmp_taskmaster, lesson_id):
+    """Read a lesson's frontmatter from .taskmaster/lessons/<id>.md."""
+    from taskmaster_v3 import parse_frontmatter
+    lesson_path = Path(tmp_taskmaster) / ".taskmaster" / "lessons" / f"{lesson_id}.md"
+    if not lesson_path.exists():
+        raise AssertionError(f"Lesson file not found: {lesson_path}")
+    fm, _ = parse_frontmatter(lesson_path.read_text(encoding="utf-8"))
+    return fm
+
+
+from backlog_server import backlog_lesson_create, backlog_idea_create
+
+
+def test_lesson_create_with_tldr(tmp_taskmaster):
+    _setup(tmp_taskmaster)
+    backlog_lesson_create(
+        title="Always use atomic writes",
+        kind="pattern",
+        tldr="Use atomic_write() for any file mutation; prevents corruption on crash.",
+        body="## Why\nAvoid partial writes.\n\n## What to do\nUse atomic_write().",
+    )
+    lesson = _load_lesson(tmp_taskmaster, "L-001")
+    assert "atomic_write()" in lesson["tldr"]
+
+
+def test_lesson_autogen_from_body(tmp_taskmaster):
+    _setup(tmp_taskmaster)
+    backlog_lesson_create(
+        title="Atomic writes",
+        kind="pattern",
+        body="Use atomic_write() for every file mutation.",
+    )
+    lesson = _load_lesson(tmp_taskmaster, "L-001")
+    assert "atomic_write()" in lesson["tldr"]
+    assert lesson.get("tldr_autogen") is True
+
+
+def test_idea_create_with_tldr(tmp_taskmaster):
+    _setup(tmp_taskmaster)
+    result = backlog_idea_create(
+        title="Add dark mode",
+        tldr="Toggle dark mode in viewer settings.",
+    )
+    assert "IDEA-" in result

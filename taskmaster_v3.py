@@ -1601,6 +1601,8 @@ def write_lesson(
     related_tasks: list[str] | None = None,
     related_issues: list[str] | None = None,
     lesson_id: str | None = None,
+    tldr: str = "",
+    tldr_autogen: bool = False,
 ) -> tuple[str, Path]:
     """Create a new lesson. Returns (id, path)."""
     if not title or not title.strip():
@@ -1617,7 +1619,10 @@ def write_lesson(
         "created": date.today().isoformat(),
         "related_tasks": list(related_tasks or []),
         "related_issues": list(related_issues or []),
+        "tldr": tldr,
     }
+    if tldr_autogen:
+        fm["tldr_autogen"] = True
     _validate_lesson(fm)
     write_task_file(lesson_path(backlog_path, lid), fm, body)
     return lid, lesson_path(backlog_path, lid)
@@ -1987,6 +1992,8 @@ def write_idea(
     related_lessons: list[str] | None = None,
     created_by: str = "Claude",
     idea_id: str | None = None,
+    tldr: str = "",
+    tldr_autogen: bool = False,
 ) -> tuple[str, Path]:
     """Create a new idea file. Returns (id, path).
 
@@ -2028,7 +2035,10 @@ def write_idea(
         "related_lessons": list(related_lessons or []),
         "promoted_to": None,
         "archived": False,
+        "tldr": tldr,
     }
+    if tldr_autogen:
+        fm["tldr_autogen"] = True
     _validate_idea(fm)
     write_task_file(target, fm, body)
     lines = _index_upsert_line(_read_ideas_index(backlog_path), iid, _idea_index_line(fm))
