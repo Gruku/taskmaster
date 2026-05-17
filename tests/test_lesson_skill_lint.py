@@ -3,6 +3,7 @@ from pathlib import Path
 import re
 
 import yaml
+from skill_budget_helper import body_token_count, description_word_count, SKILL_BUDGETS, DEFAULT_DESC_WORDS
 
 SKILL_DIR = Path(__file__).resolve().parents[1] / "skills" / "lesson"
 
@@ -88,3 +89,16 @@ def test_skill_md_documents_all_five_entry_points():
     ]
     missing = [p for p in must_have if p not in text]
     assert not missing, f"SKILL.md missing entry-point names: {missing}"
+
+
+def test_skill_body_within_budget():
+    budget = SKILL_BUDGETS["lesson"]
+    actual = body_token_count("lesson")
+    assert actual <= budget, (
+        f"body is {actual} tokens (budget: {budget}) — move deep content to references/"
+    )
+
+
+def test_description_within_word_budget():
+    count = description_word_count("lesson")
+    assert count <= DEFAULT_DESC_WORDS, f"description is {count} words (budget: {DEFAULT_DESC_WORDS})"

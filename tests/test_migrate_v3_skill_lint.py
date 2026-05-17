@@ -3,6 +3,7 @@ from pathlib import Path
 import re
 
 import yaml
+from skill_budget_helper import body_token_count, description_word_count, SKILL_BUDGETS, DEFAULT_DESC_WORDS
 
 SKILL_DIR = Path(__file__).resolve().parents[1] / "skills" / "migrate-v3"
 
@@ -59,6 +60,7 @@ def test_skill_md_contains_canonical_sentence():
 def test_all_referenced_files_exist():
     expected_refs = [
         SKILL_DIR / "references" / "v2-vs-v3.md",
+        SKILL_DIR / "references" / "migration-steps.md",
     ]
     missing = [p for p in expected_refs if not p.exists()]
     assert not missing, f"missing referenced files: {missing}"
@@ -77,3 +79,16 @@ def test_skill_md_links_resolve():
     assert refs, "SKILL.md does not reference any references/ or templates/ files"
     missing = [r for r in refs if not (SKILL_DIR / r).exists()]
     assert not missing, f"SKILL.md links do not resolve: {missing}"
+
+
+def test_skill_body_within_budget():
+    budget = SKILL_BUDGETS["migrate-v3"]
+    actual = body_token_count("migrate-v3")
+    assert actual <= budget, (
+        f"body is {actual} tokens (budget: {budget}) — move deep content to references/"
+    )
+
+
+def test_description_within_word_budget():
+    count = description_word_count("migrate-v3")
+    assert count <= DEFAULT_DESC_WORDS, f"description is {count} words (budget: {DEFAULT_DESC_WORDS})"

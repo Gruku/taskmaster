@@ -14,6 +14,11 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 if str(PLUGIN_ROOT) not in sys.path:
     sys.path.insert(0, str(PLUGIN_ROOT))
 
+# Make `import skill_budget_helper` work from tests that live in this directory.
+TESTS_ROOT = Path(__file__).resolve().parent
+if str(TESTS_ROOT) not in sys.path:
+    sys.path.insert(0, str(TESTS_ROOT))
+
 
 @pytest.fixture()
 def tmp_taskmaster(tmp_path, monkeypatch):

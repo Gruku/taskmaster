@@ -1,6 +1,6 @@
 ---
 name: spec-review
-description: "Adversarial design review of a task's spec or plan before implementation begins. Invoke when the user says 'review this spec', 'challenge this design', 'is this the right approach?', 'spec review', or after writing a new spec for a critical/high task. Reviews the proposed approach for assumptions, scope, edge cases, and predicted blast radius — does NOT review code."
+description: "Adversarial design review of a task's spec before implementation begins. Invoke when the user says 'review this spec', 'challenge this design', 'is this the right approach?', or 'spec review'. Reviews approach for assumptions, scope, edge cases, and blast radius. Does not review code — use taskmaster:review-gate for post-implementation review."
 ---
 
 # Spec Review
@@ -11,180 +11,46 @@ This skill does NOT review code. For post-implementation code review, use `taskm
 
 ## Arguments
 
-- `task_id` (optional) — specific task ID. If omitted, uses the current task in scope (asks if multiple match).
-- `--codex` / `--no-codex` (optional) — force enable/skip the Codex adversarial pass.
-  Default behavior:
-    - `critical` priority: auto-suggest, ask user before running
-    - `high` priority: offer if Codex is detected, default off
-    - `medium` / `low`: never run
-  Codex is detected if `~/.claude/plugins/cache/openai-codex/` exists or `codex` is on PATH.
-  If `--codex` is passed but Codex isn't available, WARN and continue without it.
+- `task_id` (optional) — specific task ID; defaults to current task in scope.
+- `--codex` / `--no-codex` (optional) — force enable/skip the Codex adversarial pass. Default: critical = auto-suggest; high = offer; medium/low = never. See `references/codex-integration.md`.
 
 ## When This Should Run
 
-Lifecycle: `todo (with spec)` → **spec-review** → `pick-task` → `in-progress` → … → `review-gate` → `in-review`.
+Lifecycle: `todo (with spec)` -> **spec-review** -> `pick-task` -> `in-progress` -> ... -> `review-gate` -> `in-review`.
 
-Run spec-review:
-- After writing a spec for a critical/high task, before `pick-task`.
-- On demand whenever the user wants a second opinion on an approach.
-- Re-run if the spec was significantly revised.
-
-Skip spec-review when there's no spec/plan, or for medium/low tasks (it's overkill).
+Run: after writing a spec for a critical/high task (before `pick-task`); on demand for a second opinion; re-run if spec was significantly revised. Skip: no spec/plan exists, or medium/low tasks.
 
 ## Steps
 
-1. **Get task details** — call `backlog_get_task(task_id)`. Resolve the spec/plan path:
-   - First check `task.docs.spec` and `task.docs.plan`.
-   - Otherwise search `docs/specs/`, `docs/plans/`, and `{sub_repo}/docs/` for a file matching the task ID.
-   - If no spec/plan exists: stop. Tell the user "No spec/plan found for `{task_id}` — write one first, or skip spec-review for this task."
+**1. Get task details.** `backlog_get_task(task_id)`. Resolve spec/plan path: check `task.docs.spec`/`task.docs.plan`, then search `docs/specs/`, `docs/plans/`, `{sub_repo}/docs/`. If no spec found: stop. Tell the user "No spec/plan found — write one first."
 
-2. **Gate A: Spec sanity (always runs)**
+**2. Gate A: Spec sanity.** Check spec covers: Goal, Approach, Scope, Risk/open questions, Target files. For each missing item: WARN, ask if user wants to fill or proceed. Full axis list: `references/adversarial-steps.md`.
 
-   Read the spec/plan. Check it covers, at minimum:
-   - **Goal** — what problem this solves and why now.
-   - **Approach** — the chosen design, not just "we'll add X."
-   - **Scope** — what's in and what's explicitly out.
-   - **Risk / open questions** — at least one.
-   - **Target files or modules** — even a rough list helps blast radius.
+**3. Gate B: Adversarial Design Review (Claude).** Challenge across: Assumptions, Scope creep/gaps, Alternative approaches, Failure modes, Reversibility, Dependencies & coupling. Cite files/lines. Group by Critical/Important/Minor. Full axis details: `references/adversarial-steps.md`.
 
-   For each missing item: WARN, list what's missing, ask if the user wants to fill it in or proceed anyway.
+**4. Gate C: Codex Adversarial Pass (opt-in).** Skip if Codex not detected. Dispatch `codex:codex-rescue` subagent focused on blind spots Gate B didn't flag. Tag findings `(codex)`. Full dispatch pattern: `references/codex-integration.md`.
 
-3. **Gate B: Adversarial Design Review (Claude)**
+**5. Gate D: Blast Radius.** `backlog_blast_radius(task_id, mode="predictive")`. Surface overlapping in-progress tasks loudly; list 2-4 implied follow-ups. Advisory only — never blocks.
 
-   Read the spec and enough of the codebase to ground the critique. Then challenge the design across these axes — be specific, cite files/lines:
+**6. Present results — lead with verdict.**
+```
+Gate A — Spec Sanity:           PASS / WARN
+Gate B — Adversarial (Claude):  PASS / FAIL (N issues)
+Gate C — Adversarial (Codex):   PASS / FAIL / SKIP
+Gate D — Blast Radius:          PASS / WARN (advisory)
+```
+Blocking: Critical blocks; Important requires acknowledgment; Minor/WARN/Skip never block.
 
-   - **Assumptions** — what does this spec assume that may not hold? (existing data shape, API contracts, user behavior, performance budget)
-   - **Scope creep / scope gaps** — does the spec do too much? Too little? Are there obvious sibling cases excluded?
-   - **Alternative approaches** — is there a simpler / smaller / safer way? Name one or two and say why the spec's approach is or isn't preferable.
-   - **Failure modes** — where will this break first under load, partial failure, concurrent writes, malformed input?
-   - **Reversibility** — if this ships and is wrong, how hard is it to undo?
-   - **Dependencies & coupling** — does this entangle modules that should stay separate?
+**7. Record the review.** `backlog_set_spec_review(task_id, verdict, spec_path, codex_used, critical_count, important_count)`. Full recording steps including v3 spec persistence into task body: `references/adversarial-steps.md`.
 
-   Group findings by severity:
-   - **Critical** — design has a fundamental flaw; should not proceed without rework.
-   - **Important** — should be addressed in spec before implementation, may proceed with explicit acknowledgment.
-   - **Minor** — worth considering, not blocking.
+**8. Next step.** PASS/WARN: "Ready to `pick-task {task_id}`." FAIL: "Revise the spec and re-run spec-review."
 
-4. **Gate C: Codex Adversarial Pass (opt-in, second opinion)**
+## Additional Resources
 
-   Skip silently if Codex isn't detected and not requested.
-
-   Codex is the precision knife — best for catching blind spots and cross-codebase patterns Claude's own review missed. Two key constraints:
-
-   - `/codex:adversarial-review` is **diff-only** and won't work on prose — do NOT use it here.
-   - Instead, dispatch the `codex:codex-rescue` subagent with explicit review-only framing.
-
-   Build a focus from what Gate B *didn't* flag (avoids paying for a duplicate pass). Example:
-
-   ```
-   Agent({
-     subagent_type: "codex:codex-rescue",
-     description: "Codex adversarial spec review",
-     prompt: `REVIEW-ONLY. Do not write or modify code. Do not propose patches.
-
-   Read the spec at <abs path to spec> and the surrounding codebase. Produce
-   an adversarial design review challenging the chosen approach.
-
-   Claude's own review already flagged: <bullet list of Gate B findings>.
-
-   Look specifically for blind spots Claude may have missed:
-   - Repeated bugs in this area that the spec doesn't address.
-   - Implicit assumptions about <area-specific concerns>.
-   - Cross-codebase patterns that suggest this approach has been tried/rejected before.
-   - Edge cases in <specific functions or flows> that the spec glosses over.
-
-   Return a concise list of issues with file:line citations. Group by Critical /
-   Important / Minor. Do not summarize Claude's findings — only add new ones.`
-   })
-   ```
-
-   Tag Codex findings with `(codex)` so the source is visible when merged into the report.
-
-5. **Gate D: Predicted Blast Radius**
-
-   Call `backlog_blast_radius(task_id, mode="predictive")`. This uses the task's anchors / target files (or the spec's declared targets) to estimate fan-out.
-
-   Interpret the result with judgment:
-   - Modules and subsystems likely affected.
-   - Overlapping in-progress tasks — call out conflicts loudly: "⚠ `{other_task}` is in-progress in the same area."
-   - Existing features that may need updating given the proposed changes.
-   - 2–4 specific suggested follow-ups or additional tasks the spec implies but doesn't cover.
-
-   Verdict (advisory only — never blocks):
-   - **PASS** — low fan-out, no overlaps, well-contained.
-   - **WARN** — moderate fan-out, or shared modules.
-   - **WARN (loud)** — overlapping in-progress task on the same files.
-
-6. **Present Results — lead with the verdict.**
-
-   ```
-   Spec Review — {task_id}
-   ─────────────────────────────────
-   Gate A — Spec Sanity:           PASS / WARN
-   Gate B — Adversarial (Claude):  PASS / FAIL (N issues)
-   Gate C — Adversarial (Codex):   PASS / FAIL / SKIP (not installed | opt-out)
-   Gate D — Blast Radius:          PASS / WARN (advisory)
-   ```
-
-   Then list issues grouped by severity, tagged with their source (Claude / Codex), with file:line citations.
-
-   **Blocking rules:**
-   - Critical findings (either source) block — the spec needs revision before `pick-task`.
-   - Important findings require explicit user acknowledgment.
-   - Minor findings, WARN/SKIP, and Gate D never block.
-
-7. **Record the review**
-
-   Save a record on the task so it's visible to `pick-task`, `review-gate`, and the dashboard, and so we don't re-run unnecessarily:
-
-   ```
-   backlog_set_spec_review(
-     task_id,
-     verdict="pass" | "warn" | "fail",
-     spec_path="<path that was reviewed>",
-     codex_used=true | false,
-     critical_count=N,
-     important_count=N,
-   )
-   ```
-
-   If the spec is revised later, re-running spec-review overwrites the record automatically. To explicitly invalidate a prior review (e.g. major spec rewrite without re-reviewing), call `backlog_clear_spec_review(task_id)`.
-
-7a. **(v3) Persist the spec into the task body.** Check `backlog_status` for `schema_version`. If `>= 3`:
-
-   - Read the spec content (the file at `spec_path`, or the inline plan if no external file).
-   - Read the current task body via the per-task file (`tasks/<task_id>.md`) — see slice 1C of v3.
-   - Update the body's `## Spec / Plan` section with:
-     - A heading: `## Spec / Plan`
-     - The spec content (or a reference + summary if the external file is large).
-     - Below the spec, append a `### Spec Review` block with verdict, date, and findings count:
-       ```
-       ### Spec Review
-       - Verdict: pass | warn | fail
-       - Date: YYYY-MM-DD
-       - Source: spec at <path>
-       - Findings: critical=N, important=N (codex: yes|no)
-       ```
-   - Write the updated body back via `backlog_update_task(task_id, body=<new body>)` (or whatever the canonical write path is — the v3 loader reads `_body` field; the corresponding write path goes through `save_v3` which serializes the body section back to `tasks/<id>.md`).
-   - This makes the spec discoverable from the task body in `pick-task` step 5a — no need for `pick-task` to chase a separate `docs.spec` file when v3 is active.
-   - On v2 backlogs: skip this step entirely. The external spec file remains the source of truth.
-
-8. **Next step**
-
-   If the verdict is PASS or WARN with acknowledged Important findings: "Ready to `pick-task {task_id}` and start implementation."
-
-   If FAIL: "Revise the spec to address the Critical findings, then re-run spec-review."
-
-## Why This Skill Exists
-
-`review-gate` reviews **code** — defects, regressions, spec adherence. It can't tell you whether you were building the right thing in the first place.
-
-`spec-review` reviews **the plan** — design choices, assumptions, scope. Catching a bad design here is dramatically cheaper than catching it post-implementation.
-
-Adversarial framing belongs at spec time. Once code is written, the question shifts from "is this the right approach?" to "did we execute the chosen approach correctly?" — that's review-gate's job, with a precision (not adversarial) framing.
+- `references/adversarial-steps.md` — full Gate A-D prose + step 7/7a detail
+- `references/codex-integration.md` — Codex dispatch pattern, Case A/B
 
 ## Related
 
 - `taskmaster:review-gate` — post-implementation code review.
 - `taskmaster:pick-task` — start implementation after spec-review passes.
-- `superpowers:brainstorming` — for spec *creation*, not review.

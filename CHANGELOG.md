@@ -8,6 +8,21 @@ indicate schema breaks or removed surfaces.
 
 ---
 
+## 3.6.0 — Skill content slimming (Plan E) (2026-05-17)
+
+- Every taskmaster SKILL.md is now within its token budget (800–1,500 tokens per skill).
+- Deep-walkthrough content extracted to `references/<topic>.md` per skill — loaded on demand, not eagerly.
+- All skill `description` fields trimmed to ≤60 words (exception: `issue` at ≤70 words to preserve 14 required trigger phrases).
+- Eager skill catalog reduced from ~4,000 to ≤2,500 tokens.
+- New lint infrastructure: `skill_budget_helper.py` + parametrized body and description tests for all 16 skills.
+- `start-session` and `pick-task` body budgets lint-checked but marked xfail pending Plan D merge.
+- `pick-task` description trimmed to 54 words.
+
+Spec: `docs/superpowers/specs/2026-05-15-taskmaster-progressive-disclosure-design.md` §5.
+Plan: `docs/superpowers/plans/2026-05-16-taskmaster-progressive-disclosure-plan-e-skill-slimming.md`.
+
+---
+
 ## 3.5.0 — Programmatic Linking (Plan C) (2026-05-17)
 
 ### Added

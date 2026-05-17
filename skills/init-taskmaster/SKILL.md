@@ -7,17 +7,15 @@ description: "Set up Taskmaster in the current project. Invoke when the user wan
 
 Set up AI-powered task management in the current project. Offers two modes: clean start or analyze existing work.
 
-> **CRITICAL: Never write `backlog.yaml` directly.** All backlog mutations MUST go through the `backlog_*` MCP tools (`backlog_init`, `backlog_add_epic`, `backlog_add_task`, `backlog_add_phase`). The schema is owned by the server — writing the file manually will produce an incompatible format that breaks the viewer and all other tools.
+> **CRITICAL: Never write `backlog.yaml` directly.** All backlog mutations MUST go through `backlog_init`, `backlog_add_epic`, `backlog_add_task`, `backlog_add_phase`. The schema is owned by the server.
 
 ## Step 1: Check if already initialized
 
-Call `backlog_init` with no arguments — if it reports "already initialized", call `backlog_status` instead and show the user what's there. Skip the rest of these steps.
+Call `backlog_init` with no arguments. If it reports "already initialized", call `backlog_status` and show the user what's there. Stop.
 
 ## Step 2: Ask setup questions — MANDATORY, do NOT skip
 
-Use the `AskUserQuestion` tool with both questions in a single call. Do NOT call `backlog_init` or create any files until you have the answers.
-
-> Storage location is no longer asked — taskmaster always writes to `.taskmaster/`. Existing `.claude/`-layout projects keep working under a deprecation shim; recommend `backlog_canonicalize_layout` to migrate them.
+Use `AskUserQuestion` with both questions in a single call. Do NOT call `backlog_init` until you have the answers.
 
 ```
 AskUserQuestion({
@@ -28,7 +26,7 @@ AskUserQuestion({
       multiSelect: false,
       options: [
         { label: "v2 (Default — stable)", description: "Single backlog.yaml file. Simple, proven, all existing tools work." },
-        { label: "v3 (Narrative continuity — opt-in)", description: "Slim index + per-task files. Adds handovers, lessons, issues, recap, auto-mode. More moving parts; more capabilities. Recommended for projects you'll work on across many sessions." }
+        { label: "v3 (Narrative continuity — opt-in)", description: "Slim index + per-task files. Adds handovers, lessons, issues, recap, auto-mode." }
       ]
     },
     {
@@ -44,119 +42,22 @@ AskUserQuestion({
 })
 ```
 
-Map the answers:
-- Schema: "v2" → standard `backlog_init` flow. "v3" → after `backlog_init`, immediately call `backlog_migrate_v3` to upgrade the freshly-initialized backlog to v3 layout (this also creates `.taskmaster/tasks/`, `handovers/`, `lessons/`, `issues/` subdirectories ready to receive content).
-- Init mode: "Analyze project" → Step 3b, "Clean start" → Step 3a
-
-If user picked v3, also ensure these are gitignored (write to `.gitignore` if missing):
-```
-.taskmaster/snapshots/
-.taskmaster/auto/
-```
-These directories hold runtime state that shouldn't be committed.
+Map: v3 -> after `backlog_init`, call `backlog_migrate_v3`. If v3, gitignore `.taskmaster/snapshots/` and `.taskmaster/auto/`.
 
 ## Step 3a: Clean start
 
-If the user chose clean start:
-
-1. Call `backlog_init(project_name)` (defaults to `.taskmaster/`).
-2. Guide them to create their first epic: "What are the main workstreams? For example: `auth-system`, `api`, `frontend`"
-3. Help them add tasks under those epics.
-4. Suggest creating a phase to organize the first batch of work.
-5. **Budget guidance:** Remind the user: "Aim for 5-8 tasks per epic. Tasks should be things you'd pick up in different sessions. If a task has many steps, create a plan document and link it with `docs.plan` instead of splitting into micro-tasks."
+1. `backlog_init(project_name)`.
+2. Guide them to create their first epic ("What are the main workstreams?").
+3. Help add tasks under those epics.
+4. Suggest creating a phase.
+5. Budget guidance: "Aim for 5-8 tasks per epic. If a task has many steps, create a plan doc and link it with `docs.plan`."
 
 ## Step 3b: Analyze project
 
-If the user chose analyze:
-
-1. Call `backlog_init(project_name)` first to create the files.
-2. **Scan for existing work items:**
-   - Search for `TODO`, `FIXME`, `HACK`, `XXX` comments across the codebase using Grep
-   - Read `README.md` for any roadmap, planned features, or task lists
-   - Check for existing issue trackers: `.github/ISSUES_TEMPLATE`, `TODO.md`, `ROADMAP.md`
-   - Look at recent git log for active areas of work: `git log --oneline -20`
-   - Check for any existing project management files (Jira exports, Linear exports, etc.)
-
-3. **Synthesize findings into a proposed backlog:**
-   - Group related TODOs into epics (by directory/domain)
-   - Convert individual TODOs into tasks with appropriate priorities:
-     - `FIXME` → high (should fix)
-     - `HACK` → medium (tech debt)
-     - `TODO` → medium (planned work)
-     - `XXX` → high (needs attention)
-   - Extract roadmap items from README as tasks
-   - Identify the most active code areas from git log as likely epics
-
-4. **Present the proposed backlog to the user:**
-
-   First, output your findings as text:
-
-   > **Here's what I found:**
-   >
-   > **Proposed Epics:**
-   > - `api` — 5 TODOs found in `src/api/`
-   > - `auth` — 3 FIXMEs in `src/auth/`
-   > - `frontend` — README mentions "planned dashboard feature"
-   >
-   > **Proposed Tasks:** (12 total)
-   > - [list each with source: "TODO in src/api/routes.ts:45"]
-   >
-   > **Proposed Phase:** "Cleanup & Foundation" — group the FIXMEs and HACKs
-
-   Then use `AskUserQuestion` to get explicit approval:
-
-   ```
-   AskUserQuestion({
-     questions: [
-       {
-         question: "Should I create this backlog?",
-         header: "Approval",
-         multiSelect: false,
-         options: [
-           { label: "Create it", description: "Add the proposed epics, tasks, and phase to the backlog" },
-           { label: "Adjust first", description: "I want to change some things before you create it" },
-           { label: "Cancel", description: "Don't create anything, I'll set it up manually" }
-         ]
-       }
-     ]
-   })
-   ```
-
-   - "Create it" → proceed to step 5
-   - "Adjust first" → ask what they want to change, update the proposal, then re-ask
-   - "Cancel" → stop, tell them they can run `/init-taskmaster` again later
-
-5. **After user approval**, create the epics, tasks, and phase using the MCP tools (do NOT write the YAML file directly — the server owns the schema):
-   - `backlog_add_epic` for each epic
-   - `backlog_add_task` for each task (include the source file:line in notes)
-   - `backlog_add_phase` for the initial phase
-   - Assign tasks to the phase
+Full analysis-mode flow (scan TODOs/README/git log, synthesize into proposed backlog, present with AskUserQuestion for approval, create via MCP tools) in `references/analysis-mode.md`.
 
 ## Step 4: Open the viewer and confirm
 
-1. Call `backlog_open_viewer` to open the backlog dashboard in the browser.
-2. Show the result: "Taskmaster is set up! Use `/start-session` to see your dashboard."
-3. **Tell the user:** if MCP tools stop responding or return connection errors in a future session, run `/mcp` to reconnect to the Taskmaster server.
-
-### v3 setup additions
-
-If v3 was chosen in step 2, also tell the user about the new capabilities they just unlocked:
-
-> **You're on v3. New capabilities available:**
-> - **Handovers** — `taskmaster:handover` skill captures session continuity. Auto-offered at end-session for heavy sessions.
-> - **Lessons** — `taskmaster:lesson` skill records patterns/anti-patterns/gotchas; reinforces compound across sessions.
-> - **Issues** — `taskmaster:issue` skill for bug tracking separate from work tasks.
-> - **Recap** — `backlog_recap` shows what changed in the project since last snapshot.
-> - **Auto modes** — `taskmaster:auto-task`, `auto-epic`, `auto-phase` for state-machine-driven execution.
->
-> The PreCompact hook ships with this plugin and runs automatically before context compaction (writes `.taskmaster/snapshots/last.json` so the next `recap` reflects pre-compaction state). No per-project setup required.
-
-### v2 → v3 upgrade later
-
-If the user picked v2 now and wants to upgrade later, they can run `backlog_migrate_v3` at any point. The migration is idempotent and preserves all existing data — it only restructures storage.
-
-## Edge Cases
-
-- **Monorepo** — The project root should be the top-level directory. Tasks can reference sub-repos via the `sub_repo` field.
-- **Huge codebase with hundreds of TODOs** — Don't create a task for every TODO. Group them by area, create epics for the top areas, and add representative tasks. Mention "N more TODOs in this area" in the notes.
-- **No TODOs found** — That's fine! Say "Clean codebase! Let's set up the backlog based on what you're planning to work on." and proceed like a clean start.
+1. `backlog_open_viewer` to open the dashboard.
+2. "Taskmaster is set up! Use `/start-session` to see your dashboard."
+3. If MCP tools stop responding, run `/mcp` to reconnect.
