@@ -2065,6 +2065,318 @@ def backlog_handover_resync() -> str:
     return f"Handover index resynced — {n} entries in `backlog.yaml`."
 
 
+# ── Plan C: typed-link MCP tools (spec §6) ─────────────────────────────
+
+
+@mcp.tool()
+def backlog_link_create(source: str, target: str, type: str, note: str = "") -> str:
+    """Create a typed link from `source` to `target`. Server writes the inverse
+    on the target side automatically (see spec §6A/§6B).
+
+    Validates: link type is canonical; source/target kinds match the type's
+    domain; target entity exists; depends_on writes don't create cycles.
+    Idempotent — re-running with the same args is a no-op.
+    """
+    from taskmaster_v3 import (
+        LINK_TYPES, is_valid_link, entity_kind_of,
+        read_entity_anywhere, write_entity_anywhere, add_link, entity_links,
+        sync_inverse, would_create_cycle, load_v3,
+    )
+
+    backlog_path = _backlog_path()
+
+    if type not in LINK_TYPES:
+        return f"error: invalid link type {type!r} (valid: {sorted(LINK_TYPES)})"
+
+    src_kind = entity_kind_of(source)
+    dst_kind = entity_kind_of(target)
+    if src_kind is None:
+        return f"error: invalid source ID {source!r}"
+    if dst_kind is None:
+        return f"error: invalid target ID {target!r}"
+    if not is_valid_link(type, src_kind, dst_kind):
+        return (f"error: invalid link — type {type!r} cannot go from "
+                f"{src_kind} ({source}) to {dst_kind} ({target})")
+
+    src_entity = read_entity_anywhere(backlog_path, source)
+    if src_entity is None:
+        return f"error: source {source!r} not found"
+    dst_entity = read_entity_anywhere(backlog_path, target)
+    if dst_entity is None:
+        return f"error: target {target!r} not found"
+
+    # Cycle check on depends_on / blocks (model both as forward edges in a
+    # single task→task graph; `blocks` is reversed onto `depends_on`).
+    if type in ("depends_on", "blocks"):
+        graph: dict[str, list[str]] = {}
+        data = load_v3(backlog_path)
+        for epic in data.get("epics", []):
+            for task in epic.get("tasks", []):
+                tid = task.get("id")
+                if not tid:
+                    continue
+                graph.setdefault(tid, [])
+                for link in task.get("links", []) or []:
+                    if link.get("type") == "depends_on":
+                        graph[tid].append(link["target"])
+                    elif link.get("type") == "blocks":
+                        # B blocks A == A depends_on B
+                        graph.setdefault(link["target"], []).append(tid)
+        # Normalize the new edge to a depends_on direction for the check.
+        new_src, new_dst = (source, target) if type == "depends_on" else (target, source)
+        if would_create_cycle(graph, new_src, new_dst):
+            return (f"error: would create cycle in depends_on chain "
+                    f"({new_src} -> {new_dst})")
+
+    added = add_link(src_entity, type, target)
+    if added:
+        write_entity_anywhere(backlog_path, src_entity)
+    try:
+        sync_inverse(backlog_path, source=source, target=target, type=type)
+    except KeyError as e:
+        return f"error: {e}"
+
+    suffix = "" if added else " (no-op, link already present)"
+    note_part = f" -- {note}" if note else ""
+    return f"ok: linked {source} -[{type}]-> {target}{suffix}{note_part}"
+
+
+@mcp.tool()
+def backlog_link_remove(source: str, target: str, type: str = "") -> str:
+    """Remove a link (and its inverse) between `source` and `target`.
+
+    If `type` is omitted, removes all link types between the pair.
+    """
+    from taskmaster_v3 import (
+        LINK_TYPES, entity_kind_of, read_entity_anywhere, write_entity_anywhere,
+        remove_link, entity_links, sync_inverse,
+    )
+
+    backlog_path = _backlog_path()
+
+    if entity_kind_of(source) is None:
+        return f"error: invalid source ID {source!r}"
+    if entity_kind_of(target) is None:
+        return f"error: invalid target ID {target!r}"
+
+    src_entity = read_entity_anywhere(backlog_path, source)
+    if src_entity is None:
+        return f"error: source {source!r} not found"
+
+    types_to_remove: list[str]
+    if type:
+        if type not in LINK_TYPES:
+            return f"error: invalid link type {type!r}"
+        types_to_remove = [type]
+    else:
+        types_to_remove = sorted({link["type"] for link in entity_links(src_entity)
+                                  if link["target"] == target})
+
+    if not types_to_remove:
+        return f"ok: no-op (no links from {source} to {target})"
+
+    removed_any = False
+    for t in types_to_remove:
+        if remove_link(src_entity, t, target):
+            removed_any = True
+        try:
+            sync_inverse(backlog_path, source=source, target=target, type=t, remove=True)
+        except KeyError:
+            pass
+    if removed_any:
+        write_entity_anywhere(backlog_path, src_entity)
+        return f"ok: removed {len(types_to_remove)} link(s) between {source} and {target}"
+    return f"ok: no-op (links not present between {source} and {target})"
+
+
+@mcp.tool()
+def backlog_link_query(source: str = "", target: str = "", type: str = "",
+                       depth: int = 1) -> str:
+    """Return links matching the source/target/type filter.
+
+    With depth>1, traverses transitively along the same `type`. Returns a JSON
+    array of {source, target, type} entries.
+    """
+    import json as _json
+    from taskmaster_v3 import (
+        entity_kind_of, read_entity_anywhere, entity_links, load_v3,
+    )
+
+    backlog_path = _backlog_path()
+
+    def edges_from(entity_id: str) -> list[dict]:
+        entity = read_entity_anywhere(backlog_path, entity_id)
+        if entity is None:
+            return []
+        return [{"source": entity_id, "target": link["target"], "type": link["type"]}
+                for link in entity_links(entity)]
+
+    def all_edges() -> list[dict]:
+        out: list[dict] = []
+        data = load_v3(backlog_path)
+        for epic in data.get("epics", []):
+            for task in epic.get("tasks", []):
+                tid = task.get("id")
+                if not tid:
+                    continue
+                for link in task.get("links", []) or []:
+                    out.append({"source": tid, "target": link["target"], "type": link["type"]})
+        for sub, prefix in (("handovers", "HND"), ("issues", "ISS"),
+                            ("lessons", "L"), ("ideas", "IDEA")):
+            sub_dir = backlog_path.parent / sub
+            if not sub_dir.exists():
+                continue
+            for fp in sub_dir.glob(f"{prefix}-*.md"):
+                eid = fp.stem
+                entity = read_entity_anywhere(backlog_path, eid)
+                if entity is None:
+                    continue
+                for link in entity_links(entity):
+                    out.append({"source": eid, "target": link["target"], "type": link["type"]})
+        return out
+
+    if source and entity_kind_of(source) is None:
+        return f"error: invalid source ID {source!r}"
+    if target and entity_kind_of(target) is None:
+        return f"error: invalid target ID {target!r}"
+
+    if source:
+        results = list(edges_from(source))
+        if depth > 1 and type:
+            seen = {(e["source"], e["target"]) for e in results}
+            frontier = [e["target"] for e in results if e["type"] == type]
+            for _ in range(depth - 1):
+                next_frontier: list[str] = []
+                for node in frontier:
+                    for edge in edges_from(node):
+                        if edge["type"] != type:
+                            continue
+                        key = (edge["source"], edge["target"])
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        results.append(edge)
+                        next_frontier.append(edge["target"])
+                frontier = next_frontier
+    else:
+        results = all_edges()
+
+    if target:
+        results = [e for e in results if e["target"] == target]
+    if type:
+        results = [e for e in results if e["type"] == type]
+    return _json.dumps(results)
+
+
+@mcp.tool()
+def backlog_link_validate() -> str:
+    """Report link drift: orphan links, asymmetric pairs, depends_on cycles.
+
+    Returns a JSON object {orphans, asymmetric, cycles, archived_targets}.
+    Links to archived entities (status: archived) are flagged in
+    `archived_targets` but NOT auto-removed.
+    """
+    import json as _json
+    from taskmaster_v3 import (
+        REVERSE_TYPE, read_entity_anywhere, entity_links, load_v3, find_cycle,
+    )
+
+    backlog_path = _backlog_path()
+
+    def iter_all_entities():
+        data = load_v3(backlog_path)
+        for epic in data.get("epics", []):
+            for task in epic.get("tasks", []):
+                if task.get("id"):
+                    yield task["id"], task
+        for sub, prefix in (("handovers", "HND"), ("issues", "ISS"),
+                            ("lessons", "L"), ("ideas", "IDEA")):
+            sub_dir = backlog_path.parent / sub
+            if not sub_dir.exists():
+                continue
+            for fp in sub_dir.glob(f"{prefix}-*.md"):
+                eid = fp.stem
+                entity = read_entity_anywhere(backlog_path, eid)
+                if entity is not None:
+                    yield eid, entity
+
+    orphans: list[dict] = []
+    asymmetric: list[dict] = []
+    archived_targets: list[dict] = []
+    depends_graph: dict[str, list[str]] = {}
+
+    entities_by_id: dict[str, dict] = {}
+    for eid, ent in iter_all_entities():
+        entities_by_id[eid] = ent
+
+    for eid, ent in entities_by_id.items():
+        for link in entity_links(ent):
+            tgt = link["target"]
+            ltype = link["type"]
+            if tgt not in entities_by_id:
+                orphans.append({"source": eid, "target": tgt, "type": ltype})
+                continue
+            target_entity = entities_by_id[tgt]
+            # Flag links to archived entities as a warning (not auto-removed).
+            if target_entity.get("status") == "archived":
+                archived_targets.append({"source": eid, "target": tgt, "type": ltype})
+            inverse = REVERSE_TYPE.get(ltype)
+            if inverse is None:
+                continue
+            peer_links = entity_links(target_entity)
+            if {"type": inverse, "target": eid} not in peer_links:
+                asymmetric.append({"source": eid, "target": tgt, "type": ltype,
+                                   "missing_inverse": inverse})
+            if ltype == "depends_on":
+                depends_graph.setdefault(eid, []).append(tgt)
+                depends_graph.setdefault(tgt, depends_graph.get(tgt, []))
+
+    cycles: list[list[str]] = []
+    # Find up to 5 cycles by iteratively excising one edge of each cycle found.
+    graph_copy = {k: list(v) for k, v in depends_graph.items()}
+    for _ in range(5):
+        cyc = find_cycle(graph_copy)
+        if cyc is None:
+            break
+        cycles.append(cyc)
+        # Excise the first edge of the cycle to find further independent ones.
+        if len(cyc) >= 2:
+            a, b = cyc[0], cyc[1]
+            if b in graph_copy.get(a, []):
+                graph_copy[a].remove(b)
+
+    return _json.dumps({"orphans": orphans, "asymmetric": asymmetric,
+                        "cycles": cycles, "archived_targets": archived_targets})
+
+
+@mcp.tool()
+def backlog_link_reconcile() -> str:
+    """Add missing inverse links on peers. Reports unfixable drift.
+
+    Returns JSON {fixed: N, unfixable: [...], cycles: [...]}.
+    """
+    import json as _json
+    from taskmaster_v3 import sync_inverse
+
+    validation = _json.loads(backlog_link_validate())
+    fixed = 0
+    unfixable: list[dict] = list(validation.get("orphans", []))
+    backlog_path = _backlog_path()
+
+    for entry in validation.get("asymmetric", []):
+        try:
+            sync_inverse(backlog_path,
+                         source=entry["source"],
+                         target=entry["target"],
+                         type=entry["type"])
+            fixed += 1
+        except (KeyError, ValueError) as e:
+            unfixable.append({**entry, "reason": str(e)})
+
+    return _json.dumps({"fixed": fixed, "unfixable": unfixable,
+                        "cycles": validation.get("cycles", [])})
+
+
 @mcp.tool()
 def backlog_handover_supersede(old_id: str, new_id: str) -> str:
     """Mark an existing handover as superseded by another.
