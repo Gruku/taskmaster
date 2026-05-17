@@ -1,6 +1,6 @@
 ---
 name: pick-task
-description: "Select a task to work on. Invoke when the user says 'pick a task', 'let's work on X', 'start task auth-003', 'what should I tackle next', 'continue this task', 'continue where we left off', 'resume the work', 'pick up from yesterday', or names a specific task ID. Sets status to in-progress, checks dependencies, creates a git worktree for isolation, and loads task context. On v3 backlogs, the continue-style triggers auto-resolve to the most-recently-touched in-progress task with a handover."
+description: "Select a task to work on. Invoke when the user says 'pick a task', 'let's work on X', 'start task auth-003', 'what should I tackle next', 'continue this task', 'continue where we left off', or names a specific task ID. Sets status to in-progress, checks dependencies, creates a git worktree, and loads task context."
 ---
 
 # Pick Task
