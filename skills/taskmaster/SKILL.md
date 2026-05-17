@@ -43,3 +43,17 @@ Handle sequentially — complete the first action before starting the second.
 ## When to Deepen
 
 When routes are ambiguous (handover vs end-session, issue vs task, lesson vs note, auto-task vs pick-task), read `references/disambiguation.md`.
+
+## Mid-session deepening
+
+Skills stay in glance mode during a session. When the user asks to see more detail on a specific entity, Claude deepens that entity directly — no need to re-invoke a ceremony skill.
+
+| User says | Claude does |
+|---|---|
+| "show me HND-012" / "open that handover" | `backlog_handover_get("HND-012")` (full body by default) |
+| "read the plan for T-001" / "show me the spec" | `backlog_get_task("T-001", sections=["plan"])` or `sections=["spec"]` |
+| "full task details" / "load everything for T-001" | `backlog_get_task("T-001", verbose=True)` |
+| "show me lesson L-007" / "read that lesson" | `backlog_lesson_get("L-007")` (full body) |
+| "details on ISS-014" | `backlog_issue_get("ISS-014", verbose=True)` |
+
+The deepening is surgical — one entity, the section the user asked for. The ceremony (start-session, pick-task) is not re-run. This keeps the rest of the session context unaffected.
