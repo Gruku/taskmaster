@@ -165,6 +165,65 @@ def slim_entity(
     return out
 
 
+_SECTION_HEADING_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
+
+
+def _split_body_by_heading(body: str) -> dict[str, str]:
+    """Split a markdown body into sections keyed by lowercased heading text."""
+    if not body:
+        return {}
+    matches = list(_SECTION_HEADING_RE.finditer(body))
+    if not matches:
+        return {}
+    out: dict[str, str] = {}
+    for i, m in enumerate(matches):
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
+        key = m.group(1).strip().lower().replace(" ", "_")
+        out[key] = body[start:end].strip()
+    return out
+
+
+def resolve_sections(
+    entity: dict[str, Any],
+    *,
+    kind: str,
+    sections: list[str],
+    body: str,
+    project_root: Path | None = None,
+) -> dict[str, str]:
+    """Return a dict mapping section name → content for requested sections."""
+    canon = CANONICAL_SECTIONS.get(kind, ())
+    for s in sections:
+        if s not in canon:
+            raise ValueError(f"{s!r} is not a canonical section for kind={kind!r}")
+
+    out: dict[str, str] = {}
+
+    if kind == "task":
+        for s in sections:
+            if s in TASK_INLINE_SECTIONS:
+                v = entity.get(s)
+                if v:
+                    out[s] = v if isinstance(v, str) else str(v)
+            elif s in TASK_DOC_SECTIONS:
+                doc_path = (entity.get("docs") or {}).get(s)
+                if not doc_path:
+                    continue
+                resolved = (project_root / doc_path) if project_root else Path(doc_path)
+                if resolved.exists():
+                    out[s] = resolved.read_text(encoding="utf-8")
+                else:
+                    out[s] = f"(unresolved: {doc_path})"
+        return out
+
+    body_sections = _split_body_by_heading(body)
+    for s in sections:
+        if s in body_sections:
+            out[s] = body_sections[s]
+    return out
+
+
 _legacy_warned: set[str] = set()
 
 
