@@ -25,3 +25,73 @@ def test_backfill_tldr_uses_title_when_body_empty():
     assert changed is True
     assert new_fm["tldr"] == "Refactor auth middleware"
     assert new_fm["tldr_autogen"] is True
+
+
+import subprocess
+from pathlib import Path
+
+import yaml
+
+
+def test_backfill_script_processes_all_entities(tmp_taskmaster):
+    # Pre-populate ONE legacy entity per supported type (no tldr field)
+    tasks_dir = Path(tmp_taskmaster) / ".taskmaster" / "tasks"
+    tasks_dir.mkdir(parents=True, exist_ok=True)
+    legacy_task = tasks_dir / "T-legacy-1.md"
+    legacy_task.write_text(
+        "---\n"
+        "id: T-legacy-1\n"
+        "title: Legacy task missing tldr\n"
+        "status: todo\n"
+        "---\n"
+        "Body of the legacy task. Has detail.\n",
+        encoding="utf-8",
+    )
+
+    issues_dir = Path(tmp_taskmaster) / ".taskmaster" / "issues"
+    issues_dir.mkdir(parents=True, exist_ok=True)
+    legacy_issue = issues_dir / "ISS-legacy-1.md"
+    legacy_issue.write_text(
+        "---\n"
+        "id: ISS-legacy-1\n"
+        "title: Legacy issue\n"
+        "severity: P2\n"
+        "---\n"
+        "Legacy issue body.\n",
+        encoding="utf-8",
+    )
+
+    lessons_dir = Path(tmp_taskmaster) / ".taskmaster" / "lessons"
+    lessons_dir.mkdir(parents=True, exist_ok=True)
+    legacy_lesson = lessons_dir / "L-legacy-1.md"
+    legacy_lesson.write_text(
+        "---\n"
+        "id: L-legacy-1\n"
+        "title: Legacy lesson\n"
+        "kind: pattern\n"
+        "---\n"
+        "Always commit small.\n",
+        encoding="utf-8",
+    )
+
+    # Run the CLI
+    import os
+    worktree_root = Path(__file__).parent.parent.parent.parent
+    env = {**os.environ, "PYTHONPATH": str(worktree_root)}
+    result = subprocess.run(
+        ["python", "-m", "plugins.taskmaster.scripts.backfill_tldr",
+         "--root", str(tmp_taskmaster)],
+        capture_output=True, text=True, check=True,
+        env=env,
+    )
+    assert "backfilled" in result.stdout.lower()
+
+    # Verify tldr was added to each
+    for path in (legacy_task, legacy_issue, legacy_lesson):
+        content = path.read_text(encoding="utf-8")
+        # Frontmatter is the YAML block between the first two ---
+        parts = content.split("---", 2)
+        assert len(parts) >= 3, f"No frontmatter in {path.name}"
+        fm = yaml.safe_load(parts[1]) or {}
+        assert "tldr" in fm, f"Missing tldr in {path.name}: {fm}"
+        assert fm.get("tldr_autogen") is True, f"Missing tldr_autogen flag in {path.name}: {fm}"
