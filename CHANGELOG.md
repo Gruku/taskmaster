@@ -8,6 +8,52 @@ indicate schema breaks or removed surfaces.
 
 ---
 
+## 3.3.0 — Programmatic Linking (2026-05-17)
+
+### Added
+
+- **Typed unified `links: [{type, target}]` schema** on every entity (tasks, issues, lessons, handovers, ideas). Replaces the proliferation of `related_issues`, `related_lessons`, `depends_on`, `related_tasks`, `fixed_in_task`, `duplicate_of`, `supersedes`, `superseded_by` fields with one symmetric, server-managed array per entity.
+- **13 canonical link types** with full reverse-pair table — see `plugins/taskmaster/taskmaster_v3.py::REVERSE_TYPE`. Types: `depends_on`/`blocks`, `fixes`/`fixed_in_task`, `informed_by`/`informs`, `supersedes`/`superseded_by`, `duplicate_of`/`duplicates`, `references`/`referenced_by`, and `relates_to` (its own inverse).
+- **Server-managed symmetric sync**: writing a link on one side auto-writes the inverse on the peer via `sync_inverse(source, target, type, remove=False)`. Removal is symmetric too.
+- **Auto-detection of inline ID mentions** (`T-001`, `[[T-001]]`, `@T-001`) on every entity save — materializes as `references` links with `referenced_by` inverse on the target. Opt out per entity via `auto_link: false` frontmatter. Existing explicit link types are never overwritten.
+- **Cycle detection on `depends_on` chains** — `backlog_link_create` rejects writes that would form self-cycles, 2-node, or N-node cycles via DFS with grey/black coloring (see `find_cycle` / `would_create_cycle` in `taskmaster_v3.py`).
+- **New MCP tools** (Plan C / spec §6):
+  - `backlog_link_create(source, target, type, note="")` — validates type, domain, cycle, and writes both sides
+  - `backlog_link_remove(source, target, type="")` — drops both sides; omit `type` to remove all links between the pair
+  - `backlog_link_query(source="", target="", type="", depth=1)` — JSON edge list with optional transitive traversal
+  - `backlog_link_validate()` — reports orphans, asymmetric pairs, depends_on cycles, and archived-target warnings
+  - `backlog_link_reconcile()` — fills missing inverses; reports unfixable orphans
+- **Slim `_get` views** (`backlog_get_task`, `backlog_handover_get`, `backlog_issue_get`, `backlog_lesson_get`, `backlog_idea_get`) emit one grouped `links:` block. `expand_links=true` swaps bare IDs for `{id, tldr}` pills.
+- **Viewer**: shared `link-pills.js` renderer; new "Links" panel in the task-detail right rail; `issue-detail`, `lesson-detail`, `ideas` sidebars use unified link-pills instead of per-field rendering. Legacy-field fallback ensures unmigrated projects still render correctly. UI honors project conventions: no left-colored rails, no motion on hover, no box-shadow elevation.
+- **`scripts/migrate_links.py`** — one-shot, idempotent migration: translates legacy fields to typed `links`, drops the old fields, runs `backlog_link_reconcile` to fill inverses. Reports JSON summary of `migrated.<kind>` counts plus `reconcile.fixed` / `reconcile.unfixable`.
+- **Read-fallback shim** — `read_entity_anywhere(..., fallback=True)` (default) synthesizes a virtual `links` array from legacy fields when the field is absent. Used by the slim `_get` views and the viewer so unmigrated projects work seamlessly. Pass `fallback=False` to opt out (migration script uses this).
+
+### Hooked into entity write paths
+
+`auto_link_on_save` runs at the end of every entity-creating/updating MCP tool: `backlog_handover_create`, `backlog_issue_create`, `backlog_issue_update`, `backlog_idea_create`, `backlog_idea_update`, `backlog_lesson_create`, `backlog_lesson_update`, and `backlog_update_task` (on `notes`/`review_instructions` field changes).
+
+### Migration
+
+1. Run `python -m plugins.taskmaster.scripts.migrate_links --root <project>` (use `--keep-legacy` to keep old fields readable alongside the new `links` array).
+2. Inspect the JSON summary — `reconcile.unfixable` lists orphan links pointing at deleted entities (manual cleanup).
+3. Run `backlog_link_validate` after the migration; expect `orphans == []`, `asymmetric == []`, `cycles == []`.
+4. Old `related_*` / `depends_on` / `fixed_in_task` / `duplicate_of` / `supersedes` / `superseded_by` fields are still read as a fallback when `links` is absent. They are dropped by `migrate_links` and will be removed entirely from read-fallback in a future release.
+
+### Breaking changes
+
+- After migration, entities no longer carry the legacy linkage fields. Callers that read `task["depends_on"]` directly must switch to `entity_links(task)` or filter `task["links"]`.
+- `backlog_get_task` slim mode emits a grouped `links:` block in addition to (or, after migration, in place of) per-field linkages.
+
+### Out of scope
+
+- **Spec §6E (computed/derived linkages — commit → issue, files → lesson)** is explicitly deferred from Plan C; auto-detection here only materializes inline ID mentions the user wrote, not git/path/semantic inferences.
+- Transitive graph algorithms beyond `backlog_link_query(depth=N)` (shortest-path, connected-components, etc.).
+
+Spec: `docs/superpowers/specs/2026-05-15-taskmaster-progressive-disclosure-design.md` §6.
+Plan: `docs/superpowers/plans/2026-05-16-taskmaster-progressive-disclosure-plan-c-programmatic-linking.md`.
+
+---
+
 ## 3.2.0 — Progressive Disclosure Foundation (2026-05-16)
 
 ### Added
