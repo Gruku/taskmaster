@@ -1887,6 +1887,13 @@ def backlog_handover_create(
     _save(data)
     _ensure_v3_marker(bp)
 
+    # Plan C: auto-detect inline ID mentions, materialize as `references` links.
+    from taskmaster_v3 import auto_link_on_save as _auto_link_on_save
+    try:
+        _auto_link_on_save(bp, hid)
+    except Exception:
+        pass
+
     lines = [
         f"Handover written: {hid}",
         f"- File: {target.relative_to(ROOT)}",
@@ -2531,6 +2538,14 @@ def backlog_issue_create(
     _sync_issue_index(data, bp)
     _save(data)
     _ensure_v3_marker(bp)
+
+    # Plan C: auto-detect inline ID mentions, materialize as `references` links.
+    from taskmaster_v3 import auto_link_on_save as _auto_link_on_save
+    try:
+        _auto_link_on_save(bp, iid)
+    except Exception:
+        pass
+
     return f"Issue created: {iid} ({severity}) — {title}\nFile: {target.relative_to(ROOT)}"
 
 
@@ -2726,6 +2741,15 @@ def backlog_issue_update(
     data = _load()
     _sync_issue_index(data, bp)
     _save(data)
+
+    # Plan C: auto-detect inline ID mentions on body updates.
+    if body:
+        from taskmaster_v3 import auto_link_on_save as _auto_link_on_save
+        try:
+            _auto_link_on_save(bp, issue_id)
+        except Exception:
+            pass
+
     return f"Issue updated: {issue_id} → status={fm['status']}, severity={fm['severity']}"
 
 
@@ -2965,6 +2989,14 @@ def backlog_idea_create(
         )
     except ValueError as exc:
         return f"Error: {exc}"
+
+    # Plan C: auto-detect inline ID mentions, materialize as `references` links.
+    from taskmaster_v3 import auto_link_on_save as _auto_link_on_save
+    try:
+        _auto_link_on_save(bp, iid)
+    except Exception:
+        pass
+
     try:
         rel = target.relative_to(ROOT)
     except ValueError:
@@ -3138,6 +3170,15 @@ def backlog_idea_update(
         return f"Idea not found: {idea_id}"
     except ValueError as exc:
         return f"Error: {exc}"
+
+    # Plan C: auto-detect inline ID mentions on body updates.
+    if body:
+        from taskmaster_v3 import auto_link_on_save as _auto_link_on_save
+        try:
+            _auto_link_on_save(bp, idea_id)
+        except Exception:
+            pass
+
     return f"Idea updated: {idea_id} — {fm.get('title', '')}"
 
 
@@ -3259,6 +3300,14 @@ def backlog_lesson_create(
     _sync_lesson_index(data, bp)
     _save(data)
     _ensure_v3_marker(bp)
+
+    # Plan C: auto-detect inline ID mentions, materialize as `references` links.
+    from taskmaster_v3 import auto_link_on_save as _auto_link_on_save
+    try:
+        _auto_link_on_save(bp, lid)
+    except Exception:
+        pass
+
     return f"Lesson created: {lid} ({kind}, {tier}) — {title}\nFile: {target.relative_to(ROOT)}"
 
 
@@ -3421,6 +3470,15 @@ def backlog_lesson_update(
     data = _load()
     _sync_lesson_index(data, bp)
     _save(data)
+
+    # Plan C: auto-detect inline ID mentions on body updates.
+    if body:
+        from taskmaster_v3 import auto_link_on_save as _auto_link_on_save
+        try:
+            _auto_link_on_save(bp, lesson_id)
+        except Exception:
+            pass
+
     return f"Lesson updated: {lesson_id}"
 
 
@@ -4643,6 +4701,15 @@ def backlog_update_task(
         task[field] = value
 
     _mutate_and_save(data)
+
+    # Plan C: auto-detect inline ID mentions when body-bearing fields change.
+    if field in ("notes", "review_instructions"):
+        bp = _backlog_path()
+        from taskmaster_v3 import auto_link_on_save as _auto_link_on_save
+        try:
+            _auto_link_on_save(bp, task_id)
+        except Exception:
+            pass
 
     return f"Updated `{task_id}` field `{field}` → {value}"
 

@@ -469,13 +469,24 @@ LINK_TYPE_DOMAIN: dict[str, tuple[str, str]] = {
 }
 
 
+_HANDOVER_DATE_SLUG_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-[a-z0-9\-]+$")
+
+
 def entity_kind_of(entity_id: str | None) -> str | None:
-    """Map an entity ID (e.g. 'T-001', 'ISS-007') to its kind, or None if unknown."""
+    """Map an entity ID to its kind, or None if unknown.
+
+    Recognizes:
+      - HND-NNN, T-NNN, L-NNN, ISS-NNN, IDEA-NNN prefixed IDs
+      - Date-slug handover IDs (YYYY-MM-DD-<slug>) — the actual on-disk format
+    """
     if not entity_id or not isinstance(entity_id, str):
         return None
     for prefix in _PREFIX_ORDER:
         if entity_id.startswith(prefix + "-"):
             return ENTITY_KIND_BY_PREFIX[prefix]
+    # Date-slug handover IDs (the production handover format).
+    if _HANDOVER_DATE_SLUG_RE.match(entity_id):
+        return "handover"
     return None
 
 

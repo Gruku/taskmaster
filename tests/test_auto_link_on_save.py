@@ -114,3 +114,50 @@ def test_auto_link_skips_missing_targets(tm_dir):
     hnd = read_entity_anywhere(tm_dir / "backlog.yaml", "HND-001")
     # Missing target → skipped, not a hard error.
     assert all(link["target"] != "T-999" for link in entity_links(hnd))
+
+
+def _seed_two_tasks(tmp_taskmaster) -> None:
+    backlog_path = tmp_taskmaster / ".taskmaster" / "backlog.yaml"
+    data = yaml.safe_load(backlog_path.read_text(encoding="utf-8"))
+    data["epics"] = [{
+        "id": "e1", "name": "E", "tasks": [
+            {"id": "T-001", "title": "First", "tldr": "x", "status": "todo"},
+            {"id": "T-005", "title": "Fifth", "tldr": "x", "status": "todo"},
+        ],
+    }]
+    backlog_path.write_text(yaml.safe_dump(data), encoding="utf-8")
+
+
+def test_handover_create_auto_links_on_save(tmp_taskmaster):
+    """backlog_handover_create wires auto_link_on_save."""
+    import backlog_server as bs
+    _seed_two_tasks(tmp_taskmaster)
+
+    bs.backlog_handover_create(task_ids=["T-001"], tldr="x", next_action="",
+                               body="Next: pick up T-005.")
+
+    bp = tmp_taskmaster / ".taskmaster" / "backlog.yaml"
+    hids = sorted((bp.parent / "handovers").glob("*.md"))
+    assert hids
+    # Handover IDs are not the HND- prefixed format — they're date-slug based.
+    # entity_kind_of returns None for those, so we read the file directly.
+    from taskmaster_v3 import read_handover
+    fm, body = read_handover(bp, hids[0].stem)
+    hid = fm["id"]
+    targets = {link["target"] for link in fm.get("links", [])
+               if link["type"] == "references"}
+    assert "T-005" in targets
+
+
+def test_issue_create_auto_links_on_save(tmp_taskmaster):
+    """backlog_issue_create wires auto_link_on_save."""
+    import backlog_server as bs
+    _seed_two_tasks(tmp_taskmaster)
+
+    bs.backlog_issue_create(title="Bug", severity="P1", tldr="x",
+                            body="Related: T-001 and T-005.")
+    bp = tmp_taskmaster / ".taskmaster" / "backlog.yaml"
+    iss = read_entity_anywhere(bp, "ISS-001")
+    targets = {link["target"] for link in entity_links(iss)
+               if link["type"] == "references"}
+    assert {"T-001", "T-005"}.issubset(targets)
