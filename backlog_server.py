@@ -190,6 +190,40 @@ def _get_open_handovers_for_task(bp: Path, task_id: str) -> list[str]:
     return result
 
 
+def _append_grouped_links_block(
+    lines: list[str],
+    entity: dict,
+    backlog_path: Path,
+    *,
+    expand_links: bool = False,
+) -> None:
+    """Append a Plan C grouped `links:` block to `lines` for slim-view rendering.
+
+    Reads `entity.links` (typed array). When `expand_links` is True, swaps bare
+    target IDs for `{id} ({tldr})` pills by reading peer entities.
+    Emits nothing when there are no typed links.
+    """
+    from taskmaster_v3 import (
+        links_grouped_by_type, read_entity_anywhere,
+    )
+
+    grouped = links_grouped_by_type(entity)
+    if not grouped:
+        return
+    lines.append("\n**links:**")
+    for ltype in sorted(grouped):
+        targets = grouped[ltype]
+        if expand_links:
+            pills: list[str] = []
+            for tgt in targets:
+                peer = read_entity_anywhere(backlog_path, tgt) if backlog_path.exists() else None
+                tldr = (peer or {}).get("tldr", "") if peer else ""
+                pills.append(f"{tgt} ({tldr})" if tldr else tgt)
+            lines.append(f"- {ltype}: [{', '.join(pills)}]")
+        else:
+            lines.append(f"- {ltype}: [{', '.join(targets)}]")
+
+
 def _load_auto_state():
     """Read <backlog-parent>/auto/state.json, return parsed dict or None.
 
@@ -1058,6 +1092,8 @@ def backlog_get_task(
         lines = [f"## `{slim.pop('id')}` — {slim.pop('title', task.get('title', ''))}\n"]
         for k, v in slim.items():
             lines.append(f"**{k}:** {v}")
+        # Plan C: emit grouped typed-links block.
+        _append_grouped_links_block(lines, task, bp, expand_links=expand_links)
         return "\n".join(lines)
 
     # ── verbose mode ─────────────────────────────────────────────────────────
@@ -2017,6 +2053,8 @@ def backlog_handover_get(
     lines = [f"## Handover: {slim.pop('id', handover_id)}\n"]
     for k, v in slim.items():
         lines.append(f"**{k}:** {v}")
+    # Plan C: emit grouped typed-links block.
+    _append_grouped_links_block(lines, fm, bp, expand_links=expand_links)
     return "\n".join(lines)
 
 
@@ -2623,6 +2661,8 @@ def backlog_issue_get(
     lines = [f"## Issue: {slim.pop('id', issue_id)}\n"]
     for k, v in slim.items():
         lines.append(f"**{k}:** {v}")
+    # Plan C: emit grouped typed-links block.
+    _append_grouped_links_block(lines, fm, bp, expand_links=expand_links)
     return "\n".join(lines)
 
 
@@ -3045,6 +3085,8 @@ def backlog_idea_get(
     lines = [f"## Idea: {slim.pop('id', idea_id)} — {slim.pop('title', fm.get('title', ''))}\n"]
     for k, v in slim.items():
         lines.append(f"**{k}:** {v}")
+    # Plan C: emit grouped typed-links block.
+    _append_grouped_links_block(lines, fm, bp, expand_links=expand_links)
     return "\n".join(lines)
 
 
@@ -3326,6 +3368,8 @@ def backlog_lesson_get(
     lines = [f"## Lesson: {slim.pop('id', lesson_id)}\n"]
     for k, v in slim.items():
         lines.append(f"**{k}:** {v}")
+    # Plan C: emit grouped typed-links block.
+    _append_grouped_links_block(lines, fm, bp, expand_links=expand_links)
     return "\n".join(lines)
 
 
