@@ -2024,28 +2024,42 @@ def backlog_handover_get(
 
 @mcp.tool()
 def backlog_handover_latest() -> str:
-    """Return the latest handover's frontmatter (lightweight).
+    """[DEPRECATED] Alias for backlog_handover_list(status="open", limit=1, sort="created_desc").
 
-    Use this in start-session to surface 'where I left off' without loading the
-    full body. Body fetch is on-demand via `backlog_handover_get`.
+    Use `backlog_handover_list(status="open")` instead — it returns all in-flight
+    handover tracks, not just the newest one. This alias will be removed in the
+    next major release.
     """
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
     _ensure_handover_status_backfilled()
-    hid = _latest_handover_id(bp)
-    if not hid:
-        return "No handovers yet."
-    fm, _ = _read_handover(bp, hid)
-    when_line = fm.get("created") or fm.get("date") or ""
+    data = _load()
+    entries = list(data.get("handovers") or [])
+    open_entries = [e for e in entries if e.get("status") == "open"]
+    # Sort by created descending; fall back to id for stable ordering.
+    open_entries.sort(key=lambda e: (e.get("created") or e.get("id") or ""), reverse=True)
+
+    deprecation_notice = (
+        "[DEPRECATED] backlog_handover_latest is an alias — "
+        "use backlog_handover_list(status=\"open\") for all open tracks.\n\n"
+    )
+
+    if not open_entries:
+        return deprecation_notice + "No open handovers."
+
+    e = open_entries[0]
+    when_line = e.get("created") or e.get("date") or ""
     when_label = f" ({when_line})" if when_line else ""
     return (
-        f"Latest handover: {hid}{when_label}\n"
-        f"- TLDR: {fm.get('tldr', '')}\n"
-        f"- Next: {fm.get('next_action', '(none)')}\n"
-        f"- Tasks: {', '.join(fm.get('task_ids') or []) or '(none)'}\n"
-        f"- Kind: {fm.get('session_kind', 'end-of-day')}\n"
-        f"\nFetch body with `backlog_handover_get {hid}`."
+        deprecation_notice
+        + f"Latest open handover: {e['id']}{when_label}\n"
+        + f"- TLDR: {e.get('tldr', '')}\n"
+        + f"- Next: {e.get('next_action', '(none)')}\n"
+        + f"- Tasks: {', '.join(e.get('task_ids') or []) or '(none)'}\n"
+        + f"- Kind: {e.get('session_kind', 'end-of-day')}\n"
+        + f"\nFetch body with `backlog_handover_get {e['id']}`.\n"
+        + f"List all open tracks with `backlog_handover_list(status=\"open\")`."
     )
 
 
