@@ -6,6 +6,11 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT))
 
 from taskmaster_v3 import HANDOVER_STATUSES, write_handover, read_handover
+from taskmaster_v3 import (
+    apply_supersession,
+    backfill_handover_status,
+    write_task_file,
+)
 
 
 def _setup(tmp_path):
@@ -49,3 +54,33 @@ def test_update_handover_status_rejects_old_enum(tmp_path):
     hid, _ = write_handover(bp, tldr="test", session_kind="end-of-day")
     with pytest.raises(ValueError, match="open"):
         update_handover_status(bp, handover_id=hid, status="todo")
+
+
+def test_apply_supersession_sets_superseded_status(tmp_path):
+    bp = _setup(tmp_path)
+    old_id, _ = write_handover(bp, tldr="old", session_kind="end-of-day")
+    new_id, _ = write_handover(bp, tldr="new", session_kind="end-of-day")
+    apply_supersession(bp, old_id=old_id, new_id=new_id)
+    fm, _ = read_handover(bp, old_id)
+    assert fm["status"] == "superseded"
+    assert fm["superseded_by"] == new_id
+
+
+def test_backfill_legacy_handovers_get_open_not_done(tmp_path):
+    """Legacy handovers without status get 'open', not 'done'."""
+    bp, hd = tmp_path / "backlog.yaml", tmp_path / "handovers"
+    bp.write_text(yaml.safe_dump({"meta": {}, "epics": []}))
+    hd.mkdir()
+    legacy_fm = {
+        "id": "2025-01-01-legacy",
+        "date": "2025-01-01",
+        "created": "2025-01-01T00:00:00+00:00",
+        "tldr": "old work",
+        "task_ids": [],
+        "session_kind": "end-of-day",
+    }
+    write_task_file(hd / "2025-01-01-legacy.md", legacy_fm, "body")
+    data = yaml.safe_load(bp.read_text())
+    backfill_handover_status(data, bp)
+    fm, _ = read_handover(bp, "2025-01-01-legacy")
+    assert fm["status"] == "open"

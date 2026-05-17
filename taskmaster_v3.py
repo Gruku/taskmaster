@@ -1153,7 +1153,7 @@ def apply_supersession(backlog_path: Path, *, old_id: str, new_id: str) -> Path:
     fm["superseded_by"] = new_id
 
     if not fm.get("status_user_set"):
-        fm["status"] = "done"
+        fm["status"] = "superseded"
         fm["status_changed"] = datetime.now(timezone.utc).isoformat(timespec="microseconds")
         fm["status_reason"] = f"superseded by {new_id}"
 
@@ -1281,7 +1281,7 @@ def backfill_handover_status(backlog_data: dict[str, Any], backlog_path: Path) -
             )
         except OSError:
             mtime_iso = datetime.now(timezone.utc).isoformat(timespec="microseconds")
-        fm["status"] = "done"
+        fm["status"] = "open"
         fm["status_changed"] = mtime_iso
         fm["status_reason"] = "backfilled by handover-status migration"
         fm["status_user_set"] = False
