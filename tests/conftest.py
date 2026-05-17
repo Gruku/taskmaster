@@ -20,7 +20,10 @@ def tmp_taskmaster(tmp_path, monkeypatch):
     """Create a minimal .taskmaster/ layout and redirect path resolution.
 
     Provides:
-    - tmp_path/.taskmaster/backlog.yaml  (v3 schema, empty epics list)
+    - tmp_path/.taskmaster/backlog.yaml  (v3 schema with `meta.schema_version: 3`,
+      empty epics/phases lists, `meta.updated` stub required by _save())
+    - tmp_path/.taskmaster/PROGRESS.md   (stub with `## Changelog` header, required
+      by regenerate_progress_dashboard() which reads it before rewriting)
     - tmp_path/.taskmaster/tasks/
     - tmp_path/.taskmaster/handovers/
     - tmp_path/.taskmaster/issues/

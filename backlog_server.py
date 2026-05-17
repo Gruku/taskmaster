@@ -3671,6 +3671,11 @@ def backlog_update_task(
         tldr: One-sentence essence of the task (keyword style only).
         next_step: Concrete immediate action to take on this task (keyword style only).
     """
+    # Guard against ambiguous mixed-style calls — silent field drops are worse
+    # than an explicit error. Pick one calling convention per call.
+    if (tldr or next_step) and (field or value):
+        return "Error: use either field/value style or keyword style (tldr=/next_step=), not both"
+
     # Keyword style: tldr= / next_step= kwargs take precedence over field/value.
     if tldr or next_step:
         data = _load()
@@ -3776,7 +3781,11 @@ def backlog_update_task(
         else:
             return f"Error: `blast_radius_depth` must be 'shallow', 'deep', or '' to clear. Got: `{value}`"
     elif field == "tldr":
-        # Caller-supplied tldr clears the autogen flag
+        # Caller-supplied tldr clears the autogen flag. Empty value is rejected —
+        # tldr is required on every task; use the kwarg API or recreate the task
+        # to refresh from autogen.
+        if not value:
+            return "Error: tldr cannot be cleared — provide a non-empty value or use autogen"
         task["tldr"] = value
         task.pop("tldr_autogen", None)
     elif field == "next_step":

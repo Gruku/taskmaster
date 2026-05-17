@@ -16,6 +16,7 @@ from backlog_server import (
 )
 
 
+# tmp_taskmaster is taken for chaining; actual writes go through monkeypatched ROOT in conftest
 def _setup(tmp_taskmaster):
     """Create a minimal epic + phase so backlog_add_task can proceed."""
     backlog_add_epic(epic_id="test-epic", name="Test Epic")
@@ -98,3 +99,42 @@ def test_update_task_next_step(tmp_taskmaster):
     backlog_update_task("T-tldr-5", next_step="Now do Y.")
     t = _load_task(tmp_taskmaster, "T-tldr-5")
     assert "Now do Y" in t["next_step"]
+
+
+def test_update_task_rejects_mixed_styles(tmp_taskmaster):
+    """Mixing kwarg style with field/value style is an error, not a silent drop."""
+    _setup(tmp_taskmaster)
+    backlog_add_task(
+        epic="test-epic",
+        task_id="T-tldr-6",
+        title="Mixed",
+        tldr="Mixed tldr.",
+        phase="dev",
+    )
+    result = backlog_update_task(
+        "T-tldr-6", field="title", value="Renamed", tldr="New tldr"
+    )
+    assert "Error" in result
+    assert "not both" in result
+    # Verify nothing changed
+    t = _load_task(tmp_taskmaster, "T-tldr-6")
+    assert t["title"] == "Mixed"
+    assert t["tldr"] == "Mixed tldr."
+
+
+def test_update_task_rejects_empty_tldr(tmp_taskmaster):
+    """tldr cannot be cleared via the classic field/value API — it is required."""
+    _setup(tmp_taskmaster)
+    backlog_add_task(
+        epic="test-epic",
+        task_id="T-tldr-7",
+        title="Empty tldr test",
+        tldr="Original tldr.",
+        phase="dev",
+    )
+    result = backlog_update_task("T-tldr-7", field="tldr", value="")
+    assert "Error" in result
+    assert "tldr cannot be cleared" in result
+    # Verify the original tldr is intact
+    t = _load_task(tmp_taskmaster, "T-tldr-7")
+    assert t["tldr"] == "Original tldr."
