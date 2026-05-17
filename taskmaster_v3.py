@@ -169,7 +169,12 @@ _SECTION_HEADING_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
 
 
 def _split_body_by_heading(body: str) -> dict[str, str]:
-    """Split a markdown body into sections keyed by lowercased heading text."""
+    """Split a markdown body into sections keyed by slugified heading text.
+
+    Slugification: strip punctuation (apostrophes, commas, etc.), lowercase,
+    replace spaces with underscores.  This matches canonical section names like
+    ``where_id_start`` to heading text like ``## Where I'd start``.
+    """
     if not body:
         return {}
     matches = list(_SECTION_HEADING_RE.finditer(body))
@@ -179,7 +184,7 @@ def _split_body_by_heading(body: str) -> dict[str, str]:
     for i, m in enumerate(matches):
         start = m.end()
         end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
-        key = m.group(1).strip().lower().replace(" ", "_")
+        key = re.sub(r"[^\w\s]", "", m.group(1)).strip().lower().replace(" ", "_")
         out[key] = body[start:end].strip()
     return out
 
