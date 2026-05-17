@@ -2111,8 +2111,20 @@ def backlog_issue_list(
 
 
 @mcp.tool()
-def backlog_issue_get(issue_id: str) -> str:
-    """Read an issue's full content (frontmatter + body)."""
+def backlog_issue_get(
+    issue_id: str,
+    verbose: bool = False,
+    sections: list[str] | None = None,
+    expand_links: bool = False,
+) -> str:
+    """Read an issue's content.
+
+    By default returns a slim view (frontmatter fields only, no body) to
+    minimise token cost. Use verbose=True for the full body (repro steps,
+    investigation notes). Use sections to pull specific named body sections
+    (repro, investigation, notes). Use expand_links=True to expand
+    related_tasks to {id, tldr} pills.
+    """
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
@@ -2120,8 +2132,41 @@ def backlog_issue_get(issue_id: str) -> str:
         fm, body = _read_issue(bp, issue_id)
     except FileNotFoundError:
         return f"Issue not found: {issue_id}"
-    fm_lines = [f"  {k}: {v}" for k, v in fm.items()]
-    return "---\n" + "\n".join(fm_lines) + "\n---\n" + body
+
+    # ── sections-only mode ───────────────────────────────────────────────────
+    if sections:
+        try:
+            sec_data = _resolve_sections(fm, kind="issue", sections=sections, body=body)
+        except ValueError as exc:
+            return f"Error: {exc}"
+        lines = [f"## Issue: {issue_id}\n"]
+        for sec, content in sec_data.items():
+            lines.append(f"### {sec}\n{content}")
+        return "\n".join(lines)
+
+    # ── verbose mode ─────────────────────────────────────────────────────────
+    if verbose:
+        fm_lines = [f"  {k}: {v}" for k, v in fm.items()]
+        return "---\n" + "\n".join(fm_lines) + "\n---\n" + body
+
+    # ── slim mode (default) ──────────────────────────────────────────────────
+    slim = _slim_entity(fm, kind="issue")
+
+    if expand_links:
+        data = _load()
+        tldr_index = _build_tldr_index(data, project_root=bp.parent.parent if bp.exists() else None)
+        related_tasks = slim.get("related_tasks") or []
+        if related_tasks:
+            slim["related_tasks"] = _expand_link_ids(related_tasks, tldr_index)
+        fixed_in = slim.get("fixed_in_task")
+        if fixed_in:
+            pills = _expand_link_ids([fixed_in], tldr_index)
+            slim["fixed_in_task"] = pills[0] if pills else fixed_in
+
+    lines = [f"## Issue: {slim.pop('id', issue_id)}\n"]
+    for k, v in slim.items():
+        lines.append(f"**{k}:** {v}")
+    return "\n".join(lines)
 
 
 @mcp.tool()

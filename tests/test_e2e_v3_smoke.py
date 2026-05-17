@@ -239,10 +239,11 @@ def test_v3_issue_lifecycle(tmp_path, monkeypatch):
     assert "Issue created" in result
     iss_id = result.split(":")[1].strip().split()[0]  # "ISS-001"
 
-    # 2. Get — frontmatter + body
+    # 2. Get — slim view has title; verbose=True for YAML fences
     got = backlog_server.backlog_issue_get(iss_id)
     assert "login broken" in got
-    assert "---" in got
+    got_verbose = backlog_server.backlog_issue_get(iss_id, verbose=True)
+    assert "---" in got_verbose
 
     # 3. Update status to investigating
     up = backlog_server.backlog_issue_update(issue_id=iss_id, status="investigating")
