@@ -21,7 +21,7 @@ def _setup(tmp_path):
     return bp
 
 
-def test_supersession_flips_old_to_done(tmp_path):
+def test_supersession_flips_old_to_superseded(tmp_path):
     bp = _setup(tmp_path)
     old_id, _ = write_handover(bp, tldr="old", session_kind="milestone-complete")
     new_id, _ = write_handover(bp, tldr="new", session_kind="milestone-complete")
@@ -29,7 +29,7 @@ def test_supersession_flips_old_to_done(tmp_path):
     apply_supersession(bp, old_id=old_id, new_id=new_id)
 
     fm_old, _ = read_handover(bp, old_id)
-    assert fm_old["status"] == "done"
+    assert fm_old["status"] == "superseded"
     assert "superseded by" in fm_old["status_reason"].lower()
     assert fm_old["status_user_set"] is False
 
@@ -39,12 +39,12 @@ def test_supersession_respects_user_set_lock(tmp_path):
     old_id, _ = write_handover(bp, tldr="old", session_kind="milestone-complete")
     new_id, _ = write_handover(bp, tldr="new", session_kind="milestone-complete")
 
-    update_handover_status(bp, handover_id=old_id, status="in-progress", reason="still using")
+    update_handover_status(bp, handover_id=old_id, status="open", reason="still using")
 
     apply_supersession(bp, old_id=old_id, new_id=new_id)
 
     fm_old, _ = read_handover(bp, old_id)
-    assert fm_old["status"] == "in-progress"
+    assert fm_old["status"] == "open"
     assert fm_old["status_user_set"] is True
 
 
@@ -58,4 +58,4 @@ def test_supersession_idempotent_double_call(tmp_path):
     apply_supersession(bp, old_id=old_id, new_id=new_id)
 
     fm_old, _ = read_handover(bp, old_id)
-    assert fm_old["status"] == "done"
+    assert fm_old["status"] == "superseded"
