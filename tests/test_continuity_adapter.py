@@ -49,11 +49,11 @@ def test_continuity_item_filters_auto_stage_by_default(backlog_with_handover):
     assert any(i["title"] == "auto-stage stub" for i in items_all)
 
 
-def test_continuity_handover_routes_resume_when_recent_and_todo(backlog_with_handover):
+def test_continuity_handover_routes_resume_when_recent_and_open(backlog_with_handover):
     bp, _ = backlog_with_handover
     items = tm.continuity_items(bp)
     h = [i for i in items if i["type"] == "handover"][0]
-    # Fresh handover with default status (todo) → Resume rail.
+    # Fresh handover with default status (open) → Resume rail.
     assert h["action_class"] == "resume"
 
 

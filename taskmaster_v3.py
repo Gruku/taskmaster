@@ -954,10 +954,11 @@ RECAP_SCHEMA_VERSION = 1
 # Storage kinds live in handover frontmatter (`session_kind`); the viewer renders
 # them via this mapping for kind-pill colour, kind-filter chips, and right-rail header.
 HANDOVER_KIND_TO_VIEWER_KIND = {
-    "continuity":   "wrap",
-    "deep-context": "mid-task",
-    "milestone":    "checkpoint",
-    "auto-stage":   "standalone",
+    "continuity":    "wrap",
+    "deep-context":  "mid-task",
+    "milestone":     "checkpoint",
+    "auto-stage":    "standalone",
+    "task-complete": "wrap",  # task-complete is a lightweight wrap-up variant
 }
 
 VIEWER_HANDOVER_KINDS = ("mid-task", "checkpoint", "wrap", "standalone")
@@ -3977,10 +3978,10 @@ def _age_days(iso_ts: "str | datetime | date | None", now: datetime | None = Non
 
 def _handover_to_item(fm: dict[str, Any], now: datetime | None = None) -> dict[str, Any]:
     age = _age_days(fm.get("created"), now)
-    status = fm.get("status", "todo")
-    # Action class: fresh todo handover → resume; older or done → ambient (won't surface
-    # on action view but still available for time/entity views).
-    if status == "todo" and age <= 7:
+    status = fm.get("status", "open")
+    # Action class: fresh open handover → resume; older or closed/superseded → ambient
+    # (won't surface on action view but still available for time/entity views).
+    if status == "open" and age <= 7:
         action_class = "resume"
     else:
         action_class = "ambient"

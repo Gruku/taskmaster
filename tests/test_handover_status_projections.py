@@ -31,7 +31,7 @@ def _setup(tmp_path, monkeypatch):
 
 def test_list_sessions_projects_per_handover_status(tmp_path, monkeypatch):
     bp, _ = _setup(tmp_path, monkeypatch)
-    v3.write_handover(bp, tldr="todo work", session_kind="end-of-day", task_ids=["T-1"], when="2026-05-08")
+    v3.write_handover(bp, tldr="open work", session_kind="end-of-day", task_ids=["T-1"], when="2026-05-08")
     v3.write_handover(bp, tldr="auto bookkeeping", session_kind="auto-stage", task_ids=["T-1"], when="2026-05-08")
 
     sessions = v3.list_sessions()
@@ -39,10 +39,10 @@ def test_list_sessions_projects_per_handover_status(tmp_path, monkeypatch):
     handovers = sessions[0]["handovers"]
     assert len(handovers) == 2
     by_tldr = {h["tldr"]: h for h in handovers}
-    assert by_tldr["todo work"]["status"] == "todo"
-    assert by_tldr["auto bookkeeping"]["status"] == "done"
+    assert by_tldr["open work"]["status"] == "open"
+    assert by_tldr["auto bookkeeping"]["status"] == "closed"
     # viewer_kind is also projected
-    assert by_tldr["todo work"]["viewer_kind"] == "wrap"
+    assert by_tldr["open work"]["viewer_kind"] == "wrap"
     assert by_tldr["auto bookkeeping"]["viewer_kind"] == "standalone"
 
 
@@ -78,4 +78,4 @@ def test_get_task_related_projects_status(tmp_path, monkeypatch):
     assert result["handovers"], "expected at least one handover for T-1"
     h = result["handovers"][0]
     assert "status" in h
-    assert h["status"] == "todo"
+    assert h["status"] == "open"

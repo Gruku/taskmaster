@@ -1,7 +1,7 @@
 """Tests for the `status` filter parameter on backlog_handover_list.
 
-Handovers written with session_kind="end-of-day" default to status="todo".
-Handovers written with session_kind="auto-stage" default to status="done".
+Handovers written with session_kind="end-of-day" default to status="open".
+Handovers written with session_kind="auto-stage" default to status="closed".
 The filter must narrow the index by `status` field without reading every file.
 """
 import sys
@@ -33,34 +33,34 @@ def _resync(bp):
 
 def test_list_default_returns_all(tmp_path, monkeypatch):
     bp = _setup(tmp_path, monkeypatch)
-    write_handover(bp, tldr="todo work", session_kind="end-of-day")
+    write_handover(bp, tldr="open work", session_kind="end-of-day")
     write_handover(bp, tldr="auto bookkeeping", session_kind="auto-stage")
     _resync(bp)
 
     out = backlog_server.backlog_handover_list()
-    assert "todo work" in out
+    assert "open work" in out
     assert "auto bookkeeping" in out
 
 
-def test_list_filter_by_status_todo(tmp_path, monkeypatch):
+def test_list_filter_by_status_open(tmp_path, monkeypatch):
     bp = _setup(tmp_path, monkeypatch)
-    write_handover(bp, tldr="todo work", session_kind="end-of-day")
+    write_handover(bp, tldr="open work", session_kind="end-of-day")
     write_handover(bp, tldr="auto bookkeeping", session_kind="auto-stage")
     _resync(bp)
 
-    out = backlog_server.backlog_handover_list(status="todo")
-    assert "todo work" in out
+    out = backlog_server.backlog_handover_list(status="open")
+    assert "open work" in out
     assert "auto bookkeeping" not in out
 
 
-def test_list_filter_by_status_done(tmp_path, monkeypatch):
+def test_list_filter_by_status_closed(tmp_path, monkeypatch):
     bp = _setup(tmp_path, monkeypatch)
-    write_handover(bp, tldr="todo work", session_kind="end-of-day")
+    write_handover(bp, tldr="open work", session_kind="end-of-day")
     write_handover(bp, tldr="auto bookkeeping", session_kind="auto-stage")
     _resync(bp)
 
-    out = backlog_server.backlog_handover_list(status="done")
-    assert "todo work" not in out
+    out = backlog_server.backlog_handover_list(status="closed")
+    assert "open work" not in out
     assert "auto bookkeeping" in out
 
 

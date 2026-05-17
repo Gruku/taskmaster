@@ -7,17 +7,18 @@ def test_recap_schema_version_is_one():
     assert RECAP_SCHEMA_VERSION == 1
 
 
-def test_handover_kind_to_viewer_kind_maps_all_four():
+def test_handover_kind_to_viewer_kind_maps_all_kinds():
     from taskmaster_v3 import HANDOVER_KIND_TO_VIEWER_KIND, HANDOVER_KINDS
-    # 6→4 simplification: new canonical storage kinds map to viewer kinds.
-    assert HANDOVER_KIND_TO_VIEWER_KIND["continuity"]   == "wrap"
-    assert HANDOVER_KIND_TO_VIEWER_KIND["deep-context"] == "mid-task"
-    assert HANDOVER_KIND_TO_VIEWER_KIND["milestone"]    == "checkpoint"
-    assert HANDOVER_KIND_TO_VIEWER_KIND["auto-stage"]   == "standalone"
+    # Canonical storage kinds map to viewer kinds.
+    assert HANDOVER_KIND_TO_VIEWER_KIND["continuity"]    == "wrap"
+    assert HANDOVER_KIND_TO_VIEWER_KIND["deep-context"]  == "mid-task"
+    assert HANDOVER_KIND_TO_VIEWER_KIND["milestone"]     == "checkpoint"
+    assert HANDOVER_KIND_TO_VIEWER_KIND["auto-stage"]    == "standalone"
+    assert HANDOVER_KIND_TO_VIEWER_KIND["task-complete"] == "wrap"  # Plan B addition
     # Mapping covers every storage kind:
     assert set(HANDOVER_KIND_TO_VIEWER_KIND.keys()) == set(HANDOVER_KINDS)
     # All viewer kinds are valid:
-    assert set(HANDOVER_KIND_TO_VIEWER_KIND.values()) == {
+    assert set(HANDOVER_KIND_TO_VIEWER_KIND.values()) <= {
         "mid-task", "checkpoint", "wrap", "standalone"
     }
 

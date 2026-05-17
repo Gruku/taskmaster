@@ -11,8 +11,8 @@ def backlog(tmp_path):
     return bp
 
 
-def test_kinds_are_continuity_deep_context_milestone_auto_stage():
-    assert set(tm.HANDOVER_KINDS) == {"continuity", "deep-context", "milestone", "auto-stage"}
+def test_kinds_are_continuity_deep_context_milestone_auto_stage_task_complete():
+    assert set(tm.HANDOVER_KINDS) == {"continuity", "deep-context", "milestone", "auto-stage", "task-complete"}
 
 
 def test_legacy_kinds_translate_to_new_names_on_write(backlog):
