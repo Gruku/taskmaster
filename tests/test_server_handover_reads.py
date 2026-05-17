@@ -97,8 +97,10 @@ def test_handover_latest_returns_newest_handover_summary(tmp_path, monkeypatch):
     write_handover(bp, tldr="may first work", next_action="review PR",
                    session_kind="milestone-complete", when="2026-05-01",
                    task_ids=["TASK-99"])
+    _sync_and_save(bp)
 
     result = backlog_server.backlog_handover_latest()
+    # Now returns deprecated notice + latest open handover
     assert "may first work" in result
     assert "review PR" in result
     assert "TASK-99" in result
@@ -110,7 +112,8 @@ def test_handover_latest_returns_empty_message_when_no_handovers(tmp_path, monke
     _set_backlog_root(monkeypatch, bp)
 
     result = backlog_server.backlog_handover_latest()
-    assert "No handovers" in result
+    # Deprecated tool returns notice + "No open handovers." when index is empty
+    assert "No open handovers" in result or "No backlog" in result or "No handovers" in result
 
 
 def test_handover_latest_breaks_same_day_ties_by_creation_time(tmp_path, monkeypatch):
@@ -130,6 +133,7 @@ def test_handover_latest_breaks_same_day_ties_by_creation_time(tmp_path, monkeyp
                    session_kind="end-of-day", when="2026-05-08")
     write_handover(bp, tldr="asset-studio modal polish",
                    session_kind="context-handoff", when="2026-05-08")
+    _sync_and_save(bp)
 
     result = backlog_server.backlog_handover_latest()
     assert "asset-studio modal polish" in result

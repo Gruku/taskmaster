@@ -49,20 +49,22 @@ def test_continuity_item_filters_auto_stage_by_default(backlog_with_handover):
     assert any(i["title"] == "auto-stage stub" for i in items_all)
 
 
-def test_continuity_handover_routes_resume_when_recent_and_todo(backlog_with_handover):
+def test_continuity_handover_routes_resume_when_recent_and_open(backlog_with_handover):
     bp, _ = backlog_with_handover
     items = tm.continuity_items(bp)
     h = [i for i in items if i["type"] == "handover"][0]
-    # Fresh handover with default status (todo) → Resume rail.
+    # Fresh handover with default status (open) → Resume rail.
     assert h["action_class"] == "resume"
 
 
-def test_continuity_handover_in_progress_routes_resume_any_age(backlog_with_handover):
+def test_continuity_handover_open_routes_resume_any_age(backlog_with_handover):
+    # Post-Plan-B enum rename: "in-progress" folded into "open". Open handovers
+    # of any age route to resume (continuity polish 3.3.0 rule preserved).
     bp, hid = backlog_with_handover
-    tm.update_handover_status(bp, handover_id=hid, status="in-progress")
+    tm.update_handover_status(bp, handover_id=hid, status="open")
     items = tm.continuity_items(bp)
     h = [i for i in items if i["type"] == "handover"][0]
-    assert h["status"] == "in-progress"
+    assert h["status"] == "open"
     assert h["action_class"] == "resume"
 
 
@@ -84,7 +86,7 @@ def test_continuity_handover_promotes_top_done_to_resume(tmp_path):
             tldr=f"done handover {i}",
             session_kind="end-of-day",
         )
-        tm.update_handover_status(bp, handover_id=hid, status="done")
+        tm.update_handover_status(bp, handover_id=hid, status="closed")
         written.append(hid)
     items = tm.continuity_items(bp)
     han = [i for i in items if i["type"] == "handover"]

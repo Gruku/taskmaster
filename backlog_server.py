@@ -1886,7 +1886,7 @@ def backlog_handover_list(
             (e.g. "end-of-day", "context-handoff", "milestone-complete").
         since: ISO date string (YYYY-MM-DD). If set, only entries whose
             date prefix is >= since. Raises ValueError for invalid formats.
-        status: One of todo, in-progress, done, or "all" (default). Filters
+        status: One of open, closed, superseded, or "all" (default). Filters
             against the index entry — does not read every file.
         limit: Maximum number of entries to return after filtering (default 10).
         verbose: If True, include additional index fields (next_action, task_ids,
@@ -1934,7 +1934,9 @@ def backlog_handover_list(
         tag = f" [{kind}]" if kind else ""
         when = e.get("created") or e.get("date") or ""
         when_tag = f" ({when})" if when else ""
-        lines.append(f"- {e['id']}{when_tag}{tag} — {e.get('tldr', '')}")
+        flag = e.get("flag_reason", "")
+        flag_tag = f" ▸ FLAGGED: {flag}" if flag else ""
+        lines.append(f"- {e['id']}{when_tag}{tag} — {e.get('tldr', '')}{flag_tag}")
         if verbose:
             if e.get("next_action"):
                 lines.append(f"  next: {e['next_action']}")
@@ -2022,28 +2024,42 @@ def backlog_handover_get(
 
 @mcp.tool()
 def backlog_handover_latest() -> str:
-    """Return the latest handover's frontmatter (lightweight).
+    """[DEPRECATED] Alias for backlog_handover_list(status="open", limit=1, sort="created_desc").
 
-    Use this in start-session to surface 'where I left off' without loading the
-    full body. Body fetch is on-demand via `backlog_handover_get`.
+    Use `backlog_handover_list(status="open")` instead — it returns all in-flight
+    handover tracks, not just the newest one. This alias will be removed in the
+    next major release.
     """
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
     _ensure_handover_status_backfilled()
-    hid = _latest_handover_id(bp)
-    if not hid:
-        return "No handovers yet."
-    fm, _ = _read_handover(bp, hid)
-    when_line = fm.get("created") or fm.get("date") or ""
+    data = _load()
+    entries = list(data.get("handovers") or [])
+    open_entries = [e for e in entries if e.get("status") == "open"]
+    # Sort by created descending; fall back to id for stable ordering.
+    open_entries.sort(key=lambda e: (e.get("created") or e.get("id") or ""), reverse=True)
+
+    deprecation_notice = (
+        "[DEPRECATED] backlog_handover_latest is an alias — "
+        "use backlog_handover_list(status=\"open\") for all open tracks.\n\n"
+    )
+
+    if not open_entries:
+        return deprecation_notice + "No open handovers."
+
+    e = open_entries[0]
+    when_line = e.get("created") or e.get("date") or ""
     when_label = f" ({when_line})" if when_line else ""
     return (
-        f"Latest handover: {hid}{when_label}\n"
-        f"- TLDR: {fm.get('tldr', '')}\n"
-        f"- Next: {fm.get('next_action', '(none)')}\n"
-        f"- Tasks: {', '.join(fm.get('task_ids') or []) or '(none)'}\n"
-        f"- Kind: {fm.get('session_kind', 'end-of-day')}\n"
-        f"\nFetch body with `backlog_handover_get {hid}`."
+        deprecation_notice
+        + f"Latest open handover: {e['id']}{when_label}\n"
+        + f"- TLDR: {e.get('tldr', '')}\n"
+        + f"- Next: {e.get('next_action', '(none)')}\n"
+        + f"- Tasks: {', '.join(e.get('task_ids') or []) or '(none)'}\n"
+        + f"- Kind: {e.get('session_kind', 'end-of-day')}\n"
+        + f"\nFetch body with `backlog_handover_get {e['id']}`.\n"
+        + f"List all open tracks with `backlog_handover_list(status=\"open\")`."
     )
 
 
@@ -3710,15 +3726,7 @@ def backlog_pick_task(task_id: str, force: bool = False) -> str:
         branch = task.get("branch", "")
         worktree = task.get("worktree", "")
         worktree_instruction = _build_worktree_instruction(task_id, sub_repo, branch, worktree)
-        try:
-            from taskmaster_v3 import mark_task_handovers_resumed as _mark_resumed
-            flipped = _mark_resumed(_backlog_path(), task_id)
-            if flipped:
-                data2 = _load()
-                _sync_handover_index(data2, _backlog_path())
-                _save(data2)
-        except Exception:
-            pass
+        # Open handovers stay open automatically under the new model — no resumed transition needed.
         return f"Already in progress: `{task_id}` — {task['title']}\n\n" + _task_context(data, task, epic) + worktree_instruction
 
     if status not in ("todo", "in-review"):
@@ -3738,16 +3746,7 @@ def backlog_pick_task(task_id: str, force: bool = False) -> str:
     worktree = task.get("worktree", "")
     worktree_instruction = _build_worktree_instruction(task_id, sub_repo, branch, worktree)
 
-    try:
-        from taskmaster_v3 import mark_task_handovers_resumed as _mark_resumed
-        flipped = _mark_resumed(_backlog_path(), task_id)
-        if flipped:
-            data2 = _load()
-            _sync_handover_index(data2, _backlog_path())
-            _save(data2)
-    except Exception:
-        pass
-
+    # Open handovers stay open automatically under the new model — no resumed transition needed.
     return f"Picked `{task_id}` — {task['title']} (locked to this session)\n\n" + _task_context(data, task, epic) + worktree_instruction
 
 
@@ -3913,8 +3912,20 @@ def backlog_complete_task(
 
     if target_status == "done":
         try:
-            from taskmaster_v3 import mark_task_handovers_complete as _mark_complete
-            flipped_handovers = _mark_complete(_backlog_path(), task_id)
+            from taskmaster_v3 import smart_auto_close_handovers as _smart_close
+            # Collect done/archived task IDs from backlog for smart-close evaluation.
+            _all_terminal: set[str] = set()
+            for _epic in data.get("epics", []):
+                for _t in _epic.get("tasks", []):
+                    if _t.get("status") in ("done", "archived"):
+                        _all_terminal.add(_t["id"])
+            _all_terminal.add(task_id)  # the one we just transitioned
+            smart_close_result = _smart_close(
+                _backlog_path(),
+                triggering_task_id=task_id,
+                done_or_archived_ids=_all_terminal,
+            )
+            flipped_handovers = smart_close_result["closed"] + smart_close_result["flagged"]
         except Exception:
             flipped_handovers = []
         if flipped_handovers:
@@ -4043,6 +4054,29 @@ def backlog_archive_task(task_id: str, reason: str = "done") -> str:
     task["archived"] = _now()
     task.pop("locked_by", None)
     _mutate_and_save(data)
+
+    # Smart-close open handovers that reference this task.
+    try:
+        from taskmaster_v3 import smart_auto_close_handovers as _smart_close
+        _all_terminal: set[str] = set()
+        for _epic in data.get("epics", []):
+            for _t in _epic.get("tasks", []):
+                if _t.get("status") in ("done", "archived"):
+                    _all_terminal.add(_t["id"])
+        _all_terminal.add(task_id)  # the one we just archived
+        smart_close_result = _smart_close(
+            _backlog_path(),
+            triggering_task_id=task_id,
+            done_or_archived_ids=_all_terminal,
+        )
+        flipped_handovers = smart_close_result["closed"] + smart_close_result["flagged"]
+        if flipped_handovers:
+            data2 = _load()
+            _sync_handover_index(data2, _backlog_path())
+            _save(data2)
+    except Exception:
+        pass
+
     return f"Archived `{task_id}` — {task['title']} (reason: {reason})"
 
 

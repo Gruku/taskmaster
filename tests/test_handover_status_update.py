@@ -25,11 +25,11 @@ def test_update_status_sets_all_four_fields(tmp_path, monkeypatch):
     bp = _make_backlog(tmp_path, monkeypatch)
     hid, _ = write_handover(bp, tldr="needs attention", session_kind="end-of-day")
 
-    result = backlog_server.backlog_handover_update_status(hid, "in-progress", reason="working on it")
-    assert "in-progress" in result
+    result = backlog_server.backlog_handover_update_status(hid, "closed", reason="working on it")
+    assert "closed" in result
 
     fm, _ = read_handover(bp, hid)
-    assert fm["status"] == "in-progress"
+    assert fm["status"] == "closed"
     assert fm["status_user_set"] is True
     assert fm["status_reason"] == "working on it"
     assert fm["status_changed"]  # ISO timestamp
@@ -44,16 +44,16 @@ def test_update_status_rejects_invalid_enum(tmp_path, monkeypatch):
 
 def test_update_status_unknown_id_returns_error(tmp_path, monkeypatch):
     _make_backlog(tmp_path, monkeypatch)
-    result = backlog_server.backlog_handover_update_status("2099-01-01-nope", "done")
+    result = backlog_server.backlog_handover_update_status("2099-01-01-nope", "closed")
     assert "not found" in result.lower()
 
 
 def test_update_status_reason_is_optional(tmp_path, monkeypatch):
     bp = _make_backlog(tmp_path, monkeypatch)
     hid, _ = write_handover(bp, tldr="t", session_kind="end-of-day")
-    backlog_server.backlog_handover_update_status(hid, "done")
+    backlog_server.backlog_handover_update_status(hid, "closed")
     fm, _ = read_handover(bp, hid)
-    assert fm["status"] == "done"
+    assert fm["status"] == "closed"
     assert "status_reason" not in fm
 
 
@@ -62,8 +62,8 @@ def test_update_status_empty_reason_preserves_previous(tmp_path, monkeypatch):
     status_reason intact (the if-reason guard is intentional, not a bug)."""
     bp = _make_backlog(tmp_path, monkeypatch)
     hid, _ = write_handover(bp, tldr="t", session_kind="end-of-day")
-    backlog_server.backlog_handover_update_status(hid, "in-progress", reason="initial")
-    backlog_server.backlog_handover_update_status(hid, "done")  # no reason passed
+    backlog_server.backlog_handover_update_status(hid, "open", reason="initial")
+    backlog_server.backlog_handover_update_status(hid, "closed")  # no reason passed
     fm, _ = read_handover(bp, hid)
-    assert fm["status"] == "done"
+    assert fm["status"] == "closed"
     assert fm["status_reason"] == "initial"  # preserved, not cleared

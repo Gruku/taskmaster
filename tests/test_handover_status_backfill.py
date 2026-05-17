@@ -41,7 +41,7 @@ def test_backfill_sets_done_on_legacy_handovers(tmp_path):
     assert sorted(flipped) == ["2025-01-01-legacy-a", "2025-01-02-legacy-b"]
     for hid in flipped:
         fm, _ = read_handover(bp, hid)
-        assert fm["status"] == "done"
+        assert fm["status"] == "open"
         assert fm["status_user_set"] is False
         assert "backfilled" in fm["status_reason"].lower()
         assert fm.get("status_changed")
@@ -65,14 +65,14 @@ def test_backfill_leaves_already_statused_handovers_alone(tmp_path):
         "id": "2026-05-09-modern", "date": "2026-05-09",
         "created": "2026-05-09T00:00:00+00:00",
         "tldr": "modern", "task_ids": [], "session_kind": "end-of-day",
-        "status": "todo", "status_changed": "2026-05-09T00:00:00+00:00",
+        "status": "open", "status_changed": "2026-05-09T00:00:00+00:00",
         "status_user_set": False,
     }
     write_task_file(hd / "2026-05-09-modern.md", fm, "")
     data = yaml.safe_load(bp.read_text())
     backfill_handover_status(data, bp)
     fm_after, _ = read_handover(bp, "2026-05-09-modern")
-    assert fm_after["status"] == "todo"
+    assert fm_after["status"] == "open"
 
 
 def test_backfill_stamps_marker_even_on_empty_backlog(tmp_path):

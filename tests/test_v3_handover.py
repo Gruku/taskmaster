@@ -21,8 +21,8 @@ from taskmaster_v3 import (
 
 
 def test_handover_kinds_match_spec():
-    # 6→4 simplification: legacy names mapped on write, new canonical names only.
-    assert set(HANDOVER_KINDS) == {"continuity", "deep-context", "milestone", "auto-stage"}
+    # Plan B adds "task-complete" as a 5th canonical kind eligible for smart auto-close.
+    assert set(HANDOVER_KINDS) == {"continuity", "deep-context", "milestone", "auto-stage", "task-complete"}
     # Legacy names are not canonical storage kinds.
     assert "end-of-day" not in HANDOVER_KINDS
     assert "context-handoff" not in HANDOVER_KINDS

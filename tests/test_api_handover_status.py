@@ -86,15 +86,15 @@ def test_post_handover_status_updates_frontmatter(server_with_root):
 
     hid, _ = write_handover(bp, tldr="needs override", session_kind="end-of-day")
 
-    code, body = _post_status(base, hid, {"status": "done", "reason": "manual smoke"})
+    code, body = _post_status(base, hid, {"status": "closed", "reason": "manual smoke"})
 
     assert code == 200, f"expected 200 got {code}: {body}"
     assert body.get("ok") is True
-    assert body.get("status") == "done"
+    assert body.get("status") == "closed"
     assert body.get("id") == hid
 
     fm, _ = read_handover(bp, hid)
-    assert fm["status"] == "done"
+    assert fm["status"] == "closed"
     assert fm["status_user_set"] is True
     assert fm["status_reason"] == "manual smoke"
 
@@ -113,7 +113,7 @@ def test_post_handover_status_invalid_enum(server_with_root):
 def test_post_handover_status_unknown_id(server_with_root):
     base, _, _ = server_with_root
 
-    code, body = _post_status(base, "2099-01-01-nope", {"status": "done"})
+    code, body = _post_status(base, "2099-01-01-nope", {"status": "closed"})
 
     assert code == 404, f"expected 404 got {code}: {body}"
     assert body.get("ok") is False

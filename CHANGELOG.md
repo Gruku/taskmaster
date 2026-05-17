@@ -8,6 +8,37 @@ indicate schema breaks or removed surfaces.
 
 ---
 
+## 3.4.0 — Parallel Handovers (Plan B) (2026-05-17)
+
+### Breaking changes
+
+- `HANDOVER_STATUSES` enum renamed: `"todo"` → `"open"`, `"in-progress"` → `"open"`, `"done"` → `"closed"` or `"superseded"` depending on context. Run `scripts/migrate_handover_statuses.py` against any existing project before upgrading.
+
+### New features
+
+- **Smart auto-close rule:** When a task transitions to `done` or `archived`, open handovers that reference it are auto-closed only when all three criteria are met: (1) all `task_ids` are done/archived, (2) `next_action` is empty or references only done/archived tasks, (3) `session_kind` is `"task-complete"` or absent. Otherwise the handover stays open and is flagged with a human-readable `flag_reason`.
+- **`flag_reason` field:** Flagged-but-open handovers carry a `flag_reason` string in frontmatter, surfaced in `backlog_handover_list` output with a `▸ FLAGGED:` prefix so start-session glance can show them inline.
+- **`smart_auto_close_handovers()`:** New data-layer function in `taskmaster_v3.py`. Called automatically by `backlog_complete_task` and `backlog_archive_task`.
+- **`flag_open_reason()`:** New data-layer helper. Returns the `flag_reason` string for a flagged open handover, or `None` if absent or already closed.
+- **`migrate_handover_statuses()`:** New data-layer migration function. One-shot, idempotent. CLI at `scripts/migrate_handover_statuses.py`.
+- **`task-complete` session kind:** New canonical handover kind eligible for smart auto-close.
+
+### Deprecations
+
+- `backlog_handover_latest()` is deprecated. It now emits a deprecation notice in its output and delegates to `backlog_handover_list(status="open", limit=1)`. Use `backlog_handover_list(status="open")` for all in-flight tracks. Will be removed in the next major release.
+
+### Internal
+
+- `_HANDOVER_INDEX_FIELDS` now includes `"flag_reason"` so flagged entries propagate into `backlog.yaml` index.
+- `apply_supersession()` sets `status = "superseded"` (was `"done"`).
+- `backfill_handover_status()` stamps `status = "open"` (was `"done"`) on legacy handovers lacking the field.
+- `_default_handover_status()` returns `"closed"` for `auto-stage` kind (was `"done"`), `"open"` for all others (was `"todo"`).
+- `_handover_to_item()` action_class now uses `status == "open"` (was `"todo"`) for resume routing. **Merge note:** keeps master's looser rule (any-age open → resume) and the `RESUME_RECENT_DONE_CAP` promotion ladder from 3.3.0 polish; does not adopt the `age <= 7` constraint Plan B had on the feature branch.
+- `mark_task_handovers_complete()` removed — replaced by `smart_auto_close_handovers()`.
+- `mark_task_handovers_resumed()` removed — open handovers stay open under the new model; no transition needed on task pick.
+
+---
+
 ## 3.3.0 — Continuity dashboard polish + Plan A reconcile (2026-05-17)
 
 Reconciles `plugin.json` (was stale at 3.1.1) with the 3.2.0 work already

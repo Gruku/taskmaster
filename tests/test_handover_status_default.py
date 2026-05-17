@@ -27,28 +27,28 @@ def _make_backlog(tmp_path: Path) -> Path:
 
 
 def test_handover_statuses_enum_is_three_states():
-    assert HANDOVER_STATUSES == ("todo", "in-progress", "done")
+    assert HANDOVER_STATUSES == ("open", "closed", "superseded")
 
 
 def test_status_in_index_fields():
     assert "status" in _HANDOVER_INDEX_FIELDS
 
 
-def test_auto_stage_handover_defaults_to_done(tmp_path):
+def test_auto_stage_handover_defaults_to_closed(tmp_path):
     bp = _make_backlog(tmp_path)
     hid, _ = write_handover(bp, tldr="auto-stage checkpoint", session_kind="auto-stage")
     fm, _ = read_handover(bp, hid)
-    assert fm["status"] == "done"
+    assert fm["status"] == "closed"
     assert fm["status_user_set"] is False
     assert fm.get("status_changed")  # ISO timestamp present
 
 
 @pytest.mark.parametrize("kind", [k for k in HANDOVER_KINDS if k != "auto-stage"])
-def test_other_kinds_default_to_todo(tmp_path, kind):
+def test_other_kinds_default_to_open(tmp_path, kind):
     bp = _make_backlog(tmp_path)
     hid, _ = write_handover(bp, tldr=f"a {kind} handover", session_kind=kind)
     fm, _ = read_handover(bp, hid)
-    assert fm["status"] == "todo"
+    assert fm["status"] == "open"
     assert fm["status_user_set"] is False
     assert fm.get("status_changed")
 
@@ -59,4 +59,4 @@ def test_index_entry_includes_status_after_sync(tmp_path):
     data = {"handovers": []}
     sync_handover_index(data, bp)
     assert len(data["handovers"]) == 1
-    assert data["handovers"][0]["status"] == "todo"
+    assert data["handovers"][0]["status"] == "open"

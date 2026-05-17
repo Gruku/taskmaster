@@ -918,7 +918,8 @@ def diff_against_snapshot(
 
 # Canonical session_kind values (free-form string in storage; these are
 # the well-known ones that may get special treatment elsewhere).
-HANDOVER_KINDS = ("continuity", "deep-context", "milestone", "auto-stage")
+# "task-complete" is eligible for smart auto-close (all task_ids done + no live next_action).
+HANDOVER_KINDS = ("continuity", "deep-context", "milestone", "auto-stage", "task-complete")
 
 _LEGACY_KIND_MAP = {
     "end-of-day": "continuity",
@@ -933,13 +934,13 @@ def _normalize_session_kind(kind: str) -> str:
     return _LEGACY_KIND_MAP.get(kind, kind)
 
 # Three-state lifecycle for handovers — see specs/2026-05-09-handover-status-design.md
-HANDOVER_STATUSES = ("todo", "in-progress", "done")
+HANDOVER_STATUSES = ("open", "closed", "superseded")
 
 
 def _default_handover_status(session_kind: str) -> str:
-    """auto-stage handovers are bookkeeping checkpoints — born done. All other
-    kinds default to todo so the user explicitly clears their backlog."""
-    return "done" if session_kind == "auto-stage" else "todo"
+    """auto-stage handovers are bookkeeping checkpoints — born closed.
+    All other kinds default to open so they surface in start-session glance."""
+    return "closed" if session_kind == "auto-stage" else "open"
 
 
 # Index cap — `handovers:` array in backlog.yaml is bounded.
@@ -953,10 +954,11 @@ RECAP_SCHEMA_VERSION = 1
 # Storage kinds live in handover frontmatter (`session_kind`); the viewer renders
 # them via this mapping for kind-pill colour, kind-filter chips, and right-rail header.
 HANDOVER_KIND_TO_VIEWER_KIND = {
-    "continuity":   "wrap",
-    "deep-context": "mid-task",
-    "milestone":    "checkpoint",
-    "auto-stage":   "standalone",
+    "continuity":    "wrap",
+    "deep-context":  "mid-task",
+    "milestone":     "checkpoint",
+    "auto-stage":    "standalone",
+    "task-complete": "wrap",  # task-complete is a lightweight wrap-up variant
 }
 
 VIEWER_HANDOVER_KINDS = ("mid-task", "checkpoint", "wrap", "standalone")
@@ -1153,7 +1155,7 @@ def apply_supersession(backlog_path: Path, *, old_id: str, new_id: str) -> Path:
     fm["superseded_by"] = new_id
 
     if not fm.get("status_user_set"):
-        fm["status"] = "done"
+        fm["status"] = "superseded"
         fm["status_changed"] = datetime.now(timezone.utc).isoformat(timespec="microseconds")
         fm["status_reason"] = f"superseded by {new_id}"
 
@@ -1222,62 +1224,116 @@ def update_handover_status(
     return fm, target
 
 
-def mark_task_handovers_complete(backlog_path: Path, task_id: str) -> list[str]:
-    """Flip every todo handover whose primary task (`task_ids[0]`) is `task_id`
-    to `done`. Skips user-set, already-done, and handovers where task_id is
-    only a secondary reference. Returns the list of handover ids modified."""
-    if not task_id:
-        return []
-    flipped: list[str] = []
+
+
+# ── Parallel-handover smart-close ─────────────────────────────────────────────
+
+_TASK_ID_RE = re.compile(r"\bT-\d+\b")
+
+# session_kinds that are eligible for auto-close when all criteria met.
+_AUTO_CLOSE_ELIGIBLE_KINDS: frozenset[str] = frozenset({"task-complete", ""})
+
+
+def _next_action_references_live_tasks(
+    next_action: str, done_or_archived_ids: set[str]
+) -> bool:
+    """Return True if `next_action` mentions any task ID not in
+    `done_or_archived_ids`. Empty string → no live references → False."""
+    if not next_action or not next_action.strip():
+        return False
+    mentioned = set(_TASK_ID_RE.findall(next_action))
+    live = mentioned - done_or_archived_ids
+    return bool(live)
+
+
+def smart_auto_close_handovers(
+    backlog_path: Path,
+    *,
+    triggering_task_id: str,
+    done_or_archived_ids: set[str],
+) -> dict[str, list[str]]:
+    """Apply the smart auto-close rule to open handovers that include
+    `triggering_task_id` in their task_ids.
+
+    Auto-close only when ALL true:
+      1. All task_ids in the handover are in done_or_archived_ids.
+      2. next_action is empty OR mentions only done/archived task IDs.
+      3. session_kind is "task-complete" or null/absent.
+
+    Otherwise: leave open and flag with a reason.
+
+    Returns:
+        {"closed": [...list of ids auto-closed...],
+         "flagged": [...list of ids kept open with flag_reason stamped...]}
+    """
+    closed: list[str] = []
+    flagged: list[str] = []
+
     for hid in list_handover_ids(backlog_path):
         try:
             fm, body = read_handover(backlog_path, hid)
         except (OSError, ValueError):
             continue
-        ids = fm.get("task_ids") or []
-        if not ids or ids[0] != task_id:
+
+        # Only consider open handovers that include the triggering task.
+        if fm.get("status") != "open":
+            continue
+        task_ids: list[str] = fm.get("task_ids") or []
+        if triggering_task_id not in task_ids:
             continue
         if fm.get("status_user_set"):
             continue
-        if fm.get("status") == "done":
-            continue
-        fm["status"] = "done"
-        fm["status_changed"] = datetime.now(timezone.utc).isoformat(timespec="microseconds")
-        fm["status_reason"] = f"task {task_id} completed"
-        write_task_file(handover_path(backlog_path, hid), fm, body)
-        flipped.append(hid)
-    return flipped
+
+        # Evaluate the three criteria.
+        all_tasks_terminal = all(t in done_or_archived_ids for t in task_ids)
+        next_action: str = (fm.get("next_action") or "").strip()
+        next_action_live = _next_action_references_live_tasks(next_action, done_or_archived_ids)
+        session_kind: str = fm.get("session_kind") or ""
+        kind_eligible = session_kind in _AUTO_CLOSE_ELIGIBLE_KINDS
+
+        if all_tasks_terminal and not next_action_live and kind_eligible:
+            # All criteria met — auto-close.
+            fm["status"] = "closed"
+            fm["status_changed"] = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+            fm["status_reason"] = f"auto-closed: all task_ids done, triggering task {triggering_task_id}"
+            fm.pop("flag_reason", None)
+            write_task_file(handover_path(backlog_path, hid), fm, body)
+            closed.append(hid)
+        else:
+            # Build a human-readable flag reason for start-session surfacing.
+            reasons: list[str] = []
+            if not all_tasks_terminal:
+                live_ids = [t for t in task_ids if t not in done_or_archived_ids]
+                reasons.append(f"task_ids still open: {', '.join(live_ids)}")
+            if next_action_live:
+                live_refs = set(_TASK_ID_RE.findall(next_action)) - done_or_archived_ids
+                reasons.append(f"next_action references {', '.join(sorted(live_refs))}")
+            if not kind_eligible:
+                reasons.append(f"session_kind={session_kind!r} preserved for context")
+            flag_reason = "; ".join(reasons)
+            fm["flag_reason"] = flag_reason
+            write_task_file(handover_path(backlog_path, hid), fm, body)
+            flagged.append(hid)
+
+    return {"closed": closed, "flagged": flagged}
 
 
-def mark_task_handovers_resumed(backlog_path: Path, task_id: str) -> list[str]:
-    """Flip todo handovers whose primary task is `task_id` to `in-progress`.
-    Conservative: only the latest todo handover for that task is touched, so
-    incidental views don't churn unrelated history. Skips user-set and any
-    already-non-todo entries. Returns the list of ids modified."""
-    if not task_id:
-        return []
-    for hid in list_handover_ids(backlog_path):  # newest-first
-        try:
-            fm, body = read_handover(backlog_path, hid)
-        except (OSError, ValueError):
-            continue
-        ids = fm.get("task_ids") or []
-        if not ids or ids[0] != task_id:
-            continue
-        if fm.get("status_user_set"):
-            return []
-        if fm.get("status") != "todo":
-            return []  # latest is already in-progress or done — leave history alone
-        fm["status"] = "in-progress"
-        fm["status_changed"] = datetime.now(timezone.utc).isoformat(timespec="microseconds")
-        fm["status_reason"] = "resumed in session"
-        write_task_file(handover_path(backlog_path, hid), fm, body)
-        return [hid]
-    return []
+def flag_open_reason(backlog_path: Path, handover_id: str) -> str | None:
+    """Return the `flag_reason` string for an open handover, or None if absent.
+
+    Returns None for closed/superseded handovers — those are not flagged.
+    """
+    try:
+        fm, _ = read_handover(backlog_path, handover_id)
+    except (OSError, ValueError):
+        return None
+    if fm.get("status") != "open":
+        return None
+    return fm.get("flag_reason") or None
 
 
 def backfill_handover_status(backlog_data: dict[str, Any], backlog_path: Path) -> list[str]:
-    """One-time pass: stamp `status: done` on every handover lacking the field,
+    """One-time pass: stamp `status: open` on every handover lacking the field,
     plus archived handovers, then mark the backlog as backfilled.
 
     No-op if `handover_status_backfilled` is already truthy. Returns the list
@@ -1306,7 +1362,7 @@ def backfill_handover_status(backlog_data: dict[str, Any], backlog_path: Path) -
             )
         except OSError:
             mtime_iso = datetime.now(timezone.utc).isoformat(timespec="microseconds")
-        fm["status"] = "done"
+        fm["status"] = "open"
         fm["status_changed"] = mtime_iso
         fm["status_reason"] = "backfilled by handover-status migration"
         fm["status_user_set"] = False
@@ -1316,10 +1372,97 @@ def backfill_handover_status(backlog_data: dict[str, Any], backlog_path: Path) -
     return flipped
 
 
+_LEGACY_TO_OPEN = frozenset({"todo", "in-progress"})
+
+# Marker key in backlog.yaml root so migration is idempotent.
+_MIGRATION_V2_KEY = "handover_status_v2_migrated"
+
+
+def migrate_handover_statuses(
+    backlog_data: dict[str, Any],
+    backlog_path: Path,
+    *,
+    done_or_archived_ids: set[str],
+) -> dict[str, list[str]]:
+    """One-shot migration: translate old three-state enum to new three-state enum.
+
+    Mapping:
+      - "todo" | "in-progress"  →  "open"
+      - "done" + superseded_by  →  "superseded"
+      - "done" + smart-close eligible  →  "closed"
+      - "done" + NOT eligible  →  "open"  (context still relevant)
+
+    Idempotent: no-op if `_MIGRATION_V2_KEY` is truthy in backlog_data.
+    Returns {"migrated": [list of ids changed]}.
+    """
+    if backlog_data.get(_MIGRATION_V2_KEY):
+        return {"migrated": []}
+
+    migrated: list[str] = []
+    handovers_root = handover_dir(backlog_path)
+    archive_root = handovers_root / "_archive"
+    candidates: list[Path] = []
+    if handovers_root.exists():
+        candidates.extend(p for p in handovers_root.glob("*.md"))
+    if archive_root.exists():
+        candidates.extend(archive_root.rglob("*.md"))
+
+    for path in candidates:
+        try:
+            fm, body = read_task_file(path)
+        except (OSError, ValueError):
+            continue
+
+        old_status = fm.get("status", "")
+        # Skip handovers already on the new enum.
+        if old_status in HANDOVER_STATUSES:
+            continue
+
+        now = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+
+        if old_status in _LEGACY_TO_OPEN:
+            fm["status"] = "open"
+            fm["status_changed"] = now
+            fm["status_reason"] = "migrated from legacy enum"
+        elif old_status == "done":
+            if fm.get("superseded_by"):
+                fm["status"] = "superseded"
+                fm["status_changed"] = now
+                fm["status_reason"] = "migrated: had superseded_by"
+            else:
+                # Check smart-close eligibility inline (no file writes during check).
+                task_ids: list[str] = fm.get("task_ids") or []
+                next_action: str = (fm.get("next_action") or "").strip()
+                session_kind: str = fm.get("session_kind") or ""
+                all_terminal = all(t in done_or_archived_ids for t in task_ids)
+                next_action_live = _next_action_references_live_tasks(
+                    next_action, done_or_archived_ids
+                )
+                kind_eligible = session_kind in _AUTO_CLOSE_ELIGIBLE_KINDS
+                if all_terminal and not next_action_live and kind_eligible:
+                    fm["status"] = "closed"
+                    fm["status_reason"] = "migrated: smart-close eligible"
+                else:
+                    fm["status"] = "open"
+                    fm["status_reason"] = "migrated: context still relevant"
+                fm["status_changed"] = now
+        else:
+            # Unknown status — default to open and flag.
+            fm["status"] = "open"
+            fm["status_changed"] = now
+            fm["status_reason"] = f"migrated from unknown status {old_status!r}"
+
+        write_task_file(path, fm, body)
+        migrated.append(path.stem)
+
+    backlog_data[_MIGRATION_V2_KEY] = True
+    return {"migrated": migrated}
+
+
 # Fields kept in the backlog.yaml `handovers:` index entry.
 _HANDOVER_INDEX_FIELDS = (
     "id", "date", "created", "tldr", "next_action",
-    "task_ids", "session_kind", "status",
+    "task_ids", "session_kind", "status", "flag_reason",
 )
 
 
@@ -3404,7 +3547,7 @@ def list_sessions() -> list[dict]:
             "handovers": [
                 {
                     "id": h["id"],
-                    "status": h.get("status", "todo"),
+                    "status": h.get("status", "open"),
                     "viewer_kind": HANDOVER_KIND_TO_VIEWER_KIND.get(h.get("session_kind"), "standalone"),
                     "tldr": h.get("tldr", ""),
                 }
@@ -3838,11 +3981,13 @@ RESUME_RECENT_DONE_CAP = 5
 
 def _handover_to_item(fm: dict[str, Any], now: datetime | None = None) -> dict[str, Any]:
     age = _age_days(fm.get("created"), now)
-    status = fm.get("status", "todo")
-    # Open handovers (todo / in-progress) always surface as resume. Done handovers
-    # default to ambient; the collection step promotes the most-recent N done ones
-    # to resume so the rail still shows a usable recent history.
-    if status in ("todo", "in-progress"):
+    status = fm.get("status", "open")
+    # Open handovers (any age) surface as resume; closed / superseded default to
+    # ambient. The collection step promotes the most-recent N closed handovers
+    # to resume via RESUME_RECENT_DONE_CAP so the rail still shows a usable
+    # recent history. (Plan B's age<=7 cutoff was dropped during the master
+    # merge in favor of the looser 3.3.0 continuity polish rule.)
+    if status == "open":
         action_class = "resume"
     else:
         action_class = "ambient"
@@ -3980,7 +4125,7 @@ def continuity_items(
     handover_items.sort(key=lambda it: it.get("timestamp") or "", reverse=True)
     done_promoted = 0
     for it in handover_items:
-        if it.get("status") == "done" and done_promoted < RESUME_RECENT_DONE_CAP:
+        if it.get("status") == "closed" and done_promoted < RESUME_RECENT_DONE_CAP:
             it["action_class"] = "resume"
             done_promoted += 1
     items.extend(handover_items)
