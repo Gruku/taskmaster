@@ -77,7 +77,10 @@ def migrate(root: Path, *, drop_legacy: bool = True) -> dict:
             files = sorted(sub_dir.glob(f"{prefix}-*.md"))
         for fp in files:
             eid = fp.stem
-            entity = read_entity_anywhere(backlog_path, eid)
+            # Read with fallback=False so the migration sees the raw frontmatter
+            # and `_migrate_one` actually mutates it. With fallback=True the
+            # synthesized `links` would make _migrate_one a no-op.
+            entity = read_entity_anywhere(backlog_path, eid, fallback=False)
             if entity is None:
                 continue
             changed, _ = _migrate_one(entity, kind=kind, drop_legacy=drop_legacy)

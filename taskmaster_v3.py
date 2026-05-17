@@ -4329,16 +4329,22 @@ _ENTITY_PATH_HELPERS: dict[str, Any] = {
 }
 
 
-def read_entity_anywhere(backlog_path: Path, entity_id: str) -> dict | None:
+def read_entity_anywhere(
+    backlog_path: Path,
+    entity_id: str,
+    *,
+    fallback: bool = True,
+) -> dict | None:
     """Read any entity (task/issue/lesson/handover/idea) by ID. Returns its
     in-memory dict (frontmatter for non-task entities; merged dict for tasks).
 
     Body content for non-task entities is stored under BODY_KEY for round-trip.
     Returns None when the entity is unknown.
 
-    Read-fallback: synthesizes a virtual `links` array from legacy fields when
-    no `links` is present yet (unmigrated projects). The fallback is read-only
-    — does not write back.
+    Read-fallback: when fallback=True (default), synthesizes a virtual `links`
+    array from legacy fields when no `links` is present (unmigrated projects).
+    The fallback is read-only — does not write back. Pass fallback=False to
+    get the raw entity (used by the migration script).
     """
     kind = entity_kind_of(entity_id)
     if kind is None:
@@ -4348,7 +4354,8 @@ def read_entity_anywhere(backlog_path: Path, entity_id: str) -> dict | None:
         for epic in data.get("epics", []):
             for task in epic.get("tasks", []):
                 if task.get("id") == entity_id:
-                    _fallback_links_if_absent(task, "task")
+                    if fallback:
+                        _fallback_links_if_absent(task, "task")
                     return task
         return None
     reader = {
@@ -4364,7 +4371,8 @@ def read_entity_anywhere(backlog_path: Path, entity_id: str) -> dict | None:
     fm = dict(fm)
     if body:
         fm[BODY_KEY] = body
-    _fallback_links_if_absent(fm, kind)
+    if fallback:
+        _fallback_links_if_absent(fm, kind)
     return fm
 
 
