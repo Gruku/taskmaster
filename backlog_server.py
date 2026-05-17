@@ -2536,6 +2536,53 @@ def backlog_idea_list(
 
 
 @mcp.tool()
+def backlog_idea_get(
+    idea_id: str,
+    verbose: bool = False,
+    sections: list[str] | None = None,
+    expand_links: bool = False,
+) -> str:
+    """Read an idea's content.
+
+    By default returns a slim view (frontmatter fields only, no body) to
+    minimise token cost. Use verbose=True for the full body. Ideas do not
+    have canonical body sections, so sections= is not supported (returns
+    an error if provided). Use expand_links=True to expand related_tasks,
+    related_issues, and related_lessons to {id, tldr} pills.
+    """
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    if sections:
+        return "Error: ideas have no canonical body sections — use verbose=True to read the full body."
+    try:
+        fm, body = _read_idea(bp, idea_id)
+    except FileNotFoundError:
+        return f"Idea not found: {idea_id}"
+
+    # ── verbose mode ─────────────────────────────────────────────────────────
+    if verbose:
+        fm_lines = [f"  {k}: {v}" for k, v in fm.items()]
+        return "---\n" + "\n".join(fm_lines) + "\n---\n" + body
+
+    # ── slim mode (default) ──────────────────────────────────────────────────
+    slim = _slim_entity(fm, kind="idea")
+
+    if expand_links:
+        data = _load()
+        tldr_index = _build_tldr_index(data, project_root=bp.parent.parent if bp.exists() else None)
+        for link_field in ("related_tasks", "related_issues", "related_lessons"):
+            ids = slim.get(link_field) or []
+            if ids:
+                slim[link_field] = _expand_link_ids(ids, tldr_index)
+
+    lines = [f"## Idea: {slim.pop('id', idea_id)} — {slim.pop('title', fm.get('title', ''))}\n"]
+    for k, v in slim.items():
+        lines.append(f"**{k}:** {v}")
+    return "\n".join(lines)
+
+
+@mcp.tool()
 def backlog_idea_update(
     idea_id: str,
     title: str = "",
