@@ -5336,7 +5336,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
             except FileNotFoundError:
                 self._send_json(404, {"ok": False, "error": f"decision {decision_id} not found"})
             return
-        elif m := re.fullmatch(r"/api/handover/([A-Za-z0-9_\-\.]+)", clean_path):
+        elif m := re.fullmatch(r"/api/handover/([A-Za-z0-9_\-]+)", clean_path):
             handover_id = m.group(1)
             bp = _backlog_path()
             try:

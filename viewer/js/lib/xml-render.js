@@ -17,16 +17,18 @@ export const KNOWN_TAGS = {
 };
 
 const KNOWN_NAMES = Object.keys(KNOWN_TAGS).join('|');
-// Capture the opening tag, its inner content (non-greedy across lines), and
-// the closing tag. We don't try to handle nested same-tag content; in practice
-// these tags don't nest.
-const TAG_RE = new RegExp(`<(${KNOWN_NAMES})>([\\s\\S]*?)</\\1>`, 'g');
+const TAG_PATTERN = `<(${KNOWN_NAMES})>([\\s\\S]*?)</\\1>`;
+// Non-global detector used by hasKnownTags — keeps that path stateless.
+const DETECT_RE = new RegExp(TAG_PATTERN);
+
+// Iteration uses a fresh /g regex per call so shared lastIndex state can
+// never leak across callers (concurrent or nested).
+function makeGlobalRe() { return new RegExp(TAG_PATTERN, 'g'); }
 
 /** True if the string contains at least one recognized XML tag. */
 export function hasKnownTags(s) {
   if (typeof s !== 'string' || !s) return false;
-  TAG_RE.lastIndex = 0;
-  return TAG_RE.test(s);
+  return DETECT_RE.test(s);
 }
 
 /**
@@ -42,10 +44,10 @@ export function hasKnownTags(s) {
 export function renderInline(text, { maxInnerChars = 80 } = {}) {
   const out = [];
   if (typeof text !== 'string' || !text) return out;
-  TAG_RE.lastIndex = 0;
+  const re = makeGlobalRe();
   let lastIdx = 0;
   let m;
-  while ((m = TAG_RE.exec(text)) != null) {
+  while ((m = re.exec(text)) != null) {
     const [full, name, inner] = m;
     if (m.index > lastIdx) {
       out.push(document.createTextNode(text.slice(lastIdx, m.index)));
@@ -79,7 +81,7 @@ export function renderInline(text, { maxInnerChars = 80 } = {}) {
 export function renderBlock(text) {
   const wrap = h('div', { class: 'co-xblock' });
   if (typeof text !== 'string' || !text) return wrap;
-  TAG_RE.lastIndex = 0;
+  const re = makeGlobalRe();
   let lastIdx = 0;
   let m;
   function appendText(slice) {
@@ -92,7 +94,7 @@ export function renderBlock(text) {
       wrap.appendChild(h('p', { class: 'co-xblock__p' }, t));
     }
   }
-  while ((m = TAG_RE.exec(text)) != null) {
+  while ((m = re.exec(text)) != null) {
     const [full, name, inner] = m;
     appendText(text.slice(lastIdx, m.index));
     const meta = KNOWN_TAGS[name];
