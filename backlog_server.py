@@ -900,7 +900,13 @@ def backlog_status(verbose: bool = False) -> str:
 
 
 @mcp.tool()
-def backlog_list_tasks(epic: str = "", status: str = "", priority: str = "", phase: str = "") -> str:
+def backlog_list_tasks(
+    epic: str = "",
+    status: str = "",
+    priority: str = "",
+    phase: str = "",
+    verbose: bool = False,
+) -> str:
     """List tasks with optional filters. All params optional — defaults to showing all tasks.
 
     Args:
@@ -908,10 +914,12 @@ def backlog_list_tasks(epic: str = "", status: str = "", priority: str = "", pha
         status: Filter by status: todo, in-progress, in-review, done, blocked
         priority: Filter by priority: critical, high, medium, low
         phase: Filter by phase ID
+        verbose: If True, include heavy fields (notes) per task entry. Slim
+            (default) shows id, title, tldr, priority, epic, and status only.
     """
     data = _load()
     priority_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
-    results: list[tuple[int, str, str]] = []  # (priority_rank, created, formatted)
+    results: list[tuple[int, str, str, dict]] = []  # (priority_rank, created, formatted, task)
     for ep in data["epics"]:
         if epic and ep["id"] != epic:
             continue
@@ -929,10 +937,12 @@ def backlog_list_tasks(epic: str = "", status: str = "", priority: str = "", pha
             if phase and t.get("phase") != phase:
                 continue
             pri = t.get("priority", "medium")
+            entry = f"`{t['id']}` — {t['title']} ({pri}, {ep['id']}, {t.get('status', 'todo')})"
             results.append((
                 priority_order.get(pri, 9),
                 str(t.get("created", "")),
-                f"`{t['id']}` — {t['title']} ({pri}, {ep['id']}, {t.get('status', 'todo')})",
+                entry,
+                t,
             ))
 
     if not results:
@@ -948,7 +958,26 @@ def backlog_list_tasks(epic: str = "", status: str = "", priority: str = "", pha
         return f"No tasks found matching: {', '.join(filters) if filters else 'any'}"
 
     results.sort(key=lambda x: (x[0], x[1]))
-    return f"**{len(results)} tasks:**\n" + "\n".join(f"- {r[2]}" for r in results)
+
+    if verbose:
+        lines = [f"**{len(results)} tasks:**"]
+        for _, _, entry, t in results:
+            lines.append(f"- {entry}")
+            if t.get("tldr"):
+                lines.append(f"  tldr: {t['tldr']}")
+            if t.get("notes"):
+                lines.append(f"  notes: {t['notes']}")
+        return "\n".join(lines)
+
+    # Slim mode: include tldr inline but omit heavy fields (notes, body)
+    lines = [f"**{len(results)} tasks:**"]
+    for _, _, entry, t in results:
+        tldr = t.get("tldr", "")
+        slim_entry = entry
+        if tldr:
+            slim_entry = f"{entry} — {tldr}"
+        lines.append(f"- {slim_entry}")
+    return "\n".join(lines)
 
 
 @mcp.tool()
