@@ -32,8 +32,8 @@ const COLUMNS = [
     get: t => t.started || '', render: t => t.started ? (formatAbsolute(t.started, { time: false, year: true }) || esc(t.started)) : '—' },
 ];
 
-const STATUS_LABELS = { todo: 'Todo', in_progress: 'In Progress', in_review: 'In Review', done: 'Done', blocked: 'Blocked' };
-const STATUS_ORDER = { in_progress: 0, in_review: 1, blocked: 2, todo: 3, done: 4 };
+const STATUS_LABELS = { todo: 'Todo', 'in-progress': 'In Progress', 'in-review': 'In Review', done: 'Done', blocked: 'Blocked' };
+const STATUS_ORDER = { 'in-progress': 0, 'in-review': 1, blocked: 2, todo: 3, done: 4 };
 const PRIORITY_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
 const SIZE_ORDER = { XS: 0, S: 1, M: 2, L: 3, XL: 4 };
 
@@ -58,7 +58,7 @@ export async function mount(root, { store, api, prefs }) {
   const topbar = claimTopbar();
   const subcount = tmSubcount('… tasks');
   const searchBuilt = tmSearch({
-    placeholder: 'Filter by title, id, or branch…',
+    placeholder: 'Filter… (prefix ! to exclude)',
     onInput: (v) => { state.search = v; paint(); persist(); },
   });
   const search = searchBuilt.input;
@@ -105,14 +105,17 @@ export async function mount(root, { store, api, prefs }) {
   }
 
   function applyFilters(tasks) {
-    const q = state.search.trim().toLowerCase();
+    const rawQ = state.search.trim().toLowerCase();
+    const negate = rawQ.startsWith('!');
+    const q = negate ? rawQ.slice(1).trimStart() : rawQ;
     return tasks.filter(t => {
       if (state.filters.status.length   && !state.filters.status.includes(t.status)) return false;
       if (state.filters.priority.length && !state.filters.priority.includes((t.priority || '').toLowerCase())) return false;
       if (state.filters.epic.length     && !state.filters.epic.includes(t.epic)) return false;
       if (q) {
         const hay = `${t.id} ${t.title || ''} ${t.branch || ''}`.toLowerCase();
-        if (!hay.includes(q)) return false;
+        const matches = hay.includes(q);
+        if (negate ? matches : !matches) return false;
       }
       return true;
     });
@@ -133,7 +136,7 @@ export async function mount(root, { store, api, prefs }) {
   function renderChipRail(backlog) {
     chipRail.innerHTML = '';
     const groups = [
-      { kind: 'status',   label: 'Status',   options: ['todo','in_progress','in_review','blocked','done'], pretty: prettyStatus },
+      { kind: 'status',   label: 'Status',   options: ['todo','in-progress','in-review','blocked','done'], pretty: prettyStatus },
       { kind: 'priority', label: 'Priority', options: ['critical','high','medium','low'], pretty: s => s[0].toUpperCase() + s.slice(1) },
       { kind: 'epic',     label: 'Epic',     options: (backlog.epics || []).map(e => e.id), pretty: s => s },
     ];

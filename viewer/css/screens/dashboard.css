@@ -62,7 +62,7 @@
   box-sizing: border-box;
 }
 .dash-briefing__pip--done        { background: var(--ink-3); border-color: var(--ink-3); }
-.dash-briefing__pip--in_progress { background: var(--accent-green); border-color: var(--accent-green); }
+.dash-briefing__pip--in-progress { background: var(--accent-green); border-color: var(--accent-green); }
 .dash-briefing__pip--active {
   background: var(--accent);
   border-color: var(--accent);

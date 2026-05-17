@@ -1,7 +1,7 @@
 // Pure-logic filter / sort / group for the kanban board.
 // No DOM. Tested via node --test.
 
-export const STATUS_ORDER = ['blocked', 'todo', 'in_progress', 'in_review', 'done'];
+export const STATUS_ORDER = ['blocked', 'todo', 'in-progress', 'in-review', 'done'];
 
 const PRIORITY_RANK = { critical: 4, high: 3, medium: 2, low: 1 };
 const SIZE_RANK     = { XS: 1, S: 2, M: 3, L: 4, XL: 5 };
@@ -12,7 +12,9 @@ export function applyFilters(tasks, f) {
   const pri    = Array.isArray(f.priorities) ? f.priorities : [];
   const epics  = Array.isArray(f.epics) ? f.epics : [];
   const phase  = f.phase || null;
-  const search = (f.search || '').trim().toLowerCase();
+  const rawSearch = (f.search || '').trim().toLowerCase();
+  const negate = rawSearch.startsWith('!');
+  const search = negate ? rawSearch.slice(1).trimStart() : rawSearch;
 
   return tasks.filter(t => {
     if (pri.length && !pri.includes(String(t.priority || '').toLowerCase())) return false;
@@ -26,7 +28,8 @@ export function applyFilters(tasks, f) {
     }
     if (search) {
       const hay = [t.id, t.title, t.branch].filter(Boolean).join(' ').toLowerCase();
-      if (!hay.includes(search)) return false;
+      const matches = hay.includes(search);
+      if (negate ? matches : !matches) return false;
     }
     return true;
   });
@@ -75,7 +78,7 @@ export function groupTasks(tasks, by, phaseOrder) {
     return STATUS_ORDER.map(key => ({
       key,
       label: STATUS_LABELS[key],
-      tasks: (tasks || []).filter(t => String(t.status || 'todo').replace(/-/g, '_') === key),
+      tasks: (tasks || []).filter(t => (t.status || 'todo') === key),
     }));
   }
   if (by === 'phase') {
@@ -111,8 +114,8 @@ export function groupTasks(tasks, by, phaseOrder) {
 export const STATUS_LABELS = {
   blocked: 'Blocked',
   todo: 'Todo',
-  in_progress: 'In Progress',
-  in_review: 'In Review',
+  'in-progress': 'In Progress',
+  'in-review': 'In Review',
   done: 'Done',
 };
 

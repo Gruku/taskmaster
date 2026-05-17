@@ -72,7 +72,7 @@ export async function mount(root, { store, api, prefs }) {
   // Search
   const search = document.createElement('div');
   search.className = 'tm-search';
-  search.innerHTML = `<span class="icon">⌕</span><input placeholder="Find by title, id, or branch…" /><span class="cmp-kbd">⌘K</span>`;
+  search.innerHTML = `<span class="icon">⌕</span><input placeholder="Find… (prefix ! to exclude)" /><span class="cmp-kbd">⌘K</span>`;
   const searchInput = search.querySelector('input');
   searchInput.value = state.filters.search || '';
   let searchTimer = null;
@@ -257,11 +257,22 @@ export async function mount(root, { store, api, prefs }) {
       (state.filters.phase && state.filters.phase !== '__all__' ? 1 : 0) +
       (state.filters.search ? 1 : 0);
 
-    // Compute active-task counts using full task list (NOT phase-scoped — counts
-    // are global to give pinning a stable signal, while the chip's `count` field
-    // remains phase-scoped so quick chips reflect the current view's volume).
-    const activeCounts = countActiveTasksByEpic(tasks);
-    const ranked = rankEpics(epicsArr.map(ep => ({
+    // (a) Phase-scoped epic visibility: when a phase is active, restrict to epics
+    // that have ≥1 task in that phase. Pinned epics are always included so explicit
+    // user intent survives phase switches. (v3-polish-047)
+    const epicsVisible = phaseScoped
+      ? (() => {
+          const inPhaseIds = new Set(epicsForPhase(epicsArr, tasks, phaseFilter).map(e => e.id));
+          const pinnedSet  = new Set(state.pinnedEpics);
+          return epicsArr.filter(e => inPhaseIds.has(e.id) || pinnedSet.has(e.id));
+        })()
+      : epicsArr;
+
+    // (c) Sort by phase task count: when a phase is active, use phase-scoped counts
+    // for rankEpics so ordering reflects the current view's volume, not global totals.
+    // Global counts are preserved as a fallback signal for no-phase mode. (v3-polish-047)
+    const activeCounts = countActiveTasksByEpic(phaseScoped ? tasksInPhase : tasks);
+    const ranked = rankEpics(epicsVisible.map(ep => ({
       id: ep.id,
       name: ep.name || ep.id,
       color: epicColors[ep.id],

@@ -76,15 +76,42 @@ export function renderEpicDropdown({
   const selectedSet = new Set(selectedIds);
   const pinnedSet   = new Set(pinnedIds);
 
+  // (b) Archived hidden by default. Track toggle state locally within the panel. (v3-polish-047)
+  const archivedCount = epics.filter(e => (e.status || '').toLowerCase() === 'archived').length;
+  let showArchived = false;
+
+  // Show-archived toggle (only rendered if archived epics exist)
+  if (archivedCount > 0) {
+    const archiveToggle = document.createElement('button');
+    archiveToggle.type = 'button';
+    archiveToggle.className = 'ed-archive-toggle';
+    archiveToggle.textContent = `Show archived (${archivedCount})`;
+    archiveToggle.addEventListener('click', () => {
+      showArchived = !showArchived;
+      archiveToggle.textContent = showArchived
+        ? `Hide archived (${archivedCount})`
+        : `Show archived (${archivedCount})`;
+      archiveToggle.classList.toggle('on', showArchived);
+      renderList();
+    });
+    foot.insertBefore(archiveToggle, clearBtn);
+  }
+
   function renderList() {
     const q = filterInput.value.trim().toLowerCase();
     const sorted = sortEpicsForDropdown(epics, sort, activeCounts);
-    const filtered = q ? sorted.filter(e => String(e.name || e.id || '').toLowerCase().includes(q)) : sorted;
+    // (b) Filter out archived unless show-archived is toggled on. (v3-polish-047)
+    const visibleByArchive = showArchived
+      ? sorted
+      : sorted.filter(e => (e.status || '').toLowerCase() !== 'archived');
+    const filtered = q
+      ? visibleByArchive.filter(e => String(e.name || e.id || '').toLowerCase().includes(q))
+      : visibleByArchive;
     list.replaceChildren();
     if (!filtered.length) {
       const empty = document.createElement('div');
       empty.className = 'ed-empty';
-      empty.textContent = q ? `No epics match "${q}"` : 'No epics';
+      empty.textContent = q ? `No epics match "${q}"` : (archivedCount > 0 && !showArchived ? 'No active epics' : 'No epics');
       list.appendChild(empty);
       return;
     }

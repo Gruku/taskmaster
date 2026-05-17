@@ -62,7 +62,7 @@ export function createBoardSurface({ store }) {
     const phaseId = active ? active.id : null;
     const tasks = (backlog.tasks || []).filter(t => !phaseId || t.phase === phaseId);
     const upn = tasks.filter(t => t.status === 'todo' || t.status === 'ready').slice(0, 4);
-    const ipg = tasks.filter(t => t.status === 'in-progress' || t.status === 'in_progress').slice(0, 4);
+    const ipg = tasks.filter(t => t.status === 'in-progress').slice(0, 4);
     upnext.list.replaceChildren(...upn.map(t => renderMinimalCard(t, { backlog })));
     inprog.list.replaceChildren(...ipg.map(t => renderMinimalCard(t, { backlog })));
     title.textContent = active ? `Phase: ${active.name}` : 'Board preview';
