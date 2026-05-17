@@ -27,10 +27,50 @@ def test_backfill_tldr_uses_title_when_body_empty():
     assert new_fm["tldr_autogen"] is True
 
 
+import os
 import subprocess
 from pathlib import Path
 
 import yaml
+
+
+def test_backfill_preserves_horizontal_rules_in_body(tmp_taskmaster):
+    """Body with --- separators must not lose content during round-trip."""
+    lessons_dir = Path(tmp_taskmaster) / ".taskmaster" / "lessons"
+    lessons_dir.mkdir(parents=True, exist_ok=True)
+    legacy = lessons_dir / "L-rules.md"
+    body_with_rule = "## Why\n\nReason A.\n\n---\n\n## What to do\n\nStep 1.\n"
+    legacy.write_text(
+        f"---\nid: L-rules\ntitle: Lesson with rule\nkind: pattern\ntldr: placeholder\n---\n{body_with_rule}",
+        encoding="utf-8",
+    )
+    # Remove tldr so backfill actually runs on it
+    legacy.write_text(
+        f"---\nid: L-rules\ntitle: Lesson with rule\nkind: pattern\n---\n{body_with_rule}",
+        encoding="utf-8",
+    )
+
+    worktree_root = Path(__file__).resolve().parents[3]
+    env = {**os.environ, "PYTHONPATH": str(worktree_root)}
+    subprocess.run(
+        ["python", "-m", "plugins.taskmaster.scripts.backfill_tldr",
+         "--root", str(tmp_taskmaster)],
+        env=env, capture_output=True, text=True, check=True,
+    )
+
+    after = legacy.read_text(encoding="utf-8")
+    # Body should still contain the rule and all original content
+    assert "Reason A" in after
+    assert "Step 1" in after
+    # The --- rule must survive in the body portion (after frontmatter fences)
+    # Frontmatter is delimited by first and second ---, body follows the second
+    parts = after.split("---", 2)
+    assert len(parts) == 3, f"Expected frontmatter fences in output: {after!r}"
+    body_part = parts[2]
+    assert "---" in body_part, f"Horizontal rule lost from body: {body_part!r}"
+    # Tldr was added
+    fm = yaml.safe_load(parts[1]) or {}
+    assert "tldr" in fm, f"tldr not backfilled: {fm}"
 
 
 def test_backfill_script_processes_all_entities(tmp_taskmaster):

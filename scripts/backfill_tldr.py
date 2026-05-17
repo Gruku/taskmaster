@@ -9,26 +9,11 @@ import argparse
 import sys
 from pathlib import Path
 
-from plugins.taskmaster import taskmaster_v3 as tm
-
-
-def _split_frontmatter(text: str) -> tuple[dict, str]:
-    """Parse '---\\nYAML\\n---\\nBODY' into (frontmatter, body)."""
-    import yaml
-    if not text.startswith("---"):
-        return {}, text
-    parts = text.split("---", 2)
-    if len(parts) < 3:
-        return {}, text
-    fm = yaml.safe_load(parts[1]) or {}
-    body = parts[2].lstrip("\n")
-    return fm, body
-
-
-def _join_frontmatter(fm: dict, body: str) -> str:
-    import yaml
-    fm_yaml = yaml.dump(fm, sort_keys=False, allow_unicode=True)
-    return f"---\n{fm_yaml}---\n{body}"
+from plugins.taskmaster.taskmaster_v3 import (
+    backfill_tldr,
+    parse_frontmatter,
+    render_frontmatter,
+)
 
 
 def _backfill_dir(directory: Path) -> int:
@@ -38,10 +23,10 @@ def _backfill_dir(directory: Path) -> int:
     changed = 0
     for path in sorted(directory.glob("*.md")):
         text = path.read_text(encoding="utf-8")
-        fm, body = _split_frontmatter(text)
-        new_fm, did_change = tm.backfill_tldr(fm, body)
+        fm, body = parse_frontmatter(text)
+        new_fm, did_change = backfill_tldr(fm, body)
         if did_change:
-            path.write_text(_join_frontmatter(new_fm, body), encoding="utf-8")
+            path.write_text(render_frontmatter(new_fm, body), encoding="utf-8")
             changed += 1
             print(f"  backfilled {path.name}: {new_fm['tldr']!r}")
     return changed
