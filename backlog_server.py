@@ -3896,8 +3896,20 @@ def backlog_complete_task(
 
     if target_status == "done":
         try:
-            from taskmaster_v3 import mark_task_handovers_complete as _mark_complete
-            flipped_handovers = _mark_complete(_backlog_path(), task_id)
+            from taskmaster_v3 import smart_auto_close_handovers as _smart_close
+            # Collect done/archived task IDs from backlog for smart-close evaluation.
+            _all_terminal: set[str] = set()
+            for _epic in data.get("epics", []):
+                for _t in _epic.get("tasks", []):
+                    if _t.get("status") in ("done", "archived"):
+                        _all_terminal.add(_t["id"])
+            _all_terminal.add(task_id)  # the one we just transitioned
+            smart_close_result = _smart_close(
+                _backlog_path(),
+                triggering_task_id=task_id,
+                done_or_archived_ids=_all_terminal,
+            )
+            flipped_handovers = smart_close_result["closed"] + smart_close_result["flagged"]
         except Exception:
             flipped_handovers = []
         if flipped_handovers:
@@ -4026,6 +4038,29 @@ def backlog_archive_task(task_id: str, reason: str = "done") -> str:
     task["archived"] = _now()
     task.pop("locked_by", None)
     _mutate_and_save(data)
+
+    # Smart-close open handovers that reference this task.
+    try:
+        from taskmaster_v3 import smart_auto_close_handovers as _smart_close
+        _all_terminal: set[str] = set()
+        for _epic in data.get("epics", []):
+            for _t in _epic.get("tasks", []):
+                if _t.get("status") in ("done", "archived"):
+                    _all_terminal.add(_t["id"])
+        _all_terminal.add(task_id)  # the one we just archived
+        smart_close_result = _smart_close(
+            _backlog_path(),
+            triggering_task_id=task_id,
+            done_or_archived_ids=_all_terminal,
+        )
+        flipped_handovers = smart_close_result["closed"] + smart_close_result["flagged"]
+        if flipped_handovers:
+            data2 = _load()
+            _sync_handover_index(data2, _backlog_path())
+            _save(data2)
+    except Exception:
+        pass
+
     return f"Archived `{task_id}` — {task['title']} (reason: {reason})"
 
 

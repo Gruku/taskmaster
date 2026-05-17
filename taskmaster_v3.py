@@ -1347,6 +1347,18 @@ def smart_auto_close_handovers(
     return {"closed": closed, "flagged": flagged}
 
 
+def flag_open_reason(backlog_path: Path, handover_id: str) -> str | None:
+    """Return the `flag_reason` string for an open handover, or None if absent.
+
+    Returns None for closed/superseded handovers — those are not flagged.
+    """
+    try:
+        fm, _ = read_handover(backlog_path, handover_id)
+    except (OSError, ValueError):
+        return None
+    if fm.get("status") != "open":
+        return None
+    return fm.get("flag_reason") or None
 
 
 def backfill_handover_status(backlog_data: dict[str, Any], backlog_path: Path) -> list[str]:
