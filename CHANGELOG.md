@@ -10,7 +10,11 @@ indicate schema breaks or removed surfaces.
 
 ## [Unreleased]
 
-### Changed — Ceremony glance-first redesign (Plan D)
+---
+
+## 3.6.1 — Ceremony glance-first redesign (Plan D) (2026-05-18)
+
+### Changed
 
 - `start-session` default mode is now a ~800–1,000 token glance: slim `backlog_status` + top-5 open handovers + 1-line counts. Full ceremony (recap diff, lesson digest, core lessons, all issues, last session) is available via `--deep`.
 - `pick-task` default mode is now a ~600–800 token glance: slim task + deps + open handovers for task + matched lesson IDs+tldrs (no full bodies) + filtered issues + linkage pills. Full ceremony (full task body, full lesson bodies, blast radius, handover context) is available via `--deep`.
