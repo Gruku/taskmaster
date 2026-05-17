@@ -15,7 +15,7 @@ indicate schema breaks or removed surfaces.
 - Required `tldr` field on tasks, issues, lessons, ideas (handovers already had it). Auto-generated from body's first sentence when missing on create; flagged with `tldr_autogen: true`.
 - `next_step` field on `backlog_add_task` and `backlog_update_task` — persisted and exposed in slim view.
 - Optional `task_id` kwarg on `backlog_add_task` for caller-supplied IDs (e.g., in tests). Empty/unspecified preserves auto-gen (`{epic}-NNN`) behavior.
-- Slim-by-default mode on every `_get` MCP tool: `backlog_get_task`, `backlog_handover_get`, `backlog_issue_get`, `backlog_lesson_get`, `backlog_idea_get`. Returns frontmatter + tldr + extras + bare-ID linkages (~150 tokens). Use `verbose=true` for full body, `sections=[...]` for surgical retrieval, `expand_links=true` for `{id, tldr}` pills.
+- Slim-by-default mode on every `_get` MCP tool: `backlog_get_task`, `backlog_handover_get`, `backlog_issue_get`, `backlog_lesson_get`, `backlog_idea_get`. Returns frontmatter + tldr + extras + bare-ID linkages (typically ~150 tokens; ≤200 tokens for tasks with multiple links and open handovers). Use `verbose=true` for full body, `sections=[...]` for surgical retrieval, `expand_links=true` for `{id, tldr}` pills.
 - Slim-by-default on `_list` tools: `backlog_list_tasks`, `backlog_handover_list`, `backlog_issue_list`, `backlog_lesson_list`. Heavy fields excluded.
 - `backlog_status` slim default (~1.8K chars) — omits archived, caps next-up at 5. Use `verbose=true` for full dashboard.
 - `backlog_lesson_match` slim default returns `{id} — {tldr}` pills. Use `verbose=true` for full summary line (kind + reinforce_count + title).
@@ -31,8 +31,8 @@ indicate schema breaks or removed surfaces.
 ### Notes
 
 - Foundation only: Plans B (parallel handovers), C (typed links), D (glance-first ceremonies), E (skill slimming) ship in subsequent PRs.
-- The `tldr_autogen: true` flag is removed when a caller explicitly supplies a tldr via update.
-- `verbose=true` reproduces today's full-load semantics byte-for-byte (modulo `tldr`/`tldr_autogen` being persisted alongside).
+- The `tldr_autogen: true` flag is removed when a caller explicitly supplies a tldr via `backlog_update_task`. The corresponding `backlog_issue_update`, `backlog_lesson_update`, and `backlog_idea_update` tools do not yet accept a `tldr=` kwarg — manual frontmatter edits are needed to promote an autogen tldr to authored on those entities. To be addressed in a follow-up.
+- `verbose=true` reproduces today's full-load semantics: full body, all frontmatter (now including `tldr` and `tldr_autogen` where applicable). Output formatting on `backlog_get_task` is preserved exactly; other `_get` tools include their new `tldr` field in the frontmatter block.
 
 Spec: `docs/superpowers/specs/2026-05-15-taskmaster-progressive-disclosure-design.md`
 Plan: `docs/superpowers/plans/2026-05-16-taskmaster-progressive-disclosure-plan-a-foundation.md`
