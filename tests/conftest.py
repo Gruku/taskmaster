@@ -84,3 +84,12 @@ def tmp_taskmaster(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
     return tmp_path
+
+
+@pytest.fixture()
+def tm_epic_phase(tmp_taskmaster):
+    """tmp_taskmaster + a `test-epic` epic and `dev` phase ready for task writes."""
+    import backlog_server  # noqa: PLC0415
+    backlog_server.backlog_add_epic(epic_id="test-epic", name="Test Epic")
+    backlog_server.backlog_add_phase(phase_id="dev", name="Development")
+    return tmp_taskmaster

@@ -20,14 +20,6 @@ from backlog_server import (
 )
 
 
-# tmp_taskmaster is taken for chaining; actual writes go through monkeypatched ROOT in conftest
-def _setup(tmp_taskmaster):
-    """Create a minimal epic + phase so backlog_add_task can proceed."""
-    backlog_add_epic(epic_id="test-epic", name="Test Epic")
-    backlog_add_phase(phase_id="dev", name="Development")
-    return tmp_taskmaster
-
-
 def _load_task(tmp_taskmaster, task_id: str) -> dict:
     """Read the task dict directly from backlog.yaml."""
     bp = tmp_taskmaster / ".taskmaster" / "backlog.yaml"
@@ -39,8 +31,7 @@ def _load_task(tmp_taskmaster, task_id: str) -> dict:
     raise KeyError(f"Task {task_id!r} not found in backlog.yaml")
 
 
-def test_add_task_with_tldr_succeeds(tmp_taskmaster):
-    _setup(tmp_taskmaster)
+def test_add_task_with_tldr_succeeds(tm_epic_phase):
     result = backlog_add_task(
         epic="test-epic",
         task_id="T-tldr-1",
@@ -49,13 +40,12 @@ def test_add_task_with_tldr_succeeds(tmp_taskmaster):
         phase="dev",
     )
     assert "T-tldr-1" in result
-    t = _load_task(tmp_taskmaster, "T-tldr-1")
+    t = _load_task(tm_epic_phase, "T-tldr-1")
     assert t["tldr"] == "One-line essence of the task."
     assert "tldr_autogen" not in t
 
 
-def test_add_task_without_tldr_autogenerates_from_body(tmp_taskmaster):
-    _setup(tmp_taskmaster)
+def test_add_task_without_tldr_autogenerates_from_body(tm_epic_phase):
     result = backlog_add_task(
         epic="test-epic",
         task_id="T-tldr-2",
@@ -64,21 +54,19 @@ def test_add_task_without_tldr_autogenerates_from_body(tmp_taskmaster):
         phase="dev",
     )
     assert "T-tldr-2" in result
-    t = _load_task(tmp_taskmaster, "T-tldr-2")
+    t = _load_task(tm_epic_phase, "T-tldr-2")
     assert "Fix the auth middleware" in t["tldr"]
     assert t.get("tldr_autogen") is True
 
 
-def test_add_task_without_tldr_or_body_uses_title(tmp_taskmaster):
-    _setup(tmp_taskmaster)
+def test_add_task_without_tldr_or_body_uses_title(tm_epic_phase):
     backlog_add_task(epic="test-epic", task_id="T-tldr-3", title="Refactor auth", phase="dev")
-    t = _load_task(tmp_taskmaster, "T-tldr-3")
+    t = _load_task(tm_epic_phase, "T-tldr-3")
     assert "Refactor auth" in t["tldr"]
     assert t.get("tldr_autogen") is True
 
 
-def test_add_task_with_next_step_persists(tmp_taskmaster):
-    _setup(tmp_taskmaster)
+def test_add_task_with_next_step_persists(tm_epic_phase):
     backlog_add_task(
         epic="test-epic",
         task_id="T-tldr-4",
@@ -87,12 +75,11 @@ def test_add_task_with_next_step_persists(tmp_taskmaster):
         next_step="Write failing test first.",
         phase="dev",
     )
-    t = _load_task(tmp_taskmaster, "T-tldr-4")
+    t = _load_task(tm_epic_phase, "T-tldr-4")
     assert "Write failing test first" in t["next_step"]
 
 
-def test_update_task_next_step(tmp_taskmaster):
-    _setup(tmp_taskmaster)
+def test_update_task_next_step(tm_epic_phase):
     backlog_add_task(
         epic="test-epic",
         task_id="T-tldr-5",
@@ -101,13 +88,12 @@ def test_update_task_next_step(tmp_taskmaster):
         phase="dev",
     )
     backlog_update_task("T-tldr-5", next_step="Now do Y.")
-    t = _load_task(tmp_taskmaster, "T-tldr-5")
+    t = _load_task(tm_epic_phase, "T-tldr-5")
     assert "Now do Y" in t["next_step"]
 
 
-def test_update_task_rejects_mixed_styles(tmp_taskmaster):
+def test_update_task_rejects_mixed_styles(tm_epic_phase):
     """Mixing kwarg style with field/value style is an error, not a silent drop."""
-    _setup(tmp_taskmaster)
     backlog_add_task(
         epic="test-epic",
         task_id="T-tldr-6",
@@ -121,14 +107,13 @@ def test_update_task_rejects_mixed_styles(tmp_taskmaster):
     assert "Error" in result
     assert "not both" in result
     # Verify nothing changed
-    t = _load_task(tmp_taskmaster, "T-tldr-6")
+    t = _load_task(tm_epic_phase, "T-tldr-6")
     assert t["title"] == "Mixed"
     assert t["tldr"] == "Mixed tldr."
 
 
-def test_update_task_rejects_empty_tldr(tmp_taskmaster):
+def test_update_task_rejects_empty_tldr(tm_epic_phase):
     """tldr cannot be cleared via the classic field/value API — it is required."""
-    _setup(tmp_taskmaster)
     backlog_add_task(
         epic="test-epic",
         task_id="T-tldr-7",
@@ -140,7 +125,7 @@ def test_update_task_rejects_empty_tldr(tmp_taskmaster):
     assert "Error" in result
     assert "tldr cannot be cleared" in result
     # Verify the original tldr is intact
-    t = _load_task(tmp_taskmaster, "T-tldr-7")
+    t = _load_task(tm_epic_phase, "T-tldr-7")
     assert t["tldr"] == "Original tldr."
 
 
@@ -161,7 +146,6 @@ from backlog_server import backlog_issue_create
 
 
 def test_issue_create_with_tldr(tmp_taskmaster):
-    _setup(tmp_taskmaster)
     backlog_issue_create(
         title="Auth fails on Friday",
         severity="P1",
@@ -173,7 +157,6 @@ def test_issue_create_with_tldr(tmp_taskmaster):
 
 
 def test_issue_create_autogen_tldr_from_impact(tmp_taskmaster):
-    _setup(tmp_taskmaster)
     backlog_issue_create(
         title="Auth fails",
         severity="P1",
@@ -201,7 +184,6 @@ from backlog_server import backlog_lesson_create, backlog_idea_create
 
 
 def test_lesson_create_with_tldr(tmp_taskmaster):
-    _setup(tmp_taskmaster)
     backlog_lesson_create(
         title="Always use atomic writes",
         kind="pattern",
@@ -213,7 +195,6 @@ def test_lesson_create_with_tldr(tmp_taskmaster):
 
 
 def test_lesson_autogen_from_body(tmp_taskmaster):
-    _setup(tmp_taskmaster)
     backlog_lesson_create(
         title="Atomic writes",
         kind="pattern",
@@ -225,7 +206,6 @@ def test_lesson_autogen_from_body(tmp_taskmaster):
 
 
 def test_idea_create_with_tldr(tmp_taskmaster):
-    _setup(tmp_taskmaster)
     result = backlog_idea_create(
         title="Add dark mode",
         tldr="Toggle dark mode in viewer settings.",
