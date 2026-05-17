@@ -3710,15 +3710,7 @@ def backlog_pick_task(task_id: str, force: bool = False) -> str:
         branch = task.get("branch", "")
         worktree = task.get("worktree", "")
         worktree_instruction = _build_worktree_instruction(task_id, sub_repo, branch, worktree)
-        try:
-            from taskmaster_v3 import mark_task_handovers_resumed as _mark_resumed
-            flipped = _mark_resumed(_backlog_path(), task_id)
-            if flipped:
-                data2 = _load()
-                _sync_handover_index(data2, _backlog_path())
-                _save(data2)
-        except Exception:
-            pass
+        # Open handovers stay open automatically under the new model — no resumed transition needed.
         return f"Already in progress: `{task_id}` — {task['title']}\n\n" + _task_context(data, task, epic) + worktree_instruction
 
     if status not in ("todo", "in-review"):
@@ -3738,16 +3730,7 @@ def backlog_pick_task(task_id: str, force: bool = False) -> str:
     worktree = task.get("worktree", "")
     worktree_instruction = _build_worktree_instruction(task_id, sub_repo, branch, worktree)
 
-    try:
-        from taskmaster_v3 import mark_task_handovers_resumed as _mark_resumed
-        flipped = _mark_resumed(_backlog_path(), task_id)
-        if flipped:
-            data2 = _load()
-            _sync_handover_index(data2, _backlog_path())
-            _save(data2)
-    except Exception:
-        pass
-
+    # Open handovers stay open automatically under the new model — no resumed transition needed.
     return f"Picked `{task_id}` — {task['title']} (locked to this session)\n\n" + _task_context(data, task, epic) + worktree_instruction
 
 
