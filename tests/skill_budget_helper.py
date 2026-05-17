@@ -30,7 +30,8 @@ SKILL_BUDGETS: dict[str, int] = {
 SKILLS_ROOT = Path(__file__).resolve().parents[1] / "skills"
 
 # Skills whose body budget is owned by Plan D — lint runs but is xfail until D merges.
-PLAN_D_OWNED = {"start-session", "pick-task"}
+# start-session merged: body slimmed by Plan D.
+PLAN_D_OWNED = {"pick-task"}
 
 # Default description word budget.
 DEFAULT_DESC_WORDS = 60
