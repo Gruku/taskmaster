@@ -418,6 +418,302 @@ HEAVY_FIELDS: tuple[str, ...] = (
 BODY_KEY = "_body"
 
 
+# ── Typed links (Plan C / spec §6) ────────────────────────────
+
+# Canonical link types and their inverses. Every link written on the
+# source side has a corresponding inverse written on the target side
+# by sync_inverse(). relates_to is its own inverse.
+REVERSE_TYPE: dict[str, str] = {
+    "depends_on":    "blocks",
+    "blocks":        "depends_on",
+    "fixes":         "fixed_in_task",
+    "fixed_in_task": "fixes",
+    "relates_to":    "relates_to",
+    "informed_by":   "informs",
+    "informs":       "informed_by",
+    "supersedes":    "superseded_by",
+    "superseded_by": "supersedes",
+    "duplicate_of":  "duplicates",
+    "duplicates":    "duplicate_of",
+    "references":    "referenced_by",
+    "referenced_by": "references",
+}
+LINK_TYPES: tuple[str, ...] = tuple(REVERSE_TYPE.keys())
+
+# Entity-kind dispatch by ID prefix. Longest prefix wins (IDEA before I-).
+ENTITY_KIND_BY_PREFIX: dict[str, str] = {
+    "T":    "task",
+    "ISS":  "issue",
+    "L":    "lesson",
+    "HND":  "handover",
+    "IDEA": "idea",
+}
+# Order longest-first for prefix matching.
+_PREFIX_ORDER: tuple[str, ...] = ("IDEA", "ISS", "HND", "T", "L")
+
+# (source_kind, target_kind) pairs allowed per link type. "*" = any.
+LINK_TYPE_DOMAIN: dict[str, tuple[str, str]] = {
+    "depends_on":    ("task",     "task"),
+    "blocks":        ("task",     "task"),
+    "fixes":         ("task",     "issue"),
+    "fixed_in_task": ("issue",    "task"),
+    "informed_by":   ("task",     "lesson"),
+    "informs":       ("lesson",   "task"),
+    "supersedes":    ("handover", "handover"),
+    "superseded_by": ("handover", "handover"),
+    "duplicate_of":  ("issue",    "issue"),
+    "duplicates":    ("issue",    "issue"),
+    "relates_to":    ("*",        "*"),
+    "references":    ("*",        "*"),
+    "referenced_by": ("*",        "*"),
+}
+
+
+def entity_kind_of(entity_id: str | None) -> str | None:
+    """Map an entity ID (e.g. 'T-001', 'ISS-007') to its kind, or None if unknown."""
+    if not entity_id or not isinstance(entity_id, str):
+        return None
+    for prefix in _PREFIX_ORDER:
+        if entity_id.startswith(prefix + "-"):
+            return ENTITY_KIND_BY_PREFIX[prefix]
+    return None
+
+
+def is_valid_link(link_type: str, source_kind: str, target_kind: str) -> bool:
+    """Return True if a link of `link_type` may go from source_kind to target_kind."""
+    if link_type not in LINK_TYPE_DOMAIN:
+        return False
+    expected_src, expected_dst = LINK_TYPE_DOMAIN[link_type]
+    if expected_src != "*" and expected_src != source_kind:
+        return False
+    if expected_dst != "*" and expected_dst != target_kind:
+        return False
+    return True
+
+
+LINK_FIELD: str = "links"
+
+
+def entity_links(entity: dict) -> list[dict]:
+    """Return a shallow copy of the entity's links array (empty list if absent)."""
+    raw = entity.get(LINK_FIELD) or []
+    return [dict(link) for link in raw]
+
+
+def set_entity_links(entity: dict, links: list[dict]) -> None:
+    """Replace the entity's links array, dropping the field when empty."""
+    if not links:
+        entity.pop(LINK_FIELD, None)
+    else:
+        entity[LINK_FIELD] = [dict(link) for link in links]
+
+
+def add_link(entity: dict, link_type: str, target: str) -> bool:
+    """Idempotently add a {type, target} entry. Returns True if added, False if dup."""
+    current = entity_links(entity)
+    needle = {"type": link_type, "target": target}
+    if needle in current:
+        return False
+    current.append(needle)
+    set_entity_links(entity, current)
+    return True
+
+
+def remove_link(entity: dict, link_type: str, target: str) -> bool:
+    """Remove a single {type, target} entry. Returns True if removed, False if absent."""
+    current = entity_links(entity)
+    needle = {"type": link_type, "target": target}
+    if needle not in current:
+        return False
+    current.remove(needle)
+    set_entity_links(entity, current)
+    return True
+
+
+def links_grouped_by_type(entity: dict) -> dict[str, list[str]]:
+    """Return {type: [target_id, ...]} grouped view. Used by slim-view rendering."""
+    grouped: dict[str, list[str]] = {}
+    for link in entity_links(entity):
+        grouped.setdefault(link["type"], []).append(link["target"])
+    return grouped
+
+
+def find_cycle(graph: dict[str, list[str]]) -> list[str] | None:
+    """Return a closed-loop cycle (first node repeated at end) or None.
+
+    `graph` is a dict {source_id: [target_id, ...]} representing depends_on
+    edges. DFS-based detection with grey/black coloring: returns the first
+    cycle found.
+
+    Algorithm: For each unvisited node, perform iterative DFS using a stack.
+    Mark nodes WHITE (unvisited), GRAY (in current DFS path), BLACK (done).
+    Encountering a GRAY neighbor means we've found a back-edge → cycle.
+    Reconstruct the cycle by walking parent pointers from current node back
+    to the GRAY ancestor.
+    """
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color: dict[str, int] = {node: WHITE for node in graph}
+    parent: dict[str, str | None] = {node: None for node in graph}
+
+    def dfs(start: str) -> list[str] | None:
+        stack: list[tuple[str, int]] = [(start, 0)]
+        color[start] = GRAY
+        while stack:
+            node, idx = stack[-1]
+            neighbors = graph.get(node, [])
+            if idx >= len(neighbors):
+                color[node] = BLACK
+                stack.pop()
+                continue
+            stack[-1] = (node, idx + 1)
+            nxt = neighbors[idx]
+            if color.get(nxt, WHITE) == GRAY:
+                # Self-edge: nxt == node and nxt is GRAY.
+                if nxt == node:
+                    return [node, node]
+                # Build cycle by walking parents from `node` back to `nxt`.
+                cycle = [nxt]
+                cur: str | None = node
+                while cur is not None and cur != nxt:
+                    cycle.append(cur)
+                    cur = parent.get(cur)
+                cycle.append(nxt)
+                cycle.reverse()
+                return cycle
+            if color.get(nxt, WHITE) == WHITE:
+                color[nxt] = GRAY
+                parent[nxt] = node
+                stack.append((nxt, 0))
+        return None
+
+    for node in list(graph.keys()):
+        if color[node] == WHITE:
+            found = dfs(node)
+            if found:
+                return found
+    return None
+
+
+def would_create_cycle(graph: dict[str, list[str]], source: str, target: str) -> bool:
+    """Return True if adding `source -> target` to `graph` introduces a cycle."""
+    if source == target:
+        return True
+    augmented = {node: list(targets) for node, targets in graph.items()}
+    augmented.setdefault(source, []).append(target)
+    augmented.setdefault(target, augmented.get(target, []))
+    return find_cycle(augmented) is not None
+
+
+# Match a known prefix (IDEA|ISS|HND|T|L) followed by '-' and 1+ digits,
+# optionally wrapped in [[...]] or preceded by '@'. Anchored on a non-word
+# boundary on the left so "noT-001" doesn't match.
+_INLINE_REF_RE = re.compile(
+    r"(?:(?<=^)|(?<=[^A-Za-z0-9_]))"               # left boundary
+    r"(?:\[\[|@)?"                                  # optional [[ or @
+    r"(IDEA-\d+|ISS-\d+|HND-\d+|T-\d+|L-\d+)"       # captured ID
+    r"(?:\]\])?"                                    # optional ]]
+)
+
+
+def extract_inline_refs(body: str | None, *, self_id: str | None = None) -> list[str]:
+    """Scan markdown body for entity ID mentions.
+
+    Recognized patterns:
+      - Bare: T-001, ISS-007, L-003, HND-012, IDEA-005
+      - Wiki: [[T-001]]
+      - Mention: @T-001
+
+    Returns IDs in first-seen order, deduped. Excludes self_id when supplied.
+    Case-sensitive — uppercase prefixes only.
+    """
+    if not body:
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for match in _INLINE_REF_RE.finditer(body):
+        eid = match.group(1)
+        if eid in seen:
+            continue
+        if self_id and eid == self_id:
+            continue
+        seen.add(eid)
+        out.append(eid)
+    return out
+
+
+# Per-kind legacy field → typed link mapping.
+# (field_name, link_type, value_is_list) tuples per entity kind.
+_LEGACY_LINK_RULES: dict[str, tuple[tuple[str, str, bool], ...]] = {
+    "task": (
+        ("depends_on",      "depends_on",  True),
+        ("related_issues",  "relates_to",  True),
+        ("related_lessons", "informed_by", True),
+    ),
+    "issue": (
+        ("related_tasks",  "relates_to",    True),
+        ("fixed_in_task",  "fixed_in_task", False),
+        ("duplicate_of",   "duplicate_of",  False),
+    ),
+    "lesson": (
+        ("related_tasks",  "informs",    True),
+        ("related_issues", "relates_to", True),
+    ),
+    "handover": (
+        ("supersedes",     "supersedes",    True),
+        ("superseded_by",  "superseded_by", True),
+    ),
+    "idea": (
+        ("related_tasks", "relates_to", True),
+    ),
+}
+
+
+def legacy_links_to_typed(entity: dict, kind: str) -> list[dict]:
+    """Translate legacy linkage fields on `entity` into a typed `links` array.
+
+    Existing `entity['links']` entries are preserved. The output is deduped.
+    Does not mutate the entity in place — caller decides when to assign.
+    """
+    out: list[dict] = list(entity_links(entity))
+    seen = {(link["type"], link["target"]) for link in out}
+    rules = _LEGACY_LINK_RULES.get(kind, ())
+    for field, link_type, is_list in rules:
+        raw = entity.get(field)
+        if raw is None or raw == [] or raw == "":
+            continue
+        targets = raw if is_list else [raw]
+        for tgt in targets:
+            if not tgt:
+                continue
+            key = (link_type, tgt)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({"type": link_type, "target": tgt})
+    return out
+
+
+_LEGACY_FIELDS_TO_DROP: dict[str, tuple[str, ...]] = {
+    "task":     ("depends_on", "related_issues", "related_lessons"),
+    "issue":    ("related_tasks", "fixed_in_task", "duplicate_of"),
+    "lesson":   ("related_tasks", "related_issues"),
+    "handover": ("supersedes", "superseded_by"),
+    "idea":     ("related_tasks",),
+}
+
+
+def _fallback_links_if_absent(entity: dict, kind: str) -> None:
+    """If entity has no `links` array but has legacy fields, synthesize a
+    virtual `links` array. Used by read_entity_anywhere for read-fallback
+    on unmigrated projects. Does not write back.
+    """
+    if entity.get(LINK_FIELD):
+        return
+    synthesized = legacy_links_to_typed(entity, kind=kind)
+    if synthesized:
+        entity[LINK_FIELD] = synthesized
+
+
 def task_file_path(backlog_path: Path, task_id: str) -> Path:
     """Resolve the per-task file path given the backlog.yaml path.
 
