@@ -1333,7 +1333,7 @@ def flag_open_reason(backlog_path: Path, handover_id: str) -> str | None:
 
 
 def backfill_handover_status(backlog_data: dict[str, Any], backlog_path: Path) -> list[str]:
-    """One-time pass: stamp `status: done` on every handover lacking the field,
+    """One-time pass: stamp `status: open` on every handover lacking the field,
     plus archived handovers, then mark the backlog as backfilled.
 
     No-op if `handover_status_backfilled` is already truthy. Returns the list
@@ -3547,7 +3547,7 @@ def list_sessions() -> list[dict]:
             "handovers": [
                 {
                     "id": h["id"],
-                    "status": h.get("status", "todo"),
+                    "status": h.get("status", "open"),
                     "viewer_kind": HANDOVER_KIND_TO_VIEWER_KIND.get(h.get("session_kind"), "standalone"),
                     "tldr": h.get("tldr", ""),
                 }
