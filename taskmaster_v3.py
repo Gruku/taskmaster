@@ -106,6 +106,65 @@ def backfill_tldr(frontmatter: dict[str, Any], body: str = "") -> tuple[dict[str
     return new_fm, True
 
 
+SLIM_FIELDS: dict[str, tuple[str, ...]] = {
+    "task": (
+        "id", "title", "tldr", "next_step", "status", "priority",
+        "estimate", "phase", "epic",
+        "depends_on", "related_issues", "related_lessons",
+        "started", "completed", "branch", "worktree",
+        "blockers", "open_handovers",
+        "tldr_autogen",
+    ),
+    "issue": (
+        "id", "title", "tldr", "severity", "status", "components",
+        "impact", "location", "related_tasks", "fixed_in_task",
+        "duplicate_of", "discovered", "resolved", "tldr_autogen",
+    ),
+    "lesson": (
+        "id", "title", "tldr", "kind", "tier", "files",
+        "reinforce_count", "last_reinforced",
+        "task_titles_match", "task_kinds",
+        "related_tasks", "related_issues", "tldr_autogen",
+    ),
+    "handover": (
+        "id", "tldr", "next_action", "task_ids", "session_kind",
+        "status", "status_changed", "status_reason",
+        "created", "supersedes", "superseded_by", "flag_for_review",
+        "flag_reason",
+        "tldr_autogen",
+    ),
+    "idea": (
+        "id", "title", "tldr", "status", "tags",
+        "created_by", "related_tasks", "related_issues", "related_lessons",
+        "tldr_autogen",
+    ),
+}
+
+
+def slim_entity(
+    entity: dict[str, Any],
+    kind: str,
+    *,
+    open_handovers: list[str] | None = None,
+) -> dict[str, Any]:
+    """Return the slim view of an entity dict."""
+    if kind not in SLIM_FIELDS:
+        raise ValueError(f"Unknown entity kind: {kind!r}")
+    out: dict[str, Any] = {}
+    for key in SLIM_FIELDS[kind]:
+        if key == "open_handovers":
+            continue
+        if key in entity and entity[key] not in (None, "", [], {}):
+            out[key] = entity[key]
+    if kind == "task":
+        docs = entity.get("docs") or {}
+        if docs:
+            out["docs_available"] = sorted(docs.keys())
+        if open_handovers:
+            out["open_handovers"] = open_handovers
+    return out
+
+
 _legacy_warned: set[str] = set()
 
 
