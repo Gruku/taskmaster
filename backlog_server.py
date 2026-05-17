@@ -2729,8 +2729,20 @@ def backlog_lesson_list(tier: str = "", kind: str = "") -> str:
 
 
 @mcp.tool()
-def backlog_lesson_get(lesson_id: str) -> str:
-    """Read a lesson's full content (frontmatter + body)."""
+def backlog_lesson_get(
+    lesson_id: str,
+    verbose: bool = False,
+    sections: list[str] | None = None,
+    expand_links: bool = False,
+) -> str:
+    """Read a lesson's content.
+
+    By default returns a slim view (frontmatter fields only, no body) to
+    minimise token cost. Use verbose=True for the full body. Use sections
+    to pull specific named body sections (why, what_to_do, examples).
+    Use expand_links=True to expand related_tasks and related_issues to
+    {id, tldr} pills.
+    """
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
@@ -2738,8 +2750,38 @@ def backlog_lesson_get(lesson_id: str) -> str:
         fm, body = _read_lesson(bp, lesson_id)
     except FileNotFoundError:
         return f"Lesson not found: {lesson_id}"
-    fm_lines = [f"  {k}: {v}" for k, v in fm.items()]
-    return "---\n" + "\n".join(fm_lines) + "\n---\n" + body
+
+    # ── sections-only mode ───────────────────────────────────────────────────
+    if sections:
+        try:
+            sec_data = _resolve_sections(fm, kind="lesson", sections=sections, body=body)
+        except ValueError as exc:
+            return f"Error: {exc}"
+        lines = [f"## Lesson: {lesson_id}\n"]
+        for sec, content in sec_data.items():
+            lines.append(f"### {sec}\n{content}")
+        return "\n".join(lines)
+
+    # ── verbose mode ─────────────────────────────────────────────────────────
+    if verbose:
+        fm_lines = [f"  {k}: {v}" for k, v in fm.items()]
+        return "---\n" + "\n".join(fm_lines) + "\n---\n" + body
+
+    # ── slim mode (default) ──────────────────────────────────────────────────
+    slim = _slim_entity(fm, kind="lesson")
+
+    if expand_links:
+        data = _load()
+        tldr_index = _build_tldr_index(data, project_root=bp.parent.parent if bp.exists() else None)
+        for link_field in ("related_tasks", "related_issues"):
+            ids = slim.get(link_field) or []
+            if ids:
+                slim[link_field] = _expand_link_ids(ids, tldr_index)
+
+    lines = [f"## Lesson: {slim.pop('id', lesson_id)}\n"]
+    for k, v in slim.items():
+        lines.append(f"**{k}:** {v}")
+    return "\n".join(lines)
 
 
 @mcp.tool()
