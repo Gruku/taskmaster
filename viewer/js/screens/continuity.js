@@ -5,7 +5,9 @@ import { claimTopbar } from '../lib/topbar.js';
 import { groupByAction, groupByTime, groupByEntity, pickHero } from '../lib/continuity.js';
 import { createHero } from '../components/continuity/hero.js';
 import { createSpine } from '../components/continuity/spine.js';
+import { createResumeRail } from '../components/continuity/resume-rail.js';
 import { createItemRow } from '../components/continuity/item-row.js';
+import { renderBlock } from '../lib/xml-render.js';
 
 export const meta = { title: 'Continuity', icon: '◧', sidebarKey: 'dashboard' };
 
@@ -109,13 +111,20 @@ export async function mount(root, { store, api, prefs }) {
     const rails = groupByAction(items);
     const railsEl = h('div', { class: 'co-action-view__rails' });
     for (const [label, railItems] of Object.entries(rails)) {
-      const spine = createSpine({
-        label,
-        items: railItems,
-        empty: true,
-        onItemClick: (item) => navigate(item),
-      });
-      if (spine.root) railsEl.appendChild(spine.root);
+      // Resume rail uses a dedicated component that splits Open / Recent.
+      const rail = label === 'resume'
+        ? createResumeRail({
+            items: railItems,
+            empty: true,
+            onItemClick: navigate,
+          })
+        : createSpine({
+            label,
+            items: railItems,
+            empty: true,
+            onItemClick: navigate,
+          });
+      if (rail.root) railsEl.appendChild(rail.root);
     }
     wrap.appendChild(railsEl);
     return wrap;
@@ -130,7 +139,7 @@ export async function mount(root, { store, api, prefs }) {
       const section = h('div', { class: 'co-time-view__bucket' });
       section.appendChild(h('div', { class: 'co-time-view__bucket-head' }, LABELS[key] || key));
       for (const item of bucket) {
-        const row = createItemRow({ item, onClick: (it) => navigate(it) });
+        const row = createItemRow({ item, onClick: navigate });
         section.appendChild(row.root);
       }
       wrap.appendChild(section);
@@ -149,7 +158,7 @@ export async function mount(root, { store, api, prefs }) {
       const spine = createSpine({
         label: type,
         items: groupItems,
-        onItemClick: (item) => navigate(item),
+        onItemClick: navigate,
       });
       if (spine.root) {
         const section = h('div', { class: 'co-entity-view__section' });
@@ -163,10 +172,45 @@ export async function mount(root, { store, api, prefs }) {
     return wrap;
   }
 
-  // ── Navigation placeholder (detail panels wired in later tasks). ───────
-  function navigate(item) {
-    // TODO: open detail panel for item (Task 15+).
-    console.log('[continuity] navigate to', item?.id, item?.type);
+  // ── Inline expansion: fetch handover/decision body and render XML tags. ──
+  async function fetchBody(item) {
+    if (!item?.id) return null;
+    try {
+      if (item.type === 'handover') {
+        return await api.get(`/api/handover/${encodeURIComponent(item.id)}`);
+      }
+      if (item.type === 'decision') {
+        return await api.get(`/api/decisions/${encodeURIComponent(item.id)}`);
+      }
+    } catch (e) {
+      console.error('[continuity] body fetch failed', e);
+    }
+    return null;
+  }
+
+  function buildExpandedNode(item, doc) {
+    if (!doc) return h('p', { class: 'co-xblock__p' }, 'Failed to load body.');
+    const body = doc.body || '';
+    if (item.type === 'decision') {
+      const rationale = doc.resolved_rationale || doc.dropped_reason || '';
+      const text = [rationale, body].filter(Boolean).join('\n\n');
+      return renderBlock(text || '(no rationale recorded)');
+    }
+    return renderBlock(body || '(empty body)');
+  }
+
+  async function navigate(item, controller) {
+    if (!controller) return;
+    if (controller.isExpanded()) {
+      controller.clearExpanded();
+      return;
+    }
+    if (item.type !== 'handover' && item.type !== 'decision') return;
+    controller.setLoading();
+    const doc = await fetchBody(item);
+    // Only render if still expanded (user may have collapsed mid-fetch).
+    if (!controller.isExpanded()) return;
+    controller.setExpanded(buildExpandedNode(item, doc));
   }
 
   // ── Main render ────────────────────────────────────────────────────────

@@ -26,3 +26,27 @@ test('view-switcher reflects active prop', () => {
   const active = sw.root.querySelector('button.is-active');
   assert.equal(active?.textContent.toLowerCase(), 'entity');
 });
+
+test('view-switcher updates active class on click', () => {
+  const sw = createViewSwitcher({ active: 'action', onSelect: () => {} });
+  document.body.appendChild(sw.root);
+  const btns = sw.root.querySelectorAll('button');
+  assert.ok(btns[0].classList.contains('is-active'));
+
+  btns[1].click();
+  assert.ok(!btns[0].classList.contains('is-active'));
+  assert.ok(btns[1].classList.contains('is-active'));
+  assert.equal(btns[1].getAttribute('aria-selected'), 'true');
+  assert.equal(btns[0].getAttribute('aria-selected'), 'false');
+
+  btns[2].click();
+  assert.ok(!btns[1].classList.contains('is-active'));
+  assert.ok(btns[2].classList.contains('is-active'));
+});
+
+test('view-switcher setActive imperative API moves the highlight', () => {
+  const sw = createViewSwitcher({ active: 'action', onSelect: () => {} });
+  sw.setActive('time');
+  const active = sw.root.querySelector('button.is-active');
+  assert.equal(active?.dataset.key, 'time');
+});

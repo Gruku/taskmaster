@@ -255,3 +255,114 @@
 
 .co-entity-view { display: flex; flex-direction: column; gap: 18px; }
 .co-entity-view__section { display: flex; flex-direction: column; gap: 6px; }
+
+/* ── Resume rail (Open / Recent sub-groups) ─────────────────────────────── */
+.co-resume { gap: 10px; }
+.co-resume__sub { display: flex; flex-direction: column; gap: 4px; }
+.co-resume__sub-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 2px 0;
+}
+.co-resume__sub-label {
+  font-size: 0.66rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.10em;
+  color: var(--ink-4);
+}
+.co-resume__sub-count {
+  font-size: 0.66rem;
+  color: var(--ink-4);
+}
+.co-resume__list { display: flex; flex-direction: column; gap: 4px; }
+
+/* Compact row variant — used for "Recent" done handovers. */
+.co-row--compact {
+  padding: 6px 12px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+}
+.co-row--compact:hover {
+  background: var(--bg-card);
+  border-color: var(--border);
+}
+.co-row--compact .co-row__line1 { font-size: 0.82rem; }
+
+/* ── Inline XML tag chips (in co-row next / where) ──────────────────────── */
+.co-row__xml { display: inline; }
+.co-xtag {
+  display: inline-block;
+  padding: 0 6px;
+  margin: 0 2px;
+  font-size: 0.66rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border-radius: 2px;
+  font-weight: 600;
+  vertical-align: baseline;
+  background: var(--bg-card);
+  color: var(--ink-3);
+  border: 1px solid var(--border);
+}
+.co-xtag--lc  { color: var(--amber);  background: color-mix(in srgb, var(--amber)  12%, transparent); border-color: color-mix(in srgb, var(--amber)  25%, transparent); }
+.co-xtag--th  { color: var(--ink-3);  background: rgba(160,156,149,0.10); border-color: var(--border); }
+.co-xtag--ex  { color: var(--accent); background: var(--accent-soft);     border-color: color-mix(in srgb, var(--accent) 25%, transparent); }
+.co-xtag--sr  { color: var(--red);    background: color-mix(in srgb, var(--red)    12%, transparent); border-color: color-mix(in srgb, var(--red)    25%, transparent); }
+.co-xtag--dec { color: var(--red);    background: color-mix(in srgb, var(--red)    12%, transparent); border-color: color-mix(in srgb, var(--red)    25%, transparent); }
+.co-xtag--iss { color: var(--amber);  background: color-mix(in srgb, var(--amber)  12%, transparent); border-color: color-mix(in srgb, var(--amber)  25%, transparent); }
+
+/* ── Block XML rendering (handover body / decision rationale) ───────────── */
+.co-xblock { display: flex; flex-direction: column; gap: 10px; }
+.co-xblock__p {
+  margin: 0;
+  font-size: 0.88rem;
+  line-height: 1.5;
+  color: var(--ink-2);
+  white-space: pre-wrap;
+}
+.co-xblock__tag {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.co-xblock__tag-label {
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.co-xblock__tag-body {
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--ink-2);
+  white-space: pre-wrap;
+}
+.co-xblock__tag--lc  { background: color-mix(in srgb, var(--amber)   8%, var(--bg-card)); border-color: color-mix(in srgb, var(--amber)  25%, transparent); }
+.co-xblock__tag--th  { background: var(--bg-card); }
+.co-xblock__tag--ex  { background: color-mix(in srgb, var(--accent)  8%, var(--bg-card)); border-color: color-mix(in srgb, var(--accent) 25%, transparent); }
+.co-xblock__tag--sr  { background: color-mix(in srgb, var(--red)     8%, var(--bg-card)); border-color: color-mix(in srgb, var(--red)    25%, transparent); }
+.co-xblock__tag--dec { background: color-mix(in srgb, var(--red)     8%, var(--bg-card)); border-color: color-mix(in srgb, var(--red)    25%, transparent); }
+.co-xblock__tag--iss { background: color-mix(in srgb, var(--amber)   8%, var(--bg-card)); border-color: color-mix(in srgb, var(--amber)  25%, transparent); }
+
+/* ── Expanded body inline beneath a row ─────────────────────────────────── */
+.co-row__expanded {
+  margin-top: 6px;
+  padding: 10px 14px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+.co-row__expanded-loading {
+  font-size: 0.82rem;
+  color: var(--ink-4);
+  padding: 6px 0;
+}
