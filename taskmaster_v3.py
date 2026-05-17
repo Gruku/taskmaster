@@ -50,6 +50,20 @@ def atomic_write(path: Path, content: str) -> None:
 
 TLDR_MAX_CHARS = 200
 
+# Canonical section names per entity type.
+# For tasks: 'notes' and 'review_instructions' are inline frontmatter fields;
+# 'spec'/'plan'/'design'/'analysis'/'roadmap' are resolved from task.docs.<key>
+# (external file paths in the docs dict).
+CANONICAL_SECTIONS: dict[str, tuple[str, ...]] = {
+    "task": ("notes", "review_instructions", "spec", "plan", "design", "analysis", "roadmap"),
+    "handover": ("decisions", "notes", "blockers", "where_id_start"),
+    "issue": ("repro", "investigation", "notes"),
+    "lesson": ("why", "what_to_do", "examples"),
+}
+
+TASK_INLINE_SECTIONS: frozenset[str] = frozenset({"notes", "review_instructions"})
+TASK_DOC_SECTIONS: frozenset[str] = frozenset({"spec", "plan", "design", "analysis", "roadmap"})
+
 _HEADING_RE = re.compile(r"^#{1,6}\s+.*$", re.MULTILINE)
 _SENTENCE_END_RE = re.compile(r"(?<=[.!?])\s+")
 _WHITESPACE_RE = re.compile(r"\s+")
