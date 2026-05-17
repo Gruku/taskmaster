@@ -57,6 +57,8 @@ from taskmaster_v3 import (
     SCHEMA_V2,
     SCHEMA_V3,
     SCHEMA_DEFAULT,
+    TLDR_MAX_CHARS,
+    extract_tldr,
     HANDOVER_KINDS,
     HEAVY_FIELDS as _HEAVY_FIELDS,
     detect_schema_version as _detect_schema_version,
@@ -137,6 +139,13 @@ from taskmaster_v3 import (
     load_session_snapshot,
     snapshot_diff as _snapshot_diff,
     read_hook_events as _read_hook_events,
+    slim_entity as _slim_entity,
+    resolve_sections as _resolve_sections,
+    expand_link_ids as _expand_link_ids,
+    build_tldr_index as _build_tldr_index,
+    BODY_KEY as _BODY_KEY,
+    render_frontmatter as _render_frontmatter,
+    CANONICAL_SECTIONS as _CANONICAL_SECTIONS,
 )
 
 
@@ -163,6 +172,22 @@ def _ensure_handover_status_backfilled() -> None:
         _sync_handover_index(data, bp)
         _save(data)
     _HANDOVER_STATUS_BACKFILL_RAN = True
+
+
+def _get_open_handovers_for_task(bp: Path, task_id: str) -> list[str]:
+    """Scan handovers dir for open handovers referencing task_id."""
+    hdir = bp.parent / "handovers"
+    if not hdir.exists():
+        return []
+    result = []
+    for path in sorted(hdir.glob("*.md")):
+        try:
+            fm, _ = _read_handover(bp, path.stem)
+        except Exception:
+            continue
+        if fm.get("status") == "open" and task_id in (fm.get("task_ids") or []):
+            result.append(fm.get("id") or path.stem)
+    return result
 
 
 def _load_auto_state():
@@ -719,8 +744,14 @@ def _task_context(data: dict, task: dict, epic: dict) -> str:
 
 
 @mcp.tool()
-def backlog_status() -> str:
-    """Show project dashboard: epic progress table, in-progress tasks, blocked items, next priorities, and stats."""
+def backlog_status(verbose: bool = False) -> str:
+    """Show project dashboard: epic progress table, in-progress tasks, blocked items, next priorities, and stats.
+
+    Args:
+        verbose: If True, include archived task count in stats and show up to
+            10 stale tasks and all next-up items. Default (slim) mode omits
+            archived counts, caps next-up at 5, and caps stale tasks at 3.
+    """
     data = _load()
     regenerate_context(data)  # ensure fresh stats without writing
     ctx = data["context"]
@@ -784,19 +815,20 @@ def backlog_status() -> str:
     else:
         lines.append("**Blocked:** —")
 
-    # Next Up
+    # Next Up — cap at 5 in slim mode
     nu = ctx.get("next_up", [])
+    next_up_cap = None if verbose else 5
     if nu:
         lines.append("**Next Up:**")
-        for t in nu:
+        for t in (nu if next_up_cap is None else nu[:next_up_cap]):
             lines.append(f"- `{t['id']}` — {t['title']} ({t.get('priority', 'medium')})")
     else:
         lines.append("**Next Up:** —")
 
-    # Stats
+    # Stats — omit archived count in slim mode
     s = ctx.get("stats", {})
     stats_line = f"\nTotal: {s.get('total', 0)} | Done: {s.get('done', 0)} | In Progress: {s.get('in_progress', 0)} | In Review: {s.get('in_review', 0)} | Active: {s.get('in_progress', 0) + s.get('in_review', 0)} | Todo: {s.get('todo', 0)} | Blocked: {s.get('blocked', 0)}"
-    if s.get("archived", 0):
+    if verbose and s.get("archived", 0):
         stats_line += f" | Archived: {s['archived']}"
     lines.append(stats_line)
 
@@ -824,6 +856,8 @@ def backlog_status() -> str:
             lines.append(f"- {marker} **{ph['name']}** ({ph_st['done']}/{ph_st['total']}) — {s}{target_note}")
 
     # Stale tasks (todo tasks not referenced in 14+ days)
+    # cap at 3 in slim mode, 10 in verbose
+    stale_cap = 10 if verbose else 3
     stale_tasks = []
     for ep in data["epics"]:
         for t in ep.get("tasks", []):
@@ -846,15 +880,33 @@ def backlog_status() -> str:
     if stale_tasks:
         stale_tasks.sort(key=lambda x: x[2], reverse=True)
         lines.append(f"\n**Stale tasks** (not referenced in 14+ days):")
-        for t, ep, days in stale_tasks[:10]:
+        for t, ep, days in stale_tasks[:stale_cap]:
             lines.append(f"- `{t['id']}` — {t['title']} — stale {days}d ({ep['id']})")
         lines.append("*Still relevant? Archive with `backlog_archive_task` or touch to refresh.*")
+
+    # Verbose: show archived tasks explicitly
+    if verbose:
+        archived_tasks = []
+        for ep in data["epics"]:
+            for t in ep.get("tasks", []):
+                if t.get("status") == "archived":
+                    archived_tasks.append((t, ep))
+        if archived_tasks:
+            lines.append(f"\n**Archived tasks** ({len(archived_tasks)}):")
+            for t, ep in archived_tasks[:20]:
+                lines.append(f"- `{t['id']}` — {t['title']} ({ep['id']})")
 
     return "\n".join(lines)
 
 
 @mcp.tool()
-def backlog_list_tasks(epic: str = "", status: str = "", priority: str = "", phase: str = "") -> str:
+def backlog_list_tasks(
+    epic: str = "",
+    status: str = "",
+    priority: str = "",
+    phase: str = "",
+    verbose: bool = False,
+) -> str:
     """List tasks with optional filters. All params optional — defaults to showing all tasks.
 
     Args:
@@ -862,10 +914,12 @@ def backlog_list_tasks(epic: str = "", status: str = "", priority: str = "", pha
         status: Filter by status: todo, in-progress, in-review, done, blocked
         priority: Filter by priority: critical, high, medium, low
         phase: Filter by phase ID
+        verbose: If True, include heavy fields (notes) per task entry. Slim
+            (default) shows id, title, tldr, priority, epic, and status only.
     """
     data = _load()
     priority_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
-    results: list[tuple[int, str, str]] = []  # (priority_rank, created, formatted)
+    results: list[tuple[int, str, str, dict]] = []  # (priority_rank, created, formatted, task)
     for ep in data["epics"]:
         if epic and ep["id"] != epic:
             continue
@@ -883,10 +937,12 @@ def backlog_list_tasks(epic: str = "", status: str = "", priority: str = "", pha
             if phase and t.get("phase") != phase:
                 continue
             pri = t.get("priority", "medium")
+            entry = f"`{t['id']}` — {t['title']} ({pri}, {ep['id']}, {t.get('status', 'todo')})"
             results.append((
                 priority_order.get(pri, 9),
                 str(t.get("created", "")),
-                f"`{t['id']}` — {t['title']} ({pri}, {ep['id']}, {t.get('status', 'todo')})",
+                entry,
+                t,
             ))
 
     if not results:
@@ -902,15 +958,58 @@ def backlog_list_tasks(epic: str = "", status: str = "", priority: str = "", pha
         return f"No tasks found matching: {', '.join(filters) if filters else 'any'}"
 
     results.sort(key=lambda x: (x[0], x[1]))
-    return f"**{len(results)} tasks:**\n" + "\n".join(f"- {r[2]}" for r in results)
+
+    if verbose:
+        lines = [f"**{len(results)} tasks:**"]
+        for _, _, entry, t in results:
+            lines.append(f"- {entry}")
+            if t.get("tldr"):
+                lines.append(f"  tldr: {t['tldr']}")
+            if t.get("notes"):
+                lines.append(f"  notes: {t['notes']}")
+        return "\n".join(lines)
+
+    # Slim mode: include tldr inline but omit heavy fields (notes, body)
+    lines = [f"**{len(results)} tasks:**"]
+    for _, _, entry, t in results:
+        tldr = t.get("tldr", "")
+        slim_entry = entry
+        if tldr:
+            slim_entry = f"{entry} — {tldr}"
+        lines.append(f"- {slim_entry}")
+    return "\n".join(lines)
 
 
 @mcp.tool()
-def backlog_get_task(task_id: str) -> str:
-    """Get full details for a single task including epic context and related tasks.
+def backlog_get_task(
+    task_id: str,
+    verbose: bool = False,
+    sections: list[str] | None = None,
+    expand_links: bool = False,
+) -> str:
+    """Get details for a single task including epic context and related tasks.
+
+    By default returns a slim view (tldr, status, priority, key links) to
+    minimise token cost. Use verbose=True for the full body (notes, review
+    instructions, docs, spec-review record, epic context). Use sections to
+    pull specific named body sections (e.g. ["notes", "spec"]). Use
+    expand_links=True to swap dependency/issue/lesson IDs for {id, tldr} pills.
+
+    Note: Unlike the other _get tools (handover/issue/lesson/idea), this tool
+    honours expand_links in *both* slim and verbose modes for the depends_on
+    field — verbose mode hand-rolls the expansion inline. The other four tools
+    treat expand_links as a slim-mode-only feature and silently ignore it when
+    verbose=True.
 
     Args:
         task_id: The task ID (e.g., "ue-plugin-003")
+        verbose: If True, include full body fields (notes, review_instructions,
+            docs, spec-review, epic context, recently completed tasks).
+        sections: Named sections to include (e.g. ["notes", "spec"]).
+            Canonical sections for tasks: notes, review_instructions, spec,
+            plan, design, analysis, roadmap.
+        expand_links: If True, replace bare IDs in depends_on,
+            related_issues, related_lessons with {id, tldr} pills.
     """
     data = _load()
     result = _find_task(data, task_id)
@@ -923,6 +1022,45 @@ def backlog_get_task(task_id: str) -> str:
     task["last_referenced"] = _now()
     _save(data)
 
+    bp = _backlog_path()
+
+    # ── sections-only mode ───────────────────────────────────────────────────
+    if sections:
+        try:
+            sec_data = _resolve_sections(
+                task,
+                kind="task",
+                sections=sections,
+                body=task.get(_BODY_KEY, ""),
+                project_root=bp.parent.parent if bp.exists() else None,
+            )
+        except ValueError as exc:
+            return f"Error: {exc}"
+        lines = [f"## `{task['id']}` — {task['title']}\n"]
+        for sec, content in sec_data.items():
+            lines.append(f"### {sec}\n{content}")
+        return "\n".join(lines)
+
+    # ── slim mode (default) ──────────────────────────────────────────────────
+    if not verbose:
+        open_handovers = _get_open_handovers_for_task(bp, task_id) if bp.exists() else []
+        slim = _slim_entity(task, kind="task", open_handovers=open_handovers or None)
+
+        if expand_links:
+            tldr_index = _build_tldr_index(data, project_root=bp.parent.parent if bp.exists() else None)
+            for link_field in ("depends_on", "related_issues", "related_lessons"):
+                if link_field in slim:
+                    ids = slim[link_field]
+                    if isinstance(ids, str):
+                        ids = [x.strip() for x in ids.split(",") if x.strip()]
+                    slim[link_field] = _expand_link_ids(ids, tldr_index)
+
+        lines = [f"## `{slim.pop('id')}` — {slim.pop('title', task.get('title', ''))}\n"]
+        for k, v in slim.items():
+            lines.append(f"**{k}:** {v}")
+        return "\n".join(lines)
+
+    # ── verbose mode ─────────────────────────────────────────────────────────
     lines = [f"## `{task['id']}` — {task['title']}\n"]
 
     fields = [
@@ -952,15 +1090,23 @@ def backlog_get_task(task_id: str) -> str:
     if isinstance(depends_on, str):
         depends_on = [depends_on]
     if depends_on:
-        lines.append("\n**Depends on:**")
-        for dep_id in depends_on:
-            dep_result = _find_task(data, dep_id)
-            if dep_result:
-                dep_task, _ = dep_result
-                status = dep_task.get("status", "todo")
-                lines.append(f"- `{dep_id}` — {dep_task['title']} ({status})")
-            else:
-                lines.append(f"- `{dep_id}` — NOT FOUND")
+        if expand_links:
+            tldr_index = _build_tldr_index(data, project_root=bp.parent.parent if bp.exists() else None)
+            pills = _expand_link_ids(depends_on, tldr_index)
+            lines.append("\n**Depends on:**")
+            for pill in pills:
+                tldr_str = f" — {pill['tldr']}" if pill.get("tldr") else ""
+                lines.append(f"- `{pill['id']}`{tldr_str}")
+        else:
+            lines.append("\n**Depends on:**")
+            for dep_id in depends_on:
+                dep_result = _find_task(data, dep_id)
+                if dep_result:
+                    dep_task, _ = dep_result
+                    status = dep_task.get("status", "todo")
+                    lines.append(f"- `{dep_id}` — {dep_task['title']} ({status})")
+                else:
+                    lines.append(f"- `{dep_id}` — NOT FOUND")
 
     # Show docs references
     task_docs = task.get("docs")
@@ -1302,11 +1448,44 @@ def backlog_validate() -> str:
     # Stats summary
     stats = {"total": len(all_tasks), "issues": len(issues)}
 
+    # ── tldr warnings (advisory, not blocking) ─────────────────────────────
+    warnings: list[str] = []
+    for epic in data.get("epics", []):
+        for task in epic.get("tasks", []):
+            if not task.get("tldr"):
+                warnings.append(
+                    f"  warning: task {task['id']} missing tldr — run scripts/backfill_tldr.py"
+                )
+
+    # Also scan artifact dirs for missing tldr
+    bp = _backlog_path()
+    tm_dir = bp.parent
+    from taskmaster_v3 import read_task_file as _rtf
+    for subdir in ("issues", "lessons", "handovers", "ideas"):
+        d = tm_dir / subdir
+        if not d.exists():
+            continue
+        for path in sorted(d.glob("*.md")):
+            try:
+                fm, _ = _rtf(path)
+            except Exception:
+                continue
+            if fm.get("id") and not fm.get("tldr"):
+                warnings.append(
+                    f"  warning: {fm['id']} missing tldr — run scripts/backfill_tldr.py"
+                )
+
+    output_parts: list[str] = []
     if issues:
         header = f"**{len(issues)} issue{'s' if len(issues) != 1 else ''} found** across {stats['total']} tasks:\n"
-        return header + "\n".join(f"- {i}" for i in issues)
+        output_parts.append(header + "\n".join(f"- {i}" for i in issues))
     else:
-        return f"All clear — {stats['total']} tasks validated, no issues found."
+        output_parts.append(f"All clear — {stats['total']} tasks validated, no issues found.")
+
+    if warnings:
+        output_parts.append("## Warnings\n" + "\n".join(warnings))
+
+    return "\n\n".join(output_parts)
 
 
 # ── Mutating Tools ───────────────────────────────────────────
@@ -1693,8 +1872,9 @@ def backlog_handover_list(
     since: str = "",
     status: str = "all",
     limit: int = 10,
+    verbose: bool = False,
 ) -> str:
-    """List recent handovers (slim metadata only — no bodies).
+    """List recent handovers. By default shows slim one-liners (id, date, tldr).
 
     Reads from the backlog.yaml index, which is bounded to the most recent 30.
     Older handovers are still on disk under handovers/_archive/ but not listed
@@ -1709,6 +1889,8 @@ def backlog_handover_list(
         status: One of todo, in-progress, done, or "all" (default). Filters
             against the index entry — does not read every file.
         limit: Maximum number of entries to return after filtering (default 10).
+        verbose: If True, include additional index fields (next_action, task_ids,
+            status) per entry. Slim (default) shows id, date, kind, and tldr.
     """
     bp = _backlog_path()
     if not bp.exists():
@@ -1753,12 +1935,35 @@ def backlog_handover_list(
         when = e.get("created") or e.get("date") or ""
         when_tag = f" ({when})" if when else ""
         lines.append(f"- {e['id']}{when_tag}{tag} — {e.get('tldr', '')}")
+        if verbose:
+            if e.get("next_action"):
+                lines.append(f"  next: {e['next_action']}")
+            tids = e.get("task_ids") or []
+            if tids:
+                lines.append(f"  tasks: {', '.join(tids)}")
+            if e.get("status"):
+                lines.append(f"  status: {e['status']}")
     return "\n".join(lines)
 
 
 @mcp.tool()
-def backlog_handover_get(handover_id: str) -> str:
-    """Read a handover's full content (frontmatter + body).
+def backlog_handover_get(
+    handover_id: str,
+    verbose: bool = False,
+    sections: list[str] | None = None,
+    expand_links: bool = False,
+) -> str:
+    """Read a handover's content.
+
+    By default returns a slim view (frontmatter fields only, no body) to
+    minimise token cost. Use verbose=True to include the full markdown body.
+    Use sections to pull specific named body sections (decisions, notes,
+    blockers, where_id_start). Use expand_links=True to expand task_ids to
+    {id, tldr} pills.
+
+    Note: expand_links is a slim-mode feature. When verbose=True, the full
+    frontmatter is rendered as-is and expand_links is silently ignored. To
+    get expanded links use slim mode (verbose=False) with expand_links=True.
 
     Use when start-session shows a handover tldr that you want to read in full,
     or when picking a task that has linked handovers.
@@ -1766,6 +1971,11 @@ def backlog_handover_get(handover_id: str) -> str:
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
+    if verbose and expand_links:
+        # expand_links is a slim-mode feature; in verbose mode the full frontmatter
+        # is rendered as-is (no ID→pill substitution). To get expanded links, use
+        # slim mode (verbose=False) with expand_links=True.
+        pass  # silently ignore expand_links in verbose
     _ensure_handover_status_backfilled()
     try:
         fm, body = _read_handover(bp, handover_id)
@@ -1778,8 +1988,36 @@ def backlog_handover_get(handover_id: str) -> str:
         from taskmaster_v3 import read_task_file as _read_task_file
         fm, body = _read_task_file(candidates[0])
 
-    fm_lines = [f"  {k}: {v}" for k, v in fm.items()]
-    return "---\n" + "\n".join(fm_lines) + "\n---\n" + body
+    # ── sections-only mode ───────────────────────────────────────────────────
+    if sections:
+        try:
+            sec_data = _resolve_sections(fm, kind="handover", sections=sections, body=body)
+        except ValueError as exc:
+            return f"Error: {exc}"
+        lines = [f"## Handover: {handover_id}\n"]
+        for sec, content in sec_data.items():
+            lines.append(f"### {sec}\n{content}")
+        return "\n".join(lines)
+
+    # ── verbose mode ─────────────────────────────────────────────────────────
+    if verbose:
+        fm_lines = [f"  {k}: {v}" for k, v in fm.items()]
+        return "---\n" + "\n".join(fm_lines) + "\n---\n" + body
+
+    # ── slim mode (default) ──────────────────────────────────────────────────
+    slim = _slim_entity(fm, kind="handover")
+
+    if expand_links:
+        data = _load()
+        tldr_index = _build_tldr_index(data, project_root=bp.parent.parent if bp.exists() else None)
+        task_ids = slim.get("task_ids") or []
+        if task_ids:
+            slim["task_ids"] = _expand_link_ids(task_ids, tldr_index)
+
+    lines = [f"## Handover: {slim.pop('id', handover_id)}\n"]
+    for k, v in slim.items():
+        lines.append(f"**{k}:** {v}")
+    return "\n".join(lines)
 
 
 @mcp.tool()
@@ -1893,6 +2131,7 @@ def backlog_issue_create(
     related_tasks: list[str] | None = None,
     discovered_by: str = "",
     body: str = "",
+    tldr: str = "",
 ) -> str:
     """Log a bug as a first-class issue, separate from tasks.
 
@@ -1908,12 +2147,19 @@ def backlog_issue_create(
         related_tasks: Task ids attempting or related to this issue.
         discovered_by: Who/what found it (manual QA, alert, customer report).
         body: Markdown body for repro steps + investigation notes.
+        tldr: One-line essence of the issue. Auto-generated from impact or
+            title if omitted.
     """
     bp = _backlog_path()
     if not bp.exists():
         return f"Error: no backlog found at {bp}. Run `backlog_init` first."
     if severity not in ISSUE_SEVERITIES:
         return f"Error: severity must be one of {ISSUE_SEVERITIES}"
+    # tldr: use supplied value, or auto-generate from impact/title
+    tldr_autogen = False
+    if not tldr:
+        tldr = extract_tldr(impact) or title[:TLDR_MAX_CHARS]
+        tldr_autogen = True
     try:
         iid, target = _write_issue(
             bp,
@@ -1925,6 +2171,8 @@ def backlog_issue_create(
             related_tasks=related_tasks or [],
             discovered_by=discovered_by,
             body=body,
+            tldr=tldr,
+            tldr_autogen=tldr_autogen,
         )
     except ValueError as exc:
         return f"Error: {exc}"
@@ -1941,12 +2189,20 @@ def backlog_issue_list(
     severity: str = "",
     status: str = "",
     limit: int = 20,
+    verbose: bool = False,
 ) -> str:
     """List issues, optionally filtered by severity and/or status.
 
     Reads from the backlog.yaml index (sorted P0 → P3). Default lists the
     top 20 active issues regardless of status — pass `status=open` to
     focus on what still needs work.
+
+    Args:
+        severity: Filter by severity: P0, P1, P2, P3.
+        status: Filter by status: open, investigating, fixed, wontfix, duplicate.
+        limit: Maximum number of entries to return (default 20).
+        verbose: If True, include body content (repro steps) per entry. Slim
+            (default) shows id, severity, status, title, and tldr.
     """
     bp = _backlog_path()
     if not bp.exists():
@@ -1964,25 +2220,98 @@ def backlog_issue_list(
     for e in entries:
         comps = ", ".join(e.get("components") or [])
         comps_tag = f" [{comps}]" if comps else ""
-        lines.append(
+        line = (
             f"- {e['id']} {e.get('severity', '?')} {e.get('status', '?'):14} "
             f"— {e.get('title', '')}{comps_tag}"
         )
+        # In slim mode, enrich with tldr from file (index omits tldr)
+        if not verbose:
+            try:
+                fm, _ = _read_issue(bp, e["id"])
+                tldr = fm.get("tldr", "")
+                if tldr:
+                    line += f" — {tldr}"
+            except (FileNotFoundError, OSError):
+                pass
+        lines.append(line)
+        if verbose:
+            try:
+                fm, body = _read_issue(bp, e["id"])
+                if fm.get("tldr"):
+                    lines.append(f"  tldr: {fm['tldr']}")
+                if body and body.strip():
+                    lines.append(f"  body: {body.strip()[:200]}")
+            except (FileNotFoundError, OSError):
+                pass
     return "\n".join(lines)
 
 
 @mcp.tool()
-def backlog_issue_get(issue_id: str) -> str:
-    """Read an issue's full content (frontmatter + body)."""
+def backlog_issue_get(
+    issue_id: str,
+    verbose: bool = False,
+    sections: list[str] | None = None,
+    expand_links: bool = False,
+) -> str:
+    """Read an issue's content.
+
+    By default returns a slim view (frontmatter fields only, no body) to
+    minimise token cost. Use verbose=True for the full body (repro steps,
+    investigation notes). Use sections to pull specific named body sections
+    (repro, investigation, notes). Use expand_links=True to expand
+    related_tasks to {id, tldr} pills.
+
+    Note: expand_links is a slim-mode feature. When verbose=True, the full
+    frontmatter is rendered as-is and expand_links is silently ignored. To
+    get expanded links use slim mode (verbose=False) with expand_links=True.
+    """
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
+    if verbose and expand_links:
+        # expand_links is a slim-mode feature; in verbose mode the full frontmatter
+        # is rendered as-is (no ID→pill substitution). To get expanded links, use
+        # slim mode (verbose=False) with expand_links=True.
+        pass  # silently ignore expand_links in verbose
     try:
         fm, body = _read_issue(bp, issue_id)
     except FileNotFoundError:
         return f"Issue not found: {issue_id}"
-    fm_lines = [f"  {k}: {v}" for k, v in fm.items()]
-    return "---\n" + "\n".join(fm_lines) + "\n---\n" + body
+
+    # ── sections-only mode ───────────────────────────────────────────────────
+    if sections:
+        try:
+            sec_data = _resolve_sections(fm, kind="issue", sections=sections, body=body)
+        except ValueError as exc:
+            return f"Error: {exc}"
+        lines = [f"## Issue: {issue_id}\n"]
+        for sec, content in sec_data.items():
+            lines.append(f"### {sec}\n{content}")
+        return "\n".join(lines)
+
+    # ── verbose mode ─────────────────────────────────────────────────────────
+    if verbose:
+        fm_lines = [f"  {k}: {v}" for k, v in fm.items()]
+        return "---\n" + "\n".join(fm_lines) + "\n---\n" + body
+
+    # ── slim mode (default) ──────────────────────────────────────────────────
+    slim = _slim_entity(fm, kind="issue")
+
+    if expand_links:
+        data = _load()
+        tldr_index = _build_tldr_index(data, project_root=bp.parent.parent if bp.exists() else None)
+        related_tasks = slim.get("related_tasks") or []
+        if related_tasks:
+            slim["related_tasks"] = _expand_link_ids(related_tasks, tldr_index)
+        fixed_in = slim.get("fixed_in_task")
+        if fixed_in:
+            pills = _expand_link_ids([fixed_in], tldr_index)
+            slim["fixed_in_task"] = pills[0] if pills else fixed_in
+
+    lines = [f"## Issue: {slim.pop('id', issue_id)}\n"]
+    for k, v in slim.items():
+        lines.append(f"**{k}:** {v}")
+    return "\n".join(lines)
 
 
 @mcp.tool()
@@ -2239,6 +2568,7 @@ def backlog_idea_create(
     related_issues: list[str] | None = None,
     related_lessons: list[str] | None = None,
     created_by: str = "Claude",
+    tldr: str = "",
 ) -> str:
     """Log an idea — a lightweight, unvalidated thought. Lighter than a task.
 
@@ -2256,10 +2586,17 @@ def backlog_idea_create(
         related_lessons: Lesson ids this idea relates to.
         created_by: Who logged it ("Claude" by default; "user" when
             invoked via /add-idea).
+        tldr: One-line essence of the idea. Auto-generated from body or
+            title if omitted.
     """
     bp = _backlog_path()
     if not bp.exists():
         return f"Error: no backlog found at {bp}. Run `backlog_init` first."
+    # tldr: use supplied value, or auto-generate from body/title
+    tldr_autogen = False
+    if not tldr:
+        tldr = extract_tldr(body) or title[:TLDR_MAX_CHARS]
+        tldr_autogen = True
     try:
         iid, target = _write_idea(
             bp,
@@ -2271,6 +2608,8 @@ def backlog_idea_create(
             related_issues=related_issues or [],
             related_lessons=related_lessons or [],
             created_by=created_by,
+            tldr=tldr,
+            tldr_autogen=tldr_autogen,
         )
     except ValueError as exc:
         return f"Error: {exc}"
@@ -2338,6 +2677,62 @@ def backlog_idea_list(
         st = e.get("status") or ""
         st_tag = f" [{st}]" if st else ""
         lines.append(f"- {e['id']} — {e.get('title', '')}{st_tag}")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def backlog_idea_get(
+    idea_id: str,
+    verbose: bool = False,
+    sections: list[str] | None = None,
+    expand_links: bool = False,
+) -> str:
+    """Read an idea's content.
+
+    By default returns a slim view (frontmatter fields only, no body) to
+    minimise token cost. Use verbose=True for the full body. Ideas do not
+    have canonical body sections, so sections= is not supported (returns
+    an error if provided). Use expand_links=True to expand related_tasks,
+    related_issues, and related_lessons to {id, tldr} pills.
+
+    Note: expand_links is a slim-mode feature. When verbose=True, the full
+    frontmatter is rendered as-is and expand_links is silently ignored. To
+    get expanded links use slim mode (verbose=False) with expand_links=True.
+    """
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    if verbose and expand_links:
+        # expand_links is a slim-mode feature; in verbose mode the full frontmatter
+        # is rendered as-is (no ID→pill substitution). To get expanded links, use
+        # slim mode (verbose=False) with expand_links=True.
+        pass  # silently ignore expand_links in verbose
+    if sections:
+        return "Error: ideas have no canonical body sections — use verbose=True to read the full body."
+    try:
+        fm, body = _read_idea(bp, idea_id)
+    except FileNotFoundError:
+        return f"Idea not found: {idea_id}"
+
+    # ── verbose mode ─────────────────────────────────────────────────────────
+    if verbose:
+        fm_lines = [f"  {k}: {v}" for k, v in fm.items()]
+        return "---\n" + "\n".join(fm_lines) + "\n---\n" + body
+
+    # ── slim mode (default) ──────────────────────────────────────────────────
+    slim = _slim_entity(fm, kind="idea")
+
+    if expand_links:
+        data = _load()
+        tldr_index = _build_tldr_index(data, project_root=bp.parent.parent if bp.exists() else None)
+        for link_field in ("related_tasks", "related_issues", "related_lessons"):
+            ids = slim.get(link_field) or []
+            if ids:
+                slim[link_field] = _expand_link_ids(ids, tldr_index)
+
+    lines = [f"## Idea: {slim.pop('id', idea_id)} — {slim.pop('title', fm.get('title', ''))}\n"]
+    for k, v in slim.items():
+        lines.append(f"**{k}:** {v}")
     return "\n".join(lines)
 
 
@@ -2430,6 +2825,7 @@ def backlog_lesson_create(
     related_tasks: list[str] | None = None,
     related_issues: list[str] | None = None,
     tier: str = "active",
+    tldr: str = "",
 ) -> str:
     """Create a project-scoped lesson — a reusable pattern, anti-pattern, or gotcha.
 
@@ -2451,6 +2847,8 @@ def backlog_lesson_create(
         task_kinds: Task kinds for trigger matching.
         related_tasks / related_issues: Cross-refs.
         tier: active (default) | core | retired.
+        tldr: One-line essence of the lesson. Auto-generated from body or
+            title if omitted.
     """
     bp = _backlog_path()
     if not bp.exists():
@@ -2459,6 +2857,11 @@ def backlog_lesson_create(
         return f"Error: kind must be one of {LESSON_KINDS}"
     if tier not in LESSON_TIERS:
         return f"Error: tier must be one of {LESSON_TIERS}"
+    # tldr: use supplied value, or auto-generate from body/title
+    tldr_autogen = False
+    if not tldr:
+        tldr = extract_tldr(body) or title[:TLDR_MAX_CHARS]
+        tldr_autogen = True
     triggers = {
         "files": files or [],
         "task_titles_match": task_titles_match or [],
@@ -2474,6 +2877,8 @@ def backlog_lesson_create(
             tier=tier,
             related_tasks=related_tasks or [],
             related_issues=related_issues or [],
+            tldr=tldr,
+            tldr_autogen=tldr_autogen,
         )
     except ValueError as exc:
         return f"Error: {exc}"
@@ -2504,8 +2909,19 @@ def backlog_lesson_create(
 
 
 @mcp.tool()
-def backlog_lesson_list(tier: str = "", kind: str = "") -> str:
-    """List lessons, optionally filtered by tier and/or kind."""
+def backlog_lesson_list(
+    tier: str = "",
+    kind: str = "",
+    verbose: bool = False,
+) -> str:
+    """List lessons, optionally filtered by tier and/or kind.
+
+    Args:
+        tier: Filter by tier: active, core, retired.
+        kind: Filter by kind: pattern, anti-pattern, gotcha.
+        verbose: If True, include reinforce_count and tier/kind metadata per
+            entry. Slim (default) shows id, title, and tldr only.
+    """
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
@@ -2519,23 +2935,86 @@ def backlog_lesson_list(tier: str = "", kind: str = "") -> str:
             continue
         if kind and fm.get("kind") != kind:
             continue
-        rc = fm.get("reinforce_count", 0)
-        lines.append(f"- {fm['id']} [{fm.get('tier','active')}/{fm.get('kind','?')}] x{rc} — {fm.get('title','')}")
+        if verbose:
+            rc = fm.get("reinforce_count", 0)
+            lines.append(
+                f"- {fm['id']} [{fm.get('tier','active')}/{fm.get('kind','?')}] x{rc} — {fm.get('title','')}"
+            )
+            if fm.get("tldr"):
+                lines.append(f"  tldr: {fm['tldr']}")
+        else:
+            # Slim: id, title, and tldr pill (omit heavy fields)
+            tldr = fm.get("tldr", "")
+            entry = f"- {fm['id']} — {fm.get('title', '')}"
+            if tldr:
+                entry += f" — {tldr}"
+            lines.append(entry)
     return "\n".join(lines) if lines else "No lessons match."
 
 
 @mcp.tool()
-def backlog_lesson_get(lesson_id: str) -> str:
-    """Read a lesson's full content (frontmatter + body)."""
+def backlog_lesson_get(
+    lesson_id: str,
+    verbose: bool = False,
+    sections: list[str] | None = None,
+    expand_links: bool = False,
+) -> str:
+    """Read a lesson's content.
+
+    By default returns a slim view (frontmatter fields only, no body) to
+    minimise token cost. Use verbose=True for the full body. Use sections
+    to pull specific named body sections (why, what_to_do, examples).
+    Use expand_links=True to expand related_tasks and related_issues to
+    {id, tldr} pills.
+
+    Note: expand_links is a slim-mode feature. When verbose=True, the full
+    frontmatter is rendered as-is and expand_links is silently ignored. To
+    get expanded links use slim mode (verbose=False) with expand_links=True.
+    """
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
+    if verbose and expand_links:
+        # expand_links is a slim-mode feature; in verbose mode the full frontmatter
+        # is rendered as-is (no ID→pill substitution). To get expanded links, use
+        # slim mode (verbose=False) with expand_links=True.
+        pass  # silently ignore expand_links in verbose
     try:
         fm, body = _read_lesson(bp, lesson_id)
     except FileNotFoundError:
         return f"Lesson not found: {lesson_id}"
-    fm_lines = [f"  {k}: {v}" for k, v in fm.items()]
-    return "---\n" + "\n".join(fm_lines) + "\n---\n" + body
+
+    # ── sections-only mode ───────────────────────────────────────────────────
+    if sections:
+        try:
+            sec_data = _resolve_sections(fm, kind="lesson", sections=sections, body=body)
+        except ValueError as exc:
+            return f"Error: {exc}"
+        lines = [f"## Lesson: {lesson_id}\n"]
+        for sec, content in sec_data.items():
+            lines.append(f"### {sec}\n{content}")
+        return "\n".join(lines)
+
+    # ── verbose mode ─────────────────────────────────────────────────────────
+    if verbose:
+        fm_lines = [f"  {k}: {v}" for k, v in fm.items()]
+        return "---\n" + "\n".join(fm_lines) + "\n---\n" + body
+
+    # ── slim mode (default) ──────────────────────────────────────────────────
+    slim = _slim_entity(fm, kind="lesson")
+
+    if expand_links:
+        data = _load()
+        tldr_index = _build_tldr_index(data, project_root=bp.parent.parent if bp.exists() else None)
+        for link_field in ("related_tasks", "related_issues"):
+            ids = slim.get(link_field) or []
+            if ids:
+                slim[link_field] = _expand_link_ids(ids, tldr_index)
+
+    lines = [f"## Lesson: {slim.pop('id', lesson_id)}\n"]
+    for k, v in slim.items():
+        lines.append(f"**{k}:** {v}")
+    return "\n".join(lines)
 
 
 @mcp.tool()
@@ -2989,11 +3468,19 @@ def backlog_auto_abort() -> str:
 def backlog_lesson_match(
     task_title: str = "",
     touched_files: list[str] | None = None,
+    verbose: bool = False,
 ) -> str:
     """Find lessons matching a task by title and/or file globs.
 
-    Used by `pick-task` to inject relevant lessons (full body) before a
-    task starts. Returns up to 3 best-match lesson summaries.
+    Used by `pick-task` to inject relevant lessons before a task starts.
+    Returns up to 3 best-match lesson summaries.
+
+    Args:
+        task_title: Task title to match against lesson trigger phrases.
+        touched_files: File paths the task will touch (matched against lesson
+            file glob triggers).
+        verbose: If True, return full metadata per lesson (kind, tier,
+            reinforce_count). Slim (default) returns id + tldr pills only.
     """
     bp = _backlog_path()
     if not bp.exists():
@@ -3007,9 +3494,14 @@ def backlog_lesson_match(
         return "No matching lessons."
     lines = []
     for fm, _body in matches:
-        lines.append(
-            f"- {fm.get('id')} [{fm.get('kind')}] x{fm.get('reinforce_count', 0)}: {fm.get('title')}"
-        )
+        if verbose:
+            lines.append(
+                f"- {fm.get('id')} [{fm.get('kind')}] x{fm.get('reinforce_count', 0)}: {fm.get('title')}"
+            )
+        else:
+            # Slim: id — tldr (omit reinforce_count, kind, tier)
+            tldr = fm.get("tldr") or fm.get("title", "")
+            lines.append(f"- {fm.get('id')} — {tldr}")
     return "\n".join(lines)
 
 
@@ -3019,8 +3511,9 @@ def backlog_add_task(
     docs: str = "", depends_on: str = "", sub_repo: str = "",
     stage: int | None = None, estimate: str = "", phase: str = "",
     anchors: str = "",
+    tldr: str = "", next_step: str = "", task_id: str = "",
 ) -> str:
-    """Create a new task under an epic. Auto-generates the task ID.
+    """Create a new task under an epic. Auto-generates the task ID unless task_id is supplied.
 
     Args:
         title: Short imperative description of the task
@@ -3034,6 +3527,9 @@ def backlog_add_task(
         estimate: Optional size estimate (e.g., "S", "M", "L")
         phase: Optional phase ID to assign this task to
         anchors: Optional comma-separated glob patterns or URLs declaring target files/systems (e.g., "src/auth/**,localhost:3000/api/auth")
+        tldr: One-sentence essence of the task. Auto-generated from notes or title when omitted.
+        next_step: Concrete immediate action to take on this task.
+        task_id: Override the auto-generated task ID. Must be unique. Defaults to {epic}-{NNN}.
     """
     priority = _normalize_priority(priority)
     if priority not in VALID_PRIORITIES:
@@ -3044,29 +3540,47 @@ def backlog_add_task(
     if not epic_obj:
         return f"Error: epic `{epic}` not found. Valid epics: {_epic_names(data)}"
 
-    # Generate ID: {epic-id}-{NNN}
-    tasks = epic_obj.get("tasks", [])
-    max_suffix = 0
-    prefix = f"{epic}-"
-    for t in tasks:
-        tid = t["id"]
-        if tid.startswith(prefix):
-            suffix_str = tid[len(prefix):]
-            try:
-                max_suffix = max(max_suffix, int(suffix_str))
-            except ValueError:
-                pass
-    new_id = f"{epic}-{max_suffix + 1:03d}"
+    # Resolve task ID: caller-supplied or auto-generated
+    if task_id:
+        if _find_task(data, task_id):
+            return f"Error: task ID `{task_id}` already exists"
+        new_id = task_id
+    else:
+        # Generate ID: {epic-id}-{NNN}
+        tasks = epic_obj.get("tasks", [])
+        max_suffix = 0
+        prefix = f"{epic}-"
+        for t in tasks:
+            tid = t["id"]
+            if tid.startswith(prefix):
+                suffix_str = tid[len(prefix):]
+                try:
+                    max_suffix = max(max_suffix, int(suffix_str))
+                except ValueError:
+                    pass
+        new_id = f"{epic}-{max_suffix + 1:03d}"
+
+    # tldr: use supplied value, or auto-generate from notes/title
+    tldr_autogen = False
+    if not tldr:
+        body_source = notes or title
+        tldr = extract_tldr(body_source) or title[:TLDR_MAX_CHARS]
+        tldr_autogen = True
 
     new_task: dict = {
         "id": new_id,
         "title": title,
+        "tldr": tldr,
         "status": "todo",
         "priority": priority,
         "created": _now(),
         "last_referenced": _now(),
         "notes": notes,
     }
+    if tldr_autogen:
+        new_task["tldr_autogen"] = True
+    if next_step:
+        new_task["next_step"] = next_step
 
     # Optional fields
     if depends_on:
@@ -3611,19 +4125,28 @@ def _clear_session_task(task_id: str) -> None:
         _session_task = None
 
 
-ALLOWED_FIELDS = {"title", "status", "priority", "notes", "branch", "worktree", "blockers", "docs", "depends_on", "sub_repo", "stage", "estimate", "locked_by", "review_instructions", "phase", "anchors", "blast_radius_depth", "patchnote", "release"}
+ALLOWED_FIELDS = {"title", "status", "priority", "notes", "branch", "worktree", "blockers", "docs", "depends_on", "sub_repo", "stage", "estimate", "locked_by", "review_instructions", "phase", "anchors", "blast_radius_depth", "patchnote", "release", "tldr", "next_step"}
 VALID_STATUSES = {"todo", "in-progress", "in-review", "done", "archived", "blocked"}
 VALID_PRIORITIES = {"critical", "high", "medium", "low"}
 VALID_DOC_KEYS = {"plan", "spec", "roadmap", "design", "analysis"}
 
 
 @mcp.tool()
-def backlog_update_task(task_id: str, field: str, value: str) -> str:
+def backlog_update_task(
+    task_id: str, field: str = "", value: str = "",
+    tldr: str = "", next_step: str = "",
+) -> str:
     """Update a single field on a task. Status changes trigger appropriate date updates.
+
+    Two calling styles are supported:
+    - Field/value style: backlog_update_task(task_id, field, value) — the classic API.
+    - Keyword style: backlog_update_task(task_id, tldr="...", next_step="...") — for tldr/next_step.
 
     Args:
         task_id: The task ID (e.g., "ue-plugin-003")
-        field: Field to update — one of: title, status, priority, notes, branch, worktree, blockers, docs, depends_on, sub_repo, stage, estimate, locked_by, review_instructions, phase, patchnote, release
+        field: Field to update — one of: title, status, priority, notes, branch, worktree, blockers,
+            docs, depends_on, sub_repo, stage, estimate, locked_by, review_instructions, phase,
+            patchnote, release, tldr, next_step
         value: New value. Format varies by field:
             - docs: "key:path" (e.g., "plan:docs/plans/foo.md")
             - depends_on: comma-separated task IDs (e.g., "cpp-parser-002,cpp-parser-003")
@@ -3635,7 +4158,36 @@ def backlog_update_task(task_id: str, field: str, value: str) -> str:
             - anchors: comma-separated glob patterns/URLs, or "" to clear
             - patchnote: 1-2 sentence user-facing release-note line, or "" to clear
             - release: release bucket this task ships in (e.g., "pre-alpha", "alpha-1.0"), or "" to clear
+        tldr: One-sentence essence of the task (keyword style only).
+        next_step: Concrete immediate action to take on this task (keyword style only).
     """
+    # Guard against ambiguous mixed-style calls — silent field drops are worse
+    # than an explicit error. Pick one calling convention per call.
+    if (tldr or next_step) and (field or value):
+        return "Error: use either field/value style or keyword style (tldr=/next_step=), not both"
+
+    # Keyword style: tldr= / next_step= kwargs take precedence over field/value.
+    if tldr or next_step:
+        data = _load()
+        result = _find_task(data, task_id)
+        if not result:
+            return f"Error: task `{task_id}` not found"
+        task, epic = result
+        _touch_task(task)
+        updated = []
+        if tldr:
+            task["tldr"] = tldr
+            task.pop("tldr_autogen", None)  # caller-supplied tldr is no longer auto-generated
+            updated.append(f"tldr → {tldr}")
+        if next_step:
+            task["next_step"] = next_step
+            updated.append(f"next_step → {next_step}")
+        _mutate_and_save(data)
+        return f"Updated `{task_id}`: " + "; ".join(updated)
+
+    # Classic field/value style
+    if not field:
+        return "Error: provide either `field`/`value` or keyword args `tldr`/`next_step`"
     if field not in ALLOWED_FIELDS:
         return f"Error: field `{field}` not allowed. Allowed: {', '.join(sorted(ALLOWED_FIELDS))}"
 
@@ -3718,6 +4270,19 @@ def backlog_update_task(task_id: str, field: str, value: str) -> str:
             task["blast_radius_depth"] = value
         else:
             return f"Error: `blast_radius_depth` must be 'shallow', 'deep', or '' to clear. Got: `{value}`"
+    elif field == "tldr":
+        # Caller-supplied tldr clears the autogen flag. Empty value is rejected —
+        # tldr is required on every task; use the kwarg API or recreate the task
+        # to refresh from autogen.
+        if not value:
+            return "Error: tldr cannot be cleared — provide a non-empty value or use autogen"
+        task["tldr"] = value
+        task.pop("tldr_autogen", None)
+    elif field == "next_step":
+        if value == "" or value.lower() == "none":
+            task.pop("next_step", None)
+        else:
+            task["next_step"] = value
     else:
         task[field] = value
 

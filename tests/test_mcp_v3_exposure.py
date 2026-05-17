@@ -108,6 +108,7 @@ def test_issue_tools_exposed(tool_name):
     "tool_name",
     [
         "backlog_idea_create",
+        "backlog_idea_get",
         "backlog_idea_list",
         "backlog_idea_update",
     ],

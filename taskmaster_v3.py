@@ -46,6 +46,229 @@ def atomic_write(path: Path, content: str) -> None:
     os.replace(tmp, path)
 
 
+# ── tldr extraction ───────────────────────────────────────────
+
+TLDR_MAX_CHARS = 200
+
+# Canonical section names per entity type.
+# For tasks: 'notes' and 'review_instructions' are inline frontmatter fields;
+# 'spec'/'plan'/'design'/'analysis'/'roadmap' are resolved from task.docs.<key>
+# (external file paths in the docs dict).
+CANONICAL_SECTIONS: dict[str, tuple[str, ...]] = {
+    "task": ("notes", "review_instructions", "spec", "plan", "design", "analysis", "roadmap"),
+    "handover": ("decisions", "notes", "blockers", "where_id_start"),
+    "issue": ("repro", "investigation", "notes"),
+    "lesson": ("why", "what_to_do", "examples"),
+}
+
+TASK_INLINE_SECTIONS: frozenset[str] = frozenset({"notes", "review_instructions"})
+TASK_DOC_SECTIONS: frozenset[str] = frozenset({"spec", "plan", "design", "analysis", "roadmap"})
+
+_HEADING_RE = re.compile(r"^#{1,6}\s+.*$", re.MULTILINE)
+_SENTENCE_END_RE = re.compile(r"(?<=[.!?])\s+")
+_WHITESPACE_RE = re.compile(r"\s+")
+
+
+def extract_tldr(body: str | None) -> str | None:
+    """Extract a tldr from markdown body text.
+
+    Strategy: strip markdown headings, collapse whitespace, take the first
+    sentence (split on .!?), cap at TLDR_MAX_CHARS with an ellipsis if needed.
+    Returns None if the body is empty or all whitespace.
+    """
+    if not body or not body.strip():
+        return None
+    text = _HEADING_RE.sub("", body).strip()
+    text = _WHITESPACE_RE.sub(" ", text)
+    if not text:
+        return None
+    parts = _SENTENCE_END_RE.split(text, maxsplit=1)
+    first = parts[0].strip()
+    if len(first) > TLDR_MAX_CHARS:
+        first = first[: TLDR_MAX_CHARS - 1].rstrip() + "…"
+    return first or None
+
+
+def backfill_tldr(frontmatter: dict[str, Any], body: str = "") -> tuple[dict[str, Any], bool]:
+    """If frontmatter lacks a tldr, generate one and mark tldr_autogen=True.
+
+    Returns (frontmatter, changed). Source priority: body → title. Never overwrites
+    an existing tldr. Idempotent.
+    """
+    if frontmatter.get("tldr"):
+        return frontmatter, False
+    new_fm = dict(frontmatter)
+    tldr = extract_tldr(body) or (frontmatter.get("title") or "")[:TLDR_MAX_CHARS]
+    if not tldr:
+        return frontmatter, False
+    new_fm["tldr"] = tldr
+    new_fm["tldr_autogen"] = True
+    return new_fm, True
+
+
+SLIM_FIELDS: dict[str, tuple[str, ...]] = {
+    "task": (
+        "id", "title", "tldr", "next_step", "status", "priority",
+        "estimate", "phase", "epic",
+        "depends_on", "related_issues", "related_lessons",
+        "started", "completed", "branch", "worktree",
+        "blockers", "open_handovers",
+        "tldr_autogen",
+    ),
+    "issue": (
+        "id", "title", "tldr", "severity", "status", "components",
+        "impact", "location", "related_tasks", "fixed_in_task",
+        "duplicate_of", "discovered", "resolved", "tldr_autogen",
+    ),
+    "lesson": (
+        "id", "title", "tldr", "kind", "tier", "files",
+        "reinforce_count", "last_reinforced",
+        "task_titles_match", "task_kinds",
+        "related_tasks", "related_issues", "tldr_autogen",
+    ),
+    "handover": (
+        "id", "tldr", "next_action", "task_ids", "session_kind",
+        "status", "status_changed", "status_reason",
+        "created", "supersedes", "superseded_by", "flag_for_review",
+        "flag_reason",
+        "tldr_autogen",
+    ),
+    "idea": (
+        "id", "title", "tldr", "status", "tags",
+        "created_by", "related_tasks", "related_issues", "related_lessons",
+        "tldr_autogen",
+    ),
+}
+
+
+def slim_entity(
+    entity: dict[str, Any],
+    kind: str,
+    *,
+    open_handovers: list[str] | None = None,
+) -> dict[str, Any]:
+    """Return the slim view of an entity dict."""
+    if kind not in SLIM_FIELDS:
+        raise ValueError(f"Unknown entity kind: {kind!r}")
+    out: dict[str, Any] = {}
+    for key in SLIM_FIELDS[kind]:
+        if key == "open_handovers":
+            continue
+        if key in entity and entity[key] not in (None, "", [], {}):
+            out[key] = entity[key]
+    if kind == "task":
+        docs = entity.get("docs") or {}
+        if docs:
+            out["docs_available"] = sorted(docs.keys())
+        if open_handovers:
+            out["open_handovers"] = open_handovers
+    return out
+
+
+_SECTION_HEADING_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
+
+
+def _split_body_by_heading(body: str) -> dict[str, str]:
+    """Split a markdown body into sections keyed by slugified heading text.
+
+    Slugification: strip punctuation (apostrophes, commas, etc.), lowercase,
+    replace spaces with underscores.  This matches canonical section names like
+    ``where_id_start`` to heading text like ``## Where I'd start``.
+    """
+    if not body:
+        return {}
+    matches = list(_SECTION_HEADING_RE.finditer(body))
+    if not matches:
+        return {}
+    out: dict[str, str] = {}
+    for i, m in enumerate(matches):
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
+        key = re.sub(r"[^\w\s]", "", m.group(1)).strip().lower().replace(" ", "_")
+        out[key] = body[start:end].strip()
+    return out
+
+
+def resolve_sections(
+    entity: dict[str, Any],
+    *,
+    kind: str,
+    sections: list[str],
+    body: str,
+    project_root: Path | None = None,
+) -> dict[str, str]:
+    """Return a dict mapping section name → content for requested sections."""
+    canon = CANONICAL_SECTIONS.get(kind, ())
+    for s in sections:
+        if s not in canon:
+            raise ValueError(f"{s!r} is not a canonical section for kind={kind!r}")
+
+    out: dict[str, str] = {}
+
+    if kind == "task":
+        for s in sections:
+            if s in TASK_INLINE_SECTIONS:
+                v = entity.get(s)
+                if v:
+                    out[s] = v if isinstance(v, str) else str(v)
+            elif s in TASK_DOC_SECTIONS:
+                doc_path = (entity.get("docs") or {}).get(s)
+                if not doc_path:
+                    continue
+                resolved = (project_root / doc_path) if project_root else Path(doc_path)
+                if resolved.exists():
+                    out[s] = resolved.read_text(encoding="utf-8")
+                else:
+                    out[s] = f"(unresolved: {doc_path})"
+        return out
+
+    body_sections = _split_body_by_heading(body)
+    for s in sections:
+        if s in body_sections:
+            out[s] = body_sections[s]
+    return out
+
+
+def expand_link_ids(
+    ids: list[str] | dict[str, list[str]],
+    tldr_index: dict[str, str],
+) -> list[dict[str, str | None]] | dict[str, list[dict[str, str | None]]]:
+    """Expand bare ID arrays into {id, tldr} pills.
+
+    Accepts either a flat list (returns list) or a grouped dict (returns dict).
+    Unknown IDs get tldr=None.
+    """
+    if isinstance(ids, dict):
+        return {key: expand_link_ids(vals, tldr_index) for key, vals in ids.items()}  # type: ignore[return-value]
+    return [{"id": i, "tldr": tldr_index.get(i)} for i in ids]
+
+
+def build_tldr_index(data: dict[str, Any], project_root: Path | None = None) -> dict[str, str]:
+    """Build {entity_id → tldr} index across tasks, issues, lessons, handovers, ideas."""
+    idx: dict[str, str] = {}
+    for epic in data.get("epics", []):
+        for task in epic.get("tasks", []):
+            tid = task.get("id")
+            if tid and task.get("tldr"):
+                idx[tid] = task["tldr"]
+    if project_root is None:
+        return idx
+    tm_dir = project_root / ".taskmaster"
+    for subdir in ("tasks", "issues", "lessons", "handovers", "ideas"):
+        d = tm_dir / subdir
+        if not d.exists():
+            continue
+        for path in sorted(d.glob("*.md")):
+            try:
+                fm, _ = read_task_file(path)
+                eid = fm.get("id")
+                if eid and fm.get("tldr"):
+                    idx[eid] = fm["tldr"]
+            except Exception:
+                continue
+    return idx
+
+
 _legacy_warned: set[str] = set()
 
 
@@ -1409,6 +1632,8 @@ def write_issue(
     body: str = "",
     issue_id: str | None = None,
     status: str = "open",
+    tldr: str = "",
+    tldr_autogen: bool = False,
 ) -> tuple[str, Path]:
     """Create a new issue file. Returns (id, path)."""
     if not title or not title.strip():
@@ -1430,7 +1655,10 @@ def write_issue(
         "related_tasks": list(related_tasks or []),
         "fixed_in_task": None,
         "duplicate_of": None,
+        "tldr": tldr,
     }
+    if tldr_autogen:
+        fm["tldr_autogen"] = True
     _validate_issue(fm)
     write_task_file(issue_path(backlog_path, iid), fm, body)
     return iid, issue_path(backlog_path, iid)
@@ -1553,6 +1781,8 @@ def write_lesson(
     related_tasks: list[str] | None = None,
     related_issues: list[str] | None = None,
     lesson_id: str | None = None,
+    tldr: str = "",
+    tldr_autogen: bool = False,
 ) -> tuple[str, Path]:
     """Create a new lesson. Returns (id, path)."""
     if not title or not title.strip():
@@ -1569,7 +1799,10 @@ def write_lesson(
         "created": date.today().isoformat(),
         "related_tasks": list(related_tasks or []),
         "related_issues": list(related_issues or []),
+        "tldr": tldr,
     }
+    if tldr_autogen:
+        fm["tldr_autogen"] = True
     _validate_lesson(fm)
     write_task_file(lesson_path(backlog_path, lid), fm, body)
     return lid, lesson_path(backlog_path, lid)
@@ -1939,6 +2172,8 @@ def write_idea(
     related_lessons: list[str] | None = None,
     created_by: str = "Claude",
     idea_id: str | None = None,
+    tldr: str = "",
+    tldr_autogen: bool = False,
 ) -> tuple[str, Path]:
     """Create a new idea file. Returns (id, path).
 
@@ -1980,7 +2215,10 @@ def write_idea(
         "related_lessons": list(related_lessons or []),
         "promoted_to": None,
         "archived": False,
+        "tldr": tldr,
     }
+    if tldr_autogen:
+        fm["tldr_autogen"] = True
     _validate_idea(fm)
     write_task_file(target, fm, body)
     lines = _index_upsert_line(_read_ideas_index(backlog_path), iid, _idea_index_line(fm))
