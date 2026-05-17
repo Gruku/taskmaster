@@ -8,6 +8,20 @@ indicate schema breaks or removed surfaces.
 
 ---
 
+## [Unreleased]
+
+### Changed — Ceremony glance-first redesign (Plan D)
+
+- `start-session` default mode is now a ~800–1,000 token glance: slim `backlog_status` + top-5 open handovers + 1-line counts. Full ceremony (recap diff, lesson digest, core lessons, all issues, last session) is available via `--deep`.
+- `pick-task` default mode is now a ~600–800 token glance: slim task + deps + open handovers for task + matched lesson IDs+tldrs (no full bodies) + filtered issues + linkage pills. Full ceremony (full task body, full lesson bodies, blast radius, handover context) is available via `--deep`.
+- Deep ceremony content for both skills moved to `references/deep-mode.md` per skill — loaded only when `--deep` is invoked.
+- Mid-session deepening documented in taskmaster router: "show me HND-012" → `backlog_handover_get`; "read the plan" → `backlog_get_task(sections=["plan"])` — no skill re-invocation.
+- Lint tests added: `test_start_session_skill_lint.py`, `test_pick_task_skill_lint.py`.
+- Smoke tests added: `test_start_session_smoke.py`, `test_pick_task_smoke.py`.
+- `backlog_handover_latest` is deprecated in skill flows; replaced by `backlog_handover_list(status="open")` (requires Plan B).
+
+---
+
 ## 3.6.0 — Skill content slimming (Plan E) (2026-05-17)
 
 - Every taskmaster SKILL.md is now within its token budget (800–1,500 tokens per skill).
