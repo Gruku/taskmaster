@@ -1,13 +1,17 @@
 # plugins/taskmaster/tests/test_tldr_required_on_create.py
-"""Task 3: tldr required on backlog_add_task / backlog_update_task, with autogen fallback.
+"""Tasks 3-5: tldr required on create functions, with autogen fallback.
 
 Tests read task state by loading the backlog YAML directly (path-i deviation)
 because backlog_get_task does not have a verbose=True parameter yet (Task 11).
+Issues, lessons, and ideas are read from their respective .md files using
+taskmaster_v3.parse_frontmatter (the project's own frontmatter parser, no
+external python-frontmatter dependency).
 """
 from __future__ import annotations
 
 import yaml
 import pytest
+from pathlib import Path
 from backlog_server import (
     backlog_add_task,
     backlog_add_epic,
@@ -138,3 +142,43 @@ def test_update_task_rejects_empty_tldr(tmp_taskmaster):
     # Verify the original tldr is intact
     t = _load_task(tmp_taskmaster, "T-tldr-7")
     assert t["tldr"] == "Original tldr."
+
+
+# ── Task 4: backlog_issue_create ──────────────────────────────────────────────
+
+
+def _load_issue(tmp_taskmaster, issue_id):
+    """Read an issue's frontmatter from .taskmaster/issues/<id>.md."""
+    from taskmaster_v3 import parse_frontmatter
+    issue_path = Path(tmp_taskmaster) / ".taskmaster" / "issues" / f"{issue_id}.md"
+    if not issue_path.exists():
+        raise AssertionError(f"Issue file not found: {issue_path}")
+    fm, _ = parse_frontmatter(issue_path.read_text(encoding="utf-8"))
+    return fm
+
+
+from backlog_server import backlog_issue_create
+
+
+def test_issue_create_with_tldr(tmp_taskmaster):
+    _setup(tmp_taskmaster)
+    backlog_issue_create(
+        title="Auth fails on Friday",
+        severity="P1",
+        tldr="Auth middleware crashes during Friday deploys.",
+        impact="3 customers blocked",
+    )
+    issue = _load_issue(tmp_taskmaster, "ISS-001")
+    assert "Auth middleware crashes" in issue["tldr"]
+
+
+def test_issue_create_autogen_tldr_from_impact(tmp_taskmaster):
+    _setup(tmp_taskmaster)
+    backlog_issue_create(
+        title="Auth fails",
+        severity="P1",
+        impact="Auth middleware crashes during Friday deploys.",
+    )
+    issue = _load_issue(tmp_taskmaster, "ISS-001")
+    assert "Auth middleware crashes" in issue["tldr"]
+    assert issue.get("tldr_autogen") is True

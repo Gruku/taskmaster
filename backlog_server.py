@@ -1895,6 +1895,7 @@ def backlog_issue_create(
     related_tasks: list[str] | None = None,
     discovered_by: str = "",
     body: str = "",
+    tldr: str = "",
 ) -> str:
     """Log a bug as a first-class issue, separate from tasks.
 
@@ -1910,12 +1911,19 @@ def backlog_issue_create(
         related_tasks: Task ids attempting or related to this issue.
         discovered_by: Who/what found it (manual QA, alert, customer report).
         body: Markdown body for repro steps + investigation notes.
+        tldr: One-line essence of the issue. Auto-generated from impact or
+            title if omitted.
     """
     bp = _backlog_path()
     if not bp.exists():
         return f"Error: no backlog found at {bp}. Run `backlog_init` first."
     if severity not in ISSUE_SEVERITIES:
         return f"Error: severity must be one of {ISSUE_SEVERITIES}"
+    # tldr: use supplied value, or auto-generate from impact/title
+    tldr_autogen = False
+    if not tldr:
+        tldr = extract_tldr(impact) or title[:TLDR_MAX_CHARS]
+        tldr_autogen = True
     try:
         iid, target = _write_issue(
             bp,
@@ -1927,6 +1935,8 @@ def backlog_issue_create(
             related_tasks=related_tasks or [],
             discovered_by=discovered_by,
             body=body,
+            tldr=tldr,
+            tldr_autogen=tldr_autogen,
         )
     except ValueError as exc:
         return f"Error: {exc}"

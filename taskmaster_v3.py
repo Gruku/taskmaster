@@ -1452,6 +1452,8 @@ def write_issue(
     body: str = "",
     issue_id: str | None = None,
     status: str = "open",
+    tldr: str = "",
+    tldr_autogen: bool = False,
 ) -> tuple[str, Path]:
     """Create a new issue file. Returns (id, path)."""
     if not title or not title.strip():
@@ -1473,7 +1475,10 @@ def write_issue(
         "related_tasks": list(related_tasks or []),
         "fixed_in_task": None,
         "duplicate_of": None,
+        "tldr": tldr,
     }
+    if tldr_autogen:
+        fm["tldr_autogen"] = True
     _validate_issue(fm)
     write_task_file(issue_path(backlog_path, iid), fm, body)
     return iid, issue_path(backlog_path, iid)
