@@ -1,13 +1,17 @@
 // Shared right-rail used by Task Detail Variants A and B.
-// `mountRightRail(root, { task, related, onNavigate })` renders six panels:
-//   Docs · Lessons in scope · Handovers · Issues · Dependencies + Unblocks · Blockers
+// `mountRightRail(root, { task, related, onNavigate })` renders seven panels:
+//   Docs · Links (typed, Plan C) · Lessons in scope · Handovers · Issues
+//   · Dependencies + Unblocks · Blockers
 // Returns a cleanup function.
+
+import { renderLinkPills, legacyLinksToTyped } from './link-pills.js';
 
 export function mountRightRail(root, { task, related, onNavigate }) {
   root.innerHTML = '';
   root.classList.add('td-rail');
 
   root.appendChild(panelDocs(task));
+  root.appendChild(panelLinks(task, onNavigate));
   root.appendChild(panelLessons(related?.lessons || []));
   root.appendChild(panelHandovers(related?.handovers || []));
   root.appendChild(panelIssues(related?.issues || [], onNavigate));
@@ -15,6 +19,35 @@ export function mountRightRail(root, { task, related, onNavigate }) {
   root.appendChild(panelBlockers(task?.blockers || []));
 
   return () => { root.innerHTML = ''; };
+}
+
+
+function panelLinks(task, onNavigate) {
+  // Plan C: typed links surface from `task.links`. Falls back to legacy fields
+  // when the project hasn't been migrated yet.
+  const links = task?.links && task.links.length
+    ? task.links
+    : legacyLinksToTyped(task || {}, 'task');
+  if (!links.length) {
+    return h('section', { class: 'td-panel' },
+      [panelHeader('Links'), h('div', { class: 'td-empty' }, 'none')]);
+  }
+  const wrap = h('section', { class: 'td-panel td-panel-links' },
+    [panelHeader('Links')]);
+  const pillsRoot = h('div', { class: 'td-link-pills-mount' });
+  pillsRoot.innerHTML = renderLinkPills({ ...task, links });
+  // Make link-pill anchors navigate within the SPA when applicable.
+  pillsRoot.querySelectorAll('a.link-pill').forEach((a) => {
+    a.addEventListener('click', (e) => {
+      const target = a.getAttribute('href')?.slice(1) || '';
+      if (target.startsWith('T-') || target.startsWith('ue-') || /^[a-z][\w-]+-\d+$/.test(target)) {
+        e.preventDefault();
+        onNavigate?.(target);
+      }
+    });
+  });
+  wrap.appendChild(pillsRoot);
+  return wrap;
 }
 
 function h(tag, attrs = {}, children = []) {
