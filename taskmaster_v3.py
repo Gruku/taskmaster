@@ -933,13 +933,13 @@ def _normalize_session_kind(kind: str) -> str:
     return _LEGACY_KIND_MAP.get(kind, kind)
 
 # Three-state lifecycle for handovers — see specs/2026-05-09-handover-status-design.md
-HANDOVER_STATUSES = ("todo", "in-progress", "done")
+HANDOVER_STATUSES = ("open", "closed", "superseded")
 
 
 def _default_handover_status(session_kind: str) -> str:
-    """auto-stage handovers are bookkeeping checkpoints — born done. All other
-    kinds default to todo so the user explicitly clears their backlog."""
-    return "done" if session_kind == "auto-stage" else "todo"
+    """auto-stage handovers are bookkeeping checkpoints — born closed.
+    All other kinds default to open so they surface in start-session glance."""
+    return "closed" if session_kind == "auto-stage" else "open"
 
 
 # Index cap — `handovers:` array in backlog.yaml is bounded.
