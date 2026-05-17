@@ -1886,7 +1886,7 @@ def backlog_handover_list(
             (e.g. "end-of-day", "context-handoff", "milestone-complete").
         since: ISO date string (YYYY-MM-DD). If set, only entries whose
             date prefix is >= since. Raises ValueError for invalid formats.
-        status: One of todo, in-progress, done, or "all" (default). Filters
+        status: One of open, closed, superseded, or "all" (default). Filters
             against the index entry — does not read every file.
         limit: Maximum number of entries to return after filtering (default 10).
         verbose: If True, include additional index fields (next_action, task_ids,
@@ -1934,7 +1934,9 @@ def backlog_handover_list(
         tag = f" [{kind}]" if kind else ""
         when = e.get("created") or e.get("date") or ""
         when_tag = f" ({when})" if when else ""
-        lines.append(f"- {e['id']}{when_tag}{tag} — {e.get('tldr', '')}")
+        flag = e.get("flag_reason", "")
+        flag_tag = f" ▸ FLAGGED: {flag}" if flag else ""
+        lines.append(f"- {e['id']}{when_tag}{tag} — {e.get('tldr', '')}{flag_tag}")
         if verbose:
             if e.get("next_action"):
                 lines.append(f"  next: {e['next_action']}")

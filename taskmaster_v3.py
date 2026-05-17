@@ -1461,7 +1461,7 @@ def migrate_handover_statuses(
 # Fields kept in the backlog.yaml `handovers:` index entry.
 _HANDOVER_INDEX_FIELDS = (
     "id", "date", "created", "tldr", "next_action",
-    "task_ids", "session_kind", "status",
+    "task_ids", "session_kind", "status", "flag_reason",
 )
 
 
