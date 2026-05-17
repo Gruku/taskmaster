@@ -224,6 +224,46 @@ def resolve_sections(
     return out
 
 
+def expand_link_ids(
+    ids: list[str] | dict[str, list[str]],
+    tldr_index: dict[str, str],
+) -> list[dict[str, str | None]] | dict[str, list[dict[str, str | None]]]:
+    """Expand bare ID arrays into {id, tldr} pills.
+
+    Accepts either a flat list (returns list) or a grouped dict (returns dict).
+    Unknown IDs get tldr=None.
+    """
+    if isinstance(ids, dict):
+        return {key: expand_link_ids(vals, tldr_index) for key, vals in ids.items()}  # type: ignore[return-value]
+    return [{"id": i, "tldr": tldr_index.get(i)} for i in ids]
+
+
+def build_tldr_index(data: dict[str, Any], project_root: Path | None = None) -> dict[str, str]:
+    """Build {entity_id → tldr} index across tasks, issues, lessons, handovers, ideas."""
+    idx: dict[str, str] = {}
+    for epic in data.get("epics", []):
+        for task in epic.get("tasks", []):
+            tid = task.get("id")
+            if tid and task.get("tldr"):
+                idx[tid] = task["tldr"]
+    if project_root is None:
+        return idx
+    tm_dir = project_root / ".taskmaster"
+    for subdir in ("tasks", "issues", "lessons", "handovers", "ideas"):
+        d = tm_dir / subdir
+        if not d.exists():
+            continue
+        for path in sorted(d.glob("*.md")):
+            try:
+                fm, _ = read_task_file(path)
+                eid = fm.get("id")
+                if eid and fm.get("tldr"):
+                    idx[eid] = fm["tldr"]
+            except Exception:
+                continue
+    return idx
+
+
 _legacy_warned: set[str] = set()
 
 
