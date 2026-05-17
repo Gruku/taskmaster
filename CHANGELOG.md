@@ -8,6 +8,28 @@ indicate schema breaks or removed surfaces.
 
 ---
 
+## 3.3.0 — Continuity dashboard polish + Plan A reconcile (2026-05-17)
+
+Reconciles `plugin.json` (was stale at 3.1.1) with the 3.2.0 work already
+on master and adds the continuity polish below. One minor bump folds both.
+
+### Added
+
+- **Continuity dashboard — Resume sub-grouping.** Backend `_handover_to_item` now surfaces all open handovers (todo / in-progress) at any age and promotes the latest 5 done handovers via `RESUME_RECENT_DONE_CAP`; older done handovers stay in ambient. Frontend `resume-rail.js` splits the bucket into **Open** (full rows) and **Recent** (compact rows). Resolves the "only one handover ever shows up" miss in the post-merge dashboard.
+- **XML tag rendering in the continuity dashboard.** New `viewer/js/lib/xml-render.js` recognises `<lesson-candidate>`, `<thinking>`, `<example>`, `<system-reminder>`, `<decision>`, `<issue>`. Inline chips replace tag text in item-row `next` / `where`. Click a handover or decision row → the body is fetched and rendered inline below the row with block-level tag panels.
+- **`GET /api/handover/<id>`** in `backlog_server.py` to back the row-expand fetch. Path regex matches the decision endpoint pattern (`[A-Za-z0-9_-]+`).
+- **`setActive()` imperative API on the view-switcher** so the Action / Time / Entity highlight follows clicks (was stuck on the initial selection because the topbar mount wasn't re-rendered between view changes).
+- **`.co-dash` added to `shell.css` scroll-policy A**, restoring viewport-fit parity with `.dash` / `.issues` / `.lessons`. The body now scrolls within its slot instead of growing past or leaking into sibling screens.
+
+### Notes
+
+- `_handover_to_item` projection gains a `status` field for downstream consumers (used by the Resume rail's Open / Recent split).
+- xml-render uses a stateless detector regex plus a fresh `/g` instance per call so `lastIndex` can't leak between nested or concurrent callers.
+
+Task: `v3-polish-055`. Spec embedded in task notes.
+
+---
+
 ## 3.2.0 — Progressive Disclosure Foundation (2026-05-16)
 
 ### Added
