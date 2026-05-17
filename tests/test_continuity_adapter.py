@@ -57,6 +57,48 @@ def test_continuity_handover_routes_resume_when_recent_and_todo(backlog_with_han
     assert h["action_class"] == "resume"
 
 
+def test_continuity_handover_in_progress_routes_resume_any_age(backlog_with_handover):
+    bp, hid = backlog_with_handover
+    tm.update_handover_status(bp, handover_id=hid, status="in-progress")
+    items = tm.continuity_items(bp)
+    h = [i for i in items if i["type"] == "handover"][0]
+    assert h["status"] == "in-progress"
+    assert h["action_class"] == "resume"
+
+
+def test_continuity_handover_promotes_top_done_to_resume(tmp_path):
+    """Done handovers older than the open ones still surface on the Resume rail,
+    capped at RESUME_RECENT_DONE_CAP, ordered by recency."""
+    bp = tmp_path / ".taskmaster" / "backlog.yaml"
+    bp.parent.mkdir()
+    bp.write_text(
+        "meta:\n  schema_version: 3\nepics: []\nhandovers: []\n",
+        encoding="utf-8",
+    )
+    # Write more done handovers than the cap to verify only N are promoted.
+    cap = tm.RESUME_RECENT_DONE_CAP
+    written = []
+    for i in range(cap + 2):
+        hid, _ = tm.write_handover(
+            bp,
+            tldr=f"done handover {i}",
+            session_kind="end-of-day",
+        )
+        tm.update_handover_status(bp, handover_id=hid, status="done")
+        written.append(hid)
+    items = tm.continuity_items(bp)
+    han = [i for i in items if i["type"] == "handover"]
+    resumed = [i for i in han if i["action_class"] == "resume"]
+    ambient = [i for i in han if i["action_class"] == "ambient"]
+    # Exactly N done items promoted to resume.
+    assert len(resumed) == cap
+    # The promoted ones are the most-recent N by timestamp.
+    sorted_by_ts = sorted(han, key=lambda x: x.get("timestamp") or "", reverse=True)
+    assert [i["id"] for i in sorted_by_ts[:cap]] == [i["id"] for i in resumed]
+    # The rest are ambient.
+    assert len(ambient) == len(written) - cap
+
+
 def test_continuity_open_decision_routes_to_decide(backlog_with_handover):
     bp, _ = backlog_with_handover
     tm.write_decision(bp, title="pick a path",

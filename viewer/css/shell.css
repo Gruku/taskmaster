@@ -303,6 +303,7 @@ html, body {
 .kanban-page,
 .tbl-screen,
 .dash,
+.co-dash,
 .issues,
 .lessons,
 .ideas,
@@ -324,6 +325,7 @@ html, body {
    it sits in .main, outside this scroll region. Use when content is one
    continuous column and no internal sticky chrome is needed. */
 .dash,
+.co-dash,
 .issues,
 .lessons,
 .recap-page,

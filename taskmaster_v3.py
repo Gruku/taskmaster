@@ -3595,12 +3595,16 @@ def _age_days(iso_ts: "str | datetime | date | None", now: datetime | None = Non
     return (now - ts).total_seconds() / 86400.0
 
 
+RESUME_RECENT_DONE_CAP = 5
+
+
 def _handover_to_item(fm: dict[str, Any], now: datetime | None = None) -> dict[str, Any]:
     age = _age_days(fm.get("created"), now)
     status = fm.get("status", "todo")
-    # Action class: fresh todo handover → resume; older or done → ambient (won't surface
-    # on action view but still available for time/entity views).
-    if status == "todo" and age <= 7:
+    # Open handovers (todo / in-progress) always surface as resume. Done handovers
+    # default to ambient; the collection step promotes the most-recent N done ones
+    # to resume so the rail still shows a usable recent history.
+    if status in ("todo", "in-progress"):
         action_class = "resume"
     else:
         action_class = "ambient"
@@ -3612,6 +3616,7 @@ def _handover_to_item(fm: dict[str, Any], now: datetime | None = None) -> dict[s
         "where": fm.get("branch") or (task_ids[0] if task_ids else ""),
         "next": fm.get("next_action") or "",
         "action_class": action_class,
+        "status": status,
         "timestamp": fm.get("created") or fm.get("date") or "",
         "age_days": age,
         "task_id": task_ids[0] if task_ids else None,
@@ -3723,7 +3728,9 @@ def continuity_items(
     """Project all backlog entities to a unified ContinuityItem list."""
     items: list[dict[str, Any]] = []
 
-    # Handovers.
+    # Handovers. Promote the most-recent N done handovers to 'resume' so the
+    # rail surfaces useful recent history alongside currently-open ones.
+    handover_items: list[dict[str, Any]] = []
     for hid in list_handover_ids(backlog_path):
         try:
             fm, _ = read_handover(backlog_path, hid)
@@ -3731,7 +3738,14 @@ def continuity_items(
             continue
         if not include_auto_stage and fm.get("session_kind") == "auto-stage":
             continue
-        items.append(_handover_to_item(fm, now))
+        handover_items.append(_handover_to_item(fm, now))
+    handover_items.sort(key=lambda it: it.get("timestamp") or "", reverse=True)
+    done_promoted = 0
+    for it in handover_items:
+        if it.get("status") == "done" and done_promoted < RESUME_RECENT_DONE_CAP:
+            it["action_class"] = "resume"
+            done_promoted += 1
+    items.extend(handover_items)
 
     # Decisions.
     for did in list_decision_ids(backlog_path):
