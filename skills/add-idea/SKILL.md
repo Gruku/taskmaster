@@ -1,6 +1,6 @@
 ---
 name: add-idea
-description: Log a lightweight idea (parking-lot thought) into .taskmaster/ideas/ as IDEA-NNN.md. Invoke when the user says "/add-idea …", "save this as an idea", "remember this idea", "log this idea", "that's a good idea, save it", or describes something worth keeping but not yet ready to be a task. Lighter than a task — just a freeform note with optional tags, status, and links to tasks/issues/lessons. The only correct way to write an idea — do not call backlog_idea_create directly.
+description: "Log a lightweight idea into .taskmaster/ideas/ as IDEA-NNN.md. Invoke when the user says '/add-idea', 'save this as an idea', 'remember this idea', 'log this idea', or describes something worth keeping but not yet ready to be a task. The only correct way to write an idea — do not call backlog_idea_create directly."
 ---
 
 # Add Idea
@@ -21,12 +21,7 @@ A lightweight place to record thoughts, parking-lot items, half-baked observatio
 /add-idea Auto-tag from git diff --tags automation,perf --status exploring --related-task v3-release-007
 ```
 
-Optional flags (any subset):
-- `--tags <comma-separated>` — freeform tag strings
-- `--status <freeform-string>` — e.g. `exploring`, `parking-lot`, `candidate`
-- `--related-task <task-id>` — repeat for multiple
-- `--related-issue <issue-id>` — repeat for multiple
-- `--related-lesson <lesson-id>` — repeat for multiple
+Optional flags (`--tags`, `--status`, `--related-task`, `--related-issue`, `--related-lesson`) and full parse rules in `references/slash-form.md`.
 
 ## Natural-language form
 

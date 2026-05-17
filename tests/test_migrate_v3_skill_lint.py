@@ -60,6 +60,7 @@ def test_skill_md_contains_canonical_sentence():
 def test_all_referenced_files_exist():
     expected_refs = [
         SKILL_DIR / "references" / "v2-vs-v3.md",
+        SKILL_DIR / "references" / "migration-steps.md",
     ]
     missing = [p for p in expected_refs if not p.exists()]
     assert not missing, f"missing referenced files: {missing}"
