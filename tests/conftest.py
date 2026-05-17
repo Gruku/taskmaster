@@ -17,18 +17,24 @@ if str(PLUGIN_ROOT) not in sys.path:
 
 @pytest.fixture()
 def tmp_taskmaster(tmp_path, monkeypatch):
-    """Create a minimal .taskmaster/ layout and redirect all path resolution.
+    """Create a minimal .taskmaster/ layout and redirect path resolution.
 
     Provides:
-    - tmp_path/.taskmaster/backlog.yaml  (v3 schema, one epic "e" with zero tasks)
+    - tmp_path/.taskmaster/backlog.yaml  (v3 schema, empty epics list)
     - tmp_path/.taskmaster/tasks/
     - tmp_path/.taskmaster/handovers/
     - tmp_path/.taskmaster/issues/
     - tmp_path/.taskmaster/lessons/
     - tmp_path/.taskmaster/ideas/
 
-    All backlog_server path helpers (ROOT, _backlog_path, _resolve_paths) are
-    monkeypatched to point at tmp_path so tests are fully hermetic.
+    Monkeypatches these backlog_server module attributes to point at tmp_path:
+    - ROOT
+    - CONFIG_PATH        (frozen at import time as ROOT / ".taskmaster" / "taskmaster.json")
+    - LEGACY_CONFIG_PATH (frozen at import time as ROOT / ".claude" / "taskmaster.json")
+
+    _resolve_paths() reads CONFIG_PATH and LEGACY_CONFIG_PATH directly — they
+    are module-level constants captured at import time, not re-derived from
+    ROOT on each call — so patching ROOT alone is insufficient for hermeticity.
 
     Returns the tmp_path (Path).
     """
@@ -45,12 +51,25 @@ def tmp_taskmaster(tmp_path, monkeypatch):
     }
     (tm_dir / "backlog.yaml").write_text(yaml.dump(backlog), encoding="utf-8")
 
-    # Redirect path resolution in backlog_server
+    # Redirect path resolution in backlog_server. Default raising=True so a
+    # rename or removal of any of these attributes fails the fixture loudly
+    # instead of silently no-op'ing.
     import backlog_server  # noqa: PLC0415 — imported here so sys.path is set first
 
-    monkeypatch.setattr(backlog_server, "ROOT", tmp_path, raising=False)
+    monkeypatch.setattr(backlog_server, "ROOT", tmp_path)
+    monkeypatch.setattr(
+        backlog_server,
+        "CONFIG_PATH",
+        tmp_path / ".taskmaster" / "taskmaster.json",
+    )
+    monkeypatch.setattr(
+        backlog_server,
+        "LEGACY_CONFIG_PATH",
+        tmp_path / ".claude" / "taskmaster.json",
+    )
 
-    # _resolve_paths() uses CWD or ROOT; patch CWD as a belt-and-suspenders fallback
+    # Tests that resolve relative paths against cwd should land in tmp_path —
+    # keep this as a safety net for code paths that call Path.cwd() at runtime.
     monkeypatch.chdir(tmp_path)
 
     return tmp_path
