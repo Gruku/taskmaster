@@ -139,6 +139,13 @@ from taskmaster_v3 import (
     load_session_snapshot,
     snapshot_diff as _snapshot_diff,
     read_hook_events as _read_hook_events,
+    slim_entity as _slim_entity,
+    resolve_sections as _resolve_sections,
+    expand_link_ids as _expand_link_ids,
+    build_tldr_index as _build_tldr_index,
+    BODY_KEY as _BODY_KEY,
+    render_frontmatter as _render_frontmatter,
+    CANONICAL_SECTIONS as _CANONICAL_SECTIONS,
 )
 
 
@@ -165,6 +172,22 @@ def _ensure_handover_status_backfilled() -> None:
         _sync_handover_index(data, bp)
         _save(data)
     _HANDOVER_STATUS_BACKFILL_RAN = True
+
+
+def _get_open_handovers_for_task(bp: Path, task_id: str) -> list[str]:
+    """Scan handovers dir for open handovers referencing task_id."""
+    hdir = bp.parent / "handovers"
+    if not hdir.exists():
+        return []
+    result = []
+    for path in sorted(hdir.glob("*.md")):
+        try:
+            fm, _ = _read_handover(bp, path.stem)
+        except Exception:
+            continue
+        if fm.get("status") == "open" and task_id in (fm.get("task_ids") or []):
+            result.append(fm.get("id") or path.stem)
+    return result
 
 
 def _load_auto_state():
@@ -908,11 +931,29 @@ def backlog_list_tasks(epic: str = "", status: str = "", priority: str = "", pha
 
 
 @mcp.tool()
-def backlog_get_task(task_id: str) -> str:
-    """Get full details for a single task including epic context and related tasks.
+def backlog_get_task(
+    task_id: str,
+    verbose: bool = False,
+    sections: list[str] | None = None,
+    expand_links: bool = False,
+) -> str:
+    """Get details for a single task including epic context and related tasks.
+
+    By default returns a slim view (tldr, status, priority, key links) to
+    minimise token cost. Use verbose=True for the full body (notes, review
+    instructions, docs, spec-review record, epic context). Use sections to
+    pull specific named body sections (e.g. ["notes", "spec"]). Use
+    expand_links=True to swap dependency/issue/lesson IDs for {id, tldr} pills.
 
     Args:
         task_id: The task ID (e.g., "ue-plugin-003")
+        verbose: If True, include full body fields (notes, review_instructions,
+            docs, spec-review, epic context, recently completed tasks).
+        sections: Named sections to include (e.g. ["notes", "spec"]).
+            Canonical sections for tasks: notes, review_instructions, spec,
+            plan, design, analysis, roadmap.
+        expand_links: If True, replace bare IDs in depends_on,
+            related_issues, related_lessons with {id, tldr} pills.
     """
     data = _load()
     result = _find_task(data, task_id)
@@ -925,6 +966,45 @@ def backlog_get_task(task_id: str) -> str:
     task["last_referenced"] = _now()
     _save(data)
 
+    bp = _backlog_path()
+
+    # ── sections-only mode ───────────────────────────────────────────────────
+    if sections:
+        try:
+            sec_data = _resolve_sections(
+                task,
+                kind="task",
+                sections=sections,
+                body=task.get(_BODY_KEY, ""),
+                project_root=bp.parent.parent if bp.exists() else None,
+            )
+        except ValueError as exc:
+            return f"Error: {exc}"
+        lines = [f"## `{task['id']}` — {task['title']}\n"]
+        for sec, content in sec_data.items():
+            lines.append(f"### {sec}\n{content}")
+        return "\n".join(lines)
+
+    # ── slim mode (default) ──────────────────────────────────────────────────
+    if not verbose:
+        open_handovers = _get_open_handovers_for_task(bp, task_id) if bp.exists() else []
+        slim = _slim_entity(task, kind="task", open_handovers=open_handovers or None)
+
+        if expand_links:
+            tldr_index = _build_tldr_index(data, project_root=bp.parent.parent if bp.exists() else None)
+            for link_field in ("depends_on", "related_issues", "related_lessons"):
+                if link_field in slim:
+                    ids = slim[link_field]
+                    if isinstance(ids, str):
+                        ids = [x.strip() for x in ids.split(",") if x.strip()]
+                    slim[link_field] = _expand_link_ids(ids, tldr_index)
+
+        lines = [f"## `{slim.pop('id')}` — {slim.pop('title', task.get('title', ''))}\n"]
+        for k, v in slim.items():
+            lines.append(f"**{k}:** {v}")
+        return "\n".join(lines)
+
+    # ── verbose mode ─────────────────────────────────────────────────────────
     lines = [f"## `{task['id']}` — {task['title']}\n"]
 
     fields = [
@@ -954,15 +1034,23 @@ def backlog_get_task(task_id: str) -> str:
     if isinstance(depends_on, str):
         depends_on = [depends_on]
     if depends_on:
-        lines.append("\n**Depends on:**")
-        for dep_id in depends_on:
-            dep_result = _find_task(data, dep_id)
-            if dep_result:
-                dep_task, _ = dep_result
-                status = dep_task.get("status", "todo")
-                lines.append(f"- `{dep_id}` — {dep_task['title']} ({status})")
-            else:
-                lines.append(f"- `{dep_id}` — NOT FOUND")
+        if expand_links:
+            tldr_index = _build_tldr_index(data, project_root=bp.parent.parent if bp.exists() else None)
+            pills = _expand_link_ids(depends_on, tldr_index)
+            lines.append("\n**Depends on:**")
+            for pill in pills:
+                tldr_str = f" — {pill['tldr']}" if pill.get("tldr") else ""
+                lines.append(f"- `{pill['id']}`{tldr_str}")
+        else:
+            lines.append("\n**Depends on:**")
+            for dep_id in depends_on:
+                dep_result = _find_task(data, dep_id)
+                if dep_result:
+                    dep_task, _ = dep_result
+                    status = dep_task.get("status", "todo")
+                    lines.append(f"- `{dep_id}` — {dep_task['title']} ({status})")
+                else:
+                    lines.append(f"- `{dep_id}` — NOT FOUND")
 
     # Show docs references
     task_docs = task.get("docs")
