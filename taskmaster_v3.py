@@ -46,6 +46,35 @@ def atomic_write(path: Path, content: str) -> None:
     os.replace(tmp, path)
 
 
+# ── tldr extraction ───────────────────────────────────────────
+
+TLDR_MAX_CHARS = 200
+
+_HEADING_RE = re.compile(r"^#{1,6}\s+.*$", re.MULTILINE)
+_SENTENCE_END_RE = re.compile(r"(?<=[.!?])\s+")
+_WHITESPACE_RE = re.compile(r"\s+")
+
+
+def extract_tldr(body: str | None) -> str | None:
+    """Extract a tldr from markdown body text.
+
+    Strategy: strip markdown headings, collapse whitespace, take the first
+    sentence (split on .!?), cap at TLDR_MAX_CHARS with an ellipsis if needed.
+    Returns None if the body is empty or all whitespace.
+    """
+    if not body or not body.strip():
+        return None
+    text = _HEADING_RE.sub("", body).strip()
+    text = _WHITESPACE_RE.sub(" ", text)
+    if not text:
+        return None
+    parts = _SENTENCE_END_RE.split(text, maxsplit=1)
+    first = parts[0].strip()
+    if len(first) > TLDR_MAX_CHARS:
+        first = first[: TLDR_MAX_CHARS - 1].rstrip() + "…"
+    return first or None
+
+
 _legacy_warned: set[str] = set()
 
 
