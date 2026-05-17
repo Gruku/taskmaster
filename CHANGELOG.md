@@ -8,6 +8,20 @@ indicate schema breaks or removed surfaces.
 
 ---
 
+## Unreleased — Skill content slimming (Plan E)
+
+### Skill content slimming (Plan E)
+
+- Every taskmaster SKILL.md is now within its token budget (800–1,500 tokens per skill).
+- Deep-walkthrough content extracted to `references/<topic>.md` per skill — loaded on demand, not eagerly.
+- All skill `description` fields trimmed to ≤60 words (exception: `issue` at ≤70 words to preserve 14 required trigger phrases).
+- Eager skill catalog reduced from ~4,000 to ≤2,500 tokens.
+- New lint infrastructure: `skill_budget_helper.py` + parametrized body and description tests for all 16 skills.
+- `start-session` and `pick-task` body budgets lint-checked but marked xfail pending Plan D merge.
+- `pick-task` description trimmed to 54 words.
+
+---
+
 ## 3.2.0 — Progressive Disclosure Foundation (2026-05-16)
 
 ### Added

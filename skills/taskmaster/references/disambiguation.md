@@ -1,6 +1,8 @@
 # Taskmaster Router — Disambiguation Guide
 
-When two routes could both fire, pick correctly:
+When two routes could both fire, pick correctly. This file covers the five most common
+ambiguous pairs. The test for "which one fires" is the user's stated intent, not the
+technical trigger words — multiple trigger phrases can overlap.
 
 ## handover vs end-session
 
@@ -27,3 +29,7 @@ When two routes could both fire, pick correctly:
 
 - **pick-task** — interactive; user drives every step.
 - **auto-task** — state-machine; hands-off / scripted batch work.
+
+## When Overlap Is Fine
+
+Some phrases belong to multiple skills by design. "wrap up" triggers end-session (which auto-writes a handover). "context handoff" triggers handover directly (which does NOT transition task status). These are intentional; the user's phrasing determines which dimension they care about more.
