@@ -1833,8 +1833,9 @@ def backlog_handover_list(
     since: str = "",
     status: str = "all",
     limit: int = 10,
+    verbose: bool = False,
 ) -> str:
-    """List recent handovers (slim metadata only — no bodies).
+    """List recent handovers. By default shows slim one-liners (id, date, tldr).
 
     Reads from the backlog.yaml index, which is bounded to the most recent 30.
     Older handovers are still on disk under handovers/_archive/ but not listed
@@ -1849,6 +1850,8 @@ def backlog_handover_list(
         status: One of todo, in-progress, done, or "all" (default). Filters
             against the index entry — does not read every file.
         limit: Maximum number of entries to return after filtering (default 10).
+        verbose: If True, include additional index fields (next_action, task_ids,
+            status) per entry. Slim (default) shows id, date, kind, and tldr.
     """
     bp = _backlog_path()
     if not bp.exists():
@@ -1893,6 +1896,14 @@ def backlog_handover_list(
         when = e.get("created") or e.get("date") or ""
         when_tag = f" ({when})" if when else ""
         lines.append(f"- {e['id']}{when_tag}{tag} — {e.get('tldr', '')}")
+        if verbose:
+            if e.get("next_action"):
+                lines.append(f"  next: {e['next_action']}")
+            tids = e.get("task_ids") or []
+            if tids:
+                lines.append(f"  tasks: {', '.join(tids)}")
+            if e.get("status"):
+                lines.append(f"  status: {e['status']}")
     return "\n".join(lines)
 
 
