@@ -744,8 +744,14 @@ def _task_context(data: dict, task: dict, epic: dict) -> str:
 
 
 @mcp.tool()
-def backlog_status() -> str:
-    """Show project dashboard: epic progress table, in-progress tasks, blocked items, next priorities, and stats."""
+def backlog_status(verbose: bool = False) -> str:
+    """Show project dashboard: epic progress table, in-progress tasks, blocked items, next priorities, and stats.
+
+    Args:
+        verbose: If True, include archived task count in stats and show up to
+            10 stale tasks and all next-up items. Default (slim) mode omits
+            archived counts, caps next-up at 5, and caps stale tasks at 3.
+    """
     data = _load()
     regenerate_context(data)  # ensure fresh stats without writing
     ctx = data["context"]
@@ -809,19 +815,20 @@ def backlog_status() -> str:
     else:
         lines.append("**Blocked:** —")
 
-    # Next Up
+    # Next Up — cap at 5 in slim mode
     nu = ctx.get("next_up", [])
+    next_up_cap = None if verbose else 5
     if nu:
         lines.append("**Next Up:**")
-        for t in nu:
+        for t in (nu if next_up_cap is None else nu[:next_up_cap]):
             lines.append(f"- `{t['id']}` — {t['title']} ({t.get('priority', 'medium')})")
     else:
         lines.append("**Next Up:** —")
 
-    # Stats
+    # Stats — omit archived count in slim mode
     s = ctx.get("stats", {})
     stats_line = f"\nTotal: {s.get('total', 0)} | Done: {s.get('done', 0)} | In Progress: {s.get('in_progress', 0)} | In Review: {s.get('in_review', 0)} | Active: {s.get('in_progress', 0) + s.get('in_review', 0)} | Todo: {s.get('todo', 0)} | Blocked: {s.get('blocked', 0)}"
-    if s.get("archived", 0):
+    if verbose and s.get("archived", 0):
         stats_line += f" | Archived: {s['archived']}"
     lines.append(stats_line)
 
@@ -849,6 +856,8 @@ def backlog_status() -> str:
             lines.append(f"- {marker} **{ph['name']}** ({ph_st['done']}/{ph_st['total']}) — {s}{target_note}")
 
     # Stale tasks (todo tasks not referenced in 14+ days)
+    # cap at 3 in slim mode, 10 in verbose
+    stale_cap = 10 if verbose else 3
     stale_tasks = []
     for ep in data["epics"]:
         for t in ep.get("tasks", []):
@@ -871,9 +880,21 @@ def backlog_status() -> str:
     if stale_tasks:
         stale_tasks.sort(key=lambda x: x[2], reverse=True)
         lines.append(f"\n**Stale tasks** (not referenced in 14+ days):")
-        for t, ep, days in stale_tasks[:10]:
+        for t, ep, days in stale_tasks[:stale_cap]:
             lines.append(f"- `{t['id']}` — {t['title']} — stale {days}d ({ep['id']})")
         lines.append("*Still relevant? Archive with `backlog_archive_task` or touch to refresh.*")
+
+    # Verbose: show archived tasks explicitly
+    if verbose:
+        archived_tasks = []
+        for ep in data["epics"]:
+            for t in ep.get("tasks", []):
+                if t.get("status") == "archived":
+                    archived_tasks.append((t, ep))
+        if archived_tasks:
+            lines.append(f"\n**Archived tasks** ({len(archived_tasks)}):")
+            for t, ep in archived_tasks[:20]:
+                lines.append(f"- `{t['id']}` — {t['title']} ({ep['id']})")
 
     return "\n".join(lines)
 
