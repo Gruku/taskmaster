@@ -3,6 +3,7 @@ from pathlib import Path
 import re
 
 import yaml
+from skill_budget_helper import body_token_count, description_word_count, SKILL_BUDGETS, DESCRIPTION_WORD_OVERRIDES, DEFAULT_DESC_WORDS
 
 SKILL_DIR = Path(__file__).resolve().parents[1] / "skills" / "issue"
 
@@ -103,3 +104,17 @@ def test_skill_md_links_resolve():
     assert refs, "SKILL.md does not reference any references/ or templates/ files"
     missing = [r for r in refs if not (SKILL_DIR / r).exists()]
     assert not missing, f"SKILL.md links do not resolve: {missing}"
+
+
+def test_skill_body_within_budget():
+    budget = SKILL_BUDGETS["issue"]
+    actual = body_token_count("issue")
+    assert actual <= budget, (
+        f"body is {actual} tokens (budget: {budget}) — move deep content to references/"
+    )
+
+
+def test_description_within_word_budget():
+    count = description_word_count("issue")
+    budget = DESCRIPTION_WORD_OVERRIDES.get("issue", DEFAULT_DESC_WORDS)
+    assert count <= budget, f"description is {count} words (budget: {budget})"
