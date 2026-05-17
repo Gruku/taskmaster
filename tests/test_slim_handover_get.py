@@ -56,3 +56,18 @@ def test_slim_next_action_in_output(tmp_taskmaster):
 def test_not_found_returns_message(tmp_taskmaster):
     out = backlog_handover_get("2099-01-01-no-such-handover")
     assert "not found" in out.lower() or "Handover not found" in out
+
+
+def test_verbose_with_expand_links_does_not_error(tmp_taskmaster):
+    """expand_links is silently ignored in verbose mode — should not raise."""
+    result = backlog_handover_create(
+        tldr="Verbose expand test.",
+        next_action="Check the spec.",
+        body="## Decisions\n\nChose option B.",
+        session_kind="end-of-day",
+    )
+    hid = result.split("\n")[0].split(": ", 1)[1].strip()
+    # verbose=True + expand_links=True must not crash and must return the body
+    out = backlog_handover_get(hid, verbose=True, expand_links=True)
+    assert "Chose option B" in out
+    assert "---" in out  # frontmatter fences present

@@ -995,6 +995,12 @@ def backlog_get_task(
     pull specific named body sections (e.g. ["notes", "spec"]). Use
     expand_links=True to swap dependency/issue/lesson IDs for {id, tldr} pills.
 
+    Note: Unlike the other _get tools (handover/issue/lesson/idea), this tool
+    honours expand_links in *both* slim and verbose modes for the depends_on
+    field — verbose mode hand-rolls the expansion inline. The other four tools
+    treat expand_links as a slim-mode-only feature and silently ignore it when
+    verbose=True.
+
     Args:
         task_id: The task ID (e.g., "ue-plugin-003")
         verbose: If True, include full body fields (notes, review_instructions,
@@ -1955,12 +1961,21 @@ def backlog_handover_get(
     blockers, where_id_start). Use expand_links=True to expand task_ids to
     {id, tldr} pills.
 
+    Note: expand_links is a slim-mode feature. When verbose=True, the full
+    frontmatter is rendered as-is and expand_links is silently ignored. To
+    get expanded links use slim mode (verbose=False) with expand_links=True.
+
     Use when start-session shows a handover tldr that you want to read in full,
     or when picking a task that has linked handovers.
     """
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
+    if verbose and expand_links:
+        # expand_links is a slim-mode feature; in verbose mode the full frontmatter
+        # is rendered as-is (no ID→pill substitution). To get expanded links, use
+        # slim mode (verbose=False) with expand_links=True.
+        pass  # silently ignore expand_links in verbose
     _ensure_handover_status_backfilled()
     try:
         fm, body = _read_handover(bp, handover_id)
@@ -2245,10 +2260,19 @@ def backlog_issue_get(
     investigation notes). Use sections to pull specific named body sections
     (repro, investigation, notes). Use expand_links=True to expand
     related_tasks to {id, tldr} pills.
+
+    Note: expand_links is a slim-mode feature. When verbose=True, the full
+    frontmatter is rendered as-is and expand_links is silently ignored. To
+    get expanded links use slim mode (verbose=False) with expand_links=True.
     """
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
+    if verbose and expand_links:
+        # expand_links is a slim-mode feature; in verbose mode the full frontmatter
+        # is rendered as-is (no ID→pill substitution). To get expanded links, use
+        # slim mode (verbose=False) with expand_links=True.
+        pass  # silently ignore expand_links in verbose
     try:
         fm, body = _read_issue(bp, issue_id)
     except FileNotFoundError:
@@ -2670,10 +2694,19 @@ def backlog_idea_get(
     have canonical body sections, so sections= is not supported (returns
     an error if provided). Use expand_links=True to expand related_tasks,
     related_issues, and related_lessons to {id, tldr} pills.
+
+    Note: expand_links is a slim-mode feature. When verbose=True, the full
+    frontmatter is rendered as-is and expand_links is silently ignored. To
+    get expanded links use slim mode (verbose=False) with expand_links=True.
     """
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
+    if verbose and expand_links:
+        # expand_links is a slim-mode feature; in verbose mode the full frontmatter
+        # is rendered as-is (no ID→pill substitution). To get expanded links, use
+        # slim mode (verbose=False) with expand_links=True.
+        pass  # silently ignore expand_links in verbose
     if sections:
         return "Error: ideas have no canonical body sections — use verbose=True to read the full body."
     try:
@@ -2933,10 +2966,19 @@ def backlog_lesson_get(
     to pull specific named body sections (why, what_to_do, examples).
     Use expand_links=True to expand related_tasks and related_issues to
     {id, tldr} pills.
+
+    Note: expand_links is a slim-mode feature. When verbose=True, the full
+    frontmatter is rendered as-is and expand_links is silently ignored. To
+    get expanded links use slim mode (verbose=False) with expand_links=True.
     """
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
+    if verbose and expand_links:
+        # expand_links is a slim-mode feature; in verbose mode the full frontmatter
+        # is rendered as-is (no ID→pill substitution). To get expanded links, use
+        # slim mode (verbose=False) with expand_links=True.
+        pass  # silently ignore expand_links in verbose
     try:
         fm, body = _read_lesson(bp, lesson_id)
     except FileNotFoundError:
