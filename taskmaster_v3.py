@@ -4304,3 +4304,176 @@ def continuity_items(
         items.append(_idea_to_item(fm, now))
 
     return items
+
+
+# ── Plan C: typed-link dispatchers, symmetric sync, auto-link ────
+
+# Per-kind path helpers used by the dispatcher. They all live next to
+# backlog.yaml under <kind>s/<id>.md.
+_ENTITY_PATH_HELPERS: dict[str, Any] = {
+    "handover": handover_path,
+    "issue":    issue_path,
+    "lesson":   lesson_path,
+    "idea":     idea_path,
+}
+
+
+def read_entity_anywhere(backlog_path: Path, entity_id: str) -> dict | None:
+    """Read any entity (task/issue/lesson/handover/idea) by ID. Returns its
+    in-memory dict (frontmatter for non-task entities; merged dict for tasks).
+
+    Body content for non-task entities is stored under BODY_KEY for round-trip.
+    Returns None when the entity is unknown.
+
+    Read-fallback: synthesizes a virtual `links` array from legacy fields when
+    no `links` is present yet (unmigrated projects). The fallback is read-only
+    — does not write back.
+    """
+    kind = entity_kind_of(entity_id)
+    if kind is None:
+        return None
+    if kind == "task":
+        data = load_v3(backlog_path)
+        for epic in data.get("epics", []):
+            for task in epic.get("tasks", []):
+                if task.get("id") == entity_id:
+                    _fallback_links_if_absent(task, "task")
+                    return task
+        return None
+    reader = {
+        "handover": read_handover,
+        "issue":    read_issue,
+        "lesson":   read_lesson,
+        "idea":     read_idea,
+    }[kind]
+    try:
+        fm, body = reader(backlog_path, entity_id)
+    except FileNotFoundError:
+        return None
+    fm = dict(fm)
+    if body:
+        fm[BODY_KEY] = body
+    _fallback_links_if_absent(fm, kind)
+    return fm
+
+
+def write_entity_anywhere(backlog_path: Path, entity: dict) -> None:
+    """Persist an entity's frontmatter + body via the right writer.
+
+    For tasks: round-trips through load_v3/save_v3 so the slim index stays
+    consistent. For non-task entities: writes the per-entity markdown file
+    via write_task_file (path lookup by kind). The body is read from
+    entity[BODY_KEY] (popped to avoid persisting that key as frontmatter).
+    """
+    entity_id = entity.get("id")
+    kind = entity_kind_of(entity_id)
+    if kind is None:
+        raise ValueError(f"unknown entity kind for id={entity_id!r}")
+    if kind == "task":
+        data = load_v3(backlog_path)
+        for epic in data.get("epics", []):
+            tasks = epic.get("tasks", [])
+            for i, task in enumerate(tasks):
+                if task.get("id") == entity_id:
+                    # Strip body-key before persisting (save_v3 routes it through
+                    # _split_task_for_v3 which already understands BODY_KEY).
+                    tasks[i] = dict(entity)
+                    save_v3(backlog_path, data)
+                    return
+        raise KeyError(f"task {entity_id!r} not found")
+    # Non-task: split frontmatter vs body, then write via the path helper.
+    fm = dict(entity)
+    body = fm.pop(BODY_KEY, "") or ""
+    path_helper = _ENTITY_PATH_HELPERS[kind]
+    target = path_helper(backlog_path, entity_id)
+    write_task_file(target, fm, body)
+
+
+def sync_inverse(
+    backlog_path: Path,
+    source: str,
+    target: str,
+    type: str,
+    *,
+    remove: bool = False,
+) -> None:
+    """Write (or remove) the inverse link on the target entity.
+
+    Used by `backlog_link_create`/`backlog_link_remove` to keep both sides in
+    lockstep. Raises KeyError if the target entity does not exist (caller
+    decides whether to surface the error or treat it as a soft warning).
+    """
+    if type not in REVERSE_TYPE:
+        raise ValueError(f"unknown link type {type!r}")
+    target_entity = read_entity_anywhere(backlog_path, target)
+    if target_entity is None:
+        raise KeyError(f"target entity {target!r} not found")
+    inverse_type = REVERSE_TYPE[type]
+    if remove:
+        changed = remove_link(target_entity, inverse_type, source)
+    else:
+        changed = add_link(target_entity, inverse_type, source)
+    if changed:
+        write_entity_anywhere(backlog_path, target_entity)
+
+
+def auto_link_on_save(backlog_path: Path, entity_id: str) -> list[str]:
+    """Scan an entity's body and add `references` links for inline mentions.
+
+    Rules (spec §6C):
+      - Skip when entity frontmatter has `auto_link: false`.
+      - Add a `references` link for each unique mention not already linked.
+      - Existing explicit link types (anything stronger than `references`)
+        are never overwritten — auto-detection only adds NEW targets, never
+        modifies existing links regardless of type strength.
+      - Self-references are skipped.
+      - Targets that don't exist are skipped (logged via return value).
+      - Writes the inverse `referenced_by` on each target.
+
+    For tasks (no markdown body in the traditional sense), the scan
+    concatenates `notes` + `review_instructions` fields as a synthetic body.
+
+    Returns the list of newly-added target IDs.
+    """
+    entity = read_entity_anywhere(backlog_path, entity_id)
+    if entity is None:
+        return []
+    if entity.get("auto_link") is False:
+        return []
+
+    if entity_kind_of(entity_id) == "task":
+        body = "\n\n".join(filter(None, [
+            entity.get("notes") or "",
+            entity.get("review_instructions") or "",
+        ]))
+    else:
+        body = entity.get(BODY_KEY, "") or ""
+
+    refs = extract_inline_refs(body, self_id=entity_id)
+    if not refs:
+        return []
+
+    existing_targets = {link["target"] for link in entity_links(entity)}
+    added: list[str] = []
+    for target_id in refs:
+        if target_id in existing_targets:
+            # Any link to this target already exists; auto-detection only adds
+            # new targets, never modifies existing links (regardless of type
+            # strength). This protects stronger explicit relations.
+            continue
+        # Confirm target exists; skip silently if not.
+        target_entity = read_entity_anywhere(backlog_path, target_id)
+        if target_entity is None:
+            continue
+        add_link(entity, "references", target_id)
+        added.append(target_id)
+
+    if added:
+        write_entity_anywhere(backlog_path, entity)
+        for target_id in added:
+            try:
+                sync_inverse(backlog_path, source=entity_id,
+                             target=target_id, type="references")
+            except KeyError:
+                pass
+    return added
