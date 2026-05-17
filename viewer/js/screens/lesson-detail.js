@@ -1,6 +1,7 @@
 import * as api from '../api.js';
 import { claimTopbar, tmAction } from '../lib/topbar.js';
 import { formatRelative, formatAbsolute } from '../lib/time.js';
+import { renderLinkPills, legacyLinksToTyped } from '../components/link-pills.js';
 
 export const meta = { title: 'Lesson', icon: '✦', sidebarKey: 'lessons' };
 
@@ -236,36 +237,30 @@ export async function mount(root, { params, store, prefs, subpath }) {
     sideMeta.appendChild(dl);
     side.appendChild(sideMeta);
 
-    const tasks = lesson.related_tasks || [];
-    const issues = lesson.related_issues || [];
-    if (tasks.length || issues.length) {
+    // Plan C: unified typed-links block.
+    // Falls back to legacy fields when project hasn't been migrated yet.
+    const links = lesson.links && lesson.links.length
+      ? lesson.links
+      : legacyLinksToTyped(lesson, 'lesson');
+    if (links.length) {
       const rel = document.createElement('section');
       rel.className = 'ld-side-block';
       const rh = document.createElement('h2');
       rh.className = 'ld-h';
-      rh.textContent = 'Related';
+      rh.textContent = 'Links';
       rel.appendChild(rh);
-      const list = document.createElement('div');
-      list.className = 'ld-rel-list';
-      for (const t of tasks) {
-        const tid = typeof t === 'string' ? t : (t.id || '');
-        if (!tid) continue;
-        const a = document.createElement('a');
-        a.className = 'ld-rel-pill';
-        a.href = `#/task/${encodeURIComponent(tid)}`;
-        a.textContent = tid;
-        list.appendChild(a);
-      }
-      for (const i of issues) {
-        const iid = typeof i === 'string' ? i : (i.id || '');
-        if (!iid) continue;
-        const a = document.createElement('a');
-        a.className = 'ld-rel-pill ld-rel-pill--issue';
-        a.href = `#/issue/${encodeURIComponent(iid)}`;
-        a.textContent = iid;
-        list.appendChild(a);
-      }
-      rel.appendChild(list);
+      const pillsMount = document.createElement('div');
+      pillsMount.innerHTML = renderLinkPills({ ...lesson, links });
+      // Rewrite raw `#TARGET` anchors to navigate within the SPA.
+      pillsMount.querySelectorAll('a.link-pill').forEach((a) => {
+        const target = a.getAttribute('href')?.slice(1) || '';
+        if (!target) return;
+        if (target.startsWith('ISS-')) a.href = `#/issue/${encodeURIComponent(target)}`;
+        else if (target.startsWith('L-')) a.href = `#/lesson/${encodeURIComponent(target)}`;
+        else if (target.startsWith('IDEA-')) a.href = `#/idea/${encodeURIComponent(target)}`;
+        else a.href = `#/task/${encodeURIComponent(target)}`;
+      });
+      rel.appendChild(pillsMount);
       side.appendChild(rel);
     }
 

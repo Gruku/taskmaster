@@ -5,6 +5,7 @@ import { severityLabel } from '../util/severity-label.js';
 import { pluralize } from '../util/pluralize.js';
 import { agingBar } from '../components/aging-bar.js';
 import { formatRelative, formatAbsolute } from '../lib/time.js';
+import { renderLinkPills, legacyLinksToTyped } from '../components/link-pills.js';
 
 export const meta = { title: 'Issue', icon: '!', sidebarKey: 'issues' };
 
@@ -223,34 +224,28 @@ export async function mount(root, { params, store, prefs, subpath }) {
     signals.appendChild(dl);
     side.appendChild(signals);
 
-    const tasks = issue.related_tasks || [];
-    const relatedIssues = issue.related_issues || [];
-    if (tasks.length || relatedIssues.length) {
+    // Plan C: unified typed-links block.
+    // Falls back to legacy fields when project hasn't been migrated yet.
+    const links = issue.links && issue.links.length
+      ? issue.links
+      : legacyLinksToTyped(issue, 'issue');
+    if (links.length) {
       const rel = document.createElement('section');
       rel.className = 'id-side-block';
-      const rh = document.createElement('h2'); rh.className = 'id-h'; rh.textContent = 'Related';
+      const rh = document.createElement('h2'); rh.className = 'id-h'; rh.textContent = 'Links';
       rel.appendChild(rh);
-      const list = document.createElement('div');
-      list.className = 'id-rel-list';
-      for (const t of tasks) {
-        const tid = typeof t === 'string' ? t : (t.id || '');
-        if (!tid) continue;
-        const a = document.createElement('a');
-        a.className = 'id-rel-pill';
-        a.href = `#/task/${encodeURIComponent(tid)}`;
-        a.textContent = tid;
-        list.appendChild(a);
-      }
-      for (const i of relatedIssues) {
-        const iid = typeof i === 'string' ? i : (i.id || '');
-        if (!iid) continue;
-        const a = document.createElement('a');
-        a.className = 'id-rel-pill id-rel-pill--issue';
-        a.href = `#/issue/${encodeURIComponent(iid)}`;
-        a.textContent = iid;
-        list.appendChild(a);
-      }
-      rel.appendChild(list);
+      const pillsMount = document.createElement('div');
+      pillsMount.innerHTML = renderLinkPills({ ...issue, links });
+      // Rewrite raw `#TARGET` anchors to navigate within the SPA.
+      pillsMount.querySelectorAll('a.link-pill').forEach((a) => {
+        const target = a.getAttribute('href')?.slice(1) || '';
+        if (!target) return;
+        if (target.startsWith('ISS-')) a.href = `#/issue/${encodeURIComponent(target)}`;
+        else if (target.startsWith('L-')) a.href = `#/lesson/${encodeURIComponent(target)}`;
+        else if (target.startsWith('IDEA-')) a.href = `#/idea/${encodeURIComponent(target)}`;
+        else a.href = `#/task/${encodeURIComponent(target)}`;
+      });
+      rel.appendChild(pillsMount);
       side.appendChild(rel);
     }
 

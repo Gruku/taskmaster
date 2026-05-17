@@ -8,6 +8,7 @@
 import * as api from '../api.js';
 import { claimTopbar, tmSubcount, tmSearch, tmAction } from '../lib/topbar.js';
 import { pluralize } from '../util/pluralize.js';
+import { renderLinkPills, legacyLinksToTyped } from '../components/link-pills.js';
 import { emptyState } from '../components/empty-state.js';
 import { chipClickNext, CHIP_CLICK_HINT } from '../util/chip-toggle.js';
 import { formatRelative } from '../lib/time.js';
@@ -661,69 +662,29 @@ export async function mount(root, { store, prefs }) {
     fmBlock.appendChild(dl);
     side.appendChild(fmBlock);
 
-    // Related tasks
-    const relTasks = idea.related_tasks || [];
-    if (relTasks.length > 0) {
+    // Plan C: unified typed-links block.
+    // Falls back to legacy fields when project hasn't been migrated yet.
+    const links = (idea.links && idea.links.length)
+      ? idea.links
+      : legacyLinksToTyped(idea, 'idea');
+    if (links.length) {
       const block = document.createElement('div');
       block.className = 'ideas-detail__side-block';
       const h = document.createElement('div');
       h.className = 'ideas-detail__side-h';
-      h.textContent = 'Related Tasks';
+      h.textContent = 'Links';
       block.appendChild(h);
-      const list = document.createElement('div');
-      list.className = 'ideas-detail__rel-list';
-      for (const id of relTasks) {
-        const a = document.createElement('a');
-        a.className = 'ideas-detail__rel-pill';
-        a.href = `#/kanban/${id}`;
-        a.textContent = id;
-        list.appendChild(a);
-      }
-      block.appendChild(list);
-      side.appendChild(block);
-    }
-
-    // Related issues
-    const relIssues = idea.related_issues || [];
-    if (relIssues.length > 0) {
-      const block = document.createElement('div');
-      block.className = 'ideas-detail__side-block';
-      const h = document.createElement('div');
-      h.className = 'ideas-detail__side-h';
-      h.textContent = 'Related Issues';
-      block.appendChild(h);
-      const list = document.createElement('div');
-      list.className = 'ideas-detail__rel-list';
-      for (const id of relIssues) {
-        const a = document.createElement('a');
-        a.className = 'ideas-detail__rel-pill ideas-detail__rel-pill--issue';
-        a.href = `#/issues/${id}`;
-        a.textContent = id;
-        list.appendChild(a);
-      }
-      block.appendChild(list);
-      side.appendChild(block);
-    }
-
-    // Related lessons
-    const relLessons = idea.related_lessons || [];
-    if (relLessons.length > 0) {
-      const block = document.createElement('div');
-      block.className = 'ideas-detail__side-block';
-      const h = document.createElement('div');
-      h.className = 'ideas-detail__side-h';
-      h.textContent = 'Related Lessons';
-      block.appendChild(h);
-      const list = document.createElement('div');
-      list.className = 'ideas-detail__rel-list';
-      for (const id of relLessons) {
-        const a = document.createElement('a');
-        a.className = 'ideas-detail__rel-pill ideas-detail__rel-pill--lesson';
-        a.href = `#/lessons/${id}`;
-        a.textContent = id;
-        list.appendChild(a);
-      }
-      block.appendChild(list);
+      const pillsMount = document.createElement('div');
+      pillsMount.innerHTML = renderLinkPills({ ...idea, links });
+      pillsMount.querySelectorAll('a.link-pill').forEach((a) => {
+        const target = a.getAttribute('href')?.slice(1) || '';
+        if (!target) return;
+        if (target.startsWith('ISS-')) a.href = `#/issues/${encodeURIComponent(target)}`;
+        else if (target.startsWith('L-')) a.href = `#/lessons/${encodeURIComponent(target)}`;
+        else if (target.startsWith('IDEA-')) a.href = `#/ideas/${encodeURIComponent(target)}`;
+        else a.href = `#/kanban/${encodeURIComponent(target)}`;
+      });
+      block.appendChild(pillsMount);
       side.appendChild(block);
     }
 
