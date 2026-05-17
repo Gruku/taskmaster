@@ -52,7 +52,8 @@ def test_handover_get_returns_frontmatter_and_body(tmp_path, monkeypatch):
 
     hid, _ = write_handover(bp, tldr="did the thing", body="Long explanation here.", session_kind="end-of-day")
 
-    result = backlog_server.backlog_handover_get(hid)
+    # verbose=True reproduces the full frontmatter+body output
+    result = backlog_server.backlog_handover_get(hid, verbose=True)
     assert "---" in result, "Expected YAML fence in response"
     assert "did the thing" in result
     assert "Long explanation here." in result

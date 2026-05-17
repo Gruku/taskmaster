@@ -175,8 +175,8 @@ def test_v3_handover_create_read_list(tmp_path, monkeypatch):
     assert "Handover written" in result
     hid = result.split("\n")[0].split(": ", 1)[1].strip()
 
-    # 2. Get — frontmatter + body
-    got = backlog_server.backlog_handover_get(hid)
+    # 2. Get — frontmatter + body (verbose=True to include body content)
+    got = backlog_server.backlog_handover_get(hid, verbose=True)
     assert "Smoke session complete" in got
     assert "chose X" in got
     assert "---" in got

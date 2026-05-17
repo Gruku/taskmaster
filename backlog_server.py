@@ -1847,8 +1847,19 @@ def backlog_handover_list(
 
 
 @mcp.tool()
-def backlog_handover_get(handover_id: str) -> str:
-    """Read a handover's full content (frontmatter + body).
+def backlog_handover_get(
+    handover_id: str,
+    verbose: bool = False,
+    sections: list[str] | None = None,
+    expand_links: bool = False,
+) -> str:
+    """Read a handover's content.
+
+    By default returns a slim view (frontmatter fields only, no body) to
+    minimise token cost. Use verbose=True to include the full markdown body.
+    Use sections to pull specific named body sections (decisions, notes,
+    blockers, where_id_start). Use expand_links=True to expand task_ids to
+    {id, tldr} pills.
 
     Use when start-session shows a handover tldr that you want to read in full,
     or when picking a task that has linked handovers.
@@ -1868,8 +1879,36 @@ def backlog_handover_get(handover_id: str) -> str:
         from taskmaster_v3 import read_task_file as _read_task_file
         fm, body = _read_task_file(candidates[0])
 
-    fm_lines = [f"  {k}: {v}" for k, v in fm.items()]
-    return "---\n" + "\n".join(fm_lines) + "\n---\n" + body
+    # ── sections-only mode ───────────────────────────────────────────────────
+    if sections:
+        try:
+            sec_data = _resolve_sections(fm, kind="handover", sections=sections, body=body)
+        except ValueError as exc:
+            return f"Error: {exc}"
+        lines = [f"## Handover: {handover_id}\n"]
+        for sec, content in sec_data.items():
+            lines.append(f"### {sec}\n{content}")
+        return "\n".join(lines)
+
+    # ── verbose mode ─────────────────────────────────────────────────────────
+    if verbose:
+        fm_lines = [f"  {k}: {v}" for k, v in fm.items()]
+        return "---\n" + "\n".join(fm_lines) + "\n---\n" + body
+
+    # ── slim mode (default) ──────────────────────────────────────────────────
+    slim = _slim_entity(fm, kind="handover")
+
+    if expand_links:
+        data = _load()
+        tldr_index = _build_tldr_index(data, project_root=bp.parent.parent if bp.exists() else None)
+        task_ids = slim.get("task_ids") or []
+        if task_ids:
+            slim["task_ids"] = _expand_link_ids(task_ids, tldr_index)
+
+    lines = [f"## Handover: {slim.pop('id', handover_id)}\n"]
+    for k, v in slim.items():
+        lines.append(f"**{k}:** {v}")
+    return "\n".join(lines)
 
 
 @mcp.tool()
