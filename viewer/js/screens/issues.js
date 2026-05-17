@@ -6,6 +6,7 @@ import * as api from '../api.js';
 import { claimTopbar, tmSubcount, tmSearch, tmSegmented, tmAction } from '../lib/topbar.js';
 import { chipClickNext, CHIP_CLICK_HINT } from '../util/chip-toggle.js';
 import { groupByStatus, groupBySeverity } from '../util/issues-grouping.js';
+import { legacyLinksToTyped } from '../components/link-pills.js';
 
 export const meta = { title: 'Issues', icon: '!', sidebarKey: 'issues' };
 
@@ -273,13 +274,19 @@ export async function mount(root, { store, prefs }) {
 
   function _matchesSearch(i) {
     if (!searchTerm) return true;
+    // Plan C: search the typed-links targets, falling back to legacy fields
+    // for unmigrated projects.
+    const allLinks = (i.links && i.links.length)
+      ? i.links
+      : legacyLinksToTyped(i, 'issue');
+    const linkTargets = allLinks.map((l) => l.target || '');
     const hay = [
       i.id || '',
       i.title || '',
       i.symptom || '',
       i.component || '',
       ...(i.location || []),
-      ...(i.related_tasks || []).map(t => typeof t === 'string' ? t : (t.id || '')),
+      ...linkTargets,
     ].join(' ').toLowerCase();
     return hay.includes(searchTerm);
   }
