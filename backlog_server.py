@@ -3393,11 +3393,19 @@ def backlog_auto_abort() -> str:
 def backlog_lesson_match(
     task_title: str = "",
     touched_files: list[str] | None = None,
+    verbose: bool = False,
 ) -> str:
     """Find lessons matching a task by title and/or file globs.
 
-    Used by `pick-task` to inject relevant lessons (full body) before a
-    task starts. Returns up to 3 best-match lesson summaries.
+    Used by `pick-task` to inject relevant lessons before a task starts.
+    Returns up to 3 best-match lesson summaries.
+
+    Args:
+        task_title: Task title to match against lesson trigger phrases.
+        touched_files: File paths the task will touch (matched against lesson
+            file glob triggers).
+        verbose: If True, return full metadata per lesson (kind, tier,
+            reinforce_count). Slim (default) returns id + tldr pills only.
     """
     bp = _backlog_path()
     if not bp.exists():
@@ -3411,9 +3419,14 @@ def backlog_lesson_match(
         return "No matching lessons."
     lines = []
     for fm, _body in matches:
-        lines.append(
-            f"- {fm.get('id')} [{fm.get('kind')}] x{fm.get('reinforce_count', 0)}: {fm.get('title')}"
-        )
+        if verbose:
+            lines.append(
+                f"- {fm.get('id')} [{fm.get('kind')}] x{fm.get('reinforce_count', 0)}: {fm.get('title')}"
+            )
+        else:
+            # Slim: id — tldr (omit reinforce_count, kind, tier)
+            tldr = fm.get("tldr") or fm.get("title", "")
+            lines.append(f"- {fm.get('id')} — {tldr}")
     return "\n".join(lines)
 
 
