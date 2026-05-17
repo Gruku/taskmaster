@@ -1442,11 +1442,44 @@ def backlog_validate() -> str:
     # Stats summary
     stats = {"total": len(all_tasks), "issues": len(issues)}
 
+    # ── tldr warnings (advisory, not blocking) ─────────────────────────────
+    warnings: list[str] = []
+    for epic in data.get("epics", []):
+        for task in epic.get("tasks", []):
+            if not task.get("tldr"):
+                warnings.append(
+                    f"  warning: task {task['id']} missing tldr — run scripts/backfill_tldr.py"
+                )
+
+    # Also scan artifact dirs for missing tldr
+    bp = _backlog_path()
+    tm_dir = bp.parent
+    from taskmaster_v3 import read_task_file as _rtf
+    for subdir in ("issues", "lessons", "handovers", "ideas"):
+        d = tm_dir / subdir
+        if not d.exists():
+            continue
+        for path in sorted(d.glob("*.md")):
+            try:
+                fm, _ = _rtf(path)
+            except Exception:
+                continue
+            if fm.get("id") and not fm.get("tldr"):
+                warnings.append(
+                    f"  warning: {fm['id']} missing tldr — run scripts/backfill_tldr.py"
+                )
+
+    output_parts: list[str] = []
     if issues:
         header = f"**{len(issues)} issue{'s' if len(issues) != 1 else ''} found** across {stats['total']} tasks:\n"
-        return header + "\n".join(f"- {i}" for i in issues)
+        output_parts.append(header + "\n".join(f"- {i}" for i in issues))
     else:
-        return f"All clear — {stats['total']} tasks validated, no issues found."
+        output_parts.append(f"All clear — {stats['total']} tasks validated, no issues found.")
+
+    if warnings:
+        output_parts.append("## Warnings\n" + "\n".join(warnings))
+
+    return "\n\n".join(output_parts)
 
 
 # ── Mutating Tools ───────────────────────────────────────────
