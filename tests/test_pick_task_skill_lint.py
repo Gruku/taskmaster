@@ -1,12 +1,7 @@
-"""Lint checks for the taskmaster:pick-task skill (glance-first redesign).
-
-NOTE: Body budget (1300 tokens) is xfail until Plan D merges — Plan D owns the
-pick-task SKILL.md restructuring. Description budget check runs immediately.
-"""
+"""Lint checks for the taskmaster:pick-task skill (glance-first redesign)."""
 from pathlib import Path
 import re
 import yaml
-import pytest
 from skill_budget_helper import body_token_count, description_word_count
 
 SKILL_DIR = Path(__file__).resolve().parents[1] / "skills" / "pick-task"
