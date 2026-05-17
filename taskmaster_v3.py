@@ -1371,6 +1371,93 @@ def backfill_handover_status(backlog_data: dict[str, Any], backlog_path: Path) -
     return flipped
 
 
+_LEGACY_TO_OPEN = frozenset({"todo", "in-progress"})
+
+# Marker key in backlog.yaml root so migration is idempotent.
+_MIGRATION_V2_KEY = "handover_status_v2_migrated"
+
+
+def migrate_handover_statuses(
+    backlog_data: dict[str, Any],
+    backlog_path: Path,
+    *,
+    done_or_archived_ids: set[str],
+) -> dict[str, list[str]]:
+    """One-shot migration: translate old three-state enum to new three-state enum.
+
+    Mapping:
+      - "todo" | "in-progress"  →  "open"
+      - "done" + superseded_by  →  "superseded"
+      - "done" + smart-close eligible  →  "closed"
+      - "done" + NOT eligible  →  "open"  (context still relevant)
+
+    Idempotent: no-op if `_MIGRATION_V2_KEY` is truthy in backlog_data.
+    Returns {"migrated": [list of ids changed]}.
+    """
+    if backlog_data.get(_MIGRATION_V2_KEY):
+        return {"migrated": []}
+
+    migrated: list[str] = []
+    handovers_root = handover_dir(backlog_path)
+    archive_root = handovers_root / "_archive"
+    candidates: list[Path] = []
+    if handovers_root.exists():
+        candidates.extend(p for p in handovers_root.glob("*.md"))
+    if archive_root.exists():
+        candidates.extend(archive_root.rglob("*.md"))
+
+    for path in candidates:
+        try:
+            fm, body = read_task_file(path)
+        except (OSError, ValueError):
+            continue
+
+        old_status = fm.get("status", "")
+        # Skip handovers already on the new enum.
+        if old_status in HANDOVER_STATUSES:
+            continue
+
+        now = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+
+        if old_status in _LEGACY_TO_OPEN:
+            fm["status"] = "open"
+            fm["status_changed"] = now
+            fm["status_reason"] = "migrated from legacy enum"
+        elif old_status == "done":
+            if fm.get("superseded_by"):
+                fm["status"] = "superseded"
+                fm["status_changed"] = now
+                fm["status_reason"] = "migrated: had superseded_by"
+            else:
+                # Check smart-close eligibility inline (no file writes during check).
+                task_ids: list[str] = fm.get("task_ids") or []
+                next_action: str = (fm.get("next_action") or "").strip()
+                session_kind: str = fm.get("session_kind") or ""
+                all_terminal = all(t in done_or_archived_ids for t in task_ids)
+                next_action_live = _next_action_references_live_tasks(
+                    next_action, done_or_archived_ids
+                )
+                kind_eligible = session_kind in _AUTO_CLOSE_ELIGIBLE_KINDS
+                if all_terminal and not next_action_live and kind_eligible:
+                    fm["status"] = "closed"
+                    fm["status_reason"] = "migrated: smart-close eligible"
+                else:
+                    fm["status"] = "open"
+                    fm["status_reason"] = "migrated: context still relevant"
+                fm["status_changed"] = now
+        else:
+            # Unknown status — default to open and flag.
+            fm["status"] = "open"
+            fm["status_changed"] = now
+            fm["status_reason"] = f"migrated from unknown status {old_status!r}"
+
+        write_task_file(path, fm, body)
+        migrated.append(path.stem)
+
+    backlog_data[_MIGRATION_V2_KEY] = True
+    return {"migrated": migrated}
+
+
 # Fields kept in the backlog.yaml `handovers:` index entry.
 _HANDOVER_INDEX_FIELDS = (
     "id", "date", "created", "tldr", "next_action",
