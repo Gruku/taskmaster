@@ -410,10 +410,13 @@ def _has_all_defaults(cls) -> bool:
     )
 
 
-def load_project_manifest(project_root: Path) -> ProjectManifest | None:
-    """Soft load: returns None if file missing, malformed, or invalid.
+def load_project_manifest_raw(project_root: Path) -> dict | None:
+    """Soft load: returns the validated raw dict, or None if missing/malformed/invalid.
 
-    Never raises. Validation failures and YAML errors are logged at WARNING.
+    Unlike load_project_manifest, does NOT coerce into dataclasses — so absent
+    fields stay absent rather than being filled with schema defaults. Used by
+    callers that need to distinguish "user did not set X" from "X is at its
+    default value".
     """
     path = project_yaml_path(project_root)
     if not path.is_file():
@@ -430,6 +433,17 @@ def load_project_manifest(project_root: Path) -> ProjectManifest | None:
     ok, errors = validate_manifest_dict(data)
     if not ok:
         _log.warning("%s validation failed: %s", path, "; ".join(errors))
+        return None
+    return data
+
+
+def load_project_manifest(project_root: Path) -> ProjectManifest | None:
+    """Soft load: returns None if file missing, malformed, or invalid.
+
+    Never raises. Validation failures and YAML errors are logged at WARNING.
+    """
+    data = load_project_manifest_raw(project_root)
+    if data is None:
         return None
     return _dict_to_dataclass(ProjectManifest, data)
 

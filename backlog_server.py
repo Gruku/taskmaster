@@ -7210,6 +7210,7 @@ def auto_event_log(session_id: str, since: str | None = None) -> str:
 from project import (
     ProjectManifest,
     load_project_manifest,
+    load_project_manifest_raw,
     manifest_to_dict,
     project_yaml_path,
     resolve_project_root,
@@ -7241,48 +7242,34 @@ def _dig(data: Any, path: str) -> Any:
 
 @mcp.tool()
 def backlog_project_get() -> dict | None:
-    """Return the full .taskmaster/project.yaml as a dict, or None if missing/invalid."""
+    """Return the full .taskmaster/project.yaml as a dict, or None if missing/invalid.
+
+    The returned dict is the EXPANDED form — every dataclass default is filled
+    in (e.g. `project.goal == ""` even when the YAML didn't set it). For "is
+    this field absent in the source?" queries, use `backlog_project_get_field`
+    which reads the raw YAML.
+    """
     m = load_project_manifest(_project_root_or_cwd())
     return manifest_to_dict(m) if m is not None else None
 
 
-def _load_raw_project_yaml(project_root: Path) -> dict | None:
-    """Load the raw (non-expanded) YAML dict for the project manifest.
-
-    Returns None if the file is missing, unreadable, or fails validation.
-    Validation is still enforced so callers get a consistent schema.
-    """
-    path = project_yaml_path(project_root)
-    if not path.is_file():
-        return None
-    try:
-        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except (OSError, yaml.YAMLError):
-        return None
-    if not isinstance(raw, dict):
-        return None
-    ok, _ = validate_manifest_dict(raw)
-    return raw if ok else None
-
-
 @mcp.tool()
 def backlog_project_get_field(path: str) -> Any:
-    """Read a single field via dotted/indexed path.
+    """Read a single field via dotted/indexed path from the RAW YAML.
 
-    Traverses the raw YAML (not the expanded dataclass), so fields that are
-    absent from the file return None rather than a dataclass default.
-
-    Examples:
+    Unlike `backlog_project_get`, this reads the source file directly without
+    coercing through dataclasses — so absent fields return None rather than
+    their schema defaults. Examples:
         "meta.name"
         "repos[0].name"
         "repos[0].branches.protected[0]"
 
     Returns None if any segment is missing or out of range.
     """
-    raw = _load_raw_project_yaml(_project_root_or_cwd())
-    if raw is None:
+    data = load_project_manifest_raw(_project_root_or_cwd())
+    if data is None:
         return None
-    return _dig(raw, path)
+    return _dig(data, path)
 
 
 @mcp.tool()
