@@ -7207,8 +7207,10 @@ def auto_event_log(session_id: str, since: str | None = None) -> str:
 
 # --- .taskmaster/project.yaml (Project manifest) ---
 
+from dataclasses import asdict
 from project import (
     ProjectManifest,
+    SCHEMA_VERSION,
     load_project_manifest,
     load_project_manifest_raw,
     manifest_to_dict,
@@ -7280,6 +7282,74 @@ def backlog_project_ship_order() -> list[str]:
     """
     m = load_project_manifest(_project_root_or_cwd())
     return m.ship_order() if m is not None else []
+
+
+@mcp.tool()
+def backlog_project_set(yaml_content: str) -> str:
+    """Write .taskmaster/project.yaml with strict validation.
+
+    Raises ValueError if YAML is malformed or schema invalid. Atomic write
+    using the existing _atomic_write helper. Returns the absolute path written.
+    """
+    try:
+        data = yaml.safe_load(yaml_content) or {}
+    except yaml.YAMLError as exc:
+        raise ValueError(f"YAML parse failed: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError("project.yaml top-level must be a mapping")
+    validate_manifest_dict(data, raise_on_error=True)
+
+    root = _project_root_or_cwd()
+    path = project_yaml_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rendered = yaml.safe_dump(data, sort_keys=False, allow_unicode=True, default_flow_style=False)
+    _atomic_write(path, rendered)
+    return str(path)
+
+
+def _slugify(name: str) -> str:
+    return re.sub(r"[^a-z0-9-]+", "-", name.lower()).strip("-") or "project"
+
+
+@mcp.tool()
+def backlog_project_init(name: str, slug: str = "") -> str:
+    """Scaffold a minimal valid project.yaml. Refuses to overwrite.
+
+    Returns a confirmation message including the path written.
+    """
+    root = _project_root_or_cwd()
+    path = project_yaml_path(root)
+    if path.exists():
+        raise ValueError(f"{path} exists — refusing to overwrite (edit it directly)")
+    slug = slug or _slugify(name)
+    scaffold = {
+        "schema_version": SCHEMA_VERSION,
+        "meta": {"name": name, "slug": slug, "kind": "app"},
+        "project": {"description": "", "goal": "", "owners": [], "tags": []},
+        "repos": [],
+        "submodules": [],
+        "integrations": {"observability": {"error_trace_ladder": []}, "external": []},
+        "conventions": {"narrative_ref": "./CLAUDE.md", "policies": {}},
+        "extensions": {},
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write(
+        path,
+        yaml.safe_dump(scaffold, sort_keys=False, allow_unicode=True, default_flow_style=False),
+    )
+    return f"Created {path}"
+
+
+@mcp.tool()
+def backlog_project_error_trace_ladder() -> list[dict]:
+    """Return the observability error-trace ladder as a list of dicts.
+
+    Empty list if no manifest. Consumed by IDEA-006 Diagnose-Auth-Or-Not.
+    """
+    m = load_project_manifest(_project_root_or_cwd())
+    if m is None:
+        return []
+    return [asdict(e) for e in m.error_trace_ladder()]
 
 
 if __name__ == "__main__":
