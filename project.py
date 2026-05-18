@@ -289,3 +289,99 @@ def validate_manifest_dict(
     if raise_on_error and not ok:
         raise ValidationError("\n".join(errors))
     return ok, errors
+
+
+# ---------------------------------------------------------------------------
+# Task 4: load_project_manifest, load_project_manifest_or_default, manifest_to_dict
+# ---------------------------------------------------------------------------
+
+import logging
+import typing
+from dataclasses import asdict, fields, is_dataclass
+
+import yaml
+
+_log = logging.getLogger(__name__)
+
+
+def _dict_to_dataclass(cls, data: Any):
+    """Recursively coerce a dict into a dataclass instance, ignoring unknown keys."""
+    if data is None:
+        return cls() if _has_all_defaults(cls) else None
+    if not is_dataclass(cls):
+        return data
+    kwargs: dict[str, Any] = {}
+    type_hints = typing.get_type_hints(cls)
+    for f in fields(cls):
+        if f.name not in data:
+            continue
+        raw = data[f.name]
+        hint = type_hints.get(f.name, f.type)
+        kwargs[f.name] = _coerce_field(hint, raw)
+    return cls(**kwargs)
+
+
+def _coerce_field(type_hint: Any, raw: Any) -> Any:
+    """Handle list[X], dict[...], dataclass, and primitive types."""
+    origin = getattr(type_hint, "__origin__", None)
+    if origin is list:
+        (inner,) = type_hint.__args__
+        if is_dataclass(inner):
+            return [_dict_to_dataclass(inner, item) for item in (raw or [])]
+        return list(raw or [])
+    if origin is dict:
+        return dict(raw or {})
+    # Forward references resolve via typing.get_type_hints in practice; for our
+    # closed schema, direct dataclass references work because we don't use strings.
+    if is_dataclass(type_hint):
+        return _dict_to_dataclass(type_hint, raw or {})
+    return raw
+
+
+def _has_all_defaults(cls) -> bool:
+    """True if every field has a default or default_factory."""
+    return all(
+        f.default is not f.default or f.default_factory is not f.default_factory  # noqa: PLR0124
+        for f in fields(cls)
+    ) or all(
+        (f.default is not __import__("dataclasses").MISSING)
+        or (f.default_factory is not __import__("dataclasses").MISSING)
+        for f in fields(cls)
+    )
+
+
+def load_project_manifest(project_root: Path) -> ProjectManifest | None:
+    """Soft load: returns None if file missing, malformed, or invalid.
+
+    Never raises. Validation failures and YAML errors are logged at WARNING.
+    """
+    path = project_yaml_path(project_root)
+    if not path.is_file():
+        return None
+    try:
+        raw_text = path.read_text(encoding="utf-8")
+        data = yaml.safe_load(raw_text) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        _log.warning("Failed to read %s: %s", path, exc)
+        return None
+    if not isinstance(data, dict):
+        _log.warning("%s: top-level value is not a mapping", path)
+        return None
+    ok, errors = validate_manifest_dict(data)
+    if not ok:
+        _log.warning("%s validation failed: %s", path, "; ".join(errors))
+        return None
+    return _dict_to_dataclass(ProjectManifest, data)
+
+
+def load_project_manifest_or_default(project_root: Path) -> ProjectManifest:
+    """Always returns a manifest. Missing/invalid files yield an empty one."""
+    m = load_project_manifest(project_root)
+    if m is not None:
+        return m
+    return ProjectManifest(schema_version=SCHEMA_VERSION, meta=Meta(name="", slug=""))
+
+
+def manifest_to_dict(manifest: ProjectManifest) -> dict:
+    """Convert a ProjectManifest back to a plain dict, suitable for YAML dump."""
+    return asdict(manifest)
