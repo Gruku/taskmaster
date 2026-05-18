@@ -7301,10 +7301,17 @@ def backlog_project_set(yaml_content: str) -> str:
 
     root = _project_root_or_cwd()
     path = project_yaml_path(root)
+    _ensure_taskmaster_dir(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     rendered = yaml.safe_dump(data, sort_keys=False, allow_unicode=True, default_flow_style=False)
     _atomic_write(path, rendered)
     return str(path)
+
+
+def _ensure_taskmaster_dir(path: Path) -> None:
+    """Raise ValueError if path.parent exists but is not a directory."""
+    if path.parent.exists() and not path.parent.is_dir():
+        raise ValueError(f"{path.parent} exists but is not a directory")
 
 
 def _slugify(name: str) -> str:
@@ -7332,6 +7339,7 @@ def backlog_project_init(name: str, slug: str = "") -> str:
         "conventions": {"narrative_ref": "./CLAUDE.md", "policies": {}},
         "extensions": {},
     }
+    _ensure_taskmaster_dir(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     _atomic_write(
         path,

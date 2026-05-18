@@ -400,12 +400,9 @@ def _coerce_field(type_hint: Any, raw: Any) -> Any:
 
 def _has_all_defaults(cls) -> bool:
     """True if every field has a default or default_factory."""
+    from dataclasses import MISSING
     return all(
-        f.default is not f.default or f.default_factory is not f.default_factory  # noqa: PLR0124
-        for f in fields(cls)
-    ) or all(
-        (f.default is not __import__("dataclasses").MISSING)
-        or (f.default_factory is not __import__("dataclasses").MISSING)
+        f.default is not MISSING or f.default_factory is not MISSING
         for f in fields(cls)
     )
 
