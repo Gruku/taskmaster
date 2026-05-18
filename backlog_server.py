@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -7202,6 +7203,96 @@ def auto_event_log(session_id: str, since: str | None = None) -> str:
     import json
     from taskmaster_v3 import read_auto_events
     return json.dumps({"events": read_auto_events(session_id, since=since)}, indent=2)
+
+
+# --- .taskmaster/project.yaml (Project manifest) ---
+
+from project import (
+    ProjectManifest,
+    load_project_manifest,
+    manifest_to_dict,
+    project_yaml_path,
+    resolve_project_root,
+    validate_manifest_dict,
+)
+
+_PATH_TOKEN = re.compile(r"([^.\[\]]+)|\[(\d+)\]")
+
+
+def _project_root_or_cwd() -> Path:
+    """Resolve a project root from ROOT (the module-level cwd anchor) or fall back."""
+    root = resolve_project_root(ROOT)
+    return root if root is not None else ROOT
+
+
+def _dig(data: Any, path: str) -> Any:
+    cursor: Any = data
+    for match in _PATH_TOKEN.finditer(path):
+        key, idx = match.group(1), match.group(2)
+        try:
+            if key is not None:
+                cursor = cursor[key]
+            else:
+                cursor = cursor[int(idx)]
+        except (KeyError, IndexError, TypeError):
+            return None
+    return cursor
+
+
+@mcp.tool()
+def backlog_project_get() -> dict | None:
+    """Return the full .taskmaster/project.yaml as a dict, or None if missing/invalid."""
+    m = load_project_manifest(_project_root_or_cwd())
+    return manifest_to_dict(m) if m is not None else None
+
+
+def _load_raw_project_yaml(project_root: Path) -> dict | None:
+    """Load the raw (non-expanded) YAML dict for the project manifest.
+
+    Returns None if the file is missing, unreadable, or fails validation.
+    Validation is still enforced so callers get a consistent schema.
+    """
+    path = project_yaml_path(project_root)
+    if not path.is_file():
+        return None
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    ok, _ = validate_manifest_dict(raw)
+    return raw if ok else None
+
+
+@mcp.tool()
+def backlog_project_get_field(path: str) -> Any:
+    """Read a single field via dotted/indexed path.
+
+    Traverses the raw YAML (not the expanded dataclass), so fields that are
+    absent from the file return None rather than a dataclass default.
+
+    Examples:
+        "meta.name"
+        "repos[0].name"
+        "repos[0].branches.protected[0]"
+
+    Returns None if any segment is missing or out of range.
+    """
+    raw = _load_raw_project_yaml(_project_root_or_cwd())
+    if raw is None:
+        return None
+    return _dig(raw, path)
+
+
+@mcp.tool()
+def backlog_project_ship_order() -> list[str]:
+    """Return repos in topological dependency order. Empty list if no manifest.
+
+    Raises ValueError if depends_on contains a cycle (caught by validator on load).
+    """
+    m = load_project_manifest(_project_root_or_cwd())
+    return m.ship_order() if m is not None else []
 
 
 if __name__ == "__main__":
