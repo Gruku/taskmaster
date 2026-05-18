@@ -164,6 +164,66 @@ class ProjectManifest:
     conventions: Conventions = field(default_factory=Conventions)
     extensions: dict[str, Any] = field(default_factory=dict)
 
+    # ------------------------------------------------------------------
+    # Task 5: Helper API methods
+    # ------------------------------------------------------------------
+
+    def repo(self, name: str) -> Repo | None:
+        return next((r for r in self.repos if r.name == name), None)
+
+    def submodule(self, name: str) -> Submodule | None:
+        return next((s for s in self.submodules if s.name == name), None)
+
+    def protected_branches(self, repo_name: str) -> list[str]:
+        r = self.repo(repo_name)
+        return list(r.branches.protected) if r else []
+
+    def policy(self, key: str, default: Any = None) -> Any:
+        return getattr(self.conventions.policies, key, default)
+
+    def error_trace_ladder(self) -> list[ErrorTraceEntry]:
+        return list(self.integrations.observability.error_trace_ladder)
+
+    def ship_order(self) -> list[str]:
+        """Topological sort of repos by depends_on. Raises ValueError on cycle.
+
+        Stable for independent repos: returns them in declaration order.
+        """
+        order: list[str] = []
+        visited: dict[str, int] = {r.name: 0 for r in self.repos}  # 0=white,1=gray,2=black
+        repo_by_name = {r.name: r for r in self.repos}
+
+        def visit(name: str) -> None:
+            state = visited.get(name, 0)
+            if state == 2:
+                return
+            if state == 1:
+                raise ValueError(f"repos: depends_on cycle involving {name!r}")
+            visited[name] = 1
+            for dep in repo_by_name[name].depends_on:
+                if dep in repo_by_name:
+                    visit(dep)
+            visited[name] = 2
+            order.append(name)
+
+        for r in self.repos:
+            visit(r.name)
+        return order
+
+    def valid_submodules(self) -> list[Submodule]:
+        """Drop submodules whose parent_repo is not in repos. Warns on drop."""
+        repo_names = {r.name for r in self.repos}
+        living: list[Submodule] = []
+        for s in self.submodules:
+            if s.parent_repo in repo_names:
+                living.append(s)
+            else:
+                _log.warning(
+                    "submodule %r has unknown parent_repo %r — dropping",
+                    s.name, s.parent_repo,
+                )
+        return living
+
 
 # ---------------------------------------------------------------------------
 # Task 3: Hand-written validator
