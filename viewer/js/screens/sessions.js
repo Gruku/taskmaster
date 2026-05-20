@@ -5,7 +5,7 @@ import { claimTopbar, tmSubcount, tmSearch, tmSegmented, tmAction } from '../lib
 import { pluralize } from '../util/pluralize.js';
 import { emptyState } from '../components/empty-state.js';
 import { chipClickNext } from '../util/chip-toggle.js';
-import { formatRelative, formatAbsolute } from '../lib/time.js';
+import { formatRelative, formatAbsolute, formatDurationCompact } from '../lib/time.js';
 
 export const meta = { title: 'Sessions', icon: '⊕', sidebarKey: 'sessions' };
 
@@ -320,11 +320,7 @@ function railSessionTimeLine(s) {
   const endFmt   = formatAbsolute(s.end,   { date: false });
   let timeLine = (startFmt === endFmt) ? startFmt : `${startFmt} → ${endFmt}`;
   if (s.duration > 0) {
-    const minutes = Math.round(s.duration / 60);
-    const durStr = minutes >= 60
-      ? `${Math.floor(minutes / 60)}h ${minutes % 60}m`
-      : `${minutes}m`;
-    timeLine += ` · ${durStr}`;
+    timeLine += ` · ${formatDurationCompact(s.duration * 1000)}`;
   }
   return timeLine;
 }

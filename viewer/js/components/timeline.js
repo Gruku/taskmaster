@@ -3,7 +3,7 @@
 // [start, end] windows overlap (transitively). Independent flat handovers can be
 // passed alongside; they render outside any cluster as standalone rows.
 
-import { formatAbsolute } from '../lib/time.js';
+import { formatAbsolute, formatDurationCompact } from '../lib/time.js';
 
 /**
  * @typedef {{id:string, start:string, end:string, kind?:string, parent_id?:string|null}} TimelineItem
@@ -140,11 +140,7 @@ function sessionTimeLine(s) {
 
   // Append duration when meaningful (> 0) and not a date-only session.
   if (s.duration > 0) {
-    const minutes = Math.round(s.duration / 60);
-    const durStr = minutes >= 60
-      ? `${Math.floor(minutes / 60)}h ${minutes % 60}m`
-      : `${minutes}m`;
-    timeLine += ` · ${durStr}`;
+    timeLine += ` · ${formatDurationCompact(s.duration * 1000)}`;
   }
   return timeLine;
 }
