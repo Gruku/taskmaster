@@ -3858,11 +3858,15 @@ def list_sessions() -> list[dict]:
             for t in (h.get("task_ids") or []):
                 if t not in tids:
                     tids.append(t)
+        # A session whose handovers all lack `created` only has date-level
+        # resolution; the viewer should render the date without a time.
+        time_resolution = "full" if any(h.get("created") for h in group) else "date-only"
         sessions.append({
             "id": sid,
             "start": start.isoformat(),
             "end": end.isoformat(),
             "duration": int((end - start).total_seconds()),
+            "time_resolution": time_resolution,
             "handover_ids": [h["id"] for h in group],
             "handovers": [
                 {

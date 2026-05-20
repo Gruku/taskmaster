@@ -82,3 +82,44 @@ def test_session_start_end_use_handover_created(tmp_path, monkeypatch):
     assert s["start"] == "2026-05-19T14:23:00+00:00"
     assert s["end"] == "2026-05-19T14:43:00+00:00"
     assert s["duration"] == 20 * 60  # 1200 seconds
+
+
+def test_session_with_only_date_field_marks_time_resolution(tmp_path, monkeypatch):
+    """A session built from a legacy handover (no `created`) is tagged as
+    date-only so the viewer can render the date without inventing a time."""
+    from taskmaster_v3 import list_sessions
+
+    monkeypatch.chdir(tmp_path)
+    _write_handover(tmp_path, "2026-05-13-legacy.md", {
+        "id": "2026-05-13-legacy",
+        "date": "2026-05-13",   # date-only, no `created`
+        "tldr": "...",
+        "next_action": "...",
+        "task_ids": ["T-9"],
+        "session_kind": "end-of-day",
+        "context_size_at_write": 0.5,
+    })
+
+    sessions = list_sessions()
+    assert len(sessions) == 1
+    assert sessions[0]["time_resolution"] == "date-only"
+
+
+def test_session_with_created_marks_time_resolution_full(tmp_path, monkeypatch):
+    from taskmaster_v3 import list_sessions
+
+    monkeypatch.chdir(tmp_path)
+    _write_handover(tmp_path, "2026-05-19-modern.md", {
+        "id": "2026-05-19-modern",
+        "date": "2026-05-19",
+        "created": "2026-05-19T14:23:00+00:00",
+        "tldr": "...",
+        "next_action": "...",
+        "task_ids": ["T-9"],
+        "session_kind": "end-of-day",
+        "context_size_at_write": 0.5,
+    })
+
+    sessions = list_sessions()
+    assert len(sessions) == 1
+    assert sessions[0]["time_resolution"] == "full"
