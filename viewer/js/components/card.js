@@ -113,6 +113,17 @@ export function renderCard({ task, density = 'full', epicColors = {}, autoState 
     chipRow.appendChild(ec);
     chipRowHasContent = true;
   }
+  if (task.tracker_id) {
+    const tk = parseTrackerId(task.tracker_id);
+    if (tk) {
+      const tc = document.createElement('span');
+      tc.className = `card-tracker-chip ${tk.system}`;
+      tc.title = task.tracker_id;
+      tc.innerHTML = `<span class="system">${escapeHtml(tk.system)}</span><span class="key">${escapeHtml(tk.key)}</span>`;
+      chipRow.appendChild(tc);
+      chipRowHasContent = true;
+    }
+  }
   if (task.spec_review) {
     const verdict = task.spec_review.verdict || task.spec_review;
     const known = ['pass', 'warn', 'fail'];
@@ -206,6 +217,17 @@ function appendLiveBlock(card, autoState) {
 
 function escapeHtml(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// Tracker id format: `<system>-<alias>-<key-lowercased>` (e.g. "linear-cm-eng-42").
+// Returns null on malformed input rather than throwing — the chip is purely visual.
+export function parseTrackerId(trackerId) {
+  if (!trackerId || typeof trackerId !== 'string') return null;
+  const parts = trackerId.split('-');
+  if (parts.length < 3) return null;
+  const [system, alias, ...rest] = parts;
+  if (!system || !alias || rest.length === 0) return null;
+  return { system, alias, key: rest.join('-').toUpperCase() };
 }
 
 // Plan 4 dashboard widgets import these by name; thin density-bound aliases over renderCard.
