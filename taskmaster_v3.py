@@ -1940,6 +1940,90 @@ def next_bug_id(backlog_path: Path) -> str:
     return f"B-{n:03d}"
 
 
+def _validate_bug(fm: dict[str, Any]) -> None:
+    """Raise ValueError if frontmatter violates Bug invariants."""
+    status = fm.get("status")
+    if status not in BUG_STATUSES:
+        raise ValueError(f"status must be one of {BUG_STATUSES}, got {status!r}")
+    sev = fm.get("severity")
+    if sev is not None and sev not in BUG_SEVERITIES:
+        raise ValueError(f"severity must be one of {BUG_SEVERITIES} or null, got {sev!r}")
+    disc_by = fm.get("discovered_by")
+    if disc_by not in DISCOVERED_BY_VALUES:
+        raise ValueError(f"discovered_by must be one of {DISCOVERED_BY_VALUES}, got {disc_by!r}")
+    if status == "fixed" and not fm.get("fix_commit"):
+        raise ValueError("status=fixed requires fix_commit to be set")
+    if status == "adopted" and not fm.get("adopted_into"):
+        raise ValueError("status=adopted requires adopted_into to be set")
+    if status == "promoted" and not fm.get("promoted_to"):
+        raise ValueError("status=promoted requires promoted_to to be set")
+
+
+def write_bug(
+    backlog_path: Path,
+    *,
+    title: str,
+    found_in: str | None = None,
+    discovered_by: str = "user",
+    severity: str | None = None,
+    components: list[str] | None = None,
+    location: list[str] | None = None,
+    body: str = "",
+    bug_id: str | None = None,
+    status: str = "open",
+) -> tuple[str, Path]:
+    """Create a new Bug file. Returns (id, path)."""
+    if not title or not title.strip():
+        raise ValueError("bug title is required")
+    bid = bug_id or next_bug_id(backlog_path)
+    fm: dict[str, Any] = {
+        "id": bid,
+        "title": title.strip(),
+        "status": status,
+        "severity": severity,
+        "components": list(components or []),
+        "found_in": found_in,
+        "discovered": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "discovered_by": discovered_by,
+        "location": list(location or []),
+        "fix_commit": None,
+        "adopted_into": None,
+        "promoted_to": None,
+        "links": [],
+    }
+    _validate_bug(fm)
+    bug_dir(backlog_path).mkdir(parents=True, exist_ok=True)
+    target = bug_path(backlog_path, bid)
+    write_task_file(target, fm, body)
+    return bid, target
+
+
+def read_bug(backlog_path: Path, bug_id: str) -> tuple[dict[str, Any], str]:
+    """Read a Bug. Falls through to archive if not active."""
+    p = bug_path(backlog_path, bug_id)
+    if not p.exists():
+        p = bug_path(backlog_path, bug_id, archived=True)
+    return read_task_file(p)
+
+
+def update_bug(
+    backlog_path: Path,
+    bug_id: str,
+    **updates: Any,
+) -> tuple[dict[str, Any], str]:
+    """Apply partial updates to a Bug's frontmatter, validate, and rewrite."""
+    fm, body = read_bug(backlog_path, bug_id)
+    new_body = updates.pop("body", body)
+    fm.update({k: v for k, v in updates.items() if v is not None})
+    _validate_bug(fm)
+    # Determine target — preserve archive vs active based on where it lives.
+    target = bug_path(backlog_path, bug_id)
+    if not target.exists():
+        target = bug_path(backlog_path, bug_id, archived=True)
+    write_task_file(target, fm, new_body)
+    return fm, new_body
+
+
 DECISION_STATUSES = ("open", "resolved", "dropped")
 
 

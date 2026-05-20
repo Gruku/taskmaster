@@ -45,3 +45,38 @@ def test_list_bug_ids_excludes_archive_by_default(tmp_path):
     (bugs / "archive" / "B-002.md").write_text("---\nid: B-002\n---\n")
     assert list_bug_ids(bp) == ["B-001"]
     assert list_bug_ids(bp, include_archive=True) == ["B-001", "B-002"]
+
+
+def test_write_bug_creates_file_and_returns_id_path(tmp_path):
+    from taskmaster_v3 import write_bug, read_bug
+    bp = tmp_path / ".taskmaster" / "backlog.yaml"
+    bp.parent.mkdir(parents=True)
+    bp.write_text("schema_version: 3\n")
+    bid, target = write_bug(
+        bp,
+        title="Cosmetic mismatch in status pill",
+        found_in="T-foo",
+        discovered_by="user",
+        components=["viewer"],
+        body="## Repro\n1. open page\n",
+    )
+    assert bid == "B-001"
+    assert target.exists()
+    fm, body = read_bug(bp, bid)
+    assert fm["id"] == "B-001"
+    assert fm["status"] == "open"
+    assert fm["found_in"] == "T-foo"
+    assert "Repro" in body
+
+
+def test_update_bug_status_to_fixed_requires_commit(tmp_path):
+    from taskmaster_v3 import write_bug, update_bug
+    bp = tmp_path / ".taskmaster" / "backlog.yaml"
+    bp.parent.mkdir(parents=True)
+    bp.write_text("schema_version: 3\n")
+    bid, _ = write_bug(bp, title="t", discovered_by="user")
+    with pytest.raises(ValueError, match="status=fixed requires fix_commit"):
+        update_bug(bp, bid, status="fixed")
+    fm, _ = update_bug(bp, bid, status="fixed", fix_commit="abcd1234")
+    assert fm["status"] == "fixed"
+    assert fm["fix_commit"] == "abcd1234"
