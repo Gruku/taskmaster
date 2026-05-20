@@ -43,6 +43,26 @@ Check schema: `backlog_status` first line shows `Schema: v<N>`.
 
 **5. Skip review gate.** Call `backlog_complete_task` directly. Only ask on genuine ambiguity.
 
+**5b. Bug close-gate.** Before transitioning the task, query open Bugs linked via `found_in`:
+
+```
+backlog_bug_list(status="open", found_in="<active-task-id>")
+```
+
+If the result is non-empty:
+
+> "We're wrapping up **T-XXX** but it still has **N** open bug(s) linked via `found_in`:
+> - B-NNN — title
+> - B-MMM — title
+>
+> Resolve each before closing. For each open bug, pick a disposition: fix-now / spawn-task / shelve / promote."
+
+Walk the disposition entry point in `taskmaster:bug` for each open bug. Only proceed to task transition when all linked bugs are non-`open`.
+
+If the task has any `fixed` linked bugs (status=fixed, found_in=task), mention that N bug(s) will be archived to `bugs/archive/` automatically on task close.
+
+Note: `backlog_complete_task` enforces this server-side too — the skill just gives the user the chance to resolve interactively before hitting the server gate.
+
 **6. Call `backlog_complete_task`** with all session fields (task_id, session_title, done, decisions, issues, tasks_touched, target_status, patchnote, release).
 
 **v3-post-complete-1.** For each `related_issues` that is open/investigating: ask user "Close as fixed or leave for follow-up?"
