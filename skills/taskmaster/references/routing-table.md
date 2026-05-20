@@ -27,7 +27,10 @@ The SKILL.md body carries only the ~15 highest-frequency rows.
 | (v3) "List handovers", "recent handovers" | `backlog_handover_list` |
 | (v3) "Show this handover in full", "read handover 2026-XX-XX" | `backlog_handover_get <id>` |
 | (v3) "Supersede this handover", "the new handover replaces the old one" | `backlog_handover_supersede(old_id, new_id)` |
-| (v3) "Log a bug", "found an issue", "this is broken", "track this defect" | `taskmaster:issue` |
+| (v3) "Log an issue", "this is an issue", "file an issue" | Word-agnostic intake — `taskmaster:issue` if evidence cited, else `taskmaster:bug` |
+| (v3) "Log a bug", "this is a bug", "track this defect", "I found a bug" | `taskmaster:bug` |
+| (v3) "Promote B-XX to an issue" | `taskmaster:bug` (promote subflow) → `taskmaster:issue` (creation) |
+| (v3) "Shelve this", "park this for later" | `taskmaster:bug` (disposition: shelved) |
 | (v3) "List issues", "open bugs", "what's broken" | `backlog_issue_list(status=open)` |
 | (v3) "Mark issue fixed", "close ISS-XX" | `taskmaster:issue` (entry point `update-status`) |
 | (v3) "Start investigating ISS-XX", "this is a duplicate of ISS-YY", "won't fix ISS-XX" | `taskmaster:issue` (entry point `update-status`) |
