@@ -3787,6 +3787,19 @@ def _parse_iso8601(s) -> "datetime":
     return dt
 
 
+def _handover_time(h: dict):
+    """Return the best-available timestamp for a handover, as a tz-aware datetime.
+
+    Prefers the full-precision `created` ISO timestamp written by the v3 handover
+    skill. Falls back to `date` (which may be either a full ISO timestamp or a
+    date-only string) for legacy handovers written before `created` was added.
+    """
+    raw = h.get("created") or h.get("date")
+    if raw is None:
+        raise ValueError(f"handover {h.get('id')!r} has neither 'created' nor 'date'")
+    return _parse_iso8601(raw)
+
+
 def list_sessions() -> list[dict]:
     """Synthesise sessions from on-disk handover files.
 
