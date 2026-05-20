@@ -127,3 +127,21 @@
 .ws-task-title { color: var(--ink-2); flex: 1; min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ws-ho-when { font-family: var(--font-mono); color: var(--ink-3); width: 70px; }
+
+.ws-submodule-info {
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--bg-panel); border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  font-size: var(--text-xs);
+}
+.ws-sm-label {
+  font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--ink-3);
+}
+.ws-sm-sha {
+  font-family: var(--font-mono); color: var(--ink);
+  background: var(--bg-deep); padding: 1px 6px; border-radius: 2px;
+}
+.ws-drift { color: var(--amber); font-family: var(--font-mono); }
+.ws-drift.ws-drift-clean { color: var(--ink-3); }

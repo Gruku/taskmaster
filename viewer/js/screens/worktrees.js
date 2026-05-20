@@ -61,6 +61,22 @@ function render(grid, data) {
   bindCardActions(grid);
 }
 
+function renderSubmoduleInfo(sr) {
+  if (sr.kind !== 'submodule' || !sr.submodule_info) return '';
+  const info = sr.submodule_info;
+  const sha = (info.pinned_sha || '').slice(0, 8) || '—';
+  const drift = (info.drift_ahead || info.drift_behind)
+    ? `<span class="ws-drift">drift +${info.drift_ahead || 0} / -${info.drift_behind || 0}</span>`
+    : `<span class="ws-drift ws-drift-clean">in sync</span>`;
+  return `
+    <div class="ws-submodule-info">
+      <span class="ws-sm-label">pinned</span>
+      <code class="ws-sm-sha">${escapeHtml(sha)}</code>
+      ${drift}
+    </div>
+  `;
+}
+
 function renderCard(sr) {
   const kindGlyph = sr.kind === 'submodule' ? '◈' : '▣';
   const currentBranch = sr.current_branch || '—';
@@ -75,6 +91,7 @@ function renderCard(sr) {
           title="Refresh this sub-repo">↻</button>
       </div>
       <div class="ws-card-body">
+        ${renderSubmoduleInfo(sr)}
         ${renderWorktreeList(sr)}
       </div>
     </div>
