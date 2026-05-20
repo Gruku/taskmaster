@@ -36,7 +36,13 @@ export function mountTaskDetailDocument(root, ctx) {
     },
   });
   root.appendChild(renderHeader(ctx));
-  root.appendChild(renderGrid(ctx));
+  const grid = renderGrid(ctx);
+  root.appendChild(grid);
+
+  // Fire-and-forget: fetch linked bugs and inject section into the body asynchronously.
+  if (ctx.api?.listBugs && ctx.task?.id) {
+    mountLinkedBugs(grid.querySelector('main.td-body'), ctx);
+  }
 
   return () => {
     root.innerHTML = '';
@@ -279,4 +285,59 @@ function renderRail(ctx) {
   const aside = h('aside', { class: 'td-rail-mount', 'data-test': 'rail' });
   mountRightRail(aside, ctx);
   return aside;
+}
+
+// ── Linked Bugs subsection (async, appended after sync render) ──────────────
+async function mountLinkedBugs(bodyEl, ctx) {
+  if (!bodyEl) return;
+  try {
+    const bugs = await ctx.api.listBugs({ found_in: ctx.task.id });
+    if (!bugs || !bugs.length) return;
+
+    const section = h('section', { class: 'td-linked-bugs', 'data-test': 'linked-bugs' });
+
+    const heading = h('div', { class: 'td-section-h td-linked-bugs__heading' }, 'Linked bugs');
+    const openCount = bugs.filter((b) => b.status === 'open').length;
+    if (openCount > 0) {
+      const warn = h('span', { class: 'td-linked-bugs__blocker' },
+        `${openCount} open bug${openCount === 1 ? '' : 's'} blocking close`);
+      heading.appendChild(warn);
+    }
+    section.appendChild(heading);
+
+    const ul = h('ul', { class: 'td-linked-bugs__list' });
+    for (const b of bugs) {
+      const li = document.createElement('li');
+      li.className = 'td-linked-bugs__item';
+
+      const a = document.createElement('a');
+      a.className = 'td-linked-bugs__link';
+      a.href = `#/bug/${b.id}`;
+      const idSpan = document.createElement('span');
+      idSpan.className = 'mono';
+      idSpan.textContent = b.id;
+      a.appendChild(idSpan);
+      a.appendChild(document.createTextNode(' — ' + (b.title || '')));
+
+      const pill = document.createElement('span');
+      pill.className = `td-linked-bugs__status td-linked-bugs__status--${b.status}`;
+      pill.textContent = b.status;
+
+      li.appendChild(a);
+      li.appendChild(pill);
+      ul.appendChild(li);
+    }
+    section.appendChild(ul);
+
+    // Insert before the dates footer if it exists; otherwise append.
+    const datesEl = bodyEl.querySelector('.td-dates');
+    if (datesEl) {
+      bodyEl.insertBefore(section, datesEl);
+    } else {
+      bodyEl.appendChild(section);
+    }
+  } catch (e) {
+    // listBugs failures are non-fatal — task detail still renders without bugs
+    console.warn('listBugs failed in task-detail:', e);
+  }
 }

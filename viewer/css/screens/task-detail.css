@@ -105,6 +105,44 @@
 .td-doc-chips .td-doc-chip:hover { border-color: var(--accent); color: var(--ink); }
 .td-doc-chips .td-doc-chip .type { font-family: var(--font-mono); color: var(--accent-2); font-size: var(--text-xs); }
 
+/* linked bugs subsection */
+.td-linked-bugs { margin-bottom: var(--task-section-mb); }
+.td-linked-bugs__heading {
+  display: flex; align-items: center; gap: 8px;
+  font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.1em;
+  color: var(--ink-3); margin-bottom: var(--task-section-h);
+}
+.td-linked-bugs__blocker {
+  font-size: var(--text-xs); padding: 2px 7px; border-radius: 3px;
+  background: color-mix(in oklch, var(--red) 14%, transparent);
+  color: var(--red);
+  border: 1px solid color-mix(in oklch, var(--red) 28%, transparent);
+  text-transform: none; letter-spacing: 0;
+}
+.td-linked-bugs__list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; }
+.td-linked-bugs__item { display: flex; align-items: center; gap: 8px; font-size: var(--text-sm); }
+.td-linked-bugs__link { color: var(--ink-2); text-decoration: none; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.td-linked-bugs__link:hover { color: var(--ink); }
+.td-linked-bugs__link .mono { font-family: var(--font-mono); color: var(--accent-2); margin-right: 2px; }
+.td-linked-bugs__status {
+  font-size: var(--text-xs); padding: 1px 6px; border-radius: 3px;
+  background: var(--bg-deep); color: var(--ink-3);
+  white-space: nowrap; flex-shrink: 0;
+}
+.td-linked-bugs__status--open    { color: var(--ink-2); }
+.td-linked-bugs__status--shelved { color: var(--ink-3); }
+.td-linked-bugs__status--fixed   {
+  color: var(--accent-green, #5fcdb8);
+  background: rgba(95, 205, 184, 0.10);
+  border: 1px solid rgba(95, 205, 184, 0.25);
+}
+.td-linked-bugs__status--adopted {
+  color: var(--accent-blue, #6ea8ff);
+  background: rgba(110, 168, 255, 0.10);
+  border: 1px solid rgba(110, 168, 255, 0.20);
+}
+.td-linked-bugs__status--archived { opacity: 0.6; }
+
 /* dates footer */
 .td-dates { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: var(--sp-4); margin-top: var(--sp-7); padding-top: var(--sp-4); border-top: 1px solid var(--border-soft); }
 .td-date-cell { display: flex; flex-direction: column; gap: 2px; }
