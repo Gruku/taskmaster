@@ -6038,6 +6038,56 @@ def _load_related_for_task(task_id: str) -> dict | None:
     }
 
 
+# ── Project Structure helpers ────────────────────────────────────────────
+#
+# These power backlog_project_structure() and its HTTP companion.
+# Helpers shell out to `git` via _run_git, which never raises on non-zero
+# (treat git-feature-unavailable the same as data-missing).
+
+import re as _re_ps  # local alias so we don't shadow uses elsewhere in this file
+
+_INTEGRATION_BRANCH_RE = _re_ps.compile(
+    r"^(?:origin/)?(master|main|stage|dev|work|\d+\.\d+\.\d+(?:\.\d+)?)$"
+)
+
+
+def _run_git(args: list[str], *, cwd: Path, timeout: float = 10.0) -> str:
+    """Run `git <args>` in `cwd`. Return stdout text on success, '' on any failure.
+
+    Failure is intentionally swallowed: this helper drives feature-detection
+    logic (e.g. 'is X merged into Y'), where a non-zero exit means 'no' or
+    'unknown', not 'crash the request'. The caller decides how to interpret ''.
+    """
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=str(cwd), capture_output=True, text=True, timeout=timeout,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return ""
+    if result.returncode != 0:
+        return ""
+    return result.stdout
+
+
+def _rank_integration_branch(name: str) -> tuple[int, tuple[int, ...]]:
+    """Order: work < dev < stage < <version> < master|main.
+
+    Returns a sort key suitable for `sorted(..., key=_rank_integration_branch)`.
+    Tier index goes first; for version branches the parsed numeric tuple
+    is the secondary key so 1.10.0 sorts above 1.3.1 (not lexicographic).
+    """
+    if name in ("master", "main"):
+        return (4, ())
+    if _re_ps.fullmatch(r"\d+\.\d+\.\d+(?:\.\d+)?", name):
+        parts = tuple(int(p) for p in name.split("."))
+        return (3, parts)
+    tier = {"work": 0, "dev": 1, "stage": 2}.get(name)
+    if tier is None:
+        return (-1, ())  # unknown — sorts below everything
+    return (tier, ())
+
+
 # ── HTTP Viewer Server ───────────────────────────────────
 
 
