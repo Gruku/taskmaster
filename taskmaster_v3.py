@@ -3808,7 +3808,12 @@ def list_sessions() -> list[dict]:
     SESSION_GAP_MINUTES (default 30). Each group becomes one session.
 
     Returns: list of dicts (newest first):
-      {id, start, end, duration, handover_ids[], recap_id, task_ids[], parallel_with[]}
+      {id, start, end, duration, time_resolution, handover_ids[], recap_id,
+       task_ids[], parallel_with[]}
+
+    `time_resolution` is "full" when at least one grouped handover carried a
+    precise `created` ISO timestamp, else "date-only" — the viewer uses this to
+    avoid fabricating a clock time from a midnight-UTC date.
     """
     from datetime import timedelta
     SESSION_GAP_MINUTES = 30
