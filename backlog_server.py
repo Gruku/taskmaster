@@ -4624,6 +4624,33 @@ def backlog_complete_task(
     if status not in ("in-progress", "in-review", "blocked"):
         return f"Error: task `{task_id}` is `{status}`, expected one of: in-progress, in-review, blocked"
 
+    # Bug close-gate (per bug-tier redesign)
+    bp = _backlog_path()
+    from taskmaster_v3 import (
+        list_bug_ids as _list_bug_ids,
+        read_bug as _read_bug,
+        archive_bug as _archive_bug,
+        sync_bug_index as _sync_bug_index,
+    )
+    open_bugs: list[str] = []
+    fixed_bugs: list[str] = []
+    for bid in _list_bug_ids(bp):
+        try:
+            bfm, _ = _read_bug(bp, bid)
+        except (OSError, ValueError):
+            continue
+        if bfm.get("found_in") == task_id:
+            if bfm.get("status") == "open":
+                open_bugs.append(bid)
+            elif bfm.get("status") == "fixed":
+                fixed_bugs.append(bid)
+    if open_bugs:
+        return (
+            f"Cannot complete {task_id} — {len(open_bugs)} open bug(s) linked via found_in: "
+            f"{', '.join(open_bugs)}.\n"
+            f"Resolve each (fix/adopt/shelve/promote) before closing the task."
+        )
+
     # Warn if skipping in-review when going straight to done
     review_warning = ""
     if target_status == "done" and status == "in-progress":
@@ -4665,6 +4692,17 @@ def backlog_complete_task(
             data2 = _load()
             _sync_handover_index(data2, _backlog_path())
             _save(data2)
+
+    # Archive bugs that were fixed during this task (per bug-tier redesign)
+    if target_status == "done" and fixed_bugs:
+        for bid in fixed_bugs:
+            try:
+                _archive_bug(bp, bid)
+            except (OSError, ValueError):
+                pass
+        data3 = _load()
+        _sync_bug_index(data3, bp)
+        _save(data3)
 
     # Append changelog entry if session summary provided
     changelog_msg = ""
