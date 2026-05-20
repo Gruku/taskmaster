@@ -6346,6 +6346,150 @@ def _link_handovers_to_worktrees(
     return out
 
 
+# Cache keyed by (project_root_str, gitmodules_mtime, refresh_git). LRU sized
+# at 4 — the cost of recomputing is the slow path (~seconds for 10 sub-repos
+# with refresh_git=True), not memory.
+from functools import lru_cache as _lru_cache_ps
+
+
+@_lru_cache_ps(maxsize=4)
+def _cached_project_structure(
+    project_root_str: str,
+    gitmodules_mtime: float,  # only part of the key — invalidates on change
+    refresh_git: bool,
+) -> str:
+    """Cached worker. Returns a JSON string so the @lru_cache result is
+    trivially immutable and safe to share across callers."""
+    import json as _json
+    from datetime import datetime, timezone
+
+    project_root = Path(project_root_str)
+
+    # Pull tasks + handovers from the live backlog so links reflect the
+    # current state. Use the existing _load + handover discovery surface.
+    try:
+        data = _load()
+        tasks: list[dict] = []
+        for epic in data.get("epics", []):
+            for t in epic.get("tasks", []):
+                tasks.append(t)
+    except Exception:
+        tasks = []
+
+    # Handovers: use the existing imports already at the top of this module
+    # (_list_handover_ids + _read_handover). bp is the backlog.yaml path.
+    handovers: list[dict] = []
+    try:
+        bp = _backlog_path()
+        for hid in _list_handover_ids(bp):
+            try:
+                fm, _body = _read_handover(bp, hid)
+                fm = dict(fm)  # don't mutate the caller's dict
+                fm.setdefault("id", hid)
+                handovers.append(fm)
+            except Exception:
+                continue
+    except Exception:
+        handovers = []
+
+    sub_repos = _discover_sub_repos(project_root)
+
+    for sr in sub_repos:
+        repo_path = project_root / sr["path"]
+        # Submodule whose working tree isn't checked out yet — skip git work.
+        if not (repo_path / ".git").exists():
+            sr["worktrees"] = []
+            continue
+
+        sr["integration_branches"] = _discover_integration_branches(repo_path)
+        sr["current_branch"] = (
+            _run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_path).strip()
+            or None
+        )
+
+        wts = _list_worktrees(repo_path)
+        wt_task_map = _link_worktrees_to_tasks(wts, tasks)
+        wt_ho_map = _link_handovers_to_worktrees(wt_task_map, handovers)
+
+        worktree_blocks: list[dict] = []
+        for w in wts:
+            block = {
+                "path": w["path"],
+                "branch": w["branch"],
+                "git_state": None,
+                "tasks": wt_task_map.get(w["path"], []),
+                "handovers": wt_ho_map.get(w["path"], []),
+            }
+            if refresh_git:
+                block["git_state"] = _compute_worktree_git_state(
+                    repo_path,
+                    branch=w["branch"],
+                    integration_branches=sr["integration_branches"],
+                    worktree_path=Path(w["path"]),
+                )
+            worktree_blocks.append(block)
+        sr["worktrees"] = worktree_blocks
+
+        # Submodule drift info — only when refresh_git.
+        if sr["kind"] == "submodule" and refresh_git:
+            pinned = _run_git(
+                ["ls-tree", "HEAD", sr["path"]], cwd=project_root,
+            ).strip()
+            pinned_sha = pinned.split()[2] if len(pinned.split()) >= 3 else None
+            ahead = behind = 0
+            if pinned_sha:
+                rl = _run_git(
+                    ["rev-list", "--left-right", "--count",
+                     f"{pinned_sha}...HEAD"],
+                    cwd=repo_path,
+                ).strip()
+                if rl:
+                    try:
+                        l, r = rl.split()
+                        behind, ahead = int(l), int(r)
+                    except ValueError:
+                        pass
+            sr["submodule_info"] = {
+                "pinned_sha": pinned_sha,
+                "drift_ahead": ahead,
+                "drift_behind": behind,
+            }
+
+    project_default_branch = (
+        _run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=project_root).strip()
+        or "master"
+    )
+    payload = {
+        "project": {
+            "root": str(project_root),
+            "default_branch": project_default_branch,
+        },
+        "sub_repos": sub_repos,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "git_state_included": refresh_git,
+    }
+    return _json.dumps(payload)
+
+
+@mcp.tool()
+def backlog_project_structure(refresh_git: bool = False) -> str:
+    """Return the monorepo → sub-repos → worktrees → tasks + handovers tree.
+
+    Cheap fields (paths, branch names, tasks, handovers) are always
+    populated. `git_state` per worktree and `submodule_info.drift_*` are
+    null unless `refresh_git=True`.
+
+    Args:
+        refresh_git: When True, runs `git merge-base`, `rev-list`, and
+            `status` per worktree (slow — seconds per sub-repo). When
+            False (default), returns cheap structural data only.
+    """
+    project_root = ROOT
+    gitmodules = project_root / ".gitmodules"
+    mtime = gitmodules.stat().st_mtime if gitmodules.exists() else 0.0
+    return _cached_project_structure(str(project_root), mtime, refresh_git)
+
+
 # ── HTTP Viewer Server ───────────────────────────────────
 
 

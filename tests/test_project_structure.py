@@ -372,3 +372,74 @@ def test_link_handovers_to_worktrees_transitive_via_task_ids():
     out = _link_handovers_to_worktrees(worktree_task_map, handovers)
     assert [h["id"] for h in out["/abs/wt-a"]] == ["2026-05-19-foo"]
     assert [h["id"] for h in out["/abs/wt-b"]] == ["2026-05-19-bar"]
+
+
+def test_backlog_project_structure_returns_shape(tmp_taskmaster):
+    """Smoke test against the tmp_taskmaster fixture (no real sub-repos).
+    The result must always have the documented top-level shape even with
+    zero sub-repos."""
+    import json as _json
+    from backlog_server import backlog_project_structure
+    raw = backlog_project_structure()
+    data = _json.loads(raw) if isinstance(raw, str) else raw
+    assert set(data.keys()) >= {
+        "project", "sub_repos", "generated_at", "git_state_included",
+    }
+    assert data["project"]["root"]
+    assert data["git_state_included"] is False  # default refresh_git=False
+    assert isinstance(data["sub_repos"], list)
+
+
+def test_backlog_project_structure_discovers_embedded_sub_repo(tmp_path, monkeypatch):
+    """End-to-end: a tmp project with one embedded sub-repo and one task
+    pointing at a worktree shows up in the JSON shape from the spec."""
+    import json as _json
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".taskmaster").mkdir()
+    (tmp_path / ".taskmaster" / "backlog.yaml").write_text(
+        "meta:\n  schema_version: 3\nepics: []\nphases: []\n",
+        encoding="utf-8",
+    )
+    import importlib
+    import backlog_server
+    importlib.reload(backlog_server)
+
+    # An embedded sub-repo with one extra worktree.
+    sub = _init_repo(tmp_path / "sub-a")
+    _git("branch", "feature/x", cwd=sub)
+    wt = tmp_path / ".worktrees" / "wt-x"
+    _git("worktree", "add", str(wt), "feature/x", cwd=sub)
+
+    raw = backlog_server.backlog_project_structure(refresh_git=False)
+    data = _json.loads(raw) if isinstance(raw, str) else raw
+    sub_paths = [s["path"] for s in data["sub_repos"]]
+    assert "sub-a" in sub_paths
+    target = next(s for s in data["sub_repos"] if s["path"] == "sub-a")
+    assert target["kind"] == "embedded"
+    assert any(w["branch"] == "feature/x" for w in target["worktrees"])
+    # git_state must be None when refresh_git=False.
+    for w in target["worktrees"]:
+        assert w["git_state"] is None
+
+
+def test_backlog_project_structure_refresh_git_populates_state(tmp_path, monkeypatch):
+    import json as _json
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".taskmaster").mkdir()
+    (tmp_path / ".taskmaster" / "backlog.yaml").write_text(
+        "meta:\n  schema_version: 3\nepics: []\nphases: []\n",
+        encoding="utf-8",
+    )
+    import importlib
+    import backlog_server
+    importlib.reload(backlog_server)
+
+    sub = _init_repo(tmp_path / "sub-a")
+    raw = backlog_server.backlog_project_structure(refresh_git=True)
+    data = _json.loads(raw) if isinstance(raw, str) else raw
+    assert data["git_state_included"] is True
+    target = next(s for s in data["sub_repos"] if s["path"] == "sub-a")
+    # Main worktree of the sub-repo is always present.
+    assert len(target["worktrees"]) >= 1
+    assert target["worktrees"][0]["git_state"] is not None
+    assert "merge_ladder" in target["worktrees"][0]["git_state"]
