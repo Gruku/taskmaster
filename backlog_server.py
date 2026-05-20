@@ -2498,6 +2498,7 @@ def backlog_handover_update_status(
 def backlog_issue_create(
     title: str,
     severity: str,
+    evidence: str = "",
     impact: str = "",
     components: list[str] | None = None,
     location: list[str] | None = None,
@@ -2506,14 +2507,17 @@ def backlog_issue_create(
     body: str = "",
     tldr: str = "",
 ) -> str:
-    """Log a bug as a first-class issue, separate from tasks.
+    """Log a systemic or recurring defect as a first-class Issue.
 
+    Issues require evidence of recurrence, systemic scope, or outstanding
+    customer impact — one-off defects should go to `backlog_bug_create` instead.
     A *task* is the unit of work; an *issue* is the unit of broken-ness.
     One issue can spawn multiple fix attempts; one task can close many issues.
 
     Args:
         title: Required. Short summary.
         severity: One of P0 (data loss/security), P1, P2, P3 (cosmetic).
+        evidence: Required. Cite recurrence/systemic/outstanding criterion.
         impact: Why this matters (user-visible consequences).
         components: Tags for which parts of the system are affected.
         location: file:line refs to relevant code.
@@ -2538,6 +2542,7 @@ def backlog_issue_create(
             bp,
             title=title,
             severity=severity,
+            evidence=evidence,
             impact=impact,
             components=components or [],
             location=location or [],
@@ -2780,6 +2785,320 @@ def backlog_issue_resync() -> str:
     _save(data)
     n = len(data.get("issues") or [])
     return f"Issue index resynced — {n} entries."
+
+
+# ── Bug MCP tools ─────────────────────────────────────────────────────────────
+
+
+@mcp.tool()
+def backlog_bug_create(
+    title: str,
+    found_in: str = "",
+    discovered_by: str = "user",
+    severity: str = "",
+    components: list[str] | None = None,
+    location: list[str] | None = None,
+    body: str = "",
+) -> str:
+    """Log a Bug — the user-flagged sink for defects that don't clear the Issue bar.
+
+    Bugs are project-wide lightweight artifacts (no aging window, no fix-by).
+    Use this for one-off defects, cosmetic issues, or anything the user wants
+    tracked but that doesn't yet meet the recurring/systemic/outstanding bar.
+
+    Args:
+        title: Required. Short summary.
+        found_in: Optional task ID where the bug was flagged.
+        discovered_by: 'user' (default) or 'claude'. claude is only valid for
+            the offer-on-explicit-finding entry point, never for proactive
+            AI sightings.
+        severity: Optional. P0|P1|P2|P3 if you want a sort hint.
+        components: Affected component tags.
+        location: file:line refs.
+        body: Markdown body for repro/notes.
+    """
+    from taskmaster_v3 import write_bug as _write_bug, sync_bug_index as _sync_bug_index
+    bp = _backlog_path()
+    if not bp.exists():
+        return f"Error: no backlog found at {bp}. Run `backlog_init` first."
+    try:
+        bid, target = _write_bug(
+            bp,
+            title=title,
+            found_in=found_in or None,
+            discovered_by=discovered_by,
+            severity=severity or None,
+            components=components or [],
+            location=location or [],
+            body=body,
+        )
+    except ValueError as exc:
+        return f"Error: {exc}"
+    data = _load()
+    _sync_bug_index(data, bp)
+    _save(data)
+    return f"Bug created: {bid} — {title}\nFile: {target.relative_to(ROOT)}"
+
+
+@mcp.tool()
+def backlog_bug_list(
+    status: str = "",
+    found_in: str = "",
+    limit: int = 50,
+    include_archive: bool = False,
+) -> str:
+    """List Bugs from the active set (and optionally archive).
+
+    Defaults to the active set sorted by (status weight asc, discovered desc).
+
+    Args:
+        status: Filter by status: open, fixed, shelved, adopted, promoted.
+        found_in: Filter by task ID where bug was discovered.
+        limit: Max entries to return (default 50).
+        include_archive: If True, also include archived bugs.
+    """
+    from taskmaster_v3 import (
+        sync_bug_index as _sync_bug_index,
+        list_bug_ids as _list_bug_ids,
+        read_bug as _read_bug,
+    )
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    data = _load()
+    _sync_bug_index(data, bp)
+    entries = list(data.get("bugs") or [])
+    if include_archive:
+        active_ids = {e["id"] for e in entries}
+        for bid in _list_bug_ids(bp, include_archive=True):
+            if bid in active_ids:
+                continue
+            try:
+                fm, _ = _read_bug(bp, bid)
+            except (OSError, ValueError):
+                continue
+            entries.append({
+                "id": fm["id"],
+                "title": fm["title"],
+                "status": fm["status"],
+                "components": fm.get("components"),
+                "found_in": fm.get("found_in"),
+                "discovered": fm.get("discovered"),
+            })
+    if status:
+        entries = [e for e in entries if e.get("status") == status]
+    if found_in:
+        entries = [e for e in entries if e.get("found_in") == found_in]
+    entries = entries[: max(1, limit)]
+    if not entries:
+        return "No bugs match."
+    lines = []
+    for e in entries:
+        comps = ", ".join(e.get("components") or [])
+        comps_tag = f" [{comps}]" if comps else ""
+        line = f"- {e['id']} {e.get('status', '?'):10} — {e.get('title', '')}{comps_tag}"
+        if e.get("found_in"):
+            line += f"  (found_in: {e['found_in']})"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def backlog_bug_get(bug_id: str, verbose: bool = False) -> str:
+    """Read a Bug. Falls through to archive if not in active set.
+
+    Args:
+        bug_id: Bug ID (e.g. B-001).
+        verbose: If True, return full frontmatter + body. Default is slim view.
+    """
+    from taskmaster_v3 import read_bug as _read_bug
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    try:
+        fm, body = _read_bug(bp, bug_id)
+    except FileNotFoundError:
+        return f"Bug not found: {bug_id}"
+    if verbose:
+        fm_lines = [f"  {k}: {v}" for k, v in fm.items()]
+        return "---\n" + "\n".join(fm_lines) + "\n---\n" + body
+    lines = [f"## Bug: {fm['id']}\n"]
+    for k in ("title", "status", "severity", "components", "found_in", "discovered", "discovered_by"):
+        if fm.get(k) is not None:
+            lines.append(f"**{k}:** {fm[k]}")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def backlog_bug_update(
+    bug_id: str,
+    status: str = "",
+    title: str = "",
+    severity: str = "",
+    components: list[str] | None = None,
+    location: list[str] | None = None,
+    fix_commit: str = "",
+    adopted_into: str = "",
+    promoted_to: str = "",
+    body: str = "",
+) -> str:
+    """Update a Bug's status or fields. Lifecycle constraints enforced.
+
+    - status=fixed requires fix_commit
+    - status=adopted requires adopted_into
+    - status=promoted requires promoted_to
+
+    Args:
+        bug_id: Bug ID (e.g. B-001).
+        status: New status. One of open, fixed, shelved, adopted, promoted.
+        title: Updated title.
+        severity: Updated severity (P0-P3).
+        components: Replace components list.
+        location: Replace location list.
+        fix_commit: Commit SHA that fixed this bug (required for status=fixed).
+        adopted_into: Task ID that adopted this bug (required for status=adopted).
+        promoted_to: Issue ID this was promoted to (required for status=promoted).
+        body: Replace bug body.
+    """
+    from taskmaster_v3 import update_bug as _update_bug, sync_bug_index as _sync_bug_index, BUG_STATUSES
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    updates: dict[str, Any] = {}
+    if status:
+        if status not in BUG_STATUSES:
+            return f"Error: status must be one of {BUG_STATUSES}"
+        updates["status"] = status
+    if title:
+        updates["title"] = title
+    if severity:
+        updates["severity"] = severity
+    if components is not None:
+        updates["components"] = components
+    if location is not None:
+        updates["location"] = location
+    if fix_commit:
+        updates["fix_commit"] = fix_commit
+    if adopted_into:
+        updates["adopted_into"] = adopted_into
+    if promoted_to:
+        updates["promoted_to"] = promoted_to
+    if body:
+        updates["body"] = body
+    try:
+        fm, _ = _update_bug(bp, bug_id, **updates)
+    except FileNotFoundError:
+        return f"Bug not found: {bug_id}"
+    except ValueError as exc:
+        return f"Error: {exc}"
+    data = _load()
+    _sync_bug_index(data, bp)
+    _save(data)
+    return f"Bug updated: {bug_id} — status={fm['status']}"
+
+
+@mcp.tool()
+def backlog_bug_archive(bug_id: str) -> str:
+    """Move bugs/B-NNN.md to bugs/archive/B-NNN.md.
+
+    Refuses if status is open or shelved. Called automatically by task-close
+    for fixed bugs; rarely called directly.
+
+    Args:
+        bug_id: Bug ID (e.g. B-001).
+    """
+    from taskmaster_v3 import archive_bug as _archive_bug, sync_bug_index as _sync_bug_index
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    try:
+        _archive_bug(bp, bug_id)
+    except FileNotFoundError:
+        return f"Bug not found: {bug_id}"
+    except ValueError as exc:
+        return f"Error: {exc}"
+    data = _load()
+    _sync_bug_index(data, bp)
+    _save(data)
+    return f"Bug archived: {bug_id}"
+
+
+@mcp.tool()
+def backlog_bug_pattern_scan(mode: str = "all") -> str:
+    """Run the cross-bug signature scanner and return groups.
+
+    mode: "all" (default), "open_only", "end_of_task" (excludes archive).
+    Returns a human-readable digest of candidate groups; groups have >=2 bugs.
+
+    Args:
+        mode: Scan scope. "all" includes archive, "end_of_task" excludes it.
+    """
+    from taskmaster_v3 import scan_bug_patterns as _scan_bug_patterns
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    include_archive = (mode != "end_of_task")
+    groups = _scan_bug_patterns(bp, include_archive=include_archive)
+    if not groups:
+        return "No bug patterns found (need >=2 matching signatures)."
+    lines = [f"Found {len(groups)} pattern group(s):"]
+    for i, g in enumerate(groups, 1):
+        comps = ", ".join(g["signature"]["components"]) or "(no components)"
+        toks = ", ".join(g["signature"]["tokens"])
+        ids = ", ".join(g["bug_ids"])
+        lines.append(f"  {i}. [{comps}] tokens: {toks}")
+        lines.append(f"     bugs: {ids}")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def backlog_bug_promote(
+    bug_ids: list[str],
+    title: str,
+    severity: str,
+    evidence_text: str,
+    components: list[str] | None = None,
+    body: str = "",
+) -> str:
+    """Atomic: create an Issue from N Bugs; mark each Bug status=promoted.
+
+    The user must provide evidence_text — this is the systemic/recurring/
+    outstanding rationale that the new bar requires. Bugs are marked
+    promoted_to=<new ISS-NNN>.
+
+    Args:
+        bug_ids: List of Bug IDs to promote (e.g. ["B-001", "B-002"]).
+        title: Title for the new Issue.
+        severity: Severity for the new Issue (P0-P3).
+        evidence_text: Required rationale: cite recurrence/systemic/outstanding.
+        components: Component tags for the Issue. Inferred from bugs if omitted.
+        body: Markdown body for the new Issue.
+    """
+    from taskmaster_v3 import (
+        promote_bugs_to_issue as _promote,
+        sync_bug_index as _sync_bug_index,
+        sync_issue_index as _sync_issue_index,
+    )
+    bp = _backlog_path()
+    if not bp.exists():
+        return f"Error: no backlog found at {bp}. Run `backlog_init` first."
+    try:
+        iid = _promote(
+            bp,
+            bug_ids=list(bug_ids or []),
+            title=title,
+            severity=severity,
+            evidence_text=evidence_text,
+            components=components or None,
+            body=body,
+        )
+    except ValueError as exc:
+        return f"Error: {exc}"
+    data = _load()
+    _sync_bug_index(data, bp)
+    _sync_issue_index(data, bp)
+    _save(data)
+    return f"Promoted {len(bug_ids)} bug(s) to {iid}."
 
 
 @mcp.tool()
@@ -6280,6 +6599,32 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 lessons.append(summary)
             self._send_json(200, {"lessons": lessons})
             return
+        elif clean_path.startswith("/api/bugs"):
+            from urllib.parse import urlparse, parse_qs
+            from taskmaster_v3 import (
+                list_bug_ids as _list_bug_ids_http,
+                read_bug as _read_bug_http,
+            )
+            bp = _backlog_path()
+            qs = parse_qs(urlparse(self.path).query)
+            include_archive = qs.get("include_archive", ["false"])[0].lower() == "true"
+            status_filter = qs.get("status", [""])[0]
+            found_in_filter = qs.get("found_in", [""])[0]
+            bugs = []
+            for bid in _list_bug_ids_http(bp, include_archive=include_archive):
+                try:
+                    fm, body = _read_bug_http(bp, bid)
+                except Exception:
+                    continue
+                summary = {k: v for k, v in fm.items() if k != "_body"}
+                summary["summary"] = body.strip()
+                bugs.append(summary)
+            if status_filter:
+                bugs = [b for b in bugs if b.get("status") == status_filter]
+            if found_in_filter:
+                bugs = [b for b in bugs if b.get("found_in") == found_in_filter]
+            self._send_json(200, bugs)
+            return
         elif clean_path.startswith("/api/issues"):
             import json
             from urllib.parse import urlparse, parse_qs
@@ -6693,6 +7038,173 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 self._send_json(404, {"ok": False, "error": f"decision {decision_id} not found"})
             except ValueError as e:
                 self._send_json(400, {"ok": False, "error": str(e)})
+            return
+
+        # ── Bug HTTP routes ───────────────────────────────────────────────────────
+        clean_path_post = self.path.split("?")[0].rstrip("/")
+
+        if clean_path_post == "/api/bugs":
+            from taskmaster_v3 import write_bug as _write_bug_http, sync_bug_index as _sync_bug_index_http
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length).decode("utf-8") if length else ""
+            try:
+                payload = json.loads(raw) if raw else {}
+            except Exception as e:
+                self._send_json(400, {"ok": False, "error": f"invalid JSON: {e}"})
+                return
+            title = (payload.get("title") or "").strip()
+            if not title:
+                self._send_json(400, {"ok": False, "error": "title is required"})
+                return
+            bp = _backlog_path()
+            if not bp.exists():
+                self._send_json(400, {"ok": False, "error": f"no backlog at {bp}"})
+                return
+            try:
+                bid, target = _write_bug_http(
+                    bp,
+                    title=title,
+                    found_in=payload.get("found_in") or None,
+                    discovered_by=payload.get("discovered_by", "user"),
+                    severity=payload.get("severity") or None,
+                    components=payload.get("components") or [],
+                    location=payload.get("location") or [],
+                    body=payload.get("body", ""),
+                )
+            except ValueError as e:
+                self._send_json(400, {"ok": False, "error": str(e)})
+                return
+            data = _load()
+            _sync_bug_index_http(data, bp)
+            _save(data)
+            self._send_json(201, {"ok": True, "id": bid, "path": str(target)})
+            return
+
+        m = re.fullmatch(r"/api/bugs/pattern-scan", clean_path_post)
+        if m:
+            from taskmaster_v3 import scan_bug_patterns as _scan_bug_patterns_http
+            bp = _backlog_path()
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length).decode("utf-8") if length else ""
+            try:
+                payload = json.loads(raw) if raw else {}
+            except Exception as e:
+                self._send_json(400, {"ok": False, "error": f"invalid JSON: {e}"})
+                return
+            mode = payload.get("mode", "all")
+            include_archive = (mode != "end_of_task")
+            groups = _scan_bug_patterns_http(bp, include_archive=include_archive)
+            self._send_json(200, {"groups": groups})
+            return
+
+        m = re.fullmatch(r"/api/bugs/promote", clean_path_post)
+        if m:
+            from taskmaster_v3 import (
+                promote_bugs_to_issue as _promote_http,
+                sync_bug_index as _sync_bug_index_http2,
+                sync_issue_index as _sync_issue_index_http,
+            )
+            bp = _backlog_path()
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length).decode("utf-8") if length else ""
+            try:
+                payload = json.loads(raw) if raw else {}
+            except Exception as e:
+                self._send_json(400, {"ok": False, "error": f"invalid JSON: {e}"})
+                return
+            bug_ids = payload.get("bug_ids") or []
+            title = (payload.get("title") or "").strip()
+            severity = (payload.get("severity") or "").strip()
+            evidence_text = (payload.get("evidence_text") or "").strip()
+            if not bug_ids:
+                self._send_json(400, {"ok": False, "error": "bug_ids is required"})
+                return
+            if not title:
+                self._send_json(400, {"ok": False, "error": "title is required"})
+                return
+            if not severity:
+                self._send_json(400, {"ok": False, "error": "severity is required"})
+                return
+            if not evidence_text:
+                self._send_json(400, {"ok": False, "error": "evidence_text is required"})
+                return
+            try:
+                iid = _promote_http(
+                    bp,
+                    bug_ids=list(bug_ids),
+                    title=title,
+                    severity=severity,
+                    evidence_text=evidence_text,
+                    components=payload.get("components") or None,
+                    body=payload.get("body", ""),
+                )
+            except ValueError as e:
+                self._send_json(400, {"ok": False, "error": str(e)})
+                return
+            data = _load()
+            _sync_bug_index_http2(data, bp)
+            _sync_issue_index_http(data, bp)
+            _save(data)
+            self._send_json(201, {"ok": True, "issue_id": iid})
+            return
+
+        m = re.fullmatch(r"/api/bugs/([A-Za-z0-9_\-]+)/archive", clean_path_post)
+        if m:
+            bug_id = m.group(1)
+            from taskmaster_v3 import archive_bug as _archive_bug_http, sync_bug_index as _sync_bug_index_http3
+            bp = _backlog_path()
+            length = int(self.headers.get("Content-Length") or 0)
+            self.rfile.read(length)  # consume body
+            try:
+                _archive_bug_http(bp, bug_id)
+            except FileNotFoundError:
+                self._send_json(404, {"ok": False, "error": f"bug {bug_id} not found"})
+                return
+            except ValueError as e:
+                self._send_json(400, {"ok": False, "error": str(e)})
+                return
+            data = _load()
+            _sync_bug_index_http3(data, bp)
+            _save(data)
+            self._send_json(200, {"ok": True, "id": bug_id})
+            return
+
+        m = re.fullmatch(r"/api/bugs/([A-Za-z0-9_\-]+)", clean_path_post)
+        if m:
+            bug_id = m.group(1)
+            from taskmaster_v3 import update_bug as _update_bug_http, sync_bug_index as _sync_bug_index_http4, BUG_STATUSES as _BUG_STATUSES_HTTP
+            bp = _backlog_path()
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length).decode("utf-8") if length else ""
+            try:
+                payload = json.loads(raw) if raw else {}
+            except Exception as e:
+                self._send_json(400, {"ok": False, "error": f"invalid JSON: {e}"})
+                return
+            updates = {}
+            if "status" in payload:
+                if payload["status"] not in _BUG_STATUSES_HTTP:
+                    self._send_json(400, {"ok": False, "error": f"status must be one of {_BUG_STATUSES_HTTP}"})
+                    return
+                updates["status"] = payload["status"]
+            for field in ("title", "severity", "fix_commit", "adopted_into", "promoted_to", "body"):
+                if field in payload and payload[field]:
+                    updates[field] = payload[field]
+            for field in ("components", "location"):
+                if field in payload and payload[field] is not None:
+                    updates[field] = payload[field]
+            try:
+                fm, _ = _update_bug_http(bp, bug_id, **updates)
+            except FileNotFoundError:
+                self._send_json(404, {"ok": False, "error": f"bug {bug_id} not found"})
+                return
+            except ValueError as e:
+                self._send_json(400, {"ok": False, "error": str(e)})
+                return
+            data = _load()
+            _sync_bug_index_http4(data, bp)
+            _save(data)
+            self._send_json(200, {"ok": True, "id": bug_id, "status": fm["status"]})
             return
 
         self.send_response(404)
