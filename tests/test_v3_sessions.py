@@ -35,7 +35,7 @@ def test_list_sessions_synthesises_from_handovers(tmp_path, monkeypatch):
     assert len(sessions) >= 1
     s = sessions[0]
     assert set(s.keys()) >= {
-        "id", "start", "end", "duration", "handover_ids",
+        "id", "start", "end", "duration", "time_resolution", "handover_ids",
         "recap_id", "task_ids", "parallel_with",
     }
     assert s["id"].startswith("SES-")
