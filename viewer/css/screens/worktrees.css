@@ -1,0 +1,28 @@
+/* Project Structure screen.
+   Reads tokens.css; no new global tokens introduced.
+   Hard rules: no colored left rails on cards (full borders + top borders
+   + tinted backgrounds only); no transform/translate/scale on hover;
+   no box-shadows (use surface stepping --bg-panel < --bg-card < --bg-card-hover). */
+
+.ws-page { padding: var(--sp-5); height: 100%; overflow: auto; }
+
+.ws-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: var(--sp-5);
+}
+
+.ws-empty, .ws-error {
+  padding: var(--sp-6); color: var(--ink-3);
+  font-size: var(--text-sm); text-align: center;
+}
+.ws-error { color: var(--red); }
+
+.ws-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: var(--sp-4) var(--sp-5);
+  display: flex; flex-direction: column; gap: var(--sp-3);
+}
+.ws-card:hover { background: var(--bg-card-hover); }
