@@ -38,7 +38,7 @@ DEFAULT_DESC_WORDS = 60
 
 # Per-skill overrides for skills whose trigger phrases genuinely cannot fit in 60 words.
 DESCRIPTION_WORD_OVERRIDES: dict[str, int] = {
-    "issue": 70,  # 14 required trigger phrases enforced by test_issue_skill_lint.py
+    "issue": 120,  # bar-tier (recurring/systemic/outstanding) explanation + triggers + bug-routing fallback
 }
 
 

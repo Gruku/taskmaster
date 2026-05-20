@@ -1,53 +1,59 @@
 ---
 name: issue
-description: "Log/update/close project issues in .taskmaster/issues/. Invoke when the user says 'log a bug', 'found an issue', 'this is broken', 'track this defect', 'log this defect', 'file a bug', 'report a bug', 'this is a bug', 'mark issue fixed', 'close iss-xx', 'investigating iss-xx', 'list open issues', 'what bugs are open', or 'triage issues'. This is the only correct way to write or transition an issue."
+description: "Log/update/close project issues in .taskmaster/issues/. Issues are the elevated tier — recurring (≥2 occurrences), systemic (≥2 components / class-of-defect), or outstanding (P0/P1 with concrete blast-radius). Invoke when the user says 'log an issue', 'this is an issue', 'file an issue', 'promote to issue', 'promote B-XX to an issue', 'is this an issue', 'list open issues', 'triage issues', 'mark issue fixed', 'close ISS-XX', 'investigating ISS-XX'. NOT for one-off bugs — those route to taskmaster:bug. If the user uses 'issue' colloquially for what is really a single defect, check evidence: no evidence of recurring/systemic/outstanding → route to taskmaster:bug. This is the only correct way to write or transition a project Issue."
 ---
 
 # Issue
 
-Structured defect tracking in `.taskmaster/issues/`. Issues are persistent artifacts with lifecycle state. A logged `ISS-NNN` survives sessions, links to tasks, and appears in the dashboard severity-sorted.
+Structured defect tracking in `.taskmaster/issues/` — the **elevated tier**. Issues are persistent artifacts with lifecycle state and an aging window. A logged `ISS-NNN` survives sessions, links to tasks, and appears in the dashboard severity-sorted.
+
+## The bar (new — 2026-05-20 redesign)
+
+An Issue requires **at least one** of:
+
+- **Recurring** — ≥2 prior occurrences cited (Bug IDs, task IDs, sessions)
+- **Systemic** — ≥2 affected components OR class-of-defect
+- **Outstanding** — P0/P1 with concrete blast-radius (data loss / security / prod block)
+
+Severity alone is no longer a path. P2/P3 only qualify if recurring or systemic.
+
+The mandatory `evidence:` frontmatter field must cite the criterion. `backlog_issue_create` rejects empty evidence.
+
+If you can't cite evidence, **file a Bug** (`taskmaster:bug`) — Bugs are the sink. Promotion B → ISS is one cheap step (`backlog_bug_promote`).
+
+See `references/issue-bar.md` for the bar criteria, evidence examples, and the canonical anti-example (`ISS-015`-shaped).
 
 ## Why this skill exists
 
-The backend (`backlog_issue_create`, `backlog_issue_update`, `backlog_issue_list`, `backlog_issue_get`) is the storage layer; this skill is the authoring + lifecycle layer. Calling `backlog_issue_create` directly skips auto-extraction, the user-review gate, and the offer to link a follow-up task.
+The backend (`backlog_issue_create`, `backlog_issue_update`, `backlog_issue_list`, `backlog_issue_get`) is the storage layer; this skill is the authoring + lifecycle layer. Calling `backlog_issue_create` directly skips the bar-check + evidence-citation step.
 
-This is the ONLY correct way to write or transition a project issue — do not call backlog_issue_create or backlog_issue_update directly.
+This is the ONLY correct way to write or transition a project Issue — do not call `backlog_issue_create` or `backlog_issue_update` directly.
 
 ## Five entry points
 
-1. **`log-issue`** — explicit user request to log a defect
-2. **`flag-from-conversation`** — Claude proactively offers when a bug-shaped finding surfaces
-3. **`update-status`** — transitioning open -> investigating -> fixed / wontfix / duplicate
-4. **`close-on-task-complete`** — auto-offered from end-session when a finished task has open `related_issues`
-5. **`triage-review`** — list and prioritize open issues by severity
+1. **`log-issue`** — explicit user request to log; walks bar-check + evidence prompt
+2. **`update-status`** — open → investigating → fixed / wontfix / duplicate
+3. **`close-on-task-complete`** — auto-offered from end-session when a finished task has open `related_issues`
+4. **`promote-from-bug`** — invoked by pattern scanner or by user saying "promote B-XX to an issue"
+5. **`triage-review`** — list open issues by severity, surface aging items
 
-Full per-entry-point subflows in `references/entry-point-flows.md`.
+Full per-entry-point subflows in `references/entry-point-flows.md`. Bar criteria + anti-examples in `references/issue-bar.md`.
 
 ## Entry point decision tree
 
 | Trigger | Entry |
 |---|---|
-| `log a bug`, `file a bug`, `this is broken`, `report a bug`, `track this defect`, `this is a bug` | `log-issue` |
-| Bug-shaped finding surfaces mid-session | `flag-from-conversation` |
+| `log an issue`, `file an issue`, `this is an issue` (with evidence) | `log-issue` |
+| `promote B-XX to an issue`, scanner finding | `promote-from-bug` |
 | `mark issue fixed`, `close ISS-XX`, `investigating ISS-XX` | `update-status` |
 | End-session with open `related_issues` | `close-on-task-complete` |
-| `list open issues`, `what bugs are open`, `triage issues` | `triage-review` |
-
-## Severity quick-reference
-
-| Severity | Rule |
-|---|---|
-| P0 / Critical | Data loss, security exposure, crash on startup, prod outage. Fix within 14 days. |
-| P1 / High | Blocks core user flow, no workaround, regression in prod. Fix within 30 days. |
-| P2 / Medium | Functional issue with a workaround, non-critical regression. Fix within 60 days. |
-| P3 / Low | Cosmetic, edge-case, nice-to-have. Fix within 120 days. |
-
-Full decision rules and examples in `references/severity-heuristics.md`. When severity is unclear, ask the user. Never silently assign P0.
+| `list open issues`, `triage issues` | `triage-review` |
+| `log a bug`, no evidence on "issue" wording | **route to `taskmaster:bug`** |
 
 ## References
 
-- `references/severity-heuristics.md` — P0–P3 decision rules, examples, aging tiers
+- `references/issue-bar.md` — bar criteria, evidence-shape examples, ISS-015 anti-example
 - `references/lifecycle.md` — state machine, transition rules, `_validate_issue` constraints
 - `references/auto-extraction.md` — per-field extraction sources and fallbacks
-- `references/entry-point-flows.md` — full subflow for each of the 5 entry points
+- `references/entry-point-flows.md` — full subflow per entry point
 - `templates/issue-body.md` — Repro / Expected / Investigation notes skeleton
