@@ -741,6 +741,39 @@ def _mutate_and_save(data: dict) -> None:
     regenerate_progress_dashboard(data)
 
 
+def _enqueue_linear_push_if_synced(task_id: str, task: dict | None = None) -> None:
+    """Best-effort: enqueue a Linear sync push if this project has linear.yaml
+    AND the task has a Linear tracker_id. Never raises — Linear sync is
+    non-fatal to the local mutation.
+
+    Called from post-mutation hooks (backlog_add_task / update_task /
+    complete_task / archive_task). The drain runs separately (manually via
+    /linear retry, or eventually automatically via session boundaries).
+
+    Tasks without a tracker_id are silently no-op'd — they're not synced.
+    Bootstrap (linear-005) is what links a TM task to a Linear issue by
+    populating tracker_id.
+    """
+    try:
+        bp = _backlog_path()
+        cfg = _load_linear_config(bp)
+        if cfg is None:
+            return
+        if task is None:
+            r = _find_task(_load(), task_id)
+            if not r:
+                return
+            task = r[0]
+        tracker_id = task.get("tracker_id")
+        if not tracker_id or not str(tracker_id).startswith("linear-"):
+            return
+        from integrations.linear.worker import enqueue as _linear_enqueue
+        _linear_enqueue(bp, op="task_upsert", target_id=task_id, tracker_id=tracker_id)
+    except Exception:
+        # Sync failures must not break the local mutation.
+        pass
+
+
 def _deep_merge(dst: dict, src: dict) -> dict:
     """Recursively merge *src* into *dst* in-place and return *dst*.
 
@@ -4111,6 +4144,7 @@ def backlog_add_task(
     epic_obj["tasks"].append(new_task)
 
     _mutate_and_save(data)
+    _enqueue_linear_push_if_synced(new_id, task=new_task)
 
     # Soft cap enforcement (only when explicitly set on the epic via `max_tasks`).
     # The previous default of 8 has been lifted — large epics with many tasks are
@@ -4380,6 +4414,7 @@ def backlog_complete_task(
         task["release"] = release
 
     _mutate_and_save(data)
+    _enqueue_linear_push_if_synced(task_id, task=task)
     if target_status == "done":
         _clear_session_task(task_id)
 
@@ -4527,6 +4562,7 @@ def backlog_archive_task(task_id: str, reason: str = "done") -> str:
     task["archived"] = _now()
     task.pop("locked_by", None)
     _mutate_and_save(data)
+    _enqueue_linear_push_if_synced(task_id, task=task)
 
     # Smart-close open handovers that reference this task.
     try:
@@ -4690,6 +4726,7 @@ def backlog_update_task(
             task["next_step"] = next_step
             updated.append(f"next_step → {next_step}")
         _mutate_and_save(data)
+        _enqueue_linear_push_if_synced(task_id, task=task)
         return f"Updated `{task_id}`: " + "; ".join(updated)
 
     # Classic field/value style
@@ -4803,6 +4840,8 @@ def backlog_update_task(
             _auto_link_on_save(bp, task_id)
         except Exception:
             pass
+
+    _enqueue_linear_push_if_synced(task_id, task=task)
 
     return f"Updated `{task_id}` field `{field}` → {value}"
 
