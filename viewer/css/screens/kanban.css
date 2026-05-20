@@ -191,6 +191,27 @@
   background: rgba(255,255,255,0.04); color: var(--ink-3);
   font-family: var(--font-mono);
 }
+.card-tracker-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: var(--text-xs); padding: 3px 9px; border-radius: var(--r-sm);
+  font-family: var(--font-mono);
+  border: 1px solid transparent;
+}
+.card-tracker-chip .system {
+  text-transform: uppercase; letter-spacing: 0.08em; font-size: 9.5px;
+  font-weight: 600; opacity: 0.75;
+}
+.card-tracker-chip .key { font-weight: 500; }
+.card-tracker-chip.linear {
+  background: rgba(160,127,224,0.14);
+  color: var(--purple);
+  border-color: color-mix(in srgb, var(--purple) 25%, transparent);
+}
+.card-tracker-chip.jira {
+  background: rgba(74,158,255,0.12);
+  color: var(--accent-blue, var(--accent));
+  border-color: color-mix(in srgb, var(--accent) 25%, transparent);
+}
 
 .card-footer {
   display: flex; align-items: center; gap: var(--sp-2);
