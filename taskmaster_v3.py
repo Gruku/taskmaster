@@ -2077,6 +2077,95 @@ def _discovered_rank(entry: dict[str, Any]) -> int:
         return 0
 
 
+def _bug_signature(fm: dict[str, Any]) -> tuple | None:
+    """Compute (components_tuple, tokens_tuple) signature for pattern-matching.
+
+    Returns None if the signal is too thin (fewer than 3 token-tokens after
+    stripping). Tokens are <3-char tokens dropped, numeric literals dropped,
+    duplicates removed, then sorted alphabetically.
+    """
+    title = (fm.get("title") or "").lower()
+    raw = re.findall(r"[a-z]+", title)  # letters only; drops digits and punct
+    tokens = sorted({t for t in raw if len(t) >= 3})
+    if len(tokens) < 3:
+        return None
+    comps = tuple(sorted(set(c.lower() for c in (fm.get("components") or []))))
+    return (comps, tuple(tokens))
+
+
+def scan_bug_patterns(
+    backlog_path: Path,
+    include_archive: bool = True,
+) -> list[dict[str, Any]]:
+    """Return a list of pattern groups: [{signature, bug_ids: [B-001, B-007, ...]}, ...].
+
+    Only groups with ≥2 bugs are returned. Includes archive by default so that
+    historical resolved bugs contribute to recurrence counts.
+
+    Two bugs cluster together when they share the same component set AND their
+    title token sets overlap by Jaccard ≥ 0.5. The canonical signature for a
+    group uses the intersection of token sets (i.e. the tokens all members share).
+    """
+    # Collect (bid, comps_tuple, tokens_frozenset) for each bug with a valid sig.
+    entries: list[tuple[str, tuple, frozenset]] = []
+    for bid in list_bug_ids(backlog_path, include_archive=include_archive):
+        try:
+            fm, _ = read_bug(backlog_path, bid)
+        except (OSError, ValueError):
+            continue
+        sig = _bug_signature(fm)
+        if sig is None:
+            continue
+        comps, tokens_tuple = sig
+        entries.append((bid, comps, frozenset(tokens_tuple)))
+
+    # Union-Find clustering by component equality + Jaccard ≥ 0.5.
+    parent: dict[int, int] = {i: i for i in range(len(entries))}
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(x: int, y: int) -> None:
+        parent[find(x)] = find(y)
+
+    for i in range(len(entries)):
+        for j in range(i + 1, len(entries)):
+            _, ci, ti = entries[i]
+            _, cj, tj = entries[j]
+            if ci != cj:
+                continue
+            intersection = ti & tj
+            union_size = len(ti | tj)
+            jaccard = len(intersection) / union_size if union_size else 0.0
+            if jaccard >= 0.5:
+                union(i, j)
+
+    # Aggregate clusters.
+    clusters: dict[int, list[int]] = {}
+    for i in range(len(entries)):
+        root = find(i)
+        clusters.setdefault(root, []).append(i)
+
+    result = []
+    for root, members in clusters.items():
+        if len(members) < 2:
+            continue
+        bug_ids = [entries[i][0] for i in members]
+        # Canonical signature: intersection of all token sets in group + shared comps.
+        shared_tokens = entries[members[0]][2].copy()
+        for i in members[1:]:
+            shared_tokens &= entries[i][2]
+        comps = entries[members[0]][1]
+        result.append({
+            "signature": {"components": list(comps), "tokens": sorted(shared_tokens)},
+            "bug_ids": bug_ids,
+        })
+    return result
+
+
 DECISION_STATUSES = ("open", "resolved", "dropped")
 
 
