@@ -3,14 +3,19 @@
 // [start, end] windows overlap (transitively). Independent flat handovers can be
 // passed alongside; they render outside any cluster as standalone rows.
 
-import { formatAbsolute } from '../lib/time.js';
+import { formatAbsolute, formatDurationCompact } from '../lib/time.js';
 
 /**
  * @typedef {{id:string, start:string, end:string, kind?:string, parent_id?:string|null}} TimelineItem
  */
 
-/** Group sessions whose time windows overlap (transitively). Sessions[] must be
- *  sorted ascending by start time on input. Returns an array of arrays. */
+/** Group sessions whose time windows overlap (transitively).
+ *
+ *  Algorithm requires ascending-by-start input to walk in a single pass, so we
+ *  sort internally. The returned cluster array is then reversed so that the
+ *  newest cluster is first (matching the server's DESC ordering at
+ *  taskmaster_v3.py:3884). Members WITHIN each cluster remain ascending so the
+ *  parallel-block grid reads left-to-right in chronological order. */
 export function clusterParallelSessions(sessions) {
   const sorted = [...sessions].sort((a, b) =>
     new Date(a.start) - new Date(b.start)
@@ -32,6 +37,7 @@ export function clusterParallelSessions(sessions) {
     }
   }
   if (cur.length) groups.push(cur);
+  groups.reverse(); // newest cluster first; members within stay ASC
   return groups;
 }
 
@@ -128,11 +134,28 @@ function renderIndependentHandover(h, onSelect) {
   return el;
 }
 
+function sessionTimeLine(s) {
+  const isDateOnly = s.time_resolution === 'date-only';
+  if (isDateOnly) {
+    // Legacy sessions: render the date only, no time, no arrow.
+    return formatAbsolute(s.start, { time: false });
+  }
+  const startStr = shortTime(s.start);
+  const endStr   = shortTime(s.end);
+  let timeLine = (startStr === endStr) ? startStr : `${startStr} → ${endStr}`;
+
+  // Append duration when meaningful (> 0) and not a date-only session.
+  if (s.duration > 0) {
+    timeLine += ` · ${formatDurationCompact(s.duration * 1000)}`;
+  }
+  return timeLine;
+}
+
 function sessionHeadHtml(s) {
   return (
     `<div class="ho-head">`
     + `<span class="ho-kind session">SESSION</span>`
-    + `<span class="ho-time mono">${shortTime(s.start) === shortTime(s.end) ? shortTime(s.start) : shortTime(s.start) + ' → ' + shortTime(s.end)}</span>`
+    + `<span class="ho-time mono">${escapeHtml(sessionTimeLine(s))}</span>`
     + `</div>`
     + `<div class="ho-title">${escapeHtml(s.id)}</div>`
     + `<div class="ho-foot">`

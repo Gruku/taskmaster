@@ -3787,6 +3787,19 @@ def _parse_iso8601(s) -> "datetime":
     return dt
 
 
+def _handover_time(h: dict):
+    """Return the best-available timestamp for a handover, as a tz-aware datetime.
+
+    Prefers the full-precision `created` ISO timestamp written by the v3 handover
+    skill. Falls back to `date` (which may be either a full ISO timestamp or a
+    date-only string) for legacy handovers written before `created` was added.
+    """
+    raw = h.get("created") or h.get("date")
+    if raw is None:
+        raise ValueError(f"handover {h.get('id')!r} has neither 'created' nor 'date'")
+    return _parse_iso8601(raw)
+
+
 def list_sessions() -> list[dict]:
     """Synthesise sessions from on-disk handover files.
 
@@ -3795,7 +3808,12 @@ def list_sessions() -> list[dict]:
     SESSION_GAP_MINUTES (default 30). Each group becomes one session.
 
     Returns: list of dicts (newest first):
-      {id, start, end, duration, handover_ids[], recap_id, task_ids[], parallel_with[]}
+      {id, start, end, duration, time_resolution, handover_ids[], recap_id,
+       task_ids[], parallel_with[]}
+
+    `time_resolution` is "full" when at least one grouped handover carried a
+    precise `created` ISO timestamp, else "date-only" — the viewer uses this to
+    avoid fabricating a clock time from a midnight-UTC date.
     """
     from datetime import timedelta
     SESSION_GAP_MINUTES = 30
@@ -3810,21 +3828,21 @@ def list_sessions() -> list[dict]:
             if not m:
                 continue
             fm = yaml.safe_load(m.group(1)) or {}
-            if "id" not in fm or "date" not in fm:
+            if "id" not in fm or ("date" not in fm and "created" not in fm):
                 continue
             raw.append(fm)
         except Exception:
             continue
-    raw.sort(key=lambda h: _parse_iso8601(h["date"]))
+    raw.sort(key=lambda h: _handover_time(h))
 
     groups: list[list[dict]] = []
     for h in raw:
-        h_t = _parse_iso8601(h["date"])
+        h_t = _handover_time(h)
         h_tids = set(h.get("task_ids") or [])
         attached = False
         if groups:
             tail = groups[-1][-1]
-            tail_t = _parse_iso8601(tail["date"])
+            tail_t = _handover_time(tail)
             tail_tids = set(tail.get("task_ids") or [])
             within_gap = (h_t - tail_t) <= timedelta(minutes=SESSION_GAP_MINUTES)
             shared_tasks = bool(h_tids & tail_tids)
@@ -3838,18 +3856,22 @@ def list_sessions() -> list[dict]:
     recap_ids = set(list_recaps())
     for idx, group in enumerate(groups, start=1):
         sid = f"SES-{idx:04d}"
-        start = _parse_iso8601(group[0]["date"])
-        end = _parse_iso8601(group[-1]["date"])
+        start = _handover_time(group[0])
+        end = _handover_time(group[-1])
         tids: list[str] = []
         for h in group:
             for t in (h.get("task_ids") or []):
                 if t not in tids:
                     tids.append(t)
+        # A session whose handovers all lack `created` only has date-level
+        # resolution; the viewer should render the date without a time.
+        time_resolution = "full" if any(h.get("created") for h in group) else "date-only"
         sessions.append({
             "id": sid,
             "start": start.isoformat(),
             "end": end.isoformat(),
             "duration": int((end - start).total_seconds()),
+            "time_resolution": time_resolution,
             "handover_ids": [h["id"] for h in group],
             "handovers": [
                 {

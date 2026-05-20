@@ -5,7 +5,7 @@ import { claimTopbar, tmSubcount, tmSearch, tmSegmented, tmAction } from '../lib
 import { pluralize } from '../util/pluralize.js';
 import { emptyState } from '../components/empty-state.js';
 import { chipClickNext } from '../util/chip-toggle.js';
-import { formatRelative } from '../lib/time.js';
+import { formatRelative, formatAbsolute, formatDurationCompact } from '../lib/time.js';
 
 export const meta = { title: 'Sessions', icon: '⊕', sidebarKey: 'sessions' };
 
@@ -311,12 +311,26 @@ function bindRailClose(el, rail) {
   return () => {};
 }
 
+function railSessionTimeLine(s) {
+  const isDateOnly = s.time_resolution === 'date-only';
+  if (isDateOnly) {
+    return formatAbsolute(s.start, { time: false });
+  }
+  const startFmt = formatAbsolute(s.start, { date: false });
+  const endFmt   = formatAbsolute(s.end,   { date: false });
+  let timeLine = (startFmt === endFmt) ? startFmt : `${startFmt} → ${endFmt}`;
+  if (s.duration > 0) {
+    timeLine += ` · ${formatDurationCompact(s.duration * 1000)}`;
+  }
+  return timeLine;
+}
+
 function renderSessionRail(detail) {
   const s = detail.session;
   return (
     `<div class="rr-h">`
     + `<span class="kind-pill session">SESSION</span>`
-    + `<span class="ts">${s.start === s.end ? escapeHtml(s.start) : escapeHtml(s.start) + ' → ' + escapeHtml(s.end)}</span>`
+    + `<span class="ts">${escapeHtml(railSessionTimeLine(s))}</span>`
     + `<span class="actions">`
     + `<button class="ic-btn" data-role="rail-close" title="Close">✕</button>`
     + `</span></div>`

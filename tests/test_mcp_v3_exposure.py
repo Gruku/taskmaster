@@ -166,6 +166,17 @@ def test_auto_mode_tools_exposed(tool_name):
     assert tool_name in _list_tool_names()
 
 
+# Project structure visibility (project-structure-visibility-003)
+@pytest.mark.parametrize(
+    "tool_name",
+    [
+        "backlog_project_structure",
+    ],
+)
+def test_project_structure_tools_exposed(tool_name):
+    assert tool_name in _list_tool_names()
+
+
 def test_full_v3_surface_count():
     """Sanity check the v3 surface size hasn't accidentally shrunk.
 
