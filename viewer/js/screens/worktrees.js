@@ -62,8 +62,31 @@ function render(grid, data) {
 }
 
 function renderCard(sr) {
-  // Filled in by Tasks 11–13.
-  return `<div class="ws-card" data-sub-repo="${escapeHtml(sr.path)}"></div>`;
+  const kindGlyph = sr.kind === 'submodule' ? '◈' : '▣';
+  const currentBranch = sr.current_branch || '—';
+  return `
+    <div class="ws-card" data-sub-repo="${escapeHtml(sr.path)}">
+      <div class="ws-card-head">
+        <span class="ws-kind" title="${escapeHtml(sr.kind)}">${kindGlyph}</span>
+        <span class="ws-path">${escapeHtml(sr.path)}</span>
+        <span class="ws-branch" title="current branch">${escapeHtml(currentBranch)}</span>
+        <button class="ws-refresh" type="button"
+          data-action="refresh-card" data-sub-repo="${escapeHtml(sr.path)}"
+          title="Refresh this sub-repo">↻</button>
+      </div>
+      <div class="ws-card-body">
+        ${renderWorktreeList(sr)}
+      </div>
+    </div>
+  `;
+}
+
+function renderWorktreeList(sr) {
+  if (!sr.worktrees || !sr.worktrees.length) {
+    return `<div class="ws-empty-sub">No worktrees.</div>`;
+  }
+  // Body filled in by Task 12.
+  return sr.worktrees.map(w => `<div class="ws-wt" data-wt="${escapeHtml(w.path)}">${escapeHtml(w.branch || 'detached')}</div>`).join('');
 }
 
 function bindCardActions(grid) {
