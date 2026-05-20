@@ -75,6 +75,7 @@ def test_issue_list_slim(tmp_taskmaster):
         title="Bug",
         severity="P1",
         tldr="Issue tldr.",
+        impact="fixture evidence.",
         body="## Repro\n\nLong repro steps.",
     )
     out = backlog_issue_list()

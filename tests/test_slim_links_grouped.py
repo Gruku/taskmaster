@@ -23,7 +23,7 @@ def _seed_two_tasks(tmp_taskmaster: Path) -> None:
 def test_slim_get_task_groups_links_by_type(tmp_taskmaster):
     _seed_two_tasks(tmp_taskmaster)
     bs.backlog_issue_create(title="Bug", severity="P1", tldr="Auth bug.",
-                            body="repro steps")
+                            impact="fixture evidence.", body="repro steps")
     bs.backlog_link_create(source="T-001", target="T-002", type="depends_on")
     bs.backlog_link_create(source="T-001", target="ISS-001", type="fixes")
 
@@ -38,7 +38,7 @@ def test_slim_get_task_groups_links_by_type(tmp_taskmaster):
 def test_slim_get_task_no_expanded_tldrs_by_default(tmp_taskmaster):
     _seed_two_tasks(tmp_taskmaster)
     bs.backlog_issue_create(title="Bug", severity="P1", tldr="Auth bug.",
-                            body="repro steps")
+                            impact="fixture evidence.", body="repro steps")
     bs.backlog_link_create(source="T-001", target="T-002", type="depends_on")
     bs.backlog_link_create(source="T-001", target="ISS-001", type="fixes")
 
@@ -51,7 +51,7 @@ def test_slim_get_task_no_expanded_tldrs_by_default(tmp_taskmaster):
 def test_expand_links_swaps_ids_for_pills(tmp_taskmaster):
     _seed_two_tasks(tmp_taskmaster)
     bs.backlog_issue_create(title="Bug", severity="P1", tldr="Auth bug.",
-                            body="repro steps")
+                            impact="fixture evidence.", body="repro steps")
     bs.backlog_link_create(source="T-001", target="T-002", type="depends_on")
     bs.backlog_link_create(source="T-001", target="ISS-001", type="fixes")
 

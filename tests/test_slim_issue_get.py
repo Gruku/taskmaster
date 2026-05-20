@@ -23,6 +23,7 @@ def test_verbose_includes_body(tmp_taskmaster):
         title="Login broken",
         severity="P2",
         tldr="Login page errors.",
+        impact="fixture evidence.",
         body="## Repro\n\nVerbose repro steps here.",
     )
     out = backlog_issue_get("ISS-001", verbose=True)
@@ -35,6 +36,7 @@ def test_slim_has_title_severity_status(tmp_taskmaster):
         title="Database slow",
         severity="P2",
         tldr="DB queries timeout.",
+        impact="fixture evidence.",
     )
     out = backlog_issue_get("ISS-001")
     assert "Database slow" in out
@@ -46,6 +48,7 @@ def test_sections_returns_only_requested(tmp_taskmaster):
         title="Cache miss",
         severity="P3",
         tldr="Cache misses on cold start.",
+        impact="fixture evidence.",
         body="## Repro\n\nRepro content.\n\n## Investigation\n\nInvestigation notes.",
     )
     out = backlog_issue_get("ISS-001", sections=["repro"])

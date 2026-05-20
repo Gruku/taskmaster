@@ -2403,6 +2403,10 @@ def _validate_issue(fm: dict[str, Any]) -> None:
         raise ValueError("status=fixed requires fixed_in_task to be set")
     if status == "duplicate" and not fm.get("duplicate_of"):
         raise ValueError("status=duplicate requires duplicate_of to be set")
+    # NEW: evidence field is required per bug-tier redesign.
+    evidence = (fm.get("evidence") or "").strip()
+    if not evidence:
+        raise ValueError("evidence is required — cite recurrence/systemic/outstanding criterion")
 
 
 def write_issue(
@@ -2411,6 +2415,7 @@ def write_issue(
     title: str,
     severity: str,
     impact: str = "",
+    evidence: str = "",
     components: list[str] | None = None,
     location: list[str] | None = None,
     related_tasks: list[str] | None = None,
@@ -2425,6 +2430,11 @@ def write_issue(
     """Create a new issue file. Returns (id, path)."""
     if not title or not title.strip():
         raise ValueError("issue title is required")
+    # evidence fallback: legacy callers pass impact only; treat impact as evidence.
+    if not evidence or not evidence.strip():
+        if not impact or not impact.strip():
+            raise ValueError("evidence (or impact) is required for Issue creation")
+        evidence = impact
     iid = issue_id or next_issue_id(backlog_path)
     from datetime import datetime, timezone
     default_discovered = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -2435,6 +2445,7 @@ def write_issue(
         "severity": severity,
         "components": list(components or []),
         "impact": impact.strip(),
+        "evidence": evidence.strip(),
         "location": list(location or []),
         "discovered": discovered or default_discovered,
         "discovered_by": discovered_by,
@@ -2442,6 +2453,7 @@ def write_issue(
         "related_tasks": list(related_tasks or []),
         "fixed_in_task": None,
         "duplicate_of": None,
+        "promoted_from": [],
         "tldr": tldr,
     }
     if tldr_autogen:
