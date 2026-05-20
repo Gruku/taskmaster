@@ -1881,6 +1881,65 @@ def next_issue_id(backlog_path: Path) -> str:
     return f"ISS-{n:03d}"
 
 
+# ── Bugs ───────────────────────────────────────────────────────
+
+BUG_STATUSES = ("open", "fixed", "shelved", "adopted", "promoted")
+BUG_SEVERITIES = ("P0", "P1", "P2", "P3")  # OPTIONAL on bugs
+DISCOVERED_BY_VALUES = ("user", "claude")
+
+_BUG_INDEX_FIELDS = (
+    "id",
+    "title",
+    "status",
+    "severity",
+    "components",
+    "found_in",
+    "discovered",
+)
+
+
+def bug_dir(backlog_path: Path, archived: bool = False) -> Path:
+    base = backlog_path.parent / "bugs"
+    return base / "archive" if archived else base
+
+
+def bug_path(backlog_path: Path, bug_id: str, archived: bool = False) -> Path:
+    return bug_dir(backlog_path, archived=archived) / f"{bug_id}.md"
+
+
+def list_bug_ids(backlog_path: Path, include_archive: bool = False) -> list[str]:
+    """List bug ids on disk, sorted numerically by the trailing number.
+
+    By default, returns only active bugs. Archive entries are returned in the
+    same list (after active) when include_archive=True.
+    """
+    def _rank(p: Path) -> int:
+        m = re.search(r"(\d+)$", p.stem)
+        return int(m.group(1)) if m else -1
+
+    active = sorted(bug_dir(backlog_path).glob("B-*.md"), key=_rank) if bug_dir(backlog_path).exists() else []
+    if not include_archive:
+        return [p.stem for p in active]
+    arch_dir = bug_dir(backlog_path, archived=True)
+    archived = sorted(arch_dir.glob("B-*.md"), key=_rank) if arch_dir.exists() else []
+    return [p.stem for p in active] + [p.stem for p in archived]
+
+
+def next_bug_id(backlog_path: Path) -> str:
+    """Allocate the next B-NNN id (zero-padded, 3+ digits).
+
+    Counts both active and archive when allocating so IDs are never reused.
+    """
+    existing = list_bug_ids(backlog_path, include_archive=True)
+    nums = []
+    for ident in existing:
+        m = re.search(r"(\d+)$", ident)
+        if m:
+            nums.append(int(m.group(1)))
+    n = (max(nums) + 1) if nums else 1
+    return f"B-{n:03d}"
+
+
 DECISION_STATUSES = ("open", "resolved", "dropped")
 
 
