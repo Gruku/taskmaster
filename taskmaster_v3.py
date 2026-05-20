@@ -2024,6 +2024,24 @@ def update_bug(
     return fm, new_body
 
 
+def archive_bug(backlog_path: Path, bug_id: str) -> Path:
+    """Move bugs/B-NNN.md → bugs/archive/B-NNN.md.
+
+    Idempotent (no-op if already in archive). Refuses if status=open or shelved —
+    archive is only for terminal-resolved bugs (fixed/adopted/promoted).
+    """
+    active = bug_path(backlog_path, bug_id)
+    archived = bug_path(backlog_path, bug_id, archived=True)
+    if archived.exists() and not active.exists():
+        return archived  # already there
+    fm, _ = read_bug(backlog_path, bug_id)
+    if fm["status"] in ("open", "shelved"):
+        raise ValueError(f"cannot archive bug with status={fm['status']} (must be fixed/adopted/promoted)")
+    archived.parent.mkdir(parents=True, exist_ok=True)
+    active.rename(archived)
+    return archived
+
+
 DECISION_STATUSES = ("open", "resolved", "dropped")
 
 
