@@ -6688,6 +6688,16 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 return
             self._send_json(200, detail)
             return
+        elif clean_path == "/api/project-structure":
+            import json as _json
+            from urllib.parse import parse_qs, urlsplit
+            qs = parse_qs(urlsplit(self.path).query)
+            refresh_raw = (qs.get("refresh_git") or ["0"])[0]
+            refresh_git = refresh_raw not in ("0", "false", "False", "")
+            raw = backlog_project_structure(refresh_git=refresh_git)
+            data = _json.loads(raw)
+            self._send_json(200, data)
+            return
         elif clean_path.startswith("/api/recap/"):
             sid = clean_path[len("/api/recap/"):]
             rec = load_recap(sid)

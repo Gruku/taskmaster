@@ -443,3 +443,61 @@ def test_backlog_project_structure_refresh_git_populates_state(tmp_path, monkeyp
     assert len(target["worktrees"]) >= 1
     assert target["worktrees"][0]["git_state"] is not None
     assert "merge_ladder" in target["worktrees"][0]["git_state"]
+
+
+import threading
+import time
+import urllib.request
+
+
+@pytest.fixture
+def running_server(tmp_path, monkeypatch):
+    """Stand up a real BaseHTTPServer thread bound to a tmp project root.
+    Mirrors the pattern from tests/test_server_sessions_recap.py."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".taskmaster").mkdir()
+    (tmp_path / ".taskmaster" / "backlog.yaml").write_text(
+        "meta:\n  project: test\n  schema_version: 3\nepics: []\nphases: []\n",
+        encoding="utf-8",
+    )
+    import importlib, backlog_server
+    importlib.reload(backlog_server)
+    server, port = backlog_server._make_server(host="127.0.0.1", port=0)
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    base = f"http://127.0.0.1:{port}"
+    for _ in range(20):
+        try:
+            urllib.request.urlopen(f"{base}/api/identity", timeout=0.5).read()
+            break
+        except Exception:
+            time.sleep(0.05)
+    yield base, server
+    server.shutdown()
+    server.server_close()
+
+
+def test_http_get_project_structure_default(running_server):
+    import json as _json
+    base, _ = running_server
+    resp = urllib.request.urlopen(f"{base}/api/project-structure", timeout=5).read()
+    data = _json.loads(resp.decode("utf-8"))
+    assert data["git_state_included"] is False
+    assert "sub_repos" in data
+    assert "project" in data
+
+
+def test_http_get_project_structure_refresh_git(running_server, tmp_path):
+    """refresh_git=1 query param flips git_state_included."""
+    import json as _json
+    base, _ = running_server
+    # Add an embedded sub-repo so there's at least one card to populate.
+    _init_repo(tmp_path / "sub-a")
+    resp = urllib.request.urlopen(
+        f"{base}/api/project-structure?refresh_git=1", timeout=15,
+    ).read()
+    data = _json.loads(resp.decode("utf-8"))
+    assert data["git_state_included"] is True
+    target = next((s for s in data["sub_repos"] if s["path"] == "sub-a"), None)
+    assert target is not None
+    assert target["worktrees"][0]["git_state"] is not None
