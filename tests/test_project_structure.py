@@ -90,3 +90,71 @@ def test_rank_integration_branch_orders_versions_numerically():
     assert _rank_integration_branch("1.2.0") < _rank_integration_branch("1.3.1")
     assert _rank_integration_branch("1.3.1") < _rank_integration_branch("2.0.0")
     assert _rank_integration_branch("1.3.1") < _rank_integration_branch("1.10.0")  # not lexicographic!
+
+
+def test_discover_sub_repos_finds_embedded(tmp_path):
+    """Embedded sub-repo = a nested .git directory (not a submodule)."""
+    from backlog_server import _discover_sub_repos
+    monorepo = _init_repo(tmp_path / "mono")
+    _init_repo(monorepo / "sub-a")          # depth 1
+    _init_repo(monorepo / "nested" / "sub-b")  # depth 2 — also discovered
+
+    subs = _discover_sub_repos(monorepo)
+    by_path = {s["path"]: s for s in subs}
+    assert "sub-a" in by_path
+    assert "nested/sub-b" in by_path or "nested\\sub-b" in by_path
+    assert by_path["sub-a"]["kind"] == "embedded"
+    assert by_path["sub-a"]["submodule_info"] is None
+
+
+def test_discover_sub_repos_ignores_self_dot_git(tmp_path):
+    """The project's own .git must not be reported as a sub-repo."""
+    from backlog_server import _discover_sub_repos
+    monorepo = _init_repo(tmp_path / "mono")
+    subs = _discover_sub_repos(monorepo)
+    assert all(s["path"] != "." and s["path"] != "" for s in subs)
+
+
+def test_discover_sub_repos_skips_depth_three(tmp_path):
+    """Nested .git at depth 3 is out of scope (avoid scanning node_modules etc.)."""
+    from backlog_server import _discover_sub_repos
+    monorepo = _init_repo(tmp_path / "mono")
+    _init_repo(monorepo / "a" / "b" / "deep")  # depth 3
+    subs = _discover_sub_repos(monorepo)
+    assert not any("deep" in s["path"] for s in subs)
+
+
+def test_discover_sub_repos_parses_gitmodules(tmp_path):
+    """An entry in .gitmodules is reported with kind='submodule' even if the
+    working tree isn't checked out yet."""
+    from backlog_server import _discover_sub_repos
+    monorepo = _init_repo(tmp_path / "mono")
+    (monorepo / ".gitmodules").write_text(
+        '[submodule "vendor/lib"]\n'
+        '\tpath = vendor/lib\n'
+        '\turl = https://example.com/lib.git\n',
+        encoding="utf-8",
+    )
+    subs = _discover_sub_repos(monorepo)
+    by_path = {s["path"]: s for s in subs}
+    assert "vendor/lib" in by_path
+    assert by_path["vendor/lib"]["kind"] == "submodule"
+
+
+def test_discover_sub_repos_submodule_with_checkout(tmp_path):
+    """A submodule whose working tree IS checked out (i.e. has .git as file or dir)
+    is still reported as kind='submodule', not 'embedded'."""
+    from backlog_server import _discover_sub_repos
+    monorepo = _init_repo(tmp_path / "mono")
+    (monorepo / ".gitmodules").write_text(
+        '[submodule "vendor/lib"]\n\tpath = vendor/lib\n\turl = x\n',
+        encoding="utf-8",
+    )
+    # Simulate a checked-out submodule by creating its directory with a .git marker.
+    (monorepo / "vendor" / "lib").mkdir(parents=True)
+    (monorepo / "vendor" / "lib" / ".git").write_text(
+        "gitdir: ../../.git/modules/vendor/lib\n", encoding="utf-8",
+    )
+    subs = _discover_sub_repos(monorepo)
+    by_path = {s["path"]: s for s in subs}
+    assert by_path["vendor/lib"]["kind"] == "submodule"  # NOT 'embedded'

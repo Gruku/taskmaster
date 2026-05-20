@@ -4497,17 +4497,10 @@ def backlog_archive_task(task_id: str, reason: str = "done") -> str:
 # ── Worktree Discovery ───────────────────────────────────
 
 
-def _discover_sub_repos() -> list[Path]:
-    """Auto-discover git repositories in ROOT (immediate children only).
-    Only matches real repos (.git directory), not worktrees (.git file)."""
-    sub_repos = []
-    try:
-        for child in ROOT.iterdir():
-            if child.is_dir() and (child / ".git").is_dir():
-                sub_repos.append(child)
-    except OSError:
-        pass
-    return sub_repos
+# (Note: a richer `_discover_sub_repos(project_root: Path) -> list[dict]` is
+#  defined later in the Project Structure helpers block and supersedes the
+#  earlier zero-arg stub that lived here. The stub had no callers in the
+#  codebase or tests; project-structure-visibility-003 reclaims the name.)
 
 
 def _git_subprocess_kwargs() -> dict:
@@ -6086,6 +6079,75 @@ def _rank_integration_branch(name: str) -> tuple[int, tuple[int, ...]]:
     if tier is None:
         return (-1, ())  # unknown — sorts below everything
     return (tier, ())
+
+
+def _discover_sub_repos(project_root: Path) -> list[dict]:
+    """Return a list of sub-repo descriptors found under project_root.
+
+    Two sources, merged by path (submodule wins over embedded for the kind tag):
+      1. Filesystem scan for nested `.git` (file or dir) at depth 1 or 2.
+      2. Parse of `.gitmodules` at project_root.
+
+    Each descriptor is a dict with keys:
+        path                 — POSIX-style path relative to project_root
+        kind                 — 'embedded' | 'submodule'
+        current_branch       — None at this stage (filled by tool)
+        integration_branches — [] at this stage (filled by tool)
+        submodule_info       — None at this stage (filled by tool when refresh_git)
+        worktrees            — [] at this stage (filled by tool)
+    """
+    descriptors: dict[str, dict] = {}
+
+    # 1. Filesystem scan — depth 1 and 2 only.
+    if project_root.exists():
+        for depth1 in project_root.iterdir():
+            if not depth1.is_dir() or depth1.name == ".git":
+                continue
+            if (depth1 / ".git").exists():
+                rel = depth1.name.replace("\\", "/")
+                descriptors[rel] = {
+                    "path": rel, "kind": "embedded",
+                    "current_branch": None, "integration_branches": [],
+                    "submodule_info": None, "worktrees": [],
+                }
+                continue
+            # Depth 2 scan only if depth1 is itself NOT a repo.
+            try:
+                inner = list(depth1.iterdir())
+            except OSError:
+                continue
+            for depth2 in inner:
+                if not depth2.is_dir() or depth2.name == ".git":
+                    continue
+                if (depth2 / ".git").exists():
+                    rel = f"{depth1.name}/{depth2.name}".replace("\\", "/")
+                    descriptors[rel] = {
+                        "path": rel, "kind": "embedded",
+                        "current_branch": None, "integration_branches": [],
+                        "submodule_info": None, "worktrees": [],
+                    }
+
+    # 2. .gitmodules parse — submodule entries take precedence on `kind`.
+    gitmodules = project_root / ".gitmodules"
+    if gitmodules.exists():
+        cur_path: str | None = None
+        for raw in gitmodules.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if line.startswith("[submodule"):
+                cur_path = None
+            elif line.startswith("path") and "=" in line:
+                cur_path = line.split("=", 1)[1].strip().replace("\\", "/")
+                existing = descriptors.get(cur_path)
+                if existing is not None:
+                    existing["kind"] = "submodule"
+                else:
+                    descriptors[cur_path] = {
+                        "path": cur_path, "kind": "submodule",
+                        "current_branch": None, "integration_branches": [],
+                        "submodule_info": None, "worktrees": [],
+                    }
+
+    return sorted(descriptors.values(), key=lambda d: d["path"])
 
 
 # ── HTTP Viewer Server ───────────────────────────────────
