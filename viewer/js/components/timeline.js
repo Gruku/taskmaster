@@ -9,8 +9,13 @@ import { formatAbsolute } from '../lib/time.js';
  * @typedef {{id:string, start:string, end:string, kind?:string, parent_id?:string|null}} TimelineItem
  */
 
-/** Group sessions whose time windows overlap (transitively). Sessions[] must be
- *  sorted ascending by start time on input. Returns an array of arrays. */
+/** Group sessions whose time windows overlap (transitively).
+ *
+ *  Algorithm requires ascending-by-start input to walk in a single pass, so we
+ *  sort internally. The returned cluster array is then reversed so that the
+ *  newest cluster is first (matching the server's DESC ordering at
+ *  taskmaster_v3.py:3884). Members WITHIN each cluster remain ascending so the
+ *  parallel-block grid reads left-to-right in chronological order. */
 export function clusterParallelSessions(sessions) {
   const sorted = [...sessions].sort((a, b) =>
     new Date(a.start) - new Date(b.start)
@@ -32,6 +37,7 @@ export function clusterParallelSessions(sessions) {
     }
   }
   if (cur.length) groups.push(cur);
+  groups.reverse(); // newest cluster first; members within stay ASC
   return groups;
 }
 
