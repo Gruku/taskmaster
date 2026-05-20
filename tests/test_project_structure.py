@@ -321,3 +321,54 @@ def test_compute_worktree_git_state_handles_detached(tmp_path):
     assert state["merge_ladder"] == {}
     assert state["ahead"] == 0
     assert state["behind"] == 0
+
+
+def test_link_worktrees_to_tasks_matches_by_worktree_field():
+    from backlog_server import _link_worktrees_to_tasks
+    worktrees = [
+        {"path": "/abs/wt-a", "branch": "feature/a", "head": "x"},
+        {"path": "/abs/wt-b", "branch": "feature/b", "head": "y"},
+    ]
+    tasks = [
+        {"id": "T-1", "title": "alpha", "status": "in-progress",
+         "worktree": "/abs/wt-a"},
+        {"id": "T-2", "title": "beta",  "status": "todo",
+         "worktree": "/abs/wt-a"},
+        {"id": "T-3", "title": "gamma", "status": "done",
+         "worktree": "/abs/wt-b"},
+        {"id": "T-4", "title": "delta", "status": "todo"},  # no worktree
+    ]
+    out = _link_worktrees_to_tasks(worktrees, tasks)
+    assert sorted(t["id"] for t in out["/abs/wt-a"]) == ["T-1", "T-2"]
+    assert sorted(t["id"] for t in out["/abs/wt-b"]) == ["T-3"]
+
+
+def test_link_worktrees_to_tasks_normalises_path_separators():
+    """Windows tasks may persist worktree paths with backslashes; the matcher
+    must compare canonically (POSIX form, no trailing slash)."""
+    from backlog_server import _link_worktrees_to_tasks
+    worktrees = [{"path": "C:/proj/wt-a", "branch": "x", "head": "y"}]
+    tasks = [{"id": "T-1", "title": "x", "status": "todo",
+              "worktree": r"C:\proj\wt-a"}]
+    out = _link_worktrees_to_tasks(worktrees, tasks)
+    assert len(out["C:/proj/wt-a"]) == 1
+
+
+def test_link_handovers_to_worktrees_transitive_via_task_ids():
+    """A handover linked to T-1 lands on the worktree that owns T-1."""
+    from backlog_server import _link_handovers_to_worktrees
+    worktree_task_map = {
+        "/abs/wt-a": [{"id": "T-1", "title": "x", "status": "todo"}],
+        "/abs/wt-b": [{"id": "T-9", "title": "y", "status": "todo"}],
+    }
+    handovers = [
+        {"id": "2026-05-19-foo", "created": "2026-05-19T10:00:00Z",
+         "task_ids": ["T-1"], "status": "open"},
+        {"id": "2026-05-19-bar", "created": "2026-05-19T11:00:00Z",
+         "task_ids": ["T-9"], "status": "closed"},
+        {"id": "2026-05-19-baz", "created": "2026-05-19T12:00:00Z",
+         "task_ids": [], "status": "open"},  # unlinked
+    ]
+    out = _link_handovers_to_worktrees(worktree_task_map, handovers)
+    assert [h["id"] for h in out["/abs/wt-a"]] == ["2026-05-19-foo"]
+    assert [h["id"] for h in out["/abs/wt-b"]] == ["2026-05-19-bar"]

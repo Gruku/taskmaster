@@ -6290,6 +6290,62 @@ def _compute_worktree_git_state(
     }
 
 
+def _canonical_path(p: str) -> str:
+    """POSIX-style, no trailing slash. Used for cross-platform path comparisons."""
+    if not p:
+        return ""
+    return p.replace("\\", "/").rstrip("/")
+
+
+def _link_worktrees_to_tasks(
+    worktrees: list[dict], tasks: list[dict],
+) -> dict[str, list[dict]]:
+    """Bucket tasks under the worktree they belong to (by task.worktree field).
+
+    Returns {worktree_path: [task, ...]}. Worktrees with no tasks get an
+    empty list (the key is always present). Tasks with no worktree, or whose
+    worktree doesn't match any known worktree, are silently dropped.
+    """
+    by_canonical: dict[str, str] = {
+        _canonical_path(w["path"]): w["path"] for w in worktrees
+    }
+    out: dict[str, list[dict]] = {w["path"]: [] for w in worktrees}
+    for t in tasks:
+        tw = t.get("worktree")
+        if not tw:
+            continue
+        key = by_canonical.get(_canonical_path(tw))
+        if key is not None:
+            out[key].append(t)
+    return out
+
+
+def _link_handovers_to_worktrees(
+    worktree_task_map: dict[str, list[dict]], handovers: list[dict],
+) -> dict[str, list[dict]]:
+    """Bucket handovers under worktree via handover.task_ids[] → task → worktree.
+
+    Returns {worktree_path: [handover, ...]}. A handover that references
+    multiple tasks across multiple worktrees lands under each. Order is the
+    input order of `handovers` (callers may sort).
+    """
+    # Build task_id → list of worktree paths.
+    task_to_wts: dict[str, list[str]] = {}
+    for wt_path, tasks in worktree_task_map.items():
+        for t in tasks:
+            task_to_wts.setdefault(t["id"], []).append(wt_path)
+
+    out: dict[str, list[dict]] = {wt: [] for wt in worktree_task_map}
+    for h in handovers:
+        seen_wts: set[str] = set()
+        for tid in h.get("task_ids", []) or []:
+            for wt in task_to_wts.get(tid, []):
+                if wt not in seen_wts:
+                    out[wt].append(h)
+                    seen_wts.add(wt)
+    return out
+
+
 # ── HTTP Viewer Server ───────────────────────────────────
 
 
