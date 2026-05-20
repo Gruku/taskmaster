@@ -128,11 +128,32 @@ function renderIndependentHandover(h, onSelect) {
   return el;
 }
 
+function sessionTimeLine(s) {
+  const isDateOnly = s.time_resolution === 'date-only';
+  if (isDateOnly) {
+    // Legacy sessions: render the date only, no time, no arrow.
+    return formatAbsolute(s.start, { time: false });
+  }
+  const startStr = shortTime(s.start);
+  const endStr   = shortTime(s.end);
+  let timeLine = (startStr === endStr) ? startStr : `${startStr} → ${endStr}`;
+
+  // Append duration when meaningful (> 0) and not a date-only session.
+  if (s.duration > 0) {
+    const minutes = Math.round(s.duration / 60);
+    const durStr = minutes >= 60
+      ? `${Math.floor(minutes / 60)}h ${minutes % 60}m`
+      : `${minutes}m`;
+    timeLine += ` · ${durStr}`;
+  }
+  return timeLine;
+}
+
 function sessionHeadHtml(s) {
   return (
     `<div class="ho-head">`
     + `<span class="ho-kind session">SESSION</span>`
-    + `<span class="ho-time mono">${shortTime(s.start) === shortTime(s.end) ? shortTime(s.start) : shortTime(s.start) + ' → ' + shortTime(s.end)}</span>`
+    + `<span class="ho-time mono">${escapeHtml(sessionTimeLine(s))}</span>`
     + `</div>`
     + `<div class="ho-title">${escapeHtml(s.id)}</div>`
     + `<div class="ho-foot">`
