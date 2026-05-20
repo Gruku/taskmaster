@@ -247,3 +247,77 @@ def test_list_worktrees_detached_head_has_none_branch(tmp_path):
     detached = [w for w in wts if Path(w["path"]).resolve() == wt_path.resolve()]
     assert len(detached) == 1
     assert detached[0]["branch"] is None
+
+
+def test_compute_worktree_git_state_merge_ladder(tmp_path):
+    """A worktree branch that has been merged into 'work' but not 'stage'
+    reports work=True, stage=False, master=False."""
+    from backlog_server import _compute_worktree_git_state
+    repo = _init_repo(tmp_path / "r")
+    # Create integration branches at the seed commit (so they all contain it).
+    for b in ("work", "stage"):
+        _git("branch", b, cwd=repo)
+
+    # feature/foo: branch off master, add one commit, merge into work, NOT stage.
+    _git("checkout", "-q", "-b", "feature/foo", cwd=repo)
+    (repo / "f.txt").write_text("x", encoding="utf-8")
+    _git("add", "f.txt", cwd=repo)
+    _git("commit", "-q", "-m", "f", cwd=repo)
+    _git("checkout", "-q", "work", cwd=repo)
+    _git("merge", "-q", "--no-ff", "feature/foo", "-m", "merge", cwd=repo)
+    _git("checkout", "-q", "master", cwd=repo)
+
+    state = _compute_worktree_git_state(
+        repo, branch="feature/foo",
+        integration_branches=["work", "stage", "master"],
+        worktree_path=repo,
+    )
+    assert state["merge_ladder"] == {"work": True, "stage": False, "master": False}
+
+
+def test_compute_worktree_git_state_ahead_behind(tmp_path):
+    from backlog_server import _compute_worktree_git_state
+    repo = _init_repo(tmp_path / "r")
+    _git("checkout", "-q", "-b", "feature/x", cwd=repo)
+    for i in range(3):
+        (repo / f"a{i}.txt").write_text("x", encoding="utf-8")
+        _git("add", f"a{i}.txt", cwd=repo)
+        _git("commit", "-q", "-m", f"a{i}", cwd=repo)
+
+    state = _compute_worktree_git_state(
+        repo, branch="feature/x",
+        integration_branches=["master"],
+        worktree_path=repo,
+        base="master",
+    )
+    assert state["ahead"] == 3
+    assert state["behind"] == 0
+
+
+def test_compute_worktree_git_state_dirty_file_count(tmp_path):
+    from backlog_server import _compute_worktree_git_state
+    repo = _init_repo(tmp_path / "r")
+    # Two uncommitted modifications.
+    (repo / "dirty1.txt").write_text("a", encoding="utf-8")
+    (repo / "dirty2.txt").write_text("b", encoding="utf-8")
+
+    state = _compute_worktree_git_state(
+        repo, branch="master",
+        integration_branches=["master"],
+        worktree_path=repo,
+    )
+    assert state["dirty_files"] == 2
+
+
+def test_compute_worktree_git_state_handles_detached(tmp_path):
+    """branch=None (detached HEAD) returns a state with empty ladder, no crash."""
+    from backlog_server import _compute_worktree_git_state
+    repo = _init_repo(tmp_path / "r")
+    state = _compute_worktree_git_state(
+        repo, branch=None,
+        integration_branches=["master"],
+        worktree_path=repo,
+    )
+    assert state["merge_ladder"] == {}
+    assert state["ahead"] == 0
+    assert state["behind"] == 0

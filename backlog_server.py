@@ -6218,6 +6218,78 @@ def _finalize_worktree(d: dict) -> dict:
     }
 
 
+def _compute_worktree_git_state(
+    repo_path: Path,
+    *,
+    branch: str | None,
+    integration_branches: list[str],
+    worktree_path: Path,
+    base: str | None = None,
+) -> dict:
+    """Compute merge ladder + ahead/behind + dirty-file count for one worktree.
+
+    Args:
+      repo_path: the sub-repo's main checkout (where branches live).
+      branch: the worktree's branch (or None for detached HEAD).
+      integration_branches: the rank-ordered list to test merge containment against.
+      worktree_path: where the working tree actually lives (for dirty-file count).
+      base: integration branch to use as the ahead/behind reference. If None,
+            defaults to the highest-ranked integration branch found.
+
+    Returns:
+      {
+        "merge_ladder": { branch_name: bool, ... },  # ordered like integration_branches
+        "ahead": int, "behind": int, "dirty_files": int,
+        "base": str | None,
+      }
+    """
+    if branch is None:
+        return {"merge_ladder": {}, "ahead": 0, "behind": 0,
+                "dirty_files": 0, "base": None}
+
+    ladder: dict[str, bool] = {}
+    for int_branch in integration_branches:
+        # `git merge-base --is-ancestor X Y` exits 0 if X is reachable from Y.
+        # _run_git returns "" on any non-zero, including the "no" answer, so we
+        # need the raw exit code here. Use subprocess directly for this one call.
+        try:
+            rc = subprocess.run(
+                ["git", "merge-base", "--is-ancestor", branch, int_branch],
+                cwd=str(repo_path), capture_output=True, text=True, timeout=10,
+            ).returncode
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            rc = 1
+        ladder[int_branch] = (rc == 0)
+
+    # Pick base for ahead/behind.
+    if base is None:
+        base = integration_branches[-1] if integration_branches else None
+    ahead = behind = 0
+    if base:
+        out = _run_git(
+            ["rev-list", "--left-right", "--count", f"{base}...{branch}"],
+            cwd=repo_path,
+        ).strip()
+        if out:
+            try:
+                left, right = out.split()
+                behind, ahead = int(left), int(right)
+            except ValueError:
+                pass
+
+    # Dirty file count from the actual worktree directory.
+    status = _run_git(["status", "--porcelain"], cwd=worktree_path)
+    dirty_files = sum(1 for line in status.splitlines() if line.strip())
+
+    return {
+        "merge_ladder": ladder,
+        "ahead": ahead,
+        "behind": behind,
+        "dirty_files": dirty_files,
+        "base": base,
+    }
+
+
 # ── HTTP Viewer Server ───────────────────────────────────
 
 
