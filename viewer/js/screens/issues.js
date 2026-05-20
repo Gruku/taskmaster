@@ -224,6 +224,7 @@ export async function mount(root, { store, prefs }) {
   let searchTerm = '';
   const activeComponents = new Set();
   const activeSevs = new Set();
+  let promotedFromBug = (store.getPrefs()?.screens?.issues?.promotedFromBug) || false;
   function setActiveSevs(next) {
     activeSevs.clear();
     for (const v of next) activeSevs.add(v);
@@ -313,6 +314,22 @@ export async function mount(root, { store, prefs }) {
     }
     _renderSeverityChips(filters, counts, activeSevs, setActiveSevs);
 
+    // "Promoted from Bug" toggle chip — appended after severity chips each render.
+    filters.querySelectorAll('.issues__promoted-chip').forEach(el => el.remove());
+    const promotedChip = document.createElement('button');
+    promotedChip.type = 'button';
+    promotedChip.className = 'issues__sev-chip issues__promoted-chip' + (promotedFromBug ? ' is-active' : '');
+    promotedChip.setAttribute('role', 'button');
+    promotedChip.setAttribute('aria-pressed', String(promotedFromBug));
+    promotedChip.title = 'Show only issues promoted from a bug';
+    promotedChip.innerHTML = '<span class="lbl">Promoted from Bug</span>';
+    promotedChip.addEventListener('click', () => {
+      promotedFromBug = !promotedFromBug;
+      prefs.patch({ screens: { issues: { promotedFromBug } } });
+      render();
+    });
+    filters.appendChild(promotedChip);
+
     // Re-render chips when components change, OR when search/severity changes (counts depend on both).
     const chipKey = [...new Set(allIssues.map(i => i.component).filter(Boolean))].sort().join('|')
       + '::' + searchTerm + '::' + activeFilters().join(',');
@@ -324,10 +341,11 @@ export async function mount(root, { store, prefs }) {
       if (!_matchesSearch(i)) return false;
       if (!_matchesComponent(i)) return false;
       const sevs = activeFilters();
-      if (sevs.length === 0) return true;
-      return sevs.includes(i.severity_label || severityLabel(i.severity));
+      if (sevs.length > 0 && !sevs.includes(i.severity_label || severityLabel(i.severity))) return false;
+      if (promotedFromBug && !(Array.isArray(i.promoted_from) && i.promoted_from.length > 0)) return false;
+      return true;
     });
-    const filterActive = !!searchTerm || activeFilters().length > 0 || activeComponents.size > 0;
+    const filterActive = !!searchTerm || activeFilters().length > 0 || activeComponents.size > 0 || promotedFromBug;
     subcount.textContent = filterActive
       ? `${issues.length} of ${allIssues.length} ${pluralize(allIssues.length, 'issue', 'issues')}`
       : `${allIssues.length} ${pluralize(allIssues.length, 'issue', 'issues')}`;
