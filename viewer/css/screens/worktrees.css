@@ -57,3 +57,73 @@
 
 .ws-card-body { display: flex; flex-direction: column; gap: var(--sp-2); }
 .ws-empty-sub { color: var(--ink-3); font-size: var(--text-xs); padding: var(--sp-2); }
+
+.ws-wt {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 0;
+}
+.ws-wt[open] { background: var(--bg-card); }
+
+.ws-wt-head {
+  display: flex; align-items: center; gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  cursor: pointer; list-style: none;
+  font-size: var(--text-xs);
+}
+.ws-wt-head::-webkit-details-marker { display: none; }
+.ws-wt-glyph { color: var(--ink-3); width: 12px; }
+.ws-wt-branch {
+  font-family: var(--font-mono); color: var(--ink);
+  flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ws-merged { color: var(--green); font-family: var(--font-mono); }
+.ws-unmerged { color: var(--amber); }
+
+.ws-wt-ladder {
+  display: inline-flex; gap: 4px;
+  font-family: var(--font-mono); font-size: 10px;
+}
+.ws-rung {
+  padding: 1px 4px; border-radius: 2px;
+  background: var(--bg-deep);
+}
+.ws-rung-on  { color: var(--green); }
+.ws-rung-off { color: var(--ink-4); }
+
+.ws-wt-counts {
+  display: inline-flex; gap: 4px;
+  font-family: var(--font-mono); font-size: 10px;
+}
+.ws-count {
+  padding: 1px 4px; border-radius: 2px;
+  background: var(--bg-deep); color: var(--ink-3);
+}
+
+.ws-wt-body {
+  padding: var(--sp-2) var(--sp-3) var(--sp-3) var(--sp-3);
+  display: flex; flex-direction: column; gap: var(--sp-2);
+  border-top: 1px solid var(--border-soft);
+}
+.ws-sub-list { display: flex; flex-direction: column; gap: 2px; }
+.ws-sub-h {
+  font-size: 9px; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--ink-3);
+  margin-bottom: 2px;
+}
+.ws-task, .ws-ho {
+  display: flex; align-items: center; gap: var(--sp-2);
+  padding: 3px var(--sp-2); border-radius: 2px;
+  font-size: var(--text-xs); color: var(--ink-2);
+  text-decoration: none;
+}
+.ws-task:hover, .ws-ho:hover {
+  background: var(--bg-card-hover); color: var(--ink);
+}
+.ws-task-glyph { width: 12px; color: var(--ink-3); text-align: center; }
+.ws-task-id, .ws-ho-id { font-family: var(--font-mono); color: var(--ink); }
+.ws-task-title { color: var(--ink-2); flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-ho-when { font-family: var(--font-mono); color: var(--ink-3); width: 70px; }
