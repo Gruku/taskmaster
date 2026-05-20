@@ -1,3 +1,4 @@
+import pytest
 from datetime import datetime, timezone
 
 
@@ -28,3 +29,10 @@ def test_handover_time_falls_back_to_date_only_string():
     t = _handover_time(h)
     # Date-only parses as midnight UTC; that's the legacy behaviour we tag as such.
     assert t == datetime(2026, 5, 13, 0, 0, 0, tzinfo=timezone.utc)
+
+
+def test_handover_time_raises_when_no_date_or_created():
+    from taskmaster_v3 import _handover_time
+
+    with pytest.raises(ValueError, match="neither 'created' nor 'date'"):
+        _handover_time({"id": "2026-05-19-broken"})
