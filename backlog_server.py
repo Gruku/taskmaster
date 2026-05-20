@@ -98,6 +98,7 @@ from taskmaster_v3 import (
     linked_tasks_for_tracker as _linked_tasks_for_tracker,
     linked_issues_for_tracker as _linked_issues_for_tracker,
     _validate_tracker as _validate_tracker_fm,
+    load_linear_config as _load_linear_config,
     LESSON_KINDS,
     LESSON_TIERS,
     write_lesson as _write_lesson,
@@ -1526,6 +1527,18 @@ def backlog_validate() -> str:
             issues.append(
                 f"issue `{iss.get('id', '?')}`: tracker_id `{ref}` does not match any tracker file"
             )
+
+    # 12. Linear config: validate schema if .taskmaster/linear.yaml exists.
+    #     Catches duplicate aliases / token_envs / dangling default_workspace
+    #     before they cause runtime sync failures.
+    try:
+        _load_linear_config(bp)
+    except OSError as e:
+        issues.append(f"linear.yaml: cannot read file ({e})")
+    except yaml.YAMLError as e:
+        issues.append(f"linear.yaml: malformed YAML ({e})")
+    except ValueError as e:
+        issues.append(f"linear.yaml: {e}")
 
     # Stats summary
     stats = {"total": len(all_tasks), "issues": len(issues)}
