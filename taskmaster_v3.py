@@ -2166,6 +2166,58 @@ def scan_bug_patterns(
     return result
 
 
+def promote_bugs_to_issue(
+    backlog_path: Path,
+    *,
+    bug_ids: list[str],
+    title: str,
+    severity: str,
+    evidence_text: str,
+    components: list[str] | None = None,
+    body: str = "",
+) -> str:
+    """Atomic: create an Issue from N Bugs, mark each Bug as promoted.
+
+    The new Issue gets a `promoted_from: [B-NNN, ...]` frontmatter field
+    in addition to the standard fields. The matched Bugs each get
+    status=promoted and promoted_to=<the new Issue ID>.
+    """
+    if not bug_ids:
+        raise ValueError("bug_ids must be non-empty")
+    if not evidence_text or not evidence_text.strip():
+        raise ValueError("evidence_text is required (cite recurrence/systemic/outstanding)")
+
+    # Aggregate components from source bugs if not given.
+    if components is None:
+        comps_set: set[str] = set()
+        for bid in bug_ids:
+            fm, _ = read_bug(backlog_path, bid)
+            for c in fm.get("components") or []:
+                comps_set.add(c)
+        components = sorted(comps_set)
+
+    iss_id, _ = write_issue(
+        backlog_path,
+        title=title,
+        severity=severity,
+        impact=evidence_text,  # repurpose impact field as evidence narrative
+        components=components,
+        body=body,
+    )
+    # Backfill the new evidence and promoted_from fields on the issue file.
+    fm, b = read_issue(backlog_path, iss_id)
+    fm["evidence"] = evidence_text.strip()
+    fm["promoted_from"] = list(bug_ids)
+    _validate_issue(fm)
+    write_task_file(issue_path(backlog_path, iss_id), fm, b)
+
+    # Mark each source bug as promoted.
+    for bid in bug_ids:
+        update_bug(backlog_path, bid, status="promoted", promoted_to=iss_id)
+
+    return iss_id
+
+
 DECISION_STATUSES = ("open", "resolved", "dropped")
 
 
