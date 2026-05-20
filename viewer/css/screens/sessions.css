@@ -1,7 +1,20 @@
 /* Sessions / Handovers screen — Hybrid C diary.
    Reads tokens.css; no new global tokens introduced. */
 
-.sessions-page { padding-bottom: var(--sp-9); }
+/* Bounded scroll container.
+   shell.css already gives .sessions-page flex+overflow via Scroll policy A.
+   We add an explicit height fallback and shift bottom padding INSIDE the
+   scrolling content so the last row doesn't get clipped at the scroll edge.
+   No padding on the scroll container itself — padding inside an overflow
+   container is added to the scroll length, which makes the bottom row sit
+   below the visible bottom edge instead of resting against it. */
+.sessions-page {
+  height: 100%;
+}
+.sessions-page > .sessions-mount,
+.sessions-page > [data-role="mount"] {
+  padding-bottom: var(--sp-9);
+}
 
 /* Kind filter row */
 .sessions-kinds {
@@ -32,8 +45,17 @@
 .sessions-day .meta { color: var(--ink-3); font-size: var(--text-sm); }
 .sessions-day .rule { flex: 1; height: 1px; background: var(--border-soft); margin-left: 6px; }
 
-/* timeline.js renders into `.tl` */
-.tl { display: flex; flex-direction: column; gap: var(--sp-5); }
+/* timeline.js renders into `.tl`. The flex column needs min-height:0 so
+   it can shrink below its content's intrinsic height — otherwise the
+   parent .sessions-page can't honour its overflow:auto and the document
+   gains a scrollbar instead of the screen. */
+.tl {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+  min-height: 0;
+  min-width: 0;
+}
 
 .ses-container { margin-bottom: var(--sp-6); transition: opacity 120ms ease; }
 .ses-container.is-dimmed { opacity: 0.28; }
