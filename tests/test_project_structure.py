@@ -158,3 +158,49 @@ def test_discover_sub_repos_submodule_with_checkout(tmp_path):
     subs = _discover_sub_repos(monorepo)
     by_path = {s["path"]: s for s in subs}
     assert by_path["vendor/lib"]["kind"] == "submodule"  # NOT 'embedded'
+
+
+def test_discover_integration_branches_filters_by_pattern(tmp_path):
+    from backlog_server import _discover_integration_branches
+    repo = _init_repo(tmp_path / "r")
+    # Create some branches: 2 integration-like, 2 feature-like.
+    for b in ("stage", "1.3.1", "feature/ui-001", "fix/bug-99"):
+        _git("branch", b, cwd=repo)
+
+    found = _discover_integration_branches(repo)
+    # master (the initial branch) is included; feature/* and fix/* are NOT.
+    assert set(found) >= {"master", "stage", "1.3.1"}
+    assert "feature/ui-001" not in found
+    assert "fix/bug-99" not in found
+
+
+def test_discover_integration_branches_dedupes_origin_prefix(tmp_path):
+    """`git branch -a` lists both 'master' and 'origin/master' when a remote
+    exists. The result must dedupe the origin/ prefix."""
+    from backlog_server import _discover_integration_branches
+    repo = _init_repo(tmp_path / "r")
+    # Fake a remote-tracking branch by creating a packed-refs entry.
+    refs_dir = repo / ".git" / "refs" / "remotes" / "origin"
+    refs_dir.mkdir(parents=True, exist_ok=True)
+    head_sha = _run_git_check(["rev-parse", "HEAD"], cwd=repo).strip()
+    (refs_dir / "master").write_text(head_sha + "\n", encoding="utf-8")
+    (refs_dir / "stage").write_text(head_sha + "\n", encoding="utf-8")
+
+    found = _discover_integration_branches(repo)
+    assert found.count("master") == 1
+    assert found.count("stage") == 1
+
+
+def test_discover_integration_branches_orders_by_rank(tmp_path):
+    from backlog_server import _discover_integration_branches
+    repo = _init_repo(tmp_path / "r")
+    for b in ("stage", "dev", "work", "1.3.1"):
+        _git("branch", b, cwd=repo)
+    found = _discover_integration_branches(repo)
+    # Order: work < dev < stage < 1.3.1 < master
+    assert found == ["work", "dev", "stage", "1.3.1", "master"]
+
+
+def test_discover_integration_branches_returns_empty_for_non_repo(tmp_path):
+    from backlog_server import _discover_integration_branches
+    assert _discover_integration_branches(tmp_path) == []

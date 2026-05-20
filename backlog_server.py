@@ -6150,6 +6150,32 @@ def _discover_sub_repos(project_root: Path) -> list[dict]:
     return sorted(descriptors.values(), key=lambda d: d["path"])
 
 
+def _discover_integration_branches(repo_path: Path) -> list[str]:
+    """Return integration branch names found in repo_path, ordered by rank.
+
+    Matches names like `master`, `main`, `stage`, `dev`, `work`, or
+    semver-ish `1.3.1` / `1.3.1.2`. Strips an `origin/` prefix before
+    matching, then dedupes so a branch present locally and on origin
+    appears once. Empty list if repo_path isn't a git repo.
+    """
+    raw = _run_git(["branch", "-a", "--format=%(refname:short)"], cwd=repo_path)
+    if not raw:
+        return []
+    seen: set[str] = set()
+    for line in raw.splitlines():
+        name = line.strip()
+        if not name:
+            continue
+        # Strip the `origin/` (or any single-segment remote) prefix for dedup.
+        stripped = _re_ps.sub(r"^[^/]+/", "", name) if "/" in name else name
+        candidate = stripped if _INTEGRATION_BRANCH_RE.match(stripped) else None
+        if candidate is None and _INTEGRATION_BRANCH_RE.match(name):
+            candidate = name
+        if candidate:
+            seen.add(candidate)
+    return sorted(seen, key=_rank_integration_branch)
+
+
 # ── HTTP Viewer Server ───────────────────────────────────
 
 
