@@ -6176,6 +6176,48 @@ def _discover_integration_branches(repo_path: Path) -> list[str]:
     return sorted(seen, key=_rank_integration_branch)
 
 
+def _list_worktrees(repo_path: Path) -> list[dict]:
+    """Parse `git worktree list --porcelain` into a list of dicts.
+
+    Each dict has keys:
+        path   — absolute filesystem path (str)
+        branch — short branch name or None if detached HEAD
+        head   — commit SHA
+
+    Empty list if repo_path isn't a git repo.
+    """
+    raw = _run_git(["worktree", "list", "--porcelain"], cwd=repo_path)
+    if not raw:
+        return []
+    worktrees: list[dict] = []
+    cur: dict[str, object] = {}
+    for line in raw.splitlines():
+        if line.startswith("worktree "):
+            if cur:
+                worktrees.append(_finalize_worktree(cur))
+            cur = {"path": line[len("worktree "):]}
+        elif line.startswith("HEAD "):
+            cur["head"] = line[len("HEAD "):]
+        elif line.startswith("branch "):
+            ref = line[len("branch "):]
+            # refs/heads/feature/foo → feature/foo
+            cur["branch"] = ref[len("refs/heads/"):] if ref.startswith("refs/heads/") else ref
+        elif line == "detached":
+            cur["branch"] = None
+        # blank line = entry separator; handled by next 'worktree ' or final flush
+    if cur:
+        worktrees.append(_finalize_worktree(cur))
+    return worktrees
+
+
+def _finalize_worktree(d: dict) -> dict:
+    return {
+        "path": d.get("path", ""),
+        "branch": d.get("branch"),  # None if detached
+        "head": d.get("head", ""),
+    }
+
+
 # ── HTTP Viewer Server ───────────────────────────────────
 
 

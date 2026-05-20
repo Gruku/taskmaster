@@ -204,3 +204,46 @@ def test_discover_integration_branches_orders_by_rank(tmp_path):
 def test_discover_integration_branches_returns_empty_for_non_repo(tmp_path):
     from backlog_server import _discover_integration_branches
     assert _discover_integration_branches(tmp_path) == []
+
+
+def test_list_worktrees_returns_main_repo_only_when_no_extras(tmp_path):
+    """A fresh repo has exactly one worktree: itself."""
+    from backlog_server import _list_worktrees
+    repo = _init_repo(tmp_path / "r")
+    wts = _list_worktrees(repo)
+    assert len(wts) == 1
+    assert wts[0]["branch"] == "master"
+    assert Path(wts[0]["path"]).resolve() == repo.resolve()
+
+
+def test_list_worktrees_includes_added_worktree(tmp_path):
+    from backlog_server import _list_worktrees
+    repo = _init_repo(tmp_path / "r")
+    _git("branch", "feature/foo", cwd=repo)
+    wt_path = tmp_path / "wt-foo"
+    _git("worktree", "add", str(wt_path), "feature/foo", cwd=repo)
+
+    wts = _list_worktrees(repo)
+    by_branch = {w["branch"]: w for w in wts}
+    assert "feature/foo" in by_branch
+    assert Path(by_branch["feature/foo"]["path"]).resolve() == wt_path.resolve()
+
+
+def test_list_worktrees_returns_empty_for_non_repo(tmp_path):
+    from backlog_server import _list_worktrees
+    assert _list_worktrees(tmp_path) == []
+
+
+def test_list_worktrees_detached_head_has_none_branch(tmp_path):
+    """A worktree at a detached HEAD has no branch — must not crash and must
+    return branch=None so the renderer can label it 'detached'."""
+    from backlog_server import _list_worktrees
+    repo = _init_repo(tmp_path / "r")
+    head_sha = _run_git_check(["rev-parse", "HEAD"], cwd=repo).strip()
+    wt_path = tmp_path / "wt-detached"
+    _git("worktree", "add", "--detach", str(wt_path), head_sha, cwd=repo)
+
+    wts = _list_worktrees(repo)
+    detached = [w for w in wts if Path(w["path"]).resolve() == wt_path.resolve()]
+    assert len(detached) == 1
+    assert detached[0]["branch"] is None
