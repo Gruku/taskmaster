@@ -2177,7 +2177,18 @@ def sync_issue_index(
 # lowercases it for determinism. Always reconstruct ids via make_tracker_id,
 # never by string-joining stored frontmatter fields directly.
 
-EXTERNAL_SYSTEMS: tuple[str, ...] = ("jira",)
+EXTERNAL_SYSTEMS: tuple[str, ...] = ("jira", "linear")
+
+# Each registered external system has a fixed sync direction. Pull-dominant
+# systems (Jira) treat the external as upstream and mirror it locally read-only.
+# Push-dominant systems (Linear) treat the local TM state as source of truth and
+# mirror outbound on every mutation. The runtime worker picks its codepath from
+# this map; the field is denormalized onto each tracker file as a hint for
+# humans reading the file, but the map is the source of truth.
+_SYNC_DIRECTION_BY_SYSTEM: dict[str, str] = {
+    "jira": "pull",
+    "linear": "push",
+}
 
 # Sentinel for update_tracker: distinguishes "field not passed" from
 # "field passed as None to clear it".
@@ -2235,6 +2246,14 @@ def _validate_tracker(fm: dict[str, Any]) -> None:
         raise ValueError(
             f"external_system must be one of {EXTERNAL_SYSTEMS}, got {fm['external_system']!r}"
         )
+    sd = fm.get("sync_direction")
+    if sd is not None:
+        expected_sd = _SYNC_DIRECTION_BY_SYSTEM.get(sys_name)
+        if sd != expected_sd:
+            raise ValueError(
+                f"sync_direction {sd!r} does not match system map for {sys_name!r} "
+                f"(expected {expected_sd!r})"
+            )
     expected = make_tracker_id(fm["external_system"], fm["instance_alias"], fm["external_key"])
     if fm["id"] != expected:
         raise ValueError(
@@ -2255,6 +2274,9 @@ def write_tracker(
     url: str | None = None,
     last_synced: str | None = None,
     synced_hash: str | None = None,
+    last_pushed: str | None = None,
+    push_hash: str | None = None,
+    sync_direction: str | None = None,
     body: str = "",
 ) -> tuple[str, Path]:
     """Upsert a tracker file. Returns (id, path).
@@ -2263,21 +2285,32 @@ def write_tracker(
     (external_system, instance_alias, external_key) triple always overwrites
     the same path. Callers (e.g. `backlog_jira_pull`) that hash payloads to
     skip unchanged writes do that gating before calling this.
+
+    `sync_direction` is accepted for signature compatibility but ignored —
+    the on-disk value is always re-derived from `_SYNC_DIRECTION_BY_SYSTEM`
+    so it can never drift from the system's direction policy.
+    `last_pushed` and `push_hash` are populated by push-dominant workers
+    (e.g. Linear) after a successful outbound mutation.
     """
+    del sync_direction  # always derived from external_system
     if not title or not str(title).strip():
         raise ValueError("tracker title is required")
     tid = make_tracker_id(external_system, instance_alias, external_key)
+    es_lc = str(external_system).strip().lower()
     fm: dict[str, Any] = {
         "id": tid,
-        "external_system": str(external_system).strip().lower(),
+        "external_system": es_lc,
         "external_key": str(external_key).strip(),
         "instance_alias": str(instance_alias).strip(),
         "title": str(title).strip(),
         "status": str(status).strip() if status else "",
         "assignee": assignee or None,
         "url": url or None,
+        "sync_direction": _SYNC_DIRECTION_BY_SYSTEM.get(es_lc),
         "last_synced": last_synced,
         "synced_hash": synced_hash,
+        "last_pushed": last_pushed,
+        "push_hash": push_hash,
     }
     _validate_tracker(fm)
     path = tracker_path(backlog_path, tid)
@@ -2308,8 +2341,9 @@ def update_tracker(
         raise ValueError(
             f"on-disk tracker id {fm.get('id')!r} does not match requested {tracker_id!r}"
         )
+    _validate_tracker(fm)
     new_body = updates.pop("body", body)
-    for immutable in ("id", "external_system", "external_key", "instance_alias"):
+    for immutable in ("id", "external_system", "external_key", "instance_alias", "sync_direction"):
         updates.pop(immutable, None)
     fm.update(updates)
     _validate_tracker(fm)

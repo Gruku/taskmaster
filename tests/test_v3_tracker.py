@@ -454,3 +454,117 @@ def test_update_tracker_rejects_id_mismatch(tmp_path):
     )
     with pytest.raises(ValueError, match="does not match requested"):
         update_tracker(bp, "jira-cm-cm-1", status="Done")
+
+
+# ── Push-dominant systems (linear-001) ─────────────────────────
+
+
+def test_external_systems_constant_includes_linear():
+    """Linear is registered alongside Jira so the validator accepts it."""
+    assert "linear" in EXTERNAL_SYSTEMS
+
+
+def test_write_linear_tracker_with_push_fields_roundtrip(tmp_path):
+    """Push-dominant systems carry last_pushed + push_hash in addition to the
+    common fields. Both round-trip cleanly through write/read."""
+    bp = _make_backlog(tmp_path)
+    tid, _ = write_tracker(
+        bp,
+        external_system="linear",
+        instance_alias="cm",
+        external_key="ENG-42",
+        title="Welcome flow polish",
+        status="In Progress",
+        url="https://linear.app/cm/issue/ENG-42",
+        last_pushed="2026-05-20T10:00:00Z",
+        push_hash="deadbeef",
+    )
+    assert tid == "linear-cm-eng-42"
+    fm, _ = read_tracker(bp, tid)
+    assert fm["external_system"] == "linear"
+    assert fm["last_pushed"] == "2026-05-20T10:00:00Z"
+    assert fm["push_hash"] == "deadbeef"
+
+
+def test_write_tracker_auto_fills_sync_direction_from_system(tmp_path):
+    """sync_direction is derived from external_system, never passed by the caller.
+    Linear → push, Jira → pull."""
+    bp = _make_backlog(tmp_path)
+    write_tracker(
+        bp, external_system="linear", instance_alias="cm",
+        external_key="ENG-1", title="L", status="Todo",
+    )
+    fm_l, _ = read_tracker(bp, "linear-cm-eng-1")
+    assert fm_l["sync_direction"] == "push"
+
+    write_tracker(
+        bp, external_system="jira", instance_alias="cm",
+        external_key="CM-1", title="J", status="To Do",
+    )
+    fm_j, _ = read_tracker(bp, "jira-cm-cm-1")
+    assert fm_j["sync_direction"] == "pull"
+
+
+def test_write_tracker_ignores_caller_supplied_sync_direction(tmp_path):
+    """sync_direction is derived, not user-set. Even if a caller passes a value,
+    the system map wins so the on-disk value can never drift from the system."""
+    bp = _make_backlog(tmp_path)
+    write_tracker(
+        bp, external_system="linear", instance_alias="cm",
+        external_key="ENG-1", title="L", status="Todo",
+        sync_direction="pull",  # adversarial
+    )
+    fm, _ = read_tracker(bp, "linear-cm-eng-1")
+    assert fm["sync_direction"] == "push"
+
+
+def test_update_tracker_can_set_push_hash(tmp_path):
+    """The push worker updates last_pushed and push_hash after a successful
+    outbound mutation. update_tracker is the entry point."""
+    bp = _make_backlog(tmp_path)
+    write_tracker(
+        bp, external_system="linear", instance_alias="cm",
+        external_key="ENG-1", title="L", status="Todo",
+    )
+    update_tracker(
+        bp, "linear-cm-eng-1",
+        last_pushed="2026-05-20T11:00:00Z",
+        push_hash="cafe1234",
+    )
+    fm, _ = read_tracker(bp, "linear-cm-eng-1")
+    assert fm["last_pushed"] == "2026-05-20T11:00:00Z"
+    assert fm["push_hash"] == "cafe1234"
+
+
+def test_update_tracker_treats_sync_direction_as_immutable(tmp_path):
+    """Like external_system, sync_direction cannot be flipped via update."""
+    bp = _make_backlog(tmp_path)
+    write_tracker(
+        bp, external_system="linear", instance_alias="cm",
+        external_key="ENG-1", title="L", status="Todo",
+    )
+    update_tracker(bp, "linear-cm-eng-1", sync_direction="pull")
+    fm, _ = read_tracker(bp, "linear-cm-eng-1")
+    assert fm["sync_direction"] == "push"
+
+
+def test_validator_rejects_bogus_sync_direction(tmp_path):
+    """A hand-edited tracker file with a sync_direction that doesn't match the
+    system map is rejected on next read+validate (update path)."""
+    bp = _make_backlog(tmp_path)
+    tracker_dir(bp).mkdir(parents=True, exist_ok=True)
+    rogue = tracker_dir(bp) / "linear-cm-eng-1.md"
+    rogue.write_text(
+        "---\n"
+        "id: linear-cm-eng-1\n"
+        "external_system: linear\n"
+        "instance_alias: cm\n"
+        "external_key: ENG-1\n"
+        "title: L\n"
+        "status: Todo\n"
+        "sync_direction: pull\n"  # wrong for linear
+        "---\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="sync_direction"):
+        update_tracker(bp, "linear-cm-eng-1", status="Done")
