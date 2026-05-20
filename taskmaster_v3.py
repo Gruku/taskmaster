@@ -2042,6 +2042,41 @@ def archive_bug(backlog_path: Path, bug_id: str) -> Path:
     return archived
 
 
+def _bug_index_entry(fm: dict[str, Any]) -> dict[str, Any]:
+    return {f: fm.get(f) for f in _BUG_INDEX_FIELDS if fm.get(f) is not None}
+
+
+def sync_bug_index(
+    backlog_data: dict[str, Any],
+    backlog_path: Path,
+) -> dict[str, Any]:
+    """Rebuild backlog_data['bugs'] from disk (active only — archive is opaque).
+
+    Sorted by (status weight ascending, discovered descending) so open ones
+    surface first and most-recent within a status group.
+    """
+    status_weight = {"open": 0, "shelved": 1, "adopted": 2, "promoted": 3, "fixed": 4}
+    entries: list[dict[str, Any]] = []
+    for bid in list_bug_ids(backlog_path, include_archive=False):
+        try:
+            fm, _ = read_bug(backlog_path, bid)
+        except (OSError, ValueError):
+            continue
+        entries.append(_bug_index_entry(fm))
+    entries.sort(key=lambda e: (status_weight.get(e.get("status", "open"), 99), -1 * _discovered_rank(e)))
+    backlog_data["bugs"] = entries
+    return backlog_data
+
+
+def _discovered_rank(entry: dict[str, Any]) -> int:
+    """Convert ISO-8601 discovered timestamp to an integer for sort comparison."""
+    s = entry.get("discovered") or ""
+    try:
+        return int(datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").timestamp())
+    except (ValueError, TypeError):
+        return 0
+
+
 DECISION_STATUSES = ("open", "resolved", "dropped")
 
 

@@ -80,3 +80,20 @@ def test_update_bug_status_to_fixed_requires_commit(tmp_path):
     fm, _ = update_bug(bp, bid, status="fixed", fix_commit="abcd1234")
     assert fm["status"] == "fixed"
     assert fm["fix_commit"] == "abcd1234"
+
+
+def test_sync_bug_index_lists_active_only(tmp_path):
+    from taskmaster_v3 import write_bug, update_bug, archive_bug, sync_bug_index
+    bp = tmp_path / ".taskmaster" / "backlog.yaml"
+    bp.parent.mkdir(parents=True)
+    bp.write_text("schema_version: 3\n")
+    bid1, _ = write_bug(bp, title="active one", discovered_by="user")
+    bid2, _ = write_bug(bp, title="archived one", discovered_by="user")
+    update_bug(bp, bid2, status="fixed", fix_commit="abcd")
+    archive_bug(bp, bid2)
+
+    data = {"bugs": []}
+    sync_bug_index(data, bp)
+    ids = [e["id"] for e in data["bugs"]]
+    assert bid1 in ids
+    assert bid2 not in ids  # archive excluded from active index
