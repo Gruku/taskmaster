@@ -222,6 +222,19 @@ export async function reinforceLesson(lessonId, { source = 'user', note = '' } =
   return r.json();
 }
 
+// --- Project Structure (project-structure-visibility-003) -----------------
+
+/** Fetch the project structure tree (sub-repos → worktrees → tasks + handovers).
+ *  @param {boolean} refreshGit  When true, server runs git merge-base + rev-list
+ *                               for merge ladder + ahead/behind + dirty counts.
+ *                               When false, returns cheap structural data only. */
+export async function getProjectStructure(refreshGit = false) {
+  const qs = refreshGit ? '?refresh_git=1' : '';
+  const r = await fetch(`/api/project-structure${qs}`);
+  if (!r.ok) throw new Error(`getProjectStructure: ${r.status}`);
+  return r.json();
+}
+
 // --- Issues ----------------------------------------------------------------
 export async function getIssues({ includeResolved = true } = {}) {
   const qs = includeResolved ? '' : '?include_resolved=false';
