@@ -193,7 +193,33 @@ function renderHandoverList(handovers) {
 }
 
 function bindCardActions(grid) {
-  // Wired in Task 14.
+  grid.querySelectorAll('[data-action="refresh-card"]').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const path = btn.dataset.subRepo;
+      btn.disabled = true;
+      btn.textContent = '…';
+      try {
+        // Hit the server with a fresh payload (bypasses the screen-local cache;
+        // server-side LRU still returns cached unless .gitmodules changed, but
+        // refresh_git=true forces git work to actually re-run).
+        const fresh = await getProjectStructure(true);
+        _cache = fresh;
+        // Re-render only this card to preserve other cards' expanded state.
+        const sr = fresh.sub_repos.find(s => s.path === path);
+        if (sr) {
+          const card = btn.closest('.ws-card');
+          if (card) card.outerHTML = renderCard(sr);
+        }
+        // Re-bind actions on the (possibly replaced) DOM.
+        bindCardActions(grid);
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = '↻';
+        btn.title = 'Refresh failed: ' + err.message;
+      }
+    });
+  });
 }
 
 export { STATUS_GLYPH, escapeHtml };  // exported for unit-testing convenience
