@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path, PureWindowsPath, PurePosixPath
+
 import pytest
 
 from project import (
@@ -14,6 +16,7 @@ from project import (
     ProjectManifest,
     Repo,
     Submodule,
+    resolve_manifest_path,
 )
 
 
@@ -105,3 +108,57 @@ def test_orphan_submodule_warning(caplog):
     )
     living = m.valid_submodules()
     assert [s.name for s in living] == ["mcp"]
+
+
+# ---------------------------------------------------------------------------
+# resolve_manifest_path
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_manifest_path_empty_string_returns_project_root():
+    root = Path("/projects/foo")
+    assert resolve_manifest_path(root, "") == root
+
+
+def test_resolve_manifest_path_relative_joined_to_root():
+    root = Path("/projects/foo")
+    assert resolve_manifest_path(root, "api/src") == root / "api" / "src"
+
+
+def test_resolve_manifest_path_absolute_windows_passthrough():
+    # Use PureWindowsPath to verify behavior is platform-agnostic at the type level.
+    # On Windows, "C:\\..." is absolute; on POSIX, it's relative. The helper relies on
+    # Path.is_absolute(), so test the concrete platform behavior via str input.
+    root = Path("/projects/foo")
+    raw = "C:\\opt\\external\\repo" if PureWindowsPath("C:\\x").is_absolute() else "/opt/external/repo"
+    result = resolve_manifest_path(root, raw)
+    assert result == Path(raw)
+    assert result.is_absolute()
+
+
+def test_resolve_manifest_path_absolute_posix_passthrough():
+    # The helper defers to pathlib.Path.is_absolute(). On POSIX, a leading-slash
+    # path is absolute and passes through; on Windows it is NOT absolute (no
+    # drive letter) and gets joined to the project root. Test the actual
+    # platform behavior so the contract is exercised on whichever OS runs CI.
+    root = Path("/projects/foo")
+    raw = "/opt/external/repo"
+    result = resolve_manifest_path(root, raw)
+    if Path(raw).is_absolute():
+        assert result == Path(raw)
+    else:
+        assert result == root / raw
+
+
+def test_resolve_manifest_path_tilde_not_expanded():
+    root = Path("/projects/foo")
+    result = resolve_manifest_path(root, "~/notes")
+    # `~` must be treated as a literal path segment, not expanded to $HOME.
+    assert "~" in str(result)
+    assert result == root / "~/notes"
+
+
+def test_resolve_manifest_path_accepts_path_like_root():
+    # Helper should round-trip whatever Path-like root it receives.
+    root = Path("/projects/foo")
+    assert resolve_manifest_path(root, "x") == root / "x"

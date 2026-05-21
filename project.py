@@ -28,6 +28,25 @@ def resolve_project_root(start: Path) -> Path | None:
         current = current.parent
 
 
+def resolve_manifest_path(project_root: Path, raw: str) -> Path:
+    """Resolve a manifest-declared path against the project root.
+
+    Rules (per spec section "Path resolution"):
+      - Empty string -> returns project_root itself.
+      - Absolute path -> passed through unchanged (after Path() round-trip).
+      - Relative path -> joined to project_root.
+      - `~` is NOT expanded -- manifest paths are deterministic per project,
+        not per user. Pass through any literal `~` as a regular path segment.
+    """
+    project_root = Path(project_root)
+    if raw == "":
+        return project_root
+    candidate = Path(raw)
+    if candidate.is_absolute():
+        return candidate
+    return project_root / candidate
+
+
 # ---------------------------------------------------------------------------
 # Task 2: Schema dataclasses
 # ---------------------------------------------------------------------------
