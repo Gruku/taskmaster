@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -8312,6 +8313,161 @@ def auto_event_log(session_id: str, since: str | None = None) -> str:
     import json
     from taskmaster_v3 import read_auto_events
     return json.dumps({"events": read_auto_events(session_id, since=since)}, indent=2)
+
+
+# --- .taskmaster/project.yaml (Project manifest) ---
+
+from dataclasses import asdict
+from project import (
+    ProjectManifest,
+    SCHEMA_VERSION,
+    load_project_manifest,
+    load_project_manifest_raw,
+    manifest_to_dict,
+    project_yaml_path,
+    resolve_project_root,
+    validate_manifest_dict,
+)
+
+_PATH_TOKEN = re.compile(r"([^.\[\]]+)|\[(\d+)\]")
+
+
+def _project_root_or_cwd() -> Path:
+    """Resolve a project root from ROOT (the module-level cwd anchor) or fall back."""
+    root = resolve_project_root(ROOT)
+    return root if root is not None else ROOT
+
+
+def _dig(data: Any, path: str) -> Any:
+    cursor: Any = data
+    for match in _PATH_TOKEN.finditer(path):
+        key, idx = match.group(1), match.group(2)
+        try:
+            if key is not None:
+                cursor = cursor[key]
+            else:
+                cursor = cursor[int(idx)]
+        except (KeyError, IndexError, TypeError):
+            return None
+    return cursor
+
+
+@mcp.tool()
+def backlog_project_get() -> dict | None:
+    """Return the full .taskmaster/project.yaml as a dict, or None if missing/invalid.
+
+    The returned dict is the EXPANDED form — every dataclass default is filled
+    in (e.g. `project.goal == ""` even when the YAML didn't set it). For "is
+    this field absent in the source?" queries, use `backlog_project_get_field`
+    which reads the raw YAML.
+    """
+    m = load_project_manifest(_project_root_or_cwd())
+    return manifest_to_dict(m) if m is not None else None
+
+
+@mcp.tool()
+def backlog_project_get_field(path: str) -> Any:
+    """Read a single field via dotted/indexed path from the RAW YAML.
+
+    Unlike `backlog_project_get`, this reads the source file directly without
+    coercing through dataclasses — so absent fields return None rather than
+    their schema defaults. Examples:
+        "meta.name"
+        "repos[0].name"
+        "repos[0].branches.protected[0]"
+
+    Returns None if any segment is missing or out of range.
+    """
+    data = load_project_manifest_raw(_project_root_or_cwd())
+    if data is None:
+        return None
+    return _dig(data, path)
+
+
+@mcp.tool()
+def backlog_project_ship_order() -> list[str]:
+    """Return repos in topological dependency order. Empty list if no manifest.
+
+    Raises ValueError if depends_on contains a cycle (caught by validator on load).
+    """
+    m = load_project_manifest(_project_root_or_cwd())
+    return m.ship_order() if m is not None else []
+
+
+@mcp.tool()
+def backlog_project_set(yaml_content: str) -> str:
+    """Write .taskmaster/project.yaml with strict validation.
+
+    Raises ValueError if YAML is malformed or schema invalid. Atomic write
+    using the existing _atomic_write helper. Returns the absolute path written.
+    """
+    try:
+        data = yaml.safe_load(yaml_content) or {}
+    except yaml.YAMLError as exc:
+        raise ValueError(f"YAML parse failed: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError("project.yaml top-level must be a mapping")
+    validate_manifest_dict(data, raise_on_error=True)
+
+    root = _project_root_or_cwd()
+    path = project_yaml_path(root)
+    _ensure_taskmaster_dir(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rendered = yaml.safe_dump(data, sort_keys=False, allow_unicode=True, default_flow_style=False)
+    _atomic_write(path, rendered)
+    return str(path)
+
+
+def _ensure_taskmaster_dir(path: Path) -> None:
+    """Raise ValueError if path.parent exists but is not a directory."""
+    if path.parent.exists() and not path.parent.is_dir():
+        raise ValueError(f"{path.parent} exists but is not a directory")
+
+
+def _slugify(name: str) -> str:
+    return re.sub(r"[^a-z0-9-]+", "-", name.lower()).strip("-") or "project"
+
+
+@mcp.tool()
+def backlog_project_init(name: str, slug: str = "") -> str:
+    """Scaffold a minimal valid project.yaml. Refuses to overwrite.
+
+    Returns a confirmation message including the path written.
+    """
+    root = _project_root_or_cwd()
+    path = project_yaml_path(root)
+    if path.exists():
+        raise ValueError(f"{path} exists — refusing to overwrite (edit it directly)")
+    slug = slug or _slugify(name)
+    scaffold = {
+        "schema_version": SCHEMA_VERSION,
+        "meta": {"name": name, "slug": slug, "kind": "app"},
+        "project": {"description": "", "goal": "", "owners": [], "tags": []},
+        "repos": [],
+        "submodules": [],
+        "integrations": {"observability": {"error_trace_ladder": []}, "external": []},
+        "conventions": {"narrative_ref": "./CLAUDE.md", "policies": {}},
+        "extensions": {},
+    }
+    _ensure_taskmaster_dir(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write(
+        path,
+        yaml.safe_dump(scaffold, sort_keys=False, allow_unicode=True, default_flow_style=False),
+    )
+    return f"Created {path}"
+
+
+@mcp.tool()
+def backlog_project_error_trace_ladder() -> list[dict]:
+    """Return the observability error-trace ladder as a list of dicts.
+
+    Empty list if no manifest. Consumed by IDEA-006 Diagnose-Auth-Or-Not.
+    """
+    m = load_project_manifest(_project_root_or_cwd())
+    if m is None:
+        return []
+    return [asdict(e) for e in m.error_trace_ladder()]
 
 
 # ── Linear MCP tools (linear-005) ────────────────────────────────────────────
