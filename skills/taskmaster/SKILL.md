@@ -27,6 +27,7 @@ All work in a taskmaster-enabled project flows through the task system. This ski
 | "Auto-epic <id>", "auto-phase <id>" | `taskmaster:auto-epic` / `taskmaster:auto-phase` |
 | "Upgrade to v3", "migrate to v3" | `taskmaster:migrate-v3` |
 | "Check TODOs", "todo audit" | `taskmaster:check-todos` |
+| "Set up linear", "link to linear", "retry linear", "linear status" | `taskmaster:linear` |
 | Status, search, phase, recap, snapshot | Direct `backlog_*` tool call |
 
 For the full 35-row routing table, all v3 routes, and implementation-without-a-task guidance, read `references/routing-table.md`.

@@ -2177,7 +2177,18 @@ def sync_issue_index(
 # lowercases it for determinism. Always reconstruct ids via make_tracker_id,
 # never by string-joining stored frontmatter fields directly.
 
-EXTERNAL_SYSTEMS: tuple[str, ...] = ("jira",)
+EXTERNAL_SYSTEMS: tuple[str, ...] = ("jira", "linear")
+
+# Each registered external system has a fixed sync direction. Pull-dominant
+# systems (Jira) treat the external as upstream and mirror it locally read-only.
+# Push-dominant systems (Linear) treat the local TM state as source of truth and
+# mirror outbound on every mutation. The runtime worker picks its codepath from
+# this map; the field is denormalized onto each tracker file as a hint for
+# humans reading the file, but the map is the source of truth.
+_SYNC_DIRECTION_BY_SYSTEM: dict[str, str] = {
+    "jira": "pull",
+    "linear": "push",
+}
 
 # Sentinel for update_tracker: distinguishes "field not passed" from
 # "field passed as None to clear it".
@@ -2235,6 +2246,14 @@ def _validate_tracker(fm: dict[str, Any]) -> None:
         raise ValueError(
             f"external_system must be one of {EXTERNAL_SYSTEMS}, got {fm['external_system']!r}"
         )
+    sd = fm.get("sync_direction")
+    if sd is not None:
+        expected_sd = _SYNC_DIRECTION_BY_SYSTEM.get(sys_name)
+        if sd != expected_sd:
+            raise ValueError(
+                f"sync_direction {sd!r} does not match system map for {sys_name!r} "
+                f"(expected {expected_sd!r})"
+            )
     expected = make_tracker_id(fm["external_system"], fm["instance_alias"], fm["external_key"])
     if fm["id"] != expected:
         raise ValueError(
@@ -2255,6 +2274,9 @@ def write_tracker(
     url: str | None = None,
     last_synced: str | None = None,
     synced_hash: str | None = None,
+    last_pushed: str | None = None,
+    push_hash: str | None = None,
+    sync_direction: str | None = None,
     body: str = "",
 ) -> tuple[str, Path]:
     """Upsert a tracker file. Returns (id, path).
@@ -2263,21 +2285,32 @@ def write_tracker(
     (external_system, instance_alias, external_key) triple always overwrites
     the same path. Callers (e.g. `backlog_jira_pull`) that hash payloads to
     skip unchanged writes do that gating before calling this.
+
+    `sync_direction` is accepted for signature compatibility but ignored —
+    the on-disk value is always re-derived from `_SYNC_DIRECTION_BY_SYSTEM`
+    so it can never drift from the system's direction policy.
+    `last_pushed` and `push_hash` are populated by push-dominant workers
+    (e.g. Linear) after a successful outbound mutation.
     """
+    del sync_direction  # always derived from external_system
     if not title or not str(title).strip():
         raise ValueError("tracker title is required")
     tid = make_tracker_id(external_system, instance_alias, external_key)
+    es_lc = str(external_system).strip().lower()
     fm: dict[str, Any] = {
         "id": tid,
-        "external_system": str(external_system).strip().lower(),
+        "external_system": es_lc,
         "external_key": str(external_key).strip(),
         "instance_alias": str(instance_alias).strip(),
         "title": str(title).strip(),
         "status": str(status).strip() if status else "",
         "assignee": assignee or None,
         "url": url or None,
+        "sync_direction": _SYNC_DIRECTION_BY_SYSTEM.get(es_lc),
         "last_synced": last_synced,
         "synced_hash": synced_hash,
+        "last_pushed": last_pushed,
+        "push_hash": push_hash,
     }
     _validate_tracker(fm)
     path = tracker_path(backlog_path, tid)
@@ -2308,8 +2341,9 @@ def update_tracker(
         raise ValueError(
             f"on-disk tracker id {fm.get('id')!r} does not match requested {tracker_id!r}"
         )
+    _validate_tracker(fm)
     new_body = updates.pop("body", body)
-    for immutable in ("id", "external_system", "external_key", "instance_alias"):
+    for immutable in ("id", "external_system", "external_key", "instance_alias", "sync_direction"):
         updates.pop(immutable, None)
     fm.update(updates)
     _validate_tracker(fm)
@@ -2362,6 +2396,116 @@ def linked_issues_for_tracker(
 ) -> list[dict[str, Any]]:
     """Derive the issues that link to this tracker by scanning the index."""
     return [iss for iss in backlog_data.get("issues", []) if iss.get("tracker_id") == tracker_id]
+
+
+# ── Linear config (linear-002) ─────────────────────────────────
+#
+# `.taskmaster/linear.yaml` declares Linear workspaces this project pushes to.
+# Tokens are never stored; the file names env vars that hold them, so the
+# committed config carries no secrets. Multi-workspace within a single project
+# is allowed; each tracker remembers its `workspace_alias`.
+#
+# Shape:
+#   workspaces:
+#     - alias: cm
+#       team_id: <linear-team-uuid>
+#       token_env: TASKMASTER_LINEAR_TOKEN_CM
+#       status_mapping: {todo: Todo, in-progress: In Progress, ...}
+#       priority_mapping: {critical: 1, high: 2, medium: 3, low: 4}
+#       user_mapping: {<TM-owner-string>: <linear-user-id>}
+#       label_config: {tm_managed_prefix: "tm:"}
+#   default_workspace: cm
+#
+# Validator catches missing required fields, duplicate aliases, duplicate
+# token_envs, and dangling default_workspace references at load time so
+# misconfigurations fail loud rather than silently routing pushes to the
+# wrong workspace.
+
+
+def linear_config_path(backlog_path: Path) -> Path:
+    return backlog_path.parent / "linear.yaml"
+
+
+def load_linear_config(backlog_path: Path) -> dict[str, Any] | None:
+    """Load `.taskmaster/linear.yaml`. Returns None if the file is missing
+    (Linear sync is opt-in per project). Raises ValueError on schema violation."""
+    path = linear_config_path(backlog_path)
+    if not path.exists():
+        return None
+    with path.open("r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f) or {}
+    _validate_linear_config(cfg)
+    return cfg
+
+
+def _validate_linear_config(cfg: dict[str, Any]) -> None:
+    workspaces = cfg.get("workspaces")
+    if not isinstance(workspaces, list) or not workspaces:
+        raise ValueError("linear.yaml must declare at least one workspace under 'workspaces'")
+
+    seen_aliases: set[str] = set()
+    seen_token_envs: set[str] = set()
+    for ws in workspaces:
+        if not isinstance(ws, dict):
+            raise ValueError(f"linear.yaml workspace entry must be a mapping, got {type(ws).__name__}")
+        for field in ("alias", "team_id", "token_env"):
+            if not ws.get(field):
+                raise ValueError(f"linear.yaml workspace missing required field: {field}")
+        alias = str(ws["alias"])
+        if alias in seen_aliases:
+            raise ValueError(f"linear.yaml workspace alias {alias!r} is duplicated")
+        seen_aliases.add(alias)
+        token_env = str(ws["token_env"])
+        if token_env in seen_token_envs:
+            raise ValueError(
+                f"linear.yaml token_env {token_env!r} is duplicated across workspaces "
+                f"(two workspaces would share the same token)"
+            )
+        seen_token_envs.add(token_env)
+
+    default_ws = cfg.get("default_workspace")
+    if default_ws and default_ws not in seen_aliases:
+        raise ValueError(
+            f"linear.yaml default_workspace {default_ws!r} references unknown workspace "
+            f"(known aliases: {sorted(seen_aliases)})"
+        )
+
+
+def get_linear_workspace(cfg: dict[str, Any], alias: str | None = None) -> dict[str, Any]:
+    """Resolve a workspace config by alias. If `alias` is None, use `default_workspace`.
+
+    Raises ValueError if neither path yields a known workspace.
+    """
+    target = alias or cfg.get("default_workspace")
+    if not target:
+        raise ValueError(
+            "no workspace alias passed and linear.yaml has no default_workspace; "
+            "pass an explicit alias or set default_workspace"
+        )
+    for ws in cfg.get("workspaces", []):
+        if ws.get("alias") == target:
+            return ws
+    raise ValueError(f"linear.yaml has no workspace with alias {target!r}")
+
+
+def resolve_linear_token(workspace: dict[str, Any]) -> str:
+    """Read the Linear API token from the env var named by `workspace.token_env`.
+
+    The token is read at call time, never cached on disk. If the env var is
+    missing the operator gets a canonical message pointing to the Linear
+    API-key page; same shape as the Jira variant.
+    """
+    env_name = workspace.get("token_env")
+    if not env_name:
+        raise ValueError("workspace config missing token_env")
+    token = os.environ.get(env_name)
+    if not token:
+        raise ValueError(
+            f"${env_name} is not set.\n"
+            f"Create a Linear personal API key at https://linear.app/settings/api "
+            f"then export {env_name}=<token>."
+        )
+    return token
 
 
 # ── Lessons ────────────────────────────────────────────────────

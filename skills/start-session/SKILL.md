@@ -29,6 +29,16 @@ N new issues (N P0) · N matched lessons · N stale tasks · N flagged handovers
 
 For issues count: use the `open_issues_count` field from `backlog_status` output (slim mode includes aggregate counts). For matched lessons and stale count: also from `backlog_status` aggregate fields.
 
+### Step 3b — Linear sync footer (only if `linear.yaml` exists)
+
+If `.taskmaster/linear.yaml` is present in the project, call `backlog_linear_status()` once. Append a single line to the briefing **only if non-zero**:
+
+```
+Linear sync: N queued · M permanent failures (latest: <reason snippet>)
+```
+
+If the queue is empty and there are no permanent failures, omit this line entirely. Surface verbosely only when there's a real backlog or a stuck failure — otherwise this is noise. If permanent failures are present, suggest `taskmaster:linear status` for the full breakdown.
+
 ### Step 4 — Briefing
 
 Present in order:

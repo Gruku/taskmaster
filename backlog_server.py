@@ -98,6 +98,7 @@ from taskmaster_v3 import (
     linked_tasks_for_tracker as _linked_tasks_for_tracker,
     linked_issues_for_tracker as _linked_issues_for_tracker,
     _validate_tracker as _validate_tracker_fm,
+    load_linear_config as _load_linear_config,
     LESSON_KINDS,
     LESSON_TIERS,
     write_lesson as _write_lesson,
@@ -738,6 +739,39 @@ def _mutate_and_save(data: dict) -> None:
     regenerate_context(data)
     _save(data)
     regenerate_progress_dashboard(data)
+
+
+def _enqueue_linear_push_if_synced(task_id: str, task: dict | None = None) -> None:
+    """Best-effort: enqueue a Linear sync push if this project has linear.yaml
+    AND the task has a Linear tracker_id. Never raises — Linear sync is
+    non-fatal to the local mutation.
+
+    Called from post-mutation hooks (backlog_add_task / update_task /
+    complete_task / archive_task). The drain runs separately (manually via
+    /linear retry, or eventually automatically via session boundaries).
+
+    Tasks without a tracker_id are silently no-op'd — they're not synced.
+    Bootstrap (linear-005) is what links a TM task to a Linear issue by
+    populating tracker_id.
+    """
+    try:
+        bp = _backlog_path()
+        cfg = _load_linear_config(bp)
+        if cfg is None:
+            return
+        if task is None:
+            r = _find_task(_load(), task_id)
+            if not r:
+                return
+            task = r[0]
+        tracker_id = task.get("tracker_id")
+        if not tracker_id or not str(tracker_id).startswith("linear-"):
+            return
+        from integrations.linear.worker import enqueue as _linear_enqueue
+        _linear_enqueue(bp, op="task_upsert", target_id=task_id, tracker_id=tracker_id)
+    except Exception:
+        # Sync failures must not break the local mutation.
+        pass
 
 
 def _deep_merge(dst: dict, src: dict) -> dict:
@@ -1526,6 +1560,18 @@ def backlog_validate() -> str:
             issues.append(
                 f"issue `{iss.get('id', '?')}`: tracker_id `{ref}` does not match any tracker file"
             )
+
+    # 12. Linear config: validate schema if .taskmaster/linear.yaml exists.
+    #     Catches duplicate aliases / token_envs / dangling default_workspace
+    #     before they cause runtime sync failures.
+    try:
+        _load_linear_config(bp)
+    except OSError as e:
+        issues.append(f"linear.yaml: cannot read file ({e})")
+    except yaml.YAMLError as e:
+        issues.append(f"linear.yaml: malformed YAML ({e})")
+    except ValueError as e:
+        issues.append(f"linear.yaml: {e}")
 
     # Stats summary
     stats = {"total": len(all_tasks), "issues": len(issues)}
@@ -4098,6 +4144,7 @@ def backlog_add_task(
     epic_obj["tasks"].append(new_task)
 
     _mutate_and_save(data)
+    _enqueue_linear_push_if_synced(new_id, task=new_task)
 
     # Soft cap enforcement (only when explicitly set on the epic via `max_tasks`).
     # The previous default of 8 has been lifted — large epics with many tasks are
@@ -4367,6 +4414,7 @@ def backlog_complete_task(
         task["release"] = release
 
     _mutate_and_save(data)
+    _enqueue_linear_push_if_synced(task_id, task=task)
     if target_status == "done":
         _clear_session_task(task_id)
 
@@ -4514,6 +4562,7 @@ def backlog_archive_task(task_id: str, reason: str = "done") -> str:
     task["archived"] = _now()
     task.pop("locked_by", None)
     _mutate_and_save(data)
+    _enqueue_linear_push_if_synced(task_id, task=task)
 
     # Smart-close open handovers that reference this task.
     try:
@@ -4670,6 +4719,7 @@ def backlog_update_task(
             task["next_step"] = next_step
             updated.append(f"next_step → {next_step}")
         _mutate_and_save(data)
+        _enqueue_linear_push_if_synced(task_id, task=task)
         return f"Updated `{task_id}`: " + "; ".join(updated)
 
     # Classic field/value style
@@ -4783,6 +4833,8 @@ def backlog_update_task(
             _auto_link_on_save(bp, task_id)
         except Exception:
             pass
+
+    _enqueue_linear_push_if_synced(task_id, task=task)
 
     return f"Updated `{task_id}` field `{field}` → {value}"
 
@@ -7710,6 +7762,402 @@ def auto_event_log(session_id: str, since: str | None = None) -> str:
     import json
     from taskmaster_v3 import read_auto_events
     return json.dumps({"events": read_auto_events(session_id, since=since)}, indent=2)
+
+
+# ── Linear MCP tools (linear-005) ────────────────────────────────────────────
+
+
+@mcp.tool()
+def backlog_linear_probe(token_env: str) -> str:
+    """Discover Linear workspace structure using a token read from the environment.
+
+    Calls list_teams, then for each team samples list_issue_statuses and list_users.
+    Returns a JSON summary suitable for proposing a status/priority mapping to the user.
+    Never prints the token. On missing env var: error with a link to the Linear API key page.
+
+    Args:
+        token_env: Name of the environment variable holding the Linear API token.
+    """
+    import json
+    import os
+    from integrations.linear.client import LinearAPIError, LinearClient
+
+    token = os.environ.get(token_env)
+    if not token:
+        return json.dumps({
+            "error": (
+                f"${token_env} is not set. "
+                f"Create a Linear personal API key at https://linear.app/settings/api "
+                f"then export {token_env}=<token>."
+            )
+        })
+
+    client = LinearClient(token=token)
+    try:
+        teams = client.list_teams()
+    except LinearAPIError as e:
+        return json.dumps({"error": str(e)})
+
+    result = []
+    for team in teams:
+        tid = team.get("id", "")
+        entry: dict = {"id": tid, "name": team.get("name"), "key": team.get("key")}
+        try:
+            entry["statuses"] = client.list_issue_statuses(tid)
+        except LinearAPIError as e:
+            entry["statuses_error"] = str(e)
+        try:
+            entry["users"] = client.list_users(tid)
+        except LinearAPIError as e:
+            entry["users_error"] = str(e)
+        result.append(entry)
+
+    return json.dumps({"teams": result}, indent=2)
+
+
+@mcp.tool()
+def backlog_linear_bootstrap_apply(
+    workspace_alias: str,
+    team_id: str,
+    token_env: str,
+    status_mapping: str = "",
+    priority_mapping: str = "",
+    default_workspace: bool = True,
+) -> str:
+    """Write (or append) a workspace entry to .taskmaster/linear.yaml.
+
+    If linear.yaml exists: appends the new workspace (errors if alias collides).
+    If absent: creates the file with this workspace as the only entry.
+
+    status_mapping / priority_mapping: optional comma-separated tm_value:linear_id pairs
+    (e.g. "todo:state-uuid-1,in-progress:state-uuid-2").
+
+    Args:
+        workspace_alias: Short identifier for this workspace (e.g. "cm").
+        team_id: Linear team UUID for this workspace.
+        token_env: Environment variable name holding the Linear API token.
+        status_mapping: Comma-separated TM-status:linear-state-id pairs.
+        priority_mapping: Comma-separated TM-priority:linear-priority-id pairs.
+        default_workspace: If True (default), set this workspace as default_workspace.
+    """
+    import json
+    from taskmaster_v3 import (
+        linear_config_path,
+        _validate_linear_config,
+    )
+
+    if not workspace_alias or not workspace_alias.strip():
+        return json.dumps({"error": "workspace_alias is required"})
+    if not team_id or not team_id.strip():
+        return json.dumps({"error": "team_id is required"})
+    if not token_env or not token_env.strip():
+        return json.dumps({"error": "token_env is required"})
+
+    def _parse_mapping(raw: str) -> dict:
+        """Parse 'a:b,c:d' into {'a': 'b', 'c': 'd'}, deduped, no empty halves."""
+        out: dict = {}
+        for pair in raw.split(","):
+            pair = pair.strip()
+            if not pair:
+                continue
+            parts = pair.split(":", 1)
+            if len(parts) != 2 or not parts[0].strip() or not parts[1].strip():
+                raise ValueError(f"invalid mapping pair {pair!r} — expected tm_value:linear_id")
+            out[parts[0].strip()] = parts[1].strip()
+        return out
+
+    try:
+        sm = _parse_mapping(status_mapping) if status_mapping.strip() else {}
+        pm = _parse_mapping(priority_mapping) if priority_mapping.strip() else {}
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+
+    bp = _backlog_path()
+    cfg_path = linear_config_path(bp)
+
+    if cfg_path.exists():
+        with cfg_path.open("r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+        existing_aliases = {ws.get("alias") for ws in cfg.get("workspaces") or []}
+        if workspace_alias in existing_aliases:
+            return json.dumps({"error": f"workspace alias {workspace_alias!r} already exists in linear.yaml"})
+    else:
+        cfg = {}
+
+    ws_entry: dict = {
+        "alias": workspace_alias,
+        "team_id": team_id,
+        "token_env": token_env,
+    }
+    if sm:
+        ws_entry["status_mapping"] = sm
+    if pm:
+        ws_entry["priority_mapping"] = pm
+
+    cfg.setdefault("workspaces", []).append(ws_entry)
+    if default_workspace:
+        cfg["default_workspace"] = workspace_alias
+
+    try:
+        _validate_linear_config(cfg)
+    except ValueError as e:
+        return json.dumps({"error": f"config validation failed: {e}"})
+
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    with cfg_path.open("w", encoding="utf-8") as f:
+        yaml.dump(cfg, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
+    return json.dumps({
+        "ok": True,
+        "path": str(cfg_path),
+        "workspace": workspace_alias,
+        "default": default_workspace,
+    })
+
+
+@mcp.tool()
+def backlog_linear_link(task_id: str, external_key: str, workspace_alias: str = "") -> str:
+    """Link an existing TM task to an existing Linear issue by creating a Tracker file.
+
+    Pure local operation — does not push to Linear or fetch from it.
+    Sets tracker_id on the task in backlog.yaml.
+
+    Args:
+        task_id: Taskmaster task id (e.g. "ts-001").
+        external_key: Linear issue identifier (e.g. "ENG-42").
+        workspace_alias: Workspace alias from linear.yaml. Uses default_workspace if empty.
+    """
+    import json
+
+    bp = _backlog_path()
+    if not bp.exists():
+        return json.dumps({"error": "No backlog found."})
+
+    cfg = _load_linear_config(bp)
+    if cfg is None:
+        return json.dumps({"error": "linear.yaml not found — run backlog_linear_bootstrap_apply first."})
+
+    try:
+        from taskmaster_v3 import get_linear_workspace
+        workspace = get_linear_workspace(cfg, workspace_alias or None)
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+
+    alias = workspace["alias"]
+    data = _load()
+    result = _find_task(data, task_id)
+    if result is None:
+        return json.dumps({"error": f"task {task_id!r} not found in backlog"})
+    task, _epic = result
+
+    existing_tracker = task.get("tracker_id")
+    if existing_tracker:
+        return json.dumps({"error": f"task {task_id!r} already has tracker_id {existing_tracker!r} — unlink first"})
+
+    tracker_id = _make_tracker_id("linear", alias, external_key)
+    tp = _tracker_path(bp, tracker_id)
+    if tp.exists():
+        return json.dumps({"error": f"tracker file already exists at {tp} — it may be linked to another task"})
+
+    try:
+        _write_tracker(
+            bp,
+            external_system="linear",
+            instance_alias=alias,
+            external_key=external_key,
+            title=task.get("title", external_key),
+            status=task.get("status", "todo"),
+        )
+    except (ValueError, OSError) as e:
+        return json.dumps({"error": f"failed to write tracker: {e}"})
+
+    task["tracker_id"] = tracker_id
+    _save(data)
+
+    return json.dumps({"ok": True, "tracker_id": tracker_id, "task_id": task_id})
+
+
+@mcp.tool()
+def backlog_linear_unlink(task_id: str) -> str:
+    """Clear the tracker_id on a TM task. Does NOT delete the Tracker file.
+
+    Idempotent: if the task has no tracker_id, returns that fact without error.
+
+    Args:
+        task_id: Taskmaster task id (e.g. "ts-001").
+    """
+    import json
+
+    bp = _backlog_path()
+    if not bp.exists():
+        return json.dumps({"error": "No backlog found."})
+
+    data = _load()
+    result = _find_task(data, task_id)
+    if result is None:
+        return json.dumps({"error": f"task {task_id!r} not found in backlog"})
+    task, _epic = result
+
+    existing = task.get("tracker_id")
+    if not existing:
+        return json.dumps({"ok": True, "note": f"task {task_id!r} had no tracker_id — nothing to unlink"})
+
+    task.pop("tracker_id", None)
+    _save(data)
+    return json.dumps({"ok": True, "unlinked": existing, "task_id": task_id})
+
+
+@mcp.tool()
+def backlog_linear_list() -> str:
+    """Return JSON list of all linear-* trackers from disk.
+
+    Each item: id, external_key, title, status, instance_alias, last_pushed, push_hash.
+    Reads from tracker frontmatter; does not hit Linear.
+    """
+    import json
+
+    bp = _backlog_path()
+    if not bp.exists():
+        return json.dumps({"trackers": []})
+
+    out = []
+    for tid in _list_tracker_ids(bp):
+        if not tid.startswith("linear-"):
+            continue
+        try:
+            fm, _ = _read_tracker(bp, tid)
+        except (OSError, yaml.YAMLError):
+            continue
+        out.append({
+            "id": fm.get("id"),
+            "external_key": fm.get("external_key"),
+            "title": fm.get("title"),
+            "status": fm.get("status"),
+            "instance_alias": fm.get("instance_alias"),
+            "last_pushed": fm.get("last_pushed"),
+            "push_hash": fm.get("push_hash"),
+        })
+
+    return json.dumps({"trackers": out}, indent=2)
+
+
+@mcp.tool()
+def backlog_linear_show(tracker_id: str) -> str:
+    """Return one tracker's full frontmatter and body as JSON.
+
+    Returns an error-style JSON if the tracker is missing.
+
+    Args:
+        tracker_id: Tracker id in linear-<alias>-<key> format (e.g. "linear-cm-eng-42").
+    """
+    import json
+
+    bp = _backlog_path()
+    if not bp.exists():
+        return json.dumps({"error": "No backlog found."})
+
+    tp = _tracker_path(bp, tracker_id)
+    if not tp.exists():
+        return json.dumps({"error": f"tracker {tracker_id!r} not found"})
+
+    try:
+        fm, body = _read_tracker(bp, tracker_id)
+    except (OSError, yaml.YAMLError) as e:
+        return json.dumps({"error": f"cannot read tracker: {e}"})
+
+    return json.dumps({"frontmatter": fm, "body": body}, indent=2, default=str)
+
+
+@mcp.tool()
+def backlog_linear_status() -> str:
+    """Return a summary of the Linear sync queue state.
+
+    Includes: queue depth, oldest pending item's enqueued_at, count of permanent
+    failures, and the last error message if any. No network calls.
+    """
+    import json
+    from integrations.linear.worker import read_queue
+
+    bp = _backlog_path()
+    items = read_queue(bp) if bp.exists() else []
+
+    permanent_count = sum(1 for i in items if i.get("permanent"))
+    pending = [i for i in items if not i.get("permanent")]
+    oldest_at = None
+    if pending:
+        oldest_at = min((i.get("enqueued_at") or "") for i in pending) or None
+
+    last_error = None
+    for item in reversed(items):
+        if item.get("last_error"):
+            last_error = item["last_error"]
+            break
+
+    return json.dumps({
+        "queue_depth": len(items),
+        "pending": len(pending),
+        "permanent_failures": permanent_count,
+        "oldest_enqueued_at": oldest_at,
+        "last_error": last_error,
+    }, indent=2)
+
+
+@mcp.tool()
+def backlog_linear_retry(target_id: str = "") -> str:
+    """Drain the Linear sync queue, optionally limiting to one target.
+
+    If target_id is empty: drains all queued items.
+    If target_id is provided: drains only items for that target, leaving others intact.
+
+    Requires linear.yaml and the configured token env var.
+
+    Args:
+        target_id: Taskmaster task id to retry. Empty = retry all.
+    """
+    import json
+    from integrations.linear.client import LinearAPIError, LinearClient
+    from integrations.linear import worker as _worker
+
+    bp = _backlog_path()
+    if not bp.exists():
+        return json.dumps({"error": "No backlog found."})
+
+    cfg = _load_linear_config(bp)
+    if cfg is None:
+        return json.dumps({"error": "linear.yaml not found — run backlog_linear_bootstrap_apply first."})
+
+    try:
+        from taskmaster_v3 import get_linear_workspace, resolve_linear_token
+        workspace = get_linear_workspace(cfg)
+        token = resolve_linear_token(workspace)
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+
+    try:
+        client = LinearClient(token=token)
+    except (ValueError, LinearAPIError) as e:
+        return json.dumps({"error": f"cannot build Linear client: {e}"})
+
+    data = _load()
+
+    if not target_id:
+        counts = _worker.drain(bp, client, cfg, backlog_data=data)
+    else:
+        # Filter to target only: drain the subset, then restore the rest.
+        all_items = _worker.read_queue(bp)
+        target_items = [i for i in all_items if i.get("target_id") == target_id]
+        others = [i for i in all_items if i.get("target_id") != target_id]
+
+        if not target_items:
+            return json.dumps({"error": f"no queued items for target_id {target_id!r}"})
+
+        # Write only the target items, drain, then restore others + remaining targets.
+        _worker._write_queue(bp, target_items)
+        counts = _worker.drain(bp, client, cfg, backlog_data=data)
+        remaining_targets = _worker.read_queue(bp)
+        _worker._write_queue(bp, others + remaining_targets)
+
+    return json.dumps({"ok": True, "counts": counts}, indent=2)
 
 
 if __name__ == "__main__":
