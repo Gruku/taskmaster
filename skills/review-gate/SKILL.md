@@ -26,11 +26,32 @@ This skill reviews **code** (the diff). For pre-implementation design review of 
 | 6 | Gate 3: Tests + Build (auto-detect runner — see `references/gate-details.md`) |
 | 7 | Present results — lead with verdict, gate matrix (see `references/gate-details.md`) |
 | 8 | Add review instructions if absent (see `references/gate-details.md`) |
+| 8b | Bug close-gate — query open bugs before transitioning (see below) |
 | 9 | Transition to `in-review` if all blocking gates passed |
 
 **Blocking rules:** Critical findings block unconditionally. Important require user acknowledgment. Minor and WARN/SKIP never block.
 
 Test runner detection, build detection, Codex Case A/B framing, gate matrix format, and review instructions handling in `references/gate-details.md`.
+
+### Bug close-gate
+
+Before transitioning the task (step 9), query open Bugs linked via `found_in`:
+
+```
+backlog_bug_list(status="open", found_in="<active-task-id>")
+```
+
+If the result is non-empty:
+
+> "Task **T-XXX** has **N** open bug(s) linked via `found_in`:
+> - B-NNN — title
+> - B-MMM — title
+>
+> Resolve each before close. For each open bug, choose disposition: fix-now / spawn-task / shelve / promote."
+
+Walk the disposition entry point in `taskmaster:bug` for each open bug. Only proceed to task transition when all linked bugs are non-`open`.
+
+Note: `backlog_complete_task` enforces this server-side too — the skill just gives the user the chance to resolve interactively before hitting the server gate.
 
 ## Related Reviewers (NOT part of this gate)
 

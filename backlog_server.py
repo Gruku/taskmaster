@@ -87,6 +87,19 @@ from taskmaster_v3 import (
     update_issue as _update_issue,
     list_issue_ids as _list_issue_ids,
     sync_issue_index as _sync_issue_index,
+    EXTERNAL_SYSTEMS,
+    write_tracker as _write_tracker,
+    read_tracker as _read_tracker,
+    update_tracker as _update_tracker,
+    list_tracker_ids as _list_tracker_ids,
+    sync_tracker_index as _sync_tracker_index,
+    make_tracker_id as _make_tracker_id,
+    tracker_path as _tracker_path,
+    tracker_dir as _tracker_dir,
+    linked_tasks_for_tracker as _linked_tasks_for_tracker,
+    linked_issues_for_tracker as _linked_issues_for_tracker,
+    _validate_tracker as _validate_tracker_fm,
+    load_linear_config as _load_linear_config,
     LESSON_KINDS,
     LESSON_TIERS,
     write_lesson as _write_lesson,
@@ -727,6 +740,39 @@ def _mutate_and_save(data: dict) -> None:
     regenerate_context(data)
     _save(data)
     regenerate_progress_dashboard(data)
+
+
+def _enqueue_linear_push_if_synced(task_id: str, task: dict | None = None) -> None:
+    """Best-effort: enqueue a Linear sync push if this project has linear.yaml
+    AND the task has a Linear tracker_id. Never raises — Linear sync is
+    non-fatal to the local mutation.
+
+    Called from post-mutation hooks (backlog_add_task / update_task /
+    complete_task / archive_task). The drain runs separately (manually via
+    /linear retry, or eventually automatically via session boundaries).
+
+    Tasks without a tracker_id are silently no-op'd — they're not synced.
+    Bootstrap (linear-005) is what links a TM task to a Linear issue by
+    populating tracker_id.
+    """
+    try:
+        bp = _backlog_path()
+        cfg = _load_linear_config(bp)
+        if cfg is None:
+            return
+        if task is None:
+            r = _find_task(_load(), task_id)
+            if not r:
+                return
+            task = r[0]
+        tracker_id = task.get("tracker_id")
+        if not tracker_id or not str(tracker_id).startswith("linear-"):
+            return
+        from integrations.linear.worker import enqueue as _linear_enqueue
+        _linear_enqueue(bp, op="task_upsert", target_id=task_id, tracker_id=tracker_id)
+    except Exception:
+        # Sync failures must not break the local mutation.
+        pass
 
 
 def _deep_merge(dst: dict, src: dict) -> dict:
@@ -1481,6 +1527,52 @@ def backlog_validate() -> str:
         task_ph = task.get("phase")
         if task_ph and not _find_phase(data, task_ph):
             issues.append(f"`{tid}`: phase `{task_ph}` does not exist")
+
+    # 9. Tracker validation: each tracker file's frontmatter is well-formed.
+    bp = _backlog_path()
+    on_disk_tracker_ids: set[str] = set(_list_tracker_ids(bp))
+    for trk_id in on_disk_tracker_ids:
+        try:
+            fm, _ = _read_tracker(bp, trk_id)
+        except OSError as e:
+            issues.append(f"tracker `{trk_id}`: cannot read file ({e})")
+            continue
+        except yaml.YAMLError as e:
+            issues.append(f"tracker `{trk_id}`: malformed YAML ({e})")
+            continue
+        try:
+            _validate_tracker_fm(fm)
+        except ValueError as e:
+            issues.append(f"tracker `{trk_id}`: {e}")
+
+    # 10. Task tracker_id references: must point at a tracker that exists on disk.
+    #     Closed-in-Jira trackers stay on disk so this catches typos and bit-rot.
+    for task, _epic in all_tasks:
+        ref = task.get("tracker_id")
+        if ref and ref not in on_disk_tracker_ids:
+            issues.append(
+                f"`{task['id']}`: tracker_id `{ref}` does not match any tracker file"
+            )
+
+    # 11. Issue tracker_id references: same rule as tasks.
+    for iss in data.get("issues", []) or []:
+        ref = iss.get("tracker_id")
+        if ref and ref not in on_disk_tracker_ids:
+            issues.append(
+                f"issue `{iss.get('id', '?')}`: tracker_id `{ref}` does not match any tracker file"
+            )
+
+    # 12. Linear config: validate schema if .taskmaster/linear.yaml exists.
+    #     Catches duplicate aliases / token_envs / dangling default_workspace
+    #     before they cause runtime sync failures.
+    try:
+        _load_linear_config(bp)
+    except OSError as e:
+        issues.append(f"linear.yaml: cannot read file ({e})")
+    except yaml.YAMLError as e:
+        issues.append(f"linear.yaml: malformed YAML ({e})")
+    except ValueError as e:
+        issues.append(f"linear.yaml: {e}")
 
     # Stats summary
     stats = {"total": len(all_tasks), "issues": len(issues)}
@@ -2499,6 +2591,7 @@ def backlog_handover_update_status(
 def backlog_issue_create(
     title: str,
     severity: str,
+    evidence: str = "",
     impact: str = "",
     components: list[str] | None = None,
     location: list[str] | None = None,
@@ -2507,14 +2600,17 @@ def backlog_issue_create(
     body: str = "",
     tldr: str = "",
 ) -> str:
-    """Log a bug as a first-class issue, separate from tasks.
+    """Log a systemic or recurring defect as a first-class Issue.
 
+    Issues require evidence of recurrence, systemic scope, or outstanding
+    customer impact — one-off defects should go to `backlog_bug_create` instead.
     A *task* is the unit of work; an *issue* is the unit of broken-ness.
     One issue can spawn multiple fix attempts; one task can close many issues.
 
     Args:
         title: Required. Short summary.
         severity: One of P0 (data loss/security), P1, P2, P3 (cosmetic).
+        evidence: Required. Cite recurrence/systemic/outstanding criterion.
         impact: Why this matters (user-visible consequences).
         components: Tags for which parts of the system are affected.
         location: file:line refs to relevant code.
@@ -2539,6 +2635,7 @@ def backlog_issue_create(
             bp,
             title=title,
             severity=severity,
+            evidence=evidence,
             impact=impact,
             components=components or [],
             location=location or [],
@@ -2781,6 +2878,320 @@ def backlog_issue_resync() -> str:
     _save(data)
     n = len(data.get("issues") or [])
     return f"Issue index resynced — {n} entries."
+
+
+# ── Bug MCP tools ─────────────────────────────────────────────────────────────
+
+
+@mcp.tool()
+def backlog_bug_create(
+    title: str,
+    found_in: str = "",
+    discovered_by: str = "user",
+    severity: str = "",
+    components: list[str] | None = None,
+    location: list[str] | None = None,
+    body: str = "",
+) -> str:
+    """Log a Bug — the user-flagged sink for defects that don't clear the Issue bar.
+
+    Bugs are project-wide lightweight artifacts (no aging window, no fix-by).
+    Use this for one-off defects, cosmetic issues, or anything the user wants
+    tracked but that doesn't yet meet the recurring/systemic/outstanding bar.
+
+    Args:
+        title: Required. Short summary.
+        found_in: Optional task ID where the bug was flagged.
+        discovered_by: 'user' (default) or 'claude'. claude is only valid for
+            the offer-on-explicit-finding entry point, never for proactive
+            AI sightings.
+        severity: Optional. P0|P1|P2|P3 if you want a sort hint.
+        components: Affected component tags.
+        location: file:line refs.
+        body: Markdown body for repro/notes.
+    """
+    from taskmaster_v3 import write_bug as _write_bug, sync_bug_index as _sync_bug_index
+    bp = _backlog_path()
+    if not bp.exists():
+        return f"Error: no backlog found at {bp}. Run `backlog_init` first."
+    try:
+        bid, target = _write_bug(
+            bp,
+            title=title,
+            found_in=found_in or None,
+            discovered_by=discovered_by,
+            severity=severity or None,
+            components=components or [],
+            location=location or [],
+            body=body,
+        )
+    except ValueError as exc:
+        return f"Error: {exc}"
+    data = _load()
+    _sync_bug_index(data, bp)
+    _save(data)
+    return f"Bug created: {bid} — {title}\nFile: {target.relative_to(ROOT)}"
+
+
+@mcp.tool()
+def backlog_bug_list(
+    status: str = "",
+    found_in: str = "",
+    limit: int = 50,
+    include_archive: bool = False,
+) -> str:
+    """List Bugs from the active set (and optionally archive).
+
+    Defaults to the active set sorted by (status weight asc, discovered desc).
+
+    Args:
+        status: Filter by status: open, fixed, shelved, adopted, promoted.
+        found_in: Filter by task ID where bug was discovered.
+        limit: Max entries to return (default 50).
+        include_archive: If True, also include archived bugs.
+    """
+    from taskmaster_v3 import (
+        sync_bug_index as _sync_bug_index,
+        list_bug_ids as _list_bug_ids,
+        read_bug as _read_bug,
+    )
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    data = _load()
+    _sync_bug_index(data, bp)
+    entries = list(data.get("bugs") or [])
+    if include_archive:
+        active_ids = {e["id"] for e in entries}
+        for bid in _list_bug_ids(bp, include_archive=True):
+            if bid in active_ids:
+                continue
+            try:
+                fm, _ = _read_bug(bp, bid)
+            except (OSError, ValueError):
+                continue
+            entries.append({
+                "id": fm["id"],
+                "title": fm["title"],
+                "status": fm["status"],
+                "components": fm.get("components"),
+                "found_in": fm.get("found_in"),
+                "discovered": fm.get("discovered"),
+            })
+    if status:
+        entries = [e for e in entries if e.get("status") == status]
+    if found_in:
+        entries = [e for e in entries if e.get("found_in") == found_in]
+    entries = entries[: max(1, limit)]
+    if not entries:
+        return "No bugs match."
+    lines = []
+    for e in entries:
+        comps = ", ".join(e.get("components") or [])
+        comps_tag = f" [{comps}]" if comps else ""
+        line = f"- {e['id']} {e.get('status', '?'):10} — {e.get('title', '')}{comps_tag}"
+        if e.get("found_in"):
+            line += f"  (found_in: {e['found_in']})"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def backlog_bug_get(bug_id: str, verbose: bool = False) -> str:
+    """Read a Bug. Falls through to archive if not in active set.
+
+    Args:
+        bug_id: Bug ID (e.g. B-001).
+        verbose: If True, return full frontmatter + body. Default is slim view.
+    """
+    from taskmaster_v3 import read_bug as _read_bug
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    try:
+        fm, body = _read_bug(bp, bug_id)
+    except FileNotFoundError:
+        return f"Bug not found: {bug_id}"
+    if verbose:
+        fm_lines = [f"  {k}: {v}" for k, v in fm.items()]
+        return "---\n" + "\n".join(fm_lines) + "\n---\n" + body
+    lines = [f"## Bug: {fm['id']}\n"]
+    for k in ("title", "status", "severity", "components", "found_in", "discovered", "discovered_by"):
+        if fm.get(k) is not None:
+            lines.append(f"**{k}:** {fm[k]}")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def backlog_bug_update(
+    bug_id: str,
+    status: str = "",
+    title: str = "",
+    severity: str = "",
+    components: list[str] | None = None,
+    location: list[str] | None = None,
+    fix_commit: str = "",
+    adopted_into: str = "",
+    promoted_to: str = "",
+    body: str = "",
+) -> str:
+    """Update a Bug's status or fields. Lifecycle constraints enforced.
+
+    - status=fixed requires fix_commit
+    - status=adopted requires adopted_into
+    - status=promoted requires promoted_to
+
+    Args:
+        bug_id: Bug ID (e.g. B-001).
+        status: New status. One of open, fixed, shelved, adopted, promoted.
+        title: Updated title.
+        severity: Updated severity (P0-P3).
+        components: Replace components list.
+        location: Replace location list.
+        fix_commit: Commit SHA that fixed this bug (required for status=fixed).
+        adopted_into: Task ID that adopted this bug (required for status=adopted).
+        promoted_to: Issue ID this was promoted to (required for status=promoted).
+        body: Replace bug body.
+    """
+    from taskmaster_v3 import update_bug as _update_bug, sync_bug_index as _sync_bug_index, BUG_STATUSES
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    updates: dict[str, Any] = {}
+    if status:
+        if status not in BUG_STATUSES:
+            return f"Error: status must be one of {BUG_STATUSES}"
+        updates["status"] = status
+    if title:
+        updates["title"] = title
+    if severity:
+        updates["severity"] = severity
+    if components is not None:
+        updates["components"] = components
+    if location is not None:
+        updates["location"] = location
+    if fix_commit:
+        updates["fix_commit"] = fix_commit
+    if adopted_into:
+        updates["adopted_into"] = adopted_into
+    if promoted_to:
+        updates["promoted_to"] = promoted_to
+    if body:
+        updates["body"] = body
+    try:
+        fm, _ = _update_bug(bp, bug_id, **updates)
+    except FileNotFoundError:
+        return f"Bug not found: {bug_id}"
+    except ValueError as exc:
+        return f"Error: {exc}"
+    data = _load()
+    _sync_bug_index(data, bp)
+    _save(data)
+    return f"Bug updated: {bug_id} — status={fm['status']}"
+
+
+@mcp.tool()
+def backlog_bug_archive(bug_id: str) -> str:
+    """Move bugs/B-NNN.md to bugs/archive/B-NNN.md.
+
+    Refuses if status is open or shelved. Called automatically by task-close
+    for fixed bugs; rarely called directly.
+
+    Args:
+        bug_id: Bug ID (e.g. B-001).
+    """
+    from taskmaster_v3 import archive_bug as _archive_bug, sync_bug_index as _sync_bug_index
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    try:
+        _archive_bug(bp, bug_id)
+    except FileNotFoundError:
+        return f"Bug not found: {bug_id}"
+    except ValueError as exc:
+        return f"Error: {exc}"
+    data = _load()
+    _sync_bug_index(data, bp)
+    _save(data)
+    return f"Bug archived: {bug_id}"
+
+
+@mcp.tool()
+def backlog_bug_pattern_scan(mode: str = "all") -> str:
+    """Run the cross-bug signature scanner and return groups.
+
+    mode: "all" (default), "open_only", "end_of_task" (excludes archive).
+    Returns a human-readable digest of candidate groups; groups have >=2 bugs.
+
+    Args:
+        mode: Scan scope. "all" includes archive, "end_of_task" excludes it.
+    """
+    from taskmaster_v3 import scan_bug_patterns as _scan_bug_patterns
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    include_archive = (mode != "end_of_task")
+    groups = _scan_bug_patterns(bp, include_archive=include_archive)
+    if not groups:
+        return "No bug patterns found (need >=2 matching signatures)."
+    lines = [f"Found {len(groups)} pattern group(s):"]
+    for i, g in enumerate(groups, 1):
+        comps = ", ".join(g["signature"]["components"]) or "(no components)"
+        toks = ", ".join(g["signature"]["tokens"])
+        ids = ", ".join(g["bug_ids"])
+        lines.append(f"  {i}. [{comps}] tokens: {toks}")
+        lines.append(f"     bugs: {ids}")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def backlog_bug_promote(
+    bug_ids: list[str],
+    title: str,
+    severity: str,
+    evidence_text: str,
+    components: list[str] | None = None,
+    body: str = "",
+) -> str:
+    """Atomic: create an Issue from N Bugs; mark each Bug status=promoted.
+
+    The user must provide evidence_text — this is the systemic/recurring/
+    outstanding rationale that the new bar requires. Bugs are marked
+    promoted_to=<new ISS-NNN>.
+
+    Args:
+        bug_ids: List of Bug IDs to promote (e.g. ["B-001", "B-002"]).
+        title: Title for the new Issue.
+        severity: Severity for the new Issue (P0-P3).
+        evidence_text: Required rationale: cite recurrence/systemic/outstanding.
+        components: Component tags for the Issue. Inferred from bugs if omitted.
+        body: Markdown body for the new Issue.
+    """
+    from taskmaster_v3 import (
+        promote_bugs_to_issue as _promote,
+        sync_bug_index as _sync_bug_index,
+        sync_issue_index as _sync_issue_index,
+    )
+    bp = _backlog_path()
+    if not bp.exists():
+        return f"Error: no backlog found at {bp}. Run `backlog_init` first."
+    try:
+        iid = _promote(
+            bp,
+            bug_ids=list(bug_ids or []),
+            title=title,
+            severity=severity,
+            evidence_text=evidence_text,
+            components=components or None,
+            body=body,
+        )
+    except ValueError as exc:
+        return f"Error: {exc}"
+    data = _load()
+    _sync_bug_index(data, bp)
+    _sync_issue_index(data, bp)
+    _save(data)
+    return f"Promoted {len(bug_ids)} bug(s) to {iid}."
 
 
 @mcp.tool()
@@ -4053,6 +4464,7 @@ def backlog_add_task(
     epic_obj["tasks"].append(new_task)
 
     _mutate_and_save(data)
+    _enqueue_linear_push_if_synced(new_id, task=new_task)
 
     # Soft cap enforcement (only when explicitly set on the epic via `max_tasks`).
     # The previous default of 8 has been lifted — large epics with many tasks are
@@ -4306,6 +4718,33 @@ def backlog_complete_task(
     if status not in ("in-progress", "in-review", "blocked"):
         return f"Error: task `{task_id}` is `{status}`, expected one of: in-progress, in-review, blocked"
 
+    # Bug close-gate (per bug-tier redesign)
+    bp = _backlog_path()
+    from taskmaster_v3 import (
+        list_bug_ids as _list_bug_ids,
+        read_bug as _read_bug,
+        archive_bug as _archive_bug,
+        sync_bug_index as _sync_bug_index,
+    )
+    open_bugs: list[str] = []
+    fixed_bugs: list[str] = []
+    for bid in _list_bug_ids(bp):
+        try:
+            bfm, _ = _read_bug(bp, bid)
+        except (OSError, ValueError):
+            continue
+        if bfm.get("found_in") == task_id:
+            if bfm.get("status") == "open":
+                open_bugs.append(bid)
+            elif bfm.get("status") == "fixed":
+                fixed_bugs.append(bid)
+    if open_bugs:
+        return (
+            f"Cannot complete {task_id} — {len(open_bugs)} open bug(s) linked via found_in: "
+            f"{', '.join(open_bugs)}.\n"
+            f"Resolve each (fix/adopt/shelve/promote) before closing the task."
+        )
+
     # Warn if skipping in-review when going straight to done
     review_warning = ""
     if target_status == "done" and status == "in-progress":
@@ -4322,6 +4761,7 @@ def backlog_complete_task(
         task["release"] = release
 
     _mutate_and_save(data)
+    _enqueue_linear_push_if_synced(task_id, task=task)
     if target_status == "done":
         _clear_session_task(task_id)
 
@@ -4347,6 +4787,17 @@ def backlog_complete_task(
             data2 = _load()
             _sync_handover_index(data2, _backlog_path())
             _save(data2)
+
+    # Archive bugs that were fixed during this task (per bug-tier redesign)
+    if target_status == "done" and fixed_bugs:
+        for bid in fixed_bugs:
+            try:
+                _archive_bug(bp, bid)
+            except (OSError, ValueError):
+                pass
+        data3 = _load()
+        _sync_bug_index(data3, bp)
+        _save(data3)
 
     # Append changelog entry if session summary provided
     changelog_msg = ""
@@ -4469,6 +4920,7 @@ def backlog_archive_task(task_id: str, reason: str = "done") -> str:
     task["archived"] = _now()
     task.pop("locked_by", None)
     _mutate_and_save(data)
+    _enqueue_linear_push_if_synced(task_id, task=task)
 
     # Smart-close open handovers that reference this task.
     try:
@@ -4625,6 +5077,7 @@ def backlog_update_task(
             task["next_step"] = next_step
             updated.append(f"next_step → {next_step}")
         _mutate_and_save(data)
+        _enqueue_linear_push_if_synced(task_id, task=task)
         return f"Updated `{task_id}`: " + "; ".join(updated)
 
     # Classic field/value style
@@ -4738,6 +5191,8 @@ def backlog_update_task(
             _auto_link_on_save(bp, task_id)
         except Exception:
             pass
+
+    _enqueue_linear_push_if_synced(task_id, task=task)
 
     return f"Updated `{task_id}` field `{field}` → {value}"
 
@@ -6743,6 +7198,32 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 lessons.append(summary)
             self._send_json(200, {"lessons": lessons})
             return
+        elif clean_path.startswith("/api/bugs"):
+            from urllib.parse import urlparse, parse_qs
+            from taskmaster_v3 import (
+                list_bug_ids as _list_bug_ids_http,
+                read_bug as _read_bug_http,
+            )
+            bp = _backlog_path()
+            qs = parse_qs(urlparse(self.path).query)
+            include_archive = qs.get("include_archive", ["false"])[0].lower() == "true"
+            status_filter = qs.get("status", [""])[0]
+            found_in_filter = qs.get("found_in", [""])[0]
+            bugs = []
+            for bid in _list_bug_ids_http(bp, include_archive=include_archive):
+                try:
+                    fm, body = _read_bug_http(bp, bid)
+                except Exception:
+                    continue
+                summary = {k: v for k, v in fm.items() if k != "_body"}
+                summary["summary"] = body.strip()
+                bugs.append(summary)
+            if status_filter:
+                bugs = [b for b in bugs if b.get("status") == status_filter]
+            if found_in_filter:
+                bugs = [b for b in bugs if b.get("found_in") == found_in_filter]
+            self._send_json(200, bugs)
+            return
         elif clean_path.startswith("/api/issues"):
             import json
             from urllib.parse import urlparse, parse_qs
@@ -7156,6 +7637,173 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 self._send_json(404, {"ok": False, "error": f"decision {decision_id} not found"})
             except ValueError as e:
                 self._send_json(400, {"ok": False, "error": str(e)})
+            return
+
+        # ── Bug HTTP routes ───────────────────────────────────────────────────────
+        clean_path_post = self.path.split("?")[0].rstrip("/")
+
+        if clean_path_post == "/api/bugs":
+            from taskmaster_v3 import write_bug as _write_bug_http, sync_bug_index as _sync_bug_index_http
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length).decode("utf-8") if length else ""
+            try:
+                payload = json.loads(raw) if raw else {}
+            except Exception as e:
+                self._send_json(400, {"ok": False, "error": f"invalid JSON: {e}"})
+                return
+            title = (payload.get("title") or "").strip()
+            if not title:
+                self._send_json(400, {"ok": False, "error": "title is required"})
+                return
+            bp = _backlog_path()
+            if not bp.exists():
+                self._send_json(400, {"ok": False, "error": f"no backlog at {bp}"})
+                return
+            try:
+                bid, target = _write_bug_http(
+                    bp,
+                    title=title,
+                    found_in=payload.get("found_in") or None,
+                    discovered_by=payload.get("discovered_by", "user"),
+                    severity=payload.get("severity") or None,
+                    components=payload.get("components") or [],
+                    location=payload.get("location") or [],
+                    body=payload.get("body", ""),
+                )
+            except ValueError as e:
+                self._send_json(400, {"ok": False, "error": str(e)})
+                return
+            data = _load()
+            _sync_bug_index_http(data, bp)
+            _save(data)
+            self._send_json(201, {"ok": True, "id": bid, "path": str(target)})
+            return
+
+        m = re.fullmatch(r"/api/bugs/pattern-scan", clean_path_post)
+        if m:
+            from taskmaster_v3 import scan_bug_patterns as _scan_bug_patterns_http
+            bp = _backlog_path()
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length).decode("utf-8") if length else ""
+            try:
+                payload = json.loads(raw) if raw else {}
+            except Exception as e:
+                self._send_json(400, {"ok": False, "error": f"invalid JSON: {e}"})
+                return
+            mode = payload.get("mode", "all")
+            include_archive = (mode != "end_of_task")
+            groups = _scan_bug_patterns_http(bp, include_archive=include_archive)
+            self._send_json(200, {"groups": groups})
+            return
+
+        m = re.fullmatch(r"/api/bugs/promote", clean_path_post)
+        if m:
+            from taskmaster_v3 import (
+                promote_bugs_to_issue as _promote_http,
+                sync_bug_index as _sync_bug_index_http2,
+                sync_issue_index as _sync_issue_index_http,
+            )
+            bp = _backlog_path()
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length).decode("utf-8") if length else ""
+            try:
+                payload = json.loads(raw) if raw else {}
+            except Exception as e:
+                self._send_json(400, {"ok": False, "error": f"invalid JSON: {e}"})
+                return
+            bug_ids = payload.get("bug_ids") or []
+            title = (payload.get("title") or "").strip()
+            severity = (payload.get("severity") or "").strip()
+            evidence_text = (payload.get("evidence_text") or "").strip()
+            if not bug_ids:
+                self._send_json(400, {"ok": False, "error": "bug_ids is required"})
+                return
+            if not title:
+                self._send_json(400, {"ok": False, "error": "title is required"})
+                return
+            if not severity:
+                self._send_json(400, {"ok": False, "error": "severity is required"})
+                return
+            if not evidence_text:
+                self._send_json(400, {"ok": False, "error": "evidence_text is required"})
+                return
+            try:
+                iid = _promote_http(
+                    bp,
+                    bug_ids=list(bug_ids),
+                    title=title,
+                    severity=severity,
+                    evidence_text=evidence_text,
+                    components=payload.get("components") or None,
+                    body=payload.get("body", ""),
+                )
+            except ValueError as e:
+                self._send_json(400, {"ok": False, "error": str(e)})
+                return
+            data = _load()
+            _sync_bug_index_http2(data, bp)
+            _sync_issue_index_http(data, bp)
+            _save(data)
+            self._send_json(201, {"ok": True, "issue_id": iid})
+            return
+
+        m = re.fullmatch(r"/api/bugs/([A-Za-z0-9_\-]+)/archive", clean_path_post)
+        if m:
+            bug_id = m.group(1)
+            from taskmaster_v3 import archive_bug as _archive_bug_http, sync_bug_index as _sync_bug_index_http3
+            bp = _backlog_path()
+            length = int(self.headers.get("Content-Length") or 0)
+            self.rfile.read(length)  # consume body
+            try:
+                _archive_bug_http(bp, bug_id)
+            except FileNotFoundError:
+                self._send_json(404, {"ok": False, "error": f"bug {bug_id} not found"})
+                return
+            except ValueError as e:
+                self._send_json(400, {"ok": False, "error": str(e)})
+                return
+            data = _load()
+            _sync_bug_index_http3(data, bp)
+            _save(data)
+            self._send_json(200, {"ok": True, "id": bug_id})
+            return
+
+        m = re.fullmatch(r"/api/bugs/([A-Za-z0-9_\-]+)", clean_path_post)
+        if m:
+            bug_id = m.group(1)
+            from taskmaster_v3 import update_bug as _update_bug_http, sync_bug_index as _sync_bug_index_http4, BUG_STATUSES as _BUG_STATUSES_HTTP
+            bp = _backlog_path()
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length).decode("utf-8") if length else ""
+            try:
+                payload = json.loads(raw) if raw else {}
+            except Exception as e:
+                self._send_json(400, {"ok": False, "error": f"invalid JSON: {e}"})
+                return
+            updates = {}
+            if "status" in payload:
+                if payload["status"] not in _BUG_STATUSES_HTTP:
+                    self._send_json(400, {"ok": False, "error": f"status must be one of {_BUG_STATUSES_HTTP}"})
+                    return
+                updates["status"] = payload["status"]
+            for field in ("title", "severity", "fix_commit", "adopted_into", "promoted_to", "body"):
+                if field in payload and payload[field]:
+                    updates[field] = payload[field]
+            for field in ("components", "location"):
+                if field in payload and payload[field] is not None:
+                    updates[field] = payload[field]
+            try:
+                fm, _ = _update_bug_http(bp, bug_id, **updates)
+            except FileNotFoundError:
+                self._send_json(404, {"ok": False, "error": f"bug {bug_id} not found"})
+                return
+            except ValueError as e:
+                self._send_json(400, {"ok": False, "error": str(e)})
+                return
+            data = _load()
+            _sync_bug_index_http4(data, bp)
+            _save(data)
+            self._send_json(200, {"ok": True, "id": bug_id, "status": fm["status"]})
             return
 
         self.send_response(404)
@@ -7820,6 +8468,402 @@ def backlog_project_error_trace_ladder() -> list[dict]:
     if m is None:
         return []
     return [asdict(e) for e in m.error_trace_ladder()]
+
+
+# ── Linear MCP tools (linear-005) ────────────────────────────────────────────
+
+
+@mcp.tool()
+def backlog_linear_probe(token_env: str) -> str:
+    """Discover Linear workspace structure using a token read from the environment.
+
+    Calls list_teams, then for each team samples list_issue_statuses and list_users.
+    Returns a JSON summary suitable for proposing a status/priority mapping to the user.
+    Never prints the token. On missing env var: error with a link to the Linear API key page.
+
+    Args:
+        token_env: Name of the environment variable holding the Linear API token.
+    """
+    import json
+    import os
+    from integrations.linear.client import LinearAPIError, LinearClient
+
+    token = os.environ.get(token_env)
+    if not token:
+        return json.dumps({
+            "error": (
+                f"${token_env} is not set. "
+                f"Create a Linear personal API key at https://linear.app/settings/api "
+                f"then export {token_env}=<token>."
+            )
+        })
+
+    client = LinearClient(token=token)
+    try:
+        teams = client.list_teams()
+    except LinearAPIError as e:
+        return json.dumps({"error": str(e)})
+
+    result = []
+    for team in teams:
+        tid = team.get("id", "")
+        entry: dict = {"id": tid, "name": team.get("name"), "key": team.get("key")}
+        try:
+            entry["statuses"] = client.list_issue_statuses(tid)
+        except LinearAPIError as e:
+            entry["statuses_error"] = str(e)
+        try:
+            entry["users"] = client.list_users(tid)
+        except LinearAPIError as e:
+            entry["users_error"] = str(e)
+        result.append(entry)
+
+    return json.dumps({"teams": result}, indent=2)
+
+
+@mcp.tool()
+def backlog_linear_bootstrap_apply(
+    workspace_alias: str,
+    team_id: str,
+    token_env: str,
+    status_mapping: str = "",
+    priority_mapping: str = "",
+    default_workspace: bool = True,
+) -> str:
+    """Write (or append) a workspace entry to .taskmaster/linear.yaml.
+
+    If linear.yaml exists: appends the new workspace (errors if alias collides).
+    If absent: creates the file with this workspace as the only entry.
+
+    status_mapping / priority_mapping: optional comma-separated tm_value:linear_id pairs
+    (e.g. "todo:state-uuid-1,in-progress:state-uuid-2").
+
+    Args:
+        workspace_alias: Short identifier for this workspace (e.g. "cm").
+        team_id: Linear team UUID for this workspace.
+        token_env: Environment variable name holding the Linear API token.
+        status_mapping: Comma-separated TM-status:linear-state-id pairs.
+        priority_mapping: Comma-separated TM-priority:linear-priority-id pairs.
+        default_workspace: If True (default), set this workspace as default_workspace.
+    """
+    import json
+    from taskmaster_v3 import (
+        linear_config_path,
+        _validate_linear_config,
+    )
+
+    if not workspace_alias or not workspace_alias.strip():
+        return json.dumps({"error": "workspace_alias is required"})
+    if not team_id or not team_id.strip():
+        return json.dumps({"error": "team_id is required"})
+    if not token_env or not token_env.strip():
+        return json.dumps({"error": "token_env is required"})
+
+    def _parse_mapping(raw: str) -> dict:
+        """Parse 'a:b,c:d' into {'a': 'b', 'c': 'd'}, deduped, no empty halves."""
+        out: dict = {}
+        for pair in raw.split(","):
+            pair = pair.strip()
+            if not pair:
+                continue
+            parts = pair.split(":", 1)
+            if len(parts) != 2 or not parts[0].strip() or not parts[1].strip():
+                raise ValueError(f"invalid mapping pair {pair!r} — expected tm_value:linear_id")
+            out[parts[0].strip()] = parts[1].strip()
+        return out
+
+    try:
+        sm = _parse_mapping(status_mapping) if status_mapping.strip() else {}
+        pm = _parse_mapping(priority_mapping) if priority_mapping.strip() else {}
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+
+    bp = _backlog_path()
+    cfg_path = linear_config_path(bp)
+
+    if cfg_path.exists():
+        with cfg_path.open("r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+        existing_aliases = {ws.get("alias") for ws in cfg.get("workspaces") or []}
+        if workspace_alias in existing_aliases:
+            return json.dumps({"error": f"workspace alias {workspace_alias!r} already exists in linear.yaml"})
+    else:
+        cfg = {}
+
+    ws_entry: dict = {
+        "alias": workspace_alias,
+        "team_id": team_id,
+        "token_env": token_env,
+    }
+    if sm:
+        ws_entry["status_mapping"] = sm
+    if pm:
+        ws_entry["priority_mapping"] = pm
+
+    cfg.setdefault("workspaces", []).append(ws_entry)
+    if default_workspace:
+        cfg["default_workspace"] = workspace_alias
+
+    try:
+        _validate_linear_config(cfg)
+    except ValueError as e:
+        return json.dumps({"error": f"config validation failed: {e}"})
+
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    with cfg_path.open("w", encoding="utf-8") as f:
+        yaml.dump(cfg, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
+    return json.dumps({
+        "ok": True,
+        "path": str(cfg_path),
+        "workspace": workspace_alias,
+        "default": default_workspace,
+    })
+
+
+@mcp.tool()
+def backlog_linear_link(task_id: str, external_key: str, workspace_alias: str = "") -> str:
+    """Link an existing TM task to an existing Linear issue by creating a Tracker file.
+
+    Pure local operation — does not push to Linear or fetch from it.
+    Sets tracker_id on the task in backlog.yaml.
+
+    Args:
+        task_id: Taskmaster task id (e.g. "ts-001").
+        external_key: Linear issue identifier (e.g. "ENG-42").
+        workspace_alias: Workspace alias from linear.yaml. Uses default_workspace if empty.
+    """
+    import json
+
+    bp = _backlog_path()
+    if not bp.exists():
+        return json.dumps({"error": "No backlog found."})
+
+    cfg = _load_linear_config(bp)
+    if cfg is None:
+        return json.dumps({"error": "linear.yaml not found — run backlog_linear_bootstrap_apply first."})
+
+    try:
+        from taskmaster_v3 import get_linear_workspace
+        workspace = get_linear_workspace(cfg, workspace_alias or None)
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+
+    alias = workspace["alias"]
+    data = _load()
+    result = _find_task(data, task_id)
+    if result is None:
+        return json.dumps({"error": f"task {task_id!r} not found in backlog"})
+    task, _epic = result
+
+    existing_tracker = task.get("tracker_id")
+    if existing_tracker:
+        return json.dumps({"error": f"task {task_id!r} already has tracker_id {existing_tracker!r} — unlink first"})
+
+    tracker_id = _make_tracker_id("linear", alias, external_key)
+    tp = _tracker_path(bp, tracker_id)
+    if tp.exists():
+        return json.dumps({"error": f"tracker file already exists at {tp} — it may be linked to another task"})
+
+    try:
+        _write_tracker(
+            bp,
+            external_system="linear",
+            instance_alias=alias,
+            external_key=external_key,
+            title=task.get("title", external_key),
+            status=task.get("status", "todo"),
+        )
+    except (ValueError, OSError) as e:
+        return json.dumps({"error": f"failed to write tracker: {e}"})
+
+    task["tracker_id"] = tracker_id
+    _save(data)
+
+    return json.dumps({"ok": True, "tracker_id": tracker_id, "task_id": task_id})
+
+
+@mcp.tool()
+def backlog_linear_unlink(task_id: str) -> str:
+    """Clear the tracker_id on a TM task. Does NOT delete the Tracker file.
+
+    Idempotent: if the task has no tracker_id, returns that fact without error.
+
+    Args:
+        task_id: Taskmaster task id (e.g. "ts-001").
+    """
+    import json
+
+    bp = _backlog_path()
+    if not bp.exists():
+        return json.dumps({"error": "No backlog found."})
+
+    data = _load()
+    result = _find_task(data, task_id)
+    if result is None:
+        return json.dumps({"error": f"task {task_id!r} not found in backlog"})
+    task, _epic = result
+
+    existing = task.get("tracker_id")
+    if not existing:
+        return json.dumps({"ok": True, "note": f"task {task_id!r} had no tracker_id — nothing to unlink"})
+
+    task.pop("tracker_id", None)
+    _save(data)
+    return json.dumps({"ok": True, "unlinked": existing, "task_id": task_id})
+
+
+@mcp.tool()
+def backlog_linear_list() -> str:
+    """Return JSON list of all linear-* trackers from disk.
+
+    Each item: id, external_key, title, status, instance_alias, last_pushed, push_hash.
+    Reads from tracker frontmatter; does not hit Linear.
+    """
+    import json
+
+    bp = _backlog_path()
+    if not bp.exists():
+        return json.dumps({"trackers": []})
+
+    out = []
+    for tid in _list_tracker_ids(bp):
+        if not tid.startswith("linear-"):
+            continue
+        try:
+            fm, _ = _read_tracker(bp, tid)
+        except (OSError, yaml.YAMLError):
+            continue
+        out.append({
+            "id": fm.get("id"),
+            "external_key": fm.get("external_key"),
+            "title": fm.get("title"),
+            "status": fm.get("status"),
+            "instance_alias": fm.get("instance_alias"),
+            "last_pushed": fm.get("last_pushed"),
+            "push_hash": fm.get("push_hash"),
+        })
+
+    return json.dumps({"trackers": out}, indent=2)
+
+
+@mcp.tool()
+def backlog_linear_show(tracker_id: str) -> str:
+    """Return one tracker's full frontmatter and body as JSON.
+
+    Returns an error-style JSON if the tracker is missing.
+
+    Args:
+        tracker_id: Tracker id in linear-<alias>-<key> format (e.g. "linear-cm-eng-42").
+    """
+    import json
+
+    bp = _backlog_path()
+    if not bp.exists():
+        return json.dumps({"error": "No backlog found."})
+
+    tp = _tracker_path(bp, tracker_id)
+    if not tp.exists():
+        return json.dumps({"error": f"tracker {tracker_id!r} not found"})
+
+    try:
+        fm, body = _read_tracker(bp, tracker_id)
+    except (OSError, yaml.YAMLError) as e:
+        return json.dumps({"error": f"cannot read tracker: {e}"})
+
+    return json.dumps({"frontmatter": fm, "body": body}, indent=2, default=str)
+
+
+@mcp.tool()
+def backlog_linear_status() -> str:
+    """Return a summary of the Linear sync queue state.
+
+    Includes: queue depth, oldest pending item's enqueued_at, count of permanent
+    failures, and the last error message if any. No network calls.
+    """
+    import json
+    from integrations.linear.worker import read_queue
+
+    bp = _backlog_path()
+    items = read_queue(bp) if bp.exists() else []
+
+    permanent_count = sum(1 for i in items if i.get("permanent"))
+    pending = [i for i in items if not i.get("permanent")]
+    oldest_at = None
+    if pending:
+        oldest_at = min((i.get("enqueued_at") or "") for i in pending) or None
+
+    last_error = None
+    for item in reversed(items):
+        if item.get("last_error"):
+            last_error = item["last_error"]
+            break
+
+    return json.dumps({
+        "queue_depth": len(items),
+        "pending": len(pending),
+        "permanent_failures": permanent_count,
+        "oldest_enqueued_at": oldest_at,
+        "last_error": last_error,
+    }, indent=2)
+
+
+@mcp.tool()
+def backlog_linear_retry(target_id: str = "") -> str:
+    """Drain the Linear sync queue, optionally limiting to one target.
+
+    If target_id is empty: drains all queued items.
+    If target_id is provided: drains only items for that target, leaving others intact.
+
+    Requires linear.yaml and the configured token env var.
+
+    Args:
+        target_id: Taskmaster task id to retry. Empty = retry all.
+    """
+    import json
+    from integrations.linear.client import LinearAPIError, LinearClient
+    from integrations.linear import worker as _worker
+
+    bp = _backlog_path()
+    if not bp.exists():
+        return json.dumps({"error": "No backlog found."})
+
+    cfg = _load_linear_config(bp)
+    if cfg is None:
+        return json.dumps({"error": "linear.yaml not found — run backlog_linear_bootstrap_apply first."})
+
+    try:
+        from taskmaster_v3 import get_linear_workspace, resolve_linear_token
+        workspace = get_linear_workspace(cfg)
+        token = resolve_linear_token(workspace)
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+
+    try:
+        client = LinearClient(token=token)
+    except (ValueError, LinearAPIError) as e:
+        return json.dumps({"error": f"cannot build Linear client: {e}"})
+
+    data = _load()
+
+    if not target_id:
+        counts = _worker.drain(bp, client, cfg, backlog_data=data)
+    else:
+        # Filter to target only: drain the subset, then restore the rest.
+        all_items = _worker.read_queue(bp)
+        target_items = [i for i in all_items if i.get("target_id") == target_id]
+        others = [i for i in all_items if i.get("target_id") != target_id]
+
+        if not target_items:
+            return json.dumps({"error": f"no queued items for target_id {target_id!r}"})
+
+        # Write only the target items, drain, then restore others + remaining targets.
+        _worker._write_queue(bp, target_items)
+        counts = _worker.drain(bp, client, cfg, backlog_data=data)
+        remaining_targets = _worker.read_queue(bp)
+        _worker._write_queue(bp, others + remaining_targets)
+
+    return json.dumps({"ok": True, "counts": counts}, indent=2)
 
 
 if __name__ == "__main__":

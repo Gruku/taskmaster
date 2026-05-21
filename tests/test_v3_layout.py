@@ -746,9 +746,9 @@ class TestIssues:
     def test_next_id_allocates_sequentially(self, tmp_path: Path):
         bp = self._bp(tmp_path)
         assert v3.next_issue_id(bp) == "ISS-001"
-        v3.write_issue(bp, title="A", severity="P1")
+        v3.write_issue(bp, title="A", severity="P1", impact="fixture evidence.")
         assert v3.next_issue_id(bp) == "ISS-002"
-        v3.write_issue(bp, title="B", severity="P0")
+        v3.write_issue(bp, title="B", severity="P0", impact="fixture evidence.")
         assert v3.next_issue_id(bp) == "ISS-003"
 
     def test_create_and_read_roundtrip(self, tmp_path: Path):
@@ -787,29 +787,29 @@ class TestIssues:
 
     def test_fixed_requires_fixed_in_task(self, tmp_path: Path):
         bp = self._bp(tmp_path)
-        iid, _ = v3.write_issue(bp, title="x", severity="P1")
+        iid, _ = v3.write_issue(bp, title="x", severity="P1", impact="fixture evidence.")
         with pytest.raises(ValueError):
             v3.update_issue(bp, iid, status="fixed")
 
     def test_fixed_with_task_sets_resolved(self, tmp_path: Path):
         bp = self._bp(tmp_path)
-        iid, _ = v3.write_issue(bp, title="x", severity="P1")
+        iid, _ = v3.write_issue(bp, title="x", severity="P1", impact="fixture evidence.")
         fm, _ = v3.update_issue(bp, iid, status="fixed", fixed_in_task="features-007")
         assert fm["status"] == "fixed"
         assert fm["resolved"]  # ISO date populated
 
     def test_duplicate_requires_target(self, tmp_path: Path):
         bp = self._bp(tmp_path)
-        iid, _ = v3.write_issue(bp, title="x", severity="P1")
+        iid, _ = v3.write_issue(bp, title="x", severity="P1", impact="fixture evidence.")
         with pytest.raises(ValueError):
             v3.update_issue(bp, iid, status="duplicate")
         v3.update_issue(bp, iid, status="duplicate", duplicate_of="ISS-002")  # ok
 
     def test_index_sorted_by_severity(self, tmp_path: Path):
         bp = self._bp(tmp_path)
-        v3.write_issue(bp, title="low", severity="P3")
-        v3.write_issue(bp, title="critical", severity="P0")
-        v3.write_issue(bp, title="high", severity="P1")
+        v3.write_issue(bp, title="low", severity="P3", impact="fixture evidence.")
+        v3.write_issue(bp, title="critical", severity="P0", impact="fixture evidence.")
+        v3.write_issue(bp, title="high", severity="P1", impact="fixture evidence.")
         data: dict = {}
         v3.sync_issue_index(data, bp)
         sevs = [e["severity"] for e in data["issues"]]
@@ -1166,7 +1166,7 @@ class TestV3EndToEndRoundtrip:
 
         # Mutate via the layered helpers: add handover, issue, lesson
         v3.write_handover(bp, tldr="day end", task_ids=["T-001"], when="2026-04-26")
-        v3.write_issue(bp, title="bug", severity="P1", related_tasks=["T-001"])
+        v3.write_issue(bp, title="bug", severity="P1", impact="fixture evidence.", related_tasks=["T-001"])
         v3.write_lesson(bp, title="auth gotcha", kind="gotcha")
 
         # Sync indexes (what the MCP tools do after each create)

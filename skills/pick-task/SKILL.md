@@ -58,6 +58,8 @@ Call `backlog_lesson_match(task_title=<title>, touched_files=<anchors>)`. Return
 
 The slim `backlog_get_task` response includes bare ID linkage. Surface as: `depends_on: T-002 · fixes: ISS-007 · informed_by: L-003`.
 
+If the task has a `tracker_id` starting with `linear-`, append a tracker pill: `tracker: linear-cm-eng-42 (ENG-42)`. The external_key is the third hyphen-split segment, uppercased. No additional tool calls — read straight from the slim response.
+
 ## Step 6 — Spec-review + anchors (critical/high only)
 
 If `task.spec_review` present: summarize verdict. If verdict is `fail`, warn and ask for override.

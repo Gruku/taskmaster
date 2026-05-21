@@ -864,6 +864,7 @@ _CANONICALIZE_ITEMS: tuple[str, ...] = (
     "handovers",
     "lessons",
     "issues",
+    "trackers",
     "recaps",
     "snapshots",
     "auto",
@@ -1844,6 +1845,7 @@ _ISSUE_INDEX_FIELDS = (
     "severity",
     "components",
     "related_tasks",
+    "tracker_id",
 )
 
 
@@ -1879,6 +1881,343 @@ def next_issue_id(backlog_path: Path) -> str:
             nums.append(int(m.group(1)))
     n = (max(nums) + 1) if nums else 1
     return f"ISS-{n:03d}"
+
+
+# ── Bugs ───────────────────────────────────────────────────────
+
+BUG_STATUSES = ("open", "fixed", "shelved", "adopted", "promoted")
+BUG_SEVERITIES = ("P0", "P1", "P2", "P3")  # OPTIONAL on bugs
+DISCOVERED_BY_VALUES = ("user", "claude")
+
+_BUG_INDEX_FIELDS = (
+    "id",
+    "title",
+    "status",
+    "severity",
+    "components",
+    "found_in",
+    "discovered",
+)
+
+
+def bug_dir(backlog_path: Path, archived: bool = False) -> Path:
+    base = backlog_path.parent / "bugs"
+    return base / "archive" if archived else base
+
+
+def bug_path(backlog_path: Path, bug_id: str, archived: bool = False) -> Path:
+    return bug_dir(backlog_path, archived=archived) / f"{bug_id}.md"
+
+
+def list_bug_ids(backlog_path: Path, include_archive: bool = False) -> list[str]:
+    """List bug ids on disk, sorted numerically by the trailing number.
+
+    By default, returns only active bugs. Archive entries are returned in the
+    same list (after active) when include_archive=True.
+    """
+    def _rank(p: Path) -> int:
+        m = re.search(r"(\d+)$", p.stem)
+        return int(m.group(1)) if m else -1
+
+    active = sorted(bug_dir(backlog_path).glob("B-*.md"), key=_rank) if bug_dir(backlog_path).exists() else []
+    if not include_archive:
+        return [p.stem for p in active]
+    arch_dir = bug_dir(backlog_path, archived=True)
+    archived = sorted(arch_dir.glob("B-*.md"), key=_rank) if arch_dir.exists() else []
+    return [p.stem for p in active] + [p.stem for p in archived]
+
+
+def next_bug_id(backlog_path: Path) -> str:
+    """Allocate the next B-NNN id (zero-padded, 3+ digits).
+
+    Counts both active and archive when allocating so IDs are never reused.
+    """
+    existing = list_bug_ids(backlog_path, include_archive=True)
+    nums = []
+    for ident in existing:
+        m = re.search(r"(\d+)$", ident)
+        if m:
+            nums.append(int(m.group(1)))
+    n = (max(nums) + 1) if nums else 1
+    return f"B-{n:03d}"
+
+
+def _validate_bug(fm: dict[str, Any]) -> None:
+    """Raise ValueError if frontmatter violates Bug invariants."""
+    status = fm.get("status")
+    if status not in BUG_STATUSES:
+        raise ValueError(f"status must be one of {BUG_STATUSES}, got {status!r}")
+    sev = fm.get("severity")
+    if sev is not None and sev not in BUG_SEVERITIES:
+        raise ValueError(f"severity must be one of {BUG_SEVERITIES} or null, got {sev!r}")
+    disc_by = fm.get("discovered_by")
+    if disc_by not in DISCOVERED_BY_VALUES:
+        raise ValueError(f"discovered_by must be one of {DISCOVERED_BY_VALUES}, got {disc_by!r}")
+    if status == "fixed" and not fm.get("fix_commit"):
+        raise ValueError("status=fixed requires fix_commit to be set")
+    if status == "adopted" and not fm.get("adopted_into"):
+        raise ValueError("status=adopted requires adopted_into to be set")
+    if status == "promoted" and not fm.get("promoted_to"):
+        raise ValueError("status=promoted requires promoted_to to be set")
+
+
+def write_bug(
+    backlog_path: Path,
+    *,
+    title: str,
+    found_in: str | None = None,
+    discovered_by: str = "user",
+    severity: str | None = None,
+    components: list[str] | None = None,
+    location: list[str] | None = None,
+    body: str = "",
+    bug_id: str | None = None,
+    status: str = "open",
+) -> tuple[str, Path]:
+    """Create a new Bug file. Returns (id, path)."""
+    if not title or not title.strip():
+        raise ValueError("bug title is required")
+    bid = bug_id or next_bug_id(backlog_path)
+    fm: dict[str, Any] = {
+        "id": bid,
+        "title": title.strip(),
+        "status": status,
+        "severity": severity,
+        "components": list(components or []),
+        "found_in": found_in,
+        "discovered": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "discovered_by": discovered_by,
+        "location": list(location or []),
+        "fix_commit": None,
+        "adopted_into": None,
+        "promoted_to": None,
+        "links": [],
+    }
+    _validate_bug(fm)
+    bug_dir(backlog_path).mkdir(parents=True, exist_ok=True)
+    target = bug_path(backlog_path, bid)
+    write_task_file(target, fm, body)
+    return bid, target
+
+
+def read_bug(backlog_path: Path, bug_id: str) -> tuple[dict[str, Any], str]:
+    """Read a Bug. Falls through to archive if not active."""
+    p = bug_path(backlog_path, bug_id)
+    if not p.exists():
+        p = bug_path(backlog_path, bug_id, archived=True)
+    return read_task_file(p)
+
+
+def update_bug(
+    backlog_path: Path,
+    bug_id: str,
+    **updates: Any,
+) -> tuple[dict[str, Any], str]:
+    """Apply partial updates to a Bug's frontmatter, validate, and rewrite."""
+    fm, body = read_bug(backlog_path, bug_id)
+    new_body = updates.pop("body", body)
+    fm.update({k: v for k, v in updates.items() if v is not None})
+    _validate_bug(fm)
+    # Determine target — preserve archive vs active based on where it lives.
+    target = bug_path(backlog_path, bug_id)
+    if not target.exists():
+        target = bug_path(backlog_path, bug_id, archived=True)
+    write_task_file(target, fm, new_body)
+    return fm, new_body
+
+
+def archive_bug(backlog_path: Path, bug_id: str) -> Path:
+    """Move bugs/B-NNN.md → bugs/archive/B-NNN.md.
+
+    Idempotent (no-op if already in archive). Refuses if status=open or shelved —
+    archive is only for terminal-resolved bugs (fixed/adopted/promoted).
+    """
+    active = bug_path(backlog_path, bug_id)
+    archived = bug_path(backlog_path, bug_id, archived=True)
+    if archived.exists() and not active.exists():
+        return archived  # already there
+    fm, _ = read_bug(backlog_path, bug_id)
+    if fm["status"] in ("open", "shelved"):
+        raise ValueError(f"cannot archive bug with status={fm['status']} (must be fixed/adopted/promoted)")
+    archived.parent.mkdir(parents=True, exist_ok=True)
+    active.rename(archived)
+    return archived
+
+
+def _bug_index_entry(fm: dict[str, Any]) -> dict[str, Any]:
+    return {f: fm.get(f) for f in _BUG_INDEX_FIELDS if fm.get(f) is not None}
+
+
+def sync_bug_index(
+    backlog_data: dict[str, Any],
+    backlog_path: Path,
+) -> dict[str, Any]:
+    """Rebuild backlog_data['bugs'] from disk (active only — archive is opaque).
+
+    Sorted by (status weight ascending, discovered descending) so open ones
+    surface first and most-recent within a status group.
+    """
+    status_weight = {"open": 0, "shelved": 1, "adopted": 2, "promoted": 3, "fixed": 4}
+    entries: list[dict[str, Any]] = []
+    for bid in list_bug_ids(backlog_path, include_archive=False):
+        try:
+            fm, _ = read_bug(backlog_path, bid)
+        except (OSError, ValueError):
+            continue
+        entries.append(_bug_index_entry(fm))
+    entries.sort(key=lambda e: (status_weight.get(e.get("status", "open"), 99), -1 * _discovered_rank(e)))
+    backlog_data["bugs"] = entries
+    return backlog_data
+
+
+def _discovered_rank(entry: dict[str, Any]) -> int:
+    """Convert ISO-8601 discovered timestamp to an integer for sort comparison."""
+    s = entry.get("discovered") or ""
+    try:
+        return int(datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").timestamp())
+    except (ValueError, TypeError):
+        return 0
+
+
+def _bug_signature(fm: dict[str, Any]) -> tuple | None:
+    """Compute (components_tuple, tokens_tuple) signature for pattern-matching.
+
+    Returns None if the signal is too thin (fewer than 3 token-tokens after
+    stripping). Tokens are <3-char tokens dropped, numeric literals dropped,
+    duplicates removed, then sorted alphabetically.
+    """
+    title = (fm.get("title") or "").lower()
+    raw = re.findall(r"[a-z]+", title)  # letters only; drops digits and punct
+    tokens = sorted({t for t in raw if len(t) >= 3})
+    if len(tokens) < 3:
+        return None
+    comps = tuple(sorted(set(c.lower() for c in (fm.get("components") or []))))
+    return (comps, tuple(tokens))
+
+
+def scan_bug_patterns(
+    backlog_path: Path,
+    include_archive: bool = True,
+) -> list[dict[str, Any]]:
+    """Return a list of pattern groups: [{signature, bug_ids: [B-001, B-007, ...]}, ...].
+
+    Only groups with ≥2 bugs are returned. Includes archive by default so that
+    historical resolved bugs contribute to recurrence counts.
+
+    Two bugs cluster together when they share the same component set AND their
+    title token sets overlap by Jaccard ≥ 0.5. The canonical signature for a
+    group uses the intersection of token sets (i.e. the tokens all members share).
+    """
+    # Collect (bid, comps_tuple, tokens_frozenset) for each bug with a valid sig.
+    entries: list[tuple[str, tuple, frozenset]] = []
+    for bid in list_bug_ids(backlog_path, include_archive=include_archive):
+        try:
+            fm, _ = read_bug(backlog_path, bid)
+        except (OSError, ValueError):
+            continue
+        sig = _bug_signature(fm)
+        if sig is None:
+            continue
+        comps, tokens_tuple = sig
+        entries.append((bid, comps, frozenset(tokens_tuple)))
+
+    # Union-Find clustering by component equality + Jaccard ≥ 0.5.
+    parent: dict[int, int] = {i: i for i in range(len(entries))}
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(x: int, y: int) -> None:
+        parent[find(x)] = find(y)
+
+    for i in range(len(entries)):
+        for j in range(i + 1, len(entries)):
+            _, ci, ti = entries[i]
+            _, cj, tj = entries[j]
+            if ci != cj:
+                continue
+            intersection = ti & tj
+            union_size = len(ti | tj)
+            jaccard = len(intersection) / union_size if union_size else 0.0
+            if jaccard >= 0.5:
+                union(i, j)
+
+    # Aggregate clusters.
+    clusters: dict[int, list[int]] = {}
+    for i in range(len(entries)):
+        root = find(i)
+        clusters.setdefault(root, []).append(i)
+
+    result = []
+    for root, members in clusters.items():
+        if len(members) < 2:
+            continue
+        bug_ids = [entries[i][0] for i in members]
+        # Canonical signature: intersection of all token sets in group + shared comps.
+        shared_tokens = entries[members[0]][2].copy()
+        for i in members[1:]:
+            shared_tokens &= entries[i][2]
+        comps = entries[members[0]][1]
+        result.append({
+            "signature": {"components": list(comps), "tokens": sorted(shared_tokens)},
+            "bug_ids": bug_ids,
+        })
+    return result
+
+
+def promote_bugs_to_issue(
+    backlog_path: Path,
+    *,
+    bug_ids: list[str],
+    title: str,
+    severity: str,
+    evidence_text: str,
+    components: list[str] | None = None,
+    body: str = "",
+) -> str:
+    """Atomic: create an Issue from N Bugs, mark each Bug as promoted.
+
+    The new Issue gets a `promoted_from: [B-NNN, ...]` frontmatter field
+    in addition to the standard fields. The matched Bugs each get
+    status=promoted and promoted_to=<the new Issue ID>.
+    """
+    if not bug_ids:
+        raise ValueError("bug_ids must be non-empty")
+    if not evidence_text or not evidence_text.strip():
+        raise ValueError("evidence_text is required (cite recurrence/systemic/outstanding)")
+
+    # Aggregate components from source bugs if not given.
+    if components is None:
+        comps_set: set[str] = set()
+        for bid in bug_ids:
+            fm, _ = read_bug(backlog_path, bid)
+            for c in fm.get("components") or []:
+                comps_set.add(c)
+        components = sorted(comps_set)
+
+    iss_id, _ = write_issue(
+        backlog_path,
+        title=title,
+        severity=severity,
+        impact=evidence_text,  # repurpose impact field as evidence narrative
+        components=components,
+        body=body,
+    )
+    # Backfill the new evidence and promoted_from fields on the issue file.
+    fm, b = read_issue(backlog_path, iss_id)
+    fm["evidence"] = evidence_text.strip()
+    fm["promoted_from"] = list(bug_ids)
+    _validate_issue(fm)
+    write_task_file(issue_path(backlog_path, iss_id), fm, b)
+
+    # Mark each source bug as promoted.
+    for bid in bug_ids:
+        update_bug(backlog_path, bid, status="promoted", promoted_to=iss_id)
+
+    return iss_id
 
 
 DECISION_STATUSES = ("open", "resolved", "dropped")
@@ -2066,6 +2405,10 @@ def _validate_issue(fm: dict[str, Any]) -> None:
         raise ValueError("status=fixed requires fixed_in_task to be set")
     if status == "duplicate" and not fm.get("duplicate_of"):
         raise ValueError("status=duplicate requires duplicate_of to be set")
+    # NEW: evidence field is required per bug-tier redesign.
+    evidence = (fm.get("evidence") or "").strip()
+    if not evidence:
+        raise ValueError("evidence is required — cite recurrence/systemic/outstanding criterion")
 
 
 def write_issue(
@@ -2074,6 +2417,7 @@ def write_issue(
     title: str,
     severity: str,
     impact: str = "",
+    evidence: str = "",
     components: list[str] | None = None,
     location: list[str] | None = None,
     related_tasks: list[str] | None = None,
@@ -2084,10 +2428,16 @@ def write_issue(
     status: str = "open",
     tldr: str = "",
     tldr_autogen: bool = False,
+    tracker_id: str | None = None,
 ) -> tuple[str, Path]:
     """Create a new issue file. Returns (id, path)."""
     if not title or not title.strip():
         raise ValueError("issue title is required")
+    # evidence fallback: legacy callers pass impact only; treat impact as evidence.
+    if not evidence or not evidence.strip():
+        if not impact or not impact.strip():
+            raise ValueError("evidence (or impact) is required for Issue creation")
+        evidence = impact
     iid = issue_id or next_issue_id(backlog_path)
     from datetime import datetime, timezone
     default_discovered = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -2098,6 +2448,7 @@ def write_issue(
         "severity": severity,
         "components": list(components or []),
         "impact": impact.strip(),
+        "evidence": evidence.strip(),
         "location": list(location or []),
         "discovered": discovered or default_discovered,
         "discovered_by": discovered_by,
@@ -2105,7 +2456,9 @@ def write_issue(
         "related_tasks": list(related_tasks or []),
         "fixed_in_task": None,
         "duplicate_of": None,
+        "promoted_from": [],
         "tldr": tldr,
+        "tracker_id": tracker_id or None,
     }
     if tldr_autogen:
         fm["tldr_autogen"] = True
@@ -2160,6 +2513,348 @@ def sync_issue_index(
     entries.sort(key=lambda e: (_SEVERITY_RANK.get(e.get("severity", "P3"), 99), e.get("id", "")))
     backlog_data["issues"] = entries
     return backlog_data
+
+
+# ── Trackers ───────────────────────────────────────────────────
+#
+# A tracker is a local read-only mirror of an external issue (Jira in V1).
+# It is NOT an epic and carries no epic semantics — just a reference + cache.
+# The reverse map (tracker → linked tasks/issues) is derived on demand from
+# the index, never stored on the tracker, to eliminate sync-drift bugs.
+#
+# `external_key` is stored verbatim from the source (e.g. "CM-101"). The id
+# lowercases it for determinism. Always reconstruct ids via make_tracker_id,
+# never by string-joining stored frontmatter fields directly.
+
+EXTERNAL_SYSTEMS: tuple[str, ...] = ("jira", "linear")
+
+# Each registered external system has a fixed sync direction. Pull-dominant
+# systems (Jira) treat the external as upstream and mirror it locally read-only.
+# Push-dominant systems (Linear) treat the local TM state as source of truth and
+# mirror outbound on every mutation. The runtime worker picks its codepath from
+# this map; the field is denormalized onto each tracker file as a hint for
+# humans reading the file, but the map is the source of truth.
+_SYNC_DIRECTION_BY_SYSTEM: dict[str, str] = {
+    "jira": "pull",
+    "linear": "push",
+}
+
+# Sentinel for update_tracker: distinguishes "field not passed" from
+# "field passed as None to clear it".
+_TRACKER_UNSET: Any = object()
+
+_TRACKER_INDEX_FIELDS = (
+    "id",
+    "external_system",
+    "external_key",
+    "instance_alias",
+    "title",
+    "status",
+    "url",
+    "last_synced",
+)
+
+
+def tracker_path(backlog_path: Path, tracker_id: str) -> Path:
+    return backlog_path.parent / "trackers" / f"{tracker_id}.md"
+
+
+def tracker_dir(backlog_path: Path) -> Path:
+    return backlog_path.parent / "trackers"
+
+
+def make_tracker_id(external_system: str, instance_alias: str, external_key: str) -> str:
+    """Build the deterministic tracker id: <system>-<alias>-<key-lowercased>.
+
+    Re-pulling the same external key from the same instance always yields the
+    same id, so trackers can be upserted by id without dedup logic.
+    """
+    if not external_system or not str(external_system).strip():
+        raise ValueError("external_system is required")
+    if not instance_alias or not str(instance_alias).strip():
+        raise ValueError("instance_alias is required")
+    if not external_key or not str(external_key).strip():
+        raise ValueError("external_key is required")
+    return f"{str(external_system).strip().lower()}-{str(instance_alias).strip().lower()}-{str(external_key).strip().lower()}"
+
+
+def list_tracker_ids(backlog_path: Path) -> list[str]:
+    d = tracker_dir(backlog_path)
+    if not d.exists():
+        return []
+    return sorted(p.stem for p in d.glob("*.md"))
+
+
+def _validate_tracker(fm: dict[str, Any]) -> None:
+    """Raise ValueError if frontmatter violates the tracker invariants."""
+    for field in ("id", "external_system", "external_key", "instance_alias", "title", "status"):
+        if not fm.get(field):
+            raise ValueError(f"tracker frontmatter missing required field: {field}")
+    sys_name = str(fm["external_system"]).lower()
+    if sys_name not in EXTERNAL_SYSTEMS:
+        raise ValueError(
+            f"external_system must be one of {EXTERNAL_SYSTEMS}, got {fm['external_system']!r}"
+        )
+    sd = fm.get("sync_direction")
+    if sd is not None:
+        expected_sd = _SYNC_DIRECTION_BY_SYSTEM.get(sys_name)
+        if sd != expected_sd:
+            raise ValueError(
+                f"sync_direction {sd!r} does not match system map for {sys_name!r} "
+                f"(expected {expected_sd!r})"
+            )
+    expected = make_tracker_id(fm["external_system"], fm["instance_alias"], fm["external_key"])
+    if fm["id"] != expected:
+        raise ValueError(
+            f"tracker id {fm['id']!r} does not match deterministic format "
+            f"<system>-<alias>-<key-lowercased> (expected {expected!r})"
+        )
+
+
+def write_tracker(
+    backlog_path: Path,
+    *,
+    external_system: str,
+    instance_alias: str,
+    external_key: str,
+    title: str,
+    status: str,
+    assignee: str | None = None,
+    url: str | None = None,
+    last_synced: str | None = None,
+    synced_hash: str | None = None,
+    last_pushed: str | None = None,
+    push_hash: str | None = None,
+    sync_direction: str | None = None,
+    body: str = "",
+) -> tuple[str, Path]:
+    """Upsert a tracker file. Returns (id, path).
+
+    Trackers are upsert-by-id — calling write_tracker with the same
+    (external_system, instance_alias, external_key) triple always overwrites
+    the same path. Callers (e.g. `backlog_jira_pull`) that hash payloads to
+    skip unchanged writes do that gating before calling this.
+
+    `sync_direction` is accepted for signature compatibility but ignored —
+    the on-disk value is always re-derived from `_SYNC_DIRECTION_BY_SYSTEM`
+    so it can never drift from the system's direction policy.
+    `last_pushed` and `push_hash` are populated by push-dominant workers
+    (e.g. Linear) after a successful outbound mutation.
+    """
+    del sync_direction  # always derived from external_system
+    if not title or not str(title).strip():
+        raise ValueError("tracker title is required")
+    tid = make_tracker_id(external_system, instance_alias, external_key)
+    es_lc = str(external_system).strip().lower()
+    fm: dict[str, Any] = {
+        "id": tid,
+        "external_system": es_lc,
+        "external_key": str(external_key).strip(),
+        "instance_alias": str(instance_alias).strip(),
+        "title": str(title).strip(),
+        "status": str(status).strip() if status else "",
+        "assignee": assignee or None,
+        "url": url or None,
+        "sync_direction": _SYNC_DIRECTION_BY_SYSTEM.get(es_lc),
+        "last_synced": last_synced,
+        "synced_hash": synced_hash,
+        "last_pushed": last_pushed,
+        "push_hash": push_hash,
+    }
+    _validate_tracker(fm)
+    path = tracker_path(backlog_path, tid)
+    write_task_file(path, fm, body)
+    return tid, path
+
+
+def read_tracker(backlog_path: Path, tracker_id: str) -> tuple[dict[str, Any], str]:
+    return read_task_file(tracker_path(backlog_path, tracker_id))
+
+
+def update_tracker(
+    backlog_path: Path,
+    tracker_id: str,
+    **updates: Any,
+) -> tuple[dict[str, Any], str]:
+    """Apply partial updates to a tracker's frontmatter, validate, and rewrite.
+
+    Body is preserved unchanged unless `body=` is passed. The id and the three
+    fields it derives from (external_system, external_key, instance_alias) are
+    immutable — passing them in updates is silently ignored.
+
+    Passing a field as None clears it (for nullable fields like assignee, url,
+    last_synced, synced_hash). To leave a field untouched, omit it entirely.
+    """
+    fm, body = read_tracker(backlog_path, tracker_id)
+    if fm.get("id") != tracker_id:
+        raise ValueError(
+            f"on-disk tracker id {fm.get('id')!r} does not match requested {tracker_id!r}"
+        )
+    _validate_tracker(fm)
+    new_body = updates.pop("body", body)
+    for immutable in ("id", "external_system", "external_key", "instance_alias", "sync_direction"):
+        updates.pop(immutable, None)
+    fm.update(updates)
+    _validate_tracker(fm)
+    write_task_file(tracker_path(backlog_path, tracker_id), fm, new_body)
+    return fm, new_body
+
+
+def _tracker_index_entry(fm: dict[str, Any]) -> dict[str, Any]:
+    return {f: fm.get(f) for f in _TRACKER_INDEX_FIELDS if fm.get(f) is not None}
+
+
+def sync_tracker_index(
+    backlog_data: dict[str, Any],
+    backlog_path: Path,
+) -> dict[str, Any]:
+    """Rebuild backlog_data['trackers'] from disk, sorted by id.
+
+    No archive/cap — trackers are bounded by the JQL response. A separate
+    `jira archive` command (V1.5) handles decluttering.
+    """
+    entries: list[dict[str, Any]] = []
+    for tid in list_tracker_ids(backlog_path):
+        try:
+            fm, _ = read_tracker(backlog_path, tid)
+        except (OSError, ValueError, yaml.YAMLError):
+            continue
+        entries.append(_tracker_index_entry(fm))
+    entries.sort(key=lambda e: e.get("id", ""))
+    backlog_data["trackers"] = entries
+    return backlog_data
+
+
+def linked_tasks_for_tracker(
+    backlog_data: dict[str, Any], tracker_id: str
+) -> list[dict[str, Any]]:
+    """Derive the tasks that link to this tracker by scanning the index.
+
+    Reverse map is computed on demand — never stored on the tracker file.
+    """
+    out: list[dict[str, Any]] = []
+    for epic in backlog_data.get("epics", []):
+        for task in epic.get("tasks", []):
+            if task.get("tracker_id") == tracker_id:
+                out.append(task)
+    return out
+
+
+def linked_issues_for_tracker(
+    backlog_data: dict[str, Any], tracker_id: str
+) -> list[dict[str, Any]]:
+    """Derive the issues that link to this tracker by scanning the index."""
+    return [iss for iss in backlog_data.get("issues", []) if iss.get("tracker_id") == tracker_id]
+
+
+# ── Linear config (linear-002) ─────────────────────────────────
+#
+# `.taskmaster/linear.yaml` declares Linear workspaces this project pushes to.
+# Tokens are never stored; the file names env vars that hold them, so the
+# committed config carries no secrets. Multi-workspace within a single project
+# is allowed; each tracker remembers its `workspace_alias`.
+#
+# Shape:
+#   workspaces:
+#     - alias: cm
+#       team_id: <linear-team-uuid>
+#       token_env: TASKMASTER_LINEAR_TOKEN_CM
+#       status_mapping: {todo: Todo, in-progress: In Progress, ...}
+#       priority_mapping: {critical: 1, high: 2, medium: 3, low: 4}
+#       user_mapping: {<TM-owner-string>: <linear-user-id>}
+#       label_config: {tm_managed_prefix: "tm:"}
+#   default_workspace: cm
+#
+# Validator catches missing required fields, duplicate aliases, duplicate
+# token_envs, and dangling default_workspace references at load time so
+# misconfigurations fail loud rather than silently routing pushes to the
+# wrong workspace.
+
+
+def linear_config_path(backlog_path: Path) -> Path:
+    return backlog_path.parent / "linear.yaml"
+
+
+def load_linear_config(backlog_path: Path) -> dict[str, Any] | None:
+    """Load `.taskmaster/linear.yaml`. Returns None if the file is missing
+    (Linear sync is opt-in per project). Raises ValueError on schema violation."""
+    path = linear_config_path(backlog_path)
+    if not path.exists():
+        return None
+    with path.open("r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f) or {}
+    _validate_linear_config(cfg)
+    return cfg
+
+
+def _validate_linear_config(cfg: dict[str, Any]) -> None:
+    workspaces = cfg.get("workspaces")
+    if not isinstance(workspaces, list) or not workspaces:
+        raise ValueError("linear.yaml must declare at least one workspace under 'workspaces'")
+
+    seen_aliases: set[str] = set()
+    seen_token_envs: set[str] = set()
+    for ws in workspaces:
+        if not isinstance(ws, dict):
+            raise ValueError(f"linear.yaml workspace entry must be a mapping, got {type(ws).__name__}")
+        for field in ("alias", "team_id", "token_env"):
+            if not ws.get(field):
+                raise ValueError(f"linear.yaml workspace missing required field: {field}")
+        alias = str(ws["alias"])
+        if alias in seen_aliases:
+            raise ValueError(f"linear.yaml workspace alias {alias!r} is duplicated")
+        seen_aliases.add(alias)
+        token_env = str(ws["token_env"])
+        if token_env in seen_token_envs:
+            raise ValueError(
+                f"linear.yaml token_env {token_env!r} is duplicated across workspaces "
+                f"(two workspaces would share the same token)"
+            )
+        seen_token_envs.add(token_env)
+
+    default_ws = cfg.get("default_workspace")
+    if default_ws and default_ws not in seen_aliases:
+        raise ValueError(
+            f"linear.yaml default_workspace {default_ws!r} references unknown workspace "
+            f"(known aliases: {sorted(seen_aliases)})"
+        )
+
+
+def get_linear_workspace(cfg: dict[str, Any], alias: str | None = None) -> dict[str, Any]:
+    """Resolve a workspace config by alias. If `alias` is None, use `default_workspace`.
+
+    Raises ValueError if neither path yields a known workspace.
+    """
+    target = alias or cfg.get("default_workspace")
+    if not target:
+        raise ValueError(
+            "no workspace alias passed and linear.yaml has no default_workspace; "
+            "pass an explicit alias or set default_workspace"
+        )
+    for ws in cfg.get("workspaces", []):
+        if ws.get("alias") == target:
+            return ws
+    raise ValueError(f"linear.yaml has no workspace with alias {target!r}")
+
+
+def resolve_linear_token(workspace: dict[str, Any]) -> str:
+    """Read the Linear API token from the env var named by `workspace.token_env`.
+
+    The token is read at call time, never cached on disk. If the env var is
+    missing the operator gets a canonical message pointing to the Linear
+    API-key page; same shape as the Jira variant.
+    """
+    env_name = workspace.get("token_env")
+    if not env_name:
+        raise ValueError("workspace config missing token_env")
+    token = os.environ.get(env_name)
+    if not token:
+        raise ValueError(
+            f"${env_name} is not set.\n"
+            f"Create a Linear personal API key at https://linear.app/settings/api "
+            f"then export {env_name}=<token>."
+        )
+    return token
 
 
 # ── Lessons ────────────────────────────────────────────────────

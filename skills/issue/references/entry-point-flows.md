@@ -5,27 +5,33 @@ only the entry-point names and a condensed decision tree.
 
 ## log-issue
 
-Explicit user request: `log a bug`, `file a bug`, `this is broken`, `report a bug`, `track this defect`, `this is a bug`.
+Explicit user request: `log an issue`, `file an issue`, `this is an issue`.
 
-1. **Auto-extract fields** from the conversation. Walk `references/auto-extraction.md` per-field rules:
-   - `title` — first sentence describing the bug, <=80 chars
+1. **Walk the bar** — does the description cite recurring / systemic / outstanding? Use `references/issue-bar.md`.
+   - **No evidence** → route to `taskmaster:bug` (log-bug entry point). Use the routing-echo from `references/bug-vs-issue.md`.
+   - **Evidence present** → continue to step 2.
+
+2. **Auto-extract fields** from the conversation. Walk `references/auto-extraction.md` per-field rules:
+   - `title` — first sentence describing the bug, ≤80 chars
    - `severity` — infer from impact language; ask if no signal
+   - `evidence` — the criterion + citation in one sentence (mandatory)
    - `impact` — what breaks; follow up "what breaks?" if blank
    - `components` — epic or folder; infer from file path if cited
    - `location` — `file:line` if mentioned; leave empty otherwise
    - `discovered_by` — `"Claude"` if found mid-session; `"user"` if user-reported
    - `related_tasks` — in-progress task ID + any IDs the user mentioned
-   - `body` — draft `## Repro` + `## Expected` from the conversation; use placeholder if no repro steps yet
+   - `body` — draft `## Repro` + `## Expected` from the conversation
 
-2. **Present the draft** to the user — show all fields plus the body. Ask:
+3. **Present the draft** to the user — show all fields including the evidence sentence. Ask:
    > "Looks good? I can adjust severity, add repro steps, change components, or link additional tasks."
    Iterate until the user approves.
 
-3. **Write through `backlog_issue_create`**:
+4. **Write through `backlog_issue_create`**:
    ```
    backlog_issue_create(
        title=...,
        severity="P0"|"P1"|"P2"|"P3",
+       evidence="<criterion + citation>",
        impact=...,
        components=[...],
        location=[...],
@@ -35,22 +41,11 @@ Explicit user request: `log a bug`, `file a bug`, `this is broken`, `report a bu
    )
    ```
 
-4. **Echo back**: "Issue logged: `ISS-NNN` (P1) — Short title."
+5. **Echo back**: "Issue logged: `ISS-NNN` (P1) — Short title. Criterion: <recurring|systemic|outstanding>."
 
-5. **Offer a follow-up task** if the issue has no `related_tasks`:
+6. **Offer a follow-up task** if the issue has no `related_tasks`:
    > "Want me to add a task to investigate this? I can link `ISS-NNN` in `related_issues`."
    On confirm, call `backlog_add_task` with `related_issues=["ISS-NNN"]`.
-
-## flag-from-conversation
-
-Claude proactively offers to log a bug when a bug-shaped finding surfaces mid-session — a test failure, an unexpected behavior, a root-cause identified in code, a regression mentioned in passing.
-
-Heuristics for offer (any one is enough): test output shows unexpected failure; user says "wait that's wrong" or "that shouldn't happen"; Claude identifies a defect not the focus of the current task; a known issue mentioned has no `ISS-NNN`.
-
-Offer pattern (inline, non-blocking):
-> "This looks like a defect worth tracking. Want me to log it as an issue? I'd file it as P2 — [one-line symptom]."
-
-If the user confirms, run the same flow as `log-issue` starting from step 1, using the mid-session context as intake. If the user declines, note it and continue — do not re-offer the same bug in the same session.
 
 ## update-status
 
@@ -83,6 +78,30 @@ Trigger: `mark issue fixed`, `close ISS-XX`, `investigating ISS-XX`, explicit st
    The backend auto-fills `resolved` date when `status=fixed`. The index rebuilds automatically.
 
 4. **Echo back**: "ISS-NNN marked fixed (T-NNN)."
+
+## promote-from-bug
+
+Invoked when:
+- The user says "promote B-XX to an issue" (with optional sibling bug IDs)
+- `backlog_bug_pattern_scan` surfaces a candidate group during start-session or end-of-task, AND the user confirms promotion
+
+1. **Collect bug IDs** to promote (single or multiple from a pattern group).
+
+2. **Walk evidence citation** — ask the user (or auto-fill from the matched signature) which criterion is being met. Show the bug titles and their signatures.
+
+3. **Confirm Issue title + severity** — usually a generalization of the matched bug titles.
+
+4. **Call `backlog_bug_promote`:**
+   ```
+   backlog_bug_promote(
+       bug_ids=["B-018", "B-031"],
+       title="Path-resolver mismatch across v3 readers",
+       severity="P1",
+       evidence_text="Recurring: B-018 (handover reader) + B-031 (lesson reader). Same root cause.",
+   )
+   ```
+
+5. **Echo**: "Promoted to `ISS-NNN`. Source Bugs marked promoted_to: ISS-NNN."
 
 ## close-on-task-complete
 
@@ -117,7 +136,7 @@ Trigger: `list open issues`, `what bugs are open`, `triage issues`.
    P3 (0):
    ```
 
-3. **Surface aging issues** — call attention to any issue past its severity window's 60% mark (Aging) or 100% (Stale). See `references/severity-heuristics.md` for window lengths.
+3. **Surface aging issues** — call attention to any issue past its severity window's 60% mark (Aging) or 100% (Stale). See `references/issue-bar.md` for window lengths.
 
 4. **Offer actions**:
    - Start investigating a specific issue -> `update-status` flow

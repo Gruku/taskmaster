@@ -20,16 +20,18 @@ All work in a taskmaster-enabled project flows through the task system. This ski
 | "End session", "wrap up", "mark task done" | `taskmaster:end-session` |
 | "Set up taskmaster", "initialize backlog" | `taskmaster:init-taskmaster` |
 | "Write a handover", "context handoff", "for tomorrow" | `taskmaster:handover` |
-| "Log a bug", "this is broken", "track this defect" | `taskmaster:issue` |
+| "Log an issue", "this is an issue", "file an issue" | Word-agnostic intake — `taskmaster:issue` if evidence cited, else `taskmaster:bug` |
+| "Log a bug", "this is a bug", "track this defect", "I found a bug" | `taskmaster:bug` |
 | "Remember this", "save as a lesson" | `taskmaster:lesson` |
 | "Save this as an idea", "/add-idea" | `taskmaster:add-idea` |
 | "Auto this task", "autopilot T-001" | `taskmaster:auto-task` |
 | "Auto-epic <id>", "auto-phase <id>" | `taskmaster:auto-epic` / `taskmaster:auto-phase` |
 | "Upgrade to v3", "migrate to v3" | `taskmaster:migrate-v3` |
 | "Check TODOs", "todo audit" | `taskmaster:check-todos` |
+| "Set up linear", "link to linear", "retry linear", "linear status" | `taskmaster:linear` |
 | Status, search, phase, recap, snapshot | Direct `backlog_*` tool call |
 
-For the full 35-row routing table, all v3 routes, and implementation-without-a-task guidance, read `references/routing-table.md`.
+Full routing table + word-agnostic intake algorithm: read `references/routing-table.md` and `references/word-agnostic-intake.md`.
 
 ## Do NOT Route Through Taskmaster
 
