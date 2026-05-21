@@ -76,5 +76,5 @@ For each suggested critical/high task that has a spec/plan but no `spec_review` 
 - Deep mode total token budget: ~3,000–4,000 tokens (glance ~800 + deep additions ~2,200).
 - If lesson digest + core bodies push past 5,000 tokens, prune lowest `reinforce_count` lessons first.
 - `--deep` is user-explicit. Never auto-trigger deep mode based on signals (days since last session, etc.).
-- `backlog_handover_latest` is deprecated after Plan B lands. Use `backlog_handover_list(status="open", limit=5)` instead (already in glance path).
+- `backlog_handover_latest` is deprecated (kept as a backward-compat alias only). Use `backlog_handover_list(status="open", limit=5)` — already wired into the glance path.
 - Lesson digest does NOT mean apply lessons — loading the digest is *priming* only. Reinforce on confirmed application during work, not on session start.

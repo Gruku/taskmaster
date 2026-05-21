@@ -1,6 +1,6 @@
 ---
 name: init-taskmaster
-description: "Set up Taskmaster in the current project. Invoke when the user wants task/backlog tracking, says 'set up taskmaster', 'initialize backlog', 'I want to track my work here', or when backlog.yaml does not exist. Offers clean init or analysis of existing TODOs/structure to pre-populate the backlog."
+description: "Set up Taskmaster in the current project. Invoke when the user wants task/backlog tracking, says 'set up taskmaster', 'initialize backlog', 'I want to track my work here', or when backlog.yaml does not exist. Offers clean init or analysis of existing TODOs/structure to pre-populate the backlog. Also offers to scaffold the project manifest (.taskmaster/project.yaml) on v3 setups."
 ---
 
 # Initialize Taskmaster
@@ -43,6 +43,28 @@ AskUserQuestion({
 ```
 
 Map: v3 -> after `backlog_init`, call `backlog_migrate_v3`. If v3, gitignore `.taskmaster/snapshots/` and `.taskmaster/auto/`.
+
+## Step 2b: Offer project manifest (v3 only)
+
+After `backlog_init` succeeds on a v3 setup, ask whether to also scaffold the Project manifest at `.taskmaster/project.yaml` — the structured truth about repos, submodules, branch protocol, stacks, deploy targets, and error-trace ladder. Pairs with `backlog.yaml` (work in flight).
+
+```
+AskUserQuestion({
+  questions: [{
+    question: "Scaffold a project manifest now?",
+    header: "Project manifest",
+    multiSelect: false,
+    options: [
+      { label: "Yes (Recommended)", description: "Creates minimal .taskmaster/project.yaml. Powers ship_order, error_trace_ladder, repo/branch awareness in skills." },
+      { label: "Skip", description: "Can be added later with backlog_project_init." }
+    ]
+  }]
+})
+```
+
+On "Yes": call `backlog_project_init` (no args — it writes a minimal valid manifest, refuses to overwrite). Then point the user at it: "Edit `.taskmaster/project.yaml` to declare your repos, submodules, branch protocol, and error-trace ladder. Schema reference: `plugins/taskmaster/project.py`."
+
+Skip this step entirely on v2 — project.yaml is a v3 surface.
 
 ## Step 3a: Clean start
 

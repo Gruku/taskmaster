@@ -1,5 +1,7 @@
-<!-- Reference decisions with [[DEC-NNN]] in any section.
-     Open and resolved decisions are tracked via frontmatter, not body text. -->
+<!-- Reference decisions with [[DEC-NNN]] anywhere in the body.
+     The "Open decisions" / "Resolved this session" sections below are the
+     durable carrier — `backlog_handover_create` has no separate kwargs for
+     these; the viewer resolves cross-entity links from [[DEC-NNN]] tokens. -->
 
 <!--
 HANDOVER BODY TEMPLATE — target ~60–130 lines.
@@ -34,6 +36,15 @@ Drop any section with no content. Never leave {placeholders}.
 | Touched | {path} | {what changed this session} | {why next session reads this} |
 | Read | {path} | (referenced for understanding) | {why} |
 | Relevant | {path} | (not touched but next-session-relevant) | {why} |
+
+## Open decisions
+
+- [[DEC-NNN]] — {one-line summary of the unresolved choice and what triggers a decision}
+
+## Resolved this session
+
+- [[DEC-NNN]] — {one-line summary of what was decided and why}
+- [[DEC-MMM]] — {one-line summary} (dropped)
 
 ## Important non-obvious things
 

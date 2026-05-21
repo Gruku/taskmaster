@@ -83,13 +83,11 @@ Before invoking `taskmaster:handover`, sweep open decisions linked to the in-pro
 
 1. Call `backlog_decision_list(status="open", task_id=<current>)`.
 2. If non-empty, for **each** decision ask via `AskUserQuestion`:
-   - **Carry forward** — leave open; will land in handover `open_decisions`.
-   - **Resolve now** — present options; on pick, call `backlog_decision_resolve(id, resolved_with=N, rationale="<short>")`.
-   - **Drop** — capture one-line reason; call `backlog_decision_drop(id, reason=...)`.
-3. Build `open_decisions` and `resolved_this_session` arrays.
-4. Pass both to `taskmaster:handover` as additional kwargs.
-
-Auto-resolved decisions (via commit message `Resolves: DEC-NNN with option N`) need no prompting — query `backlog_decision_list(status="resolved", resolved_in=session_window)` and include in `resolved_this_session`.
+   - **Carry forward** — leave the decision open; record it under the handover body's "Open decisions" section as `[[DEC-NNN]] — <one-line summary>`.
+   - **Resolve now** — present options; on pick, call `backlog_decision_resolve(id, resolved_with=N, rationale="<short>")`, then record it under "Resolved this session".
+   - **Drop** — capture one-line reason; call `backlog_decision_drop(id, reason=...)`, then record it under "Resolved this session" with `(dropped)` suffix.
+3. Auto-resolved decisions (via commit message `Resolves: DEC-NNN with option N`) need no prompting — query `backlog_decision_list(status="resolved", resolved_in=session_window)` and append them to "Resolved this session" the same way.
+4. The two collected lists are inserted into the handover **body markdown** by `taskmaster:handover` (step 5 of that skill). `backlog_handover_create` has no separate `open_decisions` / `resolved_this_session` parameters — the body is the durable carrier and the `[[DEC-NNN]]` link syntax is what powers cross-entity navigation in the viewer.
 
 ## v3-pre-2b: Handover Archive Sweep
 

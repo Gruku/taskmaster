@@ -27,6 +27,12 @@ The SKILL.md body carries only the ~15 highest-frequency rows.
 | (v3) "List handovers", "recent handovers" | `backlog_handover_list` |
 | (v3) "Show this handover in full", "read handover 2026-XX-XX" | `backlog_handover_get <id>` |
 | (v3) "Supersede this handover", "the new handover replaces the old one" | `backlog_handover_supersede(old_id, new_id)` |
+| (v3) "Mark handover done", "mark handover todo", "I read that handover", "triage old handovers" | `taskmaster:handover` (manual status entry points: mark-done / mark-in-progress / mark-todo / triage) |
+| (v3) "Choose between", "pick an option", "decide on X", "open question", "branching path", "list open decisions", "resolve DEC-X", "drop DEC-X" | `taskmaster:decision` |
+| (v3) "Set up linear sync", "connect to linear", "link to linear ENG-42", "unlink from linear", "linear status", "retry linear pushes", "list linear trackers" | `taskmaster:linear` |
+| (v3) "Init project manifest", "scaffold project.yaml", "show project", "what repos are in this project" | `backlog_project_init` / `backlog_project_get` / `backlog_project_structure` |
+| (v3) "Ship order", "which repo first", "dependency order" | `backlog_project_ship_order` |
+| (v3) "Where do errors land", "error-trace ladder", "how do I trace this exception" | `backlog_project_error_trace_ladder` |
 | (v3) "Log an issue", "this is an issue", "file an issue" | Word-agnostic intake — `taskmaster:issue` if evidence cited, else `taskmaster:bug` |
 | (v3) "Log a bug", "this is a bug", "track this defect", "I found a bug" | `taskmaster:bug` |
 | (v3) "Promote B-XX to an issue" | `taskmaster:bug` (promote subflow) → `taskmaster:issue` (creation) |

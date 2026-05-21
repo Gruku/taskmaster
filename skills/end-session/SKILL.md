@@ -21,7 +21,7 @@ Check schema: `backlog_status` first line shows `Schema: v<N>`.
 
 **v3-pre-2a: Lesson candidate sweep.** Auto-offer when: `<lesson-candidate>` tags visible, or `backlog_lesson_candidates_list` returns entries, or 2+ feedback-memory entries for this project. Full flow: `references/v3-pre-steps.md`.
 
-**v3-pre-1b: Decision sweep** (before handover write). Call `backlog_decision_list(status="open", task_id=<current>)`. For each open decision: ask to carry forward / resolve now / drop. Build `open_decisions` and `resolved_this_session` arrays; pass both to `taskmaster:handover`. Full flow: `references/v3-pre-steps.md`.
+**v3-pre-1b: Decision sweep** (before handover write). Call `backlog_decision_list(status="open", task_id=<current>)`. For each open decision: ask to carry forward / resolve now / drop. The resulting open / resolved sets are folded into the handover **body** under "Open decisions" / "Resolved this session" sections — they are not separate kwargs to `backlog_handover_create`. Full flow: `references/v3-pre-steps.md`.
 
 **v3-pre-2: Handover auto-write.** Write automatically (no prompt) when: session >60 turns, context >200k tokens, task still in-flight, or user said "for tomorrow" / "context handoff". Infer `session_kind` and invoke `taskmaster:handover`. Full flow: `references/v3-pre-steps.md`.
 

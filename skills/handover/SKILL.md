@@ -27,13 +27,13 @@ A handover is the per-session full record — context-injection optimisation for
 
 **4. Determine `supersedes`.** Set to prior id when: `session_kind == "milestone"` AND prior latest handover for same `task_ids` exists AND prior is also `milestone`. Algorithm in `references/supersession.md`.
 
-**5. Draft body from `templates/body.md`.** Fill every section with concrete content. Delete empty sections — never leave `{placeholder}`. Pass open/resolved decisions as `open_decisions=[...]` / `resolved_this_session=[...]` to `backlog_handover_create`; reference inline with `[[DEC-NNN]]`.
+**5. Draft body from `templates/body.md`.** Fill every section with concrete content. Delete empty sections — never leave `{placeholder}`. If end-session's decision sweep produced open/resolved decisions, embed them in the body under "Open decisions" / "Resolved this session" sections using `[[DEC-NNN]]` references — the body is the durable carrier, not a separate kwarg.
 
 **6. Generate `tldr` and `next_action`.** Each <=100 chars. `tldr` = past-tense what shipped. `next_action` = imperative what next session does first.
 
 **7. Write directly — no draft-and-approve.** Write immediately via step 8. Exceptions: user asked "show draft first"; milestone supersession changes a prior milestone; auto-extraction returned zero files (ask scope).
 
-**8. Write through `backlog_handover_create`** with all fields (tldr, next_action, body, task_ids, session_kind, open_decisions, resolved_this_session, context_size_at_write, supersedes, branch, tip_commit). If `pending_review_flag` was buffered by lesson skill, forward `flag_for_review=true` + `review_reason=<reason>`.
+**8. Write through `backlog_handover_create`** with all supported fields: `tldr`, `next_action`, `body`, `task_ids`, `session_kind`, `context_size_at_write`, `supersedes`, `branch`, `tip_commit`, `flag_for_review`, `review_reason`. Decisions live inside `body` (step 5), not as separate kwargs. If `pending_review_flag` was buffered by the lesson skill, forward `flag_for_review=true` + `review_reason=<reason>`.
 
 **9. Confirm.** "Handover written: `<id>`. Next session can resume from this with `backlog_handover_list(status="open", limit=1)`." Surface any WARNING line from the response.
 
