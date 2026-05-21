@@ -864,6 +864,7 @@ _CANONICALIZE_ITEMS: tuple[str, ...] = (
     "handovers",
     "lessons",
     "issues",
+    "trackers",
     "recaps",
     "snapshots",
     "auto",
@@ -1844,6 +1845,7 @@ _ISSUE_INDEX_FIELDS = (
     "severity",
     "components",
     "related_tasks",
+    "tracker_id",
 )
 
 
@@ -2084,6 +2086,7 @@ def write_issue(
     status: str = "open",
     tldr: str = "",
     tldr_autogen: bool = False,
+    tracker_id: str | None = None,
 ) -> tuple[str, Path]:
     """Create a new issue file. Returns (id, path)."""
     if not title or not title.strip():
@@ -2106,6 +2109,7 @@ def write_issue(
         "fixed_in_task": None,
         "duplicate_of": None,
         "tldr": tldr,
+        "tracker_id": tracker_id or None,
     }
     if tldr_autogen:
         fm["tldr_autogen"] = True
@@ -2160,6 +2164,204 @@ def sync_issue_index(
     entries.sort(key=lambda e: (_SEVERITY_RANK.get(e.get("severity", "P3"), 99), e.get("id", "")))
     backlog_data["issues"] = entries
     return backlog_data
+
+
+# ── Trackers ───────────────────────────────────────────────────
+#
+# A tracker is a local read-only mirror of an external issue (Jira in V1).
+# It is NOT an epic and carries no epic semantics — just a reference + cache.
+# The reverse map (tracker → linked tasks/issues) is derived on demand from
+# the index, never stored on the tracker, to eliminate sync-drift bugs.
+#
+# `external_key` is stored verbatim from the source (e.g. "CM-101"). The id
+# lowercases it for determinism. Always reconstruct ids via make_tracker_id,
+# never by string-joining stored frontmatter fields directly.
+
+EXTERNAL_SYSTEMS: tuple[str, ...] = ("jira",)
+
+# Sentinel for update_tracker: distinguishes "field not passed" from
+# "field passed as None to clear it".
+_TRACKER_UNSET: Any = object()
+
+_TRACKER_INDEX_FIELDS = (
+    "id",
+    "external_system",
+    "external_key",
+    "instance_alias",
+    "title",
+    "status",
+    "url",
+    "last_synced",
+)
+
+
+def tracker_path(backlog_path: Path, tracker_id: str) -> Path:
+    return backlog_path.parent / "trackers" / f"{tracker_id}.md"
+
+
+def tracker_dir(backlog_path: Path) -> Path:
+    return backlog_path.parent / "trackers"
+
+
+def make_tracker_id(external_system: str, instance_alias: str, external_key: str) -> str:
+    """Build the deterministic tracker id: <system>-<alias>-<key-lowercased>.
+
+    Re-pulling the same external key from the same instance always yields the
+    same id, so trackers can be upserted by id without dedup logic.
+    """
+    if not external_system or not str(external_system).strip():
+        raise ValueError("external_system is required")
+    if not instance_alias or not str(instance_alias).strip():
+        raise ValueError("instance_alias is required")
+    if not external_key or not str(external_key).strip():
+        raise ValueError("external_key is required")
+    return f"{str(external_system).strip().lower()}-{str(instance_alias).strip().lower()}-{str(external_key).strip().lower()}"
+
+
+def list_tracker_ids(backlog_path: Path) -> list[str]:
+    d = tracker_dir(backlog_path)
+    if not d.exists():
+        return []
+    return sorted(p.stem for p in d.glob("*.md"))
+
+
+def _validate_tracker(fm: dict[str, Any]) -> None:
+    """Raise ValueError if frontmatter violates the tracker invariants."""
+    for field in ("id", "external_system", "external_key", "instance_alias", "title", "status"):
+        if not fm.get(field):
+            raise ValueError(f"tracker frontmatter missing required field: {field}")
+    sys_name = str(fm["external_system"]).lower()
+    if sys_name not in EXTERNAL_SYSTEMS:
+        raise ValueError(
+            f"external_system must be one of {EXTERNAL_SYSTEMS}, got {fm['external_system']!r}"
+        )
+    expected = make_tracker_id(fm["external_system"], fm["instance_alias"], fm["external_key"])
+    if fm["id"] != expected:
+        raise ValueError(
+            f"tracker id {fm['id']!r} does not match deterministic format "
+            f"<system>-<alias>-<key-lowercased> (expected {expected!r})"
+        )
+
+
+def write_tracker(
+    backlog_path: Path,
+    *,
+    external_system: str,
+    instance_alias: str,
+    external_key: str,
+    title: str,
+    status: str,
+    assignee: str | None = None,
+    url: str | None = None,
+    last_synced: str | None = None,
+    synced_hash: str | None = None,
+    body: str = "",
+) -> tuple[str, Path]:
+    """Upsert a tracker file. Returns (id, path).
+
+    Trackers are upsert-by-id — calling write_tracker with the same
+    (external_system, instance_alias, external_key) triple always overwrites
+    the same path. Callers (e.g. `backlog_jira_pull`) that hash payloads to
+    skip unchanged writes do that gating before calling this.
+    """
+    if not title or not str(title).strip():
+        raise ValueError("tracker title is required")
+    tid = make_tracker_id(external_system, instance_alias, external_key)
+    fm: dict[str, Any] = {
+        "id": tid,
+        "external_system": str(external_system).strip().lower(),
+        "external_key": str(external_key).strip(),
+        "instance_alias": str(instance_alias).strip(),
+        "title": str(title).strip(),
+        "status": str(status).strip() if status else "",
+        "assignee": assignee or None,
+        "url": url or None,
+        "last_synced": last_synced,
+        "synced_hash": synced_hash,
+    }
+    _validate_tracker(fm)
+    path = tracker_path(backlog_path, tid)
+    write_task_file(path, fm, body)
+    return tid, path
+
+
+def read_tracker(backlog_path: Path, tracker_id: str) -> tuple[dict[str, Any], str]:
+    return read_task_file(tracker_path(backlog_path, tracker_id))
+
+
+def update_tracker(
+    backlog_path: Path,
+    tracker_id: str,
+    **updates: Any,
+) -> tuple[dict[str, Any], str]:
+    """Apply partial updates to a tracker's frontmatter, validate, and rewrite.
+
+    Body is preserved unchanged unless `body=` is passed. The id and the three
+    fields it derives from (external_system, external_key, instance_alias) are
+    immutable — passing them in updates is silently ignored.
+
+    Passing a field as None clears it (for nullable fields like assignee, url,
+    last_synced, synced_hash). To leave a field untouched, omit it entirely.
+    """
+    fm, body = read_tracker(backlog_path, tracker_id)
+    if fm.get("id") != tracker_id:
+        raise ValueError(
+            f"on-disk tracker id {fm.get('id')!r} does not match requested {tracker_id!r}"
+        )
+    new_body = updates.pop("body", body)
+    for immutable in ("id", "external_system", "external_key", "instance_alias"):
+        updates.pop(immutable, None)
+    fm.update(updates)
+    _validate_tracker(fm)
+    write_task_file(tracker_path(backlog_path, tracker_id), fm, new_body)
+    return fm, new_body
+
+
+def _tracker_index_entry(fm: dict[str, Any]) -> dict[str, Any]:
+    return {f: fm.get(f) for f in _TRACKER_INDEX_FIELDS if fm.get(f) is not None}
+
+
+def sync_tracker_index(
+    backlog_data: dict[str, Any],
+    backlog_path: Path,
+) -> dict[str, Any]:
+    """Rebuild backlog_data['trackers'] from disk, sorted by id.
+
+    No archive/cap — trackers are bounded by the JQL response. A separate
+    `jira archive` command (V1.5) handles decluttering.
+    """
+    entries: list[dict[str, Any]] = []
+    for tid in list_tracker_ids(backlog_path):
+        try:
+            fm, _ = read_tracker(backlog_path, tid)
+        except (OSError, ValueError, yaml.YAMLError):
+            continue
+        entries.append(_tracker_index_entry(fm))
+    entries.sort(key=lambda e: e.get("id", ""))
+    backlog_data["trackers"] = entries
+    return backlog_data
+
+
+def linked_tasks_for_tracker(
+    backlog_data: dict[str, Any], tracker_id: str
+) -> list[dict[str, Any]]:
+    """Derive the tasks that link to this tracker by scanning the index.
+
+    Reverse map is computed on demand — never stored on the tracker file.
+    """
+    out: list[dict[str, Any]] = []
+    for epic in backlog_data.get("epics", []):
+        for task in epic.get("tasks", []):
+            if task.get("tracker_id") == tracker_id:
+                out.append(task)
+    return out
+
+
+def linked_issues_for_tracker(
+    backlog_data: dict[str, Any], tracker_id: str
+) -> list[dict[str, Any]]:
+    """Derive the issues that link to this tracker by scanning the index."""
+    return [iss for iss in backlog_data.get("issues", []) if iss.get("tracker_id") == tracker_id]
 
 
 # ── Lessons ────────────────────────────────────────────────────
