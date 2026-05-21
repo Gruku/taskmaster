@@ -177,6 +177,22 @@ def test_project_structure_tools_exposed(tool_name):
     assert tool_name in _list_tool_names()
 
 
+# Project manifest (project-manifest-001)
+@pytest.mark.parametrize(
+    "tool_name",
+    [
+        "backlog_project_get",
+        "backlog_project_get_field",
+        "backlog_project_set",
+        "backlog_project_init",
+        "backlog_project_ship_order",
+        "backlog_project_error_trace_ladder",
+    ],
+)
+def test_project_manifest_tools_exposed(tool_name):
+    assert tool_name in _list_tool_names()
+
+
 def test_full_v3_surface_count():
     """Sanity check the v3 surface size hasn't accidentally shrunk.
 
