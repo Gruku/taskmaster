@@ -12,6 +12,18 @@ indicate schema breaks or removed surfaces.
 
 ---
 
+## 3.8.2 — Skill-flow deprecation cleanup (2026-05-21)
+
+### Changed
+
+- Three skill files updated to call `backlog_handover_list(status="open", limit=1)` instead of the deprecated `backlog_handover_latest`:
+  - `skills/handover/SKILL.md` step 9 (confirm message).
+  - `skills/handover/references/supersession.md` step 1 of the interim supersession algorithm.
+  - `skills/taskmaster/references/routing-table.md` "Show last handover" row.
+- Tool itself (`backlog_handover_latest`) is unchanged — still emits its deprecation warning for backwards compatibility.
+
+---
+
 ## 3.6.1 — Ceremony glance-first redesign (Plan D) (2026-05-18)
 
 ### Changed
