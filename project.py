@@ -243,9 +243,9 @@ class ValidationError(ValueError):
     """Raised when manifest validation fails in strict mode."""
 
 
-def _check_enum(value: Any, allowed: tuple[str, ...], field: str, errors: list[str]) -> None:
+def _check_enum(value: Any, allowed: tuple[str, ...], field_name: str, errors: list[str]) -> None:
     if value not in allowed:
-        errors.append(f"{field}: {value!r} is not one of {list(allowed)}")
+        errors.append(f"{field_name}: {value!r} is not one of {list(allowed)}")
 
 
 def _has_cycle(repos: list[dict]) -> bool:
