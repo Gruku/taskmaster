@@ -121,6 +121,36 @@ export function issueCard(issue, { tasksIndex = {}, agingCfg, onTaskClick, suppr
     if (bar) card.appendChild(bar);
   }
 
+  // ---- evidence sentence
+  if (issue.evidence) {
+    const ev = document.createElement('div');
+    ev.className = 'issue-card__evidence';
+    const lbl = document.createElement('span');
+    lbl.className = 'lbl';
+    lbl.textContent = 'Evidence: ';
+    ev.appendChild(lbl);
+    ev.appendChild(document.createTextNode(issue.evidence));
+    card.appendChild(ev);
+  }
+
+  // ---- promoted-from bug links
+  if (issue.promoted_from && Array.isArray(issue.promoted_from) && issue.promoted_from.length) {
+    const pf = document.createElement('div');
+    pf.className = 'issue-card__promoted-from';
+    const lbl = document.createElement('span');
+    lbl.className = 'lbl';
+    lbl.textContent = 'Promoted from: ';
+    pf.appendChild(lbl);
+    for (const [i, b] of issue.promoted_from.entries()) {
+      if (i > 0) pf.appendChild(document.createTextNode(', '));
+      const a = document.createElement('a');
+      a.href = `#/bug/${encodeURIComponent(b)}`;
+      a.textContent = b;
+      pf.appendChild(a);
+    }
+    card.appendChild(pf);
+  }
+
   // ---- footer: task pills + investigating tag
   const footer = document.createElement('div');
   footer.className = 'issue-card__footer';

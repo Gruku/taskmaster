@@ -155,6 +155,7 @@ def test_issue_create_auto_links_on_save(tmp_taskmaster):
     _seed_two_tasks(tmp_taskmaster)
 
     bs.backlog_issue_create(title="Bug", severity="P1", tldr="x",
+                            impact="fixture evidence.",
                             body="Related: T-001 and T-005.")
     bp = tmp_taskmaster / ".taskmaster" / "backlog.yaml"
     iss = read_entity_anywhere(bp, "ISS-001")

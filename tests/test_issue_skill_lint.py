@@ -36,20 +36,15 @@ def test_description_contains_trigger_phrases():
     fm = _read_frontmatter(SKILL_DIR / "SKILL.md")
     desc = fm["description"].lower()
     must_have = [
-        "log a bug",
-        "found an issue",
-        "this is broken",
-        "track this defect",
-        "log this defect",
-        "file a bug",
-        "report a bug",
-        "this is a bug",
-        "mark issue fixed",
-        "close iss-xx",
-        "investigating iss-xx",
+        "log an issue",
+        "this is an issue",
+        "file an issue",
+        "promote to issue",
+        "is this an issue",
         "list open issues",
-        "what bugs are open",
         "triage issues",
+        "mark issue fixed",
+        "close iss-",
     ]
     missing = [p for p in must_have if p not in desc]
     assert not missing, f"description is missing trigger phrases: {missing}"
@@ -58,17 +53,17 @@ def test_description_contains_trigger_phrases():
 def test_skill_md_contains_canonical_sentence():
     text = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
     expected = (
-        "This is the ONLY correct way to write or transition a project issue"
-        " — do not call backlog_issue_create or backlog_issue_update directly."
+        "This is the ONLY correct way to write or transition a project Issue"
+        " — do not call `backlog_issue_create` or `backlog_issue_update` directly."
     )
     assert expected in text, "SKILL.md is missing the canonical 'ONLY correct way' sentence"
 
 
-def test_skill_md_documents_all_five_entry_points():
+def test_skill_md_documents_all_entry_points():
     text = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8").lower()
     must_have = [
         "log-issue",
-        "flag-from-conversation",
+        "promote-from-bug",
         "update-status",
         "close-on-task-complete",
         "triage-review",
@@ -77,9 +72,22 @@ def test_skill_md_documents_all_five_entry_points():
     assert not missing, f"SKILL.md missing entry-point slugs: {missing}"
 
 
+def test_flag_from_conversation_is_gone():
+    p = SKILL_DIR / "references" / "entry-point-flows.md"
+    txt = p.read_text(encoding="utf-8") if p.exists() else ""
+    assert "flag-from-conversation" not in txt, \
+        "flag-from-conversation must be deleted per bug-tier redesign"
+
+
+def test_issue_bar_reference_exists():
+    assert (SKILL_DIR / "references" / "issue-bar.md").exists()
+    # severity-heuristics.md must be gone (renamed)
+    assert not (SKILL_DIR / "references" / "severity-heuristics.md").exists()
+
+
 def test_all_referenced_files_exist():
     expected_refs = [
-        SKILL_DIR / "references" / "severity-heuristics.md",
+        SKILL_DIR / "references" / "issue-bar.md",
         SKILL_DIR / "references" / "lifecycle.md",
         SKILL_DIR / "references" / "auto-extraction.md",
         SKILL_DIR / "templates" / "issue-body.md",

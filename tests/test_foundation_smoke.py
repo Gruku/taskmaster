@@ -35,6 +35,7 @@ def test_slim_defaults_across_all_entities(tm_epic_phase):
 
     backlog_issue_create(
         title="Bug", severity="P1", tldr="Auth bug.",
+        impact="fixture evidence.",
         body="## Repro\n\nLong steps.",
     )
 

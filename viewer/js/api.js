@@ -291,3 +291,68 @@ export async function autoBudget(sid) {
   if (!r.ok) throw new Error(`autoBudget ${r.status}`);
   return await r.json();
 }
+
+// ── Bugs ─────────────────────────────────────────────────────────────────
+
+export async function listBugs({ status, found_in, include_archive } = {}) {
+  const params = new URLSearchParams();
+  if (status) params.set('status', status);
+  if (found_in) params.set('found_in', found_in);
+  if (include_archive) params.set('include_archive', '1');
+  const qs = params.toString();
+  const r = await fetch(`/api/bugs${qs ? '?' + qs : ''}`);
+  if (!r.ok) throw new Error(`listBugs failed: ${r.status}`);
+  return r.json();
+}
+
+export async function getBug(bugId) {
+  const r = await fetch(`/api/bugs/${encodeURIComponent(bugId)}`);
+  if (!r.ok) throw new Error(`getBug ${bugId} failed: ${r.status}`);
+  return r.json();
+}
+
+export async function createBug(payload) {
+  const r = await fetch('/api/bugs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!r.ok) throw new Error(`createBug failed: ${r.status}`);
+  return r.json();
+}
+
+export async function updateBug(bugId, patch) {
+  const r = await fetch(`/api/bugs/${encodeURIComponent(bugId)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  if (!r.ok) throw new Error(`updateBug ${bugId} failed: ${r.status}`);
+  return r.json();
+}
+
+export async function archiveBug(bugId) {
+  const r = await fetch(`/api/bugs/${encodeURIComponent(bugId)}/archive`, { method: 'POST' });
+  if (!r.ok) throw new Error(`archiveBug ${bugId} failed: ${r.status}`);
+  return r.json();
+}
+
+export async function bugPatternScan({ mode = 'all' } = {}) {
+  const r = await fetch('/api/bugs/pattern-scan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode }),
+  });
+  if (!r.ok) throw new Error(`bugPatternScan failed: ${r.status}`);
+  return r.json();
+}
+
+export async function promoteBugs({ bug_ids, title, severity, evidence_text, components, body }) {
+  const r = await fetch('/api/bugs/promote', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ bug_ids, title, severity, evidence_text, components, body }),
+  });
+  if (!r.ok) throw new Error(`promoteBugs failed: ${r.status}`);
+  return r.json();
+}
