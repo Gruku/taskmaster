@@ -365,6 +365,7 @@ def test_write_issue_with_tracker_id_persists(tmp_path):
         bp,
         title="Login accepts whitespace password",
         severity="P1",
+        impact="Users can authenticate with a password that is only whitespace",
         tracker_id="jira-cm-cm-101",
     )
     fm, _ = read_issue(bp, iid)
