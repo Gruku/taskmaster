@@ -23,7 +23,7 @@ The SKILL.md body carries only the ~15 highest-frequency rows.
 | "Advance to next phase", "this phase is done" | `backlog_advance_phase` |
 | "Check TODOs", "scan for TODOs", "are my TODOs tracked", "todo audit" | `taskmaster:check-todos` |
 | (v3) "Write a handover", "wrap up for tomorrow", "context handoff", "save where I left off", "for tomorrow", "remind future me", "before compaction" | `taskmaster:handover` |
-| (v3) "Show last handover", "where did I leave off" | `backlog_handover_latest` |
+| (v3) "Show last handover", "where did I leave off" | `backlog_handover_list(status="open", limit=1)` |
 | (v3) "List handovers", "recent handovers" | `backlog_handover_list` |
 | (v3) "Show this handover in full", "read handover 2026-XX-XX" | `backlog_handover_get <id>` |
 | (v3) "Supersede this handover", "the new handover replaces the old one" | `backlog_handover_supersede(old_id, new_id)` |

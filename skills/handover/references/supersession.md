@@ -29,7 +29,7 @@ If multiple priors qualify, pick the **newest** by `date`.
 
 `backlog_handover_list` currently returns a markdown-bullet string and does not surface `task_ids`. So:
 
-1. Call `backlog_handover_latest` to get the most-recent handover's id and session_kind.
+1. Call `backlog_handover_list(status="open", limit=1)` to get the most-recent handover's id and session_kind.
 2. If its `session_kind` is not `milestone-complete` or `pivot`, **no chain** — set `supersedes` to empty and stop.
 3. Otherwise call `backlog_handover_get(id)` and read `task_ids` from the returned frontmatter block.
 4. If `set(task_ids) & set(new_task_ids)` is non-empty, set `supersedes = id` and stop.

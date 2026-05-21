@@ -35,7 +35,7 @@ A handover is the per-session full record — context-injection optimisation for
 
 **8. Write through `backlog_handover_create`** with all fields (tldr, next_action, body, task_ids, session_kind, open_decisions, resolved_this_session, context_size_at_write, supersedes, branch, tip_commit). If `pending_review_flag` was buffered by lesson skill, forward `flag_for_review=true` + `review_reason=<reason>`.
 
-**9. Confirm.** "Handover written: `<id>`. Next session can resume from this with `backlog_handover_latest`." Surface any WARNING line from the response.
+**9. Confirm.** "Handover written: `<id>`. Next session can resume from this with `backlog_handover_list(status="open", limit=1)`." Surface any WARNING line from the response.
 
 ## Manual status entry points
 
