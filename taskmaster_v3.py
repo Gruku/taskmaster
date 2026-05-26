@@ -2808,6 +2808,14 @@ def _validate_linear_config(cfg: dict[str, Any]) -> None:
             if not ws.get(field):
                 raise ValueError(f"linear.yaml workspace missing required field: {field}")
         alias = str(ws["alias"])
+        if "-" in alias:
+            # tracker_ids are "linear-<alias>-<key>" and parsed with a
+            # bounded split; a hyphen in the alias makes that parse ambiguous
+            # and routes pushes to the wrong (or no) workspace (B-032).
+            raise ValueError(
+                f"linear.yaml workspace alias {alias!r} must not contain '-' "
+                f"(it breaks tracker_id parsing of 'linear-<alias>-<key>')"
+            )
         if alias in seen_aliases:
             raise ValueError(f"linear.yaml workspace alias {alias!r} is duplicated")
         seen_aliases.add(alias)

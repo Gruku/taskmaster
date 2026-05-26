@@ -16,8 +16,9 @@ import yaml
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT))
 
-from integrations.linear.client import LinearClient  # noqa: E402
+from integrations.linear.client import LinearAPIError, LinearClient  # noqa: E402
 from integrations.linear.worker import (  # noqa: E402
+    MAX_ATTEMPTS,
     drain,
     enqueue,
     push_task,
@@ -285,4 +286,136 @@ def test_drain_no_op_when_queue_empty(tmp_path):
     bp = _make_backlog(tmp_path)
     client = _make_client(lambda r: httpx.Response(500))
     counts = drain(bp, client, _make_config(), backlog_data=_backlog_data(bp))
-    assert counts == {"ok": 0, "skipped": 0, "transient": 0, "permanent": 0}
+    assert counts == {"ok": 0, "skipped": 0, "transient": 0, "permanent": 0, "unknown": 0}
+
+
+# ── B-027: error classification from the structured flag, not substrings ──
+
+
+def test_push_task_classifies_transient_even_with_403_in_message(tmp_path):
+    """A transient error whose message happens to contain '403' (IP octet,
+    trace id) must stay transient — not be misread as a permanent 403 auth
+    failure via substring matching."""
+    bp = _make_backlog(tmp_path, tracker_id="linear-cm-eng-1")
+    write_tracker(bp, external_system="linear", instance_alias="cm",
+                  external_key="ENG-1", title="x", status="x")
+
+    class _RaisingClient:
+        def issue_upsert(self, team_id, payload):
+            raise LinearAPIError("network error: cannot reach 10.0.0.403:443", permanent=False)
+
+    result = push_task(bp, "linear-001", _RaisingClient(), _make_config(), backlog_data=_backlog_data(bp))
+    assert result["status"] == "error:transient", result
+
+
+def test_push_task_classifies_permanent_from_flag(tmp_path):
+    bp = _make_backlog(tmp_path, tracker_id="linear-cm-eng-1")
+    write_tracker(bp, external_system="linear", instance_alias="cm",
+                  external_key="ENG-1", title="x", status="x")
+
+    class _RaisingClient:
+        def issue_upsert(self, team_id, payload):
+            raise LinearAPIError("token rejected", permanent=True)
+
+    result = push_task(bp, "linear-001", _RaisingClient(), _make_config(), backlog_data=_backlog_data(bp))
+    assert result["status"] == "error:permanent", result
+
+
+# ── B-028: park after MAX_ATTEMPTS; parked items never re-hit the API ──
+
+
+def test_drain_parks_transient_after_max_attempts_and_stops_calling_api(tmp_path):
+    bp = _make_backlog(tmp_path, tracker_id="linear-cm-eng-1")
+    write_tracker(bp, external_system="linear", instance_alias="cm",
+                  external_key="ENG-1", title="x", status="x")
+    enqueue(bp, op="task_upsert", target_id="linear-001")
+
+    calls = {"n": 0}
+
+    def handler(request):
+        calls["n"] += 1
+        return httpx.Response(500)
+
+    client = _make_client(handler)
+
+    for _ in range(MAX_ATTEMPTS):
+        drain(bp, client, _make_config(), backlog_data=_backlog_data(bp))
+
+    item = read_queue(bp)[0]
+    assert item["permanent"] is True
+    assert item["attempts"] == MAX_ATTEMPTS
+
+    calls_before = calls["n"]
+    counts = drain(bp, client, _make_config(), backlog_data=_backlog_data(bp))
+    assert calls["n"] == calls_before, "parked item must not re-issue the API call"
+    assert counts["permanent"] == 1
+    assert len(read_queue(bp)) == 1  # kept for /linear status visibility
+
+
+# ── B-030: keep not_found; never silently drop an unknown status ──
+
+
+def test_drain_keeps_not_found_item_in_queue(tmp_path):
+    """skipped:not_found may be a stale snapshot — keep the pending push."""
+    bp = _make_backlog(tmp_path)  # 'ghost' is not in the backlog
+    enqueue(bp, op="task_upsert", target_id="ghost")
+    client = _make_client(lambda r: httpx.Response(200, json={"data": {}}))
+    counts = drain(bp, client, _make_config(), backlog_data=_backlog_data(bp))
+    assert counts["skipped"] == 1
+    assert len(read_queue(bp)) == 1  # not dropped
+
+
+def test_drain_keeps_item_on_unrecognized_status(tmp_path, monkeypatch):
+    import integrations.linear.worker as _w
+    bp = _make_backlog(tmp_path, tracker_id="linear-cm-eng-1")
+    enqueue(bp, op="task_upsert", target_id="linear-001")
+    monkeypatch.setattr(_w, "push_task", lambda *a, **k: {"status": "weird:unknown"})
+    client = _make_client(lambda r: httpx.Response(200, json={"data": {}}))
+    counts = _w.drain(bp, client, _make_config(), backlog_data=_backlog_data(bp))
+    assert counts["unknown"] == 1
+    assert len(read_queue(bp)) == 1
+
+
+# ── B-031: persist the returned UUID and use it for subsequent updates ──
+
+
+def test_push_persists_returned_uuid_and_uses_it_for_next_update(tmp_path):
+    bp = _make_backlog(tmp_path, tracker_id="linear-cm-eng-1")
+    write_tracker(bp, external_system="linear", instance_alias="cm",
+                  external_key="ENG-1", title="old", status="Todo")
+
+    sent_ids: list = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        sent_ids.append(body["variables"].get("id"))
+        return httpx.Response(200, json={"data": {
+            "issueUpdate": {"issue": {"id": "iss-uuid-123", "identifier": "ENG-1"}}}})
+
+    client = _make_client(handler)
+
+    # First push: no stored UUID yet → falls back to the human external_key.
+    r1 = push_task(bp, "linear-001", client, _make_config(), backlog_data=_backlog_data(bp))
+    assert r1["status"] == "ok"
+    assert sent_ids[0] == "ENG-1"
+
+    from taskmaster_v3 import read_tracker
+    fm, _ = read_tracker(bp, "linear-cm-eng-1")
+    assert fm["linear_issue_id"] == "iss-uuid-123"
+
+    # Second push with a changed task → hash differs → addresses by stored UUID.
+    data = _backlog_data(bp)
+    data["epics"][0]["tasks"][0]["title"] = "new title"
+    r2 = push_task(bp, "linear-001", client, _make_config(), backlog_data=data)
+    assert r2["status"] == "ok"
+    assert sent_ids[1] == "iss-uuid-123"
+
+
+# ── B-032: forbid hyphenated workspace aliases at validate time ──
+
+
+def test_validate_linear_config_rejects_hyphenated_alias():
+    from taskmaster_v3 import _validate_linear_config
+    cfg = {"workspaces": [{"alias": "cm-eng", "team_id": "t", "token_env": "TOK"}]}
+    with pytest.raises(ValueError, match="must not contain"):
+        _validate_linear_config(cfg)

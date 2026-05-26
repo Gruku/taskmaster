@@ -8904,22 +8904,30 @@ def backlog_linear_retry(target_id: str = "") -> str:
 
     data = _load()
 
-    if not target_id:
-        counts = _worker.drain(bp, client, cfg, backlog_data=data)
-    else:
-        # Filter to target only: drain the subset, then restore the rest.
-        all_items = _worker.read_queue(bp)
-        target_items = [i for i in all_items if i.get("target_id") == target_id]
-        others = [i for i in all_items if i.get("target_id") != target_id]
+    # An explicit retry is the un-park action: clear permanent/attempts on the
+    # items being retried so a previously-parked push gets one fresh attempt
+    # (routine drains still skip parked items). The full queue is rewritten with
+    # cleared flags, then drained with a target filter — so a target-scoped retry
+    # never removes other targets' items from disk and a crash mid-drain cannot
+    # lose them (B-029).
+    all_items = _worker.read_queue(bp)
+    targets_present = False
+    for it in all_items:
+        if target_id and it.get("target_id") != target_id:
+            continue
+        targets_present = True
+        it.pop("permanent", None)
+        it["attempts"] = 0
+        it["last_error"] = None
 
-        if not target_items:
-            return json.dumps({"error": f"no queued items for target_id {target_id!r}"})
+    if target_id and not targets_present:
+        return json.dumps({"error": f"no queued items for target_id {target_id!r}"})
 
-        # Write only the target items, drain, then restore others + remaining targets.
-        _worker._write_queue(bp, target_items)
-        counts = _worker.drain(bp, client, cfg, backlog_data=data)
-        remaining_targets = _worker.read_queue(bp)
-        _worker._write_queue(bp, others + remaining_targets)
+    _worker._write_queue(bp, all_items)
+    counts = _worker.drain(
+        bp, client, cfg, backlog_data=data,
+        only_targets={target_id} if target_id else None,
+    )
 
     return json.dumps({"ok": True, "counts": counts}, indent=2)
 

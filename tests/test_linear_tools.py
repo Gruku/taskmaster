@@ -431,3 +431,84 @@ def test_retry_error_when_no_linear_yaml(tmp_path, monkeypatch):
     result = json.loads(backlog_server.backlog_linear_retry())
     assert "error" in result
     assert "linear.yaml" in result["error"]
+
+
+def test_retry_target_preserves_other_items_when_drain_crashes(tmp_path, monkeypatch):
+    """B-029: a target-scoped retry must not destroy other targets' queued items
+    if the drain crashes mid-flight. With the old subset-write-then-restore, the
+    others were off-disk during the drain and lost on crash."""
+    bp = _make_backlog(tmp_path, with_tracker=True)
+    _make_linear_yaml(tmp_path)
+    write_tracker(bp, external_system="linear", instance_alias="cm",
+                  external_key="ENG-1", title="My task", status="todo")
+    monkeypatch.setattr(backlog_server, "_backlog_path", lambda: bp)
+    monkeypatch.setenv("TASKMASTER_LINEAR_TOKEN_CM", "lin_tok_test")
+
+    import integrations.linear.client as _lc_mod
+    monkeypatch.setattr(
+        _lc_mod, "LinearClient",
+        lambda token, **kw: _client_with_handler(lambda req: _ok({}), token=token),
+    )
+
+    from integrations.linear.worker import enqueue
+    enqueue(bp, op="task_upsert", target_id="ts-001", tracker_id="linear-cm-eng-1")
+    _write_queue(bp, read_queue(bp) + [
+        {"op": "task_upsert", "target_id": "other-task", "tracker_id": None,
+         "enqueued_at": "2026-01-01T10:00:00Z", "attempts": 0, "last_error": None}
+    ])
+
+    # Make the drain explode after the retry has rewritten the full queue.
+    import integrations.linear.worker as _wmod
+
+    def _boom(*a, **k):
+        raise RuntimeError("simulated crash mid-drain")
+
+    monkeypatch.setattr(_wmod, "drain", _boom)
+
+    with pytest.raises(RuntimeError):
+        backlog_server.backlog_linear_retry(target_id="ts-001")
+
+    remaining_ids = [i["target_id"] for i in read_queue(bp)]
+    assert "other-task" in remaining_ids, "other target's item was lost on crash"
+    assert "ts-001" in remaining_ids, "retried item should also remain (never drained)"
+
+
+def test_retry_unparks_permanent_item(tmp_path, monkeypatch):
+    """B-028: an explicit /linear retry clears the parked flag so a previously
+    permanent failure gets one fresh attempt."""
+    bp = _make_backlog(tmp_path, with_tracker=True)
+    # Config needs a status_mapping so the push can actually succeed once un-parked.
+    (tmp_path / "linear.yaml").write_text(yaml.safe_dump({
+        "workspaces": [{
+            "alias": "cm", "team_id": "team-uuid-42",
+            "token_env": "TASKMASTER_LINEAR_TOKEN_CM",
+            "status_mapping": {"todo": "state-todo", "in-progress": "state-progress", "done": "state-done"},
+            "priority_mapping": {"critical": 1, "high": 2, "medium": 3, "low": 4},
+        }],
+        "default_workspace": "cm",
+    }))
+    write_tracker(bp, external_system="linear", instance_alias="cm",
+                  external_key="ENG-1", title="My task", status="todo")
+    monkeypatch.setattr(backlog_server, "_backlog_path", lambda: bp)
+    monkeypatch.setenv("TASKMASTER_LINEAR_TOKEN_CM", "lin_tok_test")
+
+    import integrations.linear.client as _lc_mod
+    monkeypatch.setattr(
+        _lc_mod, "LinearClient",
+        lambda token, **kw: _client_with_handler(
+            lambda req: _ok({"issueUpdate": {"issue": {"id": "lin-id-1", "identifier": "ENG-1"}}}),
+            token=token,
+        ),
+    )
+
+    # A parked (permanent) item on disk.
+    _write_queue(bp, [
+        {"op": "task_upsert", "target_id": "ts-001", "tracker_id": "linear-cm-eng-1",
+         "enqueued_at": "2026-01-01T10:00:00Z", "attempts": 7,
+         "last_error": "dead", "permanent": True}
+    ])
+
+    result = json.loads(backlog_server.backlog_linear_retry(target_id="ts-001"))
+    assert result["ok"] is True
+    # Un-parked and successfully pushed → removed from the queue.
+    assert read_queue(bp) == []
