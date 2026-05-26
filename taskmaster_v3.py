@@ -2267,8 +2267,15 @@ def _validate_decision(fm: dict[str, Any]) -> None:
     if rec is not None:
         if not isinstance(rec, int) or not (1 <= rec <= len(opts)):
             raise ValueError(f"recommendation must be 1..{len(opts)}, got {rec!r}")
-    if status == "resolved" and not fm.get("resolved_with"):
+    rw = fm.get("resolved_with")
+    if status == "resolved" and not rw:
         raise ValueError("status=resolved requires resolved_with to be set (1..N)")
+    # resolved_with must stay in range even after options shrink (B-026): a later
+    # update_decision that drops options below resolved_with would otherwise persist
+    # an out-of-bounds index that crashes options[resolved_with - 1] on read.
+    if rw not in (None, ""):
+        if not isinstance(rw, int) or isinstance(rw, bool) or not (1 <= rw <= len(opts)):
+            raise ValueError(f"resolved_with must be 1..{len(opts)}, got {rw!r}")
     if status == "dropped" and not fm.get("dropped_reason"):
         raise ValueError("status=dropped requires dropped_reason")
 

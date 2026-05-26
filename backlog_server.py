@@ -4560,6 +4560,26 @@ def backlog_pick_task(task_id: str, force: bool = False) -> str:
         # blocked/done tasks cannot be picked — use backlog_update_task to change status first
         return f"Error: task `{task_id}` is `{status}`, expected one of: todo, in-progress, in-review"
 
+    # Surface unmet dependencies (B-050). Pick is an explicit override, so we warn
+    # rather than block — but we no longer disagree silently with next_available,
+    # which classifies a task with unmet deps as "blocked by dependencies".
+    deps = task.get("depends_on", [])
+    if isinstance(deps, str):
+        deps = [deps]
+    unmet_deps: list[str] = []
+    for dep_id in deps:
+        dep_result = _find_task(data, dep_id)
+        dep_status = dep_result[0].get("status", "todo") if dep_result else "todo"
+        if dep_status != "done":
+            unmet_deps.append(dep_id)
+    dep_warning = ""
+    if unmet_deps:
+        unmet_str = ", ".join(f"`{d}`" for d in unmet_deps)
+        dep_warning = (
+            f"\n\n⚠️ **Unmet dependencies:** {unmet_str} not yet done. "
+            f"Picking anyway (explicit override) — `backlog_next_available` treats this task as blocked."
+        )
+
     task["status"] = "in-progress"
     task["started"] = task.get("started") or _now()
     task["locked_by"] = SESSION_ID
@@ -4574,7 +4594,7 @@ def backlog_pick_task(task_id: str, force: bool = False) -> str:
     worktree_instruction = _build_worktree_instruction(task_id, sub_repo, branch, worktree)
 
     # Open handovers stay open automatically under the new model — no resumed transition needed.
-    return f"Picked `{task_id}` — {task['title']} (locked to this session)\n\n" + _task_context(data, task, epic) + worktree_instruction
+    return f"Picked `{task_id}` — {task['title']} (locked to this session)" + dep_warning + "\n\n" + _task_context(data, task, epic) + worktree_instruction
 
 
 def _append_changelog(
@@ -4667,6 +4687,34 @@ def _append_changelog(
     return f"\n\n**Session logged** to PROGRESS.md changelog."
 
 
+def _open_bugs_for_task(bp, task_id: str) -> tuple[list[str], list[str]]:
+    """Return (open_bugs, fixed_bugs) whose found_in matches task_id.
+
+    Matching is case-insensitive (B-025): a bug filed with found_in="TEST-EPIC-001"
+    must still gate task id "test-epic-001". Shared by complete_task and batch_update
+    so both honor the same close-gate.
+    """
+    from taskmaster_v3 import (
+        list_bug_ids as _list_bug_ids,
+        read_bug as _read_bug,
+    )
+    open_bugs: list[str] = []
+    fixed_bugs: list[str] = []
+    tid = (task_id or "").casefold()
+    for bid in _list_bug_ids(bp):
+        try:
+            bfm, _ = _read_bug(bp, bid)
+        except (OSError, ValueError):
+            continue
+        if (bfm.get("found_in") or "").casefold() == tid:
+            st = bfm.get("status")
+            if st == "open":
+                open_bugs.append(bid)
+            elif st == "fixed":
+                fixed_bugs.append(bid)
+    return open_bugs, fixed_bugs
+
+
 @mcp.tool()
 def backlog_complete_task(
     task_id: str,
@@ -4721,23 +4769,10 @@ def backlog_complete_task(
     # Bug close-gate (per bug-tier redesign)
     bp = _backlog_path()
     from taskmaster_v3 import (
-        list_bug_ids as _list_bug_ids,
-        read_bug as _read_bug,
         archive_bug as _archive_bug,
         sync_bug_index as _sync_bug_index,
     )
-    open_bugs: list[str] = []
-    fixed_bugs: list[str] = []
-    for bid in _list_bug_ids(bp):
-        try:
-            bfm, _ = _read_bug(bp, bid)
-        except (OSError, ValueError):
-            continue
-        if bfm.get("found_in") == task_id:
-            if bfm.get("status") == "open":
-                open_bugs.append(bid)
-            elif bfm.get("status") == "fixed":
-                fixed_bugs.append(bid)
+    open_bugs, fixed_bugs = _open_bugs_for_task(bp, task_id)
     if open_bugs:
         return (
             f"Cannot complete {task_id} — {len(open_bugs)} open bug(s) linked via found_in: "
@@ -5922,11 +5957,23 @@ def backlog_batch_update(operations: str) -> str:
                 errors.append(f"`{task_id}`: not found")
                 continue
             task, epic = result
+            if new_status == "done":
+                # Same lifecycle guard + close-gate as backlog_complete_task (B-049).
+                cur_status = task.get("status", "todo")
+                if cur_status not in ("in-progress", "in-review", "blocked"):
+                    errors.append(f"`{task_id}`: cannot complete from `{cur_status}` (expected in-progress/in-review/blocked)")
+                    continue
+                open_bugs, _ = _open_bugs_for_task(_backlog_path(), task_id)
+                if open_bugs:
+                    errors.append(f"`{task_id}`: {len(open_bugs)} open bug(s) linked via found_in: {', '.join(open_bugs)}")
+                    continue
             task["status"] = new_status
             if new_status == "in-progress" and not task.get("started"):
                 task["started"] = _now()
-            elif new_status == "done" and not task.get("completed"):
-                task["completed"] = _now()
+            elif new_status == "done":
+                task["started"] = task.get("started") or _now()
+                if not task.get("completed"):
+                    task["completed"] = _now()
             if new_status not in ("in-progress",):
                 task.pop("locked_by", None)
             results.append(f"`{task_id}` → {new_status}")
@@ -5939,7 +5986,18 @@ def backlog_batch_update(operations: str) -> str:
                 errors.append(f"`{task_id}`: not found")
                 continue
             task, epic = result
+            # Honor the same lifecycle guard + close-gate as backlog_complete_task,
+            # and backfill `started` so duration analytics stay correct (B-049).
+            cur_status = task.get("status", "todo")
+            if cur_status not in ("in-progress", "in-review", "blocked"):
+                errors.append(f"`{task_id}`: cannot complete from `{cur_status}` (expected in-progress/in-review/blocked)")
+                continue
+            open_bugs, _ = _open_bugs_for_task(_backlog_path(), task_id)
+            if open_bugs:
+                errors.append(f"`{task_id}`: {len(open_bugs)} open bug(s) linked via found_in: {', '.join(open_bugs)}")
+                continue
             task["status"] = "done"
+            task["started"] = task.get("started") or _now()
             if not task.get("completed"):
                 task["completed"] = _now()
             task.pop("locked_by", None)
