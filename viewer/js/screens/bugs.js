@@ -81,7 +81,7 @@ export async function mount(root, { store, prefs }) {
     for (const bug of activeBugs) {
       const status = bug.status || 'open';
       if (!filters[status]) continue;
-      if (searchTerm && !bug.title.toLowerCase().includes(searchTerm) && !bug.id.toLowerCase().includes(searchTerm)) continue;
+      if (searchTerm && !(bug.title || '').toLowerCase().includes(searchTerm) && !bug.id.toLowerCase().includes(searchTerm)) continue;
       visible.push(bug);
     }
 
@@ -90,7 +90,7 @@ export async function mount(root, { store, prefs }) {
       const seen = new Set(activeBugs.map(b => b.id));
       for (const bug of archiveBugs) {
         if (seen.has(bug.id)) continue;
-        if (searchTerm && !bug.title.toLowerCase().includes(searchTerm) && !bug.id.toLowerCase().includes(searchTerm)) continue;
+        if (searchTerm && !(bug.title || '').toLowerCase().includes(searchTerm) && !bug.id.toLowerCase().includes(searchTerm)) continue;
         visible.push(bug);
       }
     }

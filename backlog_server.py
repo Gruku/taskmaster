@@ -7206,7 +7206,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
             )
             bp = _backlog_path()
             qs = parse_qs(urlparse(self.path).query)
-            include_archive = qs.get("include_archive", ["false"])[0].lower() == "true"
+            include_archive = qs.get("include_archive", ["false"])[0].strip().lower() in ("1", "true", "yes", "on")
             status_filter = qs.get("status", [""])[0]
             found_in_filter = qs.get("found_in", [""])[0]
             bugs = []
