@@ -126,3 +126,64 @@ def test_error_trace_ladder_returns_ladder(tmp_taskmaster):
 
 def test_error_trace_ladder_empty_when_no_manifest(tmp_taskmaster):
     assert backlog_project_error_trace_ladder() == []
+
+
+# ---------------------------------------------------------------------------
+# B-019: _dig returns whole manifest on empty/whitespace path
+# ---------------------------------------------------------------------------
+
+
+def test_get_field_empty_string_returns_none(tmp_taskmaster):
+    """B-019: backlog_project_get_field('') must return None, not the whole manifest."""
+    _write(tmp_taskmaster, {
+        "schema_version": SCHEMA_VERSION,
+        "meta": {"name": "x", "slug": "x"},
+    })
+    assert backlog_project_get_field("") is None
+
+
+def test_get_field_whitespace_path_returns_none(tmp_taskmaster):
+    """B-019: backlog_project_get_field('   ') must return None."""
+    _write(tmp_taskmaster, {
+        "schema_version": SCHEMA_VERSION,
+        "meta": {"name": "x", "slug": "x"},
+    })
+    assert backlog_project_get_field("   ") is None
+
+
+def test_get_field_valid_path_still_works_after_fix(tmp_taskmaster):
+    """B-019: ensure a valid path still resolves after the empty-path guard."""
+    _write(tmp_taskmaster, {
+        "schema_version": SCHEMA_VERSION,
+        "meta": {"name": "hello", "slug": "hello"},
+    })
+    assert backlog_project_get_field("meta.name") == "hello"
+
+
+# ---------------------------------------------------------------------------
+# B-016: backlog_project_init(name='') writes invalid manifest
+# ---------------------------------------------------------------------------
+
+
+def test_init_empty_name_raises_and_writes_no_file(tmp_taskmaster):
+    """B-016: init with empty name must raise ValueError and write nothing."""
+    yaml_path = tmp_taskmaster / ".taskmaster" / "project.yaml"
+    assert not yaml_path.exists()
+    with pytest.raises(ValueError, match="name"):
+        backlog_project_init(name="")
+    assert not yaml_path.exists(), "project.yaml must NOT be written on empty name"
+
+
+def test_init_whitespace_name_raises(tmp_taskmaster):
+    """B-016: init with whitespace-only name must also raise ValueError."""
+    with pytest.raises(ValueError, match="name"):
+        backlog_project_init(name="   ")
+
+
+def test_init_valid_name_still_creates_manifest(tmp_taskmaster):
+    """B-016: a valid name still produces a readable manifest."""
+    result = backlog_project_init(name="myproj", slug="myproj")
+    assert "myproj" in result or "created" in result.lower()
+    data = backlog_project_get()
+    assert data is not None
+    assert data["meta"]["name"] == "myproj"

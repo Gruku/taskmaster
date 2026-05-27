@@ -1106,6 +1106,8 @@ def backlog_get_task(
     bp = _backlog_path()
 
     # ── sections-only mode ───────────────────────────────────────────────────
+    if sections is not None and not sections:
+        return "Error: sections=[] requested no sections; pass sections=None for the slim view or name at least one section"
     if sections:
         try:
             sec_data = _resolve_sections(
@@ -2127,6 +2129,8 @@ def backlog_handover_get(
         fm, body = _read_task_file(candidates[0])
 
     # ── sections-only mode ───────────────────────────────────────────────────
+    if sections is not None and not sections:
+        return "Error: sections=[] requested no sections; pass sections=None for the slim view or name at least one section"
     if sections:
         try:
             sec_data = _resolve_sections(fm, kind="handover", sections=sections, body=body)
@@ -2758,6 +2762,8 @@ def backlog_issue_get(
         return f"Issue not found: {issue_id}"
 
     # ── sections-only mode ───────────────────────────────────────────────────
+    if sections is not None and not sections:
+        return "Error: sections=[] requested no sections; pass sections=None for the slim view or name at least one section"
     if sections:
         try:
             sec_data = _resolve_sections(fm, kind="issue", sections=sections, body=body)
@@ -3127,11 +3133,14 @@ def backlog_bug_pattern_scan(mode: str = "all") -> str:
         mode: Scan scope. "all" includes archive, "end_of_task" excludes it.
     """
     from taskmaster_v3 import scan_bug_patterns as _scan_bug_patterns
+    if mode not in {"all", "open_only", "end_of_task"}:
+        return f"Error: invalid mode {mode!r} (expected all|open_only|end_of_task)"
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    include_archive = (mode != "end_of_task")
-    groups = _scan_bug_patterns(bp, include_archive=include_archive)
+    include_archive = (mode == "all")
+    open_only = (mode == "open_only")
+    groups = _scan_bug_patterns(bp, include_archive=include_archive, open_only=open_only)
     if not groups:
         return "No bug patterns found (need >=2 matching signatures)."
     lines = [f"Found {len(groups)} pattern group(s):"]
@@ -3519,6 +3528,8 @@ def backlog_idea_get(
         # is rendered as-is (no ID→pill substitution). To get expanded links, use
         # slim mode (verbose=False) with expand_links=True.
         pass  # silently ignore expand_links in verbose
+    if sections is not None and not sections:
+        return "Error: sections=[] requested no sections; pass sections=None for the slim view or name at least one section"
     if sections:
         return "Error: ideas have no canonical body sections — use verbose=True to read the full body."
     try:
@@ -3816,6 +3827,8 @@ def backlog_lesson_get(
         return f"Lesson not found: {lesson_id}"
 
     # ── sections-only mode ───────────────────────────────────────────────────
+    if sections is not None and not sections:
+        return "Error: sections=[] requested no sections; pass sections=None for the slim view or name at least one section"
     if sections:
         try:
             sec_data = _resolve_sections(fm, kind="lesson", sections=sections, body=body)
@@ -8397,6 +8410,8 @@ def _project_root_or_cwd() -> Path:
 
 
 def _dig(data: Any, path: str) -> Any:
+    if not path.strip():
+        return None
     cursor: Any = data
     for match in _PATH_TOKEN.finditer(path):
         key, idx = match.group(1), match.group(2)
@@ -8492,6 +8507,8 @@ def backlog_project_init(name: str, slug: str = "") -> str:
 
     Returns a confirmation message including the path written.
     """
+    if not name or not name.strip():
+        raise ValueError("name: required (project name must be non-empty)")
     root = _project_root_or_cwd()
     path = project_yaml_path(root)
     if path.exists():
@@ -8509,6 +8526,9 @@ def backlog_project_init(name: str, slug: str = "") -> str:
     }
     _ensure_taskmaster_dir(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    ok, errs = validate_manifest_dict(scaffold)
+    if not ok:
+        raise ValueError("refusing to write invalid manifest: " + "; ".join(errs))
     _atomic_write(
         path,
         yaml.safe_dump(scaffold, sort_keys=False, allow_unicode=True, default_flow_style=False),

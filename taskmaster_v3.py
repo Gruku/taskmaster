@@ -2098,6 +2098,7 @@ def _bug_signature(fm: dict[str, Any]) -> tuple | None:
 def scan_bug_patterns(
     backlog_path: Path,
     include_archive: bool = True,
+    open_only: bool = False,
 ) -> list[dict[str, Any]]:
     """Return a list of pattern groups: [{signature, bug_ids: [B-001, B-007, ...]}, ...].
 
@@ -2114,6 +2115,8 @@ def scan_bug_patterns(
         try:
             fm, _ = read_bug(backlog_path, bid)
         except (OSError, ValueError):
+            continue
+        if open_only and fm.get("status") != "open":
             continue
         sig = _bug_signature(fm)
         if sig is None:

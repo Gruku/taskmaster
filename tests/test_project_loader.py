@@ -117,3 +117,76 @@ def test_load_malformed_yaml_returns_none(tmp_path, caplog):
         "not: valid: yaml: [\n", encoding="utf-8"
     )
     assert load_project_manifest(tmp_path) is None
+
+
+# ---------------------------------------------------------------------------
+# B-017: duplicate repo names pass validation
+# ---------------------------------------------------------------------------
+
+from project import validate_manifest_dict
+
+
+def test_validate_rejects_duplicate_repo_names():
+    """B-017: two repos with the same name must fail validation."""
+    data = {
+        "schema_version": SCHEMA_VERSION,
+        "meta": {"name": "proj", "slug": "proj"},
+        "repos": [
+            {"name": "api", "path": "./api"},
+            {"name": "api", "path": "./svc"},
+        ],
+    }
+    ok, errs = validate_manifest_dict(data)
+    assert not ok
+    assert any("duplicate" in e and "api" in e for e in errs)
+
+
+def test_validate_unique_repo_names_pass():
+    """B-017: distinct repo names still pass."""
+    data = {
+        "schema_version": SCHEMA_VERSION,
+        "meta": {"name": "proj", "slug": "proj"},
+        "repos": [
+            {"name": "api", "path": "./api"},
+            {"name": "ui", "path": "./ui"},
+        ],
+    }
+    ok, errs = validate_manifest_dict(data)
+    assert ok, errs
+
+
+# ---------------------------------------------------------------------------
+# B-018: schema_version float / bool passes incorrectly
+# ---------------------------------------------------------------------------
+
+
+def test_validate_rejects_float_schema_version():
+    """B-018: schema_version=1.0 (float) must be rejected."""
+    data = {
+        "schema_version": 1.0,
+        "meta": {"name": "proj", "slug": "proj"},
+    }
+    ok, errs = validate_manifest_dict(data)
+    assert not ok
+    assert any("schema_version" in e for e in errs)
+
+
+def test_validate_rejects_bool_schema_version():
+    """B-018: schema_version=True (bool) must be rejected."""
+    data = {
+        "schema_version": True,
+        "meta": {"name": "proj", "slug": "proj"},
+    }
+    ok, errs = validate_manifest_dict(data)
+    assert not ok
+    assert any("schema_version" in e for e in errs)
+
+
+def test_validate_accepts_int_schema_version():
+    """B-018: schema_version=SCHEMA_VERSION (int) must still pass."""
+    data = {
+        "schema_version": SCHEMA_VERSION,
+        "meta": {"name": "proj", "slug": "proj"},
+    }
+    ok, errs = validate_manifest_dict(data)
+    assert ok, errs
