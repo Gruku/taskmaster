@@ -2051,7 +2051,7 @@ def backlog_handover_list(
     if session_kind:
         entries = [e for e in entries if e.get("session_kind") == session_kind]
     if since:
-        entries = [e for e in entries if e.get("id", "") >= since]
+        entries = [e for e in entries if e.get("date", e.get("id", "")) >= since]
 
     from taskmaster_v3 import HANDOVER_STATUSES as _STATUSES
     if status and status != "all":
@@ -2059,8 +2059,11 @@ def backlog_handover_list(
             return f"Error: status must be one of {_STATUSES} or 'all', got {status!r}."
         entries = [e for e in entries if e.get("status") == status]
 
+    if limit < 1:
+        return f"Error: limit must be >= 1, got {limit}."
+
     # Truncate to limit after all filters.
-    entries = entries[: max(1, limit)]
+    entries = entries[:limit]
 
     if not entries:
         filtered = any([task_id, session_kind, since, status != "all"])
@@ -2397,6 +2400,9 @@ def backlog_link_query(source: str = "", target: str = "", type: str = "",
         return f"error: invalid source ID {source!r}"
     if target and entity_kind_of(target) is None:
         return f"error: invalid target ID {target!r}"
+
+    if source and read_entity_anywhere(backlog_path, source) is None:
+        return f"error: source {source!r} not found"
 
     if source:
         results = list(edges_from(source))
@@ -6026,7 +6032,7 @@ def backlog_batch_update(operations: str) -> str:
                 continue
             task, epic = result
             task["status"] = "archived"
-            task["archived_reason"] = reason
+            task["archive_reason"] = reason
             task.pop("locked_by", None)
             results.append(f"`{task_id}` → archived ({reason})")
             changed = True

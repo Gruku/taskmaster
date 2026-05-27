@@ -106,3 +106,29 @@ def test_pick_no_warning_when_dependency_done(running_server, tmp_path):
 
     out = _bs.backlog_pick_task("needs-002")
     assert "Unmet dependencies" not in out, f"Should not warn when dep is done, got: {out!r}"
+
+
+# ── B-048: batch archive must write `archive_reason`, not `archived_reason` ──
+
+def test_batch_archive_writes_canonical_archive_reason_key(running_server, tmp_path):
+    """batch `archive <id> <reason>` must persist `archive_reason`, not `archived_reason`.
+
+    `archived_reason` is the wrong key; every other archive path and the viewer
+    use `archive_reason`.  A misspelled key means the reason chip never renders
+    and epic stats miscount the entry.
+    """
+    _ensure_scaffold(tmp_path)
+    _add_task("arch-001")
+
+    import backlog_server as _bs
+    out = _bs.backlog_batch_update("archive arch-001 deprecated")
+    assert "error" not in out.lower(), f"Unexpected error from batch archive: {out!r}"
+
+    task, _ = _bs._find_task(_bs._load(), "arch-001")
+    assert task.get("status") == "archived", f"Expected archived status, got {task.get('status')!r}"
+    assert task.get("archive_reason") == "deprecated", (
+        f"Expected archive_reason='deprecated', got task={task!r}"
+    )
+    assert "archived_reason" not in task, (
+        f"Stale key `archived_reason` must not be present, got task={task!r}"
+    )

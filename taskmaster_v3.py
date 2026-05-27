@@ -622,7 +622,7 @@ def would_create_cycle(graph: dict[str, list[str]], source: str, target: str) ->
 _INLINE_REF_RE = re.compile(
     r"(?:(?<=^)|(?<=[^A-Za-z0-9_]))"               # left boundary
     r"(?:\[\[|@)?"                                  # optional [[ or @
-    r"(IDEA-\d+|ISS-\d+|HND-\d+|T-\d+|L-\d+)"       # captured ID
+    r"(IDEA-\d+|ISS-\d+|HND-\d+|T-\d+|L-\d+|\d{4}-\d{2}-\d{2}-[a-z0-9\-]+)"  # captured ID (incl. date-slug handover)
     r"(?:\]\])?"                                    # optional ]]
 )
 
@@ -644,6 +644,8 @@ def extract_inline_refs(body: str | None, *, self_id: str | None = None) -> list
     out: list[str] = []
     for match in _INLINE_REF_RE.finditer(body):
         eid = match.group(1)
+        if entity_kind_of(eid) is None:
+            continue
         if eid in seen:
             continue
         if self_id and eid == self_id:
@@ -5364,6 +5366,7 @@ def auto_link_on_save(backlog_path: Path, entity_id: str) -> list[str]:
 
     if entity_kind_of(entity_id) == "task":
         body = "\n\n".join(filter(None, [
+            entity.get(BODY_KEY) or "",
             entity.get("notes") or "",
             entity.get("review_instructions") or "",
         ]))

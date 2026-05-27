@@ -47,3 +47,19 @@ def test_extract_excludes_self_reference():
 def test_extract_empty_body():
     assert extract_inline_refs("") == []
     assert extract_inline_refs(None) == []
+
+
+# B-035 tests: date-slug handover ID extraction
+def test_extract_matches_date_slug_handover_id():
+    result = extract_inline_refs("See 2026-05-01-my-handover for context.")
+    assert "2026-05-01-my-handover" in result
+
+
+def test_extract_ignores_bare_date_and_timestamp():
+    assert extract_inline_refs("shipped on 2026-05-01 today") == []
+    assert extract_inline_refs("ran at 2026-05-01T20:38:15Z ok") == []
+
+
+def test_extract_prefixed_id_still_works_after_b035():
+    # Confirm an existing prefixed-ID test still passes.
+    assert extract_inline_refs("Working on T-001 now.") == ["T-001"]
