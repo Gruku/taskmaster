@@ -56,6 +56,24 @@ def test_update_decision_rejects_terminal_to_open(backlog, open_decision):
         tm.update_decision(backlog, open_decision, {"status": "open"})
 
 
+def test_update_rejects_shrinking_options_below_resolved_with(backlog, open_decision):
+    """B-026: once resolved with option 3, you cannot shrink options to fewer
+    than 3 — that would leave resolved_with pointing past the end of the list
+    and crash options[resolved_with - 1] on the next read."""
+    tm.resolve_decision(backlog, open_decision, resolved_with=3)
+    with pytest.raises(ValueError, match="resolved_with must be 1..2"):
+        tm.update_decision(backlog, open_decision, {"options": ["a", "b"]})
+
+
+def test_update_allows_shrinking_options_that_keep_resolved_with_in_range(backlog, open_decision):
+    """B-026 guard must not over-fire: shrinking to a list that still contains
+    the resolved option is fine."""
+    tm.resolve_decision(backlog, open_decision, resolved_with=2)
+    fm = tm.update_decision(backlog, open_decision, {"options": ["a", "b"]})
+    assert fm["options"] == ["a", "b"]
+    assert fm["resolved_with"] == 2
+
+
 def test_link_handover_appends_referenced_in(backlog, open_decision):
     tm.link_decision_to_handover(backlog, open_decision, "2026-05-15-foo")
     fm, _ = tm.read_decision(backlog, open_decision)

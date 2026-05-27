@@ -108,6 +108,32 @@ def test_complete_task_succeeds_when_no_open_bugs(running_server, tmp_path):
     )
 
 
+def test_complete_task_gate_is_case_insensitive(running_server, tmp_path):
+    """B-025: a bug filed with found_in in a different case must still gate the task.
+    found_in='TEST-EPIC-005' (uppercase) must block completing 'test-epic-005'."""
+    base, _ = running_server
+    task_id = _setup_task(tmp_path, "test-epic-005")
+
+    bug = _post(base, "/api/bugs", {
+        "title": "uppercase-found-in bug",
+        "found_in": task_id.upper(),
+        "discovered_by": "user",
+    })
+    assert bug["id"].startswith("B-"), f"Unexpected bug response: {bug}"
+
+    import backlog_server as _bs
+    out = _bs.backlog_complete_task(task_id=task_id)
+
+    assert "open" in out.lower() or "bug" in out.lower(), (
+        f"Expected case-insensitive gate to block, got: {out!r}"
+    )
+    data = _bs._load()
+    task, _ = _bs._find_task(data, task_id)
+    assert task.get("status") != "done", (
+        f"Task should not be done despite case-mismatched open bug, status={task.get('status')!r}"
+    )
+
+
 def test_complete_task_archives_fixed_bugs(running_server, tmp_path):
     """Fixed bugs linked via found_in are moved to archive/ post-transition."""
     base, _ = running_server

@@ -1106,6 +1106,8 @@ def backlog_get_task(
     bp = _backlog_path()
 
     # ── sections-only mode ───────────────────────────────────────────────────
+    if sections is not None and not sections:
+        return "Error: sections=[] requested no sections; pass sections=None for the slim view or name at least one section"
     if sections:
         try:
             sec_data = _resolve_sections(
@@ -2049,7 +2051,7 @@ def backlog_handover_list(
     if session_kind:
         entries = [e for e in entries if e.get("session_kind") == session_kind]
     if since:
-        entries = [e for e in entries if e.get("id", "") >= since]
+        entries = [e for e in entries if e.get("date", e.get("id", "")) >= since]
 
     from taskmaster_v3 import HANDOVER_STATUSES as _STATUSES
     if status and status != "all":
@@ -2057,8 +2059,11 @@ def backlog_handover_list(
             return f"Error: status must be one of {_STATUSES} or 'all', got {status!r}."
         entries = [e for e in entries if e.get("status") == status]
 
+    if limit < 1:
+        return f"Error: limit must be >= 1, got {limit}."
+
     # Truncate to limit after all filters.
-    entries = entries[: max(1, limit)]
+    entries = entries[:limit]
 
     if not entries:
         filtered = any([task_id, session_kind, since, status != "all"])
@@ -2127,6 +2132,8 @@ def backlog_handover_get(
         fm, body = _read_task_file(candidates[0])
 
     # ── sections-only mode ───────────────────────────────────────────────────
+    if sections is not None and not sections:
+        return "Error: sections=[] requested no sections; pass sections=None for the slim view or name at least one section"
     if sections:
         try:
             sec_data = _resolve_sections(fm, kind="handover", sections=sections, body=body)
@@ -2393,6 +2400,9 @@ def backlog_link_query(source: str = "", target: str = "", type: str = "",
         return f"error: invalid source ID {source!r}"
     if target and entity_kind_of(target) is None:
         return f"error: invalid target ID {target!r}"
+
+    if source and read_entity_anywhere(backlog_path, source) is None:
+        return f"error: source {source!r} not found"
 
     if source:
         results = list(edges_from(source))
@@ -2758,6 +2768,8 @@ def backlog_issue_get(
         return f"Issue not found: {issue_id}"
 
     # ── sections-only mode ───────────────────────────────────────────────────
+    if sections is not None and not sections:
+        return "Error: sections=[] requested no sections; pass sections=None for the slim view or name at least one section"
     if sections:
         try:
             sec_data = _resolve_sections(fm, kind="issue", sections=sections, body=body)
@@ -3127,11 +3139,14 @@ def backlog_bug_pattern_scan(mode: str = "all") -> str:
         mode: Scan scope. "all" includes archive, "end_of_task" excludes it.
     """
     from taskmaster_v3 import scan_bug_patterns as _scan_bug_patterns
+    if mode not in {"all", "open_only", "end_of_task"}:
+        return f"Error: invalid mode {mode!r} (expected all|open_only|end_of_task)"
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    include_archive = (mode != "end_of_task")
-    groups = _scan_bug_patterns(bp, include_archive=include_archive)
+    include_archive = (mode == "all")
+    open_only = (mode == "open_only")
+    groups = _scan_bug_patterns(bp, include_archive=include_archive, open_only=open_only)
     if not groups:
         return "No bug patterns found (need >=2 matching signatures)."
     lines = [f"Found {len(groups)} pattern group(s):"]
@@ -3519,6 +3534,8 @@ def backlog_idea_get(
         # is rendered as-is (no ID→pill substitution). To get expanded links, use
         # slim mode (verbose=False) with expand_links=True.
         pass  # silently ignore expand_links in verbose
+    if sections is not None and not sections:
+        return "Error: sections=[] requested no sections; pass sections=None for the slim view or name at least one section"
     if sections:
         return "Error: ideas have no canonical body sections — use verbose=True to read the full body."
     try:
@@ -3816,6 +3833,8 @@ def backlog_lesson_get(
         return f"Lesson not found: {lesson_id}"
 
     # ── sections-only mode ───────────────────────────────────────────────────
+    if sections is not None and not sections:
+        return "Error: sections=[] requested no sections; pass sections=None for the slim view or name at least one section"
     if sections:
         try:
             sec_data = _resolve_sections(fm, kind="lesson", sections=sections, body=body)
@@ -4560,6 +4579,26 @@ def backlog_pick_task(task_id: str, force: bool = False) -> str:
         # blocked/done tasks cannot be picked — use backlog_update_task to change status first
         return f"Error: task `{task_id}` is `{status}`, expected one of: todo, in-progress, in-review"
 
+    # Surface unmet dependencies (B-050). Pick is an explicit override, so we warn
+    # rather than block — but we no longer disagree silently with next_available,
+    # which classifies a task with unmet deps as "blocked by dependencies".
+    deps = task.get("depends_on", [])
+    if isinstance(deps, str):
+        deps = [deps]
+    unmet_deps: list[str] = []
+    for dep_id in deps:
+        dep_result = _find_task(data, dep_id)
+        dep_status = dep_result[0].get("status", "todo") if dep_result else "todo"
+        if dep_status != "done":
+            unmet_deps.append(dep_id)
+    dep_warning = ""
+    if unmet_deps:
+        unmet_str = ", ".join(f"`{d}`" for d in unmet_deps)
+        dep_warning = (
+            f"\n\n⚠️ **Unmet dependencies:** {unmet_str} not yet done. "
+            f"Picking anyway (explicit override) — `backlog_next_available` treats this task as blocked."
+        )
+
     task["status"] = "in-progress"
     task["started"] = task.get("started") or _now()
     task["locked_by"] = SESSION_ID
@@ -4574,7 +4613,7 @@ def backlog_pick_task(task_id: str, force: bool = False) -> str:
     worktree_instruction = _build_worktree_instruction(task_id, sub_repo, branch, worktree)
 
     # Open handovers stay open automatically under the new model — no resumed transition needed.
-    return f"Picked `{task_id}` — {task['title']} (locked to this session)\n\n" + _task_context(data, task, epic) + worktree_instruction
+    return f"Picked `{task_id}` — {task['title']} (locked to this session)" + dep_warning + "\n\n" + _task_context(data, task, epic) + worktree_instruction
 
 
 def _append_changelog(
@@ -4667,6 +4706,34 @@ def _append_changelog(
     return f"\n\n**Session logged** to PROGRESS.md changelog."
 
 
+def _open_bugs_for_task(bp, task_id: str) -> tuple[list[str], list[str]]:
+    """Return (open_bugs, fixed_bugs) whose found_in matches task_id.
+
+    Matching is case-insensitive (B-025): a bug filed with found_in="TEST-EPIC-001"
+    must still gate task id "test-epic-001". Shared by complete_task and batch_update
+    so both honor the same close-gate.
+    """
+    from taskmaster_v3 import (
+        list_bug_ids as _list_bug_ids,
+        read_bug as _read_bug,
+    )
+    open_bugs: list[str] = []
+    fixed_bugs: list[str] = []
+    tid = (task_id or "").casefold()
+    for bid in _list_bug_ids(bp):
+        try:
+            bfm, _ = _read_bug(bp, bid)
+        except (OSError, ValueError):
+            continue
+        if (bfm.get("found_in") or "").casefold() == tid:
+            st = bfm.get("status")
+            if st == "open":
+                open_bugs.append(bid)
+            elif st == "fixed":
+                fixed_bugs.append(bid)
+    return open_bugs, fixed_bugs
+
+
 @mcp.tool()
 def backlog_complete_task(
     task_id: str,
@@ -4721,23 +4788,10 @@ def backlog_complete_task(
     # Bug close-gate (per bug-tier redesign)
     bp = _backlog_path()
     from taskmaster_v3 import (
-        list_bug_ids as _list_bug_ids,
-        read_bug as _read_bug,
         archive_bug as _archive_bug,
         sync_bug_index as _sync_bug_index,
     )
-    open_bugs: list[str] = []
-    fixed_bugs: list[str] = []
-    for bid in _list_bug_ids(bp):
-        try:
-            bfm, _ = _read_bug(bp, bid)
-        except (OSError, ValueError):
-            continue
-        if bfm.get("found_in") == task_id:
-            if bfm.get("status") == "open":
-                open_bugs.append(bid)
-            elif bfm.get("status") == "fixed":
-                fixed_bugs.append(bid)
+    open_bugs, fixed_bugs = _open_bugs_for_task(bp, task_id)
     if open_bugs:
         return (
             f"Cannot complete {task_id} — {len(open_bugs)} open bug(s) linked via found_in: "
@@ -5922,11 +5976,23 @@ def backlog_batch_update(operations: str) -> str:
                 errors.append(f"`{task_id}`: not found")
                 continue
             task, epic = result
+            if new_status == "done":
+                # Same lifecycle guard + close-gate as backlog_complete_task (B-049).
+                cur_status = task.get("status", "todo")
+                if cur_status not in ("in-progress", "in-review", "blocked"):
+                    errors.append(f"`{task_id}`: cannot complete from `{cur_status}` (expected in-progress/in-review/blocked)")
+                    continue
+                open_bugs, _ = _open_bugs_for_task(_backlog_path(), task_id)
+                if open_bugs:
+                    errors.append(f"`{task_id}`: {len(open_bugs)} open bug(s) linked via found_in: {', '.join(open_bugs)}")
+                    continue
             task["status"] = new_status
             if new_status == "in-progress" and not task.get("started"):
                 task["started"] = _now()
-            elif new_status == "done" and not task.get("completed"):
-                task["completed"] = _now()
+            elif new_status == "done":
+                task["started"] = task.get("started") or _now()
+                if not task.get("completed"):
+                    task["completed"] = _now()
             if new_status not in ("in-progress",):
                 task.pop("locked_by", None)
             results.append(f"`{task_id}` → {new_status}")
@@ -5939,7 +6005,18 @@ def backlog_batch_update(operations: str) -> str:
                 errors.append(f"`{task_id}`: not found")
                 continue
             task, epic = result
+            # Honor the same lifecycle guard + close-gate as backlog_complete_task,
+            # and backfill `started` so duration analytics stay correct (B-049).
+            cur_status = task.get("status", "todo")
+            if cur_status not in ("in-progress", "in-review", "blocked"):
+                errors.append(f"`{task_id}`: cannot complete from `{cur_status}` (expected in-progress/in-review/blocked)")
+                continue
+            open_bugs, _ = _open_bugs_for_task(_backlog_path(), task_id)
+            if open_bugs:
+                errors.append(f"`{task_id}`: {len(open_bugs)} open bug(s) linked via found_in: {', '.join(open_bugs)}")
+                continue
             task["status"] = "done"
+            task["started"] = task.get("started") or _now()
             if not task.get("completed"):
                 task["completed"] = _now()
             task.pop("locked_by", None)
@@ -5955,7 +6032,7 @@ def backlog_batch_update(operations: str) -> str:
                 continue
             task, epic = result
             task["status"] = "archived"
-            task["archived_reason"] = reason
+            task["archive_reason"] = reason
             task.pop("locked_by", None)
             results.append(f"`{task_id}` → archived ({reason})")
             changed = True
@@ -7053,8 +7130,12 @@ class ViewerHandler(BaseHTTPRequestHandler):
             import json as _json
             from taskmaster_v3 import list_auto_sessions
             sessions = list_auto_sessions()
+            active = next(
+                (s for s in sessions if s.get("cursor") is not None and not s.get("stopped")),
+                None,
+            )
             body = (
-                _json.dumps(sessions[0]).encode("utf-8") if sessions
+                _json.dumps(active).encode("utf-8") if active
                 else b'{"running":false}'
             )
             self.send_response(200)
@@ -7206,7 +7287,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
             )
             bp = _backlog_path()
             qs = parse_qs(urlparse(self.path).query)
-            include_archive = qs.get("include_archive", ["false"])[0].lower() == "true"
+            include_archive = qs.get("include_archive", ["false"])[0].strip().lower() in ("1", "true", "yes", "on")
             status_filter = qs.get("status", [""])[0]
             found_in_filter = qs.get("found_in", [""])[0]
             bugs = []
@@ -8339,6 +8420,8 @@ def _project_root_or_cwd() -> Path:
 
 
 def _dig(data: Any, path: str) -> Any:
+    if not path.strip():
+        return None
     cursor: Any = data
     for match in _PATH_TOKEN.finditer(path):
         key, idx = match.group(1), match.group(2)
@@ -8434,6 +8517,8 @@ def backlog_project_init(name: str, slug: str = "") -> str:
 
     Returns a confirmation message including the path written.
     """
+    if not name or not name.strip():
+        raise ValueError("name: required (project name must be non-empty)")
     root = _project_root_or_cwd()
     path = project_yaml_path(root)
     if path.exists():
@@ -8451,6 +8536,9 @@ def backlog_project_init(name: str, slug: str = "") -> str:
     }
     _ensure_taskmaster_dir(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    ok, errs = validate_manifest_dict(scaffold)
+    if not ok:
+        raise ValueError("refusing to write invalid manifest: " + "; ".join(errs))
     _atomic_write(
         path,
         yaml.safe_dump(scaffold, sort_keys=False, allow_unicode=True, default_flow_style=False),
@@ -8846,22 +8934,30 @@ def backlog_linear_retry(target_id: str = "") -> str:
 
     data = _load()
 
-    if not target_id:
-        counts = _worker.drain(bp, client, cfg, backlog_data=data)
-    else:
-        # Filter to target only: drain the subset, then restore the rest.
-        all_items = _worker.read_queue(bp)
-        target_items = [i for i in all_items if i.get("target_id") == target_id]
-        others = [i for i in all_items if i.get("target_id") != target_id]
+    # An explicit retry is the un-park action: clear permanent/attempts on the
+    # items being retried so a previously-parked push gets one fresh attempt
+    # (routine drains still skip parked items). The full queue is rewritten with
+    # cleared flags, then drained with a target filter — so a target-scoped retry
+    # never removes other targets' items from disk and a crash mid-drain cannot
+    # lose them (B-029).
+    all_items = _worker.read_queue(bp)
+    targets_present = False
+    for it in all_items:
+        if target_id and it.get("target_id") != target_id:
+            continue
+        targets_present = True
+        it.pop("permanent", None)
+        it["attempts"] = 0
+        it["last_error"] = None
 
-        if not target_items:
-            return json.dumps({"error": f"no queued items for target_id {target_id!r}"})
+    if target_id and not targets_present:
+        return json.dumps({"error": f"no queued items for target_id {target_id!r}"})
 
-        # Write only the target items, drain, then restore others + remaining targets.
-        _worker._write_queue(bp, target_items)
-        counts = _worker.drain(bp, client, cfg, backlog_data=data)
-        remaining_targets = _worker.read_queue(bp)
-        _worker._write_queue(bp, others + remaining_targets)
+    _worker._write_queue(bp, all_items)
+    counts = _worker.drain(
+        bp, client, cfg, backlog_data=data,
+        only_targets={target_id} if target_id else None,
+    )
 
     return json.dumps({"ok": True, "counts": counts}, indent=2)
 

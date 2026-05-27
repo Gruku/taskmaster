@@ -38,7 +38,7 @@ export async function mount(root, { params, subpath }) {
   const prev = recapSessions[idx + 1] || null;
   const next = recapSessions[idx - 1] || null;
 
-  const recap = await getRecap(cur.id);
+  let recap = await getRecap(cur.id);
   let diff = { tasks_added:[], tasks_changed:[], tasks_removed:[],
                files_touched:[], lessons_fired:[], issues_opened:[], issues_transitioned:[] };
   let snapshotsUnavailable = false;
@@ -205,7 +205,7 @@ function section(label, body, editing, dataRole, draftCaption) {
   return (
     `<div class="narr-section">`
     + `<h4>${label}</h4>`
-    + `<div class="narr-body">${(body || '<em class="empty">—</em>')}</div>`
+    + `<div class="narr-body">${body ? escapeHtml(body) : '<em class="empty">—</em>'}</div>`
     + `</div>`
   );
 }

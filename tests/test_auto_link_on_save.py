@@ -116,6 +116,34 @@ def test_auto_link_skips_missing_targets(tm_dir):
     assert all(link["target"] != "T-999" for link in entity_links(hnd))
 
 
+# B-033 test: task BODY_KEY must be included in the auto-link scan body
+def test_auto_link_scans_task_body_key(tm_dir):
+    """T-002's markdown body mentions T-001; auto_link_on_save must detect it."""
+    bp = tm_dir / "backlog.yaml"
+    # Add T-002 to the backlog.
+    data = yaml.safe_load(bp.read_text(encoding="utf-8"))
+    data["epics"][0]["tasks"].append(
+        {"id": "T-002", "title": "Second", "status": "todo"}
+    )
+    bp.write_text(yaml.safe_dump(data), encoding="utf-8")
+
+    # Write T-002 with a body that references T-001.
+    t2 = read_entity_anywhere(bp, "T-002")
+    t2[BODY_KEY] = "This task depends on T-001 being done first."
+    write_entity_anywhere(bp, t2)
+
+    added = auto_link_on_save(bp, "T-002")
+
+    # The return value must include T-001.
+    assert "T-001" in added
+
+    # A references link to T-001 must be persisted on T-002.
+    t2_after = read_entity_anywhere(bp, "T-002")
+    ref_targets = {link["target"] for link in entity_links(t2_after)
+                   if link["type"] == "references"}
+    assert "T-001" in ref_targets
+
+
 def _seed_two_tasks(tmp_taskmaster) -> None:
     backlog_path = tmp_taskmaster / ".taskmaster" / "backlog.yaml"
     data = yaml.safe_load(backlog_path.read_text(encoding="utf-8"))

@@ -63,3 +63,30 @@ def test_query_depth_one_does_not_traverse(tm_dir):
     pairs = {(entry["source"], entry["target"]) for entry in data}
     assert ("T-001", "T-002") in pairs
     assert ("T-002", "T-003") not in pairs
+
+
+# ── B-036: nonexistent source must return an error, not empty list ──
+
+def test_query_nonexistent_source_returns_error(tm_dir):
+    """A well-formed but nonexistent source ID must return an error, not '[]'."""
+    out = bs.backlog_link_query(source="T-999")
+    assert out.startswith("error: source"), (
+        f"Expected 'error: source ...' string, got: {out!r}"
+    )
+    assert "not found" in out, f"Expected 'not found' in error, got: {out!r}"
+
+
+def test_query_existing_source_no_links_returns_empty_list(tm_dir):
+    """An existing source with no outgoing links still returns '[]' (not an error).
+
+    T-004 is added to the epic but has no link_create calls, so edges_from
+    returns an empty list rather than an error.
+    """
+    import yaml
+    bp = tm_dir / "backlog.yaml"
+    data = yaml.safe_load(bp.read_text())
+    data["epics"][0]["tasks"].append({"id": "T-004", "title": "Fourth", "status": "todo"})
+    bp.write_text(yaml.safe_dump(data))
+
+    out = bs.backlog_link_query(source="T-004")
+    assert out == "[]", f"Expected '[]' for source with no links, got: {out!r}"

@@ -20,9 +20,22 @@ LINEAR_API_URL = "https://api.linear.app/graphql"
 
 
 class LinearAPIError(RuntimeError):
-    """Raised on permanent API failure (auth rejected, retries exhausted,
-    GraphQL-level errors, malformed responses). Caller decides whether to
-    surface to the user or requeue for a later retry attempt."""
+    """Raised on an API failure the client could not recover from.
+
+    Carries a structured `permanent` flag so callers classify retry-eligibility
+    from the flag, not by substring-matching the message (B-027). `permanent=True`
+    means do-not-retry (auth rejected, 4xx, GraphQL-level errors); `permanent=False`
+    means retry-eligible (network, 429/5xx after the client's own retries). The
+    optional `status_code` carries the originating HTTP status when known.
+
+    Defaults to `permanent=False` so any unclassified raise is treated as
+    retry-eligible rather than silently parked forever.
+    """
+
+    def __init__(self, message: str, *, permanent: bool = False, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.permanent = permanent
+        self.status_code = status_code
 
 
 class LinearClient:
@@ -159,7 +172,11 @@ class LinearClient:
                 if attempt < self.MAX_RETRIES - 1:
                     self._sleep(self.BACKOFF_BASE_SEC * (2 ** attempt))
                     continue
-                raise LinearAPIError(f"network error after {self.MAX_RETRIES} attempts: {last_error}")
+                # Network errors are retry-eligible — the blip may clear later.
+                raise LinearAPIError(
+                    f"network error after {self.MAX_RETRIES} attempts: {last_error}",
+                    permanent=False,
+                )
 
             sc = resp.status_code
 
@@ -167,13 +184,17 @@ class LinearClient:
             if sc in (401, 403):
                 raise LinearAPIError(
                     f"Linear rejected the API token (HTTP {sc}); "
-                    f"re-issue at https://linear.app/settings/api"
+                    f"re-issue at https://linear.app/settings/api",
+                    permanent=True, status_code=sc,
                 )
 
-            # Other 4xx — sanitize the body (Linear may echo the token) and raise.
+            # Other 4xx — bad request / not found / unprocessable: permanent.
             if 400 <= sc < 500 and sc != 429:
                 body = self._sanitize(resp.text or f"HTTP {sc}")
-                raise LinearAPIError(f"Linear request failed (HTTP {sc}): {body}")
+                raise LinearAPIError(
+                    f"Linear request failed (HTTP {sc}): {body}",
+                    permanent=True, status_code=sc,
+                )
 
             # 429 + 5xx — retryable.
             if sc == 429 or sc >= 500:
@@ -181,22 +202,31 @@ class LinearClient:
                 if attempt < self.MAX_RETRIES - 1:
                     self._sleep(self.BACKOFF_BASE_SEC * (2 ** attempt))
                     continue
-                raise LinearAPIError(f"Linear server error after {self.MAX_RETRIES} attempts: {last_error}")
+                raise LinearAPIError(
+                    f"Linear server error after {self.MAX_RETRIES} attempts: {last_error}",
+                    permanent=False, status_code=sc,
+                )
 
             # 2xx — parse the GraphQL envelope.
             try:
                 body = resp.json()
             except ValueError as e:
-                raise LinearAPIError(f"malformed JSON from Linear: {self._sanitize(str(e))}")
+                # Malformed JSON on a 2xx is usually a gateway/proxy hiccup — retry-eligible.
+                raise LinearAPIError(
+                    f"malformed JSON from Linear: {self._sanitize(str(e))}",
+                    permanent=False, status_code=sc,
+                )
 
             if body.get("errors"):
+                # GraphQL-level errors almost always indicate a caller bug — permanent.
                 raise LinearAPIError(
-                    f"GraphQL errors from Linear: {self._sanitize(str(body['errors']))}"
+                    f"GraphQL errors from Linear: {self._sanitize(str(body['errors']))}",
+                    permanent=True, status_code=sc,
                 )
             return body.get("data") or {}
 
         # Defensive: loop should always exit via return or raise.
-        raise LinearAPIError(f"unreachable retry exit (last_error={last_error})")
+        raise LinearAPIError(f"unreachable retry exit (last_error={last_error})", permanent=True)
 
     def _sanitize(self, msg: str) -> str:
         """Redact any literal occurrence of the API token from error strings."""

@@ -131,6 +131,20 @@ class TestRenderFrontmatter:
         assert fm2 == fm
         assert body2 == body
 
+    def test_roundtrip_idempotent_with_leading_blank_line(self):
+        """render->parse->render must be stable when the body has a leading
+        blank line (B-007). parse_frontmatter drops one leading newline after
+        the closing fence, so render must strip leading newlines too — otherwise
+        a file written, read, and re-written changes on disk every cycle.
+        """
+        fm = {"id": "T-9"}
+        body = "\nLeading blank line.\n"
+        once = v3.render_frontmatter(fm, body)
+        fm2, body2 = v3.parse_frontmatter(once)
+        twice = v3.render_frontmatter(fm2, body2)
+        assert once == twice
+        assert not body2.startswith("\n")
+
 
 class TestTaskFileIO:
     def test_write_then_read(self, tmp_path: Path):
@@ -1125,6 +1139,41 @@ class TestAutoState:
         assert "epic" in out
         assert "T-1" in out
         assert "PICK" in out
+
+    # B-046: two runs for the same target in the same second must not collide
+    def test_init_same_target_same_minute_unique_sid(self, tmp_path: Path):
+        bp = self._bp(tmp_path)
+        state1 = v3.init_auto_run(bp, mode="task", target="t-1", pending_task_ids=["t-1"])
+        state2 = v3.init_auto_run(bp, mode="task", target="t-1", pending_task_ids=["t-1"])
+        sid1 = state1["session_id"]
+        sid2 = state2["session_id"]
+        assert sid1 != sid2, "Two rapid init_auto_run calls must produce distinct session_ids"
+        assert v3.auto_session_path_bp(bp, sid1).exists(), f"Session file for {sid1} must exist"
+        assert v3.auto_session_path_bp(bp, sid2).exists(), f"Session file for {sid2} must exist"
+
+    # B-047: failed task then re-completed as done must not appear in both lists
+    def test_failed_then_done_not_double_recorded(self, tmp_path: Path):
+        bp = self._bp(tmp_path)
+        state = v3.init_auto_run(
+            bp, mode="epic", target="e", pending_task_ids=["t-1", "t-2"]
+        )
+        # First completion: fail
+        v3.complete_current_task(state, status="failed", fail_reason="tests-failed")
+        failed_ids = [r["task_id"] for r in state["failed"]]
+        assert failed_ids == ["t-1"], f"Expected ['t-1'] in failed, got {failed_ids}"
+        # Second completion: done (simulates a fix-and-retry)
+        v3.complete_current_task(state, status="done", summary="fixed")
+        completed_ids = [r["task_id"] for r in state["completed"]]
+        failed_ids_after = [r["task_id"] for r in state["failed"]]
+        assert completed_ids == ["t-1"], (
+            f"Expected t-1 in completed only, got {completed_ids}"
+        )
+        assert failed_ids_after == [], (
+            f"Expected empty failed list after recovery, got {failed_ids_after}"
+        )
+        assert state["cursor"]["task_id"] == "t-2", (
+            f"Cursor should advance to t-2, got {state['cursor']}"
+        )
 
 
 class TestV3EndToEndRoundtrip:

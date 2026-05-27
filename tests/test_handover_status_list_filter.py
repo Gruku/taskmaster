@@ -68,3 +68,91 @@ def test_list_invalid_status_returns_error(tmp_path, monkeypatch):
     _setup(tmp_path, monkeypatch)
     out = backlog_server.backlog_handover_list(status="garbage")
     assert "Error" in out or "must be" in out
+
+
+# ── B-039: since= filter uses `date` field, not id date-prefix ──
+
+def test_since_filter_uses_date_field_not_id_prefix(tmp_path, monkeypatch):
+    """since= must compare against the `date` field, not the id date-prefix.
+
+    We inject an index entry whose id prefix (2026-05-10) is AFTER the since
+    threshold but whose `date` field (2026-05-01) is BEFORE it.  The entry
+    must be excluded because `date` < since.
+
+    A second entry has matching id prefix and date (common case) to confirm
+    the normal path is unaffected.
+    """
+    bp = _setup(tmp_path, monkeypatch)
+    data = yaml.safe_load(bp.read_text()) or {}
+
+    # Entry whose `date` diverges from its id prefix date.
+    # id prefix: 2026-05-10 (>= since=2026-05-05, would PASS if filter used id)
+    # date:      2026-05-01 (<  since=2026-05-05, must FAIL the filter)
+    data.setdefault("handovers", []).append({
+        "id": "2026-05-10-diverged",
+        "date": "2026-05-01",
+        "tldr": "diverged entry",
+        "session_kind": "end-of-day",
+        "status": "open",
+    })
+    # Normal entry: id prefix and date both after the threshold.
+    data["handovers"].append({
+        "id": "2026-05-20-normal",
+        "date": "2026-05-20",
+        "tldr": "normal entry",
+        "session_kind": "end-of-day",
+        "status": "open",
+    })
+    bp.write_text(yaml.safe_dump(data, sort_keys=False))
+
+    out = backlog_server.backlog_handover_list(since="2026-05-05")
+    # The diverged entry's real date is before the threshold -> must be excluded.
+    assert "diverged entry" not in out, (
+        f"Entry with date before 'since' should be excluded, got: {out!r}"
+    )
+    # The normal entry passes both the id-prefix and the date check.
+    assert "normal entry" in out, (
+        f"Entry with date after 'since' must be included, got: {out!r}"
+    )
+
+
+# ── B-040: limit=0 or limit<1 must return an error, not the most-recent entry ──
+
+def test_limit_zero_returns_error(tmp_path, monkeypatch):
+    """limit=0 is degenerate input and must return a structured error."""
+    bp = _setup(tmp_path, monkeypatch)
+    write_handover(bp, tldr="some handover", session_kind="end-of-day")
+    _resync(bp)
+
+    out = backlog_server.backlog_handover_list(limit=0)
+    assert out.startswith("Error: limit must be >= 1"), (
+        f"Expected 'Error: limit must be >= 1 ...' string, got: {out!r}"
+    )
+
+
+def test_limit_negative_returns_error(tmp_path, monkeypatch):
+    """limit=-3 must also return a structured error."""
+    bp = _setup(tmp_path, monkeypatch)
+    write_handover(bp, tldr="some handover", session_kind="end-of-day")
+    _resync(bp)
+
+    out = backlog_server.backlog_handover_list(limit=-3)
+    assert out.startswith("Error: limit must be >= 1"), (
+        f"Expected 'Error: limit must be >= 1 ...' string, got: {out!r}"
+    )
+
+
+def test_limit_truncates_to_exact_count(tmp_path, monkeypatch):
+    """limit=2 with 3 handovers returns exactly 2 entries."""
+    bp = _setup(tmp_path, monkeypatch)
+    write_handover(bp, tldr="first", session_kind="end-of-day")
+    write_handover(bp, tldr="second", session_kind="end-of-day")
+    write_handover(bp, tldr="third", session_kind="end-of-day")
+    _resync(bp)
+
+    out = backlog_server.backlog_handover_list(limit=2)
+    # Each entry is a bullet line starting with '- '.
+    lines = [l for l in out.splitlines() if l.startswith("- ")]
+    assert len(lines) == 2, (
+        f"Expected exactly 2 entries with limit=2, got {len(lines)}: {out!r}"
+    )

@@ -19,7 +19,9 @@ from .client import LinearAPIError, LinearClient
 from .mapper import compute_push_hash, tm_task_to_linear_payload
 
 
-_PERMANENT_MARKERS = ("401", "403", "rejected the API token", "status_mapping")
+# Transient items are retried up to this many times before being parked as
+# permanent, so a recurring blip stops burning API round-trips (B-028).
+MAX_ATTEMPTS = 5
 
 
 def queue_path(backlog_path: Path) -> Path:
@@ -138,12 +140,16 @@ def push_task(
     except (OSError, ValueError) as e:
         return {"status": "error:permanent", "reason": f"cannot read tracker {tracker_id}: {e}"}
 
-    linear_issue_key = tracker_fm.get("external_key")
+    # Prefer the stored Linear UUID over the human external_key for the
+    # issueUpdate id (B-031). The UUID is stable across team-key renames /
+    # issue moves; the human key ("ENG-1") is not. Fall back to the key only
+    # until the first successful push persists the UUID.
+    linear_issue_id = tracker_fm.get("linear_issue_id") or tracker_fm.get("external_key")
     prev_hash = tracker_fm.get("push_hash")
 
     # Build payload (this may raise on unmapped status — caller treats as permanent)
     try:
-        payload = tm_task_to_linear_payload(task, workspace, linear_issue_id=linear_issue_key)
+        payload = tm_task_to_linear_payload(task, workspace, linear_issue_id=linear_issue_id)
     except ValueError as e:
         return {"status": "error:permanent", "reason": str(e)}
 
@@ -157,18 +163,22 @@ def push_task(
     try:
         result = client.issue_upsert(workspace["team_id"], payload)
     except LinearAPIError as e:
-        msg = str(e)
-        if any(marker in msg for marker in _PERMANENT_MARKERS):
-            return {"status": "error:permanent", "reason": msg}
-        return {"status": "error:transient", "reason": msg}
+        # Classify from the structured flag, not a substring of the message (B-027).
+        if getattr(e, "permanent", False):
+            return {"status": "error:permanent", "reason": str(e)}
+        return {"status": "error:transient", "reason": str(e)}
 
-    # Update tracker on success — write_hash + last_pushed + refreshed denorm fields
+    # Update tracker on success — write_hash + last_pushed + refreshed denorm fields.
+    # Persist the returned UUID so subsequent updates address the issue by its
+    # stable id rather than the human key (B-031).
+    returned_uuid = result.get("id")
     try:
         update_tracker(
             backlog_path,
             tracker_id,
             last_pushed=_now_iso(),
             push_hash=new_hash,
+            linear_issue_id=returned_uuid or linear_issue_id,
             title=task.get("title", tracker_fm.get("title", "")),
             status=task.get("status", tracker_fm.get("status", "")),
         )
@@ -195,19 +205,39 @@ def drain(
     config: dict[str, Any],
     *,
     backlog_data: dict[str, Any],
+    only_targets: set[str] | None = None,
 ) -> dict[str, int]:
-    """Process every queued push. Successful + skipped items are removed;
+    """Process queued pushes. Successful items and no-op skips are removed;
     failed items stay in the queue with incremented attempts and a
-    `last_error`. Permanent failures get `permanent: true` so a future
-    `/linear status` can surface them differently from transient ones.
+    `last_error`. Permanent failures (and transients that exhaust MAX_ATTEMPTS)
+    get `permanent: true` and are parked — a later drain leaves them untouched
+    and never re-hits the API, so a known-dead push stops burning round-trips
+    (B-028). `/linear retry` is the explicit un-park action.
+
+    If `only_targets` is given, items whose `target_id` is not in the set are
+    left in the queue untouched (no API call, no mutation). This lets a
+    target-scoped retry run without ever removing other targets' items from
+    the canonical queue, so a crash mid-drain can't lose them (B-029).
 
     Returns a count summary suitable for direct display.
     """
     items = read_queue(backlog_path)
     remaining: list[dict[str, Any]] = []
-    counts = {"ok": 0, "skipped": 0, "transient": 0, "permanent": 0}
+    counts = {"ok": 0, "skipped": 0, "transient": 0, "permanent": 0, "unknown": 0}
 
     for item in items:
+        # Target filter: leave non-matching items in place, untouched (B-029).
+        if only_targets is not None and item.get("target_id") not in only_targets:
+            remaining.append(item)
+            continue
+
+        # Already-parked permanent failures are terminal — keep them queued for
+        # `/linear status` visibility but never re-issue the API call (B-028).
+        if item.get("permanent"):
+            counts["permanent"] += 1
+            remaining.append(item)
+            continue
+
         op = item.get("op")
         target_id = item.get("target_id")
         if op == "task_upsert":
@@ -220,18 +250,42 @@ def drain(
         status = str(result.get("status", ""))
         if status.startswith("ok"):
             counts["ok"] += 1
+        elif status == "skipped:not_found":
+            # The task is absent from this backlog snapshot — possibly a stale
+            # snapshot or a race, so keep the item rather than silently dropping
+            # the pending push (B-030). Count attempts so a task that is *truly*
+            # gone eventually parks instead of looping forever (B-028).
+            counts["skipped"] += 1
+            item["attempts"] = int(item.get("attempts", 0)) + 1
+            if item["attempts"] >= MAX_ATTEMPTS:
+                item["permanent"] = True
+                item["last_error"] = f"task not found after {MAX_ATTEMPTS} attempts"
+            else:
+                item["last_error"] = "task not found in backlog snapshot"
+            remaining.append(item)
         elif status.startswith("skipped"):
+            # skipped:unchanged / skipped:no_tracker — nothing to push; drop.
             counts["skipped"] += 1
         elif status == "error:transient":
-            counts["transient"] += 1
             item["attempts"] = int(item.get("attempts", 0)) + 1
             item["last_error"] = result.get("reason")
+            if item["attempts"] >= MAX_ATTEMPTS:
+                # Retries exhausted — park so we stop burning API calls (B-028).
+                item["permanent"] = True
+                counts["permanent"] += 1
+            else:
+                counts["transient"] += 1
             remaining.append(item)
         elif status == "error:permanent":
             counts["permanent"] += 1
             item["attempts"] = int(item.get("attempts", 0)) + 1
             item["last_error"] = result.get("reason")
             item["permanent"] = True
+            remaining.append(item)
+        else:
+            # Never silently drop an unrecognized push_task status (B-030).
+            counts["unknown"] += 1
+            item["last_error"] = f"unrecognized push status {status!r}"
             remaining.append(item)
 
     _write_queue(backlog_path, remaining)

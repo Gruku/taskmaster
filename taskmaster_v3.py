@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import re
+import uuid
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -378,9 +379,12 @@ def render_frontmatter(frontmatter: dict[str, Any], body: str) -> str:
     """Render a (frontmatter, body) pair as a markdown document.
 
     Empty frontmatter dict produces a body-only document (no fences).
-    Body is normalized to end with exactly one trailing newline.
+    Body is normalized to end with exactly one trailing newline, and any
+    leading newlines are stripped — `parse_frontmatter` drops one leading
+    newline after the closing fence, so stripping here keeps the
+    render->parse->render round-trip idempotent (no spurious disk diffs).
     """
-    body_norm = body.rstrip("\n") + "\n" if body else ""
+    body_norm = body.strip("\n") + "\n" if body else ""
     if not frontmatter:
         return body_norm
     fm_text = yaml.dump(frontmatter, default_flow_style=False, sort_keys=False, allow_unicode=True)
@@ -621,7 +625,7 @@ def would_create_cycle(graph: dict[str, list[str]], source: str, target: str) ->
 _INLINE_REF_RE = re.compile(
     r"(?:(?<=^)|(?<=[^A-Za-z0-9_]))"               # left boundary
     r"(?:\[\[|@)?"                                  # optional [[ or @
-    r"(IDEA-\d+|ISS-\d+|HND-\d+|T-\d+|L-\d+)"       # captured ID
+    r"(IDEA-\d+|ISS-\d+|HND-\d+|T-\d+|L-\d+|\d{4}-\d{2}-\d{2}-[a-z0-9\-]+)"  # captured ID (incl. date-slug handover)
     r"(?:\]\])?"                                    # optional ]]
 )
 
@@ -643,6 +647,8 @@ def extract_inline_refs(body: str | None, *, self_id: str | None = None) -> list
     out: list[str] = []
     for match in _INLINE_REF_RE.finditer(body):
         eid = match.group(1)
+        if entity_kind_of(eid) is None:
+            continue
         if eid in seen:
             continue
         if self_id and eid == self_id:
@@ -2098,6 +2104,7 @@ def _bug_signature(fm: dict[str, Any]) -> tuple | None:
 def scan_bug_patterns(
     backlog_path: Path,
     include_archive: bool = True,
+    open_only: bool = False,
 ) -> list[dict[str, Any]]:
     """Return a list of pattern groups: [{signature, bug_ids: [B-001, B-007, ...]}, ...].
 
@@ -2114,6 +2121,8 @@ def scan_bug_patterns(
         try:
             fm, _ = read_bug(backlog_path, bid)
         except (OSError, ValueError):
+            continue
+        if open_only and fm.get("status") != "open":
             continue
         sig = _bug_signature(fm)
         if sig is None:
@@ -2267,8 +2276,15 @@ def _validate_decision(fm: dict[str, Any]) -> None:
     if rec is not None:
         if not isinstance(rec, int) or not (1 <= rec <= len(opts)):
             raise ValueError(f"recommendation must be 1..{len(opts)}, got {rec!r}")
-    if status == "resolved" and not fm.get("resolved_with"):
+    rw = fm.get("resolved_with")
+    if status == "resolved" and not rw:
         raise ValueError("status=resolved requires resolved_with to be set (1..N)")
+    # resolved_with must stay in range even after options shrink (B-026): a later
+    # update_decision that drops options below resolved_with would otherwise persist
+    # an out-of-bounds index that crashes options[resolved_with - 1] on read.
+    if rw not in (None, ""):
+        if not isinstance(rw, int) or isinstance(rw, bool) or not (1 <= rw <= len(opts)):
+            raise ValueError(f"resolved_with must be 1..{len(opts)}, got {rw!r}")
     if status == "dropped" and not fm.get("dropped_reason"):
         raise ValueError("status=dropped requires dropped_reason")
 
@@ -2801,6 +2817,14 @@ def _validate_linear_config(cfg: dict[str, Any]) -> None:
             if not ws.get(field):
                 raise ValueError(f"linear.yaml workspace missing required field: {field}")
         alias = str(ws["alias"])
+        if "-" in alias:
+            # tracker_ids are "linear-<alias>-<key>" and parsed with a
+            # bounded split; a hyphen in the alias makes that parse ambiguous
+            # and routes pushes to the wrong (or no) workspace (B-032).
+            raise ValueError(
+                f"linear.yaml workspace alias {alias!r} must not contain '-' "
+                f"(it breaks tracker_id parsing of 'linear-<alias>-<key>')"
+            )
         if alias in seen_aliases:
             raise ValueError(f"linear.yaml workspace alias {alias!r} is duplicated")
         seen_aliases.add(alias)
@@ -4089,9 +4113,11 @@ def init_auto_run(
     model_for_task = model_for_task or {}
     first = pending_task_ids[0]
     started_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    # 2026-05-07T20:38:15Z → 20260507T2038 — collision-free for runs >1min apart.
-    sid_compact = started_at.replace(":", "").replace("-", "")[:13]
-    sid = f"{target}-{sid_compact}"
+    # Compact + unique per run: seconds precision plus a short random suffix so
+    # two runs for the same target within the same minute/second never collide
+    # (previously minute-truncated -> overwrote state and merged event logs).
+    sid_compact = started_at.replace(":", "").replace("-", "").rstrip("Z")
+    sid = f"{target}-{sid_compact}-{uuid.uuid4().hex[:6]}"
     state: dict[str, Any] = {
         "session_id": sid,
         "task_id": first,
@@ -4162,6 +4188,11 @@ def complete_current_task(
     if not cursor:
         raise ValueError("no active cursor")
     tid = cursor["task_id"]
+    # Single-outcome / forward-only invariant: a task has exactly one terminal
+    # record. On a halt-then-recover (failed -> done) or any re-completion, drop
+    # the prior record for this task so it can never sit in both lists (B-047).
+    state["completed"] = [r for r in state.get("completed", []) if r.get("task_id") != tid]
+    state["failed"] = [r for r in state.get("failed", []) if r.get("task_id") != tid]
     record: dict[str, Any] = {
         "task_id": tid,
         "status": status,
@@ -5338,6 +5369,7 @@ def auto_link_on_save(backlog_path: Path, entity_id: str) -> list[str]:
 
     if entity_kind_of(entity_id) == "task":
         body = "\n\n".join(filter(None, [
+            entity.get(BODY_KEY) or "",
             entity.get("notes") or "",
             entity.get("review_instructions") or "",
         ]))

@@ -300,7 +300,7 @@ def validate_manifest_dict(
     sv = data.get("schema_version")
     if sv is None:
         errors.append("schema_version: required")
-    elif sv != SCHEMA_VERSION:
+    elif isinstance(sv, bool) or not isinstance(sv, int) or sv != SCHEMA_VERSION:
         errors.append(f"schema_version: {sv!r} is unknown (expected {SCHEMA_VERSION})")
 
     meta = data.get("meta") or {}
@@ -317,6 +317,8 @@ def validate_manifest_dict(
         if not name:
             errors.append(f"repos[{i}].name: required")
         else:
+            if name in repo_names:
+                errors.append(f"repos[{i}].name: duplicate repo name {name!r}")
             repo_names.add(name)
         if not r.get("path"):
             errors.append(f"repos[{i}].path: required")
