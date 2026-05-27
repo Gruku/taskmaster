@@ -379,9 +379,12 @@ def render_frontmatter(frontmatter: dict[str, Any], body: str) -> str:
     """Render a (frontmatter, body) pair as a markdown document.
 
     Empty frontmatter dict produces a body-only document (no fences).
-    Body is normalized to end with exactly one trailing newline.
+    Body is normalized to end with exactly one trailing newline, and any
+    leading newlines are stripped — `parse_frontmatter` drops one leading
+    newline after the closing fence, so stripping here keeps the
+    render->parse->render round-trip idempotent (no spurious disk diffs).
     """
-    body_norm = body.rstrip("\n") + "\n" if body else ""
+    body_norm = body.strip("\n") + "\n" if body else ""
     if not frontmatter:
         return body_norm
     fm_text = yaml.dump(frontmatter, default_flow_style=False, sort_keys=False, allow_unicode=True)

@@ -131,6 +131,20 @@ class TestRenderFrontmatter:
         assert fm2 == fm
         assert body2 == body
 
+    def test_roundtrip_idempotent_with_leading_blank_line(self):
+        """render->parse->render must be stable when the body has a leading
+        blank line (B-007). parse_frontmatter drops one leading newline after
+        the closing fence, so render must strip leading newlines too — otherwise
+        a file written, read, and re-written changes on disk every cycle.
+        """
+        fm = {"id": "T-9"}
+        body = "\nLeading blank line.\n"
+        once = v3.render_frontmatter(fm, body)
+        fm2, body2 = v3.parse_frontmatter(once)
+        twice = v3.render_frontmatter(fm2, body2)
+        assert once == twice
+        assert not body2.startswith("\n")
+
 
 class TestTaskFileIO:
     def test_write_then_read(self, tmp_path: Path):
