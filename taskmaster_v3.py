@@ -795,6 +795,47 @@ def _merge_task_from_v3(slim: dict[str, Any], heavy_fm: dict[str, Any], body: st
     return merged
 
 
+def _split_entity_for_v3(
+    entity: dict[str, Any], heavy_fields: tuple[str, ...]
+) -> tuple[dict[str, Any], dict[str, Any], str]:
+    """Generic version of _split_task_for_v3 for any entity kind.
+
+    Returns (slim, heavy_fm, body). Mirrors id + a display title into the
+    frontmatter for human readability (epics/phases use `name`, tasks `title`).
+    """
+    slim: dict[str, Any] = {}
+    heavy: dict[str, Any] = {}
+    body = ""
+    for key, value in entity.items():
+        if key == BODY_KEY:
+            body = value or ""
+        elif key in heavy_fields:
+            if value not in (None, "", [], {}):
+                heavy[key] = value
+        else:
+            slim[key] = value
+    if "id" in slim:
+        heavy.setdefault("id", slim["id"])
+    display = slim.get("name") or slim.get("title")
+    if display:
+        heavy.setdefault("title", display)
+    return slim, heavy, body
+
+
+def _merge_entity_from_v3(
+    slim: dict[str, Any], heavy_fm: dict[str, Any], body: str, heavy_fields: tuple[str, ...]
+) -> dict[str, Any]:
+    """Reverse of _split_entity_for_v3. Only pulls declared heavy_fields back
+    (the id/title frontmatter mirror is readability-only and ignored)."""
+    merged = dict(slim)
+    for key in heavy_fields:
+        if key in heavy_fm:
+            merged[key] = heavy_fm[key]
+    if body:
+        merged[BODY_KEY] = body
+    return merged
+
+
 def load_v3(backlog_path: Path) -> dict[str, Any]:
     """Load a v3 backlog: slim index + per-task files merged.
 
