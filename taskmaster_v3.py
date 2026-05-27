@@ -60,6 +60,8 @@ CANONICAL_SECTIONS: dict[str, tuple[str, ...]] = {
     "handover": ("decisions", "notes", "blockers", "where_id_start"),
     "issue": ("repro", "investigation", "notes"),
     "lesson": ("why", "what_to_do", "examples"),
+    "epic": ("notes", "design", "spec", "roadmap", "analysis"),
+    "phase": ("notes", "design", "roadmap"),
 }
 
 TASK_INLINE_SECTIONS: frozenset[str] = frozenset({"notes", "review_instructions"})
@@ -139,6 +141,9 @@ SLIM_FIELDS: dict[str, tuple[str, ...]] = {
         "created_by", "related_tasks", "related_issues", "related_lessons",
         "tldr_autogen",
     ),
+    "epic": ("id", "name", "status", "design_status", "created"),
+    "phase": ("id", "name", "status", "order", "created",
+              "target_date", "start_date", "completed", "deliverables"),
 }
 
 
@@ -415,6 +420,9 @@ HEAVY_FIELDS: tuple[str, ...] = (
     "docs",
     "review_instructions",
 )
+
+EPIC_HEAVY_FIELDS: tuple[str, ...] = ("description", "docs", "components")
+PHASE_HEAVY_FIELDS: tuple[str, ...] = ("description", "docs")
 
 # Special key on in-memory task dicts holding the markdown body of the
 # per-task file (the prose sections written by users / skills). Not persisted
@@ -738,6 +746,16 @@ def task_file_path(backlog_path: Path, task_id: str) -> Path:
     at .taskmaster/backlog.yaml resolves to .taskmaster/tasks/<id>.md.
     """
     return backlog_path.parent / "tasks" / f"{task_id}.md"
+
+
+def epic_file_path(backlog_path: Path, epic_id: str) -> Path:
+    """Per-epic file path: .taskmaster/backlog.yaml -> .taskmaster/epics/<id>.md."""
+    return backlog_path.parent / "epics" / f"{epic_id}.md"
+
+
+def phase_file_path(backlog_path: Path, phase_id: str) -> Path:
+    """Per-phase file path: .taskmaster/backlog.yaml -> .taskmaster/phases/<id>.md."""
+    return backlog_path.parent / "phases" / f"{phase_id}.md"
 
 
 def _split_task_for_v3(task: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], str]:
