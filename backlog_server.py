@@ -7124,8 +7124,12 @@ class ViewerHandler(BaseHTTPRequestHandler):
             import json as _json
             from taskmaster_v3 import list_auto_sessions
             sessions = list_auto_sessions()
+            active = next(
+                (s for s in sessions if s.get("cursor") is not None and not s.get("stopped")),
+                None,
+            )
             body = (
-                _json.dumps(sessions[0]).encode("utf-8") if sessions
+                _json.dumps(active).encode("utf-8") if active
                 else b'{"running":false}'
             )
             self.send_response(200)

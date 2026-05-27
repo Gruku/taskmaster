@@ -96,3 +96,45 @@ def test_get_auto_state_returns_most_recent_session(running_server):
     body = json.loads(resp.read())
     assert body["session_id"] == "v3-009"
     assert body["cursor"]["stage"] == "IMPLEMENT"
+
+
+# B-051: endpoint must skip stopped/cursor-less sessions
+def test_get_auto_state_skips_stopped_session(running_server):
+    """A stopped session (cursor=None, stopped=True) must return {"running": false}."""
+    base, _ = running_server
+    from taskmaster_v3 import save_auto_session
+    save_auto_session("stopped-run", {
+        "session_id": "stopped-run",
+        "started_at": "2026-04-26T09:00:00Z",
+        "cursor": None,
+        "stopped": True,
+    })
+    resp = urllib.request.urlopen(f"{base}/api/auto/state")
+    body = json.loads(resp.read())
+    assert body == {"running": False}, (
+        f"Expected {{\"running\": false}} for a stopped session, got {body}"
+    )
+
+
+def test_get_auto_state_returns_active_over_newer_stopped(running_server):
+    """An older ACTIVE session must be preferred over a newer STOPPED one."""
+    base, _ = running_server
+    from taskmaster_v3 import save_auto_session
+    # Older, but active
+    save_auto_session("active-old", {
+        "session_id": "active-old",
+        "started_at": "2026-04-25T08:00:00Z",
+        "cursor": {"task_id": "T-1", "stage": "IMPLEMENT", "model": "sonnet"},
+    })
+    # Newer, but stopped
+    save_auto_session("stopped-new", {
+        "session_id": "stopped-new",
+        "started_at": "2026-04-26T10:00:00Z",
+        "cursor": None,
+        "stopped": True,
+    })
+    resp = urllib.request.urlopen(f"{base}/api/auto/state")
+    body = json.loads(resp.read())
+    assert body.get("session_id") == "active-old", (
+        f"Expected active-old (older but active), got session_id={body.get('session_id')}"
+    )

@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import re
+import uuid
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -4107,9 +4108,11 @@ def init_auto_run(
     model_for_task = model_for_task or {}
     first = pending_task_ids[0]
     started_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    # 2026-05-07T20:38:15Z → 20260507T2038 — collision-free for runs >1min apart.
-    sid_compact = started_at.replace(":", "").replace("-", "")[:13]
-    sid = f"{target}-{sid_compact}"
+    # Compact + unique per run: seconds precision plus a short random suffix so
+    # two runs for the same target within the same minute/second never collide
+    # (previously minute-truncated -> overwrote state and merged event logs).
+    sid_compact = started_at.replace(":", "").replace("-", "").rstrip("Z")
+    sid = f"{target}-{sid_compact}-{uuid.uuid4().hex[:6]}"
     state: dict[str, Any] = {
         "session_id": sid,
         "task_id": first,
@@ -4180,6 +4183,11 @@ def complete_current_task(
     if not cursor:
         raise ValueError("no active cursor")
     tid = cursor["task_id"]
+    # Single-outcome / forward-only invariant: a task has exactly one terminal
+    # record. On a halt-then-recover (failed -> done) or any re-completion, drop
+    # the prior record for this task so it can never sit in both lists (B-047).
+    state["completed"] = [r for r in state.get("completed", []) if r.get("task_id") != tid]
+    state["failed"] = [r for r in state.get("failed", []) if r.get("task_id") != tid]
     record: dict[str, Any] = {
         "task_id": tid,
         "status": status,
