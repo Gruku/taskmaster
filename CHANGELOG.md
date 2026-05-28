@@ -12,6 +12,32 @@ indicate schema breaks or removed surfaces.
 
 ---
 
+## 3.9.0 — Epics/phases as doc-bearing entities + bughunt fixes (2026-05-28)
+
+### Added
+
+- **`backlog_epic_status` rollup tool** — per-epic status summary with per-component rollup and an attention surface that flags blocked tasks (and surfaces archived tasks in the rollup).
+- **Epic `components` block + `design_status`** — epics declare named components; tasks bind to them via a `component` field validated against the parent epic's component keys (reserved/self-ref keys guarded).
+- **`design_change` flag with locked-epic teeth** — gates mutations against epics whose design is locked.
+- **Phase `docs` field** — brings phases to epic/task parity for attached documentation.
+- **Two-tier storage for epics/phases** — heavy fields split into per-entity body files on save, merged back on load; backward-compatible with single-file entities and auto-migrates on first mutation.
+
+### Fixed
+
+- **Viewer:** closed XSS and crash bugs in the recap and bugs screens (B-052/053/054/056).
+- **Lifecycle:** terminal-state transitions guarded across task/bug/decision (B-025/026/049/050).
+- **Linear sync:** robust error classification, bounded retries, crash-safe drain (B-027..B-032).
+- **Error boundaries:** structured-error handling for project.yaml, bug-scan, and slim sections (B-016/017/018/019/024/042).
+- **Auto-mode:** unique session ids, single-outcome invariant, stopped-run filter (B-046/047/051).
+- **Linking:** link auto-detection, query/list contracts, archive-reason key (B-033/035/036/039/040/048).
+- **Frontmatter:** render/parse round-trip is now idempotent (B-007).
+
+### Notes
+
+- 3.8.3 was a version-only bump with no changelog entry; its delta is folded into this release.
+
+---
+
 ## 3.8.2 — Skill-flow deprecation cleanup (2026-05-21)
 
 ### Changed
