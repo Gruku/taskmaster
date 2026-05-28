@@ -7455,6 +7455,18 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 self._send_json(200, full, etag=etag)
                 return
             self.send_error(HTTPStatus.NOT_FOUND)
+        elif clean_path.startswith("/api/epic/"):
+            eid = clean_path[len("/api/epic/"):].rstrip("/")
+            if eid and "/" not in eid:
+                full = _load_epic_full(eid)
+                if full is None:
+                    self._send_json(404, {"ok": False, "error": f"epic {eid} not found"})
+                    return
+                from taskmaster_v3 import compute_etag
+                etag = compute_etag(_backlog_path())
+                self._send_json(200, full, etag=etag)
+                return
+            self.send_error(HTTPStatus.NOT_FOUND)
         elif clean_path == "/api/backlog":
             self._serve_json()
         elif clean_path == "/api/session":
