@@ -21,3 +21,16 @@ def test_epic_status_shows_counts_and_components(tm_epic_phase):
 def test_epic_status_unknown(tm_epic_phase):
     out = backlog_epic_status("ghost")
     assert "Error" in out and "ghost" in out
+
+def test_epic_status_attention_list(tm_epic_phase):
+    backlog_add_task(epic="test-epic", task_id="A-1", title="blocked one", phase="dev")
+    backlog_update_task("A-1", "status", "blocked")
+    backlog_update_task("A-1", "blockers", "waiting on CDN creds")
+    out = backlog_epic_status("test-epic")
+    assert "Attention" in out
+    assert "A-1" in out and "CDN creds" in out
+
+def test_epic_status_no_attention_when_clean(tm_epic_phase):
+    backlog_add_task(epic="test-epic", task_id="C-1", title="fine", phase="dev")
+    out = backlog_epic_status("test-epic")
+    assert "Attention" not in out

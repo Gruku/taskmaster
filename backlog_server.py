@@ -5933,7 +5933,19 @@ def backlog_epic_status(epic_id: str) -> str:
         u = roll["_unassigned"]
         lines.append(f"- · unassigned ({u['done']}/{u['total']})")
 
-    # gate-completion rollup is appended here once Spec A lands (extension point).
+    # Risk / attention surface (derived). Decision + failed-gate bubbling
+    # is added in Spec A / when decisions gain an epic link (extension point).
+    attention = []
+    for t in epic.get("tasks", []):
+        if t.get("status") == "blocked":
+            why = t.get("blockers")
+            attention.append(f"⏸ {t['id']} blocked" + (f": {why}" if why else ""))
+        elif t.get("blockers"):
+            attention.append(f"⚠ {t['id']}: {t['blockers']}")
+    if attention:
+        lines.append("\n**Attention:**")
+        lines.extend(f"- {a}" for a in attention)
+
     return "\n".join(lines)
 
 
