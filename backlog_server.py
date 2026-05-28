@@ -5877,7 +5877,13 @@ def backlog_phase_status(phase_id: str = "") -> str:
 
 
 def _epic_stats(data: dict, epic_id: str) -> dict:
-    """Status counts for an epic's tasks (mirrors _phase_stats)."""
+    """Status counts for an epic's tasks.
+
+    Unlike _phase_stats (which subtracts archived from total to give an
+    active-scope denominator), this keeps archived tasks in `total` so that
+    the `done + archived` numerator never exceeds it — epic-level lifetime
+    progress, not "what's left to do".
+    """
     stats = {"total": 0, "done": 0, "in-progress": 0, "in-review": 0,
              "todo": 0, "blocked": 0, "archived": 0}
     epic = _find_epic(data, epic_id)
@@ -5918,7 +5924,8 @@ def backlog_epic_status(epic_id: str) -> str:
         lines.append(f"**Progress:** {done}/{stats['total']} done")
         lines.append(f"[{bar}] {pct}%")
     lines.append(
-        f"Done: {stats['done']} | In Progress: {stats['in-progress']} | "
+        f"Done: {stats['done']} | Archived: {stats['archived']} | "
+        f"In Progress: {stats['in-progress']} | "
         f"In Review: {stats['in-review']} | Todo: {stats['todo']} | Blocked: {stats['blocked']}"
     )
 
