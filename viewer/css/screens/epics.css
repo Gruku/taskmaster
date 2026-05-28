@@ -1,0 +1,23 @@
+/* plugins/taskmaster/viewer/css/screens/epics.css */
+.epics { padding: 16px 20px; }
+.epics-empty { color: var(--ink-3); padding: 24px; }
+.epics-list { display: flex; flex-direction: column; gap: 8px; max-width: 920px; }
+.epic-row {
+  display: grid;
+  grid-template-columns: 12px 1fr auto auto 160px;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--bl, rgba(255,255,255,0.06));
+  border-radius: 8px;
+  text-decoration: none;
+  color: var(--ink-1);
+}
+.epic-row:hover { background: var(--bg-card-hover); border-color: var(--epic, rgba(255,255,255,0.18)); }
+.epic-row__swatch { width: 10px; height: 10px; border-radius: 3px; background: var(--epic); }
+.epic-row__name { font-weight: 600; }
+.epic-row__ds { font-size: var(--text-xs); color: var(--ink-3); text-transform: capitalize; }
+.epic-row__count { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-2); }
+.epic-row__bar { height: 6px; background: var(--bg-deep); border-radius: 3px; overflow: hidden; }
+.epic-row__bar > span { display: block; height: 100%; background: var(--epic); }
