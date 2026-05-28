@@ -6796,10 +6796,17 @@ def _run_git(args: list[str], *, cwd: Path, timeout: float = 10.0) -> str:
     Failure is intentionally swallowed: this helper drives feature-detection
     logic (e.g. 'is X merged into Y'), where a non-zero exit means 'no' or
     'unknown', not 'crash the request'. The caller decides how to interpret ''.
+
+    `--no-optional-locks` is mandatory: this helper is read-only, but commands
+    like `git status` otherwise take `.git/index.lock` to refresh the stat-cache.
+    On a slow repo the call can exceed `timeout`, and when Python kills the child
+    on TimeoutExpired git leaves a 0-byte `index.lock` orphan behind that blocks
+    every future commit until a human clears it. The flag stops git from taking
+    that lock at all, killing the whole class of leak (see bug B-059).
     """
     try:
         result = subprocess.run(
-            ["git", *args],
+            ["git", "--no-optional-locks", *args],
             cwd=str(cwd), capture_output=True, text=True, timeout=timeout,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):

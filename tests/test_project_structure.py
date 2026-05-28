@@ -75,6 +75,35 @@ def test_run_git_handles_missing_git_dir(tmp_path):
     assert out == ""
 
 
+def test_run_git_passes_no_optional_locks(tmp_path, monkeypatch):
+    """Regression for B-059: the read-only helper must never take .git/index.lock.
+
+    `git status` would otherwise acquire index.lock to refresh the stat-cache; a
+    timeout-kill on a slow repo then orphans a 0-byte lock that blocks all future
+    commits. `--no-optional-locks` stops git from taking the lock at all.
+    """
+    import backlog_server
+    captured: dict = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(backlog_server.subprocess, "run", fake_run)
+    backlog_server._run_git(["status", "--porcelain"], cwd=tmp_path)
+
+    assert captured["cmd"][:2] == ["git", "--no-optional-locks"]
+    assert captured["cmd"][2:] == ["status", "--porcelain"]
+
+
+def test_run_git_status_leaves_no_index_lock(tmp_path):
+    """End-to-end: a status call on a real repo must not leave index.lock behind."""
+    from backlog_server import _run_git
+    repo = _init_repo(tmp_path / "r")
+    _run_git(["status", "--porcelain"], cwd=repo)
+    assert not (repo / ".git" / "index.lock").exists()
+
+
 def test_rank_integration_branch_orders_master_highest():
     from backlog_server import _rank_integration_branch
     # Rank order (lowest → highest): work < dev < stage < <version> < master|main

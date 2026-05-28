@@ -12,6 +12,14 @@ indicate schema breaks or removed surfaces.
 
 ---
 
+## 3.9.1 — Git read-path no longer leaks index.lock (2026-05-28)
+
+### Fixed
+
+- **`_run_git` now passes `--no-optional-locks`** (B-059). The read-only feature-detection helper was running `git status`-class commands that take `.git/index.lock` to refresh the stat-cache. On a slow repo (e.g. Windows Defender scanning a large monorepo) the call could exceed the 10s timeout; Python killed the child git, which left a 0-byte `index.lock` orphan that silently blocked every future commit until cleared by hand. The flag stops git from taking the lock at all, killing the whole class of leak across all call sites.
+
+---
+
 ## 3.9.0 — Epics/phases as doc-bearing entities + bughunt fixes (2026-05-28)
 
 ### Added
