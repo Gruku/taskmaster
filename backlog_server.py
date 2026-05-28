@@ -488,6 +488,53 @@ def _phase_stats(data: dict, phase_id: str) -> dict:
     return {"total": total, **counts}
 
 
+def _component_rollup(data: dict, epic_id: str) -> dict:
+    """Per-component status rollup for an epic, computed on read.
+
+    Returns { <component_key>: {total, done, in-progress, in-review, todo,
+    blocked, status}, ..., "_unassigned": {...} }. Components with no tasks
+    still appear (status "todo"). `status` is the node color:
+      - "done"        : >0 tasks and all done/archived
+      - "todo"        : no task started (all todo)
+      - "blocked"     : any blocked and none in-progress/in-review
+      - "in-progress" : otherwise (work underway)
+    """
+    epic = _find_epic(data, epic_id)
+    declared = list((epic.get("components") or {}) if epic else [])
+    buckets: dict[str, dict] = {}
+
+    def _blank() -> dict:
+        return {"total": 0, "done": 0, "in-progress": 0, "in-review": 0,
+                "todo": 0, "blocked": 0, "archived": 0}
+
+    for key in declared:
+        buckets[key] = _blank()
+    buckets["_unassigned"] = _blank()
+
+    for t in (epic.get("tasks", []) if epic else []):
+        comp = t.get("component")
+        key = comp if comp in buckets else "_unassigned"
+        st = t.get("status", "todo")
+        b = buckets[key]
+        b["total"] += 1
+        if st in b:
+            b[st] += 1
+
+    for b in buckets.values():
+        done = b["done"] + b["archived"]
+        if b["total"] == 0:
+            b["status"] = "todo"
+        elif done == b["total"]:
+            b["status"] = "done"
+        elif b["in-progress"] == 0 and b["in-review"] == 0 and b["blocked"] > 0:
+            b["status"] = "blocked"
+        elif b["in-progress"] == 0 and b["in-review"] == 0 and done == 0:
+            b["status"] = "todo"
+        else:
+            b["status"] = "in-progress"
+    return buckets
+
+
 def _touch_task(task: dict) -> None:
     """Update last_referenced timestamp on a task."""
     task["last_referenced"] = _now()
@@ -5073,7 +5120,7 @@ def _clear_session_task(task_id: str) -> None:
         _session_task = None
 
 
-ALLOWED_FIELDS = {"title", "status", "priority", "notes", "branch", "worktree", "blockers", "docs", "depends_on", "sub_repo", "stage", "estimate", "locked_by", "review_instructions", "phase", "anchors", "blast_radius_depth", "patchnote", "release", "tldr", "next_step"}
+ALLOWED_FIELDS = {"title", "status", "priority", "notes", "branch", "worktree", "blockers", "docs", "depends_on", "sub_repo", "stage", "estimate", "locked_by", "review_instructions", "phase", "anchors", "blast_radius_depth", "patchnote", "release", "tldr", "next_step", "component", "design_change"}
 VALID_STATUSES = {"todo", "in-progress", "in-review", "done", "archived", "blocked"}
 VALID_PRIORITIES = {"critical", "high", "medium", "low"}
 VALID_DOC_KEYS = {"plan", "spec", "roadmap", "design", "analysis"}
@@ -5232,6 +5279,28 @@ def backlog_update_task(
             task.pop("next_step", None)
         else:
             task["next_step"] = value
+    elif field == "component":
+        if value == "" or value.lower() == "none":
+            task.pop("component", None)
+        else:
+            comps = (epic.get("components") or {})
+            if value not in comps:
+                declared = ", ".join(sorted(comps)) or "(none declared)"
+                return (f"Error: component `{value}` not declared on epic `{epic['id']}`. "
+                        f"Declared: {declared}. Add it via backlog_update_epic(<epic>, 'components', ...).")
+            task["component"] = value
+    elif field == "design_change":
+        truthy = value.strip().lower() in ("true", "1", "yes")
+        if truthy:
+            design = epic.get("design_status", "exploring")
+            if design == "locked":
+                return (f"Error: epic `{epic['id']}` design is locked — cannot flag a "
+                        f"design-change task. To reopen, set the epic to revising "
+                        f"(backlog_update_epic('{epic['id']}', 'design_status', 'revising')) "
+                        f"and record the reason as a decision (taskmaster:decision).")
+            task["design_change"] = True
+        else:
+            task.pop("design_change", None)
     else:
         task[field] = value
 
@@ -5333,7 +5402,37 @@ def backlog_clear_spec_review(task_id: str) -> str:
 
 
 VALID_EPIC_STATUSES = {"active", "planned", "done", "archived"}
-ALLOWED_EPIC_FIELDS = {"name", "status", "description", "docs"}
+ALLOWED_EPIC_FIELDS = {"name", "status", "description", "docs", "components", "design_status"}
+VALID_DESIGN_STATUSES = {"exploring", "proposed", "locked", "revising"}
+
+
+def _validate_components(components: dict) -> str:
+    """Return '' if the components block is well-formed, else an error string.
+
+    Shape: { <key>: { "title": str, "after": [<other keys>] } }.
+    `after` edges must reference declared component keys (DAG not enforced here).
+    """
+    if not isinstance(components, dict):
+        return "Error: components must be a JSON object {key: {title, after}}"
+    keys = set(components)
+    for key, spec in components.items():
+        if key == "_unassigned":
+            return "Error: `_unassigned` is a reserved component key"
+        if key.lower() == "none":
+            return "Error: `none` (case-insensitive) is a reserved component key"
+        if not isinstance(spec, dict):
+            return f"Error: component `{key}` must be an object with title/after"
+        if "title" in spec and not isinstance(spec["title"], str):
+            return f"Error: component `{key}` title must be a string"
+        after = spec.get("after", [])
+        if not isinstance(after, list):
+            return f"Error: component `{key}` after must be a list of component keys"
+        for ref in after:
+            if ref == key:
+                return f"Error: component `{key}` cannot reference itself in `after`"
+            if ref not in keys:
+                return f"Error: component `{key}` after references unknown component `{ref}`"
+    return ""
 
 
 @mcp.tool()
@@ -5386,6 +5485,25 @@ def backlog_update_epic(epic_id: str, field: str, value: str) -> str:
         epic["docs"][doc_key] = doc_path
         _mutate_and_save(data)
         return f"Updated epic `{epic_id}` doc `{doc_key}` → `{doc_path}`"
+
+    if field == "components":
+        try:
+            parsed = json.loads(value)
+        except (ValueError, TypeError):
+            return "Error: components value must be a JSON object {key: {title, after}}"
+        err = _validate_components(parsed)
+        if err:
+            return err
+        epic["components"] = parsed
+        _mutate_and_save(data)
+        return f"Updated epic `{epic_id}` components ({len(parsed)} declared)"
+
+    if field == "design_status":
+        if value not in VALID_DESIGN_STATUSES:
+            return f"Error: invalid design_status `{value}`. Valid: {', '.join(sorted(VALID_DESIGN_STATUSES))}"
+        epic["design_status"] = value
+        _mutate_and_save(data)
+        return f"Updated epic `{epic_id}` design_status → `{value}`"
 
     old_value = epic.get(field, "")
     epic[field] = value
@@ -5474,7 +5592,7 @@ def backlog_add_epic(
 
 
 VALID_PHASE_STATUSES = {"planned", "active", "done", "archived"}
-ALLOWED_PHASE_FIELDS = {"name", "status", "description", "order", "target_date", "start_date", "deliverables"}
+ALLOWED_PHASE_FIELDS = {"name", "status", "description", "order", "target_date", "start_date", "deliverables", "docs"}
 
 
 @mcp.tool()
@@ -5617,6 +5735,21 @@ def backlog_update_phase(phase_id: str, field: str, value: str) -> str:
             ph["deliverables"] = [{"text": str(d.get("text", "")), "done": bool(d.get("done", False))} for d in items]
         else:
             return f"Error: unknown deliverables action `{action}`. Use: add, remove, toggle, set"
+    elif field == "docs":
+        if ":" not in value:
+            return (f"Error: docs value must be `key:path` format "
+                    f"(e.g. `design:docs/design/ship.md`). Valid keys: {', '.join(sorted(VALID_DOC_KEYS))}")
+        doc_key, doc_path = (s.strip() for s in value.split(":", 1))
+        if doc_key not in VALID_DOC_KEYS:
+            return f"Error: invalid docs key `{doc_key}`. Valid: {', '.join(sorted(VALID_DOC_KEYS))}"
+        if not isinstance(ph.get("docs"), dict):
+            ph["docs"] = {}
+        if doc_path == "":
+            ph["docs"].pop(doc_key, None)
+            if not ph["docs"]:
+                ph.pop("docs", None)
+        else:
+            ph["docs"][doc_key] = doc_path
     else:
         ph[field] = value
 
@@ -5766,6 +5899,86 @@ def backlog_phase_status(phase_id: str = "") -> str:
                 unassigned_count += 1
     if unassigned_count:
         lines.append(f"*{unassigned_count} active tasks are not assigned to any phase.*")
+
+    return "\n".join(lines)
+
+
+def _epic_stats(data: dict, epic_id: str) -> dict:
+    """Status counts for an epic's tasks.
+
+    Unlike _phase_stats (which subtracts archived from total to give an
+    active-scope denominator), this keeps archived tasks in `total` so that
+    the `done + archived` numerator never exceeds it — epic-level lifetime
+    progress, not "what's left to do".
+    """
+    stats = {"total": 0, "done": 0, "in-progress": 0, "in-review": 0,
+             "todo": 0, "blocked": 0, "archived": 0}
+    epic = _find_epic(data, epic_id)
+    for t in (epic.get("tasks", []) if epic else []):
+        st = t.get("status", "todo")
+        stats["total"] += 1
+        if st in stats:
+            stats[st] += 1
+    return stats
+
+
+@mcp.tool()
+def backlog_epic_status(epic_id: str) -> str:
+    """Show progress for an epic: status counts, per-component rollup, and the
+    design-maturity lock. Derived on read from the epic's tasks — no stored rollup.
+
+    Args:
+        epic_id: The epic ID (e.g. "asset-engine").
+    """
+    data = _load()
+    epic = _find_epic(data, epic_id)
+    if not epic:
+        return f"Error: epic `{epic_id}` not found"
+
+    stats = _epic_stats(data, epic_id)
+    roll = _component_rollup(data, epic_id)
+    lines = [f"## Epic `{epic_id}` — {epic.get('name', '')}\n"]
+
+    design = epic.get("design_status", "exploring")
+    lock = " (locked)" if design == "locked" else ""
+    lines.append(f"**Design:** {design}{lock}")
+    lines.append(f"**Status:** {epic.get('status', 'active')}")
+
+    done = stats["done"] + stats["archived"]
+    if stats["total"]:
+        pct = int(done / stats["total"] * 100)
+        bar = "█" * (pct // 5) + "░" * (20 - pct // 5)
+        lines.append(f"**Progress:** {done}/{stats['total']} done")
+        lines.append(f"[{bar}] {pct}%")
+    lines.append(
+        f"Done: {stats['done']} | Archived: {stats['archived']} | "
+        f"In Progress: {stats['in-progress']} | "
+        f"In Review: {stats['in-review']} | Todo: {stats['todo']} | Blocked: {stats['blocked']}"
+    )
+
+    glyph = {"done": "█", "in-progress": "▨", "blocked": "✗", "todo": "□"}
+    lines.append("\n**Components:**")
+    for key, spec in (epic.get("components") or {}).items():
+        b = roll.get(key, {})
+        title = (spec or {}).get("title", key)
+        lines.append(f"- {glyph.get(b.get('status'), '□')} {title} "
+                     f"({b.get('done', 0)}/{b.get('total', 0)})")
+    if roll.get("_unassigned", {}).get("total"):
+        u = roll["_unassigned"]
+        lines.append(f"- · unassigned ({u['done']}/{u['total']})")
+
+    # Risk / attention surface (derived). Decision + failed-gate bubbling
+    # is added in Spec A / when decisions gain an epic link (extension point).
+    attention = []
+    for t in epic.get("tasks", []):
+        if t.get("status") == "blocked":
+            why = t.get("blockers")
+            attention.append(f"⏸ {t['id']} blocked" + (f": {why}" if why else ""))
+        elif t.get("blockers"):
+            attention.append(f"⚠ {t['id']}: {t['blockers']}")
+    if attention:
+        lines.append("\n**Attention:**")
+        lines.extend(f"- {a}" for a in attention)
 
     return "\n".join(lines)
 
