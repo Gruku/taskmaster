@@ -67,3 +67,39 @@ def test_component_rollup(tm_epic_phase):
     assert roll["core"]["status"] == "in-progress"   # mixed -> in-progress
     assert roll["ui"]["status"] == "todo"            # nothing started
     assert roll["_unassigned"]["total"] == 1         # R-4 has no component
+
+
+def test_components_reject_reserved_unassigned(tmp_taskmaster):
+    backlog_add_epic("asset-engine", "Asset Engine")
+    out = backlog_update_epic("asset-engine", "components",
+                              json.dumps({"_unassigned": {"title": "X"}}))
+    assert "Error" in out and "_unassigned" in out
+
+def test_components_reject_reserved_none(tmp_taskmaster):
+    backlog_add_epic("asset-engine", "Asset Engine")
+    out = backlog_update_epic("asset-engine", "components",
+                              json.dumps({"none": {"title": "X"}}))
+    assert "Error" in out
+
+def test_components_reject_self_reference(tmp_taskmaster):
+    backlog_add_epic("asset-engine", "Asset Engine")
+    out = backlog_update_epic("asset-engine", "components",
+                              json.dumps({"a": {"title": "A", "after": ["a"]}}))
+    assert "Error" in out and "a" in out
+
+def test_stale_component_binding_rolls_to_unassigned(tm_epic_phase):
+    backlog_update_epic("test-epic", "components",
+                        json.dumps({"core": {"title": "Core"}}))
+    backlog_add_task(epic="test-epic", task_id="S-1", title="S1", phase="dev")
+    backlog_update_task("S-1", "component", "core")
+    # remove the component the task is bound to (stale binding)
+    backlog_update_epic("test-epic", "components", json.dumps({"ui": {"title": "UI"}}))
+    roll = _component_rollup(_load(), "test-epic")
+    assert roll["_unassigned"]["total"] == 1
+
+def test_design_status_roundtrip(tmp_taskmaster):
+    backlog_add_epic("asset-engine", "Asset Engine")
+    backlog_update_epic("asset-engine", "design_status", "locked")
+    data = _load()  # reload from disk
+    e = next(e for e in data["epics"] if e["id"] == "asset-engine")
+    assert e["design_status"] == "locked"

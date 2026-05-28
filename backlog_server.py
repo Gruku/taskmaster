@@ -5404,6 +5404,10 @@ def _validate_components(components: dict) -> str:
         return "Error: components must be a JSON object {key: {title, after}}"
     keys = set(components)
     for key, spec in components.items():
+        if key == "_unassigned":
+            return "Error: `_unassigned` is a reserved component key"
+        if key.lower() == "none":
+            return "Error: `none` (case-insensitive) is a reserved component key"
         if not isinstance(spec, dict):
             return f"Error: component `{key}` must be an object with title/after"
         if "title" in spec and not isinstance(spec["title"], str):
@@ -5412,6 +5416,8 @@ def _validate_components(components: dict) -> str:
         if not isinstance(after, list):
             return f"Error: component `{key}` after must be a list of component keys"
         for ref in after:
+            if ref == key:
+                return f"Error: component `{key}` cannot reference itself in `after`"
             if ref not in keys:
                 return f"Error: component `{key}` after references unknown component `{ref}`"
     return ""
