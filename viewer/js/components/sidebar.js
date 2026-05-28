@@ -11,6 +11,7 @@ const SECTIONS = [
     { key: 'kanban',    icon: '▦', label: 'Kanban',    hash: '#/kanban' },
     { key: 'table',     icon: '▭', label: 'Table',     hash: '#/table' },
     { key: 'task',      icon: '◧', label: 'Task',      hash: '#/task' },
+    { key: 'epics',     icon: '⬡', label: 'Epics',     hash: '#/epics' },
   ]},
   { label: 'Structural', items: [
     { key: 'auto_mode', icon: '⌬', label: 'Auto Mode', hash: '#/auto', live: true },
