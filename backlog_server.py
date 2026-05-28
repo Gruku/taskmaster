@@ -488,6 +488,53 @@ def _phase_stats(data: dict, phase_id: str) -> dict:
     return {"total": total, **counts}
 
 
+def _component_rollup(data: dict, epic_id: str) -> dict:
+    """Per-component status rollup for an epic, computed on read.
+
+    Returns { <component_key>: {total, done, in-progress, in-review, todo,
+    blocked, status}, ..., "_unassigned": {...} }. Components with no tasks
+    still appear (status "todo"). `status` is the node color:
+      - "done"        : >0 tasks and all done/archived
+      - "todo"        : no task started (all todo)
+      - "blocked"     : any blocked and none in-progress/in-review
+      - "in-progress" : otherwise (work underway)
+    """
+    epic = _find_epic(data, epic_id)
+    declared = list((epic.get("components") or {}) if epic else [])
+    buckets: dict[str, dict] = {}
+
+    def _blank() -> dict:
+        return {"total": 0, "done": 0, "in-progress": 0, "in-review": 0,
+                "todo": 0, "blocked": 0, "archived": 0}
+
+    for key in declared:
+        buckets[key] = _blank()
+    buckets["_unassigned"] = _blank()
+
+    for t in (epic.get("tasks", []) if epic else []):
+        comp = t.get("component")
+        key = comp if comp in buckets else "_unassigned"
+        st = t.get("status", "todo")
+        b = buckets[key]
+        b["total"] += 1
+        if st in b:
+            b[st] += 1
+
+    for b in buckets.values():
+        done = b["done"] + b["archived"]
+        if b["total"] == 0:
+            b["status"] = "todo"
+        elif done == b["total"]:
+            b["status"] = "done"
+        elif b["in-progress"] == 0 and b["in-review"] == 0 and b["blocked"] > 0:
+            b["status"] = "blocked"
+        elif b["in-progress"] == 0 and b["in-review"] == 0 and done == 0:
+            b["status"] = "todo"
+        else:
+            b["status"] = "in-progress"
+    return buckets
+
+
 def _touch_task(task: dict) -> None:
     """Update last_referenced timestamp on a task."""
     task["last_referenced"] = _now()

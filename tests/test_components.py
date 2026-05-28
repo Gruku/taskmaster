@@ -1,6 +1,6 @@
 import json
 import yaml
-from backlog_server import backlog_add_epic, backlog_update_epic, _load, backlog_add_task, backlog_update_task, backlog_get_task
+from backlog_server import backlog_add_epic, backlog_update_epic, _load, backlog_add_task, backlog_update_task, backlog_get_task, _component_rollup
 
 def _epic(data, eid):
     return next(e for e in data["epics"] if e["id"] == eid)
@@ -51,3 +51,19 @@ def test_clear_component(tm_epic_phase):
     assert "Error" not in backlog_update_task("T-3", "component", "")
     t = next(t for e in _load()["epics"] for t in e.get("tasks", []) if t["id"] == "T-3")
     assert "component" not in t
+
+
+def test_component_rollup(tm_epic_phase):
+    backlog_update_epic("test-epic", "components",
+                        json.dumps({"core": {"title": "Core"}, "ui": {"title": "UI"}}))
+    for tid, comp, status in [("R-1", "core", "done"), ("R-2", "core", "in-progress"),
+                              ("R-3", "ui", "todo"), ("R-4", None, "todo")]:
+        backlog_add_task(epic="test-epic", task_id=tid, title=tid, phase="dev")
+        if comp:
+            backlog_update_task(tid, "component", comp)
+        backlog_update_task(tid, "status", status)
+    roll = _component_rollup(_load(), "test-epic")
+    assert roll["core"]["total"] == 2 and roll["core"]["done"] == 1
+    assert roll["core"]["status"] == "in-progress"   # mixed -> in-progress
+    assert roll["ui"]["status"] == "todo"            # nothing started
+    assert roll["_unassigned"]["total"] == 1         # R-4 has no component
