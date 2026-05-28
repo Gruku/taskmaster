@@ -5333,7 +5333,31 @@ def backlog_clear_spec_review(task_id: str) -> str:
 
 
 VALID_EPIC_STATUSES = {"active", "planned", "done", "archived"}
-ALLOWED_EPIC_FIELDS = {"name", "status", "description", "docs"}
+ALLOWED_EPIC_FIELDS = {"name", "status", "description", "docs", "components", "design_status"}
+VALID_DESIGN_STATUSES = {"exploring", "proposed", "locked", "revising"}
+
+
+def _validate_components(components: dict) -> str:
+    """Return '' if the components block is well-formed, else an error string.
+
+    Shape: { <key>: { "title": str, "after": [<other keys>] } }.
+    `after` edges must reference declared component keys (DAG not enforced here).
+    """
+    if not isinstance(components, dict):
+        return "Error: components must be a JSON object {key: {title, after}}"
+    keys = set(components)
+    for key, spec in components.items():
+        if not isinstance(spec, dict):
+            return f"Error: component `{key}` must be an object with title/after"
+        if "title" in spec and not isinstance(spec["title"], str):
+            return f"Error: component `{key}` title must be a string"
+        after = spec.get("after", [])
+        if not isinstance(after, list):
+            return f"Error: component `{key}` after must be a list of component keys"
+        for ref in after:
+            if ref not in keys:
+                return f"Error: component `{key}` after references unknown component `{ref}`"
+    return ""
 
 
 @mcp.tool()
@@ -5386,6 +5410,25 @@ def backlog_update_epic(epic_id: str, field: str, value: str) -> str:
         epic["docs"][doc_key] = doc_path
         _mutate_and_save(data)
         return f"Updated epic `{epic_id}` doc `{doc_key}` → `{doc_path}`"
+
+    if field == "components":
+        try:
+            parsed = json.loads(value)
+        except (ValueError, TypeError):
+            return "Error: components value must be a JSON object {key: {title, after}}"
+        err = _validate_components(parsed)
+        if err:
+            return err
+        epic["components"] = parsed
+        _mutate_and_save(data)
+        return f"Updated epic `{epic_id}` components ({len(parsed)} declared)"
+
+    if field == "design_status":
+        if value not in VALID_DESIGN_STATUSES:
+            return f"Error: invalid design_status `{value}`. Valid: {', '.join(sorted(VALID_DESIGN_STATUSES))}"
+        epic["design_status"] = value
+        _mutate_and_save(data)
+        return f"Updated epic `{epic_id}` design_status → `{value}`"
 
     old_value = epic.get(field, "")
     epic[field] = value
