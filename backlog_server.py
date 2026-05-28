@@ -6661,6 +6661,50 @@ def _load_task_full(task_id: str) -> dict | None:
     return out
 
 
+def _load_epic_full(epic_id: str) -> dict | None:
+    """Epic with heavy fields (description/docs/components) merged from
+    epics/<id>.md via load_v3, plus derived status counts, per-component
+    rollup, a blocked/blockers attention list, and a slim task list.
+
+    Returns None if the epic id is unknown. Mirrors _load_task_full but
+    routes through _load() (which calls _load_v3) so heavy fields that
+    /api/backlog strips are present here.
+    """
+    if not _backlog_path().exists():
+        return None
+    data = _load()
+    epic = _find_epic(data, epic_id)
+    if epic is None:
+        return None
+
+    out = {k: v for k, v in epic.items() if k != "tasks"}
+    out.setdefault("description", "")
+    out.setdefault("docs", {})
+    out.setdefault("components", {})
+    out.setdefault("design_status", "exploring")
+    out["stats"] = _epic_stats(data, epic_id)
+    out["component_rollup"] = _component_rollup(data, epic_id)
+
+    attention = []
+    for t in epic.get("tasks", []):
+        if t.get("status") == "blocked":
+            attention.append({"id": t.get("id"), "title": t.get("title"),
+                              "blocked": True, "why": t.get("blockers", "")})
+        elif t.get("blockers"):
+            attention.append({"id": t.get("id"), "title": t.get("title"),
+                              "blocked": False, "why": t.get("blockers")})
+    out["attention"] = attention
+
+    out["tasks"] = [
+        {"id": t.get("id"), "title": t.get("title"),
+         "status": t.get("status", "todo"), "component": t.get("component"),
+         "priority": t.get("priority"), "phase": t.get("phase"),
+         "design_change": t.get("design_change")}
+        for t in epic.get("tasks", [])
+    ]
+    return out
+
+
 def _load_related_for_task(task_id: str) -> dict | None:
     """Build the related-entities payload for a task: lessons (anchor-matched),
     handovers (task_ids), issues (task_ids), forward deps, reverse deps.
