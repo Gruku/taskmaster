@@ -12,6 +12,14 @@ indicate schema breaks or removed surfaces.
 
 ---
 
+## 3.10.0 — Epic viewer surface (2026-05-29)
+
+### Added
+
+- **Epic detail screen** — `GET /api/epic/<id>` HTTP endpoint (load_v3-backed), `mountEpicDetail` viewer component (rollup + components + design-lock + narrative), `/epic/<id>` detail route, `/epics` list screen, and sidebar Epics entry. (Spec C1b)
+
+---
+
 ## 3.9.1 — Git read-path no longer leaks index.lock (2026-05-28)
 
 ### Fixed
