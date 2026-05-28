@@ -895,8 +895,9 @@ def migrate_v2_to_v3(backlog_path: Path) -> dict[str, Any]:
 
     - Reads the v2 single-file backlog.
     - Sets `meta.schema_version = 3`.
-    - Calls save_v3, which strips HEAVY_FIELDS into per-task files and
-      writes the slim index back to backlog.yaml.
+    - Calls save_v3, which strips heavy fields into per-task files and also
+      writes per-epic (epics/<id>.md) and per-phase (phases/<id>.md) body
+      files, then writes the slim index back to backlog.yaml.
 
     Idempotent: re-running on a v3 backlog returns a 'no-op' summary.
 
@@ -904,7 +905,8 @@ def migrate_v2_to_v3(backlog_path: Path) -> dict[str, Any]:
         Summary dict with keys:
           - status: "migrated" | "already_v3"
           - tasks_total: int
-          - task_files_written: list[str] (relative paths)
+          - task_files_written: list[str] (relative paths) — all body files
+            written, including epics/<id>.md and phases/<id>.md, not just tasks
           - schema_before / schema_after
     """
     raw = yaml.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
@@ -920,7 +922,8 @@ def migrate_v2_to_v3(backlog_path: Path) -> dict[str, Any]:
 
     raw.setdefault("meta", {})["schema_version"] = SCHEMA_V3
 
-    # Determine which task files will get written so we can report them.
+    # Determine which files will get written so we can report them. This must
+    # mirror save_v3's write conditions for tasks, epics, and phases.
     files_to_write: list[Path] = []
     for epic in raw.get("epics", []):
         for task in epic.get("tasks", []):
@@ -931,6 +934,20 @@ def migrate_v2_to_v3(backlog_path: Path) -> dict[str, Any]:
             has_heavy = any(k in heavy_fm for k in HEAVY_FIELDS) or bool(body)
             if has_heavy:
                 files_to_write.append(task_file_path(backlog_path, tid))
+    for epic in raw.get("epics", []):
+        eid = epic.get("id")
+        if eid:
+            _, eheavy, ebody = _split_entity_for_v3(
+                {k: v for k, v in epic.items() if k != "tasks"}, EPIC_HEAVY_FIELDS
+            )
+            if any(k in eheavy for k in EPIC_HEAVY_FIELDS) or ebody:
+                files_to_write.append(epic_file_path(backlog_path, eid))
+    for phase in raw.get("phases", []):
+        pid = phase.get("id")
+        if pid:
+            _, pheavy, pbody = _split_entity_for_v3(phase, PHASE_HEAVY_FIELDS)
+            if any(k in pheavy for k in PHASE_HEAVY_FIELDS) or pbody:
+                files_to_write.append(phase_file_path(backlog_path, pid))
 
     save_v3(backlog_path, raw)
 
@@ -4389,7 +4406,11 @@ def save_v3(backlog_path: Path, data: dict[str, Any]) -> None:
         eid = slim_meta.get("id")
         if eid and (any(k in epic_heavy for k in EPIC_HEAVY_FIELDS) or epic_body):
             write_task_file(epic_file_path(backlog_path, eid), epic_heavy, epic_body)
-        slim_epic = {**slim_meta, "tasks": []}
+            slim_epic = {**slim_meta, "tasks": []}
+        else:
+            # No per-epic file written (no id, or no heavy content): keep the
+            # full meta inline so heavy fields are never silently dropped.
+            slim_epic = {**epic_meta, "tasks": []}
         for task in tasks:
             slim_task, heavy_fm, body = _split_task_for_v3(task)
             slim_epic["tasks"].append(slim_task)
@@ -4407,7 +4428,11 @@ def save_v3(backlog_path: Path, data: dict[str, Any]) -> None:
             pid = slim_phase.get("id")
             if pid and (any(k in phase_heavy for k in PHASE_HEAVY_FIELDS) or phase_body):
                 write_task_file(phase_file_path(backlog_path, pid), phase_heavy, phase_body)
-            slim_phases.append(slim_phase)
+                slim_phases.append(slim_phase)
+            else:
+                # No per-phase file written: keep the full phase dict inline so
+                # heavy fields are never silently dropped.
+                slim_phases.append(phase)
         slim_data["phases"] = slim_phases
 
     atomic_write(

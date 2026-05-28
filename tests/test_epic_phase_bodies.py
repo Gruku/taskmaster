@@ -102,3 +102,69 @@ def test_existing_backlog_migrates_on_first_save(tmp_path):
     reloaded = v3.load_v3(bp)
     assert reloaded["epics"][0]["status"] == "done"
     assert reloaded["epics"][0]["description"].startswith("Ingest")
+
+
+def test_save_v3_keeps_heavy_fields_inline_when_no_id(tmp_path):
+    bp = tmp_path / ".taskmaster" / "backlog.yaml"
+    bp.parent.mkdir(parents=True, exist_ok=True)
+    data = {
+        "version": 3, "project": "t",
+        "meta": {"updated": "", "schema_version": 3},
+        "epics": [{
+            "name": "No-Id Epic", "status": "active",
+            "description": "Epic without an id.", "tasks": [],
+        }],
+        "phases": [{
+            "name": "No-Id Phase", "status": "active", "order": 1,
+            "description": "Phase without an id.",
+        }],
+        "context": {},
+    }
+    bp.write_text(yaml.safe_dump(data), encoding="utf-8")
+    v3.save_v3(bp, v3.load_v3(bp))
+    # No stray file should be written for an id-less entity.
+    epics_dir = bp.parent / "epics"
+    phases_dir = bp.parent / "phases"
+    assert not (epics_dir.exists() and any(epics_dir.iterdir()))
+    assert not (phases_dir.exists() and any(phases_dir.iterdir()))
+    # Heavy fields must survive inline (not silently dropped).
+    slim = yaml.safe_load(bp.read_text(encoding="utf-8"))
+    assert slim["epics"][0]["description"] == "Epic without an id."
+    assert slim["phases"][0]["description"] == "Phase without an id."
+    # And they round-trip back through load.
+    reloaded = v3.load_v3(bp)
+    assert reloaded["epics"][0]["description"] == "Epic without an id."
+    assert reloaded["phases"][0]["description"] == "Phase without an id."
+
+
+def test_migrate_v2_to_v3_counts_epic_and_phase_files(tmp_path):
+    bp = tmp_path / ".taskmaster" / "backlog.yaml"
+    bp.parent.mkdir(parents=True, exist_ok=True)
+    data = {
+        "version": 2, "project": "t",
+        "meta": {"updated": "", "schema_version": 2},
+        "epics": [{
+            "id": "asset-engine", "name": "Asset Engine", "status": "active",
+            "description": "Ingest + thumbnail.", "created": "2026-05-27",
+            "tasks": [{
+                "id": "ae-1", "title": "Ingest task", "status": "todo",
+                "description": "Do the ingest.",
+            }],
+        }],
+        "phases": [{
+            "id": "ship-v3", "name": "Ship V3", "status": "active", "order": 1,
+            "description": "Wrap up.", "created": "2026-05-27",
+        }],
+        "context": {},
+    }
+    bp.write_text(yaml.safe_dump(data), encoding="utf-8")
+    summary = v3.migrate_v2_to_v3(bp)
+    assert summary["status"] == "migrated"
+    written = summary["task_files_written"]
+    # Migration summary must include epic/phase body files, not just tasks.
+    assert any(p.replace("\\", "/") == "epics/asset-engine.md" for p in written)
+    assert any(p.replace("\\", "/") == "phases/ship-v3.md" for p in written)
+    assert any(p.replace("\\", "/") == "tasks/ae-1.md" for p in written)
+    # And those files actually got written.
+    assert v3.epic_file_path(bp, "asset-engine").exists()
+    assert v3.phase_file_path(bp, "ship-v3").exists()
