@@ -860,6 +860,33 @@ def load_v3(backlog_path: Path) -> dict[str, Any]:
             else:
                 new_tasks.append(slim_task)
         epic["tasks"] = new_tasks
+
+    # Merge per-epic heavy bodies (doc-bearing epics)
+    for epic in data.get("epics", []):
+        eid = epic.get("id")
+        if not eid:
+            continue
+        ef = epic_file_path(backlog_path, eid)
+        if ef.exists():
+            fm, body = read_task_file(ef)
+            epic_meta = {k: v for k, v in epic.items() if k != "tasks"}
+            merged = _merge_entity_from_v3(epic_meta, fm, body, EPIC_HEAVY_FIELDS)
+            merged["tasks"] = epic.get("tasks", [])
+            epic.clear()
+            epic.update(merged)
+
+    # Merge per-phase heavy bodies
+    for phase in data.get("phases", []):
+        pid = phase.get("id")
+        if not pid:
+            continue
+        pf = phase_file_path(backlog_path, pid)
+        if pf.exists():
+            fm, body = read_task_file(pf)
+            merged = _merge_entity_from_v3(phase, fm, body, PHASE_HEAVY_FIELDS)
+            phase.clear()
+            phase.update(merged)
+
     return data
 
 

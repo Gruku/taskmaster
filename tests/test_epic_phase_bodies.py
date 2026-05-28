@@ -73,3 +73,20 @@ def test_save_v3_writes_epic_and_phase_bodies(tmp_path):
     assert slim["epics"][0]["id"] == "asset-engine"
     assert slim["epics"][0]["tasks"][0]["id"] == "ae-1"
     assert "description" not in slim["phases"][0]
+
+
+def test_load_v3_merges_epic_and_phase_bodies(tmp_path):
+    bp = _seed_backlog(tmp_path)
+    v3.save_v3(bp, v3.load_v3(bp))
+    data = v3.load_v3(bp)
+    epic = data["epics"][0]
+    assert epic["description"].startswith("Ingest + thumbnail.")
+    assert epic["tasks"][0]["id"] == "ae-1"
+    phase = data["phases"][0]
+    assert phase["description"].startswith("Wrap up.")
+
+def test_load_v3_backward_compat_inline_description(tmp_path):
+    bp = _seed_backlog(tmp_path)
+    data = v3.load_v3(bp)
+    assert data["epics"][0]["description"].startswith("Ingest + thumbnail.")
+    assert not v3.epic_file_path(bp, "asset-engine").exists()
