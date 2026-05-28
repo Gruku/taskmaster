@@ -112,7 +112,7 @@ def backfill_tldr(frontmatter: dict[str, Any], body: str = "") -> tuple[dict[str
 SLIM_FIELDS: dict[str, tuple[str, ...]] = {
     "task": (
         "id", "title", "tldr", "next_step", "status", "priority",
-        "estimate", "phase", "epic",
+        "estimate", "phase", "epic", "component",
         "depends_on", "related_issues", "related_lessons",
         "started", "completed", "branch", "worktree",
         "blockers", "open_handovers",

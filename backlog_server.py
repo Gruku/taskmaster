@@ -5073,7 +5073,7 @@ def _clear_session_task(task_id: str) -> None:
         _session_task = None
 
 
-ALLOWED_FIELDS = {"title", "status", "priority", "notes", "branch", "worktree", "blockers", "docs", "depends_on", "sub_repo", "stage", "estimate", "locked_by", "review_instructions", "phase", "anchors", "blast_radius_depth", "patchnote", "release", "tldr", "next_step"}
+ALLOWED_FIELDS = {"title", "status", "priority", "notes", "branch", "worktree", "blockers", "docs", "depends_on", "sub_repo", "stage", "estimate", "locked_by", "review_instructions", "phase", "anchors", "blast_radius_depth", "patchnote", "release", "tldr", "next_step", "component"}
 VALID_STATUSES = {"todo", "in-progress", "in-review", "done", "archived", "blocked"}
 VALID_PRIORITIES = {"critical", "high", "medium", "low"}
 VALID_DOC_KEYS = {"plan", "spec", "roadmap", "design", "analysis"}
@@ -5232,6 +5232,16 @@ def backlog_update_task(
             task.pop("next_step", None)
         else:
             task["next_step"] = value
+    elif field == "component":
+        if value == "" or value.lower() == "none":
+            task.pop("component", None)
+        else:
+            comps = (epic.get("components") or {})
+            if value not in comps:
+                declared = ", ".join(sorted(comps)) or "(none declared)"
+                return (f"Error: component `{value}` not declared on epic `{epic['id']}`. "
+                        f"Declared: {declared}. Add it via backlog_update_epic(<epic>, 'components', ...).")
+            task["component"] = value
     else:
         task[field] = value
 
