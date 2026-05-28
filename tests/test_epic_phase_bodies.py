@@ -1,7 +1,10 @@
 from pathlib import Path
-import pytest
 import taskmaster_v3 as v3
-from backlog_server import backlog_add_phase, backlog_update_phase, _load as _load_srv
+from backlog_server import (
+    backlog_add_phase, backlog_update_phase,
+    backlog_add_epic, backlog_update_epic,
+    _load as _load_srv,
+)
 
 
 def test_entity_constants_present():
@@ -180,16 +183,6 @@ def test_phase_docs_field(tmp_taskmaster):
     assert ph["docs"]["design"] == "docs/design/ship.md"
 
 
-# KNOWN BUG (pre-existing in save_v3, not introduced by Task 11/12 — affects epic
-# docs clear identically): when an entity's LAST heavy field (PHASE_HEAVY_FIELDS /
-# EPIC_HEAVY_FIELDS) is cleared so the heavy set becomes empty, save_v3 takes the
-# "no file written" branch and leaves the stale per-entity .md on disk. On next
-# load that stale file is merged back, resurrecting the cleared docs. The in-memory
-# clear in backlog_update_phase is correct; the persistence layer fails to delete or
-# rewrite the body file. Clearing works fine when ANOTHER heavy field remains (the
-# file is rewritten). Marked xfail so the characterization stays as a regression
-# tripwire without breaking the suite; flip to a pass when save_v3 is fixed.
-@pytest.mark.xfail(reason="save_v3 leaves stale heavy-field body file when last heavy field cleared", strict=True)
 def test_phase_docs_clear_on_empty_path(tmp_taskmaster):
     backlog_add_phase("ship2", "Ship2")
     backlog_update_phase("ship2", "docs", "design:docs/design/ship.md")
@@ -211,3 +204,54 @@ def test_phase_docs_path_with_colons(tmp_taskmaster):
     assert "Error" not in out
     ph = next(p for p in _load_srv()["phases"] if p["id"] == "ship4")
     assert ph["docs"]["design"] == "docs/a:b.md"
+
+
+def test_epic_docs_clear_removes_stale_body_file(tmp_taskmaster):
+    # Epic whose only heavy field is `docs`: setting it writes epics/<id>.md;
+    # clearing it must delete that file so docs does not resurrect on reload.
+    backlog_add_epic(epic_id="cleanup", name="Cleanup")
+    backlog_update_epic("cleanup", "docs", "design:docs/design/cleanup.md")
+    bp = tmp_taskmaster / ".taskmaster" / "backlog.yaml"
+    epic_md = v3.epic_file_path(bp, "cleanup")
+    assert epic_md.exists()  # written on first save
+    out = backlog_update_epic("cleanup", "docs", "design:")  # clear the only heavy field
+    assert "Error" not in out
+    ep = next(e for e in _load_srv()["epics"] if e["id"] == "cleanup")
+    assert "docs" not in ep or "design" not in ep.get("docs", {})
+    assert not epic_md.exists()  # stale body file removed
+
+
+def test_save_v3_removes_stale_task_body_file_on_clear(tmp_path):
+    # Storage-layer: a task with a heavy field (`description`) gets tasks/<id>.md
+    # on first save; clearing it must delete the stale file rather than leave it
+    # to resurrect the description on reload.
+    bp = tmp_path / ".taskmaster" / "backlog.yaml"
+    bp.parent.mkdir(parents=True, exist_ok=True)
+    data = {
+        "version": 3, "project": "t",
+        "meta": {"updated": "", "schema_version": 3},
+        "epics": [{
+            "id": "asset-engine", "name": "Asset Engine", "status": "active",
+            "created": "2026-05-27",
+            "tasks": [{
+                "id": "ae-1", "title": "Ingest task", "status": "todo",
+                "description": "Do the ingest.",
+            }],
+        }],
+        "phases": [],
+        "context": {},
+    }
+    bp.write_text(yaml.safe_dump(data), encoding="utf-8")
+    # First save writes the per-task body file (heavy `description`).
+    v3.save_v3(bp, v3.load_v3(bp))
+    task_md = v3.task_file_path(bp, "ae-1")
+    assert task_md.exists()
+    # Clear the only heavy field, save again.
+    reloaded = v3.load_v3(bp)
+    reloaded["epics"][0]["tasks"][0].pop("description", None)
+    v3.save_v3(bp, reloaded)
+    # (a) cleared content stays cleared after a fresh load
+    final = v3.load_v3(bp)
+    assert "description" not in final["epics"][0]["tasks"][0]
+    # (b) stale per-task body file was removed
+    assert not task_md.exists()

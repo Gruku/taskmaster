@@ -758,6 +758,15 @@ def phase_file_path(backlog_path: Path, phase_id: str) -> Path:
     return backlog_path.parent / "phases" / f"{phase_id}.md"
 
 
+def _remove_entity_file(path: Path) -> None:
+    """Delete a stale per-entity body file if present (so a cleared last heavy
+    field doesn't resurrect on the next load). No-op if absent."""
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+
+
 def _split_task_for_v3(task: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], str]:
     """Split an in-memory task dict into (slim, heavy_fm, body).
 
@@ -4410,6 +4419,10 @@ def save_v3(backlog_path: Path, data: dict[str, Any]) -> None:
         else:
             # No per-epic file written (no id, or no heavy content): keep the
             # full meta inline so heavy fields are never silently dropped.
+            # Delete any stale body file so a cleared last heavy field can't
+            # resurrect on the next load. Guard on a truthy id — no None.md.
+            if eid:
+                _remove_entity_file(epic_file_path(backlog_path, eid))
             slim_epic = {**epic_meta, "tasks": []}
         for task in tasks:
             slim_task, heavy_fm, body = _split_task_for_v3(task)
@@ -4419,6 +4432,11 @@ def save_v3(backlog_path: Path, data: dict[str, Any]) -> None:
                 continue
             if any(k in heavy_fm for k in HEAVY_FIELDS) or bool(body):
                 write_task_file(task_file_path(backlog_path, tid), heavy_fm, body)
+            else:
+                # No heavy content: delete any stale per-task body file so a
+                # cleared last heavy field can't resurrect on the next load.
+                # tid is truthy here (guarded by `if not tid: continue` above).
+                _remove_entity_file(task_file_path(backlog_path, tid))
         slim_data["epics"].append(slim_epic)
 
     if "phases" in slim_data:
@@ -4431,7 +4449,11 @@ def save_v3(backlog_path: Path, data: dict[str, Any]) -> None:
                 slim_phases.append(slim_phase)
             else:
                 # No per-phase file written: keep the full phase dict inline so
-                # heavy fields are never silently dropped.
+                # heavy fields are never silently dropped. Delete any stale body
+                # file so a cleared last heavy field can't resurrect on the next
+                # load. Guard on a truthy id — no None.md.
+                if pid:
+                    _remove_entity_file(phase_file_path(backlog_path, pid))
                 slim_phases.append(phase)
         slim_data["phases"] = slim_phases
 
