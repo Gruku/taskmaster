@@ -90,3 +90,15 @@ def test_load_v3_backward_compat_inline_description(tmp_path):
     data = v3.load_v3(bp)
     assert data["epics"][0]["description"].startswith("Ingest + thumbnail.")
     assert not v3.epic_file_path(bp, "asset-engine").exists()
+
+
+def test_existing_backlog_migrates_on_first_save(tmp_path):
+    bp = _seed_backlog(tmp_path)
+    assert not v3.epic_file_path(bp, "asset-engine").exists()
+    data = v3.load_v3(bp)
+    data["epics"][0]["status"] = "done"
+    v3.save_v3(bp, data)
+    assert v3.epic_file_path(bp, "asset-engine").exists()
+    reloaded = v3.load_v3(bp)
+    assert reloaded["epics"][0]["status"] == "done"
+    assert reloaded["epics"][0]["description"].startswith("Ingest")
