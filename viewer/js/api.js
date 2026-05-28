@@ -77,6 +77,15 @@ export async function getTaskRelated(id) {
   return resp.json();
 }
 
+export async function getEpic(id) {
+  const resp = await fetch(`/api/epic/${encodeURIComponent(id)}`);
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => ({}));
+    throw new Error(body.error || `epic ${id} not found`);
+  }
+  return resp.json();
+}
+
 export const api = {
   // Generic HTTP helpers — screens needing arbitrary endpoints (e.g. continuity
   // dashboard hitting /api/continuity, /api/decisions/*) route through these
@@ -89,6 +98,7 @@ export const api = {
   savePrefs:       (p)   => http('PUT', '/api/viewer/prefs', p),
   autoState:       ()    => http('GET', '/api/auto/state'),
   getTask,
+  getEpic,
   getTaskRelated,
   patchTask:    (id, patch) => http('PATCH', `/api/tasks/${encodeURIComponent(id)}`, patch),
   putTask:      (id, full)  => http('PUT',   `/api/tasks/${encodeURIComponent(id)}`, full),
