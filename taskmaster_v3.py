@@ -4356,17 +4356,33 @@ def save_v3(backlog_path: Path, data: dict[str, Any]) -> None:
     slim_data: dict[str, Any] = {**data}
     slim_data["epics"] = []
     for epic in data.get("epics", []):
-        slim_epic = {**epic, "tasks": []}
-        for task in epic.get("tasks", []):
+        tasks = epic.get("tasks", [])
+        epic_meta = {k: v for k, v in epic.items() if k != "tasks"}
+        slim_meta, epic_heavy, epic_body = _split_entity_for_v3(epic_meta, EPIC_HEAVY_FIELDS)
+        eid = slim_meta.get("id")
+        if eid and (any(k in epic_heavy for k in EPIC_HEAVY_FIELDS) or epic_body):
+            write_task_file(epic_file_path(backlog_path, eid), epic_heavy, epic_body)
+        slim_epic = {**slim_meta, "tasks": []}
+        for task in tasks:
             slim_task, heavy_fm, body = _split_task_for_v3(task)
             slim_epic["tasks"].append(slim_task)
             tid = slim_task.get("id")
             if not tid:
                 continue
-            has_heavy = any(k in heavy_fm for k in HEAVY_FIELDS) or bool(body)
-            if has_heavy:
+            if any(k in heavy_fm for k in HEAVY_FIELDS) or bool(body):
                 write_task_file(task_file_path(backlog_path, tid), heavy_fm, body)
         slim_data["epics"].append(slim_epic)
+
+    if "phases" in slim_data:
+        slim_phases: list[dict[str, Any]] = []
+        for phase in data.get("phases", []):
+            slim_phase, phase_heavy, phase_body = _split_entity_for_v3(phase, PHASE_HEAVY_FIELDS)
+            pid = slim_phase.get("id")
+            if pid and (any(k in phase_heavy for k in PHASE_HEAVY_FIELDS) or phase_body):
+                write_task_file(phase_file_path(backlog_path, pid), phase_heavy, phase_body)
+            slim_phases.append(slim_phase)
+        slim_data["phases"] = slim_phases
+
     atomic_write(
         backlog_path,
         yaml.dump(slim_data, default_flow_style=False, sort_keys=False, allow_unicode=True),
