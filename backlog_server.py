@@ -5876,6 +5876,67 @@ def backlog_phase_status(phase_id: str = "") -> str:
     return "\n".join(lines)
 
 
+def _epic_stats(data: dict, epic_id: str) -> dict:
+    """Status counts for an epic's tasks (mirrors _phase_stats)."""
+    stats = {"total": 0, "done": 0, "in-progress": 0, "in-review": 0,
+             "todo": 0, "blocked": 0, "archived": 0}
+    epic = _find_epic(data, epic_id)
+    for t in (epic.get("tasks", []) if epic else []):
+        st = t.get("status", "todo")
+        stats["total"] += 1
+        if st in stats:
+            stats[st] += 1
+    return stats
+
+
+@mcp.tool()
+def backlog_epic_status(epic_id: str) -> str:
+    """Show progress for an epic: status counts, per-component rollup, and the
+    design-maturity lock. Derived on read from the epic's tasks — no stored rollup.
+
+    Args:
+        epic_id: The epic ID (e.g. "asset-engine").
+    """
+    data = _load()
+    epic = _find_epic(data, epic_id)
+    if not epic:
+        return f"Error: epic `{epic_id}` not found"
+
+    stats = _epic_stats(data, epic_id)
+    roll = _component_rollup(data, epic_id)
+    lines = [f"## Epic `{epic_id}` — {epic.get('name', '')}\n"]
+
+    design = epic.get("design_status", "exploring")
+    lock = " (locked)" if design == "locked" else ""
+    lines.append(f"**Design:** {design}{lock}")
+    lines.append(f"**Status:** {epic.get('status', 'active')}")
+
+    done = stats["done"] + stats["archived"]
+    if stats["total"]:
+        pct = int(done / stats["total"] * 100)
+        bar = "█" * (pct // 5) + "░" * (20 - pct // 5)
+        lines.append(f"**Progress:** {done}/{stats['total']} done")
+        lines.append(f"[{bar}] {pct}%")
+    lines.append(
+        f"Done: {stats['done']} | In Progress: {stats['in-progress']} | "
+        f"In Review: {stats['in-review']} | Todo: {stats['todo']} | Blocked: {stats['blocked']}"
+    )
+
+    glyph = {"done": "█", "in-progress": "▨", "blocked": "✗", "todo": "□"}
+    lines.append("\n**Components:**")
+    for key, spec in (epic.get("components") or {}).items():
+        b = roll.get(key, {})
+        title = (spec or {}).get("title", key)
+        lines.append(f"- {glyph.get(b.get('status'), '□')} {title} "
+                     f"({b.get('done', 0)}/{b.get('total', 0)})")
+    if roll.get("_unassigned", {}).get("total"):
+        u = roll["_unassigned"]
+        lines.append(f"- · unassigned ({u['done']}/{u['total']})")
+
+    # gate-completion rollup is appended here once Spec A lands (extension point).
+    return "\n".join(lines)
+
+
 @mcp.tool()
 def backlog_advance_phase(force: bool = False) -> str:
     """Complete the active phase and activate the next one in sequence.
