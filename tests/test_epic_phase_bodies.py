@@ -1,5 +1,6 @@
 from pathlib import Path
 import taskmaster_v3 as v3
+from backlog_server import backlog_add_phase, backlog_update_phase, _load as _load_srv
 
 
 def test_entity_constants_present():
@@ -168,3 +169,11 @@ def test_migrate_v2_to_v3_counts_epic_and_phase_files(tmp_path):
     # And those files actually got written.
     assert v3.epic_file_path(bp, "asset-engine").exists()
     assert v3.phase_file_path(bp, "ship-v3").exists()
+
+
+def test_phase_docs_field(tmp_taskmaster):
+    backlog_add_phase("ship", "Ship")
+    out = backlog_update_phase("ship", "docs", "design:docs/design/ship.md")
+    assert "Error" not in out
+    ph = next(p for p in _load_srv()["phases"] if p["id"] == "ship")
+    assert ph["docs"]["design"] == "docs/design/ship.md"

@@ -5580,7 +5580,7 @@ def backlog_add_epic(
 
 
 VALID_PHASE_STATUSES = {"planned", "active", "done", "archived"}
-ALLOWED_PHASE_FIELDS = {"name", "status", "description", "order", "target_date", "start_date", "deliverables"}
+ALLOWED_PHASE_FIELDS = {"name", "status", "description", "order", "target_date", "start_date", "deliverables", "docs"}
 
 
 @mcp.tool()
@@ -5723,6 +5723,21 @@ def backlog_update_phase(phase_id: str, field: str, value: str) -> str:
             ph["deliverables"] = [{"text": str(d.get("text", "")), "done": bool(d.get("done", False))} for d in items]
         else:
             return f"Error: unknown deliverables action `{action}`. Use: add, remove, toggle, set"
+    elif field == "docs":
+        if ":" not in value:
+            return (f"Error: docs value must be `key:path` format "
+                    f"(e.g. `design:docs/design/ship.md`). Valid keys: {', '.join(sorted(VALID_DOC_KEYS))}")
+        doc_key, doc_path = (s.strip() for s in value.split(":", 1))
+        if doc_key not in VALID_DOC_KEYS:
+            return f"Error: invalid docs key `{doc_key}`. Valid: {', '.join(sorted(VALID_DOC_KEYS))}"
+        if not isinstance(ph.get("docs"), dict):
+            ph["docs"] = {}
+        if doc_path == "":
+            ph["docs"].pop(doc_key, None)
+            if not ph["docs"]:
+                ph.pop("docs", None)
+        else:
+            ph["docs"][doc_key] = doc_path
     else:
         ph[field] = value
 
