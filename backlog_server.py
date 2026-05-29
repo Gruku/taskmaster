@@ -5419,6 +5419,38 @@ def backlog_record_gate(
     return f"Recorded gate `{gate}` = {outcome} for `{task_id}` (state: {task['gate_state'] or 'laneless'})"
 
 
+@mcp.tool()
+def backlog_skip_gate(task_id: str, gate: str, reason: str, by: str = "claude") -> str:
+    """Record an explicit, audited skip of a pipeline gate — the ONLY way past a
+    required gate without satisfying it. Always succeeds (for a valid gate+reason)
+    and is flagged on the dashboard. No silent skips exist anywhere else.
+
+    Args:
+        task_id: Task id.
+        gate: The gate to skip (see backlog_record_gate for valid names).
+        reason: Required non-empty justification (becomes the paper trail).
+        by: "claude" or "user".
+    """
+    if gate not in _VALID_GATES:
+        return f"Error: invalid gate `{gate}`. Valid: {', '.join(_VALID_GATES)}"
+    if not (reason or "").strip():
+        return f"Error: skip_gate requires a non-empty reason (this is the audit trail)."
+
+    data = _load()
+    result = _find_task(data, task_id)
+    if not result:
+        return f"Error: task `{task_id}` not found"
+    task, _epic = result
+    _touch_task(task)
+
+    task.setdefault("gates", {})[gate] = {
+        "skipped": True, "reason": reason.strip(), "by": by, "at": _now(),
+    }
+    task["gate_state"] = _compute_gate_state(task)
+    _mutate_and_save(data)
+    return f"⚠ Skipped gate `{gate}` for `{task_id}` — reason: {reason.strip()} (by {by})"
+
+
 VALID_SPEC_REVIEW_VERDICTS = {"pass", "warn", "fail"}
 
 
