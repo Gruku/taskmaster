@@ -30,15 +30,27 @@ def test_gate_satisfied_rules():
     assert tv.gate_satisfied({}) is False
 
 
-def test_outstanding_and_gate_state():
-    task = {"lane": "express", "gates": {}}
-    assert tv.outstanding_required_gates(task) == ["impl", "review-gate"]
-    assert tv.compute_gate_state(task) == "impl:pending"
+def test_blocking_gates_per_lane():
+    """Only review/verdict gates block completion; status gates are progress markers."""
+    assert tv.blocking_gates("full") == ("spec-review", "plan-review", "review-gate")
+    assert tv.blocking_gates("standard") == ("design-review", "review-gate")
+    assert tv.blocking_gates("express") == ("review-gate",)
+    assert tv.blocking_gates(None) == ()
+    assert tv.blocking_gates("bogus") == ()
 
+
+def test_outstanding_and_gate_state():
+    # Fresh express task: only the ONE verdict gate (review-gate) is outstanding.
+    task = {"lane": "express", "gates": {}}
+    assert tv.outstanding_required_gates(task) == ["review-gate"]
+    assert tv.compute_gate_state(task) == "review-gate:pending"
+
+    # Recording a STATUS gate (impl) does NOT change outstanding or gate_state.
     task["gates"]["impl"] = {"status": "done"}
     assert tv.outstanding_required_gates(task) == ["review-gate"]
     assert tv.compute_gate_state(task) == "review-gate:pending"
 
+    # Recording the verdict gate clears outstanding and resolves state.
     task["gates"]["review-gate"] = {"verdict": "pass"}
     assert tv.outstanding_required_gates(task) == []
     assert tv.compute_gate_state(task) == "review-gate:pass"

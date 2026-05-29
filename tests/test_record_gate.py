@@ -35,7 +35,9 @@ def test_out_of_order_recording_rejected(tm_epic_phase):
     tid = _new_task()
     msg = _bs.backlog_record_gate(tid, "review-gate", verdict="pass")
     assert "Error" in msg
-    assert "spec" in msg  # names the first unsatisfied earlier gate
+    # Ordering guard only applies to blocking (verdict) gates.
+    # First unsatisfied blocking gate for "full" is spec-review, not the status gate spec.
+    assert "spec-review" in msg
 
 
 def test_invalid_gate_and_verdict_rejected(tm_epic_phase):

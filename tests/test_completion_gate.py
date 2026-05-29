@@ -14,14 +14,16 @@ def test_complete_blocked_when_gates_outstanding(tm_epic_phase):
     tid = _ready("express")
     out = _bs.backlog_complete_task(tid)            # no gates recorded
     assert "Error" in out or "Cannot" in out
-    assert "impl" in out and "review-gate" in out
+    # Only the review/verdict gate blocks — impl (status gate) is not a blocker.
+    assert "review-gate" in out
+    assert "impl" not in out
     task, _ = _bs._find_task(_bs._load(), tid)
     assert task["status"] != "done"
 
 
 def test_complete_allowed_when_gates_satisfied(tm_epic_phase):
     tid = _ready("express")
-    _bs.backlog_record_gate(tid, "impl", status="done")
+    # review-gate alone is sufficient — impl is a progress marker, not a blocker.
     _bs.backlog_record_gate(tid, "review-gate", verdict="pass")
     out = _bs.backlog_complete_task(tid)
     assert "Error" not in out and "Cannot" not in out

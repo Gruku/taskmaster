@@ -65,6 +65,7 @@ from taskmaster_v3 import (
     VERDICT_GATES as _VERDICT_GATES,
     VALID_GATE_VERDICTS as _VALID_GATE_VERDICTS,
     required_gates as _required_gates,
+    blocking_gates as _blocking_gates,
     outstanding_required_gates as _outstanding_required_gates,
     gate_satisfied as _gate_satisfied,
     default_lane as _default_lane,
@@ -5480,8 +5481,8 @@ def backlog_record_gate(
     _touch_task(task)
 
     lane = task.get("lane")
-    if lane:
-        req = _required_gates(lane)
+    if lane and gate in _VERDICT_GATES:
+        req = _blocking_gates(lane)
         gates_now = task.get("gates") or {}
         if gate in req:
             idx = req.index(gate)
@@ -5489,7 +5490,7 @@ def backlog_record_gate(
                 if not _gate_satisfied(gates_now.get(earlier)):
                     return (f"Error: cannot record `{gate}` for `{task_id}` — "
                             f"earlier required gate `{earlier}` is not satisfied "
-                            f"(pass/done/skipped). Record or skip it first.")
+                            f"(pass/skipped). Record or skip it first.")
 
     rec = {"at": _now()}
     if is_verdict:

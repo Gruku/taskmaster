@@ -46,7 +46,8 @@ def test_clear_gate_removes_record_and_recomputes(tm_epic_phase):
     assert "Error" not in out
     task, _ = _bs._find_task(_bs._load(), tid)
     assert "impl" not in (task.get("gates") or {})
-    assert task["gate_state"] == "impl:pending"
+    # gate_state tracks only blocking gates; for express that is review-gate
+    assert task["gate_state"] == "review-gate:pending"
 
 
 def test_clear_gate_absent(tm_epic_phase):

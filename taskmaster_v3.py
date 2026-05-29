@@ -472,27 +472,35 @@ def gate_satisfied(rec) -> bool:
     return False
 
 
+def blocking_gates(lane):
+    """Gates that BLOCK completion for a lane = its review/verdict gates, in order.
+    Status gates (spec/plan/tests/impl) are progress markers, not blockers."""
+    return tuple(g for g in required_gates(lane) if g in VERDICT_GATES)
+
+
 def outstanding_required_gates(task) -> list:
-    """Required gates for the task's lane that are not yet satisfied."""
+    """Blocking (review/verdict) gates for the task's lane that are not yet satisfied.
+    Status gates are informational progress markers and never block completion."""
     gates = task.get("gates") or {}
-    return [g for g in required_gates(task.get("lane")) if not gate_satisfied(gates.get(g))]
+    return [g for g in blocking_gates(task.get("lane")) if not gate_satisfied(gates.get(g))]
 
 
 def compute_gate_state(task) -> str:
-    """One-line slim mirror of pipeline position. '' for laneless tasks."""
+    """One-line slim mirror of pipeline position. '' for laneless tasks.
+    Walks blocking gates only: status gates are progress markers, not pipeline blockers."""
     lane = task.get("lane")
-    req = required_gates(lane)
-    if not req:
+    blk = blocking_gates(lane)
+    if not blk:
         return ""
     gates = task.get("gates") or {}
-    for g in req:
+    for g in blk:
         rec = gates.get(g)
         if rec and rec.get("verdict") == "fail":
             return f"blocked@{g}"
-    for g in req:
+    for g in blk:
         if not gate_satisfied(gates.get(g)):
             return f"{g}:pending"
-    last = req[-1]
+    last = blk[-1]
     rec = gates.get(last) or {}
     if rec.get("skipped"):
         outcome = "skipped"

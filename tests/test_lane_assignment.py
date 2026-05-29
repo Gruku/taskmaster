@@ -21,8 +21,8 @@ def test_new_task_default_lane_standard(tm_epic_phase):
     assert result is not None
     task, _ = result
     assert task["lane"] == "standard"
-    # first required gate for standard lane is "spec"
-    assert task.get("gate_state") == "spec:pending"
+    # gate_state reflects first unsatisfied BLOCKING gate; design-review is first for standard
+    assert task.get("gate_state") == "design-review:pending"
 
 
 def test_new_task_high_priority_bumped_to_full(tm_epic_phase):
@@ -33,8 +33,8 @@ def test_new_task_high_priority_bumped_to_full(tm_epic_phase):
     assert result is not None
     task, _ = result
     assert task["lane"] == "full"
-    # first required gate for full lane is "spec"
-    assert task.get("gate_state") == "spec:pending"
+    # gate_state reflects first unsatisfied BLOCKING gate; spec-review is first for full
+    assert task.get("gate_state") == "spec-review:pending"
 
 
 def test_new_task_critical_priority_bumped_to_full(tm_epic_phase):
@@ -45,7 +45,7 @@ def test_new_task_critical_priority_bumped_to_full(tm_epic_phase):
     assert result is not None
     task, _ = result
     assert task["lane"] == "full"
-    assert task.get("gate_state") == "spec:pending"
+    assert task.get("gate_state") == "spec-review:pending"
 
 
 def test_new_task_low_priority_is_standard(tm_epic_phase):
@@ -56,7 +56,7 @@ def test_new_task_low_priority_is_standard(tm_epic_phase):
     assert result is not None
     task, _ = result
     assert task["lane"] == "standard"
-    assert task.get("gate_state") == "spec:pending"
+    assert task.get("gate_state") == "design-review:pending"
 
 
 def test_update_lane_valid_and_recomputes_gate_state(tm_epic_phase):
@@ -67,7 +67,7 @@ def test_update_lane_valid_and_recomputes_gate_state(tm_epic_phase):
     data = _bs._load()
     task, _ = _bs._find_task(data, tid)
     assert task["lane"] == "express"
-    assert task["gate_state"] == "impl:pending"   # recomputed for the new lane
+    assert task["gate_state"] == "review-gate:pending"   # recomputed for the new lane
 
 
 def test_update_lane_invalid_rejected(tm_epic_phase):
