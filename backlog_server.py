@@ -142,6 +142,8 @@ from taskmaster_v3 import (
     write_task_file as _write_task_file,
     AUTO_MODES,
     AUTO_STAGES,
+    AUTO_STAGE_GATE as _AUTO_STAGE_GATE,
+    auto_stages_for_lane as _auto_stages_for_lane,
     AUTO_TASK_STATUSES,
     AUTO_FAIL_REASONS,
     init_auto_run as _init_auto_run,
@@ -4321,7 +4323,23 @@ def backlog_auto_advance(stage: str) -> str:
         "stage": stage,
     })
     cur = state["cursor"]
-    return f"Stage → {stage} (task={cur['task_id']}, model={cur['model']})"
+    # Spec A: lane-aware auto-mode — advancing to a gate-mapped stage records the
+    # matching gate on the cursor task. Status gates take status="done"; verdict
+    # gates take verdict="pass". Walking the lane sequence in order keeps
+    # backlog_record_gate's ordering guard satisfied.
+    gate = _AUTO_STAGE_GATE.get(stage)
+    gate_note = ""
+    if gate:
+        tid = cur["task_id"]
+        if gate in _VERDICT_GATES:
+            res = backlog_record_gate(tid, gate, verdict="pass")
+        else:
+            res = backlog_record_gate(tid, gate, status="done")
+        if res.startswith("Error:"):
+            gate_note = f"\n⚠ gate `{gate}` not recorded: {res}"
+        else:
+            gate_note = f"\nGate `{gate}` recorded."
+    return f"Stage → {stage} (task={cur['task_id']}, model={cur['model']}){gate_note}"
 
 
 @mcp.tool()

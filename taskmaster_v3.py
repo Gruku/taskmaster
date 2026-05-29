@@ -3899,7 +3899,11 @@ def scan_transcripts_for_candidates(
 AUTO_MODES = ("task", "epic", "phase")
 AUTO_STAGES = (
     "PICK",
-    "SPEC_REVIEW",
+    "SPEC",            # full/standard lanes: write the spec
+    "SPEC_REVIEW",     # full lane: adversarial spec review
+    "PLAN",            # full lane: write the plan
+    "PLAN_REVIEW",     # full lane: review the plan
+    "DESIGN_REVIEW",   # standard lane: combined design review
     "WRITE_TESTS",
     "IMPLEMENT",
     "TEST",
@@ -3908,6 +3912,46 @@ AUTO_STAGES = (
     "END_SESSION",
     "COMPLETE",
 )
+
+# Spec A: map each auto stage to the pipeline gate it satisfies (or None when
+# the stage records no gate). Used by backlog_auto_advance to auto-record the
+# matching gate as the cursor walks a lane's stage sequence.
+AUTO_STAGE_GATE = {
+    "PICK": None,
+    "SPEC": "spec",
+    "SPEC_REVIEW": "spec-review",
+    "PLAN": "plan",
+    "PLAN_REVIEW": "plan-review",
+    "DESIGN_REVIEW": "design-review",
+    "WRITE_TESTS": "tests",
+    "IMPLEMENT": "impl",
+    "TEST": None,
+    "REVIEW_GATE": "review-gate",
+    "HANDOVER_STUB": None,
+    "END_SESSION": None,
+    "COMPLETE": None,
+}
+
+# Ordered auto-stage sequence per lane. Mirrors LANE_GATES ordering so that the
+# gates auto-recorded along the way satisfy backlog_record_gate's ordering guard
+# (each earlier required gate is recorded before its successor).
+_LANE_STAGE_SEQUENCE = {
+    "full":     ("PICK", "SPEC", "SPEC_REVIEW", "PLAN", "PLAN_REVIEW",
+                 "WRITE_TESTS", "IMPLEMENT", "TEST", "REVIEW_GATE",
+                 "HANDOVER_STUB", "END_SESSION", "COMPLETE"),
+    "standard": ("PICK", "SPEC", "DESIGN_REVIEW", "WRITE_TESTS", "IMPLEMENT",
+                 "TEST", "REVIEW_GATE", "HANDOVER_STUB", "END_SESSION",
+                 "COMPLETE"),
+    "express":  ("PICK", "IMPLEMENT", "TEST", "REVIEW_GATE", "HANDOVER_STUB",
+                 "END_SESSION", "COMPLETE"),
+}
+
+
+def auto_stages_for_lane(lane):
+    """Ordered auto-stage tuple for a lane. Unknown/None lane -> standard."""
+    return _LANE_STAGE_SEQUENCE.get(lane or "standard", _LANE_STAGE_SEQUENCE["standard"])
+
+
 AUTO_TASK_STATUSES = ("done", "failed", "blocked")
 AUTO_FAIL_REASONS = ("tests-failed", "spec-rejected", "blocked", "crashed", "user-aborted")
 AUTO_MODELS = ("sonnet", "opus")
