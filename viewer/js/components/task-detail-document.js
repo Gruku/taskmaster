@@ -51,11 +51,11 @@ export function mountTaskDetailDocument(root, ctx) {
 }
 
 function mountTopbar({ prefs, onToggleVariant, task, onEdit, chrome = 'page', actionsHost = null }) {
-  // 'page' → claim the global topbar (route screen). 'embedded' → render into
-  // the caller-supplied host (modal header) and OMIT Edit/Archive (no stacked
-  // edit modal in v1). Never claimTopbar() when embedded.
-  const host = chrome === 'embedded' ? actionsHost : claimTopbar();
-  if (!host) return;
+  // v1 modal (embedded): read-only quick peek — no Document/Graph toggle, no
+  // Edit/Archive. The Graph view and edit live on the full route (Open-full).
+  if (chrome === 'embedded') return;
+  const topbar = claimTopbar();
+  if (!topbar) return;
   const view = prefs?.screens?.task_detail?.view === 'B' ? 'B' : 'A';
   const seg = tmSegmented(
     [
@@ -64,14 +64,12 @@ function mountTopbar({ prefs, onToggleVariant, task, onEdit, chrome = 'page', ac
     ],
     { value: view, onChange: (v) => onToggleVariant?.(v) },
   );
-  host.append(seg);
-  if (chrome === 'embedded') return;  // modal shows no Edit/Archive in v1
   const editBtn = tmAction({
     icon: '✎', label: 'Edit', title: 'Edit task',
     onClick: () => onEdit?.(),
   });
   const archiveBtn = tmAction({ icon: '✕', label: 'Archive', title: 'Archive task — coming soon', disabled: true });
-  host.append(editBtn, archiveBtn);
+  topbar.append(seg, editBtn, archiveBtn);
 }
 
 function h(tag, attrs = {}, children = []) {

@@ -84,11 +84,6 @@ export function openDetailModal({ kind, id }) {
           task, related, prefs: store.getPrefs(), store, api,
           chrome: 'embedded', actionsHost: actions,
           onNavigate: (tid) => load('task', tid),
-          // swap modal body in place instead of reloading the page
-          onToggleVariant: (v) => {
-            api.savePrefs({ screens: { task_detail: { view: v } } }).catch(() => {});
-            load('task', i);
-          },
         });
       }
     } catch (e) {

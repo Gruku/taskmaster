@@ -144,9 +144,9 @@ function chipFor(ep, selSet, onToggleEpics) {
   open.setAttribute('aria-label', `Open epic ${ep.name || ep.id}`);
   open.textContent = '↗';
   open.addEventListener('click', (ev) => {
-    ev.stopPropagation();          // don't toggle the filter
-    ev.preventDefault();
-    import('../lib/open-detail.js').then(({ openDetail }) => openDetail('epic', ep.id));
+    // Don't toggle the epic filter. Opening is owned by the capture-phase
+    // detail interceptor (modal mode) or the native href (full mode / modified-click).
+    ev.stopPropagation();
   });
   btn.appendChild(open);
   return btn;

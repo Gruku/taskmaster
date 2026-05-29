@@ -15,4 +15,10 @@ test('modal mode: the ↗ on an epic filter chip opens the epic modal', async ({
   await open.click();
   await expect(page.locator('.dm-overlay')).toBeVisible();
   await expect(page.locator('.dm-overlay .ed-root')).toBeVisible(); // epic detail component
+  // Guard double-history bug: one goBack should fully close the modal and
+  // return to the kanban board. If openDetail fires twice, the first goBack
+  // only pops one entry and the overlay stays visible.
+  await page.goBack();
+  await expect(page.locator('.dm-overlay')).toHaveCount(0);
+  await expect(page).toHaveURL(/#\/kanban$/);
 });
