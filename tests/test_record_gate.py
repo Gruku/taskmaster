@@ -50,3 +50,14 @@ def test_record_gate_laneless_task_allowed_no_order_check(tm_epic_phase):
     data = _bs._load(); t, _ = _bs._find_task(data, tid); t.pop("lane", None); _bs._mutate_and_save(data)
     msg = _bs.backlog_record_gate(tid, "review-gate", verdict="pass")
     assert "Error" not in msg
+
+
+def test_set_spec_review_writes_gate_record(tm_epic_phase):
+    tid = _new_task("full")
+    _bs.backlog_record_gate(tid, "spec", status="done")
+    out = _bs.backlog_set_spec_review(tid, "pass", "specs/x.md", critical_count=0)
+    assert "Error" not in out
+    task, _ = _bs._find_task(_bs._load(), tid)
+    assert task["gates"]["spec-review"]["verdict"] == "pass"
+    # legacy mirror preserved for back-compat consumers
+    assert task["spec_review"]["verdict"] == "pass"

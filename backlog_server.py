@@ -5431,12 +5431,8 @@ def backlog_set_spec_review(
     critical_count: int = 0,
     important_count: int = 0,
 ) -> str:
-    """Record the result of a spec-review pass on a task. Overwrites any prior record.
-
-    The spec_review field is structured (dict). It captures the outcome of running
-    `taskmaster:spec-review` against the task's spec/plan, so downstream tools
-    (pick-task, review-gate, dashboard) can see whether the design was vetted
-    before implementation began.
+    """Record a spec-review pass on a task. Thin alias over backlog_record_gate(gate="spec-review");
+    also keeps the legacy `spec_review` dict for back-compat. Overwrites any prior record.
 
     Args:
         task_id: The task ID (e.g., "auth-003")
@@ -5451,15 +5447,18 @@ def backlog_set_spec_review(
             f"Error: invalid verdict `{verdict}`. "
             f"Valid: {', '.join(sorted(VALID_SPEC_REVIEW_VERDICTS))}"
         )
-
+    out = backlog_record_gate(
+        task_id, "spec-review", verdict=verdict, spec_path=spec_path,
+        codex_used=codex_used, critical_count=critical_count,
+        important_count=important_count,
+    )
+    if "Error" in out:
+        return out
     data = _load()
     result = _find_task(data, task_id)
     if not result:
         return f"Error: task `{task_id}` not found"
-
-    task, _epic = result
-    _touch_task(task)
-
+    task, _ = result
     task["spec_review"] = {
         "timestamp": _now(),
         "verdict": verdict,
@@ -5468,7 +5467,6 @@ def backlog_set_spec_review(
         "important_count": int(important_count),
         "spec_path": spec_path,
     }
-
     _mutate_and_save(data)
     return (
         f"Recorded spec-review for `{task_id}`: {verdict} "
