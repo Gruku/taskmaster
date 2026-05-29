@@ -25,17 +25,18 @@ test('open() twice swaps the content', () => {
   rail.close();
 });
 
-test('mountRightRail: all-empty task mounts exactly 6 panels synchronously', () => {
+test('mountRightRail: all-empty task mounts exactly 7 panels synchronously', () => {
   const dom = new JSDOM('<!doctype html><body><aside id="rail"></aside></body>');
   global.document = dom.window.document;
   const aside = document.getElementById('rail');
   const emptyTask = { docs: {}, blockers: [] };
   const emptyRelated = { lessons: [], handovers: [], issues: [], dependencies: [], unblocks: [] };
   mountRightRail(aside, { task: emptyTask, related: emptyRelated, onNavigate: () => {} });
-  // All 6 panels must be present immediately (no queueMicrotask delay)
-  assert.equal(aside.children.length, 6, 'aside must have exactly 6 panel children');
+  // All 7 panels must be present immediately (no queueMicrotask delay)
+  // Panels: Docs · Links · Lessons · Handovers · Issues · Dependencies + Unblocks · Blockers
+  assert.equal(aside.children.length, 7, 'aside must have exactly 7 panel children');
   const panels = aside.querySelectorAll('.td-panel');
-  assert.equal(panels.length, 6, 'all 6 children must carry the .td-panel class');
+  assert.equal(panels.length, 7, 'all 7 children must carry the .td-panel class');
 });
 
 test('mountRightRail: each empty panel contains its header and an empty-state element', () => {
@@ -59,5 +60,5 @@ test('mountRightRail: null/undefined task does not throw', () => {
   assert.doesNotThrow(() => {
     mountRightRail(aside, { task: null, related: null, onNavigate: () => {} });
   });
-  assert.equal(aside.children.length, 6, 'rail still mounts all 6 panels for null task');
+  assert.equal(aside.children.length, 7, 'rail still mounts all 7 panels for null task');
 });
