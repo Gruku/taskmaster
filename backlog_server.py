@@ -5451,6 +5451,32 @@ def backlog_skip_gate(task_id: str, gate: str, reason: str, by: str = "claude") 
     return f"⚠ Skipped gate `{gate}` for `{task_id}` — reason: {reason.strip()} (by {by})"
 
 
+@mcp.tool()
+def backlog_clear_gate(task_id: str, gate: str) -> str:
+    """Remove a single gate record from a task and recompute gate_state.
+
+    Args:
+        task_id: Task id.
+        gate: The gate to clear (see backlog_record_gate for valid names).
+    """
+    if gate not in _VALID_GATES:
+        return f"Error: invalid gate `{gate}`. Valid: {', '.join(_VALID_GATES)}"
+    data = _load()
+    result = _find_task(data, task_id)
+    if not result:
+        return f"Error: task `{task_id}` not found"
+    task, _ = result
+    _touch_task(task)
+    gates = task.get("gates") or {}
+    if gate not in gates:
+        return f"`{task_id}` had no `{gate}` gate record"
+    del gates[gate]
+    task["gates"] = gates
+    task["gate_state"] = _compute_gate_state(task)
+    _mutate_and_save(data)
+    return f"Cleared gate `{gate}` on `{task_id}`"
+
+
 VALID_SPEC_REVIEW_VERDICTS = {"pass", "warn", "fail"}
 
 
@@ -5508,26 +5534,21 @@ def backlog_set_spec_review(
 
 @mcp.tool()
 def backlog_clear_spec_review(task_id: str) -> str:
-    """Remove the spec-review record from a task. Use when the spec was significantly
-    revised and the prior review is no longer valid.
+    """Remove the spec-review gate (and legacy spec_review mirror) from a task.
+    Use when the spec was significantly revised and the prior review is no longer valid.
 
     Args:
         task_id: The task ID (e.g., "auth-003")
     """
+    out = backlog_clear_gate(task_id, "spec-review")
     data = _load()
     result = _find_task(data, task_id)
-    if not result:
-        return f"Error: task `{task_id}` not found"
-
-    task, _epic = result
-    _touch_task(task)
-
-    if "spec_review" not in task:
-        return f"`{task_id}` had no spec-review record"
-
-    del task["spec_review"]
-    _mutate_and_save(data)
-    return f"Cleared spec-review record on `{task_id}`"
+    if result:
+        task, _ = result
+        if "spec_review" in task:
+            del task["spec_review"]
+            _mutate_and_save(data)
+    return out
 
 
 VALID_EPIC_STATUSES = {"active", "planned", "done", "archived"}
