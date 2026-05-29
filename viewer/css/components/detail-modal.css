@@ -1,0 +1,26 @@
+/* plugins/taskmaster/viewer/css/components/detail-modal.css */
+body.dm-open { overflow: hidden; }
+.dm-overlay {
+  position: fixed; inset: 0; z-index: 60;
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 5vh 16px; background: rgba(6, 7, 10, 0.62);
+}
+.dm-modal {
+  width: min(960px, 100%); max-height: 90vh; display: flex; flex-direction: column;
+  background: var(--bg-shell); border: 1px solid rgba(255,255,255,0.10); border-radius: 12px;
+  overflow: hidden;
+}
+.dm-header {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 14px; border-bottom: 1px solid rgba(255,255,255,0.07); background: var(--bg-panel);
+}
+.dm-title { font-weight: 600; color: var(--ink-1); margin-right: auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dm-actions { display: inline-flex; align-items: center; gap: 8px; }
+.dm-openfull { color: var(--accent); text-decoration: none; font-size: var(--text-sm); }
+.dm-close { background: none; border: none; color: var(--ink-3); font-size: 16px; cursor: pointer; }
+.dm-close:hover { color: var(--ink-1); }
+.dm-body { overflow: auto; padding: 0; }
+.dm-body.dm-loading::after { content: 'Loading\2026'; display: block; padding: 24px; color: var(--ink-3); }
+.dm-error { padding: 24px; color: var(--ink-2); }
+.dm-error a { color: var(--accent); }
