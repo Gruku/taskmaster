@@ -113,6 +113,7 @@ SLIM_FIELDS: dict[str, tuple[str, ...]] = {
     "task": (
         "id", "title", "tldr", "next_step", "status", "priority",
         "estimate", "phase", "epic", "component", "design_change",
+        "lane", "gate_state",
         "depends_on", "related_issues", "related_lessons",
         "started", "completed", "branch", "worktree",
         "blockers", "open_handovers",
@@ -419,6 +420,7 @@ HEAVY_FIELDS: tuple[str, ...] = (
     "notes",
     "docs",
     "review_instructions",
+    "gates",
 )
 
 EPIC_HEAVY_FIELDS: tuple[str, ...] = ("description", "docs", "components")
