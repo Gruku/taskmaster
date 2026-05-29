@@ -1,9 +1,20 @@
 import json
 import yaml
-from backlog_server import backlog_add_epic, backlog_update_epic, _load, backlog_add_task, backlog_update_task, backlog_get_task, _component_rollup
+from backlog_server import backlog_add_epic, backlog_update_epic, _load, backlog_add_task, backlog_update_task, backlog_get_task, _component_rollup, _find_task, _mutate_and_save
 
 def _epic(data, eid):
     return next(e for e in data["epics"] if e["id"] == eid)
+
+def _set_status(task_id, status):
+    """Set status via the data layer — bypasses the Spec A transition table /
+    done-gate for lane'd tasks where the test only cares about the final state."""
+    if status in ("in-progress", "todo"):
+        backlog_update_task(task_id, "status", status)
+        return
+    data = _load()
+    task, _ = _find_task(data, task_id)
+    task["status"] = status
+    _mutate_and_save(data)
 
 def test_set_components_block(tmp_taskmaster):
     backlog_add_epic("asset-engine", "Asset Engine")
@@ -61,7 +72,7 @@ def test_component_rollup(tm_epic_phase):
         backlog_add_task(epic="test-epic", task_id=tid, title=tid, phase="dev")
         if comp:
             backlog_update_task(tid, "component", comp)
-        backlog_update_task(tid, "status", status)
+        _set_status(tid, status)
     roll = _component_rollup(_load(), "test-epic")
     assert roll["core"]["total"] == 2 and roll["core"]["done"] == 1
     assert roll["core"]["status"] == "in-progress"   # mixed -> in-progress

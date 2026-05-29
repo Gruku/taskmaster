@@ -5156,6 +5156,17 @@ def _clear_session_task(task_id: str) -> None:
 
 ALLOWED_FIELDS = {"title", "status", "priority", "notes", "branch", "worktree", "blockers", "docs", "depends_on", "sub_repo", "stage", "estimate", "locked_by", "review_instructions", "phase", "anchors", "blast_radius_depth", "patchnote", "release", "tldr", "next_step", "component", "design_change", "lane"}
 VALID_STATUSES = {"todo", "in-progress", "in-review", "done", "archived", "blocked"}
+# Spec A Task 11: forward-transition table enforced on lane'd tasks via
+# backlog_update_task. Laneless tasks are exempt (old permissive behavior).
+# Same-status writes (value == current) bypass the table.
+LEGAL_STATUS_TRANSITIONS = {
+    "todo":        {"in-progress", "blocked", "archived"},
+    "in-progress": {"in-review", "done", "blocked", "todo", "archived"},
+    "in-review":   {"done", "in-progress", "blocked", "archived"},
+    "blocked":     {"todo", "in-progress", "in-review", "archived"},
+    "done":        {"in-review", "archived"},
+    "archived":    {"todo"},
+}
 VALID_PRIORITIES = {"critical", "high", "medium", "low"}
 VALID_DOC_KEYS = {"plan", "spec", "roadmap", "design", "analysis"}
 
@@ -5232,6 +5243,20 @@ def backlog_update_task(
     if field == "status":
         if value not in VALID_STATUSES:
             return f"Error: invalid status `{value}`. Valid: {', '.join(sorted(VALID_STATUSES))}"
+        # Spec A Task 11: enforce the forward-transition table for lane'd tasks
+        # only. Laneless tasks keep the old permissive behavior. Same-status
+        # writes (value == current) are always allowed — the guard only checks
+        # when the status actually changes.
+        cur = task.get("status", "todo")
+        if task.get("lane") and value != cur:
+            allowed = LEGAL_STATUS_TRANSITIONS.get(cur, set())
+            if value not in allowed:
+                return (f"Error: illegal transition `{cur}` → `{value}` for `{task_id}`. "
+                        f"Legal: {', '.join(sorted(allowed)) or '(none)'}.")
+            if value == "done":
+                block = _completion_block_reason(task)
+                if block:
+                    return block
         task["status"] = value
         if value == "in-progress" and not task.get("started"):
             task["started"] = _now()
