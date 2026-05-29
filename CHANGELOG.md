@@ -12,6 +12,18 @@ indicate schema breaks or removed surfaces.
 
 ---
 
+## 3.11.0 — Entity detail modals + settings (2026-05-29)
+
+### Added
+
+- **Entity detail modals** — task/epic detail opens in a modal overlay by
+  default (settable to full-page via the new `#/settings` screen); delegated
+  capture-phase link interception keeps real `href` attributes (refresh /
+  new-tab still work); history-aware close via Back / Esc / scrim click;
+  kanban epic ↗ entry point.
+
+---
+
 ## 3.10.0 — Epic viewer surface (2026-05-29)
 
 ### Added
