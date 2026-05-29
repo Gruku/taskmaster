@@ -9,6 +9,8 @@ This skill drives **one** task through every stage of work, persisting cursor st
 
 > **Critical:** Never edit `backlog.yaml` or `auto/state.json` manually — every stage transition must go through `backlog_auto_advance` so the cursor stays consistent.
 
+> **Gate recording:** `backlog_auto_advance` auto-records the gate for each stage (as of the lane-gate foundation). Do NOT record gates manually inside this skill. On each stage transition the response includes `gate_state`; surface `backlog_task_pipeline(task_id)` if a gate is outstanding or blocked.
+
 ## Step 0: Establish or resume state
 
 Run `backlog_auto_status`. If "No auto run in progress" and user gave a task id: `backlog_auto_start(mode="task", target=<id>)`. If run in progress: read cursor (`task_id`, `stage`, `model`) and resume from `cursor.stage`. If cursor is None: `backlog_auto_finish` and stop.

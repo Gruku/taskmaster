@@ -41,7 +41,7 @@ Gate D — Blast Radius:          PASS / WARN (advisory)
 ```
 Blocking: Critical blocks; Important requires acknowledgment; Minor/WARN/Skip never block.
 
-**7. Record the review.** `backlog_set_spec_review(task_id, verdict, spec_path, codex_used, critical_count, important_count)`. Full recording steps including v3 spec persistence into task body: `references/adversarial-steps.md`.
+**7. Record the review.** Call `backlog_record_gate(task_id, "spec-review", verdict=<verdict>, spec_path=<path>, codex_used=<bool>, critical_count=<n>, important_count=<n>)`. (`backlog_set_spec_review` is a valid alias for the same call.) Lane note: for a `standard`-lane task the design-review gate is `design-review`, not `spec-review` — read `task.lane` and pass `"design-review"` as the gate name when lane is `standard`. Full recording steps including v3 spec persistence into task body: `references/adversarial-steps.md`.
 
 **8. Next step.** PASS/WARN: "Ready to `pick-task {task_id}`." FAIL: "Revise the spec and re-run spec-review."
 

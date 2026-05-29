@@ -27,9 +27,16 @@ This skill reviews **code** (the diff). For pre-implementation design review of 
 | 7 | Present results — lead with verdict, gate matrix (see `references/gate-details.md`) |
 | 8 | Add review instructions if absent (see `references/gate-details.md`) |
 | 8b | Bug close-gate — query open bugs before transitioning (see below) |
-| 9 | Transition to `in-review` if all blocking gates passed |
+| 9 | Record the gate + transition to `in-review` if all blocking gates passed |
 
 **Blocking rules:** Critical findings block unconditionally. Important require user acknowledgment. Minor and WARN/SKIP never block.
+
+**Gate recording.** After reaching a verdict, call:
+```
+backlog_record_gate(task_id, "review-gate", verdict="pass"|"warn"|"fail",
+                    commit_sha=<current sha>, critical_count=<n>)
+```
+A task cannot move to `done` until review-gate is `pass` (or explicitly skipped) — the data layer enforces this. If completion is blocked, surface `backlog_task_pipeline(task_id)` to show the outstanding gates.
 
 Test runner detection, build detection, Codex Case A/B framing, gate matrix format, and review instructions handling in `references/gate-details.md`.
 

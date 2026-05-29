@@ -38,6 +38,8 @@ Call `backlog_dependencies(<task_id>)`. If any dependency is not done: warn and 
 
 Call `backlog_pick_task(<task_id>)` — sets status to in-progress, records started date. Note the `**Schema:** v<N>` line; v3 glance steps below activate only on v3 backlogs.
 
+Lane'd tasks: if spec/body present, call `backlog_record_gate(<task_id>, "spec", status="done")`. No lane transition gate applies at pick.
+
 ## Step 5 — Glance context load (v3)
 
 Run all sub-steps together. Total budget: ~500 tokens.
@@ -84,7 +86,7 @@ If worktree exists but is orphaned: `git worktree prune` and recreate.
 
 ## Deep mode (`--deep`)
 
-When the user says `pick-task <id> --deep` or "load everything": run glance steps above, then continue with `references/deep-mode.md`.
+When user says `pick-task <id> --deep` or "load everything": run glance steps above, then continue with `references/deep-mode.md`.
 
 ## Task lifecycle
 
@@ -92,17 +94,15 @@ When the user says `pick-task <id> --deep` or "load everything": run glance step
 todo → in-progress → in-review → done → archived
 ```
 
-`in-review` = Claude done, user tests. `done` = user confirmed.
+`in-review` = Claude done, user tests.
 
 ## Reclaiming a locked task
 
-`backlog_pick_task(task_id, force=True)` reclaims in a single atomic call. Never manually edit `backlog.yaml`.
+`backlog_pick_task(task_id, force=True)`. Never manually edit `backlog.yaml`.
 
 ## Notes
 
-- `backlog_pick_task` is idempotent for already in-progress tasks in same session.
-- Picking an `in-review` task demotes it to `in-progress` — confirm demotion with user first.
-- Picking a `blocked` task is rejected — help user resolve blockers first.
+- Idempotent for already in-progress tasks. Picking `in-review` demotes to `in-progress` — confirm first. Picking `blocked` is rejected.
 
 ## Additional resources
 
