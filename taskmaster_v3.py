@@ -430,6 +430,75 @@ PHASE_HEAVY_FIELDS: tuple[str, ...] = ("description", "docs")
 BODY_KEY = "_body"
 
 
+# --- Spec A: lanes & gates -------------------------------------------------
+VALID_LANES = ("full", "standard", "express")
+
+LANE_GATES = {
+    "full":     ("spec", "spec-review", "plan", "plan-review", "tests", "impl", "review-gate"),
+    "standard": ("spec", "design-review", "tests", "impl", "review-gate"),
+    "express":  ("impl", "review-gate"),
+}
+
+STATUS_GATES  = ("spec", "plan", "tests", "impl")
+VERDICT_GATES = ("spec-review", "plan-review", "design-review", "review-gate")
+VALID_GATES   = STATUS_GATES + VERDICT_GATES
+VALID_GATE_VERDICTS = ("pass", "warn", "fail")
+
+_HIGH_STAKES_PRIORITIES = ("critical", "high")
+
+
+def default_lane(priority: str) -> str:
+    """Lane assigned on task creation. high/critical earn full ceremony; else standard."""
+    return "full" if (priority or "") in _HIGH_STAKES_PRIORITIES else "standard"
+
+
+def required_gates(lane):
+    """Ordered required gates for a lane. Laneless/unknown -> () (no pipeline, exempt)."""
+    return LANE_GATES.get(lane or "", ())
+
+
+def gate_satisfied(rec) -> bool:
+    """A gate counts toward completion if skipped, done, or verdict==pass. warn/fail do not."""
+    if not rec:
+        return False
+    if rec.get("skipped"):
+        return True
+    if rec.get("status") == "done":
+        return True
+    if rec.get("verdict") == "pass":
+        return True
+    return False
+
+
+def outstanding_required_gates(task) -> list:
+    """Required gates for the task's lane that are not yet satisfied."""
+    gates = task.get("gates") or {}
+    return [g for g in required_gates(task.get("lane")) if not gate_satisfied(gates.get(g))]
+
+
+def compute_gate_state(task) -> str:
+    """One-line slim mirror of pipeline position. '' for laneless tasks."""
+    lane = task.get("lane")
+    req = required_gates(lane)
+    if not req:
+        return ""
+    gates = task.get("gates") or {}
+    for g in req:
+        rec = gates.get(g)
+        if rec and rec.get("verdict") == "fail":
+            return f"blocked@{g}"
+    for g in req:
+        if not gate_satisfied(gates.get(g)):
+            return f"{g}:pending"
+    last = req[-1]
+    rec = gates.get(last) or {}
+    if rec.get("skipped"):
+        outcome = "skipped"
+    else:
+        outcome = rec.get("verdict") or rec.get("status") or "done"
+    return f"{last}:{outcome}"
+
+
 # ── Typed links (Plan C / spec §6) ────────────────────────────
 
 # Canonical link types and their inverses. Every link written on the
