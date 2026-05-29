@@ -30,6 +30,9 @@ const SECTIONS = [
   { label: 'Structure', items: [
     { key: 'worktrees', icon: '⤿', label: 'Project', hash: '#/worktrees' },
   ]},
+  { label: 'System', items: [
+    { key: 'settings', icon: '⚙', label: 'Settings', hash: '#/settings' },
+  ]},
 ];
 
 export function mountSidebar(el, { store, prefs }) {

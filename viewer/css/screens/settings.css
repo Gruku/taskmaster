@@ -1,0 +1,9 @@
+.settings { padding: 20px 24px; max-width: 720px; }
+.set-block { margin-bottom: 28px; }
+.set-h { font-size: var(--text-lg); margin: 0 0 4px; }
+.set-desc { color: var(--ink-3); font-size: var(--text-sm); margin: 0 0 12px; }
+.set-radio { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid rgba(255,255,255,0.07); border-radius: 8px; margin-bottom: 8px; cursor: pointer; }
+.set-radio:hover { background: var(--bg-card-hover); }
+.set-radio input { margin-top: 3px; }
+.set-radio__label { display: block; color: var(--ink-1); font-weight: 600; }
+.set-radio__hint { display: block; color: var(--ink-3); font-size: var(--text-xs); }

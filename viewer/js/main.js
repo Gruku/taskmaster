@@ -26,6 +26,7 @@ registerScreen('/auto',       () => import('./screens/auto-mode.js'));
 registerScreen('/recap',      () => import('./screens/recap.js'));
 registerScreen('/archived',   () => import('./screens/archived.js'));
 registerScreen('/worktrees',  () => import('./screens/worktrees.js'));
+registerScreen('/settings',   () => import('./screens/settings.js'));
 
 // Prefs writer with debounce — screens call `prefs.patch({...})`.
 let prefsDebounce = null;
