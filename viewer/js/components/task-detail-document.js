@@ -7,6 +7,7 @@ import { claimTopbar, tmSegmented, tmAction } from '../lib/topbar.js';
 import { formatRelative } from '../lib/time.js';
 import { mountInlineField } from './edit/inline-field.js';
 import { taskSchema } from './edit/forms/task-form.js';
+import { renderGatePipeline } from './gate-pipeline.js';
 
 // Inline-edit save callback. Returns either undefined (success) or { error }.
 function inlineSave(taskId, fieldKey, ctx) {
@@ -114,6 +115,12 @@ function renderBody(ctx) {
   }
   children.push(renderChips(task, ctx));
   children.push(renderSpecReview(task));
+  const gpHtml = renderGatePipeline(task);
+  if (gpHtml) {
+    const gpSection = h('section', { class: 'td-section td-gate-section', 'data-test': 'gate-pipeline' });
+    gpSection.innerHTML = gpHtml;
+    children.push(gpSection);
+  }
   children.push(renderAutoBanner(task));
   children.push(renderDocsSection(task));
   children.push(renderMdSectionEditable('Specification', 'specification', task, ctx, 'sec-spec'));
