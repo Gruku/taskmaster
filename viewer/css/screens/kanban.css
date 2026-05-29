@@ -1256,3 +1256,8 @@
 }
 .kanban-epic-dropdown .ed-clear:hover,
 .kanban-epic-dropdown .ed-close:hover { color: var(--ink); border-color: var(--accent); }
+
+.kanban-epic-chip__open {
+  margin-left: 6px; color: inherit; opacity: 0.55; text-decoration: none; font-size: 0.9em;
+}
+.kanban-epic-chip__open:hover { opacity: 1; }

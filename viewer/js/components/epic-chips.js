@@ -136,6 +136,19 @@ function chipFor(ep, selSet, onToggleEpics) {
     const next = chipClickNext(ev, selSet, ep.id);
     if (onToggleEpics) onToggleEpics(next);
   });
+  // Open-epic affordance: a real anchor so modified-click → full route.
+  const open = document.createElement('a');
+  open.className = 'kanban-epic-chip__open';
+  open.href = `#/epic/${encodeURIComponent(ep.id)}`;
+  open.title = `Open epic ${ep.name || ep.id}`;
+  open.setAttribute('aria-label', `Open epic ${ep.name || ep.id}`);
+  open.textContent = '↗';
+  open.addEventListener('click', (ev) => {
+    ev.stopPropagation();          // don't toggle the filter
+    ev.preventDefault();
+    import('../lib/open-detail.js').then(({ openDetail }) => openDetail('epic', ep.id));
+  });
+  btn.appendChild(open);
   return btn;
 }
 
