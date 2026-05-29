@@ -12,6 +12,36 @@ indicate schema breaks or removed surfaces.
 
 ---
 
+## 3.12.0 — Spec A: lanes & enforced gates foundation (2026-05-29)
+
+### Added
+
+- **Task lanes** — explicit `lane` field on tasks (`full` / `standard` / `express`);
+  each lane maps to a fixed set of required gate stages. Laneless tasks remain
+  fully exempt from gate enforcement.
+- **Per-task gate pipeline** — `gate_state` + `gates` fields track gate outcomes
+  (passed / skipped / pending) per stage. New tools: `backlog_record_gate`,
+  `backlog_skip_gate`, `backlog_clear_gate`, `backlog_task_pipeline`,
+  `backlog_backfill_lanes`.
+- **`plan-review` skill** — adversarial design review of a task's plan before
+  implementation; sits between spec-review and review-gate in the lifecycle.
+- **Viewer gate-pipeline tracker** — per-task gate checklist in the detail modal;
+  lane badge on kanban cards.
+
+### Changed
+
+- **`complete_task` is now fail-closed** on outstanding required gates for
+  lane-bearing tasks (laneless tasks are exempt).
+- **`update_task` status follows a forward-transition table** for lane-bearing
+  tasks; backward transitions are rejected unless explicitly forced (laneless
+  tasks exempt).
+- **Auto-mode is lane-aware** — each auto-advance step auto-records the stage's
+  gate before transitioning.
+- **`set_spec_review` / `clear_spec_review`** are now thin aliases over
+  `backlog_record_gate` / `backlog_clear_gate`; behaviour is unchanged.
+
+---
+
 ## 3.11.0 — Entity detail modals + settings (2026-05-29)
 
 ### Added
