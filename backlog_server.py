@@ -65,6 +65,7 @@ from taskmaster_v3 import (
     VERDICT_GATES as _VERDICT_GATES,
     VALID_GATE_VERDICTS as _VALID_GATE_VERDICTS,
     required_gates as _required_gates,
+    outstanding_required_gates as _outstanding_required_gates,
     gate_satisfied as _gate_satisfied,
     default_lane as _default_lane,
     compute_gate_state as _compute_gate_state,
@@ -5475,6 +5476,40 @@ def backlog_clear_gate(task_id: str, gate: str) -> str:
     task["gate_state"] = _compute_gate_state(task)
     _mutate_and_save(data)
     return f"Cleared gate `{gate}` on `{task_id}`"
+
+
+@mcp.tool()
+def backlog_task_pipeline(task_id: str) -> str:
+    """Show a task's lane, its required gate pipeline, and each gate's recorded
+    state (pass/done/skipped/fail/pending), plus the one-line gate_state and the
+    list of outstanding gates blocking `done`.
+    """
+    data = _load()
+    result = _find_task(data, task_id)
+    if not result:
+        return f"Error: task `{task_id}` not found"
+    task, _ = result
+    lane = task.get("lane")
+    if not lane:
+        return f"`{task_id}` is laneless (pre-protocol) — no pipeline enforced."
+    gates = task.get("gates") or {}
+    lines = [f"## Pipeline `{task_id}` — lane: **{lane}**",
+             f"gate_state: `{task.get('gate_state') or '(none)'}`", ""]
+    for g in _required_gates(lane):
+        rec = gates.get(g)
+        if not rec:
+            mark = "○ pending"
+        elif rec.get("skipped"):
+            mark = f"⚠ skipped — {rec.get('reason', '')}"
+        elif rec.get("verdict"):
+            mark = f"{rec['verdict']}"
+        else:
+            mark = rec.get("status", "?")
+        lines.append(f"- `{g}`: {mark}")
+    outstanding = _outstanding_required_gates(task)
+    lines.append("")
+    lines.append("**Outstanding:** " + (", ".join(outstanding) if outstanding else "none — ready for done ✓"))
+    return "\n".join(lines)
 
 
 VALID_SPEC_REVIEW_VERDICTS = {"pass", "warn", "fail"}
