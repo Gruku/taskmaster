@@ -60,6 +60,8 @@ from taskmaster_v3 import (
     SCHEMA_DEFAULT,
     TLDR_MAX_CHARS,
     extract_tldr,
+    default_lane as _default_lane,
+    compute_gate_state as _compute_gate_state,
     HANDOVER_KINDS,
     HEAVY_FIELDS as _HEAVY_FIELDS,
     detect_schema_version as _detect_schema_version,
@@ -4524,6 +4526,11 @@ def backlog_add_task(
                     parsed_docs[k] = v
         if parsed_docs:
             new_task["docs"] = parsed_docs
+
+    # Assign lane (standard; bumped to full for high/critical priority) and
+    # initialize gate_state mirror so the slim field tier is populated on creation.
+    new_task["lane"] = _default_lane(new_task.get("priority", "medium"))
+    new_task["gate_state"] = _compute_gate_state(new_task)
 
     if "tasks" not in epic_obj:
         epic_obj["tasks"] = []
