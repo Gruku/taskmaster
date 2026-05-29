@@ -60,6 +60,7 @@ from taskmaster_v3 import (
     SCHEMA_DEFAULT,
     TLDR_MAX_CHARS,
     extract_tldr,
+    VALID_LANES as _VALID_LANES,
     default_lane as _default_lane,
     compute_gate_state as _compute_gate_state,
     HANDOVER_KINDS,
@@ -5127,7 +5128,7 @@ def _clear_session_task(task_id: str) -> None:
         _session_task = None
 
 
-ALLOWED_FIELDS = {"title", "status", "priority", "notes", "branch", "worktree", "blockers", "docs", "depends_on", "sub_repo", "stage", "estimate", "locked_by", "review_instructions", "phase", "anchors", "blast_radius_depth", "patchnote", "release", "tldr", "next_step", "component", "design_change"}
+ALLOWED_FIELDS = {"title", "status", "priority", "notes", "branch", "worktree", "blockers", "docs", "depends_on", "sub_repo", "stage", "estimate", "locked_by", "review_instructions", "phase", "anchors", "blast_radius_depth", "patchnote", "release", "tldr", "next_step", "component", "design_change", "lane"}
 VALID_STATUSES = {"todo", "in-progress", "in-review", "done", "archived", "blocked"}
 VALID_PRIORITIES = {"critical", "high", "medium", "low"}
 VALID_DOC_KEYS = {"plan", "spec", "roadmap", "design", "analysis"}
@@ -5286,6 +5287,12 @@ def backlog_update_task(
             task.pop("next_step", None)
         else:
             task["next_step"] = value
+    elif field == "lane":
+        if value not in _VALID_LANES:
+            return (f"Error: invalid lane `{value}`. "
+                    f"Valid: {', '.join(_VALID_LANES)}")
+        task["lane"] = value
+        task["gate_state"] = _compute_gate_state(task)
     elif field == "component":
         if value == "" or value.lower() == "none":
             task.pop("component", None)

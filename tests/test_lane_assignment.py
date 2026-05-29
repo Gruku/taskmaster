@@ -57,3 +57,21 @@ def test_new_task_low_priority_is_standard(tm_epic_phase):
     task, _ = result
     assert task["lane"] == "standard"
     assert task.get("gate_state") == "spec:pending"
+
+
+def test_update_lane_valid_and_recomputes_gate_state(tm_epic_phase):
+    out = _bs.backlog_add_task("lane override", epic="test-epic", phase="dev", priority="medium")
+    tid = _extract_id(out)
+    msg = _bs.backlog_update_task(tid, "lane", "express")
+    assert "Error" not in msg
+    data = _bs._load()
+    task, _ = _bs._find_task(data, tid)
+    assert task["lane"] == "express"
+    assert task["gate_state"] == "impl:pending"   # recomputed for the new lane
+
+
+def test_update_lane_invalid_rejected(tm_epic_phase):
+    tid = _extract_id(_bs.backlog_add_task("bad lane", epic="test-epic", phase="dev", priority="medium"))
+    msg = _bs.backlog_update_task(tid, "lane", "turbo")
+    assert "Error" in msg
+    assert "turbo" in msg
