@@ -50,9 +50,12 @@ export function mountTaskDetailDocument(root, ctx) {
   };
 }
 
-function mountTopbar({ prefs, onToggleVariant, task, onEdit }) {
-  const topbar = claimTopbar();
-  if (!topbar) return;
+function mountTopbar({ prefs, onToggleVariant, task, onEdit, chrome = 'page', actionsHost = null }) {
+  // 'page' → claim the global topbar (route screen). 'embedded' → render into
+  // the caller-supplied host (modal header) and OMIT Edit/Archive (no stacked
+  // edit modal in v1). Never claimTopbar() when embedded.
+  const host = chrome === 'embedded' ? actionsHost : claimTopbar();
+  if (!host) return;
   const view = prefs?.screens?.task_detail?.view === 'B' ? 'B' : 'A';
   const seg = tmSegmented(
     [
@@ -61,12 +64,14 @@ function mountTopbar({ prefs, onToggleVariant, task, onEdit }) {
     ],
     { value: view, onChange: (v) => onToggleVariant?.(v) },
   );
+  host.append(seg);
+  if (chrome === 'embedded') return;  // modal shows no Edit/Archive in v1
   const editBtn = tmAction({
     icon: '✎', label: 'Edit', title: 'Edit task',
     onClick: () => onEdit?.(),
   });
   const archiveBtn = tmAction({ icon: '✕', label: 'Archive', title: 'Archive task — coming soon', disabled: true });
-  topbar.append(seg, editBtn, archiveBtn);
+  host.append(editBtn, archiveBtn);
 }
 
 function h(tag, attrs = {}, children = []) {
