@@ -1837,6 +1837,36 @@ def backlog_migrate_v3() -> str:
 
 
 @mcp.tool()
+def backlog_backfill_lanes(grandfather_active: bool = True) -> str:
+    """One-time optional migration: assign a `lane` (by priority) to every task that
+    lacks one. For tasks already in-progress/in-review/done, mark their lane's required
+    gates skipped(reason="grandfathered") so enforcement never retroactively wedges
+    in-flight work. Tasks that already have a lane are left untouched.
+
+    Args:
+        grandfather_active: if true, grandfather gates on non-todo tasks (recommended).
+    """
+    data = _load()
+    migrated = 0
+    for epic in data.get("epics", []):
+        for task in epic.get("tasks", []):
+            if task.get("lane"):
+                continue
+            task["lane"] = _default_lane(task.get("priority", "medium"))
+            if grandfather_active and task.get("status") in ("in-progress", "in-review", "done"):
+                gates = task.setdefault("gates", {})
+                for g in _required_gates(task["lane"]):
+                    if not _gate_satisfied(gates.get(g)):
+                        gates[g] = {"skipped": True, "reason": "grandfathered",
+                                    "by": "migration", "at": _now()}
+            task["gate_state"] = _compute_gate_state(task)
+            migrated += 1
+    if migrated:
+        _mutate_and_save(data)
+    return f"Backfilled lanes on {migrated} task(s) (grandfather_active={grandfather_active})."
+
+
+@mcp.tool()
 def backlog_canonicalize_layout(dry_run: bool = False) -> str:
     """Migrate the v3 backlog from `.claude/` or root layout into canonical `.taskmaster/`.
 
