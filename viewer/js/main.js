@@ -90,6 +90,9 @@ async function boot() {
     deps: { store, api, prefs },
   });
 
+  // Detail-modal interception (delegated <a> clicks → openDetail when mode=modal).
+  import('./lib/open-detail.js').then(({ installDetailInterceptor }) => installDetailInterceptor());
+
   // Backlog polling loop
   pollBacklogForever();
   pollAutoStateForever();

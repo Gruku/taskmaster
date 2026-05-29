@@ -43,10 +43,10 @@ export function renderCard({ task, density = 'full', epicColors = {}, autoState 
   body.className = 'card-body';
   card.appendChild(body);
 
-  // Click navigates to task detail.
+  // Click opens task detail (modal or full per ui.detail_view_mode).
   card.addEventListener('click', (ev) => {
     if (ev.target.closest('.card-id') || ev.target.closest('.card-branch') || ev.target.closest('.cmp-icon-btn')) return;
-    location.hash = '#/task/' + encodeURIComponent(task.id);
+    import('../lib/open-detail.js').then(({ openDetail }) => openDetail('task', task.id));
   });
 
   // ── Meta line: id · priority · size · time-in-status ──
