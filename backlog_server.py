@@ -4795,6 +4795,18 @@ def _open_bugs_for_task(bp, task_id: str) -> tuple[list[str], list[str]]:
     return open_bugs, fixed_bugs
 
 
+def _completion_block_reason(task) -> str:
+    """Return a rejection message if a lane'd task has unsatisfied required gates, else ''."""
+    if not task.get("lane"):
+        return ""   # laneless => exempt (Spec A rollout rule)
+    outstanding = _outstanding_required_gates(task)
+    if outstanding:
+        return (f"Cannot complete `{task['id']}` — outstanding gates for lane "
+                f"`{task['lane']}`: {', '.join(outstanding)}. "
+                f"Record each (backlog_record_gate) or skip it (backlog_skip_gate).")
+    return ""
+
+
 @mcp.tool()
 def backlog_complete_task(
     task_id: str,
@@ -4859,6 +4871,14 @@ def backlog_complete_task(
             f"{', '.join(open_bugs)}.\n"
             f"Resolve each (fix/adopt/shelve/promote) before closing the task."
         )
+
+    # Gate-completeness guard (Spec A): a lane'd task may only go to `done`
+    # once its required gates are satisfied. Laneless tasks are exempt.
+    # Does not apply to target_status == "in-review".
+    if target_status == "done":
+        block = _completion_block_reason(task)
+        if block:
+            return block
 
     # Warn if skipping in-review when going straight to done
     review_warning = ""

@@ -53,7 +53,27 @@ def _setup_task(tmp_path: Path, task_id: str = "test-epic-001") -> str:
     # complete_task requires in-progress / in-review / blocked
     r_pick = _bs.backlog_pick_task(task_id)
     assert "Error" not in r_pick, f"pick_task failed: {r_pick}"
+
+    # Spec A gate guard: lane'd tasks can't reach `done` until required gates
+    # are satisfied. These tests exercise the BUG gate, not the gate pipeline,
+    # so skip every required gate for the assigned lane to isolate that concern.
+    _satisfy_gates(task_id)
     return task_id
+
+
+def _satisfy_gates(task_id: str) -> None:
+    """Skip every required gate for a task's lane (audited skip is always allowed)."""
+    import backlog_server as _bs
+    from taskmaster_v3 import required_gates as _required_gates
+    data = _bs._load()
+    found = _bs._find_task(data, task_id)
+    assert found is not None
+    task, _ = found
+    lane = task.get("lane")
+    if not lane:
+        return
+    for gate in _required_gates(lane):
+        _bs.backlog_skip_gate(task_id, gate, "test setup — isolating bug gate")
 
 
 def test_complete_task_blocks_when_open_bug_exists(running_server, tmp_path):
