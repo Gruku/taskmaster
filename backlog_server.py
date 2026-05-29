@@ -61,6 +61,11 @@ from taskmaster_v3 import (
     TLDR_MAX_CHARS,
     extract_tldr,
     VALID_LANES as _VALID_LANES,
+    VALID_GATES as _VALID_GATES,
+    VERDICT_GATES as _VERDICT_GATES,
+    VALID_GATE_VERDICTS as _VALID_GATE_VERDICTS,
+    required_gates as _required_gates,
+    gate_satisfied as _gate_satisfied,
     default_lane as _default_lane,
     compute_gate_state as _compute_gate_state,
     HANDOVER_KINDS,
@@ -5332,6 +5337,86 @@ def backlog_update_task(
     _enqueue_linear_push_if_synced(task_id, task=task)
 
     return f"Updated `{task_id}` field `{field}` → {value}"
+
+
+@mcp.tool()
+def backlog_record_gate(
+    task_id: str,
+    gate: str,
+    verdict: str = "",
+    status: str = "",
+    commit_sha: str = "",
+    spec_path: str = "",
+    codex_used: bool = False,
+    critical_count: int = 0,
+    important_count: int = 0,
+) -> str:
+    """Record the outcome of a pipeline gate on a task. Generalizes spec-review to
+    every gate (spec, plan, tests, impl, spec-review, plan-review, design-review,
+    review-gate). Status gates take status="done"; review gates take a verdict in
+    pass/warn/fail. Overwrites any prior record for that gate.
+
+    Enforces ordering: for a task WITH a lane, an earlier required gate must be
+    satisfied (pass/done/skipped) before a later one is recorded.
+
+    Args:
+        task_id: Task id.
+        gate: One of spec|plan|tests|impl|spec-review|plan-review|design-review|review-gate.
+        verdict: pass|warn|fail (for review gates).
+        status: done (for status gates).
+        commit_sha, spec_path, codex_used, critical_count, important_count: optional meta.
+    """
+    if gate not in _VALID_GATES:
+        return f"Error: invalid gate `{gate}`. Valid: {', '.join(_VALID_GATES)}"
+
+    is_verdict = gate in _VERDICT_GATES
+    if is_verdict:
+        if verdict not in _VALID_GATE_VERDICTS:
+            return (f"Error: gate `{gate}` requires verdict in "
+                    f"{', '.join(_VALID_GATE_VERDICTS)}, got `{verdict or '(none)'}`")
+    else:
+        if status != "done":
+            return f"Error: status gate `{gate}` requires status=\"done\", got `{status or '(none)'}`"
+
+    data = _load()
+    result = _find_task(data, task_id)
+    if not result:
+        return f"Error: task `{task_id}` not found"
+    task, _epic = result
+    _touch_task(task)
+
+    lane = task.get("lane")
+    if lane:
+        req = _required_gates(lane)
+        gates_now = task.get("gates") or {}
+        if gate in req:
+            idx = req.index(gate)
+            for earlier in req[:idx]:
+                if not _gate_satisfied(gates_now.get(earlier)):
+                    return (f"Error: cannot record `{gate}` for `{task_id}` — "
+                            f"earlier required gate `{earlier}` is not satisfied "
+                            f"(pass/done/skipped). Record or skip it first.")
+
+    rec = {"at": _now()}
+    if is_verdict:
+        rec["verdict"] = verdict
+        if commit_sha:
+            rec["commit_sha"] = commit_sha
+        if spec_path:
+            rec["spec_path"] = spec_path
+        rec["codex_used"] = bool(codex_used)
+        rec["critical_count"] = int(critical_count)
+        rec["important_count"] = int(important_count)
+    else:
+        rec["status"] = "done"
+        if commit_sha:
+            rec["commit_sha"] = commit_sha
+
+    task.setdefault("gates", {})[gate] = rec
+    task["gate_state"] = _compute_gate_state(task)
+    _mutate_and_save(data)
+    outcome = verdict if is_verdict else "done"
+    return f"Recorded gate `{gate}` = {outcome} for `{task_id}` (state: {task['gate_state'] or 'laneless'})"
 
 
 VALID_SPEC_REVIEW_VERDICTS = {"pass", "warn", "fail"}
