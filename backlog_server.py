@@ -6489,6 +6489,17 @@ def backlog_batch_update(operations: str) -> str:
                         errors.append(f"`{task_id}`: phase `{value}` not found")
                         continue
                     task["phase"] = _find_phase(data, value)["id"]
+            elif field == "lane":
+                # I2: validate lane and recompute gate_state mirror, mirroring
+                # backlog_update_task's lane branch exactly.
+                if value not in _VALID_LANES:
+                    errors.append(
+                        f"`{task_id}`: invalid lane `{value}`. "
+                        f"Valid: {', '.join(_VALID_LANES)}"
+                    )
+                    continue
+                task["lane"] = value
+                task["gate_state"] = _compute_gate_state(task)
             else:
                 task[field] = value
             results.append(f"`{task_id}`.{field} → {value}")
@@ -6514,6 +6525,12 @@ def backlog_batch_update(operations: str) -> str:
                 if open_bugs:
                     errors.append(f"`{task_id}`: {len(open_bugs)} open bug(s) linked via found_in: {', '.join(open_bugs)}")
                     continue
+                # I1: apply Spec-A completion gate (lane'd tasks must satisfy
+                # all blocking review gates before reaching done).
+                block = _completion_block_reason(task)
+                if block:
+                    errors.append(f"`{task_id}`: {block}")
+                    continue
             task["status"] = new_status
             if new_status == "in-progress" and not task.get("started"):
                 task["started"] = _now()
@@ -6533,8 +6550,10 @@ def backlog_batch_update(operations: str) -> str:
                 errors.append(f"`{task_id}`: not found")
                 continue
             task, epic = result
-            # Honor the same lifecycle guard + close-gate as backlog_complete_task,
-            # and backfill `started` so duration analytics stay correct (B-049).
+            # Honor the lifecycle guard + close-gate as backlog_complete_task,
+            # backfill `started` so duration analytics stay correct (B-049),
+            # and apply the Spec-A completion gate so lane'd tasks with
+            # outstanding review gates are rejected (I1).
             cur_status = task.get("status", "todo")
             if cur_status not in ("in-progress", "in-review", "blocked"):
                 errors.append(f"`{task_id}`: cannot complete from `{cur_status}` (expected in-progress/in-review/blocked)")
@@ -6542,6 +6561,12 @@ def backlog_batch_update(operations: str) -> str:
             open_bugs, _ = _open_bugs_for_task(_backlog_path(), task_id)
             if open_bugs:
                 errors.append(f"`{task_id}`: {len(open_bugs)} open bug(s) linked via found_in: {', '.join(open_bugs)}")
+                continue
+            # I1: apply Spec-A completion gate (lane'd tasks must satisfy
+            # all blocking review gates before reaching done).
+            block = _completion_block_reason(task)
+            if block:
+                errors.append(f"`{task_id}`: {block}")
                 continue
             task["status"] = "done"
             task["started"] = task.get("started") or _now()

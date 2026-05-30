@@ -64,6 +64,8 @@ def test_batch_complete_backfills_started_for_valid_task(running_server, tmp_pat
 
     import backlog_server as _bs
     _bs.backlog_pick_task("guard-ip-001")  # -> in-progress, sets started
+    # Satisfy required review gates so the Spec-A completion gate passes (I1).
+    _satisfy_gates("guard-ip-001")
 
     out = _bs.backlog_batch_update("complete guard-ip-001")
     assert "error" not in out.lower(), f"Unexpected error: {out!r}"
