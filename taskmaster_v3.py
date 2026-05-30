@@ -4335,17 +4335,25 @@ def init_auto_run(
     pending_task_ids: list[str],
     model_for_task: dict[str, str] | None = None,
     config: dict[str, Any] | None = None,
+    lane_for_task: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Initialize a fresh auto run, write state, and return the state dict.
 
     `model_for_task` maps task_id → "sonnet"|"opus"; missing entries default
     to sonnet. The first pending task becomes the cursor (stage=PICK).
+
+    `lane_for_task` maps task_id → lane ("full"|"standard"|"express"|None). It
+    seeds the first cursor's `planned_stages` (Spec A C2): the ordered auto-stage
+    sequence the orchestrator walks for that lane. A missing/None lane falls back
+    to the standard sequence. `_advance_to_next` re-derives `planned_stages` for
+    each subsequent task as the cursor advances through pending.
     """
     if mode not in AUTO_MODES:
         raise ValueError(f"mode must be one of {AUTO_MODES}, got {mode!r}")
     if not pending_task_ids:
         raise ValueError("pending_task_ids must not be empty")
     model_for_task = model_for_task or {}
+    lane_for_task = lane_for_task or {}
     first = pending_task_ids[0]
     started_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     # Compact + unique per run: seconds precision plus a short random suffix so
@@ -4363,11 +4371,14 @@ def init_auto_run(
             "task_id": first,
             "stage": "PICK",
             "model": model_for_task.get(first, "sonnet"),
+            "lane": lane_for_task.get(first),
+            "planned_stages": list(auto_stages_for_lane(lane_for_task.get(first))),
         },
         "completed": [],
         "pending": list(pending_task_ids[1:]),
         "failed": [],
         "models": dict(model_for_task),
+        "lanes": dict(lane_for_task),
         "config": {
             "continue_on_fail": False,
             "no_gate": False,
@@ -4386,6 +4397,32 @@ def init_auto_run(
         "pending": list(pending_task_ids),
     })
     return state
+
+
+def next_planned_stage(cursor: dict[str, Any]) -> "str | None":
+    """The lane-stage that follows the cursor's current stage in its planned
+    sequence (Spec A C2). Returns None when the cursor is already at (or past)
+    the last planned stage, or has no planned sequence.
+
+    `planned_stages` is seeded at run start from the task's lane. If it is
+    absent (legacy state), fall back to the lane's sequence, then to standard.
+    """
+    if not cursor:
+        return None
+    planned = cursor.get("planned_stages")
+    if not planned:
+        planned = list(auto_stages_for_lane(cursor.get("lane")))
+    cur_stage = cursor.get("stage")
+    try:
+        idx = planned.index(cur_stage)
+    except ValueError:
+        # Current stage isn't part of the planned sequence (e.g. an explicit
+        # off-sequence advance). Resume at the first planned stage after it that
+        # we can't determine — treat as "start from the first planned stage".
+        return planned[0] if planned else None
+    if idx + 1 >= len(planned):
+        return None
+    return planned[idx + 1]
 
 
 def advance_stage(state: dict[str, Any], new_stage: str) -> dict[str, Any]:
@@ -4461,10 +4498,13 @@ def _advance_to_next(state: dict[str, Any]) -> None:
         return
     next_id = pending.pop(0)
     state["pending"] = pending
+    next_lane = state.get("lanes", {}).get(next_id)
     state["cursor"] = {
         "task_id": next_id,
         "stage": "PICK",
         "model": state.get("models", {}).get(next_id, "sonnet"),
+        "lane": next_lane,
+        "planned_stages": list(auto_stages_for_lane(next_lane)),
     }
 
 
@@ -4481,6 +4521,14 @@ def auto_run_summary(state: dict[str, Any]) -> str:
         lines.append(
             f"Current: {cur['task_id']} @ {cur['stage']} (model={cur.get('model','sonnet')})"
         )
+        # Spec A C2: surface the lane-specific pipeline so the orchestrator can
+        # see which stages remain and step with a no-arg advance.
+        planned = cur.get("planned_stages") or list(auto_stages_for_lane(cur.get("lane")))
+        if planned:
+            lines.append(f"Lane:      {cur.get('lane') or 'standard (default)'}")
+            lines.append(f"Pipeline:  {' → '.join(planned)}")
+            nxt = next_planned_stage(cur)
+            lines.append(f"Next:      {nxt if nxt else '(pipeline complete)'}")
     else:
         lines.append("Current: (none — run complete)")
     lines.append(f"Completed: {len(state.get('completed') or [])}")

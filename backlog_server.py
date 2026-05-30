@@ -153,6 +153,7 @@ from taskmaster_v3 import (
     clear_auto_state as _clear_auto_state,
     append_auto_event_bp as _append_auto_event_bp,
     advance_stage as _advance_stage,
+    next_planned_stage as _next_planned_stage,
     complete_current_task as _complete_current_task,
     auto_run_summary as _auto_run_summary,
     load_viewer_prefs,
@@ -4240,6 +4241,7 @@ def backlog_auto_start(
     data = _load()
     pending: list[str] = []
     model_for_task: dict[str, str] = {}
+    lane_for_task: dict[str, str] = {}
 
     if mode == "task":
         # target is a task id
@@ -4248,6 +4250,7 @@ def backlog_auto_start(
         task, _ = _find_task(data, target)
         pending = [target]
         model_for_task[target] = task.get("auto_model", "sonnet")
+        lane_for_task[target] = task.get("lane")
     elif mode == "epic":
         epic = next((e for e in data.get("epics") or [] if e.get("id") == target), None)
         if not epic:
@@ -4256,12 +4259,14 @@ def backlog_auto_start(
             if t.get("status") in (None, "todo"):
                 pending.append(t["id"])
                 model_for_task[t["id"]] = t.get("auto_model", "sonnet")
+                lane_for_task[t["id"]] = t.get("lane")
     else:  # phase
         for epic in data.get("epics") or []:
             for t in epic.get("tasks") or []:
                 if t.get("phase") == target and t.get("status") in (None, "todo"):
                     pending.append(t["id"])
                     model_for_task[t["id"]] = t.get("auto_model", "sonnet")
+                    lane_for_task[t["id"]] = t.get("lane")
 
     if not pending:
         return f"No todo tasks under {mode} {target} — nothing to do."
@@ -4272,14 +4277,19 @@ def backlog_auto_start(
         target=target,
         pending_task_ids=pending,
         model_for_task=model_for_task,
+        lane_for_task=lane_for_task,
         config={"continue_on_fail": continue_on_fail, "no_gate": no_gate},
     )
 
     cur = state["cursor"]
+    planned = cur.get("planned_stages") or []
     return (
         f"Auto run started: mode={mode}, target={target}, tasks={len(pending)}.\n"
-        f"First task: {cur['task_id']} (model={cur['model']}).\n"
-        f"Cursor stage: PICK. The auto-{mode} skill should drive from here."
+        f"First task: {cur['task_id']} (model={cur['model']}, lane={cur.get('lane') or 'standard (default)'}).\n"
+        f"Cursor stage: PICK.\n"
+        f"Lane pipeline: {' → '.join(planned)}\n"
+        f"Walk it with backlog_auto_advance() (no stage arg) until COMPLETE. "
+        f"The auto-{mode} skill should drive from here."
     )
 
 
@@ -4296,18 +4306,44 @@ def backlog_auto_status() -> str:
 
 
 @mcp.tool()
-def backlog_auto_advance(stage: str) -> str:
-    """Move the cursor to a new stage. Used by orchestrating skills between steps.
+def backlog_auto_advance(stage: str = "") -> str:
+    """Move the cursor to the next (or a specific) lane stage. Used by
+    orchestrating skills between steps.
 
-    Valid stages: PICK, SPEC_REVIEW, WRITE_TESTS, IMPLEMENT, TEST,
-    REVIEW_GATE, HANDOVER_STUB, END_SESSION, COMPLETE.
+    Spec A C2 — lane-aware walking:
+      - Call with NO stage (the default) to advance to the NEXT stage in the
+        cursor task's lane-specific planned sequence. This is the preferred
+        path: it records exactly the gates that lane requires, in order, so a
+        standard-lane task records design-review (not spec-review) and a
+        full-lane task records spec-review + plan-review. When the cursor is
+        already at the last planned stage, returns a "pipeline complete" note.
+      - Call with an explicit stage to jump there (back-compat for existing
+        callers/tests). Valid stages: PICK, SPEC, SPEC_REVIEW, PLAN,
+        PLAN_REVIEW, DESIGN_REVIEW, WRITE_TESTS, IMPLEMENT, TEST, REVIEW_GATE,
+        HANDOVER_STUB, END_SESSION, COMPLETE.
+
+    Advancing to a gate-mapped stage auto-records that stage's gate.
     """
-    if stage not in AUTO_STAGES:
-        return f"Error: stage must be one of {AUTO_STAGES}"
     bp = _backlog_path()
     state = _read_auto_state(bp)
     if not state:
         return "No auto run in progress."
+    cursor = state.get("cursor")
+    if not cursor:
+        return "No active cursor — auto run is complete."
+
+    if not stage:
+        # No-arg: walk the lane-specific planned sequence.
+        stage = _next_planned_stage(cursor)
+        if not stage:
+            return (
+                f"Pipeline complete for {cursor['task_id']} "
+                f"(stage={cursor.get('stage')}). "
+                f"Finalize with backlog_auto_complete_task."
+            )
+
+    if stage not in AUTO_STAGES:
+        return f"Error: stage must be one of {AUTO_STAGES}"
     prev_stage = (state.get("cursor") or {}).get("stage")
     try:
         _advance_stage(state, stage)
