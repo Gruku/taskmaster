@@ -16,18 +16,19 @@
 //       skipped  → neutral tint (--ink-3  / rgba(124,130,144,...))
 //       pending  → transparent  (--border / dim outline only)
 //
-// Source of truth for LANE_GATES: plugins/taskmaster/taskmaster_v3.py LANE_GATES.
-// Keep this const in sync with the server when lanes change.
+// Source of truth: taskmaster_v3.py blocking_gates(). Review gates only — these gate completion.
+// Status gates (spec/plan/tests/impl) are non-blocking plumbing and are not shown in the tracker.
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-/** Mirror of LANE_GATES in taskmaster_v3.py. Keep in sync. */
-const LANE_GATES = {
-  full:     ['spec', 'spec-review', 'plan', 'plan-review', 'tests', 'impl', 'review-gate'],
-  standard: ['spec', 'design-review', 'tests', 'impl', 'review-gate'],
-  express:  ['impl', 'review-gate'],
+// Source of truth: taskmaster_v3.py blocking_gates(). Review gates only — these gate completion.
+// Status gates (spec/plan/tests/impl) are non-blocking plumbing and are not shown in the tracker.
+const BLOCKING_GATES = {
+  full:     ['spec-review', 'plan-review', 'review-gate'],
+  standard: ['design-review', 'review-gate'],
+  express:  ['review-gate'],
 };
 
 // ---------------------------------------------------------------------------
@@ -68,7 +69,7 @@ function gateStateClass(record) {
  */
 export function renderGatePipeline(task) {
   if (!task || !task.lane) return '';
-  const gates = LANE_GATES[task.lane];
+  const gates = BLOCKING_GATES[task.lane];
   if (!gates) return '';
 
   const records = task.gates || {};
