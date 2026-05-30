@@ -30,13 +30,18 @@ indicate schema breaks or removed surfaces.
 
 ### Changed
 
-- **`complete_task` is now fail-closed** on outstanding required gates for
-  lane-bearing tasks (laneless tasks are exempt).
+- **`complete_task` is now fail-closed** on outstanding review gates
+  (spec-review / plan-review / design-review / review-gate) for lane-bearing
+  tasks. Status gates (spec / plan / tests / impl) are non-blocking progress
+  markers and never block completion (laneless tasks are exempt). `batch_update`
+  `complete` / `status done` ops enforce the same gate.
 - **`update_task` status follows a forward-transition table** for lane-bearing
   tasks; backward transitions are rejected unless explicitly forced (laneless
   tasks exempt).
-- **Auto-mode is lane-aware** — each auto-advance step auto-records the stage's
-  gate before transitioning.
+- **Auto-mode is lane-aware** — an auto run walks the task's lane-specific stage
+  sequence (`auto_stages_for_lane`); no-arg `backlog_auto_advance()` steps to the
+  next planned stage and auto-records its gate, so a standard run records
+  `design-review` and a full run records `plan-review`.
 - **`set_spec_review` / `clear_spec_review`** are now thin aliases over
   `backlog_record_gate` / `backlog_clear_gate`; behaviour is unchanged.
 
