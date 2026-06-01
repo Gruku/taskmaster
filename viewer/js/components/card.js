@@ -16,6 +16,7 @@ import { epicColor, epicCssVar } from '../lib/epics.js';
 import { bindCopy } from '../lib/copy.js';
 import { isAutoRunning } from '../lib/auto-state.js';
 import { renderAutoModeLiveBlock } from './auto-mode-live-block.js';
+import { laneBadge } from './gate-pipeline.js';
 
 const PRIORITY_LABELS = { critical: 'Critical', high: 'High', medium: 'Medium', low: 'Low' };
 const STATUS_LABELS   = { blocked: 'Blocked', todo: 'Todo', 'in-progress': 'In Progress', 'in-review': 'In Review', done: 'Done' };
@@ -154,6 +155,22 @@ export function renderCard({ task, density = 'full', epicColors = {}, autoState 
     sr.className = 'card-subrepo-chip';
     sr.textContent = task.sub_repo;
     chipRow.appendChild(sr);
+    chipRowHasContent = true;
+  }
+  // ── Spec A: lane badge + gate_state one-liner ──
+  const lbHtml = laneBadge(task);
+  if (lbHtml) {
+    const lb = document.createElement('span');
+    lb.innerHTML = lbHtml;
+    const chip = lb.firstElementChild;
+    if (chip) chipRow.appendChild(chip);
+    chipRowHasContent = true;
+  }
+  if (task.gate_state) {
+    const gs = document.createElement('span');
+    gs.className = 'card-gate-state';
+    gs.textContent = task.gate_state;
+    chipRow.appendChild(gs);
     chipRowHasContent = true;
   }
   if (groupBy !== 'status' && task.status) {

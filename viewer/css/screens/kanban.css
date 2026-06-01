@@ -191,6 +191,21 @@
   background: rgba(255,255,255,0.04); color: var(--ink-3);
   font-family: var(--font-mono);
 }
+
+/* ── Spec A: lane badge + gate_state one-liner (card level) ── */
+/* NO left rails. NO box-shadows. NO hover motion. Tinted fill + full border. */
+.lane-badge {
+  font-size: var(--text-xs); padding: 2px 7px; border-radius: var(--r-sm);
+  font-weight: 600; text-transform: uppercase; letter-spacing: 0.07em;
+  border: 1px solid transparent;
+}
+.lane-badge.lane--full     { background: rgba(74,158,255,0.14); border-color: rgba(74,158,255,0.28); color: var(--accent); }
+.lane-badge.lane--standard { background: rgba(160,127,224,0.14); border-color: rgba(160,127,224,0.28); color: var(--purple); }
+.lane-badge.lane--express  { background: rgba(95,174,110,0.14); border-color: rgba(95,174,110,0.28); color: var(--green); }
+
+.card-gate-state {
+  font-size: var(--text-xs); color: var(--ink-3); font-family: var(--font-mono);
+}
 .card-tracker-chip {
   display: inline-flex; align-items: center; gap: 6px;
   font-size: var(--text-xs); padding: 3px 9px; border-radius: var(--r-sm);

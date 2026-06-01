@@ -1,6 +1,20 @@
 import json
 from backlog_server import (backlog_add_epic, backlog_add_task, backlog_update_task,
-                            backlog_update_epic, backlog_epic_status, backlog_archive_task)
+                            backlog_update_epic, backlog_epic_status, backlog_archive_task,
+                            _load, _find_task, _mutate_and_save)
+
+
+def _set_status(task_id, status):
+    """Set status via the data layer — bypasses the Spec A transition table /
+    done-gate for lane'd tasks where the test only cares about the final state."""
+    if status in ("in-progress", "todo"):
+        backlog_update_task(task_id, "status", status)
+        return
+    data = _load()
+    task, _ = _find_task(data, task_id)
+    task["status"] = status
+    _mutate_and_save(data)
+
 
 def _setup(tm_epic_phase):
     backlog_update_epic("test-epic", "components",
@@ -8,7 +22,7 @@ def _setup(tm_epic_phase):
     for tid, status in [("E-1", "done"), ("E-2", "in-progress"), ("E-3", "todo")]:
         backlog_add_task(epic="test-epic", task_id=tid, title=tid, phase="dev")
         backlog_update_task(tid, "component", "core")
-        backlog_update_task(tid, "status", status)
+        _set_status(tid, status)
 
 def test_epic_status_shows_counts_and_components(tm_epic_phase):
     _setup(tm_epic_phase)
@@ -45,9 +59,9 @@ def test_epic_status_counts_archived(tm_epic_phase):
     # epic["tasks"] with status "archived" (verified: backlog_archive_task
     # mutates status in place, does not move the task out of the list).
     backlog_add_task(epic="test-epic", task_id="K-1", title="kept", phase="dev")
-    backlog_update_task("K-1", "status", "done")
+    _set_status("K-1", "done")
     backlog_add_task(epic="test-epic", task_id="K-2", title="closed", phase="dev")
-    backlog_update_task("K-2", "status", "done")
+    _set_status("K-2", "done")
     backlog_archive_task("K-2", reason="done")
     out = backlog_epic_status("test-epic")
     # Breakdown surfaces archived count.

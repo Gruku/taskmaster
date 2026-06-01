@@ -28,6 +28,18 @@ def _add_task(task_id: str, depends_on: str = "") -> None:
     assert "Error" not in r, f"add_task {task_id} failed: {r}"
 
 
+def _satisfy_gates(task_id: str) -> None:
+    """Skip every required gate for a task's lane (audited skip is always allowed)."""
+    import backlog_server as _bs
+    from taskmaster_v3 import required_gates as _required_gates
+    task, _ = _bs._find_task(_bs._load(), task_id)
+    lane = task.get("lane")
+    if not lane:
+        return
+    for gate in _required_gates(lane):
+        _bs.backlog_skip_gate(task_id, gate, "test setup — isolating dependency warning")
+
+
 # ── B-049: batch completion honors the lifecycle guard + backfills started ──
 
 def test_batch_complete_rejects_todo_task(running_server, tmp_path):
@@ -52,6 +64,8 @@ def test_batch_complete_backfills_started_for_valid_task(running_server, tmp_pat
 
     import backlog_server as _bs
     _bs.backlog_pick_task("guard-ip-001")  # -> in-progress, sets started
+    # Satisfy required review gates so the Spec-A completion gate passes (I1).
+    _satisfy_gates("guard-ip-001")
 
     out = _bs.backlog_batch_update("complete guard-ip-001")
     assert "error" not in out.lower(), f"Unexpected error: {out!r}"
@@ -102,6 +116,10 @@ def test_pick_no_warning_when_dependency_done(running_server, tmp_path):
 
     import backlog_server as _bs
     _bs.backlog_pick_task("dep-002")
+    # Spec A gate guard: a lane'd task can't reach `done` until its required
+    # gates are satisfied. This test cares about the dependency warning, not
+    # the gate pipeline, so skip every required gate for dep-002's lane.
+    _satisfy_gates("dep-002")
     _bs.backlog_complete_task(task_id="dep-002")  # dep -> done
 
     out = _bs.backlog_pick_task("needs-002")

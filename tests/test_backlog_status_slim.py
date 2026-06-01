@@ -8,13 +8,25 @@ from backlog_server import (
     backlog_archive_task,
     backlog_status,
     backlog_update_task,
+    _load,
+    _find_task,
+    _mutate_and_save,
 )
 
 
 def _make_done(task_id: str) -> None:
-    """Set a task to in-progress then done so archive_task accepts it."""
-    backlog_update_task(task_id, "status", "in-progress")
-    backlog_update_task(task_id, "status", "done")
+    """Set a task to done so archive_task accepts it.
+
+    Tasks created via backlog_add_task are lane'd, so a direct todo->done would
+    be blocked by the Spec A transition table + done-gate. These tests only
+    care about the dashboard rendering of a done/archived task, not the status
+    mechanics — so set the terminal status via the data layer (sanctioned
+    SETUP bypass) rather than routing through gates.
+    """
+    data = _load()
+    task, _ = _find_task(data, task_id)
+    task["status"] = "done"
+    _mutate_and_save(data)
 
 
 def test_slim_status_omits_archived_section(tm_epic_phase):

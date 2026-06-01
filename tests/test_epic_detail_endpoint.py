@@ -3,7 +3,21 @@ import json
 from backlog_server import (
     backlog_add_epic, backlog_add_task, backlog_update_task,
     backlog_update_epic, _load_epic_full,
+    _load, _find_task, _mutate_and_save,
 )
+
+
+def _set_status(task_id, status):
+    """Set status via the data layer — bypasses the Spec A transition table /
+    done-gate for tasks created lane'd, where the test only cares about the
+    final state, not the transition mechanics."""
+    if status in ("in-progress", "todo"):
+        backlog_update_task(task_id, "status", status)
+        return
+    data = _load()
+    task, _ = _find_task(data, task_id)
+    task["status"] = status
+    _mutate_and_save(data)
 
 
 def test_load_epic_full_unknown_returns_none(tmp_taskmaster):
@@ -20,7 +34,7 @@ def test_load_epic_full_merges_heavy_fields_and_rollup(tm_epic_phase):
     for tid, status in [("E-1", "done"), ("E-2", "in-progress"), ("E-3", "todo")]:
         backlog_add_task(epic="test-epic", task_id=tid, title=tid, phase="dev")
         backlog_update_task(tid, "component", "core")
-        backlog_update_task(tid, "status", status)
+        _set_status(tid, status)
 
     out = _load_epic_full("test-epic")
     assert out["id"] == "test-epic"

@@ -60,6 +60,16 @@ from taskmaster_v3 import (
     SCHEMA_DEFAULT,
     TLDR_MAX_CHARS,
     extract_tldr,
+    VALID_LANES as _VALID_LANES,
+    VALID_GATES as _VALID_GATES,
+    VERDICT_GATES as _VERDICT_GATES,
+    VALID_GATE_VERDICTS as _VALID_GATE_VERDICTS,
+    required_gates as _required_gates,
+    blocking_gates as _blocking_gates,
+    outstanding_required_gates as _outstanding_required_gates,
+    gate_satisfied as _gate_satisfied,
+    default_lane as _default_lane,
+    compute_gate_state as _compute_gate_state,
     HANDOVER_KINDS,
     HEAVY_FIELDS as _HEAVY_FIELDS,
     detect_schema_version as _detect_schema_version,
@@ -133,6 +143,8 @@ from taskmaster_v3 import (
     write_task_file as _write_task_file,
     AUTO_MODES,
     AUTO_STAGES,
+    AUTO_STAGE_GATE as _AUTO_STAGE_GATE,
+    auto_stages_for_lane as _auto_stages_for_lane,
     AUTO_TASK_STATUSES,
     AUTO_FAIL_REASONS,
     init_auto_run as _init_auto_run,
@@ -141,6 +153,7 @@ from taskmaster_v3 import (
     clear_auto_state as _clear_auto_state,
     append_auto_event_bp as _append_auto_event_bp,
     advance_stage as _advance_stage,
+    next_planned_stage as _next_planned_stage,
     complete_current_task as _complete_current_task,
     auto_run_summary as _auto_run_summary,
     load_viewer_prefs,
@@ -1825,6 +1838,36 @@ def backlog_migrate_v3() -> str:
         f"\nv3 features (handovers, lessons, issues, recap, auto modes) will land in "
         f"subsequent slices."
     )
+
+
+@mcp.tool()
+def backlog_backfill_lanes(grandfather_active: bool = True) -> str:
+    """One-time optional migration: assign a `lane` (by priority) to every task that
+    lacks one. For tasks already in-progress/in-review/done, mark their lane's required
+    gates skipped(reason="grandfathered") so enforcement never retroactively wedges
+    in-flight work. Tasks that already have a lane are left untouched.
+
+    Args:
+        grandfather_active: if true, grandfather gates on non-todo tasks (recommended).
+    """
+    data = _load()
+    migrated = 0
+    for epic in data.get("epics", []):
+        for task in epic.get("tasks", []):
+            if task.get("lane"):
+                continue
+            task["lane"] = _default_lane(task.get("priority", "medium"))
+            if grandfather_active and task.get("status") in ("in-progress", "in-review", "done"):
+                gates = task.setdefault("gates", {})
+                for g in _required_gates(task["lane"]):
+                    if not _gate_satisfied(gates.get(g)):
+                        gates[g] = {"skipped": True, "reason": "grandfathered",
+                                    "by": "migration", "at": _now()}
+            task["gate_state"] = _compute_gate_state(task)
+            migrated += 1
+    if migrated:
+        _mutate_and_save(data)
+    return f"Backfilled lanes on {migrated} task(s) (grandfather_active={grandfather_active})."
 
 
 @mcp.tool()
@@ -4198,6 +4241,7 @@ def backlog_auto_start(
     data = _load()
     pending: list[str] = []
     model_for_task: dict[str, str] = {}
+    lane_for_task: dict[str, str] = {}
 
     if mode == "task":
         # target is a task id
@@ -4206,6 +4250,7 @@ def backlog_auto_start(
         task, _ = _find_task(data, target)
         pending = [target]
         model_for_task[target] = task.get("auto_model", "sonnet")
+        lane_for_task[target] = task.get("lane")
     elif mode == "epic":
         epic = next((e for e in data.get("epics") or [] if e.get("id") == target), None)
         if not epic:
@@ -4214,12 +4259,14 @@ def backlog_auto_start(
             if t.get("status") in (None, "todo"):
                 pending.append(t["id"])
                 model_for_task[t["id"]] = t.get("auto_model", "sonnet")
+                lane_for_task[t["id"]] = t.get("lane")
     else:  # phase
         for epic in data.get("epics") or []:
             for t in epic.get("tasks") or []:
                 if t.get("phase") == target and t.get("status") in (None, "todo"):
                     pending.append(t["id"])
                     model_for_task[t["id"]] = t.get("auto_model", "sonnet")
+                    lane_for_task[t["id"]] = t.get("lane")
 
     if not pending:
         return f"No todo tasks under {mode} {target} — nothing to do."
@@ -4230,14 +4277,19 @@ def backlog_auto_start(
         target=target,
         pending_task_ids=pending,
         model_for_task=model_for_task,
+        lane_for_task=lane_for_task,
         config={"continue_on_fail": continue_on_fail, "no_gate": no_gate},
     )
 
     cur = state["cursor"]
+    planned = cur.get("planned_stages") or []
     return (
         f"Auto run started: mode={mode}, target={target}, tasks={len(pending)}.\n"
-        f"First task: {cur['task_id']} (model={cur['model']}).\n"
-        f"Cursor stage: PICK. The auto-{mode} skill should drive from here."
+        f"First task: {cur['task_id']} (model={cur['model']}, lane={cur.get('lane') or 'standard (default)'}).\n"
+        f"Cursor stage: PICK.\n"
+        f"Lane pipeline: {' → '.join(planned)}\n"
+        f"Walk it with backlog_auto_advance() (no stage arg) until COMPLETE. "
+        f"The auto-{mode} skill should drive from here."
     )
 
 
@@ -4254,18 +4306,44 @@ def backlog_auto_status() -> str:
 
 
 @mcp.tool()
-def backlog_auto_advance(stage: str) -> str:
-    """Move the cursor to a new stage. Used by orchestrating skills between steps.
+def backlog_auto_advance(stage: str = "") -> str:
+    """Move the cursor to the next (or a specific) lane stage. Used by
+    orchestrating skills between steps.
 
-    Valid stages: PICK, SPEC_REVIEW, WRITE_TESTS, IMPLEMENT, TEST,
-    REVIEW_GATE, HANDOVER_STUB, END_SESSION, COMPLETE.
+    Spec A C2 — lane-aware walking:
+      - Call with NO stage (the default) to advance to the NEXT stage in the
+        cursor task's lane-specific planned sequence. This is the preferred
+        path: it records exactly the gates that lane requires, in order, so a
+        standard-lane task records design-review (not spec-review) and a
+        full-lane task records spec-review + plan-review. When the cursor is
+        already at the last planned stage, returns a "pipeline complete" note.
+      - Call with an explicit stage to jump there (back-compat for existing
+        callers/tests). Valid stages: PICK, SPEC, SPEC_REVIEW, PLAN,
+        PLAN_REVIEW, DESIGN_REVIEW, WRITE_TESTS, IMPLEMENT, TEST, REVIEW_GATE,
+        HANDOVER_STUB, END_SESSION, COMPLETE.
+
+    Advancing to a gate-mapped stage auto-records that stage's gate.
     """
-    if stage not in AUTO_STAGES:
-        return f"Error: stage must be one of {AUTO_STAGES}"
     bp = _backlog_path()
     state = _read_auto_state(bp)
     if not state:
         return "No auto run in progress."
+    cursor = state.get("cursor")
+    if not cursor:
+        return "No active cursor — auto run is complete."
+
+    if not stage:
+        # No-arg: walk the lane-specific planned sequence.
+        stage = _next_planned_stage(cursor)
+        if not stage:
+            return (
+                f"Pipeline complete for {cursor['task_id']} "
+                f"(stage={cursor.get('stage')}). "
+                f"Finalize with backlog_auto_complete_task."
+            )
+
+    if stage not in AUTO_STAGES:
+        return f"Error: stage must be one of {AUTO_STAGES}"
     prev_stage = (state.get("cursor") or {}).get("stage")
     try:
         _advance_stage(state, stage)
@@ -4282,7 +4360,23 @@ def backlog_auto_advance(stage: str) -> str:
         "stage": stage,
     })
     cur = state["cursor"]
-    return f"Stage → {stage} (task={cur['task_id']}, model={cur['model']})"
+    # Spec A: lane-aware auto-mode — advancing to a gate-mapped stage records the
+    # matching gate on the cursor task. Status gates take status="done"; verdict
+    # gates take verdict="pass". Walking the lane sequence in order keeps
+    # backlog_record_gate's ordering guard satisfied.
+    gate = _AUTO_STAGE_GATE.get(stage)
+    gate_note = ""
+    if gate:
+        tid = cur["task_id"]
+        if gate in _VERDICT_GATES:
+            res = backlog_record_gate(tid, gate, verdict="pass")
+        else:
+            res = backlog_record_gate(tid, gate, status="done")
+        if res.startswith("Error:"):
+            gate_note = f"\n⚠ gate `{gate}` not recorded: {res}"
+        else:
+            gate_note = f"\nGate `{gate}` recorded."
+    return f"Stage → {stage} (task={cur['task_id']}, model={cur['model']}){gate_note}"
 
 
 @mcp.tool()
@@ -4524,6 +4618,11 @@ def backlog_add_task(
                     parsed_docs[k] = v
         if parsed_docs:
             new_task["docs"] = parsed_docs
+
+    # Assign lane (standard; bumped to full for high/critical priority) and
+    # initialize gate_state mirror so the slim field tier is populated on creation.
+    new_task["lane"] = _default_lane(new_task.get("priority", "medium"))
+    new_task["gate_state"] = _compute_gate_state(new_task)
 
     if "tasks" not in epic_obj:
         epic_obj["tasks"] = []
@@ -4781,6 +4880,18 @@ def _open_bugs_for_task(bp, task_id: str) -> tuple[list[str], list[str]]:
     return open_bugs, fixed_bugs
 
 
+def _completion_block_reason(task) -> str:
+    """Return a rejection message if a lane'd task has unsatisfied required gates, else ''."""
+    if not task.get("lane"):
+        return ""   # laneless => exempt (Spec A rollout rule)
+    outstanding = _outstanding_required_gates(task)
+    if outstanding:
+        return (f"Cannot complete `{task['id']}` — outstanding gates for lane "
+                f"`{task['lane']}`: {', '.join(outstanding)}. "
+                f"Record each (backlog_record_gate) or skip it (backlog_skip_gate).")
+    return ""
+
+
 @mcp.tool()
 def backlog_complete_task(
     task_id: str,
@@ -4845,6 +4956,14 @@ def backlog_complete_task(
             f"{', '.join(open_bugs)}.\n"
             f"Resolve each (fix/adopt/shelve/promote) before closing the task."
         )
+
+    # Gate-completeness guard (Spec A): a lane'd task may only go to `done`
+    # once its required gates are satisfied. Laneless tasks are exempt.
+    # Does not apply to target_status == "in-review".
+    if target_status == "done":
+        block = _completion_block_reason(task)
+        if block:
+            return block
 
     # Warn if skipping in-review when going straight to done
     review_warning = ""
@@ -5120,8 +5239,19 @@ def _clear_session_task(task_id: str) -> None:
         _session_task = None
 
 
-ALLOWED_FIELDS = {"title", "status", "priority", "notes", "branch", "worktree", "blockers", "docs", "depends_on", "sub_repo", "stage", "estimate", "locked_by", "review_instructions", "phase", "anchors", "blast_radius_depth", "patchnote", "release", "tldr", "next_step", "component", "design_change"}
+ALLOWED_FIELDS = {"title", "status", "priority", "notes", "branch", "worktree", "blockers", "docs", "depends_on", "sub_repo", "stage", "estimate", "locked_by", "review_instructions", "phase", "anchors", "blast_radius_depth", "patchnote", "release", "tldr", "next_step", "component", "design_change", "lane"}
 VALID_STATUSES = {"todo", "in-progress", "in-review", "done", "archived", "blocked"}
+# Spec A Task 11: forward-transition table enforced on lane'd tasks via
+# backlog_update_task. Laneless tasks are exempt (old permissive behavior).
+# Same-status writes (value == current) bypass the table.
+LEGAL_STATUS_TRANSITIONS = {
+    "todo":        {"in-progress", "blocked", "archived"},
+    "in-progress": {"in-review", "done", "blocked", "todo", "archived"},
+    "in-review":   {"done", "in-progress", "blocked", "archived"},
+    "blocked":     {"todo", "in-progress", "in-review", "archived"},
+    "done":        {"in-review", "archived"},
+    "archived":    {"todo"},
+}
 VALID_PRIORITIES = {"critical", "high", "medium", "low"}
 VALID_DOC_KEYS = {"plan", "spec", "roadmap", "design", "analysis"}
 
@@ -5198,6 +5328,20 @@ def backlog_update_task(
     if field == "status":
         if value not in VALID_STATUSES:
             return f"Error: invalid status `{value}`. Valid: {', '.join(sorted(VALID_STATUSES))}"
+        # Spec A Task 11: enforce the forward-transition table for lane'd tasks
+        # only. Laneless tasks keep the old permissive behavior. Same-status
+        # writes (value == current) are always allowed — the guard only checks
+        # when the status actually changes.
+        cur = task.get("status", "todo")
+        if task.get("lane") and value != cur:
+            allowed = LEGAL_STATUS_TRANSITIONS.get(cur, set())
+            if value not in allowed:
+                return (f"Error: illegal transition `{cur}` → `{value}` for `{task_id}`. "
+                        f"Legal: {', '.join(sorted(allowed)) or '(none)'}.")
+            if value == "done":
+                block = _completion_block_reason(task)
+                if block:
+                    return block
         task["status"] = value
         if value == "in-progress" and not task.get("started"):
             task["started"] = _now()
@@ -5279,6 +5423,12 @@ def backlog_update_task(
             task.pop("next_step", None)
         else:
             task["next_step"] = value
+    elif field == "lane":
+        if value not in _VALID_LANES:
+            return (f"Error: invalid lane `{value}`. "
+                    f"Valid: {', '.join(_VALID_LANES)}")
+        task["lane"] = value
+        task["gate_state"] = _compute_gate_state(task)
     elif field == "component":
         if value == "" or value.lower() == "none":
             task.pop("component", None)
@@ -5320,6 +5470,178 @@ def backlog_update_task(
     return f"Updated `{task_id}` field `{field}` → {value}"
 
 
+@mcp.tool()
+def backlog_record_gate(
+    task_id: str,
+    gate: str,
+    verdict: str = "",
+    status: str = "",
+    commit_sha: str = "",
+    spec_path: str = "",
+    codex_used: bool = False,
+    critical_count: int = 0,
+    important_count: int = 0,
+) -> str:
+    """Record the outcome of a pipeline gate on a task. Generalizes spec-review to
+    every gate (spec, plan, tests, impl, spec-review, plan-review, design-review,
+    review-gate). Status gates take status="done"; review gates take a verdict in
+    pass/warn/fail. Overwrites any prior record for that gate.
+
+    Enforces ordering: for a task WITH a lane, an earlier required gate must be
+    satisfied (pass/done/skipped) before a later one is recorded.
+
+    Args:
+        task_id: Task id.
+        gate: One of spec|plan|tests|impl|spec-review|plan-review|design-review|review-gate.
+        verdict: pass|warn|fail (for review gates).
+        status: done (for status gates).
+        commit_sha, spec_path, codex_used, critical_count, important_count: optional meta.
+    """
+    if gate not in _VALID_GATES:
+        return f"Error: invalid gate `{gate}`. Valid: {', '.join(_VALID_GATES)}"
+
+    is_verdict = gate in _VERDICT_GATES
+    if is_verdict:
+        if verdict not in _VALID_GATE_VERDICTS:
+            return (f"Error: gate `{gate}` requires verdict in "
+                    f"{', '.join(_VALID_GATE_VERDICTS)}, got `{verdict or '(none)'}`")
+    else:
+        if status != "done":
+            return f"Error: status gate `{gate}` requires status=\"done\", got `{status or '(none)'}`"
+
+    data = _load()
+    result = _find_task(data, task_id)
+    if not result:
+        return f"Error: task `{task_id}` not found"
+    task, _epic = result
+    _touch_task(task)
+
+    lane = task.get("lane")
+    if lane and gate in _VERDICT_GATES:
+        req = _blocking_gates(lane)
+        gates_now = task.get("gates") or {}
+        if gate in req:
+            idx = req.index(gate)
+            for earlier in req[:idx]:
+                if not _gate_satisfied(gates_now.get(earlier)):
+                    return (f"Error: cannot record `{gate}` for `{task_id}` — "
+                            f"earlier required gate `{earlier}` is not satisfied "
+                            f"(pass/skipped). Record or skip it first.")
+
+    rec = {"at": _now()}
+    if is_verdict:
+        rec["verdict"] = verdict
+        if commit_sha:
+            rec["commit_sha"] = commit_sha
+        if spec_path:
+            rec["spec_path"] = spec_path
+        rec["codex_used"] = bool(codex_used)
+        rec["critical_count"] = int(critical_count)
+        rec["important_count"] = int(important_count)
+    else:
+        rec["status"] = "done"
+        if commit_sha:
+            rec["commit_sha"] = commit_sha
+
+    task.setdefault("gates", {})[gate] = rec
+    task["gate_state"] = _compute_gate_state(task)
+    _mutate_and_save(data)
+    outcome = verdict if is_verdict else "done"
+    return f"Recorded gate `{gate}` = {outcome} for `{task_id}` (state: {task['gate_state'] or 'laneless'})"
+
+
+@mcp.tool()
+def backlog_skip_gate(task_id: str, gate: str, reason: str, by: str = "claude") -> str:
+    """Record an explicit, audited skip of a pipeline gate — the ONLY way past a
+    required gate without satisfying it. Always succeeds (for a valid gate+reason)
+    and is flagged on the dashboard. No silent skips exist anywhere else.
+
+    Args:
+        task_id: Task id.
+        gate: The gate to skip (see backlog_record_gate for valid names).
+        reason: Required non-empty justification (becomes the paper trail).
+        by: "claude" or "user".
+    """
+    if gate not in _VALID_GATES:
+        return f"Error: invalid gate `{gate}`. Valid: {', '.join(_VALID_GATES)}"
+    if not (reason or "").strip():
+        return f"Error: skip_gate requires a non-empty reason (this is the audit trail)."
+
+    data = _load()
+    result = _find_task(data, task_id)
+    if not result:
+        return f"Error: task `{task_id}` not found"
+    task, _epic = result
+    _touch_task(task)
+
+    task.setdefault("gates", {})[gate] = {
+        "skipped": True, "reason": reason.strip(), "by": by, "at": _now(),
+    }
+    task["gate_state"] = _compute_gate_state(task)
+    _mutate_and_save(data)
+    return f"⚠ Skipped gate `{gate}` for `{task_id}` — reason: {reason.strip()} (by {by})"
+
+
+@mcp.tool()
+def backlog_clear_gate(task_id: str, gate: str) -> str:
+    """Remove a single gate record from a task and recompute gate_state.
+
+    Args:
+        task_id: Task id.
+        gate: The gate to clear (see backlog_record_gate for valid names).
+    """
+    if gate not in _VALID_GATES:
+        return f"Error: invalid gate `{gate}`. Valid: {', '.join(_VALID_GATES)}"
+    data = _load()
+    result = _find_task(data, task_id)
+    if not result:
+        return f"Error: task `{task_id}` not found"
+    task, _ = result
+    _touch_task(task)
+    gates = task.get("gates") or {}
+    if gate not in gates:
+        return f"`{task_id}` had no `{gate}` gate record"
+    del gates[gate]
+    task["gates"] = gates
+    task["gate_state"] = _compute_gate_state(task)
+    _mutate_and_save(data)
+    return f"Cleared gate `{gate}` on `{task_id}`"
+
+
+@mcp.tool()
+def backlog_task_pipeline(task_id: str) -> str:
+    """Show a task's lane, its required gate pipeline, and each gate's recorded
+    state (pass/done/skipped/fail/pending), plus the one-line gate_state and the
+    list of outstanding gates blocking `done`.
+    """
+    data = _load()
+    result = _find_task(data, task_id)
+    if not result:
+        return f"Error: task `{task_id}` not found"
+    task, _ = result
+    lane = task.get("lane")
+    if not lane:
+        return f"`{task_id}` is laneless (pre-protocol) — no pipeline enforced."
+    gates = task.get("gates") or {}
+    lines = [f"## Pipeline `{task_id}` — lane: **{lane}**",
+             f"gate_state: `{task.get('gate_state') or '(none)'}`", ""]
+    for g in _required_gates(lane):
+        rec = gates.get(g)
+        if not rec:
+            mark = "○ pending"
+        elif rec.get("skipped"):
+            mark = f"⚠ skipped — {rec.get('reason', '')}"
+        elif rec.get("verdict"):
+            mark = f"{rec['verdict']}"
+        else:
+            mark = rec.get("status", "?")
+        lines.append(f"- `{g}`: {mark}")
+    outstanding = _outstanding_required_gates(task)
+    lines.append("")
+    lines.append("**Outstanding:** " + (", ".join(outstanding) if outstanding else "none — ready for done ✓"))
+    return "\n".join(lines)
+
+
 VALID_SPEC_REVIEW_VERDICTS = {"pass", "warn", "fail"}
 
 
@@ -5332,12 +5654,8 @@ def backlog_set_spec_review(
     critical_count: int = 0,
     important_count: int = 0,
 ) -> str:
-    """Record the result of a spec-review pass on a task. Overwrites any prior record.
-
-    The spec_review field is structured (dict). It captures the outcome of running
-    `taskmaster:spec-review` against the task's spec/plan, so downstream tools
-    (pick-task, review-gate, dashboard) can see whether the design was vetted
-    before implementation began.
+    """Record a spec-review pass on a task. Thin alias over backlog_record_gate(gate="spec-review");
+    also keeps the legacy `spec_review` dict for back-compat. Overwrites any prior record.
 
     Args:
         task_id: The task ID (e.g., "auth-003")
@@ -5352,15 +5670,18 @@ def backlog_set_spec_review(
             f"Error: invalid verdict `{verdict}`. "
             f"Valid: {', '.join(sorted(VALID_SPEC_REVIEW_VERDICTS))}"
         )
-
+    out = backlog_record_gate(
+        task_id, "spec-review", verdict=verdict, spec_path=spec_path,
+        codex_used=codex_used, critical_count=critical_count,
+        important_count=important_count,
+    )
+    if "Error" in out:
+        return out
     data = _load()
     result = _find_task(data, task_id)
     if not result:
         return f"Error: task `{task_id}` not found"
-
-    task, _epic = result
-    _touch_task(task)
-
+    task, _ = result
     task["spec_review"] = {
         "timestamp": _now(),
         "verdict": verdict,
@@ -5369,7 +5690,6 @@ def backlog_set_spec_review(
         "important_count": int(important_count),
         "spec_path": spec_path,
     }
-
     _mutate_and_save(data)
     return (
         f"Recorded spec-review for `{task_id}`: {verdict} "
@@ -5379,26 +5699,21 @@ def backlog_set_spec_review(
 
 @mcp.tool()
 def backlog_clear_spec_review(task_id: str) -> str:
-    """Remove the spec-review record from a task. Use when the spec was significantly
-    revised and the prior review is no longer valid.
+    """Remove the spec-review gate (and legacy spec_review mirror) from a task.
+    Use when the spec was significantly revised and the prior review is no longer valid.
 
     Args:
         task_id: The task ID (e.g., "auth-003")
     """
+    out = backlog_clear_gate(task_id, "spec-review")
     data = _load()
     result = _find_task(data, task_id)
-    if not result:
-        return f"Error: task `{task_id}` not found"
-
-    task, _epic = result
-    _touch_task(task)
-
-    if "spec_review" not in task:
-        return f"`{task_id}` had no spec-review record"
-
-    del task["spec_review"]
-    _mutate_and_save(data)
-    return f"Cleared spec-review record on `{task_id}`"
+    if result:
+        task, _ = result
+        if "spec_review" in task:
+            del task["spec_review"]
+            _mutate_and_save(data)
+    return out
 
 
 VALID_EPIC_STATUSES = {"active", "planned", "done", "archived"}
@@ -6174,6 +6489,17 @@ def backlog_batch_update(operations: str) -> str:
                         errors.append(f"`{task_id}`: phase `{value}` not found")
                         continue
                     task["phase"] = _find_phase(data, value)["id"]
+            elif field == "lane":
+                # I2: validate lane and recompute gate_state mirror, mirroring
+                # backlog_update_task's lane branch exactly.
+                if value not in _VALID_LANES:
+                    errors.append(
+                        f"`{task_id}`: invalid lane `{value}`. "
+                        f"Valid: {', '.join(_VALID_LANES)}"
+                    )
+                    continue
+                task["lane"] = value
+                task["gate_state"] = _compute_gate_state(task)
             else:
                 task[field] = value
             results.append(f"`{task_id}`.{field} → {value}")
@@ -6199,6 +6525,12 @@ def backlog_batch_update(operations: str) -> str:
                 if open_bugs:
                     errors.append(f"`{task_id}`: {len(open_bugs)} open bug(s) linked via found_in: {', '.join(open_bugs)}")
                     continue
+                # I1: apply Spec-A completion gate (lane'd tasks must satisfy
+                # all blocking review gates before reaching done).
+                block = _completion_block_reason(task)
+                if block:
+                    errors.append(f"`{task_id}`: {block}")
+                    continue
             task["status"] = new_status
             if new_status == "in-progress" and not task.get("started"):
                 task["started"] = _now()
@@ -6218,8 +6550,10 @@ def backlog_batch_update(operations: str) -> str:
                 errors.append(f"`{task_id}`: not found")
                 continue
             task, epic = result
-            # Honor the same lifecycle guard + close-gate as backlog_complete_task,
-            # and backfill `started` so duration analytics stay correct (B-049).
+            # Honor the lifecycle guard + close-gate as backlog_complete_task,
+            # backfill `started` so duration analytics stay correct (B-049),
+            # and apply the Spec-A completion gate so lane'd tasks with
+            # outstanding review gates are rejected (I1).
             cur_status = task.get("status", "todo")
             if cur_status not in ("in-progress", "in-review", "blocked"):
                 errors.append(f"`{task_id}`: cannot complete from `{cur_status}` (expected in-progress/in-review/blocked)")
@@ -6227,6 +6561,12 @@ def backlog_batch_update(operations: str) -> str:
             open_bugs, _ = _open_bugs_for_task(_backlog_path(), task_id)
             if open_bugs:
                 errors.append(f"`{task_id}`: {len(open_bugs)} open bug(s) linked via found_in: {', '.join(open_bugs)}")
+                continue
+            # I1: apply Spec-A completion gate (lane'd tasks must satisfy
+            # all blocking review gates before reaching done).
+            block = _completion_block_reason(task)
+            if block:
+                errors.append(f"`{task_id}`: {block}")
                 continue
             task["status"] = "done"
             task["started"] = task.get("started") or _now()

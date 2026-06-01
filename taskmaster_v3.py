@@ -113,6 +113,7 @@ SLIM_FIELDS: dict[str, tuple[str, ...]] = {
     "task": (
         "id", "title", "tldr", "next_step", "status", "priority",
         "estimate", "phase", "epic", "component", "design_change",
+        "lane", "gate_state",
         "depends_on", "related_issues", "related_lessons",
         "started", "completed", "branch", "worktree",
         "blockers", "open_handovers",
@@ -419,6 +420,7 @@ HEAVY_FIELDS: tuple[str, ...] = (
     "notes",
     "docs",
     "review_instructions",
+    "gates",
 )
 
 EPIC_HEAVY_FIELDS: tuple[str, ...] = ("description", "docs", "components")
@@ -428,6 +430,83 @@ PHASE_HEAVY_FIELDS: tuple[str, ...] = ("description", "docs")
 # per-task file (the prose sections written by users / skills). Not persisted
 # to backlog.yaml; survives load/save roundtrip.
 BODY_KEY = "_body"
+
+
+# --- Spec A: lanes & gates -------------------------------------------------
+VALID_LANES = ("full", "standard", "express")
+
+LANE_GATES = {
+    "full":     ("spec", "spec-review", "plan", "plan-review", "tests", "impl", "review-gate"),
+    "standard": ("spec", "design-review", "tests", "impl", "review-gate"),
+    "express":  ("impl", "review-gate"),
+}
+
+STATUS_GATES  = ("spec", "plan", "tests", "impl")
+VERDICT_GATES = ("spec-review", "plan-review", "design-review", "review-gate")
+VALID_GATES   = STATUS_GATES + VERDICT_GATES
+VALID_GATE_VERDICTS = ("pass", "warn", "fail")
+
+_HIGH_STAKES_PRIORITIES = ("critical", "high")
+
+
+def default_lane(priority: str) -> str:
+    """Lane assigned on task creation. high/critical earn full ceremony; else standard."""
+    return "full" if (priority or "") in _HIGH_STAKES_PRIORITIES else "standard"
+
+
+def required_gates(lane):
+    """Ordered required gates for a lane. Laneless/unknown -> () (no pipeline, exempt)."""
+    return LANE_GATES.get(lane or "", ())
+
+
+def gate_satisfied(rec) -> bool:
+    """A gate counts toward completion if skipped, done, or verdict==pass. warn/fail do not."""
+    if not rec:
+        return False
+    if rec.get("skipped"):
+        return True
+    if rec.get("status") == "done":
+        return True
+    if rec.get("verdict") == "pass":
+        return True
+    return False
+
+
+def blocking_gates(lane):
+    """Gates that BLOCK completion for a lane = its review/verdict gates, in order.
+    Status gates (spec/plan/tests/impl) are progress markers, not blockers."""
+    return tuple(g for g in required_gates(lane) if g in VERDICT_GATES)
+
+
+def outstanding_required_gates(task) -> list:
+    """Blocking (review/verdict) gates for the task's lane that are not yet satisfied.
+    Status gates are informational progress markers and never block completion."""
+    gates = task.get("gates") or {}
+    return [g for g in blocking_gates(task.get("lane")) if not gate_satisfied(gates.get(g))]
+
+
+def compute_gate_state(task) -> str:
+    """One-line slim mirror of pipeline position. '' for laneless tasks.
+    Walks blocking gates only: status gates are progress markers, not pipeline blockers."""
+    lane = task.get("lane")
+    blk = blocking_gates(lane)
+    if not blk:
+        return ""
+    gates = task.get("gates") or {}
+    for g in blk:
+        rec = gates.get(g)
+        if rec and rec.get("verdict") == "fail":
+            return f"blocked@{g}"
+    for g in blk:
+        if not gate_satisfied(gates.get(g)):
+            return f"{g}:pending"
+    last = blk[-1]
+    rec = gates.get(last) or {}
+    if rec.get("skipped"):
+        outcome = "skipped"
+    else:
+        outcome = rec.get("verdict") or rec.get("status") or "done"
+    return f"{last}:{outcome}"
 
 
 # ── Typed links (Plan C / spec §6) ────────────────────────────
@@ -3828,7 +3907,11 @@ def scan_transcripts_for_candidates(
 AUTO_MODES = ("task", "epic", "phase")
 AUTO_STAGES = (
     "PICK",
-    "SPEC_REVIEW",
+    "SPEC",            # full/standard lanes: write the spec
+    "SPEC_REVIEW",     # full lane: adversarial spec review
+    "PLAN",            # full lane: write the plan
+    "PLAN_REVIEW",     # full lane: review the plan
+    "DESIGN_REVIEW",   # standard lane: combined design review
     "WRITE_TESTS",
     "IMPLEMENT",
     "TEST",
@@ -3837,6 +3920,46 @@ AUTO_STAGES = (
     "END_SESSION",
     "COMPLETE",
 )
+
+# Spec A: map each auto stage to the pipeline gate it satisfies (or None when
+# the stage records no gate). Used by backlog_auto_advance to auto-record the
+# matching gate as the cursor walks a lane's stage sequence.
+AUTO_STAGE_GATE = {
+    "PICK": None,
+    "SPEC": "spec",
+    "SPEC_REVIEW": "spec-review",
+    "PLAN": "plan",
+    "PLAN_REVIEW": "plan-review",
+    "DESIGN_REVIEW": "design-review",
+    "WRITE_TESTS": "tests",
+    "IMPLEMENT": "impl",
+    "TEST": None,
+    "REVIEW_GATE": "review-gate",
+    "HANDOVER_STUB": None,
+    "END_SESSION": None,
+    "COMPLETE": None,
+}
+
+# Ordered auto-stage sequence per lane. Mirrors LANE_GATES ordering so that the
+# gates auto-recorded along the way satisfy backlog_record_gate's ordering guard
+# (each earlier required gate is recorded before its successor).
+_LANE_STAGE_SEQUENCE = {
+    "full":     ("PICK", "SPEC", "SPEC_REVIEW", "PLAN", "PLAN_REVIEW",
+                 "WRITE_TESTS", "IMPLEMENT", "TEST", "REVIEW_GATE",
+                 "HANDOVER_STUB", "END_SESSION", "COMPLETE"),
+    "standard": ("PICK", "SPEC", "DESIGN_REVIEW", "WRITE_TESTS", "IMPLEMENT",
+                 "TEST", "REVIEW_GATE", "HANDOVER_STUB", "END_SESSION",
+                 "COMPLETE"),
+    "express":  ("PICK", "IMPLEMENT", "TEST", "REVIEW_GATE", "HANDOVER_STUB",
+                 "END_SESSION", "COMPLETE"),
+}
+
+
+def auto_stages_for_lane(lane):
+    """Ordered auto-stage tuple for a lane. Unknown/None lane -> standard."""
+    return _LANE_STAGE_SEQUENCE.get(lane or "standard", _LANE_STAGE_SEQUENCE["standard"])
+
+
 AUTO_TASK_STATUSES = ("done", "failed", "blocked")
 AUTO_FAIL_REASONS = ("tests-failed", "spec-rejected", "blocked", "crashed", "user-aborted")
 AUTO_MODELS = ("sonnet", "opus")
@@ -4212,17 +4335,25 @@ def init_auto_run(
     pending_task_ids: list[str],
     model_for_task: dict[str, str] | None = None,
     config: dict[str, Any] | None = None,
+    lane_for_task: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Initialize a fresh auto run, write state, and return the state dict.
 
     `model_for_task` maps task_id → "sonnet"|"opus"; missing entries default
     to sonnet. The first pending task becomes the cursor (stage=PICK).
+
+    `lane_for_task` maps task_id → lane ("full"|"standard"|"express"|None). It
+    seeds the first cursor's `planned_stages` (Spec A C2): the ordered auto-stage
+    sequence the orchestrator walks for that lane. A missing/None lane falls back
+    to the standard sequence. `_advance_to_next` re-derives `planned_stages` for
+    each subsequent task as the cursor advances through pending.
     """
     if mode not in AUTO_MODES:
         raise ValueError(f"mode must be one of {AUTO_MODES}, got {mode!r}")
     if not pending_task_ids:
         raise ValueError("pending_task_ids must not be empty")
     model_for_task = model_for_task or {}
+    lane_for_task = lane_for_task or {}
     first = pending_task_ids[0]
     started_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     # Compact + unique per run: seconds precision plus a short random suffix so
@@ -4240,11 +4371,14 @@ def init_auto_run(
             "task_id": first,
             "stage": "PICK",
             "model": model_for_task.get(first, "sonnet"),
+            "lane": lane_for_task.get(first),
+            "planned_stages": list(auto_stages_for_lane(lane_for_task.get(first))),
         },
         "completed": [],
         "pending": list(pending_task_ids[1:]),
         "failed": [],
         "models": dict(model_for_task),
+        "lanes": dict(lane_for_task),
         "config": {
             "continue_on_fail": False,
             "no_gate": False,
@@ -4263,6 +4397,32 @@ def init_auto_run(
         "pending": list(pending_task_ids),
     })
     return state
+
+
+def next_planned_stage(cursor: dict[str, Any]) -> "str | None":
+    """The lane-stage that follows the cursor's current stage in its planned
+    sequence (Spec A C2). Returns None when the cursor is already at (or past)
+    the last planned stage, or has no planned sequence.
+
+    `planned_stages` is seeded at run start from the task's lane. If it is
+    absent (legacy state), fall back to the lane's sequence, then to standard.
+    """
+    if not cursor:
+        return None
+    planned = cursor.get("planned_stages")
+    if not planned:
+        planned = list(auto_stages_for_lane(cursor.get("lane")))
+    cur_stage = cursor.get("stage")
+    try:
+        idx = planned.index(cur_stage)
+    except ValueError:
+        # Current stage isn't part of the planned sequence (e.g. an explicit
+        # off-sequence advance). Resume at the first planned stage after it that
+        # we can't determine — treat as "start from the first planned stage".
+        return planned[0] if planned else None
+    if idx + 1 >= len(planned):
+        return None
+    return planned[idx + 1]
 
 
 def advance_stage(state: dict[str, Any], new_stage: str) -> dict[str, Any]:
@@ -4338,10 +4498,13 @@ def _advance_to_next(state: dict[str, Any]) -> None:
         return
     next_id = pending.pop(0)
     state["pending"] = pending
+    next_lane = state.get("lanes", {}).get(next_id)
     state["cursor"] = {
         "task_id": next_id,
         "stage": "PICK",
         "model": state.get("models", {}).get(next_id, "sonnet"),
+        "lane": next_lane,
+        "planned_stages": list(auto_stages_for_lane(next_lane)),
     }
 
 
@@ -4358,6 +4521,14 @@ def auto_run_summary(state: dict[str, Any]) -> str:
         lines.append(
             f"Current: {cur['task_id']} @ {cur['stage']} (model={cur.get('model','sonnet')})"
         )
+        # Spec A C2: surface the lane-specific pipeline so the orchestrator can
+        # see which stages remain and step with a no-arg advance.
+        planned = cur.get("planned_stages") or list(auto_stages_for_lane(cur.get("lane")))
+        if planned:
+            lines.append(f"Lane:      {cur.get('lane') or 'standard (default)'}")
+            lines.append(f"Pipeline:  {' → '.join(planned)}")
+            nxt = next_planned_stage(cur)
+            lines.append(f"Next:      {nxt if nxt else '(pipeline complete)'}")
     else:
         lines.append("Current: (none — run complete)")
     lines.append(f"Completed: {len(state.get('completed') or [])}")

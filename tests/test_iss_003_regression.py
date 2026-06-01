@@ -37,6 +37,10 @@ def v3_project(tmp_path, monkeypatch):
         "docs:\n"
         "  spec: docs/spec.md\n"
         "review_instructions: Click the button.\n"
+        "gates:\n"
+        "  impl:\n"
+        "    status: done\n"
+        "    at: '2026-05-29T00:00'\n"
         "---\n",
         encoding="utf-8",
     )
