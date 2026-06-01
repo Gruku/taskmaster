@@ -41,6 +41,10 @@ def v3_project(tmp_path, monkeypatch):
         "  impl:\n"
         "    status: done\n"
         "    at: '2026-05-29T00:00'\n"
+        "merge_status:\n"
+        "  develop:\n"
+        "    merged_at: '2026-05-29T12:00'\n"
+        "    merge_commit: abc123def456\n"
         "---\n",
         encoding="utf-8",
     )
