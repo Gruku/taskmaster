@@ -511,6 +511,34 @@ def compute_gate_state(task) -> str:
     return f"{last}:{outcome}"
 
 
+# --- Spec B: merge ladder ---------------------------------------------------
+def merge_rungs(merge_targets) -> tuple:
+    """Ordered rung labels from a resolved merge_targets list[dict]. () if none."""
+    return tuple((r.get("label") or "") for r in (merge_targets or []) if r.get("label"))
+
+
+def rung_for_branch(branch, merge_targets):
+    """Map a branch name to its rung label by string match across aliases. None if unmatched."""
+    if not branch:
+        return None
+    for r in (merge_targets or []):
+        if branch in (r.get("branches") or []) or branch == r.get("label"):
+            return r.get("label")
+    return None
+
+
+def compute_merge_gate_state(task, merge_targets) -> str:
+    """Slim mirror: highest rung in the ladder for which merge_status is recorded. '' if none."""
+    status = task.get("merge_status") or {}
+    if not status:
+        return ""
+    reached = ""
+    for label in merge_rungs(merge_targets):
+        if label in status:
+            reached = label
+    return reached
+
+
 # ── Typed links (Plan C / spec §6) ────────────────────────────
 
 # Canonical link types and their inverses. Every link written on the
