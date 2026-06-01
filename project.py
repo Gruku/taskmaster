@@ -142,10 +142,18 @@ class Knowledge:
 
 
 @dataclass
+class MergeRung:
+    label: str
+    branches: list[str] = field(default_factory=list)
+
+
+@dataclass
 class Policies:
     tdd: str = _DEFAULT_TDD
     commit_style: str = _DEFAULT_COMMIT_STYLE
     spec_to_task_ratio_warn: int = _DEFAULT_SPEC_RATIO_WARN
+    review_gate_required_for_merge: bool = False
+    merge_targets: list[MergeRung] = field(default_factory=list)
 
 
 @dataclass
@@ -203,6 +211,13 @@ class ProjectManifest:
     def error_trace_ladder(self) -> list[ErrorTraceEntry]:
         return list(self.integrations.observability.error_trace_ladder)
 
+    def merge_targets_resolved(self) -> list[dict]:
+        """Ordered merge ladder as plain dicts. Explicit config wins; else built-in defaults."""
+        rungs = self.conventions.policies.merge_targets
+        if rungs:
+            return [{"label": r.label, "branches": list(r.branches)} for r in rungs]
+        return [dict(d) for d in DEFAULT_MERGE_TARGETS]
+
     def ship_order(self) -> list[str]:
         """Topological sort of repos by depends_on. Raises ValueError on cycle.
 
@@ -256,6 +271,13 @@ POINTER_POLICY_VALUES = ("separate-chore-commit", "allow-mixed")
 TRACE_KIND_VALUES = ("devtools-network", "console", "http-log", "trace")
 TDD_VALUES = ("required", "preferred", "optional")
 COMMIT_STYLE_VALUES = ("conventional", "freeform")
+
+DEFAULT_MERGE_TARGETS = (
+    {"label": "develop", "branches": ["develop", "dev"]},
+    {"label": "stage",   "branches": ["stage", "staging"]},
+    {"label": "master",  "branches": ["master", "main"]},
+)
+MERGE_GATE_FRESHNESS_VALUES = ("strict", "any")
 
 
 class ValidationError(ValueError):
@@ -365,6 +387,15 @@ def validate_manifest_dict(
             policies["commit_style"], COMMIT_STYLE_VALUES,
             "conventions.policies.commit_style", errors,
         )
+    for i, rung in enumerate(policies.get("merge_targets") or []):
+        if not isinstance(rung, dict) or not rung.get("label"):
+            errors.append(f"conventions.policies.merge_targets[{i}].label: required")
+        elif not isinstance(rung.get("branches", []), list):
+            errors.append(f"conventions.policies.merge_targets[{i}].branches: must be a list")
+    if "review_gate_required_for_merge" in policies and not isinstance(
+        policies["review_gate_required_for_merge"], bool
+    ):
+        errors.append("conventions.policies.review_gate_required_for_merge: must be a boolean")
 
     ok = not errors
     if raise_on_error and not ok:
