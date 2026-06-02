@@ -1,21 +1,30 @@
 r"""Tests for plugins/taskmaster/hooks/merge-recorder.sh (PostToolUse, never blocks).
 
 Harness convention: mirrors test_merge_gate_hook.py — shells out via subprocess
-so real bash + git + python path-resolution are all exercised.
+so real bash + git + python + the REAL v3 storage layer are all exercised.
 
-Decision table tested (verifies .taskmaster/backlog.yaml after each run):
+The recorder delegates persistence to backlog_server.backlog_record_merge, which
+is the v3-correct path: heavy `merge_status` lands in tasks/<id>.md and the slim
+`merge_gate_state` mirror is recomputed in backlog.yaml.  These tests therefore
+verify BOTH against real storage (heavy file + slim backlog.yaml).
+
+Decision table tested:
   - test_non_merge_command_noop         — non-merge command → exit 0, no record
   - test_failed_merge_not_recorded      — exit_code != 0 → no record
   - test_matched_rung_records           — target == "master" (ladder rung) →
-                                          merge_status["master"] stamped
+                                          heavy merge_status["master"] stamped +
+                                          slim merge_gate_state == "master"
   - test_unmatched_target_records_branch_label — target == "foo" (not a rung) →
-                                          merge_status["branch:foo"] recorded
+                                          heavy merge_status["branch:foo"] +
+                                          slim merge_gate_state == "" (no rung)
   - test_untracked_source_noop          — no task.branch == SRC → no record
-  - test_recorder_never_blocks          — even on internal error → returncode == 0
+  - test_recorder_never_blocks          — even on an internal error → exit 0
 
-Path note (Windows/MSYS): the hook is launched by ABSOLUTE path with subprocess
-cwd set to the test project dir.  No test-only env-var seam — merge_recorder_stamp.py
-resolves the project root from the REAL Path.cwd() exactly as production does.
+Path/env note: the hook is launched by ABSOLUTE path with subprocess cwd set to
+the test project dir (drives the stamp module's Path.cwd() — no env seam in OUR
+code).  We additionally set TASKMASTER_ROOT in the subprocess env: that is a
+legitimate backlog_server config var (backlog_server.py line 38), not a
+test-only hack — it points the storage layer at the repo so writes round-trip.
 """
 from __future__ import annotations
 
@@ -44,63 +53,66 @@ _BASH = shutil.which("bash") or "bash"
 def run(payload: dict, cwd: Path) -> subprocess.CompletedProcess:
     """Run merge-recorder.sh with `payload` JSON on stdin.
 
-    We invoke bash with the ABSOLUTE hook path and set cwd to the test project
-    dir, so merge_recorder_stamp.py resolves the project root from the REAL
-    process cwd (Path.cwd()) exactly as it does in production.  No env-var seam.
+    cwd=<repo> drives merge_recorder_stamp.py's Path.cwd() (no env seam in our
+    code).  TASKMASTER_ROOT=<repo> points backlog_server's storage layer at the
+    same repo so its _load()/_save() round-trip against the seeded backlog.
     """
+    env = dict(os.environ)
+    env["TASKMASTER_ROOT"] = str(cwd)
     return subprocess.run(
         [_BASH, HOOK],
         input=json.dumps(payload),
         text=True,
         capture_output=True,
-        cwd=str(cwd),           # REAL cwd — drives stamp module's Path.cwd()
+        cwd=str(cwd),
+        env=env,
         timeout=30,
     )
 
 
 # ---------------------------------------------------------------------------
-# Seed helpers (mirrors test_merge_gate_hook.py conventions)
+# Real v3 storage seed + verification helpers
 # ---------------------------------------------------------------------------
 
 def _seed(
-    tmp: Path,
+    repo: Path,
     *,
     branch: str = "feature/x",
-    merge_targets: list[dict] | None = None,
-) -> None:
-    """Write .taskmaster/project.yaml and a minimal v3 backlog.yaml."""
-    tm = tmp / ".taskmaster"
-    (tm / "tasks").mkdir(parents=True, exist_ok=True)
+    tid: str = "core-001",
+) -> str:
+    """Write .taskmaster/project.yaml + a minimal v3 backlog.yaml (task inline).
 
-    # Build merge_targets section for project.yaml
-    mt_yaml = ""
-    if merge_targets is not None:
-        mt_lines = ["    merge_targets:"]
-        for rung in merge_targets:
-            mt_lines.append(f"      - label: {rung['label']}")
-            mt_lines.append(f"        branches: {rung['branches']}")
-        mt_yaml = "\n" + "\n".join(mt_lines)
+    The task is written inline in backlog.yaml (no per-task file yet); the v3
+    loader tolerates this and the first save_v3 splits heavy fields out.
+    Returns the task id.
+    """
+    tm = repo / ".taskmaster"
+    (tm / "tasks").mkdir(parents=True, exist_ok=True)
+    # PROGRESS.md must exist so regenerate_progress_dashboard() can read it.
+    (tm / "PROGRESS.md").write_text("## Changelog\n", encoding="utf-8")
 
     (tm / "project.yaml").write_text(
-        textwrap.dedent(f"""\
+        textwrap.dedent("""\
             schema_version: 1
-            meta: {{name: T, slug: t, kind: app}}
+            meta: {name: T, slug: t, kind: app}
             conventions:
               policies:
-                review_gate_required_for_merge: false{mt_yaml}
+                review_gate_required_for_merge: false
         """),
         encoding="utf-8",
     )
 
-    task: dict = {
-        "id": "T-001",
+    task = {
+        "id": tid,
         "title": "Test task",
         "status": "in-progress",
         "priority": "high",
+        "created": "2026-01-01T00:00",
         "branch": branch,
     }
-
     backlog = {
+        "version": 3,
+        "project": "t",
         "meta": {"project": "t", "schema_version": 3, "updated": "2026-01-01"},
         "context": {},
         "epics": [{"id": "core", "name": "Core", "tasks": [task]}],
@@ -109,81 +121,70 @@ def _seed(
     (tm / "backlog.yaml").write_text(
         yaml.dump(backlog, allow_unicode=True), encoding="utf-8"
     )
+    return tid
 
 
-def _init_git_repo(tmp: Path, feature_branch: str = "feature/x") -> tuple[str, str]:
-    """Init a throw-away git repo with a main commit on 'master' and a feature branch.
+def _read_heavy_merge_status(repo: Path, tid: str) -> dict:
+    """Read merge_status directly out of the HEAVY per-task file tasks/<id>.md.
 
-    Returns (feature_sha, master_sha) — the HEAD of the feature branch and master.
-    Leaves HEAD on master (the merge target).
+    Proves the field landed in heavy storage (not slim backlog.yaml).
     """
-    subprocess.run(["git", "init", "-b", "master", str(tmp)], check=True, capture_output=True)
-    subprocess.run(
-        ["git", "-C", str(tmp), "config", "user.email", "test@test.com"],
-        check=True, capture_output=True,
-    )
-    subprocess.run(
-        ["git", "-C", str(tmp), "config", "user.name", "Test"],
-        check=True, capture_output=True,
-    )
-    # Initial commit on master
-    dummy = tmp / "README.md"
-    dummy.write_text("hi", encoding="utf-8")
-    subprocess.run(["git", "-C", str(tmp), "add", "README.md"], check=True, capture_output=True)
-    subprocess.run(
-        ["git", "-C", str(tmp), "commit", "-m", "init"],
-        check=True, capture_output=True,
-    )
-    master_sha = subprocess.run(
-        ["git", "-C", str(tmp), "rev-parse", "HEAD"],
-        check=True, capture_output=True, text=True,
-    ).stdout.strip()
-
-    # Feature branch
-    subprocess.run(
-        ["git", "-C", str(tmp), "checkout", "-b", feature_branch],
-        check=True, capture_output=True,
-    )
-    f = tmp / "feature.txt"
-    f.write_text("feature work", encoding="utf-8")
-    subprocess.run(["git", "-C", str(tmp), "add", "feature.txt"], check=True, capture_output=True)
-    subprocess.run(
-        ["git", "-C", str(tmp), "commit", "-m", "feature commit"],
-        check=True, capture_output=True,
-    )
-    feature_sha = subprocess.run(
-        ["git", "-C", str(tmp), "rev-parse", "HEAD"],
-        check=True, capture_output=True, text=True,
-    ).stdout.strip()
-
-    # Return to master (simulating post-merge state)
-    subprocess.run(
-        ["git", "-C", str(tmp), "checkout", "master"],
-        check=True, capture_output=True,
-    )
-    # Merge the feature branch
-    subprocess.run(
-        ["git", "-C", str(tmp), "merge", "--no-ff", feature_branch, "-m", "merge feature"],
-        check=True, capture_output=True,
-    )
-    merge_sha = subprocess.run(
-        ["git", "-C", str(tmp), "rev-parse", "HEAD"],
-        check=True, capture_output=True, text=True,
-    ).stdout.strip()
-
-    return feature_sha, merge_sha
+    tf = repo / ".taskmaster" / "tasks" / f"{tid}.md"
+    if not tf.exists():
+        return {}
+    text = tf.read_text(encoding="utf-8")
+    # Frontmatter is YAML between the first two '---' fences.
+    assert text.startswith("---"), f"task file missing frontmatter: {text[:80]!r}"
+    fm = text.split("---", 2)[1]
+    data = yaml.safe_load(fm) or {}
+    return data.get("merge_status") or {}
 
 
-def _reload_task(tmp: Path) -> dict | None:
-    """Reload .taskmaster/backlog.yaml and return the first task."""
-    bp = tmp / ".taskmaster" / "backlog.yaml"
+def _read_slim_merge_gate_state(repo: Path, tid: str) -> str:
+    """Read merge_gate_state out of the SLIM backlog.yaml (proves slim mirror)."""
+    bp = repo / ".taskmaster" / "backlog.yaml"
     data = yaml.safe_load(bp.read_text(encoding="utf-8")) or {}
-    tasks = (data.get("epics") or [{}])[0].get("tasks", [])
-    return tasks[0] if tasks else None
+    for epic in data.get("epics", []):
+        for t in epic.get("tasks", []):
+            if t.get("id") == tid:
+                assert "merge_status" not in t, (
+                    "merge_status leaked into slim backlog.yaml — must be heavy"
+                )
+                return t.get("merge_gate_state", "")
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# git repo helper
+# ---------------------------------------------------------------------------
+
+def _init_git_repo(repo: Path, *, target: str = "master", feature: str = "feature/x") -> None:
+    """Init a git repo: initial commit on `target`, a `feature` branch, then
+    merge feature into target (leaving HEAD on target = the merge commit)."""
+    subprocess.run(["git", "init", "-b", target, str(repo)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.email", "test@test.com"],
+        check=True, capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.name", "Test"],
+        check=True, capture_output=True,
+    )
+    (repo / "README.md").write_text("hi", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "README.md"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-m", "init"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "checkout", "-b", feature], check=True, capture_output=True)
+    (repo / "f.txt").write_text("feature", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "f.txt"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-m", "feat"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "checkout", target], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "merge", "--no-ff", feature, "-m", "merge"],
+        check=True, capture_output=True,
+    )
 
 
 def _merge_payload(command: str, exit_code: int = 0) -> dict:
-    """Build a PostToolUse payload for a Bash tool call."""
     return {
         "tool_name": "Bash",
         "tool_input": {"command": command},
@@ -197,112 +198,70 @@ def _merge_payload(command: str, exit_code: int = 0) -> dict:
 
 
 def test_non_merge_command_noop(tmp_path):
-    """Non-merge command → exit 0, no merge_status written."""
-    _seed(tmp_path)
-    payload = _merge_payload("git status")
-    r = run(payload, tmp_path)
+    """Non-merge command → exit 0, no merge record in heavy storage."""
+    tid = _seed(tmp_path)
+    r = run(_merge_payload("git status"), tmp_path)
     assert r.returncode == 0
-    task = _reload_task(tmp_path)
-    assert task is not None
-    assert "merge_status" not in task
+    assert _read_heavy_merge_status(tmp_path, tid) == {}
 
 
 def test_failed_merge_not_recorded(tmp_path):
-    """exit_code != 0 → hook exits 0 but writes no merge_status."""
-    _init_git_repo(tmp_path, "feature/x")
-    _seed(tmp_path, branch="feature/x")
-    payload = _merge_payload("git merge feature/x", exit_code=1)
-    r = run(payload, tmp_path)
+    """exit_code != 0 → hook exits 0 but writes no merge record."""
+    _init_git_repo(tmp_path, target="master", feature="feature/x")
+    tid = _seed(tmp_path, branch="feature/x")
+    r = run(_merge_payload("git merge feature/x", exit_code=1), tmp_path)
     assert r.returncode == 0
-    task = _reload_task(tmp_path)
-    assert "merge_status" not in (task or {})
+    assert _read_heavy_merge_status(tmp_path, tid) == {}
 
 
 def test_matched_rung_records(tmp_path):
-    """Successful merge to 'master' (a ladder rung) → merge_status['master'] stamped."""
-    _init_git_repo(tmp_path, "feature/x")
-    _seed(tmp_path, branch="feature/x")
-    # Default ladder has "master" as a rung with branches: ["master", "main"]
-    payload = _merge_payload("git merge feature/x", exit_code=0)
-    r = run(payload, tmp_path)
+    """Successful merge to 'master' (a ladder rung) → heavy merge_status['master']
+    stamped AND slim merge_gate_state == 'master'."""
+    _init_git_repo(tmp_path, target="master", feature="feature/x")
+    tid = _seed(tmp_path, branch="feature/x")
+    r = run(_merge_payload("git merge feature/x", exit_code=0), tmp_path)
     assert r.returncode == 0
-    task = _reload_task(tmp_path)
-    assert task is not None
-    ms = task.get("merge_status") or {}
-    assert "master" in ms, f"Expected 'master' rung in merge_status, got: {ms}"
-    rec = ms["master"]
-    assert "merge_commit" in rec
-    assert len(rec["merge_commit"]) >= 7  # at least a short SHA
+
+    # HEAVY: merge_status['master'] lives in tasks/<id>.md
+    heavy = _read_heavy_merge_status(tmp_path, tid)
+    assert "master" in heavy, f"expected 'master' in heavy merge_status, got: {heavy}"
+    assert len(heavy["master"]["merge_commit"]) >= 7
+
+    # SLIM: merge_gate_state mirror updated in backlog.yaml
+    assert _read_slim_merge_gate_state(tmp_path, tid) == "master"
 
 
 def test_unmatched_target_records_branch_label(tmp_path):
-    """Successful merge to 'foo' (not a ladder rung) → merge_status['branch:foo'] recorded."""
-    # Create git repo where current branch is 'foo' after the merge
-    subprocess.run(["git", "init", "-b", "foo", str(tmp_path)], check=True, capture_output=True)
-    subprocess.run(
-        ["git", "-C", str(tmp_path), "config", "user.email", "test@test.com"],
-        check=True, capture_output=True,
-    )
-    subprocess.run(
-        ["git", "-C", str(tmp_path), "config", "user.name", "Test"],
-        check=True, capture_output=True,
-    )
-    dummy = tmp_path / "README.md"
-    dummy.write_text("hi", encoding="utf-8")
-    subprocess.run(["git", "-C", str(tmp_path), "add", "README.md"], check=True, capture_output=True)
-    subprocess.run(
-        ["git", "-C", str(tmp_path), "commit", "-m", "init"],
-        check=True, capture_output=True,
-    )
-    # Create and merge feature branch
-    subprocess.run(
-        ["git", "-C", str(tmp_path), "checkout", "-b", "feature/x"],
-        check=True, capture_output=True,
-    )
-    f = tmp_path / "f.txt"
-    f.write_text("x", encoding="utf-8")
-    subprocess.run(["git", "-C", str(tmp_path), "add", "f.txt"], check=True, capture_output=True)
-    subprocess.run(
-        ["git", "-C", str(tmp_path), "commit", "-m", "feat"],
-        check=True, capture_output=True,
-    )
-    subprocess.run(
-        ["git", "-C", str(tmp_path), "checkout", "foo"],
-        check=True, capture_output=True,
-    )
-    subprocess.run(
-        ["git", "-C", str(tmp_path), "merge", "--no-ff", "feature/x", "-m", "merge"],
-        check=True, capture_output=True,
-    )
-
-    _seed(tmp_path, branch="feature/x")
-    payload = _merge_payload("git merge feature/x", exit_code=0)
-    r = run(payload, tmp_path)
+    """Successful merge to 'foo' (not a ladder rung) → heavy merge_status['branch:foo']
+    recorded for the audit trail, but the slim merge_gate_state ladder mirror
+    stays '' (compute_merge_gate_state only reports the highest *ladder* rung —
+    a 'branch:<name>' label is intentionally not a rung)."""
+    _init_git_repo(tmp_path, target="foo", feature="feature/x")
+    tid = _seed(tmp_path, branch="feature/x")
+    r = run(_merge_payload("git merge feature/x", exit_code=0), tmp_path)
     assert r.returncode == 0
-    task = _reload_task(tmp_path)
-    assert task is not None
-    ms = task.get("merge_status") or {}
-    assert "branch:foo" in ms, f"Expected 'branch:foo' in merge_status, got: {ms}"
-    rec = ms["branch:foo"]
-    assert "merge_commit" in rec
+
+    # HEAVY: the branch-label entry IS recorded (audit trail) in tasks/<id>.md
+    heavy = _read_heavy_merge_status(tmp_path, tid)
+    assert "branch:foo" in heavy, f"expected 'branch:foo' in heavy merge_status, got: {heavy}"
+    assert "merge_commit" in heavy["branch:foo"]
+
+    # SLIM: no ladder rung was reached, so the mirror is recomputed to '' —
+    # and crucially merge_status did NOT leak into slim (asserted in the helper).
+    assert _read_slim_merge_gate_state(tmp_path, tid) == ""
 
 
 def test_untracked_source_noop(tmp_path):
     """No task whose branch == SRC → no record, exit 0."""
-    _init_git_repo(tmp_path, "feature/x")
-    # Seed backlog with a DIFFERENT branch so SRC won't match
-    _seed(tmp_path, branch="feature/different")
-    payload = _merge_payload("git merge feature/x", exit_code=0)
-    r = run(payload, tmp_path)
+    _init_git_repo(tmp_path, target="master", feature="feature/x")
+    tid = _seed(tmp_path, branch="feature/different")  # SRC won't match
+    r = run(_merge_payload("git merge feature/x", exit_code=0), tmp_path)
     assert r.returncode == 0
-    task = _reload_task(tmp_path)
-    # No merge_status should be recorded since feature/x doesn't match any task
-    assert "merge_status" not in (task or {})
+    assert _read_heavy_merge_status(tmp_path, tid) == {}
+    assert _read_slim_merge_gate_state(tmp_path, tid) == ""
 
 
 def test_recorder_never_blocks(tmp_path):
-    """Even with a completely broken environment, returncode is always 0."""
-    # Run with no .taskmaster at all — stamp module should swallow all errors
-    payload = _merge_payload("git merge feature/x", exit_code=0)
-    r = run(payload, tmp_path)
+    """Even with a completely broken environment (no .taskmaster), exit is 0."""
+    r = run(_merge_payload("git merge feature/x", exit_code=0), tmp_path)
     assert r.returncode == 0
