@@ -12,6 +12,59 @@ indicate schema breaks or removed surfaces.
 
 ---
 
+## 3.13.0 — Spec B: merge ladder (2026-06-02)
+
+Builds on Spec A's review gates. Adds a per-task **promotion ladder** — an ordered
+set of merge rungs (`develop → stage → master`) — that records where each task's
+branch has landed, and an **opt-in, fail-OPEN** policy that a task branch can't be
+merged into a rung until its `review-gate` is a recorded (fresh) pass.
+
+### Added
+
+- **`merge_targets` manifest field** — ordered merge ladder at
+  `conventions.policies.merge_targets` (each rung = `{label, branches}`), plus the
+  opt-in `review_gate_required_for_merge` flag (**off by default**). Loader bakes a
+  default `develop / stage / master` ladder, so standard-branch repos need zero
+  config. (Not to be confused with `ship_order` — that's the monorepo repo
+  topo-sort.)
+- **Per-task merge state** — `merge_status` (heavy, per-rung
+  `{merged_at, merge_commit}`) plus slim `skip_merge_gate` /
+  `merge_gate_freshness` / `merge_gate_state`, mirroring how Spec A split
+  `gates` (heavy) vs `gate_state` (slim).
+- **`backlog_record_merge(task_id, rung, sha)`** — manual MCP fallback that stamps
+  a reached rung (mirrors `backlog_record_gate`; idempotent per rung; records an
+  out-of-ladder `branch:<name>` label to preserve the audit trail).
+- **`merge-gate.sh`** (PreToolUse) — blocks a `git merge` of a task branch into a
+  rung only when **certain**: policy on AND a task matches the source branch AND
+  `skip_merge_gate` is false AND `gates["review-gate"]` is not a fresh pass.
+  Decision logic lives in `merge_gate_decide.py`, wrapped to print `ALLOW` on any
+  error. One-shot **Approve / Deny** via taskmaster's OWN session-scoped approval
+  file (`$HOME/.claude/taskmaster-merge-approve-$SESSION_ID`) — **expiry-based on a
+  60s freshness window, never consumed**, so an Approve survives an unrelated merge
+  retry. Guard-hooks' `consume-approval.sh` (which only burns `guard-approve-*`)
+  never interferes.
+- **`merge-recorder.sh`** (PostToolUse) — stamps the reached rung from a successful
+  `git merge` via `backlog_record_merge` (v3-correct heavy write + `merge_gate_state`
+  recompute); **never blocks**.
+- **`taskmaster-merge-approve.sh`** (PostToolUse/AskUserQuestion) — taskmaster's own
+  approval writer that touches the approval file on an "Approve" answer; no
+  dependency on guard-hooks being installed.
+- **Viewer** — merge-rung ladder dots on the task detail surface and compact dots on
+  kanban cards (a separate `merge-status.js` component; the review-gate
+  `gate-pipeline.js` is unchanged).
+
+### Notes
+
+- **Enforcement philosophy is deliberately split:** Spec A gates are **fail-CLOSED**
+  (the MCP layer rejects illegal moves); Spec B's merge hook is **fail-OPEN** (any
+  uncertainty — no manifest, policy off, unparseable branch, corrupt yaml, untracked
+  task, hook error — resolves to *allow*; the worst case is a missing audit stamp,
+  never a wedged `git merge`).
+- Merge enforcement is **opt-in** and inert until `review_gate_required_for_merge`
+  is set true in the project manifest.
+
+---
+
 ## 3.12.0 — Spec A: lanes & enforced gates foundation (2026-05-29)
 
 ### Added
