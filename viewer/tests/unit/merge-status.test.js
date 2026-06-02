@@ -31,25 +31,35 @@ test('rung label outside the ladder is ignored in the ordered rendering', () => 
 });
 
 // ── renderMergeLadderCompact (called directly by card.js) ───────────────────
+// Compact derives from the SLIM mirror task.merge_gate_state (highest reached
+// ladder rung), NOT the heavy merge_status which is stripped from cards.
 
-test('compact: renders one ml-dot per rung, filled/empty by merge_status presence', () => {
-  const task = { merge_status: { develop: { merge_commit: 'a' }, stage: { merge_commit: 'b' } } };
+test('compact: dots filled up to the reached rung (merge_gate_state)', () => {
+  const task = { merge_gate_state: 'stage' };
   const html = renderMergeLadderCompact(task, LADDER);
   const dotCount = (html.match(/ml-dot/g) || []).length;
   assert.equal(dotCount, LADDER.length);              // one dot per rung
-  assert.match(html, /rung--filled/);                 // develop + stage reached
+  const filledCount = (html.match(/rung--filled/g) || []).length;
+  assert.equal(filledCount, 2);                       // develop + stage filled
   assert.match(html, /rung--empty/);                  // master not reached
   assert.doesNotMatch(html, /border-left:\s*\d+px|margin-left/);    // no left rails
   assert.doesNotMatch(html, /box-shadow|transform|translate|scale/); // no shadow/motion
 });
 
-test('compact: returns empty-string guard when task has no merge_status', () => {
+test('compact: terminal rung fills every dot', () => {
+  const html = renderMergeLadderCompact({ merge_gate_state: 'master' }, LADDER);
+  const filledCount = (html.match(/rung--filled/g) || []).length;
+  assert.equal(filledCount, LADDER.length);           // all filled
+  assert.doesNotMatch(html, /rung--empty/);
+});
+
+test('compact: no reached rung renders nothing (glance surface)', () => {
+  assert.equal(renderMergeLadderCompact({ merge_gate_state: '' }, LADDER), '');
   assert.equal(renderMergeLadderCompact({}, LADDER), '');
   assert.equal(renderMergeLadderCompact(null, LADDER), '');
 });
 
-test('compact: non-rung label yields no filled dot', () => {
-  const task = { merge_status: { 'branch:hotfix': {} } };
-  const html = renderMergeLadderCompact(task, LADDER);
-  assert.doesNotMatch(html, /rung--filled/);
+test('compact: merge_gate_state outside the ladder renders nothing', () => {
+  const html = renderMergeLadderCompact({ merge_gate_state: 'branch:hotfix' }, LADDER);
+  assert.equal(html, '');
 });

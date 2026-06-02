@@ -79,24 +79,35 @@ export function renderMergeLadder(task, mergeTargets = DEFAULT_MERGE_TARGETS) {
 
 /**
  * Render a compact dot-strip for kanban cards.
- * Returns an HTML string with small dots only (no labels), or '' when no merge_status.
+ *
+ * Cards are served from the SLIM backlog.yaml, where the heavy `merge_status`
+ * field is STRIPPED (it lives in tasks/<id>.md). So the compact variant derives
+ * from the slim mirror `task.merge_gate_state` instead — a single string holding
+ * the highest reached ladder rung label (e.g. "stage"), or "" when nothing in
+ * the ladder has been merged. (`compute_merge_gate_state` only ever returns a
+ * ladder rung label or ""; a `branch:<name>` target leaves it "".)
+ *
+ * A rung is filled when its index <= the index of `merge_gate_state` in the
+ * ladder. When `merge_gate_state` is empty/falsy or not a ladder rung, returns
+ * '' — the card is a glance surface, so unmerged tasks render NOTHING rather
+ * than an all-empty strip.
  *
  * @param {object|null} task
  * @param {Array<{label:string}>} [mergeTargets]  defaults to DEFAULT_MERGE_TARGETS
  * @returns {string}
  */
 export function renderMergeLadderCompact(task, mergeTargets = DEFAULT_MERGE_TARGETS) {
-  if (!task || !task.merge_status) return '';
+  if (!task) return '';
+  const reached = task.merge_gate_state;
+  if (!reached) return '';
 
-  const statusMap = task.merge_status || {};
-  const dots = mergeTargets.map(({ label }) => {
-    const record = statusMap[label];
-    // Any present record counts as a reached rung — including a sparse/empty {}
-    // (the merge happened even if details are missing or use a future schema).
-    const filled = !!(record && (record.merge_commit || record.merged_at || Object.keys(record).length > 0));
+  const reachedIdx = mergeTargets.findIndex(({ label }) => label === reached);
+  if (reachedIdx < 0) return ''; // not a ladder rung — render nothing
+
+  const dots = mergeTargets.map(({ label }, idx) => {
+    const filled = idx <= reachedIdx;
     const stateClass = filled ? 'rung--filled' : 'rung--empty';
-    const tooltip = filled ? escapeHtml(rungTooltip(record)) : escapeHtml(label);
-    return `<span class="ml-dot ${stateClass}" title="${tooltip}"></span>`;
+    return `<span class="ml-dot ${stateClass}" title="${escapeHtml(label)}"></span>`;
   });
 
   return `<span class="ml-compact">${dots.join('')}</span>`;
