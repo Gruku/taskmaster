@@ -17,6 +17,7 @@ import { bindCopy } from '../lib/copy.js';
 import { isAutoRunning } from '../lib/auto-state.js';
 import { renderAutoModeLiveBlock } from './auto-mode-live-block.js';
 import { laneBadge } from './gate-pipeline.js';
+import { renderMergeLadderCompact } from './merge-status.js';
 
 const PRIORITY_LABELS = { critical: 'Critical', high: 'High', medium: 'Medium', low: 'Low' };
 const STATUS_LABELS   = { blocked: 'Blocked', todo: 'Todo', 'in-progress': 'In Progress', 'in-review': 'In Review', done: 'Done' };
@@ -171,6 +172,15 @@ export function renderCard({ task, density = 'full', epicColors = {}, autoState 
     gs.className = 'card-gate-state';
     gs.textContent = task.gate_state;
     chipRow.appendChild(gs);
+    chipRowHasContent = true;
+  }
+  // ── Spec B: compact merge-rung dots ──
+  const mlHtml = renderMergeLadderCompact(task);
+  if (mlHtml) {
+    const mlEl = document.createElement('span');
+    mlEl.innerHTML = mlHtml;
+    const mlChip = mlEl.firstElementChild;
+    if (mlChip) chipRow.appendChild(mlChip);
     chipRowHasContent = true;
   }
   if (groupBy !== 'status' && task.status) {

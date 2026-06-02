@@ -206,6 +206,27 @@
 .card-gate-state {
   font-size: var(--text-xs); color: var(--ink-3); font-family: var(--font-mono);
 }
+
+/* ── Spec B: compact merge-rung dot strip (card chip row) ── */
+/* NO left rails. NO box-shadows. NO hover motion. Tinted fill + full border. */
+.ml-compact {
+  display: inline-flex; align-items: center; gap: 3px;
+}
+/* Individual dot — 8px circle; tinted fill or ghost */
+.ml-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  border: 1px solid transparent;
+  display: inline-block;
+  flex: 0 0 auto;
+}
+.ml-dot.rung--empty {
+  background: transparent;
+  border-color: rgba(255,255,255,0.18);
+}
+.ml-dot.rung--filled {
+  background: rgba(95,174,110,0.70);
+  border-color: rgba(95,174,110,0.50);
+}
 .card-tracker-chip {
   display: inline-flex; align-items: center; gap: 6px;
   font-size: var(--text-xs); padding: 3px 9px; border-radius: var(--r-sm);

@@ -8,6 +8,7 @@ import { formatRelative } from '../lib/time.js';
 import { mountInlineField } from './edit/inline-field.js';
 import { taskSchema } from './edit/forms/task-form.js';
 import { renderGatePipeline } from './gate-pipeline.js';
+import { renderMergeLadder } from './merge-status.js';
 
 // Inline-edit save callback. Returns either undefined (success) or { error }.
 function inlineSave(taskId, fieldKey, ctx) {
@@ -120,6 +121,12 @@ function renderBody(ctx) {
     const gpSection = h('section', { class: 'td-section td-gate-section', 'data-test': 'gate-pipeline' });
     gpSection.innerHTML = gpHtml;
     children.push(gpSection);
+  }
+  const mlHtml = renderMergeLadder(task);
+  if (mlHtml) {
+    const mlSection = h('section', { class: 'td-section td-merge-section', 'data-test': 'merge-ladder' });
+    mlSection.innerHTML = mlHtml;
+    children.push(mlSection);
   }
   children.push(renderAutoBanner(task));
   children.push(renderDocsSection(task));

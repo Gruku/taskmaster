@@ -14,6 +14,13 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 if str(PLUGIN_ROOT) not in sys.path:
     sys.path.insert(0, str(PLUGIN_ROOT))
 
+
+def pytest_configure(config):
+    """Register custom markers (avoids PytestUnknownMarkWarning)."""
+    config.addinivalue_line(
+        "markers", "slow: marks tests as slow (real git/bash subprocess)"
+    )
+
 # Make `import skill_budget_helper` work from tests that live in this directory.
 TESTS_ROOT = Path(__file__).resolve().parent
 if str(TESTS_ROOT) not in sys.path:

@@ -173,6 +173,8 @@ from taskmaster_v3 import (
     BODY_KEY as _BODY_KEY,
     render_frontmatter as _render_frontmatter,
     CANONICAL_SECTIONS as _CANONICAL_SECTIONS,
+    rung_for_branch as _rung_for_branch,
+    compute_merge_gate_state as _compute_merge_gate_state,
 )
 
 
@@ -4623,6 +4625,7 @@ def backlog_add_task(
     # initialize gate_state mirror so the slim field tier is populated on creation.
     new_task["lane"] = _default_lane(new_task.get("priority", "medium"))
     new_task["gate_state"] = _compute_gate_state(new_task)
+    new_task["merge_gate_state"] = ""   # no merges yet
 
     if "tasks" not in epic_obj:
         epic_obj["tasks"] = []
@@ -5548,6 +5551,49 @@ def backlog_record_gate(
     _mutate_and_save(data)
     outcome = verdict if is_verdict else "done"
     return f"Recorded gate `{gate}` = {outcome} for `{task_id}` (state: {task['gate_state'] or 'laneless'})"
+
+
+def _resolved_merge_targets() -> list[dict]:
+    try:
+        m = load_project_manifest(_project_root_or_cwd())
+        if m is not None:
+            return m.merge_targets_resolved()
+    except Exception:
+        pass
+    from project import DEFAULT_MERGE_TARGETS
+    return [dict(d) for d in DEFAULT_MERGE_TARGETS]
+
+
+@mcp.tool()
+def backlog_record_merge(task_id: str, rung: str, sha: str, merged_at: str = "") -> str:
+    """Stamp a merge rung on a task: records that the task's branch landed at `rung`
+    (e.g. develop|stage|master) at merge commit `sha`. Idempotent overwrite per rung.
+    The manual fallback for the PostToolUse merge-recorder hook. Not a pipeline gate —
+    no ordering is enforced; a rung label outside the ladder (e.g. "branch:<name>") is
+    still recorded to preserve the audit trail.
+
+    Args:
+        task_id: Task id.
+        rung: Rung label (ladder label or "branch:<name>" for untracked targets).
+        sha: Merge commit SHA.
+        merged_at: ISO timestamp; defaults to now.
+    """
+    if not (rung or "").strip():
+        return "Error: rung is required"
+    if not (sha or "").strip():
+        return "Error: sha is required"
+    data = _load()
+    result = _find_task(data, task_id)
+    if not result:
+        return f"Error: task `{task_id}` not found"
+    task, _epic = result
+    _touch_task(task)
+    task.setdefault("merge_status", {})[rung] = {
+        "merged_at": merged_at or _now(), "merge_commit": sha,
+    }
+    task["merge_gate_state"] = _compute_merge_gate_state(task, _resolved_merge_targets())
+    _mutate_and_save(data)
+    return f"Recorded merge for rung `{rung}` on `{task_id}` (sha={sha[:7]}, ladder: {task['merge_gate_state'] or 'none'})"
 
 
 @mcp.tool()
