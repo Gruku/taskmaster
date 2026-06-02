@@ -1,7 +1,12 @@
 """merge_gate_decide.py — Decision module for merge-gate.sh.
 
 Called by merge-gate.sh as:
-    python merge_gate_decide.py <SRC_BRANCH>
+    python merge_gate_decide.py <SRC_BRANCH> [PROJECT_CWD]
+
+PROJECT_CWD is optional and defaults to Path.cwd(). Production PreToolUse
+hooks already inherit the user's project cwd, so the default is correct in
+prod; the explicit argv is provided so callers (and tests) that launch the
+hook from a different directory can point the resolver at the project root.
 
 Prints one of:
     ALLOW
@@ -13,7 +18,6 @@ Python exception can never cause a silent block.
 """
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -47,18 +51,6 @@ def _find_backlog_path(cwd: Path) -> Path | None:
         if p.is_file():
             return p
     return None
-
-
-def _effective_cwd() -> Path:
-    """Return the effective working directory for backlog/manifest lookup.
-
-    In tests TASKMASTER_TEST_CWD overrides Path.cwd() so the hook (which runs
-    from PLUGIN_ROOT for path-resolution reasons) still finds the test project.
-    """
-    test_cwd = os.environ.get("TASKMASTER_TEST_CWD", "").strip()
-    if test_cwd:
-        return Path(test_cwd)
-    return Path.cwd()
 
 
 def decide(src: str, cwd: Path) -> str:
@@ -190,7 +182,13 @@ def main() -> None:
         if not src:
             print("ALLOW")
             return
-        cwd = _effective_cwd()
+        # Optional argv[2] = project cwd; default to the real process cwd.
+        # Production hooks inherit the user's project cwd, so Path.cwd() is
+        # correct in prod.
+        if len(sys.argv) >= 3 and sys.argv[2].strip():
+            cwd = Path(sys.argv[2].strip())
+        else:
+            cwd = Path.cwd()
         print(decide(src, cwd))
     except Exception:
         print("ALLOW")

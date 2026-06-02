@@ -49,7 +49,10 @@ check_approval() {
     if [ "$FILE_AGE" -le 60 ] 2>/dev/null; then
       return 0
     fi
-    # Expired — clean up (mirrors guard-destructive.sh behavior)
+    # Expiry cleanup ONLY — NOT consumption. The approval file is intentionally
+    # never burned on use (there is no consumer hook); the 60s window IS the
+    # expiry, so a fresh approval survives repeated merge retries. We delete it
+    # here only because it has already aged out (>60s), never because it was used.
     rm -f "$APPROVE_FILE"
   fi
   return 1

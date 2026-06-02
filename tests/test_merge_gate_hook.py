@@ -13,11 +13,11 @@ Every test checks a row in the decision table:
   existing approval (fresh file) → ALLOW even when block path fires
   approval survives second blocked merge within 60s (not consumed)
 
-Path note (Windows/MSYS): Python's subprocess.run(['bash', abs_win_path])
-fails because MSYS bash can't resolve C:\..... paths directly.  We work around
-by running bash with cwd=PLUGIN_ROOT (relative hook path works) and
-communicate the test project dir via TASKMASTER_TEST_CWD so that
-merge_gate_decide.py overrides Path.cwd() accordingly.
+Path note (Windows/MSYS): the hook is launched by ABSOLUTE path with the
+subprocess cwd set to the test project dir.  Changing cwd (not the bash exe
+path) is what sidesteps the earlier MSYS bash path-resolution issue, and it
+makes merge_gate_decide.py resolve the project root from the real Path.cwd()
+exactly as production does — no test-only env seam.
 """
 from __future__ import annotations
 
@@ -32,6 +32,7 @@ import pytest
 import yaml
 
 PLUGIN_ROOT = Path(__file__).parents[1]
+HOOK = str((PLUGIN_ROOT / "hooks" / "merge-gate.sh").resolve())
 
 # On Windows, Python's subprocess resolves "bash" to the first entry on PATH,
 # which is WSL bash — it lacks jq.  shutil.which() uses a different resolution
@@ -46,20 +47,19 @@ _BASH = shutil.which("bash") or "bash"
 def run(payload: dict, cwd: Path, home: Path | None = None) -> subprocess.CompletedProcess:
     """Run merge-gate.sh with `payload` JSON on stdin.
 
-    We invoke bash from PLUGIN_ROOT (so the relative hook path resolves) and
-    pass TASKMASTER_TEST_CWD so merge_gate_decide.py knows the project dir.
+    We invoke bash with the ABSOLUTE hook path and set cwd to the test project
+    dir, so the decision module resolves the project root from the REAL process
+    cwd (Path.cwd()) exactly as it does in production.  No test-only env seam.
     """
     env = dict(os.environ)
     if home is not None:
         env["HOME"] = str(home)
-    # Tell the decision module where the project root is.
-    env["TASKMASTER_TEST_CWD"] = str(cwd)
     return subprocess.run(
-        [_BASH, "hooks/merge-gate.sh"],
+        [_BASH, HOOK],
         input=json.dumps(payload),
         text=True,
         capture_output=True,
-        cwd=str(PLUGIN_ROOT),   # relative hook path resolves here
+        cwd=str(cwd),           # REAL cwd — drives merge_gate_decide.py's Path.cwd()
         env=env,
         timeout=30,
     )
