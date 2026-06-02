@@ -66,6 +66,8 @@ export function renderMergeLadder(task, mergeTargets = DEFAULT_MERGE_TARGETS) {
   const statusMap = task.merge_status || {};
   const rungs = mergeTargets.map(({ label }) => {
     const record = statusMap[label];
+    // Any present record counts as a reached rung — including a sparse/empty {}
+    // (the merge happened even if details are missing or use a future schema).
     const filled = !!(record && (record.merge_commit || record.merged_at || Object.keys(record).length > 0));
     const stateClass = filled ? 'rung--filled' : 'rung--empty';
     const tooltip = filled ? escapeHtml(rungTooltip(record)) : escapeHtml(label);
@@ -89,6 +91,8 @@ export function renderMergeLadderCompact(task, mergeTargets = DEFAULT_MERGE_TARG
   const statusMap = task.merge_status || {};
   const dots = mergeTargets.map(({ label }) => {
     const record = statusMap[label];
+    // Any present record counts as a reached rung — including a sparse/empty {}
+    // (the merge happened even if details are missing or use a future schema).
     const filled = !!(record && (record.merge_commit || record.merged_at || Object.keys(record).length > 0));
     const stateClass = filled ? 'rung--filled' : 'rung--empty';
     const tooltip = filled ? escapeHtml(rungTooltip(record)) : escapeHtml(label);
