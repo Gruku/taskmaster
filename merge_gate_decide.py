@@ -40,19 +40,6 @@ def _git_rev_parse(branch: str, cwd: Path) -> str | None:
         return None
 
 
-def _find_backlog_path(cwd: Path) -> Path | None:
-    """Return the path to backlog.yaml by scanning standard layout dirs."""
-    candidates = [
-        cwd / ".taskmaster" / "backlog.yaml",
-        cwd / ".claude" / "backlog.yaml",
-        cwd / "backlog.yaml",
-    ]
-    for p in candidates:
-        if p.is_file():
-            return p
-    return None
-
-
 def decide(src: str, cwd: Path) -> str:
     """Core decision logic — returns the string to print (ALLOW or BLOCK:...).
 

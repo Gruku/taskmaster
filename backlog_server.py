@@ -173,7 +173,6 @@ from taskmaster_v3 import (
     BODY_KEY as _BODY_KEY,
     render_frontmatter as _render_frontmatter,
     CANONICAL_SECTIONS as _CANONICAL_SECTIONS,
-    merge_rungs as _merge_rungs,
     rung_for_branch as _rung_for_branch,
     compute_merge_gate_state as _compute_merge_gate_state,
 )
