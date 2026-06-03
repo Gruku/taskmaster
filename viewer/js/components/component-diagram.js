@@ -80,7 +80,8 @@ function buildBlock({ node, tasks, rollup, onComponentNav }) {
   cards.className = 'cd-block__cards';
   const list = tasksForComponent(tasks, node.id);
   if (list.length) {
-    for (const t of list) cards.appendChild(renderMinimalCard(t, { groupBy: 'component', now: Date.now() }));
+    const now = Date.now();
+    for (const t of list) cards.appendChild(renderMinimalCard(t, { groupBy: 'component', now }));
   } else {
     const empty = document.createElement('div');
     empty.className = 'cd-block__empty';
@@ -150,19 +151,31 @@ export function mountComponentDiagram(container, { components, rollup, tasks, on
     const hostRect = map.getBoundingClientRect();
     svg.setAttribute('width', String(map.clientWidth || 0));
     svg.setAttribute('height', String(map.clientHeight || 0));
-    for (const e of edges) {
-      const a = map.querySelector(`.cd-block[data-id="${e.from}"]`);
-      const b = map.querySelector(`.cd-block[data-id="${e.to}"]`);
-      const path = svg.querySelector(`path[data-edge="${e.from}__${e.to}"]`);
-      if (!a || !b || !path) continue;
+    // Look up blocks by dataset (not an interpolated attribute selector) — component
+    // keys are author-controlled and may contain CSS-special chars (" ] [ etc.).
+    const blockById = new Map([...map.querySelectorAll('.cd-block')].map(el => [el.dataset.id, el]));
+    const paths = svg.querySelectorAll('path.cd-edge');
+    edges.forEach((e, i) => {
+      const a = blockById.get(e.from);
+      const b = blockById.get(e.to);
+      const path = paths[i]; // one path appended per edge, in edge order
+      if (!a || !b || !path) return;
       path.setAttribute('d', computeEdgePath(a.getBoundingClientRect(), b.getBoundingClientRect(), hostRect));
-    }
+    });
   }
 
   const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (fn) => fn();
   raf(drawEdges);
   let ro = null;
-  if (typeof ResizeObserver === 'function') { ro = new ResizeObserver(() => drawEdges()); ro.observe(map); }
+  let rafPending = false;
+  if (typeof ResizeObserver === 'function') {
+    ro = new ResizeObserver(() => {
+      if (rafPending) return;
+      rafPending = true;
+      raf(() => { rafPending = false; drawEdges(); });
+    });
+    ro.observe(map);
+  }
 
   return () => { if (ro) ro.disconnect(); container.replaceChildren(); };
 }
