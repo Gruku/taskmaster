@@ -11,7 +11,7 @@ globalThis.Node = dom.window.Node;
 globalThis.history  = dom.window.history;
 globalThis.location = dom.window.location;
 
-const { mountComponentDiagram, computeEdgePath } = await import('../../js/components/component-diagram.js');
+const { mountComponentDiagram, computeEdgePath, blockVisualState } = await import('../../js/components/component-diagram.js');
 
 const COMPONENTS = {
   ingest: { title: 'Ingest', after: [] },
@@ -159,4 +159,14 @@ test('empty components → mounts nothing and returns a no-op cleanup', () => {
   const cleanup = mountComponentDiagram(host, { components: {}, rollup: {}, tasks: [] });
   assert.equal(host.querySelector('.cd-map'), null);
   assert.doesNotThrow(() => cleanup());
+});
+
+test('blockVisualState mapping is total and pinned', () => {
+  assert.equal(blockVisualState('done'),        'done');
+  assert.equal(blockVisualState('in-progress'), 'progress');
+  assert.equal(blockVisualState('blocked'),     'attention');
+  assert.equal(blockVisualState('todo'),        'todo');
+  assert.equal(blockVisualState(undefined),     'todo');
+  assert.equal(blockVisualState('in-review'),   'todo');
+  assert.equal(blockVisualState('weird-future'),'todo');
 });
