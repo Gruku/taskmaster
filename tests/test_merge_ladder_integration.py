@@ -1,6 +1,6 @@
 r"""End-to-end merge-ladder integration test.
 
-Drives REAL git operations through BOTH hooks (merge-gate.sh + merge-recorder.sh)
+Drives REAL git operations through BOTH hooks (merge_gate.py + merge_recorder.py)
 in a throw-away temp git repo.  These are the three scenarios the unit tests
 cannot cover:
 
@@ -18,7 +18,7 @@ cannot cover:
      file, still within 60 s, on a fresh branch) -> exits 0 again.  Optionally
      verify that a stale approval (mtime >60 s ago) fires the block path again.
 
-Subprocess timeout: 60 s per call (generous — git + bash on Windows can be slow).
+Subprocess timeout: 60 s per call (generous — git on Windows can be slow).
 Module-level slow marker so CI can filter; tests are NOT skipped.
 
 Path note: hooks are launched by ABSOLUTE path; subprocess cwd is set to the
@@ -30,8 +30,8 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
+import sys
 import textwrap
 import time
 from pathlib import Path
@@ -44,14 +44,10 @@ import yaml
 # --------------------------------------------------------------------------- #
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
-GATE_HOOK    = str((PLUGIN_ROOT / "hooks" / "merge-gate.sh").resolve())
-RECORDER_HOOK = str((PLUGIN_ROOT / "hooks" / "merge-recorder.sh").resolve())
+GATE_HOOK    = str((PLUGIN_ROOT / "hooks" / "merge_gate.py").resolve())
+RECORDER_HOOK = str((PLUGIN_ROOT / "hooks" / "merge_recorder.py").resolve())
 
-# On Windows, Python subprocess may resolve "bash" to WSL bash (no jq).
-# shutil.which() finds Git bash (which ships jq) first — use it explicitly.
-_BASH = shutil.which("bash") or "bash"
-
-# Give every subprocess a generous budget — git + bash on Windows can be slow.
+# Give every subprocess a generous budget — git on Windows can be slow.
 _TIMEOUT = 60
 
 # Slow marker: present so CI can --ignore or -m "not slow"; does NOT skip.
@@ -63,7 +59,7 @@ pytestmark = pytest.mark.slow
 # --------------------------------------------------------------------------- #
 
 def _run_gate(payload: dict, cwd: Path, home: Path | None = None) -> subprocess.CompletedProcess:
-    """Run merge-gate.sh with payload JSON on stdin.
+    """Run merge_gate.py with payload JSON on stdin.
 
     cwd=<repo> drives merge_gate_decide.py's Path.cwd() (no env seam in our code).
     home= overrides $HOME so the approval file lives in an isolated tmp dir.
@@ -72,7 +68,7 @@ def _run_gate(payload: dict, cwd: Path, home: Path | None = None) -> subprocess.
     if home is not None:
         env["HOME"] = str(home)
     return subprocess.run(
-        [_BASH, GATE_HOOK],
+        [sys.executable, GATE_HOOK],
         input=json.dumps(payload),
         text=True,
         capture_output=True,
@@ -83,7 +79,7 @@ def _run_gate(payload: dict, cwd: Path, home: Path | None = None) -> subprocess.
 
 
 def _run_recorder(payload: dict, cwd: Path) -> subprocess.CompletedProcess:
-    """Run merge-recorder.sh with payload JSON on stdin.
+    """Run merge_recorder.py with payload JSON on stdin.
 
     cwd=<repo> drives merge_recorder_stamp.py's Path.cwd().
     TASKMASTER_ROOT=<repo> points backlog_server's storage layer at the repo.
@@ -91,7 +87,7 @@ def _run_recorder(payload: dict, cwd: Path) -> subprocess.CompletedProcess:
     env = dict(os.environ)
     env["TASKMASTER_ROOT"] = str(cwd)
     return subprocess.run(
-        [_BASH, RECORDER_HOOK],
+        [sys.executable, RECORDER_HOOK],
         input=json.dumps(payload),
         text=True,
         capture_output=True,
@@ -254,9 +250,9 @@ def test_allow_and_record(tmp_path):
     """Policy on, fresh pass (commit_sha == real branch tip).
 
     Flow:
-      1. merge-gate.sh -> exit 0  (gate clears)
+      1. merge_gate.py -> exit 0  (gate clears)
       2. REAL git merge
-      3. merge-recorder.sh -> exit 0
+      3. merge_recorder.py -> exit 0
       4. HEAVY tasks/<id>.md merge_status['master'] stamped with real merge SHA
       5. SLIM backlog.yaml merge_gate_state == 'master'
     """

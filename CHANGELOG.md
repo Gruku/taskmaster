@@ -12,6 +12,36 @@ indicate schema breaks or removed surfaces.
 
 ---
 
+## 3.13.1 — Python hook port (2026-06-05)
+
+Performance fix, no surface change. The four bash Bash/AskUserQuestion hooks
+are ported 1:1 to Python: on Windows each bash hook forked many subprocesses
+(jq/grep/sed/git) and MSYS2 fork costs seconds — `merge-gate.sh` measured 32s
+per Bash tool call. Python spawns in ~100ms with zero forks for regex work.
+
+### Changed
+
+- **`merge-gate.sh` → `merge_gate.py`**, **`merge-recorder.sh` →
+  `merge_recorder.py`**, **`worktree-submodule-init.sh` →
+  `worktree_submodule_init.py`**, **`taskmaster-merge-approve.sh` →
+  `taskmaster_merge_approve.py`** — behavior-preserving ports (stdlib only,
+  Python 3.9+). Decision tables, fail-open semantics, the 60s never-consumed
+  approval window, the approval-file path
+  (`$HOME/.claude/taskmaster-merge-approve-$SESSION_ID`), and all
+  Claude-facing stderr/stdout messages are unchanged character-for-character.
+  Zero subprocess spawns on the hot path — non-matching commands exit 0
+  having spawned nothing; `git` / the decision and stamp modules are only
+  spawned once a triggering pattern matched, same as before.
+- **`hooks/hooks.json`** — the four entries now invoke
+  `python "${CLAUDE_PLUGIN_ROOT}/hooks/<name>.py"` with `timeout: 10`.
+  `session-start.sh` and `snapshot.py` registrations are unchanged.
+
+### Removed
+
+- The four ported `.sh` hook scripts (`session-start.sh` stays).
+
+---
+
 ## 3.13.0 — Spec B: merge ladder (2026-06-02)
 
 Builds on Spec A's review gates. Adds a per-task **promotion ladder** — an ordered

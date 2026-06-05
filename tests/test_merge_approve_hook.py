@@ -1,31 +1,25 @@
-"""Tests for plugins/taskmaster/hooks/taskmaster-merge-approve.sh.
+"""Tests for plugins/taskmaster/hooks/taskmaster_merge_approve.py.
 
 PostToolUse hook for AskUserQuestion that writes the taskmaster-namespace
 approval file when the user picks "Approve".  Four tests from the plan
-(lines 824-866) verbatim, adapted to use shutil.which for Git bash on Windows.
+(lines 824-866) verbatim, ported to invoke the Python hook directly.
 """
 from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 PLUGIN_ROOT = Path(__file__).parents[1]
-# Relative hook path — run from PLUGIN_ROOT so bash can resolve it on Windows
-# (absolute Windows paths like C:\... fail when passed to MSYS bash).
-HOOK_REL = "hooks/taskmaster-merge-approve.sh"
-
-# On Windows, subprocess resolves "bash" to WSL bash (no jq).
-# shutil.which finds Git bash which ships jq.
-_BASH = shutil.which("bash") or "bash"
+HOOK = str((PLUGIN_ROOT / "hooks" / "taskmaster_merge_approve.py").resolve())
 
 
 def run(payload: dict, home: Path) -> subprocess.CompletedProcess:
     env = dict(os.environ, HOME=str(home))
     return subprocess.run(
-        [_BASH, HOOK_REL],
+        [sys.executable, HOOK],
         input=json.dumps(payload),
         text=True,
         capture_output=True,

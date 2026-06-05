@@ -1,6 +1,6 @@
-"""merge_gate_decide.py — Decision module for merge-gate.sh.
+"""merge_gate_decide.py — Decision module for hooks/merge_gate.py.
 
-Called by merge-gate.sh as:
+Called by merge_gate.py as:
     python merge_gate_decide.py <SRC_BRANCH> [PROJECT_CWD]
 
 PROJECT_CWD is optional and defaults to Path.cwd(). Production PreToolUse

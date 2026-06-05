@@ -1,7 +1,7 @@
-r"""Tests for plugins/taskmaster/hooks/merge-recorder.sh (PostToolUse, never blocks).
+r"""Tests for plugins/taskmaster/hooks/merge_recorder.py (PostToolUse, never blocks).
 
 Harness convention: mirrors test_merge_gate_hook.py — shells out via subprocess
-so real bash + git + python + the REAL v3 storage layer are all exercised.
+so real python + git + the REAL v3 storage layer are all exercised.
 
 The recorder delegates persistence to backlog_server.backlog_record_merge, which
 is the v3-correct path: heavy `merge_status` lands in tasks/<id>.md and the slim
@@ -30,8 +30,8 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
 
@@ -39,11 +39,7 @@ import pytest
 import yaml
 
 PLUGIN_ROOT = Path(__file__).parents[1]
-HOOK = str((PLUGIN_ROOT / "hooks" / "merge-recorder.sh").resolve())
-
-# On Windows, Python's subprocess resolves "bash" to the first entry on PATH,
-# which may be WSL bash (lacks jq). shutil.which() uses Git bash (ships jq).
-_BASH = shutil.which("bash") or "bash"
+HOOK = str((PLUGIN_ROOT / "hooks" / "merge_recorder.py").resolve())
 
 
 # ---------------------------------------------------------------------------
@@ -51,7 +47,7 @@ _BASH = shutil.which("bash") or "bash"
 # ---------------------------------------------------------------------------
 
 def run(payload: dict, cwd: Path) -> subprocess.CompletedProcess:
-    """Run merge-recorder.sh with `payload` JSON on stdin.
+    """Run merge_recorder.py with `payload` JSON on stdin.
 
     cwd=<repo> drives merge_recorder_stamp.py's Path.cwd() (no env seam in our
     code).  TASKMASTER_ROOT=<repo> points backlog_server's storage layer at the
@@ -60,7 +56,7 @@ def run(payload: dict, cwd: Path) -> subprocess.CompletedProcess:
     env = dict(os.environ)
     env["TASKMASTER_ROOT"] = str(cwd)
     return subprocess.run(
-        [_BASH, HOOK],
+        [sys.executable, HOOK],
         input=json.dumps(payload),
         text=True,
         capture_output=True,
