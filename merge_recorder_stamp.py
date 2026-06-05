@@ -1,6 +1,6 @@
-"""merge_recorder_stamp.py — Stamp module for merge-recorder.sh.
+"""merge_recorder_stamp.py — Stamp module for hooks/merge_recorder.py.
 
-Called by merge-recorder.sh as:
+Called by merge_recorder.py as:
     python merge_recorder_stamp.py <SRC_BRANCH> [PROJECT_CWD]
 
 SRC_BRANCH: the source (feature) branch that was merged in.

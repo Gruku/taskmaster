@@ -1,7 +1,7 @@
-r"""Tests for plugins/taskmaster/hooks/merge-gate.sh (PreToolUse, fail-open).
+r"""Tests for plugins/taskmaster/hooks/merge_gate.py (PreToolUse, fail-open).
 
 Harness convention: mirrors test_precompact_hook.py — shells out via
-subprocess so real bash + git + python path-resolution are all exercised.
+subprocess so real python + git path-resolution are all exercised.
 
 Every test checks a row in the decision table:
   policy_off | no_yaml | not_a_merge | anonymous_merge | untracked_branch
@@ -13,18 +13,17 @@ Every test checks a row in the decision table:
   existing approval (fresh file) → ALLOW even when block path fires
   approval survives second blocked merge within 60s (not consumed)
 
-Path note (Windows/MSYS): the hook is launched by ABSOLUTE path with the
-subprocess cwd set to the test project dir.  Changing cwd (not the bash exe
-path) is what sidesteps the earlier MSYS bash path-resolution issue, and it
-makes merge_gate_decide.py resolve the project root from the real Path.cwd()
-exactly as production does — no test-only env seam.
+Path note: the hook is launched by ABSOLUTE path with the subprocess cwd set
+to the test project dir, which makes merge_gate_decide.py resolve the project
+root from the real Path.cwd() exactly as production does — no test-only env
+seam.
 """
 from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
 
@@ -32,12 +31,7 @@ import pytest
 import yaml
 
 PLUGIN_ROOT = Path(__file__).parents[1]
-HOOK = str((PLUGIN_ROOT / "hooks" / "merge-gate.sh").resolve())
-
-# On Windows, Python's subprocess resolves "bash" to the first entry on PATH,
-# which is WSL bash — it lacks jq.  shutil.which() uses a different resolution
-# order and finds Git bash (which ships jq).  We use it explicitly.
-_BASH = shutil.which("bash") or "bash"
+HOOK = str((PLUGIN_ROOT / "hooks" / "merge_gate.py").resolve())
 
 
 # ---------------------------------------------------------------------------
@@ -45,9 +39,9 @@ _BASH = shutil.which("bash") or "bash"
 # ---------------------------------------------------------------------------
 
 def run(payload: dict, cwd: Path, home: Path | None = None) -> subprocess.CompletedProcess:
-    """Run merge-gate.sh with `payload` JSON on stdin.
+    """Run merge_gate.py with `payload` JSON on stdin.
 
-    We invoke bash with the ABSOLUTE hook path and set cwd to the test project
+    We invoke python with the ABSOLUTE hook path and set cwd to the test project
     dir, so the decision module resolves the project root from the REAL process
     cwd (Path.cwd()) exactly as it does in production.  No test-only env seam.
     """
@@ -55,7 +49,7 @@ def run(payload: dict, cwd: Path, home: Path | None = None) -> subprocess.Comple
     if home is not None:
         env["HOME"] = str(home)
     return subprocess.run(
-        [_BASH, HOOK],
+        [sys.executable, HOOK],
         input=json.dumps(payload),
         text=True,
         capture_output=True,
