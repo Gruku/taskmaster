@@ -67,6 +67,6 @@
 
 .cd-block--done     { background: color-mix(in srgb, var(--green) 14%, var(--bg-card));        border-color: color-mix(in srgb, var(--green) 35%, transparent); }
 .cd-block--progress { background: color-mix(in srgb, var(--amber) 14%, var(--bg-card));        border-color: color-mix(in srgb, var(--amber) 35%, transparent); }
-.cd-block--attention{ background: color-mix(in srgb, var(--sev-critical) 14%, var(--bg-card)); border-color: color-mix(in srgb, var(--sev-critical) 45%, transparent); border-top: 2px solid var(--sev-critical); }
+.cd-block--attention{ background: color-mix(in srgb, var(--sev-critical) 14%, var(--bg-card)); border-color: color-mix(in srgb, var(--sev-critical) 45%, transparent); border-top-width: 2px; border-top-color: var(--sev-critical); }
 .cd-block--todo     { background: var(--bg-card); border-color: var(--border-strong); }
 .cd-block--unassigned { background: var(--bg-panel); border-style: dashed; border-color: var(--border-strong); }

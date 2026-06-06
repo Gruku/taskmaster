@@ -16,6 +16,10 @@ function esc(s) {
 
 // chrome: 'page' (route screen) | 'embedded' (modal). actionsHost: optional
 // element to receive an actions row (none in C1). onNavigate(taskId): jump to a task.
+// onComponentNav(componentKey): jump to the kanban filtered to that component.
+// Lifecycle contract: callers MUST invoke the returned dispose() before re-mounting on
+// the same container — disposeDiagram is captured per-invocation and is the only handle
+// that disconnects the architecture-map ResizeObserver (skipping it leaks the observer).
 export function mountEpicDetail(container, { epic, store, onNavigate, onComponentNav, chrome = 'page' } = {}) {
   container.classList.add('ed-root');
   const colors = assignEpicColors((store?.getBacklog?.() || {}).epics || [{ id: epic.id }]);
