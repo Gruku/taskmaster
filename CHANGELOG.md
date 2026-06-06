@@ -12,6 +12,37 @@ indicate schema breaks or removed surfaces.
 
 ---
 
+## 3.14.0 — C2: Epic Architecture Map (2026-06-06)
+
+The epic detail screen now renders a live **Architecture Map** generated from the
+epic's `components` block — the C2 piece of the Task & Epic Protocol. Replaces the
+flat component list as the primary architecture surface.
+
+### Added
+
+- **Epic Architecture Map** on the epic detail document (page and modal chrome):
+  HTML blocks per component with embedded task cards, connected by an SVG edge
+  layer (blocks = components, connectors = `after` edges). Extends the bespoke
+  viewer graph idiom — no Mermaid, no new library.
+- **Pure component-DAG layout engine** (`component-graph-layout.js`) — rank
+  assignment from `after` edges with cycle guard; unassigned tasks collect into a
+  trailing dashed bucket.
+- **Rollup-driven block coloring** with a pinned, tested node-state → visual-state
+  mapping: `done` (green tint) / `in-progress` (amber tint) / `blocked` →
+  attention (critical tint + top border) / `todo` (neutral) / unassigned (dashed).
+  Degrades gracefully on coarse C1-only rollup data (empty `component_rollup`
+  renders all-neutral, never throws); richer gate-rollup coloring is an additive
+  seam.
+- **E2E + unit coverage** — Playwright architecture-map specs (route-mocked
+  fixture epic) and exhaustive visual-state mapping tests.
+
+### Design rules
+
+Tinted fills and full/top borders only — no colored left rails, no box-shadows,
+no hover motion, per the viewer's hard visual rules.
+
+---
+
 ## 3.13.0 — Spec B: merge ladder (2026-06-02)
 
 Builds on Spec A's review gates. Adds a per-task **promotion ladder** — an ordered
