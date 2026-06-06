@@ -161,6 +161,36 @@ test('empty components → mounts nothing and returns a no-op cleanup', () => {
   assert.doesNotThrow(() => cleanup());
 });
 
+// Graceful degradation (Decision D2): components defined but component_rollup is
+// completely absent / empty — all blocks should render in the neutral "todo" state
+// and the mount must not throw.
+test('empty component_rollup: all blocks render in todo (neutral) state and do not throw', () => {
+  const host = freshHost();
+  assert.doesNotThrow(() => {
+    mountComponentDiagram(host, {
+      components: {
+        api:  { title: 'API',     after: [] },
+        core: { title: 'Core',    after: ['api'] },
+        ui:   { title: 'UI',      after: ['core'] },
+      },
+      rollup: {}, // no rollup entries at all — simulates missing component_rollup
+      tasks: [],
+    });
+  });
+  // All three blocks must be present.
+  assert.equal(host.querySelectorAll('.cd-block').length, 3);
+  // Every block must carry the neutral "todo" visual state.
+  const states = [...host.querySelectorAll('.cd-block')].map(el => {
+    const m = el.className.match(/cd-block--(\w+)/);
+    return m ? m[1] : 'unknown';
+  });
+  for (const s of states) {
+    assert.equal(s, 'todo', `expected cd-block--todo but got cd-block--${s}`);
+  }
+  // SVG connector layer must still be present.
+  assert.ok(host.querySelector('svg.cd-connectors'), 'connector svg present even with empty rollup');
+});
+
 test('blockVisualState mapping is total and pinned', () => {
   assert.equal(blockVisualState('done'),        'done');
   assert.equal(blockVisualState('in-progress'), 'progress');
