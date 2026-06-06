@@ -181,7 +181,7 @@ test('empty component_rollup: all blocks render in todo (neutral) state and do n
   assert.equal(host.querySelectorAll('.cd-block').length, 3);
   // Every block must carry the neutral "todo" visual state.
   const states = [...host.querySelectorAll('.cd-block')].map(el => {
-    const m = el.className.match(/cd-block--(\w+)/);
+    const m = el.className.match(/cd-block--([\w-]+)/);
     return m ? m[1] : 'unknown';
   });
   for (const s of states) {
@@ -189,6 +189,33 @@ test('empty component_rollup: all blocks render in todo (neutral) state and do n
   }
   // SVG connector layer must still be present.
   assert.ok(host.querySelector('svg.cd-connectors'), 'connector svg present even with empty rollup');
+});
+
+// The nav affordance is conditional: without an onComponentNav handler the block
+// must NOT present itself as a button (no role, not focusable, no nav hint) —
+// a focusable button whose action is a silent no-op is an a11y defect.
+test('without onComponentNav: blocks carry no button affordance; with it: they do', () => {
+  const components = { api: { title: 'API', after: [] } };
+  const rollup = { api: { status: 'todo', total: 1, done: 0 } };
+
+  const plain = freshHost();
+  mountComponentDiagram(plain, { components, rollup, tasks: [] });
+  const plainBlock = plain.querySelector('.cd-block');
+  assert.equal(plainBlock.getAttribute('role'), null, 'no role=button without handler');
+  assert.equal(plainBlock.getAttribute('tabindex'), null, 'not focusable without handler');
+  assert.ok(!plainBlock.getAttribute('aria-label').includes('Open kanban'),
+    'aria-label must not promise navigation without handler');
+
+  const nav = freshHost();
+  const hits = [];
+  mountComponentDiagram(nav, { components, rollup, tasks: [], onComponentNav: id => hits.push(id) });
+  const navBlock = nav.querySelector('.cd-block');
+  assert.equal(navBlock.getAttribute('role'), 'button');
+  assert.equal(navBlock.tabIndex, 0);
+  assert.ok(navBlock.getAttribute('aria-label').includes('Open kanban filtered to this component'));
+  navBlock.querySelector('.cd-block__head').dispatchEvent(
+    new (navBlock.ownerDocument.defaultView.Event)('click', { bubbles: true }));
+  assert.deepEqual(hits, ['api'], 'head click fires the handler');
 });
 
 test('blockVisualState mapping is total and pinned', () => {

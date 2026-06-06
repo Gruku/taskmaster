@@ -49,14 +49,22 @@ export function computeEdgePath(from, to, host) {
 // only in the rollup input. buildBlock receives rollup so it can look up
 // rollup[node.id].blocked directly.
 function buildBlock({ node, tasks, rollup, onComponentNav }) {
+  // The nav affordance (role=button, tabIndex, click/key handlers) only exists
+  // when a handler is actually wired — a focusable button whose action is a
+  // silent no-op is worse than a plain block. v1 callers pass no handler
+  // (no component route yet); the seam stays for when kanban grows a
+  // component filter.
+  const interactive = typeof onComponentNav === 'function';
   const block = document.createElement('div');
   // Derive visual state from node.status (which comes from rollup[id].status via layout engine).
   const state = node.unassigned ? 'unassigned' : blockVisualState(node.status);
   block.className = `cd-block cd-block--${state}`;
   block.dataset.id = node.id;
   block.dataset.rank = String(node.rank ?? 0);
-  block.tabIndex = 0;
-  block.setAttribute('role', 'button');
+  if (interactive) {
+    block.tabIndex = 0;
+    block.setAttribute('role', 'button');
+  }
 
   const head = document.createElement('div');
   head.className = 'cd-block__head';
@@ -73,7 +81,8 @@ function buildBlock({ node, tasks, rollup, onComponentNav }) {
     : rollupSummary({ status: node.status, blocked: ro.blocked });
 
   head.append(title, summary);
-  block.setAttribute('aria-label', `${title.textContent} — ${summary.textContent}. Open kanban filtered to this component.`);
+  const navHint = interactive ? ' Open kanban filtered to this component.' : '';
+  block.setAttribute('aria-label', `${title.textContent} — ${summary.textContent}.${navHint}`);
   block.appendChild(head);
 
   const cards = document.createElement('div');
@@ -92,16 +101,18 @@ function buildBlock({ node, tasks, rollup, onComponentNav }) {
 
   // Block navigates to the kanban filter — but only when the click did not land
   // on an embedded task card (cards own their own click → task detail).
-  const fire = () => { if (typeof onComponentNav === 'function') onComponentNav(node.id); };
-  head.addEventListener('click', fire);
-  block.addEventListener('click', (ev) => {
-    if (ev.target.closest('.card-task')) return; // card click wins
-    if (ev.target.closest('.cd-block__head')) return; // head handler already fired
-    fire();
-  });
-  block.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); fire(); }
-  });
+  if (interactive) {
+    const fire = () => onComponentNav(node.id);
+    head.addEventListener('click', fire);
+    block.addEventListener('click', (ev) => {
+      if (ev.target.closest('.card-task')) return; // card click wins
+      if (ev.target.closest('.cd-block__head')) return; // head handler already fired
+      fire();
+    });
+    block.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); fire(); }
+    });
+  }
   return block;
 }
 
