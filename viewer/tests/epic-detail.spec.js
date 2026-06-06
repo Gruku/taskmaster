@@ -53,7 +53,11 @@ test.describe('Epic detail', () => {
   });
 
   test.describe('Architecture Map (C2)', () => {
+    let pageErrors;
+
     test.beforeEach(async ({ page }) => {
+      pageErrors = [];
+      page.on('pageerror', e => pageErrors.push(String(e)));
       // Intercept the epic API call and return the fixture so the test is
       // independent of whatever the real backlog contains.
       await page.route('**/api/epic/arch-test', route =>
@@ -65,16 +69,20 @@ test.describe('Epic detail', () => {
       );
       await page.goto('/v3');
       await page.evaluate(() => { location.hash = '#/epic/arch-test'; });
-      // Wait for the epic detail to mount (ed-diagram is rendered synchronously
-      // once the async getEpic() resolves).
-      await expect(page.locator('.ed-diagram')).toBeVisible();
+      // Gate on the diagram's own output (.cd-map), not just the .ed-diagram
+      // section shell — the shell is appended before mountComponentDiagram runs,
+      // so waiting on it alone would not catch a mount that bails early.
+      await expect(page.locator('.ed-diagram .cd-map')).toBeVisible();
+    });
+
+    test.afterEach(() => {
+      // No runtime JS errors during any architecture-map interaction
+      // (drawEdges runs via requestAnimationFrame after the assertions).
+      expect(pageErrors).toEqual([]);
     });
 
     test('svg.cd-connectors is present inside .ed-diagram', async ({ page }) => {
-      const errors = [];
-      page.on('pageerror', e => errors.push(String(e)));
       await expect(page.locator('.ed-diagram svg.cd-connectors')).toBeVisible();
-      expect(errors).toEqual([]);
     });
 
     test('cd-block count matches fixture component count + unassigned bucket', async ({ page }) => {
@@ -102,7 +110,8 @@ test.describe('Epic detail', () => {
         const diagram = document.querySelector('.ed-diagram');
         const side    = document.querySelector('.ed-side');
         if (!diagram || !side) return 'missing';
-        // compareDocumentPosition: 4 = diagram follows side (bad), 2 = side follows diagram (good)
+        // DOCUMENT_POSITION_FOLLOWING (4) is set when the ARGUMENT (side)
+        // follows the REFERENCE (diagram) — i.e. diagram precedes side. Good.
         return (diagram.compareDocumentPosition(side) & Node.DOCUMENT_POSITION_FOLLOWING)
           ? 'diagram-before-side'
           : 'diagram-after-side';
