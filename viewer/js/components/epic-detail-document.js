@@ -5,8 +5,9 @@
 import { mountMarkdown } from './markdown.js';
 import { assignEpicColors, epicCssVar } from '../lib/epics.js';
 import {
-  designBadge, componentGlyph, progressPercent, tasksForComponent,
+  designBadge, progressPercent,
 } from '../lib/epic-format.js';
+import { mountComponentDiagram } from './component-diagram.js';
 
 function esc(s) {
   return String(s == null ? '' : s)
@@ -15,7 +16,11 @@ function esc(s) {
 
 // chrome: 'page' (route screen) | 'embedded' (modal). actionsHost: optional
 // element to receive an actions row (none in C1). onNavigate(taskId): jump to a task.
-export function mountEpicDetail(container, { epic, store, onNavigate, chrome = 'page' } = {}) {
+// onComponentNav(componentKey): jump to the kanban filtered to that component.
+// Lifecycle contract: callers MUST invoke the returned dispose() before re-mounting on
+// the same container — disposeDiagram is captured per-invocation and is the only handle
+// that disconnects the architecture-map ResizeObserver (skipping it leaks the observer).
+export function mountEpicDetail(container, { epic, store, onNavigate, onComponentNav, chrome = 'page' } = {}) {
   container.classList.add('ed-root');
   const colors = assignEpicColors((store?.getBacklog?.() || {}).epics || [{ id: epic.id }]);
   container.setAttribute('style', epicCssVar(colors[epic.id]));
@@ -70,51 +75,31 @@ export function mountEpicDetail(container, { epic, store, onNavigate, chrome = '
     main.appendChild(sec);
   }
 
-  // ---- Components + tasks grouped by component (main column)
+  // ---- Components (main column)
   const comps = epic.components || {};
   const roll = epic.component_rollup || {};
-  const compSec = document.createElement('section');
-  compSec.className = 'ed-components';
-  const ch = document.createElement('h2'); ch.className = 'ed-h'; ch.textContent = 'Components';
-  compSec.appendChild(ch);
 
-  const keys = Object.keys(comps);
-  if (!keys.length) {
-    const none = document.createElement('p');
-    none.className = 'ed-body'; none.textContent = 'No components declared.';
-    compSec.appendChild(none);
+  // C2 — Epic Architecture Map. Replaces the plain component list: blocks in
+  // dependency-rank order, each holding the component's task cards, colored by rollup.
+  let disposeDiagram = () => {};
+  if (Object.keys(comps).length) {
+    const diagram = document.createElement('section');
+    diagram.className = 'ed-diagram';
+    const dh = document.createElement('h2');
+    dh.className = 'ed-h';
+    dh.textContent = 'Architecture';
+    diagram.appendChild(dh);
+    const canvas = document.createElement('div');
+    canvas.className = 'ed-diagram__canvas';
+    diagram.appendChild(canvas);
+    main.appendChild(diagram);
+    disposeDiagram = mountComponentDiagram(canvas, {
+      components: comps,
+      rollup: roll,
+      tasks: epic.tasks || [],
+      onComponentNav,
+    });
   }
-  const groups = [...keys.map(k => [k, comps[k]?.title || k]), ['_unassigned', 'Unassigned']];
-  for (const [key, title] of groups) {
-    const b = roll[key] || { total: 0, done: 0, status: 'todo' };
-    if (key === '_unassigned' && !b.total) continue;
-    const block = document.createElement('div'); block.className = 'ed-comp';
-    const hd = document.createElement('div');
-    hd.className = `ed-comp__head ed-comp__head--${b.status || 'todo'}`;
-    hd.innerHTML = `<span class="ed-comp__glyph">${componentGlyph(b.status)}</span>`
-      + `<span class="ed-comp__title">${esc(title)}</span>`
-      + `<span class="ed-comp__count">${b.done || 0}/${b.total || 0}</span>`;
-    block.appendChild(hd);
-
-    const ul = document.createElement('ul'); ul.className = 'ed-comp__tasks';
-    for (const t of tasksForComponent(epic.tasks || [], key)) {
-      const li = document.createElement('li');
-      li.className = 'ed-task';
-      const a = document.createElement('a');
-      a.className = 'ed-task__link';
-      a.href = `#/task/${encodeURIComponent(t.id)}`;
-      a.addEventListener('click', (e) => { e.preventDefault(); go(t.id); });
-      a.innerHTML = `<span class="ed-task__st ed-task__st--${esc(t.status || 'todo')}"></span>`
-        + `<span class="ed-task__id">${esc(t.id)}</span>`
-        + `<span class="ed-task__title">${esc(t.title || '')}</span>`;
-      li.appendChild(a);
-      ul.appendChild(li);
-    }
-    block.appendChild(ul);
-    compSec.appendChild(block);
-  }
-  main.appendChild(compSec);
-  // C2 diagram extension point: a `.ed-diagram` node mounts above compSec here.
 
   // ---- Attention (side column)
   if ((epic.attention || []).length) {
@@ -158,5 +143,5 @@ export function mountEpicDetail(container, { epic, store, onNavigate, chrome = '
     side.appendChild(sec);
   }
 
-  return () => { container.classList.remove('ed-root'); container.replaceChildren(); };
+  return () => { disposeDiagram(); container.classList.remove('ed-root'); container.replaceChildren(); };
 }
