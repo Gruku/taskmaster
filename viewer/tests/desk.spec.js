@@ -88,6 +88,9 @@ test.describe('desk dashboard', () => {
     // Each rendered rail is a .co-spine; rows inside are .co-row.
     const spines = page.locator('.dk-continuity .co-spine');
     const n = await spines.count();
+    // Cap logic itself is unit-tested (desk-lib.test.js); this e2e only bites
+    // when the live .taskmaster has continuity items — skip loudly otherwise.
+    test.skip(n === 0, 'no continuity items in live .taskmaster state');
 
     for (let i = 0; i < n; i++) {
       const rows = spines.nth(i).locator('.co-row');

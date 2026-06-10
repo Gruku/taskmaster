@@ -6,6 +6,9 @@ cd "$(dirname "$0")/../.."
 # notes, tasks, and other backlog data. Walk up from the plugin dir until we
 # find a directory containing .taskmaster/backlog.yaml, falling back to the
 # plugin dir itself if none is found.
+# NOTE: this intentionally roots the server for the WHOLE suite at the repo's
+# live .taskmaster (previously cwd = viewer dir, i.e. no backlog at all) — all
+# specs now see real data, so specs must create/clean their own entities.
 REPO_ROOT="$(pwd)"
 _search="$(pwd)"
 for _ in 1 2 3 4; do
