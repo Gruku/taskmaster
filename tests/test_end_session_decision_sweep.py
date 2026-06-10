@@ -10,10 +10,16 @@ def test_end_session_mentions_decision_sweep():
     assert "drop" in body.lower()
 
 
-def test_end_session_passes_open_decisions_to_handover_write():
+def test_end_session_folds_decisions_into_handover_body():
+    """b040ac6 dropped the phantom open_decisions / resolved_this_session
+    kwargs: the decision sweep results are carried as handover BODY sections
+    ("Open decisions" / "Resolved this session"), not handover_create args."""
     body = SKILL.read_text(encoding="utf-8")
-    assert "open_decisions" in body
-    assert "resolved_this_session" in body
+    assert '"Open decisions"' in body
+    assert '"Resolved this session"' in body
+    ref = SKILL.parent / "references" / "v3-pre-steps.md"
+    assert "no separate `open_decisions` / `resolved_this_session` parameters" \
+        in ref.read_text(encoding="utf-8")
 
 
 def test_start_session_calls_backlog_decision_list():
