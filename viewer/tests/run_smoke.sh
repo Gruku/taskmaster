@@ -2,6 +2,22 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
+# Locate the repo root that owns the live .taskmaster so the server can reach
+# notes, tasks, and other backlog data. Walk up from the plugin dir until we
+# find a directory containing .taskmaster/backlog.yaml, falling back to the
+# plugin dir itself if none is found.
+REPO_ROOT="$(pwd)"
+_search="$(pwd)"
+for _ in 1 2 3 4; do
+  _parent="$(dirname "$_search")"
+  if [ -f "$_parent/.taskmaster/backlog.yaml" ]; then
+    REPO_ROOT="$_parent"
+    break
+  fi
+  _search="$_parent"
+done
+export TASKMASTER_ROOT="$REPO_ROOT"
+
 # Boot the server in the background on a known port.
 PORT=8765
 python -c "
