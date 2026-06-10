@@ -31,11 +31,12 @@ def test_frontmatter_has_required_fields():
 def test_description_contains_all_trigger_phrases():
     fm = _read_frontmatter(SKILL_DIR / "SKILL.md")
     desc = fm["description"].lower()
+    # tm-audit-021 trimmed semantic duplicates ('learn this lesson',
+    # 'memorize this') from the always-loaded description; the remaining
+    # phrases are the canonical trigger surface.
     must_have = [
         "remember this",
         "save as a lesson",
-        "learn this lesson",
-        "memorize this",
         "this keeps happening",
         "we always do x here",
         "we got burned by this last time",

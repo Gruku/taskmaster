@@ -1,6 +1,6 @@
 ---
 name: linear
-description: "Manage the Linear sync surface for Taskmaster. Invoke when the user says 'set up linear sync', 'connect to linear', 'link this task to linear', 'link to linear issue ENG-42', 'unlink from linear', 'show linear status', 'retry linear pushes', 'what's failing in linear', 'list linear trackers', or 'show tracker linear-cm-eng-42'. This is the only correct way to drive `backlog_linear_*` tools — direct calls skip the bootstrap dialogue and the failure-surfacing path."
+description: "Manage Taskmaster's Linear sync. Invoke for: 'set up linear sync', 'connect to linear', 'link task to linear', 'unlink from linear', 'show linear status', 'retry linear pushes', 'what's failing in linear', 'list linear trackers', 'show tracker linear-cm-eng-42'. Only correct way to drive backlog_linear_* — direct calls skip the bootstrap dialogue."
 ---
 
 # Linear

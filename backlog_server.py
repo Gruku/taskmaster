@@ -1049,20 +1049,31 @@ def backlog_list_tasks(
     priority: str = "",
     phase: str = "",
     verbose: bool = False,
+    limit: int = 50,
 ) -> str:
-    """List tasks with optional filters. All params optional — defaults to showing all tasks.
+    """List tasks with optional filters. Active tasks sort first; output is
+    capped at `limit` rows with an overflow footer.
 
     Args:
-        epic: Filter by epic ID (e.g., "ue-plugin", "desktop-app")
+        epic: Filter by epic ID
         status: Filter by status: todo, in-progress, in-review, done, blocked
         priority: Filter by priority: critical, high, medium, low
         phase: Filter by phase ID
         verbose: If True, include heavy fields (notes) per task entry. Slim
             (default) shows id, title, tldr, priority, epic, and status only.
+        limit: Max rows returned (default 50). 0 = no cap.
     """
     data = _load()
     priority_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
-    results: list[tuple[int, str, str, dict]] = []  # (priority_rank, created, formatted, task)
+    status_order = {
+        "in-progress": 0,
+        "in-review": 1,
+        "blocked": 2,
+        "todo": 3,
+        "done": 4,
+        "archived": 5,
+    }
+    results: list[tuple[int, int, str, str, dict]] = []  # (status_rank, priority_rank, created, formatted, task)
     for ep in data["epics"]:
         if epic and ep["id"] != epic:
             continue
@@ -1082,6 +1093,7 @@ def backlog_list_tasks(
             pri = t.get("priority", "medium")
             entry = f"`{t['id']}` — {t['title']} ({pri}, {ep['id']}, {t.get('status', 'todo')})"
             results.append((
+                status_order.get(t.get("status", "todo"), 9),
                 priority_order.get(pri, 9),
                 str(t.get("created", "")),
                 entry,
@@ -1100,26 +1112,42 @@ def backlog_list_tasks(
             filters.append(f"phase={phase}")
         return f"No tasks found matching: {', '.join(filters) if filters else 'any'}"
 
-    results.sort(key=lambda x: (x[0], x[1]))
+    results.sort(key=lambda x: (x[0], x[1], x[2]))
+
+    total = len(results)
+    overflow = 0
+    if limit > 0 and total > limit:
+        overflow = total - limit
+        results = results[:limit]
+    header = f"**{total} tasks:**" if not overflow else f"**{total} tasks (showing first {limit}):**"
+    footer = (
+        f"…{overflow} more tasks — pass status/epic/phase filters or limit=0 for all"
+        if overflow
+        else ""
+    )
 
     if verbose:
-        lines = [f"**{len(results)} tasks:**"]
-        for _, _, entry, t in results:
+        lines = [header]
+        for _, _, _, entry, t in results:
             lines.append(f"- {entry}")
             if t.get("tldr"):
                 lines.append(f"  tldr: {t['tldr']}")
             if t.get("notes"):
                 lines.append(f"  notes: {t['notes']}")
+        if footer:
+            lines.append(footer)
         return "\n".join(lines)
 
     # Slim mode: include tldr inline but omit heavy fields (notes, body)
-    lines = [f"**{len(results)} tasks:**"]
-    for _, _, entry, t in results:
+    lines = [header]
+    for _, _, _, entry, t in results:
         tldr = t.get("tldr", "")
         slim_entry = entry
         if tldr:
             slim_entry = f"{entry} — {tldr}"
         lines.append(f"- {slim_entry}")
+    if footer:
+        lines.append(footer)
     return "\n".join(lines)
 
 
@@ -2259,7 +2287,6 @@ def backlog_handover_get(
     return "\n".join(lines)
 
 
-@mcp.tool()
 def backlog_handover_latest() -> str:
     """[DEPRECATED] Alias for backlog_handover_list(status="open", limit=1, sort="created_desc").
 
@@ -4131,13 +4158,14 @@ def backlog_lesson_reinforce(lesson_id: str) -> str:
         fm = _reinforce_lesson(bp, lesson_id)
     except FileNotFoundError:
         return f"Lesson not found: {lesson_id}"
+    except ValueError as exc:
+        return f"Error: {exc}"
     msg = f"Reinforced {lesson_id} → x{fm['reinforce_count']}"
     if _lesson_eligible_for_promotion(fm):
         msg += "\n→ Eligible for promotion to core tier (auto-load at session start). Use `backlog_lesson_update {} tier=core` to promote.".format(lesson_id)
     return msg
 
 
-@mcp.tool()
 def lesson_reinforce(lesson_id: str, source: str = "user", note: str = "") -> str:
     """Record a reinforcement event for a lesson.
 
@@ -5137,7 +5165,6 @@ def backlog_complete_task(
     return f"{status_label} `{task_id}` — {task['title']}" + changelog_msg + review_warning + suggestion
 
 
-@mcp.tool()
 def backlog_release_notes(release: str = "", group_by: str = "epic", include_unreleased: bool = False) -> str:
     """Aggregate user-facing patchnotes across tasks for a given release bucket.
 
@@ -9052,7 +9079,6 @@ def backlog_open_viewer() -> str:
     return f"Opened backlog viewer at {url}"
 
 
-@mcp.tool()
 def recap_get(session_id: str) -> str:
     """Return the recap for a session as JSON, or `null` when missing."""
     import json as _json
@@ -9060,7 +9086,6 @@ def recap_get(session_id: str) -> str:
     return _json.dumps(rec)
 
 
-@mcp.tool()
 def recap_set(
     session_id: str,
     frontmatter_json: str,
@@ -9098,7 +9123,6 @@ def recap_list() -> str:
     return _json.dumps(list_recaps())
 
 
-@mcp.tool()
 def snapshot_diff(snapshot_a_json: str, snapshot_b_json: str) -> str:
     """Compute structured diff between two snapshot payloads, returned as JSON."""
     import json as _json
@@ -9107,7 +9131,6 @@ def snapshot_diff(snapshot_a_json: str, snapshot_b_json: str) -> str:
     return _json.dumps(_snapshot_diff(a, b))
 
 
-@mcp.tool()
 def lesson_list_extended() -> str:
     """List all lessons with computed shelf placement using current viewer thresholds."""
     import json as _json
@@ -9130,7 +9153,6 @@ def lesson_list_extended() -> str:
     return _json.dumps({"lessons": out}, indent=2, default=str)
 
 
-@mcp.tool()
 def issue_list_extended(include_resolved: bool = True) -> str:
     """List all issues with computed aging tier per severity base."""
     import json as _json
@@ -9160,7 +9182,6 @@ def issue_list_extended(include_resolved: bool = True) -> str:
     return _json.dumps({"issues": out}, indent=2, default=str)
 
 
-@mcp.tool()
 def auto_state_get() -> str:
     """Return the most-recent auto-mode session state as JSON. {} if none running."""
     import json
@@ -9169,7 +9190,6 @@ def auto_state_get() -> str:
     return json.dumps(sessions[0] if sessions else {})
 
 
-@mcp.tool()
 def auto_pause(session_id: str) -> str:
     """Mark a running auto-mode session as paused. Returns 'ok' or 'error: ...'."""
     from datetime import datetime, timezone
@@ -9188,7 +9208,6 @@ def auto_pause(session_id: str) -> str:
     return "ok"
 
 
-@mcp.tool()
 def auto_stop(session_id: str) -> str:
     """Mark a running auto-mode session as stopped. Returns 'ok' or 'error: ...'."""
     from datetime import datetime, timezone
@@ -9207,7 +9226,6 @@ def auto_stop(session_id: str) -> str:
     return "ok"
 
 
-@mcp.tool()
 def auto_history(limit: int = 50) -> str:
     """Return recent auto-mode sessions as JSON, newest first."""
     import json
@@ -9216,7 +9234,6 @@ def auto_history(limit: int = 50) -> str:
     return json.dumps({"sessions": sessions}, indent=2)
 
 
-@mcp.tool()
 def auto_event_log(session_id: str, since: str | None = None) -> str:
     """Return events for a session, optionally filtered by ISO 8601 timestamp."""
     import json

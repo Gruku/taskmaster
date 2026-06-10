@@ -29,20 +29,15 @@ escape_for_json() {
     printf '%s' "$s"
 }
 
-CONTEXT="You have the Taskmaster plugin available for AI-powered task and backlog management.
-
-For ANY task-related request, invoke taskmaster:taskmaster first — it routes to the correct sub-skill:
+CONTEXT="Taskmaster plugin active. For ANY task-related request, invoke taskmaster:taskmaster first — it routes to the correct sub-skill. Highest-ambiguity direct routes:
 
 | User Intent | Routed To |
 |-------------|-----------|
 | New conversation, 'what should I work on', 'orient me' | taskmaster:start-session |
-| 'Pick task X', 'start task', 'what should I tackle' | taskmaster:pick-task |
-| 'Is this ready?', 'check my work', 'review gate' | taskmaster:review-gate |
-| 'End session', 'I'm done', 'wrap up', 'log this' | taskmaster:end-session |
+| 'End session', 'I'm done', 'wrap up' | taskmaster:end-session |
 | 'Set up taskmaster', 'initialize backlog' | taskmaster:init-taskmaster |
 
-Phase tools: backlog_add_phase, backlog_phase_status, backlog_advance_phase.
-All other backlog_* MCP tools are available for direct task queries and mutations when you already know what to call."
+All backlog_* MCP tools are available for direct queries and mutations when you already know what to call."
 
 context_escaped=$(escape_for_json "$CONTEXT")
 

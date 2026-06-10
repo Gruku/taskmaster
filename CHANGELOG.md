@@ -12,6 +12,49 @@ indicate schema breaks or removed surfaces.
 
 ---
 
+## 3.16.0 — Token diet: dead-tool cull, bounded list_tasks, slimmer prompts (2026-06-10)
+
+Fixed-context cost drops ~2,500 tokens per session (2026-06-10 token audit;
+tm-audit-006/021/022).
+
+### Removed
+
+- **13 dead MCP tool registrations** (125 → 112 tools, ~1,400 tok/session).
+  Zero agent-surface references, verified by corpus grep: `backlog_release_notes`,
+  `backlog_handover_latest` (self-deprecated alias), `recap_get`, `recap_set`,
+  `snapshot_diff`, `lesson_list_extended`, `issue_list_extended`, `auto_state_get`,
+  `auto_pause`, `auto_stop`, `auto_history`, `auto_event_log`, and the orphan
+  `lesson_reinforce` duplicate. The underlying functions remain — the viewer's
+  HTTP routes and tests use them; only the MCP registrations are gone.
+  SemVer note: technically removed surface (→ major), deliberately shipped as
+  minor because every removed registration had zero references and zero
+  behavior loss. Kept registered after reference-check: `backlog_archive_epic`
+  (backlog_update_epic redirects to it), `recap_list` (reflect-auto-improve
+  retro), `viewer_prefs_get/set` (migrate-v3 migration steps).
+
+### Added
+
+- **`backlog_list_tasks` is bounded**: default `limit=50` with an overflow
+  footer ("…N more tasks — pass status/epic/phase filters or limit=0 for all")
+  and `limit=0` escape hatch. Rows now sort by status activity
+  (in-progress/in-review first, done last) then priority, so the truncated
+  view leads with active work. Unfiltered calls previously dumped the entire
+  backlog (~3.3k tokens at 157 tasks).
+- **`backlog_lesson_reinforce` writes the reinforce_events audit trail.**
+  Historically only the orphan `lesson_reinforce` (now culled) appended audit
+  events, so MCP-driven reinforcement never populated the trail.
+
+### Changed
+
+- **6 heaviest skill descriptions tightened** (issue, decision, bug, linear,
+  lesson, init-taskmaster; ~975 chars / ~244 tok of always-loaded frontmatter).
+  All trigger phrases and the issue↔bug routing disambiguation preserved.
+- **SessionStart injection halved** (837 → 555 chars): routing table reduced
+  to the 3 highest-ambiguity routes; the `taskmaster:taskmaster` router skill
+  carries the full table.
+
+---
+
 ## 3.15.1 — Resilient hook launcher + legacy shims (2026-06-10)
 
 ### Fixed

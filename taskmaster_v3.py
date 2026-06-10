@@ -3287,9 +3287,24 @@ def update_lesson(
     return fm, new_body
 
 
-def reinforce_lesson(backlog_path: Path, lesson_id: str) -> dict[str, Any]:
-    """Bump reinforce_count and set last_reinforced=today. Returns updated fm."""
+def reinforce_lesson(
+    backlog_path: Path, lesson_id: str, source: str = "skill", note: str = ""
+) -> dict[str, Any]:
+    """Bump reinforce_count, set last_reinforced=today, and append a
+    reinforce_events audit entry. Returns updated fm.
+
+    The audit entry was historically only written by the bare
+    `lesson_reinforce` (CWD-resolved) path, so MCP-driven reinforcement
+    never populated the trail — consolidated here (tm-audit-006).
+    """
+    if source not in LESSON_REINFORCE_SOURCES:
+        raise ValueError(
+            f"source must be one of {sorted(LESSON_REINFORCE_SOURCES)}, got {source!r}"
+        )
     fm, body = read_lesson(backlog_path, lesson_id)
+    _ensure_reinforce_events(fm)
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    fm["reinforce_events"].append({"at": now_iso, "source": source, "note": note or ""})
     fm["reinforce_count"] = int(fm.get("reinforce_count") or 0) + 1
     fm["last_reinforced"] = date.today().isoformat()
     write_task_file(lesson_path(backlog_path, lesson_id), fm, body)
