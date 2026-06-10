@@ -4396,7 +4396,21 @@ def load_viewer_prefs() -> dict:
         prefs = deepcopy(VIEWER_PREFS_DEFAULTS)
         atomic_write(p, json.dumps(prefs, indent=2))
         return prefs
-    raw = json.loads(p.read_text())
+    try:
+        raw = json.loads(p.read_text())
+    except (json.JSONDecodeError, OSError) as exc:
+        # A corrupt prefs file must never take the viewer down (observed:
+        # trailing garbage from a concatenation accident). Quarantine it and
+        # start over from defaults.
+        import sys
+        print(f"[taskmaster] corrupt viewer.json ({exc}); resetting to defaults", file=sys.stderr)
+        try:
+            p.replace(p.with_suffix(".json.corrupt"))
+        except OSError:
+            pass
+        prefs = deepcopy(VIEWER_PREFS_DEFAULTS)
+        atomic_write(p, json.dumps(prefs, indent=2))
+        return prefs
 
     # Deep-merge defaults under the loaded data so missing nested keys appear.
     def _merge(default, loaded):
