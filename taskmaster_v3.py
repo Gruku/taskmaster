@@ -3746,7 +3746,11 @@ def _resolve_note_path(backlog_path: Path, note_id: str) -> Path:
 
 
 def list_note_ids(backlog_path: Path, include_archived: bool = False) -> list[str]:
-    """Note ids on disk, sorted numerically."""
+    """Note ids on disk, sorted numerically.
+
+    Archived ids always counted by next_note_id; only returned here when
+    include_archived=True.
+    """
 
     def _rank(p: Path) -> int:
         m = re.search(r"(\d+)$", p.stem)
@@ -3870,7 +3874,7 @@ def list_notes(backlog_path: Path, include_archived: bool = False) -> list[dict[
     for nid in list_note_ids(backlog_path, include_archived=include_archived):
         try:
             fm, body = read_note(backlog_path, nid)
-        except (OSError, ValueError, FileNotFoundError):
+        except (OSError, ValueError):
             continue
         if not include_archived and fm.get("archived"):
             continue
@@ -3880,11 +3884,14 @@ def list_notes(backlog_path: Path, include_archived: bool = False) -> list[dict[
         m = re.search(r"(\d+)$", n.get("id", ""))
         return int(m.group(1)) if m else 0
 
+    # Numeric-id tiebreak prevents nondeterminism when created timestamps tie (1-s resolution).
+    def _key(n: dict[str, Any]) -> tuple[str, int]:
+        return (n.get("created", ""), _num(n))
+
     pinned = [n for n in out if n.get("pinned")]
     unpinned = [n for n in out if not n.get("pinned")]
-    key = lambda n: (n.get("created", ""), _num(n))
-    pinned.sort(key=key, reverse=True)
-    unpinned.sort(key=key, reverse=True)
+    pinned.sort(key=_key, reverse=True)
+    unpinned.sort(key=_key, reverse=True)
     return pinned + unpinned
 
 

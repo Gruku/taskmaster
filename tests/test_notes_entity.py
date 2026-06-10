@@ -64,6 +64,11 @@ def test_update_note_text_and_pin(bp):
     assert fm2["author"] == "user"
 
 
+def test_update_note_missing_raises(bp):
+    with pytest.raises(FileNotFoundError):
+        update_note(bp, "NOTE-999", text="nope")
+
+
 def test_archive_note_moves_file(bp):
     nid, live_path = write_note(bp, text="done with this", author="claude")
     fm = archive_note(bp, nid)
@@ -90,6 +95,8 @@ def test_next_note_id_skips_archived(bp):
 
 
 def test_list_notes_pinned_first_then_newest(bp):
+    # All three notes land in the same second, so `created` ties — ordering
+    # within each pin-group is resolved by the numeric-id tiebreak.
     n1, _ = write_note(bp, text="oldest", author="user")
     n2, _ = write_note(bp, text="pinned one", author="user", pinned=True)
     n3, _ = write_note(bp, text="newest", author="claude")
