@@ -8150,6 +8150,15 @@ class ViewerHandler(BaseHTTPRequestHandler):
             except FileNotFoundError:
                 self._send_json(404, {"ok": False, "error": f"handover {handover_id} not found"})
             return
+        elif clean_path == "/api/notes":
+            from urllib.parse import urlparse, parse_qs
+            from taskmaster_v3 import list_notes as _list_notes
+            qs = parse_qs(urlparse(self.path).query)
+            include_archived = qs.get("include_archived", ["0"])[0] in ("1", "true")
+            bp = _backlog_path()
+            notes = _list_notes(bp, include_archived=include_archived) if bp.exists() else []
+            self._send_json(200, {"notes": notes})
+            return
         else:
             self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -8284,6 +8293,66 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 self._send_json(400, {"ok": False, "error": str(e)})
                 return
             self._send_json(201, {"ok": True, "id": iid, "path": str(target)})
+            return
+
+        if self.path == "/api/notes":
+            from taskmaster_v3 import write_note as _write_note
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length).decode("utf-8") if length else ""
+            try:
+                payload = json.loads(raw) if raw else {}
+            except Exception as e:
+                self._send_json(400, {"ok": False, "error": f"invalid JSON: {e}"})
+                return
+            text = (payload.get("text") or "").strip()
+            if not text:
+                self._send_json(400, {"ok": False, "error": "text is required"})
+                return
+            bp = _backlog_path()
+            if not bp.exists():
+                self._send_json(400, {"ok": False, "error": f"no backlog at {bp}"})
+                return
+            try:
+                nid, _target = _write_note(
+                    bp, text=text, author="user",
+                    pinned=bool(payload.get("pinned", False)),
+                )
+            except ValueError as e:
+                self._send_json(400, {"ok": False, "error": str(e)})
+                return
+            self._send_json(201, {"ok": True, "id": nid})
+            return
+
+        m = re.fullmatch(r"/api/notes/([A-Za-z0-9_\-]+)/(update|archive)", self.path)
+        if m:
+            from taskmaster_v3 import update_note as _update_note, archive_note as _archive_note
+            note_id, action = m.group(1), m.group(2)
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length).decode("utf-8") if length else ""
+            try:
+                payload = json.loads(raw) if raw else {}
+            except Exception as e:
+                self._send_json(400, {"ok": False, "error": f"invalid JSON: {e}"})
+                return
+            bp = _backlog_path()
+            try:
+                if action == "archive":
+                    _archive_note(bp, note_id)
+                else:
+                    text = payload.get("text")
+                    pinned = payload.get("pinned")
+                    _update_note(
+                        bp, note_id,
+                        text=(text.strip() if isinstance(text, str) and text.strip() else None),
+                        pinned=(bool(pinned) if pinned is not None else None),
+                    )
+            except FileNotFoundError:
+                self._send_json(404, {"ok": False, "error": f"note {note_id} not found"})
+                return
+            except ValueError as e:
+                self._send_json(400, {"ok": False, "error": str(e)})
+                return
+            self._send_json(200, {"ok": True, "id": note_id})
             return
 
         if self.path in ("/api/auto/pause", "/api/auto/stop"):
