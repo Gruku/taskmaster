@@ -4158,6 +4158,8 @@ def backlog_lesson_reinforce(lesson_id: str) -> str:
         fm = _reinforce_lesson(bp, lesson_id)
     except FileNotFoundError:
         return f"Lesson not found: {lesson_id}"
+    except ValueError as exc:
+        return f"Error: {exc}"
     msg = f"Reinforced {lesson_id} → x{fm['reinforce_count']}"
     if _lesson_eligible_for_promotion(fm):
         msg += "\n→ Eligible for promotion to core tier (auto-load at session start). Use `backlog_lesson_update {} tier=core` to promote.".format(lesson_id)
