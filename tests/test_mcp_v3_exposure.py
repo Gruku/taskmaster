@@ -79,7 +79,6 @@ def test_backlog_migrate_v3_is_exposed():
         "backlog_handover_create",
         "backlog_handover_get",
         "backlog_handover_list",
-        "backlog_handover_latest",
         "backlog_handover_resync",
         "backlog_handover_supersede",
     ],
@@ -204,4 +203,6 @@ def test_full_v3_surface_count():
         n for n in names
         if any(k in n for k in ("migrate", "handover", "lesson", "issue", "idea", "recap", "snapshot", "auto_"))
     ]
-    assert len(v3_tools) >= 38, f"v3 surface shrank to {len(v3_tools)} tools (was 46)"
+    # Floor lowered 38 -> 36 by tm-audit-006: intentional cull of 13 dead
+    # registrations (10 of them match the v3 keyword filter).
+    assert len(v3_tools) >= 36, f"v3 surface shrank to {len(v3_tools)} tools (was 36 after tm-audit-006)"
