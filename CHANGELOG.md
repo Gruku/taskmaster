@@ -12,6 +12,27 @@ indicate schema breaks or removed surfaces.
 
 ---
 
+## 3.15.0 — The Desk: sticky notes dashboard (2026-06-10)
+
+Dashboard rebuilt as **The Desk** — sticky notes first.
+
+### Added
+
+- **Sticky notes entity**: `.taskmaster/notes/NOTE-NNN.md` — freeform, situational notes-to-self. New MCP tools: `backlog_note_create`, `backlog_note_list`, `backlog_note_get`, `backlog_note_update`, `backlog_note_archive`. New HTTP API: `/api/notes` (+ update/archive). Viewer-created notes are author `user`; MCP-created are `claude` — rendered as visually distinct paper (yellow vs blue).
+- **Desk dashboard** (`#/dashboard`): paper-note board (quick-add composer, pin, inline edit, archive) above a pruned continuity band (4 rails, max 5 fresh cards each, >30d items collapse into "+N older" links). Time/Entity views and the stale full-width hero are retired.
+- **start-session** surfaces the desk ("Your desk" step); **end-session** may leave at most one consolidated claude note.
+
+### Fixed
+
+- **marked.js vendored locally** — CDN SRI hash mismatch silently blocked all markdown rendering.
+- **Sidebar version chip** stuck at "v?" — identity replay now supplies version correctly.
+- **Clipped "Taskmaster" brand** in sidebar.
+- **Favicon 404** resolved.
+- **Orphaned bento dashboard code removed** (`board-surface.js`, `dashboard.css`).
+- **Desk registered in shell scroll policy.**
+
+---
+
 ## 3.14.0 — C2: Epic Architecture Map (2026-06-06)
 
 The epic detail screen now renders a live **Architecture Map** generated from the

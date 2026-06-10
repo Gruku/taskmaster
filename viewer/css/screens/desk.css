@@ -1,0 +1,140 @@
+/* Desk — sticky-notes-first dashboard.
+   Paper notes are the ONE place light surfaces appear on the dark canvas:
+   that contrast (plus static tilt + folded corner) is what makes them read
+   as physical notes. No box-shadows, no hover motion — per design rules. */
+
+.dk-desk { display: flex; flex-direction: column; gap: var(--sp-7); padding: var(--sp-6) var(--sp-8); }
+
+/* Project label in the topbar slot — muted, low-emphasis. */
+.dk-proj { color: var(--ink-3); font-size: var(--text-sm); }
+
+/* Auto-mode strip slot — collapses when the strip renders nothing. */
+.dk-auto:empty { display: none; }
+
+/* ── Board ──────────────────────────────────────────────────────────────── */
+.dk-board { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--sp-5); align-items: start; }
+
+.dk-note {
+  --paper: #e8d98a;            /* user: post-it yellow */
+  --paper-edge: #d8c66f;
+  --paper-ink: #2c2718;
+  --paper-ink-soft: rgba(44, 39, 24, 0.62);
+  position: relative;
+  background: var(--paper);
+  color: var(--paper-ink);
+  border: 1px solid var(--paper-edge);
+  border-radius: 2px;            /* paper, not UI card */
+  padding: var(--sp-4) var(--sp-5) var(--sp-6);
+  min-height: 150px;
+  transform: rotate(var(--tilt, 0deg));
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  overflow-wrap: break-word;
+}
+
+/* Folded bottom-right corner — reads against bg-canvas (#14151a). */
+.dk-note::after {
+  content: '';
+  position: absolute; right: 0; bottom: 0;
+  width: 18px; height: 18px;
+  background: linear-gradient(135deg, transparent 50%, var(--bg-canvas) 50%);
+}
+
+/* Pinned pushpin dot — only on .is-pinned, so ::before is kept free on base. */
+.dk-note.is-pinned::before {
+  content: '';
+  position: absolute; left: 50%; right: auto; top: -5px; bottom: auto;
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--red); border: 1px solid rgba(0, 0, 0, 0.25);
+  transform: translateX(-50%);
+}
+
+.dk-note--claude {
+  --paper: #9fc0e8;            /* claude: cool blue paper */
+  --paper-edge: #86abd6;
+  --paper-ink: #16202e;
+  --paper-ink-soft: rgba(22, 32, 46, 0.62);
+}
+
+/* Hover: brightness lift only — no transform, no movement (design rule). */
+.dk-note:hover { background: color-mix(in srgb, var(--paper) 94%, white); }
+
+/* ── Note head ──────────────────────────────────────────────────────────── */
+.dk-note__head {
+  display: flex; align-items: baseline; gap: var(--sp-2);
+  font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.07em;
+  color: var(--paper-ink-soft);
+  margin-bottom: var(--sp-3);
+}
+.dk-note__who { font-weight: 600; }
+.dk-note__when { margin-right: auto; }
+
+.dk-note__pin, .dk-note__archive {
+  background: none; border: none; cursor: pointer; padding: 0 2px;
+  font-size: var(--text-xs); color: var(--paper-ink-soft);
+  opacity: 0;
+  transition: opacity var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.dk-note:hover .dk-note__pin,
+.dk-note:hover .dk-note__archive { opacity: 1; }
+
+/* Pinned note: pin button always visible and full colour. */
+.dk-note.is-pinned .dk-note__pin { opacity: 1; filter: none; }
+.dk-note__pin { filter: grayscale(1); }
+.dk-note__archive:hover { color: var(--red); }
+
+/* ── Note body + edit ───────────────────────────────────────────────────── */
+.dk-note__body { cursor: text; max-height: 16em; overflow: hidden; }
+.dk-note__body a { color: inherit; text-decoration: underline; }
+.dk-note__body code {
+  background: rgba(0, 0, 0, 0.08); padding: 0 3px; border-radius: 2px;
+  font-family: var(--font-mono); font-size: 0.92em;
+}
+.dk-note__body p { margin: 0 0 var(--sp-2); }
+
+.dk-note__edit {
+  width: 100%; min-height: 8em; resize: vertical;
+  background: transparent; color: var(--paper-ink);
+  border: 1px dashed var(--paper-ink-soft); border-radius: 2px;
+  font: inherit; padding: var(--sp-2);
+  box-sizing: border-box;
+}
+
+/* ── Composer: ghost paper waiting for ink ──────────────────────────────── */
+.dk-composer {
+  background: transparent;
+  border: 1.5px dashed var(--paper-edge);
+  min-height: 150px;
+}
+/* Override the base hover — use a very light yellow tint instead of color-mix. */
+.dk-composer:hover { background: rgba(232, 217, 138, 0.06); }
+
+.dk-composer__input {
+  display: block;
+  width: 100%; height: 100%; min-height: 110px; resize: none;
+  background: transparent; border: none; outline: none;
+  color: var(--ink); font: inherit;
+}
+.dk-composer__input::placeholder { color: var(--ink-4); }
+
+/* ── Continuity band ────────────────────────────────────────────────────── */
+.dk-continuity {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--sp-6);
+}
+.dk-continuity:empty { display: none; }
+
+.dk-older {
+  display: block; padding: var(--sp-2) var(--sp-3);
+  color: var(--ink-4); font-size: var(--text-xs); text-decoration: none;
+}
+.dk-older:hover { color: var(--ink-2); }
+
+.dk-empty { color: var(--ink-4); font-size: var(--text-sm); padding: var(--sp-4) 0; }
+
+/* ── Mobile ─────────────────────────────────────────────────────────────── */
+@media (max-width: 720px) {
+  .dk-desk { padding: var(--sp-4); }
+  .dk-board { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
+}

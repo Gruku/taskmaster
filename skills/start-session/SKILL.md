@@ -39,6 +39,10 @@ Linear sync: N queued · M permanent failures (latest: <reason snippet>)
 
 If the queue is empty and there are no permanent failures, omit this line entirely. Surface verbosely only when there's a real backlog or a stuck failure — otherwise this is noise. If permanent failures are present, suggest `taskmaster:linear status` for the full breakdown.
 
+### Step 3c — Your desk (sticky notes)
+
+Call `backlog_note_list()`. If notes exist, render them under a **Your desk** heading in the briefing — pinned first, one line each (author · age · first line). These are the user's situational notes-to-self: treat as orientation context for "what was on my mind", alongside (not replacing) the last handover. Never archive, edit, or act on a note without the user asking.
+
 ### Step 4 — Briefing
 
 Present in order:

@@ -3720,6 +3720,102 @@ def backlog_idea_update(
 
 
 @mcp.tool()
+def backlog_note_create(text: str, pinned: bool = False) -> str:
+    """Write a sticky note onto the user's Desk (dashboard).
+
+    Notes are the lightest continuity surface: freeform, situational,
+    NOT attached to tasks. Claude-created notes are stamped author
+    "claude" and render visually distinct from the user's own notes.
+    Write at most one consolidated note per session, and only for loose
+    thoughts that fit no other entity (task/idea/issue/handover).
+    """
+    bp = _backlog_path()
+    if not bp.exists():
+        return f"Error: no backlog found at {bp}. Run `backlog_init` first."
+    from taskmaster_v3 import write_note as _write_note
+    try:
+        nid, target = _write_note(bp, text=text, author="claude", pinned=pinned)
+    except ValueError as exc:
+        return f"Error: {exc}"
+    try:
+        rel = target.relative_to(ROOT)
+    except ValueError:
+        rel = target
+    return f"Note created: {nid}\nFile: {rel}"
+
+
+@mcp.tool()
+def backlog_note_list(include_archived: bool = False) -> str:
+    """List sticky notes from the user's Desk — pinned first, newest first.
+
+    Returns one line per note: id, author, pin marker, created date, first
+    line of text. Use during session start to surface the user's desk."""
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    from taskmaster_v3 import list_notes as _list_notes
+    notes = _list_notes(bp, include_archived=include_archived)
+    if not notes:
+        return "Desk is clear — no notes."
+    lines = []
+    for n in notes:
+        first = (n.get("body") or "").strip().splitlines()[0] if n.get("body") else ""
+        pin = "📌 " if n.get("pinned") else ""
+        arch = " [archived]" if n.get("archived") else ""
+        created = str(n.get("created", ""))[:10]
+        lines.append(f"- {n['id']} ({n.get('author')}, {created}){arch} — {pin}{first}")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def backlog_note_get(note_id: str) -> str:
+    """Read one sticky note in full (frontmatter + complete text)."""
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    from taskmaster_v3 import read_note as _read_note
+    try:
+        fm, body = _read_note(bp, note_id)
+    except FileNotFoundError:
+        return f"Note not found: {note_id}"
+    fm_lines = [f"  {k}: {v}" for k, v in fm.items()]
+    return "---\n" + "\n".join(fm_lines) + "\n---\n" + body
+
+
+@mcp.tool()
+def backlog_note_update(note_id: str, text: str = "", pinned: bool | None = None) -> str:
+    """Edit a sticky note's text and/or pin state. Author is immutable —
+    a user-authored note stays user-authored even if Claude edits it
+    (avoid editing user notes unless explicitly asked)."""
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    from taskmaster_v3 import update_note as _update_note
+    try:
+        _update_note(bp, note_id, text=text or None, pinned=pinned)
+    except FileNotFoundError:
+        return f"Note not found: {note_id}"
+    except ValueError as exc:
+        return f"Error: {exc}"
+    return f"Note updated: {note_id}"
+
+
+@mcp.tool()
+def backlog_note_archive(note_id: str) -> str:
+    """Archive a sticky note (moves it off the Desk into notes/_archive/).
+    Never archive user-authored notes unless the user explicitly asks."""
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    from taskmaster_v3 import archive_note as _archive_note
+    try:
+        _archive_note(bp, note_id)
+    except FileNotFoundError:
+        return f"Note not found: {note_id}"
+    return f"Note archived: {note_id}"
+
+
+@mcp.tool()
 def viewer_prefs_get() -> str:
     """Return current viewer prefs as JSON."""
     import json
@@ -7703,6 +7799,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
             # Make relative asset refs absolute under /static/v3/.
             html = html.replace('href="css/', 'href="/static/v3/css/')
             html = html.replace('src="js/', 'src="/static/v3/js/')
+            html = html.replace('src="vendor/', 'src="/static/v3/vendor/')
             body = html.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -8054,6 +8151,15 @@ class ViewerHandler(BaseHTTPRequestHandler):
             except FileNotFoundError:
                 self._send_json(404, {"ok": False, "error": f"handover {handover_id} not found"})
             return
+        elif clean_path == "/api/notes":
+            from urllib.parse import urlparse, parse_qs
+            from taskmaster_v3 import list_notes as _list_notes
+            qs = parse_qs(urlparse(self.path).query)
+            include_archived = qs.get("include_archived", ["0"])[0] in ("1", "true")
+            bp = _backlog_path()
+            notes = _list_notes(bp, include_archived=include_archived) if bp.exists() else []
+            self._send_json(200, {"notes": notes})
+            return
         else:
             self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -8188,6 +8294,66 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 self._send_json(400, {"ok": False, "error": str(e)})
                 return
             self._send_json(201, {"ok": True, "id": iid, "path": str(target)})
+            return
+
+        if self.path == "/api/notes":
+            from taskmaster_v3 import write_note as _write_note
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length).decode("utf-8") if length else ""
+            try:
+                payload = json.loads(raw) if raw else {}
+            except Exception as e:
+                self._send_json(400, {"ok": False, "error": f"invalid JSON: {e}"})
+                return
+            text = (payload.get("text") or "").strip()
+            if not text:
+                self._send_json(400, {"ok": False, "error": "text is required"})
+                return
+            bp = _backlog_path()
+            if not bp.exists():
+                self._send_json(400, {"ok": False, "error": f"no backlog at {bp}"})
+                return
+            try:
+                nid, _target = _write_note(
+                    bp, text=text, author="user",
+                    pinned=bool(payload.get("pinned", False)),
+                )
+            except ValueError as e:
+                self._send_json(400, {"ok": False, "error": str(e)})
+                return
+            self._send_json(201, {"ok": True, "id": nid})
+            return
+
+        m = re.fullmatch(r"/api/notes/([A-Za-z0-9_\-]+)/(update|archive)", self.path)
+        if m:
+            from taskmaster_v3 import update_note as _update_note, archive_note as _archive_note
+            note_id, action = m.group(1), m.group(2)
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length).decode("utf-8") if length else ""
+            try:
+                payload = json.loads(raw) if raw else {}
+            except Exception as e:
+                self._send_json(400, {"ok": False, "error": f"invalid JSON: {e}"})
+                return
+            bp = _backlog_path()
+            try:
+                if action == "archive":
+                    _archive_note(bp, note_id)
+                else:
+                    text = payload.get("text")
+                    pinned = payload.get("pinned")
+                    _update_note(
+                        bp, note_id,
+                        text=(text.strip() if isinstance(text, str) and text.strip() else None),
+                        pinned=(bool(pinned) if pinned is not None else None),
+                    )
+            except FileNotFoundError:
+                self._send_json(404, {"ok": False, "error": f"note {note_id} not found"})
+                return
+            except ValueError as e:
+                self._send_json(400, {"ok": False, "error": str(e)})
+                return
+            self._send_json(200, {"ok": True, "id": note_id})
             return
 
         if self.path in ("/api/auto/pause", "/api/auto/stop"):

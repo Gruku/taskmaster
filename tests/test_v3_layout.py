@@ -1536,3 +1536,17 @@ def test_read_hook_events_missing_log_returns_empty(tmp_path, monkeypatch):
     from taskmaster_v3 import read_hook_events
     monkeypatch.chdir(tmp_path)
     assert read_hook_events("v3-014") == {}
+
+
+def test_load_viewer_prefs_corrupt_file_resets_to_defaults(tmp_path, monkeypatch):
+    """A corrupt viewer.json must never take the viewer down — it is
+    quarantined to viewer.json.corrupt and replaced with defaults."""
+    import taskmaster_v3 as v3
+    p = tmp_path / "viewer.json"
+    p.write_text('{"theme": "dark"}   }\n  }\n}', encoding="utf-8")
+    monkeypatch.setattr(v3, "viewer_prefs_path", lambda: p)
+    prefs = v3.load_viewer_prefs()
+    assert prefs["schema_version"] == v3.VIEWER_PREFS_DEFAULTS["schema_version"]
+    assert (tmp_path / "viewer.json.corrupt").exists()
+    # The rewritten file parses cleanly on the next load.
+    assert v3.load_viewer_prefs()["theme"] == v3.VIEWER_PREFS_DEFAULTS["theme"]

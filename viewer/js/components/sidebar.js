@@ -44,8 +44,10 @@ export function mountSidebar(el, { store, prefs }) {
   logo.className = 'sidebar-logo';
   logo.innerHTML = `
     <div class="mark"></div>
-    <div class="name">Taskmaster</div>
-    <div class="ver" id="sidebar-version">v?</div>
+    <div class="brand">
+      <div class="name">Taskmaster</div>
+      <div class="ver" id="sidebar-version">v?</div>
+    </div>
     <button class="sidebar-collapse-btn" type="button" aria-label="Collapse sidebar" title="Collapse sidebar">‹</button>
   `;
   el.appendChild(logo);
@@ -65,12 +67,18 @@ export function mountSidebar(el, { store, prefs }) {
     collapseBtn.title = 'Expand sidebar';
   }
 
+  // Nav scroll body — sections + footer sit inside here so the logo above
+  // is never inside the overflow region and always has the full sidebar width.
+  const nav = document.createElement('div');
+  nav.className = 'sidebar-nav';
+  el.appendChild(nav);
+
   // Sections
   for (const sect of SECTIONS) {
     const h = document.createElement('div');
     h.className = 'sidebar-section-h';
     h.textContent = sect.label;
-    el.appendChild(h);
+    nav.appendChild(h);
 
     for (const item of sect.items) {
       const a = document.createElement('a');
@@ -79,7 +87,7 @@ export function mountSidebar(el, { store, prefs }) {
       a.href = item.hash;
       a.title = item.label;
       a.innerHTML = `<span class="ic">${item.icon}</span><span class="lbl">${item.label}</span><span class="badge"></span>`;
-      el.appendChild(a);
+      nav.appendChild(a);
     }
   }
 
@@ -88,7 +96,7 @@ export function mountSidebar(el, { store, prefs }) {
   footer.className = 'sidebar-footer';
   footer.innerHTML = `<span class="pulse"></span><span></span>`;
   footer.hidden = true;
-  el.appendChild(footer);
+  nav.appendChild(footer);
 
   // Active sync + aria-current
   const onRouteChanged = (e) => {
@@ -106,9 +114,11 @@ export function mountSidebar(el, { store, prefs }) {
   document.addEventListener('route:changed', onRouteChanged);
 
   // Identity → version
-  const unsubIdentity = store.subscribe('identity', (id) => {
+  const applyIdentity = (id) => {
     if (id?.version) el.querySelector('#sidebar-version').textContent = 'v' + id.version;
-  });
+  };
+  const unsubIdentity = store.subscribe('identity', applyIdentity);
+  applyIdentity(store.getIdentity());   // replay — identity is set before sidebar mounts
 
   // Auto-mode live state → footer pulse + sidebar live-dot on auto_mode link
   const unsubAutoState = store.subscribe('autoState', (auto) => {
