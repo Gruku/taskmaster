@@ -165,6 +165,13 @@ export const api = {
   },
 
   // Plans 5/6 add: reinforceLesson, getRecap, putRecap, putAutoState, etc.
+
+  // ── Notes (Desk) ──────────────────────────────────────────────
+  notes: (includeArchived = false) =>
+    http('GET', `/api/notes${includeArchived ? '?include_archived=1' : ''}`),
+  createNote: (text, pinned = false) => http('POST', '/api/notes', { text, pinned }),
+  updateNote: (id, patch) => http('POST', `/api/notes/${encodeURIComponent(id)}/update`, patch),
+  archiveNote: (id) => http('POST', `/api/notes/${encodeURIComponent(id)}/archive`, {}),
 };
 
 // --- Sessions / Recap (Plan 5a) -------------------------------------------
