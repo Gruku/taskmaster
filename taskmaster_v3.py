@@ -3713,6 +3713,181 @@ def list_ideas(
     return out
 
 
+# ── Notes (sticky) ────────────────────────────────────────────
+# A note is the lightest entity: freeform markdown body + author + pin.
+# No title, no status, no links. Viewer-created notes are author "user";
+# MCP-created notes are author "claude". Archive = move to _archive/.
+
+NOTE_AUTHORS = ("user", "claude")
+
+
+def note_dir(backlog_path: Path) -> Path:
+    return backlog_path.parent / "notes"
+
+
+def note_archive_dir(backlog_path: Path) -> Path:
+    return note_dir(backlog_path) / "_archive"
+
+
+def note_path(backlog_path: Path, note_id: str, archived: bool = False) -> Path:
+    base = note_archive_dir(backlog_path) if archived else note_dir(backlog_path)
+    return base / f"{note_id}.md"
+
+
+def _resolve_note_path(backlog_path: Path, note_id: str) -> Path:
+    """Return the existing path for a note (live first, then archive)."""
+    live = note_path(backlog_path, note_id)
+    if live.exists():
+        return live
+    archived = note_path(backlog_path, note_id, archived=True)
+    if archived.exists():
+        return archived
+    raise FileNotFoundError(f"Note not found: {note_id}")
+
+
+def list_note_ids(backlog_path: Path, include_archived: bool = False) -> list[str]:
+    """Note ids on disk, sorted numerically."""
+
+    def _rank(p: Path) -> int:
+        m = re.search(r"(\d+)$", p.stem)
+        return int(m.group(1)) if m else -1
+
+    dirs = [note_dir(backlog_path)]
+    if include_archived:
+        dirs.append(note_archive_dir(backlog_path))
+    out: list[Path] = []
+    for d in dirs:
+        if d.exists():
+            out.extend(d.glob("NOTE-*.md"))
+    return [p.stem for p in sorted(out, key=_rank)]
+
+
+def next_note_id(backlog_path: Path) -> str:
+    """Allocate the next NOTE-NNN id. Considers live AND archived notes so
+    archiving never causes id reuse."""
+    nums: list[int] = []
+    for ident in list_note_ids(backlog_path, include_archived=True):
+        m = re.search(r"(\d+)$", ident)
+        if m:
+            nums.append(int(m.group(1)))
+    n = (max(nums) + 1) if nums else 1
+    return f"NOTE-{n:03d}"
+
+
+def _validate_note(fm: dict[str, Any], body: str) -> None:
+    if not body or not body.strip():
+        raise ValueError("note text is required")
+    if fm.get("author") not in NOTE_AUTHORS:
+        raise ValueError(f"note author must be one of {NOTE_AUTHORS}")
+
+
+def write_note(
+    backlog_path: Path,
+    *,
+    text: str,
+    author: str = "claude",
+    pinned: bool = False,
+    note_id: str | None = None,
+) -> tuple[str, Path]:
+    """Create a sticky note. Returns (id, path). Body = the note text."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    fm: dict[str, Any] = {
+        "id": "PENDING",
+        "author": author,
+        "created": now,
+        "updated": now,
+        "pinned": bool(pinned),
+        "archived": False,
+        "archived_at": None,
+    }
+    _validate_note(fm, text)
+    if note_id:
+        nid = note_id
+        target = note_path(backlog_path, nid)
+        target.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        note_dir(backlog_path).mkdir(parents=True, exist_ok=True)
+        for _ in range(64):
+            candidate = next_note_id(backlog_path)
+            candidate_target = note_path(backlog_path, candidate)
+            try:
+                candidate_target.touch(exist_ok=False)
+                nid, target = candidate, candidate_target
+                break
+            except FileExistsError:
+                continue
+        else:
+            raise RuntimeError("could not allocate NOTE-NNN id after 64 attempts")
+    fm["id"] = nid
+    write_task_file(target, fm, text.strip())
+    return nid, target
+
+
+def read_note(backlog_path: Path, note_id: str) -> tuple[dict[str, Any], str]:
+    fm, body = read_task_file(_resolve_note_path(backlog_path, note_id))
+    return fm, body.rstrip("\n")
+
+
+def update_note(
+    backlog_path: Path,
+    note_id: str,
+    *,
+    text: str | None = None,
+    pinned: bool | None = None,
+) -> tuple[dict[str, Any], str]:
+    """Patch a note's text and/or pin state. Bumps `updated`. Author and
+    created are immutable."""
+    target = _resolve_note_path(backlog_path, note_id)
+    fm, body = read_task_file(target)
+    body = body.rstrip("\n")
+    new_body = body if text is None else text.strip()
+    if pinned is not None:
+        fm["pinned"] = bool(pinned)
+    fm["updated"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _validate_note(fm, new_body)
+    write_task_file(target, fm, new_body)
+    return fm, new_body
+
+
+def archive_note(backlog_path: Path, note_id: str) -> dict[str, Any]:
+    """Archive a note: set flags and move the file to _archive/."""
+    live = note_path(backlog_path, note_id)
+    if not live.exists():
+        raise FileNotFoundError(f"Note not found: {note_id}")
+    fm, body = read_task_file(live)
+    fm["archived"] = True
+    fm["archived_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    dest = note_path(backlog_path, note_id, archived=True)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    write_task_file(dest, fm, body.rstrip("\n"))
+    live.unlink()
+    return fm
+
+
+def list_notes(backlog_path: Path, include_archived: bool = False) -> list[dict[str, Any]]:
+    """All notes with bodies, pinned first then created desc (id desc tiebreak)."""
+    out: list[dict[str, Any]] = []
+    for nid in list_note_ids(backlog_path, include_archived=include_archived):
+        try:
+            fm, body = read_note(backlog_path, nid)
+        except (OSError, ValueError, FileNotFoundError):
+            continue
+        if not include_archived and fm.get("archived"):
+            continue
+        out.append({**fm, "body": body})
+
+    def _num(n: dict[str, Any]) -> int:
+        m = re.search(r"(\d+)$", n.get("id", ""))
+        return int(m.group(1)) if m else 0
+
+    pinned = [n for n in out if n.get("pinned")]
+    unpinned = [n for n in out if not n.get("pinned")]
+    key = lambda n: (n.get("created", ""), _num(n))
+    pinned.sort(key=key, reverse=True)
+    unpinned.sort(key=key, reverse=True)
+    return pinned + unpinned
+
+
 # ── Lesson candidates (deferred + scanning) ───────────────────
 
 LESSON_CANDIDATE_KINDS = ("pattern", "anti-pattern", "gotcha")
