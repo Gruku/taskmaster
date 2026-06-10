@@ -106,7 +106,7 @@
   --ease:             cubic-bezier(0.3, 0.7, 0.4, 1);
 
   /* Layout */
-  --sidebar-w:        220px;
+  --sidebar-w:        236px;
   --rail-w:           720px;            /* right-rail detail surface */
   --page-pad:         20px;
   --page-gap:         16px;
