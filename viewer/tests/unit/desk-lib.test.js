@@ -59,6 +59,16 @@ test('tiltFor is deterministic and bounded', () => {
   assert.ok(tilts.size > 1);
 });
 
+test('tiltFor spreads sequential ids (the common case) across the range', () => {
+  // Without avalanche mixing, NOTE-001..NOTE-010 cluster within ~0.05deg and
+  // the board loses its scattered-paper look.
+  const tilts = Array.from({ length: 10 }, (_, i) =>
+    tiltFor(`NOTE-${String(i + 1).padStart(3, '0')}`));
+  assert.equal(new Set(tilts).size, 10);
+  assert.ok(Math.max(...tilts) - Math.min(...tilts) >= 0.5,
+    `sequential ids too clustered: ${tilts.join(', ')}`);
+});
+
 test('firstLine returns the first non-empty line, stripped of markdown heading', () => {
   assert.equal(firstLine('# Hello\nworld'), 'Hello');
   assert.equal(firstLine('\n\n  plain text  \nmore'), 'plain text');

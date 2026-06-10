@@ -39,6 +39,11 @@ export function sortNotes(notes) {
 export function tiltFor(id) {
   let h = 0;
   for (let i = 0; i < (id || '').length; i++) h = ((h << 5) - h + id.charCodeAt(i)) | 0;
+  // Avalanche mix — without it, sequential ids (NOTE-001, NOTE-002, …) land
+  // in a near-identical tilt cluster and the board loses its scattered look.
+  h ^= h >>> 15;
+  h = Math.imul(h, 0x2c1b3c6d);
+  h ^= h >>> 12;
   return Math.round(((Math.abs(h) % 241) / 240 * 2.4 - 1.2) * 100) / 100;
 }
 
