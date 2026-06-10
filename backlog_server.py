@@ -7799,6 +7799,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
             # Make relative asset refs absolute under /static/v3/.
             html = html.replace('href="css/', 'href="/static/v3/css/')
             html = html.replace('src="js/', 'src="/static/v3/js/')
+            html = html.replace('src="vendor/', 'src="/static/v3/vendor/')
             body = html.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
