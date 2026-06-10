@@ -3720,6 +3720,102 @@ def backlog_idea_update(
 
 
 @mcp.tool()
+def backlog_note_create(text: str, pinned: bool = False) -> str:
+    """Write a sticky note onto the user's Desk (dashboard).
+
+    Notes are the lightest continuity surface: freeform, situational,
+    NOT attached to tasks. Claude-created notes are stamped author
+    "claude" and render visually distinct from the user's own notes.
+    Write at most one consolidated note per session, and only for loose
+    thoughts that fit no other entity (task/idea/issue/handover).
+    """
+    bp = _backlog_path()
+    if not bp.exists():
+        return f"Error: no backlog found at {bp}. Run `backlog_init` first."
+    from taskmaster_v3 import write_note as _write_note
+    try:
+        nid, target = _write_note(bp, text=text, author="claude", pinned=pinned)
+    except ValueError as exc:
+        return f"Error: {exc}"
+    try:
+        rel = target.relative_to(ROOT)
+    except ValueError:
+        rel = target
+    return f"Note created: {nid}\nFile: {rel}"
+
+
+@mcp.tool()
+def backlog_note_list(include_archived: bool = False) -> str:
+    """List sticky notes from the user's Desk — pinned first, newest first.
+
+    Returns one line per note: id, author, pin marker, created date, first
+    line of text. Use during session start to surface the user's desk."""
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    from taskmaster_v3 import list_notes as _list_notes
+    notes = _list_notes(bp, include_archived=include_archived)
+    if not notes:
+        return "Desk is clear — no notes."
+    lines = []
+    for n in notes:
+        first = (n.get("body") or "").strip().splitlines()[0] if n.get("body") else ""
+        pin = "📌 " if n.get("pinned") else ""
+        arch = " [archived]" if n.get("archived") else ""
+        created = str(n.get("created", ""))[:10]
+        lines.append(f"- {n['id']} ({n.get('author')}, {created}){arch} — {pin}{first}")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def backlog_note_get(note_id: str) -> str:
+    """Read one sticky note in full (frontmatter + complete text)."""
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    from taskmaster_v3 import read_note as _read_note
+    try:
+        fm, body = _read_note(bp, note_id)
+    except FileNotFoundError:
+        return f"Note not found: {note_id}"
+    fm_lines = [f"  {k}: {v}" for k, v in fm.items()]
+    return "---\n" + "\n".join(fm_lines) + "\n---\n" + body
+
+
+@mcp.tool()
+def backlog_note_update(note_id: str, text: str = "", pinned: bool | None = None) -> str:
+    """Edit a sticky note's text and/or pin state. Author is immutable —
+    a user-authored note stays user-authored even if Claude edits it
+    (avoid editing user notes unless explicitly asked)."""
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    from taskmaster_v3 import update_note as _update_note
+    try:
+        _update_note(bp, note_id, text=text or None, pinned=pinned)
+    except FileNotFoundError:
+        return f"Note not found: {note_id}"
+    except ValueError as exc:
+        return f"Error: {exc}"
+    return f"Note updated: {note_id}"
+
+
+@mcp.tool()
+def backlog_note_archive(note_id: str) -> str:
+    """Archive a sticky note (moves it off the Desk into notes/_archive/).
+    Never archive user-authored notes unless the user explicitly asks."""
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    from taskmaster_v3 import archive_note as _archive_note
+    try:
+        _archive_note(bp, note_id)
+    except FileNotFoundError:
+        return f"Note not found: {note_id}"
+    return f"Note archived: {note_id}"
+
+
+@mcp.tool()
 def viewer_prefs_get() -> str:
     """Return current viewer prefs as JSON."""
     import json

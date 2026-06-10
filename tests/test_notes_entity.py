@@ -111,3 +111,34 @@ def test_list_notes_excludes_archived_by_default(bp):
     archive_note(bp, n2)
     assert [n["id"] for n in list_notes(bp)] == [n1]
     assert {n["id"] for n in list_notes(bp, include_archived=True)} == {n1, n2}
+
+
+# ── MCP tool wrappers ────────────────────────────────────────────────────────
+
+
+def _tool(t):
+    """Call a FastMCP tool object or plain function uniformly."""
+    return getattr(t, "fn", t)
+
+
+def test_mcp_note_create_forces_claude_author(bp, monkeypatch):
+    import backlog_server
+    monkeypatch.setattr(backlog_server, "_backlog_path", lambda: bp)
+    out = _tool(backlog_server.backlog_note_create)(text="from the session")
+    assert "NOTE-001" in out
+    fm, _ = read_note(bp, "NOTE-001")
+    assert fm["author"] == "claude"
+
+
+def test_mcp_note_list_and_archive_roundtrip(bp, monkeypatch):
+    import backlog_server
+    monkeypatch.setattr(backlog_server, "_backlog_path", lambda: bp)
+    _tool(backlog_server.backlog_note_create)(text="alpha")
+    _tool(backlog_server.backlog_note_create)(text="beta", pinned=True)
+    listing = _tool(backlog_server.backlog_note_list)()
+    assert "NOTE-001" in listing and "NOTE-002" in listing
+    assert listing.index("NOTE-002") < listing.index("NOTE-001")  # pinned first
+    out = _tool(backlog_server.backlog_note_archive)("NOTE-001")
+    assert "archived" in out.lower()
+    listing2 = _tool(backlog_server.backlog_note_list)()
+    assert "NOTE-001" not in listing2
