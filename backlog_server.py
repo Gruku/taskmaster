@@ -1049,20 +1049,31 @@ def backlog_list_tasks(
     priority: str = "",
     phase: str = "",
     verbose: bool = False,
+    limit: int = 50,
 ) -> str:
-    """List tasks with optional filters. All params optional — defaults to showing all tasks.
+    """List tasks with optional filters. Active tasks sort first; output is
+    capped at `limit` rows with an overflow footer.
 
     Args:
-        epic: Filter by epic ID (e.g., "ue-plugin", "desktop-app")
+        epic: Filter by epic ID
         status: Filter by status: todo, in-progress, in-review, done, blocked
         priority: Filter by priority: critical, high, medium, low
         phase: Filter by phase ID
         verbose: If True, include heavy fields (notes) per task entry. Slim
             (default) shows id, title, tldr, priority, epic, and status only.
+        limit: Max rows returned (default 50). 0 = no cap.
     """
     data = _load()
     priority_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
-    results: list[tuple[int, str, str, dict]] = []  # (priority_rank, created, formatted, task)
+    status_order = {
+        "in-progress": 0,
+        "in-review": 1,
+        "blocked": 2,
+        "todo": 3,
+        "done": 4,
+        "archived": 5,
+    }
+    results: list[tuple[int, int, str, str, dict]] = []  # (status_rank, priority_rank, created, formatted, task)
     for ep in data["epics"]:
         if epic and ep["id"] != epic:
             continue
@@ -1082,6 +1093,7 @@ def backlog_list_tasks(
             pri = t.get("priority", "medium")
             entry = f"`{t['id']}` — {t['title']} ({pri}, {ep['id']}, {t.get('status', 'todo')})"
             results.append((
+                status_order.get(t.get("status", "todo"), 9),
                 priority_order.get(pri, 9),
                 str(t.get("created", "")),
                 entry,
@@ -1100,26 +1112,42 @@ def backlog_list_tasks(
             filters.append(f"phase={phase}")
         return f"No tasks found matching: {', '.join(filters) if filters else 'any'}"
 
-    results.sort(key=lambda x: (x[0], x[1]))
+    results.sort(key=lambda x: (x[0], x[1], x[2]))
+
+    total = len(results)
+    overflow = 0
+    if limit > 0 and total > limit:
+        overflow = total - limit
+        results = results[:limit]
+    header = f"**{total} tasks:**" if not overflow else f"**{total} tasks (showing first {limit}):**"
+    footer = (
+        f"…{overflow} more tasks — pass status/epic/phase filters or limit=0 for all"
+        if overflow
+        else ""
+    )
 
     if verbose:
-        lines = [f"**{len(results)} tasks:**"]
-        for _, _, entry, t in results:
+        lines = [header]
+        for _, _, _, entry, t in results:
             lines.append(f"- {entry}")
             if t.get("tldr"):
                 lines.append(f"  tldr: {t['tldr']}")
             if t.get("notes"):
                 lines.append(f"  notes: {t['notes']}")
+        if footer:
+            lines.append(footer)
         return "\n".join(lines)
 
     # Slim mode: include tldr inline but omit heavy fields (notes, body)
-    lines = [f"**{len(results)} tasks:**"]
-    for _, _, entry, t in results:
+    lines = [header]
+    for _, _, _, entry, t in results:
         tldr = t.get("tldr", "")
         slim_entry = entry
         if tldr:
             slim_entry = f"{entry} — {tldr}"
         lines.append(f"- {slim_entry}")
+    if footer:
+        lines.append(footer)
     return "\n".join(lines)
 
 
