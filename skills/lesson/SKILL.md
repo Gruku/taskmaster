@@ -1,6 +1,6 @@
 ---
 name: lesson
-description: "Write or reinforce a project lesson. Invoke when the user says 'remember this', 'save as a lesson', 'learn this lesson', 'memorize this', 'this keeps happening', 'we always do x here', 'we got burned by this last time', 'promote candidate to lesson', 'review lesson candidates', or 'flag this session for retro'. Do not call backlog_lesson_create or backlog_lesson_reinforce directly."
+description: "Write or reinforce a project lesson. Invoke for: 'remember this', 'save as a lesson', 'this keeps happening', 'we always do x here', 'we got burned by this last time', 'promote candidate to lesson', 'review lesson candidates', 'flag this session for retro'. Do not call backlog_lesson_create or backlog_lesson_reinforce directly."
 ---
 
 # Lesson

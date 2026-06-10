@@ -1,6 +1,6 @@
 ---
 name: init-taskmaster
-description: "Set up Taskmaster in the current project. Invoke when the user wants task/backlog tracking, says 'set up taskmaster', 'initialize backlog', 'I want to track my work here', or when backlog.yaml does not exist. Offers clean init or analysis of existing TODOs/structure to pre-populate the backlog. Also offers to scaffold the project manifest (.taskmaster/project.yaml) on v3 setups."
+description: "Set up Taskmaster in the current project. Invoke when the user says 'set up taskmaster', 'initialize backlog', 'I want to track my work here', or when backlog.yaml does not exist. Offers clean init or project analysis to pre-populate the backlog."
 ---
 
 # Initialize Taskmaster

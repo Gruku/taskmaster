@@ -1,6 +1,6 @@
 ---
 name: issue
-description: "Log/update/close project issues in .taskmaster/issues/. Issues are the elevated tier — recurring (≥2 occurrences), systemic (≥2 components / class-of-defect), or outstanding (P0/P1 with concrete blast-radius). Invoke when the user says 'log an issue', 'this is an issue', 'file an issue', 'promote to issue', 'promote B-XX to an issue', 'is this an issue', 'list open issues', 'triage issues', 'mark issue fixed', 'close ISS-XX', 'investigating ISS-XX'. NOT for one-off bugs — those route to taskmaster:bug. If the user uses 'issue' colloquially for what is really a single defect, check evidence: no evidence of recurring/systemic/outstanding → route to taskmaster:bug. This is the only correct way to write or transition a project Issue."
+description: "Log/update/close project issues in .taskmaster/issues/ — the elevated tier for recurring (≥2 occurrences), systemic (≥2 components), or P0/P1 outstanding defects. Invoke for: 'log an issue', 'file an issue', 'promote to issue', 'promote B-XX to an issue', 'is this an issue', 'list open issues', 'triage issues', 'mark issue fixed', 'close ISS-XX', 'investigating ISS-XX'. NOT for one-off bugs — those route to taskmaster:bug. Colloquial 'issue' without recurring/systemic/outstanding evidence → route to taskmaster:bug instead. Only correct way to write or transition a project Issue."
 ---
 
 # Issue
