@@ -5,6 +5,12 @@
 
 .dk-desk { display: flex; flex-direction: column; gap: var(--sp-7); padding: var(--sp-6) var(--sp-8); }
 
+/* Project label in the topbar slot — muted, low-emphasis. */
+.dk-proj { color: var(--ink-3); font-size: var(--text-sm); }
+
+/* Auto-mode strip slot — collapses when the strip renders nothing. */
+.dk-auto:empty { display: none; }
+
 /* ── Board ──────────────────────────────────────────────────────────────── */
 .dk-board { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--sp-5); align-items: start; }
 

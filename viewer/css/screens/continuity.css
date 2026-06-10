@@ -1,4 +1,8 @@
-/* Continuity dashboard — shell, topbar, view switcher, and type chips.
+/* Continuity primitives shared by the Desk dashboard band.
+   Owns the spine rail, item row, decision card, type chips, and inline XML
+   rendering. The standalone Continuity screen (hero, view switcher, action/
+   time/entity layouts) was retired — those classes are gone; the desk screen
+   (css/screens/desk.css) reuses what remains below.
    Token mapping from plan spec:
      --ground-0  → --bg-canvas      (darkest surface)
      --ground-5  → --bg-shell
@@ -7,25 +11,6 @@
      --ground-80 → --ink-2
      --ground-95 → --ink
 */
-
-.co-dash { background: var(--bg-canvas); color: var(--ink-2); }
-.co-dash__topbar { display: flex; align-items: center; gap: 10px;
-  padding: 12px 18px; background: var(--bg-shell);
-  border-bottom: 1px solid var(--border); }
-.co-dash__body { padding: 18px; }
-.co-dash__layout { display: grid; grid-template-columns: 1.55fr 1fr; gap: 18px; }
-.co-dash__footer { padding: 9px 18px; background: var(--bg-canvas);
-  border-top: 1px solid var(--bg-shell); display: flex; gap: 18px;
-  font-size: 0.825rem; color: var(--ink-3); }
-
-.co-view-switcher { margin-left: auto; display: flex; gap: 1px;
-  background: var(--bg-canvas); border: 1px solid var(--border);
-  border-radius: 5px; padding: 2px; }
-.co-view-switcher__btn { padding: 4px 10px; font-size: 0.78rem;
-  border-radius: 3px; color: var(--ink-3); background: transparent;
-  border: 0; cursor: pointer; }
-.co-view-switcher__btn.is-active { background: rgba(230,230,233,0.10);
-  color: var(--ink); }
 
 /* Type chips (decision / handover / task / branch / idea / issue). */
 .co-chip { display: inline-block; padding: 1px 6px; font-size: 0.66rem;
@@ -200,83 +185,6 @@
 }
 .co-spine__list { display: flex; flex-direction: column; gap: 4px; }
 .co-spine__empty { font-size: 0.82rem; color: var(--ink-4); padding: 8px 2px; }
-
-/* ── Hero surface ───────────────────────────────────────────────────────── */
-.co-hero { margin-bottom: 18px; }
-.co-hero--empty {
-  padding: 24px 18px;
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  text-align: center;
-}
-.co-hero__empty-msg { color: var(--ink-3); font-size: 0.9rem; margin: 0; }
-.co-hero--resume {
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  padding: 16px 18px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.co-hero__resume-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.co-hero__resume-title {
-  font-size: 1rem;
-  font-weight: 600;
-  color: var(--ink);
-}
-.co-hero__resume-next { margin: 0; font-size: 0.88rem; color: var(--ink-2); }
-.co-hero__resume-where { margin: 0; font-size: 0.78rem; color: var(--ink-3); font-family: var(--font-mono); }
-
-/* ── Action / Time / Entity view layouts ───────────────────────────────── */
-.co-action-view { display: flex; flex-direction: column; gap: 18px; }
-.co-action-view__rails {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 18px;
-}
-
-.co-time-view { display: flex; flex-direction: column; gap: 18px; }
-.co-time-view__bucket { display: flex; flex-direction: column; gap: 6px; }
-.co-time-view__bucket-head {
-  font-size: 0.72rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.10em;
-  color: var(--ink-3);
-  padding-bottom: 4px;
-  border-bottom: 1px solid var(--border);
-}
-
-.co-entity-view { display: flex; flex-direction: column; gap: 18px; }
-.co-entity-view__section { display: flex; flex-direction: column; gap: 6px; }
-
-/* ── Resume rail (Open / Recent sub-groups) ─────────────────────────────── */
-.co-resume { gap: 10px; }
-.co-resume__sub { display: flex; flex-direction: column; gap: 4px; }
-.co-resume__sub-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 2px 0;
-}
-.co-resume__sub-label {
-  font-size: 0.66rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.10em;
-  color: var(--ink-4);
-}
-.co-resume__sub-count {
-  font-size: 0.66rem;
-  color: var(--ink-4);
-}
-.co-resume__list { display: flex; flex-direction: column; gap: 4px; }
 
 /* Compact row variant — used for "Recent" done handovers. */
 .co-row--compact {
