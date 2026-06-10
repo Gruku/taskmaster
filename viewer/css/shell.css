@@ -326,8 +326,7 @@ html, body {
 
 .kanban-page,
 .tbl-screen,
-.dash,
-.co-dash,
+.dk-desk,
 .issues,
 .lessons,
 .ideas,
@@ -348,8 +347,7 @@ html, body {
 /* Scroll policy A — entire body scrolls vertically. Topbar stays put because
    it sits in .main, outside this scroll region. Use when content is one
    continuous column and no internal sticky chrome is needed. */
-.dash,
-.co-dash,
+.dk-desk,
 .issues,
 .lessons,
 .recap-page,
