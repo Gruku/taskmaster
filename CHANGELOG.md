@@ -12,6 +12,32 @@ indicate schema breaks or removed surfaces.
 
 ---
 
+## 3.15.1 — Resilient hook launcher + legacy shims (2026-06-10)
+
+### Fixed
+
+- **Hooks route through `run_hook.sh`, a fail-open launcher.** Calling
+  `python script.py` directly had two bad failure modes: a missing script
+  makes Python exit 2, which PreToolUse interprets as a hard DENY (a
+  half-updated plugin blocked every Bash call in a live session), and bare
+  `python` doesn't exist on machines that only have `python3` / the `py`
+  launcher / the Windows Store stub. The launcher resolves a Python ≥ 3.9
+  (`$CLAUDE_HOOKS_PYTHON` → `python3` → `python` → `py -3`, probed once and
+  cached), and exits 0 with a loud stderr warning when the script or
+  interpreter is missing — a dead hook degrades to "no hook", never to
+  "deny everything". Intentional exit-2 blocks pass through unchanged.
+  Registrations SOURCE the launcher into the wrapper shell
+  (`CLAUDE_HOOK_SCRIPT=x.py . ".../run_hook.sh"`) and it `exec`s Python,
+  so the hot path spawns zero extra processes — MSYS bash process creation
+  costs seconds under load, the very overhead the 3.13.1 port eliminated.
+- **Legacy `.sh` shims restored** (`merge-gate.sh`, `merge-recorder.sh`,
+  `worktree-submodule-init.sh`, `taskmaster-merge-approve.sh`). Hook
+  registrations are snapshotted at SessionStart, so sessions started before
+  the 3.13.1 Python port still invoke the deleted `.sh` paths and erred on
+  every Bash call. The shims delegate to the Python ports via the launcher.
+
+---
+
 ## 3.15.0 — The Desk: sticky notes dashboard (2026-06-10)
 
 Dashboard rebuilt as **The Desk** — sticky notes first.
