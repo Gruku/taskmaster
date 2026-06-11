@@ -7342,6 +7342,22 @@ _INTEGRATION_BRANCH_RE = _re_ps.compile(
     r"^(?:origin/)?(master|main|stage|dev|work|\d+\.\d+\.\d+(?:\.\d+)?)$"
 )
 
+# Directory names the sub-repo scan must never descend into or register.
+# Rationale (the backlog_project_structure hang, inbox 2026-06-08): a monorepo
+# with a `.worktrees/` pool holds 30+ worktree clones, each carrying a `.git`
+# FILE. Without this guard the depth-2 scan registers every clone as a bogus
+# "embedded sub-repo", and _cached_project_structure then fires 3 git
+# subprocesses per fake repo (branch -a / rev-parse / worktree list) — even on
+# the cheap refresh_git=False path — so the "structural" call stalls for
+# minutes. `node_modules` and friends add thousands of stat() calls on top.
+# These names are never legitimate sub-repos, so skipping them is safe.
+_SKIP_SCAN_DIRS = frozenset({
+    ".git", ".worktrees",
+    "node_modules", "bower_components", "vendor",
+    ".venv", "venv", "__pycache__", ".mypy_cache", ".pytest_cache",
+    "dist", "build", "target", ".next", ".nuxt", ".cache",
+})
+
 
 def _run_git(args: list[str], *, cwd: Path, timeout: float = 10.0) -> str:
     """Run `git <args>` in `cwd`. Return stdout text on success, '' on any failure.
@@ -7407,7 +7423,7 @@ def _discover_sub_repos(project_root: Path) -> list[dict]:
     # 1. Filesystem scan — depth 1 and 2 only.
     if project_root.exists():
         for depth1 in project_root.iterdir():
-            if not depth1.is_dir() or depth1.name == ".git":
+            if not depth1.is_dir() or depth1.name in _SKIP_SCAN_DIRS:
                 continue
             if (depth1 / ".git").exists():
                 rel = depth1.name.replace("\\", "/")
@@ -7423,7 +7439,7 @@ def _discover_sub_repos(project_root: Path) -> list[dict]:
             except OSError:
                 continue
             for depth2 in inner:
-                if not depth2.is_dir() or depth2.name == ".git":
+                if not depth2.is_dir() or depth2.name in _SKIP_SCAN_DIRS:
                     continue
                 if (depth2 / ".git").exists():
                     rel = f"{depth1.name}/{depth2.name}".replace("\\", "/")

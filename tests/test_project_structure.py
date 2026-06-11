@@ -153,6 +153,37 @@ def test_discover_sub_repos_skips_depth_three(tmp_path):
     assert not any("deep" in s["path"] for s in subs)
 
 
+def test_discover_sub_repos_skips_worktree_pool_and_node_modules(tmp_path):
+    """Regression for the backlog_project_structure hang (inbox 2026-06-08).
+
+    A `.worktrees/` pool holds worktree clones (each a `.git` FILE) and must NOT
+    be reported as sub-repos — otherwise the cheap structural call fires 3 git
+    subprocesses per clone and stalls for minutes. `node_modules` is likewise
+    never a sub-repo and must not even be enumerated.
+    """
+    from backlog_server import _discover_sub_repos
+    monorepo = _init_repo(tmp_path / "mono")
+
+    # Simulate a worktree clone under .worktrees/ — a `.git` file (gitdir pointer).
+    clone = monorepo / ".worktrees" / "feature-x"
+    clone.mkdir(parents=True)
+    (clone / ".git").write_text("gitdir: ../../.git/worktrees/feature-x\n", encoding="utf-8")
+
+    # Simulate an embedded repo buried in node_modules — also must be skipped.
+    pkg = monorepo / "node_modules" / "some-pkg"
+    pkg.mkdir(parents=True)
+    (pkg / ".git").mkdir()
+
+    # A real embedded sub-repo alongside, to prove the scan still works.
+    _init_repo(monorepo / "real-sub")
+
+    subs = _discover_sub_repos(monorepo)
+    paths = {s["path"] for s in subs}
+    assert "real-sub" in paths
+    assert not any(p.startswith(".worktrees") for p in paths)
+    assert not any("node_modules" in p for p in paths)
+
+
 def test_discover_sub_repos_parses_gitmodules(tmp_path):
     """An entry in .gitmodules is reported with kind='submodule' even if the
     working tree isn't checked out yet."""

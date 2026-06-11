@@ -12,6 +12,22 @@ indicate schema breaks or removed surfaces.
 
 ---
 
+## 3.16.1 — Fix backlog_project_structure hang on worktree-pool monorepos (2026-06-11)
+
+### Fixed
+
+- `backlog_project_structure` no longer hangs on monorepos with a `.worktrees/`
+  pool. The sub-repo discovery scan descended into `.worktrees/` and registered
+  each worktree clone (a `.git` *file*) as a bogus embedded sub-repo, then fired
+  3 git subprocesses per fake repo (`branch -a` / `rev-parse` / `worktree list`)
+  even on the cheap `refresh_git=False` path — stalling for minutes on a repo
+  with 30+ worktrees. The scan now skips `.worktrees`, `node_modules`, and other
+  dependency/build dirs (`_SKIP_SCAN_DIRS`) at both depth levels, eliminating the
+  false-sub-repo explosion and the `node_modules` enumeration cost.
+  (inbox 2026-06-08)
+
+---
+
 ## 3.16.0 — Token diet: dead-tool cull, bounded list_tasks, slimmer prompts (2026-06-10)
 
 Fixed-context cost drops ~2,500 tokens per session (2026-06-10 token audit;
