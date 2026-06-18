@@ -4913,6 +4913,19 @@ def backlog_complete_task(
     _enqueue_linear_push_if_synced(task_id, task=task)
     if target_status == "done":
         _clear_session_task(task_id)
+        # Clear the session bundle when the last non-terminal member completes.
+        # Guard: only act if there is a session bundle and the completed task
+        # belongs to that bundle's slug.
+        _sb = _get_session_bundle()
+        _slug = task.get("bundle", "")
+        if _sb and _slug and _sb.get("slug") == _slug:
+            _remaining = _find_tasks_by_bundle(data, _slug)
+            _non_terminal = [
+                m for m in _remaining
+                if m.get("status") not in ("done",)
+            ]
+            if not _non_terminal:
+                _clear_session_bundle()
 
     if target_status == "done":
         try:
@@ -5177,6 +5190,11 @@ def _get_session_bundle() -> dict | None:
 def _set_session_bundle(b: dict | None) -> None:
     global _session_bundle
     _session_bundle = b
+
+
+def _clear_session_bundle() -> None:
+    global _session_bundle
+    _session_bundle = None
 
 
 _BUNDLE_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,40}$")
