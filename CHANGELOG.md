@@ -12,6 +12,46 @@ indicate schema breaks or removed surfaces.
 
 ---
 
+## 3.18.0 — Task Bundles (2026-06-18)
+
+Additive surface: groups of related tasks can be bound together under a shared
+`bundle` slug, worked in a single worktree/branch, and completed as a unit
+through review-gate and end-session.
+
+### Added
+
+- **`bundle` slug field on tasks** — `backlog_add_task` and `backlog_update_task`
+  accept a `bundle` string. Validated by `_valid_bundle_slug` (lowercase
+  alphanumeric + hyphens, max 48 chars). Stored in `SLIM_FIELDS`; included in
+  `ALLOWED_FIELDS` for write access.
+- **`_find_tasks_by_bundle(bundle_slug)`** — internal helper that returns all
+  tasks carrying the given slug, cross-checked against birth-time `sub_repo` to
+  catch accidental collisions across projects.
+- **Bundle-aware `backlog_pick_task`** — when picking a task whose bundle
+  already has an in-progress sibling, the tool reuses that sibling's worktree
+  and branch. Lane for the new member is the strictest lane among all bundle
+  members (`_strictest_lane`). Active bundle is stored in `_session_bundle`
+  for the duration of the session.
+- **`structured` flag on `backlog_blast_radius`** — pass `structured=True` to
+  receive a machine-readable dict (affected epics, tasks, files, skills) in
+  addition to the prose summary. Used as a detection fallback in bundle-aware
+  pick to characterise scope before committing to a shared worktree.
+- **Viewer bundle badge** — the kanban card renders a small pill showing the
+  bundle slug when `task.bundle` is set, using the existing slim-field pathway.
+- **Pick-task skill bundle pickup** — `taskmaster:pick-task` reads
+  `_session_bundle` at session start and resumes the active bundle if one is
+  found, falling back to bundle detection via `backlog_blast_radius(structured=True)`.
+- **Review-gate per-member verdict + descope** — `taskmaster:review-gate` loops
+  over all bundle members, emits a per-task pass/fail verdict, and supports
+  descoping individual members back to `todo` (legal `in-progress → todo`
+  transition, recorded in the task's log).
+- **End-session per-member completion + merge fan-out + cleanup timing** —
+  `taskmaster:end-session` drives completion for each bundle member in turn,
+  triggers a merge fan-out (one merge record per member per merge target), and
+  gates worktree cleanup until all members are merged.
+
+---
+
 ## 3.17.0 — Remove auto mode (2026-06-14)
 
 Auto mode was an internal orchestration subsystem that never shipped as a

@@ -87,7 +87,7 @@ Orphaned: `git worktree prune` then recreate.
 
 ## Step 8.5 — Bundle detection fallback (solo picks only)
 
-After solo worktree creation, call `backlog_blast_radius(<task_id>, mode="predictive", structured=True)`. Filter `overlapping_tasks` to `status=="todo"` + strong `shared_paths` overlap. Act on own authority: assign same bundle slug via `backlog_update_task`, announce one line per swept task — that is the veto window. User objects → clear the slug. See `references/bundles.md`.
+After solo worktree creation, run the detection fallback: scan for overlapping `todo` tasks, assign them a shared bundle slug, and announce each sweep — that is the veto window. User objects → clear the slug. Full protocol in `references/bundles.md` (Path B).
 
 ## Deep mode (`--deep`)
 
