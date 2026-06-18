@@ -342,9 +342,6 @@ def _load() -> dict:
     return data
 
 
-_load_backlog = _load  # public alias used by tests and external callers
-
-
 def _save(data: dict) -> None:
     with _backlog_lock:
         data["meta"]["updated"] = _today()
@@ -414,12 +411,9 @@ def _find_task(data: dict, task_id: str) -> tuple[dict, dict] | None:
 
 def _find_tasks_by_bundle(data: dict, slug: str) -> list[dict]:
     """All non-archived tasks sharing bundle `slug` (across all epics)."""
-    result = []
-    for epic in data.get("epics", []):
-        for t in epic.get("tasks", []):
-            if t.get("bundle") == slug and t.get("status") != "archived":
-                result.append(t)
-    return result
+    return [t for epic in data.get("epics", [])
+              for t in epic.get("tasks", [])
+              if t.get("bundle") == slug and t.get("status") != "archived"]
 
 
 def _bundle_sub_repo_conflict(data: dict, slug: str, sub_repo: str, exclude_id: str = "") -> str | None:

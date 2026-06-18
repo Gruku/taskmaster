@@ -1,6 +1,6 @@
 """Task bundle: member lookup + birth-time sub_repo validation."""
 import backlog_server
-from backlog_server import _find_tasks_by_bundle, _load_backlog
+from backlog_server import _find_tasks_by_bundle, _load as _load_backlog
 
 
 def _add(task_id, bundle="", sub_repo=""):
@@ -37,3 +37,10 @@ def test_update_into_bundle_sub_repo_mismatch_rejected(tm_epic_phase):
     _add("b-2", sub_repo="web")
     out = backlog_server.backlog_update_task("b-2", "bundle", "ux")
     assert "sub_repo" in out.lower() and out.lower().startswith("error")
+
+
+def test_update_into_bundle_sub_repo_match_allowed(tm_epic_phase):
+    _add("b-1", bundle="ux", sub_repo="api")
+    _add("b-2", sub_repo="api")
+    out = backlog_server.backlog_update_task("b-2", "bundle", "ux")
+    assert not out.lower().startswith("error")
