@@ -151,6 +151,13 @@ export function renderCard({ task, density = 'full', epicColors = {}, groupBy = 
     chipRow.appendChild(sr);
     chipRowHasContent = true;
   }
+  if (task.bundle) {
+    const bc = document.createElement('span');
+    bc.className = 'card-bundle-chip tm-bundle';
+    bc.textContent = `⬢ ${task.bundle}`;
+    chipRow.appendChild(bc);
+    chipRowHasContent = true;
+  }
   // ── Spec A: lane badge + gate_state one-liner ──
   const lbHtml = laneBadge(task);
   if (lbHtml) {
