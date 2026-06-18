@@ -179,13 +179,6 @@
   color: var(--green);
 }
 
-/* auto-mode banner */
-.td-auto-banner { background: linear-gradient(90deg, rgba(74,158,255,0.10), rgba(74,158,255,0.02)); border: 1px solid rgba(74,158,255,0.25); border-radius: var(--r-md); padding: 10px 12px; margin-bottom: var(--sp-5); display: flex; align-items: center; gap: var(--sp-4); }
-.td-auto-banner .td-auto-step { flex: 1; color: var(--ink-2); font-size: var(--text-md); }
-.td-auto-banner .td-auto-bar { width: 240px; height: 4px; background: rgba(255,255,255,0.05); border-radius: 2px; overflow: hidden; }
-.td-auto-banner .td-auto-bar > span { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
-.td-auto-banner .td-auto-elapsed { font-family: var(--font-mono); color: var(--ink-3); font-size: var(--text-xs); }
-
 /* sections */
 .td-section { margin-bottom: var(--task-section-mb); }
 .td-section-h { font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.1em; color: var(--ink-3); margin-bottom: var(--task-section-h); }
@@ -372,11 +365,6 @@
   /* Dates footer: 2-column on mobile (3 cols is too cramped) */
   .td-dates {
     grid-template-columns: 1fr 1fr;
-  }
-
-  /* Auto-mode progress bar: shrink to fit */
-  .td-auto-banner .td-auto-bar {
-    width: 120px;
   }
 
   /* Chips: ensure wrapping doesn't cause horizontal overflow */

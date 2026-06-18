@@ -6,7 +6,6 @@ const ROUTES = [
   { hash: '#/sessions',           title: 'Sessions / Handovers',sidebarKey: 'sessions' },
   { hash: '#/lessons',            title: 'Lessons',             sidebarKey: 'lessons' },
   { hash: '#/issues',             title: 'Issues',              sidebarKey: 'issues' },
-  { hash: '#/auto',               title: 'Auto Mode',           sidebarKey: 'auto_mode' },
   { hash: '#/recap',              title: 'Recap',               sidebarKey: 'recap' },
   { hash: '#/recap/SES-0184',     title: 'Recap',               sidebarKey: 'recap' },
   { hash: '#/task/T-148',         title: 'Task Detail',         sidebarKey: null },
