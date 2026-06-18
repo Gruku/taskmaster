@@ -65,11 +65,19 @@ If the task has any `fixed` linked bugs (status=fixed, found_in=task), mention t
 
 Note: `backlog_complete_task` enforces this server-side too — the skill just gives the user the chance to resolve interactively before hitting the server gate.
 
-**6. Call `backlog_complete_task`** with all session fields (task_id, session_title, done, decisions, issues, tasks_touched, target_status, patchnote, release).
+**6. Call `backlog_complete_task`.** Two paths:
+
+- **Single task (default):** `backlog_complete_task(task_id, session_title, done, decisions, issues, tasks_touched, target_status, patchnote, release)`.
+- **Bundle:** Call `_get_session_bundle()` first. If a bundle is active (slug, members, …), call `backlog_complete_task(member, …)` for **each passing member** — every member gets its own completion record. Do NOT use `backlog_update_task` status-only for bundle members (see `references/edge-cases.md` §Bundle).
+
+**6b. Merge fan-out (bundle only).** On a single merge event, loop `backlog_record_merge(member, rung, sha)` over all bundle members from `_get_session_bundle()` — same rung and sha for each.
 
 **v3-post-complete-1.** For each `related_issues` that is open/investigating: ask user "Close as fixed or leave for follow-up?"
 
-**7. Worktree cleanup (done tasks only).** Offer `git worktree remove .worktrees/{task_id}`. Skip for in-review.
+**7. Worktree cleanup (done tasks only).** Skip for in-review.
+
+- **Single task:** Offer `git worktree remove .worktrees/{task_id}`.
+- **Bundle:** Offer `git worktree remove .worktrees/{slug}` **only when all members are `done` or descoped** — check `_get_session_bundle()` membership first. Never use `--force` or `rm -rf` (guard-hooks blocks `--force` by default).
 
 **8. Commit tracking files.** Stage backlog.yaml, PROGRESS.md, .taskmaster/handovers/, issues/, lessons/, tasks/. Commit with `chore: log session - {topic}`.
 
