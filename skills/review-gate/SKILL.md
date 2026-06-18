@@ -74,7 +74,7 @@ Non-bundle single-task flow is unchanged.
 
 ### Descope path (summary)
 
-Descope is always explicit, never silent. Call four `backlog_update_task` fields (`bundle=""`, `status="todo"`, `branch=""`, `worktree=""`), then edit the shared spec doc directly to excise the member's section. Branch merges atomically without the descoped member. Full procedure: `references/bundle-gate.md`.
+Descope is always explicit, never silent. Make four separate `backlog_update_task` calls (`bundle=""`, `status="todo"`, `branch=""`, `worktree=""`), then edit the shared spec doc directly to excise the member's section. Branch merges atomically without the descoped member. Full procedure: `references/bundle-gate.md`.
 
 ## Related Reviewers (NOT part of this gate)
 
