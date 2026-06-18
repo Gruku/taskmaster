@@ -1,11 +1,11 @@
 ---
 name: migrate-v3
-description: "Guided v2 to v3 backlog migration. Invoke when the user says 'upgrade to v3', 'migrate to v3', 'switch to v3', 'enable handovers and lessons', 'enable narrative continuity', 'turn on auto-mode', or 'I want recap'. Shows pre-flight summary, confirms opt-in, runs migration. Only correct way to migrate — do not call backlog_migrate_v3 directly without the pre-flight gate."
+description: "Guided v2 to v3 backlog migration. Invoke when the user says 'upgrade to v3', 'migrate to v3', 'switch to v3', 'enable handovers and lessons', 'enable narrative continuity', or 'I want recap'. Shows pre-flight summary, confirms opt-in, runs migration. Only correct way to migrate — do not call backlog_migrate_v3 directly without the pre-flight gate."
 ---
 
 # Migrate to v3
 
-v3 is an opt-in schema upgrade: slim index + per-task files. Unlocks handovers, lessons, issues, recap, and auto-mode.
+v3 is an opt-in schema upgrade: slim index + per-task files. Unlocks handovers, lessons, issues, and recap.
 
 This is the ONLY correct way to migrate a project to v3 — do not call backlog_migrate_v3 directly without the pre-flight gate.
 

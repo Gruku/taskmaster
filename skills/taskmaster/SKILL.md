@@ -1,6 +1,6 @@
 ---
 name: taskmaster
-description: "Universal taskmaster work router for any project with backlog.yaml. Invoke for implementing features, fixing bugs, writing tests, refactoring, planning epics, or any narrative-continuity operation (handovers, issues, lessons, auto-mode). The only exceptions are pure git commits and dedicated PR security reviews."
+description: "Universal taskmaster work router for any project with backlog.yaml. Invoke for implementing features, fixing bugs, writing tests, refactoring, planning epics, or any narrative-continuity operation (handovers, issues, lessons). The only exceptions are pure git commits and dedicated PR security reviews."
 ---
 
 # Taskmaster Router
@@ -24,8 +24,7 @@ All work in a taskmaster-enabled project flows through the task system. This ski
 | "Log a bug", "track this defect" | `taskmaster:bug` |
 | "Remember this", "save as a lesson" | `taskmaster:lesson` |
 | "Save this as an idea", "/add-idea" | `taskmaster:add-idea` |
-| "Auto this task", "autopilot T-001" | `taskmaster:auto-task` |
-| "Auto-epic <id>", "auto-phase <id>" | `taskmaster:auto-epic` / `taskmaster:auto-phase` |
+| "auto this task", "autopilot", "auto-epic/phase X" | Redirect to ultracode (auto removed) |
 | "Upgrade to v3", "migrate to v3" | `taskmaster:migrate-v3` |
 | "Check TODOs", "todo audit" | `taskmaster:check-todos` |
 | "Set up linear", "link to linear", "linear status" | `taskmaster:linear` |
@@ -44,7 +43,7 @@ Handle sequentially — complete the first action before starting the second.
 
 ## When to Deepen
 
-When routes are ambiguous (handover vs end-session, issue vs task, lesson vs note, auto-task vs pick-task), read `references/disambiguation.md`.
+When routes are ambiguous (handover vs end-session, issue vs task, lesson vs note), read `references/disambiguation.md`.
 
 ## Mid-session deepening
 

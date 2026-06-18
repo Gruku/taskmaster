@@ -37,9 +37,9 @@ Call backlog_snapshot(). Surface its one-line response. No confirmation needed -
 
 ## Step 8: Post-Flight Gitignore
 
-Check whether .gitignore contains .taskmaster/snapshots/ and .taskmaster/auto/. If either is missing, ask via AskUserQuestion: Yes, add them / Skip.
+Check whether .gitignore contains .taskmaster/snapshots/. If missing, ask via AskUserQuestion: Yes, add it / Skip.
 
-If Yes: append this block to .gitignore (do not overwrite; check first that neither line is already present):
+If Yes: append this block to .gitignore (do not overwrite; check first that the line is not already present):
 
 
 
@@ -50,7 +50,6 @@ Tell the user what they just unlocked:
 - Lessons -- taskmaster:lesson skill records patterns, anti-patterns, and gotchas.
 - Issues -- taskmaster:issue skill for bug tracking separate from work tasks.
 - Recap -- backlog_recap shows what changed in the project since the last snapshot.
-- Auto modes -- taskmaster:auto-task, auto-epic, auto-phase for state-machine-driven execution.
 
 The PreCompact hook ships with this plugin and runs automatically before context compaction. No per-project setup required.
 

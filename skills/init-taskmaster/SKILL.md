@@ -26,7 +26,7 @@ AskUserQuestion({
       multiSelect: false,
       options: [
         { label: "v2 (Default — stable)", description: "Single backlog.yaml file. Simple, proven, all existing tools work." },
-        { label: "v3 (Narrative continuity — opt-in)", description: "Slim index + per-task files. Adds handovers, lessons, issues, recap, auto-mode." }
+        { label: "v3 (Narrative continuity — opt-in)", description: "Slim index + per-task files. Adds handovers, lessons, issues, and recap." }
       ]
     },
     {
@@ -42,7 +42,7 @@ AskUserQuestion({
 })
 ```
 
-Map: v3 -> after `backlog_init`, call `backlog_migrate_v3`. If v3, gitignore `.taskmaster/snapshots/` and `.taskmaster/auto/`.
+Map: v3 -> after `backlog_init`, call `backlog_migrate_v3`. If v3, gitignore `.taskmaster/snapshots/`.
 
 ## Step 2b: Offer project manifest (v3 only)
 

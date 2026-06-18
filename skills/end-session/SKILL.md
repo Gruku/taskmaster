@@ -84,4 +84,3 @@ Note: `backlog_complete_task` enforces this server-side too — the skill just g
 - `references/v3-pre-steps.md` - full v3 pre-step flows (lesson sweep, handover auto-write, idea sweep).
 - `references/summary-modes.md` - light vs structured mode, patchnote format, status decision rules.
 - `references/edge-cases.md` - no in-progress task, not in git repo, multiple tasks changed.
-- `references/auto-mode.md` - behavior when `backlog_auto_status` reports an active run.

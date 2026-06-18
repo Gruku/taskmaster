@@ -19,7 +19,7 @@ A handover is the per-session full record — context-injection optimisation for
 
 ## Steps
 
-**1. Resolve `session_kind`.** Pick from `references/session-kinds.md`. Default: `continuity`. Override: "milestone done" / "chunk complete" -> `milestone`; "context handoff" / "300k" -> `deep-context`; from auto-task loop -> `auto-stage`. Ask with `AskUserQuestion` if unsure.
+**1. Resolve `session_kind`.** Pick from `references/session-kinds.md`. Default: `continuity`. Override: "milestone done" / "chunk complete" -> `milestone`; "context handoff" / "300k" -> `deep-context`. Ask with `AskUserQuestion` if unsure.
 
 **2. Auto-extract draft inputs.** Walk the six sources in `references/auto-extraction.md`. Output deduplicated paths under: Touched / Read / Relevant. Each path needs one-line `what changed` and `why next session needs it` — bare paths defeat the purpose.
 

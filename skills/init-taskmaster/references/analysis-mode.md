@@ -40,7 +40,6 @@ If v3 was chosen, tell the user what they just unlocked:
 - Lessons -- taskmaster:lesson skill records patterns, anti-patterns, and gotchas.
 - Issues -- taskmaster:issue skill for bug tracking separate from work tasks.
 - Recap -- backlog_recap shows what changed in the project since the last snapshot.
-- Auto modes -- taskmaster:auto-task, auto-epic, auto-phase for state-machine-driven execution.
 
 The PreCompact hook ships with this plugin and runs automatically before context compaction.
 No per-project setup required.

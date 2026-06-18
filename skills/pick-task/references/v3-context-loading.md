@@ -1,6 +1,6 @@
-# v3 Context Loading — token budget and auto-mode interaction
+# v3 Context Loading — token budget
 
-How pick-task behaves on v3 backlogs when context-loading sub-steps activate, and how it composes with auto-mode runs.
+How pick-task behaves on v3 backlogs when context-loading sub-steps activate.
 
 ## Token budget for steps 5a–5c
 
@@ -20,9 +20,3 @@ When a task's context load exceeds the warn threshold, prune in this order:
 1. Drop the lowest `reinforce_count` lesson match.
 2. Drop optional handover-body fetches.
 3. Never prune `related_issues` — bug context is load-bearing for not re-introducing fixed defects.
-
-## When auto modes call this skill
-
-`backlog_auto_status` reports an active run with the cursor at this task at stage `PICK` → the `auto-task` skill is the orchestrator, and it has explicitly invoked pick-task as its PICK stage. Run pick-task as normal — there is no special-case branch. After step 7 (worktree created), auto-task takes over for SPEC_REVIEW; pick-task does not advance the cursor itself.
-
-Treat auto-driven invocations and direct user invocations identically. The only thing that changes is what happens *after* pick-task returns: in the auto path, the orchestrator continues immediately; in the direct path, the user continues at their own pace.

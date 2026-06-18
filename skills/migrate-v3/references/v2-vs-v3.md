@@ -58,9 +58,8 @@ All paths relative to the backlog directory (`.taskmaster/`; `.claude/` for lega
 | `issues/` | `ISS-<NNN>.md` per issue | No |
 | `lessons/` | `L-<NNN>.md` per lesson | No |
 | `snapshots/` | `last.json` — slim snapshot for recap diff | Yes |
-| `auto/` | `state.json` — auto-mode execution cursor | Yes |
 
-`snapshots/` and `auto/` hold runtime state and must be gitignored. The `taskmaster:migrate-v3` skill offers to add them during post-flight.
+`snapshots/` holds runtime state and must be gitignored. The `taskmaster:migrate-v3` skill offers to add it during post-flight.
 
 ---
 

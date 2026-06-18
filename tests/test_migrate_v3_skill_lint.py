@@ -41,7 +41,6 @@ def test_description_contains_trigger_phrases():
         "switch to v3",
         "enable handovers and lessons",
         "enable narrative continuity",
-        "turn on auto-mode",
         "i want recap",
     ]
     missing = [p for p in must_have if p not in desc]
