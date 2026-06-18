@@ -8,7 +8,7 @@ import { renderCard } from '../../js/components/card.js';
 
 test('card renders a bundle badge when task.bundle is set', () => {
   const el = renderCard({ task: { id: 't-1', title: 'X', status: 'todo', bundle: 'asset-ux' } });
-  assert.match(el.outerHTML, /asset-ux/);
+  assert.match(el.outerHTML, /⬢.*asset-ux/);
   assert.match(el.outerHTML, /tm-bundle/);
 });
 
