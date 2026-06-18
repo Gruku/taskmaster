@@ -12,6 +12,19 @@ indicate schema breaks or removed surfaces.
 
 ---
 
+## 3.19.0 — Bundle framing in the kanban viewer (2026-06-18)
+
+Additive viewer surface: the kanban board now visually groups a bundle's
+members. Within each column, members sharing a `bundle` slug are pulled
+contiguous and wrapped in a tinted, color-coded frame with a `⬢ <slug>`
+header (member count + strictest execution lane). Framing is per-column — a
+bundle spanning statuses shows an independent frame in each column it touches.
+No new data; reads the existing `bundle` field. New `clusterBundles` layout
+helper + `renderBundleFrame` component; the per-card bundle chip is suppressed
+inside a frame to avoid redundancy. Bundle palette added to design tokens.
+
+---
+
 ## 3.18.0 — Task Bundles (2026-06-18)
 
 Additive surface: groups of related tasks can be bound together under a shared
