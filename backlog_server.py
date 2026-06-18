@@ -4511,28 +4511,43 @@ def backlog_add_task(
     return f"Added `{new_id}` — {title} ({priority}) under {epic_obj['name']}" + budget_warning
 
 
-def _build_worktree_instruction(task_id: str, sub_repo: str, branch: str, worktree: str) -> str:
-    """Build a worktree creation instruction for the pick_task response."""
+def _build_worktree_instruction(
+    task_id: str, sub_repo: str, branch: str, worktree: str,
+    _path_key: str | None = None,
+) -> str:
+    """Build a worktree creation instruction for the pick_task response.
+
+    Args:
+        task_id:   Task ID (or bundle slug when called from the bundle path).
+        sub_repo:  Sub-repo path, or empty string for root repo.
+        branch:    Already-recorded branch (skip creation if set).
+        worktree:  Already-recorded worktree path (skip creation if set).
+        _path_key: Override the slug used to derive path/branch names.
+                   When None (default), `task_id` is used as the path key,
+                   preserving existing per-task behaviour.  The bundle path
+                   passes the bundle slug here so the instruction references
+                   `.worktrees/<slug>` / `feature/<slug>` instead of the
+                   individual task-id.
+    """
     if worktree:
         return f"\n\n**Worktree:** Already recorded at `{worktree}` — verify it exists and work there."
 
-    branch_name = branch or f"feature/{task_id}"
+    key = _path_key or task_id
+    branch_name = branch or f"feature/{key}"
 
     if sub_repo:
-        repo_path = sub_repo
-        wt_path = f"{sub_repo}/.worktrees/{task_id}"
-        cmd = f"cd {sub_repo} && git worktree add .worktrees/{task_id} -b {branch_name}"
+        wt_path = f"{sub_repo}/.worktrees/{key}"
+        cmd = f"cd {sub_repo} && git worktree add .worktrees/{key} -b {branch_name}"
     else:
-        repo_path = "the appropriate sub-repo"
-        wt_path = f"<sub-repo>/.worktrees/{task_id}"
-        cmd = f"git worktree add .worktrees/{task_id} -b {branch_name}"
+        wt_path = f"<sub-repo>/.worktrees/{key}"
+        cmd = f"git worktree add .worktrees/{key} -b {branch_name}"
 
     return (
         f"\n\n**REQUIRED — Create a worktree before writing any code:**\n"
         f"```\n{cmd}\n```\n"
         f"Then record it:\n"
         f"```\nbacklog_update_task({task_id}, branch, {branch_name})\n"
-        f"backlog_update_task({task_id}, worktree, .worktrees/{task_id})\n```\n"
+        f"backlog_update_task({task_id}, worktree, .worktrees/{key})\n```\n"
         f"All work for this task MUST happen in the worktree, not on the main branch."
     )
 
@@ -4554,6 +4569,60 @@ def backlog_pick_task(task_id: str, force: bool = False) -> str:
     task, epic = result
     _touch_task(task)
     status = task.get("status", "todo")
+
+    # ── Bundle-aware pick ─────────────────────────────────────────────────────
+    slug = task.get("bundle")
+    if slug:
+        members = _find_tasks_by_bundle(data, slug)
+        # validate shared sub_repo
+        sub_repos = {(m.get("sub_repo") or "") for m in members}
+        if len(sub_repos) > 1:
+            return f"Error: bundle `{slug}` spans multiple sub_repos {sub_repos}; cannot pick."
+        sub_repo = next(iter(sub_repos))
+        branch = f"feature/{slug}"
+        worktree = (f"{sub_repo}/.worktrees/{slug}" if sub_repo else f".worktrees/{slug}")
+        lane = _strictest_lane([m.get("lane") for m in members])
+        # Check for foreign-session locks on any member
+        for m in members:
+            if m.get("locked_by") and m["locked_by"] != SESSION_ID and not force:
+                return (
+                    f"Error: `{m['id']}` is a member of bundle `{slug}` "
+                    f"locked by another session ({m['locked_by']}). Use force=True to steal."
+                )
+        # Idempotent re-pick: if all members are already in-progress for this session,
+        # just return the bundle context without re-mutating.
+        all_bound = all(
+            m.get("status") == "in-progress" and m.get("locked_by") == SESSION_ID
+            for m in members
+        )
+        if not all_bound:
+            for m in members:
+                m["status"] = "in-progress"
+                m["started"] = m.get("started") or _now()
+                m["locked_by"] = SESSION_ID
+                m["branch"] = branch
+                m["worktree"] = worktree
+            _mutate_and_save(data)
+        _set_session_task(task, epic)  # picked member stays "current task"
+        _set_session_bundle({
+            "slug": slug,
+            "sub_repo": sub_repo,
+            "branch": branch,
+            "worktree": worktree,
+            "members": [m["id"] for m in members],
+            "lane": lane,
+        })
+        member_ids = ", ".join(m["id"] for m in members)
+        # Pass empty worktree so the instruction always shows the creation command
+        # with `feature/<slug>` and `.worktrees/<slug>` visible to the agent.
+        # (The recorded worktree value is stored on every member task separately.)
+        instr = _build_worktree_instruction(task_id, sub_repo, branch, "", _path_key=slug)
+        return (
+            f"Picking bundle `{slug}`: {member_ids}.\n"
+            f"Execution lane: {lane}.\n"
+            f"{instr}"
+        )
+    # ── End bundle-aware pick ─────────────────────────────────────────────────
 
     # Allowed statuses: todo, in-progress (idempotent), in-review (revert to in-progress)
     locked_by = task.get("locked_by")
@@ -5098,12 +5167,31 @@ def _clear_session_task(task_id: str) -> None:
         _session_task = None
 
 
+_session_bundle: dict | None = None  # {"slug","sub_repo","branch","worktree","members":[id],"lane"}
+
+
+def _get_session_bundle() -> dict | None:
+    return _session_bundle
+
+
+def _set_session_bundle(b: dict | None) -> None:
+    global _session_bundle
+    _session_bundle = b
+
+
 _BUNDLE_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,40}$")
 
 
 def _valid_bundle_slug(value: str) -> bool:
     """Empty string clears the bundle (descope); otherwise must be lowercase kebab."""
     return value == "" or bool(_BUNDLE_SLUG_RE.match(value))
+
+
+def _strictest_lane(lanes: list) -> str:
+    """Return the strictest (most gates) lane from a list of lane values (or None/missing)."""
+    order = {"express": 0, "standard": 1, "full": 2}
+    present = [l for l in lanes if l in order] or ["standard"]
+    return max(present, key=lambda l: order[l])
 
 
 ALLOWED_FIELDS = {"title", "status", "priority", "notes", "branch", "worktree", "blockers", "docs", "depends_on", "sub_repo", "stage", "estimate", "locked_by", "review_instructions", "phase", "anchors", "blast_radius_depth", "patchnote", "release", "tldr", "next_step", "component", "design_change", "lane", "bundle"}
