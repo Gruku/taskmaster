@@ -12,6 +12,43 @@ indicate schema breaks or removed surfaces.
 
 ---
 
+## 3.17.0 — Remove auto mode (2026-06-14)
+
+Auto mode was an internal orchestration subsystem that never shipped as a
+supported user-facing surface. It is replaced by Codex/ultracode for
+autonomous task execution.
+
+**SemVer note:** removing an unshipped surface → minor bump rather than
+major. The decision is explicit: auto-task / auto-epic / auto-phase were
+effectively internal/unshipped (zero documented consumer references, no
+public guarantees), so this is treated as an additive cleanup rather than a
+breaking change.
+
+### Removed
+
+- **6 `backlog_auto_*` MCP tools**: `backlog_auto_start`, `backlog_auto_advance`,
+  `backlog_auto_abort`, `backlog_auto_finish`, `backlog_auto_status`,
+  `backlog_auto_complete_task`. MCP surface is gone; no replacement tool is
+  registered.
+- **Auto HTTP endpoints** from `backlog_server.py`: the 7 `/api/auto/*` routes —
+  5 GET (`/api/auto/sessions`, `/api/auto/sessions/<sid>`, `/api/auto/state`,
+  `/api/auto/events`, `/api/auto/budget/<sid>`) and 2 POST (`/api/auto/pause`,
+  `/api/auto/stop`). Viewer and external callers can no longer reach these routes.
+- **3 driver skills**: `taskmaster:auto-task`, `taskmaster:auto-epic`,
+  `taskmaster:auto-phase`. The SKILL.md files are removed; invoking these
+  slash commands will no longer work.
+- **Viewer auto-mode screen** (`js/screens/auto-mode.js` and its nav entry).
+  The auto-mode tab has been removed from the kanban viewer; reusable
+  presentational components were archived to `js/_dormant/` (imported by
+  nothing) for a possible future goals dashboard.
+- **`auto/state.json`** is no longer created or read by any MCP tool or
+  HTTP handler. Existing state files in `.taskmaster/auto/` are inert.
+
+**Redirect:** use Codex / ultracode (`codex:rescue`, `codex:codex-cli-runtime`)
+for autonomous multi-step task execution going forward.
+
+---
+
 ## 3.16.1 — Fix backlog_project_structure hang on worktree-pool monorepos (2026-06-11)
 
 ### Fixed
