@@ -7,7 +7,8 @@ import { renderPriorityChips,
          updatePriorityChips }               from '../components/priority-chips.js';
 import { renderPhaseStepper }                from '../components/phase-stepper.js';
 import { renderEpicChips }                   from '../components/epic-chips.js';
-import { applyFilters, sortTasks, groupTasks, epicsForPhase, STATUS_LABELS } from '../lib/filters.js';
+import { applyFilters, sortTasks, groupTasks, epicsForPhase, STATUS_LABELS, clusterBundles } from '../lib/filters.js';
+import { renderBundleFrame } from '../components/bundle-frame.js';
 import { assignEpicColors }                  from '../lib/epics.js';
 import { countActiveTasksByEpic, rankEpics } from '../lib/epic-ranking.js';
 import { claimTopbar, tmAction } from '../lib/topbar.js';
@@ -206,6 +207,12 @@ export async function mount(root, { store, api, prefs }) {
     const filtered = applyFilters(tasks, state.filters);
     const sorted   = sortTasks(filtered, state.filters.sort);
 
+    // Bundle totals across all columns (used to render "N of M here" in bundle frames)
+    const bundleTotals = {};
+    for (const t of sorted) {
+      if (t.bundle) bundleTotals[t.bundle] = (bundleTotals[t.bundle] || 0) + 1;
+    }
+
     // 2) Subcount
     subcount.textContent = `${tasks.length} ${pluralize(tasks.length, 'task', 'tasks')} · ${filtered.length} visible`;
 
@@ -384,13 +391,14 @@ export async function mount(root, { store, api, prefs }) {
           }));
         }
       } else {
-        for (const t of g.tasks) {
-          colBody.appendChild(renderCard({
-            task: t,
-            density: state.density,
-            epicColors,
-            groupBy: state.filters.group_by,
-          }));
+        for (const item of clusterBundles(g.tasks)) {
+          if (item.type === 'bundle') {
+            colBody.appendChild(renderBundleFrame(
+              { slug: item.slug, tasks: item.tasks, total: bundleTotals[item.slug] },
+              { density: state.density, epicColors, groupBy: state.filters.group_by }));
+          } else {
+            colBody.appendChild(renderCard({ task: item.task, density: state.density, epicColors, groupBy: state.filters.group_by }));
+          }
         }
       }
       col.appendChild(colBody);

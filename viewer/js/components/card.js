@@ -19,7 +19,7 @@ import { renderMergeLadderCompact } from './merge-status.js';
 const PRIORITY_LABELS = { critical: 'Critical', high: 'High', medium: 'Medium', low: 'Low' };
 const STATUS_LABELS   = { blocked: 'Blocked', todo: 'Todo', 'in-progress': 'In Progress', 'in-review': 'In Review', done: 'Done' };
 
-export function renderCard({ task, density = 'full', epicColors = {}, groupBy = 'status', now = Date.now() } = {}) {
+export function renderCard({ task, density = 'full', epicColors = {}, groupBy = 'status', now = Date.now(), hideBundleChip = false } = {}) {
   if (!task || !task.id) return document.createComment('empty card');
 
   const card = document.createElement('div');
@@ -151,7 +151,7 @@ export function renderCard({ task, density = 'full', epicColors = {}, groupBy = 
     chipRow.appendChild(sr);
     chipRowHasContent = true;
   }
-  if (task.bundle) {
+  if (task.bundle && !hideBundleChip) {
     const bc = document.createElement('span');
     bc.className = 'card-bundle-chip tm-bundle';
     bc.textContent = `⬢ ${task.bundle}`;

@@ -120,6 +120,30 @@ export const STATUS_LABELS = {
 };
 
 /**
+ * Cluster tasks in a single column into an ordered list of render-items.
+ * Each item is either { type:'card', task } or { type:'bundle', slug, tasks:[...] }.
+ * Bundle items are anchored at the first member's position; subsequent members are skipped.
+ * Tasks with falsy bundle values (null, undefined, '') are emitted as card items.
+ */
+export function clusterBundles(tasks) {
+  if (!Array.isArray(tasks)) return [];
+  const seen = new Set();
+  const result = [];
+  for (const task of tasks) {
+    const slug = task.bundle || null;
+    if (!slug) {
+      result.push({ type: 'card', task });
+    } else if (!seen.has(slug)) {
+      seen.add(slug);
+      const members = tasks.filter(t => t.bundle === slug);
+      result.push({ type: 'bundle', slug, tasks: members });
+    }
+    // else: already collected into its bundle group — skip
+  }
+  return result;
+}
+
+/**
  * Restrict an epic list to those that have at least one task matching the active phase filter.
  * - phase null/undefined/'__all__' → returns epics unchanged.
  * - phase '__orphans__' → epics that have a task with no phase set.
