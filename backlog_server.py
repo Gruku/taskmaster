@@ -342,6 +342,9 @@ def _load() -> dict:
     return data
 
 
+_load_backlog = _load  # public alias used by tests and external callers
+
+
 def _save(data: dict) -> None:
     with _backlog_lock:
         data["meta"]["updated"] = _today()
@@ -406,6 +409,26 @@ def _find_task(data: dict, task_id: str) -> tuple[dict, dict] | None:
         for task in epic.get("tasks", []):
             if task["id"] == task_id:
                 return task, epic
+    return None
+
+
+def _find_tasks_by_bundle(data: dict, slug: str) -> list[dict]:
+    """All non-archived tasks sharing bundle `slug` (across all epics)."""
+    result = []
+    for epic in data.get("epics", []):
+        for t in epic.get("tasks", []):
+            if t.get("bundle") == slug and t.get("status") != "archived":
+                result.append(t)
+    return result
+
+
+def _bundle_sub_repo_conflict(data: dict, slug: str, sub_repo: str, exclude_id: str = "") -> str | None:
+    """Return the ID of the first bundle member whose sub_repo differs from `sub_repo`, or None."""
+    for m in _find_tasks_by_bundle(data, slug):
+        if m["id"] == exclude_id:
+            continue
+        if (m.get("sub_repo") or "") != (sub_repo or ""):
+            return m["id"]
     return None
 
 
@@ -4443,6 +4466,9 @@ def backlog_add_task(
     if bundle:
         if not _valid_bundle_slug(bundle):
             return f"Error: invalid bundle slug `{bundle}` (lowercase kebab, 2-41 chars)."
+        conflict = _bundle_sub_repo_conflict(data, bundle, sub_repo)
+        if conflict:
+            return f"Error: bundle `{bundle}` sub_repo mismatch with member `{conflict}` (one worktree = one repo)."
         new_task["bundle"] = bundle
 
     # Parse docs if provided: "plan:path;spec:path"
@@ -5304,6 +5330,9 @@ def backlog_update_task(
         if value == "":
             task.pop("bundle", None)
         else:
+            conflict = _bundle_sub_repo_conflict(data, value, task.get("sub_repo", ""), exclude_id=task_id)
+            if conflict:
+                return f"Error: bundle `{value}` sub_repo mismatch with member `{conflict}` (one worktree = one repo)."
             task["bundle"] = value
     else:
         task[field] = value
