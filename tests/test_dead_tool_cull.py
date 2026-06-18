@@ -75,3 +75,16 @@ def test_backlog_lesson_reinforce_appends_audit_event(tmp_taskmaster):
     assert events[1]["source"] in {"user", "claude", "skill"}
     assert events[1].get("note") != "created"
     assert fm.get("reinforce_count") == 1
+
+
+@pytest.mark.parametrize("tool_name", [
+    "backlog_auto_start",
+    "backlog_auto_status",
+    "backlog_auto_advance",
+    "backlog_auto_complete_task",
+    "backlog_auto_finish",
+    "backlog_auto_abort",
+])
+def test_auto_mode_tools_removed(tool_name):
+    """Regression guard: no backlog_auto_* tool may be registered after auto removal."""
+    assert tool_name not in _list_tool_names()
