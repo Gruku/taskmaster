@@ -16,3 +16,9 @@ test('card renders no bundle badge when task.bundle is absent', () => {
   const el = renderCard({ task: { id: 't-2', title: 'Y', status: 'todo' } });
   assert.doesNotMatch(el.outerHTML, /tm-bundle/);
 });
+
+test('card hides bundle chip when hideBundleChip:true', () => {
+  const el = renderCard({ task: { id: 't-3', title: 'Z', status: 'todo', bundle: 'asset-ux' }, hideBundleChip: true });
+  assert.doesNotMatch(el.outerHTML, /tm-bundle/);
+  assert.doesNotMatch(el.outerHTML, /card-bundle-chip/);
+});
