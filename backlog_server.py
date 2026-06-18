@@ -6730,7 +6730,7 @@ def backlog_batch_preview(operations: str) -> str:
 
 
 @mcp.tool()
-def backlog_blast_radius(task_id: str, mode: str = "predictive", depth_override: str = "") -> str:
+def backlog_blast_radius(task_id: str, mode: str = "predictive", depth_override: str = "", structured: bool = False) -> str:
     """Analyze the blast radius (impact footprint) of a task.
 
     Two modes:
@@ -6741,6 +6741,7 @@ def backlog_blast_radius(task_id: str, mode: str = "predictive", depth_override:
         task_id: The task ID to analyze (e.g., "auth-005")
         mode: Analysis mode — "predictive" or "evidence"
         depth_override: Optional depth override — "shallow" (0-1 hop) or "deep" (2 hops). Overrides the adaptive heuristic.
+        structured: When True and mode is "predictive", return the raw analysis as a JSON string instead of formatted markdown. Used for detection-fallback pipelines.
     """
     if mode not in ("predictive", "evidence"):
         return f"Error: mode must be 'predictive' or 'evidence', got '{mode}'"
@@ -6761,6 +6762,8 @@ def backlog_blast_radius(task_id: str, mode: str = "predictive", depth_override:
 
     if mode == "predictive":
         analysis = analyze_predictive(task, all_tasks)
+        if structured:
+            return json.dumps(analysis)
         return _format_predictive(analysis, task.get("priority", "medium"))
     else:
         # Resolve project root for code analysis
