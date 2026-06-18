@@ -60,6 +60,22 @@ Walk the disposition entry point in `taskmaster:bug` for each open bug. Only pro
 
 Note: `backlog_complete_task` enforces this server-side too — the skill just gives the user the chance to resolve interactively before hitting the server gate.
 
+## Bundle Mode (per-member verdict)
+
+When `_get_session_bundle()` is set, the gate runs **once** but evaluates each member separately:
+
+1. Check each `member`'s acceptance criteria against the shared diff.
+2. Emit a combined report — one PASS/FAIL verdict per member.
+3. Record per-member (loop, shared `spec_path`): `backlog_record_gate(member, "review-gate", verdict=..., spec_path=<shared spec>)`.
+4. All pass → transition all to `in-review`.
+5. Any fail → fix-up in the same worktree **or** descope (see `references/bundle-gate.md`).
+
+Non-bundle single-task flow is unchanged.
+
+### Descope path (summary)
+
+Descope is always explicit, never silent. Call four `backlog_update_task` fields (`bundle=""`, `status="todo"`, `branch=""`, `worktree=""`), then edit the shared spec doc directly to excise the member's section. Branch merges atomically without the descoped member. Full procedure: `references/bundle-gate.md`.
+
 ## Related Reviewers (NOT part of this gate)
 
 - **`taskmaster:spec-review`** — pre-implementation adversarial review of the spec/plan.
