@@ -58,15 +58,16 @@ Keep tasks where:
 
 ### B3. Act on authority
 
+Generate **one slug for the entire sweep** (not one per candidate): `<epic-prefix>-bundle-<NNNN>` (use the picked task's epic prefix if available, else `tm`). Apply this single slug to all filtered candidates AND the picked task.
+
 For each candidate that passes the filter:
-1. Generate a slug: `<epic-prefix>-bundle-<NNNN>` (use the picked task's epic prefix if available, else `tm`).
-2. Set the bundle slug on the candidate: `backlog_update_task(<candidate_id>, "bundle", "<slug>")`.
-3. Also set it on the picked task if not already set: `backlog_update_task(<task_id>, "bundle", "<slug>")`.
-4. Announce in one line per swept task — this is the **veto window**:
+1. Set the bundle slug on the candidate: `backlog_update_task(<candidate_id>, "bundle", "<slug>")`.
+2. Also set it on the picked task if not already set: `backlog_update_task(<task_id>, "bundle", "<slug>")`.
+3. Announce in one line per swept task — this is the **veto window**:
    ```
    also sweeping <candidate_id> in, same files (<shared_paths summary>)
    ```
-5. If the user objects ("don't include that one"), call `backlog_update_task(<candidate_id>, "bundle", null)` to clear it, and if only the picked task remains, clear its slug too.
+4. If the user objects ("don't include that one"), call `backlog_update_task(<candidate_id>, "bundle", null)` to clear it, and if only the picked task remains, clear its slug too.
 
 **Do not ask before acting.** The announcement IS the veto window. Claude acts; user vetoes if needed.
 
@@ -80,12 +81,12 @@ When a swept candidate is later picked via `backlog_pick_task`, it will have the
 
 Bundle/cluster phrasing that routes to pick-task:
 
-| User says | Action |
-|---|---|
-| "pick this bundle" | pick the named or most-recent bundle's first pending task |
-| "work on the bundle" | same — resolve bundle from context |
-| "cluster these tasks" | detection fallback on named tasks if IDs provided |
-| "start the cluster" | pick first pending task in cluster, announce members |
+| User says | Trigger | Action |
+|---|---|---|
+| "pick this bundle" | description (direct) | pick the named or most-recent bundle's first pending task |
+| "work on the bundle" | description (direct) | same — resolve bundle from context |
+| "cluster these tasks" | description (direct) | detection fallback on named tasks if IDs provided |
+| "start the cluster" | via taskmaster universal router | routes to pick-task via the router; not a direct description trigger — handled the same as "cluster these tasks" once routed |
 
 ---
 

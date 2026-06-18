@@ -76,7 +76,7 @@ If the task has a `docs` field, read those files before writing code.
 
 The `backlog_pick_task` response includes worktree instructions. Follow them.
 
-**Bundle task** (response carries `bundle` / `_session_bundle`): use the returned shared-worktree instruction (`.worktrees/<slug>`, `feature/<slug>`); announce bundle members; record branch + worktree on this task. See `references/bundles.md`.
+**Bundle task** (response carries `bundle` / `_session_bundle`): use the returned shared-worktree instruction (`.worktrees/<slug>`, `feature/<slug>`); announce bundle members; record branch + worktree on this task. Required — do not skip. See `references/bundles.md`.
 
 **Solo task** (no bundle):
 1. `git worktree add .worktrees/{task-id} -b feature/{task-id}`
