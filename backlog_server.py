@@ -1206,6 +1206,7 @@ def backlog_get_task(
         ("Status", task.get("status", "todo")),
         ("Priority", task.get("priority", "medium")),
         ("Epic", f"{epic['name']} ({epic['id']})"),
+        ("Bundle", task.get("bundle", "—")),
         ("Stage", str(task["stage"]) if task.get("stage") is not None else "—"),
         ("Estimate", task.get("estimate", "—")),
         ("Phase", task.get("phase", "—")),
@@ -4346,6 +4347,7 @@ def backlog_add_task(
     stage: int | None = None, estimate: str = "", phase: str = "",
     anchors: str = "",
     tldr: str = "", next_step: str = "", task_id: str = "",
+    bundle: str = "",
 ) -> str:
     """Create a new task under an epic. Auto-generates the task ID unless task_id is supplied.
 
@@ -4364,6 +4366,7 @@ def backlog_add_task(
         tldr: One-sentence essence of the task. Auto-generated from notes or title when omitted.
         next_step: Concrete immediate action to take on this task.
         task_id: Override the auto-generated task ID. Must be unique. Defaults to {epic}-{NNN}.
+        bundle: Optional shared execution slug grouping related tasks (lowercase kebab, e.g. "asset-ux").
     """
     priority = _normalize_priority(priority)
     if priority not in VALID_PRIORITIES:
@@ -4437,6 +4440,10 @@ def backlog_add_task(
     if anchors:
         anchor_list = [a.strip() for a in anchors.split(",") if a.strip()]
         new_task["anchors"] = anchor_list
+    if bundle:
+        if not _valid_bundle_slug(bundle):
+            return f"Error: invalid bundle slug `{bundle}` (lowercase kebab, 2-41 chars)."
+        new_task["bundle"] = bundle
 
     # Parse docs if provided: "plan:path;spec:path"
     if docs:
@@ -5071,7 +5078,15 @@ def _clear_session_task(task_id: str) -> None:
         _session_task = None
 
 
-ALLOWED_FIELDS = {"title", "status", "priority", "notes", "branch", "worktree", "blockers", "docs", "depends_on", "sub_repo", "stage", "estimate", "locked_by", "review_instructions", "phase", "anchors", "blast_radius_depth", "patchnote", "release", "tldr", "next_step", "component", "design_change", "lane"}
+_BUNDLE_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,40}$")
+
+
+def _valid_bundle_slug(value: str) -> bool:
+    """Empty string clears the bundle (descope); otherwise must be lowercase kebab."""
+    return value == "" or bool(_BUNDLE_SLUG_RE.match(value))
+
+
+ALLOWED_FIELDS = {"title", "status", "priority", "notes", "branch", "worktree", "blockers", "docs", "depends_on", "sub_repo", "stage", "estimate", "locked_by", "review_instructions", "phase", "anchors", "blast_radius_depth", "patchnote", "release", "tldr", "next_step", "component", "design_change", "lane", "bundle"}
 VALID_STATUSES = {"todo", "in-progress", "in-review", "done", "archived", "blocked"}
 # Spec A Task 11: forward-transition table enforced on lane'd tasks via
 # backlog_update_task. Laneless tasks are exempt (old permissive behavior).
@@ -5283,6 +5298,13 @@ def backlog_update_task(
             task["design_change"] = True
         else:
             task.pop("design_change", None)
+    elif field == "bundle":
+        if not _valid_bundle_slug(value):
+            return f"Error: invalid bundle slug `{value}` (lowercase kebab, 2-41 chars)."
+        if value == "":
+            task.pop("bundle", None)
+        else:
+            task["bundle"] = value
     else:
         task[field] = value
 
