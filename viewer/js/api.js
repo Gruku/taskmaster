@@ -96,7 +96,6 @@ export const api = {
   backlog:         ()    => http('GET', '/api/backlog'),
   prefs:           ()    => http('GET', '/api/viewer/prefs'),
   savePrefs:       (p)   => http('PUT', '/api/viewer/prefs', p),
-  autoState:       ()    => http('GET', '/api/auto/state'),
   getTask,
   getEpic,
   getTaskRelated,
@@ -145,12 +144,6 @@ export const api = {
   async getBuildTestPulse() {
     const r = await fetch('/api/build-test-pulse');
     if (!r.ok) return { build: 'unknown', tests: { passed: 0, failed: 0, total: 0 }, ts: null };
-    return r.json();
-  },
-
-  async getAutoState() {
-    const r = await fetch('/api/auto/state');
-    if (!r.ok) return { running: [], hooks: {} };
     return r.json();
   },
 
@@ -258,55 +251,6 @@ export async function getIssues({ includeResolved = true } = {}) {
   const r = await fetch(`/api/issues${qs}`);
   if (!r.ok) throw new Error(`getIssues failed: ${r.status}`);
   return r.json();
-}
-
-// ---- Auto Mode (Plan 6) -------------------------------------------------
-
-export async function autoListSessions() {
-  const r = await fetch('/api/auto/sessions');
-  if (!r.ok) throw new Error(`autoListSessions ${r.status}`);
-  return (await r.json()).sessions;
-}
-
-export async function autoSession(sid) {
-  const r = await fetch(`/api/auto/sessions/${encodeURIComponent(sid)}`);
-  if (r.status === 404) return null;
-  if (!r.ok) throw new Error(`autoSession ${r.status}`);
-  return await r.json();
-}
-
-export async function autoPause(sid) {
-  const r = await fetch('/api/auto/pause', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session_id: sid }),
-  });
-  if (!r.ok) throw new Error(`autoPause ${r.status}`);
-  return await r.json();
-}
-
-export async function autoStop(sid) {
-  const r = await fetch('/api/auto/stop', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session_id: sid }),
-  });
-  if (!r.ok) throw new Error(`autoStop ${r.status}`);
-  return await r.json();
-}
-
-export async function autoEvents(sid, since) {
-  const qs = new URLSearchParams({ sid });
-  if (since) qs.set('since', since);
-  const r = await fetch(`/api/auto/events?${qs}`);
-  if (!r.ok) throw new Error(`autoEvents ${r.status}`);
-  return (await r.json()).events;
-}
-
-export async function autoBudget(sid) {
-  const r = await fetch(`/api/auto/budget/${encodeURIComponent(sid)}`);
-  if (!r.ok) throw new Error(`autoBudget ${r.status}`);
-  return await r.json();
 }
 
 // ── Bugs ─────────────────────────────────────────────────────────────────

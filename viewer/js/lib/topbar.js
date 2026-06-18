@@ -1,14 +1,11 @@
 // Shared #topbar-actions helpers — Layer 2/3 of v3-control-consistency.
-// Each screen's mount() calls claimTopbar() to wipe the slot (preserving the
-// auto-status pill, which lives globally) and gets back the slot element.
+// Each screen's mount() calls claimTopbar() to wipe the slot and gets back the slot element.
 // Then it appends primitives built with tmSubcount/tmSearch/tmSegmented/tmAction.
 
 export function claimTopbar() {
   const root = document.getElementById('topbar-actions');
   if (!root) return null;
-  const pill = root.querySelector('.auto-status-pill');
   root.replaceChildren();
-  if (pill) root.appendChild(pill);
   return root;
 }
 

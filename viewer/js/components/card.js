@@ -1,36 +1,30 @@
 // Shared task card. Renders Minimal or Full density.
 //
 // Usage:
-//   const el = renderCard({ task, density: 'full', epicColors, autoState, groupBy, now });
+//   const el = renderCard({ task, density: 'full', epicColors, groupBy, now });
 //
 // Inputs:
 //   task         — backlog task object (v3 schema)
 //   density      — 'minimal' | 'full'
 //   epicColors   — {epicId → hex} from lib/epics.js#assignEpicColors
-//   autoState    — current auto-mode state object (or null) — used to attach a live block
 //   groupBy      — 'status' | 'phase' | 'epic' (drives whether status pill renders)
 //   now          — ms (for time-in-status) — defaults to Date.now()
 
 import { formatTimeInStatus, classifyTimeInStatus, isoToMs, formatElapsed } from '../lib/time.js';
 import { epicColor, epicCssVar } from '../lib/epics.js';
 import { bindCopy } from '../lib/copy.js';
-import { isAutoRunning } from '../lib/auto-state.js';
-import { renderAutoModeLiveBlock } from './auto-mode-live-block.js';
 import { laneBadge } from './gate-pipeline.js';
 import { renderMergeLadderCompact } from './merge-status.js';
 
 const PRIORITY_LABELS = { critical: 'Critical', high: 'High', medium: 'Medium', low: 'Low' };
 const STATUS_LABELS   = { blocked: 'Blocked', todo: 'Todo', 'in-progress': 'In Progress', 'in-review': 'In Review', done: 'Done' };
 
-export function renderCard({ task, density = 'full', epicColors = {}, autoState = null, groupBy = 'status', now = Date.now() } = {}) {
+export function renderCard({ task, density = 'full', epicColors = {}, groupBy = 'status', now = Date.now() } = {}) {
   if (!task || !task.id) return document.createComment('empty card');
 
   const card = document.createElement('div');
   card.className = 'card-task ' + density;
   card.dataset.taskId = task.id;
-
-  const isAuto = !!(isAutoRunning(autoState) && autoState.cursor && autoState.cursor.task_id === task.id);
-  if (isAuto) card.classList.add('auto');
 
   // Recently-moved highlight: 24h after status change (spec §3.6).
   const startedMs = isoToMs(task.started);
@@ -96,10 +90,9 @@ export function renderCard({ task, density = 'full', epicColors = {}, autoState 
   title.textContent = task.title || '(untitled)';
   body.appendChild(title);
 
-  // Minimal density stops here (plus auto live block + status pill if grouped non-status).
+  // Minimal density stops here (plus status pill if grouped non-status).
   if (density === 'minimal') {
     if (groupBy !== 'status' && task.status) appendStatusPill(body, task.status);
-    if (isAuto) appendLiveBlock(card, autoState);
     return card;
   }
 
@@ -224,9 +217,6 @@ export function renderCard({ task, density = 'full', epicColors = {}, autoState 
     body.appendChild(callout);
   }
 
-  // ── Auto-mode live block ──
-  if (isAuto) appendLiveBlock(card, autoState);
-
   return card;
 }
 
@@ -235,11 +225,6 @@ function appendStatusPill(parent, status) {
   pill.className = 'card-status-pill ' + status;
   pill.innerHTML = `<span class="dot"></span>${STATUS_LABELS[status] || status}`;
   parent.appendChild(pill);
-}
-
-function appendLiveBlock(card, autoState) {
-  const block = renderAutoModeLiveBlock({ autoState });
-  if (block) card.appendChild(block);
 }
 
 function escapeHtml(s) {

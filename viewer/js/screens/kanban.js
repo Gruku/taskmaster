@@ -1,11 +1,8 @@
 // Kanban screen — full implementation.
-// Mounts the page-head, phase stepper, epic chips, board surface, and auto-mode strip.
-// Subscribes to store(backlog), store(autoState), and store(prefs); all writes go through prefs.patch(...).
+// Mounts the page-head, phase stepper, epic chips, board surface.
+// Subscribes to store(backlog) and store(prefs); all writes go through prefs.patch(...).
 
 import { renderCard }                        from '../components/card.js';
-import { renderAutoModeStrip,
-         updateAutoModeStrip,
-         destroyAutoModeStrip }              from '../components/auto-mode-strip.js';
 import { renderPriorityChips,
          updatePriorityChips }               from '../components/priority-chips.js';
 import { renderPhaseStepper }                from '../components/phase-stepper.js';
@@ -53,15 +50,7 @@ export async function mount(root, { store, api, prefs }) {
   const page = document.createElement('div');
   page.className = 'kanban-page';
 
-  // 1) Auto-mode strip (above page header, hidden when no run)
-  const strip = renderAutoModeStrip({
-    autoState: store.getAutoState(),
-    backlog:   store.getBacklog(),
-    onViewAll: () => { location.hash = '#/auto'; },
-  });
-  page.appendChild(strip);
-
-  // 2) Page header — inject into topbar-actions slot (preserves auto-status pill)
+  // 1) Page header — inject into topbar-actions slot
   const head = claimTopbar();
 
   const subcount = document.createElement('span');
@@ -400,7 +389,6 @@ export async function mount(root, { store, api, prefs }) {
             task: t,
             density: state.density,
             epicColors,
-            autoState: store.getAutoState(),
             groupBy: state.filters.group_by,
           }));
         }
@@ -463,17 +451,9 @@ export async function mount(root, { store, api, prefs }) {
   }
 
   // ──────────────────────────────────────────────────────────────
-  // Subscriptions: backlog & autoState
+  // Subscriptions: backlog
   // ──────────────────────────────────────────────────────────────
   const unsubBacklog = store.subscribe('backlog', () => paint());
-  const unsubAuto    = store.subscribe('autoState', (auto) => {
-    updateAutoModeStrip(strip, {
-      autoState: auto,
-      backlog:   store.getBacklog(),
-      onViewAll: () => { location.hash = '#/auto'; },
-    });
-    paint(); // re-render cards so live-blocks attach/detach
-  });
 
   // Initial paint
   paint();
@@ -486,11 +466,7 @@ export async function mount(root, { store, api, prefs }) {
   return () => {
     if (searchTimer) clearTimeout(searchTimer);
     unsubBacklog();
-    unsubAuto();
     resizeObs.disconnect();
-    destroyAutoModeStrip(strip);
-    // Don't wipe the topbar on cleanup — the next screen's claimTopbar() handles
-    // teardown while preserving the auto-status pill. Wiping here would drop the pill.
   };
 }
 

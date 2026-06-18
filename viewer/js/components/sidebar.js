@@ -3,8 +3,6 @@
 // button injected into #topbar. The drawer is dismissed by clicking the backdrop scrim
 // or the hamburger button again.
 
-import { isAutoRunning } from '../lib/auto-state.js';
-
 const SECTIONS = [
   { label: 'Frontdoor', items: [
     { key: 'dashboard', icon: '▤', label: 'Dashboard', hash: '#/dashboard' },
@@ -12,9 +10,6 @@ const SECTIONS = [
     { key: 'table',     icon: '▭', label: 'Table',     hash: '#/table' },
     { key: 'task',      icon: '◧', label: 'Task',      hash: '#/task' },
     { key: 'epics',     icon: '⬡', label: 'Epics',     hash: '#/epics' },
-  ]},
-  { label: 'Structural', items: [
-    { key: 'auto_mode', icon: '⌬', label: 'Auto Mode', hash: '#/auto', live: true },
   ]},
   { label: 'Temporal', items: [
     { key: 'recap',    icon: '↻', label: 'Recap',    hash: '#/recap' },
@@ -120,16 +115,6 @@ export function mountSidebar(el, { store, prefs }) {
   const unsubIdentity = store.subscribe('identity', applyIdentity);
   applyIdentity(store.getIdentity());   // replay — identity is set before sidebar mounts
 
-  // Auto-mode live state → footer pulse + sidebar live-dot on auto_mode link
-  const unsubAutoState = store.subscribe('autoState', (auto) => {
-    const running = isAutoRunning(auto);
-    footer.hidden = !running;
-    footer.classList.toggle('auto-running', running);
-    footer.querySelector('span:last-child').textContent = running ? 'auto-mode active' : '';
-    const link = el.querySelector('.sidebar-link[data-key="auto_mode"]');
-    if (link) link.classList.toggle('live', running);
-  });
-
   // ── Mobile hamburger drawer (< 768px) ──────────────────────────────────────
   // The sidebar becomes a fixed overlay; a hamburger button is injected into
   // #topbar and a backdrop scrim is appended to the shell. Both are torn down
@@ -217,7 +202,6 @@ export function mountSidebar(el, { store, prefs }) {
   return () => {
     document.removeEventListener('route:changed', onRouteChanged);
     if (typeof unsubIdentity === 'function') unsubIdentity();
-    if (typeof unsubAutoState === 'function') unsubAutoState();
     mql.removeEventListener('change', onMqlChange);
     detachMobileChrome();
   };

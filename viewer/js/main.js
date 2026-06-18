@@ -2,7 +2,6 @@ import { api } from './api.js';
 import { store } from './store.js';
 import { init as routerInit, registerScreen } from './router.js';
 import { mountSidebar } from './components/sidebar.js';
-import { mountAutoStatus } from './components/auto-status.js';
 
 const BACKLOG_POLL_MS = 3000;
 const PREFS_DEBOUNCE_MS = 400;
@@ -22,7 +21,6 @@ registerScreen('/issue',      () => import('./screens/issue-detail.js'));
 registerScreen('/bugs',       () => import('./screens/bugs.js'));
 registerScreen('/bug',        () => import('./screens/bug-detail.js'));
 registerScreen('/ideas',      () => import('./screens/ideas.js'));
-registerScreen('/auto',       () => import('./screens/auto-mode.js'));
 registerScreen('/recap',      () => import('./screens/recap.js'));
 registerScreen('/archived',   () => import('./screens/archived.js'));
 registerScreen('/worktrees',  () => import('./screens/worktrees.js'));
@@ -81,9 +79,6 @@ async function boot() {
   // Mount sidebar
   mountSidebar(document.getElementById('sidebar'), { store, prefs });
 
-  // Mount header auto-status pill (visible on every screen when auto-mode is running)
-  mountAutoStatus(document.getElementById('topbar-actions'), { store });
-
   // Init router
   routerInit({
     mount: document.getElementById('screen-mount'),
@@ -96,7 +91,6 @@ async function boot() {
 
   // Backlog polling loop
   pollBacklogForever();
-  pollAutoStateForever();
 }
 
 async function pollBacklogForever() {
@@ -117,45 +111,6 @@ async function pollBacklogForever() {
     const delay = consecutiveFailures > 0
       ? Math.min(BACKLOG_POLL_MS * 2 ** (consecutiveFailures - 1), MAX_BACKOFF_MS)
       : BACKLOG_POLL_MS;
-    await sleep(delay);
-
-    // After the first poll, pause subsequent polls when the tab is hidden.
-    if (!isFirst && document.visibilityState === 'hidden') {
-      await new Promise(resolve => {
-        document.addEventListener('visibilitychange', function onVisible() {
-          if (document.visibilityState === 'visible') {
-            document.removeEventListener('visibilitychange', onVisible);
-            resolve();
-          }
-        });
-      });
-    }
-    isFirst = false;
-  }
-}
-
-const AUTO_STATE_POLL_MS = 3000;
-
-async function pollAutoStateForever() {
-  let consecutiveFailures = 0;
-  const MAX_BACKOFF_MS = 60_000;
-  let isFirst = true;
-
-  while (true) {
-    try {
-      const auto = await api.autoState();
-      store.setAutoState(auto);
-      consecutiveFailures = 0;
-    } catch (e) {
-      consecutiveFailures++;
-      console.error('auto state poll failed', e);
-      store.setAutoState(null);
-    }
-
-    // Exponential backoff on consecutive failures, capped at MAX_BACKOFF_MS.
-    const delay = consecutiveFailures > 0
-      ? Math.min(AUTO_STATE_POLL_MS * 2 ** (consecutiveFailures - 1), MAX_BACKOFF_MS)
-      : AUTO_STATE_POLL_MS;
     await sleep(delay);
 
     // After the first poll, pause subsequent polls when the tab is hidden.

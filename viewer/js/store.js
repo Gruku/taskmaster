@@ -1,6 +1,5 @@
 // In-memory store. Screens read via getters and subscribe to keys.
 // Polling is initiated by main.js, not here.
-// setAutoState fires 'autoState' subscribers: sidebar live-dot, auto-mode screen.
 
 import { getTask, getTaskRelated } from './api.js';
 
@@ -8,8 +7,6 @@ const state = {
   backlog: null,           // parsed backlog YAML object
   prefs: null,             // viewer prefs
   identity: null,          // {root, version}
-  autoState: null,         // populated by Plan 6
-  activeAutoSessionId: null, // currently inspected session in auto-mode page
   lessons: null,           // lesson list; populated by lessons.js
   issues: null,            // issue list; populated by issues.js
   ideas: null,             // idea list; populated by ideas.js
@@ -49,17 +46,13 @@ export const store = {
   getBacklog:  () => state.backlog,
   getPrefs:    () => state.prefs,
   getIdentity: () => state.identity,
-  getAutoState:        () => state.autoState,
-  getActiveAutoSession:() => state.activeAutoSessionId,
-  getLessons:          () => state.lessons,
-  getIssues:           () => state.issues,
-  getIdeas:            () => state.ideas,
+  getLessons:  () => state.lessons,
+  getIssues:   () => state.issues,
+  getIdeas:    () => state.ideas,
 
   setBacklog:  (b) => { if (jsonEqual(state.backlog, b)) return; state.backlog = b; emit('backlog'); },
   setPrefs:    (p) => { state.prefs = p;    emit('prefs'); },
   setIdentity: (i) => { state.identity = i; emit('identity'); },
-  setAutoState:(a) => { if (jsonEqual(state.autoState, a)) return; state.autoState = a; emit('autoState'); },
-  setActiveAutoSession:(sid) => { state.activeAutoSessionId = sid; emitValue('activeAutoSession', sid); },
   setLessons:  (v) => { state.lessons = v || []; emit('lessons'); },
   setIssues:   (v) => { state.issues = v || [];  emit('issues'); },
   setIdeas:    (v) => { state.ideas  = v || [];  emit('ideas');  },
@@ -99,16 +92,3 @@ export function invalidateTask(id) {
   _relatedCache.delete(id);
 }
 
-// Named export so callers outside the store object can also fire subscribers.
-// The store.setAutoState method is the canonical setter; this is an alias.
-export function setAutoState(next) {
-  store.setAutoState(next);
-}
-
-// Named exports for active auto session helpers (Plan 6 M6).
-export function setActiveAutoSession(sid) {
-  store.setActiveAutoSession(sid);
-}
-export function getActiveAutoSession() {
-  return store.getActiveAutoSession();
-}

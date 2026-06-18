@@ -1,6 +1,5 @@
 import { h } from '../util/h.js';
 import { claimTopbar } from '../lib/topbar.js';
-import { createAutoModeStrip } from '../components/auto-mode-strip.js';
 import { createSpine } from '../components/continuity/spine.js';
 import { createDecisionCard } from '../components/continuity/decision-card.js';
 import { renderBlock } from '../lib/xml-render.js';
@@ -22,13 +21,9 @@ export async function mount(root, { store, api }) {
   const topbarSlot = claimTopbar();
   if (topbarSlot) topbarSlot.appendChild(h('span', { class: 'dk-proj' }, store?.projectName?.() || ''));
 
-  const autoSlot = h('section', { class: 'dk-auto' });
-  const strip = createAutoModeStrip({ store, api, mode: 'dashboard' });
-  if (strip?.root) autoSlot.appendChild(strip.root);
-
   const boardEl = h('section', { class: 'dk-board', 'aria-label': 'Sticky notes' });
   const bandEl = h('section', { class: 'dk-continuity', 'aria-label': 'Continuity' });
-  root.replaceChildren(autoSlot, boardEl, bandEl);
+  root.replaceChildren(boardEl, bandEl);
 
   let notes = [];
   let items = [];
@@ -170,5 +165,5 @@ export async function mount(root, { store, api }) {
   await renderBand();
   composer.focus();
 
-  return async () => { strip?.destroy?.(); };
+  return async () => {};
 }

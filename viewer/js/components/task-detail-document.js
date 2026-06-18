@@ -128,7 +128,6 @@ function renderBody(ctx) {
     mlSection.innerHTML = mlHtml;
     children.push(mlSection);
   }
-  children.push(renderAutoBanner(task));
   children.push(renderDocsSection(task));
   children.push(renderMdSectionEditable('Specification', 'specification', task, ctx, 'sec-spec'));
   children.push(renderMdSectionEditable('Plan', 'plan', task, ctx, 'sec-plan'));
@@ -207,17 +206,6 @@ function renderMdSectionEditable(label, fieldKey, task, ctx, dataTest) {
     onSave: inlineSave(task.id, fieldKey, ctx),
   });
   return wrap;
-}
-
-function renderAutoBanner(task) {
-  const am = task.auto_mode;
-  if (!am || !am.running) return null;
-  const pct = Math.max(0, Math.min(100, Math.round((am.progress || 0) * 100)));
-  return h('div', { class: 'td-auto-banner', 'data-test': 'auto-banner' }, [
-    h('span', { class: 'td-auto-step' }, am.step || 'auto-mode running'),
-    h('div', { class: 'td-auto-bar' }, h('span', { style: `width:${pct}%` })),
-    h('span', { class: 'td-auto-elapsed' }, am.elapsed || ''),
-  ]);
 }
 
 function renderSpecReview(task) {
