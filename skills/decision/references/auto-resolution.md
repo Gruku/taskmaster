@@ -1,6 +1,6 @@
 # Auto-Resolution Hooks
 
-Three mechanisms transition decisions without explicit `/decide` interaction:
+Two mechanisms transition decisions without explicit `/decide` interaction:
 
 ## 1. Commit-message resolution
 
@@ -12,11 +12,7 @@ triggers the MCP server's next scan to call `resolve_decision(NNN, resolved_with
 
 Regex: `^Resolves:\s*(DEC-\d+)\s+with\s+option\s+(\d+)\s*$` (multiline, case-insensitive).
 
-## 2. auto-task block
-
-`auto-task` will not transition a task to `done` while `backlog_decision_list(status="open", task_id=<current>)` is non-empty. The user can override with `--override-open-decisions`.
-
-## 3. end-session sweep
+## 2. end-session sweep
 
 `end-session` runs `backlog_decision_list(status="open", task_id=<current>)` before writing the handover. For each result, it asks (via `AskUserQuestion`):
 

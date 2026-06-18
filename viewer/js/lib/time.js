@@ -44,7 +44,7 @@ export function classifyTimeInStatus(tsMs, nowMs = Date.now()) {
   return 'fresh';
 }
 
-/** "MM:SS" or "HH:MM:SS" for elapsed-since strings on auto-mode runs. */
+/** "MM:SS" or "HH:MM:SS" for elapsed-since strings. */
 export function formatElapsed(ms) {
   if (ms == null || !Number.isFinite(ms) || ms < 0) ms = 0;
   const total = Math.floor(ms / 1000);

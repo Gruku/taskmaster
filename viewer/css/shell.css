@@ -314,7 +314,7 @@ html, body {
    never grow past it. Two mount patterns exist in the codebase and both work
    because .screen-mount is also flex-column with overflow:hidden:
      (a) screen JS adds the class directly to .screen-mount
-         (dashboard:.dash, auto-mode:.auto-page, issue-detail, lesson-detail)
+         (dashboard:.dash, issue-detail, lesson-detail)
      (b) screen JS appends a child <div> with the class to .screen-mount
          (kanban:.kanban-page, issues, lessons, ideas, recap:.recap-page,
          archived:.archived-page, task-detail:.td-page)

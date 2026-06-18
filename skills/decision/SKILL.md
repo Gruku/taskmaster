@@ -43,7 +43,6 @@ See [`references/lifecycle.md`](references/lifecycle.md).
 See [`references/auto-resolution.md`](references/auto-resolution.md).
 
 - Commit message `Resolves: DEC-001 with option 2` flips status on MCP scan.
-- `auto-task` blocks task `done` transitions while linked decisions are open (unless `--override-open-decisions`).
 - `end-session` runs a per-decision sweep over open decisions linked to the in-progress task.
 
 ## Steps — write a decision
@@ -81,7 +80,7 @@ See [`references/auto-resolution.md`](references/auto-resolution.md).
 ## References
 
 - `references/lifecycle.md` — state diagram, terminal-state rules.
-- `references/auto-resolution.md` — commit-message + auto-task hook contract.
+- `references/auto-resolution.md` — commit-message + end-session sweep contract.
 - `templates/decision-body.md` — body skeleton.
 
 ## Spec
