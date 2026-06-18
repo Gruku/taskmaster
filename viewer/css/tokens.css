@@ -59,7 +59,12 @@
   --epic-6:           #a8c958;
 
   /* Bundle palette — frame hues, deliberately off the blue accent */
-  --bundle-1:#5fcdb8; --bundle-2:#a07fe0; --bundle-3:#d6a45f; --bundle-4:#e87a85; --bundle-5:#a8c958; --bundle-6:#5fb0cd;
+  --bundle-1:          #5fcdb8;
+  --bundle-2:          #a07fe0;
+  --bundle-3:          #d6a45f;
+  --bundle-4:          #e87a85;
+  --bundle-5:          #a8c958;
+  --bundle-6:          #5fb0cd;
 
   /* Type */
   --font-sans:        'Inter', -apple-system, system-ui, sans-serif;
