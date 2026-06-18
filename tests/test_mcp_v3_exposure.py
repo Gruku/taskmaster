@@ -149,22 +149,6 @@ def test_recap_snapshot_tools_exposed(tool_name):
     assert tool_name in _list_tool_names()
 
 
-# Auto-mode state machine (v3-skills-010, v3-skills-011)
-@pytest.mark.parametrize(
-    "tool_name",
-    [
-        "backlog_auto_start",
-        "backlog_auto_status",
-        "backlog_auto_advance",
-        "backlog_auto_complete_task",
-        "backlog_auto_finish",
-        "backlog_auto_abort",
-    ],
-)
-def test_auto_mode_tools_exposed(tool_name):
-    assert tool_name in _list_tool_names()
-
-
 # Project structure visibility (project-structure-visibility-003)
 @pytest.mark.parametrize(
     "tool_name",
@@ -201,8 +185,10 @@ def test_full_v3_surface_count():
     names = _list_tool_names()
     v3_tools = [
         n for n in names
-        if any(k in n for k in ("migrate", "handover", "lesson", "issue", "idea", "recap", "snapshot", "auto_"))
+        if any(k in n for k in ("migrate", "handover", "lesson", "issue", "idea", "recap", "snapshot"))
     ]
     # Floor lowered 38 -> 36 by tm-audit-006: intentional cull of 13 dead
     # registrations (10 of them match the v3 keyword filter).
-    assert len(v3_tools) >= 36, f"v3 surface shrank to {len(v3_tools)} tools (was 36 after tm-audit-006)"
+    # Floor lowered 36 -> 30 by remove-auto-mode-001: 6 backlog_auto_* tools removed
+    # (auto_ keyword no longer in filter; actual live count = 30).
+    assert len(v3_tools) >= 30, f"v3 surface shrank to {len(v3_tools)} tools (was 30 after remove-auto-mode-001)"

@@ -24,11 +24,6 @@ CULLED = [
     "snapshot_diff",
     "lesson_list_extended",
     "issue_list_extended",
-    "auto_state_get",
-    "auto_pause",
-    "auto_stop",
-    "auto_history",
-    "auto_event_log",
     "lesson_reinforce",
 ]
 

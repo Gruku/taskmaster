@@ -141,21 +141,6 @@ from taskmaster_v3 import (
     decision_path as _decision_path,
     continuity_items as _continuity_items,
     write_task_file as _write_task_file,
-    AUTO_MODES,
-    AUTO_STAGES,
-    AUTO_STAGE_GATE as _AUTO_STAGE_GATE,
-    auto_stages_for_lane as _auto_stages_for_lane,
-    AUTO_TASK_STATUSES,
-    AUTO_FAIL_REASONS,
-    init_auto_run as _init_auto_run,
-    read_auto_state as _read_auto_state,
-    write_auto_state as _write_auto_state,
-    clear_auto_state as _clear_auto_state,
-    append_auto_event_bp as _append_auto_event_bp,
-    advance_stage as _advance_stage,
-    next_planned_stage as _next_planned_stage,
-    complete_current_task as _complete_current_task,
-    auto_run_summary as _auto_run_summary,
     load_viewer_prefs,
     save_viewer_prefs,
     load_recap,
@@ -165,7 +150,6 @@ from taskmaster_v3 import (
     get_session_detail,
     load_session_snapshot,
     snapshot_diff as _snapshot_diff,
-    read_hook_events as _read_hook_events,
     slim_entity as _slim_entity,
     resolve_sections as _resolve_sections,
     expand_link_ids as _expand_link_ids,
@@ -251,26 +235,6 @@ def _append_grouped_links_block(
             lines.append(f"- {ltype}: [{', '.join(pills)}]")
         else:
             lines.append(f"- {ltype}: [{', '.join(targets)}]")
-
-
-def _load_auto_state():
-    """Read <backlog-parent>/auto/state.json, return parsed dict or None.
-
-    Returns None when the file is missing OR contains invalid JSON.
-    Used by GET /api/auto/state. Mutating writes are out of scope for Plan 2.
-
-    Uses the CWD-fresh resolver from taskmaster_v3 (not _backlog_path()) so the
-    path stays in sync with the writer's `bp.parent / "auto"` even when ROOT
-    is frozen at import (e.g. under pytest with monkeypatch.chdir). ISS-004.
-    """
-    from taskmaster_v3 import _resolve_artifact_root
-    p = _resolve_artifact_root() / "auto" / "state.json"
-    if not p.exists():
-        return None
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        return None
 
 
 def _resolve_paths() -> tuple[Path, Path]:
@@ -4335,264 +4299,6 @@ def backlog_lesson_candidates_scan(days: int = 7, kind: str = "") -> str:
 
 
 @mcp.tool()
-def backlog_auto_start(
-    mode: str,
-    target: str,
-    continue_on_fail: bool = False,
-    no_gate: bool = False,
-) -> str:
-    """Start an auto run (skill-driven state machine).
-
-    The orchestrating skill (taskmaster:auto-task / auto-epic / auto-phase)
-    drives Claude through PICK → SPEC_REVIEW → IMPLEMENT → REVIEW_GATE →
-    HANDOVER_STUB → END_SESSION for each task. This tool seeds the run.
-
-    Args:
-        mode: 'task', 'epic', or 'phase'.
-        target: Task id (mode=task), epic id (mode=epic), or phase id (mode=phase).
-        continue_on_fail: If true, batch runs proceed past failed tasks.
-        no_gate: If true, skip user-approval gates (SPEC_REVIEW, REVIEW_GATE).
-
-    Per-task model selection:
-        Each task may declare `auto_model: sonnet|opus`. Missing → sonnet.
-        The orchestrator skill reads `state.cursor.model` to pick the
-        subagent model when dispatching.
-    """
-    if mode not in AUTO_MODES:
-        return f"Error: mode must be one of {AUTO_MODES}"
-    bp = _backlog_path()
-    if not bp.exists():
-        return "No backlog found."
-
-    data = _load()
-    pending: list[str] = []
-    model_for_task: dict[str, str] = {}
-    lane_for_task: dict[str, str] = {}
-
-    if mode == "task":
-        # target is a task id
-        if not _find_task(data, target):
-            return f"Error: task {target} not found"
-        task, _ = _find_task(data, target)
-        pending = [target]
-        model_for_task[target] = task.get("auto_model", "sonnet")
-        lane_for_task[target] = task.get("lane")
-    elif mode == "epic":
-        epic = next((e for e in data.get("epics") or [] if e.get("id") == target), None)
-        if not epic:
-            return f"Error: epic {target} not found"
-        for t in epic.get("tasks") or []:
-            if t.get("status") in (None, "todo"):
-                pending.append(t["id"])
-                model_for_task[t["id"]] = t.get("auto_model", "sonnet")
-                lane_for_task[t["id"]] = t.get("lane")
-    else:  # phase
-        for epic in data.get("epics") or []:
-            for t in epic.get("tasks") or []:
-                if t.get("phase") == target and t.get("status") in (None, "todo"):
-                    pending.append(t["id"])
-                    model_for_task[t["id"]] = t.get("auto_model", "sonnet")
-                    lane_for_task[t["id"]] = t.get("lane")
-
-    if not pending:
-        return f"No todo tasks under {mode} {target} — nothing to do."
-
-    state = _init_auto_run(
-        bp,
-        mode=mode,
-        target=target,
-        pending_task_ids=pending,
-        model_for_task=model_for_task,
-        lane_for_task=lane_for_task,
-        config={"continue_on_fail": continue_on_fail, "no_gate": no_gate},
-    )
-
-    cur = state["cursor"]
-    planned = cur.get("planned_stages") or []
-    return (
-        f"Auto run started: mode={mode}, target={target}, tasks={len(pending)}.\n"
-        f"First task: {cur['task_id']} (model={cur['model']}, lane={cur.get('lane') or 'standard (default)'}).\n"
-        f"Cursor stage: PICK.\n"
-        f"Lane pipeline: {' → '.join(planned)}\n"
-        f"Walk it with backlog_auto_advance() (no stage arg) until COMPLETE. "
-        f"The auto-{mode} skill should drive from here."
-    )
-
-
-@mcp.tool()
-def backlog_auto_status() -> str:
-    """Show current auto-run status (which task, which stage, completed/pending counts)."""
-    bp = _backlog_path()
-    if not bp.exists():
-        return "No backlog found."
-    state = _read_auto_state(bp)
-    if not state:
-        return "No auto run in progress."
-    return _auto_run_summary(state)
-
-
-@mcp.tool()
-def backlog_auto_advance(stage: str = "") -> str:
-    """Move the cursor to the next (or a specific) lane stage. Used by
-    orchestrating skills between steps.
-
-    Spec A C2 — lane-aware walking:
-      - Call with NO stage (the default) to advance to the NEXT stage in the
-        cursor task's lane-specific planned sequence. This is the preferred
-        path: it records exactly the gates that lane requires, in order, so a
-        standard-lane task records design-review (not spec-review) and a
-        full-lane task records spec-review + plan-review. When the cursor is
-        already at the last planned stage, returns a "pipeline complete" note.
-      - Call with an explicit stage to jump there (back-compat for existing
-        callers/tests). Valid stages: PICK, SPEC, SPEC_REVIEW, PLAN,
-        PLAN_REVIEW, DESIGN_REVIEW, WRITE_TESTS, IMPLEMENT, TEST, REVIEW_GATE,
-        HANDOVER_STUB, END_SESSION, COMPLETE.
-
-    Advancing to a gate-mapped stage auto-records that stage's gate.
-    """
-    bp = _backlog_path()
-    state = _read_auto_state(bp)
-    if not state:
-        return "No auto run in progress."
-    cursor = state.get("cursor")
-    if not cursor:
-        return "No active cursor — auto run is complete."
-
-    if not stage:
-        # No-arg: walk the lane-specific planned sequence.
-        stage = _next_planned_stage(cursor)
-        if not stage:
-            return (
-                f"Pipeline complete for {cursor['task_id']} "
-                f"(stage={cursor.get('stage')}). "
-                f"Finalize with backlog_auto_complete_task."
-            )
-
-    if stage not in AUTO_STAGES:
-        return f"Error: stage must be one of {AUTO_STAGES}"
-    prev_stage = (state.get("cursor") or {}).get("stage")
-    try:
-        _advance_stage(state, stage)
-    except ValueError as exc:
-        return f"Error: {exc}"
-    _write_auto_state(bp, state)
-    from datetime import datetime as _dt, timezone as _tz
-    _append_auto_event_bp(bp, state["session_id"], {
-        "ts": _dt.now(_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "session_id": state["session_id"],
-        "kind": "stage_advanced",
-        "task_id": state["cursor"]["task_id"],
-        "from": prev_stage,
-        "stage": stage,
-    })
-    cur = state["cursor"]
-    # Spec A: lane-aware auto-mode — advancing to a gate-mapped stage records the
-    # matching gate on the cursor task. Status gates take status="done"; verdict
-    # gates take verdict="pass". Walking the lane sequence in order keeps
-    # backlog_record_gate's ordering guard satisfied.
-    gate = _AUTO_STAGE_GATE.get(stage)
-    gate_note = ""
-    if gate:
-        tid = cur["task_id"]
-        if gate in _VERDICT_GATES:
-            res = backlog_record_gate(tid, gate, verdict="pass")
-        else:
-            res = backlog_record_gate(tid, gate, status="done")
-        if res.startswith("Error:"):
-            gate_note = f"\n⚠ gate `{gate}` not recorded: {res}"
-        else:
-            gate_note = f"\nGate `{gate}` recorded."
-    return f"Stage → {stage} (task={cur['task_id']}, model={cur['model']}){gate_note}"
-
-
-@mcp.tool()
-def backlog_auto_complete_task(
-    status: str,
-    summary: str = "",
-    commits: list[str] | None = None,
-    fail_reason: str = "",
-    handover_id: str = "",
-) -> str:
-    """Finalize the current cursor task and advance to the next pending task.
-
-    Args:
-        status: 'done' | 'failed' | 'blocked'.
-        summary: One-paragraph summary returned by the task subagent.
-        commits: Commit shas produced by the task.
-        fail_reason: Required if status != 'done'. One of tests-failed |
-                     spec-rejected | blocked | crashed | user-aborted.
-        handover_id: If a per-task handover was written, its id.
-    """
-    if status not in AUTO_TASK_STATUSES:
-        return f"Error: status must be one of {AUTO_TASK_STATUSES}"
-    if status != "done" and not fail_reason:
-        return "Error: fail_reason is required when status != 'done'"
-    bp = _backlog_path()
-    state = _read_auto_state(bp)
-    if not state:
-        return "No auto run in progress."
-    completed_tid = (state.get("cursor") or {}).get("task_id")
-    try:
-        _complete_current_task(
-            state,
-            status=status,
-            summary=summary,
-            commits=commits or [],
-            fail_reason=fail_reason,
-            handover_id=handover_id,
-        )
-    except ValueError as exc:
-        return f"Error: {exc}"
-    _write_auto_state(bp, state)
-    from datetime import datetime as _dt, timezone as _tz
-    _append_auto_event_bp(bp, state["session_id"], {
-        "ts": _dt.now(_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "session_id": state["session_id"],
-        "kind": "task_completed" if status == "done" else "task_failed",
-        "task_id": completed_tid,
-        "status": status,
-        "summary": summary,
-        "commits": commits or [],
-        "fail_reason": fail_reason,
-        "handover_id": handover_id,
-    })
-
-    if state["cursor"] is None:
-        return (
-            f"Task complete (status={status}). No more pending tasks — auto run is done.\n"
-            f"Completed: {len(state['completed'])}, Failed: {len(state['failed'])}.\n"
-            f"Use `backlog_auto_finish` to clear state and write run-level handover."
-        )
-    cur = state["cursor"]
-    return (
-        f"Task complete (status={status}). Next: {cur['task_id']} (model={cur['model']}, stage={cur['stage']}).\n"
-        f"Completed so far: {len(state['completed'])}, Pending: {len(state['pending'])}, Failed: {len(state['failed'])}."
-    )
-
-
-@mcp.tool()
-def backlog_auto_finish() -> str:
-    """Clear the auto state file. Call after the run-level handover is written."""
-    bp = _backlog_path()
-    state = _read_auto_state(bp)
-    if not state:
-        return "No auto run to finish."
-    cleared = _clear_auto_state(bp)
-    return f"Auto run cleared. Final: completed={len(state.get('completed') or [])}, failed={len(state.get('failed') or [])}." if cleared else "No state to clear."
-
-
-@mcp.tool()
-def backlog_auto_abort() -> str:
-    """Abort an in-progress auto run, leaving completed work intact."""
-    bp = _backlog_path()
-    state = _read_auto_state(bp)
-    if not state:
-        return "No auto run to abort."
-    cleared = _clear_auto_state(bp)
-    return f"Auto run aborted. Completed: {len(state.get('completed') or [])}." if cleared else "Nothing to abort."
-
-
-@mcp.tool()
 def backlog_lesson_match(
     task_title: str = "",
     touched_files: list[str] | None = None,
@@ -7885,77 +7591,6 @@ class ViewerHandler(BaseHTTPRequestHandler):
         elif clean_path == "/v3/dev/edit-demo" or clean_path == "/v3/dev/edit-demo/":
             viewer_root = Path(__file__).parent / "viewer"
             self._serve_file(viewer_root / "dev" / "edit-demo.html", "text/html")
-        elif clean_path == "/api/auto/sessions":
-            import json as _json
-            from taskmaster_v3 import list_auto_sessions
-            body = _json.dumps({"sessions": list_auto_sessions()}).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(body)
-            return
-        elif clean_path.startswith("/api/auto/sessions/"):
-            import json as _json
-            from taskmaster_v3 import load_auto_session
-            sid = clean_path[len("/api/auto/sessions/"):]
-            state = load_auto_session(sid)
-            if state is None:
-                self.send_response(404)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(b'{"ok":false,"error":"not found"}')
-                return
-            state["hook_counts"] = _read_hook_events(sid)
-            body = _json.dumps(state).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(body)
-            return
-        elif clean_path == "/api/auto/state":
-            import json as _json
-            from taskmaster_v3 import list_auto_sessions
-            sessions = list_auto_sessions()
-            active = next(
-                (s for s in sessions if s.get("cursor") is not None and not s.get("stopped")),
-                None,
-            )
-            body = (
-                _json.dumps(active).encode("utf-8") if active
-                else b'{"running":false}'
-            )
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(body)
-            return
-        elif clean_path.startswith("/api/auto/events"):
-            from urllib.parse import urlsplit, parse_qs
-            from taskmaster_v3 import read_auto_events
-            qs = parse_qs(urlsplit(self.path).query)
-            sid = (qs.get("sid") or [None])[0]
-            since = (qs.get("since") or [None])[0]
-            if not sid:
-                self._send_json(400, {"ok": False, "error": "sid required"})
-                return
-            events = read_auto_events(sid, since=since)
-            self._send_json(200, {"events": events})
-            return
-        elif clean_path.startswith("/api/auto/budget/"):
-            from taskmaster_v3 import load_auto_session, compute_budget
-            sid = clean_path[len("/api/auto/budget/"):]
-            state = load_auto_session(sid)
-            if state is None:
-                self._send_json(404, {"ok": False, "error": "not found"})
-                return
-            self._send_json(200, {"session_id": sid, "meters": compute_budget(state)})
-            return
         elif clean_path == "/api/viewer/prefs":
             self._send_json(200, load_viewer_prefs())
             return
@@ -8397,35 +8032,6 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 self._send_json(400, {"ok": False, "error": str(e)})
                 return
             self._send_json(200, {"ok": True, "id": note_id})
-            return
-
-        if self.path in ("/api/auto/pause", "/api/auto/stop"):
-            from datetime import datetime, timezone
-            from taskmaster_v3 import load_auto_session, save_auto_session, append_auto_event
-            length = int(self.headers.get("Content-Length") or 0)
-            try:
-                payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
-            except Exception as e:
-                self._send_json(400, {"ok": False, "error": f"invalid JSON: {e}"})
-                return
-            sid = payload.get("session_id")
-            if not sid:
-                self._send_json(400, {"ok": False, "error": "session_id required"})
-                return
-            state = load_auto_session(sid)
-            if state is None:
-                self._send_json(404, {"ok": False, "error": "not found"})
-                return
-            kind = "control_pause" if self.path.endswith("/pause") else "control_stop"
-            flag = "paused" if kind == "control_pause" else "stopped"
-            state[flag] = True
-            save_auto_session(sid, state)
-            append_auto_event(sid, {
-                "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "kind": kind, "stage": state.get("cursor", {}).get("stage"),
-                "msg": f"{kind} via /api/auto",
-            })
-            self._send_json(200, {"ok": True})
             return
 
         m = re.fullmatch(r"/api/lessons/([A-Za-z0-9_\-]+)/reinforce", self.path)
@@ -9039,9 +8645,7 @@ def _make_server(host: str = "127.0.0.1", port: int = 0):
 
 def _init_storage() -> None:
     """One-time storage migrations / dir setup. Called by server entry + tests."""
-    from taskmaster_v3 import migrate_auto_state_to_sessions, AUTO_SESSIONS_DIR
-    AUTO_SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
-    migrate_auto_state_to_sessions()
+    pass
 
 
 def _start_viewer_server() -> int:
@@ -9196,65 +8800,6 @@ def issue_list_extended(include_resolved: bool = True) -> str:
             # One bad issue must not blank the whole list. ISS-005.
             continue
     return _json.dumps({"issues": out}, indent=2, default=str)
-
-
-def auto_state_get() -> str:
-    """Return the most-recent auto-mode session state as JSON. {} if none running."""
-    import json
-    from taskmaster_v3 import list_auto_sessions
-    sessions = list_auto_sessions()
-    return json.dumps(sessions[0] if sessions else {})
-
-
-def auto_pause(session_id: str) -> str:
-    """Mark a running auto-mode session as paused. Returns 'ok' or 'error: ...'."""
-    from datetime import datetime, timezone
-    from taskmaster_v3 import load_auto_session, save_auto_session, append_auto_event
-    state = load_auto_session(session_id)
-    if state is None:
-        return f"error: session {session_id} not found"
-    state["paused"] = True
-    save_auto_session(session_id, state)
-    append_auto_event(session_id, {
-        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "kind": "control_pause",
-        "stage": state.get("cursor", {}).get("stage"),
-        "msg": "paused via MCP",
-    })
-    return "ok"
-
-
-def auto_stop(session_id: str) -> str:
-    """Mark a running auto-mode session as stopped. Returns 'ok' or 'error: ...'."""
-    from datetime import datetime, timezone
-    from taskmaster_v3 import load_auto_session, save_auto_session, append_auto_event
-    state = load_auto_session(session_id)
-    if state is None:
-        return f"error: session {session_id} not found"
-    state["stopped"] = True
-    save_auto_session(session_id, state)
-    append_auto_event(session_id, {
-        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "kind": "control_stop",
-        "stage": state.get("cursor", {}).get("stage"),
-        "msg": "stopped via MCP",
-    })
-    return "ok"
-
-
-def auto_history(limit: int = 50) -> str:
-    """Return recent auto-mode sessions as JSON, newest first."""
-    import json
-    from taskmaster_v3 import list_auto_sessions
-    sessions = list_auto_sessions()[: max(1, int(limit))]
-    return json.dumps({"sessions": sessions}, indent=2)
-
-
-def auto_event_log(session_id: str, since: str | None = None) -> str:
-    """Return events for a session, optionally filtered by ISO 8601 timestamp."""
-    import json
-    from taskmaster_v3 import read_auto_events
-    return json.dumps({"events": read_auto_events(session_id, since=since)}, indent=2)
 
 
 # --- .taskmaster/project.yaml (Project manifest) ---
