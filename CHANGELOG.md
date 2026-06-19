@@ -12,6 +12,38 @@ indicate schema breaks or removed surfaces.
 
 ---
 
+## 3.20.0 — Harden backlog_project_structure against hangs (2026-06-19)
+
+Follow-up to the 3.16.1 `.worktrees/`/`node_modules` exclusion: that fix was
+too narrow and the hang still reproduced on other monorepo layouts. Adds a
+request-wide deadline and several cost reductions so the tool degrades to
+partial results instead of stalling.
+
+### Added
+
+- **`warning` field on the response payload** — non-null with a deadline notice
+  when collection is truncated; null on a complete walk. Additive, so existing
+  consumers (superset shape) are unaffected.
+
+### Changed
+
+- **25-second overall wall-clock deadline** threaded through the filesystem walk
+  and every git subprocess. When it fires, partial results are returned with the
+  `warning` set, and the truncated response is **not cached** (`cache_clear`) so
+  the next call retries.
+- **Per-git-call timeouts are bounded by the remaining request budget**, so many
+  slow sub-repos can no longer stack 10s timeouts past the deadline.
+- **Fast path (`refresh_git=False`)** now caps each git call at 3s and makes two
+  local calls per sub-repo instead of three: `branch -a` is replaced by local
+  `for-each-ref refs/heads refs/remotes` (no remote-tracking scan), and the
+  redundant per-repo `rev-parse` is dropped — `current_branch` is read from the
+  `worktree list` output.
+- **`_SKIP_SCAN_DIRS` expanded** with more dependency/build/cache/data dir names
+  (`.tox`, `.nox`, `out`, `bin`, `obj`, `.gradle`, `.terraform`, `coverage`,
+  `data`, `datasets`, `Pods`, `DerivedData`, etc.) and additional VCS dirs.
+
+---
+
 ## 3.19.0 — Bundle framing in the kanban viewer (2026-06-18)
 
 Additive viewer surface: the kanban board now visually groups a bundle's

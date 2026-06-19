@@ -7197,9 +7197,17 @@ def _load_related_for_task(task_id: str) -> dict | None:
 # (treat git-feature-unavailable the same as data-missing).
 
 import re as _re_ps  # local alias so we don't shadow uses elsewhere in this file
+import time as _time_ps
 
 _INTEGRATION_BRANCH_RE = _re_ps.compile(
     r"^(?:origin/)?(master|main|stage|dev|work|\d+\.\d+\.\d+(?:\.\d+)?)$"
+)
+
+_PROJECT_STRUCTURE_WALL_CLOCK_SECONDS = 25.0
+_PROJECT_STRUCTURE_FAST_GIT_TIMEOUT_SECONDS = 3.0
+_PROJECT_STRUCTURE_TIMEOUT_WARNING = (
+    "Project structure collection exceeded the 25-second deadline; "
+    "returning partial results."
 )
 
 # Directory names the sub-repo scan must never descend into or register.
@@ -7212,14 +7220,39 @@ _INTEGRATION_BRANCH_RE = _re_ps.compile(
 # minutes. `node_modules` and friends add thousands of stat() calls on top.
 # These names are never legitimate sub-repos, so skipping them is safe.
 _SKIP_SCAN_DIRS = frozenset({
-    ".git", ".worktrees",
-    "node_modules", "bower_components", "vendor",
+    ".git", ".worktrees", ".hg", ".svn",
+    "node_modules", "bower_components", "vendor", "site-packages",
     ".venv", "venv", "__pycache__", ".mypy_cache", ".pytest_cache",
-    "dist", "build", "target", ".next", ".nuxt", ".cache",
+    ".ruff_cache", ".tox", ".nox", ".eggs",
+    "dist", "build", "target", "out", "bin", "obj",
+    ".next", ".nuxt", ".svelte-kit", ".cache", ".parcel-cache", ".turbo",
+    ".gradle", ".terraform", ".serverless", ".yarn", ".pnpm-store",
+    "coverage", "htmlcov", "DerivedData", "Pods",
+    "data", ".data", "datasets",
 })
 
 
-def _run_git(args: list[str], *, cwd: Path, timeout: float = 10.0) -> str:
+def _deadline_expired(deadline: float | None) -> bool:
+    return deadline is not None and _time_ps.monotonic() >= deadline
+
+
+def _git_timeout(timeout: float, deadline: float | None) -> float | None:
+    """Return a per-call timeout constrained by the request-wide deadline."""
+    if deadline is None:
+        return timeout
+    remaining = deadline - _time_ps.monotonic()
+    if remaining <= 0:
+        return None
+    return min(timeout, remaining)
+
+
+def _run_git(
+    args: list[str],
+    *,
+    cwd: Path,
+    timeout: float = 10.0,
+    deadline: float | None = None,
+) -> str:
     """Run `git <args>` in `cwd`. Return stdout text on success, '' on any failure.
 
     Failure is intentionally swallowed: this helper drives feature-detection
@@ -7233,10 +7266,14 @@ def _run_git(args: list[str], *, cwd: Path, timeout: float = 10.0) -> str:
     every future commit until a human clears it. The flag stops git from taking
     that lock at all, killing the whole class of leak (see bug B-059).
     """
+    effective_timeout = _git_timeout(timeout, deadline)
+    if effective_timeout is None:
+        return ""
     try:
         result = subprocess.run(
             ["git", "--no-optional-locks", *args],
-            cwd=str(cwd), capture_output=True, text=True, timeout=timeout,
+            cwd=str(cwd), capture_output=True, text=True,
+            timeout=effective_timeout,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return ""
@@ -7263,7 +7300,11 @@ def _rank_integration_branch(name: str) -> tuple[int, tuple[int, ...]]:
     return (tier, ())
 
 
-def _discover_sub_repos(project_root: Path) -> list[dict]:
+def _discover_sub_repos(
+    project_root: Path,
+    *,
+    deadline: float | None = None,
+) -> list[dict]:
     """Return a list of sub-repo descriptors found under project_root.
 
     Two sources, merged by path (submodule wins over embedded for the kind tag):
@@ -7282,38 +7323,49 @@ def _discover_sub_repos(project_root: Path) -> list[dict]:
 
     # 1. Filesystem scan — depth 1 and 2 only.
     if project_root.exists():
-        for depth1 in project_root.iterdir():
-            if not depth1.is_dir() or depth1.name in _SKIP_SCAN_DIRS:
-                continue
-            if (depth1 / ".git").exists():
-                rel = depth1.name.replace("\\", "/")
-                descriptors[rel] = {
-                    "path": rel, "kind": "embedded",
-                    "current_branch": None, "integration_branches": [],
-                    "submodule_info": None, "worktrees": [],
-                }
-                continue
-            # Depth 2 scan only if depth1 is itself NOT a repo.
-            try:
-                inner = list(depth1.iterdir())
-            except OSError:
-                continue
-            for depth2 in inner:
-                if not depth2.is_dir() or depth2.name in _SKIP_SCAN_DIRS:
+        try:
+            depth1_entries = project_root.iterdir()
+            for depth1 in depth1_entries:
+                if _deadline_expired(deadline):
+                    break
+                if not depth1.is_dir() or depth1.name in _SKIP_SCAN_DIRS:
                     continue
-                if (depth2 / ".git").exists():
-                    rel = f"{depth1.name}/{depth2.name}".replace("\\", "/")
+                if (depth1 / ".git").exists():
+                    rel = depth1.name.replace("\\", "/")
                     descriptors[rel] = {
                         "path": rel, "kind": "embedded",
                         "current_branch": None, "integration_branches": [],
                         "submodule_info": None, "worktrees": [],
                     }
+                    continue
+                # Depth 2 scan only if depth1 is itself NOT a repo. Iterate
+                # lazily so a large directory cannot be fully materialized
+                # before the request-wide deadline is checked.
+                try:
+                    for depth2 in depth1.iterdir():
+                        if _deadline_expired(deadline):
+                            break
+                        if not depth2.is_dir() or depth2.name in _SKIP_SCAN_DIRS:
+                            continue
+                        if (depth2 / ".git").exists():
+                            rel = f"{depth1.name}/{depth2.name}".replace("\\", "/")
+                            descriptors[rel] = {
+                                "path": rel, "kind": "embedded",
+                                "current_branch": None, "integration_branches": [],
+                                "submodule_info": None, "worktrees": [],
+                            }
+                except OSError:
+                    continue
+        except OSError:
+            pass
 
     # 2. .gitmodules parse — submodule entries take precedence on `kind`.
     gitmodules = project_root / ".gitmodules"
-    if gitmodules.exists():
+    if not _deadline_expired(deadline) and gitmodules.exists():
         cur_path: str | None = None
         for raw in gitmodules.read_text(encoding="utf-8").splitlines():
+            if _deadline_expired(deadline):
+                break
             line = raw.strip()
             if line.startswith("[submodule"):
                 cur_path = None
@@ -7332,7 +7384,12 @@ def _discover_sub_repos(project_root: Path) -> list[dict]:
     return sorted(descriptors.values(), key=lambda d: d["path"])
 
 
-def _discover_integration_branches(repo_path: Path) -> list[str]:
+def _discover_integration_branches(
+    repo_path: Path,
+    *,
+    timeout: float = 10.0,
+    deadline: float | None = None,
+) -> list[str]:
     """Return integration branch names found in repo_path, ordered by rank.
 
     Matches names like `master`, `main`, `stage`, `dev`, `work`, or
@@ -7340,7 +7397,15 @@ def _discover_integration_branches(repo_path: Path) -> list[str]:
     matching, then dedupes so a branch present locally and on origin
     appears once. Empty list if repo_path isn't a git repo.
     """
-    raw = _run_git(["branch", "-a", "--format=%(refname:short)"], cwd=repo_path)
+    raw = _run_git(
+        [
+            "for-each-ref", "--format=%(refname:short)",
+            "refs/heads", "refs/remotes",
+        ],
+        cwd=repo_path,
+        timeout=timeout,
+        deadline=deadline,
+    )
     if not raw:
         return []
     seen: set[str] = set()
@@ -7358,7 +7423,12 @@ def _discover_integration_branches(repo_path: Path) -> list[str]:
     return sorted(seen, key=_rank_integration_branch)
 
 
-def _list_worktrees(repo_path: Path) -> list[dict]:
+def _list_worktrees(
+    repo_path: Path,
+    *,
+    timeout: float = 10.0,
+    deadline: float | None = None,
+) -> list[dict]:
     """Parse `git worktree list --porcelain` into a list of dicts.
 
     Each dict has keys:
@@ -7368,7 +7438,12 @@ def _list_worktrees(repo_path: Path) -> list[dict]:
 
     Empty list if repo_path isn't a git repo.
     """
-    raw = _run_git(["worktree", "list", "--porcelain"], cwd=repo_path)
+    raw = _run_git(
+        ["worktree", "list", "--porcelain"],
+        cwd=repo_path,
+        timeout=timeout,
+        deadline=deadline,
+    )
     if not raw:
         return []
     worktrees: list[dict] = []
@@ -7407,6 +7482,7 @@ def _compute_worktree_git_state(
     integration_branches: list[str],
     worktree_path: Path,
     base: str | None = None,
+    deadline: float | None = None,
 ) -> dict:
     """Compute merge ladder + ahead/behind + dirty-file count for one worktree.
 
@@ -7431,13 +7507,20 @@ def _compute_worktree_git_state(
 
     ladder: dict[str, bool] = {}
     for int_branch in integration_branches:
+        effective_timeout = _git_timeout(10.0, deadline)
+        if effective_timeout is None:
+            break
         # `git merge-base --is-ancestor X Y` exits 0 if X is reachable from Y.
         # _run_git returns "" on any non-zero, including the "no" answer, so we
         # need the raw exit code here. Use subprocess directly for this one call.
         try:
             rc = subprocess.run(
-                ["git", "merge-base", "--is-ancestor", branch, int_branch],
-                cwd=str(repo_path), capture_output=True, text=True, timeout=10,
+                [
+                    "git", "--no-optional-locks", "merge-base",
+                    "--is-ancestor", branch, int_branch,
+                ],
+                cwd=str(repo_path), capture_output=True, text=True,
+                timeout=effective_timeout,
             ).returncode
         except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
             rc = 1
@@ -7451,6 +7534,7 @@ def _compute_worktree_git_state(
         out = _run_git(
             ["rev-list", "--left-right", "--count", f"{base}...{branch}"],
             cwd=repo_path,
+            deadline=deadline,
         ).strip()
         if out:
             try:
@@ -7460,7 +7544,11 @@ def _compute_worktree_git_state(
                 pass
 
     # Dirty file count from the actual worktree directory.
-    status = _run_git(["status", "--porcelain"], cwd=worktree_path)
+    status = _run_git(
+        ["status", "--porcelain"],
+        cwd=worktree_path,
+        deadline=deadline,
+    )
     dirty_files = sum(1 for line in status.splitlines() if line.strip())
 
     return {
@@ -7545,6 +7633,8 @@ def _cached_project_structure(
     import json as _json
     from datetime import datetime, timezone
 
+    deadline = _time_ps.monotonic() + _PROJECT_STRUCTURE_WALL_CLOCK_SECONDS
+    warning: str | None = None
     project_root = Path(project_root_str)
 
     # Pull tasks + handovers from the live backlog so links reflect the
@@ -7553,17 +7643,26 @@ def _cached_project_structure(
         data = _load()
         tasks: list[dict] = []
         for epic in data.get("epics", []):
+            if _deadline_expired(deadline):
+                warning = _PROJECT_STRUCTURE_TIMEOUT_WARNING
+                break
             for t in epic.get("tasks", []):
                 tasks.append(t)
     except Exception:
         tasks = []
+    if _deadline_expired(deadline):
+        warning = _PROJECT_STRUCTURE_TIMEOUT_WARNING
 
     # Handovers: use the existing imports already at the top of this module
     # (_list_handover_ids + _read_handover). bp is the backlog.yaml path.
     handovers: list[dict] = []
     try:
         bp = _backlog_path()
-        for hid in _list_handover_ids(bp):
+        handover_ids = [] if warning is not None else _list_handover_ids(bp)
+        for hid in handover_ids:
+            if _deadline_expired(deadline):
+                warning = _PROJECT_STRUCTURE_TIMEOUT_WARNING
+                break
             try:
                 fm, _body = _read_handover(bp, hid)
                 fm = dict(fm)  # don't mutate the caller's dict
@@ -7574,27 +7673,49 @@ def _cached_project_structure(
     except Exception:
         handovers = []
 
-    sub_repos = _discover_sub_repos(project_root)
+    sub_repos = (
+        [] if _deadline_expired(deadline)
+        else _discover_sub_repos(project_root, deadline=deadline)
+    )
+    if _deadline_expired(deadline):
+        warning = _PROJECT_STRUCTURE_TIMEOUT_WARNING
 
+    git_timeout = (
+        10.0 if refresh_git else _PROJECT_STRUCTURE_FAST_GIT_TIMEOUT_SECONDS
+    )
     for sr in sub_repos:
+        if _deadline_expired(deadline):
+            warning = _PROJECT_STRUCTURE_TIMEOUT_WARNING
+            break
         repo_path = project_root / sr["path"]
         # Submodule whose working tree isn't checked out yet — skip git work.
         if not (repo_path / ".git").exists():
             sr["worktrees"] = []
             continue
 
-        sr["integration_branches"] = _discover_integration_branches(repo_path)
-        sr["current_branch"] = (
-            _run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_path).strip()
-            or None
+        sr["integration_branches"] = _discover_integration_branches(
+            repo_path, timeout=git_timeout, deadline=deadline,
         )
-
-        wts = _list_worktrees(repo_path)
+        if _deadline_expired(deadline):
+            warning = _PROJECT_STRUCTURE_TIMEOUT_WARNING
+            break
+        wts = _list_worktrees(
+            repo_path, timeout=git_timeout, deadline=deadline,
+        )
+        # `git worktree list` always emits the main worktree first. Reuse that
+        # branch instead of paying for a separate rev-parse subprocess.
+        sr["current_branch"] = wts[0]["branch"] if wts else None
+        if _deadline_expired(deadline):
+            warning = _PROJECT_STRUCTURE_TIMEOUT_WARNING
+            break
         wt_task_map = _link_worktrees_to_tasks(wts, tasks)
         wt_ho_map = _link_handovers_to_worktrees(wt_task_map, handovers)
 
         worktree_blocks: list[dict] = []
         for w in wts:
+            if _deadline_expired(deadline):
+                warning = _PROJECT_STRUCTURE_TIMEOUT_WARNING
+                break
             block = {
                 "path": w["path"],
                 "branch": w["branch"],
@@ -7608,15 +7729,22 @@ def _cached_project_structure(
                     branch=w["branch"],
                     integration_branches=sr["integration_branches"],
                     worktree_path=Path(w["path"]),
+                    deadline=deadline,
                 )
             worktree_blocks.append(block)
         sr["worktrees"] = worktree_blocks
+        if warning is not None:
+            break
 
         # Submodule drift info — only when refresh_git.
         if sr["kind"] == "submodule" and refresh_git:
             pinned = _run_git(
                 ["ls-tree", "HEAD", sr["path"]], cwd=project_root,
+                deadline=deadline,
             ).strip()
+            if _deadline_expired(deadline):
+                warning = _PROJECT_STRUCTURE_TIMEOUT_WARNING
+                break
             pinned_sha = pinned.split()[2] if len(pinned.split()) >= 3 else None
             ahead = behind = 0
             if pinned_sha:
@@ -7624,6 +7752,7 @@ def _cached_project_structure(
                     ["rev-list", "--left-right", "--count",
                      f"{pinned_sha}...HEAD"],
                     cwd=repo_path,
+                    deadline=deadline,
                 ).strip()
                 if rl:
                     try:
@@ -7637,10 +7766,21 @@ def _cached_project_structure(
                 "drift_behind": behind,
             }
 
-    project_default_branch = (
-        _run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=project_root).strip()
-        or "master"
-    )
+    if _deadline_expired(deadline):
+        warning = _PROJECT_STRUCTURE_TIMEOUT_WARNING
+        project_default_branch = "master"
+    else:
+        project_default_branch = (
+            _run_git(
+                ["rev-parse", "--abbrev-ref", "HEAD"],
+                cwd=project_root,
+                timeout=git_timeout,
+                deadline=deadline,
+            ).strip()
+            or "master"
+        )
+        if _deadline_expired(deadline):
+            warning = _PROJECT_STRUCTURE_TIMEOUT_WARNING
     payload = {
         "project": {
             "root": str(project_root),
@@ -7649,6 +7789,7 @@ def _cached_project_structure(
         "sub_repos": sub_repos,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "git_state_included": refresh_git,
+        "warning": warning,
     }
     return _json.dumps(payload)
 
@@ -7669,7 +7810,16 @@ def backlog_project_structure(refresh_git: bool = False) -> str:
     project_root = ROOT
     gitmodules = project_root / ".gitmodules"
     mtime = gitmodules.stat().st_mtime if gitmodules.exists() else 0.0
-    return _cached_project_structure(str(project_root), mtime, refresh_git)
+    result = _cached_project_structure(str(project_root), mtime, refresh_git)
+    # A deadline-truncated response should not become the stable cached result.
+    # Clear the tiny cache so the next request can retry collection.
+    try:
+        import json as _json
+        if _json.loads(result).get("warning"):
+            _cached_project_structure.cache_clear()
+    except (TypeError, ValueError):
+        pass
+    return result
 
 
 # ── HTTP Viewer Server ───────────────────────────────────

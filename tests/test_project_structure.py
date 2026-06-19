@@ -184,6 +184,28 @@ def test_discover_sub_repos_skips_worktree_pool_and_node_modules(tmp_path):
     assert not any("node_modules" in p for p in paths)
 
 
+@pytest.mark.parametrize(
+    "dirname",
+    [
+        ".venv", "__pycache__", "dist", ".cache", "build", "vendor",
+        "target", ".tox", ".nox", ".eggs", "coverage", "htmlcov",
+        ".gradle", ".terraform", ".pnpm-store", "site-packages",
+        "DerivedData", "Pods", "data", "datasets",
+    ],
+)
+def test_discover_sub_repos_skips_common_large_directories(tmp_path, dirname):
+    """Large generated/dependency trees must never become sub-repo scan roots."""
+    from backlog_server import _discover_sub_repos
+    monorepo = _init_repo(tmp_path / "mono")
+    fake_repo = monorepo / dirname / "nested-repo"
+    fake_repo.mkdir(parents=True)
+    (fake_repo / ".git").mkdir()
+
+    paths = {s["path"] for s in _discover_sub_repos(monorepo)}
+
+    assert not any(p == dirname or p.startswith(f"{dirname}/") for p in paths)
+
+
 def test_discover_sub_repos_parses_gitmodules(tmp_path):
     """An entry in .gitmodules is reported with kind='submodule' even if the
     working tree isn't checked out yet."""
@@ -448,6 +470,135 @@ def test_backlog_project_structure_returns_shape(tmp_taskmaster):
     assert data["project"]["root"]
     assert data["git_state_included"] is False  # default refresh_git=False
     assert isinstance(data["sub_repos"], list)
+    assert data["warning"] is None
+
+
+def test_backlog_project_structure_deadline_returns_partial_results(
+    tmp_path, monkeypatch,
+):
+    """Serial slow Git calls must stop at the request-wide deadline."""
+    import backlog_server
+
+    for name in ("sub-a", "sub-b"):
+        repo = tmp_path / name
+        repo.mkdir()
+        (repo / ".git").mkdir()
+
+    monkeypatch.setattr(backlog_server, "ROOT", tmp_path)
+    monkeypatch.setattr(backlog_server, "_load", lambda: {"epics": []})
+    monkeypatch.setattr(backlog_server, "_backlog_path", lambda: tmp_path / "backlog.yaml")
+    monkeypatch.setattr(backlog_server, "_list_handover_ids", lambda _bp: [])
+    monkeypatch.setattr(
+        backlog_server, "_PROJECT_STRUCTURE_WALL_CLOCK_SECONDS", 0.04,
+    )
+
+    calls: list[tuple[str, ...]] = []
+
+    def slow_run_git(args, *, cwd, timeout=10.0, deadline=None):
+        calls.append(tuple(args))
+        time.sleep(0.025)
+        if args[0] == "for-each-ref":
+            return "master\n"
+        if args[:2] == ["rev-parse", "--abbrev-ref"]:
+            return "master\n"
+        if args[:2] == ["worktree", "list"]:
+            return (
+                f"worktree {cwd}\n"
+                "HEAD 0123456789abcdef\n"
+                "branch refs/heads/master\n"
+            )
+        return ""
+
+    monkeypatch.setattr(backlog_server, "_run_git", slow_run_git)
+    backlog_server._cached_project_structure.cache_clear()
+
+    started = time.monotonic()
+    raw = backlog_server.backlog_project_structure(refresh_git=False)
+    elapsed = time.monotonic() - started
+    data = json.loads(raw)
+
+    assert elapsed < 0.5
+    assert data["warning"] == backlog_server._PROJECT_STRUCTURE_TIMEOUT_WARNING
+    assert [s["path"] for s in data["sub_repos"]] == ["sub-a", "sub-b"]
+    assert data["sub_repos"][0]["integration_branches"] == ["master"]
+    assert data["sub_repos"][1]["integration_branches"] == []
+    assert 1 <= len(calls) <= 2
+    # Partial responses are not retained as the stable cached result.
+    assert backlog_server._cached_project_structure.cache_info().currsize == 0
+
+
+def test_backlog_project_structure_fast_path_uses_two_local_git_calls_per_repo(
+    tmp_path, monkeypatch,
+):
+    """refresh_git=False must avoid network and redundant rev-parse calls."""
+    import backlog_server
+
+    repo = tmp_path / "sub-a"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+
+    monkeypatch.setattr(backlog_server, "ROOT", tmp_path)
+    monkeypatch.setattr(backlog_server, "_load", lambda: {"epics": []})
+    monkeypatch.setattr(backlog_server, "_backlog_path", lambda: tmp_path / "backlog.yaml")
+    monkeypatch.setattr(backlog_server, "_list_handover_ids", lambda _bp: [])
+
+    calls: list[tuple[tuple[str, ...], float]] = []
+
+    def fake_run_git(args, *, cwd, timeout=10.0, deadline=None):
+        calls.append((tuple(args), timeout))
+        if args[0] == "for-each-ref":
+            return "master\n"
+        if args[:2] == ["worktree", "list"]:
+            return (
+                f"worktree {cwd}\n"
+                "HEAD 0123456789abcdef\n"
+                "branch refs/heads/master\n"
+            )
+        if args[:2] == ["rev-parse", "--abbrev-ref"]:
+            return "main\n"
+        return ""
+
+    monkeypatch.setattr(backlog_server, "_run_git", fake_run_git)
+    backlog_server._cached_project_structure.cache_clear()
+
+    data = json.loads(backlog_server.backlog_project_structure(refresh_git=False))
+    sub = data["sub_repos"][0]
+    sub_calls = [call for call in calls if call[0][0] != "rev-parse"]
+
+    assert sub["current_branch"] == "master"
+    assert [call[0][0] for call in sub_calls] == ["for-each-ref", "worktree"]
+    assert all(
+        timeout == backlog_server._PROJECT_STRUCTURE_FAST_GIT_TIMEOUT_SECONDS
+        for _args, timeout in sub_calls
+    )
+    assert not any(args[0] in {"branch", "ls-remote"} for args, _timeout in calls)
+
+
+def test_backlog_project_structure_deadline_includes_backlog_loading(
+    tmp_path, monkeypatch,
+):
+    """The request budget starts before backlog and handover collection."""
+    import backlog_server
+
+    monkeypatch.setattr(backlog_server, "ROOT", tmp_path)
+    monkeypatch.setattr(
+        backlog_server, "_PROJECT_STRUCTURE_WALL_CLOCK_SECONDS", 0.01,
+    )
+
+    def slow_load():
+        time.sleep(0.02)
+        return {"epics": []}
+
+    monkeypatch.setattr(backlog_server, "_load", slow_load)
+    monkeypatch.setattr(backlog_server, "_backlog_path", lambda: tmp_path / "backlog.yaml")
+    monkeypatch.setattr(backlog_server, "_list_handover_ids", lambda _bp: [])
+    backlog_server._cached_project_structure.cache_clear()
+
+    data = json.loads(backlog_server.backlog_project_structure(refresh_git=False))
+
+    assert data["warning"] == backlog_server._PROJECT_STRUCTURE_TIMEOUT_WARNING
+    assert data["sub_repos"] == []
+    assert backlog_server._cached_project_structure.cache_info().currsize == 0
 
 
 def test_backlog_project_structure_discovers_embedded_sub_repo(tmp_path, monkeypatch):
