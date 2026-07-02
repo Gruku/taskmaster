@@ -44,11 +44,12 @@ Verdict (advisory only — never blocks):
 
 ## Step 7: Record the Review
 
-Save a record on the task so it's visible to `pick-task`, `review-gate`, and the dashboard:
+Save a record on the task so it's visible to `pick-task`, `review-gate`, and the dashboard. Use the lane-resolved gate name: `spec-review` for `full`-lane tasks, `design-review` for `standard`-lane tasks. Express/laneless tasks record nothing.
 
 ```
-backlog_set_spec_review(
+backlog_record_gate(
   task_id,
+  gate="spec-review" | "design-review",
   verdict="pass" | "warn" | "fail",
   spec_path="<path that was reviewed>",
   codex_used=true | false,
@@ -57,7 +58,11 @@ backlog_set_spec_review(
 )
 ```
 
-If the spec is revised later, re-running spec-review overwrites the record automatically. To explicitly invalidate a prior review, call `backlog_clear_spec_review(task_id)`.
+Verdict semantics (server-enforced): only `pass` — or an explicit `backlog_skip_gate` — satisfies the gate. A `warn` verdict is recorded but leaves the gate pending: later verdict gates cannot be recorded past it and the task cannot reach `done`. A `fail` marks the pipeline `blocked@<gate>`.
+
+`backlog_set_spec_review` remains as a thin alias but hardcodes the `spec-review` gate — never use it for standard-lane tasks.
+
+If the spec is revised later, re-running the review overwrites the record automatically. To explicitly invalidate a prior review, call `backlog_clear_gate(task_id, gate)` (`backlog_clear_spec_review` is the spec-review-only legacy alias).
 
 ## Step 7a: Persist Spec into Task Body (v3 only)
 
