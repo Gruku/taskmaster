@@ -12,6 +12,33 @@ indicate schema breaks or removed surfaces.
 
 ---
 
+## 3.20.1 — spec-review skill aligned with the enforced gates model (2026-07-02)
+
+Documentation-only fix: the spec-review skill predated the Spec A lanes/gates
+enforcement and gave guidance the server contradicts.
+
+### Fixed
+
+- **WARN no longer presented as proceedable** — `gate_satisfied` only accepts
+  pass/done/skipped, so a `warn` verdict leaves the gate pending, blocks later
+  verdict gates, and blocks `done`. The skill now encodes the real verdict
+  semantics: acknowledged Important findings → record `pass` with honest
+  `important_count`; `warn` = revise-and-re-run or explicit `backlog_skip_gate`.
+- **"Skip medium/low tasks" contradiction removed** — medium/low tasks default
+  to the `standard` lane, whose required `design-review` gate this skill runs.
+  Applicability is now lane-driven (full → `spec-review`, standard →
+  `design-review`, express/laneless → advisory only, no gate recorded).
+- **Lane context promoted** to a leading section (gate name + ceremony table +
+  per-lane pipelines) instead of a parenthetical inside the recording step.
+- **`backlog_set_spec_review` alias trap flagged** — it hardcodes the
+  `spec-review` gate; skill and reference now lead with `backlog_record_gate`
+  and warn against the alias for standard-lane tasks; `backlog_clear_gate`
+  replaces the spec-review-only clear alias as the primary invalidation call.
+- **plan-review cross-reference** — now states that the standard lane's
+  `design-review` gate is run and recorded by `taskmaster:spec-review`.
+
+---
+
 ## 3.20.0 — Harden backlog_project_structure against hangs (2026-06-19)
 
 Follow-up to the 3.16.1 `.worktrees/`/`node_modules` exclusion: that fix was

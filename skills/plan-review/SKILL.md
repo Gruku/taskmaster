@@ -17,7 +17,7 @@ This gate sits between **PLAN** and **WRITE_TESTS** in the `full` lane:
 spec → spec-review → plan → plan-review → tests → impl → review-gate
 ```
 
-`standard`-lane tasks skip this gate (they use `design-review` instead). Only proceed with plan-review when `task.lane == "full"`.
+`standard`-lane tasks skip this gate (their single design gate is `design-review`, run and recorded by `taskmaster:spec-review`). Only proceed with plan-review when `task.lane == "full"`.
 
 ## Arguments
 
