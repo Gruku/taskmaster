@@ -12,6 +12,36 @@ indicate schema breaks or removed surfaces.
 
 ---
 
+## 3.21.0 — artifact-root hijack guard (tm-audit-001) (2026-07-04)
+
+### Fixed
+
+- **CRITICAL: resolvers no longer misdirect writes into the plugin source
+  tree.** When the MCP server (or any caller of its path resolvers) ran with
+  cwd = `plugins/taskmaster/` and no `TASKMASTER_ROOT` set, `_resolve_paths()`
+  (`backlog_server.py`) and `_resolve_artifact_root()` (`taskmaster_v3.py`)
+  fell through to the root-layout fallback, found the plugin's own demo
+  `backlog.yaml` fixture, and treated the plugin directory as a project root
+  — every lesson/note/handover/idea/issue/recap/`viewer.json` write then
+  landed in plugin source instead of a project's `.taskmaster/`. Both
+  resolvers now raise `RuntimeError` unconditionally (checked before any
+  fallback branch, so the guard can't go dead once a `.taskmaster/` subdir
+  exists next to the plugin) whenever `ROOT`/cwd resolves to the plugin's own
+  source directory. Fails loud — surfaces as an MCP tool error — instead of
+  silently misdirecting writes.
+
+### Changed
+
+- Relocated the demo/screenshot fixture `plugins/taskmaster/backlog.yaml` to
+  `plugins/taskmaster/tests/fixtures/visual-polish-test/backlog.yaml`, out of
+  the resolver's blast radius. No code imported the old path.
+- `.gitignore` backstop: `plugins/taskmaster/{lessons,notes,handovers,ideas,
+  issues,recaps}/` and `plugins/taskmaster/viewer.json` can no longer be
+  accidentally committed if a dev/dogfood run regenerates them before the
+  guard is deployed everywhere.
+
+---
+
 ## 3.20.2 — merge-gate reads v3 heavy gates; get_task is a pure read (2026-07-04)
 
 Two bug fixes from the tm-audit epic, merged together.

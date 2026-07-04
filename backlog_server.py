@@ -242,7 +242,18 @@ def _resolve_paths() -> tuple[Path, Path]:
 
     Priority: .taskmaster/taskmaster.json > .claude/taskmaster.json (legacy)
     > .taskmaster/backlog.yaml > .claude/backlog.yaml (legacy) > ./backlog.yaml
+
+    Guard (tm-audit-001, unconditional — checked before any fallback branch
+    so it can't go dead if a later branch starts matching first): refuse to
+    resolve when ROOT is literally the plugin's own source directory. A
+    backlog.yaml or .taskmaster/ found there is a fixture, not a project.
     """
+    if ROOT.resolve(strict=False) == SCRIPT_DIR.resolve(strict=False):
+        raise RuntimeError(
+            "Refusing to use the taskmaster plugin directory as a project root. "
+            "A backlog.yaml adjacent to backlog_server.py is a fixture, not a "
+            "project. Run from a project directory or set TASKMASTER_ROOT."
+        )
     for cfg_path in (CONFIG_PATH, LEGACY_CONFIG_PATH):
         if cfg_path.exists():
             try:
