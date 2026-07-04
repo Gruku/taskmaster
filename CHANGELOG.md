@@ -12,6 +12,25 @@ indicate schema breaks or removed surfaces.
 
 ---
 
+## 3.20.2 — stop write-on-read in backlog_get_task (2026-07-04)
+
+`backlog_get_task` mutated and full-saved `backlog.yaml` on every read
+(`last_referenced` bump), racing concurrent writers across the N MCP
+processes that share one backlog file (tm-audit-003 / ISS-027).
+
+### Fixed
+
+- **`backlog_get_task` is now a pure read** — removed the `last_referenced`
+  bump + `_save` that ran on every call. `last_referenced` is maintained
+  solely by genuine mutations (pick/update/complete, task creation).
+- **Behavior change:** reads no longer refresh a task's staleness timestamp.
+  A todo task nobody has edited or picked in 14+ days now shows as stale
+  even if it's been viewed repeatedly — this is the intended, sharper
+  signal, not a regression. Archive stale tasks or mutate them
+  (`backlog_update_task`, `backlog_pick_task`) to refresh.
+
+---
+
 ## 3.20.1 — spec-review skill aligned with the enforced gates model (2026-07-02)
 
 Documentation-only fix: the spec-review skill predated the Spec A lanes/gates
