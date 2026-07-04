@@ -402,9 +402,16 @@ def test_approve_bypass_and_retry_survives(tmp_path):
     (tm / "backlog.yaml").write_text(yaml.dump(raw, allow_unicode=True), encoding="utf-8")
     # v3: gates is a HEAVY field — write a real task file (no `gates` key)
     # so merge_gate_decide.py hits the confident "no gate -> BLOCK" path in
-    # step F below, instead of "missing task file -> fail-open ALLOW".
+    # step F below, instead of "missing task file -> fail-open ALLOW". Give
+    # it a non-empty body: save_v3 (taskmaster_v3.py:4301-4307) deletes a
+    # per-task file entirely when it has no HEAVY_FIELDS content and no
+    # body — id+title mirrored into frontmatter don't count — and step D's
+    # recorder round-trips the WHOLE backlog through backlog_server's
+    # _load()/_save(), which would otherwise prune this file before step F.
     write_task_file(
-        tm / "tasks" / "integ-002.md", {"id": "integ-002", "title": "Other task"}, ""
+        tm / "tasks" / "integ-002.md",
+        {"id": "integ-002", "title": "Other task"},
+        "Task body so the file survives the step-D save_v3 round-trip.\n",
     )
 
     # --- A. Touch fresh approval file ---
