@@ -12,6 +12,20 @@ indicate schema breaks or removed surfaces.
 
 ---
 
+## 3.21.1 — spec-review skill trimmed to budget (B-071) (2026-07-05)
+
+### Fixed
+
+- **`spec-review` skill body + description back within their lint budgets.**
+  Since 3.20.1 (`ea9f375`) the rewritten skill exceeded its own token/word
+  budgets, leaving master red on 4 lint tests (`test_skill_body_budgets`,
+  `test_skill_description_budgets`, `test_spec_review_skill_lint`). Trimmed
+  prose (body 1449→1294 tokens, description 66→55 words) with no loss of
+  routing detail — all gate/verdict/lane semantics preserved, deep prose
+  still lives in `references/`. Suite green.
+
+---
+
 ## 3.21.0 — artifact-root hijack guard (tm-audit-001) (2026-07-04)
 
 ### Fixed
