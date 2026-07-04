@@ -22,6 +22,10 @@ from typing import Any
 
 import yaml
 
+# The plugin's own source directory. Used by _resolve_artifact_root()'s guard
+# (tm-audit-001) to refuse treating this directory as a project root.
+_PLUGIN_DIR = Path(__file__).resolve().parent
+
 # Schema versions
 # v2: single backlog.yaml with epics/tasks inline. (Legacy: missing version implies v2.)
 # v3: slim backlog.yaml index + per-task files in tasks/ + handovers/ + lessons/ + issues/.
@@ -310,7 +314,18 @@ def _resolve_artifact_root() -> Path:
 
     Resolution order: `.taskmaster/` → `.claude/` (legacy, with warning)
     → project root → fallback `.taskmaster/`.
+
+    Guard (tm-audit-001, unconditional — checked before any fallback branch
+    so it can't go dead if a later branch starts matching first): refuse to
+    resolve when cwd is literally the plugin's own source directory. A
+    backlog.yaml or .taskmaster/ found there is a fixture, not a project.
     """
+    if Path.cwd().resolve(strict=False) == _PLUGIN_DIR.resolve(strict=False):
+        raise RuntimeError(
+            "Refusing to use the taskmaster plugin directory as a project root. "
+            "A backlog.yaml adjacent to backlog_server.py is a fixture, not a "
+            "project. Run from a project directory or set TASKMASTER_ROOT."
+        )
     cwd = Path.cwd()
     if (cwd / ".taskmaster" / "backlog.yaml").exists():
         return cwd / ".taskmaster"
