@@ -30,6 +30,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from taskmaster_v3 import write_task_file
+
 PLUGIN_ROOT = Path(__file__).parents[1]
 HOOK = str((PLUGIN_ROOT / "hooks" / "merge_gate.py").resolve())
 
@@ -73,7 +75,17 @@ def _seed(
     branch: str = "feature/x",
     tip: str = "abc",
 ) -> None:
-    """Write .taskmaster/project.yaml and a minimal v3 backlog.yaml."""
+    """Write .taskmaster/project.yaml, a minimal v3 backlog.yaml, and (when
+    `gates` is given) a faithful v3 tasks/T-001.md carrying `gates` in
+    frontmatter.
+
+    `gates` is a HEAVY field (taskmaster_v3.HEAVY_FIELDS) — on a real v3
+    backlog it never lives inline on the slim backlog.yaml task entry, only
+    in the per-task file (see taskmaster_v3._split_task_for_v3). A real
+    "gate never run" v3 task file has NO `gates` key at all (empty
+    containers are stripped on save), so `gates={}` writes a task file with
+    just id/title — never `gates: {}`.
+    """
     tm = tmp / ".taskmaster"
     (tm / "tasks").mkdir(parents=True, exist_ok=True)
 
@@ -99,8 +111,6 @@ def _seed(
         task["skip_merge_gate"] = True
     if freshness != "strict":
         task["merge_gate_freshness"] = freshness
-    if gates is not None:
-        task["gates"] = gates
 
     backlog = {
         "meta": {"project": "t", "schema_version": 3, "updated": "2026-01-01"},
@@ -111,6 +121,12 @@ def _seed(
     (tm / "backlog.yaml").write_text(
         yaml.dump(backlog, allow_unicode=True), encoding="utf-8"
     )
+
+    if gates is not None:
+        fm: dict = {"id": "T-001", "title": "Test task"}
+        if gates:
+            fm["gates"] = gates
+        write_task_file(tm / "tasks" / "T-001.md", fm, "")
 
 
 def _init_git_repo(tmp: Path, branch: str = "feature/x") -> str:
@@ -245,6 +261,43 @@ def test_policy_on_stale_pass_freshness_any_allows(tmp_path):
         branch="feature/x",
         tip=sha,
         freshness="any",
+    )
+    r = run({"tool_input": {"command": "git merge feature/x"}, "session_id": "s"}, tmp_path)
+    assert r.returncode == 0
+
+
+def test_v3_heavy_gates_pass_allows(tmp_path):
+    """v3 gates recorded only in tasks/<id>.md frontmatter (never inline in
+    backlog.yaml) with verdict=pass and matching commit_sha => allow.
+
+    Direct regression test for tm-audit-002: merge_gate_decide.py must
+    hydrate the HEAVY `gates` field from the per-task file on schema v3.
+    """
+    sha = _init_git_repo(tmp_path, branch="feature/x")
+    _seed(
+        tmp_path, policy=True,
+        gates={"review-gate": {"verdict": "pass", "commit_sha": sha}},
+        branch="feature/x",
+        tip=sha,
+    )
+    r = run({"tool_input": {"command": "git merge feature/x"}, "session_id": "s"}, tmp_path)
+    assert r.returncode == 0
+
+
+def test_v3_missing_task_file_allows(tmp_path):
+    """v3 backlog, task entry present and branch-matched, but tasks/<id>.md
+    does not exist on disk => fail-open, allow (accepted risk per spec)."""
+    _seed(tmp_path, policy=True, gates=None, branch="feature/x")
+    r = run({"tool_input": {"command": "git merge feature/x"}, "session_id": "s"}, tmp_path)
+    assert r.returncode == 0
+
+
+def test_v3_corrupt_task_file_allows(tmp_path):
+    """v3 backlog, tasks/<id>.md exists but its frontmatter is malformed
+    YAML => fail-open, allow."""
+    _seed(tmp_path, policy=True, gates={}, branch="feature/x")
+    (tmp_path / ".taskmaster" / "tasks" / "T-001.md").write_text(
+        "---\n{not: yaml\n---\nbody", encoding="utf-8"
     )
     r = run({"tool_input": {"command": "git merge feature/x"}, "session_id": "s"}, tmp_path)
     assert r.returncode == 0
