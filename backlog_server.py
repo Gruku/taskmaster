@@ -1006,7 +1006,7 @@ def backlog_status(verbose: bool = False) -> str:
         lines.append(f"\n**Stale tasks** (not referenced in 14+ days):")
         for t, ep, days in stale_tasks[:stale_cap]:
             lines.append(f"- `{t['id']}` — {t['title']} — stale {days}d ({ep['id']})")
-        lines.append("*Still relevant? Archive with `backlog_archive_task` or touch to refresh.*")
+        lines.append("*Still relevant? Archive with `backlog_archive_task`, or refresh with a real update (`backlog_update_task`).*")
 
     # Verbose: show archived tasks explicitly
     if verbose:
@@ -1169,10 +1169,6 @@ def backlog_get_task(
         return f"Error: task `{task_id}` not found"
 
     task, epic = result
-
-    # Update staleness tracking
-    task["last_referenced"] = _now()
-    _save(data)
 
     bp = _backlog_path()
 

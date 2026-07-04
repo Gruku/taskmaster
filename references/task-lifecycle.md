@@ -55,7 +55,7 @@ planned → active → done → archived
 | **Advancing** | When a phase's work is complete, `backlog_advance_phase` marks it done, archives its done tasks, and activates the next planned phase by order. |
 | **Cross-cutting** | A phase can contain tasks from multiple epics. Epics are thematic (auth, api, ux); phases are temporal (foundation, core features, polish). |
 | **Anchors** | Tasks can declare `anchors` — glob patterns or URLs — to say what files/systems they touch. Displayed prominently on pick. |
-| **Staleness** | `last_referenced` is auto-updated by get/pick/update/complete. Todo tasks stale for 14+ days are flagged in dashboards. |
+| **Staleness** | `last_referenced` is updated by pick/update/complete (mutations); reads do not bump it. Todo tasks stale for 14+ days are flagged in dashboards. |
 
 ### Phase + Task Workflow
 

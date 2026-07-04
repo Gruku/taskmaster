@@ -94,7 +94,7 @@ Each epic has a soft cap of 8 active (non-archived, non-done) tasks. When `backl
 
 ### Staleness
 
-Tasks track when they were last referenced (`last_referenced` field). Todo tasks not referenced in 14+ days are flagged as stale during `start-session` and in `backlog_status` output. Archive stale tasks or interact with them to refresh the timestamp.
+Tasks track when they were last referenced (`last_referenced` field). Todo tasks not referenced in 14+ days are flagged as stale during `start-session` and in `backlog_status` output. Archive stale tasks, or edit/pick them (any mutation) to refresh the timestamp.
 
 ### Sessions
 
@@ -311,7 +311,7 @@ phases:
 | `archive_reason` | enum | `done`, `deprecated`, `duplicate`, `wont-fix`, `superseded` |
 | `anchors` | list[string] | Glob patterns or URLs declaring target files/systems |
 | `blast_radius_depth` | string | Optional depth override for blast radius analysis: `shallow` (0-1 hop) or `deep` (2 hops). Overrides the adaptive heuristic. |
-| `last_referenced` | string | ISO timestamp, auto-updated when any tool touches this task |
+| `last_referenced` | string | ISO timestamp, updated by pick/update/complete (mutations); reads do not bump it |
 
 ### Context Block
 
