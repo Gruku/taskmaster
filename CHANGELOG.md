@@ -12,13 +12,19 @@ indicate schema breaks or removed surfaces.
 
 ---
 
-## 3.20.2 — merge_gate_decide reads v3 heavy gates from task files (2026-07-04)
+## 3.20.2 — merge-gate reads v3 heavy gates; get_task is a pure read (2026-07-04)
 
-Bug fix (tm-audit-002): `merge_gate_decide.py` read `gates` straight off the
+Two bug fixes from the tm-audit epic, merged together.
+
+**tm-audit-002:** `merge_gate_decide.py` read `gates` straight off the
 slim `backlog.yaml` task dict, but `gates` is a HEAVY field that lives only
 in `tasks/<id>.md` frontmatter on schema v3 — the merge-gate hook could
 never see a verdict `backlog_record_gate` actually wrote, and always fell
 through to "no review-gate has been run" regardless of reality.
+
+**tm-audit-003:** `backlog_get_task` mutated and full-saved `backlog.yaml`
+on every read (`last_referenced` bump), racing concurrent writers across
+the N MCP processes that share one backlog file (ISS-027).
 
 ### Fixed
 
@@ -31,6 +37,14 @@ through to "no review-gate has been run" regardless of reality.
   `test_merge_ladder_integration.py::_seed_backlog`, which wrote `gates`
   inline on the slim task dict under `schema_version: 3` — a shape real v3
   backlogs never produce — masking the bug in every existing test.
+- **`backlog_get_task` is now a pure read** — removed the `last_referenced`
+  bump + `_save` that ran on every call. `last_referenced` is maintained
+  solely by genuine mutations (pick/update/complete, task creation).
+- **Behavior change:** reads no longer refresh a task's staleness timestamp.
+  A todo task nobody has edited or picked in 14+ days now shows as stale
+  even if it's been viewed repeatedly — this is the intended, sharper
+  signal, not a regression. Archive stale tasks or mutate them
+  (`backlog_update_task`, `backlog_pick_task`) to refresh.
 
 ---
 

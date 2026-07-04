@@ -220,11 +220,11 @@ phases:                             # was: milestones
 
 ```yaml
 - id: "auth-007"
-  last_referenced: "2026-03-15T10:00"  # updated by any tool that touches this task
+  last_referenced: "2026-03-15T10:00"  # updated by pick/update/complete (mutations); reads do not bump it
 ```
 
 **Behavior:**
-- Any MCP tool that reads or modifies a task updates `last_referenced`
+- Any MCP tool that modifies a task updates `last_referenced`; reads do not
 - During `start-session`, if a `todo` task hasn't been referenced in 14+ days (or 5+ sessions, whichever is trackable), flag it:
 
   ```
@@ -234,7 +234,7 @@ phases:                             # was: milestones
   Still relevant? Can archive individually or sweep all.
   ```
 
-- User confirms (resets `last_referenced`) or archives
+- User edits/picks the task (resets `last_referenced`) or archives
 - Prevents slow accumulation of zombie tasks
 
 ### 6. Auto-Summary for Lightweight Sessions
