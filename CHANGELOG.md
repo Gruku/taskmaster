@@ -12,6 +12,28 @@ indicate schema breaks or removed surfaces.
 
 ---
 
+## 3.20.2 — merge_gate_decide reads v3 heavy gates from task files (2026-07-04)
+
+Bug fix (tm-audit-002): `merge_gate_decide.py` read `gates` straight off the
+slim `backlog.yaml` task dict, but `gates` is a HEAVY field that lives only
+in `tasks/<id>.md` frontmatter on schema v3 — the merge-gate hook could
+never see a verdict `backlog_record_gate` actually wrote, and always fell
+through to "no review-gate has been run" regardless of reality.
+
+### Fixed
+
+- `merge_gate_decide.py` now hydrates `gates` from the per-task file when
+  the backlog is schema v3, before reading the review-gate verdict. A
+  missing or corrupt task file falls through to the existing fail-open
+  `except Exception: return "ALLOW"` — same posture as every other
+  "can't read the data" case in this module.
+- Corrected `test_merge_gate_hook.py::_seed` and
+  `test_merge_ladder_integration.py::_seed_backlog`, which wrote `gates`
+  inline on the slim task dict under `schema_version: 3` — a shape real v3
+  backlogs never produce — masking the bug in every existing test.
+
+---
+
 ## 3.20.1 — spec-review skill aligned with the enforced gates model (2026-07-02)
 
 Documentation-only fix: the spec-review skill predated the Spec A lanes/gates

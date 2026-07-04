@@ -117,6 +117,18 @@ def decide(src: str, cwd: Path) -> str:
     try:
         task_id = task.get("id", "unknown")
         gates = task.get("gates") or {}
+
+        # v3 keeps `gates` as a HEAVY field in the per-task file, not in the
+        # slim backlog.yaml index (see taskmaster_v3.HEAVY_FIELDS). Hydrate it
+        # from there so this hook can see what backlog_record_gate wrote.
+        from taskmaster_v3 import detect_schema_version, task_file_path, read_task_file, SCHEMA_V3
+
+        if detect_schema_version(raw) >= SCHEMA_V3:
+            md_path = task_file_path(backlog_path, task_id)
+            fm, _body = read_task_file(md_path)
+            if "gates" in fm:
+                gates = fm["gates"] or {}
+
         rg = gates.get("review-gate")
 
         if not rg:

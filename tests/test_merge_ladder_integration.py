@@ -39,6 +39,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from taskmaster_v3 import write_task_file
+
 # --------------------------------------------------------------------------- #
 # Constants
 # --------------------------------------------------------------------------- #
@@ -172,6 +174,12 @@ def _seed_backlog(
 ) -> str:
     """Seed .taskmaster/project.yaml + backlog.yaml with policy=on and one task.
 
+    `gates` is a HEAVY field (taskmaster_v3.HEAVY_FIELDS) — on a real v3
+    backlog it lives only in the per-task file, never inline on the slim
+    backlog.yaml task entry. When `gates` is given, also write a faithful
+    tasks/<tid>.md carrying it in frontmatter (empty dict => no `gates` key
+    at all, matching how _split_task_for_v3 strips empty containers on save).
+
     Returns the task id.
     """
     tm = repo / ".taskmaster"
@@ -197,8 +205,6 @@ def _seed_backlog(
         "created": "2026-01-01T00:00",
         "branch": branch,
     }
-    if gates is not None:
-        task["gates"] = gates
 
     backlog = {
         "version": 3,
@@ -209,6 +215,13 @@ def _seed_backlog(
         "phases": [],
     }
     (tm / "backlog.yaml").write_text(yaml.dump(backlog, allow_unicode=True), encoding="utf-8")
+
+    if gates is not None:
+        fm: dict = {"id": tid, "title": "Integration test task"}
+        if gates:
+            fm["gates"] = gates
+        write_task_file(tm / "tasks" / f"{tid}.md", fm, "")
+
     return tid
 
 
@@ -387,6 +400,19 @@ def test_approve_bypass_and_retry_survives(tmp_path):
         "branch": feature2,
     })
     (tm / "backlog.yaml").write_text(yaml.dump(raw, allow_unicode=True), encoding="utf-8")
+    # v3: gates is a HEAVY field — write a real task file (no `gates` key)
+    # so merge_gate_decide.py hits the confident "no gate -> BLOCK" path in
+    # step F below, instead of "missing task file -> fail-open ALLOW". Give
+    # it a non-empty body: save_v3 (taskmaster_v3.py:4301-4307) deletes a
+    # per-task file entirely when it has no HEAVY_FIELDS content and no
+    # body — id+title mirrored into frontmatter don't count — and step D's
+    # recorder round-trips the WHOLE backlog through backlog_server's
+    # _load()/_save(), which would otherwise prune this file before step F.
+    write_task_file(
+        tm / "tasks" / "integ-002.md",
+        {"id": "integ-002", "title": "Other task"},
+        "Task body so the file survives the step-D save_v3 round-trip.\n",
+    )
 
     # --- A. Touch fresh approval file ---
     approve_file.touch()
