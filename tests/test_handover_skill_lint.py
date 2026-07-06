@@ -6,6 +6,7 @@ import yaml
 from skill_budget_helper import body_token_count, description_word_count, SKILL_BUDGETS, DEFAULT_DESC_WORDS
 
 SKILL_DIR = Path(__file__).resolve().parents[1] / "skills" / "handover"
+PLAYBOOK_DIR = Path(__file__).resolve().parents[1] / "playbooks" / "handover"
 
 
 def _read_frontmatter(path: Path) -> dict:
@@ -18,6 +19,15 @@ def _read_frontmatter(path: Path) -> dict:
 
 def test_skill_md_exists():
     assert (SKILL_DIR / "SKILL.md").exists()
+
+
+def test_playbook_exists():
+    assert (PLAYBOOK_DIR / "playbook.md").exists()
+
+
+def test_wrapper_points_at_playbook():
+    text = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+    assert "../../playbooks/handover/playbook.md" in text
 
 
 def test_frontmatter_has_required_fields():
@@ -45,18 +55,18 @@ def test_description_contains_key_trigger_phrases():
 def test_all_referenced_files_exist():
     # After 6→4 simplification: tier-selection.md removed; light/standard/full → body.md only.
     expected_refs = [
-        SKILL_DIR / "references" / "session-kinds.md",
-        SKILL_DIR / "references" / "auto-extraction.md",
-        SKILL_DIR / "references" / "supersession.md",
-        SKILL_DIR / "templates" / "body.md",
+        PLAYBOOK_DIR / "references" / "session-kinds.md",
+        PLAYBOOK_DIR / "references" / "auto-extraction.md",
+        PLAYBOOK_DIR / "references" / "supersession.md",
+        PLAYBOOK_DIR / "templates" / "body.md",
     ]
     missing = [p for p in expected_refs if not p.exists()]
     assert not missing, f"missing referenced files: {missing}"
     # Old files must not exist.
     removed = [
-        SKILL_DIR / "templates" / "light.md",
-        SKILL_DIR / "templates" / "standard.md",
-        SKILL_DIR / "templates" / "full.md",
+        PLAYBOOK_DIR / "templates" / "light.md",
+        PLAYBOOK_DIR / "templates" / "standard.md",
+        PLAYBOOK_DIR / "templates" / "full.md",
     ]
     present = [p for p in removed if p.exists()]
     assert not present, f"old template files should be removed: {present}"
@@ -65,28 +75,28 @@ def test_all_referenced_files_exist():
 def test_references_are_not_stubs():
     # Each reference should be > 5 non-blank lines.
     # session-kinds.md is intentionally concise after 6→4 simplification.
-    for ref in (SKILL_DIR / "references").iterdir():
+    for ref in (PLAYBOOK_DIR / "references").iterdir():
         non_blank = [ln for ln in ref.read_text(encoding="utf-8").splitlines() if ln.strip()]
         assert len(non_blank) > 5, f"reference looks like a stub: {ref}"
-    for tpl in (SKILL_DIR / "templates").iterdir():
+    for tpl in (PLAYBOOK_DIR / "templates").iterdir():
         non_blank = [ln for ln in tpl.read_text(encoding="utf-8").splitlines() if ln.strip()]
         assert len(non_blank) > 5, f"template looks like a stub: {tpl}"
 
 
 def test_skill_md_links_resolve():
-    text = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+    text = (PLAYBOOK_DIR / "playbook.md").read_text(encoding="utf-8")
     # Find all relative references like `references/foo.md` or `templates/bar.md`.
     refs = re.findall(r"`(references/[A-Za-z0-9_-]+\.md|templates/[A-Za-z0-9_-]+\.md)`", text)
-    assert refs, "SKILL.md does not reference any references/ or templates/ files"
-    missing = [r for r in refs if not (SKILL_DIR / r).exists()]
-    assert not missing, f"SKILL.md links do not resolve: {missing}"
+    assert refs, "playbook.md does not reference any references/ or templates/ files"
+    missing = [r for r in refs if not (PLAYBOOK_DIR / r).exists()]
+    assert not missing, f"playbook.md links do not resolve: {missing}"
 
 
 def test_skill_body_within_budget():
     budget = SKILL_BUDGETS["handover"]
     actual = body_token_count("handover")
     assert actual <= budget, (
-        f"body is {actual} tokens (budget: {budget}) — move deep content to references/"
+        f"playbook is {actual} tokens (budget: {budget}) — move deep content to references/"
     )
 
 

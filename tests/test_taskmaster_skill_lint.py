@@ -5,6 +5,7 @@ import yaml
 from skill_budget_helper import body_token_count, description_word_count
 
 SKILL_DIR = Path(__file__).resolve().parents[1] / "skills" / "taskmaster"
+PLAYBOOK_DIR = Path(__file__).resolve().parents[1] / "playbooks" / "taskmaster"
 
 
 def _read_frontmatter() -> dict:
@@ -17,6 +18,15 @@ def test_skill_md_exists():
     assert (SKILL_DIR / "SKILL.md").exists()
 
 
+def test_playbook_exists():
+    assert (PLAYBOOK_DIR / "playbook.md").exists()
+
+
+def test_wrapper_points_at_playbook():
+    text = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+    assert "../../playbooks/taskmaster/playbook.md" in text
+
+
 def test_frontmatter_required_fields():
     fm = _read_frontmatter()
     assert fm.get("name") == "taskmaster"
@@ -25,7 +35,7 @@ def test_frontmatter_required_fields():
 
 def test_body_within_budget():
     actual = body_token_count("taskmaster")
-    assert actual <= 800, f"body is {actual} tokens (budget: 800)"
+    assert actual <= 800, f"playbook is {actual} tokens (budget: 800)"
 
 
 def test_description_within_word_budget():
@@ -35,20 +45,20 @@ def test_description_within_word_budget():
 
 def test_references_exist():
     for ref in ("routing-table.md", "disambiguation.md"):
-        assert (SKILL_DIR / "references" / ref).exists(), f"missing references/{ref}"
+        assert (PLAYBOOK_DIR / "references" / ref).exists(), f"missing references/{ref}"
 
 
 def test_references_not_stubs():
-    for ref in (SKILL_DIR / "references").iterdir():
+    for ref in (PLAYBOOK_DIR / "references").iterdir():
         non_blank = [ln for ln in ref.read_text(encoding="utf-8").splitlines() if ln.strip()]
         assert len(non_blank) > 20, f"reference looks like stub: {ref}"
 
 
 def test_skill_md_links_resolve():
-    text = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+    text = (PLAYBOOK_DIR / "playbook.md").read_text(encoding="utf-8")
     refs = re.findall(r"`(references/[A-Za-z0-9_-]+\.md)`", text)
-    assert refs, "SKILL.md must reference at least one references/ file"
-    missing = [r for r in refs if not (SKILL_DIR / r).exists()]
+    assert refs, "playbook.md must reference at least one references/ file"
+    missing = [r for r in refs if not (PLAYBOOK_DIR / r).exists()]
     assert not missing, f"unresolved links: {missing}"
 
 

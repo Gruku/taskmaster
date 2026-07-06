@@ -5,8 +5,10 @@ import yaml
 from skill_budget_helper import body_token_count, description_word_count
 
 SKILL_DIR = Path(__file__).resolve().parents[1] / "skills" / "start-session"
+PLAYBOOK_DIR = Path(__file__).resolve().parents[1] / "playbooks" / "start-session"
 SKILL_MD = SKILL_DIR / "SKILL.md"
-DEEP_MODE_REF = SKILL_DIR / "references" / "deep-mode.md"
+PLAYBOOK_MD = PLAYBOOK_DIR / "playbook.md"
+DEEP_MODE_REF = PLAYBOOK_DIR / "references" / "deep-mode.md"
 
 # Approx characters-per-token for plain prose/markdown.
 _CHARS_PER_TOKEN = 4
@@ -36,6 +38,15 @@ def test_skill_md_exists():
     assert SKILL_MD.exists(), "SKILL.md missing"
 
 
+def test_playbook_exists():
+    assert PLAYBOOK_MD.exists(), "playbooks/start-session/playbook.md missing"
+
+
+def test_wrapper_points_at_playbook():
+    text = SKILL_MD.read_text(encoding="utf-8")
+    assert "../../playbooks/start-session/playbook.md" in text
+
+
 def test_frontmatter_required_fields():
     fm = _read_frontmatter_full()
     assert fm.get("name") == "start-session"
@@ -63,18 +74,18 @@ def test_deep_mode_reference_is_not_stub():
 
 def test_body_within_budget():
     actual = body_token_count("start-session")
-    assert actual <= 1_300, f"body is {actual} tokens (budget: 1300)"
+    assert actual <= 1_300, f"playbook is {actual} tokens (budget: 1300)"
 
 
 def test_skill_md_body_under_token_budget():
-    """Glance body (SKILL.md minus frontmatter) must be ≤1,300 tokens.
+    """Glance body (playbook.md) must be ≤1,300 tokens.
 
     This is a guardrail — content tests are the primary TDD signal.
     """
-    body = _body_without_frontmatter(SKILL_MD)
+    body = _body_without_frontmatter(PLAYBOOK_MD)
     tokens = _token_estimate(body)
     assert tokens <= 1_300, (
-        f"SKILL.md body is ~{tokens} tokens (limit 1,300). "
+        f"playbook.md body is ~{tokens} tokens (limit 1,300). "
         "Move deep-ceremony content to references/deep-mode.md."
     )
 
@@ -98,7 +109,7 @@ def test_description_contains_key_trigger_phrases():
 
 def test_glance_mcp_calls_listed_in_body():
     """Glance path must reference the slim MCP calls from spec §4."""
-    body = _body_without_frontmatter(SKILL_MD)
+    body = _body_without_frontmatter(PLAYBOOK_MD)
     required_calls = [
         "backlog_status",
         "backlog_handover_list",
@@ -109,7 +120,7 @@ def test_glance_mcp_calls_listed_in_body():
 
 def test_handover_list_filters_to_open():
     """start-session glance must filter handovers to status=open (Plan B requirement)."""
-    body = _body_without_frontmatter(SKILL_MD)
+    body = _body_without_frontmatter(PLAYBOOK_MD)
     assert 'backlog_handover_list' in body
     assert 'status="open"' in body or "status='open'" in body, (
         "start-session glance must call backlog_handover_list with status=open (Plan B requirement)"
@@ -122,7 +133,7 @@ def test_deep_ceremony_not_inline_in_body():
     backlog_recap, backlog_lesson_digest, backlog_lesson_get, and backlog_last_session
     are deep-mode only — they belong in references/deep-mode.md.
     """
-    body = _body_without_frontmatter(SKILL_MD)
+    body = _body_without_frontmatter(PLAYBOOK_MD)
     deep_only_calls = ["backlog_recap", "backlog_lesson_digest", "backlog_lesson_get"]
     present = [c for c in deep_only_calls if c in body]
     assert not present, (
@@ -133,13 +144,13 @@ def test_deep_ceremony_not_inline_in_body():
 
 def test_deep_flag_mentioned_in_body():
     """SKILL.md must mention --deep so users know how to access the full ceremony."""
-    body = _body_without_frontmatter(SKILL_MD)
+    body = _body_without_frontmatter(PLAYBOOK_MD)
     assert "--deep" in body, "SKILL.md must document the --deep flag"
 
 
 def test_deep_mode_reference_linked_from_body():
     """SKILL.md must link to references/deep-mode.md."""
-    body = _body_without_frontmatter(SKILL_MD)
+    body = _body_without_frontmatter(PLAYBOOK_MD)
     assert "references/deep-mode.md" in body, (
         "SKILL.md must link to references/deep-mode.md for the deep ceremony"
     )
