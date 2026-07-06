@@ -18,7 +18,8 @@ If the user chose analyze:
      - TODO -> medium (planned work)
      - XXX -> high (needs attention)
    - Extract roadmap items from README as tasks
-4. Present the proposed backlog to the user with text summary then AskUserQuestion for approval.
+4. Present the proposed backlog to the user with text summary then ask for approval
+   (use your structured-question tool if available; otherwise list the options).
    Options: Create it / Adjust first / Cancel.
    On Create it: use backlog_add_epic, backlog_add_task, backlog_add_phase. Include source file:line in task notes.
 
