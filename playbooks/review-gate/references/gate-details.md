@@ -28,7 +28,7 @@ Auto-detect which directory to run in from the task's `sub_repo` field or worktr
 - Determine the working directory: the task's worktree path if set, otherwise the project root.
 - Determine the working branch from the task's `branch` field. If empty, check the current git branch.
 - If no branch: WARN for medium/low, **escalate to user** for critical/high.
-- If the `superpowers:code-reviewer` subagent is available, dispatch it scoped to changed files between the branch and its base. If not available, perform an inline review of the diff.
+- Delegate the review to a sub-agent if your tool supports it (on Claude Code: the superpowers code-reviewer), scoped to changed files between the branch and its base. If not available, perform an inline review of the diff.
 - Group findings by severity: Critical / Important / Minor.
 
 ## Gate 2c: Spec Adherence Check

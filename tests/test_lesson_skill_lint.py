@@ -1,4 +1,4 @@
-"""Lint checks for the taskmaster:lesson skill scaffolding."""
+"""Lint checks for the taskmaster:lesson skill scaffolding (wrapper + playbook)."""
 from pathlib import Path
 import re
 
@@ -6,6 +6,7 @@ import yaml
 from skill_budget_helper import body_token_count, description_word_count, SKILL_BUDGETS, DEFAULT_DESC_WORDS
 
 SKILL_DIR = Path(__file__).resolve().parents[1] / "skills" / "lesson"
+PLAYBOOK_DIR = Path(__file__).resolve().parents[1] / "playbooks" / "lesson"
 
 
 def _read_frontmatter(path: Path) -> dict:
@@ -18,6 +19,15 @@ def _read_frontmatter(path: Path) -> dict:
 
 def test_skill_md_exists():
     assert (SKILL_DIR / "SKILL.md").exists()
+
+
+def test_playbook_exists():
+    assert (PLAYBOOK_DIR / "playbook.md").exists()
+
+
+def test_wrapper_points_at_playbook():
+    text = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+    assert "../../playbooks/lesson/playbook.md" in text
 
 
 def test_frontmatter_has_required_fields():
@@ -50,12 +60,12 @@ def test_description_contains_all_trigger_phrases():
 
 def test_all_referenced_files_exist():
     expected_refs = [
-        SKILL_DIR / "references" / "marker-format.md",
-        SKILL_DIR / "references" / "auto-extraction.md",
-        SKILL_DIR / "references" / "reinforce-flows.md",
-        SKILL_DIR / "references" / "promotion-decay.md",
-        SKILL_DIR / "references" / "session-retro.md",
-        SKILL_DIR / "templates" / "lesson-body.md",
+        PLAYBOOK_DIR / "references" / "marker-format.md",
+        PLAYBOOK_DIR / "references" / "auto-extraction.md",
+        PLAYBOOK_DIR / "references" / "reinforce-flows.md",
+        PLAYBOOK_DIR / "references" / "promotion-decay.md",
+        PLAYBOOK_DIR / "references" / "session-retro.md",
+        PLAYBOOK_DIR / "templates" / "lesson-body.md",
     ]
     missing = [p for p in expected_refs if not p.exists()]
     assert not missing, f"missing referenced files: {missing}"
@@ -63,24 +73,24 @@ def test_all_referenced_files_exist():
 
 def test_references_are_not_stubs():
     # Each reference > 20 non-blank lines; template > 5 (per spec §13).
-    for ref in (SKILL_DIR / "references").iterdir():
+    for ref in (PLAYBOOK_DIR / "references").iterdir():
         non_blank = [ln for ln in ref.read_text(encoding="utf-8").splitlines() if ln.strip()]
         assert len(non_blank) > 20, f"reference looks like a stub: {ref}"
-    for tpl in (SKILL_DIR / "templates").iterdir():
+    for tpl in (PLAYBOOK_DIR / "templates").iterdir():
         non_blank = [ln for ln in tpl.read_text(encoding="utf-8").splitlines() if ln.strip()]
         assert len(non_blank) > 5, f"template looks like a stub: {tpl}"
 
 
-def test_skill_md_links_resolve():
-    text = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+def test_playbook_links_resolve():
+    text = (PLAYBOOK_DIR / "playbook.md").read_text(encoding="utf-8")
     refs = re.findall(r"`(references/[A-Za-z0-9_-]+\.md|templates/[A-Za-z0-9_-]+\.md)`", text)
-    assert refs, "SKILL.md does not reference any references/ or templates/ files"
-    missing = [r for r in refs if not (SKILL_DIR / r).exists()]
-    assert not missing, f"SKILL.md links do not resolve: {missing}"
+    assert refs, "playbook.md does not reference any references/ or templates/ files"
+    missing = [r for r in refs if not (PLAYBOOK_DIR / r).exists()]
+    assert not missing, f"playbook.md links do not resolve: {missing}"
 
 
-def test_skill_md_documents_all_five_entry_points():
-    text = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8").lower()
+def test_playbook_documents_all_five_entry_points():
+    text = (PLAYBOOK_DIR / "playbook.md").read_text(encoding="utf-8").lower()
     must_have = [
         "write-from-context",
         "write-from-candidate",
@@ -89,14 +99,14 @@ def test_skill_md_documents_all_five_entry_points():
         "session-retro",
     ]
     missing = [p for p in must_have if p not in text]
-    assert not missing, f"SKILL.md missing entry-point names: {missing}"
+    assert not missing, f"playbook.md missing entry-point names: {missing}"
 
 
 def test_skill_body_within_budget():
     budget = SKILL_BUDGETS["lesson"]
     actual = body_token_count("lesson")
     assert actual <= budget, (
-        f"body is {actual} tokens (budget: {budget}) — move deep content to references/"
+        f"playbook is {actual} tokens (budget: {budget}) — move deep content to references/"
     )
 
 

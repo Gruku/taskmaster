@@ -37,7 +37,7 @@ Call backlog_snapshot(). Surface its one-line response. No confirmation needed -
 
 ## Step 8: Post-Flight Gitignore
 
-Check whether .gitignore contains .taskmaster/snapshots/. If missing, ask via AskUserQuestion: Yes, add it / Skip.
+Check whether .gitignore contains .taskmaster/snapshots/. If missing, ask the user (use your structured-question tool if available; otherwise present the options): Yes, add it / Skip.
 
 If Yes: append this block to .gitignore (do not overwrite; check first that the line is not already present):
 

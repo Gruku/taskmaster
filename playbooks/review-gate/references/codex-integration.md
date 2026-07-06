@@ -24,8 +24,10 @@ Focus text should reflect what Gate 2a covered so Codex hunts for blind spots, e
 
 ## Case B — Repeated-Bug Verification
 
-When Gate 2a found criticals already patched in-session. Codex is unusually good at catching when "the bug fix only patched the one site that hit the test." Prefer `/codex:rescue` framed as a verification task:
+When Gate 2a found criticals already patched in-session. Codex is unusually good at catching when "the bug fix only patched the one site that hit the test." Prefer `/codex:rescue` framed as a verification task.
 
+If your tool cannot dispatch sub-agents, run the review inline against the same checklist.
+<!-- cc-only:start -->
 ```
 Agent({
   subagent_type: "codex:codex-rescue",
@@ -35,6 +37,7 @@ commit <hash>. Verify the fix is complete: search the codebase for sibling
 occurrences of the same pattern that may also need patching. Cite file:line."
 })
 ```
+<!-- cc-only:end -->
 
 ## Merging into Report
 

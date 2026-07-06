@@ -1,4 +1,4 @@
-"""Lint checks for the taskmaster:migrate-v3 skill scaffolding."""
+"""Lint checks for the taskmaster:migrate-v3 skill (wrapper + playbook)."""
 from pathlib import Path
 import re
 
@@ -6,6 +6,7 @@ import yaml
 from skill_budget_helper import body_token_count, description_word_count, SKILL_BUDGETS, DEFAULT_DESC_WORDS
 
 SKILL_DIR = Path(__file__).resolve().parents[1] / "skills" / "migrate-v3"
+PLAYBOOK_DIR = Path(__file__).resolve().parents[1] / "playbooks" / "migrate-v3"
 
 
 def _read_frontmatter(path: Path) -> dict:
@@ -22,6 +23,15 @@ def test_skill_dir_exists():
 
 def test_skill_md_exists():
     assert (SKILL_DIR / "SKILL.md").exists()
+
+
+def test_playbook_exists():
+    assert (PLAYBOOK_DIR / "playbook.md").exists()
+
+
+def test_wrapper_points_at_playbook():
+    text = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+    assert "../../playbooks/migrate-v3/playbook.md" in text
 
 
 def test_frontmatter_has_required_fields():
@@ -47,19 +57,19 @@ def test_description_contains_trigger_phrases():
     assert not missing, f"description is missing trigger phrases: {missing}"
 
 
-def test_skill_md_contains_canonical_sentence():
-    text = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+def test_playbook_contains_canonical_sentence():
+    text = (PLAYBOOK_DIR / "playbook.md").read_text(encoding="utf-8")
     expected = (
         "This is the ONLY correct way to migrate a project to v3"
         " — do not call backlog_migrate_v3 directly without the pre-flight gate."
     )
-    assert expected in text, "SKILL.md is missing the canonical 'ONLY correct way' sentence"
+    assert expected in text, "playbook.md is missing the canonical 'ONLY correct way' sentence"
 
 
 def test_all_referenced_files_exist():
     expected_refs = [
-        SKILL_DIR / "references" / "v2-vs-v3.md",
-        SKILL_DIR / "references" / "migration-steps.md",
+        PLAYBOOK_DIR / "references" / "v2-vs-v3.md",
+        PLAYBOOK_DIR / "references" / "migration-steps.md",
     ]
     missing = [p for p in expected_refs if not p.exists()]
     assert not missing, f"missing referenced files: {missing}"
@@ -67,24 +77,24 @@ def test_all_referenced_files_exist():
 
 def test_references_are_not_stubs():
     # The v2-vs-v3.md reference must have > 20 non-blank lines; no stub allowed.
-    for ref in (SKILL_DIR / "references").iterdir():
+    for ref in (PLAYBOOK_DIR / "references").iterdir():
         non_blank = [ln for ln in ref.read_text(encoding="utf-8").splitlines() if ln.strip()]
         assert len(non_blank) > 20, f"reference looks like a stub: {ref}"
 
 
-def test_skill_md_links_resolve():
-    text = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+def test_playbook_links_resolve():
+    text = (PLAYBOOK_DIR / "playbook.md").read_text(encoding="utf-8")
     refs = re.findall(r"`(references/[A-Za-z0-9_-]+\.md|templates/[A-Za-z0-9_-]+\.md)`", text)
-    assert refs, "SKILL.md does not reference any references/ or templates/ files"
-    missing = [r for r in refs if not (SKILL_DIR / r).exists()]
-    assert not missing, f"SKILL.md links do not resolve: {missing}"
+    assert refs, "playbook.md does not reference any references/ or templates/ files"
+    missing = [r for r in refs if not (PLAYBOOK_DIR / r).exists()]
+    assert not missing, f"playbook.md links do not resolve: {missing}"
 
 
 def test_skill_body_within_budget():
     budget = SKILL_BUDGETS["migrate-v3"]
     actual = body_token_count("migrate-v3")
     assert actual <= budget, (
-        f"body is {actual} tokens (budget: {budget}) — move deep content to references/"
+        f"playbook is {actual} tokens (budget: {budget}) — move deep content to references/"
     )
 
 
