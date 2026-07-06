@@ -12,6 +12,16 @@ indicate schema breaks or removed surfaces.
 
 ---
 
+## 3.22.0
+
+Multi-assistant generalization, Phase 1 (spec: 2026-07-06-taskmaster-multi-assistant-design.md).
+
+- All 17 skills' workflow content extracted to assistant-neutral `playbooks/<name>/playbook.md` (+ references/templates); SKILL.md files are now thin trigger wrappers — behavior on Claude Code unchanged.
+- New `playbooks/CONVENTIONS.md` (authoring/neutrality rules) and `scripts/check_adapter_coverage.py` (1:1 wrapper↔playbook mapping + banned-CC-token scan; `--strict` gate).
+- Skill lint tests re-pointed at playbooks; body token budgets now cover wrapper+playbook combined.
+
+---
+
 ## 3.21.1 — spec-review skill trimmed to budget (B-071) (2026-07-05)
 
 ### Fixed
