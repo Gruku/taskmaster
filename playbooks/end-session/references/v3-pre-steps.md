@@ -82,7 +82,7 @@ If v3-pre-2a buffered a `pending_review_flag`, pass `flag_for_review=true` and `
 Before invoking `taskmaster:handover`, sweep open decisions linked to the in-progress task:
 
 1. Call `backlog_decision_list(status="open", task_id=<current>)`.
-2. If non-empty, for **each** decision ask via `AskUserQuestion`:
+2. If non-empty, for **each** decision ask the user (use your structured-question tool if available):
    - **Carry forward** — leave the decision open; record it under the handover body's "Open decisions" section as `[[DEC-NNN]] — <one-line summary>`.
    - **Resolve now** — present options; on pick, call `backlog_decision_resolve(id, resolved_with=N, rationale="<short>")`, then record it under "Resolved this session".
    - **Drop** — capture one-line reason; call `backlog_decision_drop(id, reason=...)`, then record it under "Resolved this session" with `(dropped)` suffix.

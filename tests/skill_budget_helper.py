@@ -25,6 +25,11 @@ SKILL_BUDGETS: dict[str, int] = {
 }
 
 SKILLS_ROOT = Path(__file__).resolve().parents[1] / "skills"
+PLAYBOOKS_ROOT = Path(__file__).resolve().parents[1] / "playbooks"
+
+
+def playbook_md_path(skill_name: str) -> Path:
+    return PLAYBOOKS_ROOT / skill_name / "playbook.md"
 
 # Skills whose body budget is owned by Plan D — lint runs but is xfail until D merges.
 # Both start-session and pick-task merged: bodies slimmed by Plan D.
@@ -44,9 +49,13 @@ def skill_md_path(skill_name: str) -> Path:
 
 
 def body_token_count(skill_name: str) -> int:
-    """Return approximate token count for a skill's SKILL.md (full file)."""
-    path = skill_md_path(skill_name)
-    text = path.read_text(encoding="utf-8")
+    """Approximate invocation-time token cost of the skill's workflow content:
+    playbook.md when converted, SKILL.md otherwise."""
+    pb = playbook_md_path(skill_name)
+    if pb.exists():
+        text = pb.read_text(encoding="utf-8")
+    else:
+        text = skill_md_path(skill_name).read_text(encoding="utf-8")
     return len(text) // CHARS_PER_TOKEN
 
 

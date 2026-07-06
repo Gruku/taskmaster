@@ -1,10 +1,10 @@
 from pathlib import Path
 
-SKILL = Path("plugins/taskmaster/skills/end-session/SKILL.md")
+PLAYBOOK = Path("plugins/taskmaster/playbooks/end-session/playbook.md")
 
 
 def test_end_session_mentions_decision_sweep():
-    body = SKILL.read_text(encoding="utf-8")
+    body = PLAYBOOK.read_text(encoding="utf-8")
     assert "backlog_decision_list" in body
     assert "carry forward" in body.lower()
     assert "drop" in body.lower()
@@ -14,10 +14,10 @@ def test_end_session_folds_decisions_into_handover_body():
     """b040ac6 dropped the phantom open_decisions / resolved_this_session
     kwargs: the decision sweep results are carried as handover BODY sections
     ("Open decisions" / "Resolved this session"), not handover_create args."""
-    body = SKILL.read_text(encoding="utf-8")
+    body = PLAYBOOK.read_text(encoding="utf-8")
     assert '"Open decisions"' in body
     assert '"Resolved this session"' in body
-    ref = SKILL.parent / "references" / "v3-pre-steps.md"
+    ref = PLAYBOOK.parent / "references" / "v3-pre-steps.md"
     assert "no separate `open_decisions` / `resolved_this_session` parameters" \
         in ref.read_text(encoding="utf-8")
 
