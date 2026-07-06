@@ -22,6 +22,8 @@ read files and call the `backlog_*` MCP tools must be able to follow one.
 4. **Cross-playbook references** point at the playbook path first, with the
    native invocation as a hint: "follow the bug playbook
    (`../bug/playbook.md`; on Claude Code/ZCode: `taskmaster:bug`)".
+   In routing tables, a single preamble line may state the
+   native-invocation mapping once instead of repeating it per row.
 5. **Assistant-specific content** (e.g. Codex-subagent dispatch snippets)
    is allowed only between `<!-- cc-only:start -->` and `<!-- cc-only:end -->`
    markers, with a one-line neutral fallback outside the markers.
