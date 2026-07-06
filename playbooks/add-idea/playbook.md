@@ -46,7 +46,7 @@ The user can also say "save this as an idea: <text>" — treat it the same as a 
 
 ## Auto-log path (agent-initiated)
 
-This skill governs **user-initiated** idea logging. For agent-initiated auto-log — when you detect a sharp idea mid-conversation per the heuristics in the start-session playbook (`../start-session/playbook.md`) — call `backlog_idea_create` directly with `created_by="assistant"` instead of invoking this skill. Then announce inline:
+This skill governs **user-initiated** idea logging. For agent-initiated auto-log — when you detect a sharp idea mid-conversation per the heuristics in the start-session playbook (`../start-session/playbook.md`) — call `backlog_idea_create` directly with `created_by="Claude"` instead of invoking this skill. Then announce inline:
 
 > _Logged as IDEA-NNN — "<title>"_
 
