@@ -27,8 +27,14 @@ Run during end-session's v3-pre-2a step:
 
 1. List lessons that were trigger-loaded at start-session (use the `backlog_lesson_list(tier="active")` output and intersect with whatever start-session injected) OR cited mid-session by Claude.
 
-2. Present a multi-select to the user:
+2. Present a multi-select to the user (use your structured-question tool if available; otherwise list the options and ask which apply):
 
+   - "L-007 [gotcha] Always read auth/session.ts before editing auth flow" — trigger-loaded; appeared in this session
+   - "L-014 [pattern] Ask structured questions for ambiguous intents" — cited at turn 23
+   - "Skip — none of these applied"
+
+<!-- cc-only:start -->
+   On Claude Code, this can be presented as a multi-select via `AskUserQuestion`:
    ```
    AskUserQuestion({
      questions: [{
@@ -37,12 +43,13 @@ Run during end-session's v3-pre-2a step:
        multiSelect: true,
        options: [
          { label: "L-007 [gotcha] Always read auth/session.ts before editing auth flow", description: "trigger-loaded; appeared in this session" },
-         { label: "L-014 [pattern] Use AskUserQuestion for ambiguous intents", description: "cited at turn 23" },
+         { label: "L-014 [pattern] Ask structured questions for ambiguous intents", description: "cited at turn 23" },
          { label: "Skip — none of these applied", description: "" }
        ]
      }]
    })
    ```
+<!-- cc-only:end -->
 
 3. For each pick, call:
 

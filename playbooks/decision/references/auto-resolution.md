@@ -14,7 +14,7 @@ Regex: `^Resolves:\s*(DEC-\d+)\s+with\s+option\s+(\d+)\s*$` (multiline, case-ins
 
 ## 2. end-session sweep
 
-`end-session` runs `backlog_decision_list(status="open", task_id=<current>)` before writing the handover. For each result, it asks (via `AskUserQuestion`):
+`end-session` runs `backlog_decision_list(status="open", task_id=<current>)` before writing the handover. For each result, it asks the user (use your structured-question tool if available):
 
 - **Carry forward** — leave open; the decision is recorded under the handover body's "Open decisions" section as `[[DEC-NNN]] — <summary>`.
 - **Resolve now** — pick an option inline; `backlog_decision_resolve` is called, and the decision is recorded under "Resolved this session".

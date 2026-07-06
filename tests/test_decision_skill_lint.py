@@ -1,10 +1,11 @@
-"""Lint the decision skill: required frontmatter, references, body sections."""
+"""Lint the decision skill: wrapper frontmatter + playbook references/body sections."""
 from pathlib import Path
 import re
 import yaml
-import pytest
 
 SKILL = Path("plugins/taskmaster/skills/decision/SKILL.md")
+PLAYBOOK_DIR = Path("plugins/taskmaster/playbooks/decision")
+PLAYBOOK = PLAYBOOK_DIR / "playbook.md"
 
 
 def parse_frontmatter(text: str) -> dict:
@@ -15,6 +16,15 @@ def parse_frontmatter(text: str) -> dict:
 
 def test_skill_file_exists():
     assert SKILL.exists()
+
+
+def test_playbook_exists():
+    assert PLAYBOOK.exists()
+
+
+def test_wrapper_points_at_playbook():
+    text = SKILL.read_text(encoding="utf-8")
+    assert "../../playbooks/decision/playbook.md" in text
 
 
 def test_frontmatter_has_name_and_description():
@@ -29,12 +39,12 @@ def test_frontmatter_has_name_and_description():
 
 
 def test_body_documents_three_lifecycle_states():
-    body = SKILL.read_text(encoding="utf-8")
+    body = PLAYBOOK.read_text(encoding="utf-8")
     for state in ("open", "resolved", "dropped"):
-        assert state in body.lower(), f"Skill body missing lifecycle state: {state}"
+        assert state in body.lower(), f"playbook body missing lifecycle state: {state}"
 
 
 def test_references_exist():
-    assert Path("plugins/taskmaster/skills/decision/references/lifecycle.md").exists()
-    assert Path("plugins/taskmaster/skills/decision/references/auto-resolution.md").exists()
-    assert Path("plugins/taskmaster/skills/decision/templates/decision-body.md").exists()
+    assert (PLAYBOOK_DIR / "references" / "lifecycle.md").exists()
+    assert (PLAYBOOK_DIR / "references" / "auto-resolution.md").exists()
+    assert (PLAYBOOK_DIR / "templates" / "decision-body.md").exists()

@@ -5,7 +5,7 @@ the purpose, markers to scan for, and the output format summary.
 
 ## Step 1: Scan for Task Files
 
-Use Glob to find: TODO.md, TODOS.md, TASKS.md, ROADMAP.md, BACKLOG.md (also in subdirectories).
+Find files named: TODO.md, TODOS.md, TASKS.md, ROADMAP.md, BACKLOG.md (also in subdirectories).
 
 If found, read each file and parse:
 - Markdown checkboxes `- [ ] item` / `- [x] done item` -> individual work items
@@ -17,7 +17,7 @@ Treat each unchecked item as a potential task.
 
 ## Step 2: Scan for Inline Markers
 
-Use Grep pattern: `TODO|FIXME|HACK|XXX` (case-insensitive).
+Search the codebase for the pattern: `TODO|FIXME|HACK|XXX` (case-insensitive).
 
 Exclude: `node_modules`, `.git`, `vendor`, `dist`, `build`, `__pycache__`, `.next`, `.nuxt`, `coverage`, `.claude`.
 
