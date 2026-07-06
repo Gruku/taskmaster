@@ -18,8 +18,10 @@ If `--codex` passed but Codex isn't available, WARN and continue without it.
 
 ## Dispatch Pattern
 
-Build a focus from what Gate B *didn't* flag (avoids paying for a duplicate pass):
+Build a focus from what Gate B *didn't* flag (avoids paying for a duplicate pass).
 
+If your tool cannot dispatch sub-agents, run the review inline against the same checklist.
+<!-- cc-only:start -->
 ```
 Agent({
   subagent_type: "codex:codex-rescue",
@@ -41,6 +43,7 @@ Return a concise list of issues with file:line citations. Group by Critical /
 Important / Minor. Do not summarize Claude's findings — only add new ones."
 })
 ```
+<!-- cc-only:end -->
 
 ## Merging into Report
 
