@@ -19,6 +19,7 @@ BANNED = [
     "model: haiku",
 ]
 CC_ONLY = re.compile(r"<!-- cc-only:start -->.*?<!-- cc-only:end -->", re.DOTALL)
+STALE_OLD_LAYOUT = re.compile(r"skills/[A-Za-z0-9_-]+/(references|templates)/")
 MAX_WRAPPER_BODY_LINES = 12
 
 
@@ -61,6 +62,9 @@ def check(root: Path, strict: bool) -> list[str]:
             for token in BANNED:
                 if token in content:
                     errors.append(f"{md}: banned assistant-specific token '{token}'")
+            for m in STALE_OLD_LAYOUT.finditer(content):
+                errors.append(
+                    f"{md}: stale old-layout path '{m.group(0)}' — moved to playbooks/ in the conversion")
 
     if strict and skills.is_dir():
         converted_names = {d.name for d in converted}

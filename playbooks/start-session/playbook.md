@@ -71,7 +71,7 @@ If `backlog_status` fails: check if `backlog.yaml` exists. If not, suggest `/ini
 
 While working in a v3 project, emit `<lesson-candidate>` XML inline (no tool call) when: (a) user corrects you twice on same thing, (b) bug encountered before, (c) user states a "we always/never do X here" rule.
 
-For idea capture: use `<idea-candidate>` inline for fuzzy/ambient ideas; call `backlog_idea_create` for explicit or concrete ones. See the lesson skill's `references/marker-format.md` (currently at `skills/lesson/references/marker-format.md`; on Claude Code/ZCode: `taskmaster:lesson`) for tag schema.
+For idea capture: use `<idea-candidate>` inline for fuzzy/ambient ideas; call `backlog_idea_create` for explicit or concrete ones. See the lesson playbook's `../lesson/references/marker-format.md` (on Claude Code/ZCode: `taskmaster:lesson`) for tag schema.
 
 ## Notes
 

@@ -90,6 +90,20 @@ def test_wrapper_body_too_long_fails(tmp_path):
     assert r.returncode == 1
 
 
+def test_stale_old_layout_path_fails(tmp_path):
+    make_pair(tmp_path, playbook_text="# Demo\n\nsee skills/other/references/foo.md\n")
+    r = run(tmp_path)
+    assert r.returncode == 1
+    assert "stale old-layout path" in r.stdout
+    assert "skills/other/references/" in r.stdout
+
+
+def test_clean_relative_playbook_reference_passes(tmp_path):
+    make_pair(tmp_path, playbook_text="# Demo\n\nsee ../other/playbook.md\n")
+    r = run(tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
 def test_strict_requires_all_skills_converted(tmp_path):
     make_pair(tmp_path)
     (tmp_path / "skills" / "unconverted").mkdir()
