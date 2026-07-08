@@ -27,7 +27,7 @@ End-session continues regardless of the handover skill's outcome.
 
 **Skip the auto-write only if:** none of the four trigger conditions above are true (lightweight one-touch session) OR the user explicitly said "no handover" / "skip handover" this session.
 
-If v3-pre-2a buffered a `pending_review_flag`, pass `flag_for_review=true` and `review_reason=<buffered reason>` through to the handover skill. If the user skipped the handover write, the flag is dropped silently.
+If a `pending_review_flag` was buffered upstream, pass `flag_for_review=true` and `review_reason=<buffered reason>` through to the handover skill. If the user skipped the handover write, the flag is dropped silently.
 
 ## Decision Sweep (before handover write)
 
