@@ -1,0 +1,10 @@
+# Taskmaster MCP registration for Codex CLI.
+#
+# Merge this block into ~/.codex/config.toml, replacing {{TASKMASTER_HOME}}
+# with the absolute path of your taskmaster checkout (forward slashes,
+# also on Windows). Requires uv (https://docs.astral.sh/uv/).
+
+[mcp_servers.taskmaster]
+command = "uv"
+args = ["run", "{{TASKMASTER_HOME}}/backlog_server.py"]
+startup_timeout_sec = 60
