@@ -80,3 +80,16 @@ def test_verbose_status_archived_count_in_stats(tm_epic_phase):
     backlog_archive_task("T-4", reason="done")
     out = backlog_status(verbose=True)
     assert "Archived:" in out or "archived" in out.lower()
+
+
+def test_status_table_marks_closeable_epic(tm_epic_phase):
+    backlog_add_task(epic="test-epic", task_id="T-5", title="Z", tldr="T.", phase="dev")
+    _make_done("T-5")
+    out = backlog_status()
+    assert "[closeable]" in out
+
+
+def test_status_table_no_marker_with_open_tasks(tm_epic_phase):
+    backlog_add_task(epic="test-epic", task_id="T-6", title="Z", tldr="T.", phase="dev")
+    out = backlog_status()
+    assert "[closeable]" not in out

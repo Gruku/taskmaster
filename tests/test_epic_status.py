@@ -68,3 +68,41 @@ def test_epic_status_counts_archived(tm_epic_phase):
     assert "Archived: 1" in out
     # Progress numerator counts done + archived against total (2/2).
     assert "2/2" in out
+
+
+def test_epic_status_shows_done_when(tm_epic_phase):
+    out = backlog_epic_status("test-epic")
+    assert "Done when: all test tasks complete" in out
+
+
+def test_epic_status_closeable_when_all_done(tm_epic_phase):
+    backlog_add_task(epic="test-epic", task_id="D-1", title="one", phase="dev")
+    _set_status("D-1", "done")
+    out = backlog_epic_status("test-epic")
+    assert "CLOSEABLE" in out
+    assert "archive via backlog_archive_epic" in out
+
+
+def test_epic_status_not_closeable_with_open_tasks(tm_epic_phase):
+    backlog_add_task(epic="test-epic", task_id="O-1", title="one", phase="dev")
+    _set_status("O-1", "done")
+    backlog_add_task(epic="test-epic", task_id="O-2", title="two", phase="dev")
+    # O-2 stays todo
+    out = backlog_epic_status("test-epic")
+    assert "CLOSEABLE" not in out
+
+
+def test_epic_status_zero_tasks_not_closeable(tm_epic_phase):
+    out = backlog_epic_status("test-epic")
+    assert "CLOSEABLE" not in out
+
+
+def test_epic_status_closeable_counts_archived_as_done(tm_epic_phase):
+    # Mirrors test_epic_status_counts_archived's math: done + archived == total.
+    backlog_add_task(epic="test-epic", task_id="AC-1", title="kept", phase="dev")
+    _set_status("AC-1", "done")
+    backlog_add_task(epic="test-epic", task_id="AC-2", title="closed", phase="dev")
+    _set_status("AC-2", "done")
+    backlog_archive_task("AC-2", reason="done")
+    out = backlog_epic_status("test-epic")
+    assert "CLOSEABLE" in out

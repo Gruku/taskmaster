@@ -899,7 +899,10 @@ def backlog_status(verbose: bool = False) -> str:
             if t.get("status") in ("in-progress", "in-review"):
                 focus = t["title"]
                 break
-        lines.append(f"| {epic['name']} | {_epic_status_label(epic.get('status', 'planned'))} | {done_count}/{total} | {focus} |")
+        name = epic["name"]
+        if _epic_stats(data, epic["id"])["closeable"]:
+            name = f"{name} [closeable]"
+        lines.append(f"| {name} | {_epic_status_label(epic.get('status', 'planned'))} | {done_count}/{total} | {focus} |")
 
     lines.append("")
 
@@ -5917,6 +5920,7 @@ def _epic_stats(data: dict, epic_id: str) -> dict:
         stats["total"] += 1
         if st in stats:
             stats[st] += 1
+    stats["closeable"] = stats["total"] > 0 and stats["done"] + stats["archived"] == stats["total"]
     return stats
 
 
@@ -5941,6 +5945,8 @@ def backlog_epic_status(epic_id: str) -> str:
     lock = " (locked)" if design == "locked" else ""
     lines.append(f"**Design:** {design}{lock}")
     lines.append(f"**Status:** {epic.get('status', 'active')}")
+    if epic.get("done_when"):
+        lines.append(f"Done when: {epic['done_when']}")
 
     done = stats["done"] + stats["archived"]
     if stats["total"]:
@@ -5953,6 +5959,10 @@ def backlog_epic_status(epic_id: str) -> str:
         f"In Progress: {stats['in-progress']} | "
         f"In Review: {stats['in-review']} | Todo: {stats['todo']} | Blocked: {stats['blocked']}"
     )
+    if stats["closeable"]:
+        lines.append(
+            f"\n⚑ CLOSEABLE — all {stats['total']} tasks done; archive via backlog_archive_epic"
+        )
 
     glyph = {"done": "█", "in-progress": "▨", "blocked": "✗", "todo": "□"}
     lines.append("\n**Components:**")
@@ -6717,7 +6727,10 @@ def _load_epic_full(epic_id: str) -> dict | None:
     out.setdefault("docs", {})
     out.setdefault("components", {})
     out.setdefault("design_status", "exploring")
+    out.setdefault("done_when", "")
+    out.setdefault("area", None)
     out["stats"] = _epic_stats(data, epic_id)
+    out["closeable"] = out["stats"]["closeable"]
     out["component_rollup"] = _component_rollup(data, epic_id)
 
     attention = []

@@ -55,3 +55,40 @@ def test_load_epic_full_attention_lists_blocked(tm_epic_phase):
     out = _load_epic_full("test-epic")
     assert any(a["id"] == "B-1" and a["blocked"] and "CDN creds" in a["why"]
                for a in out["attention"])
+
+
+def test_load_epic_full_carries_done_when_and_area(tm_epic_phase):
+    out = _load_epic_full("test-epic")
+    assert out["done_when"] == "all test tasks complete"
+    assert out["area"] is None
+
+
+def test_load_epic_full_closeable_when_all_done(tm_epic_phase):
+    backlog_add_task(epic="test-epic", task_id="CL-1", title="one", phase="dev")
+    _set_status("CL-1", "done")
+    out = _load_epic_full("test-epic")
+    assert out["closeable"] is True
+
+
+def test_load_epic_full_not_closeable_with_open_tasks(tm_epic_phase):
+    backlog_add_task(epic="test-epic", task_id="OP-1", title="one", phase="dev")
+    _set_status("OP-1", "done")
+    backlog_add_task(epic="test-epic", task_id="OP-2", title="two", phase="dev")
+    out = _load_epic_full("test-epic")
+    assert out["closeable"] is False
+
+
+def test_load_epic_full_zero_tasks_not_closeable(tm_epic_phase):
+    out = _load_epic_full("test-epic")
+    assert out["closeable"] is False
+
+
+def test_load_epic_full_closeable_counts_archived_as_done(tm_epic_phase):
+    backlog_add_task(epic="test-epic", task_id="ACL-1", title="kept", phase="dev")
+    _set_status("ACL-1", "done")
+    backlog_add_task(epic="test-epic", task_id="ACL-2", title="closed", phase="dev")
+    _set_status("ACL-2", "done")
+    from taskmaster.backlog_server import backlog_archive_task
+    backlog_archive_task("ACL-2", reason="done")
+    out = _load_epic_full("test-epic")
+    assert out["closeable"] is True
