@@ -38,6 +38,10 @@ If the queue is empty and there are no permanent failures, omit this line entire
 
 Call `backlog_note_list()`. If notes exist, render them under a **Your desk** heading in the briefing — pinned first, one line each (author · age · first line). These are the user's situational notes-to-self: treat as orientation context for "what was on my mind", alongside (not replacing) the last handover. Never archive, edit, or act on a note without the user asking.
 
+### Step 3d — Legacy lessons notice (only if `.taskmaster/lessons/` has `L-*.md` files)
+
+If the project's `.taskmaster/lessons/` directory contains any `L-*.md` files, add a single quiet line to the briefing noting legacy lessons exist and that `taskmaster:migrate-lessons` converts them. Omit entirely if the directory is empty or absent.
+
 ### Step 4 — Briefing
 
 Present in order:
