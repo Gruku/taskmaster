@@ -12,6 +12,34 @@ indicate schema breaks or removed surfaces.
 
 ---
 
+## 3.23.0 — standalone repo extraction (Phase 2a) (2026-07-08)
+
+Taskmaster now lives in its own canonical repo (extracted from
+`claude-tools/plugins/taskmaster` via `git filter-repo`, full history
+preserved). **No MCP surface changes** — `backlog_*` tool names and the
+`.taskmaster/` per-project format are unchanged.
+
+### Changed
+
+- **Python core moved into the `taskmaster/` package** (`taskmaster_v3`,
+  `backlog_server`, `project`, `blast_radius`, `integrations/`) with absolute
+  imports; the repo is now pip-installable (`pyproject.toml`).
+- **Root `backlog_server.py` is an entry shim** — `.mcp.json` registration
+  mechanics (`uv run ${CLAUDE_PLUGIN_ROOT}/backlog_server.py`, PEP 723 script
+  mode) are unchanged.
+- **`merge_gate_decide.py` / `merge_recorder_stamp.py` moved to `hooks/`**
+  (tier-3 subprocess scripts owned by the hooks).
+- Plugin-root resolution (`SCRIPT_DIR`, `_PLUGIN_DIR`, viewer static roots)
+  now points at the repo root, one level above the package.
+
+### Added
+
+- `pyproject.toml` (pip consumers: Hermes, The Fold, Codex-side tooling).
+- `docs/capability-matrix.md` — per-assistant tier coverage (Phase 3/4 fill it in).
+- `docs/specs/` + `docs/plans/` — design spec and phase plans travel with the repo.
+
+---
+
 ## 3.22.0
 
 Multi-assistant generalization, Phase 1 (spec: 2026-07-06-taskmaster-multi-assistant-design.md).

@@ -1,0 +1,7 @@
+Metadata-Version: 2.4
+Name: taskmaster
+Version: 3.23.0
+Summary: Task/backlog management MCP server with narrative continuity (handovers, lessons, issues, decisions, recap)
+Requires-Python: >=3.11
+Requires-Dist: fastmcp
+Requires-Dist: pyyaml
