@@ -533,6 +533,15 @@ def _epic_names(data: dict) -> str:
     return ", ".join(e["id"] for e in data["epics"])
 
 
+def _validate_area_ref(bp: Path, area: str) -> str | None:
+    """Return an error string if `area` doesn't match a known Area id, else None."""
+    from taskmaster.taskmaster_v3 import list_area_ids as _list_area_ids
+    known_areas = _list_area_ids(bp)
+    if area not in known_areas:
+        return f"Error: unknown area `{area}`. Valid: {', '.join(known_areas) or '(none defined)'}"
+    return None
+
+
 def _days_since(date_str: str | None) -> str:
     if not date_str:
         return "started date unknown"
@@ -1022,6 +1031,7 @@ def backlog_list_tasks(
     status: str = "",
     priority: str = "",
     phase: str = "",
+    area: str = "",
     verbose: bool = False,
     limit: int = 50,
 ) -> str:
@@ -1033,6 +1043,7 @@ def backlog_list_tasks(
         status: Filter by status: todo, in-progress, in-review, done, blocked
         priority: Filter by priority: critical, high, medium, low
         phase: Filter by phase ID
+        area: Filter by area ID
         verbose: If True, include heavy fields (notes) per task entry. Slim
             (default) shows id, title, tldr, priority, epic, and status only.
         limit: Max rows returned (default 50). 0 = no cap.
@@ -1064,6 +1075,8 @@ def backlog_list_tasks(
                 continue
             if phase and t.get("phase") != phase:
                 continue
+            if area and t.get("area") != area:
+                continue
             pri = t.get("priority", "medium")
             entry = f"`{t['id']}` — {t['title']} ({pri}, {ep['id']}, {t.get('status', 'todo')})"
             results.append((
@@ -1084,6 +1097,8 @@ def backlog_list_tasks(
             filters.append(f"priority={priority}")
         if phase:
             filters.append(f"phase={phase}")
+        if area:
+            filters.append(f"area={area}")
         return f"No tasks found matching: {', '.join(filters) if filters else 'any'}"
 
     results.sort(key=lambda x: (x[0], x[1], x[2]))
@@ -3956,7 +3971,7 @@ def backlog_add_task(
     stage: int | None = None, estimate: str = "", phase: str = "",
     anchors: str = "",
     tldr: str = "", next_step: str = "", task_id: str = "",
-    bundle: str = "",
+    bundle: str = "", area: str = "",
 ) -> str:
     """Create a new task under an epic. Auto-generates the task ID unless task_id is supplied.
 
@@ -3976,10 +3991,17 @@ def backlog_add_task(
         next_step: Concrete immediate action to take on this task.
         task_id: Override the auto-generated task ID. Must be unique. Defaults to {epic}-{NNN}.
         bundle: Optional shared execution slug grouping related tasks (lowercase kebab, e.g. "asset-ux").
+        area: Optional area id (e.g., "desktop-app") this task lives under. Must
+            match an existing Area from `backlog_area_list`; leave empty if unset.
     """
     priority = _normalize_priority(priority)
     if priority not in VALID_PRIORITIES:
         return f"Error: invalid priority `{priority}`. Valid: {', '.join(PRIORITY_NAMES)}"
+
+    if area:
+        err = _validate_area_ref(_backlog_path(), area)
+        if err:
+            return err
 
     data = _load()
     epic_obj = _find_epic(data, epic)
@@ -4056,6 +4078,8 @@ def backlog_add_task(
         if conflict:
             return f"Error: bundle `{bundle}` sub_repo mismatch with member `{conflict}` (one worktree = one repo)."
         new_task["bundle"] = bundle
+    if area:
+        new_task["area"] = area
 
     # Parse docs if provided: "plan:path;spec:path"
     if docs:
@@ -4804,7 +4828,7 @@ def _strictest_lane(lanes: list) -> str:
     return max(present, key=lambda l: order[l])
 
 
-ALLOWED_FIELDS = {"title", "status", "priority", "notes", "branch", "worktree", "blockers", "docs", "depends_on", "sub_repo", "stage", "estimate", "locked_by", "review_instructions", "phase", "anchors", "blast_radius_depth", "patchnote", "release", "tldr", "next_step", "component", "design_change", "lane", "bundle"}
+ALLOWED_FIELDS = {"title", "status", "priority", "notes", "branch", "worktree", "blockers", "docs", "depends_on", "sub_repo", "stage", "estimate", "locked_by", "review_instructions", "phase", "anchors", "blast_radius_depth", "patchnote", "release", "tldr", "next_step", "component", "design_change", "lane", "bundle", "area"}
 VALID_STATUSES = {"todo", "in-progress", "in-review", "done", "archived", "blocked"}
 # Spec A Task 11: forward-transition table enforced on lane'd tasks via
 # backlog_update_task. Laneless tasks are exempt (old permissive behavior).
@@ -4848,6 +4872,7 @@ def backlog_update_task(
             - anchors: comma-separated glob patterns/URLs, or "" to clear
             - patchnote: 1-2 sentence user-facing release-note line, or "" to clear
             - release: release bucket this task ships in (e.g., "pre-alpha", "alpha-1.0"), or "" to clear
+            - area: area id (must match an existing Area from `backlog_area_list`), or "" to clear
         tldr: One-sentence essence of the task (keyword style only).
         next_step: Concrete immediate action to take on this task (keyword style only).
     """
@@ -5026,6 +5051,14 @@ def backlog_update_task(
             if conflict:
                 return f"Error: bundle `{value}` sub_repo mismatch with member `{conflict}` (one worktree = one repo)."
             task["bundle"] = value
+    elif field == "area":
+        if value == "" or value.lower() == "none":
+            task.pop("area", None)
+        else:
+            err = _validate_area_ref(_backlog_path(), value)
+            if err:
+                return err
+            task["area"] = value
     else:
         task[field] = value
 
@@ -5448,11 +5481,9 @@ def backlog_update_epic(epic_id: str, field: str, value: str) -> str:
 
     if field == "area":
         if value:
-            from taskmaster.taskmaster_v3 import list_area_ids as _list_area_ids
-            bp = _backlog_path()
-            known_areas = _list_area_ids(bp)
-            if value not in known_areas:
-                return f"Error: unknown area `{value}`. Valid: {', '.join(known_areas) or '(none defined)'}"
+            err = _validate_area_ref(_backlog_path(), value)
+            if err:
+                return err
 
     old_value = epic.get(field, "")
     epic[field] = value
@@ -5527,12 +5558,10 @@ def backlog_add_epic(
     if not epic_id or not all(c.isalnum() or c == "-" for c in epic_id) or epic_id != epic_id.lower():
         return f"Error: epic_id must be lowercase kebab-case (e.g., 'auth-system'), got `{epic_id}`"
 
-    bp = _backlog_path()
     if area:
-        from taskmaster.taskmaster_v3 import list_area_ids as _list_area_ids
-        known_areas = _list_area_ids(bp)
-        if area not in known_areas:
-            return f"Error: unknown area `{area}`. Valid: {', '.join(known_areas) or '(none defined)'}"
+        err = _validate_area_ref(_backlog_path(), area)
+        if err:
+            return err
 
     data = _load()
 
@@ -6154,6 +6183,15 @@ def backlog_batch_update(operations: str) -> str:
                     continue
                 task["lane"] = value
                 task["gate_state"] = _compute_gate_state(task)
+            elif field == "area":
+                if value == "" or value.lower() == "none":
+                    task.pop("area", None)
+                else:
+                    err = _validate_area_ref(_backlog_path(), value)
+                    if err:
+                        errors.append(f"`{task_id}`: {err}")
+                        continue
+                    task["area"] = value
             else:
                 task[field] = value
             results.append(f"`{task_id}`.{field} → {value}")

@@ -117,7 +117,7 @@ SLIM_FIELDS: dict[str, tuple[str, ...]] = {
     "task": (
         "id", "title", "tldr", "next_step", "status", "priority",
         "estimate", "phase", "epic", "bundle", "component", "design_change",
-        "lane", "gate_state",
+        "lane", "gate_state", "area",
         "skip_merge_gate", "merge_gate_freshness", "merge_gate_state",
         "depends_on", "related_issues",
         "started", "completed", "branch", "worktree",
@@ -4413,6 +4413,10 @@ def validate_task_write(task_id: str, patch: dict, backlog_path: Path | None = N
     # Epic must exist.
     if "epic" in patch and patch["epic"] and patch["epic"] not in epic_ids:
         errors["epic"] = f"unknown epic: {patch['epic']}"
+
+    # Area must exist (areas live in files, not `data`).
+    if "area" in patch and patch["area"] and patch["area"] not in list_area_ids(bp):
+        errors["area"] = f"unknown area: {patch['area']}"
 
     # Phase must exist if set.
     if "phase" in patch and patch["phase"] and patch["phase"] not in phase_ids:
