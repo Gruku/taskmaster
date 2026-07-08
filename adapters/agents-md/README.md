@@ -17,3 +17,14 @@ answer. Per-tool verification status is tracked in
 
 The single source of workflow truth stays `{{TASKMASTER_HOME}}/playbooks/`;
 this fragment only routes to it.
+
+## Gotchas (verified 2026-07-08)
+
+- **opencode (1.17.14):** use the absolute path to `uv` in `opencode.json`'s
+  `mcp.<name>.command`. Playbooks live outside the project dir, so
+  non-interactive `opencode run` auto-rejects the read — add
+  `"permission": {"external_directory": "allow"}` to `opencode.json`
+  (interactive sessions just prompt). AGENTS.md routing works natively:
+  opencode reads the fragment and follows the playbook table unprompted.
+- **Cursor:** add the server to `~/.cursor/mcp.json` (`mcpServers` map,
+  same absolute-uv-path rule); verification requires the GUI.

@@ -12,6 +12,18 @@ indicate schema breaks or removed surfaces.
 
 ---
 
+## 3.24.1 — Phase 4 editor verification (docs) (2026-07-08)
+
+### Changed
+
+- Capability matrix: **opencode 1.17.14 verified** (MCP via `opencode.json`
+  + native AGENTS.md routing to playbooks); Cursor configured, GUI verify
+  pending; Zed untested (not installed locally).
+- agents-md adapter README: opencode/Cursor install gotchas (absolute uv
+  path, `external_directory` permission for non-interactive runs).
+
+---
+
 ## 3.24.0 — codex + agents-md adapters (Phase 3) (2026-07-08)
 
 ### Added
