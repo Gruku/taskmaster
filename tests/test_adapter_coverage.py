@@ -114,3 +114,70 @@ def test_strict_requires_all_skills_converted(tmp_path):
     r = run(tmp_path, "--strict")
     assert r.returncode == 1
     assert "unconverted" in r.stdout
+
+
+# --- adapter (codex + agents-md) coverage ----------------------------------
+
+def make_adapters(root: Path, name: str = "demo"):
+    """Minimal healthy adapters for a single playbook `name`."""
+    prompts = root / "adapters" / "codex" / "prompts"
+    prompts.mkdir(parents=True)
+    (prompts / f"{name}.md").write_text(
+        f"Read `{{{{TASKMASTER_HOME}}}}/playbooks/{name}/playbook.md` and execute it.\n",
+        encoding="utf-8")
+    agents = root / "adapters" / "agents-md"
+    agents.mkdir(parents=True)
+    (agents / "AGENTS.md").write_text(
+        f"| intent | `playbooks/{name}/playbook.md` |\n", encoding="utf-8")
+
+
+def test_adapters_absent_entirely_still_passes(tmp_path):
+    # repos without adapters/ (pre-phase-3 layouts) stay valid
+    make_pair(tmp_path)
+    assert run(tmp_path).returncode == 0
+
+
+def test_healthy_adapters_pass(tmp_path):
+    make_pair(tmp_path)
+    make_adapters(tmp_path)
+    r = run(tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_missing_codex_prompt_fails(tmp_path):
+    make_pair(tmp_path)
+    make_adapters(tmp_path)
+    (tmp_path / "adapters" / "codex" / "prompts" / "demo.md").unlink()
+    r = run(tmp_path)
+    assert r.returncode == 1
+    assert "no codex prompt wrapper" in r.stdout
+
+
+def test_codex_prompt_missing_pointer_fails(tmp_path):
+    make_pair(tmp_path)
+    make_adapters(tmp_path)
+    (tmp_path / "adapters" / "codex" / "prompts" / "demo.md").write_text(
+        "Do taskmaster things.\n", encoding="utf-8")
+    r = run(tmp_path)
+    assert r.returncode == 1
+    assert "missing pointer" in r.stdout
+
+
+def test_agents_md_missing_reference_fails(tmp_path):
+    make_pair(tmp_path)
+    make_adapters(tmp_path)
+    (tmp_path / "adapters" / "agents-md" / "AGENTS.md").write_text(
+        "# Rules with no table\n", encoding="utf-8")
+    r = run(tmp_path)
+    assert r.returncode == 1
+    assert "missing reference" in r.stdout
+
+
+def test_banned_token_in_adapter_fails(tmp_path):
+    make_pair(tmp_path)
+    make_adapters(tmp_path)
+    (tmp_path / "adapters" / "codex" / "AGENTS.md").write_text(
+        "Use CLAUDE_PLUGIN_ROOT to find things.\n", encoding="utf-8")
+    r = run(tmp_path)
+    assert r.returncode == 1
+    assert "CLAUDE_PLUGIN_ROOT" in r.stdout

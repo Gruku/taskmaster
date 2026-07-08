@@ -19,23 +19,23 @@ Playbook root: `{{TASKMASTER_HOME}}/playbooks/`
 
 | Intent | Playbook |
 |---|---|
-| Any task-related request you can't route precisely | `taskmaster/playbook.md` (router) |
-| New conversation, "what should I work on", "orient me" | `start-session/playbook.md` |
-| "Pick task X", names a task ID, "continue where we left off" | `pick-task/playbook.md` |
-| "Is this ready?", "check my work", "review gate" | `review-gate/playbook.md` |
-| "Review this spec", "challenge this design" | `spec-review/playbook.md` |
-| "Review this plan", "is this plan solid" | `plan-review/playbook.md` |
-| "End session", "wrap up", "mark task done" | `end-session/playbook.md` |
-| "Write a handover", "for tomorrow", context handoff | `handover/playbook.md` |
-| "Log a bug", "this is a bug", one-off defect | `bug/playbook.md` |
-| "File an issue" with recurring/systemic evidence | `issue/playbook.md` |
-| "Remember this", "save as a lesson" | `lesson/playbook.md` |
-| "Save this as an idea" | `add-idea/playbook.md` |
-| About to present ≥2 mutually exclusive options | `decision/playbook.md` |
-| "Set up taskmaster", "initialize backlog" | `init-taskmaster/playbook.md` |
-| "Upgrade to v3", "migrate to v3" | `migrate-v3/playbook.md` |
-| "Check TODOs", "todo audit" | `check-todos/playbook.md` |
-| "Set up linear", "link to linear" | `linear/playbook.md` |
+| Any task-related request you can't route precisely | `playbooks/taskmaster/playbook.md` (router) |
+| New conversation, "what should I work on", "orient me" | `playbooks/start-session/playbook.md` |
+| "Pick task X", names a task ID, "continue where we left off" | `playbooks/pick-task/playbook.md` |
+| "Is this ready?", "check my work", "review gate" | `playbooks/review-gate/playbook.md` |
+| "Review this spec", "challenge this design" | `playbooks/spec-review/playbook.md` |
+| "Review this plan", "is this plan solid" | `playbooks/plan-review/playbook.md` |
+| "End session", "wrap up", "mark task done" | `playbooks/end-session/playbook.md` |
+| "Write a handover", "for tomorrow", context handoff | `playbooks/handover/playbook.md` |
+| "Log a bug", "this is a bug", one-off defect | `playbooks/bug/playbook.md` |
+| "File an issue" with recurring/systemic evidence | `playbooks/issue/playbook.md` |
+| "Remember this", "save as a lesson" | `playbooks/lesson/playbook.md` |
+| "Save this as an idea" | `playbooks/add-idea/playbook.md` |
+| About to present ≥2 mutually exclusive options | `playbooks/decision/playbook.md` |
+| "Set up taskmaster", "initialize backlog" | `playbooks/init-taskmaster/playbook.md` |
+| "Upgrade to v3", "migrate to v3" | `playbooks/migrate-v3/playbook.md` |
+| "Check TODOs", "todo audit" | `playbooks/check-todos/playbook.md` |
+| "Set up linear", "link to linear" | `playbooks/linear/playbook.md` |
 | Status, search, recap, snapshot | direct `backlog_*` tool call |
 
 Each playbook is also installable as a slash prompt (`/start-session`, …) —
