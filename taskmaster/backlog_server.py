@@ -1768,7 +1768,7 @@ def backlog_init(project_name: str = "", location: str = "tracked", schema_versi
         initial_data["handovers"] = []
         initial_data["issues"] = []
         # Pre-create directories so first-run tooling has somewhere to write.
-        for sub in ("tasks", "handovers", "issues", "snapshots", "auto"):
+        for sub in ("tasks", "handovers", "issues", "snapshots", "auto", "areas"):
             (backlog_abs.parent / sub).mkdir(parents=True, exist_ok=True)
 
     backlog_abs.write_text(
@@ -3802,6 +3802,119 @@ def backlog_note_archive(note_id: str) -> str:
     except FileNotFoundError:
         return f"Note not found: {note_id}"
     return f"Note archived: {note_id}"
+
+
+# ── Areas ────────────────────────────────────────────────────────
+
+ALLOWED_AREA_FIELDS = {"name", "description", "anchors"}
+
+
+@mcp.tool()
+def backlog_area_create(
+    area_id: str, name: str, description: str = "", anchors: list[str] | None = None
+) -> str:
+    """Create a new Area — a long-lived subsystem/workstream with NO status
+    lifecycle (e.g. "desktop-app", "viewer", "mcp-server").
+
+    Areas group epics and tasks by where they live in the codebase rather
+    than by when they finish — an area never completes or archives. If an
+    epic can say when it's done, it's an epic; if it can't, it's an area.
+    """
+    bp = _backlog_path()
+    if not bp.exists():
+        return f"Error: no backlog found at {bp}. Run `backlog_init` first."
+    from taskmaster.taskmaster_v3 import write_area as _write_area
+    fm = {
+        "id": area_id,
+        "name": name,
+        "description": description,
+        "anchors": list(anchors) if anchors else [],
+        "created": _now(),
+    }
+    try:
+        target = _write_area(bp, fm, "")
+    except ValueError as exc:
+        return f"Error: {exc}"
+    try:
+        rel = target.relative_to(ROOT)
+    except ValueError:
+        rel = target
+    return f"Area created: {area_id} — {name}\nFile: {rel}"
+
+
+@mcp.tool()
+def backlog_area_list() -> str:
+    """List all Areas — long-lived subsystems with no status lifecycle.
+
+    Returns one line per area: id, name, anchor count, first line of
+    description."""
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    from taskmaster.taskmaster_v3 import list_areas as _list_areas
+    areas = _list_areas(bp)
+    if not areas:
+        return "No areas defined."
+    lines = []
+    for a in areas:
+        desc = (a.get("description") or "").strip().splitlines()[0] if a.get("description") else ""
+        anchors = a.get("anchors") or []
+        suffix = f": {desc}" if desc else ""
+        lines.append(f"- {a['id']} — {a.get('name', '')} ({len(anchors)} anchors){suffix}")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def backlog_area_get(area_id: str) -> str:
+    """Read one Area in full (frontmatter + body)."""
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    from taskmaster.taskmaster_v3 import read_area as _read_area
+    try:
+        fm, body = _read_area(bp, area_id)
+    except FileNotFoundError:
+        return f"Area not found: {area_id}"
+    fm_lines = [f"  {k}: {v}" for k, v in fm.items()]
+    out = "---\n" + "\n".join(fm_lines) + "\n---"
+    if body:
+        out += "\n" + body
+    return out
+
+
+@mcp.tool()
+def backlog_area_update(area_id: str, field: str, value: str) -> str:
+    """Update a single field on an Area.
+
+    Args:
+        area_id: The area ID (e.g., "desktop-app", "viewer")
+        field: Field to update — one of: name, description, anchors
+        value: New value. For anchors, pass a JSON array of path/glob
+            strings (e.g., '["viewer/**", "docs/viewer/**"]').
+    """
+    if field not in ALLOWED_AREA_FIELDS:
+        return f"Error: field `{field}` not allowed. Allowed: {', '.join(sorted(ALLOWED_AREA_FIELDS))}"
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    from taskmaster.taskmaster_v3 import update_area as _update_area
+    if field == "anchors":
+        try:
+            parsed = json.loads(value)
+        except (ValueError, TypeError):
+            return "Error: anchors value must be a JSON array of strings"
+        if not isinstance(parsed, list):
+            return "Error: anchors value must be a JSON array of strings"
+        updates: dict = {"anchors": parsed}
+    else:
+        updates = {field: value}
+    try:
+        _update_area(bp, area_id, updates)
+    except FileNotFoundError:
+        return f"Area not found: {area_id}"
+    except ValueError as exc:
+        return f"Error: {exc}"
+    return f"Area updated: {area_id} — field `{field}`"
 
 
 @mcp.tool()
