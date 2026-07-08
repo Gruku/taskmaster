@@ -43,6 +43,12 @@ Playbook root: `{{TASKMASTER_HOME}}/playbooks/`
 | "Set up linear", "link to linear" | `playbooks/linear/playbook.md` |
 | Status, search, recap, snapshot | direct `backlog_*` tool call |
 
+**Epics vs. areas.** Epics are finite — `backlog_add_epic` requires `done_when`
+(a workstream that can't say when it's done is an area, not an epic). Areas
+are long-lived subsystems with no status lifecycle: `backlog_area_create` /
+`backlog_area_get` / `backlog_area_list` / `backlog_area_update`. Tasks and
+epics can both carry an optional `area`.
+
 **Gate discipline (advisory).** These tools have no taskmaster enforcement
 hooks (that layer is Claude-Code-class only). Follow the discipline the
 playbooks describe anyway: pick a task before implementing, run the

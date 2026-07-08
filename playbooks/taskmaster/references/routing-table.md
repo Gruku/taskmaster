@@ -15,7 +15,8 @@ The SKILL.md body carries only the ~15 highest-frequency rows.
 | "Is this ready?", "run the review", "check my work", "I think this is done", "quality check" | `taskmaster:review-gate` |
 | "End session", "I'm done", "wrap up", "log this", "mark task done", "save progress" | `taskmaster:end-session` |
 | "Set up taskmaster", "initialize", "create backlog", first time in project without backlog.yaml | `taskmaster:init-taskmaster` |
-| "Add a task", "create a task for X", "plan out this epic" | `backlog_add_task` / `backlog_add_epic` |
+| "Add a task", "create a task for X", "plan out this epic" | `backlog_add_task` / `backlog_add_epic` (requires `done_when` — a workstream that never finishes is an area, not an epic) |
+| "Create an area", "define a subsystem", "what areas exist", "rename this area" | `backlog_area_create` / `backlog_area_list` / `backlog_area_get` / `backlog_area_update` |
 | "Show task X", "task details", "what's the status of X" | `backlog_get_task` / `backlog_status` |
 | "Search for X", "find tasks about X" | `backlog_search` |
 | "Create a phase", "plan the next phase", "set up phases" | `backlog_add_phase` |

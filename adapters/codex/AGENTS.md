@@ -41,6 +41,12 @@ Playbook root: `{{TASKMASTER_HOME}}/playbooks/`
 Each playbook is also installable as a slash prompt (`/start-session`, …) —
 see the adapter README.
 
+**Epics vs. areas.** Epics are finite — `backlog_add_epic` requires `done_when`
+(a workstream that can't say when it's done is an area, not an epic). Areas
+are long-lived subsystems with no status lifecycle: `backlog_area_create` /
+`backlog_area_get` / `backlog_area_list` / `backlog_area_update`. Tasks and
+epics can both carry an optional `area`.
+
 **Gate discipline (advisory).** Codex has no enforcement hooks (that layer is
 Claude-Code-class only). Follow the discipline the playbooks describe anyway:
 pick a task before implementing, run the review-gate before declaring work
