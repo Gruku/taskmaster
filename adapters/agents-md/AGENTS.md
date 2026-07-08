@@ -25,8 +25,8 @@ Playbook root: `{{TASKMASTER_HOME}}/playbooks/`
 | Intent | Playbook |
 |---|---|
 | Any task-related request you can't route precisely | `playbooks/taskmaster/playbook.md` (router) |
-| New conversation, "what should I work on", "orient me" | `playbooks/start-session/playbook.md` |
-| "Pick task X", names a task ID, "continue where we left off" | `playbooks/pick-task/playbook.md` |
+| New conversation, "orient me", "show the backlog" | `playbooks/start-session/playbook.md` |
+| "Pick task X", names a task ID, "what should I work on", "continue where we left off" | `playbooks/pick-task/playbook.md` |
 | "Is this ready?", "check my work", "review gate" | `playbooks/review-gate/playbook.md` |
 | "Review this spec", "challenge this design" | `playbooks/spec-review/playbook.md` |
 | "Review this plan", "is this plan solid" | `playbooks/plan-review/playbook.md` |
