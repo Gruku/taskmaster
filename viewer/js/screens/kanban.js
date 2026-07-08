@@ -21,6 +21,7 @@ export const meta = { title: 'Kanban', icon: '▦', sidebarKey: 'kanban' };
 const DEFAULT_FILTERS = {
   priorities: [],
   epics: [],
+  areas: [],
   phase: '__all__',
   group_by: 'status',
   sort: { by: 'priority', dir: 'desc' },
@@ -108,7 +109,7 @@ export async function mount(root, { store, api, prefs }) {
   // Group dropdown
   const group = document.createElement('select');
   group.className = 'kanban-select';
-  for (const opt of [['status','Group: Status'],['phase','Group: Phase'],['epic','Group: Epic']]) {
+  for (const opt of [['status','Group: Status'],['phase','Group: Phase'],['epic','Group: Epic'],['area','Group: Area']]) {
     const o = document.createElement('option');
     o.value = opt[0]; o.textContent = opt[1];
     if (state.filters.group_by === opt[0]) o.selected = true;
@@ -250,6 +251,7 @@ export async function mount(root, { store, api, prefs }) {
     const filterCount =
       state.filters.priorities.length +
       state.filters.epics.length +
+      (state.filters.areas?.length || 0) +
       (state.filters.phase && state.filters.phase !== '__all__' ? 1 : 0) +
       (state.filters.search ? 1 : 0);
 
@@ -314,7 +316,7 @@ export async function mount(root, { store, api, prefs }) {
     boardGrid.replaceChildren();
 
     const hasFilters = !!(state.filters.priorities?.length || state.filters.epics?.length ||
-      state.filters.search || (state.filters.phase && state.filters.phase !== '__all__'));
+      state.filters.areas?.length || state.filters.search || (state.filters.phase && state.filters.phase !== '__all__'));
     // When the whole board is empty (all tasks filtered out), show count context
     // only in the first non-collapsed column so the message appears once.
     const allEmpty = filtered.length === 0 && hasFilters;

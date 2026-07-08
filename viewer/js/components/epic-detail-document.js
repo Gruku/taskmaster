@@ -5,7 +5,7 @@
 import { mountMarkdown } from './markdown.js';
 import { assignEpicColors, epicCssVar } from '../lib/epics.js';
 import {
-  designBadge, progressPercent,
+  designBadge, progressPercent, closeableBadge,
 } from '../lib/epic-format.js';
 import { mountComponentDiagram } from './component-diagram.js';
 
@@ -48,8 +48,11 @@ export function mountEpicDetail(container, { epic, store, onNavigate, onComponen
       <span class="ed-id">${esc(epic.id)}</span>
       <span class="ed-ds ed-ds--${badge.cls}">${badge.locked ? '🔒 ' : ''}${esc(badge.label)}</span>
       <span class="ed-epic-status">${esc(epic.status || 'active')}</span>
+      ${closeableBadge(epic.stats)}
+      ${epic.area ? `<span class="ed-area">${esc(epic.area)}</span>` : ''}
     </div>
     <h1 class="ed-title">${esc(epic.name || epic.id)}</h1>
+    ${epic.done_when ? `<p class="ed-done-when"><strong>Done when:</strong> ${esc(epic.done_when)}</p>` : ''}
     <div class="ed-progress">
       <span class="ed-progress__bar"><span style="width:${pct}%"></span></span>
       <span class="ed-progress__label">${(epic.stats?.done || 0)}/${(epic.stats?.total || 0)} done · ${pct}%</span>

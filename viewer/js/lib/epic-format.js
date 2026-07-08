@@ -26,6 +26,17 @@ export function progressPercent(stats) {
   return Math.round((done / total) * 100);
 }
 
+// Closeable = every task in the epic is done or archived. Derived client-side
+// from stats (same formula as progressPercent) so it's testable without a
+// server round-trip; never stored, never auto-archives (see epic B task 4).
+export function closeableBadge(stats) {
+  const total = stats?.total || 0;
+  if (!total) return '';
+  const done = (stats?.done || 0) + (stats?.archived || 0);
+  if (done !== total) return '';
+  return `<span class="epic-closeable" title="All tasks done or archived">Closeable</span>`;
+}
+
 export function tasksForComponent(tasks, key) {
   const list = Array.isArray(tasks) ? tasks : [];
   if (key === '_unassigned') return list.filter(t => !t.component);
