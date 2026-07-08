@@ -30,7 +30,7 @@ Users say "issue" colloquially when they mean "bug". The router treats the word 
 | "Modal close button is 1px off" | Bug | Cosmetic, single-location, no recurrence. |
 | "Login fails for users on Safari 17 only" | Bug | Single-platform, workaround exists, no recurrence claim. |
 | "Migration drops all rows when run on stage" | Issue | Outstanding — concrete data-loss blast radius. |
-| "Path mismatch broke handovers AND lessons AND issues — same root cause" | Issue | Systemic — class-of-defect, ≥3 components. |
+| "Path mismatch broke handovers AND ideas AND issues — same root cause" | Issue | Systemic — class-of-defect, ≥3 components. |
 | "Tool-call orphaning happened in T-001, T-007, and now T-018" | Issue | Recurring — ≥2 prior occurrences cited concretely. |
 
 ## Anti-example — `ISS-015`

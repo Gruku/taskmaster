@@ -38,7 +38,6 @@ The migration is idempotent and preserves all existing data.
 
 If v3 was chosen, tell the user what they just unlocked:
 - Handovers -- taskmaster:handover skill captures session continuity.
-- Lessons -- taskmaster:lesson skill records patterns, anti-patterns, and gotchas.
 - Issues -- taskmaster:issue skill for bug tracking separate from work tasks.
 - Recap -- backlog_recap shows what changed in the project since the last snapshot.
 

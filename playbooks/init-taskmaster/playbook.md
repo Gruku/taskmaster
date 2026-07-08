@@ -14,7 +14,7 @@ Ask the user, in one round if your tool supports multi-question prompts (use you
 
 1. "Which schema version?" — options:
    - "v2 (Default — stable)": Single backlog.yaml file. Simple, proven, all existing tools work.
-   - "v3 (Narrative continuity — opt-in)": Slim index + per-task files. Adds handovers, lessons, issues, and recap.
+   - "v3 (Narrative continuity — opt-in)": Slim index + per-task files. Adds handovers, issues, and recap.
 2. "How do you want to start?" — options:
    - "Analyze project (Recommended)": Scan for TODOs, FIXMEs, README plans, and existing structure to suggest an initial backlog.
    - "Clean start": Empty backlog — you'll add epics and tasks as you go.
@@ -33,7 +33,7 @@ AskUserQuestion({
       multiSelect: false,
       options: [
         { label: "v2 (Default — stable)", description: "Single backlog.yaml file. Simple, proven, all existing tools work." },
-        { label: "v3 (Narrative continuity — opt-in)", description: "Slim index + per-task files. Adds handovers, lessons, issues, and recap." }
+        { label: "v3 (Narrative continuity — opt-in)", description: "Slim index + per-task files. Adds handovers, issues, and recap." }
       ]
     },
     {

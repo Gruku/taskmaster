@@ -14,8 +14,6 @@ Check schema: `backlog_status` first line shows `Schema: v<N>`.
 
 **v3-pre-1: Snapshot.** `backlog_snapshot(quiet=true)`.
 
-**v3-pre-2a: Lesson candidate sweep.** Auto-offer when: `<lesson-candidate>` tags visible, or `backlog_lesson_candidates_list` returns entries, or 2+ feedback-memory entries for this project. Full flow: `references/v3-pre-steps.md`.
-
 **v3-pre-1b: Decision sweep** (before handover write). Call `backlog_decision_list(status="open", task_id=<current>)`. For each open decision: ask to carry forward / resolve now / drop. The resulting open / resolved sets are folded into the handover **body** under "Open decisions" / "Resolved this session" sections — they are not separate kwargs to `backlog_handover_create`. Full flow: `references/v3-pre-steps.md`.
 
 **v3-pre-2: Handover auto-write.** Write automatically (no prompt) when: session >60 turns, context >200k tokens, task still in-flight, or user said "for tomorrow" / "context handoff". Infer `session_kind` and invoke `taskmaster:handover`. Full flow: `references/v3-pre-steps.md`.
@@ -74,7 +72,7 @@ Note: `backlog_complete_task` enforces this server-side too — the skill just g
 - **Single task:** Offer `git worktree remove .worktrees/{task_id}`.
 - **Bundle:** Offer `git worktree remove .worktrees/{slug}` **only when all members are `done` or descoped** — check `_get_session_bundle()` membership first. Never use `--force` or `rm -rf` (guard-hooks blocks `--force` by default).
 
-**8. Commit tracking files.** Stage backlog.yaml, PROGRESS.md, .taskmaster/handovers/, issues/, lessons/, tasks/. Commit with `chore: log session - {topic}`.
+**8. Commit tracking files.** Stage backlog.yaml, PROGRESS.md, .taskmaster/handovers/, issues/, tasks/. Commit with `chore: log session - {topic}`.
 
 **9. Confirm.** "Session logged. Task is now `{target_status}`."
 
@@ -84,6 +82,6 @@ Note: `backlog_complete_task` enforces this server-side too — the skill just g
 
 ## Additional Resources
 
-- `references/v3-pre-steps.md` - full v3 pre-step flows (lesson sweep, handover auto-write, idea sweep).
+- `references/v3-pre-steps.md` - full v3 pre-step flows (handover auto-write, idea sweep).
 - `references/summary-modes.md` - light vs structured mode, patchnote format, status decision rules.
 - `references/edge-cases.md` - no in-progress task, not in git repo, multiple tasks changed.

@@ -97,7 +97,7 @@ Invoked when:
        bug_ids=["B-018", "B-031"],
        title="Path-resolver mismatch across v3 readers",
        severity="P1",
-       evidence_text="Recurring: B-018 (handover reader) + B-031 (lesson reader). Same root cause.",
+       evidence_text="Recurring: B-018 (handover reader) + B-031 (idea reader). Same root cause.",
    )
    ```
 

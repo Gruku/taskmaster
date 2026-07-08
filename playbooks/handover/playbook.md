@@ -28,7 +28,7 @@ A handover is the per-session full record — context-injection optimisation for
 
 **7. Write directly — no draft-and-approve.** Write immediately via step 8. Exceptions: user asked "show draft first"; milestone supersession changes a prior milestone; auto-extraction returned zero files (ask scope).
 
-**8. Write through `backlog_handover_create`** with all supported fields: `tldr`, `next_action`, `body`, `task_ids`, `session_kind`, `context_size_at_write`, `supersedes`, `branch`, `tip_commit`, `flag_for_review`, `review_reason`. Decisions live inside `body` (step 5), not as separate kwargs. If `pending_review_flag` was buffered by the lesson skill, forward `flag_for_review=true` + `review_reason=<reason>`.
+**8. Write through `backlog_handover_create`** with all supported fields: `tldr`, `next_action`, `body`, `task_ids`, `session_kind`, `context_size_at_write`, `supersedes`, `branch`, `tip_commit`, `flag_for_review`, `review_reason`. Decisions live inside `body` (step 5), not as separate kwargs. If a `pending_review_flag` was buffered upstream, forward `flag_for_review=true` + `review_reason=<reason>`.
 
 **9. Confirm.** "Handover written: `<id>`. Next session can resume from this with `backlog_handover_list(status="open", limit=1)`." Surface any WARNING line from the response.
 

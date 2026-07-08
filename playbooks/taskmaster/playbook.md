@@ -20,7 +20,6 @@ Every playbook path below also exists as a native skill on Claude Code/ZCode:
 | "Write a handover", "for tomorrow" | `../handover/playbook.md` |
 | "Log an issue", "file an issue" | Word-agnostic intake — `../issue/playbook.md` if evidence cited, else `../bug/playbook.md` |
 | "Log a bug", "track this defect" | `../bug/playbook.md` |
-| "Remember this", "save as a lesson" | `../lesson/playbook.md` |
 | "Save this as an idea", "/add-idea" | `../add-idea/playbook.md` |
 | "auto this task", "autopilot", "auto-epic/phase X" | Redirect to ultracode (auto removed) |
 | "Upgrade to v3", "migrate to v3" | `../migrate-v3/playbook.md` |
@@ -41,7 +40,7 @@ Handle sequentially — complete the first action before starting the second.
 
 ## When to Deepen
 
-When routes are ambiguous (handover vs end-session, issue vs task, lesson vs note), read `references/disambiguation.md`.
+When routes are ambiguous (handover vs end-session, issue vs task), read `references/disambiguation.md`.
 
 ## Mid-session deepening
 
@@ -52,5 +51,4 @@ Skills stay in glance mode. Deepen specific entities directly — no skill re-in
 | "show me HND-012" | `backlog_handover_get("HND-012")` |
 | "read the plan for T-001" | `backlog_get_task("T-001", sections=["plan"])` |
 | "full task details" | `backlog_get_task("T-001", verbose=True)` |
-| "show me lesson L-007" | `backlog_lesson_get("L-007")` |
 | "details on ISS-014" | `backlog_issue_get("ISS-014", verbose=True)` |

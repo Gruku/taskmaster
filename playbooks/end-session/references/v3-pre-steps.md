@@ -3,54 +3,6 @@
 Read this file when any v3 pre-step condition fires. The SKILL.md body carries
 only the headline and condition; the full flow is here.
 
-## v3-pre-2a: Lesson Candidate Sweep
-
-Decide whether to invoke `taskmaster:lesson` for an end-session sweep. Auto-offer when ANY of:
-- Any `<lesson-candidate>` tag visible in the current conversation context.
-- Any entries in `.taskmaster/lessons/_candidates.md` (check via `backlog_lesson_candidates_list`).
-- Any feedback-memory cluster with 2+ entries scoped to this project.
-
-Inputs (gathered in this order, then merged for review):
-
-1. **Candidate-discovery scans** (routine):
-   - In-context scan: grep Claude's own conversation memory for `<lesson-candidate `.
-   - Deferred-file read: `backlog_lesson_candidates_list`.
-2. **Auto-suggestion source** (routine, separate input — not a candidate scan):
-   - Scan auto-memory `feedback/*.md` for 2+ similar entries this project. These are *promotion suggestions*, not pre-flagged candidates.
-3. **Disk-transcript scan** (on-demand only): if this session had a `/compact` event, offer `backlog_lesson_candidates_scan(days=7)` as a recovery option. Skip otherwise.
-
-If any candidates or suggestions exist, ask:
-
-> *"Found N lesson candidates from this session. Review now?"* (user-confirmed; default skip)
-
-If the user accepts, invoke `taskmaster:lesson` with each candidate. Per-candidate options:
-
-| Action | What runs |
-|---|---|
-| Promote | Lesson skill's write subflow (auto-extract + user review + `backlog_lesson_create`). |
-| Defer | `backlog_lesson_candidate_defer(...)` — stays in `_candidates.md` for next session. |
-| Discard | Drop without persisting (no tool call). |
-
-For any promoted candidate with `scope="session"`: the lesson skill **buffers** a `flag_for_review` for the upcoming handover write (next sub-step). Do not modify any existing handover here.
-
-Then: list lessons that were trigger-loaded at start-session OR cited mid-session by Claude. Multi-select prompt: "which actually applied this session?" For each pick:
-
-```
-backlog_lesson_reinforce(lesson_id="L-NNN")
-```
-
-After all reinforcements: if any return surfaces "Eligible for promotion to core tier", ask the user once:
-
-> *"L-NNN is eligible for core tier (auto-loaded every session). Promote?"* (yes → `backlog_lesson_update(lesson_id, tier="core")`; respect the core cap from `references/promotion-decay.md`)
-
-Finally: if any lessons auto-retired this session (server-side), emit one info line:
-
-> *"Retired N stale lessons (review with `backlog_lesson_list --tier retired`)."*
-
-No prompt, signal only.
-
-If none of the auto-offer conditions apply, skip this whole sub-step silently — no prompt.
-
 ## v3-pre-2: Handover Auto-Write
 
 Write a session handover automatically (no prompt) when ANY of:
@@ -97,7 +49,7 @@ Call `backlog_handover_resync()` quietly to enforce the 30-entry index cap and m
 
 After completing the work-summary phase, scan the in-context transcript for `<idea-candidate>` XML tags. For each tag found:
 
-1. Parse the `title` attribute (required), `tags`, `status`, `related-task`, `related-issue`, `related-lesson` (all optional).
+1. Parse the `title` attribute (required), `tags`, `status`, `related-task`, `related-issue` (all optional).
 2. Use the tag's text content as the body. If empty, use the title as the body.
 3. Call:
    ```
@@ -108,7 +60,6 @@ After completing the work-summary phase, scan the in-context transcript for `<id
        status=<parsed status or "candidate">,
        related_tasks=<[task] if related-task else []>,
        related_issues=<[issue] if related-issue else []>,
-       related_lessons=<[lesson] if related-lesson else []>,
        created_by="Claude",
    )
    ```

@@ -10,7 +10,7 @@ Six input sources, walked in order, deduplicated, grouped into three buckets.
 
 3. **Conversation tool-call history** — Read / Edit / Write paths from this session. **The orchestrator passes this in** when invoking the skill — the skill itself does not scrape its own context. If the orchestrator can't pass it, sources 1, 2, 4, 5 still work; source 3 falls back to empty.
 
-4. **Task body anchors** — `task.anchors`, `task.docs.spec`, `task.docs.plan`, `task.related_handovers`, `task.related_lessons`, `task.related_issues`. Pulled via `backlog_get_task(task_id)` for each task in `task_ids`. Drives the **Relevant** group.
+4. **Task body anchors** — `task.anchors`, `task.docs.spec`, `task.docs.plan`, `task.related_handovers`, `task.related_issues`. Pulled via `backlog_get_task(task_id)` for each task in `task_ids`. Drives the **Relevant** group.
 
 5. **Conversation text regex** — paths matching the pattern `[a-zA-Z_][a-zA-Z0-9_/.-]*\.(md|py|js|css|html|yaml|json|ts|tsx|jsx)` mentioned anywhere in the conversation. Includes paths in code blocks and inline `code spans`.
 

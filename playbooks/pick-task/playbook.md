@@ -1,6 +1,6 @@
 # Pick Task
 
-Select a task to work on and set it to in-progress. Default mode is a **glance briefing** (~600–800 tokens). Append `--deep` for full task body, lesson bodies, blast radius, and handover context.
+Select a task to work on and set it to in-progress. Default mode is a **glance briefing** (~600–800 tokens). Append `--deep` for full task body, blast radius, and handover context.
 
 ## Arguments
 
@@ -47,13 +47,9 @@ Call `backlog_handover_list(task_id=<task_id>, status="open", limit=3)`. Surface
 
 Call `backlog_issue_list(task_id=<task_id>)` for open P0/P1 issues.
 
-**5c. Matched lessons (IDs + tldrs only)**
+**5c. Linkage pills**
 
-Call `backlog_lesson_match(task_title=<title>, touched_files=<anchors>)`. Returns ≤3 best-match lesson IDs + tldrs. Do **not** load full bodies — `--deep` only.
-
-**5d. Linkage pills**
-
-Surface bare ID linkage from slim response: `depends_on: T-002 · fixes: ISS-007 · informed_by: L-003`. If `tracker_id` starts with `linear-`, append tracker pill (third hyphen-split segment uppercased). No extra tool calls.
+Surface bare ID linkage from slim response: `depends_on: T-002 · fixes: ISS-007`. If `tracker_id` starts with `linear-`, append tracker pill (third hyphen-split segment uppercased). No extra tool calls.
 
 ## Step 6 — Spec-review + anchors (critical/high only)
 

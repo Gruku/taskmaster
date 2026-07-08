@@ -15,7 +15,6 @@ The slash form is the primary invocation pattern for `taskmaster:add-idea`.
 - `--status <freeform-string>` — e.g. `exploring`, `parking-lot`, `candidate`
 - `--related-task <task-id>` — repeat for multiple
 - `--related-issue <issue-id>` — repeat for multiple
-- `--related-lesson <lesson-id>` — repeat for multiple
 
 ## Parse Rules
 
@@ -24,7 +23,7 @@ The slash form is the primary invocation pattern for `taskmaster:add-idea`.
 3. `body`: full idea text (verbatim, minus flags).
 4. `tags`: parsed from `--tags` value, split on commas.
 5. `status`: parsed from `--status` value; default to `"candidate"` if not provided.
-6. `related_tasks`, `related_issues`, `related_lessons`: each `--related-*` flag appends one ID to the respective list.
+6. `related_tasks`, `related_issues`: each `--related-*` flag appends one ID to the respective list.
 
 ## Field Extraction for Natural-Language Form
 
@@ -43,7 +42,6 @@ backlog_idea_create(
     status="<freeform>",
     related_tasks=[...],
     related_issues=[...],
-    related_lessons=[...],
     created_by="user",
 )
 ```
