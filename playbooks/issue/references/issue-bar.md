@@ -9,7 +9,7 @@ An Issue is the elevated tier. The bar prevents over-eager filing of one-off def
 ≥2 prior occurrences cited concretely. Each citation must be an addressable artifact: a `B-NNN`, a `T-NNN`, a handover ID, or a session reference. Hand-waving like "I've seen this before" does NOT count.
 
 **Good evidence:**
-> Recurring: matches B-018 (same null-handler defect in handover reader) and B-031 (same in lesson reader). Both fixed independently; root cause now confirmed as the shared loader.
+> Recurring: matches B-018 (same null-handler defect in handover reader) and B-031 (same in idea reader). Both fixed independently; root cause now confirmed as the shared loader.
 
 **Bad evidence (route to Bug):**
 > Recurring: I think this has come up before.
@@ -19,7 +19,7 @@ An Issue is the elevated tier. The bar prevents over-eager filing of one-off def
 ≥2 affected components named, OR a class-of-defect description that names the pattern across the surface.
 
 **Good evidence:**
-> Systemic: path-resolver mismatch affects handover reader, lesson reader, issue reader. Class-of-defect: every `Path(".taskmaster")` literal in `taskmaster_v3.py` and `backlog_server.py`.
+> Systemic: path-resolver mismatch affects handover reader, idea reader, issue reader. Class-of-defect: every `Path(".taskmaster")` literal in `taskmaster_v3.py` and `backlog_server.py`.
 
 **Bad evidence (route to Bug):**
 > Systemic: it's in a few places.

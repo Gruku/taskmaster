@@ -30,7 +30,7 @@ def tm_dir(tmp_path: Path, monkeypatch) -> Path:
             {"id": "T-003", "title": "Third",  "tldr": "x", "status": "todo"},
         ]}],
     }))
-    for sub in ("handovers", "issues", "lessons", "ideas", "tasks"):
+    for sub in ("handovers", "issues", "ideas", "tasks"):
         (d / sub).mkdir()
     monkeypatch.setattr(bs, "_backlog_path", lambda: d / "backlog.yaml")
     return d
@@ -45,10 +45,6 @@ def test_create_link_query_remove_round_trip(tm_dir):
         "status": "open", BODY_KEY: "body",
     })
     write_entity_anywhere(tm_dir / "backlog.yaml", {
-        "id": "L-001", "title": "L", "tldr": "x", "kind": "pattern",
-        "tier": "active", BODY_KEY: "body",
-    })
-    write_entity_anywhere(tm_dir / "backlog.yaml", {
         "id": "HND-001", "tldr": "x", "status": "open", "task_ids": ["T-001"],
         BODY_KEY: "body",
     })
@@ -60,7 +56,6 @@ def test_create_link_query_remove_round_trip(tm_dir):
     pairs = [
         ("T-001", "T-002",   "depends_on",  "blocks"),
         ("T-001", "ISS-001", "fixes",        "fixed_in_task"),
-        ("T-001", "L-001",   "informed_by",  "informs"),
         ("T-001", "ISS-001", "relates_to",   "relates_to"),
         ("T-001", "HND-001", "references",   "referenced_by"),
         ("T-001", "IDEA-001", "relates_to",  "relates_to"),
@@ -135,7 +130,7 @@ def test_migration_from_legacy_project(tmp_path):
             {"id": "T-002", "title": "B", "status": "todo"},
         ]}],
     }))
-    for sub in ("handovers", "issues", "lessons", "ideas", "tasks"):
+    for sub in ("handovers", "issues", "ideas", "tasks"):
         (d / sub).mkdir()
     write_entity_anywhere(d / "backlog.yaml", {
         "id": "ISS-001", "title": "Bug", "tldr": "x", "severity": "P2",

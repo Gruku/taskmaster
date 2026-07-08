@@ -18,16 +18,16 @@ _BACKLOG_STATUS_SLIM = """**Schema:** v3
 **In review:** T-007 Fix token refresh
 **Stale tasks (14d+):** T-009 SAML support (stale 21d)
 **Counts:** 12 tasks · 3 in-progress · 1 in-review · 4 todo · 2 done
-**Open issues:** 3 (1 P0) · **Matched lessons:** 5 · **Flagged handovers:** 1
-""" * 1  # ~400 chars → ~100 tokens
+**Open issues:** 3 (1 P0) · **Flagged handovers:** 1
+""" * 1  # ~380 chars → ~95 tokens
 
 _HANDOVER_LIST_SLIM = """HND-012 ▸ T-001: "rewriting auth middleware — next: backfill migration" [open]
 HND-010 ▸ T-003: "rate limiting implemented — next: add integration test" [open]
 HND-008 ▸ T-007: "token refresh fix pending review" [flagged: T-007 done but handover open ▸ next_action references T-005] [open]
 """ * 1  # ~600 chars → ~150 tokens
 
-_COUNTS_LINE = "3 new issues (1 P0) · 5 matched lessons · 1 stale task · 1 flagged handover\n"
-# ~80 chars → ~20 tokens
+_COUNTS_LINE = "3 new issues (1 P0) · 1 stale task · 1 flagged handover\n"
+# ~60 chars → ~15 tokens
 
 _CHARS_PER_TOKEN = 4
 

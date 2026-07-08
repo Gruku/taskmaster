@@ -847,162 +847,9 @@ class TestIssues:
         }
 
 
-class TestLessons:
-    def _bp(self, tmp_path: Path) -> Path:
-        return tmp_path / ".taskmaster" / "backlog.yaml"
-
-    def test_create_and_read(self, tmp_path: Path):
-        bp = self._bp(tmp_path)
-        lid, target = v3.write_lesson(
-            bp,
-            title="Always read auth/session.ts before editing auth flow",
-            kind="gotcha",
-            triggers={"files": ["src/auth/**"], "task_titles_match": ["auth", "login"]},
-            body="## Why\nNon-obvious refresh interaction.\n",
-        )
-        assert lid == "L-001"
-        assert target.exists()
-        fm, body = v3.read_lesson(bp, lid)
-        assert fm["kind"] == "gotcha"
-        assert fm["tier"] == "active"
-        assert fm["reinforce_count"] == 0
-        assert fm["last_reinforced"] is None
-        assert "Why" in body
-
-    def test_invalid_kind(self, tmp_path: Path):
-        bp = self._bp(tmp_path)
-        with pytest.raises(ValueError):
-            v3.write_lesson(bp, title="x", kind="tip")
-
-    def test_reinforce(self, tmp_path: Path):
-        bp = self._bp(tmp_path)
-        lid, _ = v3.write_lesson(bp, title="x", kind="gotcha")
-        fm = v3.reinforce_lesson(bp, lid)
-        assert fm["reinforce_count"] == 1
-        assert fm["last_reinforced"] is not None
-        v3.reinforce_lesson(bp, lid)
-        v3.reinforce_lesson(bp, lid)
-        fm, _ = v3.read_lesson(bp, lid)
-        assert fm["reinforce_count"] == 3
-
-    def test_promotion_eligibility(self, tmp_path: Path):
-        bp = self._bp(tmp_path)
-        lid, _ = v3.write_lesson(bp, title="x", kind="gotcha")
-        for _ in range(v3.LESSON_PROMOTE_REINFORCE):
-            v3.reinforce_lesson(bp, lid)
-        fm, _ = v3.read_lesson(bp, lid)
-        assert v3.lesson_eligible_for_promotion(fm) is True
-
-        # patterns aren't auto-promoted
-        lid2, _ = v3.write_lesson(bp, title="y", kind="pattern")
-        for _ in range(v3.LESSON_PROMOTE_REINFORCE):
-            v3.reinforce_lesson(bp, lid2)
-        fm2, _ = v3.read_lesson(bp, lid2)
-        assert v3.lesson_eligible_for_promotion(fm2) is False
-
-    def test_decay_eligibility(self, tmp_path: Path):
-        bp = self._bp(tmp_path)
-        lid, _ = v3.write_lesson(bp, title="x", kind="gotcha")
-        # Force last_reinforced way back
-        from datetime import date as _date, timedelta
-        old = (_date.today() - timedelta(days=v3.LESSON_DECAY_DAYS + 1)).isoformat()
-        v3.update_lesson(bp, lid, last_reinforced=old, reinforce_count=0)
-        fm, _ = v3.read_lesson(bp, lid)
-        assert v3.lesson_eligible_for_decay(fm) is True
-
-        # but well-reinforced lessons don't decay
-        v3.update_lesson(bp, lid, reinforce_count=v3.LESSON_DECAY_REINFORCE + 1)
-        fm, _ = v3.read_lesson(bp, lid)
-        assert v3.lesson_eligible_for_decay(fm) is False
-
-    def test_match_by_title_substring(self, tmp_path: Path):
-        bp = self._bp(tmp_path)
-        v3.write_lesson(
-            bp,
-            title="auth lesson",
-            kind="gotcha",
-            triggers={"files": [], "task_titles_match": ["auth", "login"]},
-        )
-        matches = v3.match_lessons_for_task(bp, {"title": "Build login page"})
-        assert len(matches) == 1
-        assert matches[0][0]["title"] == "auth lesson"
-
-    def test_match_by_file_glob(self, tmp_path: Path):
-        bp = self._bp(tmp_path)
-        v3.write_lesson(
-            bp,
-            title="auth lesson",
-            kind="gotcha",
-            triggers={"files": ["src/auth/**"]},
-        )
-        matches = v3.match_lessons_for_task(
-            bp, {"title": "Unrelated"}, touched_files=["src/auth/session.ts"]
-        )
-        assert len(matches) == 1
-
-    def test_match_excludes_retired(self, tmp_path: Path):
-        bp = self._bp(tmp_path)
-        v3.write_lesson(
-            bp,
-            title="retired one",
-            kind="gotcha",
-            triggers={"task_titles_match": ["foo"]},
-            tier="retired",
-        )
-        matches = v3.match_lessons_for_task(bp, {"title": "foo bar"})
-        assert matches == []
-
-    def test_match_caps_at_three(self, tmp_path: Path):
-        bp = self._bp(tmp_path)
-        for i in range(5):
-            v3.write_lesson(
-                bp,
-                title=f"l{i}",
-                kind="gotcha",
-                triggers={"task_titles_match": ["foo"]},
-            )
-        matches = v3.match_lessons_for_task(bp, {"title": "foo bar"})
-        assert len(matches) == 3
-
-    def test_match_sorted_by_reinforce_desc(self, tmp_path: Path):
-        bp = self._bp(tmp_path)
-        l1, _ = v3.write_lesson(bp, title="weak", kind="gotcha", triggers={"task_titles_match": ["x"]})
-        l2, _ = v3.write_lesson(bp, title="strong", kind="gotcha", triggers={"task_titles_match": ["x"]})
-        for _ in range(3):
-            v3.reinforce_lesson(bp, l2)
-        matches = v3.match_lessons_for_task(bp, {"title": "do x"})
-        assert matches[0][0]["title"] == "strong"
-
-    def test_digest_excludes_core_and_retired(self, tmp_path: Path):
-        bp = self._bp(tmp_path)
-        v3.write_lesson(bp, title="active", kind="gotcha")
-        v3.write_lesson(bp, title="core", kind="gotcha", tier="core")
-        v3.write_lesson(bp, title="retired", kind="gotcha", tier="retired")
-        digest = v3.lesson_digest(bp)
-        titles = [d["title"] for d in digest]
-        assert "active" in titles
-        assert "core" not in titles
-        assert "retired" not in titles
-
-    def test_core_lessons_returns_full_body(self, tmp_path: Path):
-        bp = self._bp(tmp_path)
-        v3.write_lesson(bp, title="core1", kind="gotcha", body="## Why\nbecause\n", tier="core")
-        cores = v3.core_lessons(bp)
-        assert len(cores) == 1
-        assert "because" in cores[1][1] if False else "because" in cores[0][1]
-
-    def test_sync_index(self, tmp_path: Path):
-        bp = self._bp(tmp_path)
-        v3.write_lesson(bp, title="a", kind="pattern")
-        v3.write_lesson(bp, title="b", kind="gotcha")
-        data: dict = {}
-        v3.sync_lesson_index(data, bp)
-        assert len(data["lessons_meta"]) == 2
-        assert all("id" in e and "title" in e for e in data["lessons_meta"])
-
 class TestV3EndToEndRoundtrip:
     """End-to-end roundtrip: heavy fields survive multiple save/load cycles
-    interleaved with non-task mutations (handovers, issues, lessons).
+    interleaved with non-task mutations (handovers, issues).
     Locks the invariant that v3 preserves all state across normal use.
     """
 
@@ -1033,20 +880,17 @@ class TestV3EndToEndRoundtrip:
             "phases": [],
             "handovers": [],
             "issues": [],
-            "lessons_meta": [],
         }
         v3.save_v3(bp, original)
 
-        # Mutate via the layered helpers: add handover, issue, lesson
+        # Mutate via the layered helpers: add handover, issue
         v3.write_handover(bp, tldr="day end", task_ids=["T-001"], when="2026-04-26")
         v3.write_issue(bp, title="bug", severity="P1", impact="fixture evidence.", related_tasks=["T-001"])
-        v3.write_lesson(bp, title="auth gotcha", kind="gotcha")
 
         # Sync indexes (what the MCP tools do after each create)
         loaded = v3.load_v3(bp)
         v3.sync_handover_index(loaded, bp)
         v3.sync_issue_index(loaded, bp)
-        v3.sync_lesson_index(loaded, bp)
         v3.save_v3(bp, loaded)
 
         # Read everything back and assert nothing got lost
@@ -1062,8 +906,6 @@ class TestV3EndToEndRoundtrip:
         assert roundtripped["handovers"][0]["task_ids"] == ["T-001"]
         assert len(roundtripped["issues"]) == 1
         assert roundtripped["issues"][0]["severity"] == "P1"
-        assert len(roundtripped["lessons_meta"]) == 1
-        assert roundtripped["lessons_meta"][0]["kind"] == "gotcha"
 
     def test_save_preserves_unrelated_top_level_keys(self, tmp_path: Path):
         # save_v3 must not strip top-level keys it doesn't know about
@@ -1083,7 +925,7 @@ class TestV3EndToEndRoundtrip:
         assert loaded["context"] == {"active_epic": "auth"}
 
     def test_v2_backlog_without_v3_indexes_loads_clean(self, tmp_path: Path):
-        # A pristine v2 file (no schema_version, no handovers/issues/lessons) should
+        # A pristine v2 file (no schema_version, no handovers/issues) should
         # not gain phantom v3 keys when read.
         bp = tmp_path / ".taskmaster" / "backlog.yaml"
         bp.parent.mkdir(parents=True)
@@ -1100,7 +942,6 @@ class TestV3EndToEndRoundtrip:
         raw = _y.safe_load(bp.read_text(encoding="utf-8"))
         assert v3.detect_schema_version(raw) == v3.SCHEMA_V2
         assert "handovers" not in raw
-        assert "lessons_meta" not in raw
 
     def test_per_task_file_persists_across_n_saves(self, tmp_path: Path):
         bp = tmp_path / ".taskmaster" / "backlog.yaml"
@@ -1134,7 +975,6 @@ def test_viewer_prefs_defaults_have_all_expected_keys():
         "dashboard",
         "ui",
         "kanban",
-        "lessons",
         "issues",
     }
     assert set(VIEWER_PREFS_DEFAULTS.keys()) == expected_top_keys

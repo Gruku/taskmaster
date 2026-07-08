@@ -27,5 +27,5 @@ test('shouldInterceptDetailLink — modal + plain left-click on a detail href on
   assert.equal(shouldInterceptDetailLink({ ...base, button: 1 }), false);          // middle-click
   assert.equal(shouldInterceptDetailLink({ ...base, metaKey: true }), false);      // cmd-click
   assert.equal(shouldInterceptDetailLink({ ...base, ctrlKey: true }), false);      // ctrl-click
-  assert.equal(shouldInterceptDetailLink({ ...base, href: '#/lessons' }), false);  // not a detail href
+  assert.equal(shouldInterceptDetailLink({ ...base, href: '#/issues' }), false);  // not a detail href
 });

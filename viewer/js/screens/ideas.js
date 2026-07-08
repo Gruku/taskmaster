@@ -2,7 +2,7 @@
 // archived toggle, frontmatter sidebar with click-through links, and a
 // "Create Idea" button in the topbar.
 //
-// Convention: mirrors issues.js / lessons.js patterns throughout.
+// Convention: mirrors issues.js patterns throughout.
 // No colored left rails (user pref); status uses tinted background pills.
 
 import * as api from '../api.js';
@@ -680,7 +680,6 @@ export async function mount(root, { store, prefs }) {
         const target = a.getAttribute('href')?.slice(1) || '';
         if (!target) return;
         if (target.startsWith('ISS-')) a.href = `#/issues/${encodeURIComponent(target)}`;
-        else if (target.startsWith('L-')) a.href = `#/lessons/${encodeURIComponent(target)}`;
         else if (target.startsWith('IDEA-')) a.href = `#/ideas/${encodeURIComponent(target)}`;
         else a.href = `#/kanban/${encodeURIComponent(target)}`;
       });

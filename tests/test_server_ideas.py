@@ -93,7 +93,6 @@ def _write_idea_file(root: Path, idea_id: str, title: str, body: str = "", **ove
         "tags": [],
         "related_tasks": [],
         "related_issues": [],
-        "related_lessons": [],
         "promoted_to": None,
         "archived": False,
     }

@@ -36,24 +36,24 @@ import yaml
 
 def test_backfill_preserves_horizontal_rules_in_body(tmp_taskmaster):
     """Body with --- separators must not lose content during round-trip."""
-    lessons_dir = Path(tmp_taskmaster) / ".taskmaster" / "lessons"
-    lessons_dir.mkdir(parents=True, exist_ok=True)
-    legacy = lessons_dir / "L-rules.md"
-    body_with_rule = "## Why\n\nReason A.\n\n---\n\n## What to do\n\nStep 1.\n"
+    issues_dir = Path(tmp_taskmaster) / ".taskmaster" / "issues"
+    issues_dir.mkdir(parents=True, exist_ok=True)
+    legacy = issues_dir / "ISS-rules.md"
+    body_with_rule = "## Repro\n\nReason A.\n\n---\n\n## Investigation\n\nStep 1.\n"
     legacy.write_text(
-        f"---\nid: L-rules\ntitle: Lesson with rule\nkind: pattern\ntldr: placeholder\n---\n{body_with_rule}",
+        f"---\nid: ISS-rules\ntitle: Issue with rule\nseverity: P2\ntldr: placeholder\n---\n{body_with_rule}",
         encoding="utf-8",
     )
     # Remove tldr so backfill actually runs on it
     legacy.write_text(
-        f"---\nid: L-rules\ntitle: Lesson with rule\nkind: pattern\n---\n{body_with_rule}",
+        f"---\nid: ISS-rules\ntitle: Issue with rule\nseverity: P2\n---\n{body_with_rule}",
         encoding="utf-8",
     )
 
-    worktree_root = Path(__file__).resolve().parents[3]
+    worktree_root = Path(__file__).resolve().parents[1]
     env = {**os.environ, "PYTHONPATH": str(worktree_root)}
     subprocess.run(
-        ["python", "-m", "taskmaster.scripts.backfill_tldr",
+        ["python", "-m", "scripts.backfill_tldr",
          "--root", str(tmp_taskmaster)],
         env=env, capture_output=True, text=True, check=True,
     )
@@ -101,25 +101,12 @@ def test_backfill_script_processes_all_entities(tmp_taskmaster):
         encoding="utf-8",
     )
 
-    lessons_dir = Path(tmp_taskmaster) / ".taskmaster" / "lessons"
-    lessons_dir.mkdir(parents=True, exist_ok=True)
-    legacy_lesson = lessons_dir / "L-legacy-1.md"
-    legacy_lesson.write_text(
-        "---\n"
-        "id: L-legacy-1\n"
-        "title: Legacy lesson\n"
-        "kind: pattern\n"
-        "---\n"
-        "Always commit small.\n",
-        encoding="utf-8",
-    )
-
     # Run the CLI
     import os
-    worktree_root = Path(__file__).parent.parent.parent.parent
+    worktree_root = Path(__file__).resolve().parents[1]
     env = {**os.environ, "PYTHONPATH": str(worktree_root)}
     result = subprocess.run(
-        ["python", "-m", "taskmaster.scripts.backfill_tldr",
+        ["python", "-m", "scripts.backfill_tldr",
          "--root", str(tmp_taskmaster)],
         capture_output=True, text=True, check=True,
         env=env,
@@ -127,7 +114,7 @@ def test_backfill_script_processes_all_entities(tmp_taskmaster):
     assert "backfilled" in result.stdout.lower()
 
     # Verify tldr was added to each
-    for path in (legacy_task, legacy_issue, legacy_lesson):
+    for path in (legacy_task, legacy_issue):
         content = path.read_text(encoding="utf-8")
         # Frontmatter is the YAML block between the first two ---
         parts = content.split("---", 2)

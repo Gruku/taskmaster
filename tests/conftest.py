@@ -39,7 +39,6 @@ def tmp_taskmaster(tmp_path, monkeypatch):
     - tmp_path/.taskmaster/tasks/
     - tmp_path/.taskmaster/handovers/
     - tmp_path/.taskmaster/issues/
-    - tmp_path/.taskmaster/lessons/
     - tmp_path/.taskmaster/ideas/
 
     Monkeypatches these backlog_server module attributes to point at tmp_path:
@@ -55,7 +54,7 @@ def tmp_taskmaster(tmp_path, monkeypatch):
     """
     # Build directory structure
     tm_dir = tmp_path / ".taskmaster"
-    for subdir in ("tasks", "handovers", "issues", "lessons", "ideas"):
+    for subdir in ("tasks", "handovers", "issues", "ideas"):
         (tm_dir / subdir).mkdir(parents=True, exist_ok=True)
 
     # PROGRESS.md must exist so regenerate_progress_dashboard() can read it.

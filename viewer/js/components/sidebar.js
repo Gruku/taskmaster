@@ -16,7 +16,6 @@ const SECTIONS = [
     { key: 'sessions', icon: '⌕', label: 'Sessions', hash: '#/sessions' },
   ]},
   { label: 'Knowledge', items: [
-    { key: 'lessons',  icon: '✦', label: 'Lessons',  hash: '#/lessons' },
     { key: 'issues',   icon: '⚠', label: 'Issues',   hash: '#/issues' },
     { key: 'bugs',     icon: '⊘', label: 'Bugs',     hash: '#/bugs' },
     { key: 'ideas',    icon: '💡', label: 'Ideas',    hash: '#/ideas' },

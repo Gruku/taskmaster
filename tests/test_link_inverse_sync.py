@@ -1,7 +1,7 @@
 """Tests for read/write_entity_anywhere dispatchers and sync_inverse engine.
 
 Uses write_entity_anywhere directly to seed test entities (bypassing the
-allocator-based write_handover/write_issue/write_lesson/write_idea which
+allocator-based write_handover/write_issue/write_idea which
 generate IDs server-side).
 """
 from pathlib import Path
@@ -30,7 +30,6 @@ def tm_dir(tmp_path: Path) -> Path:
     }), encoding="utf-8")
     (d / "handovers").mkdir()
     (d / "issues").mkdir()
-    (d / "lessons").mkdir()
     (d / "ideas").mkdir()
     (d / "tasks").mkdir()
     return d
@@ -54,18 +53,6 @@ def _seed_issue(tm_dir: Path, iid: str = "ISS-001") -> None:
         "tldr": "test",
         "severity": "P2",
         "status": "open",
-        BODY_KEY: "body",
-    }
-    write_entity_anywhere(tm_dir / "backlog.yaml", entity)
-
-
-def _seed_lesson(tm_dir: Path, lid: str = "L-001") -> None:
-    entity = {
-        "id": lid,
-        "title": "Lesson",
-        "tldr": "test",
-        "kind": "pattern",
-        "tier": "active",
         BODY_KEY: "body",
     }
     write_entity_anywhere(tm_dir / "backlog.yaml", entity)

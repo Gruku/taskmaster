@@ -16,7 +16,7 @@ A lightweight place to record thoughts, parking-lot items, half-baked observatio
 /add-idea Auto-tag from git diff --tags automation,perf --status exploring --related-task v3-release-007
 ```
 
-Optional flags (`--tags`, `--status`, `--related-task`, `--related-issue`, `--related-lesson`) and full parse rules in `references/slash-form.md`.
+Optional flags (`--tags`, `--status`, `--related-task`, `--related-issue`) and full parse rules in `references/slash-form.md`.
 
 ## Natural-language form
 
@@ -35,7 +35,6 @@ The user can also say "save this as an idea: <text>" — treat it the same as a 
        status="<freeform>",
        related_tasks=[...],
        related_issues=[...],
-       related_lessons=[...],
        created_by="user",   # this skill is user-initiated
    )
    ```

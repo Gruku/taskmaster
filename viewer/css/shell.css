@@ -314,9 +314,9 @@ html, body {
    never grow past it. Two mount patterns exist in the codebase and both work
    because .screen-mount is also flex-column with overflow:hidden:
      (a) screen JS adds the class directly to .screen-mount
-         (dashboard:.dash, issue-detail, lesson-detail)
+         (dashboard:.dash, issue-detail)
      (b) screen JS appends a child <div> with the class to .screen-mount
-         (kanban:.kanban-page, issues, lessons, ideas, recap:.recap-page,
+         (kanban:.kanban-page, issues, ideas, recap:.recap-page,
          archived:.archived-page, task-detail:.td-page)
 
    Adding a new screen: append its root class to BOTH the shared base list
@@ -326,13 +326,11 @@ html, body {
 .tbl-screen,
 .dk-desk,
 .issues,
-.lessons,
 .ideas,
 .recap-page,
 .archived-page,
 .td-page,
 .issue-detail,
-.lesson-detail,
 .sessions-page {
   display: flex;
   flex-direction: column;
@@ -346,12 +344,10 @@ html, body {
    continuous column and no internal sticky chrome is needed. */
 .dk-desk,
 .issues,
-.lessons,
 .recap-page,
 .archived-page,
 .td-page,
 .issue-detail,
-.lesson-detail,
 .sessions-page {
   overflow-y: auto;
   overflow-x: hidden;

@@ -8,7 +8,6 @@ import { h } from '../util/h.js';
 // Tag → display label and visual class. The class hooks into co-xtag--<key>
 // rules in continuity.css.
 export const KNOWN_TAGS = {
-  'lesson-candidate': { label: 'Lesson candidate', cls: 'lc'  },
   'thinking':         { label: 'Thinking',         cls: 'th'  },
   'example':          { label: 'Example',          cls: 'ex'  },
   'system-reminder':  { label: 'System reminder',  cls: 'sr'  },

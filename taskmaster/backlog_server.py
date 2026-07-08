@@ -111,24 +111,6 @@ from taskmaster.taskmaster_v3 import (
     linked_issues_for_tracker as _linked_issues_for_tracker,
     _validate_tracker as _validate_tracker_fm,
     load_linear_config as _load_linear_config,
-    LESSON_KINDS,
-    LESSON_TIERS,
-    write_lesson as _write_lesson,
-    read_lesson as _read_lesson,
-    update_lesson as _update_lesson,
-    reinforce_lesson as _reinforce_lesson,
-    list_lesson_ids as _list_lesson_ids,
-    match_lessons_for_task as _match_lessons_for_task,
-    lesson_digest as _lesson_digest,
-    core_lessons as _core_lessons,
-    sync_lesson_index as _sync_lesson_index,
-    lesson_eligible_for_promotion as _lesson_eligible_for_promotion,
-    LESSON_CANDIDATE_KINDS,
-    LESSON_CANDIDATE_SCOPES,
-    lesson_candidates_defer as _lesson_candidates_defer,
-    lesson_candidates_read as _lesson_candidates_read,
-    lesson_candidates_clear as _lesson_candidates_clear,
-    scan_transcripts_for_candidates as _scan_transcripts_for_candidates,
     write_idea as _write_idea,
     read_idea as _read_idea,
     update_idea as _update_idea,
@@ -376,7 +358,6 @@ def _has_v3_content(data: dict) -> bool:
     return bool(
         data.get("handovers")
         or data.get("issues")
-        or data.get("lessons_meta")
     )
 
 
@@ -1157,9 +1138,9 @@ def backlog_get_task(
     minimise token cost. Use verbose=True for the full body (notes, review
     instructions, docs, spec-review record, epic context). Use sections to
     pull specific named body sections (e.g. ["notes", "spec"]). Use
-    expand_links=True to swap dependency/issue/lesson IDs for {id, tldr} pills.
+    expand_links=True to swap dependency/issue IDs for {id, tldr} pills.
 
-    Note: Unlike the other _get tools (handover/issue/lesson/idea), this tool
+    Note: Unlike the other _get tools (handover/issue/idea), this tool
     honours expand_links in *both* slim and verbose modes for the depends_on
     field — verbose mode hand-rolls the expansion inline. The other four tools
     treat expand_links as a slim-mode-only feature and silently ignore it when
@@ -1173,7 +1154,7 @@ def backlog_get_task(
             Canonical sections for tasks: notes, review_instructions, spec,
             plan, design, analysis, roadmap.
         expand_links: If True, replace bare IDs in depends_on,
-            related_issues, related_lessons with {id, tldr} pills.
+            related_issues with {id, tldr} pills.
     """
     data = _load()
     result = _find_task(data, task_id)
@@ -1210,7 +1191,7 @@ def backlog_get_task(
 
         if expand_links:
             tldr_index = _build_tldr_index(data, project_root=bp.parent.parent if bp.exists() else None)
-            for link_field in ("depends_on", "related_issues", "related_lessons"):
+            for link_field in ("depends_on", "related_issues"):
                 if link_field in slim:
                     ids = slim[link_field]
                     if isinstance(ids, str):
@@ -1672,7 +1653,7 @@ def backlog_validate() -> str:
     bp = _backlog_path()
     tm_dir = bp.parent
     from taskmaster.taskmaster_v3 import read_task_file as _rtf
-    for subdir in ("issues", "lessons", "handovers", "ideas"):
+    for subdir in ("issues", "handovers", "ideas"):
         d = tm_dir / subdir
         if not d.exists():
             continue
@@ -1713,9 +1694,9 @@ def backlog_init(project_name: str = "", location: str = "tracked", schema_versi
                   `.claude/`-layout projects keep working via the resolver shim;
                   run `backlog_canonicalize_layout` to migrate them.
         schema_version: 2 (stable, single backlog.yaml) or 3 (latest, slim index +
-                  per-task files + handovers/issues/lessons/auto). 0 → use SCHEMA_DEFAULT.
+                  per-task files + handovers/issues/auto). 0 → use SCHEMA_DEFAULT.
                   v3 init creates the directory layout up front (tasks/, handovers/,
-                  lessons/, issues/, snapshots/, auto/).
+                  issues/, snapshots/, auto/).
     """
     if location == "hidden":
         return (
@@ -1786,9 +1767,8 @@ def backlog_init(project_name: str = "", location: str = "tracked", schema_versi
         # v3 adds top-level entity indexes + creates the directory layout.
         initial_data["handovers"] = []
         initial_data["issues"] = []
-        initial_data["lessons_meta"] = []
         # Pre-create directories so first-run tooling has somewhere to write.
-        for sub in ("tasks", "handovers", "lessons", "issues", "snapshots", "auto"):
+        for sub in ("tasks", "handovers", "issues", "snapshots", "auto"):
             (backlog_abs.parent / sub).mkdir(parents=True, exist_ok=True)
 
     backlog_abs.write_text(
@@ -1813,7 +1793,7 @@ def backlog_init(project_name: str = "", location: str = "tracked", schema_versi
 def backlog_migrate_v3() -> str:
     """Migrate this project's backlog to v3 layout (slim index + per-task files).
 
-    v3 introduces narrative-continuity features (handovers, lessons, issues, recap,
+    v3 introduces narrative-continuity features (handovers, issues, recap,
     auto modes). The on-disk shape changes: heavy task fields (description, notes,
     docs, review_instructions) move out of `backlog.yaml` into per-task files at
     `tasks/<id>.md`. Slim metadata (id, title, status, priority, etc.) stays in
@@ -1829,7 +1809,7 @@ def backlog_migrate_v3() -> str:
 
     # Flip the viewer to v3 mode. Both freshly migrated and already-v3 projects
     # should serve the v3 viewer — otherwise the migration completes but the
-    # user still sees the v2 UI (no Issues / Lessons / Sessions tabs).
+    # user still sees the v2 UI (no Issues / Sessions tabs).
     try:
         prefs = load_viewer_prefs()
         if not prefs.get("use_v3"):
@@ -1855,7 +1835,7 @@ def backlog_migrate_v3() -> str:
         f"- {files_msg}\n"
         f"- Index: {bp.relative_to(ROOT)}\n"
         f"- Viewer: switched to v3 UI (use_v3=true)\n"
-        f"\nv3 features (handovers, lessons, issues, recap, auto modes) will land in "
+        f"\nv3 features (handovers, issues, recap, auto modes) will land in "
         f"subsequent slices."
     )
 
@@ -1894,7 +1874,7 @@ def backlog_backfill_lanes(grandfather_active: bool = True) -> str:
 def backlog_canonicalize_layout(dry_run: bool = False) -> str:
     """Migrate the v3 backlog from `.claude/` or root layout into canonical `.taskmaster/`.
 
-    Moves backlog.yaml + the artifact subdirs (tasks, handovers, lessons, issues,
+    Moves backlog.yaml + the artifact subdirs (tasks, handovers, issues,
     recaps, snapshots, auto, PROGRESS.md, viewer.json) into `.taskmaster/`.
     Idempotent: re-running on a canonical layout is a no-op. Refuses to clobber:
     if a destination file already holds different content, nothing moves and the
@@ -2044,7 +2024,7 @@ def backlog_handover_create(
         tip_commit: Optional tip commit SHA (short or long). Lands in
             frontmatter when set.
         flag_for_review: When True, marks this handover for retro extraction in
-            the next lesson-sweep session. Sets `flag_for_review: true` and
+            the next review sweep. Sets `flag_for_review: true` and
             `review_reason` in the handover's frontmatter.
         review_reason: Free-text reason for the review flag (e.g. "multi-tab
             fanout retro"). Only used when `flag_for_review` is True.
@@ -2492,7 +2472,7 @@ def backlog_link_query(source: str = "", target: str = "", type: str = "",
                 for link in task.get("links", []) or []:
                     out.append({"source": tid, "target": link["target"], "type": link["type"]})
         for sub, prefix in (("handovers", "HND"), ("issues", "ISS"),
-                            ("lessons", "L"), ("ideas", "IDEA")):
+                            ("ideas", "IDEA")):
             sub_dir = backlog_path.parent / sub
             if not sub_dir.exists():
                 continue
@@ -2563,7 +2543,7 @@ def backlog_link_validate() -> str:
                 if task.get("id"):
                     yield task["id"], task
         for sub, prefix in (("handovers", "HND"), ("issues", "ISS"),
-                            ("lessons", "L"), ("ideas", "IDEA")):
+                            ("ideas", "IDEA")):
             sub_dir = backlog_path.parent / sub
             if not sub_dir.exists():
                 continue
@@ -3494,14 +3474,13 @@ def backlog_idea_create(
     status: str = "",
     related_tasks: list[str] | None = None,
     related_issues: list[str] | None = None,
-    related_lessons: list[str] | None = None,
     created_by: str = "Claude",
     tldr: str = "",
 ) -> str:
     """Log an idea — a lightweight, unvalidated thought. Lighter than a task.
 
     An *idea* is a parking lot for things you might want to do, explore, or
-    revisit. It can grow into a task / lesson / issue later via linkage.
+    revisit. It can grow into a task / issue later via linkage.
     Title is required; everything else is optional. Status is freeform.
 
     Args:
@@ -3511,7 +3490,6 @@ def backlog_idea_create(
         status: Freeform status ("exploring", "parking-lot", "candidate", "").
         related_tasks: Task ids this idea relates to.
         related_issues: Issue ids this idea relates to.
-        related_lessons: Lesson ids this idea relates to.
         created_by: Who logged it ("Claude" by default; "user" when
             invoked via /add-idea).
         tldr: One-line essence of the idea. Auto-generated from body or
@@ -3534,7 +3512,6 @@ def backlog_idea_create(
             status=status,
             related_tasks=related_tasks or [],
             related_issues=related_issues or [],
-            related_lessons=related_lessons or [],
             created_by=created_by,
             tldr=tldr,
             tldr_autogen=tldr_autogen,
@@ -3564,7 +3541,6 @@ def backlog_idea_list(
     archived: bool = False,
     related_task: str = "",
     related_issue: str = "",
-    related_lesson: str = "",
     limit: int = 50,
     summary: bool = True,
 ) -> str:
@@ -3594,7 +3570,6 @@ def backlog_idea_list(
         archived=archived,
         related_task=related_task or None,
         related_issue=related_issue or None,
-        related_lesson=related_lesson or None,
         limit=max(1, limit),
         summary=summary,
     )
@@ -3628,8 +3603,8 @@ def backlog_idea_get(
     By default returns a slim view (frontmatter fields only, no body) to
     minimise token cost. Use verbose=True for the full body. Ideas do not
     have canonical body sections, so sections= is not supported (returns
-    an error if provided). Use expand_links=True to expand related_tasks,
-    related_issues, and related_lessons to {id, tldr} pills.
+    an error if provided). Use expand_links=True to expand related_tasks
+    and related_issues to {id, tldr} pills.
 
     Note: expand_links is a slim-mode feature. When verbose=True, the full
     frontmatter is rendered as-is and expand_links is silently ignored. To
@@ -3663,7 +3638,7 @@ def backlog_idea_get(
     if expand_links:
         data = _load()
         tldr_index = _build_tldr_index(data, project_root=bp.parent.parent if bp.exists() else None)
-        for link_field in ("related_tasks", "related_issues", "related_lessons"):
+        for link_field in ("related_tasks", "related_issues"):
             ids = slim.get(link_field) or []
             if ids:
                 slim[link_field] = _expand_link_ids(ids, tldr_index)
@@ -3685,7 +3660,6 @@ def backlog_idea_update(
     tags: list[str] | None = None,
     related_tasks: list[str] | None = None,
     related_issues: list[str] | None = None,
-    related_lessons: list[str] | None = None,
     promoted_to: str = "",
     archived: bool | None = None,
 ) -> str:
@@ -3711,8 +3685,6 @@ def backlog_idea_update(
         updates["related_tasks"] = related_tasks
     if related_issues is not None:
         updates["related_issues"] = related_issues
-    if related_lessons is not None:
-        updates["related_lessons"] = related_lessons
     if promoted_to:
         updates["promoted_to"] = promoted_to
     if archived is not None:
@@ -3857,512 +3829,6 @@ def viewer_prefs_set(patch_json: str) -> str:
     _deep_merge(prefs, patch)
     save_viewer_prefs(prefs)
     return "ok"
-
-
-@mcp.tool()
-def backlog_lesson_create(
-    title: str,
-    kind: str,
-    body: str = "",
-    files: list[str] | None = None,
-    task_titles_match: list[str] | None = None,
-    task_kinds: list[str] | None = None,
-    related_tasks: list[str] | None = None,
-    related_issues: list[str] | None = None,
-    tier: str = "active",
-    tldr: str = "",
-) -> str:
-    """Create a project-scoped lesson — a reusable pattern, anti-pattern, or gotcha.
-
-    Lessons compound: each session reinforces lessons that get applied,
-    raising their priority. Auto-promote to 'core' tier (always loaded full)
-    when a gotcha/anti-pattern reaches reinforce_count >= 5.
-
-    Triggers determine when this lesson loads on `pick-task`:
-    - files: glob patterns matched against files the task will touch.
-    - task_titles_match: substrings checked against the task title.
-    - task_kinds: list of task kinds (feature/bug/spike/etc).
-
-    Args:
-        title: Required. One-line summary of the lesson.
-        kind: pattern | anti-pattern | gotcha.
-        body: Markdown body. Suggested sections: ## Why, ## What to do, ## Examples.
-        files: Glob patterns for trigger matching.
-        task_titles_match: Substrings for trigger matching.
-        task_kinds: Task kinds for trigger matching.
-        related_tasks / related_issues: Cross-refs.
-        tier: active (default) | core | retired.
-        tldr: One-line essence of the lesson. Auto-generated from body or
-            title if omitted.
-    """
-    bp = _backlog_path()
-    if not bp.exists():
-        return f"Error: no backlog found at {bp}. Run `backlog_init` first."
-    if kind not in LESSON_KINDS:
-        return f"Error: kind must be one of {LESSON_KINDS}"
-    if tier not in LESSON_TIERS:
-        return f"Error: tier must be one of {LESSON_TIERS}"
-    # tldr: use supplied value, or auto-generate from body/title
-    tldr_autogen = False
-    if not tldr:
-        tldr = extract_tldr(body) or title[:TLDR_MAX_CHARS]
-        tldr_autogen = True
-    triggers = {
-        "files": files or [],
-        "task_titles_match": task_titles_match or [],
-        "task_kinds": task_kinds or [],
-    }
-    try:
-        lid, target = _write_lesson(
-            bp,
-            title=title,
-            kind=kind,
-            triggers=triggers,
-            body=body,
-            tier=tier,
-            related_tasks=related_tasks or [],
-            related_issues=related_issues or [],
-            tldr=tldr,
-            tldr_autogen=tldr_autogen,
-        )
-    except ValueError as exc:
-        return f"Error: {exc}"
-
-    # Seed an initial event so the lesson lands on the "active" shelf
-    # immediately. Without this, compute_lesson_shelf sees zero events within
-    # retired_after_days and classifies a brand-new lesson as "retired".
-    # We add the event directly rather than going through lesson_reinforce —
-    # creation is not a reinforcement, so reinforce_count must stay at 0
-    # until the user actually applies the lesson.
-    try:
-        from datetime import datetime as _dt, timezone as _tz
-        from taskmaster.taskmaster_v3 import load_lesson as _load_lesson, save_lesson as _save_lesson
-        _l = _load_lesson(lid)
-        _seed_at = _dt.now(_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        _l.setdefault("reinforce_events", []).append(
-            {"at": _seed_at, "source": "user", "note": "created"}
-        )
-        _save_lesson(_l)
-    except Exception:
-        pass
-
-    data = _load()
-    _sync_lesson_index(data, bp)
-    _save(data)
-    _ensure_v3_marker(bp)
-
-    # Plan C: auto-detect inline ID mentions, materialize as `references` links.
-    from taskmaster.taskmaster_v3 import auto_link_on_save as _auto_link_on_save
-    try:
-        _auto_link_on_save(bp, lid)
-    except Exception:
-        pass
-
-    return f"Lesson created: {lid} ({kind}, {tier}) — {title}\nFile: {target.relative_to(ROOT)}"
-
-
-@mcp.tool()
-def backlog_lesson_list(
-    tier: str = "",
-    kind: str = "",
-    verbose: bool = False,
-) -> str:
-    """List lessons, optionally filtered by tier and/or kind.
-
-    Args:
-        tier: Filter by tier: active, core, retired.
-        kind: Filter by kind: pattern, anti-pattern, gotcha.
-        verbose: If True, include reinforce_count and tier/kind metadata per
-            entry. Slim (default) shows id, title, and tldr only.
-    """
-    bp = _backlog_path()
-    if not bp.exists():
-        return "No backlog found."
-    lines = []
-    for lid in _list_lesson_ids(bp):
-        try:
-            fm, _ = _read_lesson(bp, lid)
-        except Exception:
-            continue
-        if tier and fm.get("tier") != tier:
-            continue
-        if kind and fm.get("kind") != kind:
-            continue
-        if verbose:
-            rc = fm.get("reinforce_count", 0)
-            lines.append(
-                f"- {fm['id']} [{fm.get('tier','active')}/{fm.get('kind','?')}] x{rc} — {fm.get('title','')}"
-            )
-            if fm.get("tldr"):
-                lines.append(f"  tldr: {fm['tldr']}")
-        else:
-            # Slim: id, title, and tldr pill (omit heavy fields)
-            tldr = fm.get("tldr", "")
-            entry = f"- {fm['id']} — {fm.get('title', '')}"
-            if tldr:
-                entry += f" — {tldr}"
-            lines.append(entry)
-    return "\n".join(lines) if lines else "No lessons match."
-
-
-@mcp.tool()
-def backlog_lesson_get(
-    lesson_id: str,
-    verbose: bool = False,
-    sections: list[str] | None = None,
-    expand_links: bool = False,
-) -> str:
-    """Read a lesson's content.
-
-    By default returns a slim view (frontmatter fields only, no body) to
-    minimise token cost. Use verbose=True for the full body. Use sections
-    to pull specific named body sections (why, what_to_do, examples).
-    Use expand_links=True to expand related_tasks and related_issues to
-    {id, tldr} pills.
-
-    Note: expand_links is a slim-mode feature. When verbose=True, the full
-    frontmatter is rendered as-is and expand_links is silently ignored. To
-    get expanded links use slim mode (verbose=False) with expand_links=True.
-    """
-    bp = _backlog_path()
-    if not bp.exists():
-        return "No backlog found."
-    if verbose and expand_links:
-        # expand_links is a slim-mode feature; in verbose mode the full frontmatter
-        # is rendered as-is (no ID→pill substitution). To get expanded links, use
-        # slim mode (verbose=False) with expand_links=True.
-        pass  # silently ignore expand_links in verbose
-    try:
-        fm, body = _read_lesson(bp, lesson_id)
-    except FileNotFoundError:
-        return f"Lesson not found: {lesson_id}"
-
-    # ── sections-only mode ───────────────────────────────────────────────────
-    if sections is not None and not sections:
-        return "Error: sections=[] requested no sections; pass sections=None for the slim view or name at least one section"
-    if sections:
-        try:
-            sec_data = _resolve_sections(fm, kind="lesson", sections=sections, body=body)
-        except ValueError as exc:
-            return f"Error: {exc}"
-        lines = [f"## Lesson: {lesson_id}\n"]
-        for sec, content in sec_data.items():
-            lines.append(f"### {sec}\n{content}")
-        return "\n".join(lines)
-
-    # ── verbose mode ─────────────────────────────────────────────────────────
-    if verbose:
-        fm_lines = [f"  {k}: {v}" for k, v in fm.items()]
-        return "---\n" + "\n".join(fm_lines) + "\n---\n" + body
-
-    # ── slim mode (default) ──────────────────────────────────────────────────
-    slim = _slim_entity(fm, kind="lesson")
-
-    if expand_links:
-        data = _load()
-        tldr_index = _build_tldr_index(data, project_root=bp.parent.parent if bp.exists() else None)
-        for link_field in ("related_tasks", "related_issues"):
-            ids = slim.get(link_field) or []
-            if ids:
-                slim[link_field] = _expand_link_ids(ids, tldr_index)
-
-    lines = [f"## Lesson: {slim.pop('id', lesson_id)}\n"]
-    for k, v in slim.items():
-        lines.append(f"**{k}:** {v}")
-    # Plan C: emit grouped typed-links block.
-    _append_grouped_links_block(lines, fm, bp, expand_links=expand_links)
-    return "\n".join(lines)
-
-
-@mcp.tool()
-def backlog_lesson_update(
-    lesson_id: str,
-    title: str = "",
-    kind: str = "",
-    tier: str = "",
-    files: list[str] | None = None,
-    task_titles_match: list[str] | None = None,
-    task_kinds: list[str] | None = None,
-    body: str = "",
-) -> str:
-    """Update a lesson's metadata or body. Pass empty values to skip a field."""
-    bp = _backlog_path()
-    if not bp.exists():
-        return "No backlog found."
-    updates: dict[str, Any] = {}
-    if title:
-        updates["title"] = title
-    if kind:
-        if kind not in LESSON_KINDS:
-            return f"Error: kind must be one of {LESSON_KINDS}"
-        updates["kind"] = kind
-    if tier:
-        if tier not in LESSON_TIERS:
-            return f"Error: tier must be one of {LESSON_TIERS}"
-        updates["tier"] = tier
-    if files is not None or task_titles_match is not None or task_kinds is not None:
-        # Need a fresh read to merge trigger fields
-        fm, _ = _read_lesson(bp, lesson_id)
-        triggers = dict(fm.get("triggers") or {})
-        if files is not None:
-            triggers["files"] = files
-        if task_titles_match is not None:
-            triggers["task_titles_match"] = task_titles_match
-        if task_kinds is not None:
-            triggers["task_kinds"] = task_kinds
-        updates["triggers"] = triggers
-    if body:
-        updates["body"] = body
-    try:
-        _update_lesson(bp, lesson_id, **updates)
-    except FileNotFoundError:
-        return f"Lesson not found: {lesson_id}"
-    except ValueError as exc:
-        return f"Error: {exc}"
-    data = _load()
-    _sync_lesson_index(data, bp)
-    _save(data)
-
-    # Plan C: auto-detect inline ID mentions on body updates.
-    if body:
-        from taskmaster.taskmaster_v3 import auto_link_on_save as _auto_link_on_save
-        try:
-            _auto_link_on_save(bp, lesson_id)
-        except Exception:
-            pass
-
-    return f"Lesson updated: {lesson_id}"
-
-
-@mcp.tool()
-def backlog_lesson_reinforce(lesson_id: str) -> str:
-    """Mark a lesson as applied this session (reinforce_count++, last_reinforced=today).
-
-    Suggests promotion to core tier when a gotcha/anti-pattern reaches the
-    reinforcement threshold.
-    """
-    bp = _backlog_path()
-    if not bp.exists():
-        return "No backlog found."
-    try:
-        fm = _reinforce_lesson(bp, lesson_id)
-    except FileNotFoundError:
-        return f"Lesson not found: {lesson_id}"
-    except ValueError as exc:
-        return f"Error: {exc}"
-    msg = f"Reinforced {lesson_id} → x{fm['reinforce_count']}"
-    if _lesson_eligible_for_promotion(fm):
-        msg += "\n→ Eligible for promotion to core tier (auto-load at session start). Use `backlog_lesson_update {} tier=core` to promote.".format(lesson_id)
-    return msg
-
-
-def lesson_reinforce(lesson_id: str, source: str = "user", note: str = "") -> str:
-    """Record a reinforcement event for a lesson.
-
-    Args:
-        lesson_id: e.g. "L-014"
-        source: one of "user" | "claude" | "skill"
-        note: optional free-text annotation
-
-    Returns the updated lesson summary as a JSON string.
-    """
-    import json as _json
-    from taskmaster.taskmaster_v3 import lesson_reinforce as _impl
-
-    try:
-        summary = _impl(lesson_id, source=source, note=note)
-    except FileNotFoundError:
-        return _json.dumps({"ok": False, "error": f"lesson {lesson_id} not found"})
-    except ValueError as e:
-        return _json.dumps({"ok": False, "error": str(e)})
-    return _json.dumps(summary, indent=2, default=str)
-
-
-@mcp.tool()
-def backlog_lesson_digest() -> str:
-    """Return the slim digest of active-tier lessons for session-start injection.
-
-    Format: one line per lesson with id, kind, title. Capped at 30 entries.
-    Excludes core (loaded separately, full body) and retired tiers.
-    """
-    bp = _backlog_path()
-    if not bp.exists():
-        return "No backlog found."
-    digest = _lesson_digest(bp)
-    if not digest:
-        return "No active lessons."
-    return "\n".join(f"- {d['id']} [{d['kind']}] {d['title']}" for d in digest)
-
-
-def _transcripts_dir() -> Path:
-    """Resolve the Claude project transcripts directory.
-
-    Override with `TASKMASTER_TRANSCRIPTS_DIR` for tests. Default is
-    `~/.claude/projects/<encoded-cwd>/` per Claude Code's storage layout.
-    """
-    override = os.environ.get("TASKMASTER_TRANSCRIPTS_DIR")
-    if override:
-        return Path(override)
-    home = Path.home() / ".claude" / "projects"
-    encoded = str(ROOT.resolve()).replace("\\", "-").replace("/", "-").replace(":", "")
-    return home / encoded
-
-
-@mcp.tool()
-def backlog_lesson_candidate_defer(
-    title: str,
-    kind: str = "",
-    topic: str = "",
-    scope: str = "point",
-    context: str = "",
-) -> str:
-    """Defer a lesson candidate to `.taskmaster/lessons/_candidates.md`.
-
-    Use mid-session when Claude wants to flag a candidate but the user isn't
-    ready to write a full lesson. End-session sweep reads this file.
-
-    Args:
-        title: One-line summary. Required.
-        kind: pattern | anti-pattern | gotcha. Optional — leave empty to
-            classify later during the sweep.
-        topic: One-word handle for grouping in the sweep UI.
-        scope: 'point' (default) or 'session' (flags the active handover for
-            retro-extraction; see references/session-retro.md).
-        context: Free text — session id, commit sha, anything traceable.
-    """
-    bp = _backlog_path()
-    if not bp.exists():
-        return f"Error: no backlog found at {bp}. Run `backlog_init` first."
-    try:
-        idx = _lesson_candidates_defer(
-            bp,
-            title=title,
-            kind=kind,
-            topic=topic,
-            scope=scope,
-            context=context,
-        )
-    except ValueError as exc:
-        return f"Error: {exc}"
-    return f"Deferred candidate #{idx}: {title.strip()}"
-
-
-@mcp.tool()
-def backlog_lesson_candidates_list() -> str:
-    """List deferred lesson candidates (markdown bullet list, indexed)."""
-    bp = _backlog_path()
-    if not bp.exists():
-        return f"Error: no backlog found at {bp}."
-    items = _lesson_candidates_read(bp)
-    if not items:
-        return "No deferred candidates."
-    lines = []
-    for idx, it in enumerate(items):
-        kind = it.get("kind") or "?"
-        topic = it.get("topic") or ""
-        scope = it.get("scope") or "point"
-        head = f"- [#{idx}] [{kind}/{scope}]"
-        if topic:
-            head += f" ({topic})"
-        head += f" — {it.get('title', '')}"
-        lines.append(head)
-    return "\n".join(lines)
-
-
-@mcp.tool()
-def backlog_lesson_candidate_drop(index: int) -> str:
-    """Drop the deferred candidate at `index` (0-based)."""
-    bp = _backlog_path()
-    if not bp.exists():
-        return f"Error: no backlog found at {bp}."
-    items = _lesson_candidates_read(bp)
-    if index < 0 or index >= len(items):
-        return f"Error: candidate #{index} not found (have {len(items)} entries)."
-    title = items[index].get("title", "")
-    n = _lesson_candidates_clear(bp, indices=[index])
-    if not n:
-        return f"Error: candidate #{index} not found."
-    return f"Dropped candidate #{index}: {title}"
-
-
-@mcp.tool()
-def backlog_lesson_candidates_scan(days: int = 7, kind: str = "") -> str:
-    """Grep this project's transcript jsonl for `<lesson-candidate>` tags.
-
-    Recovery path for tags lost to compaction (until the PreCompact hook in
-    v3-skills-006 lands, this is the only such path). Reads
-    `~/.claude/projects/<this-project>/*.jsonl` within the last `days` days.
-
-    Args:
-        days: Window in days (default 7).
-        kind: Filter to a single kind (gotcha / pattern / anti-pattern).
-
-    Returns markdown grouped by source jsonl filename.
-    """
-    transcripts = _transcripts_dir()
-    if not transcripts.exists():
-        return f"No transcripts directory at {transcripts}."
-    matches = _scan_transcripts_for_candidates(
-        transcripts, days=days, kind_filter=kind
-    )
-    if not matches:
-        return f"No `<lesson-candidate>` tags found in last {days} days."
-    by_file: dict[str, list[dict[str, Any]]] = {}
-    for m in matches:
-        by_file.setdefault(Path(m["source_file"]).name, []).append(m)
-    lines: list[str] = []
-    for fname, items in by_file.items():
-        lines.append(f"## {fname}")
-        for it in items:
-            tag = f"[{it.get('kind') or '?'}]"
-            topic = f" ({it['topic']})" if it.get("topic") else ""
-            preview = (it.get("body") or "").splitlines()[0][:100]
-            lines.append(
-                f"- L{it['source_line']} {tag}{topic} — {preview}"
-            )
-        lines.append("")
-    return "\n".join(lines).rstrip()
-
-
-@mcp.tool()
-def backlog_lesson_match(
-    task_title: str = "",
-    touched_files: list[str] | None = None,
-    verbose: bool = False,
-) -> str:
-    """Find lessons matching a task by title and/or file globs.
-
-    Used by `pick-task` to inject relevant lessons before a task starts.
-    Returns up to 3 best-match lesson summaries.
-
-    Args:
-        task_title: Task title to match against lesson trigger phrases.
-        touched_files: File paths the task will touch (matched against lesson
-            file glob triggers).
-        verbose: If True, return full metadata per lesson (kind, tier,
-            reinforce_count). Slim (default) returns id + tldr pills only.
-    """
-    bp = _backlog_path()
-    if not bp.exists():
-        return "No backlog found."
-    matches = _match_lessons_for_task(
-        bp,
-        {"title": task_title or ""},
-        touched_files=touched_files or [],
-    )
-    if not matches:
-        return "No matching lessons."
-    lines = []
-    for fm, _body in matches:
-        if verbose:
-            lines.append(
-                f"- {fm.get('id')} [{fm.get('kind')}] x{fm.get('reinforce_count', 0)}: {fm.get('title')}"
-            )
-        else:
-            # Slim: id — tldr (omit reinforce_count, kind, tier)
-            tldr = fm.get("tldr") or fm.get("title", "")
-            lines.append(f"- {fm.get('id')} — {tldr}")
-    return "\n".join(lines)
 
 
 @mcp.tool()
@@ -6920,7 +6386,7 @@ def _compute_recent_events(since_iso: str) -> list:
     Plan 4 stub: derive events from backlog state. Plan 5+ may swap in a
     persisted event log.
     Event shape: {kind, at, summary, ref?}
-    Kinds: task_closed, task_moved, issue_opened, lesson_promoted, phase_advanced.
+    Kinds: task_closed, task_moved, issue_opened, phase_advanced.
     """
     from datetime import datetime
     try:
@@ -7083,11 +6549,10 @@ def _load_epic_full(epic_id: str) -> dict | None:
 
 
 def _load_related_for_task(task_id: str) -> dict | None:
-    """Build the related-entities payload for a task: lessons (anchor-matched),
-    handovers (task_ids), issues (task_ids), forward deps, reverse deps.
+    """Build the related-entities payload for a task: handovers (task_ids),
+    issues (task_ids), forward deps, reverse deps.
     Returns None if the task is unknown.
     """
-    import fnmatch
     import re
     import yaml
 
@@ -7106,8 +6571,6 @@ def _load_related_for_task(task_id: str) -> dict | None:
     if me is None:
         return None
 
-    my_anchors = list(me.get("anchors") or [])
-
     def _read_fm(p: Path) -> tuple[dict, str]:
         raw = p.read_text(encoding="utf-8")
         m = re.match(r"^---\n(.*?)\n---\n(.*)$", raw, re.DOTALL)
@@ -7119,32 +6582,7 @@ def _load_related_for_task(task_id: str) -> dict | None:
             fm = {}
         return fm, m.group(2)
 
-    def _anchors_overlap(a: list, b: list) -> bool:
-        for pat in a:
-            for other in b:
-                if fnmatch.fnmatch(other, pat) or fnmatch.fnmatch(pat, other):
-                    return True
-                if pat == other:
-                    return True
-        return False
-
     sidecar_root = backlog_path.parent
-
-    lessons: list[dict] = []
-    lessons_dir = sidecar_root / "lessons"
-    if lessons_dir.is_dir():
-        for f in sorted(lessons_dir.glob("*.md")):
-            fm, body = _read_fm(f)
-            their_anchors = list(fm.get("anchors") or [])
-            if _anchors_overlap(my_anchors, their_anchors):
-                lessons.append({
-                    "id": fm.get("id") or f.stem,
-                    "kind": fm.get("kind"),
-                    "title": fm.get("title") or "",
-                    "anchors": their_anchors,
-                    "summary": body.strip().splitlines()[0] if body.strip() else "",
-                    "_path": str(f),
-                })
 
     handovers: list[dict] = []
     handovers_dir = sidecar_root / "handovers"
@@ -7190,7 +6628,6 @@ def _load_related_for_task(task_id: str) -> dict | None:
 
     return {
         "task_id": task_id,
-        "lessons": lessons,
         "handovers": handovers,
         "issues": issues,
         "dependencies": dependencies,
@@ -8009,25 +7446,6 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 return
             self._send_json(200, _snapshot_diff(snap_a, snap_b))
             return
-        elif clean_path == "/api/lessons":
-            import json
-            from taskmaster.taskmaster_v3 import (
-                list_lesson_ids_cwd, load_lesson, compute_lesson_shelf,
-            )
-            prefs = load_viewer_prefs()
-            thresholds = prefs.get("lessons", {}).get("thresholds", {})
-            lessons = []
-            for lid in list_lesson_ids_cwd():
-                try:
-                    lesson = load_lesson(lid)
-                except Exception:
-                    continue
-                summary = {k: v for k, v in lesson.items() if k != "_body"}
-                summary["shelf"] = compute_lesson_shelf(lesson, thresholds)
-                summary["summary"] = (lesson.get("_body") or "").strip()
-                lessons.append(summary)
-            self._send_json(200, {"lessons": lessons})
-            return
         elif clean_path.startswith("/api/bugs"):
             from urllib.parse import urlparse, parse_qs
             from taskmaster.taskmaster_v3 import (
@@ -8248,7 +7666,6 @@ class ViewerHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         import json
         import re
-        from taskmaster.taskmaster_v3 import lesson_reinforce as _reinforce
 
         if self.path == "/api/ideas":
             from taskmaster.taskmaster_v3 import _resolve_artifact_root
@@ -8277,7 +7694,6 @@ class ViewerHandler(BaseHTTPRequestHandler):
                     status=payload.get("status", ""),
                     related_tasks=payload.get("related_tasks") or [],
                     related_issues=payload.get("related_issues") or [],
-                    related_lessons=payload.get("related_lessons") or [],
                     created_by=payload.get("created_by", "user"),
                 )
             except ValueError as e:
@@ -8344,29 +7760,6 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 self._send_json(400, {"ok": False, "error": str(e)})
                 return
             self._send_json(200, {"ok": True, "id": note_id})
-            return
-
-        m = re.fullmatch(r"/api/lessons/([A-Za-z0-9_\-]+)/reinforce", self.path)
-        if m:
-            lesson_id = m.group(1)
-            length = int(self.headers.get("Content-Length") or 0)
-            raw = self.rfile.read(length).decode("utf-8") if length else ""
-            try:
-                data = json.loads(raw) if raw else {}
-            except Exception as e:
-                self._send_json(400, {"ok": False, "error": f"invalid JSON: {e}"})
-                return
-            source = data.get("source", "user")
-            note = data.get("note", "")
-            try:
-                summary = _reinforce(lesson_id, source=source, note=note)
-            except FileNotFoundError:
-                self._send_json(404, {"ok": False, "error": f"lesson {lesson_id} not found"})
-                return
-            except ValueError as e:
-                self._send_json(400, {"ok": False, "error": str(e)})
-                return
-            self._send_json(200, summary)
             return
 
         m = re.fullmatch(r"/api/handover/([A-Za-z0-9_\-\.]+)/status", self.path)
@@ -9061,28 +8454,6 @@ def snapshot_diff(snapshot_a_json: str, snapshot_b_json: str) -> str:
     a = _json.loads(snapshot_a_json)
     b = _json.loads(snapshot_b_json)
     return _json.dumps(_snapshot_diff(a, b))
-
-
-def lesson_list_extended() -> str:
-    """List all lessons with computed shelf placement using current viewer thresholds."""
-    import json as _json
-    from taskmaster.taskmaster_v3 import (
-        list_lesson_ids_cwd, load_lesson, compute_lesson_shelf, load_viewer_prefs,
-    )
-
-    prefs = load_viewer_prefs()
-    thresholds = prefs.get("lessons", {}).get("thresholds", {})
-    out = []
-    for lid in list_lesson_ids_cwd():
-        try:
-            lesson = load_lesson(lid)
-        except Exception:
-            continue
-        summary = {k: v for k, v in lesson.items() if k != "_body"}
-        summary["shelf"] = compute_lesson_shelf(lesson, thresholds)
-        summary["summary"] = (lesson.get("_body") or "").strip()
-        out.append(summary)
-    return _json.dumps({"lessons": out}, indent=2, default=str)
 
 
 def issue_list_extended(include_resolved: bool = True) -> str:

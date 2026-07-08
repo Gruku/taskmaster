@@ -27,8 +27,8 @@ test.describe('Recap screen', () => {
     });
     await page.goto('/v3#/recap/SES-0001');
     await expect(page.locator('.recap-hero-title')).toContainText('Stitched');
-    await expect(page.locator('.recap-stat')).toHaveCount(5);
-    await expect(page.locator('.receipts-grid .rcard')).toHaveCount(4);
+    await expect(page.locator('.recap-stat')).toHaveCount(4);
+    await expect(page.locator('.receipts-grid .rcard')).toHaveCount(3);
   });
 
   test('clicking edit reveals three textareas + save/cancel/regenerate', async ({ page }) => {
@@ -47,18 +47,17 @@ test.describe('Recap screen', () => {
     await page.locator('[data-filt=tasks]').click();
     await expect(page.locator('.rcard:has-text("Tasks")')).toBeVisible();
     await expect(page.locator('.rcard:has-text("Files touched")')).toBeHidden();
-    await expect(page.locator('.rcard:has-text("Lessons fired")')).toBeHidden();
     await expect(page.locator('.rcard:has-text("Issues")')).toBeHidden();
   });
 
-  test('hero stat strip has exactly 5 cells (Handovers excluded per spec §3.16)', async ({ page }) => {
+  test('hero stat strip has exactly 4 cells (Handovers excluded per spec §3.16)', async ({ page }) => {
     await page.goto('/v3#/recap/SES-0001');
     const labels = await page.locator('.recap-stat-label').allTextContents();
-    expect(labels.length).toBe(5);
+    expect(labels.length).toBe(4);
     expect(labels.map(s => s.toLowerCase())).not.toContain('handovers');
   });
 
-  test('spec §3.16 coverage: picker, hero, narrative-3, stats-5, receipts-4, footer, edit', async ({ page, request }) => {
+  test('spec §3.16 coverage: picker, hero, narrative-3, stats-4, receipts-3, footer, edit', async ({ page, request }) => {
     await request.put('/api/recap/SES-0001', {
       headers: { 'Content-Type': 'application/json' },
       data: {
@@ -72,8 +71,8 @@ test.describe('Recap screen', () => {
     await expect(page.locator('.recap-picker')).toBeVisible();
     await expect(page.locator('.recap-hero-kind')).toHaveText('RECAP');
     await expect(page.locator('.narr-section')).toHaveCount(3);
-    await expect(page.locator('.recap-stat')).toHaveCount(5);
-    await expect(page.locator('.rcard')).toHaveCount(4);
+    await expect(page.locator('.recap-stat')).toHaveCount(4);
+    await expect(page.locator('.rcard')).toHaveCount(3);
     await expect(page.locator('[data-role=copy-resume]')).toBeVisible();
     await expect(page.locator('[data-role=open-sessions]')).toBeVisible();
     await expect(page.locator('[data-role=edit]')).toBeVisible();

@@ -37,13 +37,12 @@ The slim index — the fields that drive the kanban, dependencies, and status qu
 
 ## New top-level lists in backlog.yaml on v3
 
-Three new top-level sections appear in `backlog.yaml` after migration. Each is a slim index; full content lives in the corresponding subdirectory.
+Two new top-level sections appear in `backlog.yaml` after migration. Each is a slim index; full content lives in the corresponding subdirectory.
 
 | Section | What it holds |
 |---|---|
 | `handovers` | Last 30 handover entries: `id`, `date`, `tldr`, `next_action`, `task_ids` |
 | `issues` | All issues: `id`, `title`, `severity`, `status`, `components`, `related_tasks` |
-| `lessons_meta` | All lessons: `id`, `title`, `kind`, `tier`, `reinforce_count` |
 
 ---
 
@@ -56,7 +55,6 @@ All paths relative to the backlog directory (`.taskmaster/`; `.claude/` for lega
 | `tasks/` | `<id>.md` per task — heavy fields + body | No |
 | `handovers/` | `YYYY-MM-DD-<slug>.md` per session handover | No |
 | `issues/` | `ISS-<NNN>.md` per issue | No |
-| `lessons/` | `L-<NNN>.md` per lesson | No |
 | `snapshots/` | `last.json` — slim snapshot for recap diff | Yes |
 
 `snapshots/` holds runtime state and must be gitignored. The `taskmaster:migrate-v3` skill offers to add it during post-flight.

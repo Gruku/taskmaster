@@ -127,14 +127,6 @@ export const api = {
     return r.json();
   },
 
-  async listLessons(filter = {}) {
-    const u = new URL('/api/lessons', location.origin);
-    for (const [k, v] of Object.entries(filter)) u.searchParams.set(k, v);
-    const r = await fetch(u);
-    if (!r.ok) return [];
-    return r.json();
-  },
-
   async getRecentCommits({ limit = 8 } = {}) {
     const r = await fetch(`/api/git/commits?limit=${limit}`);
     if (!r.ok) return [];
@@ -157,7 +149,7 @@ export const api = {
     return r.json();
   },
 
-  // Plans 5/6 add: reinforceLesson, getRecap, putRecap, putAutoState, etc.
+  // Plans 5/6 add: getRecap, putRecap, putAutoState, etc.
 
   // ── Notes (Desk) ──────────────────────────────────────────────
   notes: (includeArchived = false) =>
@@ -212,23 +204,6 @@ export async function savePrefs(patch) {
     body: JSON.stringify(patch),
   });
   if (!r.ok) throw new Error(`savePrefs: ${r.status}`);
-  return r.json();
-}
-
-// --- Lessons ---------------------------------------------------------------
-export async function getLessons() {
-  const r = await fetch('/api/lessons');
-  if (!r.ok) throw new Error(`getLessons failed: ${r.status}`);
-  return r.json();
-}
-
-export async function reinforceLesson(lessonId, { source = 'user', note = '' } = {}) {
-  const r = await fetch(`/api/lessons/${encodeURIComponent(lessonId)}/reinforce`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ source, note }),
-  });
-  if (!r.ok) throw new Error(`reinforceLesson failed: ${r.status}`);
   return r.json();
 }
 

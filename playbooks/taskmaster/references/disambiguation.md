@@ -16,10 +16,11 @@ Use intent to resolve, not the surface phrase.
 - **task** = a unit of work (`backlog_add_task`). "Add a task to fix this bug."
 - Both can coexist for the same defect.
 
-## lesson vs note
+## idea vs note
 
-- **Task notes** — scratch space for one task. "Note this for the task."
-- **Lesson** — project-wide guidance. "Remember this for next time you touch auth." → `taskmaster:lesson`.
+- **idea** — a parking-lot entry worth tracking on its own record. "Save this as an idea" → `taskmaster:add-idea`.
+- **desk note** — an ephemeral situational scratchpad entry, not a standalone entity. "Note this for later" with no clear future-work shape → `backlog_note_create`.
+- If in doubt, prefer the idea route — it is the durable, searchable one.
 
 ## recap vs last_session
 

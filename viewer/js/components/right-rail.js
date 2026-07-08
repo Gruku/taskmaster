@@ -1,6 +1,6 @@
 // Shared right-rail used by Task Detail Variants A and B.
-// `mountRightRail(root, { task, related, onNavigate })` renders seven panels:
-//   Docs · Links (typed, Plan C) · Lessons in scope · Handovers · Issues
+// `mountRightRail(root, { task, related, onNavigate })` renders six panels:
+//   Docs · Links (typed, Plan C) · Handovers · Issues
 //   · Dependencies + Unblocks · Blockers
 // Returns a cleanup function.
 
@@ -12,7 +12,6 @@ export function mountRightRail(root, { task, related, onNavigate }) {
 
   root.appendChild(panelDocs(task));
   root.appendChild(panelLinks(task, onNavigate));
-  root.appendChild(panelLessons(related?.lessons || []));
   root.appendChild(panelHandovers(related?.handovers || []));
   root.appendChild(panelIssues(related?.issues || [], onNavigate));
   root.appendChild(panelDeps(related?.dependencies || [], related?.unblocks || [], onNavigate));
@@ -76,21 +75,6 @@ function panelDocs(task) {
   );
   return h('section', { class: 'td-panel td-panel-docs' },
     [panelHeader('Docs'), ...(items.length ? items : [h('div', { class: 'td-empty' }, 'no docs')])]);
-}
-
-function panelLessons(lessons) {
-  if (!lessons.length) {
-    return h('section', { class: 'td-panel' },
-      [panelHeader('Lessons in scope'), h('div', { class: 'td-empty' }, 'no anchor matches')]);
-  }
-  return h('section', { class: 'td-panel td-panel-lessons' },
-    [panelHeader('Lessons in scope'),
-     h('div', { class: 'td-rail-hint' }, 'Surfaced via anchor match'),
-     ...lessons.map((l) =>
-       h('div', { class: 'td-lesson' },
-         [h('span', { class: 'mono td-lesson-id' }, l.id),
-          h('span', { class: 'td-lesson-title' }, l.title || ''),
-          h('span', { class: 'td-lesson-anchor mono' }, (l.anchors || []).join(' · '))]))]);
 }
 
 function panelHandovers(handovers) {

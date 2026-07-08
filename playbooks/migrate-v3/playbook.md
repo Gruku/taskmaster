@@ -1,6 +1,6 @@
 # Migrate to v3
 
-v3 is an opt-in schema upgrade: slim index + per-task files. Unlocks handovers, lessons, issues, and recap.
+v3 is an opt-in schema upgrade: slim index + per-task files. Unlocks handovers, issues, and recap.
 
 This is the ONLY correct way to migrate a project to v3 — do not call backlog_migrate_v3 directly without the pre-flight gate.
 

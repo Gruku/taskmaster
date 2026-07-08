@@ -83,7 +83,6 @@ def _v3_backlog_with_epic_and_task(tmp_path: Path) -> tuple[Path, str, str]:
         "phases": [{"id": "dev", "name": "Dev", "status": "active", "order": 1}],
         "handovers": [],
         "issues": [],
-        "lessons_meta": [],
     }
     v3.save_v3(bp, data)
     # Write PROGRESS.md so complete_task / pick_task don't error
@@ -189,38 +188,6 @@ def test_v3_handover_create_read_list(tmp_path, monkeypatch):
     # 4. List filtered by task_id
     listed = backlog_server.backlog_handover_list(task_id=task_id)
     assert hid in listed
-
-
-def test_v3_lesson_create_match_reinforce(tmp_path, monkeypatch):
-    """Create lesson → match by file glob → reinforce → digest."""
-    monkeypatch.chdir(tmp_path)
-    bp, _epic_id, _task_id = _v3_backlog_with_epic_and_task(tmp_path)
-    _redirect(monkeypatch, tmp_path, bp)
-
-    # 1. Create
-    result = backlog_server.backlog_lesson_create(
-        title="Always read auth/session.ts before editing auth flow",
-        kind="gotcha",
-        files=["src/auth/*.ts"],
-        body="## Why\nNon-obvious refresh interaction.\n",
-    )
-    assert "Lesson created" in result
-    lid = result.split(":")[1].strip().split()[0]  # "L-001"
-
-    # 2. Match by file glob
-    matched = backlog_server.backlog_lesson_match(
-        task_title="auth refactor",
-        touched_files=["src/auth/session.ts"],
-    )
-    assert lid in matched
-
-    # 3. Reinforce
-    reinforced = backlog_server.backlog_lesson_reinforce(lid)
-    assert "x1" in reinforced
-
-    # 4. Digest
-    digest = backlog_server.backlog_lesson_digest()
-    assert lid in digest
 
 
 def test_v3_issue_lifecycle(tmp_path, monkeypatch):

@@ -19,10 +19,10 @@ If there are more than 5 open handovers, show `(+N more — use --deep to see al
 Compose a single counts line from the above tool outputs:
 
 ```
-N new issues (N P0) · N matched lessons · N stale tasks · N flagged handovers
+N new issues (N P0) · N stale tasks · N flagged handovers
 ```
 
-For issues count: use the `open_issues_count` field from `backlog_status` output (slim mode includes aggregate counts). For matched lessons and stale count: also from `backlog_status` aggregate fields.
+For issues count: use the `open_issues_count` field from `backlog_status` output (slim mode includes aggregate counts). For stale count: also from `backlog_status` aggregate fields.
 
 ### Step 3b — Linear sync footer (only if `linear.yaml` exists)
 
@@ -37,6 +37,10 @@ If the queue is empty and there are no permanent failures, omit this line entire
 ### Step 3c — Your desk (sticky notes)
 
 Call `backlog_note_list()`. If notes exist, render them under a **Your desk** heading in the briefing — pinned first, one line each (author · age · first line). These are the user's situational notes-to-self: treat as orientation context for "what was on my mind", alongside (not replacing) the last handover. Never archive, edit, or act on a note without the user asking.
+
+### Step 3d — Legacy lessons notice (only if `.taskmaster/lessons/` has `L-*.md` files)
+
+If the project's `.taskmaster/lessons/` directory contains any `L-*.md` files, add a single quiet line to the briefing noting legacy lessons exist and that `taskmaster:migrate-lessons` converts them. Omit entirely if the directory is empty or absent.
 
 ### Step 4 — Briefing
 
@@ -53,7 +57,7 @@ Present in order:
 
 ### Step 5 — Prompt
 
-"What would you like to work on? Use `--deep` for the full briefing with lessons, all issues, and last session."
+"What would you like to work on? Use `--deep` for the full briefing with all issues and last session."
 
 ## Deep mode (`--deep`)
 
@@ -69,9 +73,7 @@ If `backlog_status` fails: check if `backlog.yaml` exists. If not, suggest `/ini
 
 ## Mid-session behavior
 
-While working in a v3 project, emit `<lesson-candidate>` XML inline (no tool call) when: (a) user corrects you twice on same thing, (b) bug encountered before, (c) user states a "we always/never do X here" rule.
-
-For idea capture: use `<idea-candidate>` inline for fuzzy/ambient ideas; call `backlog_idea_create` for explicit or concrete ones. See the lesson playbook's `../lesson/references/marker-format.md` (on Claude Code/ZCode: `taskmaster:lesson`) for tag schema.
+For idea capture: use `<idea-candidate>` inline for fuzzy/ambient ideas; call `backlog_idea_create` for explicit or concrete ones.
 
 ## Notes
 

@@ -187,7 +187,7 @@
 .right-rail .files-list .more { color: var(--ink-3); font-style: italic; padding-top: var(--sp-2); }
 
 /* ────── Shared topbar primitives (canonical, modeled on Kanban) ──────
-   These live alongside screen-local classes (.kanban-search, .lessons__view-toggle, etc.)
+   These live alongside screen-local classes (.kanban-search, .issues__view-toggle, etc.)
    so screens can adopt them incrementally. Layer 2 of v3-control-consistency relocates
    the corresponding DOM into #topbar-actions; Layer 3 drops the per-screen classes. */
 
@@ -262,7 +262,7 @@
 .tm-segmented.tm-segmented--icon > button { width: 32px; padding: 0; font-size: 16px; }
 
 /* Action — primary in-context button (replaces .recap-action, .td-action,
-   .dash-edit-toggle, .sessions-newnote, .lesson-card__reinforce). */
+   .dash-edit-toggle, .sessions-newnote). */
 .tm-action {
   appearance: none;
   display: inline-flex; align-items: center; gap: var(--sp-2);
@@ -324,7 +324,7 @@
 }
 
 /* Card primitive — shared base for screen-level card variants
-   (issue-card, lesson-card, kanban card, side-rail blocks).
+   (issue-card, kanban card, side-rail blocks).
    Variants override background, border-color, padding, and gap as needed
    but inherit the foundation here so card structure stays consistent. */
 .tm-card {

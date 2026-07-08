@@ -13,12 +13,11 @@ def running_server(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".taskmaster").mkdir()
     (tmp_path / ".taskmaster" / "tasks").mkdir()
-    (tmp_path / ".taskmaster" / "lessons").mkdir()
     (tmp_path / ".taskmaster" / "handovers").mkdir()
     (tmp_path / ".taskmaster" / "issues").mkdir()
 
     # Canonical v3 layout: backlog.yaml lives inside .taskmaster/ next to its
-    # artifact subdirs (tasks/, lessons/, issues/, handovers/).  The old layout
+    # artifact subdirs (tasks/, issues/, handovers/).  The old layout
     # placed backlog.yaml at the project root, which caused a path mismatch when
     # the server resolved sidecar files relative to backlog_path.parent.
     (tmp_path / ".taskmaster" / "backlog.yaml").write_text(
@@ -146,26 +145,9 @@ def test_get_task_404_for_empty_id(running_server):
     assert exc.value.code == 404
 
 
-def test_get_task_related_returns_lessons_handovers_issues_and_deps(running_server, tmp_path):
+def test_get_task_related_returns_handovers_issues_and_deps(running_server, tmp_path):
     base, _ = running_server
 
-    (tmp_path / ".taskmaster" / "lessons" / "LSN-01.md").write_text(
-        "---\n"
-        "id: LSN-01\n"
-        "kind: pattern\n"
-        "anchors: ['viewer/**/*.js']\n"
-        "title: Use ES modules without bundler\n"
-        "---\n"
-        "Vanilla ES modules load without a build step.\n"
-    )
-    (tmp_path / ".taskmaster" / "lessons" / "LSN-02.md").write_text(
-        "---\n"
-        "id: LSN-02\n"
-        "kind: gotcha\n"
-        "anchors: ['scripts/**/*.sh']\n"
-        "title: Unrelated\n"
-        "---\nNot in scope.\n"
-    )
     (tmp_path / ".taskmaster" / "handovers" / "2026-04-25-detail.md").write_text(
         "---\n"
         "id: HOV-0001a\n"
@@ -189,10 +171,6 @@ def test_get_task_related_returns_lessons_handovers_issues_and_deps(running_serv
     resp = urllib.request.urlopen(f"{base}/api/task/T-148/related")
     assert resp.status == 200
     body = json.loads(resp.read())
-
-    lesson_ids = [l["id"] for l in body["lessons"]]
-    assert "LSN-01" in lesson_ids
-    assert "LSN-02" not in lesson_ids
 
     handover_ids = [h["id"] for h in body["handovers"]]
     assert "HOV-0001a" in handover_ids

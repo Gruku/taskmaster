@@ -1,6 +1,6 @@
 """Regression tests for ISS-001.
 
-Skill auto-offers (handover/lesson/issue prompts in start/pick/end-session)
+Skill auto-offers (handover/issue prompts in start/pick/end-session)
 silently skipped when backlog.yaml had v3 content but missing
 `schema_version: 3` marker. Two-pronged fix:
 
@@ -39,7 +39,6 @@ def test_has_v3_content_false_on_empty_v2(server_at):
 def test_has_v3_content_true_when_any_entity_index_present(server_at):
     assert server_at._has_v3_content({"handovers": [{"id": "HO-001"}]}) is True
     assert server_at._has_v3_content({"issues": [{"id": "ISS-001"}]}) is True
-    assert server_at._has_v3_content({"lessons_meta": [{"id": "L-001"}]}) is True
 
 
 def test_effective_schema_version_promotes_when_content_present(server_at):

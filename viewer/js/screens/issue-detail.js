@@ -241,7 +241,6 @@ export async function mount(root, { params, store, prefs, subpath }) {
         const target = a.getAttribute('href')?.slice(1) || '';
         if (!target) return;
         if (target.startsWith('ISS-')) a.href = `#/issue/${encodeURIComponent(target)}`;
-        else if (target.startsWith('L-')) a.href = `#/lesson/${encodeURIComponent(target)}`;
         else if (target.startsWith('IDEA-')) a.href = `#/idea/${encodeURIComponent(target)}`;
         else a.href = `#/task/${encodeURIComponent(target)}`;
       });

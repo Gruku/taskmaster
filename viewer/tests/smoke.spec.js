@@ -4,7 +4,6 @@ const ROUTES = [
   { hash: '#/dashboard',          title: 'Dashboard',           sidebarKey: 'dashboard' },
   { hash: '#/kanban',             title: 'Kanban',              sidebarKey: 'kanban' },
   { hash: '#/sessions',           title: 'Sessions / Handovers',sidebarKey: 'sessions' },
-  { hash: '#/lessons',            title: 'Lessons',             sidebarKey: 'lessons' },
   { hash: '#/issues',             title: 'Issues',              sidebarKey: 'issues' },
   { hash: '#/recap',              title: 'Recap',               sidebarKey: 'recap' },
   { hash: '#/recap/SES-0184',     title: 'Recap',               sidebarKey: 'recap' },

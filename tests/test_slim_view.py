@@ -9,7 +9,6 @@ def test_slim_task():
         "status": "in-progress", "priority": "high",
         "depends_on": ["T-002"],
         "related_issues": ["ISS-007"],
-        "related_lessons": ["L-003"],
         "docs": {"plan": "docs/plan.md", "spec": "docs/spec.md"},
         "notes": "long notes content here",
         "review_instructions": "lots of detail here",
@@ -40,21 +39,6 @@ def test_slim_issue():
     slim = slim_entity(full, kind="issue")
     assert slim["severity"] == "P1"
     assert slim["tldr"] == "Auth crashes on Friday."
-    assert "_body" not in slim
-
-
-def test_slim_lesson():
-    full = {
-        "id": "L-001", "title": "Atomic writes",
-        "tldr": "Use atomic_write() everywhere.",
-        "kind": "pattern", "tier": "core",
-        "reinforce_count": 3,
-        "files": ["*.py"],
-        "_body": "## Why\n\n...",
-    }
-    slim = slim_entity(full, kind="lesson")
-    assert slim["kind"] == "pattern"
-    assert slim["tier"] == "core"
     assert "_body" not in slim
 
 

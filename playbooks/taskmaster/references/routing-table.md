@@ -41,15 +41,14 @@ The SKILL.md body carries only the ~15 highest-frequency rows.
 | (v3) "Mark issue fixed", "close ISS-XX" | `taskmaster:issue` (entry point `update-status`) |
 | (v3) "Start investigating ISS-XX", "this is a duplicate of ISS-YY", "won't fix ISS-XX" | `taskmaster:issue` (entry point `update-status`) |
 | (v3) "Triage open bugs", "review issues by severity" | `taskmaster:issue` (entry point `triage-review`) |
-| (v3) "Remember this", "save as a lesson", "learn this lesson", "memorize this", "this keeps happening", "we always do X here", "we got burned by this last time", "promote candidate to lesson", "review lesson candidates", "flag this session for retro" | `taskmaster:lesson` |
-| (v3) "Show lessons", "what lessons apply", "lesson digest" | `backlog_lesson_digest` / `backlog_lesson_match` |
 | (v3) "Save this as an idea", "remember this idea", "/add-idea ..." | `taskmaster:add-idea` |
 | (v3) "List ideas", "show parking lot" | `backlog_idea_list` |
 | (v3) "Archive that idea", "promote IDEA-NNN to a task" | `backlog_idea_update` |
 | (v3) "What changed since last time", "recap", "project state delta" | `backlog_recap` |
 | (v3) "Snapshot the backlog" | `backlog_snapshot` |
 | (v3) "auto this task", "autopilot", "auto-epic X", "auto T-001" | Redirect: auto mode removed — suggest **ultracode** (Workflow orchestration) |
-| (v3) "Upgrade to v3", "migrate to v3", "switch to v3", "enable handovers and lessons" | `taskmaster:migrate-v3` |
+| (v3) "Upgrade to v3", "migrate to v3", "switch to v3", "enable handovers" | `taskmaster:migrate-v3` |
+| (v3) "Migrate lessons", "convert lessons to memory", "what happened to lessons" | `taskmaster:migrate-lessons` |
 
 ## Implementation Work Without a Task
 

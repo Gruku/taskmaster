@@ -9,7 +9,7 @@ with the absolute path of your taskmaster checkout.
 ## Taskmaster
 
 This project tracks work in a `.taskmaster/` backlog (tasks, epics, bugs,
-issues, handovers, lessons). Register the taskmaster MCP server in your
+issues, handovers, ideas). Register the taskmaster MCP server in your
 tool's MCP configuration so the `backlog_*` tools are available:
 
 - command: `uv`
@@ -34,11 +34,11 @@ Playbook root: `{{TASKMASTER_HOME}}/playbooks/`
 | "Write a handover", "for tomorrow", context handoff | `playbooks/handover/playbook.md` |
 | "Log a bug", "this is a bug", one-off defect | `playbooks/bug/playbook.md` |
 | "File an issue" with recurring/systemic evidence | `playbooks/issue/playbook.md` |
-| "Remember this", "save as a lesson" | `playbooks/lesson/playbook.md` |
 | "Save this as an idea" | `playbooks/add-idea/playbook.md` |
 | About to present ≥2 mutually exclusive options | `playbooks/decision/playbook.md` |
 | "Set up taskmaster", "initialize backlog" | `playbooks/init-taskmaster/playbook.md` |
 | "Upgrade to v3", "migrate to v3" | `playbooks/migrate-v3/playbook.md` |
+| "Migrate lessons", "convert lessons to memory", "what happened to lessons" | `playbooks/migrate-lessons/playbook.md` |
 | "Check TODOs", "todo audit" | `playbooks/check-todos/playbook.md` |
 | "Set up linear", "link to linear" | `playbooks/linear/playbook.md` |
 | Status, search, recap, snapshot | direct `backlog_*` tool call |
