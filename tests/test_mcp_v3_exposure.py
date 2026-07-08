@@ -116,27 +116,6 @@ def test_idea_tools_exposed(tool_name):
     assert tool_name in _list_tool_names()
 
 
-# Lesson surface (v3-skills-003)
-@pytest.mark.parametrize(
-    "tool_name",
-    [
-        "backlog_lesson_create",
-        "backlog_lesson_get",
-        "backlog_lesson_list",
-        "backlog_lesson_update",
-        "backlog_lesson_match",
-        "backlog_lesson_digest",
-        "backlog_lesson_reinforce",
-        "backlog_lesson_candidate_defer",
-        "backlog_lesson_candidate_drop",
-        "backlog_lesson_candidates_list",
-        "backlog_lesson_candidates_scan",
-    ],
-)
-def test_lesson_tools_exposed(tool_name):
-    assert tool_name in _list_tool_names()
-
-
 # Recap + snapshot (v3-skills-006)
 @pytest.mark.parametrize(
     "tool_name",
@@ -185,10 +164,12 @@ def test_full_v3_surface_count():
     names = _list_tool_names()
     v3_tools = [
         n for n in names
-        if any(k in n for k in ("migrate", "handover", "lesson", "issue", "idea", "recap", "snapshot"))
+        if any(k in n for k in ("migrate", "handover", "issue", "idea", "recap", "snapshot"))
     ]
     # Floor lowered 38 -> 36 by tm-audit-006: intentional cull of 13 dead
     # registrations (10 of them match the v3 keyword filter).
     # Floor lowered 36 -> 30 by remove-auto-mode-001: 6 backlog_auto_* tools removed
     # (auto_ keyword no longer in filter; actual live count = 30).
-    assert len(v3_tools) >= 30, f"v3 surface shrank to {len(v3_tools)} tools (was 30 after remove-auto-mode-001)"
+    # Floor lowered 30 -> 19 by lessons-removal epic C task 1: 11 backlog_lesson_*
+    # tools removed (lesson keyword dropped from filter too).
+    assert len(v3_tools) >= 19, f"v3 surface shrank to {len(v3_tools)} tools (was 19 after lessons-removal task 1)"
