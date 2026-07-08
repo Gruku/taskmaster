@@ -22,15 +22,15 @@
 | Table | `/v3/#/table` | [table.md](table.md) | 15 |
 | Sessions | `/v3/#/sessions` | [sessions.md](sessions.md) | 11 |
 | Recap | `/v3/#/recap` | [recap.md](recap.md) | 20 |
-| Lessons | `/v3/#/lessons` | [lessons.md](lessons.md) | 14 |
 | Issues | `/v3/#/issues` | [issues.md](issues.md) | 17 |
 | Auto Mode | `/v3/#/auto` | [auto.md](auto.md) | 16 |
 | Task detail | `/v3/#/task/<id>` | [task-detail.md](task-detail.md) | 18 |
-| Lesson detail | `/v3/#/lesson/<id>` | [lesson-detail.md](lesson-detail.md) | 14 |
 | Issue detail | `/v3/#/issue/<id>` | [issue-detail.md](issue-detail.md) | 15 |
-| **Total** | | | **169** |
+| **Total** | | | **141** |
 
-> **Process note:** First parallel-agent pass crashed the server (Python stdlib `HTTPServer` is single-threaded). The 6 affected screens (kanban, table, recap, task-detail, lesson-detail, issue-detail) were re-audited sequentially on a fresh server. All findings above are now runtime-verified.
+> **Process note:** First parallel-agent pass crashed the server (Python stdlib `HTTPServer` is single-threaded). The affected screens (kanban, table, recap, task-detail, issue-detail, and the now-removed Lessons screens) were re-audited sequentially on a fresh server. All findings above are now runtime-verified.
+>
+> **2026-07-08:** The Lessons and Lesson detail screens (and their [lessons.md](lessons.md)/[lesson-detail.md](lesson-detail.md) reports, 28 findings) were removed along with the Lessons subsystem (tm 4.0.0); rows above and the total reflect the remaining screens.
 
 ## Synthesis
 

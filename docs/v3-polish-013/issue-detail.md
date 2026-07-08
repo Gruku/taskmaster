@@ -32,7 +32,7 @@ Fix: either include `discovered` in the fixture/API, or have `agingBar()` consum
 root.innerHTML = `<div class="id-empty">Issue ${id} not found. <a href="#/issues">Back to Issues</a>.</div>`;
 ```
 
-`id` comes from `subpath?.[0] || params?.id`. The router decodes `params` via `decodeURIComponent`. Setting the hash to `#/issue?id=<img src=x onerror=...>` decodes to the literal `<img>` tag and `innerHTML=` injects it into the DOM — confirmed live: `document.querySelectorAll('img').length` returns 1 inside the empty state, and the `<img>` tag is fully parsed (the `onerror` did not fire here only because the chrome sandbox doesn't load the failed `src`, but the unsanitized HTML rendering is the bug). Same class of bug as the lesson-detail one flagged in the heads-up.
+`id` comes from `subpath?.[0] || params?.id`. The router decodes `params` via `decodeURIComponent`. Setting the hash to `#/issue?id=<img src=x onerror=...>` decodes to the literal `<img>` tag and `innerHTML=` injects it into the DOM — confirmed live: `document.querySelectorAll('img').length` returns 1 inside the empty state, and the `<img>` tag is fully parsed (the `onerror` did not fire here only because the chrome sandbox doesn't load the failed `src`, but the unsanitized HTML rendering is the bug). Same class of bug flagged in the heads-up for other detail screens.
 
 Fix: use `textContent` for the user-supplied id, or escape via the same util the impact section uses.
 
@@ -84,7 +84,7 @@ When `store.getIssues()` is empty (cold load directly into `/issue/:id`), `mount
 
 ### gap — not-found state is unframed (no crumb, no header chrome)
 
-The not-found state renders `<div class="id-empty">Issue X not found. <a>…</a></div>` and nothing else: no breadcrumb, no `.id-head` shell, just plain text on a blank panel. Verified live: `root.querySelector('.id-head')` is null. Mirror the lesson-detail not-found pattern, or at minimum render the crumb (`‹ Issues / Not found`) so the user has a consistent way back without scanning for a small underlined link.
+The not-found state renders `<div class="id-empty">Issue X not found. <a>…</a></div>` and nothing else: no breadcrumb, no `.id-head` shell, just plain text on a blank panel. Verified live: `root.querySelector('.id-head')` is null. Mirror the not-found pattern used on other detail screens, or at minimum render the crumb (`‹ Issues / Not found`) so the user has a consistent way back without scanning for a small underlined link.
 
 ---
 

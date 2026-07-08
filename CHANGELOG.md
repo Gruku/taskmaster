@@ -12,6 +12,11 @@ indicate schema breaks or removed surfaces.
 
 ---
 
+## 4.0.0
+**BREAKING — Lessons subsystem removed.** The 11 `backlog_lesson_*` MCP tools, lesson candidates/markers (`<lesson-candidate>`), `related_lessons`/`informed_by` link fields, `lessons_fired` recap stat, viewer Lessons screens, and the `taskmaster:lesson` skill are gone. Durable knowledge now lives in each assistant's own memory system (session insights) and repo instruction files like CLAUDE.md/AGENTS.md (cross-assistant knowledge). Existing `.taskmaster/lessons/` files are left untouched on disk; run the new `taskmaster:migrate-lessons` skill once per project to convert them. `lessons_meta` keys in existing backlog.yaml files are ignored. First of four 4.0 epics (lessons removal → areas → release trains → migration tooling).
+
+---
+
 ## 3.24.1 — Phase 4 editor verification (docs) (2026-07-08)
 
 ### Changed

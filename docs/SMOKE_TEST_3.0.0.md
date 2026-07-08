@@ -41,16 +41,7 @@ In a fresh empty directory:
 - [ ] Verify the briefing leads with "Where you left off:" referencing the handover
 - [ ] Say "continue this task" → `pick-task` auto-resolves to the handover's first task
 
-## 4. Lesson skill — write/match/reinforce
-
-- [ ] Say "remember this: never edit auto/state.json directly" → `lesson` skill triggers
-- [ ] Approve the lesson with kind=`gotcha`, trigger_files glob like `auto/*.json`
-- [ ] Verify lesson file appears under `.taskmaster/lessons/`
-- [ ] Pick a task whose anchors include `auto/`
-- [ ] Verify `pick-task` step 5c surfaces the matching lesson
-- [ ] Mid-work, emit `<lesson-candidate scope="session">` inline → end-session offers candidate review
-
-## 5. Issue skill — log/transition/close
+## 4. Issue skill — log/transition/close
 
 - [ ] Say "log a bug: login form accepts whitespace password, P1" → `issue` skill triggers
 - [ ] Verify severity decision flow + frontmatter capture (impact, components, location)
@@ -60,14 +51,14 @@ In a fresh empty directory:
 - [ ] Pick a task that has `related_issues: [ISS-NNN]`, complete it
 - [ ] Verify end-session's v3-post-complete-1 hook prompts to close the issue
 
-## 6. Recap + snapshot
+## 5. Recap + snapshot
 
 - [ ] Run `backlog_snapshot` once
 - [ ] Add a new task, transition another to in-progress
 - [ ] Run `backlog_recap` → verify diff shows new task + status change
 - [ ] Trigger context compaction (if possible) → verify a snapshot was written by the PreCompact hook (check timestamp on `.taskmaster/snapshots/last.json`)
 
-## 7. Auto-mode — single-task lifecycle
+## 6. Auto-mode — single-task lifecycle
 
 - [ ] Pick a small low-risk task
 - [ ] Say "auto this task" → `auto-task` skill drives PICK → SPEC_REVIEW → IMPLEMENT → TEST → REVIEW_GATE → HANDOVER_STUB → END_SESSION
@@ -75,7 +66,7 @@ In a fresh empty directory:
 - [ ] Verify auto-stage handover is written and linked in the auto state record
 - [ ] Verify task transitions to `done` and PROGRESS.md gets a session entry
 
-## 8. Viewer — kanban + edit-in-UI
+## 7. Viewer — kanban + edit-in-UI
 
 Open `backlog_open_viewer`:
 
@@ -87,12 +78,12 @@ Open `backlog_open_viewer`:
 - [ ] Open the same task in two tabs, edit both → verify conflict banner with Keep-mine / Use-server choices
 - [ ] Try to set status to "doneish" (invalid) → verify 422 with structured error message
 
-## 9. Migration safety
+## 8. Migration safety
 
 - [ ] On a v3 backlog, run `backlog_migrate_v3` again → verify "already on v3" no-op response
 - [ ] On a v3 backlog, `git restore .taskmaster/backlog.yaml && rm -rf .taskmaster/tasks/` → verify backlog is back to v2 form (rollback works)
 
-## 10. No regressions vs 1.11
+## 9. No regressions vs 1.11
 
 - [ ] Existing v2 backlogs (any project still on the `1.x` line) continue to work without changes
 - [ ] `start-session`, `pick-task`, `end-session`, `review-gate` all behave as in 1.11 on v2
