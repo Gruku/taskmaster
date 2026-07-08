@@ -31,3 +31,13 @@ discipline, Codex follows it advisorily).
 The single source of workflow truth is `{{TASKMASTER_HOME}}/playbooks/` —
 updating the checkout updates every already-installed prompt's behavior,
 because prompts only point.
+
+## Gotchas (verified on Codex CLI 0.130.0, Windows)
+
+- **Use the absolute path to `uv`** in `config.toml`'s `command` (e.g.
+  `C:/Users/you/.local/bin/uv.exe`). Codex spawns MCP servers without your
+  shell PATH; a bare `uv` silently fails to start and tools never appear.
+- **Non-interactive runs (`codex exec`) auto-cancel MCP tool calls** that
+  would need approval — interactive sessions prompt and work normally. For
+  scripted/CI use, run with Codex's approval-bypass flag in an environment
+  you trust, or pre-approve the `backlog_*` tools in your config.
