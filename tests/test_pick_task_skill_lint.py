@@ -120,7 +120,6 @@ def test_glance_mcp_calls_present():
         "backlog_get_task",
         "backlog_dependencies",
         "backlog_handover_list",
-        "backlog_lesson_match",
         "backlog_issue_list",
     ]
     missing = [c for c in required_calls if c not in body]
@@ -137,19 +136,6 @@ def test_handover_list_filters_to_open():
     assert 'backlog_handover_list' in body
     assert 'status="open"' in body or "status='open'" in body, (
         "pick-task glance must filter handovers to status=open (Plan B requirement)"
-    )
-
-
-def test_full_lesson_body_load_not_inline():
-    """Full lesson body loading (backlog_lesson_get) must NOT appear in the glance body.
-
-    In the glance path, lesson_match returns IDs+tldrs only.
-    backlog_lesson_get belongs in references/deep-mode.md.
-    """
-    body = _body_without_frontmatter(PLAYBOOK_MD)
-    assert "backlog_lesson_get" not in body, (
-        "backlog_lesson_get found in SKILL.md glance body — move it to references/deep-mode.md. "
-        "Glance path uses backlog_lesson_match IDs+tldrs only."
     )
 
 

@@ -49,7 +49,6 @@ def test_description_contains_trigger_phrases():
         "upgrade to v3",
         "migrate to v3",
         "switch to v3",
-        "enable handovers and lessons",
         "enable narrative continuity",
         "i want recap",
     ]

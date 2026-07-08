@@ -12,7 +12,7 @@ def running_server(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".taskmaster").mkdir()
     # Canonical v3 layout: backlog.yaml lives next to its artifact subdirs
-    # (lessons/, issues/, handovers/, recaps/, ...). Pre-ISS-004 the fixture
+    # (issues/, handovers/, recaps/, ...). Pre-ISS-004 the fixture
     # placed backlog.yaml at the root and artifacts under .taskmaster/, which
     # silently divergent — the very bug ISS-004 fixes.
     (tmp_path / ".taskmaster" / "backlog.yaml").write_text(

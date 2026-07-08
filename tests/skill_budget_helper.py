@@ -15,7 +15,6 @@ SKILL_BUDGETS: dict[str, int] = {
     "end-session":     1_500,
     "handover":        1_300,
     "issue":           1_300,
-    "lesson":          1_300,
     "review-gate":     1_200,
     "spec-review":     1_300,
     "init-taskmaster": 1_200,

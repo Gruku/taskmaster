@@ -87,7 +87,6 @@ def test_write_idea_full_payload(tmp_path):
         status="exploring",
         related_tasks=["v3-release-007"],
         related_issues=["ISS-004"],
-        related_lessons=["L-001"],
         created_by="user",
     )
     fm, body = read_idea(bp, iid)
@@ -95,7 +94,6 @@ def test_write_idea_full_payload(tmp_path):
     assert fm["status"] == "exploring"
     assert fm["related_tasks"] == ["v3-release-007"]
     assert fm["related_issues"] == ["ISS-004"]
-    assert fm["related_lessons"] == ["L-001"]
     assert fm["created_by"] == "user"
     assert "Link ideas to recent files" in body
 

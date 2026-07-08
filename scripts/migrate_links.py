@@ -1,7 +1,7 @@
 """Translate legacy linkage fields -> typed `links` arrays.
 
 One-shot, idempotent. Walks every entity (tasks, handovers, issues,
-lessons, ideas) under <root>/.taskmaster/, calls legacy_links_to_typed
+ideas) under <root>/.taskmaster/, calls legacy_links_to_typed
 to produce the new array, writes it back, then runs
 `backlog_link_reconcile` to fill in any missing inverses.
 
@@ -48,7 +48,7 @@ def migrate(root: Path, *, drop_legacy: bool = True) -> dict:
     if not backlog_path.exists():
         raise SystemExit(f"no backlog.yaml at {backlog_path}")
 
-    counts = {"tasks": 0, "issues": 0, "lessons": 0, "handovers": 0, "ideas": 0}
+    counts = {"tasks": 0, "issues": 0, "handovers": 0, "ideas": 0}
 
     # Tasks via load_v3/save_v3.
     data = load_v3(backlog_path)
@@ -62,7 +62,6 @@ def migrate(root: Path, *, drop_legacy: bool = True) -> dict:
     for sub, prefix, kind in (
         ("handovers", "*",    "handover"),  # handover IDs are date-slug, not HND-NNN
         ("issues",    "ISS",  "issue"),
-        ("lessons",   "L",    "lesson"),
         ("ideas",     "IDEA", "idea"),
     ):
         sub_dir = backlog_path.parent / sub

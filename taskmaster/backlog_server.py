@@ -6553,7 +6553,6 @@ def _load_related_for_task(task_id: str) -> dict | None:
     issues (task_ids), forward deps, reverse deps.
     Returns None if the task is unknown.
     """
-    import fnmatch
     import re
     import yaml
 
@@ -6572,8 +6571,6 @@ def _load_related_for_task(task_id: str) -> dict | None:
     if me is None:
         return None
 
-    my_anchors = list(me.get("anchors") or [])
-
     def _read_fm(p: Path) -> tuple[dict, str]:
         raw = p.read_text(encoding="utf-8")
         m = re.match(r"^---\n(.*?)\n---\n(.*)$", raw, re.DOTALL)
@@ -6584,15 +6581,6 @@ def _load_related_for_task(task_id: str) -> dict | None:
         except Exception:
             fm = {}
         return fm, m.group(2)
-
-    def _anchors_overlap(a: list, b: list) -> bool:
-        for pat in a:
-            for other in b:
-                if fnmatch.fnmatch(other, pat) or fnmatch.fnmatch(pat, other):
-                    return True
-                if pat == other:
-                    return True
-        return False
 
     sidecar_root = backlog_path.parent
 

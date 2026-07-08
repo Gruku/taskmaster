@@ -5,14 +5,12 @@ def test_expand_known_ids():
     tldr_index = {
         "T-001": "Refactor auth",
         "ISS-007": "Auth crashes on Friday",
-        "L-003": "Use atomic_write everywhere",
     }
-    ids = ["T-001", "ISS-007", "L-003"]
+    ids = ["T-001", "ISS-007"]
     out = expand_link_ids(ids, tldr_index)
     assert out == [
         {"id": "T-001", "tldr": "Refactor auth"},
         {"id": "ISS-007", "tldr": "Auth crashes on Friday"},
-        {"id": "L-003", "tldr": "Use atomic_write everywhere"},
     ]
 
 
@@ -33,12 +31,11 @@ def test_build_tldr_index_indexes_all_entity_types(tmp_path):
     from taskmaster.taskmaster_v3 import build_tldr_index, write_task_file
 
     tm_dir = tmp_path / ".taskmaster"
-    for subdir in ("tasks", "issues", "lessons", "handovers", "ideas"):
+    for subdir in ("tasks", "issues", "handovers", "ideas"):
         (tm_dir / subdir).mkdir(parents=True)
 
     for subdir, eid, tldr in [
         ("issues",    "ISS-001", "An issue tldr"),
-        ("lessons",   "L-001",   "A lesson tldr"),
         ("handovers", "HND-001", "A handover tldr"),
         ("ideas",     "IDEA-001","An idea tldr"),
     ]:
@@ -48,6 +45,5 @@ def test_build_tldr_index_indexes_all_entity_types(tmp_path):
     idx = build_tldr_index(data, project_root=tmp_path)
     assert idx["T-001"] == "A task tldr"
     assert idx["ISS-001"] == "An issue tldr"
-    assert idx["L-001"] == "A lesson tldr"
     assert idx["HND-001"] == "A handover tldr"
     assert idx["IDEA-001"] == "An idea tldr"

@@ -29,7 +29,7 @@ _PLUGIN_DIR = Path(__file__).resolve().parent.parent
 
 # Schema versions
 # v2: single backlog.yaml with epics/tasks inline. (Legacy: missing version implies v2.)
-# v3: slim backlog.yaml index + per-task files in tasks/ + handovers/ + lessons/ + issues/.
+# v3: slim backlog.yaml index + per-task files in tasks/ + handovers/ + issues/.
 SCHEMA_V2 = 2
 SCHEMA_V3 = 3
 SCHEMA_DEFAULT = SCHEMA_V2  # what new backlogs get unless v3 is explicitly requested
@@ -64,7 +64,6 @@ CANONICAL_SECTIONS: dict[str, tuple[str, ...]] = {
     "task": ("notes", "review_instructions", "spec", "plan", "design", "analysis", "roadmap"),
     "handover": ("decisions", "notes", "blockers", "where_id_start"),
     "issue": ("repro", "investigation", "notes"),
-    "lesson": ("why", "what_to_do", "examples"),
     "epic": ("notes", "design", "spec", "roadmap", "analysis"),
     "phase": ("notes", "design", "roadmap"),
 }
@@ -120,7 +119,7 @@ SLIM_FIELDS: dict[str, tuple[str, ...]] = {
         "estimate", "phase", "epic", "bundle", "component", "design_change",
         "lane", "gate_state",
         "skip_merge_gate", "merge_gate_freshness", "merge_gate_state",
-        "depends_on", "related_issues", "related_lessons",
+        "depends_on", "related_issues",
         "started", "completed", "branch", "worktree",
         "blockers", "open_handovers",
         "tldr_autogen",
@@ -129,12 +128,6 @@ SLIM_FIELDS: dict[str, tuple[str, ...]] = {
         "id", "title", "tldr", "severity", "status", "components",
         "impact", "location", "related_tasks", "fixed_in_task",
         "duplicate_of", "discovered", "resolved", "tldr_autogen",
-    ),
-    "lesson": (
-        "id", "title", "tldr", "kind", "tier", "files",
-        "reinforce_count", "last_reinforced",
-        "task_titles_match", "task_kinds",
-        "related_tasks", "related_issues", "tldr_autogen",
     ),
     "handover": (
         "id", "tldr", "next_action", "task_ids", "session_kind",
@@ -145,7 +138,7 @@ SLIM_FIELDS: dict[str, tuple[str, ...]] = {
     ),
     "idea": (
         "id", "title", "tldr", "status", "tags",
-        "created_by", "related_tasks", "related_issues", "related_lessons",
+        "created_by", "related_tasks", "related_issues",
         "tldr_autogen",
     ),
     "epic": ("id", "name", "status", "design_status", "created"),
@@ -257,7 +250,7 @@ def expand_link_ids(
 
 
 def build_tldr_index(data: dict[str, Any], project_root: Path | None = None) -> dict[str, str]:
-    """Build {entity_id → tldr} index across tasks, issues, lessons, handovers, ideas."""
+    """Build {entity_id → tldr} index across tasks, issues, handovers, ideas."""
     idx: dict[str, str] = {}
     for epic in data.get("epics", []):
         for task in epic.get("tasks", []):
@@ -267,7 +260,7 @@ def build_tldr_index(data: dict[str, Any], project_root: Path | None = None) -> 
     if project_root is None:
         return idx
     tm_dir = project_root / ".taskmaster"
-    for subdir in ("tasks", "issues", "lessons", "handovers", "ideas"):
+    for subdir in ("tasks", "issues", "handovers", "ideas"):
         d = tm_dir / subdir
         if not d.exists():
             continue
@@ -307,8 +300,8 @@ def _resolve_artifact_root() -> Path:
     from CWD, using the same priority chain as `backlog_server._resolve_paths()`.
 
     Why this exists (ISS-004): the writer functions take `backlog_path` and use
-    `bp.parent / "<artifact>"`. The CWD-flavor reader functions (`load_lesson`,
-    `list_sessions`, `recap_path`, `load_issue`, etc.) used to hard-code
+    `bp.parent / "<artifact>"`. The CWD-flavor reader functions (`load_issue`,
+    `list_sessions`, `recap_path`, etc.) used to hard-code
     `Path(".taskmaster") / "<artifact>"` — silently diverging from the writer
     on `.claude/`-layout and root-layout projects. This helper returns the same
     parent dir the writer's resolver would, so readers and writers agree.
@@ -566,8 +559,6 @@ REVERSE_TYPE: dict[str, str] = {
     "fixes":         "fixed_in_task",
     "fixed_in_task": "fixes",
     "relates_to":    "relates_to",
-    "informed_by":   "informs",
-    "informs":       "informed_by",
     "supersedes":    "superseded_by",
     "superseded_by": "supersedes",
     "duplicate_of":  "duplicates",
@@ -581,12 +572,11 @@ LINK_TYPES: tuple[str, ...] = tuple(REVERSE_TYPE.keys())
 ENTITY_KIND_BY_PREFIX: dict[str, str] = {
     "T":    "task",
     "ISS":  "issue",
-    "L":    "lesson",
     "HND":  "handover",
     "IDEA": "idea",
 }
 # Order longest-first for prefix matching.
-_PREFIX_ORDER: tuple[str, ...] = ("IDEA", "ISS", "HND", "T", "L")
+_PREFIX_ORDER: tuple[str, ...] = ("IDEA", "ISS", "HND", "T")
 
 # (source_kind, target_kind) pairs allowed per link type. "*" = any.
 LINK_TYPE_DOMAIN: dict[str, tuple[str, str]] = {
@@ -594,8 +584,6 @@ LINK_TYPE_DOMAIN: dict[str, tuple[str, str]] = {
     "blocks":        ("task",     "task"),
     "fixes":         ("task",     "issue"),
     "fixed_in_task": ("issue",    "task"),
-    "informed_by":   ("task",     "lesson"),
-    "informs":       ("lesson",   "task"),
     "supersedes":    ("handover", "handover"),
     "superseded_by": ("handover", "handover"),
     "duplicate_of":  ("issue",    "issue"),
@@ -613,7 +601,7 @@ def entity_kind_of(entity_id: str | None) -> str | None:
     """Map an entity ID to its kind, or None if unknown.
 
     Recognizes:
-      - HND-NNN, T-NNN, L-NNN, ISS-NNN, IDEA-NNN prefixed IDs
+      - HND-NNN, T-NNN, ISS-NNN, IDEA-NNN prefixed IDs
       - Date-slug handover IDs (YYYY-MM-DD-<slug>) — the actual on-disk format
     """
     if not entity_id or not isinstance(entity_id, str):
@@ -758,7 +746,7 @@ def would_create_cycle(graph: dict[str, list[str]], source: str, target: str) ->
 _INLINE_REF_RE = re.compile(
     r"(?:(?<=^)|(?<=[^A-Za-z0-9_]))"               # left boundary
     r"(?:\[\[|@)?"                                  # optional [[ or @
-    r"(IDEA-\d+|ISS-\d+|HND-\d+|T-\d+|L-\d+|\d{4}-\d{2}-\d{2}-[a-z0-9\-]+)"  # captured ID (incl. date-slug handover)
+    r"(IDEA-\d+|ISS-\d+|HND-\d+|T-\d+|\d{4}-\d{2}-\d{2}-[a-z0-9\-]+)"  # captured ID (incl. date-slug handover)
     r"(?:\]\])?"                                    # optional ]]
 )
 
@@ -767,7 +755,7 @@ def extract_inline_refs(body: str | None, *, self_id: str | None = None) -> list
     """Scan markdown body for entity ID mentions.
 
     Recognized patterns:
-      - Bare: T-001, ISS-007, L-003, HND-012, IDEA-005
+      - Bare: T-001, ISS-007, HND-012, IDEA-005
       - Wiki: [[T-001]]
       - Mention: @T-001
 
@@ -797,16 +785,11 @@ _LEGACY_LINK_RULES: dict[str, tuple[tuple[str, str, bool], ...]] = {
     "task": (
         ("depends_on",      "depends_on",  True),
         ("related_issues",  "relates_to",  True),
-        ("related_lessons", "informed_by", True),
     ),
     "issue": (
         ("related_tasks",  "relates_to",    True),
         ("fixed_in_task",  "fixed_in_task", False),
         ("duplicate_of",   "duplicate_of",  False),
-    ),
-    "lesson": (
-        ("related_tasks",  "informs",    True),
-        ("related_issues", "relates_to", True),
     ),
     "handover": (
         ("supersedes",     "supersedes",    True),
@@ -844,9 +827,8 @@ def legacy_links_to_typed(entity: dict, kind: str) -> list[dict]:
 
 
 _LEGACY_FIELDS_TO_DROP: dict[str, tuple[str, ...]] = {
-    "task":     ("depends_on", "related_issues", "related_lessons"),
+    "task":     ("depends_on", "related_issues"),
     "issue":    ("related_tasks", "fixed_in_task", "duplicate_of"),
-    "lesson":   ("related_tasks", "related_issues"),
     "handover": ("supersedes", "superseded_by"),
     "idea":     ("related_tasks",),
 }
@@ -1105,7 +1087,6 @@ _CANONICALIZE_ITEMS: tuple[str, ...] = (
     "viewer.json",
     "tasks",
     "handovers",
-    "lessons",
     "issues",
     "trackers",
     "recaps",
@@ -1729,11 +1710,10 @@ def apply_handover_review_flag(
 ) -> Path:
     """Stamp `flag_for_review: true` + `review_reason` onto an existing handover.
 
-    Used by `taskmaster:lesson` when a `<lesson-candidate scope="session">` is
-    promoted: the active handover for the session gets flagged so a future
-    invocation can retro-extract lessons against it. Idempotent — re-applying
-    overwrites the `review_reason` and leaves the body untouched. Raises
-    FileNotFoundError if the handover doesn't exist on disk.
+    Used to flag the active handover for a session for later follow-up review.
+    Idempotent — re-applying overwrites the `review_reason` and leaves the
+    body untouched. Raises FileNotFoundError if the handover doesn't exist
+    on disk.
     """
     target = handover_path(backlog_path, handover_id)
     if not target.exists():
@@ -3118,367 +3098,6 @@ def resolve_linear_token(workspace: dict[str, Any]) -> str:
     return token
 
 
-# ── Lessons ────────────────────────────────────────────────────
-
-LESSON_KINDS = ("pattern", "anti-pattern", "gotcha")
-LESSON_TIERS = ("active", "core", "retired")
-
-# Caps from the v3 spec.
-LESSON_DIGEST_CAP = 30          # max 'active' tier lessons in digest
-LESSON_CORE_CAP = 5             # max 'core' tier lessons (always loaded full)
-LESSON_TRIGGER_MATCH_CAP = 3    # max trigger-matched lessons per pick-task
-
-# Auto-promotion / decay thresholds.
-LESSON_PROMOTE_REINFORCE = 5    # reinforce_count >= this → suggest core promotion
-LESSON_DECAY_DAYS = 180         # if last_reinforced older + reinforce_count < 2 → retire
-LESSON_DECAY_REINFORCE = 2      # threshold for auto-decay
-
-_LESSON_INDEX_FIELDS = ("id", "title", "kind", "tier", "reinforce_count")
-
-
-def lesson_path(backlog_path: Path, lesson_id: str) -> Path:
-    return backlog_path.parent / "lessons" / f"{lesson_id}.md"
-
-
-def lesson_dir(backlog_path: Path) -> Path:
-    return backlog_path.parent / "lessons"
-
-
-def list_lesson_ids(backlog_path: Path) -> list[str]:
-    """List lesson ids on disk, sorted by trailing number."""
-    d = lesson_dir(backlog_path)
-    if not d.exists():
-        return []
-
-    def _rank(p: Path) -> int:
-        m = re.search(r"(\d+)$", p.stem)
-        return int(m.group(1)) if m else -1
-
-    return [p.stem for p in sorted(d.glob("L-*.md"), key=_rank)]
-
-
-def next_lesson_id(backlog_path: Path) -> str:
-    existing = list_lesson_ids(backlog_path)
-    nums = []
-    for ident in existing:
-        m = re.search(r"(\d+)$", ident)
-        if m:
-            nums.append(int(m.group(1)))
-    n = (max(nums) + 1) if nums else 1
-    return f"L-{n:03d}"
-
-
-def _validate_lesson(fm: dict[str, Any]) -> None:
-    if fm.get("kind") not in LESSON_KINDS:
-        raise ValueError(f"kind must be one of {LESSON_KINDS}, got {fm.get('kind')!r}")
-    tier = fm.get("tier", "active")
-    if tier not in LESSON_TIERS:
-        raise ValueError(f"tier must be one of {LESSON_TIERS}, got {tier!r}")
-
-
-def write_lesson(
-    backlog_path: Path,
-    *,
-    title: str,
-    kind: str,
-    triggers: dict[str, Any] | None = None,
-    body: str = "",
-    tier: str = "active",
-    related_tasks: list[str] | None = None,
-    related_issues: list[str] | None = None,
-    lesson_id: str | None = None,
-    tldr: str = "",
-    tldr_autogen: bool = False,
-) -> tuple[str, Path]:
-    """Create a new lesson. Returns (id, path)."""
-    if not title or not title.strip():
-        raise ValueError("lesson title is required")
-    lid = lesson_id or next_lesson_id(backlog_path)
-    fm: dict[str, Any] = {
-        "id": lid,
-        "title": title.strip(),
-        "kind": kind,
-        "triggers": triggers or {"files": [], "task_titles_match": [], "task_kinds": []},
-        "tier": tier,
-        "reinforce_count": 0,
-        "last_reinforced": None,
-        "created": date.today().isoformat(),
-        "related_tasks": list(related_tasks or []),
-        "related_issues": list(related_issues or []),
-        "tldr": tldr,
-    }
-    if tldr_autogen:
-        fm["tldr_autogen"] = True
-    _validate_lesson(fm)
-    write_task_file(lesson_path(backlog_path, lid), fm, body)
-    return lid, lesson_path(backlog_path, lid)
-
-
-def read_lesson(backlog_path: Path, lesson_id: str) -> tuple[dict[str, Any], str]:
-    return read_task_file(lesson_path(backlog_path, lesson_id))
-
-
-# ── CWD-relative lesson helpers (used by MCP tools and HTTP endpoints) ────────
-
-
-def _ensure_reinforce_events(lesson: dict) -> dict:
-    """One-time migration: legacy lesson files don't carry reinforce_events.
-    Backfill an empty list so downstream code can append unconditionally.
-    Idempotent: if the key is already present, it's left untouched.
-    """
-    if "reinforce_events" not in lesson or lesson["reinforce_events"] is None:
-        lesson["reinforce_events"] = []
-    return lesson
-
-
-def load_lesson(lesson_id: str) -> dict:
-    """Load a lesson by id from <backlog-parent>/lessons/<id>.md in CWD.
-
-    Returns a dict with frontmatter fields plus '_body'. Backfills
-    reinforce_events if not present (migration shim).
-    """
-    p = _resolve_artifact_root() / "lessons" / f"{lesson_id}.md"
-    fm, body = parse_frontmatter(p.read_text(encoding="utf-8"))
-    fm["_body"] = body
-    _ensure_reinforce_events(fm)
-    return fm
-
-
-def save_lesson(lesson: dict) -> None:
-    """Persist a lesson dict (with '_body') back to <backlog-parent>/lessons/<id>.md."""
-    lesson_id = lesson["id"]
-    p = _resolve_artifact_root() / "lessons" / f"{lesson_id}.md"
-    body = lesson.pop("_body", "")
-    atomic_write(p, render_frontmatter(lesson, body))
-    lesson["_body"] = body
-
-
-LESSON_REINFORCE_SOURCES = {"user", "claude", "skill"}
-
-
-def lesson_reinforce(lesson_id: str, source: str = "user", note: str = "") -> dict:
-    """Append a reinforcement event to a lesson and persist.
-
-    Returns the updated lesson summary (frontmatter dict, including
-    reinforce_count, last_reinforced, and the appended reinforce_events list).
-
-    Raises:
-        FileNotFoundError: if the lesson file doesn't exist.
-        ValueError: if `source` is not in LESSON_REINFORCE_SOURCES.
-    """
-    if source not in LESSON_REINFORCE_SOURCES:
-        raise ValueError(
-            f"source must be one of {sorted(LESSON_REINFORCE_SOURCES)}, got {source!r}"
-        )
-
-    from datetime import datetime, timezone
-
-    p = _resolve_artifact_root() / "lessons" / f"{lesson_id}.md"
-    if not p.exists():
-        raise FileNotFoundError(p)
-
-    lesson = load_lesson(lesson_id)
-    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    event = {"at": now_iso, "source": source, "note": note or ""}
-    lesson.setdefault("reinforce_events", []).append(event)
-    lesson["reinforce_count"] = int(lesson.get("reinforce_count") or 0) + 1
-    lesson["last_reinforced"] = now_iso
-
-    save_lesson(lesson)
-    # Strip body from the returned summary
-    summary = {k: v for k, v in lesson.items() if k != "_body"}
-    return summary
-
-
-def update_lesson(
-    backlog_path: Path,
-    lesson_id: str,
-    **updates: Any,
-) -> tuple[dict[str, Any], str]:
-    fm, body = read_lesson(backlog_path, lesson_id)
-    new_body = updates.pop("body", body)
-    fm.update({k: v for k, v in updates.items() if v is not None})
-    _validate_lesson(fm)
-    write_task_file(lesson_path(backlog_path, lesson_id), fm, new_body)
-    return fm, new_body
-
-
-def reinforce_lesson(
-    backlog_path: Path, lesson_id: str, source: str = "skill", note: str = ""
-) -> dict[str, Any]:
-    """Bump reinforce_count, set last_reinforced=today, and append a
-    reinforce_events audit entry. Returns updated fm.
-
-    The audit entry was historically only written by the bare
-    `lesson_reinforce` (CWD-resolved) path, so MCP-driven reinforcement
-    never populated the trail — consolidated here (tm-audit-006).
-    """
-    if source not in LESSON_REINFORCE_SOURCES:
-        raise ValueError(
-            f"source must be one of {sorted(LESSON_REINFORCE_SOURCES)}, got {source!r}"
-        )
-    fm, body = read_lesson(backlog_path, lesson_id)
-    _ensure_reinforce_events(fm)
-    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    fm["reinforce_events"].append({"at": now_iso, "source": source, "note": note or ""})
-    fm["reinforce_count"] = int(fm.get("reinforce_count") or 0) + 1
-    fm["last_reinforced"] = date.today().isoformat()
-    write_task_file(lesson_path(backlog_path, lesson_id), fm, body)
-    return fm
-
-
-def lesson_eligible_for_promotion(fm: dict[str, Any]) -> bool:
-    """Eligible for core tier? reinforce_count >= threshold, kind is gotcha/anti-pattern."""
-    return (
-        fm.get("tier") == "active"
-        and fm.get("kind") in ("gotcha", "anti-pattern")
-        and int(fm.get("reinforce_count") or 0) >= LESSON_PROMOTE_REINFORCE
-    )
-
-
-def lesson_eligible_for_decay(fm: dict[str, Any], today: date | None = None) -> bool:
-    """Should this lesson auto-retire?
-
-    Active tier + last_reinforced older than LESSON_DECAY_DAYS + reinforce_count below threshold.
-    """
-    if fm.get("tier") != "active":
-        return False
-    if int(fm.get("reinforce_count") or 0) >= LESSON_DECAY_REINFORCE:
-        return False
-    last = fm.get("last_reinforced")
-    if not last:
-        # Never reinforced — judge by `created` date as a proxy.
-        last = fm.get("created")
-    if not last:
-        return False
-    try:
-        last_d = datetime.strptime(str(last), "%Y-%m-%d").date()
-    except ValueError:
-        return False
-    today = today or date.today()
-    return (today - last_d).days >= LESSON_DECAY_DAYS
-
-
-def _glob_match(patterns: list[str], path: str) -> bool:
-    """Simple glob match — supports * and **. Path-separator agnostic."""
-    if not patterns:
-        return False
-    norm = path.replace("\\", "/")
-    import fnmatch
-    for pat in patterns:
-        pat_norm = pat.replace("\\", "/")
-        # Handle ** by translating to fnmatch-friendly: ** = match anything including /.
-        if "**" in pat_norm:
-            # Build regex: ** -> .*, * -> [^/]*
-            regex = (
-                "^"
-                + re.escape(pat_norm)
-                .replace(r"\*\*", ".*")
-                .replace(r"\*", "[^/]*")
-                .replace(r"\?", ".")
-                + "$"
-            )
-            if re.match(regex, norm):
-                return True
-        elif fnmatch.fnmatch(norm, pat_norm):
-            return True
-    return False
-
-
-def match_lessons_for_task(
-    backlog_path: Path,
-    task: dict[str, Any],
-    touched_files: list[str] | None = None,
-    cap: int = LESSON_TRIGGER_MATCH_CAP,
-) -> list[tuple[dict[str, Any], str]]:
-    """Find lessons whose triggers match a task's title or touched files.
-
-    Returns up to `cap` (frontmatter, body) pairs, sorted by reinforce_count desc.
-    Only `active` and `core` tier lessons are considered — retired never matches.
-    """
-    title = (task.get("title") or "").lower()
-    files = touched_files or []
-    matches: list[tuple[dict[str, Any], str, int]] = []
-    for lid in list_lesson_ids(backlog_path):
-        try:
-            fm, body = read_lesson(backlog_path, lid)
-        except (OSError, ValueError):
-            continue
-        if fm.get("tier") not in ("active", "core"):
-            continue
-        triggers = fm.get("triggers") or {}
-        title_pats = triggers.get("task_titles_match") or []
-        if any(p and p.lower() in title for p in title_pats):
-            matches.append((fm, body, int(fm.get("reinforce_count") or 0)))
-            continue
-        file_pats = triggers.get("files") or []
-        if any(_glob_match(file_pats, f) for f in files):
-            matches.append((fm, body, int(fm.get("reinforce_count") or 0)))
-    matches.sort(key=lambda m: -m[2])
-    return [(fm, body) for fm, body, _ in matches[:cap]]
-
-
-def lesson_digest(
-    backlog_path: Path,
-    cap: int = LESSON_DIGEST_CAP,
-) -> list[dict[str, Any]]:
-    """Return the slim digest of active-tier lessons (id+title+kind only).
-
-    Excludes core tier (those load in full separately) and retired tier.
-    Sorted by reinforce_count desc so the most-applied are first.
-    """
-    items: list[tuple[dict[str, Any], int]] = []
-    for lid in list_lesson_ids(backlog_path):
-        try:
-            fm, _ = read_lesson(backlog_path, lid)
-        except (OSError, ValueError):
-            continue
-        if fm.get("tier") != "active":
-            continue
-        items.append(
-            (
-                {"id": fm.get("id"), "title": fm.get("title"), "kind": fm.get("kind")},
-                int(fm.get("reinforce_count") or 0),
-            )
-        )
-    items.sort(key=lambda i: -i[1])
-    return [d for d, _ in items[:cap]]
-
-
-def core_lessons(backlog_path: Path, cap: int = LESSON_CORE_CAP) -> list[tuple[dict[str, Any], str]]:
-    """Return up to `cap` core-tier lessons in full (frontmatter + body)."""
-    out: list[tuple[dict[str, Any], str, int]] = []
-    for lid in list_lesson_ids(backlog_path):
-        try:
-            fm, body = read_lesson(backlog_path, lid)
-        except (OSError, ValueError):
-            continue
-        if fm.get("tier") == "core":
-            out.append((fm, body, int(fm.get("reinforce_count") or 0)))
-    out.sort(key=lambda m: -m[2])
-    return [(fm, body) for fm, body, _ in out[:cap]]
-
-
-def _lesson_index_entry(fm: dict[str, Any]) -> dict[str, Any]:
-    return {f: fm.get(f) for f in _LESSON_INDEX_FIELDS if fm.get(f) is not None}
-
-
-def sync_lesson_index(
-    backlog_data: dict[str, Any],
-    backlog_path: Path,
-) -> dict[str, Any]:
-    """Rebuild backlog_data['lessons_meta'] from disk."""
-    entries: list[dict[str, Any]] = []
-    for lid in list_lesson_ids(backlog_path):
-        try:
-            fm, _ = read_lesson(backlog_path, lid)
-        except (OSError, ValueError):
-            continue
-        entries.append(_lesson_index_entry(fm))
-    backlog_data["lessons_meta"] = entries
-    return backlog_data
-
-
 # ── Ideas ────────────────────────────────────────────────────
 
 def idea_path(backlog_path: Path, idea_id: str) -> Path:
@@ -3590,7 +3209,6 @@ def write_idea(
     status: str = "",
     related_tasks: list[str] | None = None,
     related_issues: list[str] | None = None,
-    related_lessons: list[str] | None = None,
     created_by: str = "Claude",
     idea_id: str | None = None,
     tldr: str = "",
@@ -3633,7 +3251,6 @@ def write_idea(
         "tags": list(tags or []),
         "related_tasks": list(related_tasks or []),
         "related_issues": list(related_issues or []),
-        "related_lessons": list(related_lessons or []),
         "promoted_to": None,
         "archived": False,
         "tldr": tldr,
@@ -3687,7 +3304,6 @@ def list_ideas(
     archived: bool = False,
     related_task: str | None = None,
     related_issue: str | None = None,
-    related_lesson: str | None = None,
     limit: int | None = None,
     summary: bool = True,
 ) -> list[dict[str, Any]]:
@@ -3724,8 +3340,6 @@ def list_ideas(
         if related_task is not None and related_task not in (fm.get("related_tasks") or []):
             continue
         if related_issue is not None and related_issue not in (fm.get("related_issues") or []):
-            continue
-        if related_lesson is not None and related_lesson not in (fm.get("related_lessons") or []):
             continue
         if summary:
             out.append(fm)
@@ -3926,224 +3540,6 @@ def list_notes(backlog_path: Path, include_archived: bool = False) -> list[dict[
     return pinned + unpinned
 
 
-# ── Lesson candidates (deferred + scanning) ───────────────────
-
-LESSON_CANDIDATE_KINDS = ("pattern", "anti-pattern", "gotcha")
-LESSON_CANDIDATE_SCOPES = ("point", "session")
-
-_LESSON_CANDIDATES_HEADER = (
-    "# Lesson Candidates (deferred)\n\n"
-    "> Auto-managed by `taskmaster:lesson`. "
-    "Edit by hand only if the file is corrupt.\n\n"
-)
-_LESSON_CANDIDATES_FENCE_OPEN = "```yaml\n"
-_LESSON_CANDIDATES_FENCE_CLOSE = "```\n"
-
-
-def lesson_candidates_path(backlog_path: Path) -> Path:
-    """Path to the `_candidates.md` file under the lessons directory."""
-    return backlog_path.parent / "lessons" / "_candidates.md"
-
-
-def lesson_candidates_read(backlog_path: Path) -> list[dict[str, Any]]:
-    """Return the deferred candidates list, or [] if the file is missing/empty.
-
-    The file format is a markdown header followed by a fenced YAML block with
-    a `candidates:` list. Anything outside the fenced block is ignored.
-    Tolerates a missing or malformed file by returning [].
-    """
-    p = lesson_candidates_path(backlog_path)
-    if not p.exists():
-        return []
-    raw = p.read_text(encoding="utf-8")
-    m = re.search(r"```yaml\n(.*?)```", raw, re.DOTALL)
-    if not m:
-        return []
-    try:
-        doc = yaml.safe_load(m.group(1)) or {}
-    except yaml.YAMLError:
-        return []
-    items = doc.get("candidates") if isinstance(doc, dict) else None
-    if not isinstance(items, list):
-        return []
-    return [i for i in items if isinstance(i, dict)]
-
-
-def _write_lesson_candidates(backlog_path: Path, items: list[dict[str, Any]]) -> None:
-    """Render the candidates list back to disk as the canonical markdown+YAML file."""
-    p = lesson_candidates_path(backlog_path)
-    if not items:
-        if p.exists():
-            p.unlink()
-        return
-    p.parent.mkdir(parents=True, exist_ok=True)
-    yaml_text = yaml.safe_dump(
-        {"candidates": items}, default_flow_style=False, sort_keys=False, allow_unicode=True
-    )
-    body = (
-        _LESSON_CANDIDATES_HEADER
-        + _LESSON_CANDIDATES_FENCE_OPEN
-        + yaml_text
-        + _LESSON_CANDIDATES_FENCE_CLOSE
-    )
-    atomic_write(p, body)
-
-
-def lesson_candidates_defer(
-    backlog_path: Path,
-    *,
-    title: str,
-    kind: str = "",
-    topic: str = "",
-    scope: str = "point",
-    context: str = "",
-) -> int:
-    """Append a new candidate. Returns the new entry's 0-based list index.
-
-    Validates kind (if provided) and scope. Empty `kind` is allowed — it lets
-    the user defer a candidate before classifying it.
-    """
-    if not title or not title.strip():
-        raise ValueError("candidate title is required")
-    if kind and kind not in LESSON_CANDIDATE_KINDS:
-        raise ValueError(
-            f"kind must be one of {LESSON_CANDIDATE_KINDS}, got {kind!r}"
-        )
-    if scope not in LESSON_CANDIDATE_SCOPES:
-        raise ValueError(
-            f"scope must be one of {LESSON_CANDIDATE_SCOPES}, got {scope!r}"
-        )
-
-    items = lesson_candidates_read(backlog_path)
-    entry: dict[str, Any] = {
-        "title": title.strip(),
-        "kind": kind,
-        "topic": topic,
-        "scope": scope,
-        "context": context,
-        "deferred_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M"),
-    }
-    items.append(entry)
-    _write_lesson_candidates(backlog_path, items)
-    return len(items) - 1
-
-
-def lesson_candidates_clear(backlog_path: Path, *, indices: list[int]) -> int:
-    """Drop the entries at `indices` (0-based). Returns the number actually removed.
-
-    Out-of-range indices are silently ignored. Re-writes the file with the
-    remaining entries; deletes the file if the list is now empty.
-    """
-    items = lesson_candidates_read(backlog_path)
-    if not items:
-        return 0
-    drop = {i for i in indices if 0 <= i < len(items)}
-    if not drop:
-        return 0
-    remaining = [it for idx, it in enumerate(items) if idx not in drop]
-    _write_lesson_candidates(backlog_path, remaining)
-    return len(drop)
-
-
-# Matches <lesson-candidate> and <lesson-candidate key="val" ...> forms.
-# Attrless form is supported (test coverage requires it). Attrs must use
-# double-quoted values per spec §3.2 grep convention.
-_LESSON_CANDIDATE_RE = re.compile(
-    r"<lesson-candidate"                    # opening tag
-    r"(?P<attrs>(?:\s+\w+=\"[^\"]*\")*)"   # 0+ key="value" attribute pairs
-    r"\s*>"                                  # > terminator (allow attrless)
-    r"(?P<body>.*?)"                         # body, non-greedy
-    r"</lesson-candidate>",                  # closing tag
-    re.DOTALL,
-)
-
-_LESSON_CANDIDATE_ATTR_RE = re.compile(r'(\w+)="([^"]*)"')
-
-
-def _parse_candidate_attrs(attr_text: str) -> dict[str, str]:
-    return {k: v for k, v in _LESSON_CANDIDATE_ATTR_RE.findall(attr_text or "")}
-
-
-def _extract_jsonl_text(obj: Any) -> str:
-    """Pull text from a Claude Code JSONL line (real format) or a flat
-    `{"content": "..."}` test fixture. Returns "" when there's no text to scan.
-    """
-    message = obj.get("message") if isinstance(obj, dict) else None
-    if isinstance(message, dict) and "content" in message:
-        content = message["content"]
-    elif isinstance(obj, dict):
-        content = obj.get("content", "")
-    else:
-        return ""
-    if isinstance(content, list):
-        parts = []
-        for block in content:
-            if isinstance(block, dict) and block.get("type") == "text":
-                t = block.get("text", "")
-                if isinstance(t, str):
-                    parts.append(t)
-        return "\n".join(parts)
-    if isinstance(content, str):
-        return content
-    return ""
-
-
-def scan_transcripts_for_candidates(
-    project_dir: Path,
-    *,
-    days: int = 7,
-    kind_filter: str = "",
-) -> list[dict[str, Any]]:
-    """Grep all `*.jsonl` files in `project_dir` for `<lesson-candidate>` tags.
-
-    Each line of a JSONL file is decoded as JSON; the `content` field (a str)
-    is searched with `_LESSON_CANDIDATE_RE`. Malformed lines are skipped.
-
-    Filters:
-      - `days`: only files whose mtime is within the last N days.
-      - `kind_filter`: only matches whose `kind` attr equals this string.
-
-    Returns a list of dicts with keys: `kind`, `topic`, `scope`, `body`,
-    `source_file`, `source_line`. `source_line` is the 1-based line number
-    in the `.jsonl` file where the match was found.
-    """
-    if not project_dir.exists() or not project_dir.is_dir():
-        return []
-    cutoff_ts = (datetime.now(timezone.utc) - timedelta(days=days)).timestamp()
-    out: list[dict[str, Any]] = []
-    for jsonl in sorted(project_dir.glob("*.jsonl")):
-        try:
-            if jsonl.stat().st_mtime < cutoff_ts:
-                continue
-            raw_lines = jsonl.read_text(encoding="utf-8", errors="replace").splitlines()
-        except OSError:
-            continue
-        for line_no, raw in enumerate(raw_lines, start=1):
-            raw = raw.strip()
-            if not raw:
-                continue
-            try:
-                obj = json.loads(raw)
-            except json.JSONDecodeError:
-                continue
-            content = _extract_jsonl_text(obj)
-            if not content:
-                continue
-            for m in _LESSON_CANDIDATE_RE.finditer(content):
-                attrs = _parse_candidate_attrs(m.group("attrs"))
-                kind = attrs.get("kind", "")
-                if kind_filter and kind != kind_filter:
-                    continue
-                out.append({
-                    "kind": kind,
-                    "topic": attrs.get("topic", ""),
-                    "scope": attrs.get("scope", "point"),
-                    "body": m.group("body").strip(),
-                    "source_file": str(jsonl),
-                    "source_line": line_no,
-                })
-    return out
-
 
 # ── ViewerPrefs ────────────────────────────────────────────────
 
@@ -4160,7 +3556,6 @@ VIEWER_PREFS_DEFAULTS = {
         "task_detail": {"view": "A"},
         "kanban":      {"view": "A"},
         "sessions":    {"view": "A"},   # diary | lanes | by_task; "A" maps to diary
-        "lessons":     {"view": "A"},   # shelves | flat | by_anchor
         "issues":      {"view": "A"},   # hybrid | kanban | list
     },
     "dashboard": {
@@ -4180,14 +3575,6 @@ VIEWER_PREFS_DEFAULTS = {
             "search": "",
         },
         "collapsed_columns": [],   # column keys (status / phase id / epic id) currently collapsed
-    },
-    "lessons": {
-        "thresholds": {
-            "core_count": 7,
-            "core_window_days": 60,
-            "core_recency_days": 14,
-            "retired_after_days": 30,
-        },
     },
     "issues": {
         "aging": {             # base period in days, severity-tiered
@@ -4490,7 +3877,6 @@ def snapshot_diff(a: dict, b: dict) -> dict:
         tasks_added:        [{id, ...task}],
         tasks_removed:      [{id, ...task}],
         tasks_changed:      [{id, from, to}],   # whole-task before/after
-        lessons_fired:      [{id, fires, first_time}],
         issues_opened:      [{id, ...issue}],
         issues_transitioned:[{id, from, to}],
         files_touched:      [path, ...],
@@ -4522,7 +3908,6 @@ def snapshot_diff(a: dict, b: dict) -> dict:
         "tasks_added":         added,
         "tasks_removed":       removed,
         "tasks_changed":       changed,
-        "lessons_fired":       list((b or {}).get("lessons_fired", []) or []),
         "issues_opened":       issues_opened,
         "issues_transitioned": issues_transitioned,
         "files_touched":       list((b or {}).get("files_touched", []) or []),
@@ -4704,20 +4089,6 @@ def get_session_detail(session_id: str) -> dict | None:
     }
 
 
-def list_lesson_ids_cwd() -> list[str]:
-    """List lesson ids from <backlog-parent>/lessons/ in the current working directory."""
-    d = _resolve_artifact_root() / "lessons"
-    if not d.exists():
-        return []
-
-    def _rank(p: Path) -> int:
-        import re as _re
-        m = _re.search(r"(\d+)$", p.stem)
-        return int(m.group(1)) if m else -1
-
-    return [p.stem for p in sorted(d.glob("*.md"), key=_rank)]
-
-
 def load_issue(issue_id: str) -> dict:
     """Load an issue by id from <backlog-parent>/issues/<id>.md in CWD.
 
@@ -4794,44 +4165,6 @@ def compute_issue_aging(issue: dict, aging_cfg: dict, now=None) -> dict:
     else:
         tier = "Stale"
     return {"percent": pct, "tier": tier}
-
-
-def compute_lesson_shelf(lesson: dict, thresholds: dict, now=None) -> str:
-    """Compute shelf placement: 'core' | 'active' | 'retired'.
-
-    Rules (driven by reinforce_events only — passive anchor matches are ignored):
-        core      — count(events within core_window_days) >= core_count
-                    AND at least one event within core_recency_days
-        retired   — no events within retired_after_days
-        active    — otherwise (any event within retired_after_days that
-                    doesn't qualify as core)
-    """
-    from datetime import datetime, timedelta, timezone
-
-    if now is None:
-        now = datetime.now(timezone.utc)
-
-    events = lesson.get("reinforce_events") or []
-
-    def _parse(e):
-        return datetime.strptime(e["at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
-
-    parsed = [_parse(e) for e in events]
-
-    core_count = int(thresholds.get("core_count", 7))
-    core_window = timedelta(days=int(thresholds.get("core_window_days", 60)))
-    core_recency = timedelta(days=int(thresholds.get("core_recency_days", 14)))
-    retired_after = timedelta(days=int(thresholds.get("retired_after_days", 30)))
-
-    in_window = [t for t in parsed if (now - t) <= core_window]
-    in_recency = [t for t in parsed if (now - t) <= core_recency]
-    in_active = [t for t in parsed if (now - t) <= retired_after]
-
-    if len(in_window) >= core_count and len(in_recency) >= 1:
-        return "core"
-    if not in_active:
-        return "retired"
-    return "active"
 
 
 # ── Edit-in-UI write primitives (v3-edit Phase A) ──────────────────
@@ -5264,7 +4597,6 @@ def continuity_items(
 _ENTITY_PATH_HELPERS: dict[str, Any] = {
     "handover": handover_path,
     "issue":    issue_path,
-    "lesson":   lesson_path,
     "idea":     idea_path,
 }
 
@@ -5275,7 +4607,7 @@ def read_entity_anywhere(
     *,
     fallback: bool = True,
 ) -> dict | None:
-    """Read any entity (task/issue/lesson/handover/idea) by ID. Returns its
+    """Read any entity (task/issue/handover/idea) by ID. Returns its
     in-memory dict (frontmatter for non-task entities; merged dict for tasks).
 
     Body content for non-task entities is stored under BODY_KEY for round-trip.
@@ -5301,7 +4633,6 @@ def read_entity_anywhere(
     reader = {
         "handover": read_handover,
         "issue":    read_issue,
-        "lesson":   read_lesson,
         "idea":     read_idea,
     }[kind]
     try:

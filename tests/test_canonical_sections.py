@@ -9,7 +9,6 @@ def test_canonical_sections_per_entity_type():
 
     assert set(CANONICAL_SECTIONS["handover"]) == {"decisions", "notes", "blockers", "where_id_start"}
     assert set(CANONICAL_SECTIONS["issue"]) == {"repro", "investigation", "notes"}
-    assert set(CANONICAL_SECTIONS["lesson"]) == {"why", "what_to_do", "examples"}
 
 
 def test_task_sections_include_docs_keys():
@@ -75,16 +74,3 @@ def test_issue_get_sections_none_returns_slim(tmp_taskmaster):
     result = backlog_issue_get("ISS-001", sections=None)
     assert "Slim issue tldr." in result
     assert not result.startswith("Error: sections=[]")
-
-
-def test_lesson_get_sections_empty_list_returns_error(tmp_taskmaster):
-    """B-042: backlog_lesson_get(sections=[]) must return an Error string."""
-    from taskmaster.backlog_server import backlog_lesson_create, backlog_lesson_get
-    backlog_lesson_create(
-        title="Test lesson",
-        kind="pattern",
-        tldr="Lesson tldr.",
-    )
-    result = backlog_lesson_get("L-001", sections=[])
-    assert isinstance(result, str)
-    assert result.startswith("Error: sections=[]")

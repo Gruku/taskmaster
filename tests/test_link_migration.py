@@ -25,13 +25,11 @@ def test_task_legacy_fields_translate():
         "id": "T-001",
         "depends_on": ["T-002", "T-003"],
         "related_issues": ["ISS-007"],
-        "related_lessons": ["L-003"],
     }
     links = legacy_links_to_typed(task, kind="task")
     assert {"type": "depends_on",  "target": "T-002"} in links
     assert {"type": "depends_on",  "target": "T-003"} in links
     assert {"type": "relates_to",  "target": "ISS-007"} in links
-    assert {"type": "informed_by", "target": "L-003"}  in links
 
 
 def test_issue_legacy_fields_translate():
@@ -45,17 +43,6 @@ def test_issue_legacy_fields_translate():
     assert {"type": "relates_to",    "target": "T-001"}   in links
     assert {"type": "fixed_in_task", "target": "T-005"}   in links
     assert {"type": "duplicate_of",  "target": "ISS-002"} in links
-
-
-def test_lesson_legacy_fields_translate():
-    lesson = {
-        "id": "L-001",
-        "related_tasks": ["T-001"],
-        "related_issues": ["ISS-007"],
-    }
-    links = legacy_links_to_typed(lesson, kind="lesson")
-    assert {"type": "informs",    "target": "T-001"}   in links
-    assert {"type": "relates_to", "target": "ISS-007"} in links
 
 
 def test_handover_legacy_fields_translate():
@@ -105,7 +92,7 @@ def _seed_project(tmp_path: Path) -> Path:
             {"id": "T-002", "title": "Second", "status": "todo"},
         ]}],
     }))
-    for sub in ("handovers", "issues", "lessons", "ideas", "tasks"):
+    for sub in ("handovers", "issues", "ideas", "tasks"):
         (d / sub).mkdir()
     # Seed an issue with a legacy fixed_in_task field via write_entity_anywhere
     # (bypasses the issue-creator allocator since that builds a fresh frontmatter).
@@ -179,7 +166,7 @@ def test_read_fallback_synthesizes_links_when_absent(tmp_path):
             {"id": "T-002", "title": "Second", "status": "todo"},
         ]}],
     }))
-    for sub in ("handovers", "issues", "lessons", "ideas", "tasks"):
+    for sub in ("handovers", "issues", "ideas", "tasks"):
         (d / sub).mkdir()
 
     t1 = read_entity_anywhere(d / "backlog.yaml", "T-001")

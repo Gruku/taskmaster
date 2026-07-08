@@ -23,7 +23,7 @@ def tm_dir(tmp_path: Path) -> Path:
             {"id": "T-005", "title": "Fifth", "status": "todo"},
         ]}],
     }))
-    for sub in ("handovers", "issues", "lessons", "ideas", "tasks"):
+    for sub in ("handovers", "issues", "ideas", "tasks"):
         (d / sub).mkdir()
     return d
 

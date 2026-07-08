@@ -8,7 +8,7 @@ import yaml
 def test_fixture_creates_directory_structure(tmp_taskmaster):
     base = Path(tmp_taskmaster) / ".taskmaster"
     assert base.is_dir()
-    for subdir in ("tasks", "handovers", "issues", "lessons", "ideas"):
+    for subdir in ("tasks", "handovers", "issues", "ideas"):
         assert (base / subdir).is_dir(), f"Missing .taskmaster/{subdir}/"
     bl = base / "backlog.yaml"
     assert bl.exists()

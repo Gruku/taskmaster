@@ -5,9 +5,9 @@ def test_extract_bare_task_id():
     assert extract_inline_refs("Working on T-001 now.") == ["T-001"]
 
 
-def test_extract_bare_issue_and_lesson_and_handover_and_idea():
-    body = "Picked up T-001 to fix ISS-007 using L-003; see HND-012 and IDEA-005."
-    assert set(extract_inline_refs(body)) == {"T-001", "ISS-007", "L-003", "HND-012", "IDEA-005"}
+def test_extract_bare_issue_and_handover_and_idea():
+    body = "Picked up T-001 to fix ISS-007; see HND-012 and IDEA-005."
+    assert set(extract_inline_refs(body)) == {"T-001", "ISS-007", "HND-012", "IDEA-005"}
 
 
 def test_extract_wiki_style():
@@ -24,8 +24,8 @@ def test_extract_dedupes():
 
 
 def test_extract_preserves_first_seen_order():
-    body = "First ISS-007, then T-001, then L-003, then T-001 again."
-    assert extract_inline_refs(body) == ["ISS-007", "T-001", "L-003"]
+    body = "First ISS-007, then T-001, then HND-012, then T-001 again."
+    assert extract_inline_refs(body) == ["ISS-007", "T-001", "HND-012"]
 
 
 def test_extract_ignores_lowercase_and_partials():

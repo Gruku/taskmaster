@@ -17,9 +17,6 @@ def test_slim_defaults_across_all_entities(tm_epic_phase):
         backlog_issue_create,
         backlog_issue_get,
         backlog_issue_list,
-        backlog_lesson_create,
-        backlog_lesson_get,
-        backlog_lesson_list,
         backlog_handover_create,
         backlog_handover_get,
         backlog_handover_list,
@@ -37,11 +34,6 @@ def test_slim_defaults_across_all_entities(tm_epic_phase):
         title="Bug", severity="P1", tldr="Auth bug.",
         impact="fixture evidence.",
         body="## Repro\n\nLong steps.",
-    )
-
-    backlog_lesson_create(
-        title="Atomic", kind="pattern", tldr="Use atomic.",
-        body="## Why\n\nLong why.\n## What to do\n\nLong WTD.",
     )
 
     hnd_result = backlog_handover_create(
@@ -65,11 +57,6 @@ def test_slim_defaults_across_all_entities(tm_epic_phase):
         f"backlog_issue_get leaked heavy content in slim mode:\n{slim_issue}"
     )
 
-    slim_lesson = backlog_lesson_get("L-001")
-    assert "Long why" not in slim_lesson, (
-        f"backlog_lesson_get leaked heavy content in slim mode:\n{slim_lesson}"
-    )
-
     if handover_id:
         slim_handover = backlog_handover_get(handover_id)
         assert "Detail" not in slim_handover, (
@@ -87,11 +74,6 @@ def test_slim_defaults_across_all_entities(tm_epic_phase):
         f"backlog_issue_get verbose missing body content:\n{verbose_issue}"
     )
 
-    verbose_lesson = backlog_lesson_get("L-001", verbose=True)
-    assert "Long why" in verbose_lesson, (
-        f"backlog_lesson_get verbose missing body content:\n{verbose_lesson}"
-    )
-
     if handover_id:
         verbose_handover = backlog_handover_get(handover_id, verbose=True)
         assert "Detail" in verbose_handover, (
@@ -107,11 +89,6 @@ def test_slim_defaults_across_all_entities(tm_epic_phase):
     list_issues_out = backlog_issue_list()
     assert "Long steps" not in list_issues_out, (
         f"backlog_issue_list leaked heavy content:\n{list_issues_out}"
-    )
-
-    list_lessons_out = backlog_lesson_list()
-    assert "Long why" not in list_lessons_out, (
-        f"backlog_lesson_list leaked heavy content:\n{list_lessons_out}"
     )
 
     list_handovers_out = backlog_handover_list()

@@ -17,7 +17,6 @@ status: in-progress
 priority: high
 depends_on: [T-002]
 related_issues: [ISS-007]
-related_lessons: [L-003]
 docs_available: [spec, plan]
 open_handovers: [HND-012]
 """ * 1  # ~600 chars → ~150 tokens
@@ -28,16 +27,11 @@ _DEPENDENCIES_SLIM = """T-002: done ✓ Setup Redis session store
 _HANDOVER_LIST_TASK_SLIM = """HND-012 ▸ T-001: "rewriting auth middleware — next: backfill migration" [open]
 """ * 1  # ~150 chars → ~37 tokens
 
-_LESSON_MATCH_SLIM = """L-007 (gotcha): auth/session.ts — read before edit, never patch blindly
-L-014 (anti-pattern): avoid raw SQL in auth handlers
-L-022 (pattern): test names must include scenario + expected outcome
-""" * 1  # ~360 chars → ~90 tokens
-
 _ISSUE_LIST_TASK_SLIM = """ISS-007 (P1, open): Login accepts whitespace-only passwords
 """ * 1  # ~80 chars → ~20 tokens
 
-_LINKAGE_PILLS = "depends_on: T-002 · fixes: ISS-007 · informed_by: L-003\n"
-# ~55 chars → ~14 tokens
+_LINKAGE_PILLS = "depends_on: T-002 · fixes: ISS-007\n"
+# ~40 chars → ~10 tokens
 
 _CHARS_PER_TOKEN = 4
 
@@ -64,7 +58,6 @@ def test_glance_mcp_payload_budget():
         len(_GET_TASK_SLIM)
         + len(_DEPENDENCIES_SLIM)
         + len(_HANDOVER_LIST_TASK_SLIM)
-        + len(_LESSON_MATCH_SLIM)
         + len(_ISSUE_LIST_TASK_SLIM)
         + len(_LINKAGE_PILLS)
     )
@@ -87,7 +80,6 @@ def test_combined_glance_budget():
         len(_GET_TASK_SLIM)
         + len(_DEPENDENCIES_SLIM)
         + len(_HANDOVER_LIST_TASK_SLIM)
-        + len(_LESSON_MATCH_SLIM)
         + len(_ISSUE_LIST_TASK_SLIM)
         + len(_LINKAGE_PILLS)
     )

@@ -17,7 +17,7 @@ def tm_dir(tmp_path: Path, monkeypatch) -> Path:
             {"id": "T-002", "title": "Second", "status": "todo"},
         ]}],
     }))
-    for sub in ("handovers", "issues", "lessons", "ideas", "tasks"):
+    for sub in ("handovers", "issues", "ideas", "tasks"):
         (d / sub).mkdir()
     monkeypatch.setattr(bs, "_backlog_path", lambda: d / "backlog.yaml")
     bs.backlog_link_create(source="T-001", target="T-002", type="depends_on")

@@ -1,4 +1,4 @@
-"""One-shot backfill: add tldr fields to legacy tasks/issues/lessons/ideas.
+"""One-shot backfill: add tldr fields to legacy tasks/issues/ideas.
 
 Idempotent — re-running only touches entities still missing a tldr. Skips
 handovers (they already require tldr at write time).
@@ -43,7 +43,7 @@ def main() -> int:
         return 2
 
     total = 0
-    for subdir in ("tasks", "issues", "lessons", "ideas"):
+    for subdir in ("tasks", "issues", "ideas"):
         d = base / subdir
         print(f"Scanning {d}...")
         total += _backfill_dir(d)
