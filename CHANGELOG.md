@@ -12,6 +12,24 @@ indicate schema breaks or removed surfaces.
 
 ---
 
+## 3.24.0 — codex + agents-md adapters (Phase 3) (2026-07-08)
+
+### Added
+
+- **`adapters/codex/`** — Codex CLI adapter: `config.toml` MCP-registration
+  snippet, AGENTS.md routing fragment, and 17 slash prompts (one per
+  playbook; thin pointers, no duplicated workflow content).
+- **`adapters/agents-md/`** — generic AGENTS.md rules fragment for
+  Cursor / Zed / opencode (any AGENTS.md-reading, MCP-speaking tool).
+- `check_adapter_coverage.py` now enforces adapter coverage 1:1 (codex
+  prompt + agents-md reference per playbook) and scans adapters for banned
+  assistant-specific tokens.
+
+Install-location independence via the `{{TASKMASTER_HOME}}` placeholder —
+see each adapter's README.
+
+---
+
 ## 3.23.0 — standalone repo extraction (Phase 2a) (2026-07-08)
 
 Taskmaster now lives in its own canonical repo (extracted from

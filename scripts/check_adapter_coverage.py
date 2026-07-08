@@ -66,6 +66,30 @@ def check(root: Path, strict: bool) -> list[str]:
                 errors.append(
                     f"{md}: stale old-layout path '{m.group(0)}' — moved to playbooks/ in the conversion")
 
+    # --- adapter coverage: codex prompts + agents-md rules stay 1:1 ---------
+    adapters = root / "adapters"
+    if adapters.is_dir():
+        agents_md = adapters / "agents-md" / "AGENTS.md"
+        agents_md_text = agents_md.read_text(encoding="utf-8") if agents_md.is_file() else None
+        if agents_md_text is None:
+            errors.append(f"{agents_md}: missing generic agents-md rules file")
+        for pb_dir in converted:
+            name = pb_dir.name
+            ref = f"playbooks/{name}/playbook.md"
+            prompt = adapters / "codex" / "prompts" / f"{name}.md"
+            if not prompt.is_file():
+                errors.append(f"{prompt}: playbook '{name}' has no codex prompt wrapper")
+            elif ref not in prompt.read_text(encoding="utf-8"):
+                errors.append(f"{prompt}: codex prompt missing pointer `{ref}`")
+            if agents_md_text is not None and ref not in agents_md_text:
+                errors.append(f"{agents_md}: missing reference `{ref}` for playbook '{name}'")
+        for f in sorted(adapters.rglob("*")):
+            if f.suffix in (".md", ".toml") and f.is_file():
+                content = f.read_text(encoding="utf-8")
+                for token in BANNED:
+                    if token in content:
+                        errors.append(f"{f}: banned assistant-specific token '{token}'")
+
     if strict and skills.is_dir():
         converted_names = {d.name for d in converted}
         for skill_dir in sorted(skills.iterdir()):
