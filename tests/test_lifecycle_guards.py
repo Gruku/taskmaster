@@ -11,7 +11,7 @@ def _ensure_scaffold(tmp_path: Path) -> None:
     if not progress.exists():
         progress.write_text("## Changelog\n", encoding="utf-8")
     from taskmaster import backlog_server as _bs
-    r_epic = _bs.backlog_add_epic(epic_id="test-epic", name="Test Epic")
+    r_epic = _bs.backlog_add_epic(epic_id="test-epic", name="Test Epic", done_when="all test tasks complete")
     if "Error" in r_epic and "already" not in r_epic.lower():
         raise AssertionError(f"add_epic failed: {r_epic}")
     r_phase = _bs.backlog_add_phase(phase_id="dev", name="Development")

@@ -17,7 +17,7 @@ def _set_status(task_id, status):
     _mutate_and_save(data)
 
 def test_set_components_block(tmp_taskmaster):
-    backlog_add_epic("asset-engine", "Asset Engine")
+    backlog_add_epic("asset-engine", "Asset Engine", done_when="ships")
     val = json.dumps({"ingest": {"title": "Ingest", "after": []},
                       "thumb": {"title": "Thumbnailer", "after": ["ingest"]}})
     out = backlog_update_epic("asset-engine", "components", val)
@@ -27,13 +27,13 @@ def test_set_components_block(tmp_taskmaster):
     assert comps["thumb"]["after"] == ["ingest"]
 
 def test_components_reject_unknown_after(tmp_taskmaster):
-    backlog_add_epic("asset-engine", "Asset Engine")
+    backlog_add_epic("asset-engine", "Asset Engine", done_when="ships")
     val = json.dumps({"thumb": {"title": "T", "after": ["nope"]}})
     out = backlog_update_epic("asset-engine", "components", val)
     assert "Error" in out and "nope" in out
 
 def test_design_status_field(tmp_taskmaster):
-    backlog_add_epic("asset-engine", "Asset Engine")
+    backlog_add_epic("asset-engine", "Asset Engine", done_when="ships")
     assert "Error" not in backlog_update_epic("asset-engine", "design_status", "locked")
     assert _epic(_load(), "asset-engine")["design_status"] == "locked"
     assert "Error" in backlog_update_epic("asset-engine", "design_status", "bogus")
@@ -81,19 +81,19 @@ def test_component_rollup(tm_epic_phase):
 
 
 def test_components_reject_reserved_unassigned(tmp_taskmaster):
-    backlog_add_epic("asset-engine", "Asset Engine")
+    backlog_add_epic("asset-engine", "Asset Engine", done_when="ships")
     out = backlog_update_epic("asset-engine", "components",
                               json.dumps({"_unassigned": {"title": "X"}}))
     assert "Error" in out and "_unassigned" in out
 
 def test_components_reject_reserved_none(tmp_taskmaster):
-    backlog_add_epic("asset-engine", "Asset Engine")
+    backlog_add_epic("asset-engine", "Asset Engine", done_when="ships")
     out = backlog_update_epic("asset-engine", "components",
                               json.dumps({"none": {"title": "X"}}))
     assert "Error" in out
 
 def test_components_reject_self_reference(tmp_taskmaster):
-    backlog_add_epic("asset-engine", "Asset Engine")
+    backlog_add_epic("asset-engine", "Asset Engine", done_when="ships")
     out = backlog_update_epic("asset-engine", "components",
                               json.dumps({"a": {"title": "A", "after": ["a"]}}))
     assert "Error" in out and "a" in out
@@ -109,7 +109,7 @@ def test_stale_component_binding_rolls_to_unassigned(tm_epic_phase):
     assert roll["_unassigned"]["total"] == 1
 
 def test_design_status_roundtrip(tmp_taskmaster):
-    backlog_add_epic("asset-engine", "Asset Engine")
+    backlog_add_epic("asset-engine", "Asset Engine", done_when="ships")
     backlog_update_epic("asset-engine", "design_status", "locked")
     data = _load()  # reload from disk
     e = next(e for e in data["epics"] if e["id"] == "asset-engine")

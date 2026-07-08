@@ -141,7 +141,7 @@ SLIM_FIELDS: dict[str, tuple[str, ...]] = {
         "created_by", "related_tasks", "related_issues",
         "tldr_autogen",
     ),
-    "epic": ("id", "name", "status", "design_status", "created"),
+    "epic": ("id", "name", "status", "design_status", "created", "done_when", "area"),
     "phase": ("id", "name", "status", "order", "created",
               "target_date", "start_date", "completed", "deliverables"),
 }

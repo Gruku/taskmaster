@@ -1643,6 +1643,11 @@ def backlog_validate() -> str:
     # ── tldr warnings (advisory, not blocking) ─────────────────────────────
     warnings: list[str] = []
     for epic in data.get("epics", []):
+        if not epic.get("done_when"):
+            warnings.append(
+                f"  warning: epic `{epic.get('id', '?')}` has no done_when (pre-4.1 legacy) "
+                f"— set one via backlog_update_epic or convert to an area"
+            )
         for task in epic.get("tasks", []):
             if not task.get("tldr"):
                 warnings.append(
@@ -5330,8 +5335,12 @@ def backlog_clear_spec_review(task_id: str) -> str:
 
 
 VALID_EPIC_STATUSES = {"active", "planned", "done", "archived"}
-ALLOWED_EPIC_FIELDS = {"name", "status", "description", "docs", "components", "design_status"}
+ALLOWED_EPIC_FIELDS = {"name", "status", "description", "docs", "components", "design_status", "done_when", "area"}
 VALID_DESIGN_STATUSES = {"exploring", "proposed", "locked", "revising"}
+EPIC_DONE_WHEN_REQUIRED_MSG = (
+    "Epics are finite: 'done_when' is required. "
+    "An epic that can't say when it's done is an area."
+)
 
 
 def _validate_components(components: dict) -> str:
@@ -5433,6 +5442,18 @@ def backlog_update_epic(epic_id: str, field: str, value: str) -> str:
         _mutate_and_save(data)
         return f"Updated epic `{epic_id}` design_status → `{value}`"
 
+    if field == "done_when":
+        if not value.strip():
+            return f"Error: {EPIC_DONE_WHEN_REQUIRED_MSG}"
+
+    if field == "area":
+        if value:
+            from taskmaster.taskmaster_v3 import list_area_ids as _list_area_ids
+            bp = _backlog_path()
+            known_areas = _list_area_ids(bp)
+            if value not in known_areas:
+                return f"Error: unknown area `{value}`. Valid: {', '.join(known_areas) or '(none defined)'}"
+
     old_value = epic.get(field, "")
     epic[field] = value
     _mutate_and_save(data)
@@ -5479,22 +5500,39 @@ def backlog_archive_epic(epic_id: str, reason: str = "done") -> str:
 
 @mcp.tool()
 def backlog_add_epic(
-    epic_id: str, name: str, description: str = "", status: str = "planned",
+    epic_id: str, name: str, done_when: str, description: str = "",
+    status: str = "planned", area: str = "",
 ) -> str:
-    """Create a new epic. Epics group related tasks into workstreams.
+    """Create a new epic. Epics group related tasks into workstreams and are
+    strictly finite — every epic must say when it's done. If the work can't
+    say when it's done, it's an Area (see `backlog_area_create`), not an epic.
 
     Args:
         epic_id: Short kebab-case identifier (e.g., "auth-system", "perf-opt"). Must be unique. Used as prefix for task IDs.
         name: Human-readable name (e.g., "Authentication System", "Performance Optimization")
+        done_when: Required. The concrete condition under which this epic is complete
+            (e.g., "auth flow ships to prod with SSO + MFA"). Cannot be empty.
         description: Brief description of the epic's scope and goals
         status: Initial status — one of: active, planned (default: planned)
+        area: Optional area id (e.g., "desktop-app") this epic lives under. Must
+            match an existing Area from `backlog_area_list`; leave empty if unset.
     """
+    if not done_when.strip():
+        return f"Error: {EPIC_DONE_WHEN_REQUIRED_MSG}"
+
     if status not in VALID_EPIC_STATUSES:
         return f"Error: invalid status `{status}`. Valid: {', '.join(sorted(VALID_EPIC_STATUSES))}"
 
     # Validate epic_id format: lowercase, kebab-case
     if not epic_id or not all(c.isalnum() or c == "-" for c in epic_id) or epic_id != epic_id.lower():
         return f"Error: epic_id must be lowercase kebab-case (e.g., 'auth-system'), got `{epic_id}`"
+
+    bp = _backlog_path()
+    if area:
+        from taskmaster.taskmaster_v3 import list_area_ids as _list_area_ids
+        known_areas = _list_area_ids(bp)
+        if area not in known_areas:
+            return f"Error: unknown area `{area}`. Valid: {', '.join(known_areas) or '(none defined)'}"
 
     data = _load()
 
@@ -5509,7 +5547,10 @@ def backlog_add_epic(
         "description": description,
         "created": _now(),
         "tasks": [],
+        "done_when": done_when,
     }
+    if area:
+        new_epic["area"] = area
 
     data["epics"].append(new_epic)
     _mutate_and_save(data)

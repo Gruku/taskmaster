@@ -50,7 +50,7 @@ def test_verbose_status_includes_archived(tm_epic_phase):
 def test_slim_status_under_1800_chars(tm_epic_phase):
     # Add a realistic-ish set (5 epics x 5 tasks each)
     for ei in range(5):
-        backlog_add_epic(epic_id=f"e{ei}", name=f"E{ei}")
+        backlog_add_epic(epic_id=f"e{ei}", name=f"E{ei}", done_when="done")
     for ei in range(5):
         for ti in range(5):
             backlog_add_task(
