@@ -18,7 +18,6 @@ export function renderReceiptsGrid(diff) {
     `<div class="receipts-grid">`
     + tasksCard(diff)
     + filesCard(diff)
-    + lessonsCard(diff)
     + issuesCard(diff)
     + `</div>`
   );
@@ -76,18 +75,6 @@ function filesCard(d) {
     );
   });
   return cardShell({ title: 'Files touched', count: rows.length, body: rows.join('') });
-}
-
-function lessonsCard(d) {
-  const rows = (d.lessons_fired || []).map(l =>
-    `<div class="lsn-row">`
-    + `<span class="id mono">${escapeHtml(l.id)}</span>`
-    + ` ${escapeHtml(l.name || '')}`
-    + ` <span class="ct mono">×${l.fires || 1}</span>`
-    + (l.first_time ? ` <span class="new-tag">(new)</span>` : '')
-    + `</div>`
-  );
-  return cardShell({ title: 'Lessons fired', count: rows.length, body: rows.join('') });
 }
 
 function issuesCard(d) {

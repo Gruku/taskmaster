@@ -27,7 +27,6 @@ export function snapshotDiff(a, b) {
     tasks_added: added,
     tasks_removed: removed,
     tasks_changed: changed,
-    lessons_fired: b.lessons_fired || [],
     issues_opened,
     issues_transitioned,
     files_touched: b.files_touched || [],

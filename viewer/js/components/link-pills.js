@@ -14,8 +14,6 @@ const TYPE_LABELS = {
   fixes:         "Fixes",
   fixed_in_task: "Fixed in",
   relates_to:    "Related",
-  informed_by:   "Informed by",
-  informs:       "Informs",
   supersedes:    "Supersedes",
   superseded_by: "Superseded by",
   duplicate_of:  "Duplicate of",
@@ -65,16 +63,11 @@ export function legacyLinksToTyped(entity, kind) {
     task: [
       ["depends_on", "depends_on", true],
       ["related_issues", "relates_to", true],
-      ["related_lessons", "informed_by", true],
     ],
     issue: [
       ["related_tasks", "relates_to", true],
       ["fixed_in_task", "fixed_in_task", false],
       ["duplicate_of", "duplicate_of", false],
-    ],
-    lesson: [
-      ["related_tasks", "informs", true],
-      ["related_issues", "relates_to", true],
     ],
     handover: [
       ["supersedes", "supersedes", true],

@@ -40,7 +40,7 @@ export async function mount(root, { params, subpath }) {
 
   let recap = await getRecap(cur.id);
   let diff = { tasks_added:[], tasks_changed:[], tasks_removed:[],
-               files_touched:[], lessons_fired:[], issues_opened:[], issues_transitioned:[] };
+               files_touched:[], issues_opened:[], issues_transitioned:[] };
   let snapshotsUnavailable = false;
   if (recap && recap.frontmatter && recap.frontmatter.snapshot_before && recap.frontmatter.snapshot_after) {
     try {
@@ -168,7 +168,6 @@ function renderRecapPage(root, { cur, prev, next, recap, diff, editing }) {
     + `<div class="recap-stats">`
     +   stat('add', stats.tasks_done,   'tasks done')
     +   stat('mod', stats.tasks_moved,  'tasks moved')
-    +   stat('',    stats.lessons_fired,'lessons fired')
     +   stat('del', stats.issues_opened,'issues opened')
     +   stat('add', stats.files_touched,'files touched')
     + `</div>`
@@ -177,7 +176,7 @@ function renderRecapPage(root, { cur, prev, next, recap, diff, editing }) {
     + `<h3>Receipts</h3>`
     + `<span class="vs mono">diff <span class="snap">${escapeHtml(fm.snapshot_before || '—')}</span> → <span class="snap">${escapeHtml(fm.snapshot_after || '—')}</span></span>`
     + `<div class="filt" data-role="filt">`
-    +   ['All','Tasks','Lessons','Issues','Files'].map((label, i) =>
+    +   ['All','Tasks','Issues','Files'].map((label, i) =>
         `<span class="filt-chip ${i===0?'on':''}" data-filt="${label.toLowerCase()}">${label}</span>`).join('')
     + `</div>`
     + `</div>`
@@ -224,10 +223,9 @@ function computeStats(diff) {
   const tasks_done   = diff.tasks_changed.filter(t => (t.to && t.to.status) === 'done').length
                      + (diff.tasks_added || []).filter(t => t.status === 'done').length;
   const tasks_moved  = diff.tasks_changed.length - tasks_done + (diff.tasks_added || []).length;
-  const lessons_fired = (diff.lessons_fired || []).reduce((n, l) => n + (l.fires || 1), 0);
   const issues_opened = (diff.issues_opened || []).length;
   const files_touched = (diff.files_touched || []).length;
-  return { tasks_done, tasks_moved, lessons_fired, issues_opened, files_touched };
+  return { tasks_done, tasks_moved, issues_opened, files_touched };
 }
 
 function formatDuration(seconds) {
@@ -254,7 +252,6 @@ function bindFilterChips(root) {
         if (f === 'all') show = true;
         else if (f === 'tasks')   show = ttl.startsWith('tasks');
         else if (f === 'files')   show = ttl.startsWith('files');
-        else if (f === 'lessons') show = ttl.startsWith('lessons');
         else if (f === 'issues')  show = ttl.startsWith('issues');
         card.style.display = show ? '' : 'none';
       });

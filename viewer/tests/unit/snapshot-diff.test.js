@@ -22,10 +22,9 @@ test('detects issue transitions', () => {
   assert.equal(d.issues_transitioned[0].to, 'fixed');
 });
 
-test('passes through lessons_fired and files_touched', () => {
+test('passes through files_touched', () => {
   const a = { tasks: {} };
-  const b = { tasks: {}, lessons_fired: [{ id: 'LSN-1', fires: 2 }], files_touched: ['x.py'] };
+  const b = { tasks: {}, files_touched: ['x.py'] };
   const d = snapshotDiff(a, b);
-  assert.deepEqual(d.lessons_fired, [{ id: 'LSN-1', fires: 2 }]);
   assert.deepEqual(d.files_touched, ['x.py']);
 });

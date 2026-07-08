@@ -34,11 +34,11 @@ test('renderInline emits text + chip nodes', () => {
 });
 
 test('renderInline handles multiple tags in one string', () => {
-  const nodes = renderInline('<example>e</example> and <lesson-candidate>lc</lesson-candidate>');
+  const nodes = renderInline('<example>e</example> and <decision>d</decision>');
   const chips = nodes.filter(n => n.nodeType === window.Node.ELEMENT_NODE);
   assert.equal(chips.length, 2);
   assert.equal(chips[0].textContent, 'Example');
-  assert.equal(chips[1].textContent, 'Lesson candidate');
+  assert.equal(chips[1].textContent, 'Decision');
 });
 
 test('renderInline truncates very long inner text in title attr', () => {
@@ -65,13 +65,13 @@ test('renderInline emits the whole string as plain text when no recognized tags'
 });
 
 test('renderBlock builds paragraphs and tagged blocks', () => {
-  const text = 'intro para\n\nsecond para\n\n<lesson-candidate>capture this</lesson-candidate>\n\ntrailing';
+  const text = 'intro para\n\nsecond para\n\n<decision>capture this</decision>\n\ntrailing';
   const root = renderBlock(text);
   const paras = root.querySelectorAll('.co-xblock__p');
   const tags  = root.querySelectorAll('.co-xblock__tag');
   assert.equal(paras.length, 3); // intro, second, trailing
   assert.equal(tags.length, 1);
-  assert.equal(tags[0].querySelector('.co-xblock__tag-label').textContent, 'Lesson candidate');
+  assert.equal(tags[0].querySelector('.co-xblock__tag-label').textContent, 'Decision');
   assert.equal(tags[0].querySelector('.co-xblock__tag-body').textContent, 'capture this');
 });
 

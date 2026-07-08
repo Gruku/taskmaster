@@ -301,8 +301,6 @@
 .ideas-detail__rel-pill:hover { border-color: var(--accent-blue); }
 .ideas-detail__rel-pill--issue { color: var(--red, #d66b5f); background: rgba(214, 107, 95, 0.08); }
 .ideas-detail__rel-pill--issue:hover { border-color: var(--red, #d66b5f); }
-.ideas-detail__rel-pill--lesson { color: var(--purple, #a07fe0); background: rgba(160, 127, 224, 0.08); }
-.ideas-detail__rel-pill--lesson:hover { border-color: var(--purple, #a07fe0); }
 
 /* ---- modal form tweaks ---- */
 

@@ -91,10 +91,9 @@ test('kanban: page fills screen-mount, board never scrolls, column bodies do', a
   }
 });
 
-test('issues/lessons/dashboard scroll on their root, not via window', async ({ page }) => {
+test('issues/dashboard scroll on their root, not via window', async ({ page }) => {
   const cases = [
     { hash: '#/issues',    rootSelector: '.screen-mount > .issues' },
-    { hash: '#/lessons',   rootSelector: '.screen-mount > .lessons' },
     { hash: '#/dashboard', rootSelector: '.screen-mount.dash' },
   ];
   for (const c of cases) {
