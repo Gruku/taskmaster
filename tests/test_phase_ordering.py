@@ -70,7 +70,7 @@ def out_of_order_project(tmp_path, monkeypatch):
     # PROGRESS.md is required by _mutate_and_save → regenerate_progress_dashboard.
     (tm / "PROGRESS.md").write_text("", encoding="utf-8")
 
-    import backlog_server
+    from taskmaster import backlog_server
     monkeypatch.setattr(backlog_server, "ROOT", tmp_path)
     monkeypatch.setattr(backlog_server, "CONFIG_PATH", tm / "missing.json")
     monkeypatch.setattr(backlog_server, "LEGACY_CONFIG_PATH", tmp_path / ".claude" / "missing.json")
@@ -81,7 +81,7 @@ def out_of_order_project(tmp_path, monkeypatch):
 @pytest.fixture
 def running_server_oo(out_of_order_project, monkeypatch):
     """HTTP server backed by the out-of-order project."""
-    import backlog_server
+    from taskmaster import backlog_server
     server, port = backlog_server._make_server(host="127.0.0.1", port=0)
     backlog_server._init_storage()
     t = threading.Thread(target=server.serve_forever, daemon=True)
@@ -138,7 +138,7 @@ class TestApiBacklogPhaseOrder:
 class TestPhaseStatsExactMatch:
     def test_phase_1_done_count_not_contaminated_by_phase_1_5(self, out_of_order_project):
         """_phase_stats uses exact id match so 'phase-1' never picks up 'phase-1-5' tasks."""
-        from backlog_server import _phase_stats, _load
+        from taskmaster.backlog_server import _phase_stats, _load
         # out_of_order_project fixture sets monkeypatch.chdir so _backlog_path() resolves.
         data = _load()
         stats_1 = _phase_stats(data, "phase-1")
@@ -151,7 +151,7 @@ class TestPhaseStatsExactMatch:
 
     def test_phase_2_stats_not_contaminated(self, out_of_order_project):
         """_phase_stats for phase-2 must not capture tasks from phase-1 or phase-1-5."""
-        from backlog_server import _phase_stats, _load
+        from taskmaster.backlog_server import _phase_stats, _load
         data = _load()
         stats_2 = _phase_stats(data, "phase-2")
         # phase-2 has 1 task (t-004)
@@ -165,20 +165,20 @@ class TestPhaseStatsExactMatch:
 
 class TestPhaseStatusMcpTool:
     def test_phase_status_active_phase_correct(self, out_of_order_project):
-        import backlog_server
+        from taskmaster import backlog_server
         result = backlog_server.backlog_phase_status()
         # Active phase is phase-1-5 (Beta)
         assert "Beta" in result, f"Expected active phase 'Beta' in output:\n{result}"
         assert "phase-1-5" in result or "Beta" in result
 
     def test_phase_status_next_phase_is_phase_2(self, out_of_order_project):
-        import backlog_server
+        from taskmaster import backlog_server
         result = backlog_server.backlog_phase_status()
         # Next phase after phase-1-5 (order=2) must be phase-2 (order=3), not phase-1
         assert "Launch" in result, f"Expected next phase 'Launch' in output:\n{result}"
 
     def test_phases_listed_in_order(self, out_of_order_project):
-        import backlog_server
+        from taskmaster import backlog_server
         result = backlog_server.backlog_phase_status("phase-1")
         # When viewing phase-1, next should be phase-1-5 (Beta), not phase-2 (Launch)
         assert "Beta" in result, (
@@ -195,7 +195,7 @@ class TestAdvancePhaseOrder:
     def test_advance_activates_correct_next_phase(self, out_of_order_project):
         """advance_phase must use order-field to pick next phase, not YAML position."""
         import yaml
-        import backlog_server
+        from taskmaster import backlog_server
         from pathlib import Path
 
         backlog_path = out_of_order_project / ".taskmaster" / "backlog.yaml"

@@ -13,9 +13,9 @@ import yaml
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT))
 
-import backlog_server  # noqa: E402
-from integrations.linear.worker import read_queue  # noqa: E402
-from taskmaster_v3 import write_tracker  # noqa: E402
+from taskmaster import backlog_server  # noqa: E402
+from taskmaster.integrations.linear.worker import read_queue  # noqa: E402
+from taskmaster.taskmaster_v3 import write_tracker  # noqa: E402
 
 
 # ── Helpers ────────────────────────────────────────────────────
@@ -159,7 +159,7 @@ def test_hook_swallows_exceptions(tmp_path, monkeypatch):
     monkeypatch.setattr(backlog_server, "regenerate_context", lambda *a, **k: None)
 
     # Replace the worker.enqueue import target with one that explodes
-    from integrations.linear import worker as _worker
+    from taskmaster.integrations.linear import worker as _worker
 
     def boom(*a, **k):
         raise RuntimeError("simulated queue failure")

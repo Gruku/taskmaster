@@ -6,7 +6,7 @@ import yaml
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT))
 
-from taskmaster_v3 import (
+from taskmaster.taskmaster_v3 import (
     smart_auto_close_handovers,
     read_handover,
     update_handover_status,
@@ -50,7 +50,7 @@ def test_complete_respects_user_set_lock(tmp_path):
     update_handover_status(bp, handover_id=hid, status="open")
 
     # Manually mark status_user_set to simulate user locking
-    from taskmaster_v3 import read_handover as _rh, write_task_file, handover_path
+    from taskmaster.taskmaster_v3 import read_handover as _rh, write_task_file, handover_path
     fm, body = _rh(bp, hid)
     fm["status_user_set"] = True
     write_task_file(handover_path(bp, hid), fm, body)

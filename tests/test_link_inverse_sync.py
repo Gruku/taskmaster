@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from taskmaster_v3 import (
+from taskmaster.taskmaster_v3 import (
     read_entity_anywhere,
     write_entity_anywhere,
     sync_inverse,

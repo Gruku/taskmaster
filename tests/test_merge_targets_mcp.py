@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import pytest
 
-import backlog_server as _bs
+from taskmaster import backlog_server as _bs
 
 
 YAML = """\

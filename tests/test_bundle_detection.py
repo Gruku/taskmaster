@@ -1,6 +1,6 @@
 """Task bundle: structured predictive blast-radius for detection-fallback."""
 import json
-import backlog_server
+from taskmaster import backlog_server
 
 
 def test_structured_predictive_returns_overlap_list(tm_epic_phase):

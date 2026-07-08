@@ -1,6 +1,6 @@
 # plugins/taskmaster/tests/test_epic_detail_endpoint.py
 import json
-from backlog_server import (
+from taskmaster.backlog_server import (
     backlog_add_epic, backlog_add_task, backlog_update_task,
     backlog_update_epic, _load_epic_full,
     _load, _find_task, _mutate_and_save,

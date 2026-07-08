@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 
 def test_handover_time_prefers_created_over_date():
-    from taskmaster_v3 import _handover_time
+    from taskmaster.taskmaster_v3 import _handover_time
 
     h = {
         "id": "2026-05-19-foo",
@@ -15,7 +15,7 @@ def test_handover_time_prefers_created_over_date():
 
 
 def test_handover_time_falls_back_to_date_when_created_missing():
-    from taskmaster_v3 import _handover_time
+    from taskmaster.taskmaster_v3 import _handover_time
 
     h = {"id": "2026-04-26-legacy", "date": "2026-04-26T16:40:00Z"}
     t = _handover_time(h)
@@ -23,7 +23,7 @@ def test_handover_time_falls_back_to_date_when_created_missing():
 
 
 def test_handover_time_falls_back_to_date_only_string():
-    from taskmaster_v3 import _handover_time
+    from taskmaster.taskmaster_v3 import _handover_time
 
     h = {"id": "2026-05-13-legacy", "date": "2026-05-13"}
     t = _handover_time(h)
@@ -32,7 +32,7 @@ def test_handover_time_falls_back_to_date_only_string():
 
 
 def test_handover_time_raises_when_no_date_or_created():
-    from taskmaster_v3 import _handover_time
+    from taskmaster.taskmaster_v3 import _handover_time
 
     with pytest.raises(ValueError, match="neither 'created' nor 'date'"):
         _handover_time({"id": "2026-05-19-broken"})
@@ -48,7 +48,7 @@ def _write_handover(tmp_path, name, body):
 
 
 def test_session_start_end_use_handover_created(tmp_path, monkeypatch):
-    from taskmaster_v3 import list_sessions
+    from taskmaster.taskmaster_v3 import list_sessions
 
     monkeypatch.chdir(tmp_path)
 
@@ -87,7 +87,7 @@ def test_session_start_end_use_handover_created(tmp_path, monkeypatch):
 def test_session_with_only_date_field_marks_time_resolution(tmp_path, monkeypatch):
     """A session built from a legacy handover (no `created`) is tagged as
     date-only so the viewer can render the date without inventing a time."""
-    from taskmaster_v3 import list_sessions
+    from taskmaster.taskmaster_v3 import list_sessions
 
     monkeypatch.chdir(tmp_path)
     _write_handover(tmp_path, "2026-05-13-legacy.md", {
@@ -106,7 +106,7 @@ def test_session_with_only_date_field_marks_time_resolution(tmp_path, monkeypatc
 
 
 def test_session_with_created_marks_time_resolution_full(tmp_path, monkeypatch):
-    from taskmaster_v3 import list_sessions
+    from taskmaster.taskmaster_v3 import list_sessions
 
     monkeypatch.chdir(tmp_path)
     _write_handover(tmp_path, "2026-05-19-modern.md", {

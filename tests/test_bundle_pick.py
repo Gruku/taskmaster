@@ -1,5 +1,5 @@
 """Task bundle: pick binds the whole bundle into one worktree."""
-import backlog_server
+from taskmaster import backlog_server
 
 
 def _add(task_id, bundle="ux", sub_repo="", lane=""):
@@ -15,7 +15,7 @@ def _satisfy_gates(task_id):
     data = backlog_server._load()
     t, _ = backlog_server._find_task(data, task_id)
     lane = t.get("lane", "")
-    import taskmaster_v3 as tv
+    from taskmaster import taskmaster_v3 as tv
     for g in tv.blocking_gates(lane):
         backlog_server.backlog_record_gate(task_id, g, verdict="pass")
 

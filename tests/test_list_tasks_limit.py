@@ -8,7 +8,7 @@ truncated view leads with what matters.
 """
 from __future__ import annotations
 
-from backlog_server import backlog_add_task, backlog_list_tasks
+from taskmaster.backlog_server import backlog_add_task, backlog_list_tasks
 
 
 def _add_tasks(n: int, prefix: str = "T") -> list[str]:
@@ -62,7 +62,7 @@ def test_explicit_limit_respected(tm_epic_phase):
 def test_active_tasks_sort_before_todo_and_done(tm_epic_phase):
     _add_tasks(4)
     # Seed statuses directly — transition legality (gates) is not under test here.
-    import backlog_server as bs
+    from taskmaster import backlog_server as bs
 
     data = bs._load()
     statuses = {"T-001": "done", "T-002": "in-progress", "T-003": "in-review"}

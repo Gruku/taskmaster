@@ -15,9 +15,9 @@ from pathlib import Path
 
 import pytest
 
-import backlog_server
+from taskmaster import backlog_server
 
-from taskmaster_v3 import write_handover, read_handover
+from taskmaster.taskmaster_v3 import write_handover, read_handover
 
 
 # ── local fixture ─────────────────────────────────────────────────────────────
@@ -38,7 +38,7 @@ def server_with_root(tmp_path, monkeypatch):
     # Patch ROOT so _backlog_path() and handover_path() resolve to tmp_path.
     monkeypatch.setattr(backlog_server, "ROOT", tmp_path)
 
-    from backlog_server import _make_server, _init_storage
+    from taskmaster.backlog_server import _make_server, _init_storage
     server, port = _make_server(host="127.0.0.1", port=0)
     _init_storage()
     t = threading.Thread(target=server.serve_forever, daemon=True)

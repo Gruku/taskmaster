@@ -1,5 +1,5 @@
 """Task bundle: slug field plumbing + validation."""
-import backlog_server
+from taskmaster import backlog_server
 
 
 def test_add_task_accepts_bundle(tm_epic_phase):

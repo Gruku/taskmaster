@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from taskmaster_v3 import (
+from taskmaster.taskmaster_v3 import (
     LESSON_CANDIDATE_KINDS,
     LESSON_CANDIDATE_SCOPES,
     lesson_candidates_clear,
@@ -135,7 +135,7 @@ import json as _json
 import os as _os
 from datetime import datetime, timedelta, timezone
 
-from taskmaster_v3 import scan_transcripts_for_candidates
+from taskmaster.taskmaster_v3 import scan_transcripts_for_candidates
 
 
 def _write_jsonl(project_dir: Path, name: str, lines: list[dict]) -> Path:
@@ -268,7 +268,7 @@ def test_scan_extracts_from_claude_code_jsonl_shape(tmp_path):
 
 import pytest as _pytest
 
-from taskmaster_v3 import (
+from taskmaster.taskmaster_v3 import (
     apply_handover_review_flag,
     read_handover,
     write_handover,
@@ -317,7 +317,7 @@ from pathlib import Path as _Path
 PLUGIN_ROOT = _Path(__file__).resolve().parents[1]
 _sys.path.insert(0, str(PLUGIN_ROOT))
 
-import backlog_server  # noqa: E402
+from taskmaster import backlog_server  # noqa: E402
 
 
 def _set_backlog_root(monkeypatch, bp: Path):

@@ -3,8 +3,8 @@ from pathlib import Path
 import re
 import yaml
 
-SKILL = Path("plugins/taskmaster/skills/decision/SKILL.md")
-PLAYBOOK_DIR = Path("plugins/taskmaster/playbooks/decision")
+SKILL = Path("skills/decision/SKILL.md")
+PLAYBOOK_DIR = Path("playbooks/decision")
 PLAYBOOK = PLAYBOOK_DIR / "playbook.md"
 
 

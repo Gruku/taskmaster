@@ -39,7 +39,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from taskmaster_v3 import write_task_file
+from taskmaster.taskmaster_v3 import write_task_file
 
 # --------------------------------------------------------------------------- #
 # Constants

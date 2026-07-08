@@ -7,7 +7,7 @@ import yaml
 
 def test_validate_warns_on_missing_tldr(tm_epic_phase):
     """backlog_validate should emit a warning (not an error) for tasks without tldr."""
-    import backlog_server
+    from taskmaster import backlog_server
 
     # Inject a legacy task directly into backlog.yaml (bypassing backlog_add_task
     # which auto-generates tldr — this simulates pre-progressive-disclosure data)
@@ -37,7 +37,7 @@ def test_validate_warns_on_missing_tldr(tm_epic_phase):
 
 def test_validate_no_warning_when_all_have_tldr(tm_epic_phase):
     """backlog_validate should NOT produce a warnings section when all tasks have tldr."""
-    import backlog_server
+    from taskmaster import backlog_server
 
     backlog_server.backlog_add_task(
         epic="test-epic",
@@ -64,7 +64,7 @@ def test_validate_no_warning_when_all_have_tldr(tm_epic_phase):
 
 def test_validate_all_clear_still_shown_with_warnings(tm_epic_phase):
     """When issues=0 but tldr warnings exist, show 'All clear' plus warnings."""
-    import backlog_server
+    from taskmaster import backlog_server
     from pathlib import Path
 
     bp = Path(tm_epic_phase) / ".taskmaster" / "backlog.yaml"

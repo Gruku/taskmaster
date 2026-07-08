@@ -12,7 +12,7 @@ def in_backlog(tmp_path, monkeypatch):
         "meta:\n  schema_version: 3\nepics: []\nhandovers: []\nissues: []\n",
         encoding="utf-8",
     )
-    import plugins.taskmaster.backlog_server as srv
+    import taskmaster.backlog_server as srv
     importlib.reload(srv)
     return srv, bp
 
@@ -52,7 +52,7 @@ def test_backlog_decision_resolve_and_drop_round_trip(in_backlog):
 
 def test_backlog_decision_create_returns_error_when_no_backlog(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    import plugins.taskmaster.backlog_server as srv
+    import taskmaster.backlog_server as srv
     importlib.reload(srv)
     out = srv.backlog_decision_create(title="x", options=["a", "b"])
     assert "no backlog" in out.lower()

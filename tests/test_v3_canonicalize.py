@@ -11,14 +11,14 @@ def _write(p: Path, content: str = "") -> None:
 
 
 def test_no_backlog_returns_no_backlog(tmp_path):
-    from taskmaster_v3 import canonicalize_layout
+    from taskmaster.taskmaster_v3 import canonicalize_layout
     summary = canonicalize_layout(tmp_path)
     assert summary["status"] == "no_backlog"
     assert summary["moved"] == []
 
 
 def test_already_canonical_is_noop(tmp_path):
-    from taskmaster_v3 import canonicalize_layout
+    from taskmaster.taskmaster_v3 import canonicalize_layout
     _write(tmp_path / ".taskmaster" / "backlog.yaml", "meta: {schema_version: 3}\n")
     _write(tmp_path / ".taskmaster" / "handovers" / "h.md", "x")
     summary = canonicalize_layout(tmp_path)
@@ -30,7 +30,7 @@ def test_already_canonical_is_noop(tmp_path):
 
 
 def test_root_layout_migrates(tmp_path):
-    from taskmaster_v3 import canonicalize_layout
+    from taskmaster.taskmaster_v3 import canonicalize_layout
     _write(tmp_path / "backlog.yaml", "meta: {schema_version: 3}\n")
     _write(tmp_path / "PROGRESS.md", "progress")
     _write(tmp_path / "tasks" / "T-001.md", "task1")
@@ -51,7 +51,7 @@ def test_root_layout_migrates(tmp_path):
 
 
 def test_claude_layout_migrates_and_deletes_config(tmp_path):
-    from taskmaster_v3 import canonicalize_layout
+    from taskmaster.taskmaster_v3 import canonicalize_layout
     _write(tmp_path / ".claude" / "backlog.yaml", "meta: {schema_version: 3}\n")
     _write(tmp_path / ".claude" / "PROGRESS.md", "progress")
     _write(tmp_path / ".claude" / "tasks" / "T-001.md", "task1")
@@ -90,7 +90,7 @@ def test_claude_layout_migrates_and_deletes_config(tmp_path):
 
 
 def test_idempotent_second_run_is_already_canonical(tmp_path):
-    from taskmaster_v3 import canonicalize_layout
+    from taskmaster.taskmaster_v3 import canonicalize_layout
     _write(tmp_path / ".claude" / "backlog.yaml", "meta: {schema_version: 3}\n")
     _write(tmp_path / ".claude" / "tasks" / "T-001.md", "task1")
     canonicalize_layout(tmp_path)
@@ -99,7 +99,7 @@ def test_idempotent_second_run_is_already_canonical(tmp_path):
 
 
 def test_dry_run_does_not_modify_anything(tmp_path):
-    from taskmaster_v3 import canonicalize_layout
+    from taskmaster.taskmaster_v3 import canonicalize_layout
     _write(tmp_path / ".claude" / "backlog.yaml", "x")
     _write(tmp_path / ".claude" / "tasks" / "T-001.md", "task1")
     summary = canonicalize_layout(tmp_path, dry_run=True)
@@ -112,7 +112,7 @@ def test_dry_run_does_not_modify_anything(tmp_path):
 
 
 def test_conflict_with_different_content_aborts_migration(tmp_path):
-    from taskmaster_v3 import canonicalize_layout
+    from taskmaster.taskmaster_v3 import canonicalize_layout
     _write(tmp_path / ".claude" / "backlog.yaml", "claude version")
     _write(tmp_path / ".taskmaster" / "backlog.yaml", "DIFFERENT taskmaster version")
     summary = canonicalize_layout(tmp_path)
@@ -125,7 +125,7 @@ def test_conflict_with_different_content_aborts_migration(tmp_path):
 
 def test_conflict_in_artifact_subdir_aborts_migration(tmp_path):
     """Same backlog location but conflicting artifact files → conflicts status."""
-    from taskmaster_v3 import canonicalize_layout
+    from taskmaster.taskmaster_v3 import canonicalize_layout
     _write(tmp_path / ".claude" / "backlog.yaml", "x")
     _write(tmp_path / ".claude" / "handovers" / "h.md", "claude content")
     _write(tmp_path / ".taskmaster" / "handovers" / "h.md", "taskmaster content")
@@ -141,7 +141,7 @@ def test_conflict_in_artifact_subdir_aborts_migration(tmp_path):
 def test_partial_prior_migration_idempotent_cleanup(tmp_path):
     """If the same file already exists at dst with identical bytes, the source
     is removed and the migration completes — represents resuming a half-run."""
-    from taskmaster_v3 import canonicalize_layout
+    from taskmaster.taskmaster_v3 import canonicalize_layout
     _write(tmp_path / ".claude" / "backlog.yaml", "x")
     _write(tmp_path / ".claude" / "handovers" / "h.md", "same bytes")
     _write(tmp_path / ".taskmaster" / "handovers" / "h.md", "same bytes")
@@ -159,7 +159,7 @@ def test_partial_prior_migration_idempotent_cleanup(tmp_path):
 def test_auto_dir_merges_with_preexisting_taskmaster_auto(tmp_path):
     """`.taskmaster/auto/` may already exist from before the migrator landed.
     Each file is enumerated separately, so the merge is automatic."""
-    from taskmaster_v3 import canonicalize_layout
+    from taskmaster.taskmaster_v3 import canonicalize_layout
     _write(tmp_path / ".claude" / "backlog.yaml", "x")
     _write(tmp_path / ".claude" / "auto" / "state.json", "from-claude")
     _write(tmp_path / ".taskmaster" / "auto" / "sessions" / "v3-001.json", "preexisting-session")
@@ -173,7 +173,7 @@ def test_auto_dir_merges_with_preexisting_taskmaster_auto(tmp_path):
 def test_only_v3_artifacts_moved_other_claude_files_untouched(tmp_path):
     """Claude Code's own files in .claude/ (settings.json, hooks/, etc.) must
     never be moved — only the items in _CANONICALIZE_ITEMS."""
-    from taskmaster_v3 import canonicalize_layout
+    from taskmaster.taskmaster_v3 import canonicalize_layout
     _write(tmp_path / ".claude" / "backlog.yaml", "x")
     _write(tmp_path / ".claude" / "settings.json", '{"theme":"dark"}')
     _write(tmp_path / ".claude" / "settings.local.json", '{}')

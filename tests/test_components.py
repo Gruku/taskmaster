@@ -1,6 +1,6 @@
 import json
 import yaml
-from backlog_server import backlog_add_epic, backlog_update_epic, _load, backlog_add_task, backlog_update_task, backlog_get_task, _component_rollup, _find_task, _mutate_and_save
+from taskmaster.backlog_server import backlog_add_epic, backlog_update_epic, _load, backlog_add_task, backlog_update_task, backlog_get_task, _component_rollup, _find_task, _mutate_and_save
 
 def _epic(data, eid):
     return next(e for e in data["epics"] if e["id"] == eid)

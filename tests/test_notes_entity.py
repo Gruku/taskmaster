@@ -1,7 +1,7 @@
 """Notes (sticky) entity — file helper tests."""
 import pytest
 
-from taskmaster_v3 import (
+from taskmaster.taskmaster_v3 import (
     archive_note,
     list_notes,
     next_note_id,
@@ -122,7 +122,7 @@ def _tool(t):
 
 
 def test_mcp_note_create_forces_claude_author(bp, monkeypatch):
-    import backlog_server
+    from taskmaster import backlog_server
     monkeypatch.setattr(backlog_server, "_backlog_path", lambda: bp)
     out = _tool(backlog_server.backlog_note_create)(text="from the session")
     assert "NOTE-001" in out
@@ -131,7 +131,7 @@ def test_mcp_note_create_forces_claude_author(bp, monkeypatch):
 
 
 def test_mcp_note_list_and_archive_roundtrip(bp, monkeypatch):
-    import backlog_server
+    from taskmaster import backlog_server
     monkeypatch.setattr(backlog_server, "_backlog_path", lambda: bp)
     _tool(backlog_server.backlog_note_create)(text="alpha")
     _tool(backlog_server.backlog_note_create)(text="beta", pinned=True)

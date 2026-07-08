@@ -1,4 +1,4 @@
-from taskmaster_v3 import (
+from taskmaster.taskmaster_v3 import (
     LINK_TYPES,
     REVERSE_TYPE,
     ENTITY_KIND_BY_PREFIX,

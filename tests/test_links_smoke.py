@@ -12,8 +12,8 @@ import sys
 import pytest
 import yaml
 
-import backlog_server as bs
-from taskmaster_v3 import (
+from taskmaster import backlog_server as bs
+from taskmaster.taskmaster_v3 import (
     read_entity_anywhere, entity_links, BODY_KEY, write_entity_anywhere,
 )
 
@@ -108,7 +108,7 @@ def test_auto_detection_e2e(tmp_taskmaster):
     # The handover lives somewhere; find the one we just made.
     hids = sorted((backlog_path.parent / "handovers").glob("*.md"))
     assert hids
-    from taskmaster_v3 import read_handover
+    from taskmaster.taskmaster_v3 import read_handover
     fm, _ = read_handover(backlog_path, hids[0].stem)
     targets = {l["target"] for l in (fm.get("links") or []) if l["type"] == "references"}
     assert {"T-002", "T-003"}.issubset(targets)
@@ -144,10 +144,10 @@ def test_migration_from_legacy_project(tmp_path):
     })
 
     result = subprocess.run(
-        [sys.executable, "-m", "plugins.taskmaster.scripts.migrate_links",
+        [sys.executable, "-m", "scripts.migrate_links",
          "--root", str(d.parent)],
         capture_output=True, text=True, check=False,
-        cwd=str(Path(__file__).resolve().parents[3]),
+        cwd=str(Path(__file__).resolve().parents[1]),
     )
     assert result.returncode == 0, result.stderr
 

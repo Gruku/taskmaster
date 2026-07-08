@@ -13,7 +13,7 @@ def server_with_backlog(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     # Patch ROOT so _resolve_paths() finds backlog.yaml in tmp_path regardless
     # of when backlog_server was first imported (ROOT is set at import time).
-    import backlog_server
+    from taskmaster import backlog_server
     monkeypatch.setattr(backlog_server, "ROOT", tmp_path)
     bp = tmp_path / "backlog.yaml"
     bp.write_text(yaml.safe_dump({
@@ -23,7 +23,7 @@ def server_with_backlog(tmp_path, monkeypatch):
                               "priority": "medium"}]}],
         "phases": [],
     }))
-    from backlog_server import _make_server
+    from taskmaster.backlog_server import _make_server
     server, port = _make_server(host="127.0.0.1", port=0)
     t = threading.Thread(target=server.serve_forever, daemon=True)
     t.start()

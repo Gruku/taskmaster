@@ -11,7 +11,7 @@ import pytest
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT))
 
-from integrations.linear.mapper import (  # noqa: E402
+from taskmaster.integrations.linear.mapper import (  # noqa: E402
     compute_push_hash,
     tm_epic_to_linear_project_payload,
     tm_task_to_linear_payload,

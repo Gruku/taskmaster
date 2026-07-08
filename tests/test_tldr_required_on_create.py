@@ -12,7 +12,7 @@ from __future__ import annotations
 import yaml
 import pytest
 from pathlib import Path
-from backlog_server import (
+from taskmaster.backlog_server import (
     backlog_add_task,
     backlog_add_epic,
     backlog_add_phase,
@@ -134,7 +134,7 @@ def test_update_task_rejects_empty_tldr(tm_epic_phase):
 
 def _load_issue(tmp_taskmaster, issue_id):
     """Read an issue's frontmatter from .taskmaster/issues/<id>.md."""
-    from taskmaster_v3 import parse_frontmatter
+    from taskmaster.taskmaster_v3 import parse_frontmatter
     issue_path = Path(tmp_taskmaster) / ".taskmaster" / "issues" / f"{issue_id}.md"
     if not issue_path.exists():
         raise AssertionError(f"Issue file not found: {issue_path}")
@@ -142,7 +142,7 @@ def _load_issue(tmp_taskmaster, issue_id):
     return fm
 
 
-from backlog_server import backlog_issue_create
+from taskmaster.backlog_server import backlog_issue_create
 
 
 def test_issue_create_with_tldr(tmp_taskmaster):
@@ -172,7 +172,7 @@ def test_issue_create_autogen_tldr_from_impact(tmp_taskmaster):
 
 def _load_lesson(tmp_taskmaster, lesson_id):
     """Read a lesson's frontmatter from .taskmaster/lessons/<id>.md."""
-    from taskmaster_v3 import parse_frontmatter
+    from taskmaster.taskmaster_v3 import parse_frontmatter
     lesson_path = Path(tmp_taskmaster) / ".taskmaster" / "lessons" / f"{lesson_id}.md"
     if not lesson_path.exists():
         raise AssertionError(f"Lesson file not found: {lesson_path}")
@@ -180,7 +180,7 @@ def _load_lesson(tmp_taskmaster, lesson_id):
     return fm
 
 
-from backlog_server import backlog_lesson_create, backlog_idea_create
+from taskmaster.backlog_server import backlog_lesson_create, backlog_idea_create
 
 
 def test_lesson_create_with_tldr(tmp_taskmaster):

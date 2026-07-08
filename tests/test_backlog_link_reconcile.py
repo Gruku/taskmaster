@@ -3,8 +3,8 @@ import json
 import pytest
 import yaml
 
-import backlog_server as bs
-from taskmaster_v3 import (
+from taskmaster import backlog_server as bs
+from taskmaster.taskmaster_v3 import (
     read_entity_anywhere, write_entity_anywhere, set_entity_links, entity_links,
 )
 

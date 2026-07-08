@@ -24,7 +24,7 @@ def _write_backlog(tmp_path: Path, body: str) -> Path:
 @pytest.fixture
 def server_at(tmp_path, monkeypatch):
     """Pin the backlog_server module to tmp_path."""
-    import backlog_server
+    from taskmaster import backlog_server
     monkeypatch.setattr(backlog_server, "ROOT", tmp_path)
     monkeypatch.setattr(backlog_server, "CONFIG_PATH", tmp_path / ".taskmaster" / "missing.json")
     monkeypatch.setattr(backlog_server, "LEGACY_CONFIG_PATH", tmp_path / ".claude" / "missing.json")

@@ -1,4 +1,4 @@
-from taskmaster_v3 import extract_inline_refs
+from taskmaster.taskmaster_v3 import extract_inline_refs
 
 
 def test_extract_bare_task_id():

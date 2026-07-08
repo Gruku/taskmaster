@@ -9,7 +9,7 @@ import yaml
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT))
 
-from taskmaster_v3 import (  # noqa: E402
+from taskmaster.taskmaster_v3 import (  # noqa: E402
     get_linear_workspace,
     linear_config_path,
     load_linear_config,

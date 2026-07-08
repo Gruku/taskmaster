@@ -49,7 +49,7 @@ def v3_project(tmp_path, monkeypatch):
         encoding="utf-8",
     )
 
-    import backlog_server
+    from taskmaster import backlog_server
     monkeypatch.setattr(backlog_server, "ROOT", tmp_path)
     monkeypatch.setattr(backlog_server, "CONFIG_PATH", tmp_path / ".taskmaster" / "missing.json")
     monkeypatch.setattr(backlog_server, "LEGACY_CONFIG_PATH", tmp_path / ".claude" / "missing.json")
@@ -57,7 +57,7 @@ def v3_project(tmp_path, monkeypatch):
 
 
 def test_load_task_full_returns_description_and_notes_from_frontmatter(v3_project):
-    from backlog_server import _load_task_full
+    from taskmaster.backlog_server import _load_task_full
 
     out = _load_task_full("t-001")
     assert out is not None
@@ -71,8 +71,8 @@ def test_load_task_full_returns_description_and_notes_from_frontmatter(v3_projec
 
 def test_load_task_full_covers_all_heavy_fields(v3_project):
     """Future-proofs the reader: every HEAVY_FIELDS entry must round-trip."""
-    from backlog_server import _load_task_full
-    from taskmaster_v3 import HEAVY_FIELDS
+    from taskmaster.backlog_server import _load_task_full
+    from taskmaster.taskmaster_v3 import HEAVY_FIELDS
 
     out = _load_task_full("t-001")
     for field in HEAVY_FIELDS:

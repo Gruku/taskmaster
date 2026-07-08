@@ -7,7 +7,7 @@ import yaml
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT))
 
-from taskmaster_v3 import (
+from taskmaster.taskmaster_v3 import (
     HANDOVER_STATUSES,
     flag_open_reason,
     list_handover_ids,
@@ -97,7 +97,7 @@ def test_new_enum_values_are_valid_statuses():
 
 def test_migration_runs_on_legacy_data(tmp_path):
     bp = _setup(tmp_path)
-    from taskmaster_v3 import write_task_file
+    from taskmaster.taskmaster_v3 import write_task_file
     hd = tmp_path / "handovers"
     legacy_fm = {
         "id": "2025-06-01-legacy",

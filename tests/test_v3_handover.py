@@ -9,9 +9,9 @@ import yaml
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT))
 
-import backlog_server  # noqa: E402
+from taskmaster import backlog_server  # noqa: E402
 
-from taskmaster_v3 import (
+from taskmaster.taskmaster_v3 import (
     HANDOVER_KINDS,
     HANDOVER_KIND_TO_VIEWER_KIND,
     apply_supersession,

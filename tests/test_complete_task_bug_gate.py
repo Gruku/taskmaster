@@ -29,7 +29,7 @@ def _setup_task(tmp_path: Path, task_id: str = "test-epic-001") -> str:
     if not progress.exists():
         progress.write_text("## Changelog\n", encoding="utf-8")
 
-    import backlog_server as _bs
+    from taskmaster import backlog_server as _bs
 
     # Add epic + phase; ignore "already exists" errors so the helper is
     # reusable across tests that share tmp_path (they don't, but defensive).
@@ -63,8 +63,8 @@ def _setup_task(tmp_path: Path, task_id: str = "test-epic-001") -> str:
 
 def _satisfy_gates(task_id: str) -> None:
     """Skip every required gate for a task's lane (audited skip is always allowed)."""
-    import backlog_server as _bs
-    from taskmaster_v3 import required_gates as _required_gates
+    from taskmaster import backlog_server as _bs
+    from taskmaster.taskmaster_v3 import required_gates as _required_gates
     data = _bs._load()
     found = _bs._find_task(data, task_id)
     assert found is not None
@@ -89,7 +89,7 @@ def test_complete_task_blocks_when_open_bug_exists(running_server, tmp_path):
     })
     assert bug["id"].startswith("B-"), f"Unexpected bug response: {bug}"
 
-    import backlog_server as _bs
+    from taskmaster import backlog_server as _bs
     out = _bs.backlog_complete_task(task_id=task_id)
 
     # Should mention open or bug in the refusal message
@@ -112,7 +112,7 @@ def test_complete_task_succeeds_when_no_open_bugs(running_server, tmp_path):
     base, _ = running_server  # noqa: F841 — server needed for fixture setup
     task_id = _setup_task(tmp_path, "test-epic-002")
 
-    import backlog_server as _bs
+    from taskmaster import backlog_server as _bs
     out = _bs.backlog_complete_task(task_id=task_id)
 
     assert "error" not in out.lower(), f"Unexpected error: {out!r}"
@@ -141,7 +141,7 @@ def test_complete_task_gate_is_case_insensitive(running_server, tmp_path):
     })
     assert bug["id"].startswith("B-"), f"Unexpected bug response: {bug}"
 
-    import backlog_server as _bs
+    from taskmaster import backlog_server as _bs
     out = _bs.backlog_complete_task(task_id=task_id)
 
     assert "open" in out.lower() or "bug" in out.lower(), (
@@ -169,7 +169,7 @@ def test_complete_task_archives_fixed_bugs(running_server, tmp_path):
 
     _post(base, f"/api/bugs/{bug_id}", {"status": "fixed", "fix_commit": "abc123"})
 
-    import backlog_server as _bs
+    from taskmaster import backlog_server as _bs
     out = _bs.backlog_complete_task(task_id=task_id)
     assert "error" not in out.lower(), f"Unexpected error: {out!r}"
 
@@ -199,7 +199,7 @@ def test_complete_task_does_not_archive_open_or_shelved_bugs(running_server, tmp
     _post(base, f"/api/bugs/{fixed['id']}", {"status": "fixed", "fix_commit": "def456"})
     _post(base, f"/api/bugs/{shelved['id']}", {"status": "shelved"})
 
-    import backlog_server as _bs
+    from taskmaster import backlog_server as _bs
     out = _bs.backlog_complete_task(task_id=task_id)
     assert "error" not in out.lower(), f"Unexpected error: {out!r}"
 

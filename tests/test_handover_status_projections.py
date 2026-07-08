@@ -8,8 +8,8 @@ import yaml
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT))
 
-import backlog_server  # noqa: E402
-import taskmaster_v3 as v3  # noqa: E402
+from taskmaster import backlog_server  # noqa: E402
+from taskmaster import taskmaster_v3 as v3  # noqa: E402
 
 
 def _setup(tmp_path, monkeypatch):

@@ -5,7 +5,7 @@ import yaml
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT))
 
-from taskmaster_v3 import (
+from taskmaster.taskmaster_v3 import (
     read_handover,
     smart_auto_close_handovers,
     write_handover,
@@ -89,7 +89,7 @@ def test_smart_close_partial_task_ids_keeps_open(tmp_path):
 
 
 def test_smart_close_skips_already_closed(tmp_path):
-    from taskmaster_v3 import update_handover_status
+    from taskmaster.taskmaster_v3 import update_handover_status
     bp = _setup(tmp_path)
     hid, _ = write_handover(
         bp,
@@ -106,7 +106,7 @@ def test_smart_close_skips_already_closed(tmp_path):
 
 
 def test_smart_close_skips_superseded(tmp_path):
-    from taskmaster_v3 import update_handover_status
+    from taskmaster.taskmaster_v3 import update_handover_status
     bp = _setup(tmp_path)
     hid, _ = write_handover(
         bp,
@@ -138,7 +138,7 @@ def test_smart_close_next_action_only_references_done_tasks_closes(tmp_path):
 
 def test_smart_close_null_session_kind_is_eligible(tmp_path):
     """A handover with null/missing session_kind satisfies the kind criterion."""
-    from taskmaster_v3 import handover_path, write_task_file
+    from taskmaster.taskmaster_v3 import handover_path, write_task_file
     bp = _setup(tmp_path)
     hid = "2026-01-01-no-kind"
     fm = {
@@ -170,7 +170,7 @@ def test_smart_close_status_user_set_blocks_auto_close(tmp_path):
     # Write handover directly via write_task_file so status_user_set is set
     # in frontmatter without going through update_handover_status (which would
     # confound the test by also writing status_user_set logic).
-    from taskmaster_v3 import handover_path, write_task_file
+    from taskmaster.taskmaster_v3 import handover_path, write_task_file
     hid = "2026-01-01-user-locked"
     fm = {
         "id": hid,

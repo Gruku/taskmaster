@@ -77,7 +77,7 @@ def tmp_taskmaster(tmp_path, monkeypatch):
     # Redirect path resolution in backlog_server. Default raising=True so a
     # rename or removal of any of these attributes fails the fixture loudly
     # instead of silently no-op'ing.
-    import backlog_server  # noqa: PLC0415 — imported here so sys.path is set first
+    from taskmaster import backlog_server  # noqa: PLC0415 — imported here so sys.path is set first
 
     monkeypatch.setattr(backlog_server, "ROOT", tmp_path)
     monkeypatch.setattr(
@@ -101,7 +101,7 @@ def tmp_taskmaster(tmp_path, monkeypatch):
 @pytest.fixture()
 def tm_epic_phase(tmp_taskmaster):
     """tmp_taskmaster + a `test-epic` epic and `dev` phase ready for task writes."""
-    import backlog_server  # noqa: PLC0415
+    from taskmaster import backlog_server  # noqa: PLC0415
     backlog_server.backlog_add_epic(epic_id="test-epic", name="Test Epic")
     backlog_server.backlog_add_phase(phase_id="dev", name="Development")
     return tmp_taskmaster

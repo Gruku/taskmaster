@@ -8,7 +8,7 @@ sys.path.insert(0, str(PLUGIN_ROOT))
 
 def test_mark_task_handovers_resumed_not_importable():
     """After enum rename, the old resumed helper must be removed."""
-    import taskmaster_v3 as m
+    from taskmaster import taskmaster_v3 as m
     assert not hasattr(m, "mark_task_handovers_resumed"), (
         "mark_task_handovers_resumed must be removed — it hard-codes 'todo'/'in-progress' "
         "which are invalid in the new enum. Use smart_auto_close_handovers instead."
@@ -19,7 +19,7 @@ def test_pick_task_does_not_corrupt_handover_status(tmp_path):
     """Regression: pick-task on a task with a related open handover must not
     write invalid status values into the handover's frontmatter."""
     import yaml
-    from taskmaster_v3 import read_handover, write_handover, HANDOVER_STATUSES
+    from taskmaster.taskmaster_v3 import read_handover, write_handover, HANDOVER_STATUSES
 
     bp = tmp_path / "backlog.yaml"
     bp.write_text(yaml.safe_dump({"meta": {}, "epics": []}))

@@ -1,6 +1,6 @@
 import re
-import backlog_server as _bs
-import taskmaster_v3 as tv
+from taskmaster import backlog_server as _bs
+from taskmaster import taskmaster_v3 as tv
 
 
 def _new_task(lane="full"):

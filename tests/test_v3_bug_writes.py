@@ -4,28 +4,28 @@ import pytest
 
 
 def test_bug_path_resolves_under_bugs_dir(tmp_path):
-    from taskmaster_v3 import bug_path
+    from taskmaster.taskmaster_v3 import bug_path
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     out = bug_path(bp, "B-001")
     assert out == bp.parent / "bugs" / "B-001.md"
 
 
 def test_bug_archive_path_resolves_under_archive_dir(tmp_path):
-    from taskmaster_v3 import bug_path
+    from taskmaster.taskmaster_v3 import bug_path
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     out = bug_path(bp, "B-001", archived=True)
     assert out == bp.parent / "bugs" / "archive" / "B-001.md"
 
 
 def test_next_bug_id_first_is_B001(tmp_path):
-    from taskmaster_v3 import next_bug_id
+    from taskmaster.taskmaster_v3 import next_bug_id
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     (bp.parent / "bugs").mkdir(parents=True)
     assert next_bug_id(bp) == "B-001"
 
 
 def test_next_bug_id_increments_max(tmp_path):
-    from taskmaster_v3 import next_bug_id
+    from taskmaster.taskmaster_v3 import next_bug_id
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bugs = bp.parent / "bugs"
     bugs.mkdir(parents=True)
@@ -37,7 +37,7 @@ def test_next_bug_id_increments_max(tmp_path):
 
 
 def test_list_bug_ids_excludes_archive_by_default(tmp_path):
-    from taskmaster_v3 import list_bug_ids
+    from taskmaster.taskmaster_v3 import list_bug_ids
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bugs = bp.parent / "bugs"
     (bugs / "archive").mkdir(parents=True)
@@ -48,7 +48,7 @@ def test_list_bug_ids_excludes_archive_by_default(tmp_path):
 
 
 def test_write_bug_creates_file_and_returns_id_path(tmp_path):
-    from taskmaster_v3 import write_bug, read_bug
+    from taskmaster.taskmaster_v3 import write_bug, read_bug
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     bp.write_text("schema_version: 3\n")
@@ -70,7 +70,7 @@ def test_write_bug_creates_file_and_returns_id_path(tmp_path):
 
 
 def test_update_bug_status_to_fixed_requires_commit(tmp_path):
-    from taskmaster_v3 import write_bug, update_bug
+    from taskmaster.taskmaster_v3 import write_bug, update_bug
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     bp.write_text("schema_version: 3\n")
@@ -83,7 +83,7 @@ def test_update_bug_status_to_fixed_requires_commit(tmp_path):
 
 
 def test_sync_bug_index_lists_active_only(tmp_path):
-    from taskmaster_v3 import write_bug, update_bug, archive_bug, sync_bug_index
+    from taskmaster.taskmaster_v3 import write_bug, update_bug, archive_bug, sync_bug_index
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     bp.write_text("schema_version: 3\n")

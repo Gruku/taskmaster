@@ -29,8 +29,8 @@ if "backlog_server" not in sys.modules:
     fake_fastmcp.FastMCP.return_value.tool = _passthrough_tool
     sys.modules.setdefault("fastmcp", fake_fastmcp)
 
-import backlog_server  # noqa: E402
-import taskmaster_v3 as v3  # noqa: E402
+from taskmaster import backlog_server  # noqa: E402
+from taskmaster import taskmaster_v3 as v3  # noqa: E402
 
 
 # ── Setup helpers ──────────────────────────────────────────────────────────────

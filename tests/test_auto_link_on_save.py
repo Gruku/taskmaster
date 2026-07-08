@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from taskmaster_v3 import (
+from taskmaster.taskmaster_v3 import (
     auto_link_on_save,
     entity_links,
     read_entity_anywhere,
@@ -158,7 +158,7 @@ def _seed_two_tasks(tmp_taskmaster) -> None:
 
 def test_handover_create_auto_links_on_save(tmp_taskmaster):
     """backlog_handover_create wires auto_link_on_save."""
-    import backlog_server as bs
+    from taskmaster import backlog_server as bs
     _seed_two_tasks(tmp_taskmaster)
 
     bs.backlog_handover_create(task_ids=["T-001"], tldr="x", next_action="",
@@ -169,7 +169,7 @@ def test_handover_create_auto_links_on_save(tmp_taskmaster):
     assert hids
     # Handover IDs are not the HND- prefixed format — they're date-slug based.
     # entity_kind_of returns None for those, so we read the file directly.
-    from taskmaster_v3 import read_handover
+    from taskmaster.taskmaster_v3 import read_handover
     fm, body = read_handover(bp, hids[0].stem)
     hid = fm["id"]
     targets = {link["target"] for link in fm.get("links", [])
@@ -179,7 +179,7 @@ def test_handover_create_auto_links_on_save(tmp_taskmaster):
 
 def test_issue_create_auto_links_on_save(tmp_taskmaster):
     """backlog_issue_create wires auto_link_on_save."""
-    import backlog_server as bs
+    from taskmaster import backlog_server as bs
     _seed_two_tasks(tmp_taskmaster)
 
     bs.backlog_issue_create(title="Bug", severity="P1", tldr="x",

@@ -34,7 +34,7 @@ def test_ensure_reinforce_events_backfills_empty_array(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write_lesson(tmp_path, "L-001")
 
-    from taskmaster_v3 import load_lesson, _ensure_reinforce_events
+    from taskmaster.taskmaster_v3 import load_lesson, _ensure_reinforce_events
 
     lesson = load_lesson("L-001")
     assert "reinforce_events" in lesson
@@ -59,7 +59,7 @@ def test_load_lesson_preserves_existing_reinforce_events(tmp_path, monkeypatch):
         ),
     )
 
-    from taskmaster_v3 import load_lesson
+    from taskmaster.taskmaster_v3 import load_lesson
 
     lesson = load_lesson("L-003")
     assert len(lesson["reinforce_events"]) == 1
@@ -71,7 +71,7 @@ def test_lesson_reinforce_appends_event_and_bumps_counters(tmp_path, monkeypatch
     monkeypatch.chdir(tmp_path)
     _write_lesson(tmp_path, "L-010")
 
-    from taskmaster_v3 import lesson_reinforce, load_lesson
+    from taskmaster.taskmaster_v3 import lesson_reinforce, load_lesson
 
     summary = lesson_reinforce("L-010", source="user", note="caught the bug")
     assert summary["id"] == "L-010"
@@ -90,7 +90,7 @@ def test_lesson_reinforce_rejects_bad_source(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write_lesson(tmp_path, "L-011")
 
-    from taskmaster_v3 import lesson_reinforce
+    from taskmaster.taskmaster_v3 import lesson_reinforce
 
     with pytest.raises(ValueError):
         lesson_reinforce("L-011", source="other-thing")
@@ -100,7 +100,7 @@ def test_lesson_reinforce_unknown_id_raises(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".taskmaster" / "lessons").mkdir(parents=True, exist_ok=True)
 
-    from taskmaster_v3 import lesson_reinforce
+    from taskmaster.taskmaster_v3 import lesson_reinforce
 
     with pytest.raises(FileNotFoundError):
         lesson_reinforce("L-999", source="user")
@@ -110,7 +110,7 @@ def test_lesson_reinforce_mcp_tool_returns_json_summary(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write_lesson(tmp_path, "L-020")
 
-    from backlog_server import lesson_reinforce as tool
+    from taskmaster.backlog_server import lesson_reinforce as tool
 
     out = tool("L-020", source="user", note="")
     assert "L-020" in out
@@ -120,7 +120,7 @@ def test_lesson_reinforce_mcp_tool_returns_json_summary(tmp_path, monkeypatch):
 
 def test_compute_lesson_shelf_core_when_recent_and_volume(tmp_path):
     from datetime import datetime, timedelta, timezone
-    from taskmaster_v3 import compute_lesson_shelf
+    from taskmaster.taskmaster_v3 import compute_lesson_shelf
 
     now = datetime(2026, 4, 26, tzinfo=timezone.utc)
     events = [
@@ -136,7 +136,7 @@ def test_compute_lesson_shelf_core_when_recent_and_volume(tmp_path):
 
 def test_compute_lesson_shelf_active_when_recent_but_low_volume(tmp_path):
     from datetime import datetime, timedelta, timezone
-    from taskmaster_v3 import compute_lesson_shelf
+    from taskmaster.taskmaster_v3 import compute_lesson_shelf
 
     now = datetime(2026, 4, 26, tzinfo=timezone.utc)
     events = [
@@ -148,7 +148,7 @@ def test_compute_lesson_shelf_active_when_recent_but_low_volume(tmp_path):
 
 def test_compute_lesson_shelf_retired_when_no_recent(tmp_path):
     from datetime import datetime, timedelta, timezone
-    from taskmaster_v3 import compute_lesson_shelf
+    from taskmaster.taskmaster_v3 import compute_lesson_shelf
 
     now = datetime(2026, 4, 26, tzinfo=timezone.utc)
     events = [
@@ -161,7 +161,7 @@ def test_compute_lesson_shelf_retired_when_no_recent(tmp_path):
 def test_compute_lesson_shelf_active_when_high_volume_but_no_recent_fire(tmp_path):
     """High volume in window but nothing in last 14d → active, not core."""
     from datetime import datetime, timedelta, timezone
-    from taskmaster_v3 import compute_lesson_shelf
+    from taskmaster.taskmaster_v3 import compute_lesson_shelf
 
     now = datetime(2026, 4, 26, tzinfo=timezone.utc)
     events = [

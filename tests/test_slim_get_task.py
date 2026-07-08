@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import yaml
-from backlog_server import backlog_add_task, backlog_get_task, backlog_update_task
+from taskmaster.backlog_server import backlog_add_task, backlog_get_task, backlog_update_task
 
 
 def test_slim_default_excludes_body(tm_epic_phase):

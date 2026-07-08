@@ -16,7 +16,7 @@ def running_server(tmp_path, monkeypatch):
     (tmp_path / ".taskmaster" / "backlog.yaml").write_text(
         "meta:\n  project: test\nepics: []\nphases: []\n"
     )
-    from backlog_server import _make_server
+    from taskmaster.backlog_server import _make_server
     server, port = _make_server(host="127.0.0.1", port=0)
     t = threading.Thread(target=server.serve_forever, daemon=True)
     t.start()
@@ -35,7 +35,7 @@ def running_server(tmp_path, monkeypatch):
 def test_recap_set_then_get_round_trip_via_mcp(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".taskmaster").mkdir()
-    from backlog_server import recap_set, recap_get
+    from taskmaster.backlog_server import recap_set, recap_get
     msg = recap_set(
         "SES-0001",
         json.dumps({"snapshot_before": "SNAP-0000", "snapshot_after": "SNAP-0001",
@@ -56,7 +56,7 @@ def test_recap_set_then_get_round_trip_via_mcp(tmp_path, monkeypatch):
 def test_recap_list_via_mcp(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".taskmaster").mkdir()
-    from backlog_server import recap_set, recap_list
+    from taskmaster.backlog_server import recap_set, recap_list
     recap_set("SES-0002",
               json.dumps({"snapshot_before":"a","snapshot_after":"b","generator":"x",
                           "generated_at":"2026-04-26T00:00Z","token_cost":0}),
@@ -66,7 +66,7 @@ def test_recap_list_via_mcp(tmp_path, monkeypatch):
 
 
 def test_snapshot_diff_via_mcp():
-    from backlog_server import snapshot_diff as snap_diff_tool
+    from taskmaster.backlog_server import snapshot_diff as snap_diff_tool
     out = snap_diff_tool(
         json.dumps({"tasks": {"T-1": {"status": "todo"}}}),
         json.dumps({"tasks": {"T-1": {"status": "done"}}}),

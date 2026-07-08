@@ -2,8 +2,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-import backlog_server as bs
-from taskmaster_v3 import read_entity_anywhere, entity_links
+from taskmaster import backlog_server as bs
+from taskmaster.taskmaster_v3 import read_entity_anywhere, entity_links
 
 
 @pytest.fixture

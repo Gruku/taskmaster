@@ -19,12 +19,12 @@ def running_server(tmp_path, monkeypatch):
         "meta:\n  project: test\nepics: []\nphases: []\n"
     )
 
-    import backlog_server as _bs
+    from taskmaster import backlog_server as _bs
     monkeypatch.setattr(_bs, "ROOT", tmp_path)
     monkeypatch.setattr(_bs, "CONFIG_PATH", tmp_path / ".taskmaster" / "taskmaster.json")
     monkeypatch.setattr(_bs, "LEGACY_CONFIG_PATH", tmp_path / ".claude" / "taskmaster.json")
 
-    from backlog_server import _make_server, _init_storage  # added in this task
+    from taskmaster.backlog_server import _make_server, _init_storage  # added in this task
     server, port = _make_server(host="127.0.0.1", port=0)
     _init_storage()
     t = threading.Thread(target=server.serve_forever, daemon=True)

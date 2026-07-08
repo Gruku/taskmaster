@@ -2,7 +2,7 @@
 """Task 12: backlog_handover_get slim default + verbose/sections/expand_links."""
 from __future__ import annotations
 
-from backlog_server import backlog_handover_create, backlog_handover_get
+from taskmaster.backlog_server import backlog_handover_create, backlog_handover_get
 
 
 def test_slim_default_excludes_body(tmp_taskmaster):

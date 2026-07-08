@@ -15,10 +15,10 @@ import yaml
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT))
 
-import backlog_server  # noqa: E402
-from integrations.linear.client import LinearClient  # noqa: E402
-from integrations.linear.worker import read_queue, _write_queue  # noqa: E402
-from taskmaster_v3 import write_tracker  # noqa: E402
+from taskmaster import backlog_server  # noqa: E402
+from taskmaster.integrations.linear.client import LinearClient  # noqa: E402
+from taskmaster.integrations.linear.worker import read_queue, _write_queue  # noqa: E402
+from taskmaster.taskmaster_v3 import write_tracker  # noqa: E402
 
 
 # ── Shared fixtures ─────────────────────────────────────────────
@@ -98,7 +98,7 @@ def test_probe_returns_teams_and_statuses(monkeypatch):
     # Patch LinearClient at module level to use our mock transport
     real_client_cls = backlog_server.__dict__.get("LinearClient")
 
-    import integrations.linear.client as _lc_mod
+    import taskmaster.integrations.linear.client as _lc_mod
     original = _lc_mod.LinearClient
 
     def fake_client(token, **kwargs):
@@ -367,7 +367,7 @@ def test_retry_drains_all_when_no_target(tmp_path, monkeypatch):
     monkeypatch.setenv("TASKMASTER_LINEAR_TOKEN_CM", "lin_tok_test")
 
     # Stub LinearClient so no real network call happens
-    import integrations.linear.client as _lc_mod
+    import taskmaster.integrations.linear.client as _lc_mod
 
     def fake_client_cls(token, **kwargs):
         def handler(req):
@@ -379,7 +379,7 @@ def test_retry_drains_all_when_no_target(tmp_path, monkeypatch):
     monkeypatch.setattr(_lc_mod, "LinearClient", fake_client_cls)
 
     # Enqueue one item
-    from integrations.linear.worker import enqueue
+    from taskmaster.integrations.linear.worker import enqueue
     enqueue(bp, op="task_upsert", target_id="ts-001", tracker_id="linear-cm-eng-1")
 
     result = json.loads(backlog_server.backlog_linear_retry())
@@ -396,7 +396,7 @@ def test_retry_target_id_filters_queue(tmp_path, monkeypatch):
     monkeypatch.setattr(backlog_server, "_backlog_path", lambda: bp)
     monkeypatch.setenv("TASKMASTER_LINEAR_TOKEN_CM", "lin_tok_test")
 
-    import integrations.linear.client as _lc_mod
+    import taskmaster.integrations.linear.client as _lc_mod
 
     def fake_client_cls(token, **kwargs):
         def handler(req):
@@ -408,7 +408,7 @@ def test_retry_target_id_filters_queue(tmp_path, monkeypatch):
     monkeypatch.setattr(_lc_mod, "LinearClient", fake_client_cls)
 
     # Enqueue two items
-    from integrations.linear.worker import enqueue
+    from taskmaster.integrations.linear.worker import enqueue
     enqueue(bp, op="task_upsert", target_id="ts-001", tracker_id="linear-cm-eng-1")
     _write_queue(bp, read_queue(bp) + [
         {"op": "task_upsert", "target_id": "other-task", "tracker_id": None,
@@ -444,13 +444,13 @@ def test_retry_target_preserves_other_items_when_drain_crashes(tmp_path, monkeyp
     monkeypatch.setattr(backlog_server, "_backlog_path", lambda: bp)
     monkeypatch.setenv("TASKMASTER_LINEAR_TOKEN_CM", "lin_tok_test")
 
-    import integrations.linear.client as _lc_mod
+    import taskmaster.integrations.linear.client as _lc_mod
     monkeypatch.setattr(
         _lc_mod, "LinearClient",
         lambda token, **kw: _client_with_handler(lambda req: _ok({}), token=token),
     )
 
-    from integrations.linear.worker import enqueue
+    from taskmaster.integrations.linear.worker import enqueue
     enqueue(bp, op="task_upsert", target_id="ts-001", tracker_id="linear-cm-eng-1")
     _write_queue(bp, read_queue(bp) + [
         {"op": "task_upsert", "target_id": "other-task", "tracker_id": None,
@@ -458,7 +458,7 @@ def test_retry_target_preserves_other_items_when_drain_crashes(tmp_path, monkeyp
     ])
 
     # Make the drain explode after the retry has rewritten the full queue.
-    import integrations.linear.worker as _wmod
+    import taskmaster.integrations.linear.worker as _wmod
 
     def _boom(*a, **k):
         raise RuntimeError("simulated crash mid-drain")
@@ -492,7 +492,7 @@ def test_retry_unparks_permanent_item(tmp_path, monkeypatch):
     monkeypatch.setattr(backlog_server, "_backlog_path", lambda: bp)
     monkeypatch.setenv("TASKMASTER_LINEAR_TOKEN_CM", "lin_tok_test")
 
-    import integrations.linear.client as _lc_mod
+    import taskmaster.integrations.linear.client as _lc_mod
     monkeypatch.setattr(
         _lc_mod, "LinearClient",
         lambda token, **kw: _client_with_handler(

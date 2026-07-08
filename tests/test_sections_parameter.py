@@ -1,4 +1,4 @@
-from plugins.taskmaster.taskmaster_v3 import resolve_sections
+from taskmaster.taskmaster_v3 import resolve_sections
 
 
 def test_resolve_task_inline_sections():

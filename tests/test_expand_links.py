@@ -1,4 +1,4 @@
-from plugins.taskmaster.taskmaster_v3 import expand_link_ids
+from taskmaster.taskmaster_v3 import expand_link_ids
 
 
 def test_expand_known_ids():
@@ -30,7 +30,7 @@ def test_expand_handles_grouped_dict():
 
 
 def test_build_tldr_index_indexes_all_entity_types(tmp_path):
-    from plugins.taskmaster.taskmaster_v3 import build_tldr_index, write_task_file
+    from taskmaster.taskmaster_v3 import build_tldr_index, write_task_file
 
     tm_dir = tmp_path / ".taskmaster"
     for subdir in ("tasks", "issues", "lessons", "handovers", "ideas"):

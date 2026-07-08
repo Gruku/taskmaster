@@ -1,4 +1,4 @@
-from plugins.taskmaster.taskmaster_v3 import slim_entity
+from taskmaster.taskmaster_v3 import slim_entity
 
 
 def test_slim_task():

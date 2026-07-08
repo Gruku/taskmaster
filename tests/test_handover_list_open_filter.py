@@ -6,13 +6,13 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT))
 
 # Tests call the data layer directly to avoid the MCP tool's backlog-path lookup.
-from taskmaster_v3 import (
+from taskmaster.taskmaster_v3 import (
     list_handover_ids,
     read_handover,
     update_handover_status,
     write_handover,
 )
-from taskmaster_v3 import HANDOVER_STATUSES
+from taskmaster.taskmaster_v3 import HANDOVER_STATUSES
 
 
 def _setup(tmp_path):
@@ -59,7 +59,7 @@ def test_list_filter_status_closed_returns_only_closed(tmp_path):
 
 
 def test_flag_reason_present_in_frontmatter_after_flag(tmp_path):
-    from taskmaster_v3 import smart_auto_close_handovers
+    from taskmaster.taskmaster_v3 import smart_auto_close_handovers
     bp = _setup(tmp_path)
     hid, _ = write_handover(
         bp,

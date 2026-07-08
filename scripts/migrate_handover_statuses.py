@@ -17,7 +17,7 @@ _PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PLUGIN_ROOT))
 
 import yaml
-from taskmaster_v3 import migrate_handover_statuses
+from taskmaster.taskmaster_v3 import migrate_handover_statuses
 
 
 def _collect_terminal_task_ids(backlog_data: dict) -> set[str]:

@@ -5,7 +5,7 @@ import yaml
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT))
 
-from taskmaster_v3 import (
+from taskmaster.taskmaster_v3 import (
     flag_open_reason,
     read_handover,
     smart_auto_close_handovers,
@@ -46,7 +46,7 @@ def test_flag_open_reason_returns_reason_after_smart_close_flags(tmp_path):
 
 
 def test_flag_open_reason_returns_none_after_close(tmp_path):
-    from taskmaster_v3 import update_handover_status
+    from taskmaster.taskmaster_v3 import update_handover_status
     bp = _setup(tmp_path)
     hid, _ = write_handover(
         bp,

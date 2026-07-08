@@ -9,7 +9,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import taskmaster_v3 as v3  # noqa: E402
+from taskmaster import taskmaster_v3 as v3  # noqa: E402
 
 
 class TestSchemaVersionDetection:
@@ -1123,7 +1123,7 @@ class TestV3EndToEndRoundtrip:
 
 
 def test_viewer_prefs_defaults_have_all_expected_keys():
-    from taskmaster_v3 import VIEWER_PREFS_DEFAULTS
+    from taskmaster.taskmaster_v3 import VIEWER_PREFS_DEFAULTS
     expected_top_keys = {
         "schema_version",
         "use_v3",
@@ -1148,7 +1148,7 @@ def test_viewer_prefs_defaults_have_all_expected_keys():
 
 
 def test_viewer_prefs_round_trip(tmp_path, monkeypatch):
-    from taskmaster_v3 import (
+    from taskmaster.taskmaster_v3 import (
         load_viewer_prefs, save_viewer_prefs, VIEWER_PREFS_DEFAULTS,
     )
     monkeypatch.chdir(tmp_path)
@@ -1171,7 +1171,7 @@ def test_viewer_prefs_round_trip(tmp_path, monkeypatch):
 def test_viewer_prefs_unknown_keys_preserved_on_save(tmp_path, monkeypatch):
     """Forward-compat: don't strip keys we don't know about."""
     import json
-    from taskmaster_v3 import load_viewer_prefs, save_viewer_prefs
+    from taskmaster.taskmaster_v3 import load_viewer_prefs, save_viewer_prefs
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".taskmaster").mkdir()
     (tmp_path / ".taskmaster" / "viewer.json").write_text(
@@ -1188,7 +1188,7 @@ def test_viewer_prefs_set_merges_patch(tmp_path, monkeypatch):
     import json
     import sys
     from unittest.mock import MagicMock
-    from taskmaster_v3 import save_viewer_prefs, load_viewer_prefs, VIEWER_PREFS_DEFAULTS
+    from taskmaster.taskmaster_v3 import save_viewer_prefs, load_viewer_prefs, VIEWER_PREFS_DEFAULTS
     from copy import deepcopy
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".taskmaster").mkdir()
@@ -1205,7 +1205,7 @@ def test_viewer_prefs_set_merges_patch(tmp_path, monkeypatch):
         fake_fastmcp = MagicMock()
         fake_fastmcp.FastMCP.return_value.tool = _passthrough_tool
         monkeypatch.setitem(sys.modules, "fastmcp", fake_fastmcp)
-    from backlog_server import viewer_prefs_set  # type: ignore
+    from taskmaster.backlog_server import viewer_prefs_set  # type: ignore
 
     msg = viewer_prefs_set('{"theme": "light", "kanban": {"filters": {"search": "auth"}}}')
     assert "ok" in msg.lower()
@@ -1220,7 +1220,7 @@ def test_viewer_prefs_set_merges_patch(tmp_path, monkeypatch):
 def test_load_viewer_prefs_corrupt_file_resets_to_defaults(tmp_path, monkeypatch):
     """A corrupt viewer.json must never take the viewer down — it is
     quarantined to viewer.json.corrupt and replaced with defaults."""
-    import taskmaster_v3 as v3
+    from taskmaster import taskmaster_v3 as v3
     p = tmp_path / "viewer.json"
     p.write_text('{"theme": "dark"}   }\n  }\n}', encoding="utf-8")
     monkeypatch.setattr(v3, "viewer_prefs_path", lambda: p)

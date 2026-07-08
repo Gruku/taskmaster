@@ -3,7 +3,7 @@ import pytest
 
 
 def test_validate_issue_rejects_empty_evidence():
-    from taskmaster_v3 import _validate_issue
+    from taskmaster.taskmaster_v3 import _validate_issue
     fm = {
         "id": "ISS-001",
         "title": "test",
@@ -16,7 +16,7 @@ def test_validate_issue_rejects_empty_evidence():
 
 
 def test_validate_issue_accepts_non_empty_evidence():
-    from taskmaster_v3 import _validate_issue
+    from taskmaster.taskmaster_v3 import _validate_issue
     fm = {
         "id": "ISS-001",
         "title": "test",
@@ -28,7 +28,7 @@ def test_validate_issue_accepts_non_empty_evidence():
 
 
 def test_write_issue_persists_evidence_field(tmp_path):
-    from taskmaster_v3 import write_issue, read_issue
+    from taskmaster.taskmaster_v3 import write_issue, read_issue
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     bp.write_text("schema_version: 3\n")

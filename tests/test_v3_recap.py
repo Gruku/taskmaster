@@ -3,12 +3,12 @@ import pytest
 
 
 def test_recap_schema_version_is_one():
-    from taskmaster_v3 import RECAP_SCHEMA_VERSION
+    from taskmaster.taskmaster_v3 import RECAP_SCHEMA_VERSION
     assert RECAP_SCHEMA_VERSION == 1
 
 
 def test_handover_kind_to_viewer_kind_maps_all_kinds():
-    from taskmaster_v3 import HANDOVER_KIND_TO_VIEWER_KIND, HANDOVER_KINDS
+    from taskmaster.taskmaster_v3 import HANDOVER_KIND_TO_VIEWER_KIND, HANDOVER_KINDS
     # Canonical storage kinds map to viewer kinds.
     assert HANDOVER_KIND_TO_VIEWER_KIND["continuity"]    == "wrap"
     assert HANDOVER_KIND_TO_VIEWER_KIND["deep-context"]  == "mid-task"
@@ -29,7 +29,7 @@ def test_recap_path_resolves_under_taskmaster_recaps(tmp_path, monkeypatch):
     always returned a literal Path(".taskmaster")/recaps/... regardless of
     actual layout, which silently diverged from the writer on .claude/ and
     root-layout projects."""
-    from taskmaster_v3 import recap_path
+    from taskmaster.taskmaster_v3 import recap_path
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".taskmaster").mkdir()
     (tmp_path / ".taskmaster" / "backlog.yaml").write_text("meta:\n  schema_version: 3\n")
@@ -38,7 +38,7 @@ def test_recap_path_resolves_under_taskmaster_recaps(tmp_path, monkeypatch):
 
 
 def test_format_recap_markdown_round_trip():
-    from taskmaster_v3 import _format_recap_markdown, _parse_recap_markdown
+    from taskmaster.taskmaster_v3 import _format_recap_markdown, _parse_recap_markdown
     fm = {
         "session_id": "SES-0184",
         "snapshot_before": "SNAP-0183",
@@ -70,7 +70,7 @@ def test_format_recap_markdown_round_trip():
 
 
 def test_save_recap_writes_file_with_expected_shape(tmp_path, monkeypatch):
-    from taskmaster_v3 import save_recap, recap_path, RECAP_SCHEMA_VERSION
+    from taskmaster.taskmaster_v3 import save_recap, recap_path, RECAP_SCHEMA_VERSION
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".taskmaster").mkdir()
 
@@ -101,14 +101,14 @@ def test_save_recap_writes_file_with_expected_shape(tmp_path, monkeypatch):
 
 
 def test_load_recap_returns_none_when_missing(tmp_path, monkeypatch):
-    from taskmaster_v3 import load_recap
+    from taskmaster.taskmaster_v3 import load_recap
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".taskmaster").mkdir()
     assert load_recap("SES-9999") is None
 
 
 def test_load_recap_round_trip(tmp_path, monkeypatch):
-    from taskmaster_v3 import save_recap, load_recap
+    from taskmaster.taskmaster_v3 import save_recap, load_recap
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".taskmaster").mkdir()
     save_recap(
@@ -129,7 +129,7 @@ def test_load_recap_round_trip(tmp_path, monkeypatch):
 
 
 def test_list_recaps_returns_session_ids_sorted_desc(tmp_path, monkeypatch):
-    from taskmaster_v3 import save_recap, list_recaps
+    from taskmaster.taskmaster_v3 import save_recap, list_recaps
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".taskmaster").mkdir()
     for sid in ("SES-0182", "SES-0185", "SES-0184"):
@@ -145,7 +145,7 @@ def test_list_recaps_returns_session_ids_sorted_desc(tmp_path, monkeypatch):
 
 
 def test_list_recaps_empty_when_dir_missing(tmp_path, monkeypatch):
-    from taskmaster_v3 import list_recaps
+    from taskmaster.taskmaster_v3 import list_recaps
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".taskmaster").mkdir()
     assert list_recaps() == []

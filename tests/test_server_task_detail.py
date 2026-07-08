@@ -35,7 +35,7 @@ def running_server(tmp_path, monkeypatch):
         "    phase: P-01\n"
         "    branch: feat/task-detail\n"
         "    depends_on: [T-100]\n"
-        "    anchors: ['plugins/taskmaster/viewer/**/*.js']\n"
+        "    anchors: ['viewer/**/*.js']\n"
         "    created: '2026-04-20'\n"
         "    started: '2026-04-22'\n"
         "  - id: T-100\n"
@@ -74,7 +74,7 @@ def running_server(tmp_path, monkeypatch):
         "Use the `marked` library from CDN.\n"
     )
 
-    import backlog_server
+    from taskmaster import backlog_server
     # Redirect the server's path resolution to the test tree so every call to
     # _resolve_paths() (which uses the module-level ROOT, CONFIG_PATH, and
     # LEGACY_CONFIG_PATH) reads fixture data instead of the real project.
@@ -114,7 +114,7 @@ def test_get_task_returns_full_payload(running_server):
     assert body["phase"] == "P-01"
     assert body["branch"] == "feat/task-detail"
     assert body["depends_on"] == ["T-100"]
-    assert body["anchors"] == ["plugins/taskmaster/viewer/**/*.js"]
+    assert body["anchors"] == ["viewer/**/*.js"]
     assert body["created"] == "2026-04-20"
     assert body["started"] == "2026-04-22"
 
@@ -153,7 +153,7 @@ def test_get_task_related_returns_lessons_handovers_issues_and_deps(running_serv
         "---\n"
         "id: LSN-01\n"
         "kind: pattern\n"
-        "anchors: ['plugins/taskmaster/viewer/**/*.js']\n"
+        "anchors: ['viewer/**/*.js']\n"
         "title: Use ES modules without bundler\n"
         "---\n"
         "Vanilla ES modules load without a build step.\n"

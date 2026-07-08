@@ -9,7 +9,7 @@ sys.path.insert(0, str(PLUGIN_ROOT))
 
 def test_backlog_handover_latest_docstring_says_deprecated():
     """Cheap static check — the tool's docstring must mention deprecation."""
-    from backlog_server import backlog_handover_latest
+    from taskmaster.backlog_server import backlog_handover_latest
     doc = backlog_handover_latest.__doc__ or ""
     assert "deprecated" in doc.lower() or "alias" in doc.lower(), (
         "backlog_handover_latest docstring must declare it deprecated"
@@ -40,7 +40,7 @@ def test_backlog_handover_latest_returns_deprecation_warning_in_output(tmp_path,
     (tmp_path / "handovers").mkdir()
 
     # Patch the backlog path so the MCP tool finds our temp backlog.
-    import backlog_server
+    from taskmaster import backlog_server
     monkeypatch.setattr(backlog_server, "_backlog_path",
                         lambda: _Path(str(bp)))
     monkeypatch.setattr(backlog_server, "_ensure_handover_status_backfilled",

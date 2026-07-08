@@ -16,8 +16,8 @@ import yaml
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT))
 
-from integrations.linear.client import LinearAPIError, LinearClient  # noqa: E402
-from integrations.linear.worker import (  # noqa: E402
+from taskmaster.integrations.linear.client import LinearAPIError, LinearClient  # noqa: E402
+from taskmaster.integrations.linear.worker import (  # noqa: E402
     MAX_ATTEMPTS,
     drain,
     enqueue,
@@ -25,7 +25,7 @@ from integrations.linear.worker import (  # noqa: E402
     queue_path,
     read_queue,
 )
-from taskmaster_v3 import write_tracker  # noqa: E402
+from taskmaster.taskmaster_v3 import write_tracker  # noqa: E402
 
 
 # ── Fixtures ───────────────────────────────────────────────────
@@ -153,7 +153,7 @@ def test_push_task_skips_when_push_hash_unchanged(tmp_path):
     burn an HTTP round-trip."""
     bp = _make_backlog(tmp_path, tracker_id="linear-cm-eng-1")
     # Pre-write a tracker with a matching push_hash
-    from integrations.linear.mapper import compute_push_hash, tm_task_to_linear_payload
+    from taskmaster.integrations.linear.mapper import compute_push_hash, tm_task_to_linear_payload
     task = _backlog_data(bp)["epics"][0]["tasks"][0]
     cfg = _make_config()
     payload = tm_task_to_linear_payload(task, cfg["workspaces"][0], linear_issue_id="ENG-1")
@@ -206,7 +206,7 @@ def test_push_task_updates_linear_and_writes_tracker(tmp_path):
     assert result["status"] == "ok"
 
     # Tracker should now record the push
-    from taskmaster_v3 import read_tracker
+    from taskmaster.taskmaster_v3 import read_tracker
     fm, _ = read_tracker(bp, "linear-cm-eng-1")
     assert fm["push_hash"]  # set
     assert fm["last_pushed"]  # set
@@ -366,7 +366,7 @@ def test_drain_keeps_not_found_item_in_queue(tmp_path):
 
 
 def test_drain_keeps_item_on_unrecognized_status(tmp_path, monkeypatch):
-    import integrations.linear.worker as _w
+    import taskmaster.integrations.linear.worker as _w
     bp = _make_backlog(tmp_path, tracker_id="linear-cm-eng-1")
     enqueue(bp, op="task_upsert", target_id="linear-001")
     monkeypatch.setattr(_w, "push_task", lambda *a, **k: {"status": "weird:unknown"})
@@ -399,7 +399,7 @@ def test_push_persists_returned_uuid_and_uses_it_for_next_update(tmp_path):
     assert r1["status"] == "ok"
     assert sent_ids[0] == "ENG-1"
 
-    from taskmaster_v3 import read_tracker
+    from taskmaster.taskmaster_v3 import read_tracker
     fm, _ = read_tracker(bp, "linear-cm-eng-1")
     assert fm["linear_issue_id"] == "iss-uuid-123"
 
@@ -415,7 +415,7 @@ def test_push_persists_returned_uuid_and_uses_it_for_next_update(tmp_path):
 
 
 def test_validate_linear_config_rejects_hyphenated_alias():
-    from taskmaster_v3 import _validate_linear_config
+    from taskmaster.taskmaster_v3 import _validate_linear_config
     cfg = {"workspaces": [{"alias": "cm-eng", "team_id": "t", "token_env": "TOK"}]}
     with pytest.raises(ValueError, match="must not contain"):
         _validate_linear_config(cfg)

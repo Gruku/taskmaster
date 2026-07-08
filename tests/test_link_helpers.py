@@ -1,4 +1,4 @@
-from taskmaster_v3 import (
+from taskmaster.taskmaster_v3 import (
     LINK_FIELD,
     entity_links,
     set_entity_links,

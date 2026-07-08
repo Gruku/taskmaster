@@ -1,5 +1,5 @@
 import pytest
-from plugins.taskmaster import taskmaster_v3 as tm
+from taskmaster import taskmaster_v3 as tm
 
 
 @pytest.fixture

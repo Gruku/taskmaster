@@ -10,7 +10,7 @@ def _ensure_scaffold(tmp_path: Path) -> None:
     progress = tmp_path / ".taskmaster" / "PROGRESS.md"
     if not progress.exists():
         progress.write_text("## Changelog\n", encoding="utf-8")
-    import backlog_server as _bs
+    from taskmaster import backlog_server as _bs
     r_epic = _bs.backlog_add_epic(epic_id="test-epic", name="Test Epic")
     if "Error" in r_epic and "already" not in r_epic.lower():
         raise AssertionError(f"add_epic failed: {r_epic}")
@@ -20,7 +20,7 @@ def _ensure_scaffold(tmp_path: Path) -> None:
 
 
 def _add_task(task_id: str, depends_on: str = "") -> None:
-    import backlog_server as _bs
+    from taskmaster import backlog_server as _bs
     r = _bs.backlog_add_task(
         title=f"Task {task_id}", epic="test-epic", phase="dev",
         priority="medium", task_id=task_id, depends_on=depends_on,
@@ -30,8 +30,8 @@ def _add_task(task_id: str, depends_on: str = "") -> None:
 
 def _satisfy_gates(task_id: str) -> None:
     """Skip every required gate for a task's lane (audited skip is always allowed)."""
-    import backlog_server as _bs
-    from taskmaster_v3 import required_gates as _required_gates
+    from taskmaster import backlog_server as _bs
+    from taskmaster.taskmaster_v3 import required_gates as _required_gates
     task, _ = _bs._find_task(_bs._load(), task_id)
     lane = task.get("lane")
     if not lane:
@@ -47,7 +47,7 @@ def test_batch_complete_rejects_todo_task(running_server, tmp_path):
     _ensure_scaffold(tmp_path)
     _add_task("guard-todo-001")  # left in todo (never picked)
 
-    import backlog_server as _bs
+    from taskmaster import backlog_server as _bs
     out = _bs.backlog_batch_update("complete guard-todo-001")
 
     assert "error" in out.lower(), f"Expected guard error, got: {out!r}"
@@ -62,7 +62,7 @@ def test_batch_complete_backfills_started_for_valid_task(running_server, tmp_pat
     _ensure_scaffold(tmp_path)
     _add_task("guard-ip-001")
 
-    import backlog_server as _bs
+    from taskmaster import backlog_server as _bs
     _bs.backlog_pick_task("guard-ip-001")  # -> in-progress, sets started
     # Satisfy required review gates so the Spec-A completion gate passes (I1).
     _satisfy_gates("guard-ip-001")
@@ -81,7 +81,7 @@ def test_batch_status_done_rejects_todo_task(running_server, tmp_path):
     _ensure_scaffold(tmp_path)
     _add_task("guard-todo-002")
 
-    import backlog_server as _bs
+    from taskmaster import backlog_server as _bs
     out = _bs.backlog_batch_update("status guard-todo-002 done")
 
     assert "cannot complete from `todo`" in out, f"Expected guard message, got: {out!r}"
@@ -97,7 +97,7 @@ def test_pick_warns_on_unmet_dependency(running_server, tmp_path):
     _add_task("dep-001")  # stays todo
     _add_task("needs-001", depends_on="dep-001")
 
-    import backlog_server as _bs
+    from taskmaster import backlog_server as _bs
     out = _bs.backlog_pick_task("needs-001")
 
     assert "Unmet dependencies" in out, f"Expected dependency warning, got: {out!r}"
@@ -114,7 +114,7 @@ def test_pick_no_warning_when_dependency_done(running_server, tmp_path):
     _add_task("dep-002")
     _add_task("needs-002", depends_on="dep-002")
 
-    import backlog_server as _bs
+    from taskmaster import backlog_server as _bs
     _bs.backlog_pick_task("dep-002")
     # Spec A gate guard: a lane'd task can't reach `done` until its required
     # gates are satisfied. This test cares about the dependency warning, not
@@ -138,7 +138,7 @@ def test_batch_archive_writes_canonical_archive_reason_key(running_server, tmp_p
     _ensure_scaffold(tmp_path)
     _add_task("arch-001")
 
-    import backlog_server as _bs
+    from taskmaster import backlog_server as _bs
     out = _bs.backlog_batch_update("archive arch-001 deprecated")
     assert "error" not in out.lower(), f"Unexpected error from batch archive: {out!r}"
 

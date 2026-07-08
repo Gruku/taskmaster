@@ -47,8 +47,8 @@ def test_live_referenced_tools_stay_exposed(tool_name):
 
 
 def test_backlog_lesson_reinforce_appends_audit_event(tmp_taskmaster):
-    from backlog_server import backlog_lesson_create, backlog_lesson_reinforce
-    from taskmaster_v3 import parse_frontmatter
+    from taskmaster.backlog_server import backlog_lesson_create, backlog_lesson_reinforce
+    from taskmaster.taskmaster_v3 import parse_frontmatter
 
     backlog_lesson_create(
         title="Atomic writes",

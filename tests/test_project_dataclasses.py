@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from project import (
+from taskmaster.project import (
     Branches,
     DeployTarget,
     ErrorTraceEntry,
@@ -68,7 +68,7 @@ def test_project_manifest_empty():
 
 import pytest
 
-from project import (
+from taskmaster.project import (
     KIND_VALUES,
     PUSH_POLICY_VALUES,
     SCHEMA_VERSION,

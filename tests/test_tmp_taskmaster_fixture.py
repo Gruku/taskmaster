@@ -18,10 +18,10 @@ def test_fixture_creates_directory_structure(tmp_taskmaster):
 
 def test_fixture_sys_path_allows_backlog_server_import(tmp_taskmaster):
     """conftest sys.path setup must allow bare `import backlog_server`."""
-    import backlog_server  # noqa: F401 — import success is the test
+    from taskmaster import backlog_server  # noqa: F401 — import success is the test
 
 
 def test_fixture_patches_backlog_server_root(tmp_taskmaster):
     """ROOT must be redirected to tmp_path so writes are hermetic."""
-    import backlog_server
+    from taskmaster import backlog_server
     assert backlog_server.ROOT == Path(tmp_taskmaster)

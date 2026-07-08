@@ -2,7 +2,7 @@ import json
 
 
 def test_save_session_snapshot_writes_named_file(tmp_path, monkeypatch):
-    from taskmaster_v3 import save_session_snapshot
+    from taskmaster.taskmaster_v3 import save_session_snapshot
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".taskmaster" / "snapshots").mkdir(parents=True)
     save_session_snapshot("SNAP-0184", {"tasks": {"T-1": {"status": "done"}}, "lessons_fired": [], "issues": {}})
@@ -13,7 +13,7 @@ def test_save_session_snapshot_writes_named_file(tmp_path, monkeypatch):
 
 
 def test_snapshot_diff_detects_added_removed_changed_tasks():
-    from taskmaster_v3 import snapshot_diff
+    from taskmaster.taskmaster_v3 import snapshot_diff
     a = {
         "tasks": {
             "T-1": {"status": "todo",        "title": "Old"},
@@ -45,7 +45,7 @@ def test_snapshot_diff_detects_added_removed_changed_tasks():
 
 
 def test_snapshot_diff_detects_issue_transitions():
-    from taskmaster_v3 import snapshot_diff
+    from taskmaster.taskmaster_v3 import snapshot_diff
     a = {"tasks": {}, "issues": {"ISS-1": {"severity": "High", "status": "open"}},
          "lessons_fired": [], "files_touched": []}
     b = {"tasks": {}, "issues": {"ISS-1": {"severity": "High", "status": "fixed"}},

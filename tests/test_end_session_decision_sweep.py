@@ -1,6 +1,6 @@
 from pathlib import Path
 
-PLAYBOOK = Path("plugins/taskmaster/playbooks/end-session/playbook.md")
+PLAYBOOK = Path("playbooks/end-session/playbook.md")
 
 
 def test_end_session_mentions_decision_sweep():
@@ -24,7 +24,7 @@ def test_end_session_folds_decisions_into_handover_body():
 
 def test_start_session_calls_backlog_decision_list():
     """backlog_decision_list must appear in start-session playbook (body or deep-mode reference)."""
-    playbook_dir = Path("plugins/taskmaster/playbooks/start-session")
+    playbook_dir = Path("playbooks/start-session")
     body = (playbook_dir / "playbook.md").read_text(encoding="utf-8")
     deep_ref = playbook_dir / "references" / "deep-mode.md"
     deep_body = deep_ref.read_text(encoding="utf-8") if deep_ref.exists() else ""

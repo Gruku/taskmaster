@@ -9,7 +9,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from plugins.taskmaster.taskmaster_v3 import (
+from taskmaster.taskmaster_v3 import (
     backfill_tldr,
     parse_frontmatter,
     render_frontmatter,

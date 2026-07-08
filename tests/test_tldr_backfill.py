@@ -1,4 +1,4 @@
-from plugins.taskmaster.taskmaster_v3 import backfill_tldr
+from taskmaster.taskmaster_v3 import backfill_tldr
 
 
 def test_backfill_tldr_adds_when_missing():
@@ -53,7 +53,7 @@ def test_backfill_preserves_horizontal_rules_in_body(tmp_taskmaster):
     worktree_root = Path(__file__).resolve().parents[3]
     env = {**os.environ, "PYTHONPATH": str(worktree_root)}
     subprocess.run(
-        ["python", "-m", "plugins.taskmaster.scripts.backfill_tldr",
+        ["python", "-m", "taskmaster.scripts.backfill_tldr",
          "--root", str(tmp_taskmaster)],
         env=env, capture_output=True, text=True, check=True,
     )
@@ -119,7 +119,7 @@ def test_backfill_script_processes_all_entities(tmp_taskmaster):
     worktree_root = Path(__file__).parent.parent.parent.parent
     env = {**os.environ, "PYTHONPATH": str(worktree_root)}
     result = subprocess.run(
-        ["python", "-m", "plugins.taskmaster.scripts.backfill_tldr",
+        ["python", "-m", "taskmaster.scripts.backfill_tldr",
          "--root", str(tmp_taskmaster)],
         capture_output=True, text=True, check=True,
         env=env,

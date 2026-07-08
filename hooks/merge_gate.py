@@ -152,8 +152,8 @@ def main() -> int:
         return 0
 
     # 4–7. Delegate to python decision module (fail-open on any error).
-    #      The script lives one directory up from this hooks/ directory.
-    decide_script = Path(__file__).parent.parent / "merge_gate_decide.py"
+    #      The script lives alongside this file in hooks/.
+    decide_script = Path(__file__).parent / "merge_gate_decide.py"
     if not decide_script.is_file():
         return 0
 

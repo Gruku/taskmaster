@@ -2,7 +2,7 @@
 """Task 14: backlog_lesson_get slim default + verbose/sections/expand_links."""
 from __future__ import annotations
 
-from backlog_server import backlog_lesson_create, backlog_lesson_get
+from taskmaster.backlog_server import backlog_lesson_create, backlog_lesson_get
 
 
 def test_slim_default_excludes_body(tmp_taskmaster):

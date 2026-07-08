@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 import yaml
 
-import backlog_server as bs
+from taskmaster import backlog_server as bs
 
 
 def _seed_two_tasks(tmp_taskmaster: Path) -> None:

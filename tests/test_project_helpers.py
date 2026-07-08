@@ -4,7 +4,7 @@ from pathlib import Path, PureWindowsPath, PurePosixPath
 
 import pytest
 
-from project import (
+from taskmaster.project import (
     SCHEMA_VERSION,
     Branches,
     ErrorTraceEntry,

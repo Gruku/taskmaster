@@ -101,7 +101,7 @@ def main() -> int:
         return 0
 
     # -- Delegate to python stamp module (fail-open: errors ignored, exit 0) -------
-    stamp_script = Path(__file__).parent.parent / "merge_recorder_stamp.py"
+    stamp_script = Path(__file__).parent / "merge_recorder_stamp.py"
     if not stamp_script.is_file():
         return 0
 

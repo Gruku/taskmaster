@@ -106,7 +106,7 @@ def _make_v2_backlog_yaml() -> str:
 
 def test_hook_writes_snapshot_for_v3_backlog(tmp_path: Path):
     """Hook writes last.json with all required fields for a v3 backlog."""
-    import taskmaster_v3 as v3
+    from taskmaster import taskmaster_v3 as v3
 
     # Write the v3 backlog index under .taskmaster/
     backlog_dir = tmp_path / ".taskmaster"

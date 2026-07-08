@@ -9,8 +9,8 @@ Covers §6 of docs/superpowers/specs/2026-07-04-tm-audit-003-write-on-read.md:
 """
 from __future__ import annotations
 
-import backlog_server
-from backlog_server import (
+from taskmaster import backlog_server
+from taskmaster.backlog_server import (
     backlog_add_task,
     backlog_get_task,
     backlog_status,

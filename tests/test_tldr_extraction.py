@@ -1,4 +1,4 @@
-from plugins.taskmaster.taskmaster_v3 import extract_tldr
+from taskmaster.taskmaster_v3 import extract_tldr
 
 
 def test_extract_tldr_from_first_sentence():

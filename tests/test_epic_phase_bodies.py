@@ -1,6 +1,6 @@
 from pathlib import Path
-import taskmaster_v3 as v3
-from backlog_server import (
+from taskmaster import taskmaster_v3 as v3
+from taskmaster.backlog_server import (
     backlog_add_phase, backlog_update_phase,
     backlog_add_epic, backlog_update_epic,
     _load as _load_srv,

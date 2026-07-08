@@ -1,4 +1,4 @@
-import taskmaster_v3 as tv
+from taskmaster import taskmaster_v3 as tv
 
 LADDER = [
     {"label": "develop", "branches": ["develop", "dev"]},

@@ -2,7 +2,7 @@
 """Task 15: backlog_idea_get slim default + verbose."""
 from __future__ import annotations
 
-from backlog_server import backlog_idea_create, backlog_idea_get
+from taskmaster.backlog_server import backlog_idea_create, backlog_idea_get
 
 
 def test_slim_default_excludes_body(tmp_taskmaster):

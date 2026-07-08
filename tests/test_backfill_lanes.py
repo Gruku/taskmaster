@@ -1,6 +1,6 @@
 import re
-import backlog_server as _bs
-import taskmaster_v3 as tv
+from taskmaster import backlog_server as _bs
+from taskmaster import taskmaster_v3 as tv
 
 
 def test_backfill_sets_lane_and_grandfathers_passed_gates(tm_epic_phase):

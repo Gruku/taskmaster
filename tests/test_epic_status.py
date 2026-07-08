@@ -1,5 +1,5 @@
 import json
-from backlog_server import (backlog_add_epic, backlog_add_task, backlog_update_task,
+from taskmaster.backlog_server import (backlog_add_epic, backlog_add_task, backlog_update_task,
                             backlog_update_epic, backlog_epic_status, backlog_archive_task,
                             _load, _find_task, _mutate_and_save)
 

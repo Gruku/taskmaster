@@ -1,4 +1,4 @@
-from taskmaster_v3 import find_cycle, would_create_cycle
+from taskmaster.taskmaster_v3 import find_cycle, would_create_cycle
 
 
 def test_find_cycle_self_edge():

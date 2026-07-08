@@ -3,7 +3,7 @@ import json
 import pytest
 import yaml
 
-import backlog_server as bs
+from taskmaster import backlog_server as bs
 
 
 @pytest.fixture

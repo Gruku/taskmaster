@@ -2,7 +2,7 @@
 """Task 3 of Spec A: verify default lane and gate_state are set on task creation."""
 import re
 
-import backlog_server as _bs
+from taskmaster import backlog_server as _bs
 
 
 def _extract_id(out: str) -> str:

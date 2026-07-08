@@ -1,6 +1,6 @@
 """Task bundle: member lookup + birth-time sub_repo validation."""
-import backlog_server
-from backlog_server import _find_tasks_by_bundle, _load as _load_backlog
+from taskmaster import backlog_server
+from taskmaster.backlog_server import _find_tasks_by_bundle, _load as _load_backlog
 
 
 def _add(task_id, bundle="", sub_repo=""):

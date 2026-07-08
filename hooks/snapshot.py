@@ -20,7 +20,7 @@ _PLUGIN_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PLUGIN_DIR))
 
 try:
-    import taskmaster_v3 as v3
+    from taskmaster import taskmaster_v3 as v3
 except Exception as exc:  # pragma: no cover - defensive
     sys.stderr.write(f"taskmaster snapshot hook: failed to import taskmaster_v3: {exc}\n")
     sys.exit(0)

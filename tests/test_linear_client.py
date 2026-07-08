@@ -14,7 +14,7 @@ import pytest
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT))
 
-from integrations.linear.client import LinearAPIError, LinearClient  # noqa: E402
+from taskmaster.integrations.linear.client import LinearAPIError, LinearClient  # noqa: E402
 
 
 # ── Helpers ────────────────────────────────────────────────────

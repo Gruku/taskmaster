@@ -10,7 +10,7 @@ def _setup(tmp_path):
 
 
 def test_promote_bugs_creates_issue_and_marks_bugs(tmp_path):
-    from taskmaster_v3 import write_bug, promote_bugs_to_issue, read_bug, read_issue
+    from taskmaster.taskmaster_v3 import write_bug, promote_bugs_to_issue, read_bug, read_issue
     bp = _setup(tmp_path)
     b1, _ = write_bug(bp, title="Path mismatch in v3 reader", components=["taskmaster"], discovered_by="user")
     b2, _ = write_bug(bp, title="Path mismatch in v3 reader handover variant", components=["taskmaster"], discovered_by="user")
@@ -33,7 +33,7 @@ def test_promote_bugs_creates_issue_and_marks_bugs(tmp_path):
 
 
 def test_promote_bugs_refuses_single_bug_without_evidence(tmp_path):
-    from taskmaster_v3 import write_bug, promote_bugs_to_issue
+    from taskmaster.taskmaster_v3 import write_bug, promote_bugs_to_issue
     bp = _setup(tmp_path)
     b1, _ = write_bug(bp, title="Single defect", discovered_by="user")
     with pytest.raises(ValueError, match="evidence_text is required"):

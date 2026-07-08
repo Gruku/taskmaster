@@ -8,7 +8,7 @@ import yaml
 
 import pytest
 
-from taskmaster_v3 import (
+from taskmaster.taskmaster_v3 import (
     legacy_links_to_typed,
     read_entity_anywhere,
     entity_links,
@@ -121,10 +121,10 @@ def _seed_project(tmp_path: Path) -> Path:
 def test_migrate_links_script_translates_legacy_fields(tmp_path):
     tm_dir = _seed_project(tmp_path)
     result = subprocess.run(
-        [sys.executable, "-m", "plugins.taskmaster.scripts.migrate_links",
+        [sys.executable, "-m", "scripts.migrate_links",
          "--root", str(tm_dir.parent)],
         capture_output=True, text=True, check=False,
-        cwd=str(Path(__file__).resolve().parents[3]),
+        cwd=str(Path(__file__).resolve().parents[1]),
     )
     assert result.returncode == 0, result.stderr
 
@@ -140,10 +140,10 @@ def test_migrate_links_is_idempotent(tmp_path):
     tm_dir = _seed_project(tmp_path)
     for _ in range(2):
         result = subprocess.run(
-            [sys.executable, "-m", "plugins.taskmaster.scripts.migrate_links",
+            [sys.executable, "-m", "scripts.migrate_links",
              "--root", str(tm_dir.parent)],
             capture_output=True, text=True, check=False,
-            cwd=str(Path(__file__).resolve().parents[3]),
+            cwd=str(Path(__file__).resolve().parents[1]),
         )
         assert result.returncode == 0
 
@@ -155,10 +155,10 @@ def test_migrate_links_is_idempotent(tmp_path):
 def test_migrate_links_adds_inverses(tmp_path):
     tm_dir = _seed_project(tmp_path)
     subprocess.run(
-        [sys.executable, "-m", "plugins.taskmaster.scripts.migrate_links",
+        [sys.executable, "-m", "scripts.migrate_links",
          "--root", str(tm_dir.parent)],
         check=True,
-        cwd=str(Path(__file__).resolve().parents[3]),
+        cwd=str(Path(__file__).resolve().parents[1]),
     )
     t2 = read_entity_anywhere(tm_dir / "backlog.yaml", "T-002")
     assert {"type": "blocks", "target": "T-001"} in entity_links(t2)

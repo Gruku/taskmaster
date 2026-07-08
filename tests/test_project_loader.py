@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from project import (
+from taskmaster.project import (
     PROJECT_YAML_RELATIVE,
     project_yaml_path,
     resolve_project_root,
@@ -38,7 +38,7 @@ def test_resolve_project_root_returns_none_when_not_found(tmp_path):
 
 import yaml
 
-from project import (
+from taskmaster.project import (
     SCHEMA_VERSION,
     ProjectManifest,
     load_project_manifest,
@@ -123,7 +123,7 @@ def test_load_malformed_yaml_returns_none(tmp_path, caplog):
 # B-017: duplicate repo names pass validation
 # ---------------------------------------------------------------------------
 
-from project import validate_manifest_dict
+from taskmaster.project import validate_manifest_dict
 
 
 def test_validate_rejects_duplicate_repo_names():

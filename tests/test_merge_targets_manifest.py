@@ -1,4 +1,4 @@
-import project
+from taskmaster import project
 
 
 def _manifest(policies):

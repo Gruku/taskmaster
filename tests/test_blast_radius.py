@@ -7,7 +7,7 @@ import subprocess
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import blast_radius as br
+from taskmaster import blast_radius as br
 
 # ---------------------------------------------------------------------------
 # Task 1: Config helpers
@@ -49,7 +49,7 @@ class TestGetChangedFiles:
         mock_result = MagicMock()
         mock_result.returncode = 0
         mock_result.stdout = "src/foo.py\nsrc/bar.py\n"
-        with patch("blast_radius.subprocess.run", return_value=mock_result) as mock_run:
+        with patch("taskmaster.blast_radius.subprocess.run", return_value=mock_result) as mock_run:
             result = br.get_changed_files("feature", "main", Path("/repo"))
         assert result == ["src/foo.py", "src/bar.py"]
         mock_run.assert_called_once_with(
@@ -64,7 +64,7 @@ class TestGetChangedFiles:
         mock_result = MagicMock()
         mock_result.returncode = 0
         mock_result.stdout = ""
-        with patch("blast_radius.subprocess.run", return_value=mock_result):
+        with patch("taskmaster.blast_radius.subprocess.run", return_value=mock_result):
             result = br.get_changed_files("feature", "main", Path("/repo"))
         assert result == []
 
@@ -72,17 +72,17 @@ class TestGetChangedFiles:
         mock_result = MagicMock()
         mock_result.returncode = 1
         mock_result.stdout = ""
-        with patch("blast_radius.subprocess.run", return_value=mock_result):
+        with patch("taskmaster.blast_radius.subprocess.run", return_value=mock_result):
             result = br.get_changed_files("feature", "main", Path("/repo"))
         assert result == []
 
     def test_timeout(self):
-        with patch("blast_radius.subprocess.run", side_effect=subprocess.TimeoutExpired("git", 30)):
+        with patch("taskmaster.blast_radius.subprocess.run", side_effect=subprocess.TimeoutExpired("git", 30)):
             result = br.get_changed_files("feature", "main", Path("/repo"))
         assert result == []
 
     def test_exception(self):
-        with patch("blast_radius.subprocess.run", side_effect=OSError("not found")):
+        with patch("taskmaster.blast_radius.subprocess.run", side_effect=OSError("not found")):
             result = br.get_changed_files("feature", "main", Path("/repo"))
         assert result == []
 
@@ -325,7 +325,7 @@ class TestHasExportChanges:
         f.write_text("def foo(): pass\n")
         mock_result = MagicMock()
         mock_result.returncode = 1  # file not in git
-        with patch("blast_radius.subprocess.run", return_value=mock_result):
+        with patch("taskmaster.blast_radius.subprocess.run", return_value=mock_result):
             result = br.has_export_changes("foo.py", "main", tmp_path)
         assert result is False
 
@@ -335,7 +335,7 @@ class TestHasExportChanges:
         mock_result = MagicMock()
         mock_result.returncode = 0
         mock_result.stdout = "def foo(): pass\n"  # old version
-        with patch("blast_radius.subprocess.run", return_value=mock_result):
+        with patch("taskmaster.blast_radius.subprocess.run", return_value=mock_result):
             result = br.has_export_changes("foo.py", "main", tmp_path)
         assert result is True
 
@@ -519,7 +519,7 @@ class TestAnalyzePredictive:
 class TestAnalyzeEvidence:
     def test_returns_structure(self, tmp_path):
         cfg = br.load_config({})
-        with patch("blast_radius.get_changed_files", return_value=[]):
+        with patch("taskmaster.blast_radius.get_changed_files", return_value=[]):
             result = br.analyze_evidence(
                 task={"id": "t1", "title": "T", "priority": "P2"},
                 all_tasks=[],
@@ -543,8 +543,8 @@ class TestAnalyzeEvidence:
         mock_git_show = MagicMock()
         mock_git_show.returncode = 0
         mock_git_show.stdout = ""
-        with patch("blast_radius.get_changed_files", return_value=["utils.py"]):
-            with patch("blast_radius.subprocess.run", return_value=mock_git_show):
+        with patch("taskmaster.blast_radius.get_changed_files", return_value=["utils.py"]):
+            with patch("taskmaster.blast_radius.subprocess.run", return_value=mock_git_show):
                 result = br.analyze_evidence(
                     task={"id": "t1", "title": "T", "priority": "P2"},
                     all_tasks=[],
@@ -645,7 +645,7 @@ class TestEndToEndEvidence:
 
         config = br.BlastRadiusConfig(max_file_scan=100)
 
-        with patch("blast_radius.subprocess.run", side_effect=mock_git):
+        with patch("taskmaster.blast_radius.subprocess.run", side_effect=mock_git):
             result = br.analyze_evidence(
                 task=task,
                 all_tasks=all_tasks,
@@ -671,7 +671,7 @@ class TestEndToEndEvidence:
         mock_result.stdout = ""
         config = br.BlastRadiusConfig()
 
-        with patch("blast_radius.subprocess.run", return_value=mock_result):
+        with patch("taskmaster.blast_radius.subprocess.run", return_value=mock_result):
             result = br.analyze_evidence(
                 task=task, all_tasks=[], project_root=tmp_path,
                 config=config, base_branch="main",

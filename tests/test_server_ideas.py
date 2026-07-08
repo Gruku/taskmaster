@@ -5,7 +5,7 @@ from tests.test_server_api import running_server  # noqa: F401
 
 
 def test_backlog_idea_create_writes_file_and_returns_id(tmp_path, monkeypatch):
-    import backlog_server
+    from taskmaster import backlog_server
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     bp.write_text("schema_version: 3\nphases: []\n")
@@ -23,7 +23,7 @@ def test_backlog_idea_create_writes_file_and_returns_id(tmp_path, monkeypatch):
 
 
 def test_backlog_idea_create_no_backlog_returns_error(tmp_path, monkeypatch):
-    import backlog_server
+    from taskmaster import backlog_server
     bp = tmp_path / ".taskmaster" / "backlog.yaml"  # does not exist
     monkeypatch.setattr(backlog_server, "_backlog_path", lambda: bp)
     out = backlog_server.backlog_idea_create(title="anything")
@@ -31,7 +31,7 @@ def test_backlog_idea_create_no_backlog_returns_error(tmp_path, monkeypatch):
 
 
 def test_backlog_idea_list_filters(tmp_path, monkeypatch):
-    import backlog_server
+    from taskmaster import backlog_server
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     bp.write_text("schema_version: 3\nphases: []\n")
@@ -44,7 +44,7 @@ def test_backlog_idea_list_filters(tmp_path, monkeypatch):
 
 
 def test_backlog_idea_list_idea_id_returns_full(tmp_path, monkeypatch):
-    import backlog_server
+    from taskmaster import backlog_server
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     bp.write_text("schema_version: 3\nphases: []\n")
@@ -56,7 +56,7 @@ def test_backlog_idea_list_idea_id_returns_full(tmp_path, monkeypatch):
 
 
 def test_backlog_idea_update_archive(tmp_path, monkeypatch):
-    import backlog_server
+    from taskmaster import backlog_server
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     bp.write_text("schema_version: 3\nphases: []\n")
@@ -69,7 +69,7 @@ def test_backlog_idea_update_archive(tmp_path, monkeypatch):
 
 
 def test_backlog_idea_update_unknown_id_returns_error(tmp_path, monkeypatch):
-    import backlog_server
+    from taskmaster import backlog_server
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     bp.write_text("schema_version: 3\nphases: []\n")

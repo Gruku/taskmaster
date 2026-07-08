@@ -11,7 +11,7 @@ def _write_handover(tmp_path, name: str, body: dict, body_md: str = "..."):
 
 
 def test_list_sessions_synthesises_from_handovers(tmp_path, monkeypatch):
-    from taskmaster_v3 import list_sessions
+    from taskmaster.taskmaster_v3 import list_sessions
     monkeypatch.chdir(tmp_path)
 
     _write_handover(tmp_path, "2026-04-26-1640-foo.md", {
@@ -47,7 +47,7 @@ def test_list_sessions_synthesises_from_handovers(tmp_path, monkeypatch):
 
 
 def test_list_sessions_marks_parallel_when_overlapping(tmp_path, monkeypatch):
-    from taskmaster_v3 import list_sessions
+    from taskmaster.taskmaster_v3 import list_sessions
     monkeypatch.chdir(tmp_path)
     # Two non-overlapping task scopes; same time window → parallel.
     _write_handover(tmp_path, "2026-04-26-1408-a.md", {
@@ -73,7 +73,7 @@ def test_list_sessions_marks_parallel_when_overlapping(tmp_path, monkeypatch):
 
 
 def test_get_session_detail_bundles_handovers_recap(tmp_path, monkeypatch):
-    from taskmaster_v3 import get_session_detail, save_recap
+    from taskmaster.taskmaster_v3 import get_session_detail, save_recap
     monkeypatch.chdir(tmp_path)
 
     _write_handover(tmp_path, "2026-04-26-1640-foo.md", {
@@ -104,7 +104,7 @@ def test_get_session_detail_bundles_handovers_recap(tmp_path, monkeypatch):
 
 
 def test_get_session_detail_returns_none_when_missing(tmp_path, monkeypatch):
-    from taskmaster_v3 import get_session_detail
+    from taskmaster.taskmaster_v3 import get_session_detail
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".taskmaster").mkdir()
     assert get_session_detail("SES-9999") is None

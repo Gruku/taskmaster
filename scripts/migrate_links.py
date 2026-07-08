@@ -6,7 +6,7 @@ to produce the new array, writes it back, then runs
 `backlog_link_reconcile` to fill in any missing inverses.
 
 Usage:
-    python -m plugins.taskmaster.scripts.migrate_links --root <project_root>
+    python -m taskmaster.scripts.migrate_links --root <project_root>
 """
 from __future__ import annotations
 
@@ -21,10 +21,10 @@ _PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 if str(_PLUGIN_ROOT) not in sys.path:
     sys.path.insert(0, str(_PLUGIN_ROOT))
 
-# Invoked via `python -m plugins.taskmaster.scripts.migrate_links` from repo root;
+# Invoked via `python -m taskmaster.scripts.migrate_links` from repo root;
 # package imports are valid here. Requires plugins/__init__.py and
 # plugins/taskmaster/__init__.py (created by Plan A Task 0).
-from plugins.taskmaster.taskmaster_v3 import (
+from taskmaster.taskmaster_v3 import (
     load_v3, save_v3,
     read_entity_anywhere, write_entity_anywhere,
     legacy_links_to_typed, set_entity_links,
@@ -89,7 +89,7 @@ def migrate(root: Path, *, drop_legacy: bool = True) -> dict:
                 counts[sub] += 1
 
     # Reconcile inverses by temporarily redirecting bs._backlog_path.
-    from plugins.taskmaster import backlog_server as bs
+    from taskmaster import backlog_server as bs
 
     original = bs._backlog_path
     try:

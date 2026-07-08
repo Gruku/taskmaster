@@ -1,7 +1,7 @@
 # plugins/taskmaster/tests/test_status_transitions.py
 """Spec A Task 11: forward-transition table + done-gate on backlog_update_task status."""
 import re
-import backlog_server as _bs
+from taskmaster import backlog_server as _bs
 
 
 def _t(lane="express"):

@@ -9,7 +9,7 @@ import re
 
 def test_slim_defaults_across_all_entities(tm_epic_phase):
     """All _get and _list tools must omit heavy body content in slim (default) mode."""
-    from backlog_server import (
+    from taskmaster.backlog_server import (
         backlog_add_task,
         backlog_get_task,
         backlog_list_tasks,
@@ -128,7 +128,7 @@ def test_slim_defaults_across_all_entities(tm_epic_phase):
 
 def test_token_budget_targets_met(tm_epic_phase):
     """Confirm Plan A's slim mode produces the promised token reductions."""
-    from backlog_server import backlog_add_task, backlog_get_task
+    from taskmaster.backlog_server import backlog_add_task, backlog_get_task
 
     backlog_add_task(
         epic="test-epic", task_id="T-1", title="Auth refactor",

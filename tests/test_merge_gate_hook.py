@@ -30,7 +30,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from taskmaster_v3 import write_task_file
+from taskmaster.taskmaster_v3 import write_task_file
 
 PLUGIN_ROOT = Path(__file__).parents[1]
 HOOK = str((PLUGIN_ROOT / "hooks" / "merge_gate.py").resolve())

@@ -3,32 +3,32 @@ from pathlib import Path
 
 
 def test_idea_path_returns_expected_location(tmp_path):
-    from taskmaster_v3 import idea_path
+    from taskmaster.taskmaster_v3 import idea_path
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     p = idea_path(bp, "IDEA-007")
     assert p == tmp_path / ".taskmaster" / "ideas" / "IDEA-007.md"
 
 
 def test_idea_dir_returns_expected_location(tmp_path):
-    from taskmaster_v3 import idea_dir
+    from taskmaster.taskmaster_v3 import idea_dir
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     assert idea_dir(bp) == tmp_path / ".taskmaster" / "ideas"
 
 
 def test_ideas_index_path_returns_expected_location(tmp_path):
-    from taskmaster_v3 import ideas_index_path
+    from taskmaster.taskmaster_v3 import ideas_index_path
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     assert ideas_index_path(bp) == tmp_path / ".taskmaster" / "ideas" / "IDEAS.md"
 
 
 def test_list_idea_ids_empty_dir(tmp_path):
-    from taskmaster_v3 import list_idea_ids
+    from taskmaster.taskmaster_v3 import list_idea_ids
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     assert list_idea_ids(bp) == []
 
 
 def test_list_idea_ids_sorted_numerically(tmp_path):
-    from taskmaster_v3 import list_idea_ids, idea_dir
+    from taskmaster.taskmaster_v3 import list_idea_ids, idea_dir
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     d = idea_dir(bp)
     d.mkdir(parents=True)
@@ -40,13 +40,13 @@ def test_list_idea_ids_sorted_numerically(tmp_path):
 
 
 def test_next_idea_id_first(tmp_path):
-    from taskmaster_v3 import next_idea_id
+    from taskmaster.taskmaster_v3 import next_idea_id
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     assert next_idea_id(bp) == "IDEA-001"
 
 
 def test_next_idea_id_after_existing(tmp_path):
-    from taskmaster_v3 import next_idea_id, idea_dir
+    from taskmaster.taskmaster_v3 import next_idea_id, idea_dir
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     d = idea_dir(bp)
     d.mkdir(parents=True)
@@ -56,7 +56,7 @@ def test_next_idea_id_after_existing(tmp_path):
 
 
 def test_write_idea_minimal(tmp_path):
-    from taskmaster_v3 import write_idea, read_idea
+    from taskmaster.taskmaster_v3 import write_idea, read_idea
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     iid, path = write_idea(bp, title="Per-task spike budgets")
@@ -76,7 +76,7 @@ def test_write_idea_minimal(tmp_path):
 
 
 def test_write_idea_full_payload(tmp_path):
-    from taskmaster_v3 import write_idea, read_idea
+    from taskmaster.taskmaster_v3 import write_idea, read_idea
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     iid, _ = write_idea(
@@ -102,7 +102,7 @@ def test_write_idea_full_payload(tmp_path):
 
 def test_write_idea_rejects_empty_title(tmp_path):
     import pytest as _pytest
-    from taskmaster_v3 import write_idea
+    from taskmaster.taskmaster_v3 import write_idea
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     with _pytest.raises(ValueError, match="title"):
@@ -110,7 +110,7 @@ def test_write_idea_rejects_empty_title(tmp_path):
 
 
 def test_write_idea_appends_to_index(tmp_path):
-    from taskmaster_v3 import write_idea, ideas_index_path
+    from taskmaster.taskmaster_v3 import write_idea, ideas_index_path
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     write_idea(bp, title="First idea")
@@ -130,7 +130,7 @@ def test_write_idea_appends_to_index(tmp_path):
 
 
 def test_write_idea_sequential_ids(tmp_path):
-    from taskmaster_v3 import write_idea
+    from taskmaster.taskmaster_v3 import write_idea
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     a, _ = write_idea(bp, title="a")
@@ -140,7 +140,7 @@ def test_write_idea_sequential_ids(tmp_path):
 
 
 def test_update_idea_status(tmp_path):
-    from taskmaster_v3 import write_idea, update_idea, read_idea
+    from taskmaster.taskmaster_v3 import write_idea, update_idea, read_idea
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     iid, _ = write_idea(bp, title="An idea")
@@ -150,7 +150,7 @@ def test_update_idea_status(tmp_path):
 
 
 def test_update_idea_archive_sets_flag_and_strikes_index(tmp_path):
-    from taskmaster_v3 import write_idea, update_idea, read_idea, ideas_index_path
+    from taskmaster.taskmaster_v3 import write_idea, update_idea, read_idea, ideas_index_path
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     iid, _ = write_idea(bp, title="Drop-this idea")
@@ -163,7 +163,7 @@ def test_update_idea_archive_sets_flag_and_strikes_index(tmp_path):
 
 
 def test_update_idea_promote_records_task_id(tmp_path):
-    from taskmaster_v3 import write_idea, update_idea, read_idea
+    from taskmaster.taskmaster_v3 import write_idea, update_idea, read_idea
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     iid, _ = write_idea(bp, title="Becomes a task")
@@ -173,7 +173,7 @@ def test_update_idea_promote_records_task_id(tmp_path):
 
 
 def test_update_idea_body_replacement(tmp_path):
-    from taskmaster_v3 import write_idea, update_idea, read_idea
+    from taskmaster.taskmaster_v3 import write_idea, update_idea, read_idea
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     iid, _ = write_idea(bp, title="An idea", body="old body")
@@ -183,7 +183,7 @@ def test_update_idea_body_replacement(tmp_path):
 
 
 def test_update_idea_preserves_body_when_not_passed(tmp_path):
-    from taskmaster_v3 import write_idea, update_idea, read_idea
+    from taskmaster.taskmaster_v3 import write_idea, update_idea, read_idea
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     iid, _ = write_idea(bp, title="Keep me", body="original body")
@@ -194,7 +194,7 @@ def test_update_idea_preserves_body_when_not_passed(tmp_path):
 
 def test_update_idea_unknown_id_raises(tmp_path):
     import pytest as _pytest
-    from taskmaster_v3 import update_idea
+    from taskmaster.taskmaster_v3 import update_idea
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     with _pytest.raises(FileNotFoundError):
@@ -202,14 +202,14 @@ def test_update_idea_unknown_id_raises(tmp_path):
 
 
 def test_list_ideas_empty(tmp_path):
-    from taskmaster_v3 import list_ideas
+    from taskmaster.taskmaster_v3 import list_ideas
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     assert list_ideas(bp) == []
 
 
 def test_list_ideas_returns_summaries_newest_first(tmp_path):
-    from taskmaster_v3 import write_idea, list_ideas
+    from taskmaster.taskmaster_v3 import write_idea, list_ideas
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     write_idea(bp, title="oldest")
@@ -223,7 +223,7 @@ def test_list_ideas_returns_summaries_newest_first(tmp_path):
 
 
 def test_list_ideas_excludes_archived_by_default(tmp_path):
-    from taskmaster_v3 import write_idea, update_idea, list_ideas
+    from taskmaster.taskmaster_v3 import write_idea, update_idea, list_ideas
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     a, _ = write_idea(bp, title="active")
@@ -235,7 +235,7 @@ def test_list_ideas_excludes_archived_by_default(tmp_path):
 
 
 def test_list_ideas_includes_archived_when_requested(tmp_path):
-    from taskmaster_v3 import write_idea, update_idea, list_ideas
+    from taskmaster.taskmaster_v3 import write_idea, update_idea, list_ideas
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     write_idea(bp, title="active")
@@ -246,7 +246,7 @@ def test_list_ideas_includes_archived_when_requested(tmp_path):
 
 
 def test_list_ideas_filter_by_status(tmp_path):
-    from taskmaster_v3 import write_idea, list_ideas
+    from taskmaster.taskmaster_v3 import write_idea, list_ideas
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     write_idea(bp, title="exploring one", status="exploring")
@@ -256,7 +256,7 @@ def test_list_ideas_filter_by_status(tmp_path):
 
 
 def test_list_ideas_filter_by_tag(tmp_path):
-    from taskmaster_v3 import write_idea, list_ideas
+    from taskmaster.taskmaster_v3 import write_idea, list_ideas
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     write_idea(bp, title="perf", tags=["perf", "automation"])
@@ -266,7 +266,7 @@ def test_list_ideas_filter_by_tag(tmp_path):
 
 
 def test_list_ideas_filter_by_related_task(tmp_path):
-    from taskmaster_v3 import write_idea, list_ideas
+    from taskmaster.taskmaster_v3 import write_idea, list_ideas
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     write_idea(bp, title="linked", related_tasks=["v3-release-007"])
@@ -276,7 +276,7 @@ def test_list_ideas_filter_by_related_task(tmp_path):
 
 
 def test_list_ideas_idea_id_returns_full_record(tmp_path):
-    from taskmaster_v3 import write_idea, list_ideas
+    from taskmaster.taskmaster_v3 import write_idea, list_ideas
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     iid, _ = write_idea(bp, title="single", body="full body content")
@@ -287,7 +287,7 @@ def test_list_ideas_idea_id_returns_full_record(tmp_path):
 
 
 def test_list_ideas_limit(tmp_path):
-    from taskmaster_v3 import write_idea, list_ideas
+    from taskmaster.taskmaster_v3 import write_idea, list_ideas
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     for i in range(5):
@@ -298,7 +298,7 @@ def test_list_ideas_limit(tmp_path):
 
 def test_list_ideas_summary_false_includes_body(tmp_path):
     """summary=False augments each summary record with its full body."""
-    from taskmaster_v3 import write_idea, list_ideas
+    from taskmaster.taskmaster_v3 import write_idea, list_ideas
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     write_idea(bp, title="A", body="alpha body")
@@ -310,7 +310,7 @@ def test_list_ideas_summary_false_includes_body(tmp_path):
 
 def test_list_ideas_summary_true_omits_body(tmp_path):
     """summary=True (default) omits body to keep payloads small."""
-    from taskmaster_v3 import write_idea, list_ideas
+    from taskmaster.taskmaster_v3 import write_idea, list_ideas
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     write_idea(bp, title="solo", body="some body content")
@@ -325,7 +325,7 @@ def test_write_idea_concurrent_allocations_unique(tmp_path):
     won the race) and then calling write_idea — it should bump to IDEA-002
     rather than overwriting.
     """
-    from taskmaster_v3 import write_idea, idea_path
+    from taskmaster.taskmaster_v3 import write_idea, idea_path
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     # Pre-create IDEA-001 to simulate another writer holding the slot.

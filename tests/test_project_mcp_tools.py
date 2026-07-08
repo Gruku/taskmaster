@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 import yaml
 
-from backlog_server import (
+from taskmaster.backlog_server import (
     backlog_project_error_trace_ladder,
     backlog_project_get,
     backlog_project_get_field,
@@ -11,7 +11,7 @@ from backlog_server import (
     backlog_project_set,
     backlog_project_ship_order,
 )
-from project import SCHEMA_VERSION
+from taskmaster.project import SCHEMA_VERSION
 
 
 def _write(tmp_taskmaster, data: dict) -> None:

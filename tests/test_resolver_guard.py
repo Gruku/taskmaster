@@ -18,7 +18,7 @@ REFUSAL = "Refusing to use the taskmaster plugin directory"
 def test_resolve_paths_raises_on_plugin_dir_fixture(tmp_path, monkeypatch):
     """A backlog.yaml adjacent to backlog_server.py is refused."""
     (tmp_path / "backlog.yaml").write_text(yaml.safe_dump({"epics": [], "phases": []}))
-    import backlog_server
+    from taskmaster import backlog_server
     monkeypatch.setattr(backlog_server, "SCRIPT_DIR", tmp_path)
     monkeypatch.setattr(backlog_server, "ROOT", tmp_path)
     with pytest.raises(RuntimeError, match=REFUSAL):
@@ -27,7 +27,7 @@ def test_resolve_paths_raises_on_plugin_dir_fixture(tmp_path, monkeypatch):
 
 def test_resolve_artifact_root_raises_on_plugin_dir_fixture(tmp_path, monkeypatch):
     (tmp_path / "backlog.yaml").write_text(yaml.safe_dump({"epics": [], "phases": []}))
-    import taskmaster_v3
+    from taskmaster import taskmaster_v3
     monkeypatch.setattr(taskmaster_v3, "_PLUGIN_DIR", tmp_path)
     monkeypatch.chdir(tmp_path)
     with pytest.raises(RuntimeError, match=REFUSAL):
@@ -42,7 +42,7 @@ def test_resolve_paths_raises_post_relocation_hole(tmp_path, monkeypatch):
     tm_dir = tmp_path / ".taskmaster"
     tm_dir.mkdir()
     (tm_dir / "backlog.yaml").write_text(yaml.safe_dump({"epics": [], "phases": []}))
-    import backlog_server
+    from taskmaster import backlog_server
     monkeypatch.setattr(backlog_server, "SCRIPT_DIR", tmp_path)
     monkeypatch.setattr(backlog_server, "ROOT", tmp_path)
     with pytest.raises(RuntimeError, match=REFUSAL):
@@ -53,7 +53,7 @@ def test_resolve_artifact_root_raises_post_relocation_hole(tmp_path, monkeypatch
     tm_dir = tmp_path / ".taskmaster"
     tm_dir.mkdir()
     (tm_dir / "backlog.yaml").write_text(yaml.safe_dump({"epics": [], "phases": []}))
-    import taskmaster_v3
+    from taskmaster import taskmaster_v3
     monkeypatch.setattr(taskmaster_v3, "_PLUGIN_DIR", tmp_path)
     monkeypatch.chdir(tmp_path)
     with pytest.raises(RuntimeError, match=REFUSAL):
@@ -63,7 +63,7 @@ def test_resolve_artifact_root_raises_post_relocation_hole(tmp_path, monkeypatch
 def test_resolve_paths_negative_control_non_plugin_dir(tmp_path, monkeypatch):
     """A root-layout backlog.yaml NOT adjacent to the plugin resolves normally."""
     (tmp_path / "backlog.yaml").write_text(yaml.safe_dump({"epics": [], "phases": []}))
-    import backlog_server
+    from taskmaster import backlog_server
     plugin_dir = tmp_path / "not-the-plugin-dir"
     plugin_dir.mkdir()
     monkeypatch.setattr(backlog_server, "SCRIPT_DIR", plugin_dir)
@@ -74,7 +74,7 @@ def test_resolve_paths_negative_control_non_plugin_dir(tmp_path, monkeypatch):
 
 def test_resolve_artifact_root_negative_control_non_plugin_dir(tmp_path, monkeypatch):
     (tmp_path / "backlog.yaml").write_text(yaml.safe_dump({"epics": [], "phases": []}))
-    import taskmaster_v3
+    from taskmaster import taskmaster_v3
     plugin_dir = tmp_path / "not-the-plugin-dir"
     plugin_dir.mkdir()
     monkeypatch.setattr(taskmaster_v3, "_PLUGIN_DIR", plugin_dir)
@@ -88,7 +88,7 @@ def test_resolve_paths_positive_control_taskmaster_layout(tmp_path, monkeypatch)
     tm_dir = tmp_path / ".taskmaster"
     tm_dir.mkdir()
     (tm_dir / "backlog.yaml").write_text(yaml.safe_dump({"epics": [], "phases": []}))
-    import backlog_server
+    from taskmaster import backlog_server
     plugin_dir = tmp_path / "not-the-plugin-dir"
     plugin_dir.mkdir()
     monkeypatch.setattr(backlog_server, "SCRIPT_DIR", plugin_dir)
@@ -101,7 +101,7 @@ def test_resolve_artifact_root_positive_control_taskmaster_layout(tmp_path, monk
     tm_dir = tmp_path / ".taskmaster"
     tm_dir.mkdir()
     (tm_dir / "backlog.yaml").write_text(yaml.safe_dump({"epics": [], "phases": []}))
-    import taskmaster_v3
+    from taskmaster import taskmaster_v3
     plugin_dir = tmp_path / "not-the-plugin-dir"
     plugin_dir.mkdir()
     monkeypatch.setattr(taskmaster_v3, "_PLUGIN_DIR", plugin_dir)

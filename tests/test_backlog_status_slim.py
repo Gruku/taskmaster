@@ -2,7 +2,7 @@
 """Task 16: backlog_status slim default + verbose for archived/completed."""
 from __future__ import annotations
 
-from backlog_server import (
+from taskmaster.backlog_server import (
     backlog_add_epic,
     backlog_add_task,
     backlog_archive_task,

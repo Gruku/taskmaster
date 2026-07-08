@@ -8,7 +8,7 @@ import yaml
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT))
 
-from taskmaster_v3 import (  # noqa: E402
+from taskmaster.taskmaster_v3 import (  # noqa: E402
     EXTERNAL_SYSTEMS,
     _CANONICALIZE_ITEMS,
     _ISSUE_INDEX_FIELDS,
@@ -177,13 +177,13 @@ def test_validator_rejects_id_that_does_not_match_components(tmp_path):
     )
     # Read returns the file; explicit validation should catch the mismatch.
     fm, _ = read_tracker(bp, "jira-cm-cm-1")
-    from taskmaster_v3 import _validate_tracker
+    from taskmaster.taskmaster_v3 import _validate_tracker
     with pytest.raises(ValueError, match="deterministic format"):
         _validate_tracker(fm)
 
 
 def test_validator_rejects_missing_required_fields(tmp_path):
-    from taskmaster_v3 import _validate_tracker
+    from taskmaster.taskmaster_v3 import _validate_tracker
     with pytest.raises(ValueError, match="missing required field"):
         _validate_tracker({"id": "jira-cm-cm-1", "external_system": "jira"})
 
@@ -357,7 +357,7 @@ def test_issue_index_now_carries_tracker_id():
 
 def test_write_issue_with_tracker_id_persists(tmp_path):
     """Issues accept a tracker_id and round-trip it through write/read."""
-    from taskmaster_v3 import write_issue, read_issue
+    from taskmaster.taskmaster_v3 import write_issue, read_issue
     bp = _make_backlog(tmp_path)
     (bp.parent / "issues").mkdir(parents=True, exist_ok=True)
 

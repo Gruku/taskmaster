@@ -36,7 +36,7 @@ def _write_issue(root: Path, issue_id: str, **overrides):
 
 
 def test_compute_issue_aging_fresh_band():
-    from taskmaster_v3 import compute_issue_aging
+    from taskmaster.taskmaster_v3 import compute_issue_aging
     now = datetime(2026, 4, 26, tzinfo=timezone.utc)
     issue = {"discovered": (now - timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%SZ"), "severity": "P1"}
     aging_cfg = {"Critical": 14, "High": 30, "Medium": 60, "Low": 120}
@@ -46,7 +46,7 @@ def test_compute_issue_aging_fresh_band():
 
 
 def test_compute_issue_aging_aging_band():
-    from taskmaster_v3 import compute_issue_aging
+    from taskmaster.taskmaster_v3 import compute_issue_aging
     now = datetime(2026, 4, 26, tzinfo=timezone.utc)
     issue = {"discovered": (now - timedelta(days=12)).strftime("%Y-%m-%dT%H:%M:%SZ"), "severity": "P1"}
     out = compute_issue_aging(issue, {"Critical": 14, "High": 30, "Medium": 60, "Low": 120}, now=now)
@@ -55,7 +55,7 @@ def test_compute_issue_aging_aging_band():
 
 
 def test_compute_issue_aging_stale_band():
-    from taskmaster_v3 import compute_issue_aging
+    from taskmaster.taskmaster_v3 import compute_issue_aging
     now = datetime(2026, 4, 26, tzinfo=timezone.utc)
     issue = {"discovered": (now - timedelta(days=25)).strftime("%Y-%m-%dT%H:%M:%SZ"), "severity": "P1"}
     out = compute_issue_aging(issue, {"Critical": 14, "High": 30, "Medium": 60, "Low": 120}, now=now)
@@ -64,7 +64,7 @@ def test_compute_issue_aging_stale_band():
 
 
 def test_compute_issue_aging_critical_decays_faster_than_low():
-    from taskmaster_v3 import compute_issue_aging
+    from taskmaster.taskmaster_v3 import compute_issue_aging
     now = datetime(2026, 4, 26, tzinfo=timezone.utc)
     discovered = (now - timedelta(days=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
     crit = compute_issue_aging({"discovered": discovered, "severity": "P0"}, {"Critical": 14, "High": 30, "Medium": 60, "Low": 120}, now=now)
@@ -99,7 +99,7 @@ def test_get_issues_excludes_resolved_when_query_param_set(running_server, tmp_p
 
 def test_compute_issue_aging_accepts_date_only_format():
     """ISS-005: compute_issue_aging must accept YYYY-MM-DD without crashing."""
-    from taskmaster_v3 import compute_issue_aging
+    from taskmaster.taskmaster_v3 import compute_issue_aging
     now = datetime(2026, 5, 15, tzinfo=timezone.utc)
     # 5 days ago in date-only format
     issue = {"discovered": "2026-05-10", "severity": "P1"}
@@ -112,7 +112,7 @@ def test_compute_issue_aging_accepts_date_only_format():
 
 def test_compute_issue_aging_date_only_stale():
     """ISS-005: date-only format should still produce correct tier (Stale)."""
-    from taskmaster_v3 import compute_issue_aging
+    from taskmaster.taskmaster_v3 import compute_issue_aging
     now = datetime(2026, 5, 15, tzinfo=timezone.utc)
     # 60 days ago in date-only format → P1/High base=30 → 200% → Stale
     issue = {"discovered": "2026-03-16", "severity": "P1"}
@@ -124,7 +124,7 @@ def test_compute_issue_aging_date_only_stale():
 
 def test_compute_issue_aging_invalid_format_returns_fresh():
     """ISS-005: completely malformed discovered should degrade gracefully to Fresh."""
-    from taskmaster_v3 import compute_issue_aging
+    from taskmaster.taskmaster_v3 import compute_issue_aging
     issue = {"discovered": "not-a-date", "severity": "P1"}
     aging_cfg = {"Critical": 14, "High": 30, "Medium": 60, "Low": 120}
     out = compute_issue_aging(issue, aging_cfg)

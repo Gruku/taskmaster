@@ -1,5 +1,5 @@
 import yaml
-import taskmaster_v3 as tv
+from taskmaster import taskmaster_v3 as tv
 
 
 def test_lane_and_gate_state_are_slim():

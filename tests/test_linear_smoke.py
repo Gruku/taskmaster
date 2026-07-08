@@ -33,9 +33,9 @@ import yaml
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT))
 
-from integrations.linear.client import LinearClient  # noqa: E402
-from integrations.linear.worker import drain, enqueue, read_queue  # noqa: E402
-from taskmaster_v3 import write_tracker, read_tracker  # noqa: E402
+from taskmaster.integrations.linear.client import LinearClient  # noqa: E402
+from taskmaster.integrations.linear.worker import drain, enqueue, read_queue  # noqa: E402
+from taskmaster.taskmaster_v3 import write_tracker, read_tracker  # noqa: E402
 
 
 SMOKE_TOKEN = os.environ.get("TASKMASTER_LINEAR_SMOKE_TOKEN")

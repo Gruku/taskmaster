@@ -6,7 +6,7 @@ import yaml
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT))
 
-from taskmaster_v3 import backfill_handover_status, read_handover, write_task_file
+from taskmaster.taskmaster_v3 import backfill_handover_status, read_handover, write_task_file
 
 
 def _setup(tmp_path):

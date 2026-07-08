@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from plugins.taskmaster import taskmaster_v3 as tm
+from taskmaster import taskmaster_v3 as tm
 
 
 @pytest.fixture

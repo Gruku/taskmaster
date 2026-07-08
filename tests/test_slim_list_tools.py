@@ -3,7 +3,7 @@
 backlog_issue_list, backlog_lesson_list, and backlog_lesson_match."""
 from __future__ import annotations
 
-from backlog_server import (
+from taskmaster.backlog_server import (
     backlog_add_task,
     backlog_handover_create,
     backlog_handover_list,

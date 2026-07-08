@@ -5,7 +5,7 @@ import yaml
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT))
 
-from taskmaster_v3 import (
+from taskmaster.taskmaster_v3 import (
     migrate_handover_statuses,
     read_handover,
     write_task_file,

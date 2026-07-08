@@ -1,5 +1,5 @@
 # plugins/taskmaster/tests/test_lane_gate_logic.py
-import taskmaster_v3 as tv
+from taskmaster import taskmaster_v3 as tv
 
 
 def test_default_lane_bumps_high_stakes():

@@ -55,7 +55,7 @@ def _init_repo(path: Path, *, initial_branch: str = "master") -> Path:
 
 
 def test_run_git_returns_stdout_text(tmp_path):
-    from backlog_server import _run_git
+    from taskmaster.backlog_server import _run_git
     repo = _init_repo(tmp_path / "r")
     out = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=repo)
     assert out.strip() == "master"
@@ -63,14 +63,14 @@ def test_run_git_returns_stdout_text(tmp_path):
 
 def test_run_git_returns_empty_string_on_nonzero(tmp_path):
     """Non-zero exit (e.g. unknown ref) must NOT raise — we treat it as 'feature unavailable'."""
-    from backlog_server import _run_git
+    from taskmaster.backlog_server import _run_git
     repo = _init_repo(tmp_path / "r")
     out = _run_git(["merge-base", "--is-ancestor", "no-such-branch", "master"], cwd=repo)
     assert out == ""  # convention: empty string on failure
 
 
 def test_run_git_handles_missing_git_dir(tmp_path):
-    from backlog_server import _run_git
+    from taskmaster.backlog_server import _run_git
     out = _run_git(["status"], cwd=tmp_path)  # tmp_path has no .git
     assert out == ""
 
@@ -82,7 +82,7 @@ def test_run_git_passes_no_optional_locks(tmp_path, monkeypatch):
     timeout-kill on a slow repo then orphans a 0-byte lock that blocks all future
     commits. `--no-optional-locks` stops git from taking the lock at all.
     """
-    import backlog_server
+    from taskmaster import backlog_server
     captured: dict = {}
 
     def fake_run(cmd, **kwargs):
@@ -98,14 +98,14 @@ def test_run_git_passes_no_optional_locks(tmp_path, monkeypatch):
 
 def test_run_git_status_leaves_no_index_lock(tmp_path):
     """End-to-end: a status call on a real repo must not leave index.lock behind."""
-    from backlog_server import _run_git
+    from taskmaster.backlog_server import _run_git
     repo = _init_repo(tmp_path / "r")
     _run_git(["status", "--porcelain"], cwd=repo)
     assert not (repo / ".git" / "index.lock").exists()
 
 
 def test_rank_integration_branch_orders_master_highest():
-    from backlog_server import _rank_integration_branch
+    from taskmaster.backlog_server import _rank_integration_branch
     # Rank order (lowest → highest): work < dev < stage < <version> < master|main
     assert _rank_integration_branch("work")    < _rank_integration_branch("dev")
     assert _rank_integration_branch("dev")     < _rank_integration_branch("stage")
@@ -115,7 +115,7 @@ def test_rank_integration_branch_orders_master_highest():
 
 
 def test_rank_integration_branch_orders_versions_numerically():
-    from backlog_server import _rank_integration_branch
+    from taskmaster.backlog_server import _rank_integration_branch
     assert _rank_integration_branch("1.2.0") < _rank_integration_branch("1.3.1")
     assert _rank_integration_branch("1.3.1") < _rank_integration_branch("2.0.0")
     assert _rank_integration_branch("1.3.1") < _rank_integration_branch("1.10.0")  # not lexicographic!
@@ -123,7 +123,7 @@ def test_rank_integration_branch_orders_versions_numerically():
 
 def test_discover_sub_repos_finds_embedded(tmp_path):
     """Embedded sub-repo = a nested .git directory (not a submodule)."""
-    from backlog_server import _discover_sub_repos
+    from taskmaster.backlog_server import _discover_sub_repos
     monorepo = _init_repo(tmp_path / "mono")
     _init_repo(monorepo / "sub-a")          # depth 1
     _init_repo(monorepo / "nested" / "sub-b")  # depth 2 — also discovered
@@ -138,7 +138,7 @@ def test_discover_sub_repos_finds_embedded(tmp_path):
 
 def test_discover_sub_repos_ignores_self_dot_git(tmp_path):
     """The project's own .git must not be reported as a sub-repo."""
-    from backlog_server import _discover_sub_repos
+    from taskmaster.backlog_server import _discover_sub_repos
     monorepo = _init_repo(tmp_path / "mono")
     subs = _discover_sub_repos(monorepo)
     assert all(s["path"] != "." and s["path"] != "" for s in subs)
@@ -146,7 +146,7 @@ def test_discover_sub_repos_ignores_self_dot_git(tmp_path):
 
 def test_discover_sub_repos_skips_depth_three(tmp_path):
     """Nested .git at depth 3 is out of scope (avoid scanning node_modules etc.)."""
-    from backlog_server import _discover_sub_repos
+    from taskmaster.backlog_server import _discover_sub_repos
     monorepo = _init_repo(tmp_path / "mono")
     _init_repo(monorepo / "a" / "b" / "deep")  # depth 3
     subs = _discover_sub_repos(monorepo)
@@ -161,7 +161,7 @@ def test_discover_sub_repos_skips_worktree_pool_and_node_modules(tmp_path):
     subprocesses per clone and stalls for minutes. `node_modules` is likewise
     never a sub-repo and must not even be enumerated.
     """
-    from backlog_server import _discover_sub_repos
+    from taskmaster.backlog_server import _discover_sub_repos
     monorepo = _init_repo(tmp_path / "mono")
 
     # Simulate a worktree clone under .worktrees/ — a `.git` file (gitdir pointer).
@@ -195,7 +195,7 @@ def test_discover_sub_repos_skips_worktree_pool_and_node_modules(tmp_path):
 )
 def test_discover_sub_repos_skips_common_large_directories(tmp_path, dirname):
     """Large generated/dependency trees must never become sub-repo scan roots."""
-    from backlog_server import _discover_sub_repos
+    from taskmaster.backlog_server import _discover_sub_repos
     monorepo = _init_repo(tmp_path / "mono")
     fake_repo = monorepo / dirname / "nested-repo"
     fake_repo.mkdir(parents=True)
@@ -209,7 +209,7 @@ def test_discover_sub_repos_skips_common_large_directories(tmp_path, dirname):
 def test_discover_sub_repos_parses_gitmodules(tmp_path):
     """An entry in .gitmodules is reported with kind='submodule' even if the
     working tree isn't checked out yet."""
-    from backlog_server import _discover_sub_repos
+    from taskmaster.backlog_server import _discover_sub_repos
     monorepo = _init_repo(tmp_path / "mono")
     (monorepo / ".gitmodules").write_text(
         '[submodule "vendor/lib"]\n'
@@ -226,7 +226,7 @@ def test_discover_sub_repos_parses_gitmodules(tmp_path):
 def test_discover_sub_repos_submodule_with_checkout(tmp_path):
     """A submodule whose working tree IS checked out (i.e. has .git as file or dir)
     is still reported as kind='submodule', not 'embedded'."""
-    from backlog_server import _discover_sub_repos
+    from taskmaster.backlog_server import _discover_sub_repos
     monorepo = _init_repo(tmp_path / "mono")
     (monorepo / ".gitmodules").write_text(
         '[submodule "vendor/lib"]\n\tpath = vendor/lib\n\turl = x\n',
@@ -243,7 +243,7 @@ def test_discover_sub_repos_submodule_with_checkout(tmp_path):
 
 
 def test_discover_integration_branches_filters_by_pattern(tmp_path):
-    from backlog_server import _discover_integration_branches
+    from taskmaster.backlog_server import _discover_integration_branches
     repo = _init_repo(tmp_path / "r")
     # Create some branches: 2 integration-like, 2 feature-like.
     for b in ("stage", "1.3.1", "feature/ui-001", "fix/bug-99"):
@@ -259,7 +259,7 @@ def test_discover_integration_branches_filters_by_pattern(tmp_path):
 def test_discover_integration_branches_dedupes_origin_prefix(tmp_path):
     """`git branch -a` lists both 'master' and 'origin/master' when a remote
     exists. The result must dedupe the origin/ prefix."""
-    from backlog_server import _discover_integration_branches
+    from taskmaster.backlog_server import _discover_integration_branches
     repo = _init_repo(tmp_path / "r")
     # Fake a remote-tracking branch by creating a packed-refs entry.
     refs_dir = repo / ".git" / "refs" / "remotes" / "origin"
@@ -274,7 +274,7 @@ def test_discover_integration_branches_dedupes_origin_prefix(tmp_path):
 
 
 def test_discover_integration_branches_orders_by_rank(tmp_path):
-    from backlog_server import _discover_integration_branches
+    from taskmaster.backlog_server import _discover_integration_branches
     repo = _init_repo(tmp_path / "r")
     for b in ("stage", "dev", "work", "1.3.1"):
         _git("branch", b, cwd=repo)
@@ -284,13 +284,13 @@ def test_discover_integration_branches_orders_by_rank(tmp_path):
 
 
 def test_discover_integration_branches_returns_empty_for_non_repo(tmp_path):
-    from backlog_server import _discover_integration_branches
+    from taskmaster.backlog_server import _discover_integration_branches
     assert _discover_integration_branches(tmp_path) == []
 
 
 def test_list_worktrees_returns_main_repo_only_when_no_extras(tmp_path):
     """A fresh repo has exactly one worktree: itself."""
-    from backlog_server import _list_worktrees
+    from taskmaster.backlog_server import _list_worktrees
     repo = _init_repo(tmp_path / "r")
     wts = _list_worktrees(repo)
     assert len(wts) == 1
@@ -299,7 +299,7 @@ def test_list_worktrees_returns_main_repo_only_when_no_extras(tmp_path):
 
 
 def test_list_worktrees_includes_added_worktree(tmp_path):
-    from backlog_server import _list_worktrees
+    from taskmaster.backlog_server import _list_worktrees
     repo = _init_repo(tmp_path / "r")
     _git("branch", "feature/foo", cwd=repo)
     wt_path = tmp_path / "wt-foo"
@@ -312,14 +312,14 @@ def test_list_worktrees_includes_added_worktree(tmp_path):
 
 
 def test_list_worktrees_returns_empty_for_non_repo(tmp_path):
-    from backlog_server import _list_worktrees
+    from taskmaster.backlog_server import _list_worktrees
     assert _list_worktrees(tmp_path) == []
 
 
 def test_list_worktrees_detached_head_has_none_branch(tmp_path):
     """A worktree at a detached HEAD has no branch — must not crash and must
     return branch=None so the renderer can label it 'detached'."""
-    from backlog_server import _list_worktrees
+    from taskmaster.backlog_server import _list_worktrees
     repo = _init_repo(tmp_path / "r")
     head_sha = _run_git_check(["rev-parse", "HEAD"], cwd=repo).strip()
     wt_path = tmp_path / "wt-detached"
@@ -334,7 +334,7 @@ def test_list_worktrees_detached_head_has_none_branch(tmp_path):
 def test_compute_worktree_git_state_merge_ladder(tmp_path):
     """A worktree branch that has been merged into 'work' but not 'stage'
     reports work=True, stage=False, master=False."""
-    from backlog_server import _compute_worktree_git_state
+    from taskmaster.backlog_server import _compute_worktree_git_state
     repo = _init_repo(tmp_path / "r")
     # Create integration branches at the seed commit (so they all contain it).
     for b in ("work", "stage"):
@@ -358,7 +358,7 @@ def test_compute_worktree_git_state_merge_ladder(tmp_path):
 
 
 def test_compute_worktree_git_state_ahead_behind(tmp_path):
-    from backlog_server import _compute_worktree_git_state
+    from taskmaster.backlog_server import _compute_worktree_git_state
     repo = _init_repo(tmp_path / "r")
     _git("checkout", "-q", "-b", "feature/x", cwd=repo)
     for i in range(3):
@@ -377,7 +377,7 @@ def test_compute_worktree_git_state_ahead_behind(tmp_path):
 
 
 def test_compute_worktree_git_state_dirty_file_count(tmp_path):
-    from backlog_server import _compute_worktree_git_state
+    from taskmaster.backlog_server import _compute_worktree_git_state
     repo = _init_repo(tmp_path / "r")
     # Two uncommitted modifications.
     (repo / "dirty1.txt").write_text("a", encoding="utf-8")
@@ -393,7 +393,7 @@ def test_compute_worktree_git_state_dirty_file_count(tmp_path):
 
 def test_compute_worktree_git_state_handles_detached(tmp_path):
     """branch=None (detached HEAD) returns a state with empty ladder, no crash."""
-    from backlog_server import _compute_worktree_git_state
+    from taskmaster.backlog_server import _compute_worktree_git_state
     repo = _init_repo(tmp_path / "r")
     state = _compute_worktree_git_state(
         repo, branch=None,
@@ -406,7 +406,7 @@ def test_compute_worktree_git_state_handles_detached(tmp_path):
 
 
 def test_link_worktrees_to_tasks_matches_by_worktree_field():
-    from backlog_server import _link_worktrees_to_tasks
+    from taskmaster.backlog_server import _link_worktrees_to_tasks
     worktrees = [
         {"path": "/abs/wt-a", "branch": "feature/a", "head": "x"},
         {"path": "/abs/wt-b", "branch": "feature/b", "head": "y"},
@@ -428,7 +428,7 @@ def test_link_worktrees_to_tasks_matches_by_worktree_field():
 def test_link_worktrees_to_tasks_normalises_path_separators():
     """Windows tasks may persist worktree paths with backslashes; the matcher
     must compare canonically (POSIX form, no trailing slash)."""
-    from backlog_server import _link_worktrees_to_tasks
+    from taskmaster.backlog_server import _link_worktrees_to_tasks
     worktrees = [{"path": "C:/proj/wt-a", "branch": "x", "head": "y"}]
     tasks = [{"id": "T-1", "title": "x", "status": "todo",
               "worktree": r"C:\proj\wt-a"}]
@@ -438,7 +438,7 @@ def test_link_worktrees_to_tasks_normalises_path_separators():
 
 def test_link_handovers_to_worktrees_transitive_via_task_ids():
     """A handover linked to T-1 lands on the worktree that owns T-1."""
-    from backlog_server import _link_handovers_to_worktrees
+    from taskmaster.backlog_server import _link_handovers_to_worktrees
     worktree_task_map = {
         "/abs/wt-a": [{"id": "T-1", "title": "x", "status": "todo"}],
         "/abs/wt-b": [{"id": "T-9", "title": "y", "status": "todo"}],
@@ -461,7 +461,7 @@ def test_backlog_project_structure_returns_shape(tmp_taskmaster):
     The result must always have the documented top-level shape even with
     zero sub-repos."""
     import json as _json
-    from backlog_server import backlog_project_structure
+    from taskmaster.backlog_server import backlog_project_structure
     raw = backlog_project_structure()
     data = _json.loads(raw) if isinstance(raw, str) else raw
     assert set(data.keys()) >= {
@@ -477,7 +477,7 @@ def test_backlog_project_structure_deadline_returns_partial_results(
     tmp_path, monkeypatch,
 ):
     """Serial slow Git calls must stop at the request-wide deadline."""
-    import backlog_server
+    from taskmaster import backlog_server
 
     for name in ("sub-a", "sub-b"):
         repo = tmp_path / name
@@ -531,7 +531,7 @@ def test_backlog_project_structure_fast_path_uses_two_local_git_calls_per_repo(
     tmp_path, monkeypatch,
 ):
     """refresh_git=False must avoid network and redundant rev-parse calls."""
-    import backlog_server
+    from taskmaster import backlog_server
 
     repo = tmp_path / "sub-a"
     repo.mkdir()
@@ -578,7 +578,7 @@ def test_backlog_project_structure_deadline_includes_backlog_loading(
     tmp_path, monkeypatch,
 ):
     """The request budget starts before backlog and handover collection."""
-    import backlog_server
+    from taskmaster import backlog_server
 
     monkeypatch.setattr(backlog_server, "ROOT", tmp_path)
     monkeypatch.setattr(
@@ -612,7 +612,7 @@ def test_backlog_project_structure_discovers_embedded_sub_repo(tmp_path, monkeyp
         encoding="utf-8",
     )
     import importlib
-    import backlog_server
+    from taskmaster import backlog_server
     importlib.reload(backlog_server)
 
     # An embedded sub-repo with one extra worktree.
@@ -642,7 +642,7 @@ def test_backlog_project_structure_refresh_git_populates_state(tmp_path, monkeyp
         encoding="utf-8",
     )
     import importlib
-    import backlog_server
+    from taskmaster import backlog_server
     importlib.reload(backlog_server)
 
     sub = _init_repo(tmp_path / "sub-a")
@@ -671,7 +671,8 @@ def running_server(tmp_path, monkeypatch):
         "meta:\n  project: test\n  schema_version: 3\nepics: []\nphases: []\n",
         encoding="utf-8",
     )
-    import importlib, backlog_server
+    import importlib
+    from taskmaster import backlog_server
     importlib.reload(backlog_server)
     server, port = backlog_server._make_server(host="127.0.0.1", port=0)
     t = threading.Thread(target=server.serve_forever, daemon=True)

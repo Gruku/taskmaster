@@ -12,7 +12,7 @@ def in_backlog(tmp_path, monkeypatch):
         "meta:\n  schema_version: 3\nepics: []\n",
         encoding="utf-8",
     )
-    import plugins.taskmaster.backlog_server as srv
+    import taskmaster.backlog_server as srv
     importlib.reload(srv)
     return srv, bp
 

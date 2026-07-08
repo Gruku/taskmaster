@@ -1,4 +1,4 @@
-from plugins.taskmaster.taskmaster_v3 import CANONICAL_SECTIONS
+from taskmaster.taskmaster_v3 import CANONICAL_SECTIONS
 
 
 def test_canonical_sections_per_entity_type():
@@ -24,7 +24,7 @@ def test_task_sections_include_docs_keys():
 
 def test_get_task_sections_empty_list_returns_error(tm_epic_phase):
     """B-042: backlog_get_task(sections=[]) must return an Error string."""
-    from backlog_server import backlog_add_task, backlog_get_task
+    from taskmaster.backlog_server import backlog_add_task, backlog_get_task
     backlog_add_task(epic="test-epic", task_id="T-B042", title="Sections test", tldr="A tldr.", phase="dev")
     result = backlog_get_task("T-B042", sections=[])
     assert isinstance(result, str)
@@ -33,7 +33,7 @@ def test_get_task_sections_empty_list_returns_error(tm_epic_phase):
 
 def test_get_task_sections_none_returns_slim(tm_epic_phase):
     """B-042: backlog_get_task(sections=None) must return the normal slim view."""
-    from backlog_server import backlog_add_task, backlog_get_task
+    from taskmaster.backlog_server import backlog_add_task, backlog_get_task
     backlog_add_task(epic="test-epic", task_id="T-B042b", title="Slim test", tldr="Slim tldr.", phase="dev")
     result = backlog_get_task("T-B042b", sections=None)
     assert "Slim tldr." in result
@@ -42,7 +42,7 @@ def test_get_task_sections_none_returns_slim(tm_epic_phase):
 
 def test_get_task_sections_valid_returns_content(tm_epic_phase):
     """B-042: backlog_get_task with a real section name still works."""
-    from backlog_server import backlog_add_task, backlog_get_task
+    from taskmaster.backlog_server import backlog_add_task, backlog_get_task
     backlog_add_task(epic="test-epic", task_id="T-B042c", title="Section test", tldr="T.",
                      notes="My notes here.", phase="dev")
     result = backlog_get_task("T-B042c", sections=["notes"])
@@ -51,7 +51,7 @@ def test_get_task_sections_valid_returns_content(tm_epic_phase):
 
 def test_issue_get_sections_empty_list_returns_error(tmp_taskmaster):
     """B-042: backlog_issue_get(sections=[]) must return an Error string."""
-    from backlog_server import backlog_issue_create, backlog_issue_get
+    from taskmaster.backlog_server import backlog_issue_create, backlog_issue_get
     backlog_issue_create(
         title="Test issue",
         severity="P2",
@@ -65,7 +65,7 @@ def test_issue_get_sections_empty_list_returns_error(tmp_taskmaster):
 
 def test_issue_get_sections_none_returns_slim(tmp_taskmaster):
     """B-042: backlog_issue_get(sections=None) must return the normal slim view."""
-    from backlog_server import backlog_issue_create, backlog_issue_get
+    from taskmaster.backlog_server import backlog_issue_create, backlog_issue_get
     backlog_issue_create(
         title="Test issue slim",
         severity="P3",
@@ -79,7 +79,7 @@ def test_issue_get_sections_none_returns_slim(tmp_taskmaster):
 
 def test_lesson_get_sections_empty_list_returns_error(tmp_taskmaster):
     """B-042: backlog_lesson_get(sections=[]) must return an Error string."""
-    from backlog_server import backlog_lesson_create, backlog_lesson_get
+    from taskmaster.backlog_server import backlog_lesson_create, backlog_lesson_get
     backlog_lesson_create(
         title="Test lesson",
         kind="pattern",
