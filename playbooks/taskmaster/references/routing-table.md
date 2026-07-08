@@ -48,6 +48,7 @@ The SKILL.md body carries only the ~15 highest-frequency rows.
 | (v3) "Snapshot the backlog" | `backlog_snapshot` |
 | (v3) "auto this task", "autopilot", "auto-epic X", "auto T-001" | Redirect: auto mode removed — suggest **ultracode** (Workflow orchestration) |
 | (v3) "Upgrade to v3", "migrate to v3", "switch to v3", "enable handovers" | `taskmaster:migrate-v3` |
+| (v3) "Migrate lessons", "convert lessons to memory", "what happened to lessons" | `taskmaster:migrate-lessons` |
 
 ## Implementation Work Without a Task
 

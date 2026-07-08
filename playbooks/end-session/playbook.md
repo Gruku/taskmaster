@@ -18,6 +18,8 @@ Check schema: `backlog_status` first line shows `Schema: v<N>`.
 
 **v3-pre-2: Handover auto-write.** Write automatically (no prompt) when: session >60 turns, context >200k tokens, task still in-flight, or user said "for tomorrow" / "context handoff". Infer `session_kind` and invoke `taskmaster:handover`. Full flow: `references/v3-pre-steps.md`.
 
+**v3-pre-2a: Instruction-file candidate check.** Before writing the session record, ask yourself once: did this session surface knowledge that must bind ALL assistants working in this repo ("we always do X here", "Y breaks if you do Z")? If yes, propose a 1-3 line addition to the repo's instruction file (CLAUDE.md / AGENTS.md) and apply it on user approval. Session-level insights that only concern you go to your own memory system instead — do not write them here. Most sessions produce neither; skip silently.
+
 **v3-pre-2b: Handover archive sweep.** `backlog_handover_resync()` quietly.
 
 **v3-pre-2c: Idea-candidate sweep.** Scan for `<idea-candidate>` tags; commit each via `backlog_idea_create`. Full flow: `references/v3-pre-steps.md`.
