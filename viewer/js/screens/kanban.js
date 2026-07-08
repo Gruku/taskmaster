@@ -377,6 +377,7 @@ export async function mount(root, { store, api, prefs }) {
           if (state.filters.search) filterParts.push(`search "${state.filters.search}"`);
           if (state.filters.priorities?.length) filterParts.push(`priority: ${state.filters.priorities.join(', ')}`);
           if (state.filters.epics?.length) filterParts.push(`epic: ${state.filters.epics.join(', ')}`);
+          if (state.filters.areas?.length) filterParts.push(`area: ${state.filters.areas.join(', ')}`);
           if (state.filters.phase && state.filters.phase !== '__all__') filterParts.push(`phase: ${state.filters.phase}`);
           const hidden = tasks.length;
           const filterDesc = filterParts.length ? filterParts.join(' · ') : 'active filters';
