@@ -19,13 +19,13 @@ Modular rebuild of the legacy `backlog-viewer.html`. Active development under Pl
 ## Run
 
 ```bash
-# From the plugin dir, on any free port:
-python -c "from backlog_server import _make_server; s, p = _make_server(host='127.0.0.1', port=0); print(f'http://127.0.0.1:{p}/v3'); s.serve_forever()"
+# From the repo root, on any free port:
+python -c "from taskmaster.backlog_server import _make_server; s, p = _make_server(host='127.0.0.1', port=0); print(f'http://127.0.0.1:{p}/v3'); s.serve_forever()"
 ```
 
 The legacy viewer still serves at `/`. Set `viewer.use_v3 = true` in `.taskmaster/viewer.json` (or via `PUT /api/viewer/prefs`) to flip the root URL.
 
 ## Test
 
-- Server: `python -m pytest plugins/taskmaster/tests/`
-- UI smoke: `bash plugins/taskmaster/viewer/tests/run_smoke.sh`
+- Server: `python -m pytest tests/`
+- UI smoke: `bash viewer/tests/run_smoke.sh`

@@ -80,7 +80,7 @@ AskUserQuestion({
 ```
 <!-- cc-only:end -->
 
-On "Yes": call `backlog_project_init` (no args — it writes a minimal valid manifest, refuses to overwrite). Then point the user at it: "Edit `.taskmaster/project.yaml` to declare your repos, submodules, branch protocol, and error-trace ladder. Schema reference: `plugins/taskmaster/project.py`."
+On "Yes": call `backlog_project_init` (no args — it writes a minimal valid manifest, refuses to overwrite). Then point the user at it: "Edit `.taskmaster/project.yaml` to declare your repos, submodules, branch protocol, and error-trace ladder. Schema reference: `taskmaster/project.py` (plugin root)."
 
 Skip this step entirely on v2 — project.yaml is a v3 surface.
 
