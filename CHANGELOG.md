@@ -13,7 +13,7 @@ indicate schema breaks or removed surfaces.
 ---
 
 ## 4.1.0
-**Areas + finite epics.** New first-class Area entity (long-lived subsystem: `backlog_area_create/get/list/update`, sidecar files under `.taskmaster/areas/`, no status lifecycle). Epics are now finite: `backlog_add_epic` requires `done_when` (an epic that can't say when it's done is an area); epics whose tasks are all done surface as "closeable" in backlog_status, backlog_epic_status, and the viewer. Tasks and epics carry an optional `area` field (validated against existing areas); kanban and table gain an Area filter/group axis. `backlog_validate` warns on legacy epics without `done_when`. Existing backlogs load unchanged. Second of four 4.x epics (lessons removal → **areas** → release trains → migration tooling).
+**Areas + finite epics.** New first-class Area entity (long-lived subsystem: `backlog_area_create/get/list/update`, sidecar files under `.taskmaster/areas/`, no status lifecycle). Epics are now finite: `backlog_add_epic` requires `done_when` (an epic that can't say when it's done is an area); epics whose tasks are all done surface as "closeable" in backlog_status, backlog_epic_status, and the viewer. **Breaking for direct MCP callers:** `backlog_add_epic` now takes `done_when` as a required argument — existing scripted callers must pass it. Tasks and epics carry an optional `area` field (validated against existing areas); kanban and table gain an Area filter/group axis. `backlog_validate` warns on legacy epics without `done_when`. Existing backlogs load unchanged. Second of four 4.x epics (lessons removal → **areas** → release trains → migration tooling).
 
 ---
 
