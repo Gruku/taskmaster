@@ -87,10 +87,11 @@ Skip this step entirely on v2 — project.yaml is a v3 surface.
 ## Step 3a: Clean start
 
 1. `backlog_init(project_name)`.
-2. Guide them to create their first epic ("What are the main workstreams?").
-3. Help add tasks under those epics.
-4. Suggest creating a phase.
-5. Budget guidance: "Aim for 5-8 tasks per epic. If a task has many steps, create a plan doc and link it with `docs.plan`."
+2. Suggest 3-6 areas first (`backlog_area_create`) for long-lived subsystems (e.g. "backend", "viewer") — areas never close.
+3. Create their first epic ("What's the first finite goal?"). Epics require `done_when`; if it never finishes, it's an area.
+4. Add tasks under those epics, tagging each with `area` where relevant.
+5. Suggest creating a phase.
+6. Budget guidance: "Aim for 5-8 tasks per epic. Link long plans with `docs.plan`."
 
 ## Step 3b: Analyze project
 

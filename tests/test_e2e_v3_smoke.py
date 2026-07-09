@@ -109,7 +109,7 @@ def test_fresh_project_init_v2_then_migrate_to_v3(tmp_path, monkeypatch):
 
     # 2. Add a phase (required for tasks), then an epic and 3 tasks via MCP tools
     backlog_server.backlog_add_phase(phase_id="dev", name="Dev")
-    backlog_server.backlog_add_epic(epic_id="core", name="Core Features")
+    backlog_server.backlog_add_epic(epic_id="core", name="Core Features", done_when="all 3 tasks ship")
     for i, title in enumerate(["Task Alpha", "Task Beta", "Task Gamma"], 1):
         r = backlog_server.backlog_add_task(title=title, epic="core", priority="medium", phase="dev")
         assert "Error" not in r
@@ -139,7 +139,7 @@ def test_fresh_v3_init_skips_migration(tmp_path, monkeypatch):
     assert v3.detect_schema_version(yaml.safe_load(bp.read_text(encoding="utf-8"))) == v3.SCHEMA_V3
 
     backlog_server.backlog_add_phase(phase_id="dev", name="Dev")
-    backlog_server.backlog_add_epic(epic_id="feat", name="Features")
+    backlog_server.backlog_add_epic(epic_id="feat", name="Features", done_when="auth refactor ships")
     r = backlog_server.backlog_add_task(
         title="Auth refactor",
         epic="feat",

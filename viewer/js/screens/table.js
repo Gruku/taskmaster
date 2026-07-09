@@ -24,6 +24,8 @@ const COLUMNS = [
     get: t => t.phase || '', render: t => esc(t.phase || '—') },
   { key: 'epic',      label: 'Epic',     width: '140px', sortable: true,
     get: t => t.epic || '', render: t => t.epic ? `<span class="t-epic">${esc(t.epic)}</span>` : '—' },
+  { key: 'area',      label: 'Area',     width: '120px', sortable: true,
+    get: t => t.area || '', render: t => t.area ? `<span class="t-area">${esc(t.area)}</span>` : '—' },
   { key: 'estimate',  label: 'Size',     width: '60px', sortable: true,
     get: t => sizeOrder(t.estimate), render: t => esc(t.estimate || '—') },
   { key: 'branch',    label: 'Branch',   width: '180px', sortable: false,
@@ -46,7 +48,7 @@ function esc(v) { return String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;',
 const DEFAULT_STATE = {
   sort: { by: 'priority', dir: 'asc' },   // priority asc → critical first
   search: '',
-  filters: { status: [], priority: [], epic: [] },
+  filters: { status: [], priority: [], epic: [], area: [] },
 };
 
 export async function mount(root, { store, api, prefs }) {
@@ -91,6 +93,7 @@ export async function mount(root, { store, api, prefs }) {
       status:   [...(persisted.filters?.status   || [])],
       priority: [...(persisted.filters?.priority || [])],
       epic:     [...(persisted.filters?.epic     || [])],
+      area:     [...(persisted.filters?.area     || [])],
     },
   };
   search.value = state.search;
@@ -112,6 +115,7 @@ export async function mount(root, { store, api, prefs }) {
       if (state.filters.status.length   && !state.filters.status.includes(t.status)) return false;
       if (state.filters.priority.length && !state.filters.priority.includes((t.priority || '').toLowerCase())) return false;
       if (state.filters.epic.length     && !state.filters.epic.includes(t.epic)) return false;
+      if (state.filters.area.length     && !state.filters.area.includes(t.area)) return false;
       if (q) {
         const hay = `${t.id} ${t.title || ''} ${t.branch || ''}`.toLowerCase();
         const matches = hay.includes(q);
@@ -139,6 +143,7 @@ export async function mount(root, { store, api, prefs }) {
       { kind: 'status',   label: 'Status',   options: ['todo','in-progress','in-review','blocked','done'], pretty: prettyStatus },
       { kind: 'priority', label: 'Priority', options: ['critical','high','medium','low'], pretty: s => s[0].toUpperCase() + s.slice(1) },
       { kind: 'epic',     label: 'Epic',     options: (backlog.epics || []).map(e => e.id), pretty: s => s },
+      { kind: 'area',     label: 'Area',     options: [...new Set((backlog.tasks || []).map(t => t.area).filter(Boolean))].sort(), pretty: s => s },
     ];
     for (const g of groups) {
       if (!g.options.length) continue;
@@ -167,14 +172,14 @@ export async function mount(root, { store, api, prefs }) {
       chipRail.appendChild(wrap);
     }
     // Clear button
-    const hasFilters = state.filters.status.length || state.filters.priority.length || state.filters.epic.length || state.search;
+    const hasFilters = state.filters.status.length || state.filters.priority.length || state.filters.epic.length || state.filters.area.length || state.search;
     if (hasFilters) {
       const clear = document.createElement('button');
       clear.type = 'button';
       clear.className = 'tbl-chip tbl-chip--clear';
       clear.textContent = '× Clear';
       clear.addEventListener('click', () => {
-        state.filters = { status: [], priority: [], epic: [] };
+        state.filters = { status: [], priority: [], epic: [], area: [] };
         state.search = '';
         search.value = '';
         paint(); persist();
@@ -189,13 +194,14 @@ export async function mount(root, { store, api, prefs }) {
     if (state.filters.status.length)   parts.push(`status: ${state.filters.status.map(prettyStatus).join(', ')}`);
     if (state.filters.priority.length) parts.push(`priority: ${state.filters.priority.map(s => s[0].toUpperCase() + s.slice(1)).join(', ')}`);
     if (state.filters.epic.length)     parts.push(`epic: ${state.filters.epic.join(', ')}`);
+    if (state.filters.area.length)     parts.push(`area: ${state.filters.area.join(', ')}`);
     const hidden = totalCount;
     const filterDesc = parts.length ? parts.join(' · ') : 'active filters';
     return `${filterDesc} — ${hidden} ${pluralize(hidden, 'task', 'tasks')} hidden`;
   }
 
   function clearFilters() {
-    state.filters = { status: [], priority: [], epic: [] };
+    state.filters = { status: [], priority: [], epic: [], area: [] };
     state.search = '';
     search.value = '';
     paint(); persist();
@@ -238,7 +244,7 @@ export async function mount(root, { store, api, prefs }) {
     // Body
     const tbody = document.createElement('tbody');
     if (!tasks.length) {
-      const hasFilters = state.filters.status.length || state.filters.priority.length || state.filters.epic.length || state.search;
+      const hasFilters = state.filters.status.length || state.filters.priority.length || state.filters.epic.length || state.filters.area.length || state.search;
       const tr = document.createElement('tr');
       const td = document.createElement('td');
       td.colSpan = COLUMNS.length;

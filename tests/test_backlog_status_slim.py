@@ -50,7 +50,7 @@ def test_verbose_status_includes_archived(tm_epic_phase):
 def test_slim_status_under_1800_chars(tm_epic_phase):
     # Add a realistic-ish set (5 epics x 5 tasks each)
     for ei in range(5):
-        backlog_add_epic(epic_id=f"e{ei}", name=f"E{ei}")
+        backlog_add_epic(epic_id=f"e{ei}", name=f"E{ei}", done_when="done")
     for ei in range(5):
         for ti in range(5):
             backlog_add_task(
@@ -80,3 +80,16 @@ def test_verbose_status_archived_count_in_stats(tm_epic_phase):
     backlog_archive_task("T-4", reason="done")
     out = backlog_status(verbose=True)
     assert "Archived:" in out or "archived" in out.lower()
+
+
+def test_status_table_marks_closeable_epic(tm_epic_phase):
+    backlog_add_task(epic="test-epic", task_id="T-5", title="Z", tldr="T.", phase="dev")
+    _make_done("T-5")
+    out = backlog_status()
+    assert "[closeable]" in out
+
+
+def test_status_table_no_marker_with_open_tasks(tm_epic_phase):
+    backlog_add_task(epic="test-epic", task_id="T-6", title="Z", tldr="T.", phase="dev")
+    out = backlog_status()
+    assert "[closeable]" not in out

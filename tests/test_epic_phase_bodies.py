@@ -209,7 +209,7 @@ def test_phase_docs_path_with_colons(tmp_taskmaster):
 def test_epic_docs_clear_removes_stale_body_file(tmp_taskmaster):
     # Epic whose only heavy field is `docs`: setting it writes epics/<id>.md;
     # clearing it must delete that file so docs does not resurrect on reload.
-    backlog_add_epic(epic_id="cleanup", name="Cleanup")
+    backlog_add_epic(epic_id="cleanup", name="Cleanup", done_when="stale files removed")
     backlog_update_epic("cleanup", "docs", "design:docs/design/cleanup.md")
     bp = tmp_taskmaster / ".taskmaster" / "backlog.yaml"
     epic_md = v3.epic_file_path(bp, "cleanup")

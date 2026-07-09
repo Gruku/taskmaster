@@ -533,6 +533,15 @@ def _epic_names(data: dict) -> str:
     return ", ".join(e["id"] for e in data["epics"])
 
 
+def _validate_area_ref(bp: Path, area: str) -> str | None:
+    """Return an error string if `area` doesn't match a known Area id, else None."""
+    from taskmaster.taskmaster_v3 import list_area_ids as _list_area_ids
+    known_areas = _list_area_ids(bp)
+    if area not in known_areas:
+        return f"Error: unknown area `{area}`. Valid: {', '.join(known_areas) or '(none defined)'}"
+    return None
+
+
 def _days_since(date_str: str | None) -> str:
     if not date_str:
         return "started date unknown"
@@ -890,7 +899,10 @@ def backlog_status(verbose: bool = False) -> str:
             if t.get("status") in ("in-progress", "in-review"):
                 focus = t["title"]
                 break
-        lines.append(f"| {epic['name']} | {_epic_status_label(epic.get('status', 'planned'))} | {done_count}/{total} | {focus} |")
+        name = epic["name"]
+        if _epic_stats(data, epic["id"])["closeable"]:
+            name = f"{name} [closeable]"
+        lines.append(f"| {name} | {_epic_status_label(epic.get('status', 'planned'))} | {done_count}/{total} | {focus} |")
 
     lines.append("")
 
@@ -1022,6 +1034,7 @@ def backlog_list_tasks(
     status: str = "",
     priority: str = "",
     phase: str = "",
+    area: str = "",
     verbose: bool = False,
     limit: int = 50,
 ) -> str:
@@ -1033,6 +1046,7 @@ def backlog_list_tasks(
         status: Filter by status: todo, in-progress, in-review, done, blocked
         priority: Filter by priority: critical, high, medium, low
         phase: Filter by phase ID
+        area: Filter by area ID
         verbose: If True, include heavy fields (notes) per task entry. Slim
             (default) shows id, title, tldr, priority, epic, and status only.
         limit: Max rows returned (default 50). 0 = no cap.
@@ -1064,6 +1078,8 @@ def backlog_list_tasks(
                 continue
             if phase and t.get("phase") != phase:
                 continue
+            if area and t.get("area") != area:
+                continue
             pri = t.get("priority", "medium")
             entry = f"`{t['id']}` — {t['title']} ({pri}, {ep['id']}, {t.get('status', 'todo')})"
             results.append((
@@ -1084,6 +1100,8 @@ def backlog_list_tasks(
             filters.append(f"priority={priority}")
         if phase:
             filters.append(f"phase={phase}")
+        if area:
+            filters.append(f"area={area}")
         return f"No tasks found matching: {', '.join(filters) if filters else 'any'}"
 
     results.sort(key=lambda x: (x[0], x[1], x[2]))
@@ -1643,6 +1661,11 @@ def backlog_validate() -> str:
     # ── tldr warnings (advisory, not blocking) ─────────────────────────────
     warnings: list[str] = []
     for epic in data.get("epics", []):
+        if not epic.get("done_when"):
+            warnings.append(
+                f"  warning: epic `{epic.get('id', '?')}` has no done_when (pre-4.1 legacy) "
+                f"— set one via backlog_update_epic or convert to an area"
+            )
         for task in epic.get("tasks", []):
             if not task.get("tldr"):
                 warnings.append(
@@ -1768,7 +1791,7 @@ def backlog_init(project_name: str = "", location: str = "tracked", schema_versi
         initial_data["handovers"] = []
         initial_data["issues"] = []
         # Pre-create directories so first-run tooling has somewhere to write.
-        for sub in ("tasks", "handovers", "issues", "snapshots", "auto"):
+        for sub in ("tasks", "handovers", "issues", "snapshots", "auto", "areas"):
             (backlog_abs.parent / sub).mkdir(parents=True, exist_ok=True)
 
     backlog_abs.write_text(
@@ -3804,6 +3827,119 @@ def backlog_note_archive(note_id: str) -> str:
     return f"Note archived: {note_id}"
 
 
+# ── Areas ────────────────────────────────────────────────────────
+
+ALLOWED_AREA_FIELDS = {"name", "description", "anchors"}
+
+
+@mcp.tool()
+def backlog_area_create(
+    area_id: str, name: str, description: str = "", anchors: list[str] | None = None
+) -> str:
+    """Create a new Area — a long-lived subsystem/workstream with NO status
+    lifecycle (e.g. "desktop-app", "viewer", "mcp-server").
+
+    Areas group epics and tasks by where they live in the codebase rather
+    than by when they finish — an area never completes or archives. If an
+    epic can say when it's done, it's an epic; if it can't, it's an area.
+    """
+    bp = _backlog_path()
+    if not bp.exists():
+        return f"Error: no backlog found at {bp}. Run `backlog_init` first."
+    from taskmaster.taskmaster_v3 import write_area as _write_area
+    fm = {
+        "id": area_id,
+        "name": name,
+        "description": description,
+        "anchors": list(anchors) if anchors else [],
+        "created": _now(),
+    }
+    try:
+        target = _write_area(bp, fm, "")
+    except ValueError as exc:
+        return f"Error: {exc}"
+    try:
+        rel = target.relative_to(ROOT)
+    except ValueError:
+        rel = target
+    return f"Area created: {area_id} — {name}\nFile: {rel}"
+
+
+@mcp.tool()
+def backlog_area_list() -> str:
+    """List all Areas — long-lived subsystems with no status lifecycle.
+
+    Returns one line per area: id, name, anchor count, first line of
+    description."""
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    from taskmaster.taskmaster_v3 import list_areas as _list_areas
+    areas = _list_areas(bp)
+    if not areas:
+        return "No areas defined."
+    lines = []
+    for a in areas:
+        desc = (a.get("description") or "").strip().splitlines()[0] if a.get("description") else ""
+        anchors = a.get("anchors") or []
+        suffix = f": {desc}" if desc else ""
+        lines.append(f"- {a['id']} — {a.get('name', '')} ({len(anchors)} anchors){suffix}")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def backlog_area_get(area_id: str) -> str:
+    """Read one Area in full (frontmatter + body)."""
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    from taskmaster.taskmaster_v3 import read_area as _read_area
+    try:
+        fm, body = _read_area(bp, area_id)
+    except FileNotFoundError:
+        return f"Area not found: {area_id}"
+    fm_lines = [f"  {k}: {v}" for k, v in fm.items()]
+    out = "---\n" + "\n".join(fm_lines) + "\n---"
+    if body:
+        out += "\n" + body
+    return out
+
+
+@mcp.tool()
+def backlog_area_update(area_id: str, field: str, value: str) -> str:
+    """Update a single field on an Area.
+
+    Args:
+        area_id: The area ID (e.g., "desktop-app", "viewer")
+        field: Field to update — one of: name, description, anchors
+        value: New value. For anchors, pass a JSON array of path/glob
+            strings (e.g., '["viewer/**", "docs/viewer/**"]').
+    """
+    if field not in ALLOWED_AREA_FIELDS:
+        return f"Error: field `{field}` not allowed. Allowed: {', '.join(sorted(ALLOWED_AREA_FIELDS))}"
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    from taskmaster.taskmaster_v3 import update_area as _update_area
+    if field == "anchors":
+        try:
+            parsed = json.loads(value)
+        except (ValueError, TypeError):
+            return "Error: anchors value must be a JSON array of strings"
+        if not isinstance(parsed, list):
+            return "Error: anchors value must be a JSON array of strings"
+        updates: dict = {"anchors": parsed}
+    else:
+        updates = {field: value}
+    try:
+        _update_area(bp, area_id, updates)
+    except FileNotFoundError:
+        return f"Area not found: {area_id}"
+    except ValueError as exc:
+        return f"Error: {exc}"
+    return f"Area updated: {area_id} — field `{field}`"
+
+
 @mcp.tool()
 def viewer_prefs_get() -> str:
     """Return current viewer prefs as JSON."""
@@ -3838,7 +3974,7 @@ def backlog_add_task(
     stage: int | None = None, estimate: str = "", phase: str = "",
     anchors: str = "",
     tldr: str = "", next_step: str = "", task_id: str = "",
-    bundle: str = "",
+    bundle: str = "", area: str = "",
 ) -> str:
     """Create a new task under an epic. Auto-generates the task ID unless task_id is supplied.
 
@@ -3858,10 +3994,17 @@ def backlog_add_task(
         next_step: Concrete immediate action to take on this task.
         task_id: Override the auto-generated task ID. Must be unique. Defaults to {epic}-{NNN}.
         bundle: Optional shared execution slug grouping related tasks (lowercase kebab, e.g. "asset-ux").
+        area: Optional area id (e.g., "desktop-app") this task lives under. Must
+            match an existing Area from `backlog_area_list`; leave empty if unset.
     """
     priority = _normalize_priority(priority)
     if priority not in VALID_PRIORITIES:
         return f"Error: invalid priority `{priority}`. Valid: {', '.join(PRIORITY_NAMES)}"
+
+    if area:
+        err = _validate_area_ref(_backlog_path(), area)
+        if err:
+            return err
 
     data = _load()
     epic_obj = _find_epic(data, epic)
@@ -3938,6 +4081,8 @@ def backlog_add_task(
         if conflict:
             return f"Error: bundle `{bundle}` sub_repo mismatch with member `{conflict}` (one worktree = one repo)."
         new_task["bundle"] = bundle
+    if area:
+        new_task["area"] = area
 
     # Parse docs if provided: "plan:path;spec:path"
     if docs:
@@ -4686,7 +4831,7 @@ def _strictest_lane(lanes: list) -> str:
     return max(present, key=lambda l: order[l])
 
 
-ALLOWED_FIELDS = {"title", "status", "priority", "notes", "branch", "worktree", "blockers", "docs", "depends_on", "sub_repo", "stage", "estimate", "locked_by", "review_instructions", "phase", "anchors", "blast_radius_depth", "patchnote", "release", "tldr", "next_step", "component", "design_change", "lane", "bundle"}
+ALLOWED_FIELDS = {"title", "status", "priority", "notes", "branch", "worktree", "blockers", "docs", "depends_on", "sub_repo", "stage", "estimate", "locked_by", "review_instructions", "phase", "anchors", "blast_radius_depth", "patchnote", "release", "tldr", "next_step", "component", "design_change", "lane", "bundle", "area"}
 VALID_STATUSES = {"todo", "in-progress", "in-review", "done", "archived", "blocked"}
 # Spec A Task 11: forward-transition table enforced on lane'd tasks via
 # backlog_update_task. Laneless tasks are exempt (old permissive behavior).
@@ -4730,6 +4875,7 @@ def backlog_update_task(
             - anchors: comma-separated glob patterns/URLs, or "" to clear
             - patchnote: 1-2 sentence user-facing release-note line, or "" to clear
             - release: release bucket this task ships in (e.g., "pre-alpha", "alpha-1.0"), or "" to clear
+            - area: area id (must match an existing Area from `backlog_area_list`), or "" to clear
         tldr: One-sentence essence of the task (keyword style only).
         next_step: Concrete immediate action to take on this task (keyword style only).
     """
@@ -4908,6 +5054,14 @@ def backlog_update_task(
             if conflict:
                 return f"Error: bundle `{value}` sub_repo mismatch with member `{conflict}` (one worktree = one repo)."
             task["bundle"] = value
+    elif field == "area":
+        if value == "" or value.lower() == "none":
+            task.pop("area", None)
+        else:
+            err = _validate_area_ref(_backlog_path(), value)
+            if err:
+                return err
+            task["area"] = value
     else:
         task[field] = value
 
@@ -5217,8 +5371,12 @@ def backlog_clear_spec_review(task_id: str) -> str:
 
 
 VALID_EPIC_STATUSES = {"active", "planned", "done", "archived"}
-ALLOWED_EPIC_FIELDS = {"name", "status", "description", "docs", "components", "design_status"}
+ALLOWED_EPIC_FIELDS = {"name", "status", "description", "docs", "components", "design_status", "done_when", "area"}
 VALID_DESIGN_STATUSES = {"exploring", "proposed", "locked", "revising"}
+EPIC_DONE_WHEN_REQUIRED_MSG = (
+    "Epics are finite: 'done_when' is required. "
+    "An epic that can't say when it's done is an area."
+)
 
 
 def _validate_components(components: dict) -> str:
@@ -5320,6 +5478,16 @@ def backlog_update_epic(epic_id: str, field: str, value: str) -> str:
         _mutate_and_save(data)
         return f"Updated epic `{epic_id}` design_status → `{value}`"
 
+    if field == "done_when":
+        if not value.strip():
+            return f"Error: {EPIC_DONE_WHEN_REQUIRED_MSG}"
+
+    if field == "area":
+        if value:
+            err = _validate_area_ref(_backlog_path(), value)
+            if err:
+                return err
+
     old_value = epic.get(field, "")
     epic[field] = value
     _mutate_and_save(data)
@@ -5366,22 +5534,37 @@ def backlog_archive_epic(epic_id: str, reason: str = "done") -> str:
 
 @mcp.tool()
 def backlog_add_epic(
-    epic_id: str, name: str, description: str = "", status: str = "planned",
+    epic_id: str, name: str, done_when: str, description: str = "",
+    status: str = "planned", area: str = "",
 ) -> str:
-    """Create a new epic. Epics group related tasks into workstreams.
+    """Create a new epic. Epics group related tasks into workstreams and are
+    strictly finite — every epic must say when it's done. If the work can't
+    say when it's done, it's an Area (see `backlog_area_create`), not an epic.
 
     Args:
         epic_id: Short kebab-case identifier (e.g., "auth-system", "perf-opt"). Must be unique. Used as prefix for task IDs.
         name: Human-readable name (e.g., "Authentication System", "Performance Optimization")
+        done_when: Required. The concrete condition under which this epic is complete
+            (e.g., "auth flow ships to prod with SSO + MFA"). Cannot be empty.
         description: Brief description of the epic's scope and goals
         status: Initial status — one of: active, planned (default: planned)
+        area: Optional area id (e.g., "desktop-app") this epic lives under. Must
+            match an existing Area from `backlog_area_list`; leave empty if unset.
     """
+    if not done_when.strip():
+        return f"Error: {EPIC_DONE_WHEN_REQUIRED_MSG}"
+
     if status not in VALID_EPIC_STATUSES:
         return f"Error: invalid status `{status}`. Valid: {', '.join(sorted(VALID_EPIC_STATUSES))}"
 
     # Validate epic_id format: lowercase, kebab-case
     if not epic_id or not all(c.isalnum() or c == "-" for c in epic_id) or epic_id != epic_id.lower():
         return f"Error: epic_id must be lowercase kebab-case (e.g., 'auth-system'), got `{epic_id}`"
+
+    if area:
+        err = _validate_area_ref(_backlog_path(), area)
+        if err:
+            return err
 
     data = _load()
 
@@ -5396,7 +5579,10 @@ def backlog_add_epic(
         "description": description,
         "created": _now(),
         "tasks": [],
+        "done_when": done_when,
     }
+    if area:
+        new_epic["area"] = area
 
     data["epics"].append(new_epic)
     _mutate_and_save(data)
@@ -5734,6 +5920,7 @@ def _epic_stats(data: dict, epic_id: str) -> dict:
         stats["total"] += 1
         if st in stats:
             stats[st] += 1
+    stats["closeable"] = stats["total"] > 0 and stats["done"] + stats["archived"] == stats["total"]
     return stats
 
 
@@ -5758,6 +5945,8 @@ def backlog_epic_status(epic_id: str) -> str:
     lock = " (locked)" if design == "locked" else ""
     lines.append(f"**Design:** {design}{lock}")
     lines.append(f"**Status:** {epic.get('status', 'active')}")
+    if epic.get("done_when"):
+        lines.append(f"Done when: {epic['done_when']}")
 
     done = stats["done"] + stats["archived"]
     if stats["total"]:
@@ -5770,6 +5959,10 @@ def backlog_epic_status(epic_id: str) -> str:
         f"In Progress: {stats['in-progress']} | "
         f"In Review: {stats['in-review']} | Todo: {stats['todo']} | Blocked: {stats['blocked']}"
     )
+    if stats["closeable"]:
+        lines.append(
+            f"\n⚑ CLOSEABLE — all {stats['total']} tasks done; archive via backlog_archive_epic"
+        )
 
     glyph = {"done": "█", "in-progress": "▨", "blocked": "✗", "todo": "□"}
     lines.append("\n**Components:**")
@@ -6000,6 +6193,15 @@ def backlog_batch_update(operations: str) -> str:
                     continue
                 task["lane"] = value
                 task["gate_state"] = _compute_gate_state(task)
+            elif field == "area":
+                if value == "" or value.lower() == "none":
+                    task.pop("area", None)
+                else:
+                    err = _validate_area_ref(_backlog_path(), value)
+                    if err:
+                        errors.append(f"`{task_id}`: {err}")
+                        continue
+                    task["area"] = value
             else:
                 task[field] = value
             results.append(f"`{task_id}`.{field} → {value}")
@@ -6525,7 +6727,10 @@ def _load_epic_full(epic_id: str) -> dict | None:
     out.setdefault("docs", {})
     out.setdefault("components", {})
     out.setdefault("design_status", "exploring")
+    out.setdefault("done_when", "")
+    out.setdefault("area", None)
     out["stats"] = _epic_stats(data, epic_id)
+    out["closeable"] = out["stats"]["closeable"]
     out["component_rollup"] = _component_rollup(data, epic_id)
 
     attention = []

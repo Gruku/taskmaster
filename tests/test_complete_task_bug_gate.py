@@ -33,7 +33,7 @@ def _setup_task(tmp_path: Path, task_id: str = "test-epic-001") -> str:
 
     # Add epic + phase; ignore "already exists" errors so the helper is
     # reusable across tests that share tmp_path (they don't, but defensive).
-    r_epic = _bs.backlog_add_epic(epic_id="test-epic", name="Test Epic")
+    r_epic = _bs.backlog_add_epic(epic_id="test-epic", name="Test Epic", done_when="all test tasks complete")
     if "Error" in r_epic and "already" not in r_epic.lower():
         raise AssertionError(f"add_epic failed: {r_epic}")
 

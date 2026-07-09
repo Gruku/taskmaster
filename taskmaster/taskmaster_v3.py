@@ -117,7 +117,7 @@ SLIM_FIELDS: dict[str, tuple[str, ...]] = {
     "task": (
         "id", "title", "tldr", "next_step", "status", "priority",
         "estimate", "phase", "epic", "bundle", "component", "design_change",
-        "lane", "gate_state",
+        "lane", "gate_state", "area",
         "skip_merge_gate", "merge_gate_freshness", "merge_gate_state",
         "depends_on", "related_issues",
         "started", "completed", "branch", "worktree",
@@ -141,7 +141,7 @@ SLIM_FIELDS: dict[str, tuple[str, ...]] = {
         "created_by", "related_tasks", "related_issues",
         "tldr_autogen",
     ),
-    "epic": ("id", "name", "status", "design_status", "created"),
+    "epic": ("id", "name", "status", "design_status", "created", "done_when", "area"),
     "phase": ("id", "name", "status", "order", "created",
               "target_date", "start_date", "completed", "deliverables"),
 }
@@ -1092,6 +1092,7 @@ _CANONICALIZE_ITEMS: tuple[str, ...] = (
     "recaps",
     "snapshots",
     "auto",
+    "areas",
 )
 
 
@@ -3540,6 +3541,103 @@ def list_notes(backlog_path: Path, include_archived: bool = False) -> list[dict[
     return pinned + unpinned
 
 
+# ── Areas ────────────────────────────────────────────────────────
+# An Area is a long-lived subsystem/workstream (e.g. "desktop-app", "viewer")
+# with NO status lifecycle — it doesn't finish, so it has no done/archived
+# state. Epics and tasks reference an area by a plain `area` scalar field.
+# Areas never archive; renaming happens through update_area.
+
+_AREA_ID_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+
+
+def area_dir(backlog_path: Path) -> Path:
+    return backlog_path.parent / "areas"
+
+
+def area_path(backlog_path: Path, area_id: str) -> Path:
+    return area_dir(backlog_path) / f"{area_id}.md"
+
+
+def list_area_ids(backlog_path: Path) -> list[str]:
+    d = area_dir(backlog_path)
+    if not d.exists():
+        return []
+    return sorted(p.stem for p in d.glob("*.md"))
+
+
+def _validate_area(fm: dict[str, Any]) -> None:
+    area_id = fm.get("id", "")
+    if not area_id or not _AREA_ID_RE.match(area_id):
+        raise ValueError(
+            f"area id must be lowercase kebab-case (e.g., 'desktop-app'), got `{area_id}`"
+        )
+    if not str(fm.get("name") or "").strip():
+        raise ValueError("area name is required")
+    if "status" in fm:
+        raise ValueError(
+            "areas have no status field — they are long-lived subsystems, not lifecycle-tracked"
+        )
+
+
+def write_area(backlog_path: Path, fm: dict[str, Any], body: str = "") -> Path:
+    """Create a new Area sidecar file. Returns the written path.
+
+    `fm` must already be fully assembled (id, name, description, anchors,
+    created) by the caller. Raises ValueError if invalid or if the id is
+    already taken.
+    """
+    _validate_area(fm)
+    target = area_path(backlog_path, fm["id"])
+    if target.exists():
+        raise ValueError(f"area `{fm['id']}` already exists")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    write_task_file(target, fm, body)
+    return target
+
+
+def read_area(backlog_path: Path, area_id: str) -> tuple[dict[str, Any], str]:
+    target = area_path(backlog_path, area_id)
+    if not target.exists():
+        raise FileNotFoundError(f"Area not found: {area_id}")
+    fm, body = read_task_file(target)
+    return fm, body.rstrip("\n")
+
+
+def update_area(
+    backlog_path: Path, area_id: str, updates: dict[str, Any]
+) -> tuple[dict[str, Any], str]:
+    """Patch one or more fields on an Area. `id` and `created` are immutable;
+    `status` is rejected — areas have no status field."""
+    target = area_path(backlog_path, area_id)
+    if not target.exists():
+        raise FileNotFoundError(f"Area not found: {area_id}")
+    fm, body = read_task_file(target)
+    body = body.rstrip("\n")
+    if "status" in updates:
+        raise ValueError(
+            "areas have no status field — they are long-lived subsystems, not lifecycle-tracked"
+        )
+    for key in ("id", "created"):
+        if key in updates:
+            raise ValueError(f"area `{key}` is immutable")
+    fm.update(updates)
+    _validate_area(fm)
+    write_task_file(target, fm, body)
+    return fm, body
+
+
+def list_areas(backlog_path: Path) -> list[dict[str, Any]]:
+    """All areas with bodies, sorted by id."""
+    out: list[dict[str, Any]] = []
+    for aid in list_area_ids(backlog_path):
+        try:
+            fm, body = read_area(backlog_path, aid)
+        except (OSError, ValueError):
+            continue
+        out.append({**fm, "body": body})
+    out.sort(key=lambda a: a.get("id", ""))
+    return out
+
 
 # ── ViewerPrefs ────────────────────────────────────────────────
 
@@ -4315,6 +4413,10 @@ def validate_task_write(task_id: str, patch: dict, backlog_path: Path | None = N
     # Epic must exist.
     if "epic" in patch and patch["epic"] and patch["epic"] not in epic_ids:
         errors["epic"] = f"unknown epic: {patch['epic']}"
+
+    # Area must exist (areas live in files, not `data`).
+    if "area" in patch and patch["area"] and patch["area"] not in list_area_ids(bp):
+        errors["area"] = f"unknown area: {patch['area']}"
 
     # Phase must exist if set.
     if "phase" in patch and patch["phase"] and patch["phase"] not in phase_ids:

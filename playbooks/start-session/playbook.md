@@ -51,7 +51,7 @@ Present in order:
 - **Needs testing:** in-review tasks
 - **Phase progress:** if active phase, show done/total
 - **Stale tasks:** if any (from `backlog_status` stale list)
-- **Dashboard:** epic progress summary
+- **Dashboard:** epic progress summary (flag any epic as "closeable" once its tasks are all done — suggest `backlog_archive_epic`)
 - **Suggested next:** first available task from the active phase
 - **Counts line** (Step 3)
 

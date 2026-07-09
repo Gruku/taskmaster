@@ -12,6 +12,11 @@ indicate schema breaks or removed surfaces.
 
 ---
 
+## 4.1.0
+**Areas + finite epics.** New first-class Area entity (long-lived subsystem: `backlog_area_create/get/list/update`, sidecar files under `.taskmaster/areas/`, no status lifecycle). Epics are now finite: `backlog_add_epic` requires `done_when` (an epic that can't say when it's done is an area); epics whose tasks are all done surface as "closeable" in backlog_status, backlog_epic_status, and the viewer. **Breaking for direct MCP callers:** `backlog_add_epic` now takes `done_when` as a required argument — existing scripted callers must pass it. Tasks and epics carry an optional `area` field (validated against existing areas); kanban and table gain an Area filter/group axis. `backlog_validate` warns on legacy epics without `done_when`. Existing backlogs load unchanged. Second of four 4.x epics (lessons removal → **areas** → release trains → migration tooling).
+
+---
+
 ## 4.0.0
 **BREAKING — Lessons subsystem removed.** The 11 `backlog_lesson_*` MCP tools, lesson candidates/markers (`<lesson-candidate>`), `related_lessons`/`informed_by` link fields, `lessons_fired` recap stat, viewer Lessons screens, and the `taskmaster:lesson` skill are gone. Durable knowledge now lives in each assistant's own memory system (session insights) and repo instruction files like CLAUDE.md/AGENTS.md (cross-assistant knowledge). Existing `.taskmaster/lessons/` files are left untouched on disk; run the new `taskmaster:migrate-lessons` skill once per project to convert them. `lessons_meta` keys in existing backlog.yaml files are ignored. First of four 4.0 epics (lessons removal → areas → release trains → migration tooling).
 

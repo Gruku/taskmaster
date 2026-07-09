@@ -101,6 +101,6 @@ def tmp_taskmaster(tmp_path, monkeypatch):
 def tm_epic_phase(tmp_taskmaster):
     """tmp_taskmaster + a `test-epic` epic and `dev` phase ready for task writes."""
     from taskmaster import backlog_server  # noqa: PLC0415
-    backlog_server.backlog_add_epic(epic_id="test-epic", name="Test Epic")
+    backlog_server.backlog_add_epic(epic_id="test-epic", name="Test Epic", done_when="all test tasks complete")
     backlog_server.backlog_add_phase(phase_id="dev", name="Development")
     return tmp_taskmaster

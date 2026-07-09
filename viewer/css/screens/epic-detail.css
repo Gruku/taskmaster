@@ -11,7 +11,17 @@
 .ed-ds--locked { background: color-mix(in srgb, var(--amber) 16%, transparent); color: var(--amber); }
 .ed-ds--revising { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
 .ed-epic-status { color: var(--ink-3); }
+.ed-area {
+  font-size: var(--text-xs);
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  color: var(--ink-3);
+}
 .ed-title { font-size: var(--text-2xl); margin: 8px 0 12px; }
+.ed-done-when { color: var(--ink-2); font-size: var(--text-sm); margin: 0 0 12px; }
+.ed-done-when strong { color: var(--ink-1); }
 .ed-progress { display: flex; align-items: center; gap: 10px; }
 .ed-progress__bar { flex: 1; max-width: 360px; height: 6px; background: var(--bg-deep); border-radius: 3px; overflow: hidden; }
 .ed-progress__bar > span { display: block; height: 100%; background: var(--epic); }

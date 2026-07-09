@@ -11,6 +11,7 @@ export function applyFilters(tasks, f) {
   f = f || {};
   const pri    = Array.isArray(f.priorities) ? f.priorities : [];
   const epics  = Array.isArray(f.epics) ? f.epics : [];
+  const areas  = Array.isArray(f.areas) ? f.areas : [];
   const phase  = f.phase || null;
   const rawSearch = (f.search || '').trim().toLowerCase();
   const negate = rawSearch.startsWith('!');
@@ -19,6 +20,7 @@ export function applyFilters(tasks, f) {
   return tasks.filter(t => {
     if (pri.length && !pri.includes(String(t.priority || '').toLowerCase())) return false;
     if (epics.length && !epics.includes(t.epic || '__none__')) return false;
+    if (areas.length && !areas.includes(t.area || '__none__')) return false;
     if (phase && phase !== '__all__') {
       if (phase === '__orphans__') {
         if (t.phase) return false;
@@ -105,6 +107,19 @@ export function groupTasks(tasks, by, phaseOrder) {
     return [...seen.entries()].map(([key, ts]) => ({
       key,
       label: key === '__none__' ? '— no epic —' : key,
+      tasks: ts,
+    }));
+  }
+  if (by === 'area') {
+    const seen = new Map();
+    for (const t of tasks || []) {
+      const k = t.area || '__none__';
+      if (!seen.has(k)) seen.set(k, []);
+      seen.get(k).push(t);
+    }
+    return [...seen.entries()].map(([key, ts]) => ({
+      key,
+      label: key === '__none__' ? 'No area' : key,
       tasks: ts,
     }));
   }
