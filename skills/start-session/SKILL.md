@@ -1,6 +1,6 @@
 ---
 name: start-session
-description: "Start a work session and orient for a new conversation. Invoke when the user says 'let's get started', 'what should I work on', 'show me the backlog', 'orient me', or begins a new conversation in a project that has backlog.yaml. Shows dashboard, last session summary, and suggests next tasks."
+description: "Start a work session, orient a new conversation. Triggers: 'let's get started', 'what should I work on', 'show me the backlog', 'orient me', or a new conversation where backlog.yaml exists. Shows dashboard, last session, next tasks."
 ---
 
 # Start Session

@@ -1,6 +1,6 @@
 ---
 name: migrate-lessons
-description: "One-time migration of legacy .taskmaster/lessons/ files into assistant memory and repo instruction files after upgrading to taskmaster 4.x. Invoke when the user says 'migrate lessons', 'convert lessons to memory', 'what happened to lessons', or when start-session detects L-*.md files under .taskmaster/lessons/ in a 4.x project."
+description: "Migrate legacy .taskmaster/lessons/ into assistant memory and repo instruction files after a taskmaster 4.x upgrade. Triggers: 'migrate lessons', 'convert lessons to memory', 'what happened to lessons', or start-session finding L-*.md files."
 ---
 
 # Migrate Lessons

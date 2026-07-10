@@ -1,6 +1,6 @@
 ---
 name: handover
-description: "Write a session handover into .taskmaster/handovers/. Invoke when the user says 'write a handover', 'wrap up', 'for tomorrow', 'before compaction', 'context handoff', or 'continue where we left off'. This is the only correct way to write a handover — do not call backlog_handover_create directly."
+description: "Write a session handover into .taskmaster/handovers/. Triggers: 'write a handover', 'wrap up', 'for tomorrow', 'before compaction', 'context handoff', 'continue where we left off'. Only way - not backlog_handover_create directly."
 ---
 
 # Handover

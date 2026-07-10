@@ -1,6 +1,6 @@
 ---
 name: decision
-description: "Write/resolve/drop project decisions in .taskmaster/decisions/. Invoke when Claude is about to write an inline option menu (≥2 mutually exclusive paths) — route through this skill instead of writing Options: in chat. Also invoke for 'choose between', 'pick an option', 'decide on', 'open question', 'branching path', 'resolve DEC-X', 'drop DEC-X', 'list open decisions'. Only correct way — do not call backlog_decision_create directly."
+description: "Write/resolve/drop project decisions in .taskmaster/decisions/. Invoke when about to write an inline option menu - route here, not Options: in chat. Also 'choose between', 'pick an option', 'decide on', 'open question', 'resolve DEC-X', 'drop DEC-X'. Only correct way - do not call backlog_decision_create directly."
 ---
 
 # Decision
