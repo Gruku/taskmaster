@@ -316,7 +316,7 @@ html, body {
      (a) screen JS adds the class directly to .screen-mount
          (dashboard:.dash, issue-detail)
      (b) screen JS appends a child <div> with the class to .screen-mount
-         (kanban:.kanban-page, issues, ideas, recap:.recap-page,
+         (kanban:.kanban-page, issues, ideas,
          archived:.archived-page, task-detail:.td-page)
 
    Adding a new screen: append its root class to BOTH the shared base list
@@ -327,7 +327,6 @@ html, body {
 .dk-desk,
 .issues,
 .ideas,
-.recap-page,
 .archived-page,
 .td-page,
 .issue-detail,
@@ -344,7 +343,6 @@ html, body {
    continuous column and no internal sticky chrome is needed. */
 .dk-desk,
 .issues,
-.recap-page,
 .archived-page,
 .td-page,
 .issue-detail,

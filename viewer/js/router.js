@@ -2,7 +2,6 @@
 //   #/dashboard
 //   #/kanban?epic=auth&phase=2
 //   #/task/T-148
-//   #/recap/SES-0184
 
 const screens = new Map();   // path-prefix → loader (() => Promise<module>)
 let currentCleanup = null;

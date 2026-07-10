@@ -45,8 +45,6 @@ The SKILL.md body carries only the ~15 highest-frequency rows.
 | (v3) "Save this as an idea", "remember this idea", "/add-idea ..." | `taskmaster:add-idea` |
 | (v3) "List ideas", "show parking lot" | `backlog_idea_list` |
 | (v3) "Archive that idea", "promote IDEA-NNN to a task" | `backlog_idea_update` |
-| (v3) "What changed since last time", "recap", "project state delta" | `backlog_recap` |
-| (v3) "Snapshot the backlog" | `backlog_snapshot` |
 | (v3) "auto this task", "autopilot", "auto-epic X", "auto T-001" | Redirect: auto mode removed — suggest **ultracode** (Workflow orchestration) |
 | (v3) "Upgrade to v3", "migrate to v3", "switch to v3", "enable handovers" | `taskmaster:migrate-v3` |
 | (v3) "Migrate lessons", "convert lessons to memory", "what happened to lessons" | `taskmaster:migrate-lessons` |

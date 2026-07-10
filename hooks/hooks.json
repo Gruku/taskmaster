@@ -50,18 +50,6 @@
           }
         ]
       }
-    ],
-    "PreCompact": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "CLAUDE_HOOK_SCRIPT=snapshot.py . \"${CLAUDE_PLUGIN_ROOT}/hooks/run_hook.sh\"",
-            "async": true
-          }
-        ]
-      }
     ]
   }
 }

@@ -31,26 +31,11 @@ Options: Yes, canonicalize / Show plan first / Skip.
 
 If .taskmaster/backlog.yaml already exists, skip this step entirely.
 
-## Step 7: Seed the Recap Baseline
-
-Call backlog_snapshot(). Surface its one-line response. No confirmation needed -- this is harmless and unblocks recap immediately.
-
-## Step 8: Post-Flight Gitignore
-
-Check whether .gitignore contains .taskmaster/snapshots/. If missing, ask the user (use your structured-question tool if available; otherwise present the options): Yes, add it / Skip.
-
-If Yes: append this block to .gitignore (do not overwrite; check first that the line is not already present):
-
-
-
-## Step 9: Tour the v3 Surfaces
+## Step 7: Tour the v3 Surfaces
 
 Tell the user what they just unlocked:
 - Handovers -- taskmaster:handover skill captures session continuity.
 - Issues -- taskmaster:issue skill for bug tracking separate from work tasks.
-- Recap -- backlog_recap shows what changed in the project since the last snapshot.
-
-The PreCompact hook ships with this plugin and runs automatically before context compaction. No per-project setup required.
 
 ## When NOT to invoke
 

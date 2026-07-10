@@ -1,6 +1,6 @@
 # Migrate to v3
 
-v3 is an opt-in schema upgrade: slim index + per-task files. Unlocks handovers, issues, and recap.
+v3 is an opt-in schema upgrade: slim index + per-task files. Unlocks handovers and issues.
 
 This is the ONLY correct way to migrate a project to v3 — do not call backlog_migrate_v3 directly without the pre-flight gate.
 
@@ -46,6 +46,6 @@ AskUserQuestion({
 
 Call `backlog_migrate_v3()`. Surface the response verbatim. If error: surface as-is, stop.
 
-## Steps 5-9
+## Steps 5-7
 
-Full detail for steps 5-9 (viewer flip verification, layout canonicalize, recap baseline seed, gitignore, v3 surface tour) in `references/migration-steps.md`.
+Full detail for steps 5-7 (viewer flip verification, layout canonicalize, v3 surface tour) in `references/migration-steps.md`.

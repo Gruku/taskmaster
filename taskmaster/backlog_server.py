@@ -78,11 +78,6 @@ from taskmaster.taskmaster_v3 import (
     load_v3 as _load_v3,
     save_v3 as _save_v3,
     migrate_v2_to_v3 as _migrate_v2_to_v3,
-    take_snapshot as _take_snapshot,
-    write_snapshot as _write_snapshot,
-    read_snapshot as _read_snapshot,
-    diff_against_snapshot as _diff_against_snapshot,
-    format_recap as _format_recap,
     write_handover as _write_handover,
     read_handover as _read_handover,
     apply_supersession as _apply_supersession,
@@ -126,13 +121,8 @@ from taskmaster.taskmaster_v3 import (
     write_task_file as _write_task_file,
     load_viewer_prefs,
     save_viewer_prefs,
-    load_recap,
-    save_recap,
-    list_recaps,
     list_sessions,
     get_session_detail,
-    load_session_snapshot,
-    snapshot_diff as _snapshot_diff,
     slim_entity as _slim_entity,
     resolve_sections as _resolve_sections,
     expand_link_ids as _expand_link_ids,
@@ -1719,7 +1709,7 @@ def backlog_init(project_name: str = "", location: str = "tracked", schema_versi
         schema_version: 2 (stable, single backlog.yaml) or 3 (latest, slim index +
                   per-task files + handovers/issues/auto). 0 → use SCHEMA_DEFAULT.
                   v3 init creates the directory layout up front (tasks/, handovers/,
-                  issues/, snapshots/, auto/).
+                  issues/, auto/).
     """
     if location == "hidden":
         return (
@@ -1791,7 +1781,7 @@ def backlog_init(project_name: str = "", location: str = "tracked", schema_versi
         initial_data["handovers"] = []
         initial_data["issues"] = []
         # Pre-create directories so first-run tooling has somewhere to write.
-        for sub in ("tasks", "handovers", "issues", "snapshots", "auto", "areas"):
+        for sub in ("tasks", "handovers", "issues", "auto", "areas"):
             (backlog_abs.parent / sub).mkdir(parents=True, exist_ok=True)
 
     backlog_abs.write_text(
@@ -1816,7 +1806,7 @@ def backlog_init(project_name: str = "", location: str = "tracked", schema_versi
 def backlog_migrate_v3() -> str:
     """Migrate this project's backlog to v3 layout (slim index + per-task files).
 
-    v3 introduces narrative-continuity features (handovers, issues, recap,
+    v3 introduces narrative-continuity features (handovers, issues,
     auto modes). The on-disk shape changes: heavy task fields (description, notes,
     docs, review_instructions) move out of `backlog.yaml` into per-task files at
     `tasks/<id>.md`. Slim metadata (id, title, status, priority, etc.) stays in
@@ -1858,7 +1848,7 @@ def backlog_migrate_v3() -> str:
         f"- {files_msg}\n"
         f"- Index: {bp.relative_to(ROOT)}\n"
         f"- Viewer: switched to v3 UI (use_v3=true)\n"
-        f"\nv3 features (handovers, issues, recap, auto modes) will land in "
+        f"\nv3 features (handovers, issues, auto modes) will land in "
         f"subsequent slices."
     )
 
@@ -1898,7 +1888,7 @@ def backlog_canonicalize_layout(dry_run: bool = False) -> str:
     """Migrate the v3 backlog from `.claude/` or root layout into canonical `.taskmaster/`.
 
     Moves backlog.yaml + the artifact subdirs (tasks, handovers, issues,
-    recaps, snapshots, auto, PROGRESS.md, viewer.json) into `.taskmaster/`.
+    auto, PROGRESS.md, viewer.json) into `.taskmaster/`.
     Idempotent: re-running on a canonical layout is a no-op. Refuses to clobber:
     if a destination file already holds different content, nothing moves and the
     conflicts are reported. After a successful `.claude/` migration, the redundant
@@ -1960,54 +1950,6 @@ def backlog_canonicalize_layout(dry_run: bool = False) -> str:
     if summary["deleted_config"]:
         out.append(f"Deleted redundant config: `{summary['deleted_config']}`.")
     return "\n".join(out)
-
-
-@mcp.tool()
-def backlog_snapshot(quiet: bool = False) -> str:
-    """Capture a slim snapshot of the backlog for later recap diffing.
-
-    Snapshots are written to `<backlog_dir>/snapshots/last.json` (gitignored).
-    Each snapshot tracks per-task status/priority/stage/epic and the active
-    phase — enough to compute a "what changed since" diff without storing
-    full backlog history.
-
-    Args:
-        quiet: When true, return an empty string on success (use for hooks).
-               Errors still surface.
-    """
-    bp = _backlog_path()
-    if not bp.exists():
-        return "" if quiet else "No backlog found — nothing to snapshot."
-    try:
-        data = _load()
-    except Exception as exc:
-        return f"snapshot failed: {exc}"
-    snap = _take_snapshot(data)
-    sp = _write_snapshot(bp, snap)
-    if quiet:
-        return ""
-    return f"Snapshot written: {sp.relative_to(ROOT)} ({snap['structural_hash'][:18]}…)"
-
-
-@mcp.tool()
-def backlog_recap() -> str:
-    """Show what changed in the backlog since the last snapshot.
-
-    Compares the current backlog state against `<backlog_dir>/snapshots/last.json`
-    and renders a compact diff: tasks added/removed, status/priority/stage/epic
-    changes, and active-phase transitions. Returns guidance text when no prior
-    snapshot exists.
-    """
-    bp = _backlog_path()
-    if not bp.exists():
-        return "No backlog found."
-    try:
-        data = _load()
-    except Exception as exc:
-        return f"recap failed: {exc}"
-    prev = _read_snapshot(bp)
-    diff = _diff_against_snapshot(data, prev)
-    return _format_recap(diff)
 
 
 @mcp.tool()
@@ -6344,9 +6286,6 @@ def backlog_batch_update(operations: str) -> str:
 def backlog_batch_preview(operations: str) -> str:
     """Preview what a batch of task operations would do without writing to disk.
 
-    Distinct from `backlog_snapshot` (which captures backlog state for `recap`
-    diffing) — this is a planning aid for batch operations.
-
     Args:
         operations: Newline-separated list of operations to preview. Each line is:
             "complete {task_id}" — preview marking a task as done
@@ -6982,31 +6921,6 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 self._send_json(404, {"ok": False, "error": f"unknown session {sid}"})
                 return
             self._send_json(200, detail)
-            return
-        elif clean_path.startswith("/api/recap/"):
-            sid = clean_path[len("/api/recap/"):]
-            rec = load_recap(sid)
-            if rec is None:
-                self._send_json(404, {"ok": False, "error": f"no recap for {sid}"})
-                return
-            self._send_json(200, rec)
-            return
-        elif clean_path.startswith("/api/snapshots/diff"):
-            from urllib.parse import urlsplit, parse_qs
-            qs = parse_qs(urlsplit(self.path).query)
-            a = (qs.get("from") or [None])[0]
-            b = (qs.get("to")   or [None])[0]
-            if not a or not b:
-                self._send_json(400, {"ok": False,
-                    "error": "both 'from' and 'to' query params required"})
-                return
-            snap_a = load_session_snapshot(a)
-            snap_b = load_session_snapshot(b)
-            if snap_a is None or snap_b is None:
-                self._send_json(404, {"ok": False,
-                    "error": f"missing snapshot(s): from={snap_a is not None} to={snap_b is not None}"})
-                return
-            self._send_json(200, _snapshot_diff(snap_a, snap_b))
             return
         elif clean_path.startswith("/api/bugs"):
             from urllib.parse import urlparse, parse_qs
@@ -7654,32 +7568,6 @@ class ViewerHandler(BaseHTTPRequestHandler):
             self._send_json(200, {"ok": True})
             return
 
-        if self.path.startswith("/api/recap/"):
-            import json as _json
-            sid = self.path[len("/api/recap/"):]
-            length = int(self.headers.get("Content-Length") or 0)
-            raw = self.rfile.read(length).decode("utf-8") if length else ""
-            try:
-                payload = _json.loads(raw)
-            except Exception as e:
-                self._send_json(400, {"ok": False, "error": f"invalid JSON: {e}"})
-                return
-            required = {"frontmatter", "title", "what_happened", "what_landed", "whats_next"}
-            if not required.issubset(payload.keys()):
-                self._send_json(400, {"ok": False,
-                    "error": f"payload missing keys: {sorted(required - set(payload.keys()))}"})
-                return
-            save_recap(
-                session_id=sid,
-                frontmatter=payload["frontmatter"],
-                title=payload["title"],
-                what_happened=payload["what_happened"],
-                what_landed=payload["what_landed"],
-                whats_next=payload["whats_next"],
-            )
-            self._send_json(200, {"ok": True})
-            return
-
         if m := re.fullmatch(r"/api/tasks/([A-Za-z0-9_\-]+)", self.path):
             task_id = m.group(1)
             length = int(self.headers.get("Content-Length") or 0)
@@ -7964,58 +7852,6 @@ def backlog_open_viewer() -> str:
     url = f"http://127.0.0.1:{port}/"
     webbrowser.open(url)
     return f"Opened backlog viewer at {url}"
-
-
-def recap_get(session_id: str) -> str:
-    """Return the recap for a session as JSON, or `null` when missing."""
-    import json as _json
-    rec = load_recap(session_id)
-    return _json.dumps(rec)
-
-
-def recap_set(
-    session_id: str,
-    frontmatter_json: str,
-    title: str,
-    what_happened: str,
-    what_landed: str,
-    whats_next: str,
-) -> str:
-    """Write a recap. `frontmatter_json` is a JSON object holding
-    snapshot_before / snapshot_after / generator / generated_at / token_cost.
-    `session_id` and `schema_version` are auto-injected.
-    """
-    import json as _json
-    try:
-        fm = _json.loads(frontmatter_json)
-    except Exception as e:
-        return f"error: invalid frontmatter JSON ({e})"
-    if not isinstance(fm, dict):
-        return "error: frontmatter must be a JSON object"
-    save_recap(
-        session_id=session_id,
-        frontmatter=fm,
-        title=title,
-        what_happened=what_happened,
-        what_landed=what_landed,
-        whats_next=whats_next,
-    )
-    return "ok"
-
-
-@mcp.tool()
-def recap_list() -> str:
-    """List session ids that have a recap on disk (newest first)."""
-    import json as _json
-    return _json.dumps(list_recaps())
-
-
-def snapshot_diff(snapshot_a_json: str, snapshot_b_json: str) -> str:
-    """Compute structured diff between two snapshot payloads, returned as JSON."""
-    import json as _json
-    a = _json.loads(snapshot_a_json)
-    b = _json.loads(snapshot_b_json)
-    return _json.dumps(_snapshot_diff(a, b))
 
 
 def issue_list_extended(include_resolved: bool = True) -> str:

@@ -25,7 +25,7 @@ Every playbook path below also exists as a native skill on Claude Code/ZCode:
 | "Upgrade to v3", "migrate to v3" | `../migrate-v3/playbook.md` |
 | "Check TODOs", "todo audit" | `../check-todos/playbook.md` |
 | "Set up linear", "link to linear", "linear status" | `../linear/playbook.md` |
-| Status, search, phase, recap, snapshot | Direct `backlog_*` tool call |
+| Status, search, phase | Direct `backlog_*` tool call |
 
 Full routing table + word-agnostic intake algorithm: read `references/routing-table.md` and `references/word-agnostic-intake.md`.
 

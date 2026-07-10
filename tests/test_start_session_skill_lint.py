@@ -130,11 +130,11 @@ def test_handover_list_filters_to_open():
 def test_deep_ceremony_not_inline_in_body():
     """Heavy deep-mode calls must NOT appear in the glance body.
 
-    backlog_recap and backlog_last_session are deep-mode only — they belong
-    in references/deep-mode.md.
+    backlog_last_session is deep-mode only — it belongs in
+    references/deep-mode.md.
     """
     body = _body_without_frontmatter(PLAYBOOK_MD)
-    deep_only_calls = ["backlog_recap"]
+    deep_only_calls = ["backlog_last_session"]
     present = [c for c in deep_only_calls if c in body]
     assert not present, (
         f"Deep-mode MCP calls found in SKILL.md glance body: {present}. "

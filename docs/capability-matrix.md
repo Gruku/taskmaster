@@ -10,7 +10,7 @@ What each assistant gets from taskmaster, per portability tier (see
 | Viewer (kanban web UI) | 1 | ✅ | ✅ | ✅ (assistant-independent) | ✅ | ✅ | ✅ |
 | Project manifest (`project.py`) | 1 | ✅ | ✅ | ✅ (via MCP tools) | via MCP once verified | via MCP once verified | ✅ (via MCP tools) |
 | Workflow playbooks (`playbooks/`) | 2 | ✅ via `skills/` wrappers | ✅ via `skills/` wrappers | ✅ `adapters/codex/` — full session loop verified 2026-07-08 (start-session → pick-task → end-session) | adapter shipped (`adapters/agents-md/`); GUI verify pending | not installed locally — untested | ✅ `adapters/agents-md/` — AGENTS.md routing verified 2026-07-08 (auto-routed to start-session playbook) |
-| Hooks (gate enforcement, snapshot, merge recorder) | 3 | ✅ `hooks/hooks.json` | ✅ | ❌ by design — playbooks state the discipline advisorily | ❌ | ❌ | ❌ |
+| Hooks (gate enforcement, merge recorder) | 3 | ✅ `hooks/hooks.json` | ✅ | ❌ by design — playbooks state the discipline advisorily | ❌ | ❌ | ❌ |
 | Statusline integration | 3 | ✅ (separate plugin) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Subagent dispatch conventions | 3 | ✅ | ✅ | ❌ (inline fallback per playbook phrasing) | ❌ | ❌ | ❌ |
 

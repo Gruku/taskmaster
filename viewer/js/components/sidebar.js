@@ -12,7 +12,6 @@ const SECTIONS = [
     { key: 'epics',     icon: '⬡', label: 'Epics',     hash: '#/epics' },
   ]},
   { label: 'Temporal', items: [
-    { key: 'recap',    icon: '↻', label: 'Recap',    hash: '#/recap' },
     { key: 'sessions', icon: '⌕', label: 'Sessions', hash: '#/sessions' },
   ]},
   { label: 'Knowledge', items: [

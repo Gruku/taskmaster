@@ -5,8 +5,6 @@ const ROUTES = [
   { hash: '#/kanban',             title: 'Kanban',              sidebarKey: 'kanban' },
   { hash: '#/sessions',           title: 'Sessions / Handovers',sidebarKey: 'sessions' },
   { hash: '#/issues',             title: 'Issues',              sidebarKey: 'issues' },
-  { hash: '#/recap',              title: 'Recap',               sidebarKey: 'recap' },
-  { hash: '#/recap/SES-0184',     title: 'Recap',               sidebarKey: 'recap' },
   { hash: '#/task/T-148',         title: 'Task Detail',         sidebarKey: null },
 ];
 

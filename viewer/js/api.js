@@ -149,7 +149,7 @@ export const api = {
     return r.json();
   },
 
-  // Plans 5/6 add: getRecap, putRecap, putAutoState, etc.
+  // Plans 5/6 add: putAutoState, etc.
 
   // ── Notes (Desk) ──────────────────────────────────────────────
   notes: (includeArchived = false) =>
@@ -159,7 +159,7 @@ export const api = {
   archiveNote: (id) => http('POST', `/api/notes/${encodeURIComponent(id)}/archive`, {}),
 };
 
-// --- Sessions / Recap (Plan 5a) -------------------------------------------
+// --- Sessions (Plan 5a) -------------------------------------------
 
 export async function listSessions() {
   const r = await fetch('/api/sessions');
@@ -170,30 +170,6 @@ export async function listSessions() {
 export async function getSessionDetail(sid) {
   const r = await fetch(`/api/sessions/${encodeURIComponent(sid)}`);
   if (!r.ok) throw new Error(`getSessionDetail(${sid}): ${r.status}`);
-  return r.json();
-}
-
-export async function getRecap(sid) {
-  const r = await fetch(`/api/recap/${encodeURIComponent(sid)}`);
-  if (r.status === 404) return null;
-  if (!r.ok) throw new Error(`getRecap(${sid}): ${r.status}`);
-  return r.json();
-}
-
-export async function putRecap(sid, payload) {
-  const r = await fetch(`/api/recap/${encodeURIComponent(sid)}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  if (!r.ok) throw new Error(`putRecap(${sid}): ${r.status}`);
-  return r.json();
-}
-
-export async function getSnapshotDiff(fromId, toId) {
-  const u = `/api/snapshots/diff?from=${encodeURIComponent(fromId)}&to=${encodeURIComponent(toId)}`;
-  const r = await fetch(u);
-  if (!r.ok) throw new Error(`getSnapshotDiff(${fromId}→${toId}): ${r.status}`);
   return r.json();
 }
 

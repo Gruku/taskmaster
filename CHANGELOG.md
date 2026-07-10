@@ -10,6 +10,7 @@ indicate schema breaks or removed surfaces.
 
 ## [Unreleased]
 - **Removed:** `backlog_project_structure` MCP tool, the `/api/project-structure` HTTP endpoint, and the viewer Structure > Project screen. The git-scanning subsystem behind them could hang on large or slow repos; the feature is culled. The `backlog_project_*` manifest tools (`project.yaml`) are unaffected.
+- **Removed:** the recap + snapshot subsystem — `backlog_recap`, `backlog_snapshot`, and `recap_list` MCP tools, the recap/snapshot-diff core, the PreCompact snapshot hook, the `/api/recap/*` and `/api/snapshots/diff` HTTP endpoints, and the viewer Recap screen plus its sessions-timeline integration. Recap never produced a recap in practice and the snapshot machinery existed only to feed it. Sessions and handovers are unaffected.
 
 ---
 

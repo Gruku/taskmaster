@@ -16,7 +16,7 @@ test.describe('Sessions screen', () => {
     // View toggle lives in the global topbar (.tm-segmented) post-redesign;
     // the old per-screen <h2> header was retired.
     await expect(page.locator('.tm-segmented button')).toHaveCount(3);
-    await expect(page.locator('[data-role=kinds] .sessions-kind-chip')).toHaveCount(3);
+    await expect(page.locator('[data-role=kinds] .sessions-kind-chip')).toHaveCount(2);
     await expect(page.locator('[aria-label="New note — coming soon"]')).toBeVisible();
 
     // No JS errors during initial mount.
@@ -33,7 +33,7 @@ test.describe('Sessions screen', () => {
 
   test('kind chips toggle visibility', async ({ page }) => {
     await page.goto('/v3#/sessions');
-    const chip = page.locator('[data-role=kinds] [data-kind=recap]');
+    const chip = page.locator('[data-role=kinds] [data-kind=handover]');
     await expect(chip).toHaveClass(/\bon\b/);
     await chip.click();
     await expect(chip).not.toHaveClass(/\bon\b/);
@@ -56,11 +56,10 @@ test.describe('Sessions screen', () => {
     // View toggle has all three (now in global topbar via tmSegmented).
     const segs = await page.locator('.tm-segmented button').allTextContents();
     expect(segs).toEqual(['Diary', 'Lanes', 'By Task']);
-    // Kind chips: Sessions / Handovers / Recaps.
+    // Kind chips: Sessions / Handovers.
     const chips = await page.locator('[data-role=kinds] .sessions-kind-chip').allTextContents();
     expect(chips.join(' ').toLowerCase()).toMatch(/sessions/);
     expect(chips.join(' ').toLowerCase()).toMatch(/handovers/);
-    expect(chips.join(' ').toLowerCase()).toMatch(/recaps/);
     // "+ New note" button is present (currently disabled with "coming soon" affordance).
     await expect(page.locator('[aria-label="New note — coming soon"]')).toBeVisible();
   });

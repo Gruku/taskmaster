@@ -41,7 +41,7 @@ Playbook root: `{{TASKMASTER_HOME}}/playbooks/`
 | "Migrate lessons", "convert lessons to memory", "what happened to lessons" | `playbooks/migrate-lessons/playbook.md` |
 | "Check TODOs", "todo audit" | `playbooks/check-todos/playbook.md` |
 | "Set up linear", "link to linear" | `playbooks/linear/playbook.md` |
-| Status, search, recap, snapshot | direct `backlog_*` tool call |
+| Status, search | direct `backlog_*` tool call |
 
 **Epics vs. areas.** Epics are finite — `backlog_add_epic` requires `done_when`
 (a workstream that can't say when it's done is an area, not an epic). Areas
