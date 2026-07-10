@@ -1,9 +1,15 @@
 # Taskmaster Router
 
-All work in a taskmaster-enabled project flows through the task system. This skill detects what the user wants and routes to the right sub-skill or MCP tool.
+Two lanes: small direct changes stay lightweight; anything with scope, design, or continuity is tracked. This skill detects what the user wants and routes accordingly.
 
 Every playbook path below also exists as a native skill on Claude Code/ZCode:
 `taskmaster:<name>`, where `<name>` is the playbook directory name.
+
+## Direct-change lane
+
+When **all** hold, just make the change — no sub-skill, no backlog writes, commit normally: the user asked for **this specific change** directly (not "track it"/"make a task"); a **single sitting**; **no open design decisions**; **roughly ≤3 files**. Routing a one-line fix through router → pick-task → gates wastes tokens.
+
+**Escalation.** The moment a direct change grows — design question, follow-ups, or won't finish this session — say so and route through the tracked lane.
 
 ## Intent Detection
 
