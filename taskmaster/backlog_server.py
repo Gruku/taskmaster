@@ -21,7 +21,7 @@ from http import HTTPStatus
 from copy import deepcopy
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from fastmcp import FastMCP
@@ -1959,41 +1959,33 @@ def backlog_handover_create(
     body: str = "",
     task_ids: list[str] | None = None,
     session_kind: str = "end-of-day",
-    context_size_at_write: str = "",
     supersedes: str = "",
-    branch: str = "",
-    tip_commit: str = "",
     flag_for_review: bool = False,
-    review_reason: str = "",
+    options: dict | None = None,
 ) -> str:
-    """Write a session handover — committed markdown artifact for cross-session
-    continuity.
-
-    Use to capture the unwritten context at the end of a long session: decisions
-    made, blockers, where to start tomorrow. The body is freeform markdown
-    (suggested sections: Decisions, Blockers, Where I'd start, Open threads).
+    """Write a session handover — a committed markdown artifact for cross-session
+    continuity. Capture end-of-session context: decisions, blockers, where to
+    start next. body is freeform markdown (Decisions / Blockers / Where I'd
+    start / Open threads).
 
     Args:
         tldr: One-line summary. Required.
-        next_action: One-line "where to start next session." Optional but useful.
+        next_action: One-line "where to start next session."
         body: Markdown body (the four-section narrative).
         task_ids: Tasks this handover relates to (surfaces in pick-task).
         session_kind: One of {", ".join(HANDOVER_KINDS)}.
-        context_size_at_write: Optional marker for compaction-prompted handovers.
-        supersedes: Optional id of an older handover this one supersedes. When
-            set, the new handover records `supersedes:` in its frontmatter and
-            the old handover gets a `superseded_by:` field plus a SUPERSEDED
-            callout prepended to its body. Use for milestone-complete or pivot
-            chains.
-        branch: Optional git branch name. Lands in frontmatter when set.
-        tip_commit: Optional tip commit SHA (short or long). Lands in
-            frontmatter when set.
-        flag_for_review: When True, marks this handover for retro extraction in
-            the next review sweep. Sets `flag_for_review: true` and
-            `review_reason` in the handover's frontmatter.
-        review_reason: Free-text reason for the review flag (e.g. "multi-tab
-            fanout retro"). Only used when `flag_for_review` is True.
+        supersedes: Optional id of an older handover this one supersedes; the old
+            one gets a `superseded_by:` field and a SUPERSEDED callout.
+        flag_for_review: When True, flags this handover for retro extraction.
+        options: Rarely-set fields — branch, tip_commit (frontmatter git
+            context), context_size_at_write (compaction marker), review_reason
+            (used only when flag_for_review).
     """
+    options = options or {}
+    branch = options.get("branch", "") or ""
+    tip_commit = options.get("tip_commit", "") or ""
+    context_size_at_write = options.get("context_size_at_write", "") or ""
+    review_reason = options.get("review_reason", "") or ""
     bp = _backlog_path()
     if not bp.exists():
         return f"Error: no backlog found at {bp}. Run `backlog_init` first."
@@ -2284,6 +2276,35 @@ def backlog_handover_resync() -> str:
 
 
 @mcp.tool()
+def backlog_link(
+    action: Literal["create", "remove", "query", "validate", "reconcile"],
+    source: str = "",
+    target: str = "",
+    type: str = "",
+    note: str = "",
+    depth: int = 1,
+) -> str:
+    """Manage typed links between entities. The server writes the inverse side
+    automatically and rejects invalid types, kind mismatches, and depends_on
+    cycles.
+
+    Params by action: create(source, target, type, note);
+    remove(source, target, type); query(source, target, type, depth);
+    validate(); reconcile().
+    """
+    if action == "create":
+        return backlog_link_create(source, target, type, note)
+    if action == "remove":
+        return backlog_link_remove(source, target, type)
+    if action == "query":
+        return backlog_link_query(source, target, type, depth)
+    if action == "validate":
+        return backlog_link_validate()
+    if action == "reconcile":
+        return backlog_link_reconcile()
+    return json.dumps({"error": f"unknown action {action!r}"})
+
+
 def backlog_link_create(source: str, target: str, type: str, note: str = "") -> str:
     """Create a typed link from `source` to `target`. Server writes the inverse
     on the target side automatically (see spec §6A/§6B).
@@ -2356,7 +2377,6 @@ def backlog_link_create(source: str, target: str, type: str, note: str = "") -> 
     return f"ok: linked {source} -[{type}]-> {target}{suffix}{note_part}"
 
 
-@mcp.tool()
 def backlog_link_remove(source: str, target: str, type: str = "") -> str:
     """Remove a link (and its inverse) between `source` and `target`.
 
@@ -2404,7 +2424,6 @@ def backlog_link_remove(source: str, target: str, type: str = "") -> str:
     return f"ok: no-op (links not present between {source} and {target})"
 
 
-@mcp.tool()
 def backlog_link_query(source: str = "", target: str = "", type: str = "",
                        depth: int = 1) -> str:
     """Return links matching the source/target/type filter.
@@ -2486,7 +2505,6 @@ def backlog_link_query(source: str = "", target: str = "", type: str = "",
     return _json.dumps(results)
 
 
-@mcp.tool()
 def backlog_link_validate() -> str:
     """Report link drift: orphan links, asymmetric pairs, depends_on cycles.
 
@@ -2567,7 +2585,6 @@ def backlog_link_validate() -> str:
                         "cycles": cycles, "archived_targets": archived_targets})
 
 
-@mcp.tool()
 def backlog_link_reconcile() -> str:
     """Add missing inverse links on peers. Reports unfixable drift.
 
@@ -2861,55 +2878,37 @@ def backlog_issue_get(
     return "\n".join(lines)
 
 
-@mcp.tool()
-def backlog_issue_update(
-    issue_id: str,
-    status: str = "",
-    title: str = "",
-    severity: str = "",
-    impact: str = "",
-    components: list[str] | None = None,
-    location: list[str] | None = None,
-    related_tasks: list[str] | None = None,
-    fixed_in_task: str = "",
-    duplicate_of: str = "",
-    body: str = "",
-) -> str:
-    """Update an issue's metadata or body. Pass empty strings/None to skip a field.
+ISSUE_UPDATE_LIST_FIELDS = {"components", "location", "related_tasks"}
+ISSUE_UPDATE_SCALAR_FIELDS = {
+    "status", "title", "severity", "impact", "fixed_in_task", "duplicate_of", "body",
+}
+ISSUE_UPDATE_FIELDS = ISSUE_UPDATE_LIST_FIELDS | ISSUE_UPDATE_SCALAR_FIELDS
 
-    Lifecycle constraints enforced:
-    - status=fixed requires fixed_in_task to be set.
-    - status=duplicate requires duplicate_of to be set.
-    - resolved date is auto-filled when status moves to fixed.
+
+@mcp.tool()
+def backlog_issue_update(issue_id: str, field: str, value: str = "") -> str:
+    """Set one field on an issue. List fields take a comma-separated value; an
+    empty value clears the field.
+
+    field ∈ {status, title, severity, impact, components, location,
+    related_tasks, fixed_in_task, duplicate_of, body}. Lifecycle: status=fixed
+    needs fixed_in_task (set it in a prior call), status=duplicate needs
+    duplicate_of; `resolved` auto-fills when status moves to fixed.
     """
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    updates: dict[str, Any] = {}
-    if status:
-        if status not in ISSUE_STATUSES:
-            return f"Error: status must be one of {ISSUE_STATUSES}"
-        updates["status"] = status
-    if title:
-        updates["title"] = title
-    if severity:
-        if severity not in ISSUE_SEVERITIES:
-            return f"Error: severity must be one of {ISSUE_SEVERITIES}"
-        updates["severity"] = severity
-    if impact:
-        updates["impact"] = impact
-    if components is not None:
-        updates["components"] = components
-    if location is not None:
-        updates["location"] = location
-    if related_tasks is not None:
-        updates["related_tasks"] = related_tasks
-    if fixed_in_task:
-        updates["fixed_in_task"] = fixed_in_task
-    if duplicate_of:
-        updates["duplicate_of"] = duplicate_of
-    if body:
-        updates["body"] = body
+    if field not in ISSUE_UPDATE_FIELDS:
+        return f"Error: field {field!r} not allowed. Allowed: {', '.join(sorted(ISSUE_UPDATE_FIELDS))}"
+    if field == "status" and value not in ISSUE_STATUSES:
+        return f"Error: status must be one of {ISSUE_STATUSES}"
+    if field == "severity" and value not in ISSUE_SEVERITIES:
+        return f"Error: severity must be one of {ISSUE_SEVERITIES}"
+    if field in ISSUE_UPDATE_LIST_FIELDS:
+        updates: dict[str, Any] = {field: [x.strip() for x in value.split(",") if x.strip()]}
+    else:
+        updates = {field: value}
+    body = value if field == "body" else ""
 
     try:
         fm, _ = _update_issue(bp, issue_id, **updates)
@@ -3088,62 +3087,35 @@ def backlog_bug_get(bug_id: str, verbose: bool = False) -> str:
     return "\n".join(lines)
 
 
+BUG_UPDATE_LIST_FIELDS = {"components", "location"}
+BUG_UPDATE_SCALAR_FIELDS = {
+    "status", "title", "severity", "fix_commit", "adopted_into", "promoted_to", "body",
+}
+BUG_UPDATE_FIELDS = BUG_UPDATE_LIST_FIELDS | BUG_UPDATE_SCALAR_FIELDS
+
+
 @mcp.tool()
-def backlog_bug_update(
-    bug_id: str,
-    status: str = "",
-    title: str = "",
-    severity: str = "",
-    components: list[str] | None = None,
-    location: list[str] | None = None,
-    fix_commit: str = "",
-    adopted_into: str = "",
-    promoted_to: str = "",
-    body: str = "",
-) -> str:
-    """Update a Bug's status or fields. Lifecycle constraints enforced.
+def backlog_bug_update(bug_id: str, field: str, value: str = "") -> str:
+    """Set one field on a Bug. List fields take a comma-separated value; an
+    empty value clears the field.
 
-    - status=fixed requires fix_commit
-    - status=adopted requires adopted_into
-    - status=promoted requires promoted_to
-
-    Args:
-        bug_id: Bug ID (e.g. B-001).
-        status: New status. One of open, fixed, shelved, adopted, promoted.
-        title: Updated title.
-        severity: Updated severity (P0-P3).
-        components: Replace components list.
-        location: Replace location list.
-        fix_commit: Commit SHA that fixed this bug (required for status=fixed).
-        adopted_into: Task ID that adopted this bug (required for status=adopted).
-        promoted_to: Issue ID this was promoted to (required for status=promoted).
-        body: Replace bug body.
+    field ∈ {status, title, severity, components, location, fix_commit,
+    adopted_into, promoted_to, body}. Lifecycle (set the companion field first,
+    in a prior call): status=fixed needs fix_commit, status=adopted needs
+    adopted_into, status=promoted needs promoted_to.
     """
     from taskmaster.taskmaster_v3 import update_bug as _update_bug, sync_bug_index as _sync_bug_index, BUG_STATUSES
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    updates: dict[str, Any] = {}
-    if status:
-        if status not in BUG_STATUSES:
-            return f"Error: status must be one of {BUG_STATUSES}"
-        updates["status"] = status
-    if title:
-        updates["title"] = title
-    if severity:
-        updates["severity"] = severity
-    if components is not None:
-        updates["components"] = components
-    if location is not None:
-        updates["location"] = location
-    if fix_commit:
-        updates["fix_commit"] = fix_commit
-    if adopted_into:
-        updates["adopted_into"] = adopted_into
-    if promoted_to:
-        updates["promoted_to"] = promoted_to
-    if body:
-        updates["body"] = body
+    if field not in BUG_UPDATE_FIELDS:
+        return f"Error: field {field!r} not allowed. Allowed: {', '.join(sorted(BUG_UPDATE_FIELDS))}"
+    if field == "status" and value not in BUG_STATUSES:
+        return f"Error: status must be one of {BUG_STATUSES}"
+    if field in BUG_UPDATE_LIST_FIELDS:
+        updates: dict[str, Any] = {field: [x.strip() for x in value.split(",") if x.strip()]}
+    else:
+        updates = {field: value}
     try:
         fm, _ = _update_bug(bp, bug_id, **updates)
     except FileNotFoundError:
@@ -3311,6 +3283,44 @@ def backlog_decision_create(
 
 
 @mcp.tool()
+def backlog_decision(
+    action: Literal["list", "get", "resolve", "drop", "update"],
+    decision_id: str = "",
+    status: str = "open",
+    task_id: str = "",
+    limit: int = 20,
+    resolved_with: int | None = None,
+    rationale: str = "",
+    resolved_in: str = "",
+    reason: str = "",
+    title: str = "",
+    options: list[str] | None = None,
+    recommendation: int | None = None,
+    body: str = "",
+) -> str:
+    """Read and transition existing decisions (DEC-NNN). To CREATE a decision use
+    backlog_decision_create. Route through the taskmaster:decision skill.
+
+    Params by action: list(status, task_id, limit); get(decision_id);
+    resolve(decision_id, resolved_with, rationale, resolved_in);
+    drop(decision_id, reason); update(decision_id, title, options,
+    recommendation, body).
+    """
+    if action == "list":
+        return backlog_decision_list(status, task_id, limit)
+    if action == "get":
+        return backlog_decision_get(decision_id)
+    if action == "resolve":
+        if resolved_with is None:
+            return "Error: resolve requires resolved_with (1-indexed option)"
+        return backlog_decision_resolve(decision_id, resolved_with, rationale, resolved_in)
+    if action == "drop":
+        return backlog_decision_drop(decision_id, reason)
+    if action == "update":
+        return backlog_decision_update(decision_id, title, options, recommendation, body)
+    return f"Error: unknown action {action!r}"
+
+
 def backlog_decision_list(status: str = "open", task_id: str = "", limit: int = 20) -> str:
     """List decisions filtered by status. `status='all'` returns every state."""
     bp = _backlog_path()
@@ -3335,7 +3345,6 @@ def backlog_decision_list(status: str = "open", task_id: str = "", limit: int = 
     return "\n".join(rows) if rows else f"No decisions matching status={status}."
 
 
-@mcp.tool()
 def backlog_decision_get(decision_id: str) -> str:
     """Return full decision frontmatter + body as readable text."""
     bp = _backlog_path()
@@ -3347,7 +3356,6 @@ def backlog_decision_get(decision_id: str) -> str:
     return "\n".join(lines) + "\n\n---\n" + body
 
 
-@mcp.tool()
 def backlog_decision_resolve(
     decision_id: str,
     resolved_with: int,
@@ -3371,7 +3379,6 @@ def backlog_decision_resolve(
     )
 
 
-@mcp.tool()
 def backlog_decision_drop(decision_id: str, reason: str) -> str:
     """Drop a decision with a reason (no option picked)."""
     bp = _backlog_path()
@@ -3382,7 +3389,6 @@ def backlog_decision_drop(decision_id: str, reason: str) -> str:
     return f"Decision {decision_id} dropped: {reason}"
 
 
-@mcp.tool()
 def backlog_decision_update(
     decision_id: str,
     title: str = "",
@@ -3616,44 +3622,34 @@ def backlog_idea_get(
     return "\n".join(lines)
 
 
-@mcp.tool()
-def backlog_idea_update(
-    idea_id: str,
-    title: str = "",
-    body: str = "",
-    status: str = "",
-    tags: list[str] | None = None,
-    related_tasks: list[str] | None = None,
-    related_issues: list[str] | None = None,
-    promoted_to: str = "",
-    archived: bool | None = None,
-) -> str:
-    """Patch an idea's frontmatter and/or body.
+IDEA_UPDATE_LIST_FIELDS = {"tags", "related_tasks", "related_issues"}
+IDEA_UPDATE_SCALAR_FIELDS = {"title", "body", "status", "promoted_to"}
+IDEA_UPDATE_FIELDS = IDEA_UPDATE_LIST_FIELDS | IDEA_UPDATE_SCALAR_FIELDS | {"archived"}
 
-    Pass empty strings / None to skip a field. To promote an idea into a
-    task, pass `promoted_to="T-XYZ"` and optionally `archived=True`. To
-    archive without promotion, pass `archived=True`.
+
+@mcp.tool()
+def backlog_idea_update(idea_id: str, field: str, value: str = "") -> str:
+    """Set one field on an idea. List fields take a comma-separated value; an
+    empty value clears the field.
+
+    field ∈ {title, body, status, tags, related_tasks, related_issues,
+    promoted_to, archived}. To promote an idea, set promoted_to then set
+    archived=true; archived takes true/false.
     """
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    updates: dict[str, Any] = {}
-    if title:
-        updates["title"] = title
-    if body:
-        updates["body"] = body
-    if status:
-        updates["status"] = status
-    if tags is not None:
-        updates["tags"] = tags
-    if related_tasks is not None:
-        updates["related_tasks"] = related_tasks
-    if related_issues is not None:
-        updates["related_issues"] = related_issues
-    if promoted_to:
-        updates["promoted_to"] = promoted_to
-    if archived is not None:
-        updates["archived"] = archived
+    if field not in IDEA_UPDATE_FIELDS:
+        return f"Error: field {field!r} not allowed. Allowed: {', '.join(sorted(IDEA_UPDATE_FIELDS))}"
+    if field == "archived":
+        if value.lower() not in ("true", "false"):
+            return "Error: archived must be 'true' or 'false'"
+        updates: dict[str, Any] = {"archived": value.lower() == "true"}
+    elif field in IDEA_UPDATE_LIST_FIELDS:
+        updates = {field: [x.strip() for x in value.split(",") if x.strip()]}
+    else:
+        updates = {field: value}
+    body = value if field == "body" else ""
 
     try:
         fm, _ = _update_idea(bp, idea_id, **updates)
@@ -3674,6 +3670,35 @@ def backlog_idea_update(
 
 
 @mcp.tool()
+def backlog_note(
+    action: Literal["create", "list", "get", "update", "archive"],
+    note_id: str = "",
+    text: str = "",
+    pinned: bool | None = None,
+    include_archived: bool = False,
+) -> str:
+    """Manage sticky notes on the user's Desk. Notes are the lightest continuity
+    surface: freeform, situational, NOT attached to tasks. Write at most one
+    consolidated note per session, only for loose thoughts that fit no other
+    entity (task/idea/issue/handover). Never archive or edit user-authored notes
+    unless the user explicitly asks.
+
+    Params by action: create(text, pinned); list(include_archived);
+    get(note_id); update(note_id, text, pinned); archive(note_id).
+    """
+    if action == "create":
+        return backlog_note_create(text, bool(pinned))
+    if action == "list":
+        return backlog_note_list(include_archived)
+    if action == "get":
+        return backlog_note_get(note_id)
+    if action == "update":
+        return backlog_note_update(note_id, text, pinned)
+    if action == "archive":
+        return backlog_note_archive(note_id)
+    return f"Error: unknown action {action!r}"
+
+
 def backlog_note_create(text: str, pinned: bool = False) -> str:
     """Write a sticky note onto the user's Desk (dashboard).
 
@@ -3698,7 +3723,6 @@ def backlog_note_create(text: str, pinned: bool = False) -> str:
     return f"Note created: {nid}\nFile: {rel}"
 
 
-@mcp.tool()
 def backlog_note_list(include_archived: bool = False) -> str:
     """List sticky notes from the user's Desk — pinned first, newest first.
 
@@ -3721,7 +3745,6 @@ def backlog_note_list(include_archived: bool = False) -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
 def backlog_note_get(note_id: str) -> str:
     """Read one sticky note in full (frontmatter + complete text)."""
     bp = _backlog_path()
@@ -3736,7 +3759,6 @@ def backlog_note_get(note_id: str) -> str:
     return "---\n" + "\n".join(fm_lines) + "\n---\n" + body
 
 
-@mcp.tool()
 def backlog_note_update(note_id: str, text: str = "", pinned: bool | None = None) -> str:
     """Edit a sticky note's text and/or pin state. Author is immutable —
     a user-authored note stays user-authored even if Claude edits it
@@ -3754,7 +3776,6 @@ def backlog_note_update(note_id: str, text: str = "", pinned: bool | None = None
     return f"Note updated: {note_id}"
 
 
-@mcp.tool()
 def backlog_note_archive(note_id: str) -> str:
     """Archive a sticky note (moves it off the Desk into notes/_archive/).
     Never archive user-authored notes unless the user explicitly asks."""
@@ -3911,34 +3932,37 @@ def viewer_prefs_set(patch_json: str) -> str:
 
 @mcp.tool()
 def backlog_add_task(
-    title: str, epic: str, priority: str = "medium", notes: str = "",
-    docs: str = "", depends_on: str = "", sub_repo: str = "",
-    stage: int | None = None, estimate: str = "", phase: str = "",
-    anchors: str = "",
-    tldr: str = "", next_step: str = "", task_id: str = "",
-    bundle: str = "", area: str = "",
+    title: str, epic: str, phase: str = "", priority: str = "medium",
+    tldr: str = "", notes: str = "", next_step: str = "",
+    depends_on: str = "", bundle: str = "",
+    options: dict | None = None,
 ) -> str:
-    """Create a new task under an epic. Auto-generates the task ID unless task_id is supplied.
+    """Create a new task under an epic. `phase` is required.
 
-    Args:
-        title: Short imperative description of the task
-        epic: Epic ID (e.g., "ue-plugin", "desktop-app", "cpp-parser")
-        priority: critical, high, medium (default), or low
-        notes: Optional freeform context
-        docs: Optional doc references as "key:path" pairs separated by semicolons (e.g., "plan:docs/plans/foo.md;spec:docs/specs/bar.md")
-        depends_on: Optional comma-separated task IDs this task depends on (e.g., "cpp-parser-002,cpp-parser-003")
-        sub_repo: Optional sub-repo directory name for monorepo projects
-        stage: Optional stage number for phased work
-        estimate: Optional size estimate (e.g., "S", "M", "L")
-        phase: Optional phase ID to assign this task to
-        anchors: Optional comma-separated glob patterns or URLs declaring target files/systems (e.g., "src/auth/**,localhost:3000/api/auth")
-        tldr: One-sentence essence of the task. Auto-generated from notes or title when omitted.
-        next_step: Concrete immediate action to take on this task.
-        task_id: Override the auto-generated task ID. Must be unique. Defaults to {epic}-{NNN}.
-        bundle: Optional shared execution slug grouping related tasks (lowercase kebab, e.g. "asset-ux").
-        area: Optional area id (e.g., "desktop-app") this task lives under. Must
-            match an existing Area from `backlog_area_list`; leave empty if unset.
+    Common fields are top-level. Rarely-set fields go in `options`:
+    docs ("key:path;key:path"), sub_repo, stage (int), estimate (S/M/L),
+    anchors (comma-separated globs/URLs), task_id (override the auto id),
+    area (existing Area id). depends_on/anchors are comma-separated;
+    tldr auto-generates from notes/title when omitted.
     """
+    options = options or {}
+    docs = options.get("docs", "") or ""
+    sub_repo = options.get("sub_repo", "") or ""
+    estimate = options.get("estimate", "") or ""
+    anchors = options.get("anchors", "") or ""
+    task_id = options.get("task_id", "") or ""
+    area = options.get("area", "") or ""
+    stage = options.get("stage")
+    if isinstance(stage, str):
+        stage = stage.strip()
+        if not stage:
+            stage = None
+        else:
+            try:
+                stage = int(stage)
+            except ValueError:
+                return f"Error: stage must be an integer, got `{stage}`"
+
     priority = _normalize_priority(priority)
     if priority not in VALID_PRIORITIES:
         return f"Error: invalid priority `{priority}`. Valid: {', '.join(PRIORITY_NAMES)}"
@@ -8040,9 +8064,58 @@ def backlog_project_error_trace_ladder() -> list[dict]:
 
 
 # ── Linear MCP tools (linear-005) ────────────────────────────────────────────
+#
+# Consolidated behind one action-dispatched tool (tm-audit-020). The taskmaster:
+# linear skill is the only correct driver; the per-verb functions below are the
+# implementation and stay directly callable in-process (tests, internal callers).
 
 
 @mcp.tool()
+def backlog_linear(
+    action: Literal[
+        "probe", "bootstrap_apply", "link", "unlink",
+        "list", "show", "status", "retry",
+    ],
+    task_id: str = "",
+    external_key: str = "",
+    workspace_alias: str = "",
+    token_env: str = "",
+    team_id: str = "",
+    status_mapping: str = "",
+    priority_mapping: str = "",
+    default_workspace: bool = True,
+    tracker_id: str = "",
+    target_id: str = "",
+) -> str:
+    """Drive Taskmaster's Linear sync. Route through the taskmaster:linear skill.
+
+    Params by action: probe(token_env); bootstrap_apply(workspace_alias, team_id,
+    token_env, status_mapping, priority_mapping, default_workspace);
+    link(task_id, external_key, workspace_alias); unlink(task_id); list();
+    show(tracker_id); status(); retry(target_id).
+    """
+    if action == "probe":
+        return backlog_linear_probe(token_env)
+    if action == "bootstrap_apply":
+        return backlog_linear_bootstrap_apply(
+            workspace_alias, team_id, token_env,
+            status_mapping, priority_mapping, default_workspace,
+        )
+    if action == "link":
+        return backlog_linear_link(task_id, external_key, workspace_alias)
+    if action == "unlink":
+        return backlog_linear_unlink(task_id)
+    if action == "list":
+        return backlog_linear_list()
+    if action == "show":
+        return backlog_linear_show(tracker_id)
+    if action == "status":
+        return backlog_linear_status()
+    if action == "retry":
+        return backlog_linear_retry(target_id)
+    return json.dumps({"error": f"unknown action {action!r}"})
+
+
 def backlog_linear_probe(token_env: str) -> str:
     """Discover Linear workspace structure using a token read from the environment.
 
@@ -8090,7 +8163,6 @@ def backlog_linear_probe(token_env: str) -> str:
     return json.dumps({"teams": result}, indent=2)
 
 
-@mcp.tool()
 def backlog_linear_bootstrap_apply(
     workspace_alias: str,
     team_id: str,
@@ -8190,7 +8262,6 @@ def backlog_linear_bootstrap_apply(
     })
 
 
-@mcp.tool()
 def backlog_linear_link(task_id: str, external_key: str, workspace_alias: str = "") -> str:
     """Link an existing TM task to an existing Linear issue by creating a Tracker file.
 
@@ -8252,7 +8323,6 @@ def backlog_linear_link(task_id: str, external_key: str, workspace_alias: str = 
     return json.dumps({"ok": True, "tracker_id": tracker_id, "task_id": task_id})
 
 
-@mcp.tool()
 def backlog_linear_unlink(task_id: str) -> str:
     """Clear the tracker_id on a TM task. Does NOT delete the Tracker file.
 
@@ -8282,7 +8352,6 @@ def backlog_linear_unlink(task_id: str) -> str:
     return json.dumps({"ok": True, "unlinked": existing, "task_id": task_id})
 
 
-@mcp.tool()
 def backlog_linear_list() -> str:
     """Return JSON list of all linear-* trackers from disk.
 
@@ -8316,7 +8385,6 @@ def backlog_linear_list() -> str:
     return json.dumps({"trackers": out}, indent=2)
 
 
-@mcp.tool()
 def backlog_linear_show(tracker_id: str) -> str:
     """Return one tracker's full frontmatter and body as JSON.
 
@@ -8343,7 +8411,6 @@ def backlog_linear_show(tracker_id: str) -> str:
     return json.dumps({"frontmatter": fm, "body": body}, indent=2, default=str)
 
 
-@mcp.tool()
 def backlog_linear_status() -> str:
     """Return a summary of the Linear sync queue state.
 
@@ -8377,7 +8444,6 @@ def backlog_linear_status() -> str:
     }, indent=2)
 
 
-@mcp.tool()
 def backlog_linear_retry(target_id: str = "") -> str:
     """Drain the Linear sync queue, optionally limiting to one target.
 

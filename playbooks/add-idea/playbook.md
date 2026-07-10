@@ -25,7 +25,7 @@ The user can also say "save this as an idea: <text>" — treat it the same as a 
 ## Procedure
 
 1. **Parse the input.** Title is the first sentence/clause if not separately specified. Body is the full text. Pull any optional flags out of the input.
-2. **Search for duplicates.** Call `backlog_idea_list(limit=20)` and check the returned summaries for an existing idea covering the same ground. If you find one, don't create a duplicate — tell the user and offer to update the existing idea via `backlog_idea_update` instead.
+2. **Search for duplicates.** Call `backlog_idea_list(limit=20)` and check the returned summaries for an existing idea covering the same ground. If you find one, don't create a duplicate — tell the user and offer to update the existing idea via `backlog_idea_update` (field/value) instead.
 3. **Commit.** Call:
    ```
    backlog_idea_create(
@@ -60,4 +60,4 @@ For ideas where the user gives only a one-liner title with no body, you may opti
 - Don't ask the user to confirm before logging — log it, announce, move on. The whole point is low friction.
 - Don't make ideas into tasks. If the user wants a task, they'll ask.
 - Don't add detail beyond what the user said. The body is freeform; resist the urge to expand it.
-- Don't link `promoted_to`. That field is set when an idea is promoted to a task (via `backlog_idea_update(promoted_to="T-XYZ")`), not at creation.
+- Don't link `promoted_to`. That field is set when an idea is promoted to a task (via `backlog_idea_update(idea_id, "promoted_to", "T-XYZ")`), not at creation.

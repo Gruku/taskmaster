@@ -25,7 +25,7 @@ Use intent to resolve, not the surface phrase.
 ## idea vs note
 
 - **idea** — a parking-lot entry worth tracking on its own record. "Save this as an idea" → `taskmaster:add-idea`.
-- **desk note** — an ephemeral situational scratchpad entry, not a standalone entity. "Note this for later" with no clear future-work shape → `backlog_note_create`.
+- **desk note** — an ephemeral situational scratchpad entry, not a standalone entity. "Note this for later" with no clear future-work shape → `backlog_note(action="create")`.
 - If in doubt, prefer the idea route — it is the durable, searchable one.
 
 ## When Overlap Is Fine

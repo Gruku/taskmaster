@@ -33,12 +33,12 @@ If a `pending_review_flag` was buffered upstream, pass `flag_for_review=true` an
 
 Before invoking `taskmaster:handover`, sweep open decisions linked to the in-progress task:
 
-1. Call `backlog_decision_list(status="open", task_id=<current>)`.
+1. Call `backlog_decision(action="list", status="open", task_id=<current>)`.
 2. If non-empty, for **each** decision ask the user (use your structured-question tool if available):
    - **Carry forward** — leave the decision open; record it under the handover body's "Open decisions" section as `[[DEC-NNN]] — <one-line summary>`.
-   - **Resolve now** — present options; on pick, call `backlog_decision_resolve(id, resolved_with=N, rationale="<short>")`, then record it under "Resolved this session".
-   - **Drop** — capture one-line reason; call `backlog_decision_drop(id, reason=...)`, then record it under "Resolved this session" with `(dropped)` suffix.
-3. Auto-resolved decisions (via commit message `Resolves: DEC-NNN with option N`) need no prompting — query `backlog_decision_list(status="resolved", resolved_in=session_window)` and append them to "Resolved this session" the same way.
+   - **Resolve now** — present options; on pick, call `backlog_decision(action="resolve", decision_id=id, resolved_with=N, rationale="<short>")`, then record it under "Resolved this session".
+   - **Drop** — capture one-line reason; call `backlog_decision(action="drop", decision_id=id, reason=...)`, then record it under "Resolved this session" with `(dropped)` suffix.
+3. Auto-resolved decisions (via commit message `Resolves: DEC-NNN with option N`) need no prompting — query `backlog_decision(action="list", status="resolved")` and append them to "Resolved this session" the same way.
 4. The two collected lists are inserted into the handover **body markdown** by `taskmaster:handover` (step 5 of that skill). `backlog_handover_create` has no separate `open_decisions` / `resolved_this_session` parameters — the body is the durable carrier and the `[[DEC-NNN]]` link syntax is what powers cross-entity navigation in the viewer.
 
 ## v3-pre-2b: Handover Archive Sweep

@@ -16,35 +16,15 @@ from taskmaster.backlog_server import (
 
 
 def test_list_tasks_returns_slim_entries(tm_epic_phase):
-    backlog_add_task(
-        epic="test-epic",
-        task_id="T-1",
-        title="X",
-        tldr="Tldr 1.",
-        notes="Heavy notes content.",
-        phase="dev",
-    )
-    backlog_add_task(
-        epic="test-epic",
-        task_id="T-2",
-        title="Y",
-        tldr="Tldr 2.",
-        phase="dev",
-    )
+    backlog_add_task(epic="test-epic", title="X", tldr="Tldr 1.", notes="Heavy notes content.", phase="dev", options={"task_id": "T-1"})
+    backlog_add_task(epic="test-epic", title="Y", tldr="Tldr 2.", phase="dev", options={"task_id": "T-2"})
     out = backlog_list_tasks()
     assert "Tldr 1" in out and "Tldr 2" in out
     assert "Heavy notes content" not in out
 
 
 def test_list_tasks_verbose_includes_heavy(tm_epic_phase):
-    backlog_add_task(
-        epic="test-epic",
-        task_id="T-1",
-        title="X",
-        tldr="T.",
-        notes="Heavy notes content.",
-        phase="dev",
-    )
+    backlog_add_task(epic="test-epic", title="X", tldr="T.", notes="Heavy notes content.", phase="dev", options={"task_id": "T-1"})
     out = backlog_list_tasks(verbose=True)
     assert "Heavy notes content" in out
 

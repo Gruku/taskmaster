@@ -4,9 +4,7 @@ from taskmaster.backlog_server import _find_tasks_by_bundle, _load as _load_back
 
 
 def _add(task_id, bundle="", sub_repo=""):
-    backlog_server.backlog_add_task(
-        title=task_id, epic="test-epic", phase="dev",
-        task_id=task_id, bundle=bundle, sub_repo=sub_repo)
+    backlog_server.backlog_add_task(title=task_id, epic="test-epic", phase="dev", bundle=bundle, options={"task_id": task_id, "sub_repo": sub_repo})
 
 
 def test_find_returns_only_members(tm_epic_phase):
@@ -18,17 +16,13 @@ def test_find_returns_only_members(tm_epic_phase):
 
 def test_birth_sub_repo_mismatch_rejected_on_add(tm_epic_phase):
     _add("b-1", bundle="ux", sub_repo="api")
-    out = backlog_server.backlog_add_task(
-        title="b-2", epic="test-epic", phase="dev",
-        task_id="b-2", bundle="ux", sub_repo="web")
+    out = backlog_server.backlog_add_task(title="b-2", epic="test-epic", phase="dev", bundle="ux", options={"task_id": "b-2", "sub_repo": "web"})
     assert "sub_repo" in out.lower() and out.lower().startswith("error")
 
 
 def test_birth_sub_repo_match_allowed(tm_epic_phase):
     _add("b-1", bundle="ux", sub_repo="api")
-    out = backlog_server.backlog_add_task(
-        title="b-2", epic="test-epic", phase="dev",
-        task_id="b-2", bundle="ux", sub_repo="api")
+    out = backlog_server.backlog_add_task(title="b-2", epic="test-epic", phase="dev", bundle="ux", options={"task_id": "b-2", "sub_repo": "api"})
     assert not out.lower().startswith("error")
 
 

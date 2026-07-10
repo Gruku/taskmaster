@@ -39,13 +39,7 @@ def test_validate_no_warning_when_all_have_tldr(tm_epic_phase):
     """backlog_validate should NOT produce a warnings section when all tasks have tldr."""
     from taskmaster import backlog_server
 
-    backlog_server.backlog_add_task(
-        epic="test-epic",
-        task_id="T-has-tldr",
-        title="Task with tldr",
-        tldr="This is a proper tldr.",
-        phase="dev",
-    )
+    backlog_server.backlog_add_task(epic="test-epic", title="Task with tldr", tldr="This is a proper tldr.", phase="dev", options={"task_id": "T-has-tldr"})
 
     out = backlog_server.backlog_validate()
 

@@ -43,7 +43,7 @@ def test_bind_task_to_component(tm_epic_phase):
     # tm_epic_phase pre-creates epic "test-epic" + phase "dev"
     val = json.dumps({"core": {"title": "Core", "after": []}})
     backlog_update_epic("test-epic", "components", val)
-    backlog_add_task(epic="test-epic", task_id="T-1", title="X", phase="dev")
+    backlog_add_task(epic="test-epic", title="X", phase="dev", options={"task_id": "T-1"})
     assert "Error" not in backlog_update_task("T-1", "component", "core")
     data = _load()
     t = next(t for e in data["epics"] for t in e.get("tasks", []) if t["id"] == "T-1")
@@ -51,13 +51,13 @@ def test_bind_task_to_component(tm_epic_phase):
 
 def test_bind_unknown_component_rejected(tm_epic_phase):
     backlog_update_epic("test-epic", "components", json.dumps({"core": {"title": "Core"}}))
-    backlog_add_task(epic="test-epic", task_id="T-2", title="Y", phase="dev")
+    backlog_add_task(epic="test-epic", title="Y", phase="dev", options={"task_id": "T-2"})
     out = backlog_update_task("T-2", "component", "ghost")
     assert "Error" in out and "ghost" in out
 
 def test_clear_component(tm_epic_phase):
     backlog_update_epic("test-epic", "components", json.dumps({"core": {"title": "Core"}}))
-    backlog_add_task(epic="test-epic", task_id="T-3", title="Z", phase="dev")
+    backlog_add_task(epic="test-epic", title="Z", phase="dev", options={"task_id": "T-3"})
     backlog_update_task("T-3", "component", "core")
     assert "Error" not in backlog_update_task("T-3", "component", "")
     t = next(t for e in _load()["epics"] for t in e.get("tasks", []) if t["id"] == "T-3")
@@ -69,7 +69,7 @@ def test_component_rollup(tm_epic_phase):
                         json.dumps({"core": {"title": "Core"}, "ui": {"title": "UI"}}))
     for tid, comp, status in [("R-1", "core", "done"), ("R-2", "core", "in-progress"),
                               ("R-3", "ui", "todo"), ("R-4", None, "todo")]:
-        backlog_add_task(epic="test-epic", task_id=tid, title=tid, phase="dev")
+        backlog_add_task(epic="test-epic", title=tid, phase="dev", options={"task_id": tid})
         if comp:
             backlog_update_task(tid, "component", comp)
         _set_status(tid, status)
@@ -101,7 +101,7 @@ def test_components_reject_self_reference(tmp_taskmaster):
 def test_stale_component_binding_rolls_to_unassigned(tm_epic_phase):
     backlog_update_epic("test-epic", "components",
                         json.dumps({"core": {"title": "Core"}}))
-    backlog_add_task(epic="test-epic", task_id="S-1", title="S1", phase="dev")
+    backlog_add_task(epic="test-epic", title="S1", phase="dev", options={"task_id": "S-1"})
     backlog_update_task("S-1", "component", "core")
     # remove the component the task is bound to (stale binding)
     backlog_update_epic("test-epic", "components", json.dumps({"ui": {"title": "UI"}}))

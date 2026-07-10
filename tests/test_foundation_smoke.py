@@ -23,12 +23,7 @@ def test_slim_defaults_across_all_entities(tm_epic_phase):
     )
 
     # ── Create one of each entity with heavy body content ──────────────────
-    backlog_add_task(
-        epic="test-epic", task_id="T-1", title="Auth",
-        tldr="Refactor auth.",
-        notes="Heavy notes content here.",
-        phase="dev",
-    )
+    backlog_add_task(epic="test-epic", title="Auth", tldr="Refactor auth.", notes="Heavy notes content here.", phase="dev", options={"task_id": "T-1"})
 
     backlog_issue_create(
         title="Bug", severity="P1", tldr="Auth bug.",
@@ -107,12 +102,7 @@ def test_token_budget_targets_met(tm_epic_phase):
     """Confirm Plan A's slim mode produces the promised token reductions."""
     from taskmaster.backlog_server import backlog_add_task, backlog_get_task
 
-    backlog_add_task(
-        epic="test-epic", task_id="T-1", title="Auth refactor",
-        tldr="Refactor middleware.",
-        notes="A" * 2000,
-        phase="dev",
-    )
+    backlog_add_task(epic="test-epic", title="Auth refactor", tldr="Refactor middleware.", notes="A" * 2000, phase="dev", options={"task_id": "T-1"})
 
     slim = backlog_get_task("T-1")
     assert len(slim) < 800, (

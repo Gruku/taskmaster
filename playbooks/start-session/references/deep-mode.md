@@ -16,7 +16,7 @@ Call `backlog_last_session` to get the most recent PROGRESS.md entry. Surface as
 
 ### D3. Open decisions
 
-Call `backlog_decision_list(status="open")`. Report the count and titles.
+Call `backlog_decision(action="list", status="open")`. Report the count and titles.
 
 > "3 open decisions: DEC-001 (Land ue-plugin-086), DEC-003 (Voice billing semantics), DEC-005 (…)"
 

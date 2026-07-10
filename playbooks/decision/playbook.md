@@ -6,7 +6,7 @@ A decision is a structured branching point: ≥2 mutually exclusive paths Claude
 
 The user used to receive option menus inline in chat ("Options: 1. ... 2. ..."). Scrollback is not durable storage. After context dies, the user couldn't find unresolved choices and resorted to writing Telegram messages to themselves. Decisions move that menu into a first-class entity readable from the continuity dashboard.
 
-The backend is `backlog_decision_create` / `backlog_decision_resolve` / `backlog_decision_drop` / `backlog_decision_update` / `backlog_decision_list` / `backlog_decision_get`. This skill is the **authoring + lifecycle** layer. Calling the MCP tools directly skips trigger heuristics and the option-quality gate. Always go through this skill.
+The backend is `backlog_decision_create` (distinct tool) plus `backlog_decision(action=...)` for `list` / `get` / `resolve` / `drop` / `update`. This skill is the **authoring + lifecycle** layer. Calling the MCP tools directly skips trigger heuristics and the option-quality gate. Always go through this skill.
 
 ## When to invoke
 
@@ -61,7 +61,7 @@ See [`references/auto-resolution.md`](references/auto-resolution.md).
 
 1. Parse the option number from the user's phrasing ("option 2", "the local merge one", "2", `/decide DEC-001 2`).
 2. Optionally capture a one-line rationale.
-3. Call `backlog_decision_resolve(decision_id, resolved_with, rationale)`.
+3. Call `backlog_decision(action="resolve", decision_id=..., resolved_with=..., rationale=...)`.
 4. Echo the resolution and (if a linked task exists) append a one-line trace to the task body:
    `2026-MM-DD · DEC-NNN resolved with option N: "<option text>"`.
 

@@ -26,7 +26,7 @@ For issues count: use the `open_issues_count` field from `backlog_status` output
 
 ### Step 3b — Linear sync footer (only if `linear.yaml` exists)
 
-If `.taskmaster/linear.yaml` is present in the project, call `backlog_linear_status()` once. Append a single line to the briefing **only if non-zero**:
+If `.taskmaster/linear.yaml` is present in the project, call `backlog_linear(action="status")` once. Append a single line to the briefing **only if non-zero**:
 
 ```
 Linear sync: N queued · M permanent failures (latest: <reason snippet>)
@@ -36,7 +36,7 @@ If the queue is empty and there are no permanent failures, omit this line entire
 
 ### Step 3c — Your desk (sticky notes)
 
-Call `backlog_note_list()`. If notes exist, render them under a **Your desk** heading in the briefing — pinned first, one line each (author · age · first line). These are the user's situational notes-to-self: treat as orientation context for "what was on my mind", alongside (not replacing) the last handover. Never archive, edit, or act on a note without the user asking.
+Call `backlog_note(action="list")`. If notes exist, render them under a **Your desk** heading in the briefing — pinned first, one line each (author · age · first line). These are the user's situational notes-to-self: treat as orientation context for "what was on my mind", alongside (not replacing) the last handover. Never archive, edit, or act on a note without the user asking.
 
 ### Step 3d — Legacy lessons notice (only if `.taskmaster/lessons/` has `L-*.md` files)
 

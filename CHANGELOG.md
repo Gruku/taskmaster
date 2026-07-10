@@ -8,6 +8,22 @@ indicate schema breaks or removed surfaces.
 
 ---
 
+## 4.3.0
+**MCP write-surface consolidation (tm-audit-020).** Merges skill-mediated write families behind action-dispatched tools and collapses heavy update signatures, cutting the MCP surface from 95 to 76 tools and trimming per-tool schema tokens loaded into every session. All consolidated families are skill-mediated (the taskmaster:linear / :decision / :handover skills and the note/link routing tell the model exactly what to call), so this ships as a minor by explicit user convention — no alias shims; skills update in the same release.
+- **Merged (per-verb tools removed, one action-dispatched tool added):**
+  - `backlog_linear` replaces `backlog_linear_probe`, `backlog_linear_bootstrap_apply`, `backlog_linear_link`, `backlog_linear_unlink`, `backlog_linear_list`, `backlog_linear_show`, `backlog_linear_status`, `backlog_linear_retry` (action ∈ probe/bootstrap_apply/link/unlink/list/show/status/retry).
+  - `backlog_note` replaces `backlog_note_create`, `backlog_note_list`, `backlog_note_get`, `backlog_note_update`, `backlog_note_archive` (action ∈ create/list/get/update/archive).
+  - `backlog_link` replaces `backlog_link_create`, `backlog_link_remove`, `backlog_link_query`, `backlog_link_validate`, `backlog_link_reconcile` (action ∈ create/remove/query/validate/reconcile).
+  - `backlog_decision` replaces `backlog_decision_list`, `backlog_decision_get`, `backlog_decision_resolve`, `backlog_decision_drop`, `backlog_decision_update` (action ∈ list/get/resolve/drop/update). `backlog_decision_create` stays a distinct tool (heavy, distinct schema).
+- **Param collapse (tool kept, signature changed):**
+  - `backlog_issue_update`, `backlog_bug_update`, `backlog_idea_update` now take `(id, field, value)` like `backlog_update_task`. One field per call; list fields (e.g. `components`) take a comma-separated value; `archived` takes `"true"`/`"false"`. Lifecycle-paired updates (e.g. `status=fixed` needs `fixed_in_task`) are two sequential calls — set the companion field first; validation reads the merged on-disk state.
+  - `backlog_add_task` keeps the common path top-level (title, epic, phase, priority, tldr, notes, next_step, depends_on, bundle) and moves rarely-set params into an `options` dict: `docs`, `sub_repo`, `stage`, `estimate`, `anchors`, `task_id`, `area`.
+  - `backlog_handover_create` moves `branch`, `tip_commit`, `context_size_at_write`, `review_reason` into an `options` dict.
+
+Direct MCP callers of the removed per-verb tools must switch to the merged tool with an `action` argument; direct callers of the collapsed update tools must switch to `field`/`value`. Skill-mediated callers are updated in this release.
+
+---
+
 ## 4.2.0
 **Project-structure scan and recap removed.** Two non-working features culled (2026-07-10). Note: breaks direct MCP callers of the four removed tools; shipped as a minor by explicit user decision.
 - **Removed:** `backlog_project_structure` MCP tool, the `/api/project-structure` HTTP endpoint, and the viewer Structure > Project screen. The git-scanning subsystem behind them could hang on large or slow repos; the feature is culled. The `backlog_project_*` manifest tools (`project.yaml`) are unaffected.

@@ -20,7 +20,7 @@ def _setup(tm_epic_phase):
     backlog_update_epic("test-epic", "components",
                         json.dumps({"core": {"title": "Core"}}))
     for tid, status in [("E-1", "done"), ("E-2", "in-progress"), ("E-3", "todo")]:
-        backlog_add_task(epic="test-epic", task_id=tid, title=tid, phase="dev")
+        backlog_add_task(epic="test-epic", title=tid, phase="dev", options={"task_id": tid})
         backlog_update_task(tid, "component", "core")
         _set_status(tid, status)
 
@@ -37,7 +37,7 @@ def test_epic_status_unknown(tm_epic_phase):
     assert "Error" in out and "ghost" in out
 
 def test_epic_status_attention_list(tm_epic_phase):
-    backlog_add_task(epic="test-epic", task_id="A-1", title="blocked one", phase="dev")
+    backlog_add_task(epic="test-epic", title="blocked one", phase="dev", options={"task_id": "A-1"})
     backlog_update_task("A-1", "status", "blocked")
     backlog_update_task("A-1", "blockers", "waiting on CDN creds")
     out = backlog_epic_status("test-epic")
@@ -45,12 +45,12 @@ def test_epic_status_attention_list(tm_epic_phase):
     assert "A-1" in out and "CDN creds" in out
 
 def test_epic_status_no_attention_when_clean(tm_epic_phase):
-    backlog_add_task(epic="test-epic", task_id="C-1", title="fine", phase="dev")
+    backlog_add_task(epic="test-epic", title="fine", phase="dev", options={"task_id": "C-1"})
     out = backlog_epic_status("test-epic")
     assert "Attention" not in out
 
 def test_epic_status_shows_unassigned(tm_epic_phase):
-    backlog_add_task(epic="test-epic", task_id="U-1", title="loose", phase="dev")
+    backlog_add_task(epic="test-epic", title="loose", phase="dev", options={"task_id": "U-1"})
     out = backlog_epic_status("test-epic")
     assert "unassigned" in out
 
@@ -58,9 +58,9 @@ def test_epic_status_counts_archived(tm_epic_phase):
     # Two tasks: one done, one archived. Archiving keeps the task in
     # epic["tasks"] with status "archived" (verified: backlog_archive_task
     # mutates status in place, does not move the task out of the list).
-    backlog_add_task(epic="test-epic", task_id="K-1", title="kept", phase="dev")
+    backlog_add_task(epic="test-epic", title="kept", phase="dev", options={"task_id": "K-1"})
     _set_status("K-1", "done")
-    backlog_add_task(epic="test-epic", task_id="K-2", title="closed", phase="dev")
+    backlog_add_task(epic="test-epic", title="closed", phase="dev", options={"task_id": "K-2"})
     _set_status("K-2", "done")
     backlog_archive_task("K-2", reason="done")
     out = backlog_epic_status("test-epic")
@@ -76,7 +76,7 @@ def test_epic_status_shows_done_when(tm_epic_phase):
 
 
 def test_epic_status_closeable_when_all_done(tm_epic_phase):
-    backlog_add_task(epic="test-epic", task_id="D-1", title="one", phase="dev")
+    backlog_add_task(epic="test-epic", title="one", phase="dev", options={"task_id": "D-1"})
     _set_status("D-1", "done")
     out = backlog_epic_status("test-epic")
     assert "CLOSEABLE" in out
@@ -84,9 +84,9 @@ def test_epic_status_closeable_when_all_done(tm_epic_phase):
 
 
 def test_epic_status_not_closeable_with_open_tasks(tm_epic_phase):
-    backlog_add_task(epic="test-epic", task_id="O-1", title="one", phase="dev")
+    backlog_add_task(epic="test-epic", title="one", phase="dev", options={"task_id": "O-1"})
     _set_status("O-1", "done")
-    backlog_add_task(epic="test-epic", task_id="O-2", title="two", phase="dev")
+    backlog_add_task(epic="test-epic", title="two", phase="dev", options={"task_id": "O-2"})
     # O-2 stays todo
     out = backlog_epic_status("test-epic")
     assert "CLOSEABLE" not in out
@@ -99,9 +99,9 @@ def test_epic_status_zero_tasks_not_closeable(tm_epic_phase):
 
 def test_epic_status_closeable_counts_archived_as_done(tm_epic_phase):
     # Mirrors test_epic_status_counts_archived's math: done + archived == total.
-    backlog_add_task(epic="test-epic", task_id="AC-1", title="kept", phase="dev")
+    backlog_add_task(epic="test-epic", title="kept", phase="dev", options={"task_id": "AC-1"})
     _set_status("AC-1", "done")
-    backlog_add_task(epic="test-epic", task_id="AC-2", title="closed", phase="dev")
+    backlog_add_task(epic="test-epic", title="closed", phase="dev", options={"task_id": "AC-2"})
     _set_status("AC-2", "done")
     backlog_archive_task("AC-2", reason="done")
     out = backlog_epic_status("test-epic")

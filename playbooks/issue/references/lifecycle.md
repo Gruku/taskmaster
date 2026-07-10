@@ -25,7 +25,7 @@ When to use: you have started root-cause analysis but have not landed a fix.
 Required field: none.
 
 ```
-backlog_issue_update(issue_id="ISS-NNN", status="investigating")
+backlog_issue_update("ISS-NNN", "status", "investigating")
 ```
 
 The most common first transition. Use it to signal that the issue is being actively worked rather than sitting in the queue.
@@ -34,10 +34,11 @@ The most common first transition. Use it to signal that the issue is being activ
 
 When to use: the fix is committed and covered by a task.
 
-Required field: `fixed_in_task` must be set to the task ID that contains the fix. `_validate_issue` raises `ValueError` if `fixed_in_task` is absent when `status="fixed"`.
+Required field: `fixed_in_task` must be set to the task ID that contains the fix. `_validate_issue` raises `ValueError` if `fixed_in_task` is absent when `status="fixed"`. Set it first — `backlog_issue_update` takes one field/value per call and validates the merged on-disk state.
 
 ```
-backlog_issue_update(issue_id="ISS-NNN", status="fixed", fixed_in_task="T-NNN")
+backlog_issue_update("ISS-NNN", "fixed_in_task", "T-NNN")
+backlog_issue_update("ISS-NNN", "status", "fixed")
 ```
 
 The backend auto-fills `resolved` with today's ISO date if it is not already set. The issue file is rewritten and the index is rebuilt automatically via `sync_issue_index`.
@@ -49,17 +50,18 @@ When to use: triaged out — the defect is acknowledged but not worth fixing (sc
 Required field: none, but a body note is expected by convention.
 
 ```
-backlog_issue_update(issue_id="ISS-NNN", status="wontfix")
+backlog_issue_update("ISS-NNN", "status", "wontfix")
 ```
 
 ### open/investigating → duplicate
 
 When to use: the same defect is already tracked under another `ISS-NNN`.
 
-Required field: `duplicate_of` must be set. `_validate_issue` raises `ValueError` if `duplicate_of` is absent when `status="duplicate"`.
+Required field: `duplicate_of` must be set. `_validate_issue` raises `ValueError` if `duplicate_of` is absent when `status="duplicate"`. Set it first (one field/value per call).
 
 ```
-backlog_issue_update(issue_id="ISS-NNN", status="duplicate", duplicate_of="ISS-MMM")
+backlog_issue_update("ISS-NNN", "duplicate_of", "ISS-MMM")
+backlog_issue_update("ISS-NNN", "status", "duplicate")
 ```
 
 ## What happens on disk

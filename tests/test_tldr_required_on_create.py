@@ -32,13 +32,7 @@ def _load_task(tmp_taskmaster, task_id: str) -> dict:
 
 
 def test_add_task_with_tldr_succeeds(tm_epic_phase):
-    result = backlog_add_task(
-        epic="test-epic",
-        task_id="T-tldr-1",
-        title="Test task",
-        tldr="One-line essence of the task.",
-        phase="dev",
-    )
+    result = backlog_add_task(epic="test-epic", title="Test task", tldr="One-line essence of the task.", phase="dev", options={"task_id": "T-tldr-1"})
     assert "T-tldr-1" in result
     t = _load_task(tm_epic_phase, "T-tldr-1")
     assert t["tldr"] == "One-line essence of the task."
@@ -46,13 +40,7 @@ def test_add_task_with_tldr_succeeds(tm_epic_phase):
 
 
 def test_add_task_without_tldr_autogenerates_from_body(tm_epic_phase):
-    result = backlog_add_task(
-        epic="test-epic",
-        task_id="T-tldr-2",
-        title="Test task",
-        notes="Fix the auth middleware. It breaks on Friday deploys.",
-        phase="dev",
-    )
+    result = backlog_add_task(epic="test-epic", title="Test task", notes="Fix the auth middleware. It breaks on Friday deploys.", phase="dev", options={"task_id": "T-tldr-2"})
     assert "T-tldr-2" in result
     t = _load_task(tm_epic_phase, "T-tldr-2")
     assert "Fix the auth middleware" in t["tldr"]
@@ -60,33 +48,20 @@ def test_add_task_without_tldr_autogenerates_from_body(tm_epic_phase):
 
 
 def test_add_task_without_tldr_or_body_uses_title(tm_epic_phase):
-    backlog_add_task(epic="test-epic", task_id="T-tldr-3", title="Refactor auth", phase="dev")
+    backlog_add_task(epic="test-epic", title="Refactor auth", phase="dev", options={"task_id": "T-tldr-3"})
     t = _load_task(tm_epic_phase, "T-tldr-3")
     assert "Refactor auth" in t["tldr"]
     assert t.get("tldr_autogen") is True
 
 
 def test_add_task_with_next_step_persists(tm_epic_phase):
-    backlog_add_task(
-        epic="test-epic",
-        task_id="T-tldr-4",
-        title="Auth refactor",
-        tldr="Refactor auth.",
-        next_step="Write failing test first.",
-        phase="dev",
-    )
+    backlog_add_task(epic="test-epic", title="Auth refactor", tldr="Refactor auth.", next_step="Write failing test first.", phase="dev", options={"task_id": "T-tldr-4"})
     t = _load_task(tm_epic_phase, "T-tldr-4")
     assert "Write failing test first" in t["next_step"]
 
 
 def test_update_task_next_step(tm_epic_phase):
-    backlog_add_task(
-        epic="test-epic",
-        task_id="T-tldr-5",
-        title="Auth",
-        tldr="Auth tldr.",
-        phase="dev",
-    )
+    backlog_add_task(epic="test-epic", title="Auth", tldr="Auth tldr.", phase="dev", options={"task_id": "T-tldr-5"})
     backlog_update_task("T-tldr-5", next_step="Now do Y.")
     t = _load_task(tm_epic_phase, "T-tldr-5")
     assert "Now do Y" in t["next_step"]
@@ -94,13 +69,7 @@ def test_update_task_next_step(tm_epic_phase):
 
 def test_update_task_rejects_mixed_styles(tm_epic_phase):
     """Mixing kwarg style with field/value style is an error, not a silent drop."""
-    backlog_add_task(
-        epic="test-epic",
-        task_id="T-tldr-6",
-        title="Mixed",
-        tldr="Mixed tldr.",
-        phase="dev",
-    )
+    backlog_add_task(epic="test-epic", title="Mixed", tldr="Mixed tldr.", phase="dev", options={"task_id": "T-tldr-6"})
     result = backlog_update_task(
         "T-tldr-6", field="title", value="Renamed", tldr="New tldr"
     )
@@ -114,13 +83,7 @@ def test_update_task_rejects_mixed_styles(tm_epic_phase):
 
 def test_update_task_rejects_empty_tldr(tm_epic_phase):
     """tldr cannot be cleared via the classic field/value API — it is required."""
-    backlog_add_task(
-        epic="test-epic",
-        task_id="T-tldr-7",
-        title="Empty tldr test",
-        tldr="Original tldr.",
-        phase="dev",
-    )
+    backlog_add_task(epic="test-epic", title="Empty tldr test", tldr="Original tldr.", phase="dev", options={"task_id": "T-tldr-7"})
     result = backlog_update_task("T-tldr-7", field="tldr", value="")
     assert "Error" in result
     assert "tldr cannot be cleared" in result

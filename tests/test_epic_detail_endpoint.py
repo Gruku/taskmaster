@@ -32,7 +32,7 @@ def test_load_epic_full_merges_heavy_fields_and_rollup(tm_epic_phase):
     backlog_update_epic("test-epic", "components",
                         json.dumps({"core": {"title": "Core", "after": []}}))
     for tid, status in [("E-1", "done"), ("E-2", "in-progress"), ("E-3", "todo")]:
-        backlog_add_task(epic="test-epic", task_id=tid, title=tid, phase="dev")
+        backlog_add_task(epic="test-epic", title=tid, phase="dev", options={"task_id": tid})
         backlog_update_task(tid, "component", "core")
         _set_status(tid, status)
 
@@ -49,7 +49,7 @@ def test_load_epic_full_merges_heavy_fields_and_rollup(tm_epic_phase):
 
 
 def test_load_epic_full_attention_lists_blocked(tm_epic_phase):
-    backlog_add_task(epic="test-epic", task_id="B-1", title="blocked one", phase="dev")
+    backlog_add_task(epic="test-epic", title="blocked one", phase="dev", options={"task_id": "B-1"})
     backlog_update_task("B-1", "status", "blocked")
     backlog_update_task("B-1", "blockers", "waiting on CDN creds")
     out = _load_epic_full("test-epic")
@@ -64,16 +64,16 @@ def test_load_epic_full_carries_done_when_and_area(tm_epic_phase):
 
 
 def test_load_epic_full_closeable_when_all_done(tm_epic_phase):
-    backlog_add_task(epic="test-epic", task_id="CL-1", title="one", phase="dev")
+    backlog_add_task(epic="test-epic", title="one", phase="dev", options={"task_id": "CL-1"})
     _set_status("CL-1", "done")
     out = _load_epic_full("test-epic")
     assert out["closeable"] is True
 
 
 def test_load_epic_full_not_closeable_with_open_tasks(tm_epic_phase):
-    backlog_add_task(epic="test-epic", task_id="OP-1", title="one", phase="dev")
+    backlog_add_task(epic="test-epic", title="one", phase="dev", options={"task_id": "OP-1"})
     _set_status("OP-1", "done")
-    backlog_add_task(epic="test-epic", task_id="OP-2", title="two", phase="dev")
+    backlog_add_task(epic="test-epic", title="two", phase="dev", options={"task_id": "OP-2"})
     out = _load_epic_full("test-epic")
     assert out["closeable"] is False
 
@@ -84,9 +84,9 @@ def test_load_epic_full_zero_tasks_not_closeable(tm_epic_phase):
 
 
 def test_load_epic_full_closeable_counts_archived_as_done(tm_epic_phase):
-    backlog_add_task(epic="test-epic", task_id="ACL-1", title="kept", phase="dev")
+    backlog_add_task(epic="test-epic", title="kept", phase="dev", options={"task_id": "ACL-1"})
     _set_status("ACL-1", "done")
-    backlog_add_task(epic="test-epic", task_id="ACL-2", title="closed", phase="dev")
+    backlog_add_task(epic="test-epic", title="closed", phase="dev", options={"task_id": "ACL-2"})
     _set_status("ACL-2", "done")
     from taskmaster.backlog_server import backlog_archive_task
     backlog_archive_task("ACL-2", reason="done")
