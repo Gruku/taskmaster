@@ -44,7 +44,7 @@ After `backlog_complete_task` succeeds, check whether the just-completed task ha
 
 | Choice | Action |
 |---|---|
-| Close as fixed | `backlog_issue_update(issue_id="ISS-XXX", status="fixed", fixed_in_task="<task_id>")` |
+| Close as fixed | `backlog_issue_update("ISS-XXX", "fixed_in_task", "<task_id>")` then `backlog_issue_update("ISS-XXX", "status", "fixed")` |
 | Leave for follow-up | No tool call - issue remains open |
 
 If the task has no `related_issues`, or all related issues are already fixed/closed/wont-fix, skip this sub-step silently.

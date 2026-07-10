@@ -4,9 +4,9 @@ Driver skill for Taskmaster's Linear sync. Linear is a **shared mirror** — TM 
 
 ## Why this skill exists
 
-The `backlog_linear_*` MCP tools (`probe`, `bootstrap_apply`, `link`, `unlink`, `list`, `show`, `status`, `retry`) are the storage / transport layer. This skill is the dialogue layer — bootstrap requires a multi-step probe → propose-mapping → apply flow that has to happen in conversation, not in a single tool call.
+The `backlog_linear` MCP tool (one action-dispatched entry point; actions `probe`, `bootstrap_apply`, `link`, `unlink`, `list`, `show`, `status`, `retry`) is the storage / transport layer. This skill is the dialogue layer — bootstrap requires a multi-step probe → propose-mapping → apply flow that has to happen in conversation, not in a single tool call.
 
-Calling `backlog_linear_bootstrap_apply` directly skips the discovery + mapping proposal. Don't do that.
+Calling `backlog_linear(action="bootstrap_apply", ...)` directly skips the discovery + mapping proposal. Don't do that.
 
 ## Entry points
 
@@ -36,7 +36,7 @@ If the user hasn't created an API key: point them to `https://linear.app/setting
 
 ### Step 2 — probe
 
-Call `backlog_linear_probe(token_env="TASKMASTER_LINEAR_TOKEN_<ALIAS>")`. Returns JSON: teams + their statuses + users.
+Call `backlog_linear(action="probe", token_env="TASKMASTER_LINEAR_TOKEN_<ALIAS>")`. Returns JSON: teams + their statuses + users.
 
 Present a summary:
 ```
@@ -57,7 +57,7 @@ Show the proposed mapping as a table and confirm with the user before writing.
 
 ### Step 4 — apply
 
-Call `backlog_linear_bootstrap_apply(workspace_alias=..., team_id=..., token_env=..., status_mapping="todo:state-uuid,...", priority_mapping="critical:1,...", default_workspace=True)`.
+Call `backlog_linear(action="bootstrap_apply", workspace_alias=..., team_id=..., token_env=..., status_mapping="todo:state-uuid,...", priority_mapping="critical:1,...", default_workspace=True)`.
 
 Read the response. On success: confirm with the user and offer the next move — "Want to link an existing task now (`/linear link <task_id> <KEY>`), or rely on auto-push for new mutations?"
 
@@ -65,7 +65,7 @@ Read the response. On success: confirm with the user and offer the next move —
 
 User: `link auth-003 to linear ENG-42`.
 
-Call `backlog_linear_link(task_id="auth-003", external_key="ENG-42")`. The tool creates the Tracker file and stamps `tracker_id` on the task. Confirm with the user; the next mutation on that task will push to Linear.
+Call `backlog_linear(action="link", task_id="auth-003", external_key="ENG-42")`. The tool creates the Tracker file and stamps `tracker_id` on the task. Confirm with the user; the next mutation on that task will push to Linear.
 
 If `workspace_alias` is ambiguous (multiple in `linear.yaml`), pass it explicitly.
 
@@ -73,13 +73,13 @@ If `workspace_alias` is ambiguous (multiple in `linear.yaml`), pass it explicitl
 
 User: `unlink auth-003 from linear`.
 
-Call `backlog_linear_unlink(task_id="auth-003")`. The tracker file stays on disk as a historical record — the task just no longer references it. Subsequent mutations on that task are no-ops for Linear. Tell the user.
+Call `backlog_linear(action="unlink", task_id="auth-003")`. The tracker file stays on disk as a historical record — the task just no longer references it. Subsequent mutations on that task are no-ops for Linear. Tell the user.
 
 ## status
 
 User: `show linear status`.
 
-Call `backlog_linear_status()`. Read the JSON. Surface:
+Call `backlog_linear(action="status")`. Read the JSON. Surface:
 - Queue depth and the oldest enqueued item's age
 - Count of permanent failures (and the most recent reason)
 - Recent transient retries
@@ -90,19 +90,19 @@ If the queue has stuck permanent failures: surface the reason and offer `taskmas
 
 User: `retry linear pushes` or `retry linear for auth-003`.
 
-Call `backlog_linear_retry(target_id="")` for all, or `backlog_linear_retry(target_id="auth-003")` for one. Returns counts. Surface them.
+Call `backlog_linear(action="retry", target_id="")` for all, or `backlog_linear(action="retry", target_id="auth-003")` for one. Returns counts. Surface them.
 
 ## list
 
 User: `list linear trackers`.
 
-Call `backlog_linear_list()`. Returns JSON of all linear trackers + their last-pushed state. Render as a table.
+Call `backlog_linear(action="list")`. Returns JSON of all linear trackers + their last-pushed state. Render as a table.
 
 ## show
 
 User: `show tracker linear-cm-eng-42`.
 
-Call `backlog_linear_show("linear-cm-eng-42")`. Returns the full frontmatter + body. Render plainly.
+Call `backlog_linear(action="show", tracker_id="linear-cm-eng-42")`. Returns the full frontmatter + body. Render plainly.
 
 ## Notes
 

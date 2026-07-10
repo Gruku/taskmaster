@@ -12,7 +12,7 @@ Log the current work session, transition tasks, and commit tracking files.
 
 Check schema: `backlog_status` first line shows `Schema: v<N>`.
 
-**v3-pre-1: Decision sweep** (before handover write). Call `backlog_decision_list(status="open", task_id=<current>)`. For each open decision: ask to carry forward / resolve now / drop. The resulting open / resolved sets are folded into the handover **body** under "Open decisions" / "Resolved this session" sections — they are not separate kwargs to `backlog_handover_create`. Full flow: `references/v3-pre-steps.md`.
+**v3-pre-1: Decision sweep** (before handover write). Call `backlog_decision(action="list", status="open", task_id=<current>)`. For each open decision: ask to carry forward / resolve now / drop. The resulting open / resolved sets are folded into the handover **body** under "Open decisions" / "Resolved this session" sections — they are not separate kwargs to `backlog_handover_create`. Full flow: `references/v3-pre-steps.md`.
 
 **v3-pre-2: Handover auto-write.** Write automatically (no prompt) when: session >60 turns, context >200k tokens, task still in-flight, or user said "for tomorrow" / "context handoff". Infer `session_kind` and invoke `taskmaster:handover`. Full flow: `references/v3-pre-steps.md`.
 
@@ -22,7 +22,7 @@ Check schema: `backlog_status` first line shows `Schema: v<N>`.
 
 **v3-pre-2c: Idea-candidate sweep.** Scan for `<idea-candidate>` tags; commit each via `backlog_idea_create`. Full flow: `references/v3-pre-steps.md`.
 
-**v3-pre-2d: Loose thoughts → desk note (optional, max one).** If the session leaves a genuinely situational thought that fits no entity (not a task, idea, issue, or the handover's next_action) — write at most ONE consolidated note via `backlog_note_create(text=...)`. Default is none. Never duplicate handover content into a note; the note is for what would otherwise be lost.
+**v3-pre-2d: Loose thoughts → desk note (optional, max one).** If the session leaves a genuinely situational thought that fits no entity (not a task, idea, issue, or the handover's next_action) — write at most ONE consolidated note via `backlog_note(action="create", text=...)`. Default is none. Never duplicate handover content into a note; the note is for what would otherwise be lost.
 
 ### Existing Flow
 

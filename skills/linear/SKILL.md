@@ -1,6 +1,6 @@
 ---
 name: linear
-description: "Manage Taskmaster's Linear sync. Invoke for: 'set up linear sync', 'connect to linear', 'link task to linear', 'unlink from linear', 'show linear status', 'retry linear pushes', 'what's failing in linear', 'list linear trackers', 'show tracker linear-cm-eng-42'. Only correct way to drive backlog_linear_* — direct calls skip the bootstrap dialogue."
+description: "Manage Taskmaster's Linear sync. Invoke for: 'set up linear sync', 'connect to linear', 'link task to linear', 'unlink from linear', 'show linear status', 'retry linear pushes', 'what's failing in linear', 'list linear trackers', 'show tracker linear-cm-eng-42'. Only correct way to drive backlog_linear — direct calls skip the bootstrap dialogue."
 ---
 
 # Linear

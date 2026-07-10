@@ -46,7 +46,7 @@ Selector run at Bug creation and at task-close. Choices:
 | Choice | Action | Side effects |
 |---|---|---|
 | **fix-now** | Apply the fix as part of the current task | status remains `open` until the commit lands; user comes back and sets `status=fixed, fix_commit=<sha>` |
-| **spawn-task** | Create a follow-up task | `backlog_add_task` returns T-XXX; set bug `status=adopted, adopted_into=T-XXX` |
+| **spawn-task** | Create a follow-up task | `backlog_add_task` returns T-XXX; set bug `adopted_into=T-XXX` then `status=adopted` |
 | **shelve** | Park for later | `status=shelved`; surfaces in start-session "shelved bugs to revisit" |
 | **promote** | Cleared the Issue bar | Walk evidence citation; call `backlog_bug_promote(bug_ids=[B-XXX], evidence_text=...)`; bug → `promoted` |
 
@@ -56,7 +56,7 @@ Trigger: `mark B-XXX fixed`, `shelve B-XXX`, `promote B-XXX`, `close B-XXX`, `fi
 
 1. Identify Bug ID from user message or ask: "Which bug? (B-NNN)"
 2. Confirm target status + required fields per state machine.
-3. Call `backlog_bug_update(bug_id, status=..., fix_commit=..., adopted_into=..., promoted_to=...)`.
+3. `backlog_bug_update` takes one `field`/`value` per call. Set the companion field first, then the status: e.g. `backlog_bug_update(bug_id, "fix_commit", "<sha>")` then `backlog_bug_update(bug_id, "status", "fixed")` (likewise `adopted_into`→`adopted`, `promoted_to`→`promoted`). Validation reads the merged on-disk state, so the two-call order satisfies the lifecycle constraint.
 
 ## triage-review
 

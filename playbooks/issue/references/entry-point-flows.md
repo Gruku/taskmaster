@@ -66,14 +66,12 @@ Trigger: `mark issue fixed`, `close ISS-XX`, `investigating ISS-XX`, explicit st
 
    See `references/lifecycle.md` for full state machine and `_validate_issue` rules.
 
-3. **Call `backlog_issue_update`**:
+3. **Call `backlog_issue_update`** — one `field`/`value` per call. Set the
+   companion field first, then the status (validation reads merged on-disk state):
    ```
-   backlog_issue_update(
-       issue_id="ISS-NNN",
-       status="fixed",
-       fixed_in_task="T-NNN",   # required for fixed
-       # duplicate_of="ISS-MMM", # required for duplicate
-   )
+   backlog_issue_update("ISS-NNN", "fixed_in_task", "T-NNN")   # required for fixed
+   backlog_issue_update("ISS-NNN", "status", "fixed")
+   # for duplicate: backlog_issue_update("ISS-NNN", "duplicate_of", "ISS-MMM") then status="duplicate"
    ```
    The backend auto-fills `resolved` date when `status=fixed`. The index rebuilds automatically.
 
@@ -112,7 +110,8 @@ End-session detects this via the task's `related_issues` list. For each open iss
 
 On confirm for each:
 ```
-backlog_issue_update(issue_id="ISS-XXX", status="fixed", fixed_in_task="T-NNN")
+backlog_issue_update("ISS-XXX", "fixed_in_task", "T-NNN")
+backlog_issue_update("ISS-XXX", "status", "fixed")
 ```
 
 On decline: leave the issue open, no action. The user may close it in a future session or mark it `wontfix`.

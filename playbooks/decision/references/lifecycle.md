@@ -17,7 +17,7 @@ Terminal states do **not** transition back to `open`. A "reopened" decision is a
 
 ## Pre-resolution mutability
 
-While `open`, the following may be edited via `backlog_decision_update`:
+While `open`, the following may be edited via `backlog_decision(action="update", ...)`:
 - `title`
 - `options` (list mutates — recommendation index re-validates)
 - `recommendation`

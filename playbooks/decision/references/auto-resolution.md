@@ -14,10 +14,10 @@ Regex: `^Resolves:\s*(DEC-\d+)\s+with\s+option\s+(\d+)\s*$` (multiline, case-ins
 
 ## 2. end-session sweep
 
-`end-session` runs `backlog_decision_list(status="open", task_id=<current>)` before writing the handover. For each result, it asks the user (use your structured-question tool if available):
+`end-session` runs `backlog_decision(action="list", status="open", task_id=<current>)` before writing the handover. For each result, it asks the user (use your structured-question tool if available):
 
 - **Carry forward** — leave open; the decision is recorded under the handover body's "Open decisions" section as `[[DEC-NNN]] — <summary>`.
-- **Resolve now** — pick an option inline; `backlog_decision_resolve` is called, and the decision is recorded under "Resolved this session".
-- **Drop** — capture reason; `backlog_decision_drop` is called, and the decision is recorded under "Resolved this session" with a `(dropped)` suffix.
+- **Resolve now** — pick an option inline; `backlog_decision(action="resolve", ...)` is called, and the decision is recorded under "Resolved this session".
+- **Drop** — capture reason; `backlog_decision(action="drop", ...)` is called, and the decision is recorded under "Resolved this session" with a `(dropped)` suffix.
 
 The collected lists are embedded directly in the handover **body markdown**. `backlog_handover_create` has no `open_decisions` / `resolved_this_session` kwargs — body sections plus `[[DEC-NNN]]` link syntax are the carrier, and the viewer resolves cross-entity navigation from those links.

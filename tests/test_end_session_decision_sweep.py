@@ -5,7 +5,8 @@ PLAYBOOK = Path("playbooks/end-session/playbook.md")
 
 def test_end_session_mentions_decision_sweep():
     body = PLAYBOOK.read_text(encoding="utf-8")
-    assert "backlog_decision_list" in body
+    # tm-audit-020: decision reads route through the action-dispatched tool.
+    assert 'backlog_decision(action="list"' in body
     assert "carry forward" in body.lower()
     assert "drop" in body.lower()
 
@@ -23,11 +24,12 @@ def test_end_session_folds_decisions_into_handover_body():
 
 
 def test_start_session_calls_backlog_decision_list():
-    """backlog_decision_list must appear in start-session playbook (body or deep-mode reference)."""
+    """The decision-list read must appear in start-session (body or deep-mode ref)."""
     playbook_dir = Path("playbooks/start-session")
     body = (playbook_dir / "playbook.md").read_text(encoding="utf-8")
     deep_ref = playbook_dir / "references" / "deep-mode.md"
     deep_body = deep_ref.read_text(encoding="utf-8") if deep_ref.exists() else ""
-    assert "backlog_decision_list" in body or "backlog_decision_list" in deep_body, (
-        "backlog_decision_list must appear in start-session/playbook.md or references/deep-mode.md"
+    needle = 'backlog_decision(action="list"'
+    assert needle in body or needle in deep_body, (
+        "decision-list read must appear in start-session/playbook.md or references/deep-mode.md"
     )
