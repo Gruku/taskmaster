@@ -70,8 +70,8 @@ def test_query_depth_one_does_not_traverse(tm_dir):
 def test_query_nonexistent_source_returns_error(tm_dir):
     """A well-formed but nonexistent source ID must return an error, not '[]'."""
     out = bs.backlog_link_query(source="T-999")
-    assert out.startswith("error: source"), (
-        f"Expected 'error: source ...' string, got: {out!r}"
+    assert out.startswith("Error: source"), (
+        f"Expected 'Error: source ...' string, got: {out!r}"
     )
     assert "not found" in out, f"Expected 'not found' in error, got: {out!r}"
 
