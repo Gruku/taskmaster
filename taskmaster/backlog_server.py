@@ -4672,12 +4672,6 @@ def backlog_archive_task(task_id: str, reason: str = "done") -> str:
 # ── Worktree Discovery ───────────────────────────────────
 
 
-# (Note: a richer `_discover_sub_repos(project_root: Path) -> list[dict]` is
-#  defined later in the Project Structure helpers block and supersedes the
-#  earlier zero-arg stub that lived here. The stub had no callers in the
-#  codebase or tests; project-structure-visibility-003 reclaims the name.)
-
-
 def _git_subprocess_kwargs() -> dict:
     """Common kwargs for git subprocess calls — prevents hangs on Windows."""
     kwargs: dict = {"capture_output": True, "text": True, "timeout": 3}
