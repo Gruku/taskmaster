@@ -22,6 +22,14 @@ indicate schema breaks or removed surfaces.
 
 Direct MCP callers of the removed per-verb tools must switch to the merged tool with an `action` argument; direct callers of the collapsed update tools must switch to `field`/`value`. Skill-mediated callers are updated in this release.
 
+**MCP server renamed `taskmaster` → `tm` (tm-audit-023).** The `.mcp.json` server key is now `tm`, so tool names become `mcp__plugin_taskmaster_tm__backlog_*` (Claude Code namespaces plugin servers as `plugin:<plugin>:<key>`; the doubled name is gone). Permission allowlists or configs referencing `plugin_taskmaster_taskmaster` must be updated.
+
+**Direct-change lane (tm-audit-024).** Two-tier routing replaces "invoke taskmaster:taskmaster for ANY task-related request": small direct changes (user asked outright, one sitting, no open design decisions, ~≤3 files) skip skills and backlog writes entirely — just make the change and commit; everything else routes through the tracked lane, and a direct change that grows escalates with a one-line note. Encoded in the SessionStart notice (548 chars, net smaller), the router playbook, and the taskmaster skill description.
+
+**Unified MCP read conventions (tm-audit-007).** One slim toggle (`verbose` — `backlog_idea_list`'s `summary` renamed), `limit` on every list surface (default 50, `limit=0` = all, standard "…N more" overflow footer), one error shape (`Error:` prefix — lowercase `error:` sites swept), `note` added to SLIM_FIELDS, and `expand_links` honored uniformly in slim + verbose reads.
+
+**Skill descriptions re-trimmed −25% (tm-audit-026).** All 17 skill frontmatter descriptions tightened (6,016 → 4,504 chars) with every routing-critical clause and trigger phrase preserved.
+
 ---
 
 ## 4.2.0
