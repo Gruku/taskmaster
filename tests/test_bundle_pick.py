@@ -3,9 +3,7 @@ from taskmaster import backlog_server
 
 
 def _add(task_id, bundle="ux", sub_repo="", lane=""):
-    backlog_server.backlog_add_task(
-        title=task_id, epic="test-epic", phase="dev",
-        task_id=task_id, bundle=bundle, sub_repo=sub_repo)
+    backlog_server.backlog_add_task(title=task_id, epic="test-epic", phase="dev", bundle=bundle, options={"task_id": task_id, "sub_repo": sub_repo})
     if lane:
         backlog_server.backlog_update_task(task_id, "lane", lane)
 
@@ -51,7 +49,7 @@ def test_repick_bound_bundle_idempotent(tm_epic_phase):
 
 
 def test_non_bundle_pick_unchanged(tm_epic_phase):
-    backlog_server.backlog_add_task(title="solo", epic="test-epic", phase="dev", task_id="s-1")
+    backlog_server.backlog_add_task(title="solo", epic="test-epic", phase="dev", options={"task_id": "s-1"})
     out = backlog_server.backlog_pick_task("s-1")
     assert "feature/s-1" in out                               # per-task path preserved
 

@@ -24,7 +24,7 @@ def test_task_sections_include_docs_keys():
 def test_get_task_sections_empty_list_returns_error(tm_epic_phase):
     """B-042: backlog_get_task(sections=[]) must return an Error string."""
     from taskmaster.backlog_server import backlog_add_task, backlog_get_task
-    backlog_add_task(epic="test-epic", task_id="T-B042", title="Sections test", tldr="A tldr.", phase="dev")
+    backlog_add_task(epic="test-epic", title="Sections test", tldr="A tldr.", phase="dev", options={"task_id": "T-B042"})
     result = backlog_get_task("T-B042", sections=[])
     assert isinstance(result, str)
     assert result.startswith("Error: sections=[]")
@@ -33,7 +33,7 @@ def test_get_task_sections_empty_list_returns_error(tm_epic_phase):
 def test_get_task_sections_none_returns_slim(tm_epic_phase):
     """B-042: backlog_get_task(sections=None) must return the normal slim view."""
     from taskmaster.backlog_server import backlog_add_task, backlog_get_task
-    backlog_add_task(epic="test-epic", task_id="T-B042b", title="Slim test", tldr="Slim tldr.", phase="dev")
+    backlog_add_task(epic="test-epic", title="Slim test", tldr="Slim tldr.", phase="dev", options={"task_id": "T-B042b"})
     result = backlog_get_task("T-B042b", sections=None)
     assert "Slim tldr." in result
     assert not result.startswith("Error: sections=[]")
@@ -42,8 +42,7 @@ def test_get_task_sections_none_returns_slim(tm_epic_phase):
 def test_get_task_sections_valid_returns_content(tm_epic_phase):
     """B-042: backlog_get_task with a real section name still works."""
     from taskmaster.backlog_server import backlog_add_task, backlog_get_task
-    backlog_add_task(epic="test-epic", task_id="T-B042c", title="Section test", tldr="T.",
-                     notes="My notes here.", phase="dev")
+    backlog_add_task(epic="test-epic", title="Section test", tldr="T.", notes="My notes here.", phase="dev", options={"task_id": "T-B042c"})
     result = backlog_get_task("T-B042c", sections=["notes"])
     assert "My notes here" in result
 

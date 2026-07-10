@@ -21,10 +21,7 @@ def _ensure_scaffold(tmp_path: Path) -> None:
 
 def _add_task(task_id: str, depends_on: str = "") -> None:
     from taskmaster import backlog_server as _bs
-    r = _bs.backlog_add_task(
-        title=f"Task {task_id}", epic="test-epic", phase="dev",
-        priority="medium", task_id=task_id, depends_on=depends_on,
-    )
+    r = _bs.backlog_add_task(title=f"Task {task_id}", epic="test-epic", phase="dev", priority="medium", depends_on=depends_on, options={"task_id": task_id})
     assert "Error" not in r, f"add_task {task_id} failed: {r}"
 
 

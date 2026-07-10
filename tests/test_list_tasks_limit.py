@@ -15,12 +15,7 @@ def _add_tasks(n: int, prefix: str = "T") -> list[str]:
     ids = []
     for i in range(n):
         tid = f"{prefix}-{i:03d}"
-        backlog_add_task(
-            epic="test-epic",
-            task_id=tid,
-            title=f"Task {i}",
-            phase="dev",
-        )
+        backlog_add_task(epic="test-epic", title=f"Task {i}", phase="dev", options={"task_id": tid})
         ids.append(tid)
     return ids
 

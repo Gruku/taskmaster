@@ -213,16 +213,17 @@ def test_v3_issue_lifecycle(tmp_path, monkeypatch):
     assert "---" in got_verbose
 
     # 3. Update status to investigating
-    up = backlog_server.backlog_issue_update(issue_id=iss_id, status="investigating")
+    up = backlog_server.backlog_issue_update(iss_id, "status", "investigating")
     assert "Error" not in up
     assert "investigating" in up
 
     # 4. Fixed WITHOUT fixed_in_task → error
-    err = backlog_server.backlog_issue_update(issue_id=iss_id, status="fixed")
+    err = backlog_server.backlog_issue_update(iss_id, "status", "fixed")
     assert "Error" in err or "error" in err.lower()
 
     # 5. Fixed WITH fixed_in_task → success + resolved date stamped
-    ok = backlog_server.backlog_issue_update(issue_id=iss_id, status="fixed", fixed_in_task=task_id)
+    backlog_server.backlog_issue_update(iss_id, "fixed_in_task", task_id)
+    ok = backlog_server.backlog_issue_update(iss_id, "status", "fixed")
     assert "Error" not in ok
     fm, _ = v3.read_issue(bp, iss_id)
     assert fm["status"] == "fixed"
@@ -310,7 +311,7 @@ def test_e2e_ideas_full_lifecycle(tmp_path, monkeypatch):
     assert "IDEA-001" not in only_candidate
 
     # Archive idea 1
-    arch = backlog_server.backlog_idea_update(idea_id="IDEA-001", archived=True)
+    arch = backlog_server.backlog_idea_update("IDEA-001", "archived", "true")
     assert "IDEA-001" in arch
     listed_default = backlog_server.backlog_idea_list()
     assert "IDEA-001" not in listed_default  # archived excluded by default
@@ -319,7 +320,8 @@ def test_e2e_ideas_full_lifecycle(tmp_path, monkeypatch):
     assert "IDEA-002" in listed_with_arch
 
     # Promote idea 2
-    prom = backlog_server.backlog_idea_update(idea_id="IDEA-002", promoted_to="T-XYZ", archived=True)
+    backlog_server.backlog_idea_update("IDEA-002", "promoted_to", "T-XYZ")
+    prom = backlog_server.backlog_idea_update("IDEA-002", "archived", "true")
     assert "IDEA-002" in prom
 
     # Verify on disk

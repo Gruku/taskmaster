@@ -19,8 +19,7 @@ from taskmaster.backlog_server import (
 
 
 def test_get_task_never_writes_backlog_file(tm_epic_phase, monkeypatch):
-    backlog_add_task(epic="test-epic", task_id="T-RO", title="X", tldr="Short tldr.",
-                      notes="Some notes.", phase="dev")
+    backlog_add_task(epic="test-epic", title="X", tldr="Short tldr.", notes="Some notes.", phase="dev", options={"task_id": "T-RO"})
 
     bp = tm_epic_phase / ".taskmaster" / "backlog.yaml"
     before = bp.read_bytes()
@@ -40,8 +39,7 @@ def test_get_task_never_writes_backlog_file(tm_epic_phase, monkeypatch):
 
 
 def test_last_referenced_unchanged_by_read_advanced_by_mutation(tm_epic_phase):
-    backlog_add_task(epic="test-epic", task_id="T-LR", title="X", tldr="Tldr.",
-                      phase="dev")
+    backlog_add_task(epic="test-epic", title="X", tldr="Tldr.", phase="dev", options={"task_id": "T-LR"})
     # Backdate last_referenced so a same-minute mutation timestamp can't
     # collide with it — isolates "did a read touch this" from clock precision.
     data = backlog_server._load()
@@ -63,8 +61,7 @@ def test_last_referenced_unchanged_by_read_advanced_by_mutation(tm_epic_phase):
 
 
 def test_stale_task_stays_stale_after_read(tm_epic_phase):
-    backlog_add_task(epic="test-epic", task_id="T-STALE", title="Old one", tldr="T.",
-                      phase="dev")
+    backlog_add_task(epic="test-epic", title="Old one", tldr="T.", phase="dev", options={"task_id": "T-STALE"})
     data = backlog_server._load()
     task, _ = backlog_server._find_task(data, "T-STALE")
     task["last_referenced"] = "2020-01-01"

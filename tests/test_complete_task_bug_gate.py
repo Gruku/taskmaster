@@ -41,13 +41,7 @@ def _setup_task(tmp_path: Path, task_id: str = "test-epic-001") -> str:
     if "Error" in r_phase and "already" not in r_phase.lower():
         raise AssertionError(f"add_phase failed: {r_phase}")
 
-    r_task = _bs.backlog_add_task(
-        title="Demo Task",
-        epic="test-epic",
-        phase="dev",
-        priority="medium",
-        task_id=task_id,
-    )
+    r_task = _bs.backlog_add_task(title="Demo Task", epic="test-epic", phase="dev", priority="medium", options={"task_id": task_id})
     assert "Error" not in r_task, f"add_task failed: {r_task}"
 
     # complete_task requires in-progress / in-review / blocked
