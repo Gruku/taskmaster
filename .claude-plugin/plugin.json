@@ -1,7 +1,7 @@
 {
   "name": "taskmaster",
   "description": "Latest channel \u2014 v3 schema. Universal AI-powered task and backlog management plus narrative continuity: handovers, issues. Per-task files (.taskmaster/tasks/<id>.md) with slim YAML index. v2 backlogs keep working unchanged; opt into v3 via `backlog_init schema_version=3` or `backlog_migrate_v3`. Requires: uv (https://docs.astral.sh/uv/)",
-  "version": "5.0.0",
+  "version": "4.2.0",
   "channel": "latest",
   "author": {
     "name": "gruku"
