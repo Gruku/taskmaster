@@ -1,6 +1,6 @@
 ---
 name: check-todos
-description: "Scan the codebase for TODO/FIXME/HACK/XXX comments and cross-reference with the backlog. Invoke when the user says 'check todos', 'are my todos tracked', 'scan for todos', 'todo audit', 'what's untracked', or wants to make sure inline code comments are captured in the task system."
+description: "Scan the codebase for TODO/FIXME/HACK/XXX and cross-reference the backlog. Triggers: 'check todos', 'are my todos tracked', 'scan for todos', 'todo audit', 'what's untracked'."
 ---
 
 # Check TODOs

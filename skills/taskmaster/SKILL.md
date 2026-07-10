@@ -1,6 +1,6 @@
 ---
 name: taskmaster
-description: "Universal taskmaster work router for any project with backlog.yaml. Invoke for implementing features, fixing bugs, writing tests, refactoring, planning epics, or any narrative-continuity operation (handovers, issues). Exceptions (skip the router, just do the work): pure git commits, dedicated PR security reviews, and small direct changes the user asked for outright — one sitting, no open design decisions, ~≤3 files."
+description: "Universal taskmaster work router for projects with backlog.yaml. Invoke for features, bug fixes, tests, refactors, epic planning, or narrative-continuity work (handovers, issues). Skip only for: pure git commits, dedicated PR security reviews, and small direct changes asked for outright (one sitting, no open design decisions, ~<=3 files)."
 ---
 
 # Taskmaster

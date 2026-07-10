@@ -1,6 +1,6 @@
 ---
 name: bug
-description: "Log/update/close project bugs in .taskmaster/bugs/. Invoke for: 'log a bug', 'this is a bug', 'track this defect', 'file a bug', 'I found a bug', 'list open bugs', 'what bugs are open', 'promote B-XX', 'close B-XX', 'fixed B-XX in commit', 'shelve this for later'. Also invoke for ambiguous 'issue' phrasing when the finding lacks recurring/systemic/outstanding evidence — the router falls back here. Only correct way to write or transition a project Bug."
+description: "Log/update/close project bugs in .taskmaster/bugs/. Triggers: 'log a bug', 'this is a bug', 'track this defect', 'I found a bug', 'shelve this for later', 'list open bugs', 'promote B-XX', 'close B-XX'. Also for ambiguous 'issue' phrasing lacking recurring/systemic/outstanding evidence - falls back here. Only correct way to transition a project Bug."
 ---
 
 # Bug

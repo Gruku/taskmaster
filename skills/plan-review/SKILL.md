@@ -1,6 +1,6 @@
 ---
 name: plan-review
-description: "Adversarial review of a task's implementation plan before writing tests. This skill should be used when the user says 'review this plan', 'plan review', 'challenge my plan', or 'is this plan solid'. The full-lane gate between PLAN and WRITE_TESTS. Does not review code — use taskmaster:review-gate for post-implementation review."
+description: "Review a task's implementation plan before writing tests. Triggers: 'review this plan', 'plan review', 'challenge my plan', 'is this plan solid'. Full-lane gate between PLAN and WRITE_TESTS; post-implementation review is taskmaster:review-gate."
 ---
 
 # Plan Review

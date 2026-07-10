@@ -1,6 +1,6 @@
 ---
 name: init-taskmaster
-description: "Set up Taskmaster in the current project. Invoke when the user says 'set up taskmaster', 'initialize backlog', 'I want to track my work here', or when backlog.yaml does not exist. Offers clean init or project analysis to pre-populate the backlog."
+description: "Set up Taskmaster in the current project. Triggers: 'set up taskmaster', 'initialize backlog', 'I want to track my work here', or backlog.yaml missing. Offers clean init or project analysis."
 ---
 
 # Initialize Taskmaster

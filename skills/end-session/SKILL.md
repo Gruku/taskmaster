@@ -1,6 +1,6 @@
 ---
 name: end-session
-description: "Close out a work session. Invoke when the user says 'end session', 'I'm done for today', 'let's wrap up', 'mark this task done', or 'save progress'. This is the ONLY correct way to mark tasks done or in-review with a session record."
+description: "Close out a work session. Triggers: 'end session', 'I'm done for today', 'let's wrap up', 'mark this task done', 'save progress'. ONLY correct way to mark tasks done/in-review with a session record."
 ---
 
 # End Session
