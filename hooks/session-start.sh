@@ -29,15 +29,13 @@ escape_for_json() {
     printf '%s' "$s"
 }
 
-CONTEXT="Taskmaster plugin active. For ANY task-related request, invoke taskmaster:taskmaster first — it routes to the correct sub-skill. Highest-ambiguity direct routes:
+CONTEXT="Taskmaster active. DIRECT — user asked directly, one sitting, no design questions, ~≤3 files: do it and commit, no skill/backlog. TRACKED (everything else, or a direct change that grows — say so, then route): invoke taskmaster:taskmaster. Highest-ambiguity routes:
 
 | User Intent | Routed To |
 |-------------|-----------|
 | New conversation, 'what should I work on', 'orient me' | taskmaster:start-session |
 | 'End session', 'I'm done', 'wrap up' | taskmaster:end-session |
-| 'Set up taskmaster', 'initialize backlog' | taskmaster:init-taskmaster |
-
-All backlog_* MCP tools are available for direct queries and mutations when you already know what to call."
+| 'Set up taskmaster', 'initialize backlog' | taskmaster:init-taskmaster |"
 
 context_escaped=$(escape_for_json "$CONTEXT")
 
