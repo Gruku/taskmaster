@@ -21,9 +21,6 @@ const SECTIONS = [
     { key: 'ideas',    icon: '💡', label: 'Ideas',    hash: '#/ideas' },
     { key: 'archived', icon: '⌫', label: 'Archived', hash: '#/archived' },
   ]},
-  { label: 'Structure', items: [
-    { key: 'worktrees', icon: '⤿', label: 'Project', hash: '#/worktrees' },
-  ]},
   { label: 'System', items: [
     { key: 'settings', icon: '⚙', label: 'Settings', hash: '#/settings' },
   ]},
