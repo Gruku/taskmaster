@@ -36,7 +36,7 @@ def test_list_sessions_synthesises_from_handovers(tmp_path, monkeypatch):
     s = sessions[0]
     assert set(s.keys()) >= {
         "id", "start", "end", "duration", "time_resolution", "handover_ids",
-        "recap_id", "task_ids", "parallel_with",
+        "task_ids", "parallel_with",
     }
     assert s["id"].startswith("SES-")
     # Both handovers reference the same task within ~10 min — clustered into one session.
@@ -72,8 +72,8 @@ def test_list_sessions_marks_parallel_when_overlapping(tmp_path, monkeypatch):
     assert b["id"] in a["parallel_with"]
 
 
-def test_get_session_detail_bundles_handovers_recap(tmp_path, monkeypatch):
-    from taskmaster.taskmaster_v3 import get_session_detail, save_recap
+def test_get_session_detail_bundles_handovers(tmp_path, monkeypatch):
+    from taskmaster.taskmaster_v3 import get_session_detail
     monkeypatch.chdir(tmp_path)
 
     _write_handover(tmp_path, "2026-04-26-1640-foo.md", {
@@ -83,13 +83,6 @@ def test_get_session_detail_bundles_handovers_recap(tmp_path, monkeypatch):
         "task_ids": ["T-148"], "session_kind": "deep-context",
         "context_size_at_write": 0.8,
     }, body_md="Resume by running pytest -k gate.")
-    save_recap(
-        session_id="SES-0001",
-        frontmatter={"snapshot_before": "SNAP-0000", "snapshot_after": "SNAP-0001",
-                     "generator": "claude", "generated_at": "2026-04-26T16:48Z",
-                     "token_cost": 1840},
-        title="Stitched", what_happened="A", what_landed="B", whats_next="C",
-    )
 
     detail = get_session_detail("SES-0001")
     assert detail["session"]["id"] == "SES-0001"
@@ -99,7 +92,6 @@ def test_get_session_detail_bundles_handovers_recap(tmp_path, monkeypatch):
     assert h["viewer_kind"] == "mid-task"  # deep-context → mid-task
     assert h["tldr"] == "Stitched the gate"
     assert h["resume_prompt"].startswith("Resume by running")
-    assert detail["recap"]["frontmatter"]["session_id"] == "SES-0001"
     assert detail["task_ids"] == ["T-148"]
 
 

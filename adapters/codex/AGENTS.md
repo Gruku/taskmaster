@@ -36,7 +36,7 @@ Playbook root: `{{TASKMASTER_HOME}}/playbooks/`
 | "Migrate lessons", "convert lessons to memory", "what happened to lessons" | `playbooks/migrate-lessons/playbook.md` |
 | "Check TODOs", "todo audit" | `playbooks/check-todos/playbook.md` |
 | "Set up linear", "link to linear" | `playbooks/linear/playbook.md` |
-| Status, search, recap, snapshot | direct `backlog_*` tool call |
+| Status, search | direct `backlog_*` tool call |
 
 Each playbook is also installable as a slash prompt (`/start-session`, …) —
 see the adapter README.

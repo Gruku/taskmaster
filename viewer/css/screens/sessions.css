@@ -29,7 +29,6 @@
 .sessions-kind-chip .dot { width: 7px; height: 7px; border-radius: 50%; }
 .sessions-kind-chip.session .dot { background: var(--accent); }
 .sessions-kind-chip.handover .dot { background: var(--purple); }
-.sessions-kind-chip.recap .dot { background: var(--green); }
 .sessions-kind-chip.on { color: var(--ink); background: var(--accent-soft);
   border-color: rgba(74,158,255,0.3); }
 .sessions-kind-chip .ct { color: var(--ink-3); font-family: var(--font-mono); font-size: 9px; }
@@ -76,7 +75,6 @@
 }
 .ho-kind.session  { background: var(--accent-soft); color: var(--accent); }
 .ho-kind.handover { background: rgba(160,127,224,0.15); color: var(--purple); }
-.ho-kind.recap    { background: rgba(95,174,110,0.15); color: var(--green); }
 .ho-kind.handover.mid-task   { background: rgba(160,127,224,0.20); }
 .ho-kind.handover.checkpoint { background: rgba(160,127,224,0.12); }
 .ho-kind.handover.wrap       { background: rgba(95,174,110,0.15); color: var(--green); }

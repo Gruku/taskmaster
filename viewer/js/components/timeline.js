@@ -42,7 +42,7 @@ export function clusterParallelSessions(sessions) {
 }
 
 /** Render the timeline into `root`. Items shape:
- *    sessions: [{id, start, end, kind:'session', task_ids[], handover_ids[], recap_id}],
+ *    sessions: [{id, start, end, kind:'session', task_ids[], handover_ids[]}],
  *    handovers: dict id→{viewer_kind, ...}, used to render nested sub-rows
  *    independent: flat handover items not tied to a session
  *  Returns a cleanup function.
@@ -100,24 +100,17 @@ function renderSessionContainer(session, handovers, onSelect, dimmed) {
   ho.addEventListener('click', () => onSelect && onSelect({ kind: 'session', id: session.id }));
   c.appendChild(ho);
 
-  const childIds = [...(session.handover_ids || []), session.recap_id].filter(Boolean);
+  const childIds = session.handover_ids || [];
   if (childIds.length) {
     const kids = document.createElement('div');
     kids.className = 'ses-children';
     for (const cid of childIds) {
-      const isRecap = cid === session.recap_id;
+      const h = (handovers || {})[cid];
       const child = document.createElement('div');
       child.className = 'ho-child';
-      if (isRecap) {
-        child.dataset.recapId = cid;
-        child.innerHTML = recapChildHtml(cid);
-        child.addEventListener('click', () => onSelect && onSelect({ kind: 'recap', id: cid }));
-      } else {
-        const h = (handovers || {})[cid];
-        child.dataset.handoverId = cid;
-        child.innerHTML = handoverChildHtml(cid, h);
-        child.addEventListener('click', () => onSelect && onSelect({ kind: 'handover', id: cid }));
-      }
+      child.dataset.handoverId = cid;
+      child.innerHTML = handoverChildHtml(cid, h);
+      child.addEventListener('click', () => onSelect && onSelect({ kind: 'handover', id: cid }));
       kids.appendChild(child);
     }
     c.appendChild(kids);
@@ -172,15 +165,6 @@ function handoverChildHtml(id, h) {
     + `<span class="ho-time mono">${escapeHtml(id)}</span>`
     + `</div>`
     + `<div class="ho-summary">${escapeHtml((h && h.tldr) || '')}</div>`
-  );
-}
-
-function recapChildHtml(id) {
-  return (
-    `<div class="ho-head">`
-    + `<span class="ho-kind recap">RECAP</span>`
-    + `<span class="ho-time mono">${escapeHtml(id)}</span>`
-    + `</div>`
   );
 }
 

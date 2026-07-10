@@ -39,7 +39,7 @@
   --purple:           #a07fe0;
   --gold:             var(--amber); /* semantic alias — identical hue, keep --amber as canonical */
 
-  /* Diff colors (Recap, Sessions detail) */
+  /* Diff colors (Sessions detail) */
   --diff-add:         var(--green);
   --diff-mod:         var(--amber);
   --diff-del:         var(--red);

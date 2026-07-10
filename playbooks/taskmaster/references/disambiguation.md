@@ -16,16 +16,17 @@ Use intent to resolve, not the surface phrase.
 - **task** = a unit of work (`backlog_add_task`). "Add a task to fix this bug."
 - Both can coexist for the same defect.
 
+## bug vs issue
+
+- **bug** — a one-off defect (`taskmaster:bug`). "I found a bug", "file a bug", "track this defect".
+- **issue** — the elevated tier for defects that are recurring (≥2 occurrences), systemic (≥2 components), or P0/P1 and outstanding (`taskmaster:issue`). "promote B-XX to an issue", "this keeps happening".
+- Colloquial "issue" with no recurring/systemic/outstanding evidence routes to **bug**, not issue.
+
 ## idea vs note
 
 - **idea** — a parking-lot entry worth tracking on its own record. "Save this as an idea" → `taskmaster:add-idea`.
 - **desk note** — an ephemeral situational scratchpad entry, not a standalone entity. "Note this for later" with no clear future-work shape → `backlog_note_create`.
 - If in doubt, prefer the idea route — it is the durable, searchable one.
-
-## recap vs last_session
-
-- **last_session** — what *you* did.
-- **recap** — what changed in the *project state* (any source). At session start, both render — they're complementary.
 
 ## When Overlap Is Fine
 

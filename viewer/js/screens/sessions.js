@@ -30,9 +30,6 @@ export async function mount(root, { params, store, prefs }) {
         <span class="sessions-kind-chip handover on" data-kind="handover">
           <span class="dot"></span> Handovers <span class="ct">0</span>
         </span>
-        <span class="sessions-kind-chip recap on" data-kind="recap">
-          <span class="dot"></span> Recaps <span class="ct">0</span>
-        </span>
       </div>
       <div class="handover-status-chips" data-role="ho-status">
         <span class="status-chip on" data-status="todo">todo <span class="ct">0</span></span>
@@ -89,7 +86,7 @@ export async function mount(root, { params, store, prefs }) {
     sessions: [],
     detailCache: new Map(),
     view: prefs.screens.sessions.view,
-    kinds: { session: true, handover: true, recap: true },
+    kinds: { session: true, handover: true },
     handoverStatus: new Set(persistedStatus),
     searchTerm: '',
     selectedSessionId: params && params.id || null,
@@ -120,7 +117,6 @@ function _filteredSessions(state) {
       s.id || '',
       ...(s.task_ids || []),
       ...(s.handover_ids || []),
-      s.recap_id || '',
       s.tldr || '',
     ].join(' ').toLowerCase();
     return hay.includes(q);
@@ -170,19 +166,16 @@ function refreshStatusChipCounts(root, handovers) {
 function refreshKindCounts(root, sessions, subcount, totalCount) {
   const sCount = sessions.length;
   const hCount = sessions.reduce((n, s) => n + (s.handover_ids || []).length, 0);
-  const rCount = sessions.filter(s => s.recap_id).length;
   const chips = root.querySelectorAll('[data-role=kinds] .sessions-kind-chip');
   chips[0].querySelector('.ct').textContent = sCount;
   chips[1].querySelector('.ct').textContent = hCount;
-  chips[2].querySelector('.ct').textContent = rCount;
   if (subcount) {
     const filtered = totalCount != null && totalCount !== sCount;
     const sLabel = pluralize(sCount, 'session', 'sessions');
     const hLabel = pluralize(hCount, 'handover', 'handovers');
-    const rLabel = pluralize(rCount, 'recap', 'recaps');
     subcount.textContent = filtered
-      ? `${sCount} of ${totalCount} ${pluralize(totalCount, 'session', 'sessions')} · ${hCount} ${hLabel} · ${rCount} ${rLabel}`
-      : `${sCount} ${sLabel} · ${hCount} ${hLabel} · ${rCount} ${rLabel}`;
+      ? `${sCount} of ${totalCount} ${pluralize(totalCount, 'session', 'sessions')} · ${hCount} ${hLabel}`
+      : `${sCount} ${sLabel} · ${hCount} ${hLabel}`;
   }
 }
 
@@ -204,7 +197,6 @@ function render(root, state, rail) {
     ? state.sessions.map(s => ({
         ...s,
         handover_ids: state.kinds.handover ? (s.handover_ids || []) : [],
-        recap_id: state.kinds.recap ? s.recap_id : null,
       }))
     : [];
 
@@ -264,7 +256,6 @@ function render(root, state, rail) {
     onSelect: ({ kind, id }) => {
       if (kind === 'session')  return openSessionDetail(rail, id, state);
       if (kind === 'handover') return openHandoverDetail(rail, id, state);
-      if (kind === 'recap')    window.location.hash = `#/recap/${id}`;
     },
   });
 }

@@ -78,11 +78,6 @@ from taskmaster.taskmaster_v3 import (
     load_v3 as _load_v3,
     save_v3 as _save_v3,
     migrate_v2_to_v3 as _migrate_v2_to_v3,
-    take_snapshot as _take_snapshot,
-    write_snapshot as _write_snapshot,
-    read_snapshot as _read_snapshot,
-    diff_against_snapshot as _diff_against_snapshot,
-    format_recap as _format_recap,
     write_handover as _write_handover,
     read_handover as _read_handover,
     apply_supersession as _apply_supersession,
@@ -126,13 +121,8 @@ from taskmaster.taskmaster_v3 import (
     write_task_file as _write_task_file,
     load_viewer_prefs,
     save_viewer_prefs,
-    load_recap,
-    save_recap,
-    list_recaps,
     list_sessions,
     get_session_detail,
-    load_session_snapshot,
-    snapshot_diff as _snapshot_diff,
     slim_entity as _slim_entity,
     resolve_sections as _resolve_sections,
     expand_link_ids as _expand_link_ids,
@@ -1719,7 +1709,7 @@ def backlog_init(project_name: str = "", location: str = "tracked", schema_versi
         schema_version: 2 (stable, single backlog.yaml) or 3 (latest, slim index +
                   per-task files + handovers/issues/auto). 0 → use SCHEMA_DEFAULT.
                   v3 init creates the directory layout up front (tasks/, handovers/,
-                  issues/, snapshots/, auto/).
+                  issues/, auto/).
     """
     if location == "hidden":
         return (
@@ -1791,7 +1781,7 @@ def backlog_init(project_name: str = "", location: str = "tracked", schema_versi
         initial_data["handovers"] = []
         initial_data["issues"] = []
         # Pre-create directories so first-run tooling has somewhere to write.
-        for sub in ("tasks", "handovers", "issues", "snapshots", "auto", "areas"):
+        for sub in ("tasks", "handovers", "issues", "auto", "areas"):
             (backlog_abs.parent / sub).mkdir(parents=True, exist_ok=True)
 
     backlog_abs.write_text(
@@ -1816,7 +1806,7 @@ def backlog_init(project_name: str = "", location: str = "tracked", schema_versi
 def backlog_migrate_v3() -> str:
     """Migrate this project's backlog to v3 layout (slim index + per-task files).
 
-    v3 introduces narrative-continuity features (handovers, issues, recap,
+    v3 introduces narrative-continuity features (handovers, issues,
     auto modes). The on-disk shape changes: heavy task fields (description, notes,
     docs, review_instructions) move out of `backlog.yaml` into per-task files at
     `tasks/<id>.md`. Slim metadata (id, title, status, priority, etc.) stays in
@@ -1858,7 +1848,7 @@ def backlog_migrate_v3() -> str:
         f"- {files_msg}\n"
         f"- Index: {bp.relative_to(ROOT)}\n"
         f"- Viewer: switched to v3 UI (use_v3=true)\n"
-        f"\nv3 features (handovers, issues, recap, auto modes) will land in "
+        f"\nv3 features (handovers, issues, auto modes) will land in "
         f"subsequent slices."
     )
 
@@ -1898,7 +1888,7 @@ def backlog_canonicalize_layout(dry_run: bool = False) -> str:
     """Migrate the v3 backlog from `.claude/` or root layout into canonical `.taskmaster/`.
 
     Moves backlog.yaml + the artifact subdirs (tasks, handovers, issues,
-    recaps, snapshots, auto, PROGRESS.md, viewer.json) into `.taskmaster/`.
+    auto, PROGRESS.md, viewer.json) into `.taskmaster/`.
     Idempotent: re-running on a canonical layout is a no-op. Refuses to clobber:
     if a destination file already holds different content, nothing moves and the
     conflicts are reported. After a successful `.claude/` migration, the redundant
@@ -1960,54 +1950,6 @@ def backlog_canonicalize_layout(dry_run: bool = False) -> str:
     if summary["deleted_config"]:
         out.append(f"Deleted redundant config: `{summary['deleted_config']}`.")
     return "\n".join(out)
-
-
-@mcp.tool()
-def backlog_snapshot(quiet: bool = False) -> str:
-    """Capture a slim snapshot of the backlog for later recap diffing.
-
-    Snapshots are written to `<backlog_dir>/snapshots/last.json` (gitignored).
-    Each snapshot tracks per-task status/priority/stage/epic and the active
-    phase — enough to compute a "what changed since" diff without storing
-    full backlog history.
-
-    Args:
-        quiet: When true, return an empty string on success (use for hooks).
-               Errors still surface.
-    """
-    bp = _backlog_path()
-    if not bp.exists():
-        return "" if quiet else "No backlog found — nothing to snapshot."
-    try:
-        data = _load()
-    except Exception as exc:
-        return f"snapshot failed: {exc}"
-    snap = _take_snapshot(data)
-    sp = _write_snapshot(bp, snap)
-    if quiet:
-        return ""
-    return f"Snapshot written: {sp.relative_to(ROOT)} ({snap['structural_hash'][:18]}…)"
-
-
-@mcp.tool()
-def backlog_recap() -> str:
-    """Show what changed in the backlog since the last snapshot.
-
-    Compares the current backlog state against `<backlog_dir>/snapshots/last.json`
-    and renders a compact diff: tasks added/removed, status/priority/stage/epic
-    changes, and active-phase transitions. Returns guidance text when no prior
-    snapshot exists.
-    """
-    bp = _backlog_path()
-    if not bp.exists():
-        return "No backlog found."
-    try:
-        data = _load()
-    except Exception as exc:
-        return f"recap failed: {exc}"
-    prev = _read_snapshot(bp)
-    diff = _diff_against_snapshot(data, prev)
-    return _format_recap(diff)
 
 
 @mcp.tool()
@@ -4730,12 +4672,6 @@ def backlog_archive_task(task_id: str, reason: str = "done") -> str:
 # ── Worktree Discovery ───────────────────────────────────
 
 
-# (Note: a richer `_discover_sub_repos(project_root: Path) -> list[dict]` is
-#  defined later in the Project Structure helpers block and supersedes the
-#  earlier zero-arg stub that lived here. The stub had no callers in the
-#  codebase or tests; project-structure-visibility-003 reclaims the name.)
-
-
 def _git_subprocess_kwargs() -> dict:
     """Common kwargs for git subprocess calls — prevents hangs on Windows."""
     kwargs: dict = {"capture_output": True, "text": True, "timeout": 3}
@@ -6344,9 +6280,6 @@ def backlog_batch_update(operations: str) -> str:
 def backlog_batch_preview(operations: str) -> str:
     """Preview what a batch of task operations would do without writing to disk.
 
-    Distinct from `backlog_snapshot` (which captures backlog state for `recap`
-    diffing) — this is a planning aid for batch operations.
-
     Args:
         operations: Newline-separated list of operations to preview. Each line is:
             "complete {task_id}" — preview marking a task as done
@@ -6839,639 +6772,6 @@ def _load_related_for_task(task_id: str) -> dict | None:
         "unblocks": unblocks,
     }
 
-
-# ── Project Structure helpers ────────────────────────────────────────────
-#
-# These power backlog_project_structure() and its HTTP companion.
-# Helpers shell out to `git` via _run_git, which never raises on non-zero
-# (treat git-feature-unavailable the same as data-missing).
-
-import re as _re_ps  # local alias so we don't shadow uses elsewhere in this file
-import time as _time_ps
-
-_INTEGRATION_BRANCH_RE = _re_ps.compile(
-    r"^(?:origin/)?(master|main|stage|dev|work|\d+\.\d+\.\d+(?:\.\d+)?)$"
-)
-
-_PROJECT_STRUCTURE_WALL_CLOCK_SECONDS = 25.0
-_PROJECT_STRUCTURE_FAST_GIT_TIMEOUT_SECONDS = 3.0
-_PROJECT_STRUCTURE_TIMEOUT_WARNING = (
-    "Project structure collection exceeded the 25-second deadline; "
-    "returning partial results."
-)
-
-# Directory names the sub-repo scan must never descend into or register.
-# Rationale (the backlog_project_structure hang, inbox 2026-06-08): a monorepo
-# with a `.worktrees/` pool holds 30+ worktree clones, each carrying a `.git`
-# FILE. Without this guard the depth-2 scan registers every clone as a bogus
-# "embedded sub-repo", and _cached_project_structure then fires 3 git
-# subprocesses per fake repo (branch -a / rev-parse / worktree list) — even on
-# the cheap refresh_git=False path — so the "structural" call stalls for
-# minutes. `node_modules` and friends add thousands of stat() calls on top.
-# These names are never legitimate sub-repos, so skipping them is safe.
-_SKIP_SCAN_DIRS = frozenset({
-    ".git", ".worktrees", ".hg", ".svn",
-    "node_modules", "bower_components", "vendor", "site-packages",
-    ".venv", "venv", "__pycache__", ".mypy_cache", ".pytest_cache",
-    ".ruff_cache", ".tox", ".nox", ".eggs",
-    "dist", "build", "target", "out", "bin", "obj",
-    ".next", ".nuxt", ".svelte-kit", ".cache", ".parcel-cache", ".turbo",
-    ".gradle", ".terraform", ".serverless", ".yarn", ".pnpm-store",
-    "coverage", "htmlcov", "DerivedData", "Pods",
-    "data", ".data", "datasets",
-})
-
-
-def _deadline_expired(deadline: float | None) -> bool:
-    return deadline is not None and _time_ps.monotonic() >= deadline
-
-
-def _git_timeout(timeout: float, deadline: float | None) -> float | None:
-    """Return a per-call timeout constrained by the request-wide deadline."""
-    if deadline is None:
-        return timeout
-    remaining = deadline - _time_ps.monotonic()
-    if remaining <= 0:
-        return None
-    return min(timeout, remaining)
-
-
-def _run_git(
-    args: list[str],
-    *,
-    cwd: Path,
-    timeout: float = 10.0,
-    deadline: float | None = None,
-) -> str:
-    """Run `git <args>` in `cwd`. Return stdout text on success, '' on any failure.
-
-    Failure is intentionally swallowed: this helper drives feature-detection
-    logic (e.g. 'is X merged into Y'), where a non-zero exit means 'no' or
-    'unknown', not 'crash the request'. The caller decides how to interpret ''.
-
-    `--no-optional-locks` is mandatory: this helper is read-only, but commands
-    like `git status` otherwise take `.git/index.lock` to refresh the stat-cache.
-    On a slow repo the call can exceed `timeout`, and when Python kills the child
-    on TimeoutExpired git leaves a 0-byte `index.lock` orphan behind that blocks
-    every future commit until a human clears it. The flag stops git from taking
-    that lock at all, killing the whole class of leak (see bug B-059).
-    """
-    effective_timeout = _git_timeout(timeout, deadline)
-    if effective_timeout is None:
-        return ""
-    try:
-        result = subprocess.run(
-            ["git", "--no-optional-locks", *args],
-            cwd=str(cwd), capture_output=True, text=True,
-            timeout=effective_timeout,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-        return ""
-    if result.returncode != 0:
-        return ""
-    return result.stdout
-
-
-def _rank_integration_branch(name: str) -> tuple[int, tuple[int, ...]]:
-    """Order: work < dev < stage < <version> < master|main.
-
-    Returns a sort key suitable for `sorted(..., key=_rank_integration_branch)`.
-    Tier index goes first; for version branches the parsed numeric tuple
-    is the secondary key so 1.10.0 sorts above 1.3.1 (not lexicographic).
-    """
-    if name in ("master", "main"):
-        return (4, ())
-    if _re_ps.fullmatch(r"\d+\.\d+\.\d+(?:\.\d+)?", name):
-        parts = tuple(int(p) for p in name.split("."))
-        return (3, parts)
-    tier = {"work": 0, "dev": 1, "stage": 2}.get(name)
-    if tier is None:
-        return (-1, ())  # unknown — sorts below everything
-    return (tier, ())
-
-
-def _discover_sub_repos(
-    project_root: Path,
-    *,
-    deadline: float | None = None,
-) -> list[dict]:
-    """Return a list of sub-repo descriptors found under project_root.
-
-    Two sources, merged by path (submodule wins over embedded for the kind tag):
-      1. Filesystem scan for nested `.git` (file or dir) at depth 1 or 2.
-      2. Parse of `.gitmodules` at project_root.
-
-    Each descriptor is a dict with keys:
-        path                 — POSIX-style path relative to project_root
-        kind                 — 'embedded' | 'submodule'
-        current_branch       — None at this stage (filled by tool)
-        integration_branches — [] at this stage (filled by tool)
-        submodule_info       — None at this stage (filled by tool when refresh_git)
-        worktrees            — [] at this stage (filled by tool)
-    """
-    descriptors: dict[str, dict] = {}
-
-    # 1. Filesystem scan — depth 1 and 2 only.
-    if project_root.exists():
-        try:
-            depth1_entries = project_root.iterdir()
-            for depth1 in depth1_entries:
-                if _deadline_expired(deadline):
-                    break
-                if not depth1.is_dir() or depth1.name in _SKIP_SCAN_DIRS:
-                    continue
-                if (depth1 / ".git").exists():
-                    rel = depth1.name.replace("\\", "/")
-                    descriptors[rel] = {
-                        "path": rel, "kind": "embedded",
-                        "current_branch": None, "integration_branches": [],
-                        "submodule_info": None, "worktrees": [],
-                    }
-                    continue
-                # Depth 2 scan only if depth1 is itself NOT a repo. Iterate
-                # lazily so a large directory cannot be fully materialized
-                # before the request-wide deadline is checked.
-                try:
-                    for depth2 in depth1.iterdir():
-                        if _deadline_expired(deadline):
-                            break
-                        if not depth2.is_dir() or depth2.name in _SKIP_SCAN_DIRS:
-                            continue
-                        if (depth2 / ".git").exists():
-                            rel = f"{depth1.name}/{depth2.name}".replace("\\", "/")
-                            descriptors[rel] = {
-                                "path": rel, "kind": "embedded",
-                                "current_branch": None, "integration_branches": [],
-                                "submodule_info": None, "worktrees": [],
-                            }
-                except OSError:
-                    continue
-        except OSError:
-            pass
-
-    # 2. .gitmodules parse — submodule entries take precedence on `kind`.
-    gitmodules = project_root / ".gitmodules"
-    if not _deadline_expired(deadline) and gitmodules.exists():
-        cur_path: str | None = None
-        for raw in gitmodules.read_text(encoding="utf-8").splitlines():
-            if _deadline_expired(deadline):
-                break
-            line = raw.strip()
-            if line.startswith("[submodule"):
-                cur_path = None
-            elif line.startswith("path") and "=" in line:
-                cur_path = line.split("=", 1)[1].strip().replace("\\", "/")
-                existing = descriptors.get(cur_path)
-                if existing is not None:
-                    existing["kind"] = "submodule"
-                else:
-                    descriptors[cur_path] = {
-                        "path": cur_path, "kind": "submodule",
-                        "current_branch": None, "integration_branches": [],
-                        "submodule_info": None, "worktrees": [],
-                    }
-
-    return sorted(descriptors.values(), key=lambda d: d["path"])
-
-
-def _discover_integration_branches(
-    repo_path: Path,
-    *,
-    timeout: float = 10.0,
-    deadline: float | None = None,
-) -> list[str]:
-    """Return integration branch names found in repo_path, ordered by rank.
-
-    Matches names like `master`, `main`, `stage`, `dev`, `work`, or
-    semver-ish `1.3.1` / `1.3.1.2`. Strips an `origin/` prefix before
-    matching, then dedupes so a branch present locally and on origin
-    appears once. Empty list if repo_path isn't a git repo.
-    """
-    raw = _run_git(
-        [
-            "for-each-ref", "--format=%(refname:short)",
-            "refs/heads", "refs/remotes",
-        ],
-        cwd=repo_path,
-        timeout=timeout,
-        deadline=deadline,
-    )
-    if not raw:
-        return []
-    seen: set[str] = set()
-    for line in raw.splitlines():
-        name = line.strip()
-        if not name:
-            continue
-        # Strip the `origin/` (or any single-segment remote) prefix for dedup.
-        stripped = _re_ps.sub(r"^[^/]+/", "", name) if "/" in name else name
-        candidate = stripped if _INTEGRATION_BRANCH_RE.match(stripped) else None
-        if candidate is None and _INTEGRATION_BRANCH_RE.match(name):
-            candidate = name
-        if candidate:
-            seen.add(candidate)
-    return sorted(seen, key=_rank_integration_branch)
-
-
-def _list_worktrees(
-    repo_path: Path,
-    *,
-    timeout: float = 10.0,
-    deadline: float | None = None,
-) -> list[dict]:
-    """Parse `git worktree list --porcelain` into a list of dicts.
-
-    Each dict has keys:
-        path   — absolute filesystem path (str)
-        branch — short branch name or None if detached HEAD
-        head   — commit SHA
-
-    Empty list if repo_path isn't a git repo.
-    """
-    raw = _run_git(
-        ["worktree", "list", "--porcelain"],
-        cwd=repo_path,
-        timeout=timeout,
-        deadline=deadline,
-    )
-    if not raw:
-        return []
-    worktrees: list[dict] = []
-    cur: dict[str, object] = {}
-    for line in raw.splitlines():
-        if line.startswith("worktree "):
-            if cur:
-                worktrees.append(_finalize_worktree(cur))
-            cur = {"path": line[len("worktree "):]}
-        elif line.startswith("HEAD "):
-            cur["head"] = line[len("HEAD "):]
-        elif line.startswith("branch "):
-            ref = line[len("branch "):]
-            # refs/heads/feature/foo → feature/foo
-            cur["branch"] = ref[len("refs/heads/"):] if ref.startswith("refs/heads/") else ref
-        elif line == "detached":
-            cur["branch"] = None
-        # blank line = entry separator; handled by next 'worktree ' or final flush
-    if cur:
-        worktrees.append(_finalize_worktree(cur))
-    return worktrees
-
-
-def _finalize_worktree(d: dict) -> dict:
-    return {
-        "path": d.get("path", ""),
-        "branch": d.get("branch"),  # None if detached
-        "head": d.get("head", ""),
-    }
-
-
-def _compute_worktree_git_state(
-    repo_path: Path,
-    *,
-    branch: str | None,
-    integration_branches: list[str],
-    worktree_path: Path,
-    base: str | None = None,
-    deadline: float | None = None,
-) -> dict:
-    """Compute merge ladder + ahead/behind + dirty-file count for one worktree.
-
-    Args:
-      repo_path: the sub-repo's main checkout (where branches live).
-      branch: the worktree's branch (or None for detached HEAD).
-      integration_branches: the rank-ordered list to test merge containment against.
-      worktree_path: where the working tree actually lives (for dirty-file count).
-      base: integration branch to use as the ahead/behind reference. If None,
-            defaults to the highest-ranked integration branch found.
-
-    Returns:
-      {
-        "merge_ladder": { branch_name: bool, ... },  # ordered like integration_branches
-        "ahead": int, "behind": int, "dirty_files": int,
-        "base": str | None,
-      }
-    """
-    if branch is None:
-        return {"merge_ladder": {}, "ahead": 0, "behind": 0,
-                "dirty_files": 0, "base": None}
-
-    ladder: dict[str, bool] = {}
-    for int_branch in integration_branches:
-        effective_timeout = _git_timeout(10.0, deadline)
-        if effective_timeout is None:
-            break
-        # `git merge-base --is-ancestor X Y` exits 0 if X is reachable from Y.
-        # _run_git returns "" on any non-zero, including the "no" answer, so we
-        # need the raw exit code here. Use subprocess directly for this one call.
-        try:
-            rc = subprocess.run(
-                [
-                    "git", "--no-optional-locks", "merge-base",
-                    "--is-ancestor", branch, int_branch,
-                ],
-                cwd=str(repo_path), capture_output=True, text=True,
-                timeout=effective_timeout,
-            ).returncode
-        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-            rc = 1
-        ladder[int_branch] = (rc == 0)
-
-    # Pick base for ahead/behind.
-    if base is None:
-        base = integration_branches[-1] if integration_branches else None
-    ahead = behind = 0
-    if base:
-        out = _run_git(
-            ["rev-list", "--left-right", "--count", f"{base}...{branch}"],
-            cwd=repo_path,
-            deadline=deadline,
-        ).strip()
-        if out:
-            try:
-                left, right = out.split()
-                behind, ahead = int(left), int(right)
-            except ValueError:
-                pass
-
-    # Dirty file count from the actual worktree directory.
-    status = _run_git(
-        ["status", "--porcelain"],
-        cwd=worktree_path,
-        deadline=deadline,
-    )
-    dirty_files = sum(1 for line in status.splitlines() if line.strip())
-
-    return {
-        "merge_ladder": ladder,
-        "ahead": ahead,
-        "behind": behind,
-        "dirty_files": dirty_files,
-        "base": base,
-    }
-
-
-def _canonical_path(p: str) -> str:
-    """POSIX-style, no trailing slash. Used for cross-platform path comparisons."""
-    if not p:
-        return ""
-    return p.replace("\\", "/").rstrip("/")
-
-
-def _link_worktrees_to_tasks(
-    worktrees: list[dict], tasks: list[dict],
-) -> dict[str, list[dict]]:
-    """Bucket tasks under the worktree they belong to (by task.worktree field).
-
-    Returns {worktree_path: [task, ...]}. Worktrees with no tasks get an
-    empty list (the key is always present). Tasks with no worktree, or whose
-    worktree doesn't match any known worktree, are silently dropped.
-    """
-    by_canonical: dict[str, str] = {
-        _canonical_path(w["path"]): w["path"] for w in worktrees
-    }
-    out: dict[str, list[dict]] = {w["path"]: [] for w in worktrees}
-    for t in tasks:
-        tw = t.get("worktree")
-        if not tw:
-            continue
-        key = by_canonical.get(_canonical_path(tw))
-        if key is not None:
-            out[key].append(t)
-    return out
-
-
-def _link_handovers_to_worktrees(
-    worktree_task_map: dict[str, list[dict]], handovers: list[dict],
-) -> dict[str, list[dict]]:
-    """Bucket handovers under worktree via handover.task_ids[] → task → worktree.
-
-    Returns {worktree_path: [handover, ...]}. A handover that references
-    multiple tasks across multiple worktrees lands under each. Order is the
-    input order of `handovers` (callers may sort).
-    """
-    # Build task_id → list of worktree paths.
-    task_to_wts: dict[str, list[str]] = {}
-    for wt_path, tasks in worktree_task_map.items():
-        for t in tasks:
-            task_to_wts.setdefault(t["id"], []).append(wt_path)
-
-    out: dict[str, list[dict]] = {wt: [] for wt in worktree_task_map}
-    for h in handovers:
-        seen_wts: set[str] = set()
-        for tid in h.get("task_ids", []) or []:
-            for wt in task_to_wts.get(tid, []):
-                if wt not in seen_wts:
-                    out[wt].append(h)
-                    seen_wts.add(wt)
-    return out
-
-
-# Cache keyed by (project_root_str, gitmodules_mtime, refresh_git). LRU sized
-# at 4 — the cost of recomputing is the slow path (~seconds for 10 sub-repos
-# with refresh_git=True), not memory.
-from functools import lru_cache as _lru_cache_ps
-
-
-@_lru_cache_ps(maxsize=4)
-def _cached_project_structure(
-    project_root_str: str,
-    gitmodules_mtime: float,  # only part of the key — invalidates on change
-    refresh_git: bool,
-) -> str:
-    """Cached worker. Returns a JSON string so the @lru_cache result is
-    trivially immutable and safe to share across callers."""
-    import json as _json
-    from datetime import datetime, timezone
-
-    deadline = _time_ps.monotonic() + _PROJECT_STRUCTURE_WALL_CLOCK_SECONDS
-    warning: str | None = None
-    project_root = Path(project_root_str)
-
-    # Pull tasks + handovers from the live backlog so links reflect the
-    # current state. Use the existing _load + handover discovery surface.
-    try:
-        data = _load()
-        tasks: list[dict] = []
-        for epic in data.get("epics", []):
-            if _deadline_expired(deadline):
-                warning = _PROJECT_STRUCTURE_TIMEOUT_WARNING
-                break
-            for t in epic.get("tasks", []):
-                tasks.append(t)
-    except Exception:
-        tasks = []
-    if _deadline_expired(deadline):
-        warning = _PROJECT_STRUCTURE_TIMEOUT_WARNING
-
-    # Handovers: use the existing imports already at the top of this module
-    # (_list_handover_ids + _read_handover). bp is the backlog.yaml path.
-    handovers: list[dict] = []
-    try:
-        bp = _backlog_path()
-        handover_ids = [] if warning is not None else _list_handover_ids(bp)
-        for hid in handover_ids:
-            if _deadline_expired(deadline):
-                warning = _PROJECT_STRUCTURE_TIMEOUT_WARNING
-                break
-            try:
-                fm, _body = _read_handover(bp, hid)
-                fm = dict(fm)  # don't mutate the caller's dict
-                fm.setdefault("id", hid)
-                handovers.append(fm)
-            except Exception:
-                continue
-    except Exception:
-        handovers = []
-
-    sub_repos = (
-        [] if _deadline_expired(deadline)
-        else _discover_sub_repos(project_root, deadline=deadline)
-    )
-    if _deadline_expired(deadline):
-        warning = _PROJECT_STRUCTURE_TIMEOUT_WARNING
-
-    git_timeout = (
-        10.0 if refresh_git else _PROJECT_STRUCTURE_FAST_GIT_TIMEOUT_SECONDS
-    )
-    for sr in sub_repos:
-        if _deadline_expired(deadline):
-            warning = _PROJECT_STRUCTURE_TIMEOUT_WARNING
-            break
-        repo_path = project_root / sr["path"]
-        # Submodule whose working tree isn't checked out yet — skip git work.
-        if not (repo_path / ".git").exists():
-            sr["worktrees"] = []
-            continue
-
-        sr["integration_branches"] = _discover_integration_branches(
-            repo_path, timeout=git_timeout, deadline=deadline,
-        )
-        if _deadline_expired(deadline):
-            warning = _PROJECT_STRUCTURE_TIMEOUT_WARNING
-            break
-        wts = _list_worktrees(
-            repo_path, timeout=git_timeout, deadline=deadline,
-        )
-        # `git worktree list` always emits the main worktree first. Reuse that
-        # branch instead of paying for a separate rev-parse subprocess.
-        sr["current_branch"] = wts[0]["branch"] if wts else None
-        if _deadline_expired(deadline):
-            warning = _PROJECT_STRUCTURE_TIMEOUT_WARNING
-            break
-        wt_task_map = _link_worktrees_to_tasks(wts, tasks)
-        wt_ho_map = _link_handovers_to_worktrees(wt_task_map, handovers)
-
-        worktree_blocks: list[dict] = []
-        for w in wts:
-            if _deadline_expired(deadline):
-                warning = _PROJECT_STRUCTURE_TIMEOUT_WARNING
-                break
-            block = {
-                "path": w["path"],
-                "branch": w["branch"],
-                "git_state": None,
-                "tasks": wt_task_map.get(w["path"], []),
-                "handovers": wt_ho_map.get(w["path"], []),
-            }
-            if refresh_git:
-                block["git_state"] = _compute_worktree_git_state(
-                    repo_path,
-                    branch=w["branch"],
-                    integration_branches=sr["integration_branches"],
-                    worktree_path=Path(w["path"]),
-                    deadline=deadline,
-                )
-            worktree_blocks.append(block)
-        sr["worktrees"] = worktree_blocks
-        if warning is not None:
-            break
-
-        # Submodule drift info — only when refresh_git.
-        if sr["kind"] == "submodule" and refresh_git:
-            pinned = _run_git(
-                ["ls-tree", "HEAD", sr["path"]], cwd=project_root,
-                deadline=deadline,
-            ).strip()
-            if _deadline_expired(deadline):
-                warning = _PROJECT_STRUCTURE_TIMEOUT_WARNING
-                break
-            pinned_sha = pinned.split()[2] if len(pinned.split()) >= 3 else None
-            ahead = behind = 0
-            if pinned_sha:
-                rl = _run_git(
-                    ["rev-list", "--left-right", "--count",
-                     f"{pinned_sha}...HEAD"],
-                    cwd=repo_path,
-                    deadline=deadline,
-                ).strip()
-                if rl:
-                    try:
-                        l, r = rl.split()
-                        behind, ahead = int(l), int(r)
-                    except ValueError:
-                        pass
-            sr["submodule_info"] = {
-                "pinned_sha": pinned_sha,
-                "drift_ahead": ahead,
-                "drift_behind": behind,
-            }
-
-    if _deadline_expired(deadline):
-        warning = _PROJECT_STRUCTURE_TIMEOUT_WARNING
-        project_default_branch = "master"
-    else:
-        project_default_branch = (
-            _run_git(
-                ["rev-parse", "--abbrev-ref", "HEAD"],
-                cwd=project_root,
-                timeout=git_timeout,
-                deadline=deadline,
-            ).strip()
-            or "master"
-        )
-        if _deadline_expired(deadline):
-            warning = _PROJECT_STRUCTURE_TIMEOUT_WARNING
-    payload = {
-        "project": {
-            "root": str(project_root),
-            "default_branch": project_default_branch,
-        },
-        "sub_repos": sub_repos,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "git_state_included": refresh_git,
-        "warning": warning,
-    }
-    return _json.dumps(payload)
-
-
-@mcp.tool()
-def backlog_project_structure(refresh_git: bool = False) -> str:
-    """Return the monorepo → sub-repos → worktrees → tasks + handovers tree.
-
-    Cheap fields (paths, branch names, tasks, handovers) are always
-    populated. `git_state` per worktree and `submodule_info.drift_*` are
-    null unless `refresh_git=True`.
-
-    Args:
-        refresh_git: When True, runs `git merge-base`, `rev-list`, and
-            `status` per worktree (slow — seconds per sub-repo). When
-            False (default), returns cheap structural data only.
-    """
-    project_root = ROOT
-    gitmodules = project_root / ".gitmodules"
-    mtime = gitmodules.stat().st_mtime if gitmodules.exists() else 0.0
-    result = _cached_project_structure(str(project_root), mtime, refresh_git)
-    # A deadline-truncated response should not become the stable cached result.
-    # Clear the tiny cache so the next request can retry collection.
-    try:
-        import json as _json
-        if _json.loads(result).get("warning"):
-            _cached_project_structure.cache_clear()
-    except (TypeError, ValueError):
-        pass
-    return result
-
-
 # ── HTTP Viewer Server ───────────────────────────────────
 
 
@@ -7615,41 +6915,6 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 self._send_json(404, {"ok": False, "error": f"unknown session {sid}"})
                 return
             self._send_json(200, detail)
-            return
-        elif clean_path == "/api/project-structure":
-            import json as _json
-            from urllib.parse import parse_qs, urlsplit
-            qs = parse_qs(urlsplit(self.path).query)
-            refresh_raw = (qs.get("refresh_git") or ["0"])[0]
-            refresh_git = refresh_raw not in ("0", "false", "False", "")
-            raw = backlog_project_structure(refresh_git=refresh_git)
-            data = _json.loads(raw)
-            self._send_json(200, data)
-            return
-        elif clean_path.startswith("/api/recap/"):
-            sid = clean_path[len("/api/recap/"):]
-            rec = load_recap(sid)
-            if rec is None:
-                self._send_json(404, {"ok": False, "error": f"no recap for {sid}"})
-                return
-            self._send_json(200, rec)
-            return
-        elif clean_path.startswith("/api/snapshots/diff"):
-            from urllib.parse import urlsplit, parse_qs
-            qs = parse_qs(urlsplit(self.path).query)
-            a = (qs.get("from") or [None])[0]
-            b = (qs.get("to")   or [None])[0]
-            if not a or not b:
-                self._send_json(400, {"ok": False,
-                    "error": "both 'from' and 'to' query params required"})
-                return
-            snap_a = load_session_snapshot(a)
-            snap_b = load_session_snapshot(b)
-            if snap_a is None or snap_b is None:
-                self._send_json(404, {"ok": False,
-                    "error": f"missing snapshot(s): from={snap_a is not None} to={snap_b is not None}"})
-                return
-            self._send_json(200, _snapshot_diff(snap_a, snap_b))
             return
         elif clean_path.startswith("/api/bugs"):
             from urllib.parse import urlparse, parse_qs
@@ -8297,32 +7562,6 @@ class ViewerHandler(BaseHTTPRequestHandler):
             self._send_json(200, {"ok": True})
             return
 
-        if self.path.startswith("/api/recap/"):
-            import json as _json
-            sid = self.path[len("/api/recap/"):]
-            length = int(self.headers.get("Content-Length") or 0)
-            raw = self.rfile.read(length).decode("utf-8") if length else ""
-            try:
-                payload = _json.loads(raw)
-            except Exception as e:
-                self._send_json(400, {"ok": False, "error": f"invalid JSON: {e}"})
-                return
-            required = {"frontmatter", "title", "what_happened", "what_landed", "whats_next"}
-            if not required.issubset(payload.keys()):
-                self._send_json(400, {"ok": False,
-                    "error": f"payload missing keys: {sorted(required - set(payload.keys()))}"})
-                return
-            save_recap(
-                session_id=sid,
-                frontmatter=payload["frontmatter"],
-                title=payload["title"],
-                what_happened=payload["what_happened"],
-                what_landed=payload["what_landed"],
-                whats_next=payload["whats_next"],
-            )
-            self._send_json(200, {"ok": True})
-            return
-
         if m := re.fullmatch(r"/api/tasks/([A-Za-z0-9_\-]+)", self.path):
             task_id = m.group(1)
             length = int(self.headers.get("Content-Length") or 0)
@@ -8607,58 +7846,6 @@ def backlog_open_viewer() -> str:
     url = f"http://127.0.0.1:{port}/"
     webbrowser.open(url)
     return f"Opened backlog viewer at {url}"
-
-
-def recap_get(session_id: str) -> str:
-    """Return the recap for a session as JSON, or `null` when missing."""
-    import json as _json
-    rec = load_recap(session_id)
-    return _json.dumps(rec)
-
-
-def recap_set(
-    session_id: str,
-    frontmatter_json: str,
-    title: str,
-    what_happened: str,
-    what_landed: str,
-    whats_next: str,
-) -> str:
-    """Write a recap. `frontmatter_json` is a JSON object holding
-    snapshot_before / snapshot_after / generator / generated_at / token_cost.
-    `session_id` and `schema_version` are auto-injected.
-    """
-    import json as _json
-    try:
-        fm = _json.loads(frontmatter_json)
-    except Exception as e:
-        return f"error: invalid frontmatter JSON ({e})"
-    if not isinstance(fm, dict):
-        return "error: frontmatter must be a JSON object"
-    save_recap(
-        session_id=session_id,
-        frontmatter=fm,
-        title=title,
-        what_happened=what_happened,
-        what_landed=what_landed,
-        whats_next=whats_next,
-    )
-    return "ok"
-
-
-@mcp.tool()
-def recap_list() -> str:
-    """List session ids that have a recap on disk (newest first)."""
-    import json as _json
-    return _json.dumps(list_recaps())
-
-
-def snapshot_diff(snapshot_a_json: str, snapshot_b_json: str) -> str:
-    """Compute structured diff between two snapshot payloads, returned as JSON."""
-    import json as _json
-    a = _json.loads(snapshot_a_json)
-    b = _json.loads(snapshot_b_json)
-    return _json.dumps(_snapshot_diff(a, b))
 
 
 def issue_list_extended(include_resolved: bool = True) -> str:

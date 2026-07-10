@@ -233,50 +233,6 @@ def test_v3_issue_lifecycle(tmp_path, monkeypatch):
     assert iss_id not in listed
 
 
-def test_v3_recap_against_snapshot(tmp_path, monkeypatch):
-    """Snapshot → add task + status change → recap shows diff."""
-    monkeypatch.chdir(tmp_path)
-    bp, epic_id, task_id = _v3_backlog_with_epic_and_task(tmp_path)
-    _redirect(monkeypatch, tmp_path, bp)
-
-    # 1. Seed 2nd task and take a snapshot via v3 primitives directly.
-    # (backlog_snapshot is shadowed by a later definition in backlog_server.)
-    data = v3.load_v3(bp)
-    data["epics"][0]["tasks"].append({
-        "id": f"{epic_id}-002",
-        "title": "Second smoke task",
-        "status": "todo",
-        "priority": "low",
-        "phase": "dev",
-        "created": "2026-05-05T10:00",
-        "last_referenced": "2026-05-05T10:00",
-        "notes": "",
-    })
-    v3.save_v3(bp, data)
-    snap = v3.take_snapshot(data)
-    v3.write_snapshot(bp, snap)
-
-    # 2. Add a 3rd task + flip task-001 to in-progress
-    data2 = v3.load_v3(bp)
-    data2["epics"][0]["tasks"].append({
-        "id": f"{epic_id}-003",
-        "title": "Third smoke task",
-        "status": "todo",
-        "priority": "high",
-        "phase": "dev",
-        "created": "2026-05-05T11:00",
-        "last_referenced": "2026-05-05T11:00",
-        "notes": "",
-    })
-    data2["epics"][0]["tasks"][0]["status"] = "in-progress"
-    v3.save_v3(bp, data2)
-
-    # 3. Recap goes through backlog_server which calls _read_snapshot + _format_recap
-    recap = backlog_server.backlog_recap()
-    assert f"{epic_id}-003" in recap or "Third" in recap
-    assert "in-progress" in recap or "status" in recap.lower()
-
-
 def test_v3_pick_complete_full_lifecycle(tmp_path, monkeypatch):
     """pick_task → in-progress + started stamped → complete_task → done + PROGRESS entry."""
     monkeypatch.chdir(tmp_path)

@@ -25,8 +25,7 @@ def test_ported_hooks_route_through_launcher_with_timeout():
     deny). Sourcing (`. file`) instead of `bash file` is load-bearing: MSYS
     bash process creation costs seconds under load, and the env-assignment
     prefix is the POSIX-portable way to pass the script name into a sourced
-    file. session-start.sh is unchanged; snapshot.py also routes through
-    the launcher."""
+    file. session-start.sh is unchanged."""
     d = json.loads(HJ.read_text())["hooks"]
     ported = []
     for event in ("PreToolUse", "PostToolUse"):
@@ -43,8 +42,6 @@ def test_ported_hooks_route_through_launcher_with_timeout():
             'CLAUDE_HOOK_SCRIPT=%s . "${CLAUDE_PLUGIN_ROOT}/hooks/run_hook.sh"'
             % script)
         assert h["timeout"] == 10
-    # session-start unchanged; PreCompact snapshot routed through launcher too
+    # session-start unchanged
     ss = " ".join(h["command"] for m in d["SessionStart"] for h in m["hooks"])
-    pc = " ".join(h["command"] for m in d["PreCompact"] for h in m["hooks"])
     assert "session-start.sh" in ss
-    assert "CLAUDE_HOOK_SCRIPT=snapshot.py . " in pc

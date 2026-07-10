@@ -4,8 +4,8 @@
 13 tools with zero agent-surface references lose their @mcp.tool()
 registration (functions stay for HTTP routes/tests). Tools that looked
 dead but have live skill references stay registered: backlog_archive_epic
-(backlog_update_epic redirects to it), recap_list (reflect-auto-improve
-retro), viewer_prefs_get/set (migrate-v3 migration-steps).
+(backlog_update_epic redirects to it), viewer_prefs_get/set (migrate-v3
+migration-steps).
 """
 from __future__ import annotations
 
@@ -16,15 +16,11 @@ from test_mcp_v3_exposure import _list_tool_names
 CULLED = [
     "backlog_release_notes",
     "backlog_handover_latest",
-    "recap_get",
-    "recap_set",
-    "snapshot_diff",
     "issue_list_extended",
 ]
 
 KEPT = [
     "backlog_archive_epic",
-    "recap_list",
     "viewer_prefs_get",
     "viewer_prefs_set",
 ]

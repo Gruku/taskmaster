@@ -12,7 +12,6 @@ const SECTIONS = [
     { key: 'epics',     icon: '⬡', label: 'Epics',     hash: '#/epics' },
   ]},
   { label: 'Temporal', items: [
-    { key: 'recap',    icon: '↻', label: 'Recap',    hash: '#/recap' },
     { key: 'sessions', icon: '⌕', label: 'Sessions', hash: '#/sessions' },
   ]},
   { label: 'Knowledge', items: [
@@ -20,9 +19,6 @@ const SECTIONS = [
     { key: 'bugs',     icon: '⊘', label: 'Bugs',     hash: '#/bugs' },
     { key: 'ideas',    icon: '💡', label: 'Ideas',    hash: '#/ideas' },
     { key: 'archived', icon: '⌫', label: 'Archived', hash: '#/archived' },
-  ]},
-  { label: 'Structure', items: [
-    { key: 'worktrees', icon: '⤿', label: 'Project', hash: '#/worktrees' },
   ]},
   { label: 'System', items: [
     { key: 'settings', icon: '⚙', label: 'Settings', hash: '#/settings' },

@@ -130,29 +130,6 @@ def test_area_tools_exposed(tool_name):
     assert tool_name in _list_tool_names()
 
 
-# Recap + snapshot (v3-skills-006)
-@pytest.mark.parametrize(
-    "tool_name",
-    [
-        "backlog_recap",
-        "backlog_snapshot",
-    ],
-)
-def test_recap_snapshot_tools_exposed(tool_name):
-    assert tool_name in _list_tool_names()
-
-
-# Project structure visibility (project-structure-visibility-003)
-@pytest.mark.parametrize(
-    "tool_name",
-    [
-        "backlog_project_structure",
-    ],
-)
-def test_project_structure_tools_exposed(tool_name):
-    assert tool_name in _list_tool_names()
-
-
 # Project manifest (project-manifest-001)
 @pytest.mark.parametrize(
     "tool_name",
@@ -178,7 +155,7 @@ def test_full_v3_surface_count():
     names = _list_tool_names()
     v3_tools = [
         n for n in names
-        if any(k in n for k in ("migrate", "handover", "issue", "idea", "recap", "snapshot", "area"))
+        if any(k in n for k in ("migrate", "handover", "issue", "idea", "area"))
     ]
     # Floor lowered 38 -> 36 by tm-audit-006: intentional cull of 13 dead
     # registrations (10 of them match the v3 keyword filter).
@@ -188,4 +165,7 @@ def test_full_v3_surface_count():
     # tools removed (lesson keyword dropped from filter too).
     # Floor raised 19 -> 23 by epic B task 1: 4 backlog_area_* tools added
     # ("area" keyword added to filter too).
-    assert len(v3_tools) >= 23, f"v3 surface shrank to {len(v3_tools)} tools (was 23 after epic B task 1)"
+    # Floor lowered 23 -> 20 by feature-cull-002: 3 tools removed
+    # (backlog_recap, backlog_snapshot, recap_list; recap/snapshot keywords
+    # dropped from filter too).
+    assert len(v3_tools) >= 20, f"v3 surface shrank to {len(v3_tools)} tools (was 20 after feature-cull-002)"

@@ -6,21 +6,15 @@ Run all steps below in addition to the standard glance steps (backlog_status + o
 
 ## Deep steps (run in order after glance steps 1–3)
 
-### D1. Recap diff
-
-Call `backlog_recap` to see what changed in the project since the last snapshot — tasks added, status transitions, issues fixed, phase advances.
-
-Surface as a `**Since last snapshot:**` block. Compact format — do not expand into prose. If nothing changed, skip the block.
-
-### D2. Full issue list
+### D1. Full issue list
 
 Call `backlog_issue_list(status="open")` (no limit cap). Surface all open issues grouped P0 → P3. P0/P1 entries get a visual flag.
 
-### D3. Last session entry
+### D2. Last session entry
 
 Call `backlog_last_session` to get the most recent PROGRESS.md entry. Surface as `**Last session:**` block for continuity.
 
-### D4. Open decisions
+### D3. Open decisions
 
 Call `backlog_decision_list(status="open")`. Report the count and titles.
 
@@ -28,7 +22,7 @@ Call `backlog_decision_list(status="open")`. Report the count and titles.
 
 If a decision blocks the user's top-of-mind task, mention it inline in the "where you left off" recap.
 
-### D5. Untracked work
+### D4. Untracked work
 
 After showing the dashboard, check for commits since the last session that aren't associated with any tracked task branch:
 
@@ -48,11 +42,10 @@ After showing the dashboard, check for commits since the last session that aren'
 
 Present in this order after the glance briefing:
 
-1. `**Since last snapshot:**` (recap diff, D1)
-2. `**All open issues:**` (D2)
-3. `**Last session:**` (D3 — PROGRESS.md entry)
-4. `**Open decisions:**` (D4 — count + titles)
-5. Untracked work notice if any (D5)
+1. `**All open issues:**` (D1)
+2. `**Last session:**` (D2 — PROGRESS.md entry)
+3. `**Open decisions:**` (D3 — count + titles)
+4. Untracked work notice if any (D4)
 
 ## Spec-review hints (deep only)
 

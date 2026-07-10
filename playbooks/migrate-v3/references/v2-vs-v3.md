@@ -55,9 +55,6 @@ All paths relative to the backlog directory (`.taskmaster/`; `.claude/` for lega
 | `tasks/` | `<id>.md` per task — heavy fields + body | No |
 | `handovers/` | `YYYY-MM-DD-<slug>.md` per session handover | No |
 | `issues/` | `ISS-<NNN>.md` per issue | No |
-| `snapshots/` | `last.json` — slim snapshot for recap diff | Yes |
-
-`snapshots/` holds runtime state and must be gitignored. The `taskmaster:migrate-v3` skill offers to add it during post-flight.
 
 ---
 

@@ -108,7 +108,6 @@
 }
 .right-rail .rr-h .kind-pill.handover { background: rgba(160,127,224,0.15); color: var(--purple); }
 .right-rail .rr-h .kind-pill.session  { background: var(--accent-soft); color: var(--accent); }
-.right-rail .rr-h .kind-pill.recap    { background: rgba(95,174,110,0.15); color: var(--green); }
 .right-rail .rr-h .ts { color: var(--ink-3); font-family: var(--font-mono); font-size: 10px; }
 .right-rail .rr-h .actions { margin-left: auto; display: flex; gap: 4px; }
 .right-rail .rr-h .ic-btn {
@@ -261,7 +260,7 @@
 /* Icon-only segment variant — fixed square */
 .tm-segmented.tm-segmented--icon > button { width: 32px; padding: 0; font-size: 16px; }
 
-/* Action — primary in-context button (replaces .recap-action, .td-action,
+/* Action — primary in-context button (replaces .td-action,
    .dash-edit-toggle, .sessions-newnote). */
 .tm-action {
   appearance: none;

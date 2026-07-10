@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "taskmaster"
-version = "4.1.0"
-description = "Task/backlog management MCP server with narrative continuity (handovers, issues, decisions, recap)"
+version = "5.0.0"
+description = "Task/backlog management MCP server with narrative continuity (handovers, issues, decisions)"
 requires-python = ">=3.11"
 dependencies = ["fastmcp", "pyyaml"]
 

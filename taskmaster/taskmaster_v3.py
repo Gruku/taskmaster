@@ -301,7 +301,7 @@ def _resolve_artifact_root() -> Path:
 
     Why this exists (ISS-004): the writer functions take `backlog_path` and use
     `bp.parent / "<artifact>"`. The CWD-flavor reader functions (`load_issue`,
-    `list_sessions`, `recap_path`, etc.) used to hard-code
+    `list_sessions`, etc.) used to hard-code
     `Path(".taskmaster") / "<artifact>"` — silently diverging from the writer
     on `.claude/`-layout and root-layout projects. This helper returns the same
     parent dir the writer's resolver would, so readers and writers agree.
@@ -334,6 +334,10 @@ def _resolve_artifact_root() -> Path:
 # ── Markdown + YAML frontmatter ─────────────────────────────────
 
 _FRONTMATTER_FENCE = "---"
+
+# Fast regex form of the frontmatter split, used by the handover/session
+# readers (`list_sessions`, `_load_handover_full`) that only need the YAML block.
+_MD_FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
 
 
 def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
@@ -1089,8 +1093,6 @@ _CANONICALIZE_ITEMS: tuple[str, ...] = (
     "handovers",
     "issues",
     "trackers",
-    "recaps",
-    "snapshots",
     "auto",
     "areas",
 )
@@ -1276,177 +1278,6 @@ def canonicalize_layout(
     return summary
 
 
-# ── Snapshots (for recap diff) ─────────────────────────────────
-
-# Snapshot fields tracked per task. Keep this slim — adding fields
-# bloats every snapshot file. Issues join later in step 4.
-_SNAPSHOT_TASK_FIELDS = ("status", "priority", "stage")
-
-
-def snapshot_path(backlog_path: Path) -> Path:
-    """Resolve the snapshot file path. Lives next to the backlog under snapshots/."""
-    return backlog_path.parent / "snapshots" / "last.json"
-
-
-def take_snapshot(data: dict[str, Any]) -> dict[str, Any]:
-    """Build a slim snapshot dict from in-memory backlog data.
-
-    The snapshot captures only the fields needed for `recap` to show what
-    changed since last session — not the full backlog content. The
-    `structural_hash` is a quick check for 'did anything change at all'.
-    """
-    tasks: dict[str, dict[str, Any]] = {}
-    for epic in data.get("epics", []):
-        for t in epic.get("tasks", []):
-            tid = t.get("id")
-            if not tid:
-                continue
-            entry = {f: t.get(f) for f in _SNAPSHOT_TASK_FIELDS if t.get(f) is not None}
-            # Track epic membership too — moves between epics show up in recap.
-            entry["epic"] = epic.get("id")
-            entry["title"] = t.get("title", "")
-            tasks[tid] = entry
-
-    phase_active = None
-    for p in data.get("phases", []) or []:
-        if p.get("status") == "active":
-            phase_active = p.get("id")
-            break
-
-    payload_for_hash = json.dumps({"tasks": tasks, "phase_active": phase_active}, sort_keys=True)
-    return {
-        "taken_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "schema_version": SCHEMA_V3,
-        "structural_hash": "sha256:" + hashlib.sha256(payload_for_hash.encode("utf-8")).hexdigest(),
-        "tasks": tasks,
-        "phase_active": phase_active,
-    }
-
-
-def write_snapshot(backlog_path: Path, snapshot: dict[str, Any]) -> Path:
-    """Persist a snapshot atomically to .taskmaster/snapshots/last.json."""
-    sp = snapshot_path(backlog_path)
-    atomic_write(sp, json.dumps(snapshot, indent=2) + "\n")
-    return sp
-
-
-def read_snapshot(backlog_path: Path) -> dict[str, Any] | None:
-    """Read the latest snapshot if present, else None."""
-    sp = snapshot_path(backlog_path)
-    if not sp.exists():
-        return None
-    try:
-        return json.loads(sp.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return None
-
-
-# ── Recap (diff against last snapshot) ─────────────────────────
-
-
-def diff_against_snapshot(
-    current_data: dict[str, Any],
-    prev_snapshot: dict[str, Any] | None,
-) -> dict[str, Any]:
-    """Compute the recap diff between current backlog and the previous snapshot.
-
-    Returns a structured dict with task add/remove/change groups and a phase
-    change marker. Designed to be cheap to render as a few lines of text.
-
-    With no prior snapshot (first run), returns the 'no_prior_snapshot' shape
-    so the caller can render an appropriate first-time message rather than
-    pretending nothing changed.
-    """
-    current_snap = take_snapshot(current_data)
-
-    if prev_snapshot is None:
-        return {
-            "no_prior_snapshot": True,
-            "current_taken_at": current_snap["taken_at"],
-            "tasks_added": [],
-            "tasks_removed": [],
-            "tasks_changed": [],
-            "phase_changed": None,
-            "no_changes": False,
-        }
-
-    if prev_snapshot.get("structural_hash") == current_snap["structural_hash"]:
-        return {
-            "no_prior_snapshot": False,
-            "no_changes": True,
-            "prev_taken_at": prev_snapshot.get("taken_at"),
-            "current_taken_at": current_snap["taken_at"],
-            "tasks_added": [],
-            "tasks_removed": [],
-            "tasks_changed": [],
-            "phase_changed": None,
-        }
-
-    prev_tasks: dict[str, dict[str, Any]] = prev_snapshot.get("tasks", {}) or {}
-    cur_tasks: dict[str, dict[str, Any]] = current_snap.get("tasks", {}) or {}
-
-    added_ids = sorted(set(cur_tasks) - set(prev_tasks))
-    removed_ids = sorted(set(prev_tasks) - set(cur_tasks))
-    common_ids = set(cur_tasks) & set(prev_tasks)
-
-    tasks_added = [
-        {
-            "id": tid,
-            "title": cur_tasks[tid].get("title", ""),
-            "status": cur_tasks[tid].get("status"),
-            "priority": cur_tasks[tid].get("priority"),
-            "epic": cur_tasks[tid].get("epic"),
-        }
-        for tid in added_ids
-    ]
-    tasks_removed = [
-        {
-            "id": tid,
-            "title": prev_tasks[tid].get("title", ""),
-            "epic": prev_tasks[tid].get("epic"),
-        }
-        for tid in removed_ids
-    ]
-
-    tracked_fields = (*_SNAPSHOT_TASK_FIELDS, "epic")
-    tasks_changed = []
-    for tid in sorted(common_ids):
-        before = prev_tasks[tid]
-        after = cur_tasks[tid]
-        changes = [
-            {"field": f, "before": before.get(f), "after": after.get(f)}
-            for f in tracked_fields
-            if before.get(f) != after.get(f)
-        ]
-        if changes:
-            tasks_changed.append(
-                {
-                    "id": tid,
-                    "title": after.get("title", before.get("title", "")),
-                    "changes": changes,
-                }
-            )
-
-    phase_before = prev_snapshot.get("phase_active")
-    phase_after = current_snap["phase_active"]
-    phase_changed = (
-        {"before": phase_before, "after": phase_after}
-        if phase_before != phase_after
-        else None
-    )
-
-    return {
-        "no_prior_snapshot": False,
-        "no_changes": False,
-        "prev_taken_at": prev_snapshot.get("taken_at"),
-        "current_taken_at": current_snap["taken_at"],
-        "tasks_added": tasks_added,
-        "tasks_removed": tasks_removed,
-        "tasks_changed": tasks_changed,
-        "phase_changed": phase_changed,
-    }
-
-
 # ── Handovers ──────────────────────────────────────────────────
 
 # Canonical session_kind values (free-form string in storage; these are
@@ -1478,10 +1309,6 @@ def _default_handover_status(session_kind: str) -> str:
 
 # Index cap — `handovers:` array in backlog.yaml is bounded.
 HANDOVER_INDEX_CAP = 30
-
-# ---- Recap ---------------------------------------------------------------
-
-RECAP_SCHEMA_VERSION = 1
 
 # Map storage-side handover kinds to viewer-side display kinds (spec §5).
 # Storage kinds live in handover frontmatter (`session_kind`); the viewer renders
@@ -3737,36 +3564,6 @@ def save_viewer_prefs(prefs: dict) -> None:
     atomic_write(p, json.dumps(prefs, indent=2))
 
 
-def format_recap(diff: dict[str, Any]) -> str:
-    """Render a recap diff as a compact human-readable string.
-
-    Format roughly mirrors the spec example:
-        + T features-009 "Add SSO" (high, todo)
-        ~ T features-002 status: todo → in-progress
-        - T infra-005 "Old thing"
-        Phase: setup → development
-    """
-    if diff.get("no_prior_snapshot"):
-        return "No prior snapshot — recap will populate after the next snapshot."
-    if diff.get("no_changes"):
-        return f"No changes since {diff.get('prev_taken_at', 'last snapshot')}."
-
-    lines: list[str] = []
-    for t in diff["tasks_added"]:
-        prio = t.get("priority") or "?"
-        status = t.get("status") or "?"
-        lines.append(f"+ T {t['id']} \"{t['title']}\" ({prio}, {status})")
-    for t in diff["tasks_changed"]:
-        for c in t["changes"]:
-            lines.append(f"~ T {t['id']} {c['field']}: {c['before']} → {c['after']}")
-    for t in diff["tasks_removed"]:
-        lines.append(f"- T {t['id']} \"{t['title']}\"")
-    if diff["phase_changed"]:
-        pc = diff["phase_changed"]
-        lines.append(f"Phase: {pc['before']} → {pc['after']}")
-    return "\n".join(lines)
-
-
 def save_v3(backlog_path: Path, data: dict[str, Any]) -> None:
     """Save a v3 backlog: slim index → backlog.yaml; heavy fields → per-task files.
 
@@ -3832,186 +3629,6 @@ def save_v3(backlog_path: Path, data: dict[str, Any]) -> None:
     )
 
 
-# ---- Recap helpers -------------------------------------------------------
-
-
-def recap_path(session_id: str) -> Path:
-    """Path on disk for the recap file of a given session."""
-    return _resolve_artifact_root() / "recaps" / f"{session_id}.md"
-
-
-def _format_recap_markdown(
-    *,
-    frontmatter: dict,
-    title: str,
-    what_happened: str,
-    what_landed: str,
-    whats_next: str,
-) -> str:
-    """Render a recap file: YAML frontmatter + H1 title + three H2 sections.
-    Section order is fixed per spec §3.16: What happened / What landed / What's next.
-    """
-    fm_text = yaml.safe_dump(frontmatter, sort_keys=False).rstrip()
-    return (
-        f"---\n{fm_text}\n---\n\n"
-        f"# {title}\n\n"
-        f"## What happened\n\n{what_happened.rstrip()}\n\n"
-        f"## What landed\n\n{what_landed.rstrip()}\n\n"
-        f"## What's next\n\n{whats_next.rstrip()}\n"
-    )
-
-
-_RECAP_FM_RE = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
-
-
-def _parse_recap_markdown(text: str) -> dict:
-    """Inverse of `_format_recap_markdown`. Returns
-    `{frontmatter, title, what_happened, what_landed, whats_next}`.
-    Missing sections come back as empty strings.
-    """
-    m = _RECAP_FM_RE.match(text)
-    if not m:
-        raise ValueError("recap is missing YAML frontmatter")
-    fm = yaml.safe_load(m.group(1)) or {}
-    body = text[m.end():]
-
-    title_m = re.search(r"^#\s+(.+?)\s*$", body, re.MULTILINE)
-    title = title_m.group(1).strip() if title_m else ""
-
-    def _grab(label: str) -> str:
-        pat = re.compile(
-            rf"^##\s+{re.escape(label)}\s*\n+(.*?)(?=^##\s+|\Z)",
-            re.DOTALL | re.MULTILINE,
-        )
-        m2 = pat.search(body)
-        return m2.group(1).strip() if m2 else ""
-
-    return {
-        "frontmatter": fm,
-        "title": title,
-        "what_happened": _grab("What happened"),
-        "what_landed":   _grab("What landed"),
-        "whats_next":    _grab("What's next"),
-    }
-
-
-def save_recap(
-    *,
-    session_id: str,
-    frontmatter: dict,
-    title: str,
-    what_happened: str,
-    what_landed: str,
-    whats_next: str,
-) -> Path:
-    """Write `.taskmaster/recaps/<session-id>.md`. `session_id` and
-    `schema_version` are auto-injected into the frontmatter; the rest is
-    passed through verbatim.
-    """
-    fm = dict(frontmatter)
-    fm["session_id"] = session_id
-    fm["schema_version"] = RECAP_SCHEMA_VERSION
-    md = _format_recap_markdown(
-        frontmatter=fm,
-        title=title,
-        what_happened=what_happened,
-        what_landed=what_landed,
-        whats_next=whats_next,
-    )
-    p = recap_path(session_id)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write(p, md)
-    return p
-
-
-def load_recap(session_id: str) -> dict | None:
-    """Load and parse a recap file. Returns None when missing.
-    Returned dict: {frontmatter, title, what_happened, what_landed, whats_next}.
-    """
-    p = recap_path(session_id)
-    if not p.exists():
-        return None
-    return _parse_recap_markdown(p.read_text(encoding="utf-8"))
-
-
-def list_recaps() -> list[str]:
-    """Return session ids of all on-disk recaps, sorted descending (newest first)."""
-    d = _resolve_artifact_root() / "recaps"
-    if not d.exists():
-        return []
-    ids = [p.stem for p in d.glob("*.md") if not p.name.startswith("_")]
-    ids.sort(reverse=True)
-    return ids
-
-
-# ---- Session snapshots ---------------------------------------------------
-
-
-def save_session_snapshot(snapshot_id: str, payload: dict) -> Path:
-    """Write `<backlog-parent>/snapshots/<snapshot-id>.json` (atomic). The rolling
-    `last.json` is unaffected; per-session files coexist alongside it.
-    """
-    import json as _json
-    p = _resolve_artifact_root() / "snapshots" / f"{snapshot_id}.json"
-    p.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write(p, _json.dumps(payload, indent=2))
-    return p
-
-
-def load_session_snapshot(snapshot_id: str) -> dict | None:
-    """Load `<backlog-parent>/snapshots/<snapshot-id>.json`. None when missing."""
-    import json as _json
-    p = _resolve_artifact_root() / "snapshots" / f"{snapshot_id}.json"
-    if not p.exists():
-        return None
-    return _json.loads(p.read_text(encoding="utf-8"))
-
-
-def snapshot_diff(a: dict, b: dict) -> dict:
-    """Compute a structured diff from snapshot `a` (before) to `b` (after).
-
-    Returned shape (mirrors the client-side helper):
-      {
-        tasks_added:        [{id, ...task}],
-        tasks_removed:      [{id, ...task}],
-        tasks_changed:      [{id, from, to}],   # whole-task before/after
-        issues_opened:      [{id, ...issue}],
-        issues_transitioned:[{id, from, to}],
-        files_touched:      [path, ...],
-      }
-    """
-    a_tasks = (a or {}).get("tasks", {}) or {}
-    b_tasks = (b or {}).get("tasks", {}) or {}
-
-    added   = [{"id": tid, **b_tasks[tid]} for tid in b_tasks if tid not in a_tasks]
-    removed = [{"id": tid, **a_tasks[tid]} for tid in a_tasks if tid not in b_tasks]
-    changed = [
-        {"id": tid, "from": a_tasks[tid], "to": b_tasks[tid]}
-        for tid in a_tasks if tid in b_tasks and a_tasks[tid] != b_tasks[tid]
-    ]
-
-    a_iss = (a or {}).get("issues", {}) or {}
-    b_iss = (b or {}).get("issues", {}) or {}
-    issues_opened = [
-        {"id": iid, **b_iss[iid]} for iid in b_iss if iid not in a_iss
-    ]
-    issues_transitioned = [
-        {"id": iid, "from": a_iss[iid].get("status"),
-                    "to":   b_iss[iid].get("status")}
-        for iid in a_iss if iid in b_iss
-        and a_iss[iid].get("status") != b_iss[iid].get("status")
-    ]
-
-    return {
-        "tasks_added":         added,
-        "tasks_removed":       removed,
-        "tasks_changed":       changed,
-        "issues_opened":       issues_opened,
-        "issues_transitioned": issues_transitioned,
-        "files_touched":       list((b or {}).get("files_touched", []) or []),
-    }
-
-
 # ---- Sessions ------------------------------------------------------------
 
 
@@ -4050,7 +3667,7 @@ def list_sessions() -> list[dict]:
     SESSION_GAP_MINUTES (default 30). Each group becomes one session.
 
     Returns: list of dicts (newest first):
-      {id, start, end, duration, time_resolution, handover_ids[], recap_id,
+      {id, start, end, duration, time_resolution, handover_ids[],
        task_ids[], parallel_with[]}
 
     `time_resolution` is "full" when at least one grouped handover carried a
@@ -4066,7 +3683,7 @@ def list_sessions() -> list[dict]:
     for p in sorted(handovers_dir.glob("*.md")):
         try:
             text = p.read_text(encoding="utf-8")
-            m = _RECAP_FM_RE.match(text)
+            m = _MD_FRONTMATTER_RE.match(text)
             if not m:
                 continue
             fm = yaml.safe_load(m.group(1)) or {}
@@ -4095,7 +3712,6 @@ def list_sessions() -> list[dict]:
             groups.append([h])
 
     sessions: list[dict] = []
-    recap_ids = set(list_recaps())
     for idx, group in enumerate(groups, start=1):
         sid = f"SES-{idx:04d}"
         start = _handover_time(group[0])
@@ -4124,7 +3740,6 @@ def list_sessions() -> list[dict]:
                 }
                 for h in group
             ],
-            "recap_id": sid if sid in recap_ids else None,
             "task_ids": tids,
             "parallel_with": [],   # filled below
         })
@@ -4155,7 +3770,7 @@ def _load_handover_full(handover_id: str) -> dict | None:
     if not p.exists():
         return None
     text = p.read_text(encoding="utf-8")
-    m = _RECAP_FM_RE.match(text)
+    m = _MD_FRONTMATTER_RE.match(text)
     if not m:
         return None
     fm = yaml.safe_load(m.group(1)) or {}
@@ -4168,7 +3783,7 @@ def _load_handover_full(handover_id: str) -> dict | None:
 
 
 def get_session_detail(session_id: str) -> dict | None:
-    """Bundle one session with its handovers, recap, and task ids."""
+    """Bundle one session with its handovers and task ids."""
     sessions = list_sessions()
     target = next((s for s in sessions if s["id"] == session_id), None)
     if target is None:
@@ -4178,11 +3793,9 @@ def get_session_detail(session_id: str) -> dict | None:
         h = _load_handover_full(hid)
         if h is not None:
             handovers.append(h)
-    recap = load_recap(session_id)
     return {
         "session": target,
         "handovers": handovers,
-        "recap": recap,
         "task_ids": target["task_ids"],
     }
 

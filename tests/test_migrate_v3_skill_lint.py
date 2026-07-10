@@ -50,7 +50,6 @@ def test_description_contains_trigger_phrases():
         "migrate to v3",
         "switch to v3",
         "enable narrative continuity",
-        "i want recap",
     ]
     missing = [p for p in must_have if p not in desc]
     assert not missing, f"description is missing trigger phrases: {missing}"

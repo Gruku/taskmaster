@@ -19,9 +19,7 @@ registerScreen('/issue',      () => import('./screens/issue-detail.js'));
 registerScreen('/bugs',       () => import('./screens/bugs.js'));
 registerScreen('/bug',        () => import('./screens/bug-detail.js'));
 registerScreen('/ideas',      () => import('./screens/ideas.js'));
-registerScreen('/recap',      () => import('./screens/recap.js'));
 registerScreen('/archived',   () => import('./screens/archived.js'));
-registerScreen('/worktrees',  () => import('./screens/worktrees.js'));
 registerScreen('/settings',   () => import('./screens/settings.js'));
 
 // Prefs writer with debounce — screens call `prefs.patch({...})`.
