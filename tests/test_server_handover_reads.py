@@ -262,9 +262,10 @@ def test_handover_list_respects_limit_after_filters(tmp_path, monkeypatch):
     _sync_and_save(bp)
 
     result = backlog_server.backlog_handover_list(task_id="TASK-1", limit=3)
-    # Exactly 3 lines (one per entry).
-    lines = [l for l in result.splitlines() if l.strip()]
-    assert len(lines) == 3, f"Expected 3 lines, got {len(lines)}: {result!r}"
+    # Exactly 3 entry lines (bullets); an overflow footer notes the rest.
+    lines = [l for l in result.splitlines() if l.startswith("- ")]
+    assert len(lines) == 3, f"Expected 3 entry lines, got {len(lines)}: {result!r}"
+    assert "5 more handovers" in result, f"Expected overflow footer, got: {result!r}"
 
     # The 3 returned should be the newest 3 (index is newest-first).
     # Newest 3 from 8: entries 5,6,7 → 2026-05-06, 2026-05-07, 2026-05-08

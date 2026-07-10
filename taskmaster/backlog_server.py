@@ -210,6 +210,44 @@ def _append_grouped_links_block(
             lines.append(f"- {ltype}: [{', '.join(targets)}]")
 
 
+# Link fields expanded by expand_links, per entity kind. Used to give verbose
+# (full-frontmatter) reads the same expand_links behavior as slim reads.
+_EXPAND_LINK_FIELDS: dict[str, tuple[str, ...]] = {
+    "handover": ("task_ids",),
+    "issue": ("related_tasks", "fixed_in_task"),
+    "idea": ("related_tasks", "related_issues"),
+}
+
+
+def _expand_fm_links(fm: dict, kind: str, backlog_path: Path) -> dict:
+    """Return a copy of `fm` with the kind's link fields rewritten from bare IDs
+    to readable `id (tldr)` strings. Keeps expand_links behavior identical
+    between slim and verbose reads (tm-audit-007). Unknown IDs render bare.
+    """
+    fields = _EXPAND_LINK_FIELDS.get(kind, ())
+    if not fields or not any(fm.get(f) for f in fields):
+        return fm
+    data = _load()
+    tldr_index = _build_tldr_index(
+        data, project_root=backlog_path.parent.parent if backlog_path.exists() else None
+    )
+
+    def _one(i: str) -> str:
+        tldr = tldr_index.get(i)
+        return f"{i} ({tldr})" if tldr else i
+
+    out = dict(fm)
+    for field in fields:
+        val = fm.get(field)
+        if not val:
+            continue
+        if isinstance(val, list):
+            out[field] = [_one(str(i)) for i in val]
+        else:
+            out[field] = _one(str(val))
+    return out
+
+
 def _resolve_paths() -> tuple[Path, Path]:
     """Resolve backlog.yaml and PROGRESS.md paths from config or defaults.
 
@@ -275,6 +313,30 @@ def _today() -> str:
 def _now() -> str:
     """ISO timestamp with minute precision: YYYY-MM-DDTHH:MM"""
     return datetime.now().strftime("%Y-%m-%dT%H:%M")
+
+
+# ── Unified list-read convention ─────────────────────────
+# Every list tool/action caps at DEFAULT_LIST_LIMIT rows and emits an overflow
+# footer when it truncates, mirroring backlog_list_tasks. limit<=0 means no cap.
+DEFAULT_LIST_LIMIT = 50
+
+
+def _cap_list(entries: list, limit: int) -> tuple[list, int]:
+    """Apply the unified limit convention. Returns (capped, overflow_count).
+
+    limit>0 caps at `limit`; limit<=0 returns everything (no cap).
+    """
+    total = len(entries)
+    if limit > 0 and total > limit:
+        return entries[:limit], total - limit
+    return entries, 0
+
+
+def _overflow_footer(overflow: int, noun: str) -> str:
+    """Standard overflow footer line, or '' when nothing was truncated."""
+    if overflow <= 0:
+        return ""
+    return f"…{overflow} more {noun} — narrow with filters or pass limit=0 for all"
 
 
 def _validate_date(s: str) -> date | None:
@@ -1146,13 +1208,8 @@ def backlog_get_task(
     minimise token cost. Use verbose=True for the full body (notes, review
     instructions, docs, spec-review record, epic context). Use sections to
     pull specific named body sections (e.g. ["notes", "spec"]). Use
-    expand_links=True to swap dependency/issue IDs for {id, tldr} pills.
-
-    Note: Unlike the other _get tools (handover/issue/idea), this tool
-    honours expand_links in *both* slim and verbose modes for the depends_on
-    field — verbose mode hand-rolls the expansion inline. The other four tools
-    treat expand_links as a slim-mode-only feature and silently ignore it when
-    verbose=True.
+    expand_links=True to swap dependency/issue IDs for {id, tldr} pills —
+    honored in both slim and verbose modes (uniform across all _get tools).
 
     Args:
         task_id: The task ID (e.g., "ue-plugin-003")
@@ -2056,7 +2113,7 @@ def backlog_handover_list(
     session_kind: str = "",
     since: str = "",
     status: str = "all",
-    limit: int = 10,
+    limit: int = DEFAULT_LIST_LIMIT,
     verbose: bool = False,
 ) -> str:
     """List recent handovers. By default shows slim one-liners (id, date, tldr).
@@ -2073,7 +2130,8 @@ def backlog_handover_list(
             date prefix is >= since. Raises ValueError for invalid formats.
         status: One of open, closed, superseded, or "all" (default). Filters
             against the index entry — does not read every file.
-        limit: Maximum number of entries to return after filtering (default 10).
+        limit: Max entries returned (default 50). 0 = no cap. An overflow footer
+            reports how many were hidden.
         verbose: If True, include additional index fields (next_action, task_ids,
             status) per entry. Slim (default) shows id, date, kind, and tldr.
     """
@@ -2106,15 +2164,13 @@ def backlog_handover_list(
             return f"Error: status must be one of {_STATUSES} or 'all', got {status!r}."
         entries = [e for e in entries if e.get("status") == status]
 
-    if limit < 1:
-        return f"Error: limit must be >= 1, got {limit}."
-
-    # Truncate to limit after all filters.
-    entries = entries[:limit]
-
     if not entries:
         filtered = any([task_id, session_kind, since, status != "all"])
         return "No handovers match those filters." if filtered else "No handovers yet."
+
+    # Cap after all filters (limit<=0 = no cap) and report overflow.
+    entries, overflow = _cap_list(entries, limit)
+    footer = _overflow_footer(overflow, "handovers")
 
     lines = []
     for e in entries:
@@ -2133,6 +2189,8 @@ def backlog_handover_list(
                 lines.append(f"  tasks: {', '.join(tids)}")
             if e.get("status"):
                 lines.append(f"  status: {e['status']}")
+    if footer:
+        lines.append(footer)
     return "\n".join(lines)
 
 
@@ -2149,11 +2207,7 @@ def backlog_handover_get(
     minimise token cost. Use verbose=True to include the full markdown body.
     Use sections to pull specific named body sections (decisions, notes,
     blockers, where_id_start). Use expand_links=True to expand task_ids to
-    {id, tldr} pills.
-
-    Note: expand_links is a slim-mode feature. When verbose=True, the full
-    frontmatter is rendered as-is and expand_links is silently ignored. To
-    get expanded links use slim mode (verbose=False) with expand_links=True.
+    `id (tldr)` — honored in both slim and verbose modes.
 
     Use when start-session shows a handover tldr that you want to read in full,
     or when picking a task that has linked handovers.
@@ -2161,11 +2215,6 @@ def backlog_handover_get(
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    if verbose and expand_links:
-        # expand_links is a slim-mode feature; in verbose mode the full frontmatter
-        # is rendered as-is (no ID→pill substitution). To get expanded links, use
-        # slim mode (verbose=False) with expand_links=True.
-        pass  # silently ignore expand_links in verbose
     _ensure_handover_status_backfilled()
     try:
         fm, body = _read_handover(bp, handover_id)
@@ -2193,7 +2242,8 @@ def backlog_handover_get(
 
     # ── verbose mode ─────────────────────────────────────────────────────────
     if verbose:
-        fm_lines = [f"  {k}: {v}" for k, v in fm.items()]
+        vfm = _expand_fm_links(fm, "handover", bp) if expand_links else fm
+        fm_lines = [f"  {k}: {v}" for k, v in vfm.items()]
         return "---\n" + "\n".join(fm_lines) + "\n---\n" + body
 
     # ── slim mode (default) ──────────────────────────────────────────────────
@@ -2322,24 +2372,24 @@ def backlog_link_create(source: str, target: str, type: str, note: str = "") -> 
     backlog_path = _backlog_path()
 
     if type not in LINK_TYPES:
-        return f"error: invalid link type {type!r} (valid: {sorted(LINK_TYPES)})"
+        return f"Error: invalid link type {type!r} (valid: {sorted(LINK_TYPES)})"
 
     src_kind = entity_kind_of(source)
     dst_kind = entity_kind_of(target)
     if src_kind is None:
-        return f"error: invalid source ID {source!r}"
+        return f"Error: invalid source ID {source!r}"
     if dst_kind is None:
-        return f"error: invalid target ID {target!r}"
+        return f"Error: invalid target ID {target!r}"
     if not is_valid_link(type, src_kind, dst_kind):
-        return (f"error: invalid link — type {type!r} cannot go from "
+        return (f"Error: invalid link — type {type!r} cannot go from "
                 f"{src_kind} ({source}) to {dst_kind} ({target})")
 
     src_entity = read_entity_anywhere(backlog_path, source)
     if src_entity is None:
-        return f"error: source {source!r} not found"
+        return f"Error: source {source!r} not found"
     dst_entity = read_entity_anywhere(backlog_path, target)
     if dst_entity is None:
-        return f"error: target {target!r} not found"
+        return f"Error: target {target!r} not found"
 
     # Cycle check on depends_on / blocks (model both as forward edges in a
     # single task→task graph; `blocks` is reversed onto `depends_on`).
@@ -2361,7 +2411,7 @@ def backlog_link_create(source: str, target: str, type: str, note: str = "") -> 
         # Normalize the new edge to a depends_on direction for the check.
         new_src, new_dst = (source, target) if type == "depends_on" else (target, source)
         if would_create_cycle(graph, new_src, new_dst):
-            return (f"error: would create cycle in depends_on chain "
+            return (f"Error: would create cycle in depends_on chain "
                     f"({new_src} -> {new_dst})")
 
     added = add_link(src_entity, type, target)
@@ -2370,7 +2420,7 @@ def backlog_link_create(source: str, target: str, type: str, note: str = "") -> 
     try:
         sync_inverse(backlog_path, source=source, target=target, type=type)
     except KeyError as e:
-        return f"error: {e}"
+        return f"Error: {e}"
 
     suffix = "" if added else " (no-op, link already present)"
     note_part = f" -- {note}" if note else ""
@@ -2390,18 +2440,18 @@ def backlog_link_remove(source: str, target: str, type: str = "") -> str:
     backlog_path = _backlog_path()
 
     if entity_kind_of(source) is None:
-        return f"error: invalid source ID {source!r}"
+        return f"Error: invalid source ID {source!r}"
     if entity_kind_of(target) is None:
-        return f"error: invalid target ID {target!r}"
+        return f"Error: invalid target ID {target!r}"
 
     src_entity = read_entity_anywhere(backlog_path, source)
     if src_entity is None:
-        return f"error: source {source!r} not found"
+        return f"Error: source {source!r} not found"
 
     types_to_remove: list[str]
     if type:
         if type not in LINK_TYPES:
-            return f"error: invalid link type {type!r}"
+            return f"Error: invalid link type {type!r}"
         types_to_remove = [type]
     else:
         types_to_remove = sorted({link["type"] for link in entity_links(src_entity)
@@ -2470,12 +2520,12 @@ def backlog_link_query(source: str = "", target: str = "", type: str = "",
         return out
 
     if source and entity_kind_of(source) is None:
-        return f"error: invalid source ID {source!r}"
+        return f"Error: invalid source ID {source!r}"
     if target and entity_kind_of(target) is None:
-        return f"error: invalid target ID {target!r}"
+        return f"Error: invalid target ID {target!r}"
 
     if source and read_entity_anywhere(backlog_path, source) is None:
-        return f"error: source {source!r} not found"
+        return f"Error: source {source!r} not found"
 
     if source:
         results = list(edges_from(source))
@@ -2748,19 +2798,20 @@ def backlog_issue_create(
 def backlog_issue_list(
     severity: str = "",
     status: str = "",
-    limit: int = 20,
+    limit: int = DEFAULT_LIST_LIMIT,
     verbose: bool = False,
 ) -> str:
     """List issues, optionally filtered by severity and/or status.
 
-    Reads from the backlog.yaml index (sorted P0 → P3). Default lists the
-    top 20 active issues regardless of status — pass `status=open` to
-    focus on what still needs work.
+    Reads from the backlog.yaml index (sorted P0 → P3). Default lists active
+    issues regardless of status — pass `status=open` to focus on what still
+    needs work.
 
     Args:
         severity: Filter by severity: P0, P1, P2, P3.
         status: Filter by status: open, investigating, fixed, wontfix, duplicate.
-        limit: Maximum number of entries to return (default 20).
+        limit: Max entries returned (default 50). 0 = no cap. An overflow footer
+            reports how many were hidden.
         verbose: If True, include body content (repro steps) per entry. Slim
             (default) shows id, severity, status, title, and tldr.
     """
@@ -2773,7 +2824,7 @@ def backlog_issue_list(
         entries = [e for e in entries if e.get("severity") == severity]
     if status:
         entries = [e for e in entries if e.get("status") == status]
-    entries = entries[: max(1, limit)]
+    entries, overflow = _cap_list(list(entries), limit)
     if not entries:
         return "No issues match."
     lines = []
@@ -2803,6 +2854,9 @@ def backlog_issue_list(
                     lines.append(f"  body: {body.strip()[:200]}")
             except (FileNotFoundError, OSError):
                 pass
+    footer = _overflow_footer(overflow, "issues")
+    if footer:
+        lines.append(footer)
     return "\n".join(lines)
 
 
@@ -2819,20 +2873,12 @@ def backlog_issue_get(
     minimise token cost. Use verbose=True for the full body (repro steps,
     investigation notes). Use sections to pull specific named body sections
     (repro, investigation, notes). Use expand_links=True to expand
-    related_tasks to {id, tldr} pills.
-
-    Note: expand_links is a slim-mode feature. When verbose=True, the full
-    frontmatter is rendered as-is and expand_links is silently ignored. To
-    get expanded links use slim mode (verbose=False) with expand_links=True.
+    related_tasks/fixed_in_task to `id (tldr)` — honored in both slim and
+    verbose modes.
     """
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    if verbose and expand_links:
-        # expand_links is a slim-mode feature; in verbose mode the full frontmatter
-        # is rendered as-is (no ID→pill substitution). To get expanded links, use
-        # slim mode (verbose=False) with expand_links=True.
-        pass  # silently ignore expand_links in verbose
     try:
         fm, body = _read_issue(bp, issue_id)
     except FileNotFoundError:
@@ -2853,7 +2899,8 @@ def backlog_issue_get(
 
     # ── verbose mode ─────────────────────────────────────────────────────────
     if verbose:
-        fm_lines = [f"  {k}: {v}" for k, v in fm.items()]
+        vfm = _expand_fm_links(fm, "issue", bp) if expand_links else fm
+        fm_lines = [f"  {k}: {v}" for k, v in vfm.items()]
         return "---\n" + "\n".join(fm_lines) + "\n---\n" + body
 
     # ── slim mode (default) ──────────────────────────────────────────────────
@@ -3002,7 +3049,7 @@ def backlog_bug_create(
 def backlog_bug_list(
     status: str = "",
     found_in: str = "",
-    limit: int = 50,
+    limit: int = DEFAULT_LIST_LIMIT,
     include_archive: bool = False,
 ) -> str:
     """List Bugs from the active set (and optionally archive).
@@ -3012,7 +3059,8 @@ def backlog_bug_list(
     Args:
         status: Filter by status: open, fixed, shelved, adopted, promoted.
         found_in: Filter by task ID where bug was discovered.
-        limit: Max entries to return (default 50).
+        limit: Max entries returned (default 50). 0 = no cap. An overflow footer
+            reports how many were hidden.
         include_archive: If True, also include archived bugs.
     """
     from taskmaster.taskmaster_v3 import (
@@ -3047,7 +3095,7 @@ def backlog_bug_list(
         entries = [e for e in entries if e.get("status") == status]
     if found_in:
         entries = [e for e in entries if e.get("found_in") == found_in]
-    entries = entries[: max(1, limit)]
+    entries, overflow = _cap_list(entries, limit)
     if not entries:
         return "No bugs match."
     lines = []
@@ -3058,6 +3106,9 @@ def backlog_bug_list(
         if e.get("found_in"):
             line += f"  (found_in: {e['found_in']})"
         lines.append(line)
+    footer = _overflow_footer(overflow, "bugs")
+    if footer:
+        lines.append(footer)
     return "\n".join(lines)
 
 
@@ -3288,7 +3339,7 @@ def backlog_decision(
     decision_id: str = "",
     status: str = "open",
     task_id: str = "",
-    limit: int = 20,
+    limit: int = DEFAULT_LIST_LIMIT,
     resolved_with: int | None = None,
     rationale: str = "",
     resolved_in: str = "",
@@ -3321,8 +3372,11 @@ def backlog_decision(
     return f"Error: unknown action {action!r}"
 
 
-def backlog_decision_list(status: str = "open", task_id: str = "", limit: int = 20) -> str:
-    """List decisions filtered by status. `status='all'` returns every state."""
+def backlog_decision_list(
+    status: str = "open", task_id: str = "", limit: int = DEFAULT_LIST_LIMIT
+) -> str:
+    """List decisions filtered by status. `status='all'` returns every state.
+    Caps at `limit` (default 50; 0 = no cap) with an overflow footer."""
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
@@ -3340,9 +3394,13 @@ def backlog_decision_list(status: str = "open", task_id: str = "", limit: int = 
         rec = fm.get("recommendation")
         rec_str = f" [rec={rec}]" if rec else ""
         rows.append(f"{did} · {fm.get('status')} · {fm.get('title')}{rec_str}")
-        if len(rows) >= limit:
-            break
-    return "\n".join(rows) if rows else f"No decisions matching status={status}."
+    if not rows:
+        return f"No decisions matching status={status}."
+    rows, overflow = _cap_list(rows, limit)
+    footer = _overflow_footer(overflow, "decisions")
+    if footer:
+        rows.append(footer)
+    return "\n".join(rows)
 
 
 def backlog_decision_get(decision_id: str) -> str:
@@ -3512,15 +3570,15 @@ def backlog_idea_list(
     archived: bool = False,
     related_task: str = "",
     related_issue: str = "",
-    limit: int = 50,
-    summary: bool = True,
+    limit: int = DEFAULT_LIST_LIMIT,
+    verbose: bool = False,
 ) -> str:
     """List ideas, optionally filtered. With `idea_id`, returns one full record.
 
-    Without `idea_id`, returns summary lines (no body) — newest first. Pass
-    `summary=False` to render full record per entry (heavier payload, useful
-    when scripting). Filters compose as AND. By default archived ideas are
-    excluded.
+    Without `idea_id`, returns slim one-liners (no body) — newest first. Pass
+    `verbose=True` to render the full record per entry (heavier payload). Output
+    caps at `limit` with an overflow footer (limit=0 for all). Filters compose as
+    AND. By default archived ideas are excluded.
     """
     bp = _backlog_path()
     if not bp.exists():
@@ -3541,24 +3599,29 @@ def backlog_idea_list(
         archived=archived,
         related_task=related_task or None,
         related_issue=related_issue or None,
-        limit=max(1, limit),
-        summary=summary,
+        limit=None,  # fetch all; cap here (below) so we can report overflow
+        summary=not verbose,
     )
     if not entries:
         return "No ideas match."
-    if not summary:
+    entries, overflow = _cap_list(entries, limit)
+    footer = _overflow_footer(overflow, "ideas")
+    if verbose:
         # Full-record mode: render each as a frontmatter+body block.
         blocks = []
         for e in entries:
             body = e.pop("body", "")
             fm_lines = [f"  {k}: {v}" for k, v in e.items()]
             blocks.append("---\n" + "\n".join(fm_lines) + "\n---\n" + body)
-        return "\n\n".join(blocks)
+        out = "\n\n".join(blocks)
+        return f"{out}\n\n{footer}" if footer else out
     lines = []
     for e in entries:
         st = e.get("status") or ""
         st_tag = f" [{st}]" if st else ""
         lines.append(f"- {e['id']} — {e.get('title', '')}{st_tag}")
+    if footer:
+        lines.append(footer)
     return "\n".join(lines)
 
 
@@ -3575,20 +3638,11 @@ def backlog_idea_get(
     minimise token cost. Use verbose=True for the full body. Ideas do not
     have canonical body sections, so sections= is not supported (returns
     an error if provided). Use expand_links=True to expand related_tasks
-    and related_issues to {id, tldr} pills.
-
-    Note: expand_links is a slim-mode feature. When verbose=True, the full
-    frontmatter is rendered as-is and expand_links is silently ignored. To
-    get expanded links use slim mode (verbose=False) with expand_links=True.
+    and related_issues to `id (tldr)` — honored in both slim and verbose modes.
     """
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    if verbose and expand_links:
-        # expand_links is a slim-mode feature; in verbose mode the full frontmatter
-        # is rendered as-is (no ID→pill substitution). To get expanded links, use
-        # slim mode (verbose=False) with expand_links=True.
-        pass  # silently ignore expand_links in verbose
     if sections is not None and not sections:
         return "Error: sections=[] requested no sections; pass sections=None for the slim view or name at least one section"
     if sections:
@@ -3600,7 +3654,8 @@ def backlog_idea_get(
 
     # ── verbose mode ─────────────────────────────────────────────────────────
     if verbose:
-        fm_lines = [f"  {k}: {v}" for k, v in fm.items()]
+        vfm = _expand_fm_links(fm, "idea", bp) if expand_links else fm
+        fm_lines = [f"  {k}: {v}" for k, v in vfm.items()]
         return "---\n" + "\n".join(fm_lines) + "\n---\n" + body
 
     # ── slim mode (default) ──────────────────────────────────────────────────
@@ -3676,6 +3731,7 @@ def backlog_note(
     text: str = "",
     pinned: bool | None = None,
     include_archived: bool = False,
+    limit: int = DEFAULT_LIST_LIMIT,
 ) -> str:
     """Manage sticky notes on the user's Desk. Notes are the lightest continuity
     surface: freeform, situational, NOT attached to tasks. Write at most one
@@ -3683,13 +3739,13 @@ def backlog_note(
     entity (task/idea/issue/handover). Never archive or edit user-authored notes
     unless the user explicitly asks.
 
-    Params by action: create(text, pinned); list(include_archived);
+    Params by action: create(text, pinned); list(include_archived, limit);
     get(note_id); update(note_id, text, pinned); archive(note_id).
     """
     if action == "create":
         return backlog_note_create(text, bool(pinned))
     if action == "list":
-        return backlog_note_list(include_archived)
+        return backlog_note_list(include_archived, limit)
     if action == "get":
         return backlog_note_get(note_id)
     if action == "update":
@@ -3723,11 +3779,12 @@ def backlog_note_create(text: str, pinned: bool = False) -> str:
     return f"Note created: {nid}\nFile: {rel}"
 
 
-def backlog_note_list(include_archived: bool = False) -> str:
+def backlog_note_list(include_archived: bool = False, limit: int = DEFAULT_LIST_LIMIT) -> str:
     """List sticky notes from the user's Desk — pinned first, newest first.
 
     Returns one line per note: id, author, pin marker, created date, first
-    line of text. Use during session start to surface the user's desk."""
+    line of text. Caps at `limit` (default 50; 0 = no cap) with an overflow
+    footer. Use during session start to surface the user's desk."""
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
@@ -3735,6 +3792,7 @@ def backlog_note_list(include_archived: bool = False) -> str:
     notes = _list_notes(bp, include_archived=include_archived)
     if not notes:
         return "Desk is clear — no notes."
+    notes, overflow = _cap_list(notes, limit)
     lines = []
     for n in notes:
         first = (n.get("body") or "").strip().splitlines()[0] if n.get("body") else ""
@@ -3742,6 +3800,9 @@ def backlog_note_list(include_archived: bool = False) -> str:
         arch = " [archived]" if n.get("archived") else ""
         created = str(n.get("created", ""))[:10]
         lines.append(f"- {n['id']} ({n.get('author')}, {created}){arch} — {pin}{first}")
+    footer = _overflow_footer(overflow, "notes")
+    if footer:
+        lines.append(footer)
     return "\n".join(lines)
 
 
@@ -3829,11 +3890,12 @@ def backlog_area_create(
 
 
 @mcp.tool()
-def backlog_area_list() -> str:
+def backlog_area_list(limit: int = DEFAULT_LIST_LIMIT) -> str:
     """List all Areas — long-lived subsystems with no status lifecycle.
 
     Returns one line per area: id, name, anchor count, first line of
-    description."""
+    description. Caps at `limit` (default 50; 0 = no cap) with an overflow
+    footer."""
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
@@ -3841,12 +3903,16 @@ def backlog_area_list() -> str:
     areas = _list_areas(bp)
     if not areas:
         return "No areas defined."
+    areas, overflow = _cap_list(areas, limit)
     lines = []
     for a in areas:
         desc = (a.get("description") or "").strip().splitlines()[0] if a.get("description") else ""
         anchors = a.get("anchors") or []
         suffix = f": {desc}" if desc else ""
         lines.append(f"- {a['id']} — {a.get('name', '')} ({len(anchors)} anchors){suffix}")
+    footer = _overflow_footer(overflow, "areas")
+    if footer:
+        lines.append(footer)
     return "\n".join(lines)
 
 
@@ -3920,9 +3986,9 @@ def viewer_prefs_set(patch_json: str) -> str:
     try:
         patch = json.loads(patch_json)
     except Exception as e:
-        return f"error: invalid JSON ({e})"
+        return f"Error: invalid JSON ({e})"
     if not isinstance(patch, dict):
-        return "error: patch must be a JSON object"
+        return "Error: patch must be a JSON object"
 
     prefs = load_viewer_prefs()
     _deep_merge(prefs, patch)

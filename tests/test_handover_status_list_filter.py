@@ -116,29 +116,35 @@ def test_since_filter_uses_date_field_not_id_prefix(tmp_path, monkeypatch):
     )
 
 
-# ── B-040: limit=0 or limit<1 must return an error, not the most-recent entry ──
+# ── B-040 / tm-audit-007: limit<=0 means "no cap" (unified list convention),
+# never a silent truncation to the most-recent single entry. ──
 
-def test_limit_zero_returns_error(tmp_path, monkeypatch):
-    """limit=0 is degenerate input and must return a structured error."""
+def test_limit_zero_returns_all(tmp_path, monkeypatch):
+    """limit=0 returns every handover (no cap), not a single most-recent entry."""
     bp = _setup(tmp_path, monkeypatch)
-    write_handover(bp, tldr="some handover", session_kind="end-of-day")
+    write_handover(bp, tldr="first", session_kind="end-of-day")
+    write_handover(bp, tldr="second", session_kind="end-of-day")
+    write_handover(bp, tldr="third", session_kind="end-of-day")
     _resync(bp)
 
     out = backlog_server.backlog_handover_list(limit=0)
-    assert out.startswith("Error: limit must be >= 1"), (
-        f"Expected 'Error: limit must be >= 1 ...' string, got: {out!r}"
+    lines = [l for l in out.splitlines() if l.startswith("- ")]
+    assert len(lines) == 3, (
+        f"Expected all 3 entries with limit=0 (no cap), got {len(lines)}: {out!r}"
     )
 
 
-def test_limit_negative_returns_error(tmp_path, monkeypatch):
-    """limit=-3 must also return a structured error."""
+def test_limit_negative_returns_all(tmp_path, monkeypatch):
+    """limit<0 also means no cap under the unified convention."""
     bp = _setup(tmp_path, monkeypatch)
-    write_handover(bp, tldr="some handover", session_kind="end-of-day")
+    write_handover(bp, tldr="first", session_kind="end-of-day")
+    write_handover(bp, tldr="second", session_kind="end-of-day")
     _resync(bp)
 
     out = backlog_server.backlog_handover_list(limit=-3)
-    assert out.startswith("Error: limit must be >= 1"), (
-        f"Expected 'Error: limit must be >= 1 ...' string, got: {out!r}"
+    lines = [l for l in out.splitlines() if l.startswith("- ")]
+    assert len(lines) == 2, (
+        f"Expected all 2 entries with limit=-3 (no cap), got {len(lines)}: {out!r}"
     )
 
 
