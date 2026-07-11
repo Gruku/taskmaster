@@ -7,6 +7,12 @@ Versions follow [SemVer](https://semver.org/spec/v2.0.0.html) — major bumps
 indicate schema breaks or removed surfaces.
 
 ---
+## 4.4.1
+
+**Codex marketplace bundle fix.** Documents and versions the standalone payload consumed by `claude-tools`' generated Codex distribution. Codex marketplace repository installs do not materialize Git submodules, so pointing the catalog directly at the Taskmaster submodule produced an empty installed plugin with no skills or MCP servers. The parent marketplace now packages a generated, regular-file distribution sourced from this repository.
+
+No Taskmaster runtime or workflow behavior changes.
+
 
 ## 4.4.0
 
