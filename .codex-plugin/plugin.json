@@ -1,0 +1,39 @@
+{
+  "name": "taskmaster",
+  "version": "4.4.0",
+  "description": "Harness-agnostic task and backlog management with neutral workflow playbooks, narrative continuity, and a local kanban viewer.",
+  "author": {
+    "name": "gruku"
+  },
+  "skills": "./skills/",
+  "mcpServers": {
+    "tm": {
+      "command": "uv",
+      "cwd": ".",
+      "startup_timeout_sec": 120,
+      "tool_timeout_sec": 30,
+      "args": [
+        "run",
+        "backlog_server.py"
+      ]
+    }
+  },
+  "interface": {
+    "displayName": "Taskmaster",
+    "shortDescription": "Harness-agnostic task and backlog management.",
+    "longDescription": "Manage tasks, epics, areas, bugs, issues, decisions, handovers, and project manifests through an assistant-neutral MCP core and workflow playbooks. Codex receives the verified core and advisory workflow layers; Claude-only enforcement hooks are intentionally excluded.",
+    "developerName": "gruku",
+    "category": "Productivity",
+    "capabilities": [
+      "Task management",
+      "Workflow playbooks",
+      "Narrative continuity",
+      "Kanban viewer"
+    ],
+    "defaultPrompt": [
+      "Show me the Taskmaster backlog and orient this session.",
+      "Pick the next ready task and explain why it is next.",
+      "Review the current task against its completion criteria."
+    ]
+  }
+}

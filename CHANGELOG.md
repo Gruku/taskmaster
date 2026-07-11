@@ -8,6 +8,12 @@ indicate schema breaks or removed surfaces.
 
 ---
 
+## 4.4.0
+
+**Native Codex marketplace packaging.** Adds a `.codex-plugin/plugin.json` manifest that exposes Taskmaster's already-verified harness-agnostic MCP core and all 17 assistant-neutral workflow playbooks directly through the Codex plugin marketplace. The Codex package uses a plugin-relative MCP working directory, so marketplace installs no longer need the older adapter's manual `{{TASKMASTER_HOME}}` substitution. Claude-only enforcement hooks remain intentionally outside the Codex capability tier; workflow gates remain advisory there, as documented in the capability matrix.
+
+The existing `adapters/codex/` files remain useful for manual/source-checkout installs. Marketplace installation is now the preferred Codex path.
+
 ## 4.3.0
 **MCP write-surface consolidation (tm-audit-020).** Merges skill-mediated write families behind action-dispatched tools and collapses heavy update signatures, cutting the MCP surface from 95 to 76 tools and trimming per-tool schema tokens loaded into every session. All consolidated families are skill-mediated (the taskmaster:linear / :decision / :handover skills and the note/link routing tell the model exactly what to call), so this ships as a minor by explicit user convention — no alias shims; skills update in the same release.
 - **Merged (per-verb tools removed, one action-dispatched tool added):**
