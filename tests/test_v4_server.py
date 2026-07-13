@@ -72,3 +72,13 @@ def test_load_snapshot_is_deep_copy(v4_project):
 def _read(path):
     from taskmaster import taskmaster_v3 as v3
     return v3.read_task_file(path)
+
+
+def test_add_task_allocates_id_and_order(v4_project):
+    from taskmaster import backlog_server
+    out = backlog_server.backlog_add_task(
+        epic="e", title="Second", phase="p1", priority="medium")
+    assert "e-002" in out
+    fm, _ = _read(v4_project / ".taskmaster" / "tasks" / "e-002.md")
+    assert fm["epic"] == "e"
+    assert fm["order"] == 2.0

@@ -133,6 +133,46 @@ class TestLoadV4:
         assert data["epics"][0]["tasks"][0][v3.BODY_KEY] == "## Notes\n\nhello"
 
 
+class TestV4Allocators:
+    def test_next_task_id_scans_dir_incl_archive(self, tmp_path):
+        bp = _write_v4_project(
+            tmp_path, epics=[{"id": "e", "name": "E"}],
+            tasks=[{"id": "e-001", "title": "a", "epic": "e", "order": 1.0},
+                   {"id": "e-002", "title": "b", "epic": "e", "order": 2.0}],
+        )
+        arch = bp.parent / "tasks" / "archive"
+        arch.mkdir()
+        fm, body = v3.task_v4_to_file({"id": "e-005", "title": "old", "epic": "e", "order": 5.0})
+        v3.write_task_file(arch / "e-005.md", fm, body)
+        assert v3.next_task_id(bp, "e") == "e-006"
+
+    def test_next_task_id_empty_epic(self, tmp_path):
+        bp = _write_v4_project(tmp_path, epics=[{"id": "e", "name": "E"}], tasks=[])
+        assert v3.next_task_id(bp, "e") == "e-001"
+
+    def test_next_task_id_ignores_other_epics(self, tmp_path):
+        bp = _write_v4_project(
+            tmp_path, epics=[{"id": "e", "name": "E"}, {"id": "auth", "name": "A"}],
+            tasks=[{"id": "auth-009", "title": "x", "epic": "auth", "order": 1.0}],
+        )
+        assert v3.next_task_id(bp, "e") == "e-001"
+
+    def test_next_task_order_is_max_plus_one(self, tmp_path):
+        bp = _write_v4_project(
+            tmp_path, epics=[{"id": "e", "name": "E"}],
+            tasks=[{"id": "e-001", "title": "a", "epic": "e", "order": 1.0},
+                   {"id": "e-002", "title": "b", "epic": "e", "order": 2.0}],
+        )
+        assert v3.next_task_order(bp, "e") == 3.0
+
+    def test_next_task_order_empty_epic_is_one(self, tmp_path):
+        bp = _write_v4_project(tmp_path, epics=[{"id": "e", "name": "E"}], tasks=[])
+        assert v3.next_task_order(bp, "e") == 1.0
+
+    def test_order_between_is_midpoint(self):
+        assert v3.order_between(1.0, 2.0) == 1.5
+
+
 class TestSaveV4:
     def test_writes_task_files_and_slim_backlog(self, tmp_path):
         tm = tmp_path / ".taskmaster"
