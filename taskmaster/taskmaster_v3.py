@@ -3727,6 +3727,74 @@ def save_v3(backlog_path: Path, data: dict[str, Any]) -> None:
     )
 
 
+def save_v4(
+    backlog_path: Path,
+    data: dict[str, Any],
+    snapshot: dict[str, Any] | None = None,
+) -> None:
+    """Save a v4 backlog: every task field -> tasks/<id>.md; backlog.yaml holds
+    only meta (minus `updated`) + phases + epic definitions (no task lists).
+
+    `snapshot` (a deep copy of the dict returned by the matching load) enables
+    dirty-scoped writes: only tasks that differ from the snapshot are written
+    (see _v4_write_task, filled in Task 6). snapshot=None writes every task --
+    the baseline used by migration and by tests.
+    """
+    # 1. Task files.
+    for epic in data.get("epics", []):
+        for task in epic.get("tasks", []):
+            tid = task.get("id")
+            if not tid:
+                continue
+            _v4_write_task(backlog_path, task, snapshot)
+
+    # 2. Epic / phase body files (identical policy to save_v3).
+    slim_data: dict[str, Any] = {k: v for k, v in data.items() if not k.startswith("_")}
+    slim_data["epics"] = []
+    for epic in data.get("epics", []):
+        epic_meta = {k: v for k, v in epic.items() if k != "tasks"}
+        slim_meta, epic_heavy, epic_body = _split_entity_for_v3(epic_meta, EPIC_HEAVY_FIELDS)
+        eid = slim_meta.get("id")
+        if eid and (any(k in epic_heavy for k in EPIC_HEAVY_FIELDS) or epic_body):
+            write_task_file(epic_file_path(backlog_path, eid), epic_heavy, epic_body)
+            slim_data["epics"].append(slim_meta)
+        else:
+            if eid:
+                _remove_entity_file(epic_file_path(backlog_path, eid))
+            slim_data["epics"].append(epic_meta)
+
+    if "phases" in slim_data:
+        slim_phases: list[dict[str, Any]] = []
+        for phase in data.get("phases", []):
+            slim_phase, phase_heavy, phase_body = _split_entity_for_v3(phase, PHASE_HEAVY_FIELDS)
+            pid = slim_phase.get("id")
+            if pid and (any(k in phase_heavy for k in PHASE_HEAVY_FIELDS) or phase_body):
+                write_task_file(phase_file_path(backlog_path, pid), phase_heavy, phase_body)
+                slim_phases.append(slim_phase)
+            else:
+                if pid:
+                    _remove_entity_file(phase_file_path(backlog_path, pid))
+                slim_phases.append(phase)
+        slim_data["phases"] = slim_phases
+
+    # 3. Slim backlog.yaml -- never carries task lists or `meta.updated`.
+    if isinstance(slim_data.get("meta"), dict):
+        slim_data["meta"] = {k: v for k, v in slim_data["meta"].items() if k != "updated"}
+    atomic_write(
+        backlog_path,
+        yaml.dump(slim_data, default_flow_style=False, sort_keys=False, allow_unicode=True),
+    )
+
+
+def _v4_write_task(
+    backlog_path: Path, task: dict[str, Any], snapshot: dict[str, Any] | None
+) -> None:
+    """Write one task file. Task 6 replaces this with the dirty-scoped,
+    merge-aware version; this baseline always writes (snapshot ignored)."""
+    fm, body = task_v4_to_file(task)
+    write_task_file(task_file_path(backlog_path, task["id"]), fm, body)
+
+
 # ---- Sessions ------------------------------------------------------------
 
 
