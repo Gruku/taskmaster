@@ -56,4 +56,4 @@ For each suggested critical/high task that has a spec/plan but no `spec_review` 
 
 - Deep mode total token budget: ~1,800–2,200 tokens (glance ~800 + deep additions ~1,000–1,400).
 - `--deep` is user-explicit. Never auto-trigger deep mode based on signals (days since last session, etc.).
-- `backlog_handover_latest` was removed from the MCP surface (tm-audit-006). Use `backlog_handover_list(status="open", limit=5)` — already wired into the glance path.
+- `backlog_handover_latest` was removed from the MCP surface (tm-audit-006). The glance path now anchors on `backlog_thread_list()` (the thread board); use `backlog_handover_list` only for per-handover history digs.
