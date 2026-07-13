@@ -170,3 +170,44 @@ body.rail-open .tl .selected { opacity: 1; pointer-events: auto; }
 .handover-status-chips .status-chip:hover {
   filter: brightness(1.05);
 }
+
+/* Thread board — open lines of work, above the diary. */
+.thread-board { margin-bottom: var(--sp-6); }
+.tb-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--sp-3);
+}
+.thread-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: var(--sp-3) var(--sp-4);
+  cursor: pointer;
+}
+.thread-card:hover { background: var(--bg-card-hover); border-color: var(--border-strong); }
+.tc-head { display: flex; justify-content: space-between; align-items: baseline; }
+.tc-name { font-weight: 600; color: var(--ink); }
+.tc-stale { color: var(--ink-3); font-size: var(--text-xs); }
+.tc-tldr { margin-top: var(--sp-1); color: var(--ink-2); font-size: var(--text-sm); line-height: 1.5; }
+.tc-next { margin-top: var(--sp-1); color: var(--ink-2); font-size: var(--text-xs); }
+.tc-foot { margin-top: var(--sp-3); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.tc-foot .pill {
+  font-size: 9px; color: var(--ink-3);
+  background: var(--bg-panel); border: 1px solid var(--border-soft);
+  padding: 1px 6px; border-radius: 3px;
+}
+.tc-branch { color: var(--ink-3); font-size: var(--text-xs); }
+.tc-copy {
+  margin-left: auto;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  color: var(--ink-2);
+  border-radius: var(--r-sm);
+  padding: 2px var(--sp-3);
+  cursor: copy;
+  font-size: var(--text-xs);
+}
+.tc-copy:hover { background: var(--bg-card-hover); }
+.tb-parked { margin-top: var(--sp-3); }
+.tb-parked summary { cursor: pointer; color: var(--ink-3); }

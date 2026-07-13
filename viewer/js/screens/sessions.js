@@ -1,11 +1,12 @@
 import { renderTimeline } from '../components/timeline.js';
 import { RightRail } from '../components/right-rail.js';
-import { listSessions, getSessionDetail } from '../api.js';
+import { listSessions, getSessionDetail, listThreads } from '../api.js';
 import { claimTopbar, tmSubcount, tmSearch, tmSegmented, tmAction } from '../lib/topbar.js';
 import { pluralize } from '../util/pluralize.js';
 import { emptyState } from '../components/empty-state.js';
 import { chipClickNext } from '../util/chip-toggle.js';
 import { formatRelative, formatAbsolute, formatDurationCompact } from '../lib/time.js';
+import { bindCopy } from '../lib/copy.js';
 
 export const meta = { title: 'Sessions', icon: '⊕', sidebarKey: 'sessions' };
 
@@ -23,6 +24,7 @@ export async function mount(root, { params, store, prefs }) {
 
   root.innerHTML = `
     <div class="sessions-page">
+      <div class="thread-board" data-role="board"></div>
       <div class="sessions-kinds" data-role="kinds">
         <span class="sessions-kind-chip session on" data-kind="session">
           <span class="dot"></span> Sessions <span class="ct">0</span>
@@ -84,6 +86,7 @@ export async function mount(root, { params, store, prefs }) {
   const persistedStatus = (prefsData.screens?.sessions?.handoverStatus) || ['open', 'closed'];
   const state = {
     sessions: [],
+    threads: [],
     detailCache: new Map(),
     view: prefs.screens.sessions.view,
     kinds: { session: true, handover: true },
@@ -104,9 +107,63 @@ export async function mount(root, { params, store, prefs }) {
   refreshKindCounts(root, state.sessions, subcount);
   render(root, state, rail);
 
+  try {
+    state.threads = await listThreads();
+  } catch { state.threads = []; }
+  renderBoard(root, state);
+
   if (state.selectedSessionId) openSessionDetail(rail, state.selectedSessionId, state);
 
   return () => { rail.close(); };
+}
+
+function renderBoard(root, state) {
+  const host = root.querySelector('[data-role=board]');
+  if (!host) return;
+  const open = (state.threads || []).filter(t => t.status === 'open');
+  const parked = (state.threads || []).filter(t => t.status === 'parked');
+  host.innerHTML = '';
+  if (!open.length && !parked.length) { host.style.display = 'none'; return; }
+  host.style.display = '';
+  const grid = document.createElement('div');
+  grid.className = 'tb-grid';
+  for (const t of open) grid.appendChild(threadCard(t));
+  host.appendChild(grid);
+  if (parked.length) {
+    const fold = document.createElement('details');
+    fold.className = 'tb-parked';
+    fold.innerHTML = `<summary>${parked.length} parked</summary>`;
+    const pgrid = document.createElement('div');
+    pgrid.className = 'tb-grid';
+    for (const t of parked) pgrid.appendChild(threadCard(t));
+    fold.appendChild(pgrid);
+    host.appendChild(fold);
+  }
+}
+
+function threadCard(t) {
+  const card = document.createElement('div');
+  card.className = `thread-card thread-card-${t.status}`;
+  const stale = t.staleness_days > 0 ? `${t.staleness_days}d` : 'today';
+  card.innerHTML =
+    `<div class="tc-head">`
+    + `<span class="tc-name mono">${escapeHtml(t.name)}</span>`
+    + `<span class="tc-stale mono">${escapeHtml(stale)}</span>`
+    + `</div>`
+    + `<div class="tc-tldr">${escapeHtml(t.tldr || '')}</div>`
+    + (t.next_action ? `<div class="tc-next">→ ${escapeHtml(t.next_action)}</div>` : '')
+    + `<div class="tc-foot">`
+    + (t.task_ids || []).slice(0, 4).map(id => `<span class="pill task mono">${escapeHtml(id)}</span>`).join('')
+    + (t.branch ? `<span class="tc-branch mono">${escapeHtml(t.branch)}</span>` : '')
+    + `<button class="tc-copy" title="Copy resume line">⧉ resume</button>`
+    + `</div>`;
+  const btn = card.querySelector('.tc-copy');
+  bindCopy(btn, `Resume: ${t.name} — ${t.next_action || t.tldr || ''}`);
+  card.addEventListener('click', (ev) => {
+    if (ev.target === btn) return;
+    location.hash = `#/sessions/${encodeURIComponent(t.name)}`;
+  });
+  return card;
 }
 
 function _filteredSessions(state) {
@@ -291,6 +348,8 @@ async function openHandoverDetail(rail, hid, state) {
           });
         });
       }
+      const copyBtn = el.querySelector('.rr-resume .copy');
+      if (copyBtn) bindCopy(copyBtn, h.resume_prompt || h.next_action || '');
       return cleanup;
     },
   });
