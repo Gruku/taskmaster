@@ -157,6 +157,29 @@ class TestV4Allocators:
         )
         assert v3.next_task_id(bp, "e") == "e-001"
 
+    def test_next_task_id_rejects_overlapping_epic_prefix(self, tmp_path):
+        bp = _write_v4_project(
+            tmp_path,
+            epics=[{"id": "e", "name": "E"}, {"id": "e-auth", "name": "Auth"}],
+            tasks=[
+                {"id": "e-002", "title": "valid", "epic": "e", "order": 1.0},
+                {"id": "e-auth-009", "title": "other", "epic": "e-auth", "order": 1.0},
+            ],
+        )
+        assert v3.next_task_id(bp, "e") == "e-003"
+
+    def test_next_task_id_rejects_malformed_archive_suffix(self, tmp_path):
+        bp = _write_v4_project(
+            tmp_path, epics=[{"id": "e", "name": "E"}],
+            tasks=[{"id": "e-002", "title": "valid", "epic": "e", "order": 1.0}],
+        )
+        arch = bp.parent / "tasks" / "archive"
+        arch.mkdir()
+        fm, body = v3.task_v4_to_file(
+            {"id": "e-foo009", "title": "malformed", "epic": "e", "order": 9.0})
+        v3.write_task_file(arch / "e-foo009.md", fm, body)
+        assert v3.next_task_id(bp, "e") == "e-003"
+
     def test_next_task_order_is_max_plus_one(self, tmp_path):
         bp = _write_v4_project(
             tmp_path, epics=[{"id": "e", "name": "E"}],
