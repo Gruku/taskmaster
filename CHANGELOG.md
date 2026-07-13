@@ -7,6 +7,16 @@ Versions follow [SemVer](https://semver.org/spec/v2.0.0.html) — major bumps
 indicate schema breaks or removed surfaces.
 
 ---
+## 5.0.0
+
+**Team relayout — sharded per-task storage (`schema_version: 4`).** Every task field now lives in `tasks/<id>.md`; the slim `backlog.yaml` contains only project metadata, phases, and epic definitions. Task order is fractional and epic membership is declared by each task's `epic:` field.
+
+Saves are dirty-scoped and merge-aware: only changed task files are written, while concurrent disk changes are preserved through a per-field three-way merge. IDs allocate by directory scan, and typed-link reads and writes now dispatch through the active schema.
+
+Machine-local state (`viewer.json`, `auto/`, `PROGRESS.md`, and derived `meta.updated`) lives under `.taskmaster/local/`. Existing v3 projects remain readable and writable and receive a migration prompt; migrate idempotently with `backlog_migrate_v4`. New projects use v4 by default. An MCP server restart is required after upgrading.
+
+This is epic 1 of the team-collaboration design; identity, synchronization, team IDs, and viewer collaboration land in later releases.
+
 ## 4.4.1
 
 **Codex marketplace bundle fix.** Documents and versions the standalone payload consumed by `claude-tools`' generated Codex distribution. Codex marketplace repository installs do not materialize Git submodules, so pointing the catalog directly at the Taskmaster submodule produced an empty installed plugin with no skills or MCP servers. The parent marketplace now packages a generated, regular-file distribution sourced from this repository.
