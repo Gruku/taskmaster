@@ -258,3 +258,63 @@ class TestSaveV4:
         assert task_body.removesuffix("\n") == "task body"
         assert epic_body.removesuffix("\n") == "epic body"
         assert phase_body.removesuffix("\n") == "phase body"
+
+
+@pytest.fixture()
+def v4_server_project(tmp_path, monkeypatch):
+    tm = tmp_path / ".taskmaster"
+    (tm / "tasks").mkdir(parents=True)
+    (tm / "PROGRESS.md").write_text("## Changelog\n", encoding="utf-8")
+    backlog = {
+        "meta": {"project": "t", "updated": "", "schema_version": 4},
+        "epics": [{"id": "e", "name": "E", "status": "active"}],
+        "phases": [{"id": "p1", "name": "P1", "status": "active"}],
+    }
+    (tm / "backlog.yaml").write_text(yaml.dump(backlog), encoding="utf-8")
+    task = {
+        "id": "e-001", "title": "First", "epic": "e", "order": 1.0,
+        "status": "todo", "priority": "medium",
+    }
+    fm, body = v3.task_v4_to_file(task)
+    v3.write_task_file(tm / "tasks" / "e-001.md", fm, body)
+    from taskmaster import backlog_server
+    monkeypatch.setattr(backlog_server, "ROOT", tmp_path)
+    monkeypatch.setattr(backlog_server, "CONFIG_PATH", tm / "taskmaster.json")
+    monkeypatch.setattr(
+        backlog_server,
+        "LEGACY_CONFIG_PATH",
+        tmp_path / ".claude" / "taskmaster.json",
+    )
+    monkeypatch.chdir(tmp_path)
+    return tmp_path
+
+
+def test_server_load_returns_globbed_v4_tasks(v4_server_project):
+    from taskmaster import backlog_server
+
+    data = backlog_server._load()
+    assert data["epics"][0]["tasks"][0]["id"] == "e-001"
+
+
+def test_update_task_writes_to_v4_task_file_not_backlog(v4_server_project):
+    from taskmaster import backlog_server
+
+    v3.update_task(
+        "e-001", {"title": "Renamed"}, backlog_path=backlog_server._backlog_path()
+    )
+    fm, _ = v3.read_task_file(
+        v4_server_project / ".taskmaster" / "tasks" / "e-001.md"
+    )
+    assert fm["title"] == "Renamed"
+    on_disk = yaml.safe_load(
+        (v4_server_project / ".taskmaster" / "backlog.yaml").read_text()
+    )
+    assert "tasks" not in on_disk["epics"][0]
+
+
+def test_server_load_snapshot_is_deep_copy(v4_server_project):
+    from taskmaster import backlog_server
+
+    data = backlog_server._load()
+    data["epics"][0]["tasks"][0]["title"] = "mutated in memory"
+    assert backlog_server._LOAD_SNAPSHOT["epics"][0]["tasks"][0]["title"] == "First"
