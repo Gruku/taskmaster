@@ -3727,6 +3727,28 @@ def save_v3(backlog_path: Path, data: dict[str, Any]) -> None:
     )
 
 
+def _v4_strip_private_fields(value: Any, *, preserve_body: bool = False) -> Any:
+    """Return a persistence-safe copy with private mapping keys removed.
+
+    BODY_KEY is private runtime state everywhere except at an entity boundary,
+    where it represents the entity's markdown body and must reach the file
+    serializer. Nested mappings never inherit that exception.
+    """
+    if isinstance(value, dict):
+        return {
+            key: _v4_strip_private_fields(child)
+            for key, child in value.items()
+            if not (
+                isinstance(key, str)
+                and key.startswith("_")
+                and not (preserve_body and key == BODY_KEY)
+            )
+        }
+    if isinstance(value, list):
+        return [_v4_strip_private_fields(child) for child in value]
+    return value
+
+
 def save_v4(
     backlog_path: Path,
     data: dict[str, Any],
@@ -3749,10 +3771,17 @@ def save_v4(
             _v4_write_task(backlog_path, task, snapshot)
 
     # 2. Epic / phase body files (identical policy to save_v3).
-    slim_data: dict[str, Any] = {k: v for k, v in data.items() if not k.startswith("_")}
+    slim_data: dict[str, Any] = {
+        k: _v4_strip_private_fields(v)
+        for k, v in data.items()
+        if not k.startswith("_")
+    }
     slim_data["epics"] = []
     for epic in data.get("epics", []):
-        epic_meta = {k: v for k, v in epic.items() if k != "tasks"}
+        epic_meta = _v4_strip_private_fields(
+            {k: v for k, v in epic.items() if k != "tasks"},
+            preserve_body=True,
+        )
         slim_meta, epic_heavy, epic_body = _split_entity_for_v3(epic_meta, EPIC_HEAVY_FIELDS)
         eid = slim_meta.get("id")
         if eid and (any(k in epic_heavy for k in EPIC_HEAVY_FIELDS) or epic_body):
@@ -3766,7 +3795,10 @@ def save_v4(
     if "phases" in slim_data:
         slim_phases: list[dict[str, Any]] = []
         for phase in data.get("phases", []):
-            slim_phase, phase_heavy, phase_body = _split_entity_for_v3(phase, PHASE_HEAVY_FIELDS)
+            persistable_phase = _v4_strip_private_fields(phase, preserve_body=True)
+            slim_phase, phase_heavy, phase_body = _split_entity_for_v3(
+                persistable_phase, PHASE_HEAVY_FIELDS
+            )
             pid = slim_phase.get("id")
             if pid and (any(k in phase_heavy for k in PHASE_HEAVY_FIELDS) or phase_body):
                 write_task_file(phase_file_path(backlog_path, pid), phase_heavy, phase_body)
@@ -3791,7 +3823,8 @@ def _v4_write_task(
 ) -> None:
     """Write one task file. Task 6 replaces this with the dirty-scoped,
     merge-aware version; this baseline always writes (snapshot ignored)."""
-    fm, body = task_v4_to_file(task)
+    persistable_task = _v4_strip_private_fields(task, preserve_body=True)
+    fm, body = task_v4_to_file(persistable_task)
     write_task_file(task_file_path(backlog_path, task["id"]), fm, body)
 
 
