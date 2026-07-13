@@ -7,6 +7,10 @@ Versions follow [SemVer](https://semver.org/spec/v2.0.0.html) — major bumps
 indicate schema breaks or removed surfaces.
 
 ---
+## 4.6.0
+
+**in-review becomes a human-blocked exception state.** `done` is now the default terminal status (Claude complete + gates passed); `in-review` is reserved for tasks blocked on an action only a human can perform, recorded in the new `human_action` light field. Every write path that reaches in-review (`backlog_complete_task`, `backlog_update_task`, `backlog_batch_update`) rejects the transition without a `human_action`; reaching `done` clears it. Review-gate no longer transitions status — it records the gate and end-session closes the task. start-session gains a "Waiting on you" list plus a one-time sweep offering to bulk-close pre-4.6.0 in-review tasks. Viewer: kanban column relabeled "Waiting on human"; in-review cards show their `human_action`.
+
 ## 4.5.0
 
 Handover threads — stable resume tokens and a thread-lane sessions view.
@@ -17,7 +21,6 @@ Handover threads — stable resume tokens and a thread-lane sessions view.
 - Removed: `backlog_handover_latest`; start-session's latest/limit=1 resume flow; viewer Lanes/By-Task stub views.
 - Fixed: viewer handover status menu spoke a dead todo/in-progress/done enum (POSTs 400ed) — now open/closed/superseded; the rail's RESUME copy button is wired.
 - Viewer: thread board (open-thread cards with copy-resume) above the diary.
-
 
 ## 4.4.1
 

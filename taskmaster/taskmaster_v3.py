@@ -122,7 +122,7 @@ SLIM_FIELDS: dict[str, tuple[str, ...]] = {
         "skip_merge_gate", "merge_gate_freshness", "merge_gate_state",
         "depends_on", "related_issues",
         "started", "completed", "branch", "worktree",
-        "blockers", "open_handovers",
+        "blockers", "human_action", "open_handovers",
         "tldr_autogen",
     ),
     "issue": (
@@ -4230,6 +4230,9 @@ def update_task(task_id: str, patch: dict, backlog_path: Path | None = None) -> 
                 task["started"] = _now_iso()
             if after_status == "done" and not task.get("completed"):
                 task["completed"] = _now_iso()
+        # done clears the human-only blocker (parity with every other done path).
+        if after_status == "done":
+            task.pop("human_action", None)
         task["last_referenced"] = _now_iso()
         atomic_write(bp, yaml.safe_dump(data, sort_keys=False))
         return dict(task)
@@ -4321,6 +4324,19 @@ def validate_task_write(task_id: str, patch: dict, backlog_path: Path | None = N
     # Phase must exist if set.
     if "phase" in patch and patch["phase"] and patch["phase"] not in phase_ids:
         errors["phase"] = f"unknown phase: {patch['phase']}"
+
+    # human_action gate: `in-review` means blocked on a human-only action. A
+    # write that moves a task to in-review must leave it with a non-whitespace
+    # human_action — either already stored or arriving in the same payload.
+    # (Parity with backlog_update_task / batch; the transition-table and
+    # completion gates that path also lacks stay intentionally absent here.)
+    if patch.get("status") == "in-review":
+        ha = proposed.get("human_action")
+        if not (isinstance(ha, str) and ha.strip()):
+            errors["human_action"] = (
+                "`in-review` requires human_action — set the human-only blocker "
+                "(e.g. 'add OPENAI_API_KEY to .env') in the same write"
+            )
 
     # Deps: each must exist; no self-dep; no cycle.
     if "depends_on" in patch:

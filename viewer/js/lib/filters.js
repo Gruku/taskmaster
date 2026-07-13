@@ -130,7 +130,7 @@ export const STATUS_LABELS = {
   blocked: 'Blocked',
   todo: 'Todo',
   'in-progress': 'In Progress',
-  'in-review': 'In Review',
+  'in-review': 'Waiting on human',
   done: 'Done',
 };
 

@@ -61,7 +61,7 @@ List issues grouped by severity, tagged with source (Claude / Codex) and gate.
 - Important findings require user acknowledgment before proceeding.
 - Minor findings and WARN/SKIP results never block.
 
-If gates failed, offer: "Stay in-progress and address issues" or "Move to in-review anyway (you'll need to justify the critical findings)."
+If gates failed, offer: "Stay in-progress and address issues" or "Record a pass anyway (you'll need to justify the critical findings) — end-session will close it to done."
 
 If Codex flagged criticals that Claude missed: "Codex caught issues Claude's review didn't — worth reading carefully."
 

@@ -27,14 +27,11 @@ Also pick a **release bucket** (pre-alpha, alpha-1.0, ...) if the project uses t
 
 ## Step 4: Target Status Decision Rules
 
-**Default:** silently target `in-review` - the user tests and marks `done` later.
+**Default:** silently target `done` — Claude finished and the lane's gates passed. Nothing to ask.
 
-**Override to `done` when conversation context clearly indicates one of:**
-- User already confirmed manual testing during the session ("I tested it", "works on my end")
-- Task has no testable surface (pure infra/cleanup/docs/config bump)
-- User explicitly says "mark done" / "this is done"
+**Target `in-review` ONLY when a human-only action blocks the task** — something Claude cannot do itself: add an API key, set LLM config, grant account access, a physical-world step. Pass it as `human_action` (short imperative: "add OPENAI_API_KEY to .env"). `backlog_complete_task` rejects in-review without it.
 
-Do not ask "does this need manual testing?" - that's a confirmation gate on a decision the default already handles. The user can transition `in-review -> done` later with a one-liner.
+Do not target in-review for "the user should look at this" — done work gets reviewed downstream, off the board. Do not ask "is this done?" — the default already handles it; the user can reopen with a one-liner if something's wrong.
 
 ## v3-post-complete-1: Issue-Close-on-Task-Complete Hook
 

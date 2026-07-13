@@ -91,7 +91,7 @@ Run glance steps above, then continue with `references/deep-mode.md`.
 todo → in-progress → in-review → done → archived
 ```
 
-`in-review` = Claude done, user tests.
+`in-review` = blocked on a human-only action (the task's `human_action` says what).
 
 ## Reclaiming a locked task
 
@@ -99,7 +99,7 @@ todo → in-progress → in-review → done → archived
 
 ## Notes
 
-- Idempotent for already in-progress tasks. Picking `in-review` demotes to `in-progress` — confirm first. Picking `blocked` is rejected.
+- Idempotent for already in-progress tasks. Picking `in-review` demotes to `in-progress` (resume after the human action is handled) — confirm first. Picking `blocked` is rejected.
 
 ## Additional resources
 

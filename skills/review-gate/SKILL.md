@@ -1,6 +1,6 @@
 ---
 name: review-gate
-description: "Run quality checks on a task's implementation before marking it ready for testing. Triggers: 'is this ready?', 'run the review gate', 'check my work', 'I think this is done'. Reviews code + spec adherence, runs tests/build. Design review uses taskmaster:spec-review."
+description: "Run quality checks on a task's implementation before it closes to done. Triggers: 'is this ready?', 'run the review gate', 'check my work', 'I think this is done'. Reviews code + spec adherence, runs tests/build. Design review uses taskmaster:spec-review."
 ---
 
 # Review Gate
