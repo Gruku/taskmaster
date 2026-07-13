@@ -32,6 +32,7 @@ _PLUGIN_DIR = Path(__file__).resolve().parent.parent
 # v3: slim backlog.yaml index + per-task files in tasks/ + handovers/ + issues/.
 SCHEMA_V2 = 2
 SCHEMA_V3 = 3
+SCHEMA_V4 = 4
 SCHEMA_DEFAULT = SCHEMA_V2  # what new backlogs get unless v3 is explicitly requested
 
 
@@ -914,6 +915,32 @@ def _merge_task_from_v3(slim: dict[str, Any], heavy_fm: dict[str, Any], body: st
     if body:
         merged[BODY_KEY] = body
     return merged
+
+
+def task_v4_to_file(task: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    """v4: split a whole task dict into (frontmatter, body).
+
+    Unlike v3, NO field stays in backlog.yaml - every key except the prose
+    body lives in the per-task file's frontmatter (id, title, status, epic,
+    order, gates, ...). Body is the BODY_KEY value.
+    """
+    fm: dict[str, Any] = {}
+    body = ""
+    for key, value in task.items():
+        if key == BODY_KEY:
+            body = value or ""
+        else:
+            fm[key] = value
+    return fm, body
+
+
+def task_v4_from_file(fm: dict[str, Any], body: str) -> dict[str, Any]:
+    """v4: reverse of task_v4_to_file. Body attaches under BODY_KEY only when
+    non-empty (keeps bodyless tasks free of an empty _body key)."""
+    task = dict(fm)
+    if body:
+        task[BODY_KEY] = body
+    return task
 
 
 def _split_entity_for_v3(
