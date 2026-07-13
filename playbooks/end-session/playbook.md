@@ -34,7 +34,7 @@ Check schema: `backlog_status` first line shows `Schema: v<N>`.
 
 **3. Session title.** `{Topic}: {Brief Description}`.
 
-**4. Target status.** Default `in-review`. Override to `done` when: user confirmed testing, pure infra task, or user says "mark done". See `references/summary-modes.md`.
+**4. Target status.** Default `done` — Claude complete + gates passed. Target `in-review` ONLY when an action that only the human can perform blocks the task (API key, LLM config, account access); pass it as `human_action` (short imperative, e.g. "add OPENAI_API_KEY to .env") — `backlog_complete_task` rejects in-review without it. See `references/summary-modes.md`.
 
 **5. Skip review gate.** Call `backlog_complete_task` directly. Only ask on genuine ambiguity.
 
@@ -60,7 +60,7 @@ Note: `backlog_complete_task` enforces this server-side too — the skill just g
 
 **6. Call `backlog_complete_task`.** Two paths:
 
-- **Single task (default):** `backlog_complete_task(task_id, session_title, done, decisions, issues, tasks_touched, target_status, patchnote, release)`.
+- **Single task (default):** `backlog_complete_task(task_id, session_title, done, decisions, issues, tasks_touched, target_status, patchnote, release, human_action)`.
 - **Bundle:** Call `_get_session_bundle()` first. If a bundle is active (slug, members, …), call `backlog_complete_task(member, …)` for **each passing member** — every member gets its own completion record. Do NOT use `backlog_update_task` status-only for bundle members (see `references/edge-cases.md` §Bundle).
 
 **6b. Merge fan-out (bundle only).** On a single merge event, loop `backlog_record_merge(member, rung, sha)` over all bundle members from `_get_session_bundle()` — same rung and sha for each.
@@ -78,7 +78,7 @@ Note: `backlog_complete_task` enforces this server-side too — the skill just g
 
 ## Task Lifecycle
 
-`todo -> in-progress -> in-review -> done -> archived`. In-review = Claude done, user tests. Done = user confirmed.
+`todo -> in-progress -> in-review -> done -> archived`. In-review = blocked on a human-only action (`human_action` says what). Done = Claude complete + gates passed. Human review of shipped work happens downstream, not on the board.
 
 ## Additional Resources
 
