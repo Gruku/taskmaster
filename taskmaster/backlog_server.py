@@ -4531,7 +4531,7 @@ def backlog_complete_task(
         return f"Error: task `{task_id}` is `{status}`, expected one of: in-progress, in-review, blocked"
 
     if target_status == "in-review":
-        human_action = human_action.strip() or task.get("human_action", "")
+        human_action = human_action.strip() or (task.get("human_action") or "").strip()
         if not human_action:
             return ("Error: target_status='in-review' requires human_action — the human-only "
                     "step that blocks this task (e.g. 'add OPENAI_API_KEY to .env'). "
@@ -4901,7 +4901,7 @@ def backlog_update_task(
         task_id: The task ID (e.g., "ue-plugin-003")
         field: Field to update — one of: title, status, priority, notes, branch, worktree, blockers,
             docs, depends_on, sub_repo, stage, estimate, locked_by, review_instructions, phase,
-            patchnote, release, tldr, next_step
+            patchnote, release, tldr, next_step, human_action
         value: New value. Format varies by field:
             - docs: "key:path" (e.g., "plan:docs/plans/foo.md")
             - depends_on: comma-separated task IDs (e.g., "cpp-parser-002,cpp-parser-003")
@@ -4964,7 +4964,7 @@ def backlog_update_task(
         # writes (value == current) are always allowed — the guard only checks
         # when the status actually changes.
         cur = task.get("status", "todo")
-        if value == "in-review" and value != cur and not task.get("human_action"):
+        if value == "in-review" and value != cur and not (task.get("human_action") or "").strip():
             return (f"Error: `in-review` means blocked on a human-only action; set human_action first: "
                     f"backlog_update_task('{task_id}', 'human_action', '<what the human must do>')")
         if task.get("lane") and value != cur:
@@ -6175,7 +6175,7 @@ def backlog_batch_update(operations: str) -> str:
                 if value not in VALID_STATUSES:
                     errors.append(f"`{task_id}`: invalid status `{value}`")
                     continue
-                if value == "in-review" and task.get("status") != "in-review" and not task.get("human_action"):
+                if value == "in-review" and task.get("status") != "in-review" and not (task.get("human_action") or "").strip():
                     errors.append(f"`{task_id}`: in-review requires human_action — set it first via backlog_update_task")
                     continue
                 if value == "done":
@@ -6265,7 +6265,7 @@ def backlog_batch_update(operations: str) -> str:
                 errors.append(f"`{task_id}`: not found")
                 continue
             task, epic = result
-            if new_status == "in-review" and task.get("status") != "in-review" and not task.get("human_action"):
+            if new_status == "in-review" and task.get("status") != "in-review" and not (task.get("human_action") or "").strip():
                 errors.append(f"`{task_id}`: in-review requires human_action — set it first via backlog_update_task")
                 continue
             if new_status == "done":
