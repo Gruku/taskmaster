@@ -3806,6 +3806,17 @@ def save_v4(
                 continue
             _v4_write_task(backlog_path, task, snapshot)
 
+    # Delete task files for ids removed since load (never touch archived files --
+    # archival is a move into tasks/archive/, handled by the archive tool).
+    live_ids = {
+        task.get("id")
+        for epic in data.get("epics", [])
+        for task in epic.get("tasks", [])
+    }
+    for tid in _v4_snapshot_tasks(snapshot):
+        if tid not in live_ids:
+            _remove_entity_file(task_file_path(backlog_path, tid))
+
     # 2. Epic / phase body files (identical policy to save_v3).
     slim_data: dict[str, Any] = {
         k: _v4_strip_private_fields(v)
@@ -3854,11 +3865,31 @@ def save_v4(
     )
 
 
+def _v4_snapshot_tasks(
+    snapshot: dict[str, Any] | None,
+) -> dict[str, dict[str, Any]]:
+    """Flatten a load snapshot into {task_id: task_dict} for dirty diffing."""
+    index: dict[str, dict[str, Any]] = {}
+    if not snapshot:
+        return index
+    for epic in snapshot.get("epics", []):
+        for task in epic.get("tasks", []):
+            tid = task.get("id")
+            if tid:
+                index[tid] = task
+    return index
+
+
 def _v4_write_task(
     backlog_path: Path, task: dict[str, Any], snapshot: dict[str, Any] | None
 ) -> None:
-    """Write one task file. Task 6 replaces this with the dirty-scoped,
-    merge-aware version; this baseline always writes (snapshot ignored)."""
+    """Write one task file, dirty-scoped: skip when the task is byte-identical
+    to its snapshot counterpart (so a save that touched other tasks never
+    rewrites this one -- the two-process clobber fix)."""
+    snap_index = _v4_snapshot_tasks(snapshot)
+    prior = snap_index.get(task["id"])
+    if prior is not None and prior == task:
+        return
     persistable_task = _v4_strip_private_fields(task, preserve_body=True)
     fm, body = task_v4_to_file(persistable_task)
     write_task_file(task_file_path(backlog_path, task["id"]), fm, body)
