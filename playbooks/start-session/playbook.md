@@ -44,7 +44,7 @@ If the project's `.taskmaster/lessons/` directory contains any `L-*.md` files, a
 
 ### Step 3e — Legacy in-review sweep (only if in-review tasks lack `human_action`)
 
-If any in-review task has no `human_action`, it predates the human-gate semantics (pre-4.5.0: in-review meant "user tests"). Once per project: present them as one table (id, title) and offer to bulk-close all to `done` via `backlog_batch_update` (op `complete`) — unless the user flags one as genuinely blocked, in which case write its blocker instead: `backlog_update_task(id, "human_action", "...")`. Apply on approval, one message. If a close is rejected by outstanding gates, report it and leave that task as-is. Self-extinguishing: once every in-review task carries a human_action, this step never fires again.
+If any in-review task has no `human_action`, it predates the human-gate semantics (pre-4.6.0: in-review meant "user tests"). Once per project: present them as one table (id, title) and offer to bulk-close all to `done` via `backlog_batch_update` (op `complete`) — unless the user flags one as genuinely blocked, in which case write its blocker instead: `backlog_update_task(id, "human_action", "...")`. Apply on approval, one message. If a close is rejected by outstanding gates, report it and leave that task as-is. Self-extinguishing: once every in-review task carries a human_action, this step never fires again.
 
 ### Step 4 — Briefing
 
