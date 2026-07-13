@@ -3880,19 +3880,69 @@ def _v4_snapshot_tasks(
     return index
 
 
+_MISSING = object()
+
+
+def _three_way_merge_fields(
+    base: dict[str, Any], ours: dict[str, Any], theirs: dict[str, Any]
+) -> dict[str, Any]:
+    """Per-key three-way merge with local changes winning conflicts.
+
+    A missing key is a value for merge purposes, so deletion on either side is
+    treated as a change relative to the base.
+    """
+    result: dict[str, Any] = {}
+    for key in set(base) | set(ours) | set(theirs):
+        base_value = base.get(key, _MISSING)
+        our_value = ours.get(key, _MISSING)
+        their_value = theirs.get(key, _MISSING)
+        if our_value == their_value:
+            chosen = our_value
+        elif our_value != base_value:
+            chosen = our_value
+        elif their_value != base_value:
+            chosen = their_value
+        else:
+            chosen = our_value
+        if chosen is not _MISSING:
+            result[key] = chosen
+    return result
+
+
+def _merge_task_with_disk(
+    base_task: dict[str, Any], mem_task: dict[str, Any], disk_path: Path
+) -> tuple[dict[str, Any], str]:
+    """Three-way merge an in-memory task against its current disk file."""
+    persistable_base = _v4_strip_private_fields(base_task, preserve_body=True)
+    persistable_mem = _v4_strip_private_fields(mem_task, preserve_body=True)
+    base_fm, base_body = task_v4_to_file(persistable_base)
+    mem_fm, mem_body = task_v4_to_file(persistable_mem)
+    disk_fm, disk_body = read_task_file(disk_path)
+    merged_fm = _three_way_merge_fields(base_fm, mem_fm, disk_fm)
+    merged_body = mem_body if mem_body != base_body else disk_body
+    return merged_fm, merged_body
+
+
 def _v4_write_task(
     backlog_path: Path, task: dict[str, Any], snapshot: dict[str, Any] | None
 ) -> None:
-    """Write one task file, dirty-scoped: skip when the task is byte-identical
-    to its snapshot counterpart (so a save that touched other tasks never
-    rewrites this one -- the two-process clobber fix)."""
+    """Write one task file, dirty-scoped and merge-aware."""
     snap_index = _v4_snapshot_tasks(snapshot)
     prior = snap_index.get(task["id"])
     if prior is not None and prior == task:
         return
+    path = task_file_path(backlog_path, task["id"])
+    if prior is not None and path.exists():
+        disk_fm, disk_body = read_task_file(path)
+        persistable_prior = _v4_strip_private_fields(prior, preserve_body=True)
+        base_fm, base_body = task_v4_to_file(persistable_prior)
+        if (disk_fm, disk_body) != (base_fm, base_body):
+            merged_fm, merged_body = _merge_task_with_disk(prior, task, path)
+            write_task_file(path, merged_fm, merged_body)
+            return
     persistable_task = _v4_strip_private_fields(task, preserve_body=True)
     fm, body = task_v4_to_file(persistable_task)
-    write_task_file(task_file_path(backlog_path, task["id"]), fm, body)
+    write_task_file(path, fm, body)
 
 
 # ---- Sessions ------------------------------------------------------------
