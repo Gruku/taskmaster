@@ -1064,9 +1064,9 @@ def next_task_id(backlog_path: Path, epic: str) -> str:
     for tf in iter_task_files(backlog_path):
         stem = tf.stem
         if stem.startswith(prefix):
-            m = re.search(r"(\d+)$", stem)
-            if m:
-                nums.append(int(m.group(1)))
+            suffix = stem[len(prefix):]
+            if suffix.isdigit():
+                nums.append(int(suffix))
     n = (max(nums) + 1) if nums else 1
     return f"{epic}-{n:03d}"
 
