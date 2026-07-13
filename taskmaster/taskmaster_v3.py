@@ -332,6 +332,22 @@ def _resolve_artifact_root() -> Path:
         return cwd
     return cwd / ".taskmaster"
 
+def local_dir(backlog_path: Path) -> Path:
+    """Return the machine-local state directory for a backlog."""
+    return backlog_path.parent / "local"
+
+
+def _is_v4_project(artifact_root: Path) -> bool:
+    """Return whether the backlog at ``artifact_root`` declares schema v4."""
+    backlog_path = artifact_root / "backlog.yaml"
+    if not backlog_path.exists():
+        return False
+    try:
+        raw = yaml.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return False
+    return detect_schema_version(raw) >= SCHEMA_V4
+
 
 # ── Markdown + YAML frontmatter ─────────────────────────────────
 
@@ -3647,7 +3663,10 @@ VIEWER_PREFS_DEFAULTS = {
 
 
 def viewer_prefs_path() -> Path:
-    return _resolve_artifact_root() / "viewer.json"
+    root = _resolve_artifact_root()
+    if _is_v4_project(root):
+        return local_dir(root / "backlog.yaml") / "viewer.json"
+    return root / "viewer.json"
 
 def load_viewer_prefs() -> dict:
     """Load viewer prefs, creating the file with defaults on first call.

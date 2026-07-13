@@ -301,7 +301,14 @@ def _backlog_path() -> Path:
 
 
 def _progress_path() -> Path:
-    return _resolve_paths()[1]
+    backlog, legacy_progress = _resolve_paths()
+    try:
+        raw = yaml.safe_load(backlog.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return legacy_progress
+    if _detect_schema_version(raw) >= SCHEMA_V4:
+        return backlog.parent / "local" / "PROGRESS.md"
+    return legacy_progress
 
 
 # ── Session identity (unique per MCP server process) ─────
@@ -411,6 +418,7 @@ def _save(data: dict) -> None:
         bp = _backlog_path()
         version = _detect_schema_version(data)
         if version >= SCHEMA_V4:
+            _write_local_meta_cache(bp, {"updated": _today()})
             _save_v4(bp, data, snapshot=_LOAD_SNAPSHOT)
         elif version >= SCHEMA_V3:
             data["meta"]["updated"] = _today()
@@ -422,6 +430,12 @@ def _save(data: dict) -> None:
                 yaml.dump(data, default_flow_style=False, sort_keys=False, allow_unicode=True),
             )
 
+
+def _write_local_meta_cache(backlog_path: Path, payload: dict) -> None:
+    """Persist derived metadata without churning the shared v4 index."""
+    cache_dir = backlog_path.parent / "local" / "cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    _atomic_write(cache_dir / "meta.json", json.dumps(payload, indent=2) + "\n")
 
 def _has_v3_content(data: dict) -> bool:
     """True when the backlog has any v3 narrative-continuity entity content.
@@ -766,7 +780,9 @@ def regenerate_context(data: dict) -> None:
 
 def regenerate_progress_dashboard(data: dict) -> None:
     """Rewrite PROGRESS.md above the '## Changelog' line."""
-    progress_text = _progress_path().read_text(encoding="utf-8")
+    path = _progress_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    progress_text = path.read_text(encoding="utf-8") if path.exists() else "## Changelog\n"
 
     changelog_marker = "## Changelog"
     idx = progress_text.find(changelog_marker)
@@ -851,7 +867,7 @@ def regenerate_progress_dashboard(data: dict) -> None:
     lines.append("\n---\n")
 
     dashboard = "\n".join(lines) + "\n"
-    _progress_path().write_text(dashboard + changelog_section, encoding="utf-8")
+    path.write_text(dashboard + changelog_section, encoding="utf-8")
 
 
 def _mutate_and_save(data: dict) -> None:
