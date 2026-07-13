@@ -372,3 +372,57 @@ class TestDirtyScopedSave:
         v3.save_v4(bp, data, snapshot=snapshot)
         assert not (bp.parent / "tasks" / "e-002.md").exists()
         assert (bp.parent / "tasks" / "e-001.md").exists()
+
+
+class TestConcurrentDiskMerge:
+    def _project(self, tmp_path):
+        import copy
+        tm = tmp_path / ".taskmaster"
+        (tm / "tasks").mkdir(parents=True)
+        bp = tm / "backlog.yaml"
+        bp.write_text(yaml.dump({"meta": {"schema_version": 4}, "epics": [], "phases": []}))
+        data = {"meta": {"schema_version": 4}, "phases": [],
+                "epics": [{"id": "e", "name": "E", "tasks": [
+                    {"id": "e-001", "title": "A", "epic": "e", "order": 1.0,
+                     "status": "todo", "priority": "medium"},
+                ]}]}
+        v3.save_v4(bp, data)
+        return bp, data, copy.deepcopy(data)
+
+    def test_disjoint_disk_field_preserved(self, tmp_path):
+        bp, data, snapshot = self._project(tmp_path)
+        # Another process adds `assignee` on disk (a field we never touched).
+        f = bp.parent / "tasks" / "e-001.md"
+        fm, body = v3.read_task_file(f)
+        fm["assignee"] = "jdoe"
+        v3.write_task_file(f, fm, body)
+        # We change only `status` in memory.
+        data["epics"][0]["tasks"][0]["status"] = "in-progress"
+        v3.save_v4(bp, data, snapshot=snapshot)
+        fm2, _ = v3.read_task_file(f)
+        assert fm2["status"] == "in-progress"   # our change
+        assert fm2["assignee"] == "jdoe"       # disk-only change preserved
+
+    def test_same_field_in_memory_wins(self, tmp_path):
+        bp, data, snapshot = self._project(tmp_path)
+        f = bp.parent / "tasks" / "e-001.md"
+        fm, body = v3.read_task_file(f)
+        fm["title"] = "disk title"
+        v3.write_task_file(f, fm, body)
+        data["epics"][0]["tasks"][0]["title"] = "memory title"
+        v3.save_v4(bp, data, snapshot=snapshot)
+        fm2, _ = v3.read_task_file(f)
+        assert fm2["title"] == "memory title"
+
+    def test_disk_only_change_kept_when_field_untouched(self, tmp_path):
+        bp, data, snapshot = self._project(tmp_path)
+        f = bp.parent / "tasks" / "e-001.md"
+        fm, body = v3.read_task_file(f)
+        fm["title"] = "disk title"
+        v3.write_task_file(f, fm, body)
+        # We change a DIFFERENT field, leaving title at its snapshot value.
+        data["epics"][0]["tasks"][0]["status"] = "done"
+        v3.save_v4(bp, data, snapshot=snapshot)
+        fm2, _ = v3.read_task_file(f)
+        assert fm2["title"] == "disk title"   # remote change survives
+        assert fm2["status"] == "done"
