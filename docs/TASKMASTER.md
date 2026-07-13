@@ -110,19 +110,21 @@ A session is one Claude conversation process. The MCP server generates a unique 
 
 ```
 todo → in-progress → in-review → done → archived
-         (pick-task)  (review-gate)      (archive)
+         (pick-task)  (end-session,      (archive)
+                        when human-
+                        blocked)
 ```
 
 | Status | Meaning |
 |--------|---------|
 | `todo` | Defined, waiting. May have unmet dependencies. |
 | `in-progress` | Actively being worked on. Locked to a session. Has a worktree. |
-| `in-review` | Implementation complete, automated checks passed. User must manually test. |
-| `done` | User confirmed it works. Session summary logged. |
+| `in-review` | Exception state: blocked on an action only the human can do; recorded in `human_action`. Rare. |
+| `done` | Claude complete + required gates passed. Session summary logged. |
 | `blocked` | Cannot proceed due to an external blocker. |
 | `archived` | Hidden from board. Reason recorded (`done`, `deprecated`, `duplicate`, `wont-fix`, `superseded`). |
 
-**`in-review` is mandatory.** Tasks should not jump from `in-progress` to `done`. The stage exists because automated tests can't catch everything — UI behavior, integration feel, edge cases that need human judgment.
+**`in-review` is exceptional.** Most tasks go straight from `in-progress` to `done` once their gates pass. in-review is reserved for tasks blocked on an action only the human can perform — an API key, external config, account access — recorded on the task as `human_action`. start-session surfaces these as a "Waiting on you" list.
 
 ---
 
@@ -164,7 +166,7 @@ Three gates:
 2. **Code review** — diffs branch vs. base, runs code reviewer sub-agent
 3. **Tests + Build** — auto-detects test runner (pytest, npm test, cargo test, go test, etc.)
 
-Presents a verdict with gate breakdown. Critical findings block unconditionally. On pass, transitions task to `in-review`.
+Presents a verdict with gate breakdown. Critical findings block unconditionally. Records the gate result on the task; does not transition status — the task stays `in-progress` until `end-session`.
 
 ### `taskmaster:end-session`
 
@@ -172,7 +174,7 @@ Presents a verdict with gate breakdown. Critical findings block unconditionally.
 
 1. Auto-generates session summary: Done / Decisions / Issues / Tasks touched
 2. Generates a session title (`{Topic}: {Brief Description}`)
-3. Asks: `in-review` (needs manual testing) or `done` (already confirmed)?
+3. Target status defaults to `done` (Claude complete + gates passed); only `in-review` when a human-only action blocks the task, recorded as `human_action`
 4. Atomically transitions status + appends changelog to `PROGRESS.md`
 5. Offers worktree cleanup if task is done
 6. Commits tracking files

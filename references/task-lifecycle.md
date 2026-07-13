@@ -5,8 +5,8 @@
 ```
 todo → in-progress → in-review → done → archived
          ↑              ↑                   ↑
-    (pick-task)    (review-gate)      (archive after
-                                      user confirms)
+    (pick-task)  (end-session, when      (archive)
+                    human-blocked)
 ```
 
 ## What Each Status Means
@@ -15,26 +15,26 @@ todo → in-progress → in-review → done → archived
 |--------|-------------|-----------------|
 | **todo** | Nobody | Task is defined and waiting. May have unmet dependencies. |
 | **in-progress** | Claude | Actively being worked on. Locked to a session. Has a worktree. |
-| **in-review** | The user | Implementation is complete and automated checks passed. The user needs to manually test and confirm it works. |
-| **done** | Nobody | User tested and confirmed. Session summary has been logged to PROGRESS.md. |
+| **in-review** | The user | Exception state: AI work complete, but an action only the human can perform blocks it. The task's `human_action` states it. Entering in-review without one is rejected. |
+| **done** | Nobody | Claude complete + required gates passed. Session summary logged to PROGRESS.md. |
 | **blocked** | Nobody | Cannot proceed — external dependency, missing info, or upstream task not done. |
 | **archived** | Nobody | Permanently cleared from the active board. Still in YAML but hidden from listings. |
 
 ## Why In-Review Exists
 
-The `in-review` stage is a **user-testing gate**. It exists because automated tests can't catch everything — UI behavior, tool output quality, integration feel. When a task moves to `in-review`, it means "Claude did everything it can; now the human needs to verify this actually works the way they want."
+`in-review` is an **exception state**, not a pipeline stage. It means the AI work is complete but an action only the human can perform blocks true completion — adding an API key, changing LLM config, granting access. The blocking action is recorded on the task as `human_action`; every write path rejects in-review without it.
 
-Tasks should NOT skip from `in-progress` directly to `done`. The in-review checkpoint ensures the user has explicitly signed off.
+Most tasks never touch in-review: they go `in-progress → done` once the lane's gates pass. Human review of done work happens downstream (review sweeps), not on the board.
 
 ## Transitions
 
 | From | To | How | What Happens |
 |------|----|-----|-------------|
 | todo | in-progress | `pick-task` skill or `backlog_pick_task` | Sets `started` timestamp, locks to session, creates worktree |
-| in-progress | in-review | `review-gate` skill | Runs quality checks, then transitions if gates pass |
-| in-progress | done | `end-session` skill | Skips review (warned). Logs session summary. |
-| in-review | done | `end-session` skill | User confirmed it works. Logs session summary. |
-| in-review | in-progress | `pick-task` skill | Demotes back (user found issues during testing) |
+| in-progress | done | `end-session` skill | Gates passed; session summary logged |
+| in-progress | in-review | `end-session` skill | A human-only action blocks the task; `human_action` recorded |
+| in-review | done | `start-session` / `end-session` | Human action handled (verified or user-confirmed); `human_action` cleared |
+| in-review | in-progress | `pick-task` skill | Resume work after the human action is handled |
 | done | archived | `backlog_archive_task` | Clears from board. Reason recorded. |
 | todo/blocked | archived | `backlog_archive_task` | Requires non-"done" reason (deprecated, duplicate, wont-fix, superseded) |
 
