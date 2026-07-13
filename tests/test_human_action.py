@@ -118,6 +118,15 @@ def test_batch_status_in_review_requires_human_action(tm_epic_phase):
     assert task["status"] == "in-progress"
 
 
+def test_batch_update_field_status_in_review_requires_human_action(tm_epic_phase):
+    tid = _t()
+    _bs.backlog_update_task(tid, "status", "in-progress")
+    out = _bs.backlog_batch_update(f"update {tid} status in-review")
+    assert "human_action" in out
+    task, _ = _bs._find_task(_bs._load(), tid)
+    assert task["status"] == "in-progress"
+
+
 def test_batch_complete_clears_human_action(tm_epic_phase):
     tid = _t()
     _bs.backlog_update_task(tid, "status", "in-progress")

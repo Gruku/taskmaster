@@ -6175,6 +6175,11 @@ def backlog_batch_update(operations: str) -> str:
                 if value not in VALID_STATUSES:
                     errors.append(f"`{task_id}`: invalid status `{value}`")
                     continue
+                if value == "in-review" and task.get("status") != "in-review" and not task.get("human_action"):
+                    errors.append(f"`{task_id}`: in-review requires human_action — set it first via backlog_update_task")
+                    continue
+                if value == "done":
+                    task.pop("human_action", None)
                 task["status"] = value
                 if value == "in-progress" and not task.get("started"):
                     task["started"] = _now()
