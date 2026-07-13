@@ -38,6 +38,7 @@ A handover is the per-session full record — context-injection optimisation for
 
 - `taskmaster:handover close <id>` — `backlog_handover_update_status(<id>, "closed", reason)`.
 - `taskmaster:handover reopen <id>` — same with `"open"`.
+- `taskmaster:handover triage` — walk open handovers older than 14 days (algorithm: `references/triage.md`); thread-level parking via `backlog_thread_update` replaces per-handover bulk moves.
 - Thread level: `backlog_thread_update(<name>, "parked" | "closed" | "open", reason)` — park a line of work without touching individual handovers.
 
 ## References

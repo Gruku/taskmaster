@@ -4,7 +4,7 @@ Select a task to work on and set it to in-progress. Default mode is a **glance b
 
 ## Arguments
 
-- `task_id` (optional) — specific task ID. If omitted, presents top priorities or auto-resolves via open handovers on v3 backlogs.
+- `task_id` (optional) — specific task ID. If omitted, presents top priorities or auto-resolves via the thread board (`backlog_thread_list`) on v3 backlogs.
 
 ## Step 0 — (v3) "Continue" auto-resolve
 

@@ -1,8 +1,9 @@
 # Triage walkthrough
 
 A long-form description of the `taskmaster:handover triage` interaction. The
-SKILL.md `triage` section is the authoritative spec; this file is the
-narrative companion you can read when you want context behind the choices.
+"Manual status entry points" section of `playbook.md` is the authoritative
+spec; this file is the narrative companion you can read when you want context
+behind the choices.
 
 ## Why 14 days?
 

@@ -28,7 +28,7 @@ The SKILL.md body carries only the ~15 highest-frequency rows.
 | (v3) "List handovers", "recent handovers" | `backlog_handover_list` |
 | (v3) "Show this handover in full", "read handover 2026-XX-XX" | `backlog_handover_get <id>` |
 | (v3) "Supersede this handover", "the new handover replaces the old one" | `backlog_handover_supersede(old_id, new_id)` |
-| (v3) "Close this handover", "reopen this handover", "I read that handover", "park this thread", "triage old handovers" | `taskmaster:handover` (manual status entry points: close / reopen / thread-update) |
+| (v3) "Close this handover", "reopen this handover", "I read that handover", "park this thread", "triage old handovers" | `taskmaster:handover` (manual status entry points: close / reopen / triage / thread-update) |
 | (v3) "Choose between", "pick an option", "decide on X", "open question", "branching path", "list open decisions", "resolve DEC-X", "drop DEC-X" | `taskmaster:decision` |
 | (v3) "Set up linear sync", "connect to linear", "link to linear ENG-42", "unlink from linear", "linear status", "retry linear pushes", "list linear trackers" | `taskmaster:linear` |
 | (v3) "Init project manifest", "scaffold project.yaml", "show project", "what repos are in this project" | `backlog_project_init` / `backlog_project_get` |
