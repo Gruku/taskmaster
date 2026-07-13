@@ -4128,7 +4128,16 @@ def update_task(task_id: str, patch: dict, backlog_path: Path | None = None) -> 
     """
     bp = backlog_path or _resolve_backlog_path()
     with with_file_lock(bp):
-        data = yaml.safe_load(bp.read_text(encoding="utf-8")) or {}
+        raw = yaml.safe_load(bp.read_text(encoding="utf-8")) or {}
+        version = detect_schema_version(raw)
+        if version >= SCHEMA_V4:
+            from copy import deepcopy
+
+            data = load_v4(bp)
+            snapshot = deepcopy(data)
+        else:
+            data = raw
+            snapshot = None
         found = _find_task_in_yaml(data, task_id)
         if found is None:
             raise KeyError(f"task {task_id} not found")
@@ -4143,7 +4152,10 @@ def update_task(task_id: str, patch: dict, backlog_path: Path | None = None) -> 
             if after_status == "done" and not task.get("completed"):
                 task["completed"] = _now_iso()
         task["last_referenced"] = _now_iso()
-        atomic_write(bp, yaml.safe_dump(data, sort_keys=False))
+        if version >= SCHEMA_V4:
+            save_v4(bp, data, snapshot=snapshot)
+        else:
+            atomic_write(bp, yaml.safe_dump(data, sort_keys=False))
         return dict(task)
 
 

@@ -58,6 +58,7 @@ _NAME_TO_LEGACY = {v: k for k, v in _LEGACY_TO_NAME.items()}
 from taskmaster.taskmaster_v3 import (
     SCHEMA_V2,
     SCHEMA_V3,
+    SCHEMA_V4,
     SCHEMA_DEFAULT,
     TLDR_MAX_CHARS,
     extract_tldr,
@@ -77,6 +78,8 @@ from taskmaster.taskmaster_v3 import (
     atomic_write as _atomic_write,
     load_v3 as _load_v3,
     save_v3 as _save_v3,
+    load_v4 as _load_v4,
+    save_v4 as _save_v4,
     migrate_v2_to_v3 as _migrate_v2_to_v3,
     write_handover as _write_handover,
     read_handover as _read_handover,
@@ -305,6 +308,12 @@ SESSION_ID = f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
 # ── File-level lock for backlog.yaml writes ──────────────
 _backlog_lock = threading.Lock()
 
+import copy as _copy
+
+# Deep copy of the last v4 _load() result, used as the diff baseline for
+# dirty-scoped save_v4 (None for v2/v3, which write whole-file).
+_LOAD_SNAPSHOT: dict | None = None
+
 
 def _today() -> str:
     return date.today().isoformat()
@@ -372,12 +381,18 @@ def _normalize_priority(value: str) -> str:
 
 
 def _load() -> dict:
+    global _LOAD_SNAPSHOT
     bp = _backlog_path()
     # Peek at version without per-file enrichment so we can dispatch.
     raw = yaml.safe_load(bp.read_text(encoding="utf-8")) or {}
     version = _detect_schema_version(raw)
-    data = _load_v3(bp) if version >= SCHEMA_V3 else raw
-    # Backfill missing 'created' on tasks + normalize legacy priorities (applies to both versions).
+    if version >= SCHEMA_V4:
+        data = _load_v4(bp)
+    elif version >= SCHEMA_V3:
+        data = _load_v3(bp)
+    else:
+        data = raw
+    # Backfill missing 'created' on tasks + normalize legacy priorities.
     for epic in data.get("epics", []):
         for t in epic.get("tasks", []):
             if not t.get("created"):
@@ -385,16 +400,21 @@ def _load() -> dict:
             pri = t.get("priority", "")
             if pri in _LEGACY_TO_NAME:
                 t["priority"] = _LEGACY_TO_NAME[pri]
+    _LOAD_SNAPSHOT = _copy.deepcopy(data) if version >= SCHEMA_V4 else None
     return data
 
 
 def _save(data: dict) -> None:
     with _backlog_lock:
-        data["meta"]["updated"] = _today()
         bp = _backlog_path()
-        if _detect_schema_version(data) >= SCHEMA_V3:
+        version = _detect_schema_version(data)
+        if version >= SCHEMA_V4:
+            _save_v4(bp, data, snapshot=_LOAD_SNAPSHOT)
+        elif version >= SCHEMA_V3:
+            data["meta"]["updated"] = _today()
             _save_v3(bp, data)
         else:
+            data["meta"]["updated"] = _today()
             _atomic_write(
                 bp,
                 yaml.dump(data, default_flow_style=False, sort_keys=False, allow_unicode=True),
