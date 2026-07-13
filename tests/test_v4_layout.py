@@ -426,3 +426,27 @@ class TestConcurrentDiskMerge:
         fm2, _ = v3.read_task_file(f)
         assert fm2["title"] == "disk title"   # remote change survives
         assert fm2["status"] == "done"
+
+    def test_disk_private_fields_are_rejected_without_losing_legitimate_edits(
+        self, tmp_path
+    ):
+        bp, data, snapshot = self._project(tmp_path)
+        f = bp.parent / "tasks" / "e-001.md"
+        fm, _ = v3.read_task_file(f)
+        fm["assignee"] = "jdoe"
+        fm["_disk_private"] = "must not persist"
+        fm["metadata"] = {
+            "label": "keep",
+            "_nested_private": {"secret": True},
+        }
+        v3.write_task_file(f, fm, "disk body")
+
+        data["epics"][0]["tasks"][0]["status"] = "done"
+        v3.save_v4(bp, data, snapshot=snapshot)
+
+        merged_fm, merged_body = v3.read_task_file(f)
+        assert merged_fm["status"] == "done"
+        assert merged_fm["assignee"] == "jdoe"
+        assert merged_fm["metadata"] == {"label": "keep"}
+        assert "_disk_private" not in merged_fm
+        assert merged_body.removesuffix("\n") == "disk body"
