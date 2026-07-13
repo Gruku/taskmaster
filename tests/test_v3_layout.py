@@ -29,9 +29,9 @@ class TestSchemaVersionDetection:
     def test_missing_meta_implies_v2(self):
         assert v3.detect_schema_version({}) == v3.SCHEMA_V2
 
-    def test_default_is_v2(self):
-        # New backlogs get v2 unless v3 is opted into. Locks the rollout policy.
-        assert v3.SCHEMA_DEFAULT == v3.SCHEMA_V2
+    def test_default_is_v4(self):
+        # New backlogs use sharded, merge-aware storage by default.
+        assert v3.SCHEMA_DEFAULT == v3.SCHEMA_V4
 
 
 class TestAtomicWrite:

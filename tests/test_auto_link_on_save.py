@@ -145,16 +145,17 @@ def test_auto_link_scans_task_body_key(tm_dir):
 
 
 def _seed_two_tasks(tmp_taskmaster) -> None:
+    from taskmaster import taskmaster_v3 as v3
+
     backlog_path = tmp_taskmaster / ".taskmaster" / "backlog.yaml"
     data = yaml.safe_load(backlog_path.read_text(encoding="utf-8"))
     data["epics"] = [{
         "id": "e1", "name": "E", "tasks": [
-            {"id": "T-001", "title": "First", "tldr": "x", "status": "todo"},
-            {"id": "T-005", "title": "Fifth", "tldr": "x", "status": "todo"},
+            {"id": "T-001", "title": "First", "tldr": "x", "status": "todo", "epic": "e1", "order": 1.0},
+            {"id": "T-005", "title": "Fifth", "tldr": "x", "status": "todo", "epic": "e1", "order": 2.0},
         ],
     }]
-    backlog_path.write_text(yaml.safe_dump(data), encoding="utf-8")
-
+    v3.save_v4(backlog_path, data)
 
 def test_handover_create_auto_links_on_save(tmp_taskmaster):
     """backlog_handover_create wires auto_link_on_save."""

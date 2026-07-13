@@ -974,6 +974,8 @@ def backlog_status(verbose: bool = False) -> str:
     ctx = data["context"]
 
     lines = [f"**Schema:** v{_effective_schema_version(data)}\n"]
+    if _effective_schema_version(data) < SCHEMA_V4:
+        lines.append("Migration available: run `backlog_migrate_v4` for sharded, merge-aware storage.\n")
     lines.append("## Dashboard\n")
     lines.append("| Workstream | Status | Progress | Current Focus |")
     lines.append("|-----------|--------|----------|---------------|")
@@ -1615,6 +1617,12 @@ def backlog_validate() -> str:
 
     issues: list[str] = []
 
+    for orphan_id in data.get("_orphan_tasks", []):
+        issues.append(
+            f"Task `{orphan_id}` names an epic that does not exist "
+            "(orphaned `epic:` frontmatter) — fix the task's epic field."
+        )
+
     for task, epic in all_tasks:
         tid = task["id"]
 
@@ -1818,8 +1826,8 @@ def backlog_init(project_name: str = "", location: str = "tracked", schema_versi
         return f"Error: location must be 'tracked', got '{location}'"
     if schema_version == 0:
         schema_version = SCHEMA_DEFAULT
-    if schema_version not in (SCHEMA_V2, SCHEMA_V3):
-        return f"Error: schema_version must be {SCHEMA_V2} or {SCHEMA_V3}, got {schema_version}"
+    if schema_version not in (SCHEMA_V2, SCHEMA_V3, SCHEMA_V4):
+        return f"Error: schema_version must be {SCHEMA_V2}, {SCHEMA_V3}, or {SCHEMA_V4}, got {schema_version}"
 
     if not project_name:
         project_name = ROOT.name
@@ -1840,7 +1848,11 @@ def backlog_init(project_name: str = "", location: str = "tracked", schema_versi
             )
 
     backlog_rel = ".taskmaster/backlog.yaml"
-    progress_rel = ".taskmaster/PROGRESS.md"
+    progress_rel = (
+        ".taskmaster/local/PROGRESS.md"
+        if schema_version >= SCHEMA_V4
+        else ".taskmaster/PROGRESS.md"
+    )
 
     backlog_abs = ROOT / backlog_rel
     progress_abs = ROOT / progress_rel
@@ -1877,8 +1889,14 @@ def backlog_init(project_name: str = "", location: str = "tracked", schema_versi
         initial_data["handovers"] = []
         initial_data["issues"] = []
         # Pre-create directories so first-run tooling has somewhere to write.
-        for sub in ("tasks", "handovers", "issues", "auto", "areas"):
+        subdirs = ["tasks", "handovers", "issues", "areas"]
+        subdirs.extend(["local", "local/cache"] if schema_version >= SCHEMA_V4 else ["auto"])
+        for sub in subdirs:
             (backlog_abs.parent / sub).mkdir(parents=True, exist_ok=True)
+
+    if schema_version >= SCHEMA_V4:
+        initial_data["meta"].pop("updated", None)
+        _write_local_meta_cache(backlog_abs, {"updated": _today()})
 
     backlog_abs.write_text(
         yaml.dump(initial_data, default_flow_style=False, sort_keys=False, allow_unicode=True),
@@ -1888,10 +1906,15 @@ def backlog_init(project_name: str = "", location: str = "tracked", schema_versi
 
     # Create PROGRESS.md
     progress_content = f"# {project_name} Progress\n\n> Auto-generated from backlog.yaml — do not edit manually\n\n## Dashboard\n\n---\n\n## Changelog\n"
+    progress_abs.parent.mkdir(parents=True, exist_ok=True)
     progress_abs.write_text(progress_content, encoding="utf-8")
     created.append(progress_rel)
 
-    schema_label = "v3 (latest — narrative continuity)" if schema_version >= SCHEMA_V3 else "v2 (stable)"
+    schema_label = (
+        "v4 (sharded per-task storage)"
+        if schema_version >= SCHEMA_V4
+        else "v3 (narrative continuity)" if schema_version >= SCHEMA_V3 else "v2 (stable)"
+    )
     return (
         f"Initialized taskmaster for **{project_name}** in `.taskmaster/` (trackable in git) on schema {schema_label}.\n"
         f"Created: {', '.join(created)}"
@@ -2425,7 +2448,7 @@ def backlog_link_create(source: str, target: str, type: str, note: str = "") -> 
     from taskmaster.taskmaster_v3 import (
         LINK_TYPES, is_valid_link, entity_kind_of,
         read_entity_anywhere, write_entity_anywhere, add_link, entity_links,
-        sync_inverse, would_create_cycle, load_v3,
+        sync_inverse, would_create_cycle,
     )
 
     backlog_path = _backlog_path()
@@ -2454,7 +2477,7 @@ def backlog_link_create(source: str, target: str, type: str, note: str = "") -> 
     # single task→task graph; `blocks` is reversed onto `depends_on`).
     if type in ("depends_on", "blocks"):
         graph: dict[str, list[str]] = {}
-        data = load_v3(backlog_path)
+        data = _load()
         for epic in data.get("epics", []):
             for task in epic.get("tasks", []):
                 tid = task.get("id")
@@ -2542,7 +2565,7 @@ def backlog_link_query(source: str = "", target: str = "", type: str = "",
     """
     import json as _json
     from taskmaster.taskmaster_v3 import (
-        entity_kind_of, read_entity_anywhere, entity_links, load_v3,
+        entity_kind_of, read_entity_anywhere, entity_links,
     )
 
     backlog_path = _backlog_path()
@@ -2556,7 +2579,7 @@ def backlog_link_query(source: str = "", target: str = "", type: str = "",
 
     def all_edges() -> list[dict]:
         out: list[dict] = []
-        data = load_v3(backlog_path)
+        data = _load()
         for epic in data.get("epics", []):
             for task in epic.get("tasks", []):
                 tid = task.get("id")
@@ -2623,13 +2646,13 @@ def backlog_link_validate() -> str:
     """
     import json as _json
     from taskmaster.taskmaster_v3 import (
-        REVERSE_TYPE, read_entity_anywhere, entity_links, load_v3, find_cycle,
+        REVERSE_TYPE, read_entity_anywhere, entity_links, find_cycle,
     )
 
     backlog_path = _backlog_path()
 
     def iter_all_entities():
-        data = load_v3(backlog_path)
+        data = _load()
         for epic in data.get("epics", []):
             for task in epic.get("tasks", []):
                 if task.get("id"):

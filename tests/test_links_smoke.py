@@ -85,18 +85,19 @@ def test_cycle_prevention_blocks_3_node(tm_dir):
 
 
 def test_auto_detection_e2e(tmp_taskmaster):
-    # Seed two extra tasks so they exist for auto-link target resolution.
+    # Seed task files so auto-link target resolution sees them under v4.
+    from taskmaster import taskmaster_v3 as v3
+
     backlog_path = tmp_taskmaster / ".taskmaster" / "backlog.yaml"
     data = yaml.safe_load(backlog_path.read_text(encoding="utf-8"))
     data["epics"] = [{
         "id": "e1", "name": "E", "tasks": [
-            {"id": "T-001", "title": "First",  "tldr": "x", "status": "todo"},
-            {"id": "T-002", "title": "Second", "tldr": "x", "status": "todo"},
-            {"id": "T-003", "title": "Third",  "tldr": "x", "status": "todo"},
+            {"id": "T-001", "title": "First", "tldr": "x", "status": "todo", "epic": "e1", "order": 1.0},
+            {"id": "T-002", "title": "Second", "tldr": "x", "status": "todo", "epic": "e1", "order": 2.0},
+            {"id": "T-003", "title": "Third", "tldr": "x", "status": "todo", "epic": "e1", "order": 3.0},
         ],
     }]
-    backlog_path.write_text(yaml.safe_dump(data), encoding="utf-8")
-
+    v3.save_v4(backlog_path, data)
     # Use a handover with date-slug id (real production format).
     bs.backlog_handover_create(task_ids=["T-001"], tldr="some work", next_action="",
                                body="Picked up T-001, next start T-002, also see T-003.")

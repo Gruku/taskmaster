@@ -8,17 +8,17 @@ from taskmaster import backlog_server as bs
 
 
 def _seed_two_tasks(tmp_taskmaster: Path) -> None:
-    """Use the tmp_taskmaster fixture and add two seeded tasks via the v3 API."""
+    from taskmaster import taskmaster_v3 as v3
+
     backlog_path = tmp_taskmaster / ".taskmaster" / "backlog.yaml"
     data = yaml.safe_load(backlog_path.read_text(encoding="utf-8"))
     data["epics"] = [{
         "id": "e1", "name": "E", "tasks": [
-            {"id": "T-001", "title": "First", "tldr": "First task.", "status": "todo"},
-            {"id": "T-002", "title": "Second", "tldr": "Second task.", "status": "todo"},
+            {"id": "T-001", "title": "First", "tldr": "First task.", "status": "todo", "epic": "e1", "order": 1.0},
+            {"id": "T-002", "title": "Second", "tldr": "Second task.", "status": "todo", "epic": "e1", "order": 2.0},
         ],
     }]
-    backlog_path.write_text(yaml.safe_dump(data), encoding="utf-8")
-
+    v3.save_v4(backlog_path, data)
 
 def test_slim_get_task_groups_links_by_type(tmp_taskmaster):
     _seed_two_tasks(tmp_taskmaster)

@@ -21,15 +21,16 @@ from taskmaster.backlog_server import (
 
 
 def _load_task(tmp_taskmaster, task_id: str) -> dict:
-    """Read the task dict directly from backlog.yaml."""
-    bp = tmp_taskmaster / ".taskmaster" / "backlog.yaml"
-    data = yaml.safe_load(bp.read_text(encoding="utf-8"))
-    for epic in data["epics"]:
-        for t in epic.get("tasks", []):
-            if t["id"] == task_id:
-                return t
-    raise KeyError(f"Task {task_id!r} not found in backlog.yaml")
+    """Read a task through the layout-aware v4 loader."""
+    from taskmaster.taskmaster_v3 import load_v4
 
+    bp = tmp_taskmaster / ".taskmaster" / "backlog.yaml"
+    data = load_v4(bp)
+    for epic in data["epics"]:
+        for task in epic.get("tasks", []):
+            if task["id"] == task_id:
+                return task
+    raise KeyError(f"Task {task_id!r} not found")
 
 def test_add_task_with_tldr_succeeds(tm_epic_phase):
     result = backlog_add_task(epic="test-epic", title="Test task", tldr="One-line essence of the task.", phase="dev", options={"task_id": "T-tldr-1"})

@@ -33,7 +33,7 @@ _PLUGIN_DIR = Path(__file__).resolve().parent.parent
 SCHEMA_V2 = 2
 SCHEMA_V3 = 3
 SCHEMA_V4 = 4
-SCHEMA_DEFAULT = SCHEMA_V2  # what new backlogs get unless v3 is explicitly requested
+SCHEMA_DEFAULT = SCHEMA_V4  # new projects use sharded per-task storage
 
 
 def detect_schema_version(data: dict) -> int:
@@ -4707,6 +4707,12 @@ _ENTITY_PATH_HELPERS: dict[str, Any] = {
 }
 
 
+def _load_task_entities(backlog_path: Path) -> tuple[dict[str, Any], bool]:
+    """Load task entities through the schema-appropriate storage reader."""
+    raw = yaml.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
+    is_v4 = detect_schema_version(raw) >= SCHEMA_V4
+    return (load_v4(backlog_path) if is_v4 else load_v3(backlog_path), is_v4)
+
 def read_entity_anywhere(
     backlog_path: Path,
     entity_id: str,
@@ -4728,7 +4734,7 @@ def read_entity_anywhere(
     if kind is None:
         return None
     if kind == "task":
-        data = load_v3(backlog_path)
+        data, _ = _load_task_entities(backlog_path)
         for epic in data.get("epics", []):
             for task in epic.get("tasks", []):
                 if task.get("id") == entity_id:
@@ -4766,7 +4772,11 @@ def write_entity_anywhere(backlog_path: Path, entity: dict) -> None:
     if kind is None:
         raise ValueError(f"unknown entity kind for id={entity_id!r}")
     if kind == "task":
-        data = load_v3(backlog_path)
+        data, is_v4 = _load_task_entities(backlog_path)
+        if is_v4:
+            from copy import deepcopy
+
+            snapshot = deepcopy(data)
         for epic in data.get("epics", []):
             tasks = epic.get("tasks", [])
             for i, task in enumerate(tasks):
@@ -4774,7 +4784,10 @@ def write_entity_anywhere(backlog_path: Path, entity: dict) -> None:
                     # Strip body-key before persisting (save_v3 routes it through
                     # _split_task_for_v3 which already understands BODY_KEY).
                     tasks[i] = dict(entity)
-                    save_v3(backlog_path, data)
+                    if is_v4:
+                        save_v4(backlog_path, data, snapshot=snapshot)
+                    else:
+                        save_v3(backlog_path, data)
                     return
         raise KeyError(f"task {entity_id!r} not found")
     # Non-task: split frontmatter vs body, then write via the path helper.
