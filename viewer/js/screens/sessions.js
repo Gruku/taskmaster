@@ -1,7 +1,7 @@
 import { renderTimeline } from '../components/timeline.js';
 import { RightRail } from '../components/right-rail.js';
 import { listSessions, getSessionDetail, listThreads } from '../api.js';
-import { claimTopbar, tmSubcount, tmSearch, tmSegmented, tmAction } from '../lib/topbar.js';
+import { claimTopbar, tmSubcount, tmSearch, tmAction } from '../lib/topbar.js';
 import { pluralize } from '../util/pluralize.js';
 import { emptyState } from '../components/empty-state.js';
 import { chipClickNext } from '../util/chip-toggle.js';
@@ -15,19 +15,15 @@ const escapeHtml = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c =>
 
 export async function mount(root, { params, store, prefs }) {
   // Gotcha: `prefs` is the patch helper, not the data.
-  // Read persisted state from store.getPrefs(), then mirror back onto prefs.
+  // Read persisted state from store.getPrefs() (used below for handover status).
   const prefsData = store?.getPrefs?.() || {};
-  const sessionPrefs = (prefsData.screens && prefsData.screens.sessions) || {};
-  if (!prefs.screens) prefs.screens = {};
-  if (!prefs.screens.sessions) prefs.screens.sessions = {};
-  prefs.screens.sessions.view = sessionPrefs.view || 'A';
 
   root.innerHTML = `
     <div class="sessions-page">
       <div class="thread-board" data-role="board"></div>
       <div class="sessions-kinds" data-role="kinds">
         <span class="sessions-kind-chip session on" data-kind="session">
-          <span class="dot"></span> Sessions <span class="ct">0</span>
+          <span class="dot"></span> Threads <span class="ct">0</span>
         </span>
         <span class="sessions-kind-chip handover on" data-kind="handover">
           <span class="dot"></span> Handovers <span class="ct">0</span>
@@ -54,24 +50,6 @@ export async function mount(root, { params, store, prefs }) {
       render(root, state, rail);
     },
   });
-  const initialSessionsView = prefs.screens.sessions.view || 'A';
-  const viewToggle = tmSegmented(
-    [
-      { key: 'A', label: 'Diary' },
-      { key: 'B', label: 'Lanes' },
-      { key: 'C', label: 'By Task' },
-    ],
-    {
-      value: initialSessionsView,
-      onChange: (v) => {
-        state.view = v;
-        window.dispatchEvent(new CustomEvent('viewer:prefs-patch', {
-          detail: { screens: { sessions: { view: v } } },
-        }));
-        render(root, state, rail);
-      },
-    },
-  );
   const newNoteBtn = tmAction({
     icon: '+', label: 'New note', variant: 'primary',
     title: 'New note — coming soon',
@@ -79,7 +57,6 @@ export async function mount(root, { params, store, prefs }) {
   });
   topbar?.appendChild(subcount);
   topbar?.appendChild(searchBuilt.el);
-  topbar?.appendChild(viewToggle);
   topbar?.appendChild(newNoteBtn);
 
   const rail = new RightRail({ width: 480 });
@@ -88,7 +65,6 @@ export async function mount(root, { params, store, prefs }) {
     sessions: [],
     threads: [],
     detailCache: new Map(),
-    view: prefs.screens.sessions.view,
     kinds: { session: true, handover: true },
     handoverStatus: new Set(persistedStatus),
     searchTerm: '',
@@ -228,20 +204,16 @@ function refreshKindCounts(root, sessions, subcount, totalCount) {
   chips[1].querySelector('.ct').textContent = hCount;
   if (subcount) {
     const filtered = totalCount != null && totalCount !== sCount;
-    const sLabel = pluralize(sCount, 'session', 'sessions');
+    const sLabel = pluralize(sCount, 'thread', 'threads');
     const hLabel = pluralize(hCount, 'handover', 'handovers');
     subcount.textContent = filtered
-      ? `${sCount} of ${totalCount} ${pluralize(totalCount, 'session', 'sessions')} · ${hCount} ${hLabel}`
+      ? `${sCount} of ${totalCount} ${pluralize(totalCount, 'thread', 'threads')} · ${hCount} ${hLabel}`
       : `${sCount} ${sLabel} · ${hCount} ${hLabel}`;
   }
 }
 
 function render(root, state, rail) {
   const mount = root.querySelector('[data-role=mount]');
-  if (state.view !== 'A') {
-    mount.innerHTML = `<div class="stub">View "${escapeHtml(state.view)}" — Plan 5b owns Lanes/By-Task.<div class="stub-meta">/sessions?view=${escapeHtml(state.view)}</div></div>`;
-    return;
-  }
 
   // Search dims non-matching sessions so the timeline keeps its rhythm;
   // kind-chip toggles still hide rows entirely.
@@ -379,12 +351,13 @@ function renderSessionRail(detail) {
   const s = detail.session;
   return (
     `<div class="rr-h">`
-    + `<span class="kind-pill session">SESSION</span>`
+    + `<span class="kind-pill session">THREAD</span>`
     + `<span class="ts">${escapeHtml(railSessionTimeLine(s))}</span>`
     + `<span class="actions">`
     + `<button class="ic-btn" data-role="rail-close" title="Close">✕</button>`
     + `</span></div>`
     + `<div class="rr-title">${escapeHtml(s.id)}</div>`
+    + (s.tldr ? `<div class="rr-meta"><span>${escapeHtml(s.tldr)}</span></div>` : '')
     + `<div class="rr-meta"><span>Tasks: ${(s.task_ids||[]).map(escapeHtml).join(', ') || '—'}</span></div>`
     + (detail.handovers || []).map(h =>
         `<div class="rr-section"><h4>${escapeHtml(h.viewer_kind.toUpperCase())} <span class="ct mono">${escapeHtml(h.id)}</span></h4>`
