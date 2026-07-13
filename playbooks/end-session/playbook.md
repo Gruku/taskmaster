@@ -34,7 +34,7 @@ Check schema: `backlog_status` first line shows `Schema: v<N>`.
 
 **3. Session title.** `{Topic}: {Brief Description}`.
 
-**4. Target status.** Default `done` — Claude complete + gates passed. Target `in-review` ONLY when an action that only the human can perform blocks the task (API key, LLM config, account access); pass it as `human_action` (short imperative, e.g. "add OPENAI_API_KEY to .env") — `backlog_complete_task` rejects in-review without it. See `references/summary-modes.md`.
+**4. Target status.** Default `done` — Claude complete + gates passed. Target `in-review` ONLY when a human-only action blocks the task (API key, LLM config, account access); pass it as `human_action` (short imperative, e.g. "add OPENAI_API_KEY to .env") — `backlog_complete_task` rejects in-review without it. See `references/summary-modes.md`.
 
 **5. Skip review gate.** Call `backlog_complete_task` directly. Only ask on genuine ambiguity.
 
@@ -78,7 +78,7 @@ Note: `backlog_complete_task` enforces this server-side too.
 
 ## Task Lifecycle
 
-`todo -> in-progress -> in-review -> done -> archived`. In-review = blocked on a human-only action (`human_action` says what). Done = Claude complete + gates passed. Human review of shipped work happens downstream, not on the board.
+`todo -> in-progress -> in-review -> done -> archived`. In-review = blocked on a human-only action (`human_action` says what); done = Claude complete + gates passed (human review is downstream, not on the board).
 
 ## Additional Resources
 
