@@ -131,3 +131,66 @@ class TestLoadV4:
         )
         data = v3.load_v4(bp)
         assert data["epics"][0]["tasks"][0][v3.BODY_KEY] == "## Notes\n\nhello"
+
+
+class TestSaveV4:
+    def test_writes_task_files_and_slim_backlog(self, tmp_path):
+        tm = tmp_path / ".taskmaster"
+        (tm / "tasks").mkdir(parents=True)
+        bp = tm / "backlog.yaml"
+        bp.write_text(yaml.dump({"meta": {"project": "t", "schema_version": 4},
+                                 "epics": [{"id": "e", "name": "E"}], "phases": []}))
+        data = {
+            "meta": {"project": "t", "schema_version": 4},
+            "epics": [{"id": "e", "name": "E", "tasks": [
+                {"id": "e-001", "title": "A", "epic": "e", "order": 1.0, "status": "todo"},
+            ]}],
+            "phases": [],
+        }
+        v3.save_v4(bp, data)
+        # task file exists with all fields
+        fm, _ = v3.read_task_file(tm / "tasks" / "e-001.md")
+        assert fm["title"] == "A" and fm["epic"] == "e" and fm["status"] == "todo"
+        # backlog.yaml carries NO task list
+        on_disk = yaml.safe_load(bp.read_text())
+        assert "tasks" not in on_disk["epics"][0]
+
+    def test_round_trip_identity(self, tmp_path):
+        tm = tmp_path / ".taskmaster"
+        (tm / "tasks").mkdir(parents=True)
+        bp = tm / "backlog.yaml"
+        bp.write_text(yaml.dump({"meta": {"schema_version": 4}, "epics": [], "phases": []}))
+        data = {
+            "meta": {"schema_version": 4},
+            "epics": [{"id": "e", "name": "E", "tasks": [
+                {"id": "e-001", "title": "A", "epic": "e", "order": 1.0},
+                {"id": "e-002", "title": "B", "epic": "e", "order": 2.0,
+                 v3.BODY_KEY: "## Notes\n\nbody"},
+            ]}],
+            "phases": [],
+        }
+        v3.save_v4(bp, data)
+        reloaded = v3.load_v4(bp)
+        tasks = reloaded["epics"][0]["tasks"]
+        assert [t["id"] for t in tasks] == ["e-001", "e-002"]
+        assert tasks[1][v3.BODY_KEY] == "## Notes\n\nbody"
+
+    def test_private_keys_not_persisted(self, tmp_path):
+        tm = tmp_path / ".taskmaster"
+        (tm / "tasks").mkdir(parents=True)
+        bp = tm / "backlog.yaml"
+        bp.write_text(yaml.dump({"meta": {"schema_version": 4}, "epics": [], "phases": []}))
+        data = {"meta": {"schema_version": 4}, "epics": [], "phases": [],
+                "_orphan_tasks": ["x-001"]}
+        v3.save_v4(bp, data)
+        assert "_orphan_tasks" not in yaml.safe_load(bp.read_text())
+
+    def test_meta_updated_not_written(self, tmp_path):
+        tm = tmp_path / ".taskmaster"
+        (tm / "tasks").mkdir(parents=True)
+        bp = tm / "backlog.yaml"
+        bp.write_text(yaml.dump({"meta": {"schema_version": 4}, "epics": [], "phases": []}))
+        data = {"meta": {"schema_version": 4, "updated": "2026-07-11"},
+                "epics": [], "phases": []}
+        v3.save_v4(bp, data)
+        assert "updated" not in yaml.safe_load(bp.read_text())["meta"]
