@@ -1239,7 +1239,7 @@ wheels = [
 
 [[package]]
 name = "taskmaster"
-version = "4.3.0"
+version = "4.5.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
