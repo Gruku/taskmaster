@@ -83,6 +83,7 @@ from taskmaster.taskmaster_v3 import (
     next_task_id,
     next_task_order,
     migrate_v2_to_v3 as _migrate_v2_to_v3,
+    migrate_v3_to_v4 as _migrate_v3_to_v4,
     write_handover as _write_handover,
     read_handover as _read_handover,
     apply_supersession as _apply_supersession,
@@ -1947,6 +1948,26 @@ def backlog_migrate_v3() -> str:
         f"subsequent slices."
     )
 
+
+@mcp.tool()
+def backlog_migrate_v4() -> str:
+    """Migrate this project to v4 sharded per-task storage."""
+    backlog_path = _backlog_path()
+    if not backlog_path.exists():
+        return f"Error: no backlog found at {backlog_path}. Run `backlog_init` first."
+    summary = _migrate_v3_to_v4(backlog_path)
+    if summary["status"] == "already_v4":
+        return (
+            f"Already on v4 — {summary['tasks_total']} tasks, no changes made.\n"
+            f"Backlog at: {backlog_path.relative_to(ROOT)}"
+        )
+    return (
+        "Migrated v3 -> v4.\n"
+        f"- Tasks: {summary['tasks_total']} (all fields now in tasks/<id>.md)\n"
+        f"- Index: {backlog_path.relative_to(ROOT)} (slim — no task lists)\n"
+        "- Local state moved into local/; snapshots/ removed.\n"
+        "- Restart the MCP server to pick up the new schema."
+    )
 
 @mcp.tool()
 def backlog_backfill_lanes(grandfather_active: bool = True) -> str:

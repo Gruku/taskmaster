@@ -1230,6 +1230,49 @@ def migrate_v2_to_v3(backlog_path: Path) -> dict[str, Any]:
     }
 
 
+def migrate_v3_to_v4(backlog_path: Path) -> dict[str, Any]:
+    """Convert a v3 backlog to sharded v4 storage, idempotently."""
+    raw = yaml.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
+    before = detect_schema_version(raw)
+    if before >= SCHEMA_V4:
+        return {
+            "status": "already_v4",
+            "tasks_total": len(iter_task_files(backlog_path)),
+            "schema_before": before,
+            "schema_after": before,
+        }
+
+    data = load_v3(backlog_path)
+    tasks_total = 0
+    for epic in data.get("epics", []):
+        epic_id = epic.get("id")
+        for position, task in enumerate(epic.get("tasks", []), start=1):
+            task["epic"] = epic_id
+            task.setdefault("order", float(position))
+            tasks_total += 1
+    data.setdefault("meta", {})["schema_version"] = SCHEMA_V4
+    save_v4(backlog_path, data, snapshot=None)
+
+    root = backlog_path.parent
+    target = local_dir(backlog_path)
+    target.mkdir(parents=True, exist_ok=True)
+    for name in ("viewer.json", "auto"):
+        source = root / name
+        if source.exists():
+            os.replace(source, target / name)
+    snapshots = root / "snapshots"
+    if snapshots.is_dir():
+        import shutil
+
+        shutil.rmtree(snapshots)
+
+    return {
+        "status": "migrated",
+        "tasks_total": tasks_total,
+        "schema_before": before,
+        "schema_after": SCHEMA_V4,
+    }
+
 # ── v3 layout canonicalization (.claude/ or root → .taskmaster/) ─────────
 
 # Items the canonicalizer moves. Anything outside this list is left alone —
