@@ -1178,6 +1178,8 @@ def backlog_list_tasks(
                 lines.append(f"  tldr: {t['tldr']}")
             if t.get("notes"):
                 lines.append(f"  notes: {t['notes']}")
+            if t.get("human_action"):
+                lines.append(f"  waiting-on-human: {t['human_action']}")
         if footer:
             lines.append(footer)
         return "\n".join(lines)
@@ -1189,6 +1191,8 @@ def backlog_list_tasks(
         slim_entry = entry
         if tldr:
             slim_entry = f"{entry} — {tldr}"
+        if t.get("human_action"):
+            slim_entry += f"\n    waiting-on-human: {t['human_action']}"
         lines.append(f"- {slim_entry}")
     if footer:
         lines.append(footer)
@@ -1288,6 +1292,7 @@ def backlog_get_task(
         ("Completed", str(task.get("completed", "—"))),
         ("Branch", task.get("branch", "—")),
         ("Blockers", task.get("blockers", "—")),
+        ("Waiting on human", task.get("human_action", "")),
         ("Locked by", task.get("locked_by", "—")),
         ("Review instructions", task.get("review_instructions", "—")),
         ("Notes", task.get("notes", "—")),
@@ -4857,7 +4862,7 @@ def _strictest_lane(lanes: list) -> str:
     return max(present, key=lambda l: order[l])
 
 
-ALLOWED_FIELDS = {"title", "status", "priority", "notes", "branch", "worktree", "blockers", "docs", "depends_on", "sub_repo", "stage", "estimate", "locked_by", "review_instructions", "phase", "anchors", "blast_radius_depth", "patchnote", "release", "tldr", "next_step", "component", "design_change", "lane", "bundle", "area"}
+ALLOWED_FIELDS = {"title", "status", "priority", "notes", "branch", "worktree", "blockers", "docs", "depends_on", "sub_repo", "stage", "estimate", "locked_by", "review_instructions", "phase", "anchors", "blast_radius_depth", "patchnote", "release", "tldr", "next_step", "component", "design_change", "lane", "bundle", "area", "human_action"}
 VALID_STATUSES = {"todo", "in-progress", "in-review", "done", "archived", "blocked"}
 # Spec A Task 11: forward-transition table enforced on lane'd tasks via
 # backlog_update_task. Laneless tasks are exempt (old permissive behavior).

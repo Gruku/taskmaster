@@ -121,7 +121,7 @@ SLIM_FIELDS: dict[str, tuple[str, ...]] = {
         "skip_merge_gate", "merge_gate_freshness", "merge_gate_state",
         "depends_on", "related_issues",
         "started", "completed", "branch", "worktree",
-        "blockers", "open_handovers",
+        "blockers", "human_action", "open_handovers",
         "tldr_autogen",
     ),
     "issue": (
