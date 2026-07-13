@@ -17,7 +17,7 @@ import { laneBadge } from './gate-pipeline.js';
 import { renderMergeLadderCompact } from './merge-status.js';
 
 const PRIORITY_LABELS = { critical: 'Critical', high: 'High', medium: 'Medium', low: 'Low' };
-const STATUS_LABELS   = { blocked: 'Blocked', todo: 'Todo', 'in-progress': 'In Progress', 'in-review': 'In Review', done: 'Done' };
+const STATUS_LABELS   = { blocked: 'Blocked', todo: 'Todo', 'in-progress': 'In Progress', 'in-review': 'Waiting on human', done: 'Done' };
 
 export function renderCard({ task, density = 'full', epicColors = {}, groupBy = 'status', now = Date.now(), hideBundleChip = false } = {}) {
   if (!task || !task.id) return document.createComment('empty card');
@@ -215,6 +215,14 @@ export function renderCard({ task, density = 'full', epicColors = {}, groupBy = 
   }
   footer.appendChild(actions);
   body.appendChild(footer);
+
+  // ── Human action: in-review cards show what the human must do ──
+  if (task.status === 'in-review' && task.human_action) {
+    const ha = document.createElement('div');
+    ha.className = 'card-human-action';
+    ha.textContent = task.human_action;
+    body.appendChild(ha);
+  }
 
   // ── Callout: blocked + unmet deps ──
   if (task.status === 'blocked' && Array.isArray(task.blockers) && task.blockers.length) {
