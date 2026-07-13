@@ -3918,7 +3918,8 @@ def _merge_task_with_disk(
     base_fm, base_body = task_v4_to_file(persistable_base)
     mem_fm, mem_body = task_v4_to_file(persistable_mem)
     disk_fm, disk_body = read_task_file(disk_path)
-    merged_fm = _three_way_merge_fields(base_fm, mem_fm, disk_fm)
+    persistable_disk_fm = _v4_strip_private_fields(disk_fm)
+    merged_fm = _three_way_merge_fields(base_fm, mem_fm, persistable_disk_fm)
     merged_body = mem_body if mem_body != base_body else disk_body
     return merged_fm, merged_body
 
