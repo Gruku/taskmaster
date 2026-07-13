@@ -82,3 +82,24 @@ def test_add_task_allocates_id_and_order(v4_project):
     fm, _ = _read(v4_project / ".taskmaster" / "tasks" / "e-002.md")
     assert fm["epic"] == "e"
     assert fm["order"] == 2.0
+
+
+class TestLocalRelocation:
+    def test_progress_written_under_local(self, v4_project):
+        from taskmaster import backlog_server
+        data = backlog_server._load()
+        backlog_server._mutate_and_save(data)
+        assert (v4_project / ".taskmaster" / "local" / "PROGRESS.md").exists()
+
+    def test_viewer_prefs_under_local(self, v4_project):
+        from taskmaster import taskmaster_v3 as v3
+        assert v3.viewer_prefs_path().parent.name == "local"
+
+    def test_meta_updated_cached_locally(self, v4_project):
+        import json
+        from taskmaster import backlog_server
+        data = backlog_server._load()
+        backlog_server._save(data)
+        cache = v4_project / ".taskmaster" / "local" / "cache" / "meta.json"
+        assert cache.exists()
+        assert "updated" in json.loads(cache.read_text(encoding="utf-8"))
