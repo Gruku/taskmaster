@@ -2185,6 +2185,25 @@ def backfill_threads(
     return {"stamped": stamped, "groups": len(groups)}
 
 
+def derive_thread_name(
+    task_ids: list[str],
+    tldr: str,
+    data: dict[str, Any],
+    bundle_slug: str = "",
+) -> str:
+    """Auto-name a thread: bundle slug → epic of first linked task →
+    first task id → slugified tldr."""
+    if bundle_slug:
+        return normalize_thread_name(bundle_slug)
+    if task_ids:
+        for epic in data.get("epics") or []:
+            if any(t.get("id") in task_ids for t in epic.get("tasks") or []):
+                if epic.get("id"):
+                    return normalize_thread_name(epic["id"])
+        return normalize_thread_name(task_ids[0])
+    return normalize_thread_name(tldr)
+
+
 # ── Issues ─────────────────────────────────────────────────────
 
 ISSUE_STATUSES = ("open", "investigating", "fixed", "wontfix", "duplicate")

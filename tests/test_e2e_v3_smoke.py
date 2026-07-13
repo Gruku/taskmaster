@@ -180,8 +180,8 @@ def test_v3_handover_create_read_list(tmp_path, monkeypatch):
     assert "chose X" in got
     assert "---" in got
 
-    # 3. Latest — tldr and next_action surface
-    latest = backlog_server.backlog_handover_latest()
+    # 3. Thread resume — tldr and next_action surface via the newest handover
+    latest = backlog_server.backlog_thread_resume(hid)
     assert "Smoke session complete" in latest
     assert "Resume auth work" in latest
 

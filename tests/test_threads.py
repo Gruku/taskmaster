@@ -299,3 +299,14 @@ def test_backfill_prefers_epic_name(tmp_path):
     backfill_threads(bp, backlog_data=data)
     fm, _ = read_handover(bp, h)
     assert fm["thread"] == "team-relayout"
+
+
+from taskmaster.taskmaster_v3 import derive_thread_name
+
+
+def test_derive_thread_name_precedence():
+    data = {"epics": [{"id": "team-relayout", "tasks": [{"id": "T-9"}]}]}
+    assert derive_thread_name(["T-9"], "x", data, bundle_slug="my-bundle") == "my-bundle"
+    assert derive_thread_name(["T-9"], "x", data) == "team-relayout"
+    assert derive_thread_name(["T-77"], "x", data) == "t-77"
+    assert derive_thread_name([], "Fix The Parser", data) == "fix-the-parser"
