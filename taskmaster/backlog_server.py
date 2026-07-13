@@ -2757,14 +2757,14 @@ def backlog_handover_update_status(
     status: str,
     reason: str = "",
 ) -> str:
-    """Manually set a handover's status (todo / in-progress / done).
+    """Manually set a handover's status (open / closed / superseded).
 
     Marks status_user_set: true — subsequent auto-transitions (supersession,
     task-complete, resume) will skip this handover.
 
     Args:
         handover_id: The handover id (e.g. "2026-05-09-shipped-x").
-        status: One of todo, in-progress, done.
+        status: One of open, closed, superseded.
         reason: Optional free-text rationale stored as `status_reason`.
     """
     bp = _backlog_path()

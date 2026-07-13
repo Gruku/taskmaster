@@ -155,17 +155,17 @@ body.rail-open .tl .selected { opacity: 1; pointer-events: auto; }
   cursor: pointer;
   user-select: none;
 }
-.handover-status-chips .status-chip.on[data-status="todo"] {
+.handover-status-chips .status-chip.on[data-status="open"] {
   background: var(--amber-tint-bg, rgba(255, 191, 0, 0.15));
   border-color: var(--amber-tint-border, rgba(255, 191, 0, 0.45));
 }
-.handover-status-chips .status-chip.on[data-status="in-progress"] {
-  background: var(--blue-tint-bg, rgba(60, 130, 246, 0.15));
-  border-color: var(--blue-tint-border, rgba(60, 130, 246, 0.45));
-}
-.handover-status-chips .status-chip.on[data-status="done"] {
+.handover-status-chips .status-chip.on[data-status="closed"] {
   background: var(--muted-tint-bg, rgba(136, 136, 136, 0.15));
   border-color: var(--muted-tint-border, rgba(136, 136, 136, 0.45));
+}
+.handover-status-chips .status-chip.on[data-status="superseded"] {
+  background: rgba(148, 130, 196, 0.15);
+  border-color: rgba(148, 130, 196, 0.45);
 }
 .handover-status-chips .status-chip:hover {
   filter: brightness(1.05);

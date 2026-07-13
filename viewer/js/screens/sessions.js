@@ -32,9 +32,9 @@ export async function mount(root, { params, store, prefs }) {
         </span>
       </div>
       <div class="handover-status-chips" data-role="ho-status">
-        <span class="status-chip on" data-status="todo">todo <span class="ct">0</span></span>
-        <span class="status-chip on" data-status="in-progress">in-progress <span class="ct">0</span></span>
-        <span class="status-chip" data-status="done">done <span class="ct">0</span></span>
+        <span class="status-chip on" data-status="open">open <span class="ct">0</span></span>
+        <span class="status-chip on" data-status="closed">closed <span class="ct">0</span></span>
+        <span class="status-chip" data-status="superseded">superseded <span class="ct">0</span></span>
       </div>
       <div class="right-rail-host" data-role="rail-host"></div>
       <div class="sessions-mount" data-role="mount"></div>
@@ -81,7 +81,7 @@ export async function mount(root, { params, store, prefs }) {
   topbar?.appendChild(newNoteBtn);
 
   const rail = new RightRail({ width: 480 });
-  const persistedStatus = (prefsData.screens?.sessions?.handoverStatus) || ['todo', 'in-progress'];
+  const persistedStatus = (prefsData.screens?.sessions?.handoverStatus) || ['open', 'closed'];
   const state = {
     sessions: [],
     detailCache: new Map(),
@@ -150,9 +150,9 @@ function bindStatusChips(root, state, onChange) {
 }
 
 function refreshStatusChipCounts(root, handovers) {
-  const counts = { todo: 0, 'in-progress': 0, done: 0 };
+  const counts = { open: 0, closed: 0, superseded: 0 };
   for (const meta of Object.values(handovers)) {
-    const s = meta.status || 'todo';
+    const s = meta.status || 'open';
     if (counts[s] != null) counts[s] += 1;
   }
   const row = root.querySelector('[data-role=ho-status]');
@@ -204,13 +204,13 @@ function render(root, state, rail) {
   for (const s of state.sessions) {
     for (const hid of s.handover_ids || []) {
       if (!handovers[hid]) {
-        // Look up status from session metadata if available; default to 'todo' for legacy entries.
+        // Look up status from session metadata if available; default to 'open' for legacy entries.
         const meta = (s.handovers || []).find(h => h.id === hid) || {};
         handovers[hid] = {
           id: hid,
           viewer_kind: meta.viewer_kind || 'standalone',
           tldr: meta.tldr || '',
-          status: meta.status || 'todo',
+          status: meta.status || 'open',
         };
       }
     }
@@ -222,7 +222,7 @@ function render(root, state, rail) {
   // Apply status filter — handovers whose status is not in the active set are excluded.
   const filteredHandovers = {};
   for (const [hid, meta] of Object.entries(handovers)) {
-    if (state.handoverStatus.has(meta.status || 'todo')) {
+    if (state.handoverStatus.has(meta.status || 'open')) {
       filteredHandovers[hid] = meta;
     }
   }
@@ -287,7 +287,7 @@ async function openHandoverDetail(rail, hid, state) {
       if (pill) {
         pill.addEventListener('click', () => {
           import('../components/right-rail.js').then(({ openStatusMenu }) => {
-            openStatusMenu(pill, h.id, h.status || 'todo');
+            openStatusMenu(pill, h.id, h.status || 'open');
           });
         });
       }
@@ -335,7 +335,7 @@ function renderSessionRail(detail) {
 
 function renderHandoverRail(h, owner) {
   const fp = `.taskmaster/handovers/${h.id}.md`;
-  const status = h.status || 'todo';
+  const status = h.status || 'open';
   return (
     `<div class="rr-h">`
     + `<span class="kind-pill handover">${escapeHtml(h.viewer_kind.toUpperCase())}</span>`
