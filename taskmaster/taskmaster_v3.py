@@ -1038,6 +1038,76 @@ def load_v3(backlog_path: Path) -> dict[str, Any]:
     return data
 
 
+def iter_task_files(backlog_path: Path) -> list[Path]:
+    """All v4 task files: tasks/*.md then tasks/archive/*.md, each sorted.
+
+    Mirrors next_bug_id's directory-scan philosophy — the filesystem, not an
+    in-memory index, is the enumeration source of truth.
+    """
+    tdir = backlog_path.parent / "tasks"
+    files: list[Path] = []
+    if tdir.is_dir():
+        files.extend(sorted(tdir.glob("*.md")))
+    adir = tdir / "archive"
+    if adir.is_dir():
+        files.extend(sorted(adir.glob("*.md")))
+    return files
+
+
+def load_v4(backlog_path: Path) -> dict[str, Any]:
+    """Load a v4 backlog: slim index (meta + phases + epic defs) + per-task
+    files enumerated by glob and grouped by each task's `epic:` frontmatter.
+
+    Produces the same in-memory shape as load_v3 (epics[].tasks[] populated,
+    ordered by (order, id)), so existing read code keeps working unchanged.
+    Tasks whose `epic:` names no known epic are collected under the private
+    key `_orphan_tasks` (surfaced by backlog_validate, stripped on save).
+    """
+    data = yaml.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
+    epic_ids = {e.get("id") for e in data.get("epics", [])}
+    tasks_by_epic: dict[str, list[dict[str, Any]]] = {}
+    orphans: list[str] = []
+    for tf in iter_task_files(backlog_path):
+        fm, body = read_task_file(tf)
+        task = task_v4_from_file(fm, body.removesuffix("\n"))
+        eid = task.get("epic")
+        if eid not in epic_ids:
+            orphans.append(task.get("id") or tf.stem)
+            continue
+        tasks_by_epic.setdefault(eid, []).append(task)
+    for tlist in tasks_by_epic.values():
+        tlist.sort(key=lambda t: (float(t.get("order", 0.0)), str(t.get("id", ""))))
+    for epic in data.get("epics", []):
+        epic["tasks"] = tasks_by_epic.get(epic.get("id"), [])
+
+    # Per-epic / per-phase heavy bodies (doc-bearing epics/phases) — same as v3.
+    for epic in data.get("epics", []):
+        eid = epic.get("id")
+        if not eid:
+            continue
+        ef = epic_file_path(backlog_path, eid)
+        if ef.exists():
+            fm, body = read_task_file(ef)
+            epic_meta = {k: v for k, v in epic.items() if k != "tasks"}
+            merged = _merge_entity_from_v3(epic_meta, fm, body, EPIC_HEAVY_FIELDS)
+            merged["tasks"] = epic.get("tasks", [])
+            epic.clear()
+            epic.update(merged)
+    for phase in data.get("phases", []):
+        pid = phase.get("id")
+        if not pid:
+            continue
+        pf = phase_file_path(backlog_path, pid)
+        if pf.exists():
+            fm, body = read_task_file(pf)
+            merged = _merge_entity_from_v3(phase, fm, body, PHASE_HEAVY_FIELDS)
+            phase.clear()
+            phase.update(merged)
+
+    data["_orphan_tasks"] = orphans
+    return data
+
+
 def migrate_v2_to_v3(backlog_path: Path) -> dict[str, Any]:
     """Convert a v2 backlog at `backlog_path` to v3 in place.
 
