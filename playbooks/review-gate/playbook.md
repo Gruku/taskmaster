@@ -22,7 +22,7 @@ This skill reviews **code** (the diff). For pre-implementation design review of 
 | 7 | Present results — lead with verdict, gate matrix (see `references/gate-details.md`) |
 | 8 | Add review instructions if absent (see `references/gate-details.md`) |
 | 8b | Bug close-gate — query open bugs before transitioning (see below) |
-| 9 | Record the gate + transition to `in-review` if all blocking gates passed |
+| 9 | Record the gate — the task stays `in-progress`; end-session closes it to `done` |
 
 **Blocking rules:** Critical findings block unconditionally. Important require user acknowledgment. Minor and WARN/SKIP never block.
 
@@ -62,7 +62,7 @@ When `_get_session_bundle()` is set, the gate runs **once** but evaluates each m
 1. Check each `member`'s acceptance criteria against the shared diff.
 2. Emit a combined report — one PASS/FAIL verdict per member.
 3. Record per-member (loop, shared `spec_path`): `backlog_record_gate(member, "review-gate", verdict=..., spec_path=<shared spec>)`.
-4. All pass → transition all to `in-review`.
+4. All pass → record each member's gate. Members stay `in-progress`; end-session closes them to `done`.
 5. Any fail → fix-up in the same worktree **or** descope (see `references/bundle-gate.md`).
 
 Non-bundle single-task flow is unchanged.

@@ -54,7 +54,7 @@ for member in bundle["members"]:
 ### 5. All pass
 
 If all members pass:
-- Transition all members to `in-review` (call `backlog_update_task(member, "status", "in-review")` for each).
+- Record each member's gate. Members stay `in-progress`; end-session closes them to `done`.
 - Close the gate — report "All N bundle members passed review-gate."
 
 ### 6. Any fail — options
@@ -117,6 +117,6 @@ The branch now represents only the remaining members' work. Merge (or PR) procee
 
 **Single-member bundle:** A bundle with one member degenerates to the standard single-task flow. Detect this and skip the per-member report format; run the normal gate steps.
 
-**Partial fix-up then re-run:** After fixing a failing member, call the gate again with just that member's ID as `task_id` to re-evaluate. When it passes, record its gate and transition it to `in-review`. Do not re-evaluate already-passed members.
+**Partial fix-up then re-run:** After fixing a failing member, call the gate again with just that member's ID as `task_id` to re-evaluate. When it passes, record its gate (it stays `in-progress` until end-session closes it). Do not re-evaluate already-passed members.
 
 **Spec doc absent:** If the bundle has no shared spec doc, use each member's individual `spec` path as that member's `spec_path` in `backlog_record_gate`. The descope spec-edit step is skipped if there is no shared doc — note the skip in the descope report.
