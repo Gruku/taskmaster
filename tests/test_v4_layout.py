@@ -194,3 +194,67 @@ class TestSaveV4:
                 "epics": [], "phases": []}
         v3.save_v4(bp, data)
         assert "updated" not in yaml.safe_load(bp.read_text())["meta"]
+
+    def test_private_fields_never_persist_at_any_level(self, tmp_path):
+        tm = tmp_path / ".taskmaster"
+        (tm / "tasks").mkdir(parents=True)
+        bp = tm / "backlog.yaml"
+        bp.write_text(yaml.dump({"meta": {"schema_version": 4}, "epics": [], "phases": []}))
+        data = {
+            "meta": {
+                "schema_version": 4,
+                "_private": "meta",
+                "settings": {"keep": True, "_private": "nested-meta"},
+            },
+            "epics": [{
+                "id": "e", "name": "E", "_private": "epic",
+                "settings": {"keep": True, "_private": "nested-epic"},
+                v3.BODY_KEY: "epic body",
+                "tasks": [{
+                    "id": "e-001", "title": "A", "epic": "e", "order": 1.0,
+                    "_private": "task",
+                    "settings": {
+                        "keep": True,
+                        "_private": "nested-task",
+                        "items": [{"keep": True, "_private": "nested-list"}],
+                    },
+                    v3.BODY_KEY: "task body",
+                }],
+            }],
+            "phases": [{
+                "id": "p", "name": "P", "_private": "phase",
+                "settings": {"keep": True, "_private": "nested-phase"},
+                v3.BODY_KEY: "phase body",
+            }],
+            "_private": "root",
+        }
+
+        v3.save_v4(bp, data)
+
+        def assert_no_private_keys(value):
+            if isinstance(value, dict):
+                assert all(not key.startswith("_") for key in value)
+                for child in value.values():
+                    assert_no_private_keys(child)
+            elif isinstance(value, list):
+                for child in value:
+                    assert_no_private_keys(child)
+
+        on_disk = yaml.safe_load(bp.read_text())
+        assert_no_private_keys(on_disk)
+        assert on_disk["meta"]["settings"] == {"keep": True}
+        assert on_disk["epics"][0]["settings"] == {"keep": True}
+        assert on_disk["phases"][0]["settings"] == {"keep": True}
+
+        task_fm, task_body = v3.read_task_file(tm / "tasks" / "e-001.md")
+        epic_fm, epic_body = v3.read_task_file(tm / "epics" / "e.md")
+        phase_fm, phase_body = v3.read_task_file(tm / "phases" / "p.md")
+        assert_no_private_keys(task_fm)
+        assert_no_private_keys(epic_fm)
+        assert_no_private_keys(phase_fm)
+        assert task_fm["settings"] == {
+            "keep": True, "items": [{"keep": True}],
+        }
+        assert task_body.removesuffix("\n") == "task body"
+        assert epic_body.removesuffix("\n") == "epic body"
+        assert phase_body.removesuffix("\n") == "phase body"
