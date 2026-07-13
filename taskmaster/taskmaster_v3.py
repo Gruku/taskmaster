@@ -2037,6 +2037,68 @@ def update_thread_status(
     return backlog_data
 
 
+def resolve_thread(
+    backlog_data: dict[str, Any],
+    backlog_path: Path,
+    ref: str,
+) -> tuple[str, str]:
+    """Resolve a resume token to (thread_name, newest_handover_id).
+
+    `ref` may be a thread name (normalized) or a handover id — live or
+    archived — whose `thread` field routes to the thread's newest handover.
+    A threadless handover id resolves to ("", ref). Raises KeyError when
+    nothing matches.
+    """
+    threads = backlog_data.get("threads") or {}
+    name = normalize_thread_name(ref)
+    if name in threads and threads[name]["handover_ids"]:
+        return name, threads[name]["handover_ids"][-1]
+
+    fm: dict[str, Any] | None = None
+    p = handover_path(backlog_path, ref)
+    if p.exists():
+        fm, _ = read_task_file(p)
+    else:
+        archive_root = handover_dir(backlog_path) / "_archive"
+        if archive_root.exists():
+            hits = list(archive_root.rglob(f"{ref}.md"))
+            if hits:
+                fm, _ = read_task_file(hits[0])
+    if fm is None:
+        raise KeyError(ref)
+    tname = fm.get("thread") or ""
+    if tname and tname in threads and threads[tname]["handover_ids"]:
+        return tname, threads[tname]["handover_ids"][-1]
+    return tname, str(fm.get("id") or ref)
+
+
+def list_threads(backlog_data: dict[str, Any]) -> list[dict[str, Any]]:
+    """Board rows from the registry — open first, then parked, then closed;
+    newest-touched first within each status. staleness_days is whole days
+    since last_touched (0 when unparseable)."""
+    rows: list[dict[str, Any]] = []
+    now = datetime.now(timezone.utc)
+    for name, t in (backlog_data.get("threads") or {}).items():
+        try:
+            staleness = max(0, (now - _parse_iso8601(t["last_touched"])).days)
+        except (ValueError, KeyError, TypeError):
+            staleness = 0
+        rows.append({
+            "name": name,
+            "status": t.get("status", "open"),
+            "tldr": t.get("tldr", ""),
+            "next_action": t.get("next_action", ""),
+            "task_ids": list(t.get("task_ids") or []),
+            "branch": t.get("branch", ""),
+            "last_touched": t.get("last_touched", ""),
+            "staleness_days": staleness,
+        })
+    order = {"open": 0, "parked": 1, "closed": 2}
+    rows.sort(key=lambda r: _ts_or_min(r["last_touched"]), reverse=True)
+    rows.sort(key=lambda r: order.get(r["status"], 3))
+    return rows
+
+
 # ── Issues ─────────────────────────────────────────────────────
 
 ISSUE_STATUSES = ("open", "investigating", "fixed", "wontfix", "duplicate")
@@ -3815,22 +3877,13 @@ def _handover_time(h: dict):
 
 
 def list_sessions() -> list[dict]:
-    """Synthesise sessions from on-disk handover files.
+    """One diary lane per thread, synthesised from on-disk handover files.
 
-    Algorithm: load every handover, sort by date asc, then greedily group
-    consecutive handovers that share at least one task_id AND occur within
-    SESSION_GAP_MINUTES (default 30). Each group becomes one session.
-
-    Returns: list of dicts (newest first):
-      {id, start, end, duration, time_resolution, handover_ids[],
-       task_ids[], parallel_with[]}
-
-    `time_resolution` is "full" when at least one grouped handover carried a
-    precise `created` ISO timestamp, else "date-only" — the viewer uses this to
-    avoid fabricating a clock time from a midnight-UTC date.
+    Groups handovers by their `thread` frontmatter; threadless (legacy)
+    handovers each form a solo lane keyed by their own id. Rows are
+    session-shaped for the viewer timeline: overlapping lanes render as
+    parallel columns client-side. Newest end-time first.
     """
-    from datetime import timedelta
-    SESSION_GAP_MINUTES = 30
     handovers_dir = _resolve_artifact_root() / "handovers"
     if not handovers_dir.exists():
         return []
@@ -3849,26 +3902,13 @@ def list_sessions() -> list[dict]:
             continue
     raw.sort(key=lambda h: _handover_time(h))
 
-    groups: list[list[dict]] = []
+    lanes: dict[str, list[dict]] = {}
     for h in raw:
-        h_t = _handover_time(h)
-        h_tids = set(h.get("task_ids") or [])
-        attached = False
-        if groups:
-            tail = groups[-1][-1]
-            tail_t = _handover_time(tail)
-            tail_tids = set(tail.get("task_ids") or [])
-            within_gap = (h_t - tail_t) <= timedelta(minutes=SESSION_GAP_MINUTES)
-            shared_tasks = bool(h_tids & tail_tids)
-            if within_gap and shared_tasks:
-                groups[-1].append(h)
-                attached = True
-        if not attached:
-            groups.append([h])
+        key = h.get("thread") or h["id"]
+        lanes.setdefault(key, []).append(h)
 
     sessions: list[dict] = []
-    for idx, group in enumerate(groups, start=1):
-        sid = f"SES-{idx:04d}"
+    for key, group in lanes.items():
         start = _handover_time(group[0])
         end = _handover_time(group[-1])
         tids: list[str] = []
@@ -3876,11 +3916,13 @@ def list_sessions() -> list[dict]:
             for t in (h.get("task_ids") or []):
                 if t not in tids:
                     tids.append(t)
-        # A session whose handovers all lack `created` only has date-level
-        # resolution; the viewer should render the date without a time.
         time_resolution = "full" if any(h.get("created") for h in group) else "date-only"
+        any_open = any(h.get("status", "open") == "open" for h in group)
+        newest = group[-1]
         sessions.append({
-            "id": sid,
+            "id": key,
+            "kind": "thread",
+            "status": "open" if any_open else "closed",
             "start": start.isoformat(),
             "end": end.isoformat(),
             "duration": int((end - start).total_seconds()),
@@ -3896,26 +3938,11 @@ def list_sessions() -> list[dict]:
                 for h in group
             ],
             "task_ids": tids,
-            "parallel_with": [],   # filled below
+            "tldr": newest.get("tldr", ""),
+            "next_action": newest.get("next_action", ""),
         })
 
-    # Mark parallel sessions: any pair with overlapping [start,end] windows.
-    # Windows are expanded by SESSION_GAP_MINUTES so that two single-handover
-    # sessions that were close in time but different in task scope are flagged.
-    from datetime import timedelta as _td
-    _gap = _td(minutes=SESSION_GAP_MINUTES)
-    for i, s in enumerate(sessions):
-        s_start = _parse_iso8601(s["start"])
-        s_end = _parse_iso8601(s["end"]) + _gap
-        for j, o in enumerate(sessions):
-            if i == j:
-                continue
-            o_start = _parse_iso8601(o["start"])
-            o_end = _parse_iso8601(o["end"]) + _gap
-            if s_start <= o_end and o_start <= s_end:
-                s["parallel_with"].append(o["id"])
-
-    sessions.sort(key=lambda s: s["start"], reverse=True)
+    sessions.sort(key=lambda s: s["end"], reverse=True)
     return sessions
 
 

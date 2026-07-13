@@ -20,6 +20,12 @@ from taskmaster.taskmaster_v3 import (
     update_handover_status,
     update_thread_status,
 )
+from taskmaster.taskmaster_v3 import (
+    archive_handover,
+    list_sessions,
+    list_threads,
+    resolve_thread,
+)
 
 
 def _setup(tmp_path):
@@ -203,3 +209,52 @@ def test_override_staleness_survives_z_suffix(tmp_path):
     # Same instant as the handover, not older → override still applies.
     assert data["threads"]["t-z"]["status"] == "parked"
     assert "t-z" in data["thread_meta"]
+
+
+def test_resolve_thread_by_name_and_by_handover_id(tmp_path):
+    bp = _setup(tmp_path)
+    a1, a2, b1 = _write3(bp)
+    data = {"meta": {}, "epics": []}
+    sync_thread_registry(data, bp)
+
+    assert resolve_thread(data, bp, "thread-a") == ("thread-a", a2)
+    assert resolve_thread(data, bp, "Thread A") == ("thread-a", a2)  # normalized
+    # A stale dated slug still lands on the thread's NEWEST handover.
+    assert resolve_thread(data, bp, a1) == ("thread-a", a2)
+    import pytest
+    with pytest.raises(KeyError):
+        resolve_thread(data, bp, "nope-never")
+
+
+def test_resolve_thread_archived_handover_id(tmp_path):
+    bp = _setup(tmp_path)
+    a1, a2, b1 = _write3(bp)
+    data = {"meta": {}, "epics": []}
+    sync_thread_registry(data, bp)
+    archive_handover(bp, a1)
+    assert resolve_thread(data, bp, a1) == ("thread-a", a2)
+
+
+def test_list_threads_board_rows(tmp_path):
+    bp = _setup(tmp_path)
+    _write3(bp)
+    data = {"meta": {}, "epics": []}
+    sync_thread_registry(data, bp)
+    rows = list_threads(data)
+    assert [r["name"] for r in rows] == ["thread-a", "thread-b"]  # newest-touched first
+    assert rows[0]["next_action"] == "do T-2 tests"
+    assert "staleness_days" in rows[0]
+
+
+def test_list_sessions_one_lane_per_thread(tmp_path, monkeypatch):
+    bp = _setup(tmp_path)
+    a1, a2, b1 = _write3(bp)
+    solo, _ = write_handover(bp, tldr="threadless legacy", when="2026-07-09")
+    monkeypatch.chdir(tmp_path)
+    rows = list_sessions()
+    by_id = {r["id"]: r for r in rows}
+    assert set(by_id) == {"thread-a", "thread-b", solo}
+    assert by_id["thread-a"]["handover_ids"] == [a1, a2]
+    assert by_id["thread-a"]["kind"] == "thread"
+    assert by_id["thread-a"]["status"] == "open"
+    assert all("parallel_with" not in r for r in rows)

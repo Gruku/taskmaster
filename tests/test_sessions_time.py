@@ -52,9 +52,10 @@ def test_session_start_end_use_handover_created(tmp_path, monkeypatch):
 
     monkeypatch.chdir(tmp_path)
 
-    # Two handovers in the same session, real wall-clock times 20 minutes apart
-    # (well within the 30-minute SESSION_GAP_MINUTES threshold so they group together).
+    # Two handovers in the same thread, real wall-clock times 20 minutes apart.
     # `date` is date-only (the production shape); `created` carries the precise time.
+    # Shared `thread` puts both in one lane — list_sessions groups by thread now,
+    # not by task-id/time-gap clustering.
     _write_handover(tmp_path, "2026-05-19-first.md", {
         "id": "2026-05-19-first",
         "date": "2026-05-19",
@@ -62,6 +63,7 @@ def test_session_start_end_use_handover_created(tmp_path, monkeypatch):
         "tldr": "...",
         "next_action": "...",
         "task_ids": ["T-1"],
+        "thread": "t-1",
         "session_kind": "context-handoff",
         "context_size_at_write": 0.5,
     })
@@ -72,6 +74,7 @@ def test_session_start_end_use_handover_created(tmp_path, monkeypatch):
         "tldr": "...",
         "next_action": "...",
         "task_ids": ["T-1"],
+        "thread": "t-1",
         "session_kind": "end-of-day",
         "context_size_at_write": 0.6,
     })

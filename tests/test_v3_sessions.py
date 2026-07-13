@@ -32,24 +32,27 @@ def test_list_sessions_synthesises_from_handovers(tmp_path, monkeypatch):
     })
 
     sessions = list_sessions()
-    assert len(sessions) >= 1
-    s = sessions[0]
+    # Threadless handovers each form their own solo lane — no clustering.
+    assert len(sessions) == 2
+    by_id = {s["id"]: s for s in sessions}
+    assert set(by_id) == {"2026-04-26-1640-foo", "2026-04-26-1648-bar"}
+    s = by_id["2026-04-26-1640-foo"]
     assert set(s.keys()) >= {
-        "id", "start", "end", "duration", "time_resolution", "handover_ids",
-        "task_ids", "parallel_with",
+        "id", "kind", "status", "start", "end", "duration", "time_resolution",
+        "handover_ids", "task_ids",
     }
-    assert s["id"].startswith("SES-")
-    # Both handovers reference the same task within ~10 min — clustered into one session.
-    assert sorted(s["handover_ids"]) == [
-        "2026-04-26-1640-foo", "2026-04-26-1648-bar",
-    ]
+    assert s["kind"] == "thread"
+    assert s["handover_ids"] == ["2026-04-26-1640-foo"]
     assert s["task_ids"] == ["T-148"]
+    assert "parallel_with" not in s
 
 
-def test_list_sessions_marks_parallel_when_overlapping(tmp_path, monkeypatch):
+def test_list_sessions_solo_lanes_for_overlapping_threadless_handovers(tmp_path, monkeypatch):
     from taskmaster.taskmaster_v3 import list_sessions
     monkeypatch.chdir(tmp_path)
-    # Two non-overlapping task scopes; same time window → parallel.
+    # Two threadless handovers, same time window, different task scopes.
+    # Each forms its own lane now — overlap is a viewer-side rendering concern,
+    # not something list_sessions tracks (parallel_with is gone).
     _write_handover(tmp_path, "2026-04-26-1408-a.md", {
         "id": "2026-04-26-1408-a",
         "date": "2026-04-26T14:08:00Z",
@@ -65,11 +68,10 @@ def test_list_sessions_marks_parallel_when_overlapping(tmp_path, monkeypatch):
         "context_size_at_write": 0.5,
     })
     sessions = list_sessions()
-    by_id = {s["id"]: s for s in sessions}
     assert len(sessions) == 2
-    a, b = sessions
-    assert a["id"] in b["parallel_with"]
-    assert b["id"] in a["parallel_with"]
+    by_id = {s["id"]: s for s in sessions}
+    assert set(by_id) == {"2026-04-26-1408-a", "2026-04-26-1410-b"}
+    assert all("parallel_with" not in s for s in sessions)
 
 
 def test_get_session_detail_bundles_handovers(tmp_path, monkeypatch):
@@ -84,8 +86,8 @@ def test_get_session_detail_bundles_handovers(tmp_path, monkeypatch):
         "context_size_at_write": 0.8,
     }, body_md="Resume by running pytest -k gate.")
 
-    detail = get_session_detail("SES-0001")
-    assert detail["session"]["id"] == "SES-0001"
+    detail = get_session_detail("2026-04-26-1640-foo")
+    assert detail["session"]["id"] == "2026-04-26-1640-foo"
     assert len(detail["handovers"]) == 1
     h = detail["handovers"][0]
     assert h["id"] == "2026-04-26-1640-foo"
