@@ -26,6 +26,7 @@ from taskmaster.taskmaster_v3 import (
     list_threads,
     resolve_thread,
 )
+from taskmaster.taskmaster_v3 import apply_supersession, backfill_threads
 
 
 def _setup(tmp_path):
@@ -258,3 +259,43 @@ def test_list_sessions_one_lane_per_thread(tmp_path, monkeypatch):
     assert by_id["thread-a"]["kind"] == "thread"
     assert by_id["thread-a"]["status"] == "open"
     assert all("parallel_with" not in r for r in rows)
+
+
+def test_backfill_groups_by_supersession_and_tasks(tmp_path):
+    bp = _setup(tmp_path)
+    # Chain: h1 superseded by h2 (no shared tasks) → one thread.
+    h1, _ = write_handover(bp, tldr="old milestone", when="2026-07-01")
+    h2, _ = write_handover(bp, tldr="new milestone", when="2026-07-02",
+                           supersedes=None)
+    apply_supersession(bp, old_id=h1, new_id=h2)
+    # Shared task: h3 + h4 both on T-9 → one thread named T-9.
+    h3, _ = write_handover(bp, tldr="T9 part one", task_ids=["T-9"], when="2026-07-03")
+    h4, _ = write_handover(bp, tldr="T9 part two", task_ids=["T-9"], when="2026-07-04")
+    # Singleton, no tasks → thread named from its own id slug.
+    h5, _ = write_handover(bp, tldr="loose exploration", when="2026-07-05")
+
+    result = backfill_threads(bp)
+    assert result["groups"] == 3
+    fm1, _ = read_handover(bp, h1)
+    fm2, _ = read_handover(bp, h2)
+    assert fm1["thread"] == fm2["thread"]
+    fm3, _ = read_handover(bp, h3)
+    fm4, _ = read_handover(bp, h4)
+    assert fm3["thread"] == fm4["thread"] == "t-9"
+    fm5, _ = read_handover(bp, h5)
+    assert fm5["thread"] == "loose-exploration"
+
+    # Idempotent: second run stamps nothing.
+    assert backfill_threads(bp)["stamped"] == []
+
+
+def test_backfill_prefers_epic_name(tmp_path):
+    bp = _setup(tmp_path)
+    h, _ = write_handover(bp, tldr="epic work", task_ids=["T-9"], when="2026-07-01")
+    data = {"meta": {}, "epics": [
+        {"id": "team-relayout", "name": "Team Relayout",
+         "tasks": [{"id": "T-9", "title": "x", "status": "todo"}]},
+    ]}
+    backfill_threads(bp, backlog_data=data)
+    fm, _ = read_handover(bp, h)
+    assert fm["thread"] == "team-relayout"

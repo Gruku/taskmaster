@@ -2099,6 +2099,92 @@ def list_threads(backlog_data: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def backfill_threads(
+    backlog_path: Path,
+    backlog_data: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Stamp `thread:` frontmatter onto non-archived handovers that lack it.
+
+    Union-find grouping: an edge joins two handovers when one supersedes the
+    other, or when they share a task id. Name precedence per group: epic id
+    containing any member task → first member task id → newest member's id
+    with the date prefix stripped. Idempotent; files already carrying
+    `thread` are untouched. Returns {"stamped": [...], "groups": N}.
+    """
+    ids = list_handover_ids(backlog_path)
+    fms: dict[str, dict[str, Any]] = {}
+    bodies: dict[str, str] = {}
+    for hid in ids:
+        try:
+            fm, body = read_handover(backlog_path, hid)
+        except (OSError, ValueError):
+            continue
+        if fm.get("thread"):
+            continue
+        fms[hid] = fm
+        bodies[hid] = body
+    if not fms:
+        return {"stamped": [], "groups": 0}
+
+    parent: dict[str, str] = {hid: hid for hid in fms}
+
+    def find(x: str) -> str:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: str, b: str) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    by_task: dict[str, list[str]] = {}
+    for hid, fm in fms.items():
+        for link_key in ("supersedes", "superseded_by"):
+            other = fm.get(link_key)
+            if other in fms:
+                union(hid, other)
+        for tid in fm.get("task_ids") or []:
+            by_task.setdefault(tid, []).append(hid)
+    for members in by_task.values():
+        for other in members[1:]:
+            union(members[0], other)
+
+    groups: dict[str, list[str]] = {}
+    for hid in fms:
+        groups.setdefault(find(hid), []).append(hid)
+
+    task_to_epic: dict[str, str] = {}
+    for epic in (backlog_data or {}).get("epics") or []:
+        for t in epic.get("tasks") or []:
+            if t.get("id") and epic.get("id"):
+                task_to_epic[t["id"]] = epic["id"]
+
+    stamped: list[str] = []
+    for members in groups.values():
+        members.sort(key=lambda h: str(fms[h].get("created") or fms[h].get("date") or ""))
+        newest = members[-1]
+        all_tasks: list[str] = []
+        for hid in members:
+            for tid in fms[hid].get("task_ids") or []:
+                if tid not in all_tasks:
+                    all_tasks.append(tid)
+        epic_ids = [task_to_epic[t] for t in all_tasks if t in task_to_epic]
+        if epic_ids:
+            name = normalize_thread_name(epic_ids[0])
+        elif all_tasks:
+            name = normalize_thread_name(all_tasks[0])
+        else:
+            name = normalize_thread_name(re.sub(r"^\d{4}-\d{2}-\d{2}-", "", newest))
+        for hid in members:
+            fms[hid]["thread"] = name
+            write_task_file(handover_path(backlog_path, hid), fms[hid], bodies[hid])
+            stamped.append(hid)
+
+    return {"stamped": stamped, "groups": len(groups)}
+
+
 # ── Issues ─────────────────────────────────────────────────────
 
 ISSUE_STATUSES = ("open", "investigating", "fixed", "wontfix", "duplicate")
