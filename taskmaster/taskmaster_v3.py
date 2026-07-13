@@ -1925,10 +1925,18 @@ def sync_handover_index(
 # A thread is a named chain of handovers — the stable resume token.
 # `threads:` in backlog.yaml is a rebuildable projection of handover
 # frontmatter; `thread_meta:` holds user-set status overrides that expire
-# when a newer handover lands (auto-reopen). See
-# specs/2026-07-13-handover-threads-design.md.
+# when a newer handover lands (auto-reopen). See the handover-threads design
+# spec (claude-tools repo, docs/superpowers/specs/2026-07-13-handover-threads-design.md).
 
 THREAD_STATUSES = ("open", "parked", "closed")
+
+
+def _ts_or_min(raw: str):
+    """Parse an ISO timestamp for comparison; unparsable/empty sorts as -inf."""
+    try:
+        return _parse_iso8601(raw)
+    except (ValueError, TypeError):
+        return datetime.min.replace(tzinfo=timezone.utc)
 
 
 def sync_thread_registry(
@@ -1968,13 +1976,15 @@ def sync_thread_registry(
         for tid in fm.get("task_ids") or []:
             if tid not in t["task_ids"]:
                 t["task_ids"].append(tid)
-        touched = fm.get("created") or fm.get("date") or ""
-        if touched >= t["last_touched"]:
-            t["last_touched"] = touched
-            t["tldr"] = fm.get("tldr", "")
-            t["next_action"] = fm.get("next_action", "")
-            if fm.get("branch"):
-                t["branch"] = fm["branch"]
+        # `ids` (and thus this reversed loop) is already ordered oldest → newest
+        # per list_handover_ids — so the last-iterated member of each thread is
+        # the newest by definition. Assign unconditionally so "newest member"
+        # agrees with handover_ids[-1] rather than a separate `created` compare.
+        t["last_touched"] = fm.get("created") or fm.get("date") or ""
+        t["tldr"] = fm.get("tldr", "")
+        t["next_action"] = fm.get("next_action", "")
+        if fm.get("branch"):
+            t["branch"] = fm["branch"]
         if fm.get("status", "open") == "open":
             t["_any_open"] = True
 
@@ -1982,7 +1992,7 @@ def sync_thread_registry(
     for name, t in threads.items():
         derived = "open" if t.pop("_any_open") else "closed"
         override = meta.get(name)
-        if override and str(override.get("set_at", "")) >= t["last_touched"]:
+        if override and _ts_or_min(str(override.get("set_at", ""))) >= _ts_or_min(t["last_touched"]):
             t["status"] = override.get("status", derived)
         else:
             meta.pop(name, None)  # stale/absent — newer handover reopens

@@ -10,6 +10,7 @@ from taskmaster.taskmaster_v3 import (
     normalize_thread_name,
     read_handover,
     write_handover,
+    handover_path,
     _handover_index_entry,
 )
 from taskmaster.taskmaster_v3 import (
@@ -138,3 +139,67 @@ def test_sync_handover_index_populates_threads(tmp_path):
     assert "thread-a" in data["threads"]
     # Round-trips through YAML (registry must be plain data).
     yaml.safe_dump(data)
+
+
+def test_registry_prunes_vanished_thread_and_its_override(tmp_path):
+    bp = _setup(tmp_path)
+    a1, a2, b1 = _write3(bp)
+    data = {"meta": {}, "epics": []}
+    sync_thread_registry(data, bp)
+    update_thread_status(data, bp, name="thread-a", status="parked")
+    assert "thread-a" in data["thread_meta"]
+
+    for hid in (a1, a2):
+        handover_path(bp, hid).unlink()
+
+    sync_thread_registry(data, bp)
+    assert "thread-a" not in data["threads"]
+    assert "thread-a" not in (data.get("thread_meta") or {})
+
+
+def test_newest_member_follows_handover_id_order_not_created(tmp_path):
+    """A backfilled when= date must not steal 'newest' from the id ordering."""
+    bp = _setup(tmp_path)
+    write_handover(bp, tldr="really newest", thread="t-x", when="2026-07-12")
+    # Written later in wall-clock time, but dated earlier — NOT the newest member.
+    hid_older, _ = write_handover(bp, tldr="backfilled older", thread="t-x", when="2026-07-05")
+    data = {"meta": {}, "epics": []}
+    sync_thread_registry(data, bp)
+    t = data["threads"]["t-x"]
+    assert t["tldr"] == "really newest"
+    assert t["handover_ids"][-1].startswith("2026-07-12")
+    newest_id = t["handover_ids"][-1]
+    fm, _ = read_handover(bp, newest_id)
+    assert t["last_touched"] == fm["created"]
+
+
+def test_override_staleness_survives_z_suffix(tmp_path):
+    """A legacy Z-suffixed created timestamp must not out-rank an equal-instant
+    override just because 'Z' sorts lexically above '+00:00'.
+
+    Both timestamps below denote the SAME instant (2026-07-13T10:00:00 UTC),
+    just in different notations. Raw string comparison says
+    "2026-07-13T10:00:00+00:00" < "2026-07-13T10:00:00Z" (since '+' < 'Z'),
+    which would wrongly mark the override stale and prune it. Parsed as
+    datetimes they are equal, so the tie must still honour the override.
+    """
+    from taskmaster.taskmaster_v3 import write_task_file, handover_path
+    bp = _setup(tmp_path)
+    hid, _ = write_handover(bp, tldr="only member", thread="t-z", when="2026-07-10")
+    fm, body = read_handover(bp, hid)
+    fm["created"] = "2026-07-13T10:00:00Z"
+    write_task_file(handover_path(bp, hid), fm, body)
+
+    data = {"meta": {}, "epics": []}
+    sync_thread_registry(data, bp)
+    assert data["threads"]["t-z"]["last_touched"] == "2026-07-13T10:00:00Z"
+
+    data["thread_meta"] = {
+        "t-z": {"status": "parked", "set_at": "2026-07-13T10:00:00+00:00"},
+    }
+    data["threads"]["t-z"]["status"] = "parked"
+
+    sync_thread_registry(data, bp)
+    # Same instant as the handover, not older → override still applies.
+    assert data["threads"]["t-z"]["status"] == "parked"
+    assert "t-z" in data["thread_meta"]
