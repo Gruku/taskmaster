@@ -4486,6 +4486,7 @@ def backlog_complete_task(
     issues: str = "",
     tasks_touched: str = "",
     target_status: str = "done",
+    human_action: str = "",
     auto_summary: bool = False,
     patchnote: str = "",
     release: str = "",
@@ -4495,9 +4496,9 @@ def backlog_complete_task(
     When session summary fields are provided, a changelog entry is appended automatically.
     This combines the status transition and session logging into one atomic operation.
 
-    Use target_status="in-review" when implementation is complete but the user needs to
-    manually test before confirming. Use target_status="done" when no manual testing is needed
-    or the user has already confirmed.
+    Use target_status="done" (default) when Claude's work is complete and gates passed.
+    Use target_status="in-review" ONLY when an action that only the human can perform
+    blocks the task (API key, LLM config, account access) — pass it as human_action.
 
     Accepts tasks that are in-progress, in-review, or blocked.
 
@@ -4508,7 +4509,8 @@ def backlog_complete_task(
         decisions: Optional newline-separated list of decisions made
         issues: Optional newline-separated list of issues encountered. Use "None" if none.
         tasks_touched: Optional comma-separated task IDs that changed status this session
-        target_status: Target status — "done" (default) or "in-review" (needs manual testing)
+        target_status: Target status — "done" (default) or "in-review" (blocked on a human-only action)
+        human_action: Required with target_status="in-review" (unless already set on the task): short imperative describing the human-only blocker, e.g. "add OPENAI_API_KEY to .env". Cleared automatically when the task reaches done.
         auto_summary: If true, generates a lightweight auto-summary instead of the structured format. Pass git stats as the done field.
         patchnote: Optional 1-2 sentence user-facing release-note line describing what shipped. Leave empty for internal/infra tasks.
         release: Optional release bucket this task ships in (e.g., "pre-alpha", "alpha-1.0"). Groups patchnotes for release notes.
@@ -4527,6 +4529,13 @@ def backlog_complete_task(
 
     if status not in ("in-progress", "in-review", "blocked"):
         return f"Error: task `{task_id}` is `{status}`, expected one of: in-progress, in-review, blocked"
+
+    if target_status == "in-review":
+        human_action = human_action.strip() or task.get("human_action", "")
+        if not human_action:
+            return ("Error: target_status='in-review' requires human_action — the human-only "
+                    "step that blocks this task (e.g. 'add OPENAI_API_KEY to .env'). "
+                    "If nothing blocks it, target 'done'.")
 
     # Bug close-gate (per bug-tier redesign)
     bp = _backlog_path()
@@ -4550,14 +4559,12 @@ def backlog_complete_task(
         if block:
             return block
 
-    # Warn if skipping in-review when going straight to done
-    review_warning = ""
-    if target_status == "done" and status == "in-progress":
-        review_warning = "\n\n**Note:** Task went directly from in-progress → done, skipping the in-review stage. Consider using `in-review` first so the user can manually test and confirm it works."
-
     task["status"] = target_status
     if target_status == "done":
         task["completed"] = _now()
+        task.pop("human_action", None)
+    else:  # in-review — allowlist above guarantees it
+        task["human_action"] = human_action
     task.pop("locked_by", None)
 
     if patchnote:
@@ -4633,7 +4640,7 @@ def backlog_complete_task(
         suggestion = f"\n\n**Next in {epic['name']}:** `{n['id']}` — {n['title']} ({n.get('priority', 'medium')})"
 
     status_label = "Completed" if target_status == "done" else "Moved to in-review"
-    return f"{status_label} `{task_id}` — {task['title']}" + changelog_msg + review_warning + suggestion
+    return f"{status_label} `{task_id}` — {task['title']}" + changelog_msg + suggestion
 
 
 def backlog_release_notes(release: str = "", group_by: str = "epic", include_unreleased: bool = False) -> str:
