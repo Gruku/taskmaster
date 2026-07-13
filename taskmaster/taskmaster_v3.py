@@ -1367,6 +1367,11 @@ def slugify(text: str, max_len: int = 40) -> str:
     return s[:max_len].rstrip("-") or "untitled"
 
 
+def normalize_thread_name(name: str) -> str:
+    """Canonical slug form for thread names — same rules as handover ids."""
+    return slugify(name, max_len=40)
+
+
 def make_handover_id(date_str: str, tldr: str) -> str:
     """Build a handover id from a date and tldr text."""
     return f"{date_str}-{slugify(tldr)}"
@@ -1389,6 +1394,7 @@ def write_handover(
     body: str = "",
     task_ids: list[str] | None = None,
     session_kind: str = "continuity",
+    thread: str | None = None,
     when: str | None = None,
     context_size_at_write: str | None = None,
     supersedes: str | None = None,
@@ -1410,6 +1416,7 @@ def write_handover(
         raise ValueError(
             f"session_kind must be one of {HANDOVER_KINDS}, got {session_kind!r}"
         )
+    thread = normalize_thread_name(thread) if thread and thread.strip() else None
     when = when or date.today().isoformat()
     base_id = make_handover_id(when, tldr)
     target = handover_path(backlog_path, base_id)
@@ -1433,6 +1440,8 @@ def write_handover(
     fm["status"] = _default_handover_status(session_kind)
     fm["status_changed"] = fm["created"]
     fm["status_user_set"] = False
+    if thread:
+        fm["thread"] = thread
     if context_size_at_write:
         fm["context_size_at_write"] = context_size_at_write
     if supersedes:
@@ -1849,7 +1858,7 @@ def migrate_handover_statuses(
 # Fields kept in the backlog.yaml `handovers:` index entry.
 _HANDOVER_INDEX_FIELDS = (
     "id", "date", "created", "tldr", "next_action",
-    "task_ids", "session_kind", "status", "flag_reason",
+    "task_ids", "session_kind", "status", "flag_reason", "thread",
 )
 
 
