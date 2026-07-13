@@ -20,6 +20,8 @@ A handover is the per-session full record — context-injection optimisation for
 
 **3. Resolve `task_ids`.** In-progress task id for milestone/deep-context/auto-stage. Last-touched task id for continuity. Leave empty `[]` for exploration sessions — do not invent a task id.
 
+**3b. Resolve `thread`.** The stable resume token. If this session resumed from a thread (via `backlog_thread_resume` or a pasted name), reuse that name. Otherwise leave `thread` empty — the server derives it (bundle slug → epic → task id → tldr). Only set it explicitly when the user names the line of work.
+
 **4. Determine `supersedes`.** Set to prior id when: `session_kind == "milestone"` AND prior latest handover for same `task_ids` exists AND prior is also `milestone`. Algorithm in `references/supersession.md`.
 
 **5. Draft body from `templates/body.md`.** Fill every section with concrete content. Delete empty sections — never leave `{placeholder}`. If end-session's decision sweep produced open/resolved decisions, embed them in the body under "Open decisions" / "Resolved this session" sections using `[[DEC-NNN]]` references — the body is the durable carrier, not a separate kwarg.
@@ -28,16 +30,16 @@ A handover is the per-session full record — context-injection optimisation for
 
 **7. Write directly — no draft-and-approve.** Write immediately via step 8. Exceptions: user asked "show draft first"; milestone supersession changes a prior milestone; auto-extraction returned zero files (ask scope).
 
-**8. Write through `backlog_handover_create`** with its top-level fields: `tldr`, `next_action`, `body`, `task_ids`, `session_kind`, `supersedes`, `flag_for_review`. Rarely-set fields go in the `options` dict: `branch`, `tip_commit`, `context_size_at_write`, `review_reason` (e.g. `options={"branch": ..., "tip_commit": ...}`). Decisions live inside `body` (step 5), not as separate kwargs. If a `pending_review_flag` was buffered upstream, forward `flag_for_review=true` + `options={"review_reason": "<reason>"}`.
+**8. Write through `backlog_handover_create`** with its top-level fields: `tldr`, `next_action`, `body`, `task_ids`, `session_kind`, `supersedes`, `thread`, `flag_for_review`. Rarely-set fields go in the `options` dict: `branch`, `tip_commit`, `context_size_at_write`, `review_reason` (e.g. `options={"branch": ..., "tip_commit": ...}`). Decisions live inside `body` (step 5), not as separate kwargs. If a `pending_review_flag` was buffered upstream, forward `flag_for_review=true` + `options={"review_reason": "<reason>"}`.
 
-**9. Confirm.** "Handover written: `<id>`. Next session can resume from this with `backlog_handover_list(status="open", limit=1)`." Surface any WARNING line from the response.
+**9. Confirm.** Echo the server's final line verbatim — `Resume: <thread> — <next_action>` — as the last line of your reply. That line is the durable resume token: pasting the thread name into any future session resumes this work via `backlog_thread_resume`. Surface any WARNING line from the response.
 
 ## Manual status entry points
 
-- `taskmaster:handover mark-done <id>` — `backlog_handover_update_status(<id>, "done", reason)`.
-- `taskmaster:handover mark-in-progress <id>` — same with `"in-progress"`.
-- `taskmaster:handover mark-todo <id>` — same with `"todo"`. Undoes erroneous mark-done.
-- `taskmaster:handover triage` — walk todo handovers older than 14 days. Full algorithm: `references/triage.md`.
+- `taskmaster:handover close <id>` — `backlog_handover_update_status(<id>, "closed", reason)`.
+- `taskmaster:handover reopen <id>` — same with `"open"`.
+- `taskmaster:handover triage` — walk open handovers older than 14 days (algorithm: `references/triage.md`); thread-level parking via `backlog_thread_update` replaces per-handover bulk moves.
+- Thread level: `backlog_thread_update(<name>, "parked" | "closed" | "open", reason)` — park a line of work without touching individual handovers.
 
 ## References
 

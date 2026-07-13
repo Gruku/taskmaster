@@ -84,8 +84,8 @@ from taskmaster.taskmaster_v3 import (
     apply_handover_review_flag as _apply_handover_review_flag,
     update_handover_status as _update_handover_status,
     list_handover_ids as _list_handover_ids,
-    latest_handover_id as _latest_handover_id,
     sync_handover_index as _sync_handover_index,
+    derive_thread_name as _derive_thread_name,
     ISSUE_STATUSES,
     ISSUE_SEVERITIES,
     write_issue as _write_issue,
@@ -2016,6 +2016,7 @@ def backlog_handover_create(
     body: str = "",
     task_ids: list[str] | None = None,
     session_kind: str = "end-of-day",
+    thread: str = "",
     supersedes: str = "",
     flag_for_review: bool = False,
     options: dict | None = None,
@@ -2031,6 +2032,7 @@ def backlog_handover_create(
         body: Markdown body (the four-section narrative).
         task_ids: Tasks this handover relates to (surfaces in pick-task).
         session_kind: One of {", ".join(HANDOVER_KINDS)}.
+        thread: Thread this handover belongs to (stable resume token). Auto-derived from bundle/epic/task/tldr when empty.
         supersedes: Optional id of an older handover this one supersedes; the old
             one gets a `superseded_by:` field and a SUPERSEDED callout.
         flag_for_review: When True, flags this handover for retro extraction.
@@ -2047,6 +2049,13 @@ def backlog_handover_create(
     if not bp.exists():
         return f"Error: no backlog found at {bp}. Run `backlog_init` first."
     _ensure_handover_status_backfilled()
+    data = _load()
+    thread_name = (thread or "").strip()
+    if not thread_name:
+        bundle = _get_session_bundle() or {}
+        thread_name = _derive_thread_name(
+            task_ids or [], tldr, data, bundle_slug=bundle.get("slug", "") or ""
+        )
     try:
         hid, target = _write_handover(
             bp,
@@ -2055,6 +2064,7 @@ def backlog_handover_create(
             body=body,
             task_ids=task_ids or [],
             session_kind=session_kind,
+            thread=thread_name,
             context_size_at_write=context_size_at_write or None,
             supersedes=supersedes or None,
             branch=branch or None,
@@ -2081,7 +2091,6 @@ def backlog_handover_create(
         except FileNotFoundError as exc:
             return f"Error: handover not found: {exc}."
 
-    data = _load()
     _sync_handover_index(data, bp)
     _save(data)
     _ensure_v3_marker(bp)
@@ -2104,6 +2113,7 @@ def backlog_handover_create(
         lines.append(f"- {superseded_warning}")
     if flag_for_review:
         lines.append(f"- Flagged for review: {review_reason}")
+    lines.append(f"Resume: {thread_name} — {next_action or tldr}")
     return "\n".join(lines)
 
 
@@ -2264,46 +2274,6 @@ def backlog_handover_get(
     return "\n".join(lines)
 
 
-def backlog_handover_latest() -> str:
-    """[DEPRECATED] Alias for backlog_handover_list(status="open", limit=1, sort="created_desc").
-
-    Use `backlog_handover_list(status="open")` instead — it returns all in-flight
-    handover tracks, not just the newest one. This alias will be removed in the
-    next major release.
-    """
-    bp = _backlog_path()
-    if not bp.exists():
-        return "No backlog found."
-    _ensure_handover_status_backfilled()
-    data = _load()
-    entries = list(data.get("handovers") or [])
-    open_entries = [e for e in entries if e.get("status") == "open"]
-    # Sort by created descending; fall back to id for stable ordering.
-    open_entries.sort(key=lambda e: (e.get("created") or e.get("id") or ""), reverse=True)
-
-    deprecation_notice = (
-        "[DEPRECATED] backlog_handover_latest is an alias — "
-        "use backlog_handover_list(status=\"open\") for all open tracks.\n\n"
-    )
-
-    if not open_entries:
-        return deprecation_notice + "No open handovers."
-
-    e = open_entries[0]
-    when_line = e.get("created") or e.get("date") or ""
-    when_label = f" ({when_line})" if when_line else ""
-    return (
-        deprecation_notice
-        + f"Latest open handover: {e['id']}{when_label}\n"
-        + f"- TLDR: {e.get('tldr', '')}\n"
-        + f"- Next: {e.get('next_action', '(none)')}\n"
-        + f"- Tasks: {', '.join(e.get('task_ids') or []) or '(none)'}\n"
-        + f"- Kind: {e.get('session_kind', 'end-of-day')}\n"
-        + f"\nFetch body with `backlog_handover_get {e['id']}`.\n"
-        + f"List all open tracks with `backlog_handover_list(status=\"open\")`."
-    )
-
-
 @mcp.tool()
 def backlog_handover_resync() -> str:
     """Rebuild the handover index in backlog.yaml from disk.
@@ -2316,10 +2286,104 @@ def backlog_handover_resync() -> str:
         return "No backlog found."
     _ensure_handover_status_backfilled()
     data = _load()
+    from taskmaster.taskmaster_v3 import backfill_threads as _backfill_threads
+    backfill = _backfill_threads(bp, backlog_data=data)
     _sync_handover_index(data, bp)
     _save(data)
     n = len(data.get("handovers") or [])
-    return f"Handover index resynced — {n} entries in `backlog.yaml`."
+    extra = f" Backfilled thread on {len(backfill['stamped'])} legacy handover(s)." if backfill["stamped"] else ""
+    return f"Handover index resynced — {n} entries in `backlog.yaml`.{extra}"
+
+
+@mcp.tool()
+def backlog_thread_list(include_closed: bool = False) -> str:
+    """The thread board — open (and parked) lines of work with their stable
+    resume tokens. Resume one with `backlog_thread_resume(<name>)`.
+
+    Args:
+        include_closed: Also list closed threads (default False).
+    """
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    data = _load()
+    if "threads" not in data:
+        _sync_handover_index(data, bp)
+        _save(data)
+    from taskmaster.taskmaster_v3 import list_threads as _list_threads
+    rows = _list_threads(data)
+    if not include_closed:
+        rows = [r for r in rows if r["status"] != "closed"]
+    if not rows:
+        return "No open threads. Write a handover to start one."
+    lines = []
+    for r in rows:
+        stale = f" · {r['staleness_days']}d" if r["staleness_days"] else ""
+        park = " [parked]" if r["status"] == "parked" else ""
+        branch = f" · {r['branch']}" if r["branch"] else ""
+        lines.append(f"- **{r['name']}**{park}{stale}{branch} — {r['tldr']}")
+        if r["next_action"]:
+            lines.append(f"  next: {r['next_action']}")
+        if r["task_ids"]:
+            lines.append(f"  tasks: {', '.join(r['task_ids'])}")
+    lines.append("\nResume: `backlog_thread_resume(\"<name>\")`")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def backlog_thread_resume(ref: str) -> str:
+    """Resume a thread: returns its newest handover in full (frontmatter +
+    body) in one call. `ref` is a thread name OR any handover id (stale dated
+    slugs still land on the thread's newest handover).
+    """
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    data = _load()
+    if "threads" not in data:
+        _sync_handover_index(data, bp)
+        _save(data)
+    from taskmaster.taskmaster_v3 import resolve_thread as _resolve_thread
+    try:
+        tname, hid = _resolve_thread(data, bp, ref)
+    except KeyError:
+        return (f"No thread or handover matches {ref!r}. "
+                f"See `backlog_thread_list()` for open threads.")
+    try:
+        fm, body = _read_handover(bp, hid)
+    except FileNotFoundError:
+        return f"Thread {tname!r} resolved to {hid}, but the file is missing — run `backlog_handover_resync`."
+    t = (data.get("threads") or {}).get(tname) or {}
+    header = [
+        f"# Thread: {tname or '(none — standalone handover)'}",
+        f"- status: {t.get('status', 'open')}" if tname else "",
+        f"- handovers: {len(t.get('handover_ids') or []) or 1}",
+        f"- newest: {hid}",
+        "",
+    ]
+    fm_lines = [f"  {k}: {v}" for k, v in fm.items()]
+    return "\n".join(x for x in header if x is not None) + "---\n" + "\n".join(fm_lines) + "\n---\n" + body
+
+
+@mcp.tool()
+def backlog_thread_update(name: str, status: str, reason: str = "") -> str:
+    """Set a thread's status: open / parked / closed. Writing a new handover
+    into the thread later auto-reopens it (override expires)."""
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    data = _load()
+    if "threads" not in data:
+        _sync_handover_index(data, bp)
+    from taskmaster.taskmaster_v3 import update_thread_status as _update_thread_status
+    try:
+        _update_thread_status(data, bp, name=name, status=status, reason=reason)
+    except ValueError as exc:
+        return f"Error: {exc}"
+    except KeyError:
+        return f"Error: no thread named {name!r}. See `backlog_thread_list()`."
+    _save(data)
+    return f"Thread {name} → {status}." + (f" ({reason})" if reason else "")
 
 
 # ── Plan C: typed-link MCP tools (spec §6) ─────────────────────────────
@@ -2692,14 +2756,14 @@ def backlog_handover_update_status(
     status: str,
     reason: str = "",
 ) -> str:
-    """Manually set a handover's status (todo / in-progress / done).
+    """Manually set a handover's status (open / closed / superseded).
 
     Marks status_user_set: true — subsequent auto-transitions (supersession,
     task-complete, resume) will skip this handover.
 
     Args:
         handover_id: The handover id (e.g. "2026-05-09-shipped-x").
-        status: One of todo, in-progress, done.
+        status: One of open, closed, superseded.
         reason: Optional free-text rationale stored as `status_reason`.
     """
     bp = _backlog_path()
@@ -6994,6 +7058,14 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 self._send_json(400, {"ok": False, "error": str(e)})
                 return
             self._send_json(200, events)
+            return
+        elif clean_path == "/api/threads":
+            from taskmaster.taskmaster_v3 import list_threads as _list_threads_http
+            data = _load()
+            if "threads" not in data:
+                _sync_handover_index(data, _backlog_path())
+                _save(data)
+            self._send_json(200, _list_threads_http(data))
             return
         elif clean_path == "/api/sessions":
             self._send_json(200, list_sessions())

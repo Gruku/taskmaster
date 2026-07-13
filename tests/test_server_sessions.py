@@ -46,7 +46,8 @@ def test_http_get_sessions_returns_list(running_server, tmp_path):
     assert resp.status == 200
     body = json.loads(resp.read())
     assert isinstance(body, list)
-    assert body[0]["id"].startswith("SES-")
+    # Threadless handover → solo lane keyed by its own id (SES-NNNN is gone).
+    assert body[0]["id"] == "2026-04-26-1640-x"
     sid = body[0]["id"]
 
     resp2 = urllib.request.urlopen(f"{base}/api/sessions/{sid}")

@@ -1,6 +1,6 @@
-"""End-to-end tests for backlog_handover_get, backlog_handover_latest, and
-backlog_handover_list (all three read tools) invoked directly through the
-backlog_server module — same style as test_v3_handover.py.
+"""End-to-end tests for backlog_handover_get and backlog_handover_list
+(handover read tools) invoked directly through the backlog_server module —
+same style as test_v3_handover.py.
 """
 import sys
 from pathlib import Path
@@ -81,63 +81,6 @@ def test_handover_get_returns_not_found_for_unknown_id(tmp_path, monkeypatch):
 
     result = backlog_server.backlog_handover_get("2099-01-01-does-not-exist")
     assert "Handover not found" in result
-
-
-# ── backlog_handover_latest ────────────────────────────────────────────────────
-
-
-def test_handover_latest_returns_newest_handover_summary(tmp_path, monkeypatch):
-    bp = _make_backlog(tmp_path)
-    _set_backlog_root(monkeypatch, bp)
-
-    write_handover(bp, tldr="april first work", session_kind="end-of-day",
-                   when="2026-04-01")
-    write_handover(bp, tldr="april fifteenth work", session_kind="context-handoff",
-                   when="2026-04-15")
-    write_handover(bp, tldr="may first work", next_action="review PR",
-                   session_kind="milestone-complete", when="2026-05-01",
-                   task_ids=["TASK-99"])
-    _sync_and_save(bp)
-
-    result = backlog_server.backlog_handover_latest()
-    # Now returns deprecated notice + latest open handover
-    assert "may first work" in result
-    assert "review PR" in result
-    assert "TASK-99" in result
-    assert "milestone" in result  # normalized from "milestone-complete"
-
-
-def test_handover_latest_returns_empty_message_when_no_handovers(tmp_path, monkeypatch):
-    bp = _make_backlog(tmp_path)
-    _set_backlog_root(monkeypatch, bp)
-
-    result = backlog_server.backlog_handover_latest()
-    # Deprecated tool returns notice + "No open handovers." when index is empty
-    assert "No open handovers" in result or "No backlog" in result or "No handovers" in result
-
-
-def test_handover_latest_breaks_same_day_ties_by_creation_time(tmp_path, monkeypatch):
-    """Two handovers on the same date should order by `created`, not slug alpha.
-
-    Regression: prior behavior sorted handover ids alphabetically, so on a
-    same-day collision the slug that sorted later beat the one written later
-    in time. The fix records `created` on every handover and sorts by it.
-    """
-    bp = _make_backlog(tmp_path)
-    _set_backlog_root(monkeypatch, bp)
-
-    # Slug "regenerated-..." sorts AFTER "asset-studio-..." alphabetically,
-    # but is written FIRST chronologically. The actual latest is the second
-    # write (asset-studio).
-    write_handover(bp, tldr="regenerated mcp tool catalog",
-                   session_kind="end-of-day", when="2026-05-08")
-    write_handover(bp, tldr="asset-studio modal polish",
-                   session_kind="context-handoff", when="2026-05-08")
-    _sync_and_save(bp)
-
-    result = backlog_server.backlog_handover_latest()
-    assert "asset-studio modal polish" in result
-    assert "regenerated mcp tool catalog" not in result
 
 
 # ── backlog_handover_list ──────────────────────────────────────────────────────

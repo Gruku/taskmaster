@@ -108,22 +108,31 @@ def test_description_contains_key_trigger_phrases():
 # ── Content / glance-first checks ────────────────────────────────────────────
 
 def test_glance_mcp_calls_listed_in_body():
-    """Glance path must reference the slim MCP calls from spec §4."""
+    """Glance path must reference the slim MCP calls from spec §4 (thread-era)."""
     body = _body_without_frontmatter(PLAYBOOK_MD)
     required_calls = [
         "backlog_status",
-        "backlog_handover_list",
+        "backlog_thread_list",
     ]
     missing = [c for c in required_calls if c not in body]
     assert not missing, f"Glance MCP calls missing from SKILL.md body: {missing}"
 
 
-def test_handover_list_filters_to_open():
-    """start-session glance must filter handovers to status=open (Plan B requirement)."""
+def test_thread_list_anchors_the_glance_board():
+    """start-session glance must source its board from backlog_thread_list() and
+    present it as the open-threads board — the thread-era equivalent of the old
+    backlog_handover_list(status="open") requirement (Plan B superseded by the
+    handover-threads design: the board replaces per-handover listing).
+    """
     body = _body_without_frontmatter(PLAYBOOK_MD)
-    assert 'backlog_handover_list' in body
-    assert 'status="open"' in body or "status='open'" in body, (
-        "start-session glance must call backlog_handover_list with status=open (Plan B requirement)"
+    assert "backlog_thread_list()" in body, (
+        "start-session glance must call backlog_thread_list() to source the board"
+    )
+    assert "include_closed=True" not in body, (
+        "glance path must not override the default open-only thread filter"
+    )
+    assert "Open threads" in body, (
+        "briefing must present the thread board under an 'Open threads' anchor"
     )
 
 

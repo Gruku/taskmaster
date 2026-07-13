@@ -87,7 +87,7 @@ function panelHandovers(handovers) {
      ...handovers.map((ho) => {
        const when = formatHandoverTime(ho.created);
        const idLine = `${ho.id} · ${ho.kind || ''}${when ? ` · ${when}` : ''}`;
-       const status = ho.status || 'todo';
+       const status = ho.status || 'open';
        return h('div', { class: `td-handover td-handover-${ho.kind || 'mid-task'}` },
          [statusPill(ho.id, status),
           h('div', { class: 'mono td-handover-id' }, idLine),
@@ -109,7 +109,7 @@ export function openStatusMenu(anchor, handoverId, currentStatus) {
   document.querySelectorAll('.ho-status-menu').forEach((m) => m.remove());
   const menu = document.createElement('div');
   menu.className = 'ho-status-menu';
-  for (const opt of ['todo', 'in-progress', 'done']) {
+  for (const opt of ['open', 'closed', 'superseded']) {
     const item = document.createElement('button');
     item.className = `ho-status-menu-item${opt === currentStatus ? ' is-current' : ''}`;
     item.textContent = opt;
@@ -123,7 +123,7 @@ export function openStatusMenu(anchor, handoverId, currentStatus) {
         });
         // Patch every pill rendered for this handover (right-rail panel and session-detail rail)
         for (const pill of document.querySelectorAll(`.ho-status-pill[data-handover-id="${CSS.escape(handoverId)}"]`)) {
-          pill.classList.remove('ho-status-pill-todo', 'ho-status-pill-in-progress', 'ho-status-pill-done');
+          pill.classList.remove('ho-status-pill-open', 'ho-status-pill-closed', 'ho-status-pill-superseded');
           pill.classList.add(`ho-status-pill-${opt}`);
           pill.setAttribute('data-status', opt);
           pill.textContent = opt;

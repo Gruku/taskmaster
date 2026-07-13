@@ -173,6 +173,12 @@ export async function getSessionDetail(sid) {
   return r.json();
 }
 
+export async function listThreads() {
+  const r = await fetch('/api/threads');
+  if (!r.ok) throw new Error(`listThreads: ${r.status}`);
+  return r.json();
+}
+
 export async function savePrefs(patch) {
   const r = await fetch('/api/viewer/prefs', {
     method: 'PUT',

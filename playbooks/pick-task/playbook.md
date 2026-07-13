@@ -4,16 +4,17 @@ Select a task to work on and set it to in-progress. Default mode is a **glance b
 
 ## Arguments
 
-- `task_id` (optional) — specific task ID. If omitted, presents top priorities or auto-resolves via open handovers on v3 backlogs.
+- `task_id` (optional) — specific task ID. If omitted, presents top priorities or auto-resolves via the thread board (`backlog_thread_list`) on v3 backlogs.
 
 ## Step 0 — (v3) "Continue" auto-resolve
 
-If the user says "continue", "resume", or similar with no explicit `task_id`:
+If the user says "continue", "resume", or similar with no explicit `task_id` or thread name:
 
-- Call `backlog_handover_list(status="open", limit=1)`. If empty, fall through to Step 1.
-- Take the first id in the handover's `task_ids`. Call `backlog_get_task(<id>)` slim.
+- Call `backlog_thread_list()`. If empty, fall through to Step 1.
+- If exactly one open thread, treat it as the resume target. If more than one, show the board and ask which (or accept a pasted thread name / handover id).
+- Call `backlog_thread_resume(<name>)` to load its latest handover. Take the first id in the handover's `task_ids`. Call `backlog_get_task(<id>)` slim.
 - If status is `done` or `archived`, fall through to Step 1.
-- Confirm: "Continuing `<task_id>` from the `<date>` handover (`<tldr>`). Right task?" Default Yes → jump to Step 4.
+- Confirm: "Continuing `<task_id>` from thread `<name>` (`<tldr>`). Right task?" Default Yes → jump to Step 4.
 
 v2 backlogs: skip silently.
 

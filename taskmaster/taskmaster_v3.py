@@ -1367,6 +1367,11 @@ def slugify(text: str, max_len: int = 40) -> str:
     return s[:max_len].rstrip("-") or "untitled"
 
 
+def normalize_thread_name(name: str) -> str:
+    """Canonical slug form for thread names — same rules as handover ids."""
+    return slugify(name, max_len=40)
+
+
 def make_handover_id(date_str: str, tldr: str) -> str:
     """Build a handover id from a date and tldr text."""
     return f"{date_str}-{slugify(tldr)}"
@@ -1389,6 +1394,7 @@ def write_handover(
     body: str = "",
     task_ids: list[str] | None = None,
     session_kind: str = "continuity",
+    thread: str | None = None,
     when: str | None = None,
     context_size_at_write: str | None = None,
     supersedes: str | None = None,
@@ -1410,6 +1416,7 @@ def write_handover(
         raise ValueError(
             f"session_kind must be one of {HANDOVER_KINDS}, got {session_kind!r}"
         )
+    thread = normalize_thread_name(thread) if thread and thread.strip() else None
     when = when or date.today().isoformat()
     base_id = make_handover_id(when, tldr)
     target = handover_path(backlog_path, base_id)
@@ -1433,6 +1440,8 @@ def write_handover(
     fm["status"] = _default_handover_status(session_kind)
     fm["status_changed"] = fm["created"]
     fm["status_user_set"] = False
+    if thread:
+        fm["thread"] = thread
     if context_size_at_write:
         fm["context_size_at_write"] = context_size_at_write
     if supersedes:
@@ -1849,7 +1858,7 @@ def migrate_handover_statuses(
 # Fields kept in the backlog.yaml `handovers:` index entry.
 _HANDOVER_INDEX_FIELDS = (
     "id", "date", "created", "tldr", "next_action",
-    "task_ids", "session_kind", "status", "flag_reason",
+    "task_ids", "session_kind", "status", "flag_reason", "thread",
 )
 
 
@@ -1907,7 +1916,292 @@ def sync_handover_index(
         except (OSError, FileNotFoundError):
             continue
 
+    sync_thread_registry(backlog_data, backlog_path)
+
     return backlog_data
+
+
+# ── Threads ─────────────────────────────────────────────────────
+# A thread is a named chain of handovers — the stable resume token.
+# `threads:` in backlog.yaml is a rebuildable projection of handover
+# frontmatter; `thread_meta:` holds user-set status overrides that expire
+# when a newer handover lands (auto-reopen). See the handover-threads design
+# spec (specs/2026-07-13-handover-threads-design.md).
+
+THREAD_STATUSES = ("open", "parked", "closed")
+
+
+def _ts_or_min(raw: str):
+    """Parse an ISO timestamp for comparison; unparsable/empty sorts as -inf."""
+    try:
+        return _parse_iso8601(raw)
+    except (ValueError, TypeError):
+        return datetime.min.replace(tzinfo=timezone.utc)
+
+
+def sync_thread_registry(
+    backlog_data: dict[str, Any],
+    backlog_path: Path,
+) -> dict[str, Any]:
+    """Rebuild backlog_data['threads'] from non-archived handover files.
+
+    Derived status: open if any member handover is open, else closed.
+    A `thread_meta` override (parked/closed/open) is honoured only while no
+    member handover is newer than the override's set_at; stale overrides and
+    overrides for vanished threads are pruned. Mutates in place, returns
+    backlog_data for chaining.
+    """
+    ids = list_handover_ids(backlog_path)  # newest-first
+    threads: dict[str, dict[str, Any]] = {}
+    for hid in reversed(ids):              # oldest-first → chronological chains
+        try:
+            fm, _ = read_handover(backlog_path, hid)
+        except (OSError, ValueError):
+            continue
+        name = fm.get("thread")
+        if not name:
+            continue
+        t = threads.setdefault(name, {
+            "status": "closed",
+            "handover_ids": [],
+            "task_ids": [],
+            "created": fm.get("created") or fm.get("date") or "",
+            "last_touched": "",
+            "tldr": "",
+            "next_action": "",
+            "branch": "",
+            "_any_open": False,
+        })
+        t["handover_ids"].append(hid)
+        for tid in fm.get("task_ids") or []:
+            if tid not in t["task_ids"]:
+                t["task_ids"].append(tid)
+        # `ids` (and thus this reversed loop) is already ordered oldest → newest
+        # per list_handover_ids — so the last-iterated member of each thread is
+        # the newest by definition. Assign unconditionally so "newest member"
+        # agrees with handover_ids[-1] rather than a separate `created` compare.
+        t["last_touched"] = fm.get("created") or fm.get("date") or ""
+        t["tldr"] = fm.get("tldr", "")
+        t["next_action"] = fm.get("next_action", "")
+        if fm.get("branch"):
+            t["branch"] = fm["branch"]
+        if fm.get("status", "open") == "open":
+            t["_any_open"] = True
+
+    meta = dict(backlog_data.get("thread_meta") or {})
+    for name, t in threads.items():
+        derived = "open" if t.pop("_any_open") else "closed"
+        override = meta.get(name)
+        if override and _ts_or_min(str(override.get("set_at", ""))) >= _ts_or_min(t["last_touched"]):
+            t["status"] = override.get("status", derived)
+        else:
+            meta.pop(name, None)  # stale/absent — newer handover reopens
+            t["status"] = derived
+    meta = {k: v for k, v in meta.items() if k in threads}
+
+    backlog_data["threads"] = threads
+    backlog_data["thread_meta"] = meta
+    return backlog_data
+
+
+def update_thread_status(
+    backlog_data: dict[str, Any],
+    backlog_path: Path,
+    *,
+    name: str,
+    status: str,
+    reason: str = "",
+) -> dict[str, Any]:
+    """User-driven thread status override (parked/closed/open).
+
+    Recorded in thread_meta with a set_at timestamp; a newer handover in the
+    thread invalidates it (auto-reopen). Raises ValueError on bad enum,
+    KeyError if the thread doesn't exist.
+    """
+    if status not in THREAD_STATUSES:
+        raise ValueError(f"status must be one of {THREAD_STATUSES}, got {status!r}")
+    name = normalize_thread_name(name)
+    threads = backlog_data.get("threads") or {}
+    if name not in threads:
+        raise KeyError(name)
+    meta = dict(backlog_data.get("thread_meta") or {})
+    entry: dict[str, Any] = {
+        "status": status,
+        "set_at": datetime.now(timezone.utc).isoformat(timespec="microseconds"),
+    }
+    if reason:
+        entry["reason"] = reason
+    meta[name] = entry
+    backlog_data["thread_meta"] = meta
+    threads[name]["status"] = status
+    return backlog_data
+
+
+def resolve_thread(
+    backlog_data: dict[str, Any],
+    backlog_path: Path,
+    ref: str,
+) -> tuple[str, str]:
+    """Resolve a resume token to (thread_name, newest_handover_id).
+
+    `ref` may be a thread name (normalized) or a handover id — live or
+    archived — whose `thread` field routes to the thread's newest handover.
+    A threadless handover id resolves to ("", ref). Raises KeyError when
+    nothing matches.
+    """
+    threads = backlog_data.get("threads") or {}
+    name = normalize_thread_name(ref)
+    if name in threads and threads[name]["handover_ids"]:
+        return name, threads[name]["handover_ids"][-1]
+
+    fm: dict[str, Any] | None = None
+    p = handover_path(backlog_path, ref)
+    if p.exists():
+        fm, _ = read_task_file(p)
+    else:
+        archive_root = handover_dir(backlog_path) / "_archive"
+        if archive_root.exists():
+            hits = list(archive_root.rglob(f"{ref}.md"))
+            if hits:
+                fm, _ = read_task_file(hits[0])
+    if fm is None:
+        raise KeyError(ref)
+    tname = fm.get("thread") or ""
+    if tname and tname in threads and threads[tname]["handover_ids"]:
+        return tname, threads[tname]["handover_ids"][-1]
+    return tname, str(fm.get("id") or ref)
+
+
+def list_threads(backlog_data: dict[str, Any]) -> list[dict[str, Any]]:
+    """Board rows from the registry — open first, then parked, then closed;
+    newest-touched first within each status. staleness_days is whole days
+    since last_touched (0 when unparseable)."""
+    rows: list[dict[str, Any]] = []
+    now = datetime.now(timezone.utc)
+    for name, t in (backlog_data.get("threads") or {}).items():
+        try:
+            staleness = max(0, (now - _parse_iso8601(t["last_touched"])).days)
+        except (ValueError, KeyError, TypeError):
+            staleness = 0
+        rows.append({
+            "name": name,
+            "status": t.get("status", "open"),
+            "tldr": t.get("tldr", ""),
+            "next_action": t.get("next_action", ""),
+            "task_ids": list(t.get("task_ids") or []),
+            "branch": t.get("branch", ""),
+            "last_touched": t.get("last_touched", ""),
+            "staleness_days": staleness,
+        })
+    order = {"open": 0, "parked": 1, "closed": 2}
+    rows.sort(key=lambda r: _ts_or_min(r["last_touched"]), reverse=True)
+    rows.sort(key=lambda r: order.get(r["status"], 3))
+    return rows
+
+
+def backfill_threads(
+    backlog_path: Path,
+    backlog_data: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Stamp `thread:` frontmatter onto non-archived handovers that lack it.
+
+    Union-find grouping: an edge joins two handovers when one supersedes the
+    other, or when they share a task id. Name precedence per group: epic id
+    containing any member task → first member task id → newest member's id
+    with the date prefix stripped. Idempotent; files already carrying
+    `thread` are untouched. Returns {"stamped": [...], "groups": N}.
+    """
+    ids = list_handover_ids(backlog_path)
+    fms: dict[str, dict[str, Any]] = {}
+    bodies: dict[str, str] = {}
+    for hid in ids:
+        try:
+            fm, body = read_handover(backlog_path, hid)
+        except (OSError, ValueError):
+            continue
+        if fm.get("thread"):
+            continue
+        fms[hid] = fm
+        bodies[hid] = body
+    if not fms:
+        return {"stamped": [], "groups": 0}
+
+    parent: dict[str, str] = {hid: hid for hid in fms}
+
+    def find(x: str) -> str:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: str, b: str) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    by_task: dict[str, list[str]] = {}
+    for hid, fm in fms.items():
+        for link_key in ("supersedes", "superseded_by"):
+            other = fm.get(link_key)
+            if other in fms:
+                union(hid, other)
+        for tid in fm.get("task_ids") or []:
+            by_task.setdefault(tid, []).append(hid)
+    for members in by_task.values():
+        for other in members[1:]:
+            union(members[0], other)
+
+    groups: dict[str, list[str]] = {}
+    for hid in fms:
+        groups.setdefault(find(hid), []).append(hid)
+
+    task_to_epic: dict[str, str] = {}
+    for epic in (backlog_data or {}).get("epics") or []:
+        for t in epic.get("tasks") or []:
+            if t.get("id") and epic.get("id"):
+                task_to_epic[t["id"]] = epic["id"]
+
+    stamped: list[str] = []
+    for members in groups.values():
+        members.sort(key=lambda h: str(fms[h].get("created") or fms[h].get("date") or ""))
+        newest = members[-1]
+        all_tasks: list[str] = []
+        for hid in members:
+            for tid in fms[hid].get("task_ids") or []:
+                if tid not in all_tasks:
+                    all_tasks.append(tid)
+        epic_ids = [task_to_epic[t] for t in all_tasks if t in task_to_epic]
+        if epic_ids:
+            name = normalize_thread_name(epic_ids[0])
+        elif all_tasks:
+            name = normalize_thread_name(all_tasks[0])
+        else:
+            name = normalize_thread_name(re.sub(r"^\d{4}-\d{2}-\d{2}-", "", newest))
+        for hid in members:
+            fms[hid]["thread"] = name
+            write_task_file(handover_path(backlog_path, hid), fms[hid], bodies[hid])
+            stamped.append(hid)
+
+    return {"stamped": stamped, "groups": len(groups)}
+
+
+def derive_thread_name(
+    task_ids: list[str],
+    tldr: str,
+    data: dict[str, Any],
+    bundle_slug: str = "",
+) -> str:
+    """Auto-name a thread: bundle slug → epic of first linked task →
+    first task id → slugified tldr."""
+    if bundle_slug:
+        return normalize_thread_name(bundle_slug)
+    if task_ids:
+        for epic in data.get("epics") or []:
+            if any(t.get("id") in task_ids for t in epic.get("tasks") or []):
+                if epic.get("id"):
+                    return normalize_thread_name(epic["id"])
+        return normalize_thread_name(task_ids[0])
+    return normalize_thread_name(tldr)
 
 
 # ── Issues ─────────────────────────────────────────────────────
@@ -3688,22 +3982,13 @@ def _handover_time(h: dict):
 
 
 def list_sessions() -> list[dict]:
-    """Synthesise sessions from on-disk handover files.
+    """One diary lane per thread, synthesised from on-disk handover files.
 
-    Algorithm: load every handover, sort by date asc, then greedily group
-    consecutive handovers that share at least one task_id AND occur within
-    SESSION_GAP_MINUTES (default 30). Each group becomes one session.
-
-    Returns: list of dicts (newest first):
-      {id, start, end, duration, time_resolution, handover_ids[],
-       task_ids[], parallel_with[]}
-
-    `time_resolution` is "full" when at least one grouped handover carried a
-    precise `created` ISO timestamp, else "date-only" — the viewer uses this to
-    avoid fabricating a clock time from a midnight-UTC date.
+    Groups handovers by their `thread` frontmatter; threadless (legacy)
+    handovers each form a solo lane keyed by their own id. Rows are
+    session-shaped for the viewer timeline: overlapping lanes render as
+    parallel columns client-side. Newest end-time first.
     """
-    from datetime import timedelta
-    SESSION_GAP_MINUTES = 30
     handovers_dir = _resolve_artifact_root() / "handovers"
     if not handovers_dir.exists():
         return []
@@ -3722,26 +4007,13 @@ def list_sessions() -> list[dict]:
             continue
     raw.sort(key=lambda h: _handover_time(h))
 
-    groups: list[list[dict]] = []
+    lanes: dict[str, list[dict]] = {}
     for h in raw:
-        h_t = _handover_time(h)
-        h_tids = set(h.get("task_ids") or [])
-        attached = False
-        if groups:
-            tail = groups[-1][-1]
-            tail_t = _handover_time(tail)
-            tail_tids = set(tail.get("task_ids") or [])
-            within_gap = (h_t - tail_t) <= timedelta(minutes=SESSION_GAP_MINUTES)
-            shared_tasks = bool(h_tids & tail_tids)
-            if within_gap and shared_tasks:
-                groups[-1].append(h)
-                attached = True
-        if not attached:
-            groups.append([h])
+        key = h.get("thread") or h["id"]
+        lanes.setdefault(key, []).append(h)
 
     sessions: list[dict] = []
-    for idx, group in enumerate(groups, start=1):
-        sid = f"SES-{idx:04d}"
+    for key, group in lanes.items():
         start = _handover_time(group[0])
         end = _handover_time(group[-1])
         tids: list[str] = []
@@ -3749,11 +4021,13 @@ def list_sessions() -> list[dict]:
             for t in (h.get("task_ids") or []):
                 if t not in tids:
                     tids.append(t)
-        # A session whose handovers all lack `created` only has date-level
-        # resolution; the viewer should render the date without a time.
         time_resolution = "full" if any(h.get("created") for h in group) else "date-only"
+        any_open = any(h.get("status", "open") == "open" for h in group)
+        newest = group[-1]
         sessions.append({
-            "id": sid,
+            "id": key,
+            "kind": "thread",
+            "status": "open" if any_open else "closed",
             "start": start.isoformat(),
             "end": end.isoformat(),
             "duration": int((end - start).total_seconds()),
@@ -3769,26 +4043,11 @@ def list_sessions() -> list[dict]:
                 for h in group
             ],
             "task_ids": tids,
-            "parallel_with": [],   # filled below
+            "tldr": newest.get("tldr", ""),
+            "next_action": newest.get("next_action", ""),
         })
 
-    # Mark parallel sessions: any pair with overlapping [start,end] windows.
-    # Windows are expanded by SESSION_GAP_MINUTES so that two single-handover
-    # sessions that were close in time but different in task scope are flagged.
-    from datetime import timedelta as _td
-    _gap = _td(minutes=SESSION_GAP_MINUTES)
-    for i, s in enumerate(sessions):
-        s_start = _parse_iso8601(s["start"])
-        s_end = _parse_iso8601(s["end"]) + _gap
-        for j, o in enumerate(sessions):
-            if i == j:
-                continue
-            o_start = _parse_iso8601(o["start"])
-            o_end = _parse_iso8601(o["end"]) + _gap
-            if s_start <= o_end and o_start <= s_end:
-                s["parallel_with"].append(o["id"])
-
-    sessions.sort(key=lambda s: s["start"], reverse=True)
+    sessions.sort(key=lambda s: s["end"], reverse=True)
     return sessions
 
 

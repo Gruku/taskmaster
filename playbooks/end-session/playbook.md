@@ -74,7 +74,7 @@ Note: `backlog_complete_task` enforces this server-side too — the skill just g
 
 **8. Commit tracking files.** Stage backlog.yaml, PROGRESS.md, .taskmaster/handovers/, issues/, tasks/. Commit with `chore: log session - {topic}`.
 
-**9. Confirm.** "Session logged. Task is now `{target_status}`."
+**9. Confirm.** "Session logged. Task is now `{target_status}`." If a handover was written this session, end with its resume line verbatim: `Resume: <thread> — <next_action>`.
 
 ## Task Lifecycle
 

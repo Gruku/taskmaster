@@ -44,6 +44,8 @@ done
 cd viewer/tests
 VIEWER_BASE_URL="http://127.0.0.1:$PORT" npx playwright test
 RESULT=$?
+VIEWER_BASE_URL="http://127.0.0.1:$PORT" npx playwright test --config playwright.threads.config.js
+RESULT=$((RESULT || $?))
 
 # Tear down.
 kill $SERVER_PID 2>/dev/null || true

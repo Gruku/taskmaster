@@ -7,6 +7,18 @@ Versions follow [SemVer](https://semver.org/spec/v2.0.0.html) — major bumps
 indicate schema breaks or removed surfaces.
 
 ---
+## 4.5.0
+
+Handover threads — stable resume tokens and a thread-lane sessions view.
+
+- New: `thread` frontmatter on handovers; rebuildable `threads:` registry in backlog.yaml (`thread_meta:` holds user-set overrides; a newer handover auto-reopens).
+- New MCP: `backlog_thread_list`, `backlog_thread_resume` (accepts thread name or any handover id), `backlog_thread_update`; `backlog_handover_create` gains `thread` (auto-derived bundle → epic → task → tldr) and always ends with a copy-ready `Resume:` line.
+- Changed: `/api/sessions` now returns one lane per thread (SES-NNNN ids, 30-min gap clustering, and `parallel_with` removed); `backlog_handover_resync` backfills `thread` onto legacy handovers.
+- Removed: `backlog_handover_latest`; start-session's latest/limit=1 resume flow; viewer Lanes/By-Task stub views.
+- Fixed: viewer handover status menu spoke a dead todo/in-progress/done enum (POSTs 400ed) — now open/closed/superseded; the rail's RESUME copy button is wired.
+- Viewer: thread board (open-thread cards with copy-resume) above the diary.
+
+
 ## 4.4.1
 
 **Codex marketplace bundle fix.** Documents and versions the standalone payload consumed by `claude-tools`' generated Codex distribution. Codex marketplace repository installs do not materialize Git submodules, so pointing the catalog directly at the Taskmaster submodule produced an empty installed plugin with no skills or MCP servers. The parent marketplace now packages a generated, regular-file distribution sourced from this repository.

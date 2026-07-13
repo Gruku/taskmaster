@@ -147,7 +147,7 @@ function sessionTimeLine(s) {
 function sessionHeadHtml(s) {
   return (
     `<div class="ho-head">`
-    + `<span class="ho-kind session">SESSION</span>`
+    + `<span class="ho-kind session">THREAD</span>`
     + `<span class="ho-time mono">${escapeHtml(sessionTimeLine(s))}</span>`
     + `</div>`
     + `<div class="ho-title">${escapeHtml(s.id)}</div>`
