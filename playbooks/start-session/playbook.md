@@ -42,13 +42,17 @@ Call `backlog_note(action="list")`. If notes exist, render them under a **Your d
 
 If the project's `.taskmaster/lessons/` directory contains any `L-*.md` files, add a single quiet line to the briefing noting legacy lessons exist and that `taskmaster:migrate-lessons` converts them. Omit entirely if the directory is empty or absent.
 
+### Step 3e — Legacy in-review sweep (only if in-review tasks lack `human_action`)
+
+If any in-review task has no `human_action`, it predates the human-gate semantics (pre-4.5.0: in-review meant "user tests"). Once per project: present them as one table (id, title) and offer to bulk-close all to `done` via `backlog_batch_update` (op `complete`) — unless the user flags one as genuinely blocked, in which case write its blocker instead: `backlog_update_task(id, "human_action", "...")`. Apply on approval, one message. If a close is rejected by outstanding gates, report it and leave that task as-is. Self-extinguishing: once every in-review task carries a human_action, this step never fires again.
+
 ### Step 4 — Briefing
 
 Present in order:
 
 - **Where you left off:** latest open handover tldr + next_action (most actionable anchor)
 - **Resuming:** in-progress tasks (from `backlog_status`)
-- **Needs testing:** in-review tasks
+- **Waiting on you:** in-review tasks, each with its `human_action`. If the user says one is handled — or you can verify it directly (e.g. the env var now exists) — close it with `backlog_complete_task(id, target_status="done", ...)`; that clears the human_action and logs the session record.
 - **Phase progress:** if active phase, show done/total
 - **Stale tasks:** if any (from `backlog_status` stale list)
 - **Dashboard:** epic progress summary (flag any epic as "closeable" once its tasks are all done — suggest `backlog_archive_epic`)
