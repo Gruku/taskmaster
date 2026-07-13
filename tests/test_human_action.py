@@ -80,3 +80,51 @@ def test_no_skip_review_nag_on_direct_done(tm_epic_phase):
     _bs.backlog_record_gate(tid, "review-gate", verdict="pass")
     out = _bs.backlog_complete_task(tid)
     assert "skipping the in-review stage" not in out
+
+
+def test_update_status_in_review_requires_human_action(tm_epic_phase):
+    tid = _t()
+    _bs.backlog_update_task(tid, "status", "in-progress")
+    out = _bs.backlog_update_task(tid, "status", "in-review")
+    assert "Error" in out and "human_action" in out
+    task, _ = _bs._find_task(_bs._load(), tid)
+    assert task["status"] == "in-progress"
+
+
+def test_update_status_in_review_ok_when_field_set(tm_epic_phase):
+    tid = _t()
+    _bs.backlog_update_task(tid, "status", "in-progress")
+    _bs.backlog_update_task(tid, "human_action", "add API key")
+    assert "Error" not in _bs.backlog_update_task(tid, "status", "in-review")
+
+
+def test_update_status_done_clears_human_action(tm_epic_phase):
+    tid = _t()
+    _bs.backlog_update_task(tid, "status", "in-progress")
+    _bs.backlog_update_task(tid, "human_action", "add API key")
+    _bs.backlog_record_gate(tid, "impl", status="done")
+    _bs.backlog_record_gate(tid, "review-gate", verdict="pass")
+    assert "Error" not in _bs.backlog_update_task(tid, "status", "done")
+    task, _ = _bs._find_task(_bs._load(), tid)
+    assert "human_action" not in task
+
+
+def test_batch_status_in_review_requires_human_action(tm_epic_phase):
+    tid = _t()
+    _bs.backlog_update_task(tid, "status", "in-progress")
+    out = _bs.backlog_batch_update(f"status {tid} in-review")
+    assert "human_action" in out
+    task, _ = _bs._find_task(_bs._load(), tid)
+    assert task["status"] == "in-progress"
+
+
+def test_batch_complete_clears_human_action(tm_epic_phase):
+    tid = _t()
+    _bs.backlog_update_task(tid, "status", "in-progress")
+    _bs.backlog_update_task(tid, "human_action", "add API key")
+    _bs.backlog_record_gate(tid, "impl", status="done")
+    _bs.backlog_record_gate(tid, "review-gate", verdict="pass")
+    _bs.backlog_batch_update(f"complete {tid}")
+    task, _ = _bs._find_task(_bs._load(), tid)
+    assert task["status"] == "done"
+    assert "human_action" not in task

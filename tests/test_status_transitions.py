@@ -37,6 +37,7 @@ def test_update_to_done_applies_gate_check(tm_epic_phase):
 def test_backward_jump_rejected(tm_epic_phase):
     tid = _t()
     _bs.backlog_update_task(tid, "status", "in-progress")
+    _bs.backlog_update_task(tid, "human_action", "test blocker")
     _bs.backlog_update_task(tid, "status", "in-review")
     assert "Error" in _bs.backlog_update_task(tid, "status", "todo")   # in-review->todo illegal
 
@@ -44,6 +45,7 @@ def test_backward_jump_rejected(tm_epic_phase):
 def test_in_review_allowed_with_outstanding_gates(tm_epic_phase):
     tid = _t()
     _bs.backlog_update_task(tid, "status", "in-progress")
+    _bs.backlog_update_task(tid, "human_action", "test blocker")
     assert "Error" not in _bs.backlog_update_task(tid, "status", "in-review")
 
 

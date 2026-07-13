@@ -4964,6 +4964,9 @@ def backlog_update_task(
         # writes (value == current) are always allowed — the guard only checks
         # when the status actually changes.
         cur = task.get("status", "todo")
+        if value == "in-review" and value != cur and not task.get("human_action"):
+            return (f"Error: `in-review` means blocked on a human-only action; set human_action first: "
+                    f"backlog_update_task('{task_id}', 'human_action', '<what the human must do>')")
         if task.get("lane") and value != cur:
             allowed = LEGAL_STATUS_TRANSITIONS.get(cur, set())
             if value not in allowed:
@@ -4973,6 +4976,8 @@ def backlog_update_task(
                 block = _completion_block_reason(task)
                 if block:
                     return block
+        if value == "done":
+            task.pop("human_action", None)
         task["status"] = value
         if value == "in-progress" and not task.get("started"):
             task["started"] = _now()
@@ -6255,6 +6260,9 @@ def backlog_batch_update(operations: str) -> str:
                 errors.append(f"`{task_id}`: not found")
                 continue
             task, epic = result
+            if new_status == "in-review" and task.get("status") != "in-review" and not task.get("human_action"):
+                errors.append(f"`{task_id}`: in-review requires human_action — set it first via backlog_update_task")
+                continue
             if new_status == "done":
                 # Same lifecycle guard + close-gate as backlog_complete_task (B-049).
                 cur_status = task.get("status", "todo")
@@ -6278,6 +6286,7 @@ def backlog_batch_update(operations: str) -> str:
                 task["started"] = task.get("started") or _now()
                 if not task.get("completed"):
                     task["completed"] = _now()
+                task.pop("human_action", None)
             if new_status not in ("in-progress",):
                 task.pop("locked_by", None)
             results.append(f"`{task_id}` → {new_status}")
@@ -6313,6 +6322,7 @@ def backlog_batch_update(operations: str) -> str:
             if not task.get("completed"):
                 task["completed"] = _now()
             task.pop("locked_by", None)
+            task.pop("human_action", None)
             results.append(f"`{task_id}` → done")
             changed = True
 
