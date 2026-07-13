@@ -1054,6 +1054,42 @@ def iter_task_files(backlog_path: Path) -> list[Path]:
     return files
 
 
+def next_task_id(backlog_path: Path, epic: str) -> str:
+    """Allocate the next {epic}-NNN id by scanning task filenames on disk
+    (active + archive) — mirrors next_bug_id. The filesystem, not an in-memory
+    list, is the allocation source of truth so a concurrent process's just-
+    created file is honored."""
+    prefix = f"{epic}-"
+    nums: list[int] = []
+    for tf in iter_task_files(backlog_path):
+        stem = tf.stem
+        if stem.startswith(prefix):
+            m = re.search(r"(\d+)$", stem)
+            if m:
+                nums.append(int(m.group(1)))
+    n = (max(nums) + 1) if nums else 1
+    return f"{epic}-{n:03d}"
+
+
+def next_task_order(backlog_path: Path, epic: str) -> float:
+    """Next fractional order for a new task appended to `epic`: max existing
+    order + 1.0 (1.0 when the epic is empty)."""
+    orders: list[float] = []
+    for tf in iter_task_files(backlog_path):
+        fm, _ = read_task_file(tf)
+        if fm.get("epic") == epic and "order" in fm:
+            try:
+                orders.append(float(fm["order"]))
+            except (TypeError, ValueError):
+                pass
+    return (max(orders) + 1.0) if orders else 1.0
+
+
+def order_between(a: float, b: float) -> float:
+    """Midpoint order for inserting between two tasks (fractional indexing)."""
+    return (a + b) / 2
+
+
 def load_v4(backlog_path: Path) -> dict[str, Any]:
     """Load a v4 backlog: slim index (meta + phases + epic defs) + per-task
     files enumerated by glob and grouped by each task's `epic:` frontmatter.

@@ -80,6 +80,8 @@ from taskmaster.taskmaster_v3 import (
     save_v3 as _save_v3,
     load_v4 as _load_v4,
     save_v4 as _save_v4,
+    next_task_id,
+    next_task_order,
     migrate_v2_to_v3 as _migrate_v2_to_v3,
     write_handover as _write_handover,
     read_handover as _read_handover,
@@ -4069,19 +4071,23 @@ def backlog_add_task(
             return f"Error: task ID `{task_id}` already exists"
         new_id = task_id
     else:
-        # Generate ID: {epic-id}-{NNN}
-        tasks = epic_obj.get("tasks", [])
-        max_suffix = 0
-        prefix = f"{epic}-"
-        for t in tasks:
-            tid = t["id"]
-            if tid.startswith(prefix):
-                suffix_str = tid[len(prefix):]
-                try:
-                    max_suffix = max(max_suffix, int(suffix_str))
-                except ValueError:
-                    pass
-        new_id = f"{epic}-{max_suffix + 1:03d}"
+        # v4: allocate by directory scan (honors concurrent creates); v3: legacy
+        # in-memory scan (per-task files aren't the enumeration source there).
+        if _detect_schema_version(data) >= SCHEMA_V4:
+            new_id = next_task_id(_backlog_path(), epic)
+        else:
+            tasks = epic_obj.get("tasks", [])
+            max_suffix = 0
+            prefix = f"{epic}-"
+            for t in tasks:
+                tid = t["id"]
+                if tid.startswith(prefix):
+                    suffix_str = tid[len(prefix):]
+                    try:
+                        max_suffix = max(max_suffix, int(suffix_str))
+                    except ValueError:
+                        pass
+            new_id = f"{epic}-{max_suffix + 1:03d}"
 
     # tldr: use supplied value, or auto-generate from notes/title
     tldr_autogen = False
@@ -4154,6 +4160,10 @@ def backlog_add_task(
     new_task["lane"] = _default_lane(new_task.get("priority", "medium"))
     new_task["gate_state"] = _compute_gate_state(new_task)
     new_task["merge_gate_state"] = ""   # no merges yet
+
+    if _detect_schema_version(data) >= SCHEMA_V4:
+        new_task["epic"] = epic
+        new_task["order"] = next_task_order(_backlog_path(), epic)
 
     if "tasks" not in epic_obj:
         epic_obj["tasks"] = []
