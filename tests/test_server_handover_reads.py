@@ -1,6 +1,6 @@
-"""End-to-end tests for backlog_handover_get, backlog_handover_latest, and
-backlog_handover_list (all three read tools) invoked directly through the
-backlog_server module — same style as test_v3_handover.py.
+"""End-to-end tests for backlog_handover_get and backlog_handover_list
+(handover read tools) invoked directly through the backlog_server module —
+same style as test_v3_handover.py.
 """
 import sys
 from pathlib import Path

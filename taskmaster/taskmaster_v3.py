@@ -1926,7 +1926,7 @@ def sync_handover_index(
 # `threads:` in backlog.yaml is a rebuildable projection of handover
 # frontmatter; `thread_meta:` holds user-set status overrides that expire
 # when a newer handover lands (auto-reopen). See the handover-threads design
-# spec (claude-tools repo, docs/superpowers/specs/2026-07-13-handover-threads-design.md).
+# spec (specs/2026-07-13-handover-threads-design.md).
 
 THREAD_STATUSES = ("open", "parked", "closed")
 

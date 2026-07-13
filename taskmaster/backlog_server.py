@@ -84,7 +84,6 @@ from taskmaster.taskmaster_v3 import (
     apply_handover_review_flag as _apply_handover_review_flag,
     update_handover_status as _update_handover_status,
     list_handover_ids as _list_handover_ids,
-    latest_handover_id as _latest_handover_id,
     sync_handover_index as _sync_handover_index,
     derive_thread_name as _derive_thread_name,
     ISSUE_STATUSES,
