@@ -8,11 +8,9 @@ Load project context and orient for a new work session. Default mode is a **glan
 
 Call `backlog_status()` (slim, no `verbose`). This returns counts, in-progress titles, active phase, and stale task count. Note the `**Schema:** v<N>` line — v3 steps activate only on v3 backlogs.
 
-### Step 2 — Open handovers
+### Step 2 — Thread board
 
-Call `backlog_handover_list(status="open", limit=5)`. Returns slim entries (id + task_ids + tldr + next_action). Each entry is ~50 tokens. Flagged handovers (task done but handover still open) appear with an inline reason.
-
-If there are more than 5 open handovers, show `(+N more — use --deep to see all)`.
+Call `backlog_thread_list()`. Returns the open lines of work — one entry per thread: name (the resume token), staleness, branch, tldr, next action, tasks. This replaces per-handover listing; a thread's newest handover is fetched only when the user picks it (`backlog_thread_resume("<name>")`).
 
 ### Step 3 — 1-line counts
 
@@ -46,7 +44,7 @@ If the project's `.taskmaster/lessons/` directory contains any `L-*.md` files, a
 
 Present in order:
 
-- **Where you left off:** latest open handover tldr + next_action (most actionable anchor)
+- **Open threads:** the board from Step 2, one line each (`name — tldr → next_action`). If the user's prompt already names a thread or pastes a handover id, skip the board and call `backlog_thread_resume` with it directly.
 - **Resuming:** in-progress tasks (from `backlog_status`)
 - **Needs testing:** in-review tasks
 - **Phase progress:** if active phase, show done/total
