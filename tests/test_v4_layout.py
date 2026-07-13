@@ -1,6 +1,7 @@
 """Tests for the v4 sharded storage layout (team-relayout, epic 1)."""
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -321,3 +322,53 @@ class TestSaveV4:
         assert task_body.removesuffix("\n") == "task body"
         assert epic_body.removesuffix("\n") == "epic body"
         assert phase_body.removesuffix("\n") == "phase body"
+
+
+class TestDirtyScopedSave:
+    def _project(self, tmp_path):
+        tm = tmp_path / ".taskmaster"
+        (tm / "tasks").mkdir(parents=True)
+        bp = tm / "backlog.yaml"
+        bp.write_text(yaml.dump({"meta": {"schema_version": 4}, "epics": [], "phases": []}))
+        data = {"meta": {"schema_version": 4}, "phases": [],
+                "epics": [{"id": "e", "name": "E", "tasks": [
+                    {"id": "e-001", "title": "A", "epic": "e", "order": 1.0},
+                    {"id": "e-002", "title": "B", "epic": "e", "order": 2.0},
+                ]}]}
+        v3.save_v4(bp, data)   # baseline write of both files
+        return bp, data
+
+    def test_unchanged_task_file_not_rewritten(self, tmp_path):
+        import copy
+        bp, data = self._project(tmp_path)
+        snapshot = copy.deepcopy(data)
+        f1 = bp.parent / "tasks" / "e-001.md"
+        f2 = bp.parent / "tasks" / "e-002.md"
+        m1_before, m2_before = f1.stat().st_mtime_ns, f2.stat().st_mtime_ns
+        # Touch only e-002 in memory.
+        data["epics"][0]["tasks"][1]["title"] = "B-renamed"
+        # Make mtime resolution observable.
+        os.utime(f1, ns=(m1_before, m1_before))
+        os.utime(f2, ns=(m2_before, m2_before))
+        v3.save_v4(bp, data, snapshot=snapshot)
+        assert f1.stat().st_mtime_ns == m1_before  # unchanged task not rewritten
+        fm2, _ = v3.read_task_file(f2)
+        assert fm2["title"] == "B-renamed"
+
+    def test_new_task_written(self, tmp_path):
+        import copy
+        bp, data = self._project(tmp_path)
+        snapshot = copy.deepcopy(data)
+        data["epics"][0]["tasks"].append(
+            {"id": "e-003", "title": "C", "epic": "e", "order": 3.0})
+        v3.save_v4(bp, data, snapshot=snapshot)
+        assert (bp.parent / "tasks" / "e-003.md").exists()
+
+    def test_removed_task_file_deleted(self, tmp_path):
+        import copy
+        bp, data = self._project(tmp_path)
+        snapshot = copy.deepcopy(data)
+        data["epics"][0]["tasks"] = [t for t in data["epics"][0]["tasks"] if t["id"] != "e-002"]
+        v3.save_v4(bp, data, snapshot=snapshot)
+        assert not (bp.parent / "tasks" / "e-002.md").exists()
+        assert (bp.parent / "tasks" / "e-001.md").exists()
