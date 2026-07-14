@@ -58,6 +58,7 @@ _NAME_TO_LEGACY = {v: k for k, v in _LEGACY_TO_NAME.items()}
 from taskmaster.taskmaster_v3 import (
     SCHEMA_V2,
     SCHEMA_V3,
+    SCHEMA_V4,
     SCHEMA_DEFAULT,
     TLDR_MAX_CHARS,
     extract_tldr,
@@ -77,7 +78,12 @@ from taskmaster.taskmaster_v3 import (
     atomic_write as _atomic_write,
     load_v3 as _load_v3,
     save_v3 as _save_v3,
+    load_v4 as _load_v4,
+    save_v4 as _save_v4,
+    next_task_id,
+    next_task_order,
     migrate_v2_to_v3 as _migrate_v2_to_v3,
+    migrate_v3_to_v4 as _migrate_v3_to_v4,
     write_handover as _write_handover,
     read_handover as _read_handover,
     apply_supersession as _apply_supersession,
@@ -296,7 +302,14 @@ def _backlog_path() -> Path:
 
 
 def _progress_path() -> Path:
-    return _resolve_paths()[1]
+    backlog, legacy_progress = _resolve_paths()
+    try:
+        raw = yaml.safe_load(backlog.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return legacy_progress
+    if _detect_schema_version(raw) >= SCHEMA_V4:
+        return backlog.parent / "local" / "PROGRESS.md"
+    return legacy_progress
 
 
 # ── Session identity (unique per MCP server process) ─────
@@ -304,6 +317,12 @@ SESSION_ID = f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
 
 # ── File-level lock for backlog.yaml writes ──────────────
 _backlog_lock = threading.Lock()
+
+import copy as _copy
+
+# Deep copy of the last v4 _load() result, used as the diff baseline for
+# dirty-scoped save_v4 (None for v2/v3, which write whole-file).
+_LOAD_SNAPSHOT: dict | None = None
 
 
 def _today() -> str:
@@ -372,12 +391,18 @@ def _normalize_priority(value: str) -> str:
 
 
 def _load() -> dict:
+    global _LOAD_SNAPSHOT
     bp = _backlog_path()
     # Peek at version without per-file enrichment so we can dispatch.
     raw = yaml.safe_load(bp.read_text(encoding="utf-8")) or {}
     version = _detect_schema_version(raw)
-    data = _load_v3(bp) if version >= SCHEMA_V3 else raw
-    # Backfill missing 'created' on tasks + normalize legacy priorities (applies to both versions).
+    if version >= SCHEMA_V4:
+        data = _load_v4(bp)
+    elif version >= SCHEMA_V3:
+        data = _load_v3(bp)
+    else:
+        data = raw
+    # Backfill missing 'created' on tasks + normalize legacy priorities.
     for epic in data.get("epics", []):
         for t in epic.get("tasks", []):
             if not t.get("created"):
@@ -385,21 +410,33 @@ def _load() -> dict:
             pri = t.get("priority", "")
             if pri in _LEGACY_TO_NAME:
                 t["priority"] = _LEGACY_TO_NAME[pri]
+    _LOAD_SNAPSHOT = _copy.deepcopy(data) if version >= SCHEMA_V4 else None
     return data
 
 
 def _save(data: dict) -> None:
     with _backlog_lock:
-        data["meta"]["updated"] = _today()
         bp = _backlog_path()
-        if _detect_schema_version(data) >= SCHEMA_V3:
+        version = _detect_schema_version(data)
+        if version >= SCHEMA_V4:
+            _write_local_meta_cache(bp, {"updated": _today()})
+            _save_v4(bp, data, snapshot=_LOAD_SNAPSHOT)
+        elif version >= SCHEMA_V3:
+            data["meta"]["updated"] = _today()
             _save_v3(bp, data)
         else:
+            data["meta"]["updated"] = _today()
             _atomic_write(
                 bp,
                 yaml.dump(data, default_flow_style=False, sort_keys=False, allow_unicode=True),
             )
 
+
+def _write_local_meta_cache(backlog_path: Path, payload: dict) -> None:
+    """Persist derived metadata without churning the shared v4 index."""
+    cache_dir = backlog_path.parent / "local" / "cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    _atomic_write(cache_dir / "meta.json", json.dumps(payload, indent=2) + "\n")
 
 def _has_v3_content(data: dict) -> bool:
     """True when the backlog has any v3 narrative-continuity entity content.
@@ -744,7 +781,9 @@ def regenerate_context(data: dict) -> None:
 
 def regenerate_progress_dashboard(data: dict) -> None:
     """Rewrite PROGRESS.md above the '## Changelog' line."""
-    progress_text = _progress_path().read_text(encoding="utf-8")
+    path = _progress_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    progress_text = path.read_text(encoding="utf-8") if path.exists() else "## Changelog\n"
 
     changelog_marker = "## Changelog"
     idx = progress_text.find(changelog_marker)
@@ -829,7 +868,7 @@ def regenerate_progress_dashboard(data: dict) -> None:
     lines.append("\n---\n")
 
     dashboard = "\n".join(lines) + "\n"
-    _progress_path().write_text(dashboard + changelog_section, encoding="utf-8")
+    path.write_text(dashboard + changelog_section, encoding="utf-8")
 
 
 def _mutate_and_save(data: dict) -> None:
@@ -935,6 +974,8 @@ def backlog_status(verbose: bool = False) -> str:
     ctx = data["context"]
 
     lines = [f"**Schema:** v{_effective_schema_version(data)}\n"]
+    if _effective_schema_version(data) < SCHEMA_V4:
+        lines.append("Migration available: run `backlog_migrate_v4` for sharded, merge-aware storage.\n")
     lines.append("## Dashboard\n")
     lines.append("| Workstream | Status | Progress | Current Focus |")
     lines.append("|-----------|--------|----------|---------------|")
@@ -1581,6 +1622,12 @@ def backlog_validate() -> str:
 
     issues: list[str] = []
 
+    for orphan_id in data.get("_orphan_tasks", []):
+        issues.append(
+            f"Task `{orphan_id}` names an epic that does not exist "
+            "(orphaned `epic:` frontmatter) — fix the task's epic field."
+        )
+
     for task, epic in all_tasks:
         tid = task["id"]
 
@@ -1784,8 +1831,8 @@ def backlog_init(project_name: str = "", location: str = "tracked", schema_versi
         return f"Error: location must be 'tracked', got '{location}'"
     if schema_version == 0:
         schema_version = SCHEMA_DEFAULT
-    if schema_version not in (SCHEMA_V2, SCHEMA_V3):
-        return f"Error: schema_version must be {SCHEMA_V2} or {SCHEMA_V3}, got {schema_version}"
+    if schema_version not in (SCHEMA_V2, SCHEMA_V3, SCHEMA_V4):
+        return f"Error: schema_version must be {SCHEMA_V2}, {SCHEMA_V3}, or {SCHEMA_V4}, got {schema_version}"
 
     if not project_name:
         project_name = ROOT.name
@@ -1806,7 +1853,11 @@ def backlog_init(project_name: str = "", location: str = "tracked", schema_versi
             )
 
     backlog_rel = ".taskmaster/backlog.yaml"
-    progress_rel = ".taskmaster/PROGRESS.md"
+    progress_rel = (
+        ".taskmaster/local/PROGRESS.md"
+        if schema_version >= SCHEMA_V4
+        else ".taskmaster/PROGRESS.md"
+    )
 
     backlog_abs = ROOT / backlog_rel
     progress_abs = ROOT / progress_rel
@@ -1843,8 +1894,14 @@ def backlog_init(project_name: str = "", location: str = "tracked", schema_versi
         initial_data["handovers"] = []
         initial_data["issues"] = []
         # Pre-create directories so first-run tooling has somewhere to write.
-        for sub in ("tasks", "handovers", "issues", "auto", "areas"):
+        subdirs = ["tasks", "handovers", "issues", "areas"]
+        subdirs.extend(["local", "local/cache"] if schema_version >= SCHEMA_V4 else ["auto"])
+        for sub in subdirs:
             (backlog_abs.parent / sub).mkdir(parents=True, exist_ok=True)
+
+    if schema_version >= SCHEMA_V4:
+        initial_data["meta"].pop("updated", None)
+        _write_local_meta_cache(backlog_abs, {"updated": _today()})
 
     backlog_abs.write_text(
         yaml.dump(initial_data, default_flow_style=False, sort_keys=False, allow_unicode=True),
@@ -1854,10 +1911,15 @@ def backlog_init(project_name: str = "", location: str = "tracked", schema_versi
 
     # Create PROGRESS.md
     progress_content = f"# {project_name} Progress\n\n> Auto-generated from backlog.yaml — do not edit manually\n\n## Dashboard\n\n---\n\n## Changelog\n"
+    progress_abs.parent.mkdir(parents=True, exist_ok=True)
     progress_abs.write_text(progress_content, encoding="utf-8")
     created.append(progress_rel)
 
-    schema_label = "v3 (latest — narrative continuity)" if schema_version >= SCHEMA_V3 else "v2 (stable)"
+    schema_label = (
+        "v4 (sharded per-task storage)"
+        if schema_version >= SCHEMA_V4
+        else "v3 (narrative continuity)" if schema_version >= SCHEMA_V3 else "v2 (stable)"
+    )
     return (
         f"Initialized taskmaster for **{project_name}** in `.taskmaster/` (trackable in git) on schema {schema_label}.\n"
         f"Created: {', '.join(created)}"
@@ -1914,6 +1976,26 @@ def backlog_migrate_v3() -> str:
         f"subsequent slices."
     )
 
+
+@mcp.tool()
+def backlog_migrate_v4() -> str:
+    """Migrate this project to v4 sharded per-task storage."""
+    backlog_path = _backlog_path()
+    if not backlog_path.exists():
+        return f"Error: no backlog found at {backlog_path}. Run `backlog_init` first."
+    summary = _migrate_v3_to_v4(backlog_path)
+    if summary["status"] == "already_v4":
+        return (
+            f"Already on v4 — {summary['tasks_total']} tasks, no changes made.\n"
+            f"Backlog at: {backlog_path.relative_to(ROOT)}"
+        )
+    return (
+        "Migrated v3 -> v4.\n"
+        f"- Tasks: {summary['tasks_total']} (all fields now in tasks/<id>.md)\n"
+        f"- Index: {backlog_path.relative_to(ROOT)} (slim — no task lists)\n"
+        "- Local state moved into local/; snapshots/ removed.\n"
+        "- Restart the MCP server to pick up the new schema."
+    )
 
 @mcp.tool()
 def backlog_backfill_lanes(grandfather_active: bool = True) -> str:
@@ -2435,7 +2517,7 @@ def backlog_link_create(source: str, target: str, type: str, note: str = "") -> 
     from taskmaster.taskmaster_v3 import (
         LINK_TYPES, is_valid_link, entity_kind_of,
         read_entity_anywhere, write_entity_anywhere, add_link, entity_links,
-        sync_inverse, would_create_cycle, load_v3,
+        sync_inverse, would_create_cycle,
     )
 
     backlog_path = _backlog_path()
@@ -2464,7 +2546,7 @@ def backlog_link_create(source: str, target: str, type: str, note: str = "") -> 
     # single task→task graph; `blocks` is reversed onto `depends_on`).
     if type in ("depends_on", "blocks"):
         graph: dict[str, list[str]] = {}
-        data = load_v3(backlog_path)
+        data = _load()
         for epic in data.get("epics", []):
             for task in epic.get("tasks", []):
                 tid = task.get("id")
@@ -2552,7 +2634,7 @@ def backlog_link_query(source: str = "", target: str = "", type: str = "",
     """
     import json as _json
     from taskmaster.taskmaster_v3 import (
-        entity_kind_of, read_entity_anywhere, entity_links, load_v3,
+        entity_kind_of, read_entity_anywhere, entity_links,
     )
 
     backlog_path = _backlog_path()
@@ -2566,7 +2648,7 @@ def backlog_link_query(source: str = "", target: str = "", type: str = "",
 
     def all_edges() -> list[dict]:
         out: list[dict] = []
-        data = load_v3(backlog_path)
+        data = _load()
         for epic in data.get("epics", []):
             for task in epic.get("tasks", []):
                 tid = task.get("id")
@@ -2633,13 +2715,13 @@ def backlog_link_validate() -> str:
     """
     import json as _json
     from taskmaster.taskmaster_v3 import (
-        REVERSE_TYPE, read_entity_anywhere, entity_links, load_v3, find_cycle,
+        REVERSE_TYPE, read_entity_anywhere, entity_links, find_cycle,
     )
 
     backlog_path = _backlog_path()
 
     def iter_all_entities():
-        data = load_v3(backlog_path)
+        data = _load()
         for epic in data.get("epics", []):
             for task in epic.get("tasks", []):
                 if task.get("id"):
@@ -4118,19 +4200,23 @@ def backlog_add_task(
             return f"Error: task ID `{task_id}` already exists"
         new_id = task_id
     else:
-        # Generate ID: {epic-id}-{NNN}
-        tasks = epic_obj.get("tasks", [])
-        max_suffix = 0
-        prefix = f"{epic}-"
-        for t in tasks:
-            tid = t["id"]
-            if tid.startswith(prefix):
-                suffix_str = tid[len(prefix):]
-                try:
-                    max_suffix = max(max_suffix, int(suffix_str))
-                except ValueError:
-                    pass
-        new_id = f"{epic}-{max_suffix + 1:03d}"
+        # v4: allocate by directory scan (honors concurrent creates); v3: legacy
+        # in-memory scan (per-task files aren't the enumeration source there).
+        if _detect_schema_version(data) >= SCHEMA_V4:
+            new_id = next_task_id(_backlog_path(), epic)
+        else:
+            tasks = epic_obj.get("tasks", [])
+            max_suffix = 0
+            prefix = f"{epic}-"
+            for t in tasks:
+                tid = t["id"]
+                if tid.startswith(prefix):
+                    suffix_str = tid[len(prefix):]
+                    try:
+                        max_suffix = max(max_suffix, int(suffix_str))
+                    except ValueError:
+                        pass
+            new_id = f"{epic}-{max_suffix + 1:03d}"
 
     # tldr: use supplied value, or auto-generate from notes/title
     tldr_autogen = False
@@ -4203,6 +4289,10 @@ def backlog_add_task(
     new_task["lane"] = _default_lane(new_task.get("priority", "medium"))
     new_task["gate_state"] = _compute_gate_state(new_task)
     new_task["merge_gate_state"] = ""   # no merges yet
+
+    if _detect_schema_version(data) >= SCHEMA_V4:
+        new_task["epic"] = epic
+        new_task["order"] = next_task_order(_backlog_path(), epic)
 
     if "tasks" not in epic_obj:
         epic_obj["tasks"] = []

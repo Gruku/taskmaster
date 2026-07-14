@@ -33,7 +33,7 @@ _PLUGIN_DIR = Path(__file__).resolve().parent.parent
 SCHEMA_V2 = 2
 SCHEMA_V3 = 3
 SCHEMA_V4 = 4
-SCHEMA_DEFAULT = SCHEMA_V2  # what new backlogs get unless v3 is explicitly requested
+SCHEMA_DEFAULT = SCHEMA_V4  # new projects use sharded per-task storage
 
 
 def detect_schema_version(data: dict) -> int:
@@ -331,6 +331,22 @@ def _resolve_artifact_root() -> Path:
     if (cwd / "backlog.yaml").exists():
         return cwd
     return cwd / ".taskmaster"
+
+def local_dir(backlog_path: Path) -> Path:
+    """Return the machine-local state directory for a backlog."""
+    return backlog_path.parent / "local"
+
+
+def _is_v4_project(artifact_root: Path) -> bool:
+    """Return whether the backlog at ``artifact_root`` declares schema v4."""
+    backlog_path = artifact_root / "backlog.yaml"
+    if not backlog_path.exists():
+        return False
+    try:
+        raw = yaml.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return False
+    return detect_schema_version(raw) >= SCHEMA_V4
 
 
 # ── Markdown + YAML frontmatter ─────────────────────────────────
@@ -1038,6 +1054,112 @@ def load_v3(backlog_path: Path) -> dict[str, Any]:
     return data
 
 
+def iter_task_files(backlog_path: Path) -> list[Path]:
+    """All v4 task files: tasks/*.md then tasks/archive/*.md, each sorted.
+
+    Mirrors next_bug_id's directory-scan philosophy — the filesystem, not an
+    in-memory index, is the enumeration source of truth.
+    """
+    tdir = backlog_path.parent / "tasks"
+    files: list[Path] = []
+    if tdir.is_dir():
+        files.extend(sorted(tdir.glob("*.md")))
+    adir = tdir / "archive"
+    if adir.is_dir():
+        files.extend(sorted(adir.glob("*.md")))
+    return files
+
+
+def next_task_id(backlog_path: Path, epic: str) -> str:
+    """Allocate the next {epic}-NNN id by scanning task filenames on disk
+    (active + archive) — mirrors next_bug_id. The filesystem, not an in-memory
+    list, is the allocation source of truth so a concurrent process's just-
+    created file is honored."""
+    prefix = f"{epic}-"
+    nums: list[int] = []
+    for tf in iter_task_files(backlog_path):
+        stem = tf.stem
+        if stem.startswith(prefix):
+            suffix = stem[len(prefix):]
+            if suffix.isdigit():
+                nums.append(int(suffix))
+    n = (max(nums) + 1) if nums else 1
+    return f"{epic}-{n:03d}"
+
+
+def next_task_order(backlog_path: Path, epic: str) -> float:
+    """Next fractional order for a new task appended to `epic`: max existing
+    order + 1.0 (1.0 when the epic is empty)."""
+    orders: list[float] = []
+    for tf in iter_task_files(backlog_path):
+        fm, _ = read_task_file(tf)
+        if fm.get("epic") == epic and "order" in fm:
+            try:
+                orders.append(float(fm["order"]))
+            except (TypeError, ValueError):
+                pass
+    return (max(orders) + 1.0) if orders else 1.0
+
+
+def order_between(a: float, b: float) -> float:
+    """Midpoint order for inserting between two tasks (fractional indexing)."""
+    return (a + b) / 2
+
+
+def load_v4(backlog_path: Path) -> dict[str, Any]:
+    """Load a v4 backlog: slim index (meta + phases + epic defs) + per-task
+    files enumerated by glob and grouped by each task's `epic:` frontmatter.
+
+    Produces the same in-memory shape as load_v3 (epics[].tasks[] populated,
+    ordered by (order, id)), so existing read code keeps working unchanged.
+    Tasks whose `epic:` names no known epic are collected under the private
+    key `_orphan_tasks` (surfaced by backlog_validate, stripped on save).
+    """
+    data = yaml.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
+    epic_ids = {e.get("id") for e in data.get("epics", [])}
+    tasks_by_epic: dict[str, list[dict[str, Any]]] = {}
+    orphans: list[str] = []
+    for tf in iter_task_files(backlog_path):
+        fm, body = read_task_file(tf)
+        task = task_v4_from_file(fm, body.removesuffix("\n"))
+        eid = task.get("epic")
+        if eid not in epic_ids:
+            orphans.append(task.get("id") or tf.stem)
+            continue
+        tasks_by_epic.setdefault(eid, []).append(task)
+    for tlist in tasks_by_epic.values():
+        tlist.sort(key=lambda t: (float(t.get("order", 0.0)), str(t.get("id", ""))))
+    for epic in data.get("epics", []):
+        epic["tasks"] = tasks_by_epic.get(epic.get("id"), [])
+
+    # Per-epic / per-phase heavy bodies (doc-bearing epics/phases) — same as v3.
+    for epic in data.get("epics", []):
+        eid = epic.get("id")
+        if not eid:
+            continue
+        ef = epic_file_path(backlog_path, eid)
+        if ef.exists():
+            fm, body = read_task_file(ef)
+            epic_meta = {k: v for k, v in epic.items() if k != "tasks"}
+            merged = _merge_entity_from_v3(epic_meta, fm, body, EPIC_HEAVY_FIELDS)
+            merged["tasks"] = epic.get("tasks", [])
+            epic.clear()
+            epic.update(merged)
+    for phase in data.get("phases", []):
+        pid = phase.get("id")
+        if not pid:
+            continue
+        pf = phase_file_path(backlog_path, pid)
+        if pf.exists():
+            fm, body = read_task_file(pf)
+            merged = _merge_entity_from_v3(phase, fm, body, PHASE_HEAVY_FIELDS)
+            phase.clear()
+            phase.update(merged)
+
+    data["_orphan_tasks"] = orphans
+    return data
+
+
 def migrate_v2_to_v3(backlog_path: Path) -> dict[str, Any]:
     """Convert a v2 backlog at `backlog_path` to v3 in place.
 
@@ -1107,6 +1229,49 @@ def migrate_v2_to_v3(backlog_path: Path) -> dict[str, Any]:
         "schema_after": SCHEMA_V3,
     }
 
+
+def migrate_v3_to_v4(backlog_path: Path) -> dict[str, Any]:
+    """Convert a v3 backlog to sharded v4 storage, idempotently."""
+    raw = yaml.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
+    before = detect_schema_version(raw)
+    if before >= SCHEMA_V4:
+        return {
+            "status": "already_v4",
+            "tasks_total": len(iter_task_files(backlog_path)),
+            "schema_before": before,
+            "schema_after": before,
+        }
+
+    data = load_v3(backlog_path)
+    tasks_total = 0
+    for epic in data.get("epics", []):
+        epic_id = epic.get("id")
+        for position, task in enumerate(epic.get("tasks", []), start=1):
+            task["epic"] = epic_id
+            task.setdefault("order", float(position))
+            tasks_total += 1
+    data.setdefault("meta", {})["schema_version"] = SCHEMA_V4
+    save_v4(backlog_path, data, snapshot=None)
+
+    root = backlog_path.parent
+    target = local_dir(backlog_path)
+    target.mkdir(parents=True, exist_ok=True)
+    for name in ("viewer.json", "auto"):
+        source = root / name
+        if source.exists():
+            os.replace(source, target / name)
+    snapshots = root / "snapshots"
+    if snapshots.is_dir():
+        import shutil
+
+        shutil.rmtree(snapshots)
+
+    return {
+        "status": "migrated",
+        "tasks_total": tasks_total,
+        "schema_before": before,
+        "schema_after": SCHEMA_V4,
+    }
 
 # ── v3 layout canonicalization (.claude/ or root → .taskmaster/) ─────────
 
@@ -3835,7 +4000,10 @@ VIEWER_PREFS_DEFAULTS = {
 
 
 def viewer_prefs_path() -> Path:
-    return _resolve_artifact_root() / "viewer.json"
+    root = _resolve_artifact_root()
+    if _is_v4_project(root):
+        return local_dir(root / "backlog.yaml") / "viewer.json"
+    return root / "viewer.json"
 
 def load_viewer_prefs() -> dict:
     """Load viewer prefs, creating the file with defaults on first call.
@@ -3949,6 +4117,189 @@ def save_v3(backlog_path: Path, data: dict[str, Any]) -> None:
         backlog_path,
         yaml.dump(slim_data, default_flow_style=False, sort_keys=False, allow_unicode=True),
     )
+
+
+def _v4_strip_private_fields(value: Any, *, preserve_body: bool = False) -> Any:
+    """Return a persistence-safe copy with private mapping keys removed.
+
+    BODY_KEY is private runtime state everywhere except at an entity boundary,
+    where it represents the entity's markdown body and must reach the file
+    serializer. Nested mappings never inherit that exception.
+    """
+    if isinstance(value, dict):
+        return {
+            key: _v4_strip_private_fields(child)
+            for key, child in value.items()
+            if not (
+                isinstance(key, str)
+                and key.startswith("_")
+                and not (preserve_body and key == BODY_KEY)
+            )
+        }
+    if isinstance(value, list):
+        return [_v4_strip_private_fields(child) for child in value]
+    return value
+
+
+def save_v4(
+    backlog_path: Path,
+    data: dict[str, Any],
+    snapshot: dict[str, Any] | None = None,
+) -> None:
+    """Save a v4 backlog: every task field -> tasks/<id>.md; backlog.yaml holds
+    only meta (minus `updated`) + phases + epic definitions (no task lists).
+
+    `snapshot` (a deep copy of the dict returned by the matching load) enables
+    dirty-scoped writes: only tasks that differ from the snapshot are written
+    (see _v4_write_task, filled in Task 6). snapshot=None writes every task --
+    the baseline used by migration and by tests.
+    """
+    # 1. Task files.
+    for epic in data.get("epics", []):
+        for task in epic.get("tasks", []):
+            tid = task.get("id")
+            if not tid:
+                continue
+            _v4_write_task(backlog_path, task, snapshot)
+
+    # Delete task files for ids removed since load (never touch archived files --
+    # archival is a move into tasks/archive/, handled by the archive tool).
+    live_ids = {
+        task.get("id")
+        for epic in data.get("epics", [])
+        for task in epic.get("tasks", [])
+    }
+    for tid in _v4_snapshot_tasks(snapshot):
+        if tid not in live_ids:
+            _remove_entity_file(task_file_path(backlog_path, tid))
+
+    # 2. Epic / phase body files (identical policy to save_v3).
+    slim_data: dict[str, Any] = {
+        k: _v4_strip_private_fields(v)
+        for k, v in data.items()
+        if not k.startswith("_")
+    }
+    slim_data["epics"] = []
+    for epic in data.get("epics", []):
+        epic_meta = _v4_strip_private_fields(
+            {k: v for k, v in epic.items() if k != "tasks"},
+            preserve_body=True,
+        )
+        slim_meta, epic_heavy, epic_body = _split_entity_for_v3(epic_meta, EPIC_HEAVY_FIELDS)
+        eid = slim_meta.get("id")
+        if eid and (any(k in epic_heavy for k in EPIC_HEAVY_FIELDS) or epic_body):
+            write_task_file(epic_file_path(backlog_path, eid), epic_heavy, epic_body)
+            slim_data["epics"].append(slim_meta)
+        else:
+            if eid:
+                _remove_entity_file(epic_file_path(backlog_path, eid))
+            slim_data["epics"].append(epic_meta)
+
+    if "phases" in slim_data:
+        slim_phases: list[dict[str, Any]] = []
+        for phase in data.get("phases", []):
+            persistable_phase = _v4_strip_private_fields(phase, preserve_body=True)
+            slim_phase, phase_heavy, phase_body = _split_entity_for_v3(
+                persistable_phase, PHASE_HEAVY_FIELDS
+            )
+            pid = slim_phase.get("id")
+            if pid and (any(k in phase_heavy for k in PHASE_HEAVY_FIELDS) or phase_body):
+                write_task_file(phase_file_path(backlog_path, pid), phase_heavy, phase_body)
+                slim_phases.append(slim_phase)
+            else:
+                if pid:
+                    _remove_entity_file(phase_file_path(backlog_path, pid))
+                slim_phases.append(phase)
+        slim_data["phases"] = slim_phases
+
+    # 3. Slim backlog.yaml -- never carries task lists or `meta.updated`.
+    if isinstance(slim_data.get("meta"), dict):
+        slim_data["meta"] = {k: v for k, v in slim_data["meta"].items() if k != "updated"}
+    atomic_write(
+        backlog_path,
+        yaml.dump(slim_data, default_flow_style=False, sort_keys=False, allow_unicode=True),
+    )
+
+
+def _v4_snapshot_tasks(
+    snapshot: dict[str, Any] | None,
+) -> dict[str, dict[str, Any]]:
+    """Flatten a load snapshot into {task_id: task_dict} for dirty diffing."""
+    index: dict[str, dict[str, Any]] = {}
+    if not snapshot:
+        return index
+    for epic in snapshot.get("epics", []):
+        for task in epic.get("tasks", []):
+            tid = task.get("id")
+            if tid:
+                index[tid] = task
+    return index
+
+
+_MISSING = object()
+
+
+def _three_way_merge_fields(
+    base: dict[str, Any], ours: dict[str, Any], theirs: dict[str, Any]
+) -> dict[str, Any]:
+    """Per-key three-way merge with local changes winning conflicts.
+
+    A missing key is a value for merge purposes, so deletion on either side is
+    treated as a change relative to the base.
+    """
+    result: dict[str, Any] = {}
+    for key in set(base) | set(ours) | set(theirs):
+        base_value = base.get(key, _MISSING)
+        our_value = ours.get(key, _MISSING)
+        their_value = theirs.get(key, _MISSING)
+        if our_value == their_value:
+            chosen = our_value
+        elif our_value != base_value:
+            chosen = our_value
+        elif their_value != base_value:
+            chosen = their_value
+        else:
+            chosen = our_value
+        if chosen is not _MISSING:
+            result[key] = chosen
+    return result
+
+
+def _merge_task_with_disk(
+    base_task: dict[str, Any], mem_task: dict[str, Any], disk_path: Path
+) -> tuple[dict[str, Any], str]:
+    """Three-way merge an in-memory task against its current disk file."""
+    persistable_base = _v4_strip_private_fields(base_task, preserve_body=True)
+    persistable_mem = _v4_strip_private_fields(mem_task, preserve_body=True)
+    base_fm, base_body = task_v4_to_file(persistable_base)
+    mem_fm, mem_body = task_v4_to_file(persistable_mem)
+    disk_fm, disk_body = read_task_file(disk_path)
+    persistable_disk_fm = _v4_strip_private_fields(disk_fm)
+    merged_fm = _three_way_merge_fields(base_fm, mem_fm, persistable_disk_fm)
+    merged_body = mem_body if mem_body != base_body else disk_body
+    return merged_fm, merged_body
+
+
+def _v4_write_task(
+    backlog_path: Path, task: dict[str, Any], snapshot: dict[str, Any] | None
+) -> None:
+    """Write one task file, dirty-scoped and merge-aware."""
+    snap_index = _v4_snapshot_tasks(snapshot)
+    prior = snap_index.get(task["id"])
+    if prior is not None and prior == task:
+        return
+    path = task_file_path(backlog_path, task["id"])
+    if prior is not None and path.exists():
+        disk_fm, disk_body = read_task_file(path)
+        persistable_prior = _v4_strip_private_fields(prior, preserve_body=True)
+        base_fm, base_body = task_v4_to_file(persistable_prior)
+        if (disk_fm, disk_body) != (base_fm, base_body):
+            merged_fm, merged_body = _merge_task_with_disk(prior, task, path)
+            write_task_file(path, merged_fm, merged_body)
+            return
+    persistable_task = _v4_strip_private_fields(task, preserve_body=True)
+    fm, body = task_v4_to_file(persistable_task)
+    write_task_file(path, fm, body)
 
 
 # ---- Sessions ------------------------------------------------------------
@@ -4216,7 +4567,16 @@ def update_task(task_id: str, patch: dict, backlog_path: Path | None = None) -> 
     """
     bp = backlog_path or _resolve_backlog_path()
     with with_file_lock(bp):
-        data = yaml.safe_load(bp.read_text(encoding="utf-8")) or {}
+        raw = yaml.safe_load(bp.read_text(encoding="utf-8")) or {}
+        version = detect_schema_version(raw)
+        if version >= SCHEMA_V4:
+            from copy import deepcopy
+
+            data = load_v4(bp)
+            snapshot = deepcopy(data)
+        else:
+            data = raw
+            snapshot = None
         found = _find_task_in_yaml(data, task_id)
         if found is None:
             raise KeyError(f"task {task_id} not found")
@@ -4234,7 +4594,10 @@ def update_task(task_id: str, patch: dict, backlog_path: Path | None = None) -> 
         if after_status == "done":
             task.pop("human_action", None)
         task["last_referenced"] = _now_iso()
-        atomic_write(bp, yaml.safe_dump(data, sort_keys=False))
+        if version >= SCHEMA_V4:
+            save_v4(bp, data, snapshot=snapshot)
+        else:
+            atomic_write(bp, yaml.safe_dump(data, sort_keys=False))
         return dict(task)
 
 
@@ -4619,6 +4982,12 @@ _ENTITY_PATH_HELPERS: dict[str, Any] = {
 }
 
 
+def _load_task_entities(backlog_path: Path) -> tuple[dict[str, Any], bool]:
+    """Load task entities through the schema-appropriate storage reader."""
+    raw = yaml.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
+    is_v4 = detect_schema_version(raw) >= SCHEMA_V4
+    return (load_v4(backlog_path) if is_v4 else load_v3(backlog_path), is_v4)
+
 def read_entity_anywhere(
     backlog_path: Path,
     entity_id: str,
@@ -4640,7 +5009,7 @@ def read_entity_anywhere(
     if kind is None:
         return None
     if kind == "task":
-        data = load_v3(backlog_path)
+        data, _ = _load_task_entities(backlog_path)
         for epic in data.get("epics", []):
             for task in epic.get("tasks", []):
                 if task.get("id") == entity_id:
@@ -4678,7 +5047,11 @@ def write_entity_anywhere(backlog_path: Path, entity: dict) -> None:
     if kind is None:
         raise ValueError(f"unknown entity kind for id={entity_id!r}")
     if kind == "task":
-        data = load_v3(backlog_path)
+        data, is_v4 = _load_task_entities(backlog_path)
+        if is_v4:
+            from copy import deepcopy
+
+            snapshot = deepcopy(data)
         for epic in data.get("epics", []):
             tasks = epic.get("tasks", [])
             for i, task in enumerate(tasks):
@@ -4686,7 +5059,10 @@ def write_entity_anywhere(backlog_path: Path, entity: dict) -> None:
                     # Strip body-key before persisting (save_v3 routes it through
                     # _split_task_for_v3 which already understands BODY_KEY).
                     tasks[i] = dict(entity)
-                    save_v3(backlog_path, data)
+                    if is_v4:
+                        save_v4(backlog_path, data, snapshot=snapshot)
+                    else:
+                        save_v3(backlog_path, data)
                     return
         raise KeyError(f"task {entity_id!r} not found")
     # Non-task: split frontmatter vs body, then write via the path helper.

@@ -7,6 +7,16 @@ Versions follow [SemVer](https://semver.org/spec/v2.0.0.html) — major bumps
 indicate schema breaks or removed surfaces.
 
 ---
+## 5.0.0
+
+**Team relayout — sharded per-task storage (`schema_version: 4`).** Every task field now lives in `tasks/<id>.md`; the slim `backlog.yaml` contains only project metadata, phases, and epic definitions. Task order is fractional and epic membership is declared by each task's `epic:` field.
+
+Saves are dirty-scoped and merge-aware: only changed task files are written, while concurrent disk changes are preserved through a per-field three-way merge. IDs allocate by directory scan, and typed-link reads and writes now dispatch through the active schema.
+
+Machine-local state (`viewer.json`, `auto/`, `PROGRESS.md`, and derived `meta.updated`) lives under `.taskmaster/local/`. Existing v3 projects remain readable and writable and receive a migration prompt; migrate idempotently with `backlog_migrate_v4`. New projects use v4 by default. An MCP server restart is required after upgrading.
+
+This is epic 1 of the team-collaboration design; identity, synchronization, team IDs, and viewer collaboration land in later releases.
+
 ## 4.6.0
 
 **in-review becomes a human-blocked exception state.** `done` is now the default terminal status (Claude complete + gates passed); `in-review` is reserved for tasks blocked on an action only a human can perform, recorded in the new `human_action` light field. Every write path that reaches in-review (`backlog_complete_task`, `backlog_update_task`, `backlog_batch_update`) rejects the transition without a `human_action`; reaching `done` clears it. Review-gate no longer transitions status — it records the gate and end-session closes the task. start-session gains a "Waiting on you" list plus a one-time sweep offering to bulk-close pre-4.6.0 in-review tasks. Viewer: kanban column relabeled "Waiting on human"; in-review cards show their `human_action`.

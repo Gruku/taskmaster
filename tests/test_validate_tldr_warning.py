@@ -5,26 +5,31 @@ from __future__ import annotations
 import yaml
 
 
+def _write_missing_tldr(backlog_path, task_id: str, title: str) -> None:
+    from taskmaster.taskmaster_v3 import write_task_file
+
+    write_task_file(
+        backlog_path.parent / "tasks" / f"{task_id}.md",
+        {
+            "id": task_id,
+            "title": title,
+            "status": "todo",
+            "phase": "dev",
+            "epic": "test-epic",
+            "order": 999.0,
+        },
+        "",
+    )
+
+
 def test_validate_warns_on_missing_tldr(tm_epic_phase):
     """backlog_validate should emit a warning (not an error) for tasks without tldr."""
     from taskmaster import backlog_server
 
-    # Inject a legacy task directly into backlog.yaml (bypassing backlog_add_task
-    # which auto-generates tldr — this simulates pre-progressive-disclosure data)
     from pathlib import Path
-    bp = Path(tm_epic_phase) / ".taskmaster" / "backlog.yaml"
-    data = yaml.safe_load(bp.read_text(encoding="utf-8"))
 
-    for epic in data.get("epics", []):
-        if epic.get("id") == "test-epic":
-            epic.setdefault("tasks", []).append({
-                "id": "T-no-tldr",
-                "title": "Task without tldr",
-                "status": "todo",
-                "phase": "dev",
-            })
-            break
-    bp.write_text(yaml.safe_dump(data), encoding="utf-8")
+    bp = Path(tm_epic_phase) / ".taskmaster" / "backlog.yaml"
+    _write_missing_tldr(bp, "T-no-tldr", "Task without tldr")
 
     out = backlog_server.backlog_validate()
 
@@ -62,18 +67,7 @@ def test_validate_all_clear_still_shown_with_warnings(tm_epic_phase):
     from pathlib import Path
 
     bp = Path(tm_epic_phase) / ".taskmaster" / "backlog.yaml"
-    data = yaml.safe_load(bp.read_text(encoding="utf-8"))
-
-    for epic in data.get("epics", []):
-        if epic.get("id") == "test-epic":
-            epic.setdefault("tasks", []).append({
-                "id": "T-legacy-2",
-                "title": "Another legacy task",
-                "status": "todo",
-                "phase": "dev",
-            })
-            break
-    bp.write_text(yaml.safe_dump(data), encoding="utf-8")
+    _write_missing_tldr(bp, "T-legacy-2", "Another legacy task")
 
     out = backlog_server.backlog_validate()
 
