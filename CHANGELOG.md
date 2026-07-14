@@ -7,6 +7,12 @@ Versions follow [SemVer](https://semver.org/spec/v2.0.0.html) — major bumps
 indicate schema breaks or removed surfaces.
 
 ---
+## 5.1.0
+
+**Legacy viewer removed; new UI only.** The single-file `backlog-viewer.html` is deleted and the root URL (`/`) now serves the modular viewer shell unconditionally, with assets under `/static/v3/`. `/v3` remains as an alias for open tabs and tests. The `use_v3` viewer pref is retired — it no longer influences routing, is dropped from the prefs defaults, and any stale `use_v3` key left in a project's `viewer.json` is ignored without error. `backlog_migrate_v3` no longer flips viewer prefs.
+
+The guided init flow is v4-only: `backlog_init` already defaults to v4 sharded storage, and the init playbook no longer offers a schema choice (the project-manifest offer now applies to every init). The `schema_version` argument still accepts 2/3/4 for migration tooling and tests.
+
 ## 5.0.0
 
 **Team relayout — sharded per-task storage (`schema_version: 4`).** Every task field now lives in `tasks/<id>.md`; the slim `backlog.yaml` contains only project metadata, phases, and epic definitions. Task order is fractional and epic membership is declared by each task's `epic:` field.

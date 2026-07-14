@@ -1,6 +1,6 @@
-# Taskmaster Viewer (v3)
+# Taskmaster Viewer
 
-Modular rebuild of the legacy `backlog-viewer.html`. Active development under Plans 1–6 of the redesign.
+The taskmaster viewer UI. Served at `/` (and aliased at `/v3`) by the embedded HTTP server; assets are rewritten under `/static/v3/`.
 
 ## Layout
 
@@ -23,7 +23,7 @@ Modular rebuild of the legacy `backlog-viewer.html`. Active development under Pl
 python -c "from taskmaster.backlog_server import _make_server; s, p = _make_server(host='127.0.0.1', port=0); print(f'http://127.0.0.1:{p}/v3'); s.serve_forever()"
 ```
 
-The legacy viewer still serves at `/`. Set `viewer.use_v3 = true` in `.taskmaster/viewer.json` (or via `PUT /api/viewer/prefs`) to flip the root URL.
+Root (`/`) serves this viewer shell — no pref flip needed. `/v3` is a kept alias for open tabs and tests.
 
 ## Test
 

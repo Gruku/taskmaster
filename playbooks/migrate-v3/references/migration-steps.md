@@ -14,11 +14,9 @@ Call backlog_list_tasks and backlog_status to gather counts. Present:
 - No data is lost. The in-memory shape is identical on v2 and v3
 - Reversibility: the migration is idempotent -- if you want to roll back, git restore backlog.yaml and delete the tasks/ directory
 
-## Step 5: Verify Viewer Flipped to v3
+## Step 5: Refresh the Viewer
 
-1. Call viewer_prefs_get and parse the JSON response.
-2. If use_v3 is true: tell user to hard-refresh any open viewer tab (Ctrl+Shift+R / Cmd+Shift+R).
-3. If use_v3 is false or missing: the inner flip silently failed. Call viewer_prefs_set({use_v3: true}) explicitly. If it returns error, tell user the schema migrated cleanly but the viewer toggle needs manual fixing.
+The viewer serves the same UI at `/` for every schema — migration no longer touches viewer prefs. If a viewer tab is open, tell the user to hard-refresh it (Ctrl+Shift+R / Cmd+Shift+R) so the newly unlocked v3 surfaces (Issues, Sessions) appear.
 
 ## Step 6: Canonicalize Layout (Legacy .claude/ Projects Only)
 

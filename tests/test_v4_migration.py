@@ -34,6 +34,8 @@ def _v3_project(tmp_path: Path) -> Path:
         {"id": "e-001", "title": "First", "notes": "important"},
         "## Spec\n\nbody",
     )
+    # use_v3 is a retired pref; keeping it here proves migration relocates a
+    # stale viewer.json (and its dead keys) to local/ without choking.
     (tm / "viewer.json").write_text('{"use_v3": true}', encoding="utf-8")
     (tm / "auto").mkdir()
     (tm / "auto" / "state.json").write_text("{}", encoding="utf-8")

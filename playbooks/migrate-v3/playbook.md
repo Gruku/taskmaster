@@ -48,4 +48,4 @@ Call `backlog_migrate_v3()`. Surface the response verbatim. If error: surface as
 
 ## Steps 5-7
 
-Full detail for steps 5-7 (viewer flip verification, layout canonicalize, v3 surface tour) in `references/migration-steps.md`.
+Full detail for steps 5-7 (viewer refresh, layout canonicalize, v3 surface tour) in `references/migration-steps.md`.
