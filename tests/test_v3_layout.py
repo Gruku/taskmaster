@@ -738,7 +738,6 @@ def test_viewer_prefs_defaults_have_all_expected_keys():
     from taskmaster.taskmaster_v3 import VIEWER_PREFS_DEFAULTS
     expected_top_keys = {
         "schema_version",
-        "use_v3",
         "theme",
         "card_density",
         "zoom",
@@ -778,6 +777,22 @@ def test_viewer_prefs_round_trip(tmp_path, monkeypatch):
     p2 = load_viewer_prefs()
     assert p2["theme"] == "light"
     assert p2["kanban"]["filters"]["search"] == "auth"
+
+def test_viewer_prefs_tolerates_stale_use_v3(tmp_path, monkeypatch):
+    """The retired use_v3 pref, if left on disk from an older version, must load
+    without error and never appear in the defaults."""
+    import json
+    from taskmaster.taskmaster_v3 import load_viewer_prefs, VIEWER_PREFS_DEFAULTS
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".taskmaster").mkdir()
+    (tmp_path / ".taskmaster" / "viewer.json").write_text(
+        json.dumps({"schema_version": 1, "use_v3": True, "theme": "dark"})
+    )
+    assert "use_v3" not in VIEWER_PREFS_DEFAULTS
+    prefs = load_viewer_prefs()  # must not raise
+    assert prefs["theme"] == "dark"
+    assert prefs["card_density"] == "full"  # defaults still fill in
+
 
 def test_viewer_prefs_unknown_keys_preserved_on_save(tmp_path, monkeypatch):
     """Forward-compat: don't strip keys we don't know about."""

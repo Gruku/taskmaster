@@ -126,10 +126,22 @@ def test_static_v3_path_traversal_url_encoded_blocked(running_server):
     assert exc.value.code == 400
 
 
-def test_root_serves_v3_when_use_v3_flag_set(running_server):
+def test_root_serves_new_shell_by_default(running_server):
     base, _ = running_server
-    # Flip the prefs flag
-    put_body = json.dumps({"use_v3": True}).encode()
+    # A fresh project, no viewer prefs written: root serves the new viewer
+    # shell with assets rewritten under /static/v3/.
+    resp = urllib.request.urlopen(f"{base}/")
+    assert resp.status == 200
+    html = resp.read().decode()
+    assert "<title>Taskmaster</title>" in html
+    assert 'src="/static/v3/js/main.js"' in html
+
+
+def test_root_ignores_stale_use_v3_pref(running_server):
+    base, _ = running_server
+    # The retired use_v3 pref must not affect routing. Even written to false,
+    # root still serves the new shell (the only viewer that ships).
+    put_body = json.dumps({"use_v3": False}).encode()
     req = urllib.request.Request(f"{base}/api/viewer/prefs", data=put_body, method="PUT",
                                  headers={"Content-Type": "application/json"})
     urllib.request.urlopen(req)
@@ -137,17 +149,5 @@ def test_root_serves_v3_when_use_v3_flag_set(running_server):
     resp = urllib.request.urlopen(f"{base}/")
     assert resp.status == 200
     html = resp.read().decode()
-    # When use_v3 is True, root serves the new shell, not the legacy file
     assert "<title>Taskmaster</title>" in html
-    assert 'src="/static/v3/js/main.js"' in html or 'main.js' in html
-
-
-def test_root_serves_legacy_by_default(running_server):
-    base, _ = running_server
-    resp = urllib.request.urlopen(f"{base}/")
-    body = resp.read().decode()
-    # The legacy viewer; whatever is in backlog-viewer.html (we just check it's NOT the v3 shell).
-    # If the legacy file isn't present in the test fixture, this test should xfail rather than fail.
-    # Heuristic: legacy file is much larger and includes 'jsyaml' inline.
-    # If legacy isn't shipped to test fixture, accept either; but assert v3 marker is absent.
-    assert 'src="/static/v3/js/main.js"' not in body
+    assert 'src="/static/v3/js/main.js"' in html
