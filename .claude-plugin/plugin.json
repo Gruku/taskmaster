@@ -1,7 +1,7 @@
 {
   "name": "taskmaster",
   "description": "Latest channel \u2014 v4 sharded storage (default). Universal AI-powered task and backlog management plus narrative continuity: handovers, issues. Per-task files (.taskmaster/tasks/<id>.md) with a slim YAML index and dirty-scoped, merge-aware saves. v2/v3 backlogs keep working unchanged; migrate with `backlog_migrate_v4`. Requires: uv (https://docs.astral.sh/uv/)",
-  "version": "5.0.0",
+  "version": "5.1.0",
   "channel": "latest",
   "author": {
     "name": "gruku"

@@ -37,7 +37,6 @@ mcp = FastMCP("taskmaster")
 # Repo/plugin root — this module lives in the taskmaster/ package, one level down.
 SCRIPT_DIR = Path(__file__).resolve().parent.parent
 ROOT = Path(os.environ.get("TASKMASTER_ROOT", Path.cwd()))
-VIEWER_PATH = SCRIPT_DIR / "backlog-viewer.html"
 CONFIG_PATH = ROOT / ".taskmaster" / "taskmaster.json"
 # Legacy location read-only fallback. Pre-consolidation projects wrote config
 # to `.claude/taskmaster.json`; the resolver still honors it so those servers
@@ -1815,10 +1814,12 @@ def backlog_init(project_name: str = "", location: str = "tracked", schema_versi
                   taskmaster always writes to `.taskmaster/` now. Existing
                   `.claude/`-layout projects keep working via the resolver shim;
                   run `backlog_canonicalize_layout` to migrate them.
-        schema_version: 2 (stable, single backlog.yaml) or 3 (latest, slim index +
-                  per-task files + handovers/issues/auto). 0 → use SCHEMA_DEFAULT.
-                  v3 init creates the directory layout up front (tasks/, handovers/,
-                  issues/, auto/).
+        schema_version: 0 → use SCHEMA_DEFAULT (v4, sharded per-task storage) —
+                  the default for new projects. 2 (single backlog.yaml) and 3
+                  (slim index + per-task files) are legacy schemas retained only
+                  for migration tooling and tests; do not pick them for a fresh
+                  project. v3/v4 init creates the directory layout up front
+                  (tasks/, handovers/, issues/, auto/).
     """
     if location == "hidden":
         return (
@@ -1944,17 +1945,6 @@ def backlog_migrate_v3() -> str:
         return f"Error: no backlog found at {bp}. Run `backlog_init` first."
     summary = _migrate_v2_to_v3(bp)
 
-    # Flip the viewer to v3 mode. Both freshly migrated and already-v3 projects
-    # should serve the v3 viewer — otherwise the migration completes but the
-    # user still sees the v2 UI (no Issues / Sessions tabs).
-    try:
-        prefs = load_viewer_prefs()
-        if not prefs.get("use_v3"):
-            prefs["use_v3"] = True
-            save_viewer_prefs(prefs)
-    except Exception:
-        pass
-
     if summary["status"] == "already_v3":
         return (
             f"Already on v3 — {summary['tasks_total']} tasks, no changes made.\n"
@@ -1971,7 +1961,6 @@ def backlog_migrate_v3() -> str:
         f"- Tasks: {summary['tasks_total']}\n"
         f"- {files_msg}\n"
         f"- Index: {bp.relative_to(ROOT)}\n"
-        f"- Viewer: switched to v3 UI (use_v3=true)\n"
         f"\nv3 features (handovers, issues, auto modes) will land in "
         f"subsequent slices."
     )
@@ -7055,16 +7044,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         clean_path = unquote(parsed.path)
 
-        if clean_path in ("/", "/index.html"):
-            try:
-                prefs = load_viewer_prefs()
-                if prefs.get("use_v3"):
-                    self.path = "/v3"
-                    return self.do_GET()
-            except Exception:
-                pass
-            self._serve_file(VIEWER_PATH, "text/html")
-        elif clean_path in ("/v3", "/v3/", "/v3/index.html"):
+        if clean_path in ("/", "/index.html", "/v3", "/v3/", "/v3/index.html"):
             viewer_root = SCRIPT_DIR / "viewer"
             idx = viewer_root / "index.html"
             if not idx.exists():

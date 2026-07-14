@@ -353,7 +353,7 @@ Taskmaster includes a kanban board that runs in your browser.
 
 | Endpoint | Description |
 |----------|-------------|
-| `GET /` | Kanban board (backlog-viewer.html) |
+| `GET /` | Viewer UI shell (`viewer/index.html`; aliased at `/v3`) |
 | `GET /backlog.yaml` | Raw YAML |
 | `GET /api/backlog` | Backlog as JSON |
 | `GET /api/session` | Current session state + SESSION_ID |

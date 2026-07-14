@@ -3959,7 +3959,6 @@ VIEWER_PREFS_SCHEMA_VERSION = 1
 
 VIEWER_PREFS_DEFAULTS = {
     "schema_version": VIEWER_PREFS_SCHEMA_VERSION,
-    "use_v3": False,          # serve v3 viewer shell at root when True
     "theme": "dark",          # dark | light
     "card_density": "full",   # full | minimal
     "zoom": 1.0,              # 1.5x baked into source CSS as of T2.24α

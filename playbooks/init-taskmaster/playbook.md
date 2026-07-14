@@ -8,34 +8,22 @@ Set up AI-powered task management in the current project. Offers two modes: clea
 
 Call `backlog_init` with no arguments. If it reports "already initialized", call `backlog_status` and show the user what's there. Stop.
 
-## Step 2: Ask setup questions — MANDATORY, do NOT skip
+## Step 2: Ask how to start — MANDATORY, do NOT skip
 
-Ask the user, in one round if your tool supports multi-question prompts (use your structured-question tool if available; otherwise ask sequentially):
+New projects always use the current schema (v4 — sharded per-task storage). Do not present schema as a choice; `backlog_init` uses the server default. Ask only how to seed the backlog:
 
-1. "Which schema version?" — options:
-   - "v2 (Default — stable)": Single backlog.yaml file. Simple, proven, all existing tools work.
-   - "v3 (Narrative continuity — opt-in)": Slim index + per-task files. Adds handovers and issues.
-2. "How do you want to start?" — options:
-   - "Analyze project (Recommended)": Scan for TODOs, FIXMEs, README plans, and existing structure to suggest an initial backlog.
-   - "Clean start": Empty backlog — you'll add epics and tasks as you go.
+- "How do you want to start?" — options:
+  - "Analyze project (Recommended)": Scan for TODOs, FIXMEs, README plans, and existing structure to suggest an initial backlog.
+  - "Clean start": Empty backlog — you'll add epics and tasks as you go.
 
-Do NOT call `backlog_init` until you have the answers.
+Do NOT call `backlog_init` until you have the answer.
 
 <!-- cc-only:start -->
-On Claude Code, use `AskUserQuestion` with both questions in a single call:
+On Claude Code, use `AskUserQuestion`:
 
 ```
 AskUserQuestion({
   questions: [
-    {
-      question: "Which schema version?",
-      header: "Schema",
-      multiSelect: false,
-      options: [
-        { label: "v2 (Default — stable)", description: "Single backlog.yaml file. Simple, proven, all existing tools work." },
-        { label: "v3 (Narrative continuity — opt-in)", description: "Slim index + per-task files. Adds handovers and issues." }
-      ]
-    },
     {
       question: "How do you want to start?",
       header: "Init mode",
@@ -50,11 +38,9 @@ AskUserQuestion({
 ```
 <!-- cc-only:end -->
 
-Map: v3 -> after `backlog_init`, call `backlog_migrate_v3`.
+## Step 2b: Offer project manifest
 
-## Step 2b: Offer project manifest (v3 only)
-
-After `backlog_init` succeeds on a v3 setup, ask whether to also scaffold the Project manifest at `.taskmaster/project.yaml` — the structured truth about repos, submodules, branch protocol, stacks, deploy targets, and error-trace ladder. Pairs with `backlog.yaml` (work in flight).
+After `backlog_init` succeeds, ask whether to also scaffold the Project manifest at `.taskmaster/project.yaml` — the structured truth about repos, submodules, branch protocol, stacks, deploy targets, and error-trace ladder. Pairs with `backlog.yaml` (work in flight).
 
 Ask the user (use your structured-question tool if available; otherwise present the options):
 
@@ -81,8 +67,6 @@ AskUserQuestion({
 <!-- cc-only:end -->
 
 On "Yes": call `backlog_project_init` (no args — it writes a minimal valid manifest, refuses to overwrite). Then point the user at it: "Edit `.taskmaster/project.yaml` to declare your repos, submodules, branch protocol, and error-trace ladder. Schema reference: `taskmaster/project.py` (plugin root)."
-
-Skip this step entirely on v2 — project.yaml is a v3 surface.
 
 ## Step 3a: Clean start
 

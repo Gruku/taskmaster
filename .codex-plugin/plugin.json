@@ -1,6 +1,6 @@
 {
   "name": "taskmaster",
-  "version": "5.0.0",
+  "version": "5.1.0",
   "description": "Harness-agnostic task and backlog management with neutral workflow playbooks, narrative continuity, and a local kanban viewer.",
   "author": {
     "name": "gruku"
