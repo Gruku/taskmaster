@@ -6,6 +6,9 @@ build-backend = "setuptools.build_meta"
 name = "taskmaster"
 version = "5.1.0"
 description = "Task/backlog management MCP server with narrative continuity (handovers, issues, decisions)"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "gruku" }]
 requires-python = ">=3.11"
 dependencies = ["fastmcp", "pyyaml"]
 
