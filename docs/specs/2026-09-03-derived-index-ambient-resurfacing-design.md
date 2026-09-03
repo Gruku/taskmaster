@@ -68,12 +68,13 @@ isolated, so an explicit graph traversal feature would be built on sparse data. 
 
 Trigger points:
 
-- The MCP server calls `build_index` after every write it performs, so the index is normally
-  current when the hook runs.
-- The SessionStart hook runs an incremental build in the background so the first edit of a
-  session never sees a stale index.
-- The edit hook runs `build_index(budget_s=2.0)` before querying, and appends
-  `(index stale)` to its line if the report is stale.
+- The MCP server calls `build_index(budget_s=1.5)` inside `_load()`, so every tool call keeps
+  the index current, including after out-of-band file edits.
+- The SessionStart hook runs `backlog_server.py --build-index` in the background so the first
+  edit of a session never sees a stale index.
+- The edit hook never builds. It runs under system Python with the standard library only, reads
+  the DB, and appends `(index stale)` when `backlog.yaml` or an entity directory is newer than
+  the recorded `built_at_epoch`. A missing DB makes the hook silent.
 
 ### 3.3 Schema
 
@@ -164,7 +165,7 @@ Rules:
   matches. Either is omitted when zero.
 - Silent when nothing matches at all, including when only closed items match. (Closed history
   is reachable through `backlog_query`; the tool description says so.)
-- Append `(index stale)` when the bounded build could not finish.
+- Append `(index stale)` when source files are newer than the index (see 3.2).
 
 ### 4.4 Dedupe
 
@@ -176,7 +177,7 @@ pruned on write.
 
 Whole hook, interpreter startup included, must complete under 1 s on the CodeMaestro fixture.
 A test asserts the query portion stays under 50 ms on a 3k-entity synthetic index. Hook
-timeout in `hooks.json`: 5 s.
+timeout in `hooks.json`: 10 s, matching the other ported hooks.
 
 ## 5. Component: query tool and search
 
@@ -231,7 +232,8 @@ without the user's answer.
 ## 7. Error handling
 
 - Index unavailable or corrupt: hook stays silent; `backlog_query` rebuilds; `backlog_search`
-  falls back.
+  falls back. Build failures inside `_load()` are logged to `.taskmaster/local/index.log` and
+  never fail the tool call.
 - Hook exceptions never surface to the tool call; they are logged to
   `.taskmaster/local/hook.log`, capped at 1 MB with truncation.
 - Build failures on a single malformed entity file skip that file and record it in
