@@ -13,7 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from taskmaster.backlog_server import mcp  # noqa: E402
+from taskmaster.backlog_server import main, mcp  # noqa: E402,F401
 
 if __name__ == "__main__":
-    mcp.run()
+    main()

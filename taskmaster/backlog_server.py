@@ -15,7 +15,7 @@ import threading
 import urllib.request
 import uuid
 import webbrowser
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from functools import partial
 from http import HTTPStatus
 from copy import deepcopy
@@ -389,6 +389,29 @@ def _normalize_priority(value: str) -> str:
     return _LEGACY_TO_NAME.get(value, value)
 
 
+# The index refresh rides along on every tool call, so it gets a short budget:
+# past it the build stops early and reports itself stale rather than stalling the
+# tool. The SessionStart warm runs unbudgeted and catches up.
+INDEX_REFRESH_BUDGET_S = 1.5
+INDEX_LOG_MAX_BYTES = 1024 * 1024
+INDEX_LOG_KEEP_BYTES = 512 * 1024
+
+
+def _log_index_error(bp: Path, exc: BaseException) -> None:
+    """Append one line to `.taskmaster/local/index.log`. Never raises."""
+    try:
+        log = bp.parent / "local" / "index.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        if log.exists() and log.stat().st_size > INDEX_LOG_MAX_BYTES:
+            tail = log.read_bytes()[-INDEX_LOG_KEEP_BYTES:]
+            log.write_bytes(tail)
+        stamp = datetime.now(timezone.utc).isoformat()
+        with log.open("a", encoding="utf-8") as fh:
+            fh.write(f"{stamp} {exc!r}\n")
+    except Exception:  # logging must never break the tool call either
+        pass
+
+
 def _load() -> dict:
     global _LOAD_SNAPSHOT
     bp = _backlog_path()
@@ -410,6 +433,11 @@ def _load() -> dict:
             if pri in _LEGACY_TO_NAME:
                 t["priority"] = _LEGACY_TO_NAME[pri]
     _LOAD_SNAPSHOT = _copy.deepcopy(data) if version >= SCHEMA_V4 else None
+    try:
+        from taskmaster import index as _index  # noqa: PLC0415 — optional, derived
+        _index.build_index(bp, data, budget_s=INDEX_REFRESH_BUDGET_S)
+    except Exception as exc:  # index is derived; never break a tool call
+        _log_index_error(bp, exc)
     return data
 
 
@@ -1413,6 +1441,51 @@ def backlog_get_task(
             lines.append(f"- `{t['id']}` — {t['title']} ({t.get('priority', 'medium')})")
 
     return "\n".join(lines)
+
+
+def _render_index_report(bp: Path, report) -> str:
+    from taskmaster import index as _index  # noqa: PLC0415
+
+    yn = lambda b: "yes" if b else "no"  # noqa: E731
+    counts = report.row_counts or {}
+    rows = " ".join(
+        f"{t}={counts.get(t, 0)}"
+        for t in ("entities", "entity_paths", "links", "handovers", "related", "entity_fts")
+    ).replace("entity_fts=", "fts=")
+    lines = [
+        f"Index: {_index.db_path(bp)}",
+        f"Built: {report.built_at}  (full rebuild: {yn(report.full_rebuild)}, "
+        f"stale: {yn(report.stale)}, {report.elapsed_ms} ms)",
+        f"Rows: {rows}",
+    ]
+    pending = report.pending_files or []
+    lines.append(f"Pending: {len(pending)} files"
+                 + (f"  {', '.join(pending[:10])}" if pending else ""))
+    errors = report.errors or []
+    lines.append(f"Errors: {len(errors)}"
+                 + (f"  {'; '.join(errors[:5])}" if errors else ""))
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def backlog_index_status(rebuild: bool = False) -> str:
+    """Report the state of the derived SQLite index (`.taskmaster/local/index.db`).
+
+    The index is derived and disposable — it is refreshed on every backlog tool
+    call and rebuilt from the files whenever it is missing or stale.
+
+    Args:
+        rebuild: Delete the index and build it from scratch before reporting.
+    """
+    from taskmaster import index as _index  # noqa: PLC0415
+
+    bp = _backlog_path()
+    if rebuild:
+        _index.db_path(bp).unlink(missing_ok=True)
+        report = _index.build_index(bp)
+    else:
+        report = _index.last_report(bp) or _index.build_index(bp)
+    return _render_index_report(bp, report)
 
 
 @mcp.tool()
@@ -8744,5 +8817,28 @@ def backlog_linear_retry(target_id: str = "") -> str:
     return json.dumps({"ok": True, "counts": counts}, indent=2)
 
 
-if __name__ == "__main__":
+def _build_index_cli(argv: list[str]) -> int:
+    """`--build-index [path]`: refresh the derived index and print the report."""
+    import dataclasses  # noqa: PLC0415
+
+    from taskmaster import index as _index  # noqa: PLC0415
+
+    rest = argv[argv.index("--build-index") + 1:]
+    positional = next((a for a in rest if not a.startswith("-")), None)
+    bp = _index.resolve_backlog_path(Path(positional)) if positional else _backlog_path()
+    if not bp.exists():
+        print(f"no backlog found at {bp}", file=sys.stderr)
+        return 1
+    print(json.dumps(dataclasses.asdict(_index.build_index(bp)), indent=2))
+    return 0
+
+
+def main() -> None:
+    """Entry point for both `taskmaster/backlog_server.py` and the root shim."""
+    if "--build-index" in sys.argv:
+        sys.exit(_build_index_cli(sys.argv))
     mcp.run()
+
+
+if __name__ == "__main__":
+    main()

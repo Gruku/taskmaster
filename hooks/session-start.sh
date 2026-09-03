@@ -49,4 +49,10 @@ cat <<EOF
 }
 EOF
 
+# Warm the derived index in the background, after the JSON is printed so a slow
+# uv start can never delay the hook.
+if command -v uv >/dev/null 2>&1 && [ -f ".taskmaster/backlog.yaml" ]; then
+  (uv run "${PLUGIN_ROOT}/backlog_server.py" --build-index >/dev/null 2>&1 &)
+fi
+
 exit 0
