@@ -1443,15 +1443,22 @@ def backlog_get_task(
     return "\n".join(lines)
 
 
+# Report label -> index table name. `fts` is shortened; the rest match 1:1.
+_INDEX_ROW_LABELS = (
+    ("entities", "entities"), ("entity_paths", "entity_paths"), ("links", "links"),
+    ("handovers", "handovers"), ("related", "related"), ("fts", "entity_fts"),
+)
+
+
 def _render_index_report(bp: Path, report) -> str:
+    """Format an `index.IndexReport` as the five-line `backlog_index_status` body."""
     from taskmaster import index as _index  # noqa: PLC0415
 
-    yn = lambda b: "yes" if b else "no"  # noqa: E731
+    def yn(flag: bool) -> str:
+        return "yes" if flag else "no"
+
     counts = report.row_counts or {}
-    rows = " ".join(
-        f"{t}={counts.get(t, 0)}"
-        for t in ("entities", "entity_paths", "links", "handovers", "related", "entity_fts")
-    ).replace("entity_fts=", "fts=")
+    rows = " ".join(f"{label}={counts.get(table, 0)}" for label, table in _INDEX_ROW_LABELS)
     lines = [
         f"Index: {_index.db_path(bp)}",
         f"Built: {report.built_at}  (full rebuild: {yn(report.full_rebuild)}, "
