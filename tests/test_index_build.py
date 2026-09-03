@@ -66,6 +66,11 @@ def test_prose_paths_exclude_jsonl_and_urls():
     assert got == ["api/src/svc/other.py"]
 
 
+def test_prose_paths_keep_the_whole_extension():
+    got = extract_prose_paths("web/app/page.tsx, sln/x.csproj, src/y.hpp and logs/abc.jsonl")
+    assert got == ["web/app/page.tsx", "sln/x.csproj", "src/y.hpp"]
+
+
 def test_infer_repo_longest_prefix_wins():
     repos = [("api", "api"), ("api-web", "api/web")]
     assert infer_repo(["api/web/page.tsx"], repos) == "api-web"
@@ -115,12 +120,113 @@ def test_incremental_reingest_on_mtime(fixture_tm):
 def test_removed_file_rows_deleted(fixture_tm):
     bp = fixture_tm / "backlog.yaml"
     build_index(bp)
+    con = open_ro(bp)
+    assert con.execute("select count(*) from links where src='B-002'").fetchone()[0] > 0
     (fixture_tm / "bugs" / "B-002.md").unlink()
     build_index(bp)
     con = open_ro(bp)
     assert con.execute("select count(*) from entities where id='B-002'").fetchone()[0] == 0
     assert con.execute("select count(*) from entity_paths where entity_id='B-002'").fetchone()[0] == 0
     assert con.execute("select count(*) from related where a='B-002' or b='B-002'").fetchone()[0] == 0
+    assert con.execute("select count(*) from links where src='B-002'").fetchone()[0] == 0
+    assert con.execute("select count(*) from links where dst='B-002'").fetchone()[0] == 0
+
+
+def test_link_removal_drops_forward_row_and_mirror(fixture_tm):
+    bp = fixture_tm / "backlog.yaml"
+    build_index(bp)
+    text = bp.read_text(encoding="utf-8")
+    bp.write_text(
+        text.replace("        links:\n          - type: depends_on\n            target: eng-002\n", ""),
+        encoding="utf-8",
+    )
+    os.utime(bp, (time.time() + 5, time.time() + 5))
+    build_index(bp)
+    con = open_ro(bp)
+    assert con.execute(
+        "select count(*) from links where src='eng-001' and dst='eng-002'").fetchone()[0] == 0
+    assert con.execute(
+        "select count(*) from links where src='eng-002' and dst='eng-001'").fetchone()[0] == 0
+
+
+def test_project_yaml_change_reingests_repo_inference(fixture_tm):
+    bp = fixture_tm / "backlog.yaml"
+    build_index(bp)
+    con = open_ro(bp)
+    assert con.execute("select repo from entities where id='B-001'").fetchone()[0] == "api"
+    pf = fixture_tm / "project.yaml"
+    pf.write_text(pf.read_text(encoding="utf-8").replace("name: api", "name: svc"), encoding="utf-8")
+    os.utime(pf, (time.time() + 5, time.time() + 5))
+    build_index(bp)
+    con = open_ro(bp)
+    assert con.execute("select repo from entities where id='B-001'").fetchone()[0] == "svc"
+
+
+def test_task_detail_file_ingested_alongside_project_yaml(fixture_tm):
+    bp = fixture_tm / "backlog.yaml"
+    build_index(bp)
+    detail = fixture_tm / "tasks" / "eng-001.md"
+    detail.parent.mkdir(exist_ok=True)
+    detail.write_text(
+        "---\nid: eng-001\ntitle: Rework model usage accounting\n"
+        "notes: heavy notes mention Quokkasaurus\n---\n\nBody.\n",
+        encoding="utf-8",
+    )
+    pf = fixture_tm / "project.yaml"
+    pf.write_text(pf.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    stamp = time.time() + 5
+    for f in (detail, pf):
+        os.utime(f, (stamp, stamp))
+    build_index(bp)
+    con = open_ro(bp)
+    ids = [r[0] for r in con.execute("select id from entity_fts where entity_fts match 'Quokkasaurus'")]
+    assert ids == ["eng-001"]
+
+
+def test_v3_task_detail_removal_keeps_the_entity(fixture_tm):
+    bp = fixture_tm / "backlog.yaml"
+    detail = fixture_tm / "tasks" / "eng-001.md"
+    detail.parent.mkdir(exist_ok=True)
+    detail.write_text(
+        "---\nid: eng-001\ntitle: Rework model usage accounting\nnotes: heavy notes\n---\n\nBody.\n",
+        encoding="utf-8",
+    )
+    build_index(bp)
+    con = open_ro(bp)
+    assert con.execute("select count(*) from entities where id='eng-001'").fetchone()[0] == 1
+    detail.unlink()
+    build_index(bp)
+    con = open_ro(bp)
+    assert con.execute("select count(*) from entities where id='eng-001'").fetchone()[0] == 1
+    assert con.execute("select file from entities where id='eng-001'").fetchone()[0] == "backlog.yaml"
+
+
+def test_string_valued_list_fields_are_tolerated(fixture_tm):
+    bug = fixture_tm / "bugs" / "B-003.md"
+    bug.write_text(
+        "---\nid: B-003\ntitle: Solo location\nstatus: open\nseverity: low\n"
+        "discovered: '2026-08-20T00:00:00Z'\nlocation: api/src/svc/solo.py\n---\n\nBody.\n",
+        encoding="utf-8",
+    )
+    build_index(fixture_tm / "backlog.yaml")
+    con = open_ro(fixture_tm / "backlog.yaml")
+    rows = con.execute(
+        "select path from entity_paths where entity_id='B-003' and source='location'").fetchall()
+    assert [r[0] for r in rows] == ["api/src/svc/solo.py"]
+
+
+def test_read_succeeds_while_a_write_transaction_is_open(fixture_tm):
+    bp = fixture_tm / "backlog.yaml"
+    build_index(bp)
+    writer = sqlite3.connect(db_path(bp))
+    try:
+        writer.execute("begin immediate")
+        writer.execute("insert into meta(key, value) values ('probe','1')")
+        con = open_ro(bp)
+        assert con.execute("select count(*) from entities").fetchone()[0] == 9
+    finally:
+        writer.rollback()
+        writer.close()
 
 
 def test_task_removed_from_backlog_is_dropped(fixture_tm):
@@ -140,6 +246,29 @@ def test_budget_marks_stale(fixture_tm):
     bp = fixture_tm / "backlog.yaml"
     rep = build_index(bp, budget_s=0.0)
     assert rep.stale and rep.pending_files
+
+
+def _meta(bp, key):
+    row = open_ro(bp).execute("select value from meta where key=?", (key,)).fetchone()
+    return row[0] if row else None
+
+
+def test_stale_build_does_not_advance_source_mtime_max(fixture_tm):
+    bp = fixture_tm / "backlog.yaml"
+    build_index(bp)
+    before = _meta(bp, "source_mtime_max")
+    bug = fixture_tm / "bugs" / "B-001.md"
+    os.utime(bug, (time.time() + 500, time.time() + 500))
+    rep = build_index(bp, budget_s=0.0)
+    assert rep.stale
+    assert _meta(bp, "source_mtime_max") == before
+
+
+def test_first_build_under_budget_records_no_source_mtime_max(fixture_tm):
+    bp = fixture_tm / "backlog.yaml"
+    rep = build_index(bp, budget_s=0.0)
+    assert rep.stale
+    assert _meta(bp, "source_mtime_max") is None
 
 
 def test_schema_bump_forces_full_rebuild(fixture_tm):

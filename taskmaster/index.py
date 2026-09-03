@@ -26,8 +26,11 @@ from taskmaster.taskmaster_v3 import (
     parse_frontmatter,
 )
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 DB_RELPATH = Path("local") / "index.db"
+# The MCP server rebuilds inside `_load()` while hooks and tools read; WAL lets
+# those readers through, and the timeout absorbs the brief write-lock overlaps.
+BUSY_TIMEOUT_MS = 2000
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -36,7 +39,7 @@ CREATE TABLE IF NOT EXISTS entities(id TEXT PRIMARY KEY, kind TEXT, status TEXT,
   phase TEXT, lane TEXT, repo TEXT, priority TEXT, created TEXT, updated TEXT,
   archived INTEGER DEFAULT 0, file TEXT);
 CREATE TABLE IF NOT EXISTS entity_paths(entity_id TEXT, path TEXT, match_kind TEXT, source TEXT);
-CREATE TABLE IF NOT EXISTS links(src TEXT, type TEXT, dst TEXT);
+CREATE TABLE IF NOT EXISTS links(src TEXT, type TEXT, dst TEXT, derived INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS handovers(id TEXT PRIMARY KEY, thread TEXT, tldr TEXT, next_action TEXT,
   session_kind TEXT, branch TEXT, tip_commit TEXT, supersedes TEXT);
 CREATE TABLE IF NOT EXISTS handover_tasks(handover_id TEXT, task_id TEXT);
@@ -74,13 +77,21 @@ SOURCE_GLOBS: tuple[tuple[str, str], ...] = (
     ("idea", "ideas/*.md"),
 )
 
-_CODE_EXT = (
-    "py|ts|tsx|js|jsx|cs|csproj|md|yaml|yml|json|toml|html|css|scss|sql|sh|ps1|"
-    "cpp|h|hpp|c|rs|go|java|kt|swift|uasset|ini|cfg|txt"
+_CODE_EXTS = (
+    "py", "ts", "tsx", "js", "jsx", "cs", "csproj", "md", "yaml", "yml", "json", "toml",
+    "html", "css", "scss", "sql", "sh", "ps1", "cpp", "h", "hpp", "c", "rs", "go",
+    "java", "kt", "swift", "uasset", "ini", "cfg", "txt",
 )
+# Longest alternative first plus a trailing word guard, so `page.tsx` cannot be
+# truncated to `page.ts`, `x.csproj` to `x.cs`, or `abc.jsonl` to `abc.json`.
+_EXT_ALT = "|".join(sorted(_CODE_EXTS, key=lambda e: (-len(e), e)))
 _PROSE_PATH_RE = re.compile(
-    r"(?<![\w:/\\])((?:[A-Za-z0-9_.-]+/){1,}[A-Za-z0-9_.-]+\.(?:" + _CODE_EXT + r"))(?::\d+)?"
+    r"(?<![\w:/\\])((?:[A-Za-z0-9_.-]+/){1,}[A-Za-z0-9_.-]+\.(?:" + _EXT_ALT
+    + r"))(?![A-Za-z0-9])(?::\d+)?"
 )
+# Transcript paths are never project sources. Dropped explicitly rather than by
+# relying on `jsonl` being absent from the extension list.
+_EXCLUDED_PATH_SUFFIXES = (".jsonl",)
 _URL_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://\S*")
 _LINE_SUFFIX_RE = re.compile(r":\d+$")
 _WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:$")
@@ -152,7 +163,7 @@ def extract_prose_paths(text: str) -> list[str]:
     seen: set[str] = set()
     for m in _PROSE_PATH_RE.finditer(stripped):
         p = m.group(1)
-        if "://" in p:
+        if "://" in p or p.endswith(_EXCLUDED_PATH_SUFFIXES):
             continue
         first = p.split("/", 1)[0]
         if _WINDOWS_DRIVE_RE.match(first) or first == "Users":
@@ -238,7 +249,9 @@ def open_ro(backlog_path: Path) -> sqlite3.Connection:
     p = db_path(backlog_path)
     if not p.exists():
         raise FileNotFoundError(f"index database not found: {p}")
-    return sqlite3.connect(p.as_uri() + "?mode=ro", uri=True)
+    con = sqlite3.connect(p.as_uri() + "?mode=ro", uri=True)
+    con.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
+    return con
 
 
 def last_report(backlog_path: Path) -> IndexReport | None:
@@ -274,9 +287,12 @@ def _open_build_db(path: Path, *, force_full: bool = False) -> tuple[sqlite3.Con
             full = True
         finally:
             probe.close()
-    if full and path.exists():
-        path.unlink()
+    if full:
+        for leftover in (path, path.with_suffix(".db-wal"), path.with_suffix(".db-shm")):
+            leftover.unlink(missing_ok=True)
     con = sqlite3.connect(path)
+    con.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
+    con.execute("PRAGMA journal_mode=WAL")
     con.executescript(SCHEMA_SQL)
     return con, full
 
@@ -294,7 +310,8 @@ def _ensure_local_dir(local: Path) -> None:
 def _delete_entity(con: sqlite3.Connection, eid: str) -> None:
     con.execute("delete from entities where id=?", (eid,))
     con.execute("delete from entity_paths where entity_id=?", (eid,))
-    con.execute("delete from links where src=?", (eid,))
+    # Only rows this entity declared; inbound rows belong to the other file.
+    con.execute("delete from links where src=? and derived=0", (eid,))
     con.execute("delete from handovers where id=?", (eid,))
     con.execute("delete from handover_tasks where handover_id=?", (eid,))
     con.execute("delete from entity_fts where id=?", (eid,))
@@ -323,30 +340,34 @@ def _put_paths(con: sqlite3.Connection, eid: str, entries: list[tuple[str, str, 
 
 
 def _put_link(con: sqlite3.Connection, src: str, ltype: str, dst: str) -> None:
-    """Record a declared link. Its inverse is added by `_close_reverse_links`."""
+    """Record a declared (`derived=0`) link. Its inverse comes from the closure pass."""
     if not src or not dst or not ltype:
         return
-    con.execute("insert or ignore into links(src, type, dst) values (?,?,?)", (src, ltype, dst))
+    con.execute(
+        "insert or ignore into links(src, type, dst, derived) values (?,?,?,0)", (src, ltype, dst)
+    )
 
 
 def _close_reverse_links(con: sqlite3.Connection) -> None:
-    """Materialize the inverse of every declared link.
+    """Rebuild every reverse link from the declared rows.
 
-    Reverse rows live under the *target* entity's `src`, so re-ingesting one
-    entity drops reverses other entities are entitled to. Deriving them as a
-    closure over the whole table restores those instead of losing them. The
-    pass only inserts, so a link deleted from a file can leave an orphan
-    reverse row until its counterpart entity is next re-ingested.
+    A reverse row lives under the *target* entity's `src`, so it is owned by no
+    file and cannot be deleted per entity. Wiping `derived=1` wholesale and
+    re-deriving keeps the table from accumulating mirrors of links that have
+    since been removed from their source file. A row that both sides declare is
+    stored once as `derived=0` and survives the wipe.
     """
+    con.execute("delete from links where derived=1")
     for ltype, inverse in REVERSE_TYPE.items():
         con.execute(
-            "insert or ignore into links(src, type, dst) select dst, ?, src from links where type=?",
+            "insert or ignore into links(src, type, dst, derived)"
+            " select dst, ?, src, 1 from links where type=? and derived=0",
             (inverse, ltype),
         )
 
 
 def _put_typed_links(con: sqlite3.Connection, eid: str, entity: dict[str, Any]) -> None:
-    for link in entity.get("links") or []:
+    for link in _as_list(entity.get("links")):
         if isinstance(link, dict):
             _put_link(con, eid, str(link.get("type") or ""), str(link.get("target") or ""))
 
@@ -363,20 +384,35 @@ def _as_str(value: Any) -> str | None:
     return None if value is None else str(value)
 
 
+def _as_list(value: Any) -> list[Any]:
+    """Coerce a field that should be a list. A bare string becomes one element.
+
+    Hand-edited frontmatter routinely writes `location: api/src/x.py` instead of
+    a YAML list; iterating that string would index it character by character.
+    """
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    return [value]
+
+
 # ── Per-kind ingestion ──────────────────────────────────────────
 
 
-def _ingest_task(con, task: dict[str, Any], epic_id: str | None, backlog_root: Path,
+def _ingest_task(con, task: dict[str, Any], epic_id: str | None, schema: int,
                  repos: list[tuple[str, str]]) -> None:
     tid = task.get("id")
     if not tid:
         return
     _delete_entity(con, tid)
     sub_repo = task.get("sub_repo") or None
-    anchors = [normalize_task_anchor(a, sub_repo) for a in (task.get("anchors") or []) if a]
+    anchors = [normalize_task_anchor(a, sub_repo) for a in _as_list(task.get("anchors")) if a]
     exact_paths = [p for p, kind in anchors if kind == "exact"]
     status = _as_str(task.get("status"))
-    task_file = f"tasks/{tid}.md"
+    # In v3 the task itself lives in backlog.yaml and `tasks/<id>.md` only carries
+    # heavy fields, so that file's removal must not look like the task's removal.
+    source_file = f"tasks/{tid}.md" if schema >= SCHEMA_V4 else "backlog.yaml"
     _put_entity(con, {
         "id": tid,
         "kind": "task",
@@ -391,23 +427,22 @@ def _ingest_task(con, task: dict[str, Any], epic_id: str | None, backlog_root: P
         "updated": _as_str(task.get("last_referenced") or task.get("completed")
                            or task.get("started") or task.get("created")),
         "archived": 1 if status == "archived" or task.get("archived") else 0,
-        "file": task_file if (backlog_root / task_file).exists() else "backlog.yaml",
+        "file": source_file,
     })
     _put_paths(con, tid, [(p, kind, "anchors") for p, kind in anchors])
     _put_typed_links(con, tid, task)
-    for dep in task.get("depends_on") or []:
+    for dep in _as_list(task.get("depends_on")):
         _put_link(con, tid, "depends_on", str(dep))
     _put_fts(con, tid, "task", _as_str(task.get("title")) or "",
              [task.get("notes"), task.get("description"), task.get("review_instructions")])
 
 
-def _ingest_epic(con, epic: dict[str, Any], backlog_root: Path) -> None:
+def _ingest_epic(con, epic: dict[str, Any]) -> None:
     eid = epic.get("id")
     if not eid:
         return
     _delete_entity(con, eid)
     status = _as_str(epic.get("status"))
-    epic_file = f"epics/{eid}.md"
     _put_entity(con, {
         "id": eid,
         "kind": "epic",
@@ -421,7 +456,7 @@ def _ingest_epic(con, epic: dict[str, Any], backlog_root: Path) -> None:
         "created": _as_str(epic.get("created")),
         "updated": _as_str(epic.get("updated") or epic.get("created")),
         "archived": 1 if status == "archived" or epic.get("archived") else 0,
-        "file": epic_file if (backlog_root / epic_file).exists() else "backlog.yaml",
+        "file": "backlog.yaml",  # the epic definition; epics/<id>.md is a body only
     })
     _put_typed_links(con, eid, epic)
     _put_fts(con, eid, "epic", _as_str(epic.get("name")) or "", [epic.get("description")])
@@ -432,7 +467,7 @@ def _ingest_defect(con, kind: str, fm: dict[str, Any], body: str, rel_file: str,
     """Ingest a bug or an issue — both carry `location[]` plus prose paths."""
     eid = fm.get("id") or Path(rel_file).stem
     _delete_entity(con, eid)
-    located = [normalize_location(loc) for loc in (fm.get("location") or []) if loc]
+    located = [normalize_location(loc) for loc in _as_list(fm.get("location")) if loc]
     located_set = set(located)
     prose = [p for p in extract_prose_paths(body) if p not in located_set]
     status = _as_str(fm.get("status"))
@@ -457,7 +492,7 @@ def _ingest_defect(con, kind: str, fm: dict[str, Any], body: str, rel_file: str,
     _put_typed_links(con, eid, fm)
     if fm.get("adopted_into"):
         _put_link(con, eid, "relates_to", str(fm["adopted_into"]))
-    for tid in fm.get("related_tasks") or []:
+    for tid in _as_list(fm.get("related_tasks")):
         _put_link(con, eid, "relates_to", str(tid))
     _put_fts(con, eid, kind, _as_str(fm.get("title")) or "",
              [fm.get("impact"), fm.get("evidence"), body])
@@ -491,7 +526,7 @@ def _ingest_handover(con, fm: dict[str, Any], body: str, rel_file: str,
          _as_str(fm.get("session_kind")), _as_str(fm.get("branch")),
          _as_str(fm.get("tip_commit")), _as_str(fm.get("supersedes"))),
     )
-    for tid in fm.get("task_ids") or []:
+    for tid in _as_list(fm.get("task_ids")):
         con.execute("insert into handover_tasks(handover_id, task_id) values (?,?)", (hid, str(tid)))
     _put_paths(con, hid, [(p, "exact", "prose") for p in prose])
     _put_typed_links(con, hid, fm)
@@ -526,7 +561,7 @@ def _ingest_note_entity(con, kind: str, fm: dict[str, Any], body: str, rel_file:
     _put_typed_links(con, eid, fm)
     if fm.get("task_id"):
         _put_link(con, eid, "relates_to", str(fm["task_id"]))
-    for tid in fm.get("related_tasks") or []:
+    for tid in _as_list(fm.get("related_tasks")):
         _put_link(con, eid, "relates_to", str(tid))
     _put_fts(con, eid, kind, _as_str(fm.get("title")) or "", [fm.get("options"), body])
 
@@ -625,27 +660,41 @@ def build_index(backlog_path: Path, data: dict | None = None, *,
     try:
         repos = _load_repos(backlog_path)
         on_disk = _scan_sources(root)
-        known = {row[0]: (row[1], row[2]) for row in con.execute("select file, mtime, size from sources")}
-
-        removed = [f for f in known if f not in on_disk]
-        for rel in removed:
-            for (eid,) in con.execute("select id from entities where file=?", (rel,)).fetchall():
-                _delete_entity(con, eid)
-            con.execute("delete from sources where file=?", (rel,))
+        known = {row[0]: (row[1], row[2], row[3])
+                 for row in con.execute("select file, mtime, size, kind from sources")}
 
         changed = [rel for rel, (mtime, size, _kind) in on_disk.items()
-                   if known.get(rel) != (mtime, size)]
+                   if rel not in known or known[rel][:2] != (mtime, size)]
         # Preserve SOURCE_GLOBS order so backlog.yaml (all tasks and epics) leads.
         order = {rel: i for i, rel in enumerate(on_disk)}
         changed.sort(key=lambda rel: order[rel])
 
+        # A repo-definition edit changes repo inference for *every* entity, not
+        # just the tasks, so it re-ingests the whole tree.
+        if "project.yaml" in changed:
+            changed = sorted(on_disk, key=lambda rel: order[rel])
         backlog_wide = any(rel in ("backlog.yaml", "project.yaml") for rel in changed)
+
+        removed = [f for f in known if f not in on_disk]
+        for rel in removed:
+            if known[rel][2] in ("task", "epic"):
+                # In v3 the entity still lives in backlog.yaml; only its heavy
+                # fields are gone. Reconcile through the backlog, never by file.
+                backlog_wide = True
+            else:
+                for (eid,) in con.execute("select id from entities where file=?", (rel,)).fetchall():
+                    _delete_entity(con, eid)
+            con.execute("delete from sources where file=?", (rel,))
 
         def _data() -> dict:
             nonlocal data
             if data is None:
                 data = load_backlog_data(backlog_path)
             return data
+
+        over_budget = budget_s is not None and time.perf_counter() - started > budget_s
+        if backlog_wide and not over_budget:
+            _ingest_backlog(con, _data(), repos)
 
         for i, rel in enumerate(changed):
             if budget_s is not None and time.perf_counter() - started > budget_s:
@@ -673,14 +722,18 @@ def build_index(backlog_path: Path, data: dict | None = None, *,
         # `last_report` is seeded empty and filled once the report exists.
         built_at_dt = datetime.now(timezone.utc)
         built_at = built_at_dt.isoformat(timespec="seconds")
-        mtime_max = max((m for m, _s, _k in on_disk.values()), default=0.0)
-        for key, value in (
+        meta_rows = [
             ("schema_version", str(SCHEMA_VERSION)),
             ("built_at", built_at),
             ("built_at_epoch", str(built_at_dt.timestamp())),
-            ("source_mtime_max", str(mtime_max)),
             ("last_report", ""),
-        ):
+        ]
+        # Taken over the sources actually ingested, never over what is on disk:
+        # a budget-truncated build must not claim the newest file is covered.
+        mtime_max = con.execute("select max(mtime) from sources").fetchone()[0]
+        if mtime_max is not None:
+            meta_rows.append(("source_mtime_max", str(mtime_max)))
+        for key, value in meta_rows:
             con.execute("insert or replace into meta(key, value) values (?,?)", (key, value))
 
         report = IndexReport(
@@ -700,39 +753,46 @@ def build_index(backlog_path: Path, data: dict | None = None, *,
         con.close()
 
 
+def _ingest_backlog(con, data: dict, repos: list[tuple[str, str]]) -> None:
+    """Re-ingest every task and epic from the loaded backlog, and only those.
+
+    Runs whenever `backlog.yaml` or `project.yaml` changed — repo inference
+    follows repo-definition edits — or when a task/epic detail file appeared or
+    vanished. Tasks and epics have no per-entity file to disappear in v3, so the
+    reconciliation of deleted ones is only reachable from here.
+    """
+    schema = detect_schema_version(data)
+    live: set[str] = set()
+    for epic in data.get("epics", []):
+        _ingest_epic(con, epic)
+        live.add(epic.get("id"))
+        for task in epic.get("tasks", []):
+            _ingest_task(con, task, epic.get("id"), schema, repos)
+            live.add(task.get("id"))
+    gone = [eid for (eid,) in con.execute(
+        "select id from entities where kind in ('task','epic')") if eid not in live]
+    for eid in gone:
+        _delete_entity(con, eid)
+
+
 def _ingest_source(con, root: Path, rel: str, kind: str, repos: list[tuple[str, str]],
                    data_fn, *, backlog_wide: bool) -> None:
     """Ingest one changed source file into the open index connection."""
-    if kind == "project":
-        return  # repos are read directly; project.yaml holds no entities
-    if kind == "backlog":
-        data = data_fn()
-        live: set[str] = set()
-        for epic in data.get("epics", []):
-            _ingest_epic(con, epic, root)
-            live.add(epic.get("id"))
-            for task in epic.get("tasks", []):
-                _ingest_task(con, task, epic.get("id"), root, repos)
-                live.add(task.get("id"))
-        # Tasks and epics deleted from the index have no file of their own to
-        # disappear, so their rows are only reachable from here.
-        gone = [eid for (eid,) in con.execute(
-            "select id from entities where kind in ('task','epic')") if eid not in live]
-        for eid in gone:
-            _delete_entity(con, eid)
-        return
+    if kind in ("backlog", "project"):
+        return  # handled wholesale by _ingest_backlog before the file loop
     if kind in ("task", "epic"):
         if backlog_wide:
             return  # already re-ingested wholesale from the backlog index
         entity_id = Path(rel).stem
         data = data_fn()
+        schema = detect_schema_version(data)
         for epic in data.get("epics", []):
             if kind == "epic" and epic.get("id") == entity_id:
-                _ingest_epic(con, epic, root)
+                _ingest_epic(con, epic)
                 return
             for task in epic.get("tasks", []):
                 if kind == "task" and task.get("id") == entity_id:
-                    _ingest_task(con, task, epic.get("id"), root, repos)
+                    _ingest_task(con, task, epic.get("id"), schema, repos)
                     return
         return
     if kind == "phase":
