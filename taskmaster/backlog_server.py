@@ -9,6 +9,7 @@ import json
 import os
 import re
 import socket
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -1493,6 +1494,66 @@ def backlog_index_status(rebuild: bool = False) -> str:
     else:
         report = _index.last_report(bp) or _index.build_index(bp)
     return _render_index_report(bp, report)
+
+
+def _render_query_table(description, rows: list, limit: int) -> str:
+    """Aligned text table plus the row-count footer `backlog_query` returns."""
+    headers = [col[0] for col in description]
+    capped = len(rows) > limit
+    rows = rows[:limit]
+    cells = [[("" if v is None else str(v))[:80] for v in row] for row in rows]
+    widths = [len(h) for h in headers]
+    for row in cells:
+        for i, cell in enumerate(row):
+            widths[i] = max(widths[i], len(cell))
+
+    def line(values: list[str]) -> str:
+        return "  ".join(v.ljust(widths[i]) for i, v in enumerate(values)).rstrip()
+
+    body = "\n".join([line(headers)] + [line(row) for row in cells])
+    footer = f"{limit} rows (capped)" if capped else f"{len(cells)} rows"
+    return f"{body}\n{footer}"
+
+
+@mcp.tool()
+def backlog_query(sql: str, limit: int = 50) -> str:
+    """Read-only SQL over the derived backlog index (.taskmaster/local/index.db). Use it to dig
+    deeper than the one-line edit hook: closed history for a path, titles, related entities, FTS.
+
+    Tables: entities(id,kind,status,title,epic,phase,lane,repo,priority,created,updated,archived,file)
+      entity_paths(entity_id,path,match_kind,source) links(src,type,dst,derived)
+      handovers(id,thread,tldr,next_action,session_kind,branch,tip_commit,supersedes)
+      handover_tasks(handover_id,task_id) related(a,b,via,weight) entity_fts(id,kind,title,body)
+    kind: task|epic|bug|issue|handover|decision|idea. Open statuses: task todo|in-progress|blocked|in-review,
+    bug open|adopted, issue open|investigating, handover open.
+    Examples:
+      SELECT id,status,title FROM entities WHERE kind='bug' AND repo='facade' AND status IN ('open','adopted')
+      SELECT e.id,e.kind,e.status,e.title FROM entity_paths p JOIN entities e ON e.id=p.entity_id WHERE p.path LIKE '%ModelUsageService.cs'
+      SELECT id,title FROM entity_fts WHERE entity_fts MATCH 'credit exhaustion' AND kind='handover' ORDER BY bm25(entity_fts) LIMIT 10
+
+    Args:
+        sql: one SELECT (or WITH ... SELECT). Writes, PRAGMA, ATTACH and multiple statements are rejected.
+        limit: row cap, 1..500 (default 50).
+    """
+    from taskmaster import index as _index  # noqa: PLC0415
+    from taskmaster import query_guard  # noqa: PLC0415
+
+    limit = max(1, min(500, limit))
+    bp = _backlog_path()
+    con = None
+    try:
+        statement = query_guard.validate(sql)
+        if not _index.db_path(bp).exists():
+            _index.build_index(bp)
+        con = _index.open_ro(bp)
+        con.set_authorizer(query_guard.authorizer)
+        cur = con.execute(f"SELECT * FROM ({statement}) LIMIT {limit + 1}")
+        return _render_query_table(cur.description, cur.fetchall(), limit)
+    except (sqlite3.Error, ValueError, OSError) as exc:
+        return f"Error: {exc}\n\nSchema: {query_guard.SCHEMA_SUMMARY}"
+    finally:
+        if con is not None:
+            con.close()
 
 
 @mcp.tool()
