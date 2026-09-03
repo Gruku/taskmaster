@@ -1,8 +1,8 @@
 # Handover Auto-Extraction Sources
 
-Six input sources, walked in order, deduplicated, grouped into three buckets.
+Seven input sources, walked in order, deduplicated; sources 1-6 group into three buckets.
 
-## The six sources
+## The sources
 
 1. **`git status` + `git diff --stat`** — uncommitted state, line-count deltas. Drives the "Pending commits" section in `full` tier.
 
@@ -16,9 +16,11 @@ Six input sources, walked in order, deduplicated, grouped into three buckets.
 
 6. **Conversation numbered-step regex** — lines matching `^\d+\.\s+` that read like next-session actions (verb-led: "Run X", "Read Y", "Continue with Z"). Drives the "What's next" section in `standard` and `full` tiers.
 
+7. **Index reverse lookup** — for every Touched path, `backlog_query("SELECT DISTINCT e.id,e.kind,e.status,e.title FROM entity_paths p JOIN entities e ON e.id=p.entity_id WHERE p.source IN ('anchors','location') AND (p.path='<rel>' OR (p.match_kind='glob' AND '<rel>' GLOB p.path))")`. Paths are project-root relative with `/`. Before splicing `<rel>` into the query, escape single quotes by doubling them (`'` → `''`), and skip the path entirely if it holds any character outside `[A-Za-z0-9_./' -]`. Open results feed `task_ids` (tasks) and the fix question (bugs and issues). Skip silently when `backlog_query` reports a missing index.
+
 ## Grouping into three buckets
 
-After all six sources are collected, deduplicate paths and assign each one to exactly one of:
+After sources 1-6 are collected, deduplicate paths and assign each one to exactly one of:
 
 - **Touched** = (sources 1, 2, 3) ∩ written/edited
 - **Read** = source 3 ∩ read-only (i.e., paths Claude `Read` but never `Edit`/`Write`)

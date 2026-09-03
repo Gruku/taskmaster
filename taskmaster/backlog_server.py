@@ -9,13 +9,14 @@ import json
 import os
 import re
 import socket
+import sqlite3
 import subprocess
 import sys
 import threading
 import urllib.request
 import uuid
 import webbrowser
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from functools import partial
 from http import HTTPStatus
 from copy import deepcopy
@@ -25,6 +26,8 @@ from typing import Any, Literal
 
 import yaml
 from fastmcp import FastMCP
+
+from taskmaster import yaml_io
 from taskmaster.blast_radius import (
     BlastRadiusConfig,
     load_config,
@@ -303,7 +306,7 @@ def _backlog_path() -> Path:
 def _progress_path() -> Path:
     backlog, legacy_progress = _resolve_paths()
     try:
-        raw = yaml.safe_load(backlog.read_text(encoding="utf-8")) or {}
+        raw = yaml_io.safe_load(backlog.read_text(encoding="utf-8")) or {}
     except (OSError, yaml.YAMLError):
         return legacy_progress
     if _detect_schema_version(raw) >= SCHEMA_V4:
@@ -389,11 +392,34 @@ def _normalize_priority(value: str) -> str:
     return _LEGACY_TO_NAME.get(value, value)
 
 
+# The index refresh rides along on every tool call, so it gets a short budget:
+# past it the build stops early and reports itself stale rather than stalling the
+# tool. The SessionStart warm runs unbudgeted and catches up.
+INDEX_REFRESH_BUDGET_S = 1.5
+INDEX_LOG_MAX_BYTES = 1024 * 1024
+INDEX_LOG_KEEP_BYTES = 512 * 1024
+
+
+def _log_index_error(bp: Path, exc: BaseException) -> None:
+    """Append one line to `.taskmaster/local/index.log`. Never raises."""
+    try:
+        log = bp.parent / "local" / "index.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        if log.exists() and log.stat().st_size > INDEX_LOG_MAX_BYTES:
+            tail = log.read_bytes()[-INDEX_LOG_KEEP_BYTES:]
+            log.write_bytes(tail)
+        stamp = datetime.now(timezone.utc).isoformat()
+        with log.open("a", encoding="utf-8") as fh:
+            fh.write(f"{stamp} {exc!r}\n")
+    except Exception:  # logging must never break the tool call either
+        pass
+
+
 def _load() -> dict:
     global _LOAD_SNAPSHOT
     bp = _backlog_path()
     # Peek at version without per-file enrichment so we can dispatch.
-    raw = yaml.safe_load(bp.read_text(encoding="utf-8")) or {}
+    raw = yaml_io.safe_load(bp.read_text(encoding="utf-8")) or {}
     version = _detect_schema_version(raw)
     if version >= SCHEMA_V4:
         data = _load_v4(bp)
@@ -410,6 +436,11 @@ def _load() -> dict:
             if pri in _LEGACY_TO_NAME:
                 t["priority"] = _LEGACY_TO_NAME[pri]
     _LOAD_SNAPSHOT = _copy.deepcopy(data) if version >= SCHEMA_V4 else None
+    try:
+        from taskmaster import index as _index  # noqa: PLC0415 — optional, derived
+        _index.build_index(bp, data, budget_s=INDEX_REFRESH_BUDGET_S)
+    except Exception as exc:  # index is derived; never break a tool call
+        _log_index_error(bp, exc)
     return data
 
 
@@ -471,7 +502,7 @@ def _ensure_v3_marker(bp: Path) -> None:
     Idempotent. Subsequent saves may migrate task storage via the normal
     v3 dispatch.
     """
-    raw = yaml.safe_load(bp.read_text(encoding="utf-8")) or {}
+    raw = yaml_io.safe_load(bp.read_text(encoding="utf-8")) or {}
     if _detect_schema_version(raw) >= SCHEMA_V3:
         return
     raw.setdefault("meta", {})["schema_version"] = SCHEMA_V3
@@ -1415,14 +1446,222 @@ def backlog_get_task(
     return "\n".join(lines)
 
 
+# Report label -> index table name. `fts` is shortened; the rest match 1:1.
+_INDEX_ROW_LABELS = (
+    ("entities", "entities"), ("entity_paths", "entity_paths"), ("links", "links"),
+    ("handovers", "handovers"), ("related", "related"), ("fts", "entity_fts"),
+)
+
+
+def _render_index_report(bp: Path, report) -> str:
+    """Format an `index.IndexReport` as the five-line `backlog_index_status` body."""
+    from taskmaster import index as _index  # noqa: PLC0415
+
+    def yn(flag: bool) -> str:
+        return "yes" if flag else "no"
+
+    counts = report.row_counts or {}
+    rows = " ".join(f"{label}={counts.get(table, 0)}" for label, table in _INDEX_ROW_LABELS)
+    lines = [
+        f"Index: {_index.db_path(bp)}",
+        f"Built: {report.built_at}  (full rebuild: {yn(report.full_rebuild)}, "
+        f"stale: {yn(report.stale)}, {report.elapsed_ms} ms, loader={yaml_io.LOADER_NAME})",
+        f"Rows: {rows}",
+    ]
+    pending = report.pending_files or []
+    lines.append(f"Pending: {len(pending)} files"
+                 + (f"  {', '.join(pending[:10])}" if pending else ""))
+    errors = report.errors or []
+    lines.append(f"Errors: {len(errors)}"
+                 + (f"  {'; '.join(errors[:5])}" if errors else ""))
+    return "\n".join(lines)
+
+
 @mcp.tool()
-def backlog_search(query: str) -> str:
-    """Full-text search across task IDs, titles, notes, branches, and doc paths. Returns matching tasks ranked by relevance.
+def backlog_index_status(rebuild: bool = False) -> str:
+    """Report the state of the derived SQLite index (`.taskmaster/local/index.db`).
+
+    The index is derived and disposable — it is refreshed on every backlog tool
+    call and rebuilt from the files whenever it is missing or stale.
 
     Args:
-        query: Search text (case-insensitive). Matches against id, title, notes, branch, epic name, and doc paths.
+        rebuild: Delete the index and build it from scratch before reporting.
     """
+    from taskmaster import index as _index  # noqa: PLC0415
+
+    bp = _backlog_path()
+    if rebuild:
+        _index.db_path(bp).unlink(missing_ok=True)
+        report = _index.build_index(bp)
+    else:
+        report = _index.last_report(bp) or _index.build_index(bp)
+    return _render_index_report(bp, report)
+
+
+def _render_query_table(description, rows: list, limit: int) -> str:
+    """Aligned text table plus the row-count footer `backlog_query` returns."""
+    headers = [col[0] for col in description]
+    capped = len(rows) > limit
+    rows = rows[:limit]
+    cells = [[("" if v is None else str(v))[:80] for v in row] for row in rows]
+    widths = [len(h) for h in headers]
+    for row in cells:
+        for i, cell in enumerate(row):
+            widths[i] = max(widths[i], len(cell))
+
+    def line(values: list[str]) -> str:
+        return "  ".join(v.ljust(widths[i]) for i, v in enumerate(values)).rstrip()
+
+    body = "\n".join([line(headers)] + [line(row) for row in cells])
+    footer = f"{limit} rows (capped)" if capped else f"{len(cells)} rows"
+    return f"{body}\n{footer}"
+
+
+@mcp.tool()
+def backlog_query(sql: str, limit: int = 50) -> str:
+    """Read-only SQL over the derived backlog index (.taskmaster/local/index.db). Use it to dig
+    deeper than the one-line edit hook: closed history for a path, titles, related entities, FTS.
+
+    Tables: entities(id,kind,status,title,epic,phase,lane,repo,priority,created,updated,archived,file)
+      entity_paths(entity_id,path,match_kind,source) links(src,type,dst,derived)
+      handovers(id,thread,tldr,next_action,session_kind,branch,tip_commit,supersedes)
+      handover_tasks(handover_id,task_id) related(a,b,via,weight) entity_fts(id,kind,title,body)
+    kind: task|epic|bug|issue|handover|decision|idea. Open statuses: task todo|in-progress|blocked|in-review,
+    bug open|adopted, issue open|investigating, handover open.
+    Examples:
+      SELECT id,status,title FROM entities WHERE kind='bug' AND repo='facade' AND status IN ('open','adopted')
+      SELECT e.id,e.kind,e.status,e.title FROM entity_paths p JOIN entities e ON e.id=p.entity_id WHERE p.path LIKE '%ModelUsageService.cs'
+      SELECT id,title FROM entity_fts WHERE entity_fts MATCH 'credit exhaustion' AND kind='handover' ORDER BY bm25(entity_fts) LIMIT 10
+
+    Args:
+        sql: one SELECT (or WITH ... SELECT, recursive CTEs allowed). Writes, PRAGMA, ATTACH and
+            multiple statements are rejected, as is a forbidden keyword inside a double-quoted
+            identifier — quote string values with single quotes. Queries are cut off after 5 s.
+        limit: row cap, 1..500 (default 50).
+    """
+    from taskmaster import index as _index  # noqa: PLC0415
+    from taskmaster import query_guard  # noqa: PLC0415
+
+    limit = max(1, min(500, limit))
+    bp = _backlog_path()
+    con = None
+    guard = None
+    deadline = None
+    try:
+        statement = query_guard.validate(sql)
+        guard = query_guard.Authorizer(query_guard.declared_names(statement))
+        if not _index.db_path(bp).exists():
+            _index.build_index(bp)
+        # The clock starts after the cold build: a first-ever call would
+        # otherwise spend the whole 5 s indexing and time out before it queried.
+        deadline = query_guard.Deadline(query_guard.QUERY_TIMEOUT_S)
+        con = _index.open_ro(bp)
+        con.set_authorizer(guard)
+        con.set_progress_handler(deadline, query_guard.PROGRESS_INSTRUCTIONS)
+        cur = con.execute(f"SELECT * FROM ({statement}) LIMIT {limit + 1}")
+        return _render_query_table(cur.description, cur.fetchall(), limit)
+    except (sqlite3.Error, ValueError, OSError) as exc:
+        # SQLite reports both an abort and a denial as a bare message with no object,
+        # so prefer what the handler and the authorizer actually recorded.
+        if deadline is not None and deadline.expired:
+            reason = deadline.message
+        elif guard is not None and guard.denial:
+            reason = f"not authorized: {guard.denial}"
+        else:
+            reason = str(exc)
+        return f"Error: {reason}\n\nSchema: {query_guard.SCHEMA_SUMMARY}"
+    finally:
+        if con is not None:
+            con.close()
+
+
+# Entity kinds the derived index carries; anything else passed in `kinds` is ignored.
+_SEARCH_KINDS = ("task", "epic", "bug", "issue", "handover", "decision", "idea")
+_SEARCH_LIMIT = 15
+
+
+def _fts_match_expression(query: str) -> str:
+    """Turn free text into a safe FTS5 MATCH expression.
+
+    Every whitespace-separated token becomes a quoted phrase (an embedded `"` is doubled), so
+    punctuation like `-`, `:` or a stray quote is data rather than MATCH grammar. Tokens are
+    joined by spaces, which FTS5 reads as implicit AND.
+    """
+    return " ".join('"' + tok.replace('"', '""') + '"' for tok in query.split())
+
+
+def _render_search_row(row) -> str:
+    """One result line. Tasks keep their historic `(priority, epic, status)` tail."""
+    eid, kind, status, title, priority, epic = row
+    status = status or "todo"
+    if kind == "task":
+        return f"`{eid}` — {title or ''} ({priority or 'medium'}, {epic or '—'}, {status})"
+    return f"`{eid}` — {title or ''} ({kind}, {status})"
+
+
+def _search_via_index(query: str, kinds: list[str] | None) -> str | None:
+    """FTS5 search across every entity kind, or None to tell the caller to fall back.
+
+    Returns None when the index is missing or any SQLite error occurs — the substring scan can
+    always answer for tasks, so search must never surface an error from here. The index is
+    deliberately not built on this path: a cold build costs ~20 s, far too long for a search.
+    """
+    from taskmaster import index as _index  # noqa: PLC0415
+
+    match = _fts_match_expression(query)
+    if not match:
+        return None
+    selected = [k for k in kinds if k in _SEARCH_KINDS] if kinds else []
+    con = None
+    try:
+        con = _index.open_ro(_backlog_path())
+        where = "WHERE entity_fts MATCH ?"
+        params: list[str] = [match]
+        if selected:
+            where += " AND e.kind IN (" + ",".join("?" * len(selected)) + ")"
+            params.extend(selected)
+        source = f"FROM entity_fts JOIN entities e ON e.id = entity_fts.id {where}"
+        total = con.execute(f"SELECT COUNT(*) {source}", params).fetchone()[0]
+        if not total:
+            # Not "No tasks": this path searches every kind, and `kinds` may
+            # have excluded tasks entirely.
+            return f"No matches for `{query}`"
+        rows = con.execute(
+            "SELECT entity_fts.id, e.kind, e.status, e.title, e.priority, e.epic, "
+            "bm25(entity_fts) AS rank "
+            f"{source} ORDER BY rank LIMIT {int(_SEARCH_LIMIT)}", params).fetchall()
+    except (sqlite3.Error, OSError, ValueError):
+        return None
+    finally:
+        if con is not None:
+            con.close()
+
+    body = "\n".join(f"- {_render_search_row(r[:6])}" for r in rows)
+    return f"**{total} match{'es' if total != 1 else ''}** for `{query}`:\n" + body
+
+
+@mcp.tool()
+def backlog_search(query: str, kinds: list[str] | None = None) -> str:
+    """Full-text search across every backlog entity — tasks, epics, bugs, issues, handovers,
+    decisions and ideas — ranked by relevance (bm25) over the derived index.
+
+    Args:
+        query: Search text (case-insensitive). Matched against titles and bodies (notes,
+            descriptions, evidence, handover prose). Multiple words are ANDed together.
+        kinds: Optional filter, e.g. ["bug", "issue"]. Unknown kinds are ignored; omit for all.
+            Valid kinds: task, epic, bug, issue, handover, decision, idea.
+    """
+    if isinstance(kinds, str):  # tolerate kinds="bug" from a loose caller
+        kinds = [kinds]
+    # _load() performs the bounded incremental index refresh every other tool relies on, so the
+    # FTS path below sees out-of-band file edits without any other tool call having run.
     data = _load()
+
+    indexed = _search_via_index(query, kinds)
+    if indexed is not None:
+        return indexed
+
+    # Fallback: index missing or unreadable. Substring scan over tasks only, unchanged.
     q = query.lower()
     scored: list[tuple[int, str]] = []
 
@@ -1461,7 +1700,7 @@ def backlog_search(query: str) -> str:
         return f"No tasks matching `{query}`"
 
     scored.sort(key=lambda x: -x[0])
-    results = [item for _, item in scored[:15]]
+    results = [item for _, item in scored[:_SEARCH_LIMIT]]
     return f"**{len(scored)} match{'es' if len(scored) != 1 else ''}** for `{query}`:\n" + "\n".join(f"- {r}" for r in results)
 
 
@@ -2181,6 +2420,7 @@ def backlog_handover_create(
     lines = [
         f"Handover written: {hid}",
         f"- File: {target.relative_to(ROOT)}",
+        f"- Path: {target.resolve()}",
         f"- Index entries: {len(data.get('handovers') or [])}",
     ]
     if supersedes and not superseded_warning:
@@ -6789,7 +7029,7 @@ def _compute_recent_events(since_iso: str) -> list:
     except Exception as e:
         raise ValueError(f"invalid since: {e}")
 
-    backlog = yaml.safe_load(_backlog_path().read_text(encoding="utf-8")) or {}  # existing helper from Plan 1
+    backlog = yaml_io.safe_load(_backlog_path().read_text(encoding="utf-8")) or {}  # existing helper from Plan 1
     events: list = []
 
     def _parse(s):
@@ -6839,12 +7079,11 @@ def _load_task_full(task_id: str) -> dict | None:
     Returns None if the task id is not in the index.
     """
     import re
-    import yaml
 
     backlog_path = _backlog_path()
     if not backlog_path.exists():
         return None
-    backlog = yaml.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
+    backlog = yaml_io.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
     tasks = backlog.get("tasks")
     if not isinstance(tasks, list):
         tasks = [
@@ -6869,7 +7108,7 @@ def _load_task_full(task_id: str) -> dict | None:
         fm_match = re.match(r"^---\n(.*?)\n---\n(.*)$", raw, re.DOTALL)
         if fm_match:
             try:
-                fm = yaml.safe_load(fm_match.group(1)) or {}
+                fm = yaml_io.safe_load(fm_match.group(1)) or {}
             except Exception:
                 fm = {}
             body = fm_match.group(2)
@@ -6952,12 +7191,11 @@ def _load_related_for_task(task_id: str) -> dict | None:
     Returns None if the task is unknown.
     """
     import re
-    import yaml
 
     backlog_path = _backlog_path()
     if not backlog_path.exists():
         return None
-    backlog = yaml.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
+    backlog = yaml_io.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
     tasks = backlog.get("tasks")
     if not isinstance(tasks, list):
         tasks = [
@@ -6975,7 +7213,7 @@ def _load_related_for_task(task_id: str) -> dict | None:
         if not m:
             return {}, raw
         try:
-            fm = yaml.safe_load(m.group(1)) or {}
+            fm = yaml_io.safe_load(m.group(1)) or {}
         except Exception:
             fm = {}
         return fm, m.group(2)
@@ -7369,7 +7607,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
 
     def _serve_json(self) -> None:
         try:
-            data = yaml.safe_load(_backlog_path().read_text(encoding="utf-8"))
+            data = yaml_io.safe_load(_backlog_path().read_text(encoding="utf-8"))
             data.setdefault("meta", {})["_version"] = VERSION
             if not isinstance(data.get("tasks"), list):
                 data["tasks"] = [
@@ -8225,7 +8463,7 @@ def backlog_project_set(yaml_content: str) -> str:
     using the existing _atomic_write helper. Returns the absolute path written.
     """
     try:
-        data = yaml.safe_load(yaml_content) or {}
+        data = yaml_io.safe_load(yaml_content) or {}
     except yaml.YAMLError as exc:
         raise ValueError(f"YAML parse failed: {exc}") from exc
     if not isinstance(data, dict):
@@ -8459,7 +8697,7 @@ def backlog_linear_bootstrap_apply(
 
     if cfg_path.exists():
         with cfg_path.open("r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f) or {}
+            cfg = yaml_io.safe_load(f) or {}
         existing_aliases = {ws.get("alias") for ws in cfg.get("workspaces") or []}
         if workspace_alias in existing_aliases:
             return json.dumps({"error": f"workspace alias {workspace_alias!r} already exists in linear.yaml"})
@@ -8744,5 +8982,28 @@ def backlog_linear_retry(target_id: str = "") -> str:
     return json.dumps({"ok": True, "counts": counts}, indent=2)
 
 
-if __name__ == "__main__":
+def _build_index_cli(argv: list[str]) -> int:
+    """`--build-index [path]`: refresh the derived index and print the report."""
+    import dataclasses  # noqa: PLC0415
+
+    from taskmaster import index as _index  # noqa: PLC0415
+
+    rest = argv[argv.index("--build-index") + 1:]
+    positional = next((a for a in rest if not a.startswith("-")), None)
+    bp = _index.resolve_backlog_path(Path(positional)) if positional else _backlog_path()
+    if not bp.exists():
+        print(f"no backlog found at {bp}", file=sys.stderr)
+        return 1
+    print(json.dumps(dataclasses.asdict(_index.build_index(bp)), indent=2))
+    return 0
+
+
+def main() -> None:
+    """Entry point for both `taskmaster/backlog_server.py` and the root shim."""
+    if "--build-index" in sys.argv:
+        sys.exit(_build_index_cli(sys.argv))
     mcp.run()
+
+
+if __name__ == "__main__":
+    main()

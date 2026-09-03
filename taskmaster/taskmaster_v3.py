@@ -22,6 +22,8 @@ from typing import Any
 
 import yaml
 
+from taskmaster import yaml_io
+
 # The plugin's own source root (repo root — this module lives in the
 # taskmaster/ package, one level down). Used by _resolve_artifact_root()'s
 # guard (tm-audit-001) to refuse treating this directory as a project root.
@@ -343,7 +345,7 @@ def _is_v4_project(artifact_root: Path) -> bool:
     if not backlog_path.exists():
         return False
     try:
-        raw = yaml.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
+        raw = yaml_io.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
     except (OSError, yaml.YAMLError):
         return False
     return detect_schema_version(raw) >= SCHEMA_V4
@@ -406,7 +408,7 @@ def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     if not fm_text.strip():
         return {}, body
 
-    parsed = yaml.safe_load(fm_text) or {}
+    parsed = yaml_io.safe_load(fm_text) or {}
     if not isinstance(parsed, dict):
         # Frontmatter must be a mapping; anything else is malformed input.
         raise ValueError("Frontmatter must be a YAML mapping")
@@ -1009,7 +1011,7 @@ def load_v3(backlog_path: Path) -> dict[str, Any]:
     Per-task files that don't exist yet are tolerated — that task simply has
     no heavy fields (it was created in v3 mode and hasn't been edited yet).
     """
-    data = yaml.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
+    data = yaml_io.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
     for epic in data.get("epics", []):
         new_tasks: list[dict[str, Any]] = []
         for slim_task in epic.get("tasks", []):
@@ -1115,7 +1117,7 @@ def load_v4(backlog_path: Path) -> dict[str, Any]:
     Tasks whose `epic:` names no known epic are collected under the private
     key `_orphan_tasks` (surfaced by backlog_validate, stripped on save).
     """
-    data = yaml.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
+    data = yaml_io.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
     epic_ids = {e.get("id") for e in data.get("epics", [])}
     tasks_by_epic: dict[str, list[dict[str, Any]]] = {}
     orphans: list[str] = []
@@ -1179,7 +1181,7 @@ def migrate_v2_to_v3(backlog_path: Path) -> dict[str, Any]:
             written, including epics/<id>.md and phases/<id>.md, not just tasks
           - schema_before / schema_after
     """
-    raw = yaml.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
+    raw = yaml_io.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
     before = detect_schema_version(raw)
     if before >= SCHEMA_V3:
         return {
@@ -1232,7 +1234,7 @@ def migrate_v2_to_v3(backlog_path: Path) -> dict[str, Any]:
 
 def migrate_v3_to_v4(backlog_path: Path) -> dict[str, Any]:
     """Convert a v3 backlog to sharded v4 storage, idempotently."""
-    raw = yaml.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
+    raw = yaml_io.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
     before = detect_schema_version(raw)
     if before >= SCHEMA_V4:
         return {
@@ -3330,7 +3332,7 @@ def load_linear_config(backlog_path: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None
     with path.open("r", encoding="utf-8") as f:
-        cfg = yaml.safe_load(f) or {}
+        cfg = yaml_io.safe_load(f) or {}
     _validate_linear_config(cfg)
     return cfg
 
@@ -4349,7 +4351,7 @@ def list_sessions() -> list[dict]:
             m = _MD_FRONTMATTER_RE.match(text)
             if not m:
                 continue
-            fm = yaml.safe_load(m.group(1)) or {}
+            fm = yaml_io.safe_load(m.group(1)) or {}
             if "id" not in fm or ("date" not in fm and "created" not in fm):
                 continue
             raw.append(fm)
@@ -4410,7 +4412,7 @@ def _load_handover_full(handover_id: str) -> dict | None:
     m = _MD_FRONTMATTER_RE.match(text)
     if not m:
         return None
-    fm = yaml.safe_load(m.group(1)) or {}
+    fm = yaml_io.safe_load(m.group(1)) or {}
     body = text[m.end():].strip()
     fm["resume_prompt"] = body          # body is the resume prompt artifact
     fm["viewer_kind"] = HANDOVER_KIND_TO_VIEWER_KIND.get(
@@ -4566,7 +4568,7 @@ def update_task(task_id: str, patch: dict, backlog_path: Path | None = None) -> 
     """
     bp = backlog_path or _resolve_backlog_path()
     with with_file_lock(bp):
-        raw = yaml.safe_load(bp.read_text(encoding="utf-8")) or {}
+        raw = yaml_io.safe_load(bp.read_text(encoding="utf-8")) or {}
         version = detect_schema_version(raw)
         if version >= SCHEMA_V4:
             from copy import deepcopy
@@ -4607,7 +4609,7 @@ def create_task(payload: dict, backlog_path: Path | None = None) -> str:
     if not epic_id:
         raise ValueError("epic is required")
     with with_file_lock(bp):
-        data = yaml.safe_load(bp.read_text(encoding="utf-8")) or {}
+        data = yaml_io.safe_load(bp.read_text(encoding="utf-8")) or {}
         epic = next((e for e in (data.get("epics") or []) if e.get("id") == epic_id), None)
         if epic is None:
             raise KeyError(f"epic {epic_id} not found")
@@ -4654,7 +4656,7 @@ def validate_task_write(task_id: str, patch: dict, backlog_path: Path | None = N
     Pure function — does not persist.
     """
     bp = backlog_path or _resolve_backlog_path()
-    data = yaml.safe_load(bp.read_text(encoding="utf-8")) or {}
+    data = yaml_io.safe_load(bp.read_text(encoding="utf-8")) or {}
     errors: dict[str, str] = {}
 
     # Build helper maps.
@@ -4941,7 +4943,7 @@ def continuity_items(
 
     # Tasks (from backlog.yaml epics).
     try:
-        data = yaml.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
+        data = yaml_io.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
     except (OSError, yaml.YAMLError):
         data = {}
     for epic in data.get("epics", []) or []:
@@ -4983,7 +4985,7 @@ _ENTITY_PATH_HELPERS: dict[str, Any] = {
 
 def _load_task_entities(backlog_path: Path) -> tuple[dict[str, Any], bool]:
     """Load task entities through the schema-appropriate storage reader."""
-    raw = yaml.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
+    raw = yaml_io.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
     is_v4 = detect_schema_version(raw) >= SCHEMA_V4
     return (load_v4(backlog_path) if is_v4 else load_v3(backlog_path), is_v4)
 

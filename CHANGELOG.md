@@ -7,6 +7,16 @@ Versions follow [SemVer](https://semver.org/spec/v2.0.0.html) — major bumps
 indicate schema breaks or removed surfaces.
 
 ---
+## 5.2.0
+
+**Derived index and ambient resurfacing.** A disposable SQLite/FTS5 index at `.taskmaster/local/index.db` is now built from `backlog.yaml` and every entity file, refreshed inside every tool call within a 1.5s budget, and warmed in the background at SessionStart; delete it any time and it rebuilds. It tracks entities, entity paths, links (with derived reverse rows), handovers, handover tasks, and implicit `related` edges via shared paths or handovers, at schema version 4.
+
+A new PostToolUse hook (`edit_resurface.py`) fires on Edit/Write/MultiEdit and prints one line naming open bugs, issues, tasks, and handovers whose anchors or locations point at the edited file, e.g. `TM: <path> → <open ids...> (+N closed, +N prose)`; it's silent otherwise, fires once per path per session, is stdlib-only, and fails open. It activates in sessions started after the upgrade, since hook registrations are snapshotted at SessionStart.
+
+Two new read-only tools ride on the index: `backlog_query(sql, limit)` runs a guarded, read-only SELECT/WITH (recursive CTEs allowed) directly over it, and `backlog_index_status(rebuild)` reports index health and the active YAML loader. `backlog_search` now spans all entity kinds with a `kinds` filter and ranks by bm25 (result order differs from earlier releases), falling back to substring search when the index is unavailable. `backlog_server.py` gains a `--build-index [path]` CLI flag.
+
+Handover creation responses now include the handover's absolute path, and the handover playbook ends with a paste block (tldr / absolute path / Resume line); auto-extraction gains a new source that proposes task IDs and asks about bugs or issues touching edited files, via an index reverse lookup. YAML reads use libyaml's `CSafeLoader` when available, roughly 5x faster on large backlogs; `backlog_index_status` reports which loader is active. The first session on an existing backlog pays one full index build (about 8–20s on a 2.3k-task backlog); on v3 backlogs, each `backlog.yaml` write makes the next tool call re-ingest inline tasks (2–4s).
+
 ## 5.1.0
 
 **Legacy viewer removed; new UI only.** The single-file `backlog-viewer.html` is deleted and the root URL (`/`) now serves the modular viewer shell unconditionally, with assets under `/static/v3/`. `/v3` remains as an alias for open tabs and tests. The `use_v3` viewer pref is retired — it no longer influences routing, is dropped from the prefs defaults, and any stale `use_v3` key left in a project's `viewer.json` is ignored without error. `backlog_migrate_v3` no longer flips viewer prefs.

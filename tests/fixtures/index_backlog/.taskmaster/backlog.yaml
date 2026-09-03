@@ -1,0 +1,43 @@
+version: 3
+project: index-fixture
+meta:
+  schema_version: 3
+  updated: '2026-09-01T00:00:00Z'
+epics:
+  - id: eng
+    name: Engine work
+    status: in-progress
+    description: Fixture epic covering the model usage service.
+    tasks:
+      - id: eng-001
+        title: Rework model usage accounting
+        status: in-progress
+        phase: dev
+        lane: standard
+        priority: high
+        sub_repo: api
+        created: '2026-08-01T00:00:00Z'
+        started: '2026-08-02T00:00:00Z'
+        anchors:
+          - src/svc/model.py
+          - src/svc/
+        branch: design/quokka-rework
+        docs:
+          spec: docs/specs/usage-rework-spec.md
+        notes: touches ModelUsageService
+        links:
+          - type: depends_on
+            target: eng-002
+      - id: eng-002
+        title: Seed the usage table
+        status: done
+        phase: dev
+        lane: fast
+        priority: medium
+        created: '2026-07-20T00:00:00Z'
+        completed: '2026-07-25T00:00:00Z'
+        notes: see src/svc/model.py and B-001
+phases:
+  - id: dev
+    name: Development
+context: {}
