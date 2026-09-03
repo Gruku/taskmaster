@@ -323,3 +323,18 @@ def test_local_gitignore_written(fixture_tm):
 def test_cli_prints_report(fixture_tm):
     out = subprocess.run([sys.executable, "-m", "taskmaster.index", str(fixture_tm.parent)], capture_output=True, text=True, cwd=PLUGIN_ROOT)
     assert out.returncode == 0 and json.loads(out.stdout)["row_counts"]["entities"] == 9
+
+
+def test_task_fts_covers_branch_docs_and_anchors(fixture_tm):
+    """Field parity with the old substring search: branch, doc paths and anchors are indexed."""
+    bp = fixture_tm / "backlog.yaml"
+    build_index(bp)
+    con = open_ro(bp)
+
+    def ids(match: str) -> list[str]:
+        return [r[0] for r in con.execute(
+            "select id from entity_fts where entity_fts match ?", (match,))]
+
+    assert ids('"quokka"') == ["eng-001"]          # from branch design/quokka-rework
+    assert "eng-001" in ids('"usage-rework-spec"')  # from docs.spec path
+    assert "eng-001" in ids('"svc"')                # from the anchors src/svc/model.py, src/svc/

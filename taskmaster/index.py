@@ -26,7 +26,7 @@ from taskmaster.taskmaster_v3 import (
     parse_frontmatter,
 )
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 DB_RELPATH = Path("local") / "index.db"
 # The MCP server rebuilds inside `_load()` while hooks and tools read; WAL lets
 # those readers through, and the timeout absorbs the brief write-lock overlaps.
@@ -433,8 +433,13 @@ def _ingest_task(con, task: dict[str, Any], epic_id: str | None, schema: int,
     _put_typed_links(con, tid, task)
     for dep in _as_list(task.get("depends_on")):
         _put_link(con, tid, "depends_on", str(dep))
+    # Branch, doc paths and anchors are indexed too so FTS keeps the field coverage the old
+    # substring search in `backlog_search` had (it scored branch and docs directly).
+    docs = task.get("docs")
+    doc_values = list(docs.values()) if isinstance(docs, dict) else []
     _put_fts(con, tid, "task", _as_str(task.get("title")) or "",
-             [task.get("notes"), task.get("description"), task.get("review_instructions")])
+             [task.get("notes"), task.get("description"), task.get("review_instructions"),
+              task.get("branch"), *doc_values, *[p for p, _ in anchors]])
 
 
 def _ingest_epic(con, epic: dict[str, Any]) -> None:

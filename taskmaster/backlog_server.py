@@ -1644,12 +1644,17 @@ def backlog_search(query: str, kinds: list[str] | None = None) -> str:
         kinds: Optional filter, e.g. ["bug", "issue"]. Unknown kinds are ignored; omit for all.
             Valid kinds: task, epic, bug, issue, handover, decision, idea.
     """
+    if isinstance(kinds, str):  # tolerate kinds="bug" from a loose caller
+        kinds = [kinds]
+    # _load() performs the bounded incremental index refresh every other tool relies on, so the
+    # FTS path below sees out-of-band file edits without any other tool call having run.
+    data = _load()
+
     indexed = _search_via_index(query, kinds)
     if indexed is not None:
         return indexed
 
     # Fallback: index missing or unreadable. Substring scan over tasks only, unchanged.
-    data = _load()
     q = query.lower()
     scored: list[tuple[int, str]] = []
 

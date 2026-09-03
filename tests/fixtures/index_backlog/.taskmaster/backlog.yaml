@@ -21,6 +21,9 @@ epics:
         anchors:
           - src/svc/model.py
           - src/svc/
+        branch: design/quokka-rework
+        docs:
+          spec: docs/specs/usage-rework-spec.md
         notes: touches ModelUsageService
         links:
           - type: depends_on

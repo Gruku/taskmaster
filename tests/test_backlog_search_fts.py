@@ -111,3 +111,50 @@ def test_fallback_is_used_when_the_index_errors(indexed_server, monkeypatch):
     assert "Error" not in out
     assert "eng-001" in out
     assert "B-001" not in out  # fallback is tasks-only, by design
+
+
+def test_search_sees_out_of_band_edits_without_another_tool_call(indexed_server, tmp_taskmaster):
+    """`backlog_search` calls `_load()`, which refreshes the index, so a file edit is visible."""
+    import os  # noqa: PLC0415
+
+    bug = tmp_taskmaster / ".taskmaster" / "bugs" / "B-001.md"
+    bug.write_text(
+        bug.read_text(encoding="utf-8").replace(
+            "title: Usage rows are double counted", "title: Quokkasaurus rows are double counted"),
+        encoding="utf-8")
+    stamp = os.path.getmtime(bug) + 5
+    os.utime(bug, (stamp, stamp))
+
+    out = indexed_server.backlog_search("Quokkasaurus")
+    assert "- `B-001` — Quokkasaurus rows are double counted (bug, open)" in out
+
+
+def test_archived_entities_still_appear(indexed_server, tmp_taskmaster):
+    """Ruling: archived items stay in results — the old scan included them and status is shown."""
+    import os  # noqa: PLC0415
+
+    backlog = tmp_taskmaster / ".taskmaster" / "backlog.yaml"  # eng-002 is the only `status: done`
+    backlog.write_text(
+        backlog.read_text(encoding="utf-8").replace("status: done", "status: archived"),
+        encoding="utf-8")
+    stamp = os.path.getmtime(backlog) + 5
+    os.utime(backlog, (stamp, stamp))
+
+    out = indexed_server.backlog_search("usage")
+    assert "- `eng-002` — Seed the usage table (medium, eng, archived)" in out
+
+
+def test_search_finds_a_task_by_branch_via_the_index(indexed_server):
+    """Branch names are in the FTS body now; a non-task result proves this is not the fallback."""
+    out = indexed_server.backlog_search("quokka-rework")
+    assert "- `eng-001` — Rework model usage accounting (high, eng, in-progress)" in out
+    assert out.startswith("**1 match** for `quokka-rework`:")
+
+    docs_hit = indexed_server.backlog_search("usage-rework-spec")
+    assert "eng-001" in docs_hit
+
+
+def test_kinds_accepts_a_bare_string(indexed_server):
+    out = indexed_server.backlog_search("usage", kinds="bug")
+    assert "B-001" in out and "B-002" in out
+    assert "eng-001" not in out and "ISS-001" not in out
