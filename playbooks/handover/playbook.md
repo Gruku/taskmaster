@@ -16,7 +16,7 @@ A handover is the per-session full record — context-injection optimisation for
 
 **1. Resolve `session_kind`.** Pick from `references/session-kinds.md`. Default: `continuity`. Override: "milestone done" / "chunk complete" -> `milestone`; "context handoff" / "300k" -> `deep-context`. Ask the user if unsure (use your structured-question tool if available).
 
-**2. Auto-extract draft inputs.** Walk the first six sources in `references/auto-extraction.md`. Output deduplicated paths under: Touched / Read / Relevant. Each path needs one-line `what changed` and `why next session needs it` — bare paths defeat the purpose. Then run source 7 in `references/auto-extraction.md` — the index reverse lookup — and propose its open ids for `task_ids`; for open bugs whose location you edited, ask in one line whether this session fixed them. Never change a status without the answer.
+**2. Auto-extract draft inputs.** Walk the first six sources in `references/auto-extraction.md`. Output deduplicated paths under: Touched / Read / Relevant. Each path needs one-line `what changed` and `why next session needs it` — bare paths defeat the purpose. Then run source 7 in `references/auto-extraction.md` — the index reverse lookup — and propose its open ids for `task_ids`; for open bugs and issues whose location you edited, ask in one line whether this session fixed them. Never change a status without the answer.
 
 **3. Resolve `task_ids`.** In-progress task id for milestone/deep-context/auto-stage. Last-touched task id for continuity. Leave empty `[]` for exploration sessions — do not invent a task id.
 

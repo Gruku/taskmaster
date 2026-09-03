@@ -118,3 +118,14 @@ def test_playbook_step2_points_at_reverse_lookup():
 def test_auto_extraction_has_reverse_lookup_source():
     text = (PLAYBOOK_DIR / "references" / "auto-extraction.md").read_text(encoding="utf-8")
     assert "7. **Index reverse lookup**" in text and "backlog_query" in text
+
+
+def test_reverse_lookup_covers_issues_and_quote_escaping():
+    text = (PLAYBOOK_DIR / "references" / "auto-extraction.md").read_text(encoding="utf-8")
+    playbook = (PLAYBOOK_DIR / "playbook.md").read_text(encoding="utf-8")
+    # Open issues get the same fix question as bugs (spec 6.2).
+    assert "bugs and issues" in text
+    assert "bugs and issues" in playbook
+    # The agent splices <rel> into SQL by hand, so it must be told how to quote it.
+    assert "escape single quotes" in text
+    assert "skip the path" in text

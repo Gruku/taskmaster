@@ -16,7 +16,7 @@ Seven input sources, walked in order, deduplicated; sources 1-6 group into three
 
 6. **Conversation numbered-step regex** — lines matching `^\d+\.\s+` that read like next-session actions (verb-led: "Run X", "Read Y", "Continue with Z"). Drives the "What's next" section in `standard` and `full` tiers.
 
-7. **Index reverse lookup** — for every Touched path, `backlog_query("SELECT DISTINCT e.id,e.kind,e.status,e.title FROM entity_paths p JOIN entities e ON e.id=p.entity_id WHERE p.source IN ('anchors','location') AND (p.path='<rel>' OR (p.match_kind='glob' AND '<rel>' GLOB p.path))")`. Paths are project-root relative with `/`. Open results feed `task_ids` (tasks) and the fix question (bugs). Skip silently when `backlog_query` reports a missing index.
+7. **Index reverse lookup** — for every Touched path, `backlog_query("SELECT DISTINCT e.id,e.kind,e.status,e.title FROM entity_paths p JOIN entities e ON e.id=p.entity_id WHERE p.source IN ('anchors','location') AND (p.path='<rel>' OR (p.match_kind='glob' AND '<rel>' GLOB p.path))")`. Paths are project-root relative with `/`. Before splicing `<rel>` into the query, escape single quotes by doubling them (`'` → `''`), and skip the path entirely if it holds any character outside `[A-Za-z0-9_./ -']`. Open results feed `task_ids` (tasks) and the fix question (bugs and issues). Skip silently when `backlog_query` reports a missing index.
 
 ## Grouping into three buckets
 
