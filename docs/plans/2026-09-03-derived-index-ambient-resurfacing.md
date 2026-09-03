@@ -625,3 +625,49 @@ No push. The submodule pointer references a commit that exists only locally unti
 - [ ] `uv run pytest -q` full suite green
 - [ ] Commit: `chore: release 5.2.0`
 - [ ] Submodule bump commit in claude-tools (local only)
+
+---
+
+### Task 8: Fast YAML loading (libyaml) — added by controller ruling
+
+**Why:** profiling the full index build on CodeMaestro showed ~90% of time in PyYAML's pure-Python parser via `load_v3`, which is also what every MCP tool call pays in `_load()` (7.8 s per call on that backlog). libyaml is present in the venv (`yaml.__with_libyaml__ == True`) and loads `backlog.yaml` in 0.33 s instead of 1.92 s.
+
+**Files:**
+- Create: `taskmaster/yaml_io.py`
+- Modify: every `yaml.safe_load(` call site in `taskmaster/taskmaster_v3.py`, `taskmaster/backlog_server.py`, `taskmaster/index.py`, `taskmaster/project.py` (find with `grep -n "yaml.safe_load" taskmaster/*.py`)
+- Create: `tests/test_yaml_io.py`
+
+**Interfaces:**
+- Produces: `yaml_io.safe_load(stream_or_text) -> Any` — uses `yaml.CSafeLoader` when `yaml.__with_libyaml__` is true, else `yaml.SafeLoader`. Same return values. `yaml_io.LOADER_NAME` = `"CSafeLoader"` or `"SafeLoader"` for diagnostics.
+
+**Rules:** do not touch `yaml.safe_dump` / dump paths. Do not change any call's arguments beyond the function name. `yaml_io` must not import anything from the taskmaster package.
+
+**Tests:**
+```python
+def test_loader_selection_matches_libyaml_flag():
+    import yaml
+    from taskmaster import yaml_io
+    assert yaml_io.LOADER_NAME == ("CSafeLoader" if yaml.__with_libyaml__ else "SafeLoader")
+
+def test_safe_load_equivalence_on_fixture_backlog():
+    import yaml
+    from taskmaster import yaml_io
+    text = (FIXTURE / ".taskmaster" / "backlog.yaml").read_text(encoding="utf-8")   # Task 1 fixture
+    assert yaml_io.safe_load(text) == yaml.load(text, Loader=yaml.SafeLoader)
+
+def test_safe_load_accepts_stream(tmp_path):
+    p = tmp_path / "a.yaml"; p.write_text("a: 1\nb: [x, y]\n", encoding="utf-8")
+    with p.open(encoding="utf-8") as fh:
+        assert yaml_io.safe_load(fh) == {"a": 1, "b": ["x", "y"]}
+
+def test_no_remaining_direct_safe_load_calls():
+    import re
+    for f in (PLUGIN_ROOT / "taskmaster").glob("*.py"):
+        if f.name == "yaml_io.py": continue
+        assert not re.search(r"\byaml\.safe_load\(", f.read_text(encoding="utf-8")), f
+```
+Also add `LOADER_NAME` to the `backlog_index_status` output line `Built:` as `loader=<name>` so the speedup is visible in the field.
+
+- [ ] Tests, helper, mechanical swap
+- [ ] `uv run pytest -q` green
+- [ ] Commit: `perf(yaml): use libyaml CSafeLoader for all backlog reads when available`
