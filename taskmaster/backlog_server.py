@@ -1532,7 +1532,9 @@ def backlog_query(sql: str, limit: int = 50) -> str:
       SELECT id,title FROM entity_fts WHERE entity_fts MATCH 'credit exhaustion' AND kind='handover' ORDER BY bm25(entity_fts) LIMIT 10
 
     Args:
-        sql: one SELECT (or WITH ... SELECT). Writes, PRAGMA, ATTACH and multiple statements are rejected.
+        sql: one SELECT (or WITH ... SELECT, recursive CTEs allowed). Writes, PRAGMA, ATTACH and
+            multiple statements are rejected, as is a forbidden keyword inside a double-quoted
+            identifier — quote string values with single quotes. Queries are cut off after 5 s.
         limit: row cap, 1..500 (default 50).
     """
     from taskmaster import index as _index  # noqa: PLC0415
@@ -1541,16 +1543,28 @@ def backlog_query(sql: str, limit: int = 50) -> str:
     limit = max(1, min(500, limit))
     bp = _backlog_path()
     con = None
+    guard = None
+    deadline = query_guard.Deadline(query_guard.QUERY_TIMEOUT_S)
     try:
         statement = query_guard.validate(sql)
+        guard = query_guard.Authorizer(query_guard.declared_names(statement))
         if not _index.db_path(bp).exists():
             _index.build_index(bp)
         con = _index.open_ro(bp)
-        con.set_authorizer(query_guard.authorizer)
+        con.set_authorizer(guard)
+        con.set_progress_handler(deadline, query_guard.PROGRESS_INSTRUCTIONS)
         cur = con.execute(f"SELECT * FROM ({statement}) LIMIT {limit + 1}")
         return _render_query_table(cur.description, cur.fetchall(), limit)
     except (sqlite3.Error, ValueError, OSError) as exc:
-        return f"Error: {exc}\n\nSchema: {query_guard.SCHEMA_SUMMARY}"
+        # SQLite reports both an abort and a denial as a bare message with no object,
+        # so prefer what the handler and the authorizer actually recorded.
+        if deadline.expired:
+            reason = deadline.message
+        elif guard is not None and guard.denial:
+            reason = f"not authorized: {guard.denial}"
+        else:
+            reason = str(exc)
+        return f"Error: {reason}\n\nSchema: {query_guard.SCHEMA_SUMMARY}"
     finally:
         if con is not None:
             con.close()

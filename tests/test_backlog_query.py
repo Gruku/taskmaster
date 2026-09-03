@@ -57,10 +57,19 @@ def test_query_error_includes_schema(indexed_server):
     assert out.startswith("Error:") and "entity_paths(" in out
 
 
-def test_authorizer_blocks_sqlite_master_writes_and_functions(indexed_server):
+def test_write_capable_function_is_unavailable(indexed_server):
     # a SELECT that calls a write-capable function must still fail under the authorizer
     out = indexed_server.backlog_query("SELECT writefile('x.txt','y')")
     assert out.startswith("Error:")
+
+
+def test_authorizer_is_the_thing_stopping_off_index_reads(indexed_server):
+    """Would fail if the authorizer were removed: both queries are valid read-only SQL."""
+    allowed = indexed_server.backlog_query("SELECT count(*) AS n FROM sqlite_master")
+    assert not allowed.startswith("Error:")
+
+    denied = indexed_server.backlog_query("SELECT count(*) AS n FROM pragma_table_info('entities')")
+    assert denied.startswith("Error: not authorized: READ pragma_table_info")
 
 
 def test_limit_clamped(indexed_server):
@@ -88,14 +97,98 @@ def test_docstring_examples_run(indexed_server):
 def test_authorizer_denies_unknown_table_and_write_pragma():
     import sqlite3
 
-    from taskmaster.query_guard import authorizer
+    from taskmaster.query_guard import Authorizer
 
-    assert authorizer(sqlite3.SQLITE_READ, "entities", "id", "main", None) == sqlite3.SQLITE_OK
-    assert authorizer(sqlite3.SQLITE_READ, "secrets", "v", "main", None) == sqlite3.SQLITE_DENY
-    assert authorizer(sqlite3.SQLITE_INSERT, "entities", None, "main", None) == sqlite3.SQLITE_DENY
-    assert authorizer(sqlite3.SQLITE_ATTACH, "other.db", None, None, None) == sqlite3.SQLITE_DENY
-    assert authorizer(sqlite3.SQLITE_PRAGMA, "journal_mode", "delete", "main", None) == sqlite3.SQLITE_DENY
-    assert authorizer(sqlite3.SQLITE_PRAGMA, "data_version", None, "main", None) == sqlite3.SQLITE_OK
+    az = Authorizer()
+    assert az(sqlite3.SQLITE_READ, "entities", "id", "main", None) == sqlite3.SQLITE_OK
+    assert az(sqlite3.SQLITE_RECURSIVE, None, None, None, None) == sqlite3.SQLITE_OK
+    assert az(sqlite3.SQLITE_PRAGMA, "data_version", None, "main", None) == sqlite3.SQLITE_OK
+    assert az.denial is None
+
+    for action, arg1, arg2 in ((sqlite3.SQLITE_READ, "secrets", "v"),
+                               (sqlite3.SQLITE_INSERT, "entities", None),
+                               (sqlite3.SQLITE_ATTACH, "other.db", None),
+                               (sqlite3.SQLITE_PRAGMA, "journal_mode", "delete")):
+        assert Authorizer()(action, arg1, arg2, "main", None) == sqlite3.SQLITE_DENY
+
+
+def test_authorizer_records_the_first_denial_by_name():
+    import sqlite3
+
+    from taskmaster.query_guard import Authorizer
+
+    az = Authorizer()
+    az(sqlite3.SQLITE_INSERT, "entities", None, "main", None)
+    az(sqlite3.SQLITE_DROP_TABLE, "entities", None, "main", None)
+    assert az.denial == "INSERT entities"  # first denial wins, action named
+
+
+def test_recursive_cte_is_allowed(indexed_server):
+    out = indexed_server.backlog_query(
+        "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x<5) SELECT * FROM c")
+    assert not out.startswith("Error:")
+    assert "5 rows" in out
+
+
+def test_aggregate_over_a_cte_is_allowed(indexed_server):
+    """`count(*)` over a CTE issues SQLITE_READ on the CTE's own name."""
+    out = indexed_server.backlog_query(
+        "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x<5) "
+        "SELECT count(*) AS n FROM c")
+    assert not out.startswith("Error:") and "5" in out
+
+    linked = indexed_server.backlog_query(
+        "WITH RECURSIVE reach(id) AS (SELECT 'B-001' UNION SELECT l.dst FROM links l "
+        "JOIN reach r ON l.src=r.id) SELECT count(*) AS n FROM reach")
+    assert not linked.startswith("Error:")
+
+
+def test_declared_names_finds_cte_names_and_ignores_strings():
+    from taskmaster.query_guard import declared_names  # noqa: PLC0415
+
+    assert declared_names("WITH a AS (SELECT 1), b(x) AS (SELECT 2) SELECT * FROM a") == {"a", "b"}
+    assert declared_names("SELECT 'q AS (' AS lit") == frozenset()
+    assert declared_names("SELECT 1") == frozenset()
+
+
+def test_cte_named_after_a_forbidden_object_cannot_reach_it(indexed_server):
+    """A CTE name shadows any schema object, so declaring one reaches nothing new."""
+    out = indexed_server.backlog_query(
+        "WITH pragma_table_info AS (SELECT 42 AS answer) SELECT * FROM pragma_table_info")
+    assert not out.startswith("Error:") and "42" in out
+
+    real = indexed_server.backlog_query("SELECT count(*) AS n FROM main.pragma_table_info")
+    assert real.startswith("Error:")
+
+
+def test_query_timeout_aborts_a_runaway_query(indexed_server, monkeypatch):
+    """A recursive CTE with 50M steps must be cut off, not run to completion."""
+    from taskmaster import query_guard  # noqa: PLC0415
+
+    monkeypatch.setattr(query_guard, "QUERY_TIMEOUT_S", 0.01)
+    out = indexed_server.backlog_query(
+        "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x<50000000) "
+        "SELECT count(*) FROM c")
+    assert out.startswith("Error: query exceeded 0.01 s")
+    assert "entity_paths(" in out
+
+
+def test_default_timeout_is_five_seconds():
+    """Pins the production wording of the timeout error: `query exceeded 5 s`."""
+    from taskmaster.query_guard import QUERY_TIMEOUT_S, Deadline
+
+    assert QUERY_TIMEOUT_S == 5.0
+    assert Deadline(QUERY_TIMEOUT_S).message == "query exceeded 5 s"
+
+
+def test_deadline_aborts_only_after_it_expires():
+    from taskmaster.query_guard import Deadline
+
+    live = Deadline(60.0)
+    assert live() == 0 and not live.expired
+
+    dead = Deadline(0.0)
+    assert dead() == 1 and dead.expired
 
 
 @pytest.mark.parametrize("bad", ["SELECT name FROM pragma_table_info('entities')",

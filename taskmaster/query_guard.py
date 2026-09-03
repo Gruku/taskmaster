@@ -5,8 +5,16 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import time
 
 from taskmaster.index import TABLES
+
+# `LIMIT` caps rows, not work: a cross join or a runaway recursive CTE can burn minutes
+# inside one MCP call. The progress handler aborts the statement past this deadline.
+QUERY_TIMEOUT_S = 5.0
+# VM instructions between progress-handler calls. Small enough to notice the deadline
+# promptly, large enough that the callback is not the bottleneck.
+PROGRESS_INSTRUCTIONS = 10_000
 
 # The schema summary appended to every error, so a failed query self-corrects.
 SCHEMA_SUMMARY = (
@@ -67,6 +75,21 @@ def _mask(sql: str) -> str:
     return "".join(out)
 
 
+# A CTE or window name in `<name> [(cols)] AS (`. SQLite reports a read of a CTE as
+# SQLITE_READ on the CTE's own name, indistinguishable in shape from a read of a
+# table-valued function, so the allowlist has to learn the names the query declares.
+_DECLARED = re.compile(r"([A-Za-z_][A-Za-z0-9_$]*)\s*(?:\([^()]*\))?\s+AS\s*\(", re.IGNORECASE)
+
+
+def declared_names(sql: str) -> frozenset[str]:
+    """Names the query itself introduces via `WITH ... AS (` or `WINDOW ... AS (`.
+
+    Safe to add to the read allowlist: a CTE name shadows any schema object of the
+    same name for the whole query, so declaring one can never reach a real table.
+    """
+    return frozenset(m.group(1) for m in _DECLARED.finditer(_mask(sql)))
+
+
 def validate(sql: str) -> str:
     """Return `sql` normalized for execution, or raise ValueError naming the broken rule."""
     text = sql.strip()
@@ -90,15 +113,70 @@ def validate(sql: str) -> str:
     return text
 
 
-def authorizer(action: int, arg1, arg2, dbname, source) -> int:  # noqa: ARG001
-    """sqlite3 authorizer: allow reads of the index tables and functions, deny the rest."""
-    if action == sqlite3.SQLITE_SELECT or action == sqlite3.SQLITE_FUNCTION:
-        return sqlite3.SQLITE_OK
-    if action == sqlite3.SQLITE_READ:
-        return sqlite3.SQLITE_OK if arg1 in READABLE_TABLES else sqlite3.SQLITE_DENY
-    # FTS5 issues `PRAGMA data_version` internally on every MATCH; it only reads a
-    # counter. `validate` already rejects a user-written PRAGMA, so this can only
-    # come from inside the virtual table.
-    if action == sqlite3.SQLITE_PRAGMA and arg1 == "data_version" and not arg2:
-        return sqlite3.SQLITE_OK
-    return sqlite3.SQLITE_DENY
+# sqlite3 reuses low integers for both authorizer actions and return codes
+# (SQLITE_COPY is 0, same as SQLITE_OK), so the reverse map is built from the
+# authorizer action names only — never from a blanket scan of the module.
+_ACTION_NAMES = {
+    getattr(sqlite3, name): name[len("SQLITE_"):]
+    for name in (
+        "SQLITE_CREATE_INDEX", "SQLITE_CREATE_TABLE", "SQLITE_CREATE_TEMP_INDEX",
+        "SQLITE_CREATE_TEMP_TABLE", "SQLITE_CREATE_TEMP_TRIGGER", "SQLITE_CREATE_TEMP_VIEW",
+        "SQLITE_CREATE_TRIGGER", "SQLITE_CREATE_VIEW", "SQLITE_DELETE", "SQLITE_DROP_INDEX",
+        "SQLITE_DROP_TABLE", "SQLITE_DROP_TEMP_INDEX", "SQLITE_DROP_TEMP_TABLE",
+        "SQLITE_DROP_TEMP_TRIGGER", "SQLITE_DROP_TEMP_VIEW", "SQLITE_DROP_TRIGGER",
+        "SQLITE_DROP_VIEW", "SQLITE_INSERT", "SQLITE_PRAGMA", "SQLITE_READ", "SQLITE_SELECT",
+        "SQLITE_TRANSACTION", "SQLITE_UPDATE", "SQLITE_ATTACH", "SQLITE_DETACH",
+        "SQLITE_ALTER_TABLE", "SQLITE_REINDEX", "SQLITE_ANALYZE", "SQLITE_CREATE_VTABLE",
+        "SQLITE_DROP_VTABLE", "SQLITE_FUNCTION", "SQLITE_SAVEPOINT", "SQLITE_COPY",
+        "SQLITE_RECURSIVE",
+    )
+    if hasattr(sqlite3, name)
+}
+
+
+class Authorizer:
+    """Callable sqlite3 authorizer: read the index tables, nothing else.
+
+    Instantiate one per query, passing that query's `declared_names`. It remembers
+    the first thing it denied so the tool can say *what* was refused — SQLite's own
+    "not authorized" carries no object.
+    """
+
+    def __init__(self, declared: frozenset[str] = frozenset()) -> None:
+        self.readable = READABLE_TABLES | declared
+        self.denial: str | None = None
+
+    def __call__(self, action: int, arg1, arg2, dbname, source) -> int:  # noqa: ARG002
+        if action in (sqlite3.SQLITE_SELECT, sqlite3.SQLITE_FUNCTION, sqlite3.SQLITE_RECURSIVE):
+            # SQLITE_RECURSIVE is the step of a `WITH RECURSIVE` CTE, not a write.
+            return sqlite3.SQLITE_OK
+        if action == sqlite3.SQLITE_READ and arg1 in self.readable:
+            return sqlite3.SQLITE_OK
+        # FTS5 issues `PRAGMA data_version` internally on every MATCH; it only reads a
+        # counter. `validate` already rejects a user-written PRAGMA, so this can only
+        # come from inside the virtual table.
+        if action == sqlite3.SQLITE_PRAGMA and arg1 == "data_version" and not arg2:
+            return sqlite3.SQLITE_OK
+        if self.denial is None:
+            name = _ACTION_NAMES.get(action, str(action))
+            self.denial = f"{name} {arg1}".strip() if arg1 else name
+        return sqlite3.SQLITE_DENY
+
+
+class Deadline:
+    """Callable sqlite3 progress handler that aborts the statement once time is up."""
+
+    def __init__(self, seconds: float) -> None:
+        self.seconds = seconds
+        self.expires_at = time.monotonic() + seconds
+        self.expired = False
+
+    def __call__(self) -> int:
+        if time.monotonic() >= self.expires_at:
+            self.expired = True
+            return 1  # non-zero aborts the running statement
+        return 0
+
+    @property
+    def message(self) -> str:
+        return f"query exceeded {self.seconds:g} s"
