@@ -28,7 +28,7 @@ from taskmaster.taskmaster_v3 import (
     parse_frontmatter,
 )
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 DB_RELPATH = Path("local") / "index.db"
 # The MCP server rebuilds inside `_load()` while hooks and tools read; WAL lets
 # those readers through, and the timeout absorbs the brief write-lock overlaps.
@@ -54,6 +54,10 @@ CREATE INDEX IF NOT EXISTS ix_entities_repo ON entities(repo);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_links ON links(src, type, dst);
 CREATE INDEX IF NOT EXISTS ix_links_dst ON links(dst);
 CREATE INDEX IF NOT EXISTS ix_related_a ON related(a);
+-- Reverse-side lookup: `delete from related where a=? or b=?` scanned the whole
+-- table without this, which on a multi-thousand-task backlog dominated a rebuild.
+CREATE INDEX IF NOT EXISTS ix_related_b ON related(b);
+CREATE INDEX IF NOT EXISTS ix_paths_entity ON entity_paths(entity_id);
 """
 
 TABLES = (
@@ -317,7 +321,25 @@ def _delete_entity(con: sqlite3.Connection, eid: str) -> None:
     con.execute("delete from handovers where id=?", (eid,))
     con.execute("delete from handover_tasks where handover_id=?", (eid,))
     con.execute("delete from entity_fts where id=?", (eid,))
-    con.execute("delete from related where a=? or b=?", (eid, eid))
+    con.execute("delete from related where a=?", (eid,))
+    con.execute("delete from related where b=?", (eid,))
+
+
+# Tasks and epics are re-ingested wholesale from backlog.yaml, so their old rows
+# come out in one set-based sweep instead of one `_delete_entity` per entity —
+# 2 000+ single-row deletes against `related` and `entity_fts` were the reason a
+# large backlog could not finish a refresh inside its budget. `related` is left
+# alone deliberately: it is derived from `entity_paths` and gets recomputed at
+# the end of the build, so wiping it here would only leave a stale-build window
+# with no related edges at all.
+_BACKLOG_KINDS_SQL = "select id from entities where kind in ('task','epic')"
+
+
+def _purge_backlog_entities(con: sqlite3.Connection) -> None:
+    con.execute(f"delete from entity_paths where entity_id in ({_BACKLOG_KINDS_SQL})")
+    con.execute(f"delete from links where derived=0 and src in ({_BACKLOG_KINDS_SQL})")
+    con.execute(f"delete from entity_fts where id in ({_BACKLOG_KINDS_SQL})")
+    con.execute("delete from entities where kind in ('task','epic')")
 
 
 def _put_entity(con: sqlite3.Connection, row: dict[str, Any]) -> None:
@@ -403,14 +425,20 @@ def _as_list(value: Any) -> list[Any]:
 
 
 def _ingest_task(con, task: dict[str, Any], epic_id: str | None, schema: int,
-                 repos: list[tuple[str, str]]) -> None:
+                 repos: list[tuple[str, str]], *, delete_first: bool = True) -> None:
     tid = task.get("id")
     if not tid:
         return
-    _delete_entity(con, tid)
+    if delete_first:
+        _delete_entity(con, tid)
     sub_repo = task.get("sub_repo") or None
     anchors = [normalize_task_anchor(a, sub_repo) for a in _as_list(task.get("anchors")) if a]
     exact_paths = [p for p, kind in anchors if kind == "exact"]
+    # A directory anchor (`api/src/svc/` → `api/src/svc/**`) names a repo just as
+    # well as a file anchor, so repo inference sees it with the `/**` stripped.
+    repo_paths = exact_paths + [
+        p[: -len("/**")] if p.endswith("/**") else p for p, kind in anchors if kind == "glob"
+    ]
     status = _as_str(task.get("status"))
     # In v3 the task itself lives in backlog.yaml and `tasks/<id>.md` only carries
     # heavy fields, so that file's removal must not look like the task's removal.
@@ -423,7 +451,7 @@ def _ingest_task(con, task: dict[str, Any], epic_id: str | None, schema: int,
         "epic": epic_id,
         "phase": _as_str(task.get("phase")),
         "lane": _as_str(task.get("lane")),
-        "repo": sub_repo or infer_repo(exact_paths, repos),
+        "repo": sub_repo or infer_repo(repo_paths, repos),
         "priority": _as_str(task.get("priority")),
         "created": _as_str(task.get("created")),
         "updated": _as_str(task.get("last_referenced") or task.get("completed")
@@ -444,11 +472,12 @@ def _ingest_task(con, task: dict[str, Any], epic_id: str | None, schema: int,
               task.get("branch"), *doc_values, *[p for p, _ in anchors]])
 
 
-def _ingest_epic(con, epic: dict[str, Any]) -> None:
+def _ingest_epic(con, epic: dict[str, Any], *, delete_first: bool = True) -> None:
     eid = epic.get("id")
     if not eid:
         return
-    _delete_entity(con, eid)
+    if delete_first:
+        _delete_entity(con, eid)
     status = _as_str(epic.get("status"))
     _put_entity(con, {
         "id": eid,
@@ -579,14 +608,14 @@ def _ingest_note_entity(con, kind: str, fm: dict[str, Any], body: str, rel_file:
 def _recompute_related(con: sqlite3.Connection) -> None:
     con.execute("delete from related")
     exact: dict[str, set[str]] = defaultdict(set)
-    globs: dict[str, list[re.Pattern[str]]] = defaultdict(list)
+    globs: dict[str, set[str]] = defaultdict(set)
     rows = con.execute(
         "select entity_id, path, match_kind from entity_paths"
         " where source in ('anchors','location')"
     ).fetchall()
     for eid, path, match_kind in rows:
         if match_kind == "glob":
-            globs[eid].append(_glob_to_regex(path))
+            globs[eid].add(path)
         else:
             exact[eid].add(path)
 
@@ -600,16 +629,29 @@ def _recompute_related(con: sqlite3.Connection) -> None:
             continue
         for a, b in combinations(sorted(eids), 2):
             shared[(a, b)].add(path)
+    # Each distinct glob is matched against each distinct path exactly once.
+    # Matching per (glob entity × exact entity × path) instead meant millions of
+    # regex calls on a large backlog, where the same directory anchor and the
+    # same file recur across hundreds of tasks.
+    distinct_paths = sorted(by_path)
+    matches: dict[str, list[str]] = {}
+    for pattern in {p for paths in globs.values() for p in paths}:
+        rx = _glob_to_regex(pattern)
+        matches[pattern] = [path for path in distinct_paths if rx.match(path)]
     for geid, patterns in globs.items():
-        for eid, paths in exact.items():
-            if eid == geid:
-                continue
-            key = (geid, eid) if geid < eid else (eid, geid)
-            for path in paths:
-                if any(pat.match(path) for pat in patterns):
-                    shared[key].add(path)
-    for (a, b), paths in shared.items():
-        con.execute("insert into related(a, b, via, weight) values (?,?,'path',?)", (a, b, len(paths)))
+        hit: set[str] = set()
+        for pattern in patterns:
+            hit.update(matches[pattern])
+        for path in hit:
+            for eid in by_path[path]:
+                if eid == geid:
+                    continue
+                key = (geid, eid) if geid < eid else (eid, geid)
+                shared[key].add(path)
+    con.executemany(
+        "insert into related(a, b, via, weight) values (?,?,'path',?)",
+        [(a, b, len(paths)) for (a, b), paths in shared.items()],
+    )
 
     groups: dict[str, set[str]] = defaultdict(set)
     for hid, tid in con.execute("select handover_id, task_id from handover_tasks"):
@@ -618,8 +660,10 @@ def _recompute_related(con: sqlite3.Connection) -> None:
     for tids in groups.values():
         for a, b in combinations(sorted(tids), 2):
             handover_weight[(a, b)] += 1
-    for (a, b), weight in handover_weight.items():
-        con.execute("insert into related(a, b, via, weight) values (?,?,'handover',?)", (a, b, weight))
+    con.executemany(
+        "insert into related(a, b, via, weight) values (?,?,'handover',?)",
+        [(a, b, weight) for (a, b), weight in handover_weight.items()],
+    )
 
 
 # ── Build ───────────────────────────────────────────────────────
@@ -699,9 +743,23 @@ def build_index(backlog_path: Path, data: dict | None = None, *,
                 data = load_backlog_data(backlog_path)
             return data
 
-        over_budget = budget_s is not None and time.perf_counter() - started > budget_s
-        if backlog_wide and not over_budget:
+        # The backlog re-ingest is one indivisible unit of work: it is the first
+        # thing the build does and every task/epic file in `changed` defers to
+        # it, so starting it and then breaking for budget would drop that work on
+        # the floor. It always runs to completion and its source rows are
+        # recorded immediately — a later budget break must not make the next
+        # refresh redo it, which is how a large backlog never converged.
+        if backlog_wide:
             _ingest_backlog(con, _data(), repos)
+            for rel in ("backlog.yaml", "project.yaml"):
+                if rel in changed and rel in on_disk:
+                    mtime, size, kind = on_disk[rel]
+                    con.execute(
+                        "insert or replace into sources(file, mtime, size, kind) values (?,?,?,?)",
+                        (rel, mtime, size, kind),
+                    )
+                    ingested += 1
+            changed = [rel for rel in changed if rel not in ("backlog.yaml", "project.yaml")]
 
         for i, rel in enumerate(changed):
             if budget_s is not None and time.perf_counter() - started > budget_s:
@@ -769,17 +827,28 @@ def _ingest_backlog(con, data: dict, repos: list[tuple[str, str]]) -> None:
     reconciliation of deleted ones is only reachable from here.
     """
     schema = detect_schema_version(data)
+    epics = list(data.get("epics", []))
     live: set[str] = set()
-    for epic in data.get("epics", []):
-        _ingest_epic(con, epic)
+    for epic in epics:
         live.add(epic.get("id"))
         for task in epic.get("tasks", []):
-            _ingest_task(con, task, epic.get("id"), schema, repos)
             live.add(task.get("id"))
-    gone = [eid for (eid,) in con.execute(
-        "select id from entities where kind in ('task','epic')") if eid not in live]
-    for eid in gone:
-        _delete_entity(con, eid)
+    # Entities the backlog no longer carries lose their derived `related` rows
+    # too, so they go through the full per-entity delete; the survivors are
+    # cleared in one sweep and rewritten below.
+    for (eid,) in con.execute(_BACKLOG_KINDS_SQL).fetchall():
+        if eid not in live:
+            _delete_entity(con, eid)
+    _purge_backlog_entities(con)
+    seen: set[str] = set()
+    for epic in epics:
+        eid = epic.get("id")
+        _ingest_epic(con, epic, delete_first=eid in seen)
+        seen.add(eid)
+        for task in epic.get("tasks", []):
+            tid = task.get("id")
+            _ingest_task(con, task, eid, schema, repos, delete_first=tid in seen)
+            seen.add(tid)
 
 
 def _ingest_source(con, root: Path, rel: str, kind: str, repos: list[tuple[str, str]],

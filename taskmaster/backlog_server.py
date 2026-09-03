@@ -1546,12 +1546,15 @@ def backlog_query(sql: str, limit: int = 50) -> str:
     bp = _backlog_path()
     con = None
     guard = None
-    deadline = query_guard.Deadline(query_guard.QUERY_TIMEOUT_S)
+    deadline = None
     try:
         statement = query_guard.validate(sql)
         guard = query_guard.Authorizer(query_guard.declared_names(statement))
         if not _index.db_path(bp).exists():
             _index.build_index(bp)
+        # The clock starts after the cold build: a first-ever call would
+        # otherwise spend the whole 5 s indexing and time out before it queried.
+        deadline = query_guard.Deadline(query_guard.QUERY_TIMEOUT_S)
         con = _index.open_ro(bp)
         con.set_authorizer(guard)
         con.set_progress_handler(deadline, query_guard.PROGRESS_INSTRUCTIONS)
@@ -1560,7 +1563,7 @@ def backlog_query(sql: str, limit: int = 50) -> str:
     except (sqlite3.Error, ValueError, OSError) as exc:
         # SQLite reports both an abort and a denial as a bare message with no object,
         # so prefer what the handler and the authorizer actually recorded.
-        if deadline.expired:
+        if deadline is not None and deadline.expired:
             reason = deadline.message
         elif guard is not None and guard.denial:
             reason = f"not authorized: {guard.denial}"
@@ -1620,7 +1623,9 @@ def _search_via_index(query: str, kinds: list[str] | None) -> str | None:
         source = f"FROM entity_fts JOIN entities e ON e.id = entity_fts.id {where}"
         total = con.execute(f"SELECT COUNT(*) {source}", params).fetchone()[0]
         if not total:
-            return f"No tasks matching `{query}`"
+            # Not "No tasks": this path searches every kind, and `kinds` may
+            # have excluded tasks entirely.
+            return f"No matches for `{query}`"
         rows = con.execute(
             "SELECT entity_fts.id, e.kind, e.status, e.title, e.priority, e.epic, "
             "bm25(entity_fts) AS rank "

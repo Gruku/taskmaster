@@ -73,7 +73,8 @@ def test_search_punctuation_does_not_error(indexed_server):
 
 
 def test_no_match_message(indexed_server):
-    assert indexed_server.backlog_search("zzzznotathing") == "No tasks matching `zzzznotathing`"
+    """The FTS path covers every kind, so its empty answer must not say "tasks"."""
+    assert indexed_server.backlog_search("zzzznotathing") == "No matches for `zzzznotathing`"
 
 
 def test_result_list_is_capped_at_fifteen(indexed_server, monkeypatch):

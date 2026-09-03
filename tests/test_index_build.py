@@ -264,11 +264,23 @@ def test_stale_build_does_not_advance_source_mtime_max(fixture_tm):
     assert _meta(bp, "source_mtime_max") == before
 
 
-def test_first_build_under_budget_records_no_source_mtime_max(fixture_tm):
+def test_first_build_under_budget_covers_only_the_backlog(fixture_tm):
+    """A truncated first build keeps the backlog it finished and claims nothing more.
+
+    The backlog re-ingest is indivisible, so it runs and is recorded even at a
+    zero budget; `source_mtime_max` must still exclude every file the build never
+    reached, or a later freshness check would think they were covered.
+    """
     bp = fixture_tm / "backlog.yaml"
+    bug = fixture_tm / "bugs" / "B-001.md"
+    future = time.time() + 500
+    os.utime(bug, (future, future))
     rep = build_index(bp, budget_s=0.0)
-    assert rep.stale
-    assert _meta(bp, "source_mtime_max") is None
+    assert rep.stale and "bugs/B-001.md" in rep.pending_files
+    con = open_ro(bp)
+    assert {r[0] for r in con.execute("select file from sources")} == {"backlog.yaml",
+                                                                      "project.yaml"}
+    assert float(_meta(bp, "source_mtime_max")) < future
 
 
 def test_schema_bump_forces_full_rebuild(fixture_tm):
@@ -338,3 +350,85 @@ def test_task_fts_covers_branch_docs_and_anchors(fixture_tm):
     assert ids('"quokka"') == ["eng-001"]          # from branch design/quokka-rework
     assert "eng-001" in ids('"usage-rework-spec"')  # from docs.spec path
     assert "eng-001" in ids('"svc"')                # from the anchors src/svc/model.py, src/svc/
+
+
+def _write_large_backlog(tm: Path, n_tasks: int, *, bump: str = "") -> None:
+    """A v3 backlog with `n_tasks` tasks sharing file and directory anchors.
+
+    Anchors repeat across tasks on purpose: that is what makes `related` large
+    (tens of thousands of rows on the real backlog) and what made the budgeted
+    refresh unable to finish.
+    """
+    lines = ["version: 3", "project: large", "meta:", "  schema_version: 3",
+             "  updated: '2026-09-01T00:00:00Z'", "epics:"]
+    per_epic = 120
+    tid = 0
+    for e in range((n_tasks + per_epic - 1) // per_epic):
+        lines += [f"  - id: ep{e:03d}", f"    name: Epic {e}", "    status: in-progress",
+                  "    tasks:"]
+        for _ in range(per_epic):
+            if tid >= n_tasks:
+                break
+            d, f = tid % 60, tid % 300
+            lines += [
+                f"      - id: t-{tid:05d}",
+                f"        title: Task {tid} {bump if tid == 0 else ''}",
+                "        status: todo",
+                "        created: '2026-08-01T00:00:00Z'",
+                "        anchors:",
+                f"          - api/src/mod{d:02d}/file{f:03d}.py",
+                f"          - api/src/mod{d:02d}/",
+            ]
+            tid += 1
+    lines += ["phases:", "  - id: dev", "    name: Development", "context: {}", ""]
+    (tm / "backlog.yaml").write_text("\n".join(lines), encoding="utf-8")
+
+
+def test_budgeted_refresh_converges_on_a_large_backlog(tmp_path):
+    """A one-task edit on a 2 000-task backlog must finish inside the 1.5 s budget.
+
+    Regression guard: the backlog re-ingest used to be interrupted by the budget
+    check that follows it, so `backlog.yaml` was never recorded in `sources`,
+    every later refresh redid the same work, and the link/related passes were
+    skipped forever.
+    """
+    tm = tmp_path / ".taskmaster"
+    tm.mkdir(parents=True)
+    (tm / "project.yaml").write_text(
+        "version: 1\nname: large\nrepos:\n  - name: api\n    path: ./api\n", encoding="utf-8")
+    _write_large_backlog(tm, 2000)
+    bp = tm / "backlog.yaml"
+
+    first = build_index(bp)
+    assert not first.stale and first.row_counts["related"] > 10_000
+
+    _write_large_backlog(tm, 2000, bump="edited")
+    refresh = build_index(bp, budget_s=1.5)
+    assert not refresh.stale, refresh.pending_files
+    assert refresh.elapsed_ms < 1500
+    assert refresh.row_counts["related"] == first.row_counts["related"]
+
+    settled = build_index(bp, budget_s=1.5)
+    assert settled.files_ingested == 0 and not settled.stale
+    con = open_ro(bp)
+    assert con.execute(
+        "select title from entities where id='t-00000'").fetchone()[0].endswith("edited")
+
+
+def test_directory_anchor_infers_repo(tmp_path):
+    """A task anchored only at `api/src/svc/` still belongs to the `api` repo."""
+    tm = tmp_path / ".taskmaster"
+    tm.mkdir(parents=True)
+    (tm / "project.yaml").write_text(
+        "version: 1\nname: dirs\nrepos:\n  - name: api\n    path: ./api\n"
+        "  - name: web\n    path: ./web\n", encoding="utf-8")
+    (tm / "backlog.yaml").write_text(
+        "version: 3\nproject: dirs\nmeta:\n  schema_version: 3\nepics:\n"
+        "  - id: ep\n    name: Epic\n    status: in-progress\n    tasks:\n"
+        "      - id: dir-001\n        title: Dir anchored\n        status: todo\n"
+        "        anchors:\n          - api/src/svc/\nphases: []\ncontext: {}\n",
+        encoding="utf-8")
+    bp = tm / "backlog.yaml"
+    build_index(bp)
+    con = open_ro(bp)
+    assert con.execute("select repo from entities where id='dir-001'").fetchone()[0] == "api"

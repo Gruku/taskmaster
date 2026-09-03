@@ -224,3 +224,35 @@ def test_long_cells_are_truncated(indexed_server):
     out = indexed_server.backlog_query("SELECT hex(zeroblob(200)) AS wide")
     cell = out.splitlines()[1]
     assert len(cell) == 80
+
+
+def test_cold_build_does_not_eat_the_query_deadline(tmp_taskmaster, monkeypatch):
+    """The 5 s clock covers the query only — a first-ever call builds, then queries.
+
+    Regression guard: the Deadline used to be constructed before the cold build,
+    so the very first `backlog_query` on a project spent its whole budget
+    indexing and returned a timeout instead of rows.
+    """
+    import time  # noqa: PLC0415
+
+    from taskmaster import backlog_server as bs  # noqa: PLC0415
+    from taskmaster import index as _index  # noqa: PLC0415
+    from taskmaster import query_guard  # noqa: PLC0415
+
+    shutil.copytree(FIXTURE_SRC, tmp_taskmaster / ".taskmaster", dirs_exist_ok=True)
+    assert not _index.db_path(bs._backlog_path()).exists()
+    monkeypatch.setattr(query_guard, "QUERY_TIMEOUT_S", 0.5)
+    # The handler only aborts while a statement is executing, and the fixture is
+    # far too small to reach the real instruction interval — so make every step
+    # check the clock, which is what exposes a deadline that started too early.
+    monkeypatch.setattr(query_guard, "PROGRESS_INSTRUCTIONS", 1)
+    real_build = _index.build_index
+
+    def slow_build(*args, **kwargs):
+        time.sleep(1.0)  # longer than the whole patched query timeout
+        return real_build(*args, **kwargs)
+
+    monkeypatch.setattr(_index, "build_index", slow_build)
+    out = bs.backlog_query("SELECT id FROM entities ORDER BY id", limit=5)
+    assert not out.startswith("Error:"), out
+    assert "rows (capped)" in out and "B-001" in out
