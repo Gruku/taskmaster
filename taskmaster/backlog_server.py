@@ -1570,13 +1570,85 @@ def backlog_query(sql: str, limit: int = 50) -> str:
             con.close()
 
 
+# Entity kinds the derived index carries; anything else passed in `kinds` is ignored.
+_SEARCH_KINDS = ("task", "epic", "bug", "issue", "handover", "decision", "idea")
+_SEARCH_LIMIT = 15
+
+
+def _fts_match_expression(query: str) -> str:
+    """Turn free text into a safe FTS5 MATCH expression.
+
+    Every whitespace-separated token becomes a quoted phrase (an embedded `"` is doubled), so
+    punctuation like `-`, `:` or a stray quote is data rather than MATCH grammar. Tokens are
+    joined by spaces, which FTS5 reads as implicit AND.
+    """
+    return " ".join('"' + tok.replace('"', '""') + '"' for tok in query.split())
+
+
+def _render_search_row(row) -> str:
+    """One result line. Tasks keep their historic `(priority, epic, status)` tail."""
+    eid, kind, status, title, priority, epic = row
+    status = status or "todo"
+    if kind == "task":
+        return f"`{eid}` — {title or ''} ({priority or 'medium'}, {epic or '—'}, {status})"
+    return f"`{eid}` — {title or ''} ({kind}, {status})"
+
+
+def _search_via_index(query: str, kinds: list[str] | None) -> str | None:
+    """FTS5 search across every entity kind, or None to tell the caller to fall back.
+
+    Returns None when the index is missing or any SQLite error occurs — the substring scan can
+    always answer for tasks, so search must never surface an error from here. The index is
+    deliberately not built on this path: a cold build costs ~20 s, far too long for a search.
+    """
+    from taskmaster import index as _index  # noqa: PLC0415
+
+    match = _fts_match_expression(query)
+    if not match:
+        return None
+    selected = [k for k in kinds if k in _SEARCH_KINDS] if kinds else []
+    con = None
+    try:
+        con = _index.open_ro(_backlog_path())
+        where = "WHERE entity_fts MATCH ?"
+        params: list[str] = [match]
+        if selected:
+            where += " AND e.kind IN (" + ",".join("?" * len(selected)) + ")"
+            params.extend(selected)
+        source = f"FROM entity_fts JOIN entities e ON e.id = entity_fts.id {where}"
+        total = con.execute(f"SELECT COUNT(*) {source}", params).fetchone()[0]
+        if not total:
+            return f"No tasks matching `{query}`"
+        rows = con.execute(
+            "SELECT entity_fts.id, e.kind, e.status, e.title, e.priority, e.epic, "
+            "bm25(entity_fts) AS rank "
+            f"{source} ORDER BY rank LIMIT {int(_SEARCH_LIMIT)}", params).fetchall()
+    except (sqlite3.Error, OSError, ValueError):
+        return None
+    finally:
+        if con is not None:
+            con.close()
+
+    body = "\n".join(f"- {_render_search_row(r[:6])}" for r in rows)
+    return f"**{total} match{'es' if total != 1 else ''}** for `{query}`:\n" + body
+
+
 @mcp.tool()
-def backlog_search(query: str) -> str:
-    """Full-text search across task IDs, titles, notes, branches, and doc paths. Returns matching tasks ranked by relevance.
+def backlog_search(query: str, kinds: list[str] | None = None) -> str:
+    """Full-text search across every backlog entity — tasks, epics, bugs, issues, handovers,
+    decisions and ideas — ranked by relevance (bm25) over the derived index.
 
     Args:
-        query: Search text (case-insensitive). Matches against id, title, notes, branch, epic name, and doc paths.
+        query: Search text (case-insensitive). Matched against titles and bodies (notes,
+            descriptions, evidence, handover prose). Multiple words are ANDed together.
+        kinds: Optional filter, e.g. ["bug", "issue"]. Unknown kinds are ignored; omit for all.
+            Valid kinds: task, epic, bug, issue, handover, decision, idea.
     """
+    indexed = _search_via_index(query, kinds)
+    if indexed is not None:
+        return indexed
+
+    # Fallback: index missing or unreadable. Substring scan over tasks only, unchanged.
     data = _load()
     q = query.lower()
     scored: list[tuple[int, str]] = []
@@ -1616,7 +1688,7 @@ def backlog_search(query: str) -> str:
         return f"No tasks matching `{query}`"
 
     scored.sort(key=lambda x: -x[0])
-    results = [item for _, item in scored[:15]]
+    results = [item for _, item in scored[:_SEARCH_LIMIT]]
     return f"**{len(scored)} match{'es' if len(scored) != 1 else ''}** for `{query}`:\n" + "\n".join(f"- {r}" for r in results)
 
 
