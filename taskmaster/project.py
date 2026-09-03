@@ -413,6 +413,8 @@ from dataclasses import asdict, fields, is_dataclass
 
 import yaml
 
+from taskmaster import yaml_io
+
 _log = logging.getLogger(__name__)
 
 
@@ -472,7 +474,7 @@ def load_project_manifest_raw(project_root: Path) -> dict | None:
         return None
     try:
         raw_text = path.read_text(encoding="utf-8")
-        data = yaml.safe_load(raw_text) or {}
+        data = yaml_io.safe_load(raw_text) or {}
     except (OSError, yaml.YAMLError) as exc:
         _log.warning("Failed to read %s: %s", path, exc)
         return None

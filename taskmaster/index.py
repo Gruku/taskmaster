@@ -17,6 +17,8 @@ from typing import Any
 
 import yaml
 
+from taskmaster import yaml_io
+
 from taskmaster.taskmaster_v3 import (
     REVERSE_TYPE,
     SCHEMA_V4,
@@ -212,7 +214,7 @@ def _glob_to_regex(pattern: str) -> re.Pattern[str]:
 def load_backlog_data(backlog_path: Path) -> dict:
     """Load a backlog, dispatching v3/v4 without importing the MCP server."""
     backlog_path = Path(backlog_path)
-    raw = yaml.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
+    raw = yaml_io.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
     if detect_schema_version(raw) >= SCHEMA_V4:
         return load_v4(backlog_path)
     return load_v3(backlog_path)
@@ -224,7 +226,7 @@ def _load_repos(backlog_path: Path) -> list[tuple[str, str]]:
     if not pf.exists():
         return []
     try:
-        raw = yaml.safe_load(pf.read_text(encoding="utf-8")) or {}
+        raw = yaml_io.safe_load(pf.read_text(encoding="utf-8")) or {}
     except (OSError, yaml.YAMLError):
         return []
     repos: list[tuple[str, str]] = []

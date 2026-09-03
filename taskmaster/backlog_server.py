@@ -26,6 +26,8 @@ from typing import Any, Literal
 
 import yaml
 from fastmcp import FastMCP
+
+from taskmaster import yaml_io
 from taskmaster.blast_radius import (
     BlastRadiusConfig,
     load_config,
@@ -304,7 +306,7 @@ def _backlog_path() -> Path:
 def _progress_path() -> Path:
     backlog, legacy_progress = _resolve_paths()
     try:
-        raw = yaml.safe_load(backlog.read_text(encoding="utf-8")) or {}
+        raw = yaml_io.safe_load(backlog.read_text(encoding="utf-8")) or {}
     except (OSError, yaml.YAMLError):
         return legacy_progress
     if _detect_schema_version(raw) >= SCHEMA_V4:
@@ -417,7 +419,7 @@ def _load() -> dict:
     global _LOAD_SNAPSHOT
     bp = _backlog_path()
     # Peek at version without per-file enrichment so we can dispatch.
-    raw = yaml.safe_load(bp.read_text(encoding="utf-8")) or {}
+    raw = yaml_io.safe_load(bp.read_text(encoding="utf-8")) or {}
     version = _detect_schema_version(raw)
     if version >= SCHEMA_V4:
         data = _load_v4(bp)
@@ -500,7 +502,7 @@ def _ensure_v3_marker(bp: Path) -> None:
     Idempotent. Subsequent saves may migrate task storage via the normal
     v3 dispatch.
     """
-    raw = yaml.safe_load(bp.read_text(encoding="utf-8")) or {}
+    raw = yaml_io.safe_load(bp.read_text(encoding="utf-8")) or {}
     if _detect_schema_version(raw) >= SCHEMA_V3:
         return
     raw.setdefault("meta", {})["schema_version"] = SCHEMA_V3
@@ -1463,7 +1465,7 @@ def _render_index_report(bp: Path, report) -> str:
     lines = [
         f"Index: {_index.db_path(bp)}",
         f"Built: {report.built_at}  (full rebuild: {yn(report.full_rebuild)}, "
-        f"stale: {yn(report.stale)}, {report.elapsed_ms} ms)",
+        f"stale: {yn(report.stale)}, {report.elapsed_ms} ms, loader={yaml_io.LOADER_NAME})",
         f"Rows: {rows}",
     ]
     pending = report.pending_files or []
@@ -7022,7 +7024,7 @@ def _compute_recent_events(since_iso: str) -> list:
     except Exception as e:
         raise ValueError(f"invalid since: {e}")
 
-    backlog = yaml.safe_load(_backlog_path().read_text(encoding="utf-8")) or {}  # existing helper from Plan 1
+    backlog = yaml_io.safe_load(_backlog_path().read_text(encoding="utf-8")) or {}  # existing helper from Plan 1
     events: list = []
 
     def _parse(s):
@@ -7072,12 +7074,11 @@ def _load_task_full(task_id: str) -> dict | None:
     Returns None if the task id is not in the index.
     """
     import re
-    import yaml
 
     backlog_path = _backlog_path()
     if not backlog_path.exists():
         return None
-    backlog = yaml.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
+    backlog = yaml_io.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
     tasks = backlog.get("tasks")
     if not isinstance(tasks, list):
         tasks = [
@@ -7102,7 +7103,7 @@ def _load_task_full(task_id: str) -> dict | None:
         fm_match = re.match(r"^---\n(.*?)\n---\n(.*)$", raw, re.DOTALL)
         if fm_match:
             try:
-                fm = yaml.safe_load(fm_match.group(1)) or {}
+                fm = yaml_io.safe_load(fm_match.group(1)) or {}
             except Exception:
                 fm = {}
             body = fm_match.group(2)
@@ -7185,12 +7186,11 @@ def _load_related_for_task(task_id: str) -> dict | None:
     Returns None if the task is unknown.
     """
     import re
-    import yaml
 
     backlog_path = _backlog_path()
     if not backlog_path.exists():
         return None
-    backlog = yaml.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
+    backlog = yaml_io.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
     tasks = backlog.get("tasks")
     if not isinstance(tasks, list):
         tasks = [
@@ -7208,7 +7208,7 @@ def _load_related_for_task(task_id: str) -> dict | None:
         if not m:
             return {}, raw
         try:
-            fm = yaml.safe_load(m.group(1)) or {}
+            fm = yaml_io.safe_load(m.group(1)) or {}
         except Exception:
             fm = {}
         return fm, m.group(2)
@@ -7602,7 +7602,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
 
     def _serve_json(self) -> None:
         try:
-            data = yaml.safe_load(_backlog_path().read_text(encoding="utf-8"))
+            data = yaml_io.safe_load(_backlog_path().read_text(encoding="utf-8"))
             data.setdefault("meta", {})["_version"] = VERSION
             if not isinstance(data.get("tasks"), list):
                 data["tasks"] = [
@@ -8458,7 +8458,7 @@ def backlog_project_set(yaml_content: str) -> str:
     using the existing _atomic_write helper. Returns the absolute path written.
     """
     try:
-        data = yaml.safe_load(yaml_content) or {}
+        data = yaml_io.safe_load(yaml_content) or {}
     except yaml.YAMLError as exc:
         raise ValueError(f"YAML parse failed: {exc}") from exc
     if not isinstance(data, dict):
@@ -8692,7 +8692,7 @@ def backlog_linear_bootstrap_apply(
 
     if cfg_path.exists():
         with cfg_path.open("r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f) or {}
+            cfg = yaml_io.safe_load(f) or {}
         existing_aliases = {ws.get("alias") for ws in cfg.get("workspaces") or []}
         if workspace_alias in existing_aliases:
             return json.dumps({"error": f"workspace alias {workspace_alias!r} already exists in linear.yaml"})
