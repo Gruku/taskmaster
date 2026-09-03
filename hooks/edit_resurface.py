@@ -154,12 +154,19 @@ def resolve(db_path, rel: str) -> ResolveResult:
 
 
 def format_line(rel: str, result: ResolveResult, stale: bool) -> str:
+    """One line naming the open work, `HND `-labelled for handovers.
+
+    Handover ids are dated slugs — long, and unrecognisable next to a `B-231`.
+    The label says what the id is and the truncation keeps the line short; the
+    status is redundant because only open handovers are ever listed.
+    """
     parts = []
     for entry in result.listed[:MAX_IDS]:
         if entry.kind == "handover":
             eid = entry.id
-            parts.append(eid if len(eid) <= HANDOVER_ID_CHARS
-                         else eid[:HANDOVER_ID_CHARS] + "…")
+            if len(eid) > HANDOVER_ID_CHARS:
+                eid = eid[:HANDOVER_ID_CHARS] + "…"
+            parts.append(f"HND {eid}")
         else:
             parts.append(f"{entry.id} {entry.status}")
     overflow = len(result.listed) - MAX_IDS
@@ -333,11 +340,14 @@ def main() -> int:
             return 0
 
         result = resolve(db_file, rel)
-        record_seen(seen_file, seen, rel)
         if not result.listed:
             return 0
 
         line = format_line(rel, result, is_stale(root, db_file))
+        # Recorded only now: dedupe suppresses a repeat of a line the agent has
+        # already seen, so a silent edit must not burn the path. Otherwise the
+        # first edit before a bug is filed would mute every later edit.
+        record_seen(seen_file, seen, rel)
         sys.stdout.write(json.dumps({"hookSpecificOutput": {
             "hookEventName": "PostToolUse", "additionalContext": line}}))
     except Exception as exc:

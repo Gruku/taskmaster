@@ -80,7 +80,8 @@ def test_open_items_one_line(indexed_root):
     r = run(payload(indexed_root, "api/src/svc/model.py"), indexed_root)
     ctx = context(r)
     assert ctx.startswith(
-        "TM: api/src/svc/model.py → B-001 open, eng-001 in-progress, 2026-09-01-fixture-hando…")
+        "TM: api/src/svc/model.py → B-001 open, eng-001 in-progress, "
+        "HND 2026-09-01-fixture-hando…")
     assert "(+1 closed" in ctx and "\n" not in ctx
 
 
@@ -141,6 +142,30 @@ def test_dedupe_per_session(indexed_root):
     assert r.stdout == ""
     r2 = run(payload(indexed_root, "api/src/svc/model.py", session="s2"), indexed_root)
     assert r2.stdout != ""
+
+
+def test_silent_edit_does_not_burn_the_dedupe_slot(tmp_path):
+    """Dedupe suppresses a repeated *line*, not a repeated edit.
+
+    Editing a file before anyone files a bug against it must not mute the line
+    for the rest of the session once the bug exists.
+    """
+    root = _synthetic_root(tmp_path, [
+        ("B-900", "bug", "fixed", "svc/quiet.py", "exact", "location")])
+    (root / "svc").mkdir(parents=True)
+    (root / "svc" / "quiet.py").write_text("x", encoding="utf-8")
+    assert run(payload(root, "svc/quiet.py"), root).stdout == ""
+
+    db = root / ".taskmaster" / "local" / "index.db"
+    con = sqlite3.connect(db)
+    con.execute("insert into entities(id,kind,status) values ('B-901','bug','open')")
+    con.execute("insert into entity_paths values "
+                "('B-901','svc/quiet.py','exact','location')")
+    con.commit()
+    con.close()
+
+    ctx = context(run(payload(root, "svc/quiet.py"), root))
+    assert ctx == "TM: svc/quiet.py → B-901 open (+1 closed)"
 
 
 def test_dedupe_prunes_seen_files_older_than_seven_days(indexed_root):
@@ -286,14 +311,23 @@ def test_format_orders_bugs_issues_tasks_handovers(tmp_path):
     mod = _load_hook_module()
     rows = [(eid, kind, status, "a/b.py", "exact", src) for eid, kind, status, src in [
         ("t-1", "task", "todo", "anchors"),
-        ("HND-x", "handover", "open", "prose"),
+        ("2026-09-02-mapped-unimplemented", "handover", "open", "prose"),
         ("B-1", "bug", "open", "location"),
         ("ISS-1", "issue", "investigating", "location"),
     ]]
     root = _synthetic_root(tmp_path, rows)
     res = mod.resolve(root / ".taskmaster" / "local" / "index.db", "a/b.py")
     assert mod.format_line("a/b.py", res, False) == (
-        "TM: a/b.py → B-1 open, ISS-1 investigating, t-1 todo, HND-x")
+        "TM: a/b.py → B-1 open, ISS-1 investigating, t-1 todo, "
+        "HND 2026-09-02-mapped-unimpl…")
+
+
+def test_short_handover_id_is_not_truncated(tmp_path):
+    mod = _load_hook_module()
+    root = _synthetic_root(tmp_path, [
+        ("2026-09-02-short", "handover", "open", "a/b.py", "exact", "prose")])
+    res = mod.resolve(root / ".taskmaster" / "local" / "index.db", "a/b.py")
+    assert mod.format_line("a/b.py", res, False) == "TM: a/b.py → HND 2026-09-02-short"
 
 
 def test_format_caps_at_six_ids(tmp_path):
