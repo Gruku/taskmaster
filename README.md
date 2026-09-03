@@ -157,6 +157,20 @@ Taskmaster separates intent from mechanics:
 3. **Repository files** preserve shared state in human-readable Markdown and YAML.
 4. **The viewer** renders the same state without becoming a second source of truth.
 
+### Derived index and ambient resurfacing
+
+A disposable SQLite/FTS5 index at `.taskmaster/local/index.db` is built from
+`backlog.yaml` and every entity file, refreshed within every tool call, and
+warmed in the background at session start. Delete it any time — it rebuilds
+from source on the next tool call.
+
+Editing a file that a task, bug, issue, or handover already tracks prints a
+single ambient line naming the open items it touches, e.g.
+`TM: <path> → <open ids...> (+N closed, +N prose)`; it stays silent when
+nothing tracks the file. `backlog_query(sql, limit)` runs read-only SQL
+directly over the index for ad hoc lookups, and `backlog_index_status`
+reports index health and rebuilds it on demand.
+
 ## Built-in workflows
 
 | Workflow | Example request |

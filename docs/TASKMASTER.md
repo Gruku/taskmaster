@@ -211,7 +211,9 @@ All tools are prefixed with `backlog_`. These are the low-level building blocks 
 | `backlog_status` | Full dashboard: epic table, in-progress, blocked, next-up, stats, phase |
 | `backlog_list_tasks` | Filtered list. Params: `epic`, `status`, `priority`, `phase` |
 | `backlog_get_task(task_id)` | Full task detail with epic context, deps, docs, related tasks |
-| `backlog_search(query)` | Full-text search across ID, title, notes, branch, epic name, doc paths |
+| `backlog_search(query, kinds?)` | FTS5-ranked search across all entity kinds (tasks, bugs, issues, decisions, handovers, ideas); `kinds` filters the set; falls back to substring search when the index is unavailable |
+| `backlog_query(sql, limit?)` | Read-only SELECT/WITH query directly over the derived index (`.taskmaster/local/index.db`) |
+| `backlog_index_status(rebuild?)` | Derived index health: schema version, row counts, active YAML loader; `rebuild` forces a full rebuild |
 | `backlog_dependencies(task_id)` | Upstream (depends-on) and downstream (unblocks) graph |
 | `backlog_next_available` | Ready-to-work tasks: todo in active epics, deps satisfied, phase-filtered |
 | `backlog_validate` | Integrity check: dangling deps, circular deps, missing dates, status inconsistencies |
