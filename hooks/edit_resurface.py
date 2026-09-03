@@ -44,6 +44,7 @@ STRUCTURAL_SOURCES = {"anchors", "location"}
 MAX_IDS = 6
 HANDOVER_ID_CHARS = 24
 SEEN_TTL_SECONDS = 7 * 86400
+BUSY_TIMEOUT_SECONDS = 2.0
 LOG_MAX_BYTES = 1024 * 1024
 LOG_KEEP_BYTES = 512 * 1024
 
@@ -95,14 +96,20 @@ def _glob_match(pattern: str, rel: str) -> bool:
     return _glob_to_regex(pattern).match(rel) is not None
 
 
+def _connect_ro(db_file) -> sqlite3.Connection:
+    """Read-only handle. The hook must never create a -wal/-shm file, let alone
+    write a row — the server owns every write to the index."""
+    uri = Path(db_file).resolve().as_uri() + "?mode=ro"
+    return sqlite3.connect(uri, uri=True, timeout=BUSY_TIMEOUT_SECONDS)
+
+
 def resolve(db_path, rel: str) -> ResolveResult:
     """Classify every index entity that claims `rel`.
 
     Exposed as a module function so the timing and formatting tests can call it
     in-process without paying for interpreter startup.
     """
-    uri = "file:" + str(Path(db_path).resolve()).replace("\\", "/").lstrip("/") + "?mode=ro"
-    con = sqlite3.connect(uri, uri=True, timeout=2.0)
+    con = _connect_ro(db_path)
     try:
         rows = con.execute(
             "SELECT e.id, e.kind, e.status, p.match_kind, p.path, p.source"
@@ -199,7 +206,7 @@ def relative_path(root: Path, target: Path):
 
 def is_stale(root: Path, db_file: Path) -> bool:
     """True when the index cannot be trusted to reflect the files on disk."""
-    con = sqlite3.connect(str(db_file), timeout=2.0)
+    con = _connect_ro(db_file)
     try:
         meta = dict(con.execute("select key, value from meta").fetchall())
     finally:
