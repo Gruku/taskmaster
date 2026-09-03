@@ -179,3 +179,19 @@ def test_backlog_handover_supersede_tool(tmp_path, monkeypatch):
 
     fm, _ = read_handover(bp, old_id)
     assert fm["superseded_by"] == new_id
+
+
+def test_handover_create_returns_absolute_path(tmp_path, monkeypatch):
+    """The paste block needs an absolute path the user can copy into a chat."""
+    bp = _make_backlog(tmp_path)
+    _set_backlog_root(monkeypatch, bp)
+
+    out = backlog_server.backlog_handover_create(tldr="Did a thing", next_action="Do next")
+    lines = out.splitlines()
+    path_line = next(ln for ln in lines if ln.startswith("- Path: "))
+    path = Path(path_line[len("- Path: "):])
+    assert path.is_absolute()
+    assert path.exists()
+    # Sits directly after the `- File:` line.
+    file_idx = next(i for i, ln in enumerate(lines) if ln.startswith("- File: "))
+    assert lines[file_idx + 1] == path_line

@@ -2413,6 +2413,7 @@ def backlog_handover_create(
     lines = [
         f"Handover written: {hid}",
         f"- File: {target.relative_to(ROOT)}",
+        f"- Path: {target.resolve()}",
         f"- Index entries: {len(data.get('handovers') or [])}",
     ]
     if supersedes and not superseded_warning:

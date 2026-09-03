@@ -16,7 +16,7 @@ A handover is the per-session full record — context-injection optimisation for
 
 **1. Resolve `session_kind`.** Pick from `references/session-kinds.md`. Default: `continuity`. Override: "milestone done" / "chunk complete" -> `milestone`; "context handoff" / "300k" -> `deep-context`. Ask the user if unsure (use your structured-question tool if available).
 
-**2. Auto-extract draft inputs.** Walk the six sources in `references/auto-extraction.md`. Output deduplicated paths under: Touched / Read / Relevant. Each path needs one-line `what changed` and `why next session needs it` — bare paths defeat the purpose.
+**2. Auto-extract draft inputs.** Walk the first six sources in `references/auto-extraction.md`. Output deduplicated paths under: Touched / Read / Relevant. Each path needs one-line `what changed` and `why next session needs it` — bare paths defeat the purpose. Then run source 7 in `references/auto-extraction.md` — the index reverse lookup — and propose its open ids for `task_ids`; for open bugs whose location you edited, ask in one line whether this session fixed them. Never change a status without the answer.
 
 **3. Resolve `task_ids`.** In-progress task id for milestone/deep-context/auto-stage. Last-touched task id for continuity. Leave empty `[]` for exploration sessions — do not invent a task id.
 
@@ -32,7 +32,15 @@ A handover is the per-session full record — context-injection optimisation for
 
 **8. Write through `backlog_handover_create`** with its top-level fields: `tldr`, `next_action`, `body`, `task_ids`, `session_kind`, `supersedes`, `thread`, `flag_for_review`. Rarely-set fields go in the `options` dict: `branch`, `tip_commit`, `context_size_at_write`, `review_reason` (e.g. `options={"branch": ..., "tip_commit": ...}`). Decisions live inside `body` (step 5), not as separate kwargs. If a `pending_review_flag` was buffered upstream, forward `flag_for_review=true` + `options={"review_reason": "<reason>"}`.
 
-**9. Confirm.** Echo the server's final line verbatim — `Resume: <thread> — <next_action>` — as the last line of your reply. That line is the durable resume token: pasting the thread name into any future session resumes this work via `backlog_thread_resume`. Surface any WARNING line from the response.
+**9. Confirm with the paste block.** End your reply with exactly this fenced block and nothing after it — the user copies it into a chat as the durable pointer:
+
+    ```
+    <tldr>
+    <absolute path from the server's `- Path:` line>
+    Resume: <thread> — <next_action>
+    ```
+
+The `Resume:` line is the server's final line verbatim; pasting the thread name into any future session resumes via `backlog_thread_resume`. Surface any WARNING line from the response above the block, never inside it.
 
 ## Manual status entry points
 
@@ -44,7 +52,7 @@ A handover is the per-session full record — context-injection optimisation for
 ## References
 
 - `references/session-kinds.md` — the four kinds, resume-load behavior, archive policy
-- `references/auto-extraction.md` — six sources, dedup grouping rules, regex specs
+- `references/auto-extraction.md` — seven sources, dedup grouping rules, regex specs
 - `references/supersession.md` — chained-supersession algorithm
 - `references/triage.md` — triage loop algorithm
 - `templates/body.md` — body skeleton

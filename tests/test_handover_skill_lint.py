@@ -103,3 +103,18 @@ def test_skill_body_within_budget():
 def test_description_within_word_budget():
     count = description_word_count("handover")
     assert count <= DEFAULT_DESC_WORDS, f"description is {count} words (budget: {DEFAULT_DESC_WORDS})"
+
+
+def test_playbook_step9_defines_paste_block():
+    text = (PLAYBOOK_DIR / "playbook.md").read_text(encoding="utf-8")
+    assert "paste block" in text and "- Path:" in text and "Resume: <thread>" in text
+
+
+def test_playbook_step2_points_at_reverse_lookup():
+    text = (PLAYBOOK_DIR / "playbook.md").read_text(encoding="utf-8")
+    assert "source 7" in text
+
+
+def test_auto_extraction_has_reverse_lookup_source():
+    text = (PLAYBOOK_DIR / "references" / "auto-extraction.md").read_text(encoding="utf-8")
+    assert "7. **Index reverse lookup**" in text and "backlog_query" in text
