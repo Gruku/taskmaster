@@ -45,3 +45,17 @@ def test_ported_hooks_route_through_launcher_with_timeout():
     # session-start unchanged
     ss = " ".join(h["command"] for m in d["SessionStart"] for h in m["hooks"])
     assert "session-start.sh" in ss
+
+
+def test_edit_resurface_registered_on_edit_write_multiedit():
+    """The ambient resurfacing hook rides the same fail-open launcher and 10s
+    timeout as the ported hooks, on the file-writing tools."""
+    d = json.loads(HJ.read_text())["hooks"]
+    entries = [(m, h) for m in d["PostToolUse"] for h in m["hooks"]
+               if "edit_resurface.py" in h["command"]]
+    assert len(entries) == 1
+    matcher, hook = entries[0]
+    assert matcher["matcher"] == "Edit|Write|MultiEdit"
+    assert hook["command"] == (
+        'CLAUDE_HOOK_SCRIPT=edit_resurface.py . "${CLAUDE_PLUGIN_ROOT}/hooks/run_hook.sh"')
+    assert hook["timeout"] == 10

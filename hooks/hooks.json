@@ -41,6 +41,16 @@
         ]
       },
       {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CLAUDE_HOOK_SCRIPT=edit_resurface.py . \"${CLAUDE_PLUGIN_ROOT}/hooks/run_hook.sh\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
         "matcher": "AskUserQuestion",
         "hooks": [
           {
