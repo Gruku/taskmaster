@@ -437,6 +437,55 @@ def _transaction(*, tool: str):
         pass
 
 
+def _store_tx() -> "store.Transaction":
+    """The store transaction behind the active compatibility dict.
+
+    The write-back deliberately ignores entities missing from the dict, so an
+    archive can never be expressed by editing the dict alone — every intended
+    removal has to go through the transaction explicitly.
+    """
+    tx = store.active_transaction()
+    if tx is None:
+        raise RuntimeError(
+            "no active store transaction — an explicit archive/delete must run "
+            "inside _transaction()"
+        )
+    return tx
+
+
+def _archive_entity(kind: str, ident: str, entity: dict | None = None) -> None:
+    """Archive one task/epic/phase in the store, not just in the dict.
+
+    The store row's archive flag is what decides where the projection file
+    lives, so a status flip on the dict document is not an archive.
+    """
+    _store_tx().archive(kind, ident)
+
+
+def _unarchive_entity(kind: str, ident: str, entity: dict | None = None) -> None:
+    """Undo an archive, clearing the dict's `archived` marker as well.
+
+    `put` re-derives the flag from the document when it carries one, so a stale
+    `archived` timestamp left in the dict would immediately re-archive the row.
+    """
+    _store_tx().unarchive(kind, ident)
+    if entity is not None:
+        entity.pop("archived", None)
+        entity.pop("archive_reason", None)
+
+
+def _apply_archive_transition(
+    kind: str, ident: str, entity: dict, *, before: str, after: str
+) -> None:
+    """Mirror a status transition into or out of `archived` onto the store row."""
+    if after == before:
+        return
+    if after == "archived":
+        _archive_entity(kind, ident, entity)
+    elif before == "archived":
+        _unarchive_entity(kind, ident, entity)
+
+
 def _render_after_commit(renderer) -> None:
     """Register a response renderer that runs against committed state.
 
@@ -5440,6 +5489,7 @@ def backlog_archive_task(task_id: str, reason: str = "done") -> str:
     task["archive_reason"] = reason
     task["archived"] = _now()
     task.pop("locked_by", None)
+    _archive_entity("task", task_id, task)
     _mutate_and_save(data)
     _enqueue_linear_push_if_synced(task_id, task=task)
 
@@ -5682,6 +5732,9 @@ def backlog_update_task(
         elif value == "done" and not task.get("completed"):
             task["completed"] = _now()
         # Note: archived status is allowed via update_task for flexibility (prefer backlog_archive_task)
+        # The store's archive flag is what moves the projection file in or out of
+        # tasks/archive/, so the transition has to say so explicitly.
+        _apply_archive_transition("task", task_id, task, before=cur, after=value)
         # Clear lock when leaving in-progress
         if value not in ("in-progress",):
             task.pop("locked_by", None)
@@ -6272,6 +6325,8 @@ def backlog_archive_epic(epic_id: str, reason: str = "done") -> str:
     epic["archive_reason"] = reason
     epic["archived"] = now
 
+    _archive_entity("epic", epic_id, epic)
+
     cascaded = 0
     for task in epic.get("tasks", []):
         if task.get("status") != "archived":
@@ -6279,6 +6334,7 @@ def backlog_archive_epic(epic_id: str, reason: str = "done") -> str:
             task["archive_reason"] = reason
             task["archived"] = now
             task.pop("locked_by", None)
+            _archive_entity("task", task["id"], task)
             cascaded += 1
 
     _mutate_and_save(data)
@@ -6800,6 +6856,7 @@ def backlog_advance_phase(force: bool = False) -> str:
                 t["status"] = "archived"
                 t["archive_reason"] = "done"
                 t["archived"] = _now()
+                _archive_entity("task", t["id"], t)
                 archived_count += 1
 
     # Find and activate next planned phase by order
@@ -6895,11 +6952,15 @@ def backlog_batch_update(operations: str) -> str:
                     continue
                 if value == "done":
                     task.pop("human_action", None)
+                prior_status = task.get("status", "todo")
                 task["status"] = value
                 if value == "in-progress" and not task.get("started"):
                     task["started"] = _now()
                 elif value == "done" and not task.get("completed"):
                     task["completed"] = _now()
+                _apply_archive_transition(
+                    "task", task_id, task, before=prior_status, after=value
+                )
                 if value not in ("in-progress",):
                     task.pop("locked_by", None)
             elif field == "priority":
@@ -6999,6 +7060,7 @@ def backlog_batch_update(operations: str) -> str:
                 if block:
                     errors.append(f"`{task_id}`: {block}")
                     continue
+            prior_status = task.get("status", "todo")
             task["status"] = new_status
             if new_status == "in-progress" and not task.get("started"):
                 task["started"] = _now()
@@ -7007,6 +7069,9 @@ def backlog_batch_update(operations: str) -> str:
                 if not task.get("completed"):
                     task["completed"] = _now()
                 task.pop("human_action", None)
+            _apply_archive_transition(
+                "task", task_id, task, before=prior_status, after=new_status
+            )
             if new_status not in ("in-progress",):
                 task.pop("locked_by", None)
             results.append(f"`{task_id}` → {new_status}")
@@ -7054,9 +7119,13 @@ def backlog_batch_update(operations: str) -> str:
                 errors.append(f"`{task_id}`: not found")
                 continue
             task, epic = result
+            already_archived = task.get("status") == "archived"
             task["status"] = "archived"
             task["archive_reason"] = reason
             task.pop("locked_by", None)
+            if not already_archived:
+                task["archived"] = _now()
+            _archive_entity("task", task_id, task)
             results.append(f"`{task_id}` → archived ({reason})")
             changed = True
 
@@ -7067,9 +7136,13 @@ def backlog_batch_update(operations: str) -> str:
                 errors.append(f"`{task_id}`: not found")
                 continue
             task, epic = result
+            prior_status = task.get("status", "todo")
             task["status"] = "in-progress"
             if not task.get("started"):
                 task["started"] = _now()
+            _apply_archive_transition(
+                "task", task_id, task, before=prior_status, after="in-progress"
+            )
             results.append(f"`{task_id}` → in-progress")
             changed = True
 

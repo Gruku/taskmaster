@@ -657,10 +657,27 @@ def configure_derivers(
 def load_dict(backlog_path: Path | None = None) -> dict[str, Any]:
     active = getattr(_ACTIVE_DICT, "value", None)
     if active is not None:
-        active_path, data = active
+        active_path, data, _tx = active
         if backlog_path is None or db_path(backlog_path) == active_path:
             return data
     return open_store(backlog_path=backlog_path).load_dict()
+
+
+def active_transaction(backlog_path: Path | None = None) -> "Transaction | None":
+    """The `Transaction` behind the thread's open `transaction_dict`, if any.
+
+    The compatibility dict cannot express a removal — a key deleted from
+    ``epics``/``phases``/a task list is ignored by the write-back — so a caller
+    that needs to archive or delete an entity has to reach the transaction and
+    say so explicitly.  Returns ``None`` outside a transaction.
+    """
+    active = getattr(_ACTIVE_DICT, "value", None)
+    if active is None:
+        return None
+    active_path, _data, tx = active
+    if backlog_path is None or db_path(backlog_path) == active_path:
+        return tx
+    return None
 
 
 @contextmanager
@@ -1455,7 +1472,7 @@ class Store:
             data = self._load_cached_dict_from_connection(tx.connection, publish=False)
             snapshot = copy.deepcopy(data)
             prior = getattr(_ACTIVE_DICT, "value", None)
-            _ACTIVE_DICT.value = (self.db_path, data)
+            _ACTIVE_DICT.value = (self.db_path, data, tx)
             try:
                 yield data
                 self._apply_dict_diff(tx, snapshot, data)
@@ -3228,6 +3245,32 @@ class Transaction:
         seq = self._record_change(kind, ident, "archive", ["archived"], before, after)
         self.connection.execute(
             "UPDATE entities SET archived=1,doc=?,rev=rev+1,updated_seq=? WHERE kind=? AND id=?",
+            (_json(doc), seq, kind, ident),
+        )
+        self.seq = seq
+        self._mark(kind, ident)
+
+    def unarchive(self, kind: str, ident: str) -> None:
+        """Undo `archive`: clear the flag so the projection returns to the live path.
+
+        The inverse matters because `put` never lowers the flag on its own — it
+        falls back to the stored value for any document that omits ``archived``,
+        so an archive would otherwise be a one-way door.
+        """
+        row = self.connection.execute(
+            "SELECT doc,archived,deleted FROM entities WHERE kind=? AND id=?", (kind, ident)
+        ).fetchone()
+        if not row or row["deleted"]:
+            raise KeyError(f"{kind} {ident} not found")
+        if not row["archived"]:
+            return
+        doc = _from_json(row["doc"], {})
+        doc.pop("archived", None)
+        seq = self._record_change(
+            kind, ident, "unarchive", ["archived"], {"archived": True}, {"archived": False}
+        )
+        self.connection.execute(
+            "UPDATE entities SET archived=0,doc=?,rev=rev+1,updated_seq=? WHERE kind=? AND id=?",
             (_json(doc), seq, kind, ident),
         )
         self.seq = seq
