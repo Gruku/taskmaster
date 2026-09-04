@@ -1,8 +1,8 @@
 """Two interleaved load/save cycles on one machine must not clobber."""
 from __future__ import annotations
 
-import copy
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -47,21 +47,37 @@ def v4_two_task_project(tmp_path, monkeypatch):
     return tmp_path
 
 
-def test_interleaved_saves_no_clobber(v4_two_task_project):
+def test_interleaved_writers_do_not_clobber_each_other(v4_two_task_project):
+    """Two writers that both start from the same state must both survive.
+
+    This is the write-loss defect the SQLite store exists to fix: the old
+    boundary kept one module-level baseline, so whichever writer saved last
+    reverted the other one's task. Each transaction now reads and writes under
+    the store's writer lock, so both edits land.
+    """
     from taskmaster import backlog_server
 
-    data_a = backlog_server._load()
-    snapshot_a = copy.deepcopy(backlog_server._LOAD_SNAPSHOT)
+    barrier = threading.Barrier(2)
+    errors: list[BaseException] = []
 
-    data_b = backlog_server._load()
-    snapshot_b = copy.deepcopy(backlog_server._LOAD_SNAPSHOT)
-    backlog_server._find_task(data_b, "e-002")[0]["title"] = "B-edited-2"
-    backlog_server._LOAD_SNAPSHOT = snapshot_b
-    backlog_server._save(data_b)
+    def edit(task_id: str, title: str) -> None:
+        try:
+            barrier.wait(timeout=30)
+            with backlog_server._transaction(tool="test-writer") as data:
+                backlog_server._find_task(data, task_id)[0]["title"] = title
+                backlog_server._mutate_and_save(data)
+        except BaseException as exc:  # pragma: no cover - reported below
+            errors.append(exc)
 
-    backlog_server._find_task(data_a, "e-001")[0]["title"] = "A-edited-1"
-    backlog_server._LOAD_SNAPSHOT = snapshot_a
-    backlog_server._save(data_a)
+    threads = [
+        threading.Thread(target=edit, args=("e-001", "A-edited-1")),
+        threading.Thread(target=edit, args=("e-002", "B-edited-2")),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=60)
+    assert not errors, errors
 
     final = backlog_server._load()
     titles = {

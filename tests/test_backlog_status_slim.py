@@ -11,6 +11,7 @@ from taskmaster.backlog_server import (
     _load,
     _find_task,
     _mutate_and_save,
+    _transaction,
 )
 
 
@@ -23,10 +24,10 @@ def _make_done(task_id: str) -> None:
     mechanics — so set the terminal status via the data layer (sanctioned
     SETUP bypass) rather than routing through gates.
     """
-    data = _load()
-    task, _ = _find_task(data, task_id)
-    task["status"] = "done"
-    _mutate_and_save(data)
+    with _transaction(tool="test-setup") as data:
+        task, _ = _find_task(data, task_id)
+        task["status"] = "done"
+        _mutate_and_save(data)
 
 
 def test_slim_status_omits_archived_section(tm_epic_phase):

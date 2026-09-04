@@ -2014,7 +2014,12 @@ class Store:
     def _import_projection(self, tx: "Transaction", *, full: bool = False) -> None:
         backlog_file = self.backlog_path / "backlog.yaml"
         data = self._bootstrap_backlog_data()
-        if detect_schema_version(data) < SCHEMA_V4:
+        # A pre-v4 projection splits a task across backlog.yaml (slim fields)
+        # and tasks/<id>.md (heavy fields only). `_bootstrap_backlog_data`
+        # already merged the two halves, so the per-file import below must not
+        # replace that row with the heavy-only document.
+        legacy_projection = detect_schema_version(data) < SCHEMA_V4
+        if legacy_projection:
             data["version"] = SCHEMA_V4
             data.setdefault("meta", {})["schema_version"] = SCHEMA_V4
             for epic in data.get("epics") or []:
@@ -2055,6 +2060,15 @@ class Store:
                                 kind, content.decode("utf-8")
                             )
                             self._validate_projected_identity(kind, ident, parsed_doc)
+                            if kind == "task" and legacy_projection:
+                                current = tx.connection.execute(
+                                    "SELECT doc FROM entities WHERE kind=? AND id=?",
+                                    (kind, ident),
+                                ).fetchone()
+                                if current:
+                                    merged = _from_json(current["doc"], {})
+                                    merged.update(parsed_doc)
+                                    parsed_doc = merged
                             if kind in {"epic", "phase"}:
                                 current = tx.connection.execute(
                                     "SELECT doc FROM entities WHERE kind=? AND id=?",

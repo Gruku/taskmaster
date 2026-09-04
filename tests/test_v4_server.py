@@ -62,11 +62,14 @@ def test_update_task_writes_to_task_file_not_backlog(v4_project):
     assert "tasks" not in on_disk["epics"][0]
 
 
-def test_load_snapshot_is_deep_copy(v4_project):
+def test_load_outside_a_transaction_returns_an_independent_dict(v4_project):
+    """No shared module-level snapshot: an unsaved edit cannot leak forward."""
     from taskmaster import backlog_server
     data = backlog_server._load()
     data["epics"][0]["tasks"][0]["title"] = "mutated in memory"
-    assert backlog_server._LOAD_SNAPSHOT["epics"][0]["tasks"][0]["title"] == "First"
+    again = backlog_server._load()
+    assert again is not data
+    assert again["epics"][0]["tasks"][0]["title"] == "First"
 
 
 def _read(path):
@@ -87,8 +90,9 @@ def test_add_task_allocates_id_and_order(v4_project):
 class TestLocalRelocation:
     def test_progress_written_under_local(self, v4_project):
         from taskmaster import backlog_server
-        data = backlog_server._load()
-        backlog_server._mutate_and_save(data)
+        with backlog_server._transaction(tool="test-setup") as data:
+            data["epics"][0]["tasks"][0]["title"] = "Touched"
+            backlog_server._mutate_and_save(data)
         assert (v4_project / ".taskmaster" / "local" / "PROGRESS.md").exists()
 
     def test_viewer_prefs_under_local(self, v4_project):
@@ -98,8 +102,9 @@ class TestLocalRelocation:
     def test_meta_updated_cached_locally(self, v4_project):
         import json
         from taskmaster import backlog_server
-        data = backlog_server._load()
-        backlog_server._save(data)
+        with backlog_server._transaction(tool="test-setup") as data:
+            data["epics"][0]["tasks"][0]["title"] = "Touched"
+            backlog_server._save(data)
         cache = v4_project / ".taskmaster" / "local" / "cache" / "meta.json"
         assert cache.exists()
         assert "updated" in json.loads(cache.read_text(encoding="utf-8"))

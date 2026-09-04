@@ -215,9 +215,9 @@ def test_link_creates_tracker_and_sets_tracker_id(tmp_path, monkeypatch):
     tp = tmp_path / "trackers" / "linear-cm-eng-42.md"
     assert tp.exists()
 
-    # Task has tracker_id set
-    data = yaml.safe_load(bp.read_text())
-    task = data["epics"][0]["tasks"][0]
+    # Task has tracker_id set (the projection keeps tasks in tasks/<id>.md)
+    from taskmaster.taskmaster_v3 import load_v4
+    task = load_v4(bp)["epics"][0]["tasks"][0]
     assert task["tracker_id"] == "linear-cm-eng-42"
 
 
@@ -257,8 +257,8 @@ def test_unlink_clears_tracker_id(tmp_path, monkeypatch):
     assert result["ok"] is True
     assert result["unlinked"] == "linear-cm-eng-1"
 
-    data = yaml.safe_load(bp.read_text())
-    task = data["epics"][0]["tasks"][0]
+    from taskmaster.taskmaster_v3 import load_v4
+    task = load_v4(bp)["epics"][0]["tasks"][0]
     assert "tracker_id" not in task or not task.get("tracker_id")
 
     # Tracker file is still on disk

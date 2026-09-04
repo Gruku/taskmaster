@@ -42,10 +42,10 @@ def test_last_referenced_unchanged_by_read_advanced_by_mutation(tm_epic_phase):
     backlog_add_task(epic="test-epic", title="X", tldr="Tldr.", phase="dev", options={"task_id": "T-LR"})
     # Backdate last_referenced so a same-minute mutation timestamp can't
     # collide with it — isolates "did a read touch this" from clock precision.
-    data = backlog_server._load()
-    task, _ = backlog_server._find_task(data, "T-LR")
-    task["last_referenced"] = "2020-01-01T00:00"
-    backlog_server._save(data)
+    with backlog_server._transaction(tool="test-setup") as data:
+        task, _ = backlog_server._find_task(data, "T-LR")
+        task["last_referenced"] = "2020-01-01T00:00"
+        backlog_server._save(data)
 
     backlog_get_task("T-LR")
 
@@ -62,10 +62,10 @@ def test_last_referenced_unchanged_by_read_advanced_by_mutation(tm_epic_phase):
 
 def test_stale_task_stays_stale_after_read(tm_epic_phase):
     backlog_add_task(epic="test-epic", title="Old one", tldr="T.", phase="dev", options={"task_id": "T-STALE"})
-    data = backlog_server._load()
-    task, _ = backlog_server._find_task(data, "T-STALE")
-    task["last_referenced"] = "2020-01-01"
-    backlog_server._save(data)
+    with backlog_server._transaction(tool="test-setup") as data:
+        task, _ = backlog_server._find_task(data, "T-STALE")
+        task["last_referenced"] = "2020-01-01"
+        backlog_server._save(data)
 
     # A read must not clear staleness.
     backlog_get_task("T-STALE")

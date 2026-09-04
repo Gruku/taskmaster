@@ -95,15 +95,23 @@ def decide(src: str, cwd: Path) -> str:
 
     # --- Find task whose branch == SRC ---
     try:
-        task = None
+        tasks = []
         for epic in raw.get("epics", []):
-            for t in epic.get("tasks", []):
-                if t.get("branch") == src:
-                    task = t
-                    break
-            if task:
-                break
+            tasks.extend(epic.get("tasks") or [])
+        if not tasks:
+            # The v4 projection keeps the task index in tasks/<id>.md rather
+            # than inline in backlog.yaml. Without this the gate found no task
+            # and fell open on every v4 project.
+            from taskmaster.taskmaster_v3 import (
+                iter_task_files, read_task_file, task_v4_from_file,
+            )
+            for task_file in iter_task_files(backlog_path):
+                frontmatter, body = read_task_file(task_file)
+                tasks.append(
+                    task_v4_from_file(frontmatter, body.rstrip("\n"))
+                )
 
+        task = next((t for t in tasks if t.get("branch") == src), None)
         if task is None:
             return "ALLOW"
 

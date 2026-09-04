@@ -27,6 +27,10 @@ from typing import Any, Literal
 import yaml
 from fastmcp import FastMCP
 
+from contextlib import contextmanager
+from functools import wraps
+
+from taskmaster import store
 from taskmaster import yaml_io
 from taskmaster.blast_radius import (
     BlastRadiusConfig,
@@ -147,6 +151,7 @@ _HANDOVER_STATUS_BACKFILL_RAN = False
 
 
 def _ensure_handover_status_backfilled() -> None:
+    """One-shot legacy backfill. Runs in its own transaction when called first."""
     global _HANDOVER_STATUS_BACKFILL_RAN
     if _HANDOVER_STATUS_BACKFILL_RAN:
         return
@@ -154,17 +159,17 @@ def _ensure_handover_status_backfilled() -> None:
     if not bp.exists():
         return
     try:
-        data = _load()
+        with _transaction(tool="_ensure_handover_status_backfilled") as data:
+            if data.get("handover_status_backfilled"):
+                _HANDOVER_STATUS_BACKFILL_RAN = True
+                return
+            from taskmaster.taskmaster_v3 import backfill_handover_status as _bf
+            flipped = _bf(data, bp)
+            if flipped or "handover_status_backfilled" in data:
+                _sync_handover_index(data, bp)
+                _save(data)
     except Exception:
         return
-    if data.get("handover_status_backfilled"):
-        _HANDOVER_STATUS_BACKFILL_RAN = True
-        return
-    from taskmaster.taskmaster_v3 import backfill_handover_status as _bf
-    flipped = _bf(data, bp)
-    if flipped or "handover_status_backfilled" in data:
-        _sync_handover_index(data, bp)
-        _save(data)
     _HANDOVER_STATUS_BACKFILL_RAN = True
 
 
@@ -317,14 +322,148 @@ def _progress_path() -> Path:
 # ── Session identity (unique per MCP server process) ─────
 SESSION_ID = f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
 
-# ── File-level lock for backlog.yaml writes ──────────────
-_backlog_lock = threading.Lock()
-
 import copy as _copy
 
-# Deep copy of the last v4 _load() result, used as the diff baseline for
-# dirty-scoped save_v4 (None for v2/v3, which write whole-file).
-_LOAD_SNAPSHOT: dict | None = None
+
+# ── Store-backed transaction boundary ────────────────────
+# SQLite is the runtime authority (see docs/specs/2026-09-04-sqlite-store-design.md).
+# One public tool call owns exactly one store transaction; `_load()` hands out the
+# transaction's dict, and `_mutate_and_save()` latches it for commit. There is no
+# module-level snapshot or file lock any more — those lost writes across threads
+# and processes because two callers could read the same baseline and both write.
+
+
+class _TxFrame:
+    """The active transaction for one thread: its dict, latch and renderer."""
+
+    __slots__ = ("data", "latched", "renderer")
+
+    def __init__(self, data: dict):
+        self.data = data
+        self.latched = False
+        self.renderer = None
+
+
+class _UnlatchedTransaction(Exception):
+    """Internal signal: leave the store transaction without committing."""
+
+
+# FastMCP runs sync tools in a thread pool, so the active transaction is
+# per-thread, never per-module.
+_TX_STATE = threading.local()
+
+
+def _active_tx() -> "_TxFrame | None":
+    return getattr(_TX_STATE, "frame", None)
+
+
+def _configure_store_derivers() -> None:
+    """Point the store at this module's pure derivation helpers.
+
+    `store.py` must not import this module (cycle), and `store.reset_for_tests()`
+    clears the hooks, so this is re-applied on every store access.
+    """
+    store.configure_derivers(
+        context_builder=lambda data: regenerate_context(data),
+        progress_renderer=lambda data, existing: _render_progress_dashboard(data, existing),
+    )
+
+
+def _store() -> "store.Store":
+    _configure_store_derivers()
+    return store.open_store(_backlog_path())
+
+
+def _store_for_read() -> "store.Store":
+    """The store, with its read-scan throttle cleared.
+
+    Bugs, issues, handovers and the link tools still write entity files behind
+    the store's back, so a server read that sat behind the store's two-second
+    read-scan throttle would miss their edits. Spec step 3 moves those writers
+    onto the store and this drops back to the throttled read.
+    """
+    instance = _store()
+    instance._last_read_scan_clock = None
+    return instance
+
+
+def _normalize_loaded(data: dict) -> None:
+    """Backfill `created` and normalize legacy P-code priorities in place."""
+    for epic in data.get("epics", []) or []:
+        for task in epic.get("tasks", []) or []:
+            if not task.get("created"):
+                task["created"] = (
+                    task.get("started") or task.get("completed") or "2025-01-01T00:00"
+                )
+            priority = task.get("priority", "")
+            if priority in _LEGACY_TO_NAME:
+                task["priority"] = _LEGACY_TO_NAME[priority]
+
+
+@contextmanager
+def _transaction(*, tool: str):
+    """Own one store transaction for the whole of one public tool call.
+
+    Nested calls reuse the active transaction so `_load()` stays identity-stable.
+    Leaving the block without `_mutate_and_save()` rolls back, so an early return
+    or a validation error can never persist a half-applied mutation.
+    """
+    prior = _active_tx()
+    if prior is not None:
+        yield prior.data
+        return
+    try:
+        with _store().transaction_dict(tool=tool) as data:
+            frame = _TxFrame(data)
+            _TX_STATE.frame = frame
+            try:
+                _normalize_loaded(data)
+                regenerate_context(data)
+                yield data
+                if not frame.latched:
+                    raise _UnlatchedTransaction
+            finally:
+                _TX_STATE.frame = None
+    except _UnlatchedTransaction:
+        pass
+
+
+def _render_after_commit(renderer) -> None:
+    """Register a response renderer that runs against committed state.
+
+    `renderer(data)` is called after the transaction commits, with a fresh
+    committed read, so a tool never reports a value the store did not persist.
+    """
+    frame = _active_tx()
+    if frame is not None:
+        frame.renderer = renderer
+
+
+def _transactional(tool: str):
+    """Wrap a public tool so its whole body runs in one named transaction."""
+
+    def decorate(fn):
+        @wraps(fn)
+        def wrapper(*args, **kwargs):
+            if _active_tx() is not None:
+                return fn(*args, **kwargs)
+            if not _backlog_path().exists():
+                # No projection yet: behave exactly as before rather than
+                # bootstrapping a database next to a missing backlog.
+                return fn(*args, **kwargs)
+            renderer = None
+            with _transaction(tool=tool) as _data:
+                result = fn(*args, **kwargs)
+                frame = _active_tx()
+                if frame is not None and frame.latched:
+                    renderer = frame.renderer
+            if renderer is not None:
+                return renderer(_load())
+            return result
+
+        return wrapper
+
+    return decorate
 
 
 def _today() -> str:
@@ -416,28 +555,21 @@ def _log_index_error(bp: Path, exc: BaseException) -> None:
 
 
 def _load() -> dict:
-    global _LOAD_SNAPSHOT
+    """The compatibility read: the store's dict, or the active transaction's.
+
+    Inside a transaction this returns the very same object every time, so the
+    nested loads in complete_task / link expansion / Linear enqueue all mutate
+    one shared tree instead of forking a second, stale copy.
+    """
     bp = _backlog_path()
-    # Peek at version without per-file enrichment so we can dispatch.
-    raw = yaml_io.safe_load(bp.read_text(encoding="utf-8")) or {}
-    version = _detect_schema_version(raw)
-    if version >= SCHEMA_V4:
-        data = _load_v4(bp)
-    elif version >= SCHEMA_V3:
-        data = _load_v3(bp)
-    else:
-        data = raw
-    # Backfill missing 'created' on tasks + normalize legacy priorities.
-    for epic in data.get("epics", []):
-        for t in epic.get("tasks", []):
-            if not t.get("created"):
-                t["created"] = t.get("started") or t.get("completed") or "2025-01-01T00:00"
-            pri = t.get("priority", "")
-            if pri in _LEGACY_TO_NAME:
-                t["priority"] = _LEGACY_TO_NAME[pri]
-    _LOAD_SNAPSHOT = _copy.deepcopy(data) if version >= SCHEMA_V4 else None
+    if not bp.exists():
+        raise FileNotFoundError(bp)
+    data = _store_for_read().load_dict()
+    _normalize_loaded(data)
+    if not data.get("context"):
+        regenerate_context(data)
     try:
-        from taskmaster import index as _index  # noqa: PLC0415 — optional, derived
+        from taskmaster import index as _index  # noqa: PLC0415 - optional, derived
         _index.build_index(bp, data, budget_s=INDEX_REFRESH_BUDGET_S)
     except Exception as exc:  # index is derived; never break a tool call
         _log_index_error(bp, exc)
@@ -445,21 +577,12 @@ def _load() -> dict:
 
 
 def _save(data: dict) -> None:
-    with _backlog_lock:
-        bp = _backlog_path()
-        version = _detect_schema_version(data)
-        if version >= SCHEMA_V4:
-            _write_local_meta_cache(bp, {"updated": _today()})
-            _save_v4(bp, data, snapshot=_LOAD_SNAPSHOT)
-        elif version >= SCHEMA_V3:
-            data["meta"]["updated"] = _today()
-            _save_v3(bp, data)
-        else:
-            data["meta"]["updated"] = _today()
-            _atomic_write(
-                bp,
-                yaml.dump(data, default_flow_style=False, sort_keys=False, allow_unicode=True),
-            )
+    """Latch-only compatibility shim for writers not yet on the store row API.
+
+    It performs no file write of its own - the store owns projection export.
+    Spec step 3 removes the remaining raw entity writers that still pair with it.
+    """
+    _mutate_and_save(data)
 
 
 def _write_local_meta_cache(backlog_path: Path, payload: dict) -> None:
@@ -518,6 +641,103 @@ def _find_task(data: dict, task_id: str) -> tuple[dict, dict] | None:
         for task in epic.get("tasks", []):
             if task["id"] == task_id:
                 return task, epic
+    return None
+
+
+def _sync_projection() -> None:
+    """Bootstrap the store before a raw entity reader parses the files.
+
+    The link tools still read and write task markdown directly. Opening the
+    store first means they never observe the projection mid-migration - the
+    store may rewrite a v3 layout into v4 on its first load. Spec step 3 moves
+    these writers onto the store and this helper goes away with them.
+    """
+    if _backlog_path().exists():
+        _store_for_read().load_dict()
+
+
+def _auto_link_task_in_tx(data: dict, task_id: str) -> list[str]:
+    """Add `references` links for inline ID mentions, inside the open transaction.
+
+    Store-owned entities (tasks, epics, phases) are edited on the transaction
+    dict so the link commits atomically with the text that produced it. Targets
+    the store does not yet own still round-trip through their own files; spec
+    step 3 moves those onto the store too.
+    """
+    from taskmaster.taskmaster_v3 import (  # noqa: PLC0415 - link helpers
+        add_link as _add_link,
+        entity_links as _entity_links,
+        extract_inline_refs as _extract_inline_refs,
+        read_entity_anywhere as _read_entity_anywhere,
+        sync_inverse as _sync_inverse,
+    )
+
+    found = _find_task(data, task_id)
+    if not found:
+        return []
+    task, _epic = found
+    if task.get("auto_link") is False:
+        return []
+    body = "\n\n".join(
+        filter(
+            None,
+            [
+                task.get(_BODY_KEY) or "",
+                task.get("notes") or "",
+                task.get("review_instructions") or "",
+            ],
+        )
+    )
+    refs = _extract_inline_refs(body, self_id=task_id)
+    if not refs:
+        return []
+
+    bp = _backlog_path()
+    existing = {link["target"] for link in _entity_links(task)}
+    pending: list[tuple[str, dict | None]] = []
+    for target_id in refs:
+        if target_id in existing:
+            # Any link to this target already exists; auto-detection only adds
+            # new targets, so a stronger explicit relation is never downgraded.
+            continue
+        in_tx_target = _find_in_transaction(data, target_id)
+        if in_tx_target is None and _read_entity_anywhere(bp, target_id) is None:
+            continue
+        _add_link(task, "references", target_id)
+        pending.append((target_id, in_tx_target))
+
+    for target_id, in_tx_target in pending:
+        if in_tx_target is not None:
+            _add_link(in_tx_target, "referenced_by", task_id)
+            continue
+        try:
+            _sync_inverse(bp, source=task_id, target=target_id, type="references")
+        except KeyError:
+            pass
+    return [target_id for target_id, _ in pending]
+
+
+def _committed_field(data: dict, task_id: str, field: str, fallback):
+    """The value a field actually holds in committed state, for responses."""
+    found = _find_task(data, task_id)
+    if not found:
+        return fallback
+    value = found[0].get(field, fallback)
+    return fallback if value is None else value
+
+
+def _find_in_transaction(data: dict, entity_id: str) -> dict | None:
+    """The store-owned entity dict for `entity_id`, or None if the store does
+    not own that kind yet (bugs, issues, handovers, ideas, ...)."""
+    found = _find_task(data, entity_id)
+    if found:
+        return found[0]
+    epic = _find_epic(data, entity_id)
+    if epic is not None:
+        return epic
+    for phase in data.get("phases", []) or []:
+        if phase.get("id") == entity_id:
+            return phase
     return None
 
 
@@ -814,6 +1034,15 @@ def regenerate_progress_dashboard(data: dict) -> None:
     path = _progress_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     progress_text = path.read_text(encoding="utf-8") if path.exists() else "## Changelog\n"
+    path.write_text(_render_progress_dashboard(data, progress_text), encoding="utf-8")
+
+
+def _render_progress_dashboard(data: dict, progress_text: str) -> str:
+    """Pure renderer: the dashboard for `data` spliced above the changelog.
+
+    The store calls this after a commit, so PROGRESS.md always reflects
+    committed state rather than a caller's in-flight dict.
+    """
 
     changelog_marker = "## Changelog"
     idx = progress_text.find(changelog_marker)
@@ -898,14 +1127,36 @@ def regenerate_progress_dashboard(data: dict) -> None:
     lines.append("\n---\n")
 
     dashboard = "\n".join(lines) + "\n"
-    path.write_text(dashboard + changelog_section, encoding="utf-8")
+    return dashboard + changelog_section
 
 
 def _mutate_and_save(data: dict) -> None:
-    """Regenerate context, save YAML, regenerate PROGRESS.md dashboard."""
+    """Latch the active store transaction so its dict is committed on exit.
+
+    Raises outside a transaction, and refuses any dict that is not the active
+    transaction's - a foreign dict would be silently dropped, which is exactly
+    the write-loss class this migration exists to remove. Projection export and
+    the PROGRESS.md dashboard are the store's job once the commit lands.
+    """
+    frame = _active_tx()
+    if frame is None:
+        raise RuntimeError(
+            "_mutate_and_save() called outside a store transaction; wrap the "
+            "mutation in _transaction(tool=...) or @_transactional(...)"
+        )
+    if data is not frame.data:
+        raise RuntimeError(
+            "_mutate_and_save() was handed a dict that is not the active store "
+            "transaction dict; mutate the dict returned by _load()"
+        )
     regenerate_context(data)
-    _save(data)
-    regenerate_progress_dashboard(data)
+    # Derived, unversioned convenience cache the viewer reads; not part of the
+    # projection the store owns, so it stays on the server side.
+    try:
+        _write_local_meta_cache(_backlog_path(), {"updated": _today()})
+    except OSError:
+        pass
+    frame.latched = True
 
 
 def _enqueue_linear_push_if_synced(task_id: str, task: dict | None = None) -> None:
@@ -2226,6 +2477,7 @@ def backlog_migrate_v4() -> str:
     )
 
 @mcp.tool()
+@_transactional("backlog_backfill_lanes")
 def backlog_backfill_lanes(grandfather_active: bool = True) -> str:
     """One-time optional migration: assign a `lane` (by priority) to every task that
     lacks one. For tasks already in-progress/in-review/done, mark their lane's required
@@ -2325,6 +2577,7 @@ def backlog_canonicalize_layout(dry_run: bool = False) -> str:
 
 
 @mcp.tool()
+@_transactional("backlog_handover_create")
 def backlog_handover_create(
     tldr: str,
     next_action: str = "",
@@ -2591,6 +2844,7 @@ def backlog_handover_get(
 
 
 @mcp.tool()
+@_transactional("backlog_handover_resync")
 def backlog_handover_resync() -> str:
     """Rebuild the handover index in backlog.yaml from disk.
 
@@ -2612,6 +2866,7 @@ def backlog_handover_resync() -> str:
 
 
 @mcp.tool()
+@_transactional("backlog_thread_list")
 def backlog_thread_list(include_closed: bool = False) -> str:
     """The thread board — open (and parked) lines of work with their stable
     resume tokens. Resume one with `backlog_thread_resume(<name>)`.
@@ -2647,6 +2902,7 @@ def backlog_thread_list(include_closed: bool = False) -> str:
 
 
 @mcp.tool()
+@_transactional("backlog_thread_resume")
 def backlog_thread_resume(ref: str) -> str:
     """Resume a thread: returns its newest handover in full (frontmatter +
     body) in one call. `ref` is a thread name OR any handover id (stale dated
@@ -2682,6 +2938,7 @@ def backlog_thread_resume(ref: str) -> str:
 
 
 @mcp.tool()
+@_transactional("backlog_thread_update")
 def backlog_thread_update(name: str, status: str, reason: str = "") -> str:
     """Set a thread's status: open / parked / closed. Writing a new handover
     into the thread later auto-reopens it (override expires)."""
@@ -2743,6 +3000,7 @@ def backlog_link_create(source: str, target: str, type: str, note: str = "") -> 
     domain; target entity exists; depends_on writes don't create cycles.
     Idempotent — re-running with the same args is a no-op.
     """
+    _sync_projection()
     from taskmaster.taskmaster_v3 import (
         LINK_TYPES, is_valid_link, entity_kind_of,
         read_entity_anywhere, write_entity_anywhere, add_link, entity_links,
@@ -2812,6 +3070,7 @@ def backlog_link_remove(source: str, target: str, type: str = "") -> str:
 
     If `type` is omitted, removes all link types between the pair.
     """
+    _sync_projection()
     from taskmaster.taskmaster_v3 import (
         LINK_TYPES, entity_kind_of, read_entity_anywhere, write_entity_anywhere,
         remove_link, entity_links, sync_inverse,
@@ -2861,6 +3120,7 @@ def backlog_link_query(source: str = "", target: str = "", type: str = "",
     With depth>1, traverses transitively along the same `type`. Returns a JSON
     array of {source, target, type} entries.
     """
+    _sync_projection()
     import json as _json
     from taskmaster.taskmaster_v3 import (
         entity_kind_of, read_entity_anywhere, entity_links,
@@ -2942,6 +3202,7 @@ def backlog_link_validate() -> str:
     Links to archived entities (status: archived) are flagged in
     `archived_targets` but NOT auto-removed.
     """
+    _sync_projection()
     import json as _json
     from taskmaster.taskmaster_v3 import (
         REVERSE_TYPE, read_entity_anywhere, entity_links, find_cycle,
@@ -3067,6 +3328,7 @@ def backlog_handover_supersede(old_id: str, new_id: str) -> str:
 
 
 @mcp.tool()
+@_transactional("backlog_handover_update_status")
 def backlog_handover_update_status(
     handover_id: str,
     status: str,
@@ -3099,6 +3361,7 @@ def backlog_handover_update_status(
 
 
 @mcp.tool()
+@_transactional("backlog_issue_create")
 def backlog_issue_create(
     title: str,
     severity: str,
@@ -3313,6 +3576,7 @@ ISSUE_UPDATE_FIELDS = ISSUE_UPDATE_LIST_FIELDS | ISSUE_UPDATE_SCALAR_FIELDS
 
 
 @mcp.tool()
+@_transactional("backlog_issue_update")
 def backlog_issue_update(issue_id: str, field: str, value: str = "") -> str:
     """Set one field on an issue. List fields take a comma-separated value; an
     empty value clears the field.
@@ -3360,6 +3624,7 @@ def backlog_issue_update(issue_id: str, field: str, value: str = "") -> str:
 
 
 @mcp.tool()
+@_transactional("backlog_issue_resync")
 def backlog_issue_resync() -> str:
     """Rebuild the issue index in backlog.yaml from disk."""
     bp = _backlog_path()
@@ -3376,6 +3641,7 @@ def backlog_issue_resync() -> str:
 
 
 @mcp.tool()
+@_transactional("backlog_bug_create")
 def backlog_bug_create(
     title: str,
     found_in: str = "",
@@ -3526,6 +3792,7 @@ BUG_UPDATE_FIELDS = BUG_UPDATE_LIST_FIELDS | BUG_UPDATE_SCALAR_FIELDS
 
 
 @mcp.tool()
+@_transactional("backlog_bug_update")
 def backlog_bug_update(bug_id: str, field: str, value: str = "") -> str:
     """Set one field on a Bug. List fields take a comma-separated value; an
     empty value clears the field.
@@ -3560,6 +3827,7 @@ def backlog_bug_update(bug_id: str, field: str, value: str = "") -> str:
 
 
 @mcp.tool()
+@_transactional("backlog_bug_archive")
 def backlog_bug_archive(bug_id: str) -> str:
     """Move bugs/B-NNN.md to bugs/archive/B-NNN.md.
 
@@ -3617,6 +3885,7 @@ def backlog_bug_pattern_scan(mode: str = "all") -> str:
 
 
 @mcp.tool()
+@_transactional("backlog_bug_promote")
 def backlog_bug_promote(
     bug_ids: list[str],
     title: str,
@@ -4377,6 +4646,7 @@ def viewer_prefs_set(patch_json: str) -> str:
 
 
 @mcp.tool()
+@_transactional("backlog_add_task")
 def backlog_add_task(
     title: str, epic: str, phase: str = "", priority: str = "medium",
     tldr: str = "", notes: str = "", next_step: str = "",
@@ -4592,6 +4862,7 @@ def _build_worktree_instruction(
 
 
 @mcp.tool()
+@_transactional("backlog_pick_task")
 def backlog_pick_task(task_id: str, force: bool = False) -> str:
     """Start working on a task — sets it to in-progress. Idempotent if already in-progress.
 
@@ -4861,6 +5132,7 @@ def _completion_block_reason(task) -> str:
 
 
 @mcp.tool()
+@_transactional("backlog_complete_task")
 def backlog_complete_task(
     task_id: str,
     session_title: str = "",
@@ -5094,6 +5366,7 @@ VALID_ARCHIVE_REASONS = {"done", "deprecated", "duplicate", "wont-fix", "superse
 
 
 @mcp.tool()
+@_transactional("backlog_archive_task")
 def backlog_archive_task(task_id: str, reason: str = "done") -> str:
     """Archive a task — hides it from the board and default listings.
     Tasks with status `done`, `blocked`, or `todo` can be archived. Archiving captures WHY the task
@@ -5270,6 +5543,7 @@ VALID_DOC_KEYS = {"plan", "spec", "roadmap", "design", "analysis"}
 
 
 @mcp.tool()
+@_transactional("backlog_update_task")
 def backlog_update_task(
     task_id: str, field: str = "", value: str = "",
     tldr: str = "", next_step: str = "",
@@ -5491,23 +5765,27 @@ def backlog_update_task(
     else:
         task[field] = value
 
-    _mutate_and_save(data)
-
     # Plan C: auto-detect inline ID mentions when body-bearing fields change.
+    # Runs before the latch so the link and the text that produced it land in
+    # one commit instead of a second, post-commit write.
     if field in ("notes", "review_instructions"):
-        bp = _backlog_path()
-        from taskmaster.taskmaster_v3 import auto_link_on_save as _auto_link_on_save
         try:
-            _auto_link_on_save(bp, task_id)
+            _auto_link_task_in_tx(data, task_id)
         except Exception:
             pass
 
+    _mutate_and_save(data)
     _enqueue_linear_push_if_synced(task_id, task=task)
 
+    _render_after_commit(
+        lambda committed: f"Updated `{task_id}` field `{field}` → "
+        + str(_committed_field(committed, task_id, field, value))
+    )
     return f"Updated `{task_id}` field `{field}` → {value}"
 
 
 @mcp.tool()
+@_transactional("backlog_record_gate")
 def backlog_record_gate(
     task_id: str,
     gate: str,
@@ -5599,6 +5877,7 @@ def _resolved_merge_targets() -> list[dict]:
 
 
 @mcp.tool()
+@_transactional("backlog_record_merge")
 def backlog_record_merge(task_id: str, rung: str, sha: str, merged_at: str = "") -> str:
     """Stamp a merge rung on a task: records that the task's branch landed at `rung`
     (e.g. develop|stage|master) at merge commit `sha`. Idempotent overwrite per rung.
@@ -5631,6 +5910,7 @@ def backlog_record_merge(task_id: str, rung: str, sha: str, merged_at: str = "")
 
 
 @mcp.tool()
+@_transactional("backlog_skip_gate")
 def backlog_skip_gate(task_id: str, gate: str, reason: str, by: str = "claude") -> str:
     """Record an explicit, audited skip of a pipeline gate — the ONLY way past a
     required gate without satisfying it. Always succeeds (for a valid gate+reason)
@@ -5663,6 +5943,7 @@ def backlog_skip_gate(task_id: str, gate: str, reason: str, by: str = "claude") 
 
 
 @mcp.tool()
+@_transactional("backlog_clear_gate")
 def backlog_clear_gate(task_id: str, gate: str) -> str:
     """Remove a single gate record from a task and recompute gate_state.
 
@@ -5726,6 +6007,7 @@ VALID_SPEC_REVIEW_VERDICTS = {"pass", "warn", "fail"}
 
 
 @mcp.tool()
+@_transactional("backlog_set_spec_review")
 def backlog_set_spec_review(
     task_id: str,
     verdict: str,
@@ -5778,6 +6060,7 @@ def backlog_set_spec_review(
 
 
 @mcp.tool()
+@_transactional("backlog_clear_spec_review")
 def backlog_clear_spec_review(task_id: str) -> str:
     """Remove the spec-review gate (and legacy spec_review mirror) from a task.
     Use when the spec was significantly revised and the prior review is no longer valid.
@@ -5835,6 +6118,7 @@ def _validate_components(components: dict) -> str:
 
 
 @mcp.tool()
+@_transactional("backlog_update_epic")
 def backlog_update_epic(epic_id: str, field: str, value: str) -> str:
     """Update a single field on an epic.
 
@@ -5921,6 +6205,7 @@ def backlog_update_epic(epic_id: str, field: str, value: str) -> str:
 
 
 @mcp.tool()
+@_transactional("backlog_archive_epic")
 def backlog_archive_epic(epic_id: str, reason: str = "done") -> str:
     """Archive an epic and all its tasks — hides the epic from the board and default listings.
     Cascades: every non-archived task in the epic is also archived with the same reason.
@@ -5959,6 +6244,7 @@ def backlog_archive_epic(epic_id: str, reason: str = "done") -> str:
 
 
 @mcp.tool()
+@_transactional("backlog_add_epic")
 def backlog_add_epic(
     epic_id: str, name: str, done_when: str, description: str = "",
     status: str = "planned", area: str = "",
@@ -6023,6 +6309,7 @@ ALLOWED_PHASE_FIELDS = {"name", "status", "description", "order", "target_date",
 
 
 @mcp.tool()
+@_transactional("backlog_add_phase")
 def backlog_add_phase(
     phase_id: str, name: str, description: str = "", order: int | None = None,
     target_date: str = "", start_date: str = "",
@@ -6091,6 +6378,7 @@ def backlog_add_phase(
 
 
 @mcp.tool()
+@_transactional("backlog_update_phase")
 def backlog_update_phase(phase_id: str, field: str, value: str) -> str:
     """Update a single field on a phase.
 
@@ -6418,6 +6706,7 @@ def backlog_epic_status(epic_id: str) -> str:
 
 
 @mcp.tool()
+@_transactional("backlog_advance_phase")
 def backlog_advance_phase(force: bool = False) -> str:
     """Complete the active phase and activate the next one in sequence.
     Archives all 'done' tasks in the completed phase. Activates the next 'planned' phase by order.
@@ -6513,6 +6802,7 @@ def backlog_advance_phase(force: bool = False) -> str:
 
 
 @mcp.tool()
+@_transactional("backlog_batch_update")
 def backlog_batch_update(operations: str) -> str:
     """Apply multiple task/epic updates in a single atomic operation. One load/save cycle.
 
@@ -7195,7 +7485,9 @@ def _load_related_for_task(task_id: str) -> dict | None:
     backlog_path = _backlog_path()
     if not backlog_path.exists():
         return None
-    backlog = yaml_io.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
+    # Route through _load() so a call nested inside an open transaction sees the
+    # in-flight tree the mutation is building, not the last exported file.
+    backlog = _load()
     tasks = backlog.get("tasks")
     if not isinstance(tasks, list):
         tasks = [
@@ -7396,10 +7688,10 @@ class ViewerHandler(BaseHTTPRequestHandler):
             return
         elif clean_path == "/api/threads":
             from taskmaster.taskmaster_v3 import list_threads as _list_threads_http
-            data = _load()
-            if "threads" not in data:
-                _sync_handover_index(data, _backlog_path())
-                _save(data)
+            with _transaction(tool="viewer:GET /api/threads") as data:
+                if "threads" not in data:
+                    _sync_handover_index(data, _backlog_path())
+                    _save(data)
             self._send_json(200, _list_threads_http(data))
             return
         elif clean_path == "/api/sessions":
@@ -7750,9 +8042,9 @@ class ViewerHandler(BaseHTTPRequestHandler):
             except FileNotFoundError:
                 self._send_json(404, {"ok": False, "error": f"handover not found: {handover_id}"})
                 return
-            data = _load()
-            _sync_handover_index(data, _backlog_path())
-            _save(data)
+            with _transaction(tool="viewer:POST /api/handovers/status") as data:
+                _sync_handover_index(data, _backlog_path())
+                _save(data)
             self._send_json(200, {"ok": True, "id": handover_id, "status": fm["status"]})
             return
 
@@ -7903,9 +8195,9 @@ class ViewerHandler(BaseHTTPRequestHandler):
             except ValueError as e:
                 self._send_json(400, {"ok": False, "error": str(e)})
                 return
-            data = _load()
-            _sync_bug_index_http(data, bp)
-            _save(data)
+            with _transaction(tool="viewer:POST /api/bugs") as data:
+                _sync_bug_index_http(data, bp)
+                _save(data)
             self._send_json(201, {"ok": True, "id": bid, "path": str(target)})
             return
 
@@ -7970,10 +8262,10 @@ class ViewerHandler(BaseHTTPRequestHandler):
             except ValueError as e:
                 self._send_json(400, {"ok": False, "error": str(e)})
                 return
-            data = _load()
-            _sync_bug_index_http2(data, bp)
-            _sync_issue_index_http(data, bp)
-            _save(data)
+            with _transaction(tool="viewer:POST /api/bugs/promote") as data:
+                _sync_bug_index_http2(data, bp)
+                _sync_issue_index_http(data, bp)
+                _save(data)
             self._send_json(201, {"ok": True, "issue_id": iid})
             return
 
@@ -7992,9 +8284,9 @@ class ViewerHandler(BaseHTTPRequestHandler):
             except ValueError as e:
                 self._send_json(400, {"ok": False, "error": str(e)})
                 return
-            data = _load()
-            _sync_bug_index_http3(data, bp)
-            _save(data)
+            with _transaction(tool="viewer:POST /api/bugs/archive") as data:
+                _sync_bug_index_http3(data, bp)
+                _save(data)
             self._send_json(200, {"ok": True, "id": bug_id})
             return
 
@@ -8030,9 +8322,9 @@ class ViewerHandler(BaseHTTPRequestHandler):
             except ValueError as e:
                 self._send_json(400, {"ok": False, "error": str(e)})
                 return
-            data = _load()
-            _sync_bug_index_http4(data, bp)
-            _save(data)
+            with _transaction(tool="viewer:PATCH /api/bugs") as data:
+                _sync_bug_index_http4(data, bp)
+                _save(data)
             self._send_json(200, {"ok": True, "id": bug_id, "status": fm["status"]})
             return
 
@@ -8735,6 +9027,7 @@ def backlog_linear_bootstrap_apply(
     })
 
 
+@_transactional("backlog_linear:link")
 def backlog_linear_link(task_id: str, external_key: str, workspace_alias: str = "") -> str:
     """Link an existing TM task to an existing Linear issue by creating a Tracker file.
 
@@ -8796,6 +9089,7 @@ def backlog_linear_link(task_id: str, external_key: str, workspace_alias: str = 
     return json.dumps({"ok": True, "tracker_id": tracker_id, "task_id": task_id})
 
 
+@_transactional("backlog_linear:unlink")
 def backlog_linear_unlink(task_id: str) -> str:
     """Clear the tracker_id on a TM task. Does NOT delete the Tracker file.
 

@@ -94,8 +94,10 @@ def test_issue_create_auto_promotes_marker(server_at, tmp_path):
         impact="Test",
     )
     assert "Issue created" in result, result
+    # The store adopts a v3 projection into the v4 layout on first load, so the
+    # marker the issue write promotes lands at v4.
     raw = yaml.safe_load(bp.read_text(encoding="utf-8"))
-    assert raw["meta"]["schema_version"] == 3
+    assert raw["meta"]["schema_version"] == 4
 
 
 def test_backlog_status_emits_schema_line(server_at, tmp_path):
@@ -110,7 +112,7 @@ def test_backlog_status_emits_schema_line(server_at, tmp_path):
     (tmp_path / ".taskmaster" / "tasks").mkdir()
 
     out = server_at.backlog_status()
-    assert out.splitlines()[0].startswith("**Schema:** v3"), out
+    assert out.splitlines()[0].startswith("**Schema:** v4"), out
 
 
 def test_backlog_status_schema_line_uses_effective_version(server_at, tmp_path):
@@ -124,4 +126,4 @@ def test_backlog_status_schema_line_uses_effective_version(server_at, tmp_path):
     )
 
     out = server_at.backlog_status()
-    assert out.splitlines()[0].startswith("**Schema:** v3"), out
+    assert out.splitlines()[0].startswith("**Schema:** v4"), out

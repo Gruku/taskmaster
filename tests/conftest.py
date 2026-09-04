@@ -27,6 +27,24 @@ if str(TESTS_ROOT) not in sys.path:
     sys.path.insert(0, str(TESTS_ROOT))
 
 
+@pytest.fixture(autouse=True)
+def _store_isolation():
+    """Never let one test's SQLite store, cache, or root resolution leak forward.
+
+    The server now routes every load/mutate through `taskmaster.store`, which
+    keeps process-global connections, a dict cache and a resolved root.  Tests
+    reuse `tmp_path` names and monkeypatch the root, so both ends need a reset.
+    """
+    from taskmaster import store  # noqa: PLC0415 — imported after sys.path setup
+
+    store.reset_for_tests()
+    try:
+        yield
+    finally:
+        store.reset_for_tests()
+        store.close_thread_connection()
+
+
 @pytest.fixture()
 def tmp_taskmaster(tmp_path, monkeypatch):
     """Create a minimal .taskmaster/ layout and redirect path resolution.
@@ -94,6 +112,12 @@ def tmp_taskmaster(tmp_path, monkeypatch):
     # Tests that resolve relative paths against cwd should land in tmp_path —
     # keep this as a safety net for code paths that call Path.cwd() at runtime.
     monkeypatch.chdir(tmp_path)
+
+    # The projection was just written; drop any store bound to a stale
+    # view of this path so the first load bootstraps from these files.
+    from taskmaster import store  # noqa: PLC0415
+
+    store.reset_for_tests()
 
     return tmp_path
 

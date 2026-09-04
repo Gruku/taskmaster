@@ -1,7 +1,7 @@
 import json
 from taskmaster.backlog_server import (backlog_add_epic, backlog_add_task, backlog_update_task,
                             backlog_update_epic, backlog_epic_status, backlog_archive_task,
-                            _load, _find_task, _mutate_and_save)
+                            _load, _find_task, _mutate_and_save, _transaction)
 
 
 def _set_status(task_id, status):
@@ -10,10 +10,10 @@ def _set_status(task_id, status):
     if status in ("in-progress", "todo"):
         backlog_update_task(task_id, "status", status)
         return
-    data = _load()
-    task, _ = _find_task(data, task_id)
-    task["status"] = status
-    _mutate_and_save(data)
+    with _transaction(tool="test-setup") as data:
+        task, _ = _find_task(data, task_id)
+        task["status"] = status
+        _mutate_and_save(data)
 
 
 def _setup(tm_epic_phase):

@@ -390,3 +390,62 @@ def test_exact_byte_repair_clears_quarantine_before_later_db_export(
     assert parse_frontmatter(task_path.read_text(encoding="utf-8"))[0]["title"] == (
         "Database after repair"
     )
+
+
+def test_v3_adoption_keeps_slim_task_fields_that_live_only_in_backlog_yaml(tmp_path):
+    """A v3 project splits a task across backlog.yaml (slim) and tasks/<id>.md (heavy).
+
+    Bootstrapping such a project must keep both halves: the heavy file is a
+    partial document, not the whole task, so importing it may not replace the
+    row the merged v3 load already produced.
+    """
+    from taskmaster import store
+
+    store.reset_for_tests()
+    tm_dir = tmp_path / ".taskmaster"
+    (tm_dir / "tasks").mkdir(parents=True)
+    backlog_path = tm_dir / "backlog.yaml"
+    backlog_path.write_text(
+        yaml.safe_dump(
+            {
+                "version": 3,
+                "meta": {"project": "legacy", "schema_version": 3},
+                "epics": [
+                    {
+                        "id": "core",
+                        "name": "Core",
+                        "tasks": [
+                            {
+                                "id": "core-001",
+                                "title": "Legacy task",
+                                "status": "in-progress",
+                                "priority": "high",
+                                "branch": "feature/x",
+                            }
+                        ],
+                    }
+                ],
+                "phases": [],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (tm_dir / "tasks" / "core-001.md").write_text(
+        render_frontmatter(
+            {"id": "core-001", "title": "Legacy task",
+             "gates": {"review-gate": {"verdict": "pass"}}},
+            "Heavy body.",
+        ),
+        encoding="utf-8",
+    )
+
+    try:
+        data = store.load_dict(backlog_path)
+        task = data["epics"][0]["tasks"][0]
+        assert task["status"] == "in-progress"
+        assert task["priority"] == "high"
+        assert task["branch"] == "feature/x"
+        assert task["gates"] == {"review-gate": {"verdict": "pass"}}
+    finally:
+        store.reset_for_tests()

@@ -41,6 +41,7 @@ def test_complete_allowed_with_skips(tm_epic_phase):
 def test_laneless_task_exempt(tm_epic_phase):
     tid = re.search(r"[a-z0-9-]+-\d{3}",
                     _bs.backlog_add_task("c", epic="test-epic", phase="dev", priority="medium")).group(0)
-    data = _bs._load(); t, _ = _bs._find_task(data, tid); t.pop("lane", None); t["status"] = "in-progress"; _bs._mutate_and_save(data)
+    with _bs._transaction(tool="test-setup") as data:
+        t, _ = _bs._find_task(data, tid); t.pop("lane", None); t["status"] = "in-progress"; _bs._mutate_and_save(data)
     out = _bs.backlog_complete_task(tid)            # no gates, but laneless => allowed
     assert "Error" not in out and "Cannot" not in out
