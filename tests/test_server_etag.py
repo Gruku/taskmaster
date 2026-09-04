@@ -79,8 +79,12 @@ def test_patch_with_stale_etag_returns_409(server_etag):
     body = json.loads(resp.read())
     assert body["ok"] is False
     assert body.get("error") == "stale"
-    assert "current" in body
     assert "current_etag" in body
+    # The stale payload must carry the current task so the viewer can show a
+    # diff; a null `current` is what a v4-blind task read produced.
+    assert body.get("current") is not None
+    assert body["current"]["id"] == "e1-001"
+    assert body["current"]["title"] == "Changed by other"
 
 
 def test_patch_without_if_match_proceeds(server_etag):

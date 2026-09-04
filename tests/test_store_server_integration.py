@@ -132,10 +132,76 @@ def test_unknown_task_error_writes_nothing(two_tasks):
 
 
 def test_update_task_response_is_rendered_from_committed_state(two_tasks):
+    """The field/value path is the one that renders after commit."""
     root, task_id, _ = two_tasks
-    out = bs.backlog_update_task(task_id, tldr="a committed tldr")
-    assert "a committed tldr" in out
-    assert _committed_task(root, task_id)["tldr"] == "a committed tldr"
+    out = bs.backlog_update_task(task_id, field="priority", value="high")
+    assert out.endswith("high"), out
+    assert _committed_task(root, task_id)["priority"] == "high"
+
+
+def test_update_task_response_says_so_when_the_write_did_not_persist(two_tasks):
+    """A response may never echo a value the store did not keep."""
+    root, task_id, _ = two_tasks
+    original = bs._load
+
+    def load_without_the_task():
+        data = original()
+        if bs._active_tx() is None:  # the post-commit render read
+            for epic in data.get("epics", []):
+                epic["tasks"] = [t for t in epic["tasks"] if t.get("id") != task_id]
+        return data
+
+    bs._load = load_without_the_task
+    try:
+        out = bs.backlog_update_task(task_id, field="priority", value="low")
+    finally:
+        bs._load = original
+    assert out.endswith(bs.NOT_PERSISTED), out
+
+
+@pytest.mark.parametrize(
+    "field,value,expected",
+    [
+        ("anchors", "src/a.py,src/b.py", "src/a.py,src/b.py"),
+        ("docs", "plan:docs/plans/p.md", "plan:docs/plans/p.md"),
+        ("design_change", "true", "true"),
+    ],
+)
+def test_update_task_response_keeps_the_callers_representation(
+    two_tasks, field, value, expected
+):
+    """Structured fields are stored parsed; the response still reads flat."""
+    _root, task_id, _ = two_tasks
+    out = bs.backlog_update_task(task_id, field=field, value=value)
+    assert "Error" not in out, out
+    assert out.endswith(f"→ {expected}"), out
+
+
+def test_update_task_response_renders_a_committed_dependency_list(two_tasks):
+    _root, first, second = two_tasks
+    out = bs.backlog_update_task(first, field="depends_on", value=second)
+    assert "Error" not in out, out
+    assert out.endswith(f"→ {second}"), out
+
+
+def test_committed_field_display_never_falls_back_to_the_request():
+    data = {"epics": [{"id": "e", "tasks": [{"id": "t", "priority": "low"}]}]}
+    # Task absent from committed state.
+    assert bs._committed_field_display(
+        {"epics": []}, "t", "priority", "high"
+    ) == bs.NOT_PERSISTED
+    # Committed value differs from what the tool applied.
+    assert bs._committed_field_display(
+        data, "t", "priority", "high"
+    ) == bs.NOT_PERSISTED
+    # Field the tool deliberately removed reads back empty, not "not persisted".
+    assert bs._committed_field_display(
+        data, "t", "anchors", bs._MISSING_FIELD
+    ) == ""
+    # A field that should have been removed but is still there is flagged.
+    assert bs._committed_field_display(
+        data, "t", "priority", bs._MISSING_FIELD
+    ) == bs.NOT_PERSISTED
 
 
 def test_add_epic_and_add_task_persist_through_the_store(tmp_taskmaster):
@@ -290,3 +356,33 @@ def test_two_threads_adding_tasks_do_not_collide_on_one_id(tm_epic_phase):
     assert len(ids) == 2, ids
     assert len(set(ids)) == 2, ids
     assert sorted(t["title"] for t in tasks) == ["T0", "T1"]
+
+
+def test_exception_inside_a_transaction_propagates_and_commits_nothing(two_tasks):
+    """The unlatched-exit signal must not swallow a real failure."""
+    root, task_id, _ = two_tasks
+    before = _max_seq(root)
+
+    class Boom(RuntimeError):
+        pass
+
+    with pytest.raises(Boom):
+        with bs._transaction(tool="test") as data:
+            data["epics"][0]["tasks"][0]["title"] = "never committed"
+            bs._mutate_and_save(data)
+            raise Boom("failure inside the transaction")
+
+    assert _max_seq(root) == before
+    assert _committed_task(root, task_id)["title"] == "First"
+
+
+def test_task_detail_endpoint_finds_a_task_on_a_store_adopted_project(two_tasks):
+    """GET /api/tasks/<id> reads the task index the store keeps, not backlog.yaml."""
+    _root, task_id, _ = two_tasks
+    bs.backlog_update_task(task_id, field="notes", value="detail note")
+    full = bs._load_task_full(task_id)
+    assert full is not None, "task detail lost the task after store adoption"
+    assert full["id"] == task_id
+    assert full["epic"] == "test-epic"
+    assert full["notes"] == "detail note"
+    assert bs._load_task_full("no-such-task") is None

@@ -4656,7 +4656,10 @@ def validate_task_write(task_id: str, patch: dict, backlog_path: Path | None = N
     Pure function — does not persist.
     """
     bp = backlog_path or _resolve_backlog_path()
-    data = yaml_io.safe_load(bp.read_text(encoding="utf-8")) or {}
+    # Read through the schema-appropriate loader: the v4 projection keeps the
+    # task index in tasks/<id>.md, so a raw backlog.yaml read finds no tasks and
+    # every patch is rejected as "task not found".
+    data, _is_v4 = _load_task_entities(bp)
     errors: dict[str, str] = {}
 
     # Build helper maps.

@@ -160,15 +160,24 @@ def _ensure_handover_status_backfilled() -> None:
         return
     try:
         with _transaction(tool="_ensure_handover_status_backfilled") as data:
-            if data.get("handover_status_backfilled"):
-                _HANDOVER_STATUS_BACKFILL_RAN = True
+            try:
+                if data.get("handover_status_backfilled"):
+                    _HANDOVER_STATUS_BACKFILL_RAN = True
+                    return
+                from taskmaster.taskmaster_v3 import backfill_handover_status as _bf
+                flipped = _bf(data, bp)
+                if flipped or "handover_status_backfilled" in data:
+                    _sync_handover_index(data, bp)
+                    _save(data)
+            except Exception:
+                # A backfill that cannot read its own inputs stays a no-op, as
+                # before. Commit and export failures are raised by the context
+                # exit below, outside this guard, so they are never discarded.
                 return
-            from taskmaster.taskmaster_v3 import backfill_handover_status as _bf
-            flipped = _bf(data, bp)
-            if flipped or "handover_status_backfilled" in data:
-                _sync_handover_index(data, bp)
-                _save(data)
-    except Exception:
+    except Exception as exc:
+        # The store could not commit or export. This runs from several handover
+        # tools, so it must not block them - but it must leave a trace.
+        _log_index_error(bp, exc)
         return
     _HANDOVER_STATUS_BACKFILL_RAN = True
 
@@ -717,13 +726,45 @@ def _auto_link_task_in_tx(data: dict, task_id: str) -> list[str]:
     return [target_id for target_id, _ in pending]
 
 
-def _committed_field(data: dict, task_id: str, field: str, fallback):
-    """The value a field actually holds in committed state, for responses."""
+_MISSING_FIELD = object()
+NOT_PERSISTED = "(not persisted)"
+
+
+def _format_task_field(value) -> str:
+    """Render a stored field the way the caller wrote it.
+
+    Structured fields are stored parsed (depends_on and anchors as lists, docs
+    as a dict, design_change as a bool) but the tool's response has always
+    echoed the caller's flat representation, so keep that shape.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, list):
+        return ",".join(str(item) for item in value)
+    if isinstance(value, dict):
+        return ", ".join(f"{key}:{item}" for key, item in sorted(value.items()))
+    return str(value)
+
+
+def _committed_field_display(data: dict, task_id: str, field: str, expected) -> str:
+    """Render `field` from committed state, or say plainly that it did not land.
+
+    This never falls back to the caller's requested value: echoing a write the
+    store did not keep is exactly the failure the committed-state rule exists to
+    catch. A field the tool deliberately removed reads back as an empty string,
+    matching the old response for a cleared field.
+    """
     found = _find_task(data, task_id)
     if not found:
-        return fallback
-    value = found[0].get(field, fallback)
-    return fallback if value is None else value
+        return NOT_PERSISTED
+    committed = found[0].get(field, _MISSING_FIELD)
+    if committed is _MISSING_FIELD or expected is _MISSING_FIELD:
+        return "" if committed is expected else NOT_PERSISTED
+    if committed != expected:
+        return NOT_PERSISTED
+    return _format_task_field(committed)
 
 
 def _find_in_transaction(data: dict, entity_id: str) -> dict | None:
@@ -5777,9 +5818,10 @@ def backlog_update_task(
     _mutate_and_save(data)
     _enqueue_linear_push_if_synced(task_id, task=task)
 
+    expected = deepcopy(task.get(field, _MISSING_FIELD))
     _render_after_commit(
         lambda committed: f"Updated `{task_id}` field `{field}` → "
-        + str(_committed_field(committed, task_id, field, value))
+        + _committed_field_display(committed, task_id, field, expected)
     )
     return f"Updated `{task_id}` field `{field}` → {value}"
 
@@ -7373,7 +7415,10 @@ def _load_task_full(task_id: str) -> dict | None:
     backlog_path = _backlog_path()
     if not backlog_path.exists():
         return None
-    backlog = yaml_io.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
+    # Route through _load(): the v4 projection keeps no task index in
+    # backlog.yaml, and a call nested inside an open transaction must see the
+    # in-flight tree rather than the last exported file.
+    backlog = _load()
     tasks = backlog.get("tasks")
     if not isinstance(tasks, list):
         tasks = [
