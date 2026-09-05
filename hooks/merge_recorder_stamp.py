@@ -1,3 +1,6 @@
+# User intent: after a merge succeeds, stamp the rung it reached onto the task,
+# through the server's own recorder so the write is v3-correct — and against the
+# checkout that owns the backlog, even when the merge ran in a linked worktree.
 """merge_recorder_stamp.py — Stamp module for hooks/merge_recorder.py.
 
 Called by merge_recorder.py as:
@@ -25,6 +28,7 @@ cwd=<project> (prod inherits it; tests pass cwd=) targets the right project.
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -32,6 +36,28 @@ from pathlib import Path
 # This script lives in hooks/; the taskmaster package is at the repo root one
 # level up. Subprocess invocation puts hooks/ on sys.path, not the root.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+
+def pin_root(cwd: Path) -> None:
+    """Pin `TASKMASTER_ROOT` before `backlog_server` freezes its own at import.
+
+    `backlog_server.ROOT` is read from the environment once, at import time, so
+    the resolution has to happen first. `resolve_root` walks to the git common
+    dir, which is what makes a merge run inside a linked worktree stamp the main
+    checkout's backlog instead of silently finding none. An explicit
+    `TASKMASTER_ROOT` already in the environment wins, exactly as it does for
+    the server.
+    """
+    if os.environ.get("TASKMASTER_ROOT"):
+        return
+    try:
+        from taskmaster.root import resolve_root
+
+        root = resolve_root(Path(cwd)).root
+    except Exception:
+        return
+    if (root / ".taskmaster").is_dir():
+        os.environ["TASKMASTER_ROOT"] = str(root)
 
 
 def _git(args: list[str], cwd: Path) -> str | None:
@@ -58,6 +84,7 @@ def stamp(src: str, cwd: Path) -> None:
     storage split (heavy merge_status -> tasks/<id>.md) and merge_gate_state
     recompute happen via the canonical path.
     """
+    pin_root(cwd)
     try:
         from taskmaster import backlog_server as _bs
     except Exception:

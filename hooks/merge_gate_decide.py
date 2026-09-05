@@ -1,3 +1,6 @@
+# User intent: block a merge whose task has no fresh passing review-gate, decided
+# from the SQLite store the server writes so a gate recorded seconds ago is
+# visible here. Read-only, fail-open, and it never imports a backlog.
 """merge_gate_decide.py — Decision module for hooks/merge_gate.py.
 
 Called by merge_gate.py as:
@@ -12,19 +15,51 @@ Prints one of:
     ALLOW
     BLOCK:<task-id>: <reason>. Run /taskmaster:review-gate.
 
+The root is `taskmaster.root.resolve_root` — the same rule the server uses —
+so a merge run inside a linked worktree is judged against the main checkout's
+store. When `<root>/.taskmaster/local/store.db` exists every answer comes from
+it; when it does not, the projection is parsed instead and the reason is
+logged. A hook never imports a backlog into a store (spec §4.5, R10).
+
 CARDINAL RULE: FAIL-OPEN.  Every uncertainty, error, or missing piece
 prints "ALLOW".  The ENTIRE body is wrapped in a top-level try/except so a
 Python exception can never cause a silent block.
 """
 from __future__ import annotations
 
+import json
+import sqlite3
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 # This script lives in hooks/; the taskmaster package is at the repo root one
 # level up. Subprocess invocation puts hooks/ on sys.path, not the root.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+BUSY_TIMEOUT_SECONDS = 2.0
+LOG_MAX_BYTES = 1024 * 1024
+LOG_KEEP_BYTES = 512 * 1024
+
+_TASK_BY_BRANCH_SQL = (
+    "SELECT id, doc FROM entities"
+    " WHERE kind='task' AND deleted=0 AND archived=0"
+    "   AND json_extract(doc,'$.branch')=?"
+)
+
+
+def _log(root: Path, reason: str) -> None:
+    """One line saying which source the decision came from. Never raises."""
+    try:
+        log = root / ".taskmaster" / "local" / "hook.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with log.open("a", encoding="utf-8") as fh:
+            fh.write(f"{time.time()} merge_gate_decide: {reason}\n")
+        if log.stat().st_size > LOG_MAX_BYTES:
+            log.write_bytes(log.read_bytes()[-LOG_KEEP_BYTES:])
+    except Exception:
+        pass
 
 
 def _git_rev_parse(branch: str, cwd: Path) -> str | None:
@@ -44,38 +79,157 @@ def _git_rev_parse(branch: str, cwd: Path) -> str | None:
         return None
 
 
-def decide(src: str, cwd: Path) -> str:
-    """Core decision logic — returns the string to print (ALLOW or BLOCK:...).
+def _walk_up_for_backlog(start: Path) -> Path | None:
+    current = Path(start).resolve()
+    while True:
+        if (current / ".taskmaster").is_dir():
+            return current
+        if current.parent == current:
+            return None
+        current = current.parent
 
-    Fail-open: any exception or unexpected state returns ALLOW.
+
+def project_root(cwd: Path) -> Path | None:
+    """The checkout whose `.taskmaster/` governs this merge, or None.
+
+    `resolve_root` is the shared rule (`TASKMASTER_ROOT`, else the git common
+    dir, else cwd); an explicitly pinned root that has no backlog is an answer,
+    not a reason to go looking elsewhere.
     """
-    # --- Load project manifest ---
     try:
-        # Walk up from cwd to find project root containing .taskmaster/
-        from taskmaster.project import load_project_manifest, resolve_project_root
+        from taskmaster.root import resolve_root
 
-        project_root = resolve_project_root(cwd)
-        if project_root is None:
+        resolution = resolve_root(Path(cwd))
+        if (resolution.root / ".taskmaster").is_dir():
+            return resolution.root
+        if resolution.source in ("env", "explicit"):
+            return None
+    except Exception:
+        pass
+    return _walk_up_for_backlog(Path(cwd))
+
+
+# ── Store path ──────────────────────────────────────────────────
+
+
+def _connect_ro(db_file: Path) -> sqlite3.Connection:
+    """Read-only handle: the gate must never write a row or hold a lock."""
+    uri = Path(db_file).resolve().as_uri()
+    try:
+        return sqlite3.connect(uri + "?mode=ro", uri=True, timeout=BUSY_TIMEOUT_SECONDS)
+    except sqlite3.OperationalError:
+        # A WAL database cannot be opened `mode=ro` when its `-shm` is absent
+        # and cannot be created (design spec 3.1). Failing open here would
+        # disable the gate; `query_only` reads instead, and still writes nothing.
+        con = sqlite3.connect(uri + "?mode=rw", uri=True, timeout=BUSY_TIMEOUT_SECONDS)
+        con.execute("PRAGMA query_only=ON")
+        return con
+
+
+def _task_for_branch(con: sqlite3.Connection, src: str):
+    try:
+        rows = con.execute(_TASK_BY_BRANCH_SQL, (src,)).fetchall()
+    except sqlite3.OperationalError:
+        # An interpreter whose SQLite lacks JSON1 still has to decide.
+        rows = [
+            (ident, doc)
+            for ident, doc in con.execute(
+                "SELECT id, doc FROM entities"
+                " WHERE kind='task' AND deleted=0 AND archived=0"
+            )
+            if json.loads(doc).get("branch") == src
+        ]
+    for ident, doc in rows:
+        return ident, json.loads(doc)
+    return None, None
+
+
+def _policy_on(con: sqlite3.Connection) -> bool:
+    row = con.execute(
+        "SELECT doc FROM entities WHERE kind='project' AND deleted=0 LIMIT 1"
+    ).fetchone()
+    if not row:
+        return False
+    manifest = json.loads(row[0])
+    conventions = manifest.get("conventions") or {}
+    policies = conventions.get("policies") or {}
+    return bool(policies.get("review_gate_required_for_merge"))
+
+
+def decide_from_store(db_file: Path, src: str, cwd: Path) -> str:
+    con = _connect_ro(db_file)
+    try:
+        if not _policy_on(con):
             return "ALLOW"
+        task_id, task = _task_for_branch(con, src)
+    finally:
+        con.close()
+    if task is None:
+        return "ALLOW"
+    return _verdict(task_id, task, src, cwd)
+
+
+# ── Verdict (shared by both sources) ────────────────────────────
+
+
+def _verdict(task_id: str, task: dict, src: str, cwd: Path) -> str:
+    if task.get("skip_merge_gate"):
+        return "ALLOW"
+
+    gates = task.get("gates") or {}
+    rg = gates.get("review-gate") if isinstance(gates, dict) else None
+    if not rg:
+        return (
+            f"BLOCK:{task_id}: no review-gate has been run on this branch. "
+            "Run /taskmaster:review-gate."
+        )
+
+    verdict = rg.get("verdict", "")
+    if verdict != "pass":
+        return (
+            f"BLOCK:{task_id}: review-gate verdict is '{verdict}' (not pass). "
+            "Run /taskmaster:review-gate."
+        )
+
+    # Gate passed — check freshness.
+    if task.get("merge_gate_freshness", "strict") == "any":
+        return "ALLOW"
+
+    gate_sha = rg.get("commit_sha", "")
+    branch_tip = _git_rev_parse(src, cwd)
+    if branch_tip is None:
+        # Can't resolve tip (no git repo, detached, etc.) — fail-open
+        return "ALLOW"
+    if gate_sha == branch_tip:
+        return "ALLOW"
+    return (
+        f"BLOCK:{task_id}: review-gate was run on "
+        f"{gate_sha[:12] if gate_sha else '(unknown)'} "
+        f"but branch tip is now {branch_tip[:12]}. "
+        "Run /taskmaster:review-gate to re-validate. "
+        "Set merge_gate_freshness: any to skip the SHA check."
+    )
+
+
+# ── Projection fallback (no store on disk yet) ──────────────────
+
+
+def decide_from_files(project_root: Path, src: str, cwd: Path) -> str:
+    """Today's YAML/markdown reader, kept for projects with no store yet."""
+    try:
+        from taskmaster.project import load_project_manifest
 
         manifest = load_project_manifest(project_root)
         if manifest is None:
             return "ALLOW"
-
         if not manifest.conventions.policies.review_gate_required_for_merge:
             return "ALLOW"
-
     except Exception:
         return "ALLOW"
 
-    # Policy is ON — proceed to check the task.
-
-    # --- Load backlog ---
     try:
         import yaml
 
-        # Try to find backlog relative to project_root, using the same
-        # priority order as taskmaster_v3._resolve_artifact_root.
         backlog_path = None
         for candidate in [
             project_root / ".taskmaster" / "backlog.yaml",
@@ -93,7 +247,6 @@ def decide(src: str, cwd: Path) -> str:
     except Exception:
         return "ALLOW"
 
-    # --- Find task whose branch == SRC ---
     try:
         tasks = []
         for epic in raw.get("epics", []):
@@ -107,78 +260,53 @@ def decide(src: str, cwd: Path) -> str:
             )
             for task_file in iter_task_files(backlog_path):
                 frontmatter, body = read_task_file(task_file)
-                tasks.append(
-                    task_v4_from_file(frontmatter, body.rstrip("\n"))
-                )
+                tasks.append(task_v4_from_file(frontmatter, body.rstrip("\n")))
 
         task = next((t for t in tasks if t.get("branch") == src), None)
         if task is None:
             return "ALLOW"
 
-    except Exception:
-        return "ALLOW"
-
-    # --- Check skip_merge_gate ---
-    try:
-        if task.get("skip_merge_gate"):
-            return "ALLOW"
-    except Exception:
-        return "ALLOW"
-
-    # --- Read gate record ---
-    try:
         task_id = task.get("id", "unknown")
-        gates = task.get("gates") or {}
-
-        # v3 keeps `gates` as a HEAVY field in the per-task file, not in the
-        # slim backlog.yaml index (see taskmaster_v3.HEAVY_FIELDS). Hydrate it
-        # from there so this hook can see what backlog_record_gate wrote.
-        from taskmaster.taskmaster_v3 import detect_schema_version, task_file_path, read_task_file, SCHEMA_V3
-
-        if detect_schema_version(raw) >= SCHEMA_V3:
-            md_path = task_file_path(backlog_path, task_id)
-            fm, _body = read_task_file(md_path)
-            if "gates" in fm:
-                gates = fm["gates"] or {}
-
-        rg = gates.get("review-gate")
-
-        if not rg:
-            return (
-                f"BLOCK:{task_id}: no review-gate has been run on this branch. "
-                "Run /taskmaster:review-gate."
-            )
-
-        verdict = rg.get("verdict", "")
-        if verdict != "pass":
-            return (
-                f"BLOCK:{task_id}: review-gate verdict is '{verdict}' (not pass). "
-                "Run /taskmaster:review-gate."
-            )
-
-        # Gate passed — check freshness.
-        freshness = task.get("merge_gate_freshness", "strict")
-        if freshness == "any":
-            return "ALLOW"
-
-        # strict: commit_sha must match current branch tip
-        gate_sha = rg.get("commit_sha", "")
-        branch_tip = _git_rev_parse(src, cwd)
-
-        if branch_tip is None:
-            # Can't resolve tip (no git repo, detached, etc.) — fail-open
-            return "ALLOW"
-
-        if gate_sha == branch_tip:
-            return "ALLOW"
-
-        return (
-            f"BLOCK:{task_id}: review-gate was run on {gate_sha[:12] if gate_sha else '(unknown)'} "
-            f"but branch tip is now {branch_tip[:12]}. "
-            "Run /taskmaster:review-gate to re-validate. "
-            "Set merge_gate_freshness: any to skip the SHA check."
+        # `gates` is a HEAVY field: on v3 it never lives inline in the slim
+        # backlog.yaml index, only in the per-task file.
+        from taskmaster.taskmaster_v3 import (
+            SCHEMA_V3, detect_schema_version, read_task_file, task_file_path,
         )
 
+        if detect_schema_version(raw) >= SCHEMA_V3:
+            frontmatter, _body = read_task_file(task_file_path(backlog_path, task_id))
+            if "gates" in frontmatter:
+                task = dict(task)
+                task["gates"] = frontmatter["gates"] or {}
+
+        return _verdict(task_id, task, src, cwd)
+    except Exception:
+        return "ALLOW"
+
+
+def decide(src: str, cwd: Path) -> str:
+    """Core decision logic — returns the string to print (ALLOW or BLOCK:...).
+
+    Fail-open: any exception or unexpected state returns ALLOW.
+    """
+    try:
+        root = project_root(Path(cwd))
+    except Exception:
+        return "ALLOW"
+    if root is None:
+        return "ALLOW"
+
+    db_file = root / ".taskmaster" / "local" / "store.db"
+    if db_file.is_file():
+        try:
+            return decide_from_store(db_file, src, cwd)
+        except Exception as exc:
+            _log(root, f"store unreadable ({exc!r}); failing open")
+            return "ALLOW"
+
+    _log(root, f"no store at {db_file}; reading the projection instead")
+    try:
+        return decide_from_files(root, src, cwd)
     except Exception:
         return "ALLOW"
 
