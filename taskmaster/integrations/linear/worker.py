@@ -26,6 +26,7 @@ skip avoids the round-trip entirely when TM state is unchanged.
 """
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -172,18 +173,16 @@ def push_task(
     # stable id rather than the human key (B-031).
     returned_uuid = result.get("id")
     try:
-        from taskmaster.taskmaster_v3 import BODY_KEY, apply_tracker_updates
-
-        updated = apply_tracker_updates(
-            {k: v for k, v in tracker_fm.items() if k != BODY_KEY},
+        _record_push_result(
+            backlog_path,
+            tracker_id,
             last_pushed=_now_iso(),
             push_hash=new_hash,
             linear_issue_id=returned_uuid or linear_issue_id,
             title=task.get("title", tracker_fm.get("title", "")),
             status=task.get("status", tracker_fm.get("status", "")),
         )
-        _bs._store_write_entity(backlog_path, "tracker", updated)
-    except (OSError, ValueError, KeyError) as e:
+    except (OSError, ValueError, KeyError, RuntimeError) as e:
         # Push succeeded but local cache update failed. Don't requeue
         # (would cause a duplicate push); surface as a stale-cache warning.
         return {
@@ -200,6 +199,35 @@ def push_task(
     }
 
 
+def _record_push_result(backlog_path: Path, tracker_id: str, **updates: Any) -> None:
+    """Write one push's outcome onto the tracker, inside a short transaction.
+
+    The tracker read before the HTTP call is a snapshot: submitting that whole
+    document back would revert anything committed while the request was in
+    flight, and dropping its body would erase the tracker's narrative outright.
+    So the row is read again here and only the push-result fields move; the
+    body and every field this push did not touch are carried through untouched.
+    """
+    from taskmaster import backlog_server as _bs
+    from taskmaster.taskmaster_v3 import BODY_KEY, apply_tracker_updates
+
+    def apply() -> None:
+        tx = _bs._store_tx()
+        current = tx.get("tracker", tracker_id)
+        body = current.pop(BODY_KEY, None)
+        tx.put("tracker", tracker_id, apply_tracker_updates(current, **updates),
+               body=body)
+
+    if _bs._active_tx() is not None:
+        apply()
+        return
+    with _bs._transaction(
+        tool="linear:record-push", backlog_path=Path(backlog_path)
+    ) as data:
+        apply()
+        _bs._mutate_and_save(data)
+
+
 def drain(
     store: "Store",
     client: LinearClient,
@@ -210,11 +238,22 @@ def drain(
 ) -> dict[str, int]:
     """Process queued pushes, one short store transaction per outcome.
 
-    Reads only `pending` rows, so an already-parked failure is never re-issued
-    and never re-counted (B-028); `backlog_linear_retry` un-parks explicitly.
-    Each item is marked the moment its push returns, outside any transaction
-    that spans the HTTP call, so a crash mid-drain loses at most the outcome of
-    the request in flight and every other row keeps its state (B-029).
+    Rows are *claimed* before the first push: one transaction moves them out of
+    `pending` and stamps this drain as their owner.  That is what makes a mark
+    of `done` truthful.  An edit that lands while a push is in flight can no
+    longer be de-duped onto the row being pushed, so it queues a request of its
+    own instead of being settled unsent; and a second drain running
+    concurrently finds nothing pending for those rows, so no push is issued
+    twice.  The claim is a lease -- a drain killed mid-push has its rows
+    returned to `pending` once it expires -- and an outcome is only recorded
+    while this drain still owns the row.
+
+    Only `pending` rows are ever claimed, so an already-parked failure is never
+    re-issued and never re-counted (B-028); `backlog_linear_retry` un-parks
+    explicitly.  Each item is marked the moment its push returns, outside any
+    transaction that spans the HTTP call, so a crash mid-drain loses at most
+    the outcome of the request in flight and every other row keeps its state
+    (B-029).
 
     If `only_targets` is given the filter runs in the query, before the row
     limit, so a target-scoped retry finds its rows even when hundreds of other
@@ -228,7 +267,16 @@ def drain(
     backlog_path = store.backlog_path
     counts = {"ok": 0, "skipped": 0, "transient": 0, "permanent": 0, "unknown": 0}
 
-    for item in store.linear_pending(DRAIN_BATCH, targets=only_targets):
+    owner = f"drain:{uuid.uuid4().hex}"
+    claimed = store.linear_claim(DRAIN_BATCH, targets=only_targets, owner=owner)
+    if not claimed:
+        return counts
+    # Task state is read *after* the claim: a snapshot taken before it could
+    # predate an edit that has already been folded into a row this drain is
+    # about to push and mark done.
+    backlog_data = store.load_dict()
+
+    for item in claimed:
         target_id = item["target_id"]
         op = item["op"]
         if op == "task_upsert":
@@ -273,7 +321,11 @@ def drain(
             state = "failed" if last_chance else "pending"
             error = f"unrecognized push status {status!r}"
 
+        if not store.linear_mark(item["seq"], state=state, error=error, owner=owner):
+            # The lease expired and another drain took the row over. Its
+            # outcome is that drain's to record; counting this one would
+            # double-report the push.
+            continue
         counts[bucket] += 1
-        store.linear_mark(item["seq"], state=state, error=error)
 
     return counts

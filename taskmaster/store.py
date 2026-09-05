@@ -76,6 +76,10 @@ _IDEAS_INDEX_KIND = "ideas-index"
 _IDEAS_INDEX_REL = "ideas/IDEAS.md"
 _PROGRESS_REL = "local/PROGRESS.md"
 _LINEAR_QUEUE_RECEIPT_KEY = "linear_queue_import_receipt"
+# How long a drain's claim on a queue row survives without an outcome. Past
+# it the row goes back to `pending`, so a drain killed mid-push strands
+# nothing; it is well beyond any single HTTP round-trip.
+LINEAR_CLAIM_LEASE_SECONDS = 900.0
 _PROGRESS_LOG_KEY = "pending_progress_log"
 _PROGRESS_APPLIED_KEY = "progress_log"
 # The session-log region of PROGRESS.md shows this many entries. Bounded so one
@@ -152,7 +156,9 @@ CREATE TABLE IF NOT EXISTS linear_queue(
   payload TEXT,
   state TEXT,
   attempts INTEGER,
-  last_error TEXT
+  last_error TEXT,
+  claimed_by TEXT,
+  claimed_at REAL
 );
 CREATE TABLE IF NOT EXISTS entity_paths(
   kind TEXT NOT NULL,
@@ -1115,11 +1121,28 @@ class Store:
                 (str(uuid.uuid4()),),
             )
 
-    @staticmethod
-    def _execute_schema(connection: sqlite3.Connection) -> None:
+    # Columns added to an existing table after the first release. `CREATE
+    # TABLE IF NOT EXISTS` cannot add them and the queue rows are not projected,
+    # so a schema rebuild would destroy pending pushes: they are applied
+    # additively on every open instead.
+    _ADDED_COLUMNS = (
+        ("linear_queue", "claimed_by", "TEXT"),
+        ("linear_queue", "claimed_at", "REAL"),
+    )
+
+    @classmethod
+    def _execute_schema(cls, connection: sqlite3.Connection) -> None:
         for statement in SCHEMA_SQL.split(";"):
             if statement.strip():
                 connection.execute(statement)
+        for table, column, decl in cls._ADDED_COLUMNS:
+            existing = {
+                row[1] for row in connection.execute(f"PRAGMA table_info({table})")
+            }
+            if column not in existing:
+                connection.execute(
+                    f"ALTER TABLE {table} ADD COLUMN {column} {decl}"
+                )
 
     def _rebuild_for_version(self, connection: sqlite3.Connection) -> None:
         # A schema incompatibility is not corruption. Rebuild in place so a
@@ -1785,8 +1808,8 @@ class Store:
         self._last_read_scan_clock = None
 
     _LINEAR_COLUMNS = (
-        "SELECT seq,op,target_id,tracker_id,payload,state,attempts,last_error "
-        "FROM linear_queue"
+        "SELECT seq,op,target_id,tracker_id,payload,state,attempts,last_error,"
+        "claimed_by,claimed_at FROM linear_queue"
     )
 
     @staticmethod
@@ -1800,6 +1823,8 @@ class Store:
             "state": row["state"],
             "attempts": int(row["attempts"] or 0),
             "last_error": row["last_error"],
+            "claimed_by": row["claimed_by"],
+            "claimed_at": row["claimed_at"],
         }
 
     def projection_only_reason(self) -> str | None:
@@ -1851,6 +1876,10 @@ class Store:
         push from burning round-trips, so the only way back is explicit.  Its own
         short transaction, like `linear_mark`, so no HTTP is ever held under the
         writer lock.  Returns how many rows changed.
+
+        Any claim is dropped with the state: an explicit retry outranks a drain
+        that still holds the row, and clearing the owner is what stops that
+        drain from later marking a row that is pending again as settled.
         """
         self._ensure_open()
         degraded = self.projection_only_reason()
@@ -1870,7 +1899,8 @@ class Store:
             try:
                 placeholders = ",".join("?" for _ in wanted)
                 cursor = connection.execute(
-                    "UPDATE linear_queue SET state='pending',attempts=0,last_error=NULL"
+                    "UPDATE linear_queue SET state='pending',attempts=0,"
+                    "last_error=NULL,claimed_by=NULL,claimed_at=NULL"
                     f" WHERE seq IN ({placeholders})",
                     tuple(wanted),
                 )
@@ -1880,6 +1910,77 @@ class Store:
                     connection.rollback()
                 raise
         return int(cursor.rowcount)
+
+    def linear_claim(
+        self,
+        limit: int = 100,
+        *,
+        targets: Sequence[str] | None = None,
+        owner: str,
+        lease_seconds: float = LINEAR_CLAIM_LEASE_SECONDS,
+    ) -> list[dict[str, Any]]:
+        """Take ownership of up to `limit` pending pushes, oldest first.
+
+        One `BEGIN IMMEDIATE` moves the rows out of `pending` and stamps them
+        with `owner`, which is what makes a drain safe:
+
+          - a second drain running concurrently sees no pending row for them,
+            so the same push is never issued twice;
+          - an edit landing mid-push cannot be de-duped onto a claimed row
+            (`linear_enqueue` folds only into `pending`), so it gets a request
+            of its own instead of being marked done unsent.
+
+        The claim is a lease, not a lock: a drain that dies mid-push would
+        otherwise strand its rows forever, so a claim older than
+        `lease_seconds` is returned to `pending` before this call selects.
+        """
+        self._ensure_open()
+        degraded = self.projection_only_reason()
+        if degraded:
+            raise RuntimeError(f"cannot write the Linear queue: {degraded}")
+        if targets is not None and not targets:
+            return []
+        if self.connection.in_transaction:
+            raise RuntimeError("linear_claim needs its own transaction")
+        with self._writer_mutex():
+            connection = self.connection
+            if connection.in_transaction:
+                raise RuntimeError("linear_claim needs its own transaction")
+            self._recover_export_intents(connection)
+            self._begin_immediate(connection)
+            try:
+                now = time.time()
+                connection.execute(
+                    "UPDATE linear_queue SET state='pending',claimed_by=NULL,"
+                    "claimed_at=NULL WHERE state='claimed' "
+                    "AND (claimed_at IS NULL OR claimed_at <= ?)",
+                    (now - lease_seconds,),
+                )
+                sql = self._LINEAR_COLUMNS + " WHERE state='pending'"
+                params: list[Any] = []
+                if targets is not None:
+                    sql += " AND target_id IN (" + ",".join("?" for _ in targets) + ")"
+                    params.extend(targets)
+                params.append(limit)
+                rows = [
+                    self._linear_row(row)
+                    for row in connection.execute(sql + " ORDER BY seq LIMIT ?", params)
+                ]
+                for row in rows:
+                    connection.execute(
+                        "UPDATE linear_queue SET state='claimed',claimed_by=?,"
+                        "claimed_at=? WHERE seq=?",
+                        (owner, now, row["seq"]),
+                    )
+                    row["state"] = "claimed"
+                    row["claimed_by"] = owner
+                    row["claimed_at"] = now
+                connection.commit()
+            except BaseException:
+                if connection.in_transaction:
+                    connection.rollback()
+                raise
+        return rows
 
     def linear_pending(
         self, limit: int = 100, *, targets: Sequence[str] | None = None
@@ -1905,7 +2006,14 @@ class Store:
             for row in self.connection.execute(sql + " ORDER BY seq LIMIT ?", params)
         ]
 
-    def linear_mark(self, seq: int, *, state: str, error: str | None = None) -> None:
+    def linear_mark(
+        self,
+        seq: int,
+        *,
+        state: str,
+        error: str | None = None,
+        owner: str | None = None,
+    ) -> bool:
         """Record the outcome of one drain attempt on queue row `seq`.
 
         Its own short `BEGIN IMMEDIATE` so a drain that spends seconds in HTTP
@@ -1914,6 +2022,11 @@ class Store:
         *failed* attempts -- a mark carrying an `error`.  A success mark leaves
         the counter alone, so a row that succeeded on its first try never looks
         like it burned a retry.
+
+        With `owner`, the mark only lands while that owner still holds the
+        claim: a drain whose lease expired and was taken over by another must
+        not settle the row the new owner is pushing.  Returns whether the mark
+        landed; a row that does not exist at all still raises.
         """
         self._ensure_open()
         degraded = self.projection_only_reason()
@@ -1935,14 +2048,27 @@ class Store:
             self._recover_export_intents(connection)
             self._begin_immediate(connection)
             try:
-                cursor = connection.execute(
+                sql = (
                     "UPDATE linear_queue SET state=?,last_error=?,"
-                    "attempts=attempts+? WHERE seq=?",
-                    (state, error, 1 if error is not None else 0, seq),
+                    "attempts=attempts+?,claimed_by=NULL,claimed_at=NULL WHERE seq=?"
                 )
+                params: list[Any] = [
+                    state, error, 1 if error is not None else 0, seq
+                ]
+                if owner is not None:
+                    sql += " AND claimed_by=?"
+                    params.append(owner)
+                cursor = connection.execute(sql, params)
                 if cursor.rowcount == 0:
-                    raise KeyError(f"linear queue row {seq} not found")
+                    exists = connection.execute(
+                        "SELECT 1 FROM linear_queue WHERE seq=?", (seq,)
+                    ).fetchone()
+                    if exists is None:
+                        raise KeyError(f"linear queue row {seq} not found")
+                    connection.rollback()
+                    return False
                 connection.commit()
+                return True
             except BaseException:
                 if connection.in_transaction:
                     connection.rollback()
@@ -2228,7 +2354,8 @@ class Store:
             )
             queued = int(
                 connection.execute(
-                    "SELECT COUNT(*) FROM linear_queue WHERE state='pending'"
+                    "SELECT COUNT(*) FROM linear_queue "
+                    "WHERE state IN ('pending','claimed')"
                 ).fetchone()[0]
             )
             if owns_snapshot:

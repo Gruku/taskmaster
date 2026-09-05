@@ -10770,8 +10770,10 @@ def backlog_linear_status() -> str:
     # answer empty rather than raising — the warning is the useful part.
     opened = _store_for(bp)
     degraded = opened.projection_only_reason()
-    rows = opened.linear_rows(states=("pending", "failed"))
-    pending = [row for row in rows if row["state"] == "pending"]
+    # A `claimed` row is one a drain has in flight: still owed, not settled,
+    # so it counts as pending rather than vanishing from the depth.
+    rows = opened.linear_rows(states=("pending", "claimed", "failed"))
+    pending = [row for row in rows if row["state"] in ("pending", "claimed")]
     parked = [row for row in rows if row["state"] == "failed"]
 
     stamps = [
@@ -10849,7 +10851,7 @@ def backlog_linear_retry(target_id: str = "") -> str:
     # and a crash mid-drain leaves them exactly as they were (B-029).
     candidates = [
         row
-        for row in st.linear_rows(states=("pending", "failed"))
+        for row in st.linear_rows(states=("pending", "claimed", "failed"))
         if not target_id or row["target_id"] == target_id
     ]
 

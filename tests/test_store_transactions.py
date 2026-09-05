@@ -690,6 +690,8 @@ def test_linear_enqueue_returns_a_seq_that_pending_reads_back(
         "state": "pending",
         "attempts": 0,
         "last_error": None,
+        "claimed_by": None,
+        "claimed_at": None,
     }
     assert pending[1]["payload"] is None
     assert opened.linear_pending(1) == [pending[0]]
