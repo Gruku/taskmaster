@@ -1792,9 +1792,14 @@ def _enqueue_linear_push_if_synced(task_id: str, task: dict | None = None) -> No
         _worker.enqueue(
             _store_tx(), op="task_upsert", target_id=task_id, tracker_id=tracker_id
         )
-    except Exception:
-        # Sync failures must not break the local mutation.
-        pass
+    except Exception as exc:
+        # Sync failures must not break the local mutation -- but a bare `pass`
+        # made a broken enqueue invisible: the task changes, no push is queued,
+        # and nothing anywhere says why.
+        try:
+            _log_index_error(_backlog_path(), exc)
+        except Exception:
+            pass
 
 
 def _deep_merge(dst: dict, src: dict) -> dict:

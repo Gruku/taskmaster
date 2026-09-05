@@ -51,6 +51,11 @@ def server_with_root(tmp_path, monkeypatch):
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 
+# A viewer request now waits behind a real store transaction, so a two-second
+# ceiling was a machine-load flake rather than a real failure signal.
+_HTTP_TIMEOUT = 15
+
+
 def _post(base, path, payload):
     req = urllib.request.Request(
         f"{base}{path}",
@@ -58,12 +63,12 @@ def _post(base, path, payload):
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=2) as resp:
+    with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT) as resp:
         return resp.status, json.loads(resp.read().decode("utf-8"))
 
 
 def _get(base, path):
-    with urllib.request.urlopen(f"{base}{path}", timeout=2) as resp:
+    with urllib.request.urlopen(f"{base}{path}", timeout=_HTTP_TIMEOUT) as resp:
         return resp.status, json.loads(resp.read().decode("utf-8"))
 
 

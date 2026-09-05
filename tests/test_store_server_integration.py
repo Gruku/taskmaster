@@ -23,8 +23,18 @@ def _max_seq(root: Path) -> int:
 
 
 def _said(result: str) -> str:
-    """A tool result without its `[seq N]` suffix, for exact-tail assertions."""
-    return re.sub(r"\s*\[seq \d+\]$", "", result.strip())
+    """A tool result without the metadata `_with_seq` appends.
+
+    Both the `[seq N]` suffix and any `(export pending: …)` notice: leaving the
+    notice in place turned an exact-tail assertion into a false failure the
+    moment an export lagged.
+    """
+    trimmed = re.sub(r"\s*\[seq \d+\]$", "", result.strip())
+    while True:
+        stripped = re.sub(r"\s*\(export pending: [^)]*\)$", "", trimmed)
+        if stripped == trimmed:
+            return trimmed
+        trimmed = stripped
 
 
 def _committed_task(root: Path, task_id: str) -> dict:

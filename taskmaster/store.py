@@ -3549,7 +3549,14 @@ class Store:
             and now - self._last_progress_clock < 5.0
         ):
             return
-        entries = (tx.applied_progress_log() + pending)[-_PROGRESS_LOG_CAP:]
+        # The cap trims the *applied* tail only. Slicing the combined list
+        # handed a truncated set to `apply_progress_log`, which clears every
+        # pending row, so past the cap the oldest queued paragraphs were
+        # discarded without ever reaching the file — and they exist nowhere
+        # else. Room is what the cap leaves after the unwritten ones.
+        applied = tx.applied_progress_log()
+        room = max(_PROGRESS_LOG_CAP - len(pending), 0)
+        entries = (applied[-room:] if room else []) + pending
         target = self.db_path.parent / "PROGRESS.md"
         temp = target.with_name(f"{target.name}.tmp.{self.session}")
         try:

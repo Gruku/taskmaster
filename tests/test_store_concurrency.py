@@ -475,6 +475,8 @@ rng = random.Random(worker)
 own_epic = f"w{worker}"
 mine = []                 # live task ids this worker created and still tracks
 created = []              # (kind, id) creations, to prove ids are globally unique
+captured = {}             # kind -> ids successfully read back out of a create result
+unparsed = {}             # kind -> creates that succeeded but whose id could not be read
 branches = {}             # task id -> asserted branch
 human_actions = {}        # task id -> asserted human_action
 priorities = {}           # task id -> asserted priority
@@ -522,13 +524,20 @@ def add_task(epic, label):
 
 
 def add_entity(kind, tool, **kwargs):
-    """Create one non-task entity and record its id for the uniqueness check."""
+    """Create one non-task entity and record its id for the uniqueness check.
+
+    A create whose result wording stops matching `ENTITY_ID_PATTERN` would
+    otherwise drop out of the uniqueness check in silence while `REQUIRED_OPS`
+    still passed, so the miss is counted and asserted on afterwards.
+    """
     result = call(tool, **kwargs)
     if not result:
         return None
     match = ENTITY_ID_PATTERN.search(result)
     if not match:
+        unparsed[kind] = unparsed.get(kind, 0) + 1
         return None
+    captured[kind] = captured.get(kind, 0) + 1
     created.append([kind, match.group(1)])
     return match.group(1)
 
@@ -687,6 +696,8 @@ report_path.write_text(
         {
             "worker": worker,
             "created": created,
+            "captured": captured,
+            "unparsed": unparsed,
             "branches": branches,
             "human_actions": human_actions,
             "priorities": priorities,
@@ -744,6 +755,10 @@ ASSERTED_CLASSES = (
 )
 
 # Operations that must have succeeded at least once somewhere in the run.
+# The kinds `add_entity` captures ids for. Areas use a caller-derived id and
+# are appended directly, so they are not in this set.
+ENTITY_KINDS_CREATED = ("bug", "issue", "decision", "idea", "note", "handover")
+
 REQUIRED_OPS = (
     "backlog_add_task",
     "backlog_update_task",
@@ -867,6 +882,28 @@ def test_mixed_public_tool_operations_across_processes_never_lose_a_write(tmp_pa
             )
             seen[key] = result["worker"]
     assert len(seen) > workers, f"only {len(seen)} entities created — the mix did not run"
+
+    # Anti-vacuity on the ids themselves: every entity kind the mix creates has
+    # to have contributed at least one id to the check above, and no successful
+    # create may have had its id go unparsed.
+    captured_by_kind: dict[str, int] = {}
+    unparsed_by_kind: dict[str, int] = {}
+    for result in results:
+        for kind, count in (result.get("captured") or {}).items():
+            captured_by_kind[kind] = captured_by_kind.get(kind, 0) + count
+        for kind, count in (result.get("unparsed") or {}).items():
+            unparsed_by_kind[kind] = unparsed_by_kind.get(kind, 0) + count
+    assert unparsed_by_kind == {}, (
+        f"a create succeeded but its id could not be read out of the result, so it "
+        f"never entered the uniqueness check: {unparsed_by_kind}"
+    )
+    missing_kinds = [
+        kind for kind in ENTITY_KINDS_CREATED if not captured_by_kind.get(kind)
+    ]
+    assert not missing_kinds, (
+        f"no ids captured for {missing_kinds}, so their uniqueness was not checked; "
+        f"captured: {captured_by_kind}"
+    )
 
     data = _committed(backlog_path)
     tasks = _tasks(data)

@@ -515,3 +515,31 @@ def test_the_applied_session_log_is_bounded(project, monkeypatch):
     region = _session_log_region(project)
     assert "entry 0" not in region, region
     assert "entry 1" in region and "entry 2" in region, region
+
+
+# -- M1: the cap trims the applied tail, never an unwritten paragraph --------
+
+
+def test_the_progress_cap_never_discards_an_unwritten_paragraph(project, monkeypatch):
+    """`(applied + pending)[-CAP:]` handed the applied log to
+    `apply_progress_log`, which clears *all* pending -- so past the cap the
+    oldest queued paragraphs were dropped without ever reaching the file. They
+    exist nowhere else, so that is a silent loss of the session summary."""
+    monkeypatch.setattr(store, "_PROGRESS_LOG_CAP", 3)
+    armed = _break_the_progress_export(monkeypatch)
+
+    titles = [f"Queued {n}" for n in range(5)]
+    for title in titles:
+        with store.transaction(
+            backlog_path=project / "backlog.yaml", tool="test-queue"
+        ) as tx:
+            tx.queue_progress_log(title)
+    assert len(_pending_progress_log(project)) == len(titles)
+
+    armed["on"] = False
+    bs.backlog_update_task("core-001", "branch", "feature/flush")
+
+    text = (project / "local" / "PROGRESS.md").read_text(encoding="utf-8")
+    written = [title for title in titles if title in text]
+    assert _pending_progress_log(project) == [], "paragraphs left queued"
+    assert written == titles, f"paragraphs lost without ever being written: {written}"

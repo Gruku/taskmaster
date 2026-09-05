@@ -271,9 +271,10 @@ def drain(
     claimed = store.linear_claim(DRAIN_BATCH, targets=only_targets, owner=owner)
     if not claimed:
         return counts
-    # Task state is read *after* the claim: a snapshot taken before it could
-    # predate an edit that has already been folded into a row this drain is
-    # about to push and mark done.
+    # Task state is read *after* the claim, replacing whatever the caller
+    # passed: a snapshot taken before the claim could predate an edit already
+    # folded into a row this drain is about to push and mark done. The
+    # parameter is kept so the call sites do not change.
     backlog_data = store.load_dict()
 
     for item in claimed:

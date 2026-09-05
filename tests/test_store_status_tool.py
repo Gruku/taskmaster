@@ -296,3 +296,28 @@ def test_reporting_a_truncated_store_reports_rather_than_recovers(
     assert sorted(db.parent.glob("store.db.corrupt-*")) == []
     assert db.stat().st_size == len(_store.SQLITE_HEADER) + 400
     assert _line(report, "Warning:") != "Warning: none"
+
+
+def test_read_only_status_reads_a_wal_store_without_its_shm(
+    bare_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The state an operator actually finds after a crash: a WAL database whose
+    shared-memory file is gone. The status tool must read it as it stands --
+    reporting it, not repairing it, and never leaving a write behind."""
+    _store.reset_for_tests()
+    with _store.transaction(backlog_path=bare_project, tool="seed") as tx:
+        tx.linear_enqueue("push", "ts-001", None, None)
+    db = _store.db_path(bare_project)
+    _store.reset_for_tests()  # closes the connections holding the shm open
+    shm = db.with_name(db.name + "-shm")
+    shm.unlink(missing_ok=True)
+    before = {path.name for path in db.parent.iterdir()}
+
+    status = _store.read_only_status(bare_project)
+
+    assert status.schema_version == _store.SCHEMA_VERSION, status
+    assert status.max_seq > 0, status
+    assert status.linear_pending == 1, status
+    assert "corrupt" not in (status.warning or "").lower(), status.warning
+    after = {path.name for path in db.parent.iterdir()}
+    assert not [name for name in after - before if "corrupt" in name], after - before
