@@ -6,7 +6,7 @@
 **Date:** 2026-09-05
 **Session kind:** milestone (Step 2 implemented, reviewed by Claude + Codex, fix wave closed, merged locally)
 **Thread:** sqlite-store
-**Branch:** `feature/sqlite-store-step-2` → merged into `master` with `--no-ff` (see merge SHA below)
+**Branch:** `feature/sqlite-store-step-2` → merged into `master` with `--no-ff` as `e9026e7`
 **Worktree:** `C:\Users\gruku\Files\Claude\taskmaster\.worktrees\sqlite-store-step-2`
 **Push status:** not pushed — nothing has left the machine
 
