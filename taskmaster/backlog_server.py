@@ -2322,6 +2322,11 @@ def backlog_index_status(rebuild: bool = False) -> str:
             The authoritative tables are not touched and no file is re-read.
     """
     bp = _backlog_path()
+    if not bp.exists():
+        # Same answer as `backlog_store_status`: a diagnostic must report on a
+        # project that has no backlog yet, and must not open a store beside one
+        # that does not exist. `rebuild=True` has nothing to rebuild either.
+        return f"no backlog found at {bp}"
     st = _store()
     if rebuild:
         # Derived rows only: `entities`, `changes` and `projection` are the

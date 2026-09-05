@@ -294,3 +294,26 @@ def test_string_valued_anchors_and_task_ids_are_tolerated(stored_server):
     tasks = [r[0] for r in con(bs).execute(
         "SELECT task_id FROM handover_tasks WHERE handover_id='2026-09-01-fixture-handover'")]
     assert tasks == ["eng-001"]
+
+
+def test_status_without_a_backlog_reports_instead_of_raising(tmp_path, monkeypatch):
+    """A diagnostic tool must answer on a project that has no backlog yet.
+
+    It also must not create one: `backlog_index_status` is read-only apart from
+    `rebuild=True`, and opening a store here would put a database beside a
+    backlog that does not exist.
+    """
+    from taskmaster import backlog_server as bs  # noqa: PLC0415
+    from taskmaster import store  # noqa: PLC0415
+
+    monkeypatch.setattr(bs, "ROOT", tmp_path)
+    monkeypatch.setattr(bs, "CONFIG_PATH", tmp_path / ".taskmaster" / "taskmaster.json")
+    monkeypatch.setattr(bs, "LEGACY_CONFIG_PATH", tmp_path / ".claude" / "taskmaster.json")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TASKMASTER_ROOT", str(tmp_path))
+    store.reset_for_tests()
+
+    for rebuild in (False, True):
+        out = bs.backlog_index_status(rebuild=rebuild)
+        assert out.startswith("no backlog found at"), out
+    assert not (tmp_path / ".taskmaster").exists()
