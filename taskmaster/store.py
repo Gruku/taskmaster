@@ -1701,10 +1701,15 @@ class Store:
         retry policy: `attempts` counts marks, the caller chooses the state.
         """
         self._ensure_open()
-        connection = self.connection
-        if connection.in_transaction:
+        if self.connection.in_transaction:
             raise RuntimeError("linear_mark needs its own transaction")
         with self._writer_mutex():
+            # Re-read under the mutex, as `transaction` does: a recovery that
+            # finished while this caller queued for the lock closes the handle
+            # we would otherwise have captured before waiting.
+            connection = self.connection
+            if connection.in_transaction:
+                raise RuntimeError("linear_mark needs its own transaction")
             self._begin_immediate(connection)
             try:
                 cursor = connection.execute(
@@ -2408,18 +2413,23 @@ class Store:
                     (stat.st_mtime, stat.st_size, rel),
                 )
                 continue
+            if row["dirty"]:
+                if row["kind"] == "backlog":
+                    self._merge_dirty_backlog_edit(tx, row, content, stat)
+                    continue
+                if row["kind"] == _IDEAS_INDEX_KIND:
+                    # A pending export outranks whatever is on disk: refreshing
+                    # the hash here would launder the failure into "clean".
+                    tx._export_ideas = True
+                    continue
+                self._merge_dirty_external_edit(tx, row, content, stat)
+                continue
             if row["kind"] == _IDEAS_INDEX_KIND:
                 # Derived output (R2): a hand edit is not an entity change, so
                 # only the hash moves.  The next idea write regenerates it.
                 self._record_projection_bytes(
                     tx.connection, rel, _IDEAS_INDEX_KIND, None, content, stat
                 )
-                continue
-            if row["dirty"]:
-                if row["kind"] == "backlog":
-                    self._merge_dirty_backlog_edit(tx, row, content, stat)
-                    continue
-                self._merge_dirty_external_edit(tx, row, content, stat)
                 continue
             if row["kind"] == "backlog":
                 self._import_backlog_file(tx, path, content, stat)
@@ -2772,6 +2782,8 @@ class Store:
         ).fetchall():
             if row["id"]:
                 tx._export_keys.add((row["kind"], row["id"]))
+            elif row["kind"] == _IDEAS_INDEX_KIND:
+                tx._export_ideas = True
             else:
                 tx._export_backlog = True
 

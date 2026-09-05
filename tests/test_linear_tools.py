@@ -390,9 +390,11 @@ def test_retry_drains_all_when_no_target(tmp_path, monkeypatch):
 
 
 @pytest.mark.xfail(
+    strict=True,
     reason="R8: the store adopts integrations/linear-queue.json on first open and "
     "removes it, so the file-backed retry path is empty until task 3.5 points "
-    "worker.enqueue/drain at the linear_queue table.",
+    "worker.enqueue/drain at the linear_queue table.  Task 3.5 must delete this "
+    "marker: strict, so it fails the suite once the table-backed path lands.",
 )
 def test_retry_target_id_filters_queue(tmp_path, monkeypatch):
     bp = _make_backlog(tmp_path, with_tracker=True)
@@ -440,9 +442,11 @@ def test_retry_error_when_no_linear_yaml(tmp_path, monkeypatch):
 
 
 @pytest.mark.xfail(
+    strict=True,
     reason="R8: the store adopts integrations/linear-queue.json on first open and "
     "removes it, so the file-backed retry path is empty until task 3.5 points "
-    "worker.enqueue/drain at the linear_queue table.",
+    "worker.enqueue/drain at the linear_queue table.  Task 3.5 must delete this "
+    "marker: strict, so it fails the suite once the table-backed path lands.",
 )
 def test_retry_target_preserves_other_items_when_drain_crashes(tmp_path, monkeypatch):
     """B-029: a target-scoped retry must not destroy other targets' queued items
@@ -485,9 +489,11 @@ def test_retry_target_preserves_other_items_when_drain_crashes(tmp_path, monkeyp
 
 
 @pytest.mark.xfail(
+    strict=True,
     reason="R8: the store adopts integrations/linear-queue.json on first open and "
     "removes it, so the file-backed retry path is empty until task 3.5 points "
-    "worker.enqueue/drain at the linear_queue table.",
+    "worker.enqueue/drain at the linear_queue table.  Task 3.5 must delete this "
+    "marker: strict, so it fails the suite once the table-backed path lands.",
 )
 def test_retry_unparks_permanent_item(tmp_path, monkeypatch):
     """B-028: an explicit /linear retry clears the parked flag so a previously

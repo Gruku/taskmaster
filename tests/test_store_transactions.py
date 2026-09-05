@@ -13,6 +13,7 @@ import sys
 import textwrap
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Iterator
@@ -805,3 +806,41 @@ def test_force_scan_on_next_read_defeats_the_read_throttle(
     assert _task(opened.load_dict(), "e-001")["title"] == "Task 1"
     opened.force_scan_on_next_read()
     assert _task(opened.load_dict(), "e-001")["title"] == "Edited by hand"
+
+
+def test_linear_mark_rereads_the_connection_after_waiting_for_the_writer_mutex(
+    transaction_store: tuple[Any, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A recovery that lands while `linear_mark` queues for the lock must not
+    leave it writing through the handle it held before waiting."""
+    opened, _backlog_path = transaction_store
+    with opened.transaction(tool="enqueue-linear") as tx:
+        seq = tx.linear_enqueue("push", "e-001", None, None)
+
+    real_mutex = type(opened)._writer_mutex
+    retired: list[Any] = []
+
+    @contextmanager
+    def recovering_mutex(self: Any, **kwargs: Any) -> Iterator[None]:
+        with real_mutex(self, **kwargs):
+            if not retired:
+                stale = self.connection
+                # Stand in for a concurrent recovery: the identity check in the
+                # `connection` property closes this handle and opens another.
+                store._CONNECTION_IDENTITIES[id(stale)] = (-1, -1)
+                retired.append(stale)
+                assert self.connection is not stale
+            yield
+
+    monkeypatch.setattr(store.Store, "_writer_mutex", recovering_mutex)
+    opened.linear_mark(seq, state="failed", error="boom")
+    monkeypatch.undo()
+
+    assert retired and retired[0] is not opened.connection
+    assert opened.linear_pending(10) == []
+    with _connect(_backlog_path) as connection:
+        row = connection.execute(
+            "SELECT state,last_error FROM linear_queue WHERE seq=?", (seq,)
+        ).fetchone()
+    assert (row["state"], row["last_error"]) == ("failed", "boom")

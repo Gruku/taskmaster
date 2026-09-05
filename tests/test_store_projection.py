@@ -535,3 +535,94 @@ def test_deleted_ideas_index_is_regenerated_on_the_next_scan(tmp_path, store_api
         pass
 
     assert index.read_text(encoding="utf-8") == expected
+
+
+def _fail_replace_of(path: Path, monkeypatch):
+    """Make `os.replace` raise a retryable sharing violation for one target."""
+    real_replace = os.replace
+
+    def sharing_violation(source, destination):
+        if Path(destination) == path:
+            raise PermissionError(13, "simulated sharing violation", str(destination))
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(os, "replace", sharing_violation)
+    return real_replace
+
+
+def test_failed_ideas_index_export_stays_dirty_and_drains_on_the_next_call(
+    tmp_path, store_api, monkeypatch
+):
+    backlog_path, _task_path = _write_v4_projection(tmp_path)
+    instance = store_api.open_store(
+        backlog_path=backlog_path, session="ideas-index-retry"
+    )
+    _seed_ideas(instance)
+    index = backlog_path.parent / "ideas" / "IDEAS.md"
+    stale_bytes = index.read_bytes()
+
+    real_replace = _fail_replace_of(index, monkeypatch)
+    with instance.transaction(tool="rename-idea-during-contention") as tx:
+        idea = tx.get("idea", "IDEA-001")
+        idea["title"] = "First renamed"
+        tx.put("idea", "IDEA-001", idea)
+
+    assert index.read_bytes() == stale_bytes
+    row = _query(
+        store_api,
+        backlog_path,
+        "SELECT dirty,quarantined FROM projection WHERE file='ideas/IDEAS.md'",
+    )[0]
+    assert (row["dirty"], row["quarantined"]) == (1, 0)
+
+    monkeypatch.setattr(os, "replace", real_replace)
+    with instance.transaction(tool="next-call-drains"):
+        pass
+
+    assert "First renamed" in index.read_text(encoding="utf-8")
+    row = _query(
+        store_api,
+        backlog_path,
+        "SELECT dirty,quarantined FROM projection WHERE file='ideas/IDEAS.md'",
+    )[0]
+    assert (row["dirty"], row["quarantined"]) == (0, 0)
+
+
+def test_hand_edit_never_launders_a_pending_ideas_index_export(
+    tmp_path, store_api, monkeypatch
+):
+    backlog_path, _task_path = _write_v4_projection(tmp_path)
+    instance = store_api.open_store(
+        backlog_path=backlog_path, session="ideas-index-launder"
+    )
+    _seed_ideas(instance)
+    index = backlog_path.parent / "ideas" / "IDEAS.md"
+
+    real_replace = _fail_replace_of(index, monkeypatch)
+    with instance.transaction(tool="rename-idea-during-contention") as tx:
+        idea = tx.get("idea", "IDEA-001")
+        idea["title"] = "First renamed"
+        tx.put("idea", "IDEA-001", idea)
+
+    # A hand edit after the failed export moves the hash away from the recorded
+    # one, so the scan sees a changed file with a pending export behind it.
+    monkeypatch.setattr(os, "replace", real_replace)
+    index.write_text("# Ideas\n\n- hand written\n", encoding="utf-8")
+
+    with instance.transaction(tool="next-call-drains"):
+        pass
+
+    assert index.read_text(encoding="utf-8").splitlines() == [
+        "# Ideas",
+        "",
+        "- 2026-09-02 11:30 — [IDEA-002](IDEA-002.md) — Second _(shipped)_",
+        "- 2026-09-01 10:00 — [IDEA-001](IDEA-001.md) — First renamed",
+    ]
+    row = _query(
+        store_api,
+        backlog_path,
+        "SELECT dirty,quarantined,content_hash FROM projection "
+        "WHERE file='ideas/IDEAS.md'",
+    )[0]
+    assert (row["dirty"], row["quarantined"]) == (0, 0)
+    assert row["content_hash"] == hashlib.sha1(index.read_bytes()).hexdigest()
