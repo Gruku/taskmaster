@@ -35,7 +35,12 @@ from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 import yaml
 
 from taskmaster import yaml_io
-from taskmaster.paths import extract_prose_paths, normalize_location, normalize_task_anchor
+from taskmaster.paths import (
+    as_list,
+    extract_prose_paths,
+    normalize_location,
+    normalize_task_anchor,
+)
 # Root resolution lives in a standard-library-only module so the hooks, which
 # run under the system interpreter, share this exact rule without importing
 # yaml.  Re-exported here: `store.resolve_root` stays the public entry point,
@@ -1785,6 +1790,20 @@ class Store:
         """Drop the read-scan throttle so the next read re-imports hand edits."""
         self._last_read_scan_clock = None
 
+    def scan_for_read(self) -> None:
+        """Import hand edits before a read that does not go through `load_dict`.
+
+        `load_dict_with_identity` runs this on the way past, so every tool that
+        reads the compatibility dict adopts a hand-edited file for free. A tool
+        that queries the tables directly -- `backlog_query` -- has to ask, or it
+        serves pre-edit rows while the files on disk say otherwise (spec §3.4).
+        Throttled and best-effort, exactly as the dict path is.
+        """
+        self._ensure_open()
+        if self._network_projection_only:
+            return
+        self._maybe_scan_on_read()
+
     _LINEAR_COLUMNS = (
         "SELECT seq,op,target_id,tracker_id,payload,state,attempts,last_error,"
         "claimed_by,claimed_at FROM linear_queue"
@@ -3321,7 +3340,7 @@ class Store:
                 parts.extend(str(value or "") for value in docs.values())
             anchors = [
                 normalize_task_anchor(str(anchor), doc.get("sub_repo"))
-                for anchor in doc.get("anchors") or []
+                for anchor in as_list(doc.get("anchors"))
             ]
             parts.extend(path for path, _ in anchors)
             if row["body"]:
@@ -3337,7 +3356,7 @@ class Store:
                     (kind, ident, value, match_kind, "anchors"),
                 )
             located: set[str] = set()
-            for location in doc.get("location") or []:
+            for location in as_list(doc.get("location")):
                 value = normalize_location(str(location))
                 located.add(value)
                 tx.connection.execute(
@@ -3363,7 +3382,7 @@ class Store:
                     (kind, ident, link_type, target_kind, target_id),
                 )
             if kind == "handover":
-                for task_id in doc.get("task_ids") or []:
+                for task_id in as_list(doc.get("task_ids")):
                     tx.connection.execute(
                         "INSERT INTO handover_tasks(handover_id,task_id) VALUES(?,?)",
                         (ident, str(task_id)),

@@ -2454,13 +2454,22 @@ def backlog_query(sql: str, limit: int = 50) -> str:
     try:
         statement = query_guard.validate(sql)
         guard = query_guard.Authorizer(query_guard.declared_names(statement))
-        con = _store().connection
+        st = _store()
+        # The tables are the answer here, so nothing else on this path adopts a
+        # hand-edited file the way `_load()` does for every other read tool.
+        st.scan_for_read()
+        con = st.connection
         if con.in_transaction:
             raise ValueError("backlog_query cannot run inside another store transaction")
         # A plain BEGIN takes a read snapshot and no write lock, so a concurrent
         # writer is never blocked by a long query, and the query never sees a
         # half-applied transaction. Every row is fetched before the tool returns:
         # no cursor and no snapshot outlives this call.
+        #
+        # This is the store's read/write connection -- `store.py` is the only
+        # module that opens the database, so there is no `mode=ro` handle to
+        # borrow. The authorizer below is therefore load-bearing, not defence in
+        # depth: it is the only thing between a crafted statement and a write.
         con.execute("BEGIN")
         started = True
         deadline = query_guard.Deadline(query_guard.QUERY_TIMEOUT_S)

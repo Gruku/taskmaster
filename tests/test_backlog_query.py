@@ -269,3 +269,22 @@ def test_long_cells_are_truncated(indexed_server):
     out = indexed_server.backlog_query("SELECT hex(zeroblob(200)) AS wide")
     cell = out.splitlines()[1]
     assert len(cell) == 80
+
+
+def test_query_sees_a_hand_edited_file(indexed_server, tmp_taskmaster):
+    """Spec §3.4: a read tool adopts hand edits. `build_index` used to do this on every query.
+
+    The store throttles read-path imports to once every two seconds and the
+    fixture's own load consumed that window, so the throttle is defeated
+    explicitly rather than by sleeping.
+    """
+    bug = tmp_taskmaster / ".taskmaster" / "bugs" / "B-001.md"
+    bug.write_text(
+        bug.read_text(encoding="utf-8").replace(
+            "title: Usage rows are double counted", "title: Quokkasaurus rows are counted"),
+        encoding="utf-8")
+    indexed_server._store().force_scan_on_next_read()
+
+    out = indexed_server.backlog_query(
+        "SELECT json_extract(doc,'$.title') AS title FROM entities WHERE id='B-001'")
+    assert "Quokkasaurus" in out, out

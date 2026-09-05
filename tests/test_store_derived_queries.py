@@ -249,3 +249,48 @@ def test_no_build_index_cli_remains(stored_server):
     assert not hasattr(bs, "_build_index_cli")
     hook = (PLUGIN_ROOT / "hooks" / "session-start.sh").read_text(encoding="utf-8")
     assert "--build-index" not in hook
+
+
+# ── Hand-edited frontmatter: a bare string where a list belongs ──
+
+
+def test_string_valued_list_fields_are_tolerated(tmp_taskmaster):
+    """`location: api/src/x.py` with no YAML list must be one path, not one row per character.
+
+    Hand-edited frontmatter writes this routinely. Iterating the string walked it
+    character by character and filled `entity_paths` with one-character rows.
+    """
+    from taskmaster import backlog_server as bs  # noqa: PLC0415
+
+    shutil.copytree(FIXTURE_SRC, tmp_taskmaster / ".taskmaster", dirs_exist_ok=True)
+    (tmp_taskmaster / ".taskmaster" / "bugs" / "B-003.md").write_text(
+        "---\nid: B-003\ntitle: Solo location\nstatus: open\nseverity: low\n"
+        "discovered: '2026-08-20T00:00:00Z'\nlocation: api/src/svc/solo.py:42\n---\n\nBody.\n",
+        encoding="utf-8")
+    bs._load()
+
+    rows = [r[0] for r in con(bs).execute(
+        "SELECT path FROM entity_paths WHERE id='B-003' AND source='location'")]
+    assert rows == ["api/src/svc/solo.py"]
+
+
+def test_string_valued_anchors_and_task_ids_are_tolerated(stored_server):
+    """The same coercion protects `anchors` on a task and `task_ids` on a handover."""
+    from taskmaster import store  # noqa: PLC0415
+
+    bs = stored_server
+    with store.transaction(tool="test-bare-strings") as tx:
+        task = tx.get("task", "eng-002")
+        task["anchors"] = "api/src/svc/solo.py"
+        tx.put("task", "eng-002", task)
+        hid = "2026-09-01-fixture-handover"
+        handover = tx.get("handover", hid)
+        handover["task_ids"] = "eng-001"
+        tx.put("handover", hid, handover)
+
+    anchors = [r[0] for r in con(bs).execute(
+        "SELECT path FROM entity_paths WHERE id='eng-002' AND source='anchors'")]
+    assert anchors == ["api/src/svc/solo.py"]
+    tasks = [r[0] for r in con(bs).execute(
+        "SELECT task_id FROM handover_tasks WHERE handover_id='2026-09-01-fixture-handover'")]
+    assert tasks == ["eng-001"]

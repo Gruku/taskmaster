@@ -30,6 +30,19 @@ _LINE_SUFFIX_RE = re.compile(r":\d+$")
 _WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:$")
 
 
+def as_list(value: object) -> list:
+    """Coerce a field that should be a list. A bare string becomes one element.
+
+    Hand-edited frontmatter routinely writes `location: api/src/x.py` instead of
+    a YAML list; iterating that string would index it character by character.
+    """
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    return [value]
+
+
 def normalize_task_anchor(anchor: str, sub_repo: str | None) -> tuple[str, str]:
     """Normalize a task anchor to (project-root-relative path, 'exact'|'glob')."""
     p = str(anchor).replace("\\", "/")
@@ -78,7 +91,12 @@ def extract_prose_paths(text: str) -> list[str]:
 
 
 def infer_repo(paths: list[str], repos: list[tuple[str, str]]) -> str | None:
-    """Name of the repo whose (longest) path prefix contains one of `paths`."""
+    """Name of the repo whose (longest) path prefix contains one of `paths`.
+
+    No caller remains: the store's `entities` table has no `repo` column, so
+    nothing infers one any more. Kept because R9 names it -- a repo dimension is
+    a plausible addition to the derived tables and this is the rule it would use.
+    """
     best_name: str | None = None
     best_len = -1
     for name, prefix in repos:
