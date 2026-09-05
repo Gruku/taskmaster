@@ -165,6 +165,9 @@ _MAX_KIND_DEPTH = 3
 _GUARDED_FILES = ("IDEAS.md", "linear-queue.json")
 _PACKAGE_DIR = PLUGIN_ROOT / "taskmaster"
 _HOOKS_DIR = PLUGIN_ROOT / "hooks"
+# The maintenance CLIs are production code too: they edit a real project's
+# backlog, so a raw write from one is the same lost-write bug as from a tool.
+_SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 _STORE_FILE = _PACKAGE_DIR / "store.py"
 # The one legacy module tests may still drive directly to seed a v3/v4
 # projection *before* the store adopts it.  Production never enters here first —
@@ -245,7 +248,9 @@ def _bypass_offender():
         if path == _STORE_FILE:
             return None  # the store owns the projection
         if entry is None and (
-            _is_under(path, _PACKAGE_DIR) or _is_under(path, _HOOKS_DIR)
+            _is_under(path, _PACKAGE_DIR)
+            or _is_under(path, _HOOKS_DIR)
+            or _is_under(path, _SCRIPTS_DIR)
         ):
             entry = path
     if entry is None:
