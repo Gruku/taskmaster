@@ -37,13 +37,13 @@ def _terminal_task_ids(
     }
 
 
-def _report(migrated: list[tuple[str, dict]], *, dry_run: bool) -> None:
+def _report(migrated: list[Row], *, dry_run: bool) -> None:
     if not migrated:
         print("Nothing to do: handover statuses are already on the v2 enum.")
         return
     prefix = "[dry-run] Would migrate" if dry_run else "Migrated"
     print(f"{prefix} {len(migrated)} handover(s):")
-    for hid, doc in migrated:
+    for hid, doc, _body in migrated:
         print(f"  {hid} -> {doc['status']}")
 
 
@@ -86,17 +86,17 @@ def main(argv: list[str] | None = None) -> int:
                   file=sys.stderr)
             return 2
         backlog_id, backlog_doc, backlog_body = backlog_rows[0]
-        handovers = tx.list("handover", include_archived=True)
-        bodies = {hid: body for hid, _doc, body in handovers}
         report = migrate_handover_statuses(
             backlog_doc,
-            handovers,
+            tx.list("handover", include_archived=True),
             done_or_archived_ids=_terminal_task_ids(
                 tx.list("task", include_archived=True)
             ),
         )
-        for hid, doc in report["migrated"]:
-            tx.put("handover", hid, doc, body=bodies.get(hid))
+        # The planner carries each row's body through, so committing the plan
+        # cannot erase a handover's narrative.
+        for hid, doc, body in report["migrated"]:
+            tx.put("handover", hid, doc, body=body)
         # The marker rides the same commit as the rewrites it guards.
         tx.put("backlog", backlog_id, backlog_doc, body=backlog_body)
 
