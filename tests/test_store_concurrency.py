@@ -125,6 +125,39 @@ def _doc(row) -> dict:
     return json.loads(row["doc"])
 
 
+def _assert_entity_files_match_row_content(backlog_path: Path) -> None:
+    """Every task file must hold exactly the frontmatter and body of its row.
+
+    Matching the recorded content hash only proves the file agrees with whatever
+    was last exported.  Re-rendering the live row proves it agrees with what the
+    store holds now, which is what "rows and files agree" is supposed to mean.
+    """
+    from taskmaster.taskmaster_v3 import (
+        BODY_KEY,
+        render_frontmatter,
+        task_v4_to_file,
+    )
+
+    for row in _rows(
+        backlog_path,
+        "SELECT id,archived,doc,body FROM entities WHERE kind='task' AND deleted=0",
+    ):
+        document = json.loads(row["doc"])
+        if row["body"]:
+            document = document | {BODY_KEY: row["body"]}
+        frontmatter, body = task_v4_to_file(document)
+        expected = render_frontmatter(frontmatter, body)
+        relative = (
+            f"tasks/archive/{row['id']}.md"
+            if row["archived"]
+            else f"tasks/{row['id']}.md"
+        )
+        actual = (backlog_path / relative).read_text(encoding="utf-8")
+        assert actual == expected, (
+            f"{relative} disagrees with the row the store holds for {row['id']}"
+        )
+
+
 def _assert_projection_matches_rows(backlog_path: Path) -> None:
     """Row -> file and file -> row must agree, in both directions.
 
@@ -170,6 +203,8 @@ def _assert_projection_matches_rows(backlog_path: Path) -> None:
         for path in sorted((backlog_path / directory).glob("*.md")):
             rel = path.relative_to(backlog_path).as_posix()
             assert rel in tracked, f"untracked projection file {rel}"
+
+    _assert_entity_files_match_row_content(backlog_path)
 
     leftovers = [
         path.name
@@ -448,6 +483,8 @@ phase_notes = {}          # phase id -> asserted description
 archived = set()          # task ids this worker archived
 archived_epics = []       # [epic id, the task the archive must have cascaded to]
 statuses = {}             # task id -> status this worker last drove it to
+gates = {}                # task id -> gate whose "done" record must survive
+merges = {}               # task id -> merge commit sha that must survive
 ok = {}                   # tool -> successful call count
 errors = {}               # tool -> refused call count
 error_samples = []
@@ -535,12 +572,16 @@ for index in range(ops):
         if call("backlog_pick_task", task_id):
             statuses[task_id] = "in-progress"
     elif op == "gate":
-        call("backlog_record_gate", task_id, "impl", status="done")
+        if call("backlog_record_gate", task_id, "impl", status="done"):
+            gates[task_id] = "impl"
     elif op == "merge":
-        call("backlog_record_merge", task_id, "develop", f"{worker:02d}{index:038d}")
+        sha = f"{worker:02d}{index:038d}"
+        if call("backlog_record_merge", task_id, "develop", sha):
+            merges[task_id] = sha
     elif op == "complete":
         # The full completion ladder, as a real session drives it.
-        call("backlog_pick_task", task_id)
+        if call("backlog_pick_task", task_id):
+            statuses[task_id] = "in-progress"
         call("backlog_record_gate", task_id, "impl", status="done")
         call("backlog_skip_gate", task_id, "design-review", reason="stress")
         call("backlog_skip_gate", task_id, "review-gate", reason="stress")
@@ -605,6 +646,9 @@ report_path.write_text(
             "phase_notes": phase_notes,
             "archived": sorted(archived),
             "archived_epics": archived_epics,
+            "statuses": statuses,
+            "gates": gates,
+            "merges": merges,
             "ok": ok,
             "errors": errors,
             "error_samples": error_samples,
@@ -639,6 +683,9 @@ ASSERTED_CLASSES = (
     "phase_notes",
     "archived",
     "archived_epics",
+    "statuses",
+    "gates",
+    "merges",
 )
 
 # Operations that must have succeeded at least once somewhere in the run.
@@ -792,6 +839,27 @@ def test_mixed_public_tool_operations_across_processes_never_lose_a_write(tmp_pa
         for task_id in result["archived"]:
             assert task_id in archived_rows, f"{task_id} archive did not reach the row"
             assert (backlog_path / "tasks" / "archive" / f"{task_id}.md").exists()
+        for task_id, status in result["statuses"].items():
+            if task_id in result["archived"]:
+                continue
+            assert tasks[task_id].get("status") == status, (
+                f"{task_id} is {tasks[task_id].get('status')!r}, not the {status!r} "
+                f"this worker drove it to"
+            )
+        for task_id, gate in result["gates"].items():
+            document = tasks.get(task_id) or _doc(rows[("task", task_id)])
+            recorded = document.get("gates") or {}
+            assert recorded.get(gate, {}).get("status") == "done", (
+                f"{task_id} lost the `{gate}` gate it recorded"
+            )
+        for task_id, sha in result["merges"].items():
+            document = tasks.get(task_id) or _doc(rows[("task", task_id)])
+            landed = {
+                entry.get("merge_commit")
+                for entry in (document.get("merge_status") or {}).values()
+                if isinstance(entry, dict)
+            }
+            assert sha in landed, f"{task_id} lost the merge it recorded ({sha[:7]})"
         for epic_id, task_id in result["archived_epics"]:
             assert rows[("epic", epic_id)]["archived"], f"epic {epic_id} archive did not reach the row"
             assert _doc(rows[("epic", epic_id)]).get("status") == "archived"
