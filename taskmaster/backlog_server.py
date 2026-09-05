@@ -193,11 +193,14 @@ def _ensure_handover_status_backfilled() -> None:
     bp = _backlog_path()
     if not bp.exists():
         return
+    # Only a transaction this call owns proves the backfill is durable.  Joining
+    # a caller's transaction means an outer rollback can still discard it, so the
+    # flag stays unset and the next call re-checks instead of skipping forever.
+    owns_transaction = _active_tx() is None
     try:
         with _transaction(tool="_ensure_handover_status_backfilled") as data:
             try:
                 if data.get("handover_status_backfilled"):
-                    _HANDOVER_STATUS_BACKFILL_RAN = True
                     return
                 from taskmaster.taskmaster_v3 import backfill_handover_status as _bf
                 flipped = _bf(data, bp)
@@ -214,7 +217,8 @@ def _ensure_handover_status_backfilled() -> None:
         # tools, so it must not block them - but it must leave a trace.
         _log_index_error(bp, exc)
         return
-    _HANDOVER_STATUS_BACKFILL_RAN = True
+    if owns_transaction:
+        _HANDOVER_STATUS_BACKFILL_RAN = True
 
 
 def _get_open_handovers_for_task(bp: Path, task_id: str) -> list[str]:
@@ -378,15 +382,20 @@ import copy as _copy
 
 
 class _TxFrame:
-    """The active transaction for one thread: its dict, latch and renderer."""
+    """The active transaction for one thread: its dict, latch, renderer and result."""
 
-    __slots__ = ("data", "latched", "renderer", "backlog_path")
+    __slots__ = ("data", "latched", "renderer", "backlog_path", "tx", "committed")
 
     def __init__(self, data: dict, backlog_path: "Path"):
         self.data = data
         self.backlog_path = backlog_path
         self.latched = False
         self.renderer = None
+        self.tx = None
+        # Filled once the transaction commits: the documents this writer itself
+        # committed, keyed by (kind, id).  A response rendered from these can
+        # never be spoiled by a later writer, which a fresh re-read could.
+        self.committed: dict = {}
 
 
 class _UnlatchedTransaction(Exception):
@@ -462,10 +471,12 @@ def _transaction(*, tool: str, backlog_path: "Path | None" = None):
     if prior is not None:
         yield prior.data
         return
+    frame = None
     try:
         instance = _store_for(backlog_path)
         with instance.transaction_dict(tool=tool) as data:
             frame = _TxFrame(data, instance.backlog_path / "backlog.yaml")
+            frame.tx = store.active_transaction()
             _TX_STATE.frame = frame
             try:
                 _normalize_loaded(data)
@@ -475,6 +486,8 @@ def _transaction(*, tool: str, backlog_path: "Path | None" = None):
                     raise _UnlatchedTransaction
             finally:
                 _TX_STATE.frame = None
+        if frame is not None and frame.tx is not None:
+            frame.committed = dict(frame.tx.committed)
     except _UnlatchedTransaction:
         pass
 
@@ -529,10 +542,12 @@ def _apply_archive_transition(
 
 
 def _render_after_commit(renderer) -> None:
-    """Register a response renderer that runs against committed state.
+    """Register a response renderer that runs against this writer's own commit.
 
-    `renderer(data)` is called after the transaction commits, with a fresh
-    committed read, so a tool never reports a value the store did not persist.
+    `renderer(committed)` is called after the transaction commits, with the
+    `{(kind, id): document}` map the store captured while this writer still held
+    the lock.  A fresh re-read would instead show whatever the *next* writer
+    left, which reported a perfectly good write as "(not persisted)".
     """
     frame = _active_tx()
     if frame is not None:
@@ -552,13 +567,15 @@ def _transactional(tool: str):
                 # bootstrapping a database next to a missing backlog.
                 return fn(*args, **kwargs)
             renderer = None
+            committed_frame = None
             with _transaction(tool=tool) as _data:
                 result = fn(*args, **kwargs)
                 frame = _active_tx()
                 if frame is not None and frame.latched:
                     renderer = frame.renderer
-            if renderer is not None:
-                return renderer(_load())
+                    committed_frame = frame
+            if renderer is not None and committed_frame is not None:
+                return renderer(committed_frame.committed)
             return result
 
         return wrapper
@@ -911,18 +928,20 @@ def _format_task_field(value) -> str:
     return str(value)
 
 
-def _committed_field_display(data: dict, task_id: str, field: str, expected) -> str:
-    """Render `field` from committed state, or say plainly that it did not land.
+def _committed_field_display(committed_docs, task_id: str, field: str, expected) -> str:
+    """Render `field` from this writer's own commit, or say it did not land.
 
-    This never falls back to the caller's requested value: echoing a write the
-    store did not keep is exactly the failure the committed-state rule exists to
-    catch. A field the tool deliberately removed reads back as an empty string,
-    matching the old response for a cleared field.
+    `committed_docs` is the `{(kind, id): document}` map the store captured
+    inside the committing transaction.  This never falls back to the caller's
+    requested value: echoing a write the store did not keep is exactly the
+    failure the committed-state rule exists to catch.  A field the tool
+    deliberately removed reads back as an empty string, matching the old
+    response for a cleared field.
     """
-    found = _find_task(data, task_id)
-    if not found:
+    document = committed_docs.get(("task", task_id))
+    if document is None:
         return NOT_PERSISTED
-    committed = found[0].get(field, _MISSING_FIELD)
+    committed = document.get(field, _MISSING_FIELD)
     if committed is _MISSING_FIELD or expected is _MISSING_FIELD:
         return "" if committed is expected else NOT_PERSISTED
     if committed != expected:
@@ -6008,7 +6027,11 @@ def backlog_update_task(
     _mutate_and_save(data)
     _enqueue_linear_push_if_synced(task_id, task=task)
 
-    expected = deepcopy(task.get(field, _MISSING_FIELD))
+    # The sentinel must keep its identity: deep-copying it produced a different
+    # object, so a deliberately cleared field compared unequal to itself and a
+    # successful removal rendered as "(not persisted)".
+    stored = task.get(field, _MISSING_FIELD)
+    expected = stored if stored is _MISSING_FIELD else deepcopy(stored)
     _render_after_commit(
         lambda committed: f"Updated `{task_id}` field `{field}` → "
         + _committed_field_display(committed, task_id, field, expected)

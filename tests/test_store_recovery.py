@@ -519,6 +519,9 @@ def test_read_side_projection_scan_does_not_wait_for_writer_mutex(tmp_path):
     thread.start()
     assert entered.wait(timeout=5)
     started = time.monotonic()
+    # `elapsed` is assigned outside the try so a load_dict() failure surfaces as
+    # itself rather than as a NameError from the assertion below.
+    elapsed = float("inf")
     try:
         stale = opened.load_dict()
         elapsed = time.monotonic() - started

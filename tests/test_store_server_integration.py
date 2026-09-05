@@ -139,23 +139,19 @@ def test_update_task_response_is_rendered_from_committed_state(two_tasks):
     assert _committed_task(root, task_id)["priority"] == "high"
 
 
-def test_update_task_response_says_so_when_the_write_did_not_persist(two_tasks):
+def test_update_task_response_says_so_when_the_write_did_not_persist(
+    two_tasks, monkeypatch
+):
     """A response may never echo a value the store did not keep."""
-    root, task_id, _ = two_tasks
-    original = bs._load
+    _root, task_id, _ = two_tasks
+    real_capture = store.Transaction._capture_committed
 
-    def load_without_the_task():
-        data = original()
-        if bs._active_tx() is None:  # the post-commit render read
-            for epic in data.get("epics", []):
-                epic["tasks"] = [t for t in epic["tasks"] if t.get("id") != task_id]
-        return data
+    def capture_without_the_task(self):
+        real_capture(self)
+        self._pending_committed.pop(("task", task_id), None)
 
-    bs._load = load_without_the_task
-    try:
-        out = bs.backlog_update_task(task_id, field="priority", value="low")
-    finally:
-        bs._load = original
+    monkeypatch.setattr(store.Transaction, "_capture_committed", capture_without_the_task)
+    out = bs.backlog_update_task(task_id, field="priority", value="low")
     assert out.endswith(bs.NOT_PERSISTED), out
 
 
@@ -185,22 +181,22 @@ def test_update_task_response_renders_a_committed_dependency_list(two_tasks):
 
 
 def test_committed_field_display_never_falls_back_to_the_request():
-    data = {"epics": [{"id": "e", "tasks": [{"id": "t", "priority": "low"}]}]}
-    # Task absent from committed state.
+    committed = {("task", "t"): {"id": "t", "priority": "low"}}
+    # Task absent from what this writer committed.
     assert bs._committed_field_display(
-        {"epics": []}, "t", "priority", "high"
+        {}, "t", "priority", "high"
     ) == bs.NOT_PERSISTED
     # Committed value differs from what the tool applied.
     assert bs._committed_field_display(
-        data, "t", "priority", "high"
+        committed, "t", "priority", "high"
     ) == bs.NOT_PERSISTED
     # Field the tool deliberately removed reads back empty, not "not persisted".
     assert bs._committed_field_display(
-        data, "t", "anchors", bs._MISSING_FIELD
+        committed, "t", "anchors", bs._MISSING_FIELD
     ) == ""
     # A field that should have been removed but is still there is flagged.
     assert bs._committed_field_display(
-        data, "t", "priority", bs._MISSING_FIELD
+        committed, "t", "priority", bs._MISSING_FIELD
     ) == bs.NOT_PERSISTED
 
 
