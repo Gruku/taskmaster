@@ -111,6 +111,20 @@ def _file_task(backlog_path: Path, task_id: str) -> dict:
     return parse_frontmatter(path.read_text(encoding="utf-8"))[0]
 
 
+def _totals(results: list[dict], key: str) -> dict[str, int]:
+    """Sum one worker-report counter dict across every worker."""
+    totals: dict[str, int] = {}
+    for result in results:
+        for name, count in (result.get(key) or {}).items():
+            totals[name] = totals.get(name, 0) + count
+    return totals
+
+
+def _doc(row) -> dict:
+    """The stored JSON document of one `entities` row."""
+    return json.loads(row["doc"])
+
+
 def _assert_projection_matches_rows(backlog_path: Path) -> None:
     """Row -> file and file -> row must agree, in both directions.
 
@@ -424,12 +438,20 @@ while not start_gate.exists():
 
 rng = random.Random(worker)
 own_epic = f"w{worker}"
-mine = []                 # task ids this worker created
-created = []              # (kind, id) creations to prove globally unique
+mine = []                 # live task ids this worker created and still tracks
+created = []              # (kind, id) creations, to prove ids are globally unique
 branches = {}             # task id -> asserted branch
-archived = set()
+human_actions = {}        # task id -> asserted human_action
+priorities = {}           # task id -> asserted priority
+epic_notes = {}           # epic id -> asserted description
+phase_notes = {}          # phase id -> asserted description
+archived = set()          # task ids this worker archived
+archived_epics = []       # [epic id, the task the archive must have cascaded to]
+statuses = {}             # task id -> status this worker last drove it to
+ok = {}                   # tool -> successful call count
+errors = {}               # tool -> refused call count
+error_samples = []
 seqs = []
-errors = []
 ID_PATTERN = re.compile(r"Added `([^`]+)`")
 
 
@@ -438,57 +460,138 @@ def note_seq():
 
 
 def call(_tool, *args, **kwargs):
+    """Run a real public tool.  A refused call is recorded, never swallowed."""
     result = getattr(bs, _tool)(*args, **kwargs)
     if isinstance(result, str) and result.startswith("Error"):
+        errors[_tool] = errors.get(_tool, 0) + 1
+        if len(error_samples) < 8:
+            error_samples.append(_tool + ": " + result[:160])
         return None
+    ok[_tool] = ok.get(_tool, 0) + 1
     note_seq()
     return result
 
 
-for index in range(ops):
+def add_task(epic, label):
+    result = call("backlog_add_task", title=label, epic=epic, phase="dev")
+    if not result:
+        return None
+    match = ID_PATTERN.search(result)
+    if not match:
+        return None
+    created.append(["task", match.group(1)])
+    return match.group(1)
+
+
+def forget(task_id):
+    branches.pop(task_id, None)
+    human_actions.pop(task_id, None)
+    priorities.pop(task_id, None)
+    statuses.pop(task_id, None)
+
+
+# Weighted mix, plus a deterministic warm-up sweep so every operation class is
+# attempted at least once even on a reduced debugging profile.  The interleaving
+# across processes stays racy; only the coverage is pinned.
+WEIGHTS = [
+    ("add", 0.30), ("branch", 0.16), ("human", 0.09), ("pick", 0.07),
+    ("gate", 0.06), ("merge", 0.05), ("complete", 0.05), ("archive", 0.04),
+    ("batch", 0.04), ("phase", 0.04), ("epic", 0.05), ("epic_archive", 0.05),
+]
+SWEEP = ["add", "add", "branch", "human", "pick", "gate", "merge", "add",
+         "complete", "archive", "add", "batch", "phase", "epic", "epic_archive"]
+
+
+def pick_op(index):
+    if index < len(SWEEP):
+        return SWEEP[index]
     roll = rng.random()
-    if roll < 0.34 or not mine:
+    for name, weight in WEIGHTS:
+        roll -= weight
+        if roll < 0:
+            return name
+    return "add"
+
+
+for index in range(ops):
+    op = pick_op(index)
+    if op == "add" or not mine:
         epic = own_epic if rng.random() < 0.5 else "shared"
-        result = call("backlog_add_task", title=f"w{worker} task {index}",
-                      epic=epic, phase="dev")
-        if result:
-            match = ID_PATTERN.search(result)
-            if match:
-                mine.append(match.group(1))
-                created.append(["task", match.group(1)])
+        task_id = add_task(epic, f"w{worker} task {index}")
+        if task_id:
+            mine.append(task_id)
+            statuses[task_id] = "todo"
         continue
     task_id = rng.choice(mine)
-    if roll < 0.52:
+    if op == "branch":
         value = f"feature/w{worker}-{index}"
         if call("backlog_update_task", task_id, "branch", value):
             branches[task_id] = value
-    elif roll < 0.62:
-        call("backlog_update_task", task_id, "human_action", f"check {worker}/{index}")
-    elif roll < 0.70:
-        call("backlog_pick_task", task_id)
-    elif roll < 0.77:
+    elif op == "human":
+        value = f"check {worker}/{index}"
+        if call("backlog_update_task", task_id, "human_action", value):
+            human_actions[task_id] = value
+    elif op == "pick":
+        if call("backlog_pick_task", task_id):
+            statuses[task_id] = "in-progress"
+    elif op == "gate":
         call("backlog_record_gate", task_id, "impl", status="done")
-    elif roll < 0.83:
+    elif op == "merge":
         call("backlog_record_merge", task_id, "develop", f"{worker:02d}{index:038d}")
-    elif roll < 0.88:
+    elif op == "complete":
         # The full completion ladder, as a real session drives it.
         call("backlog_pick_task", task_id)
         call("backlog_record_gate", task_id, "impl", status="done")
         call("backlog_skip_gate", task_id, "design-review", reason="stress")
         call("backlog_skip_gate", task_id, "review-gate", reason="stress")
-        call("backlog_complete_task", task_id, session_title=f"w{worker} {index}")
-    elif roll < 0.92:
-        if call("backlog_archive_task", task_id, reason="wont-fix"):
-            archived.add(task_id)
-            branches.pop(task_id, None)
-            mine.remove(task_id)
-    elif roll < 0.96:
+        if call("backlog_complete_task", task_id, session_title=f"w{worker} {index}"):
+            statuses[task_id] = "done"
+            human_actions.pop(task_id, None)   # completion clears it by design
+    elif op == "archive":
+        # Only a done/blocked/todo task may be archived; picking one keeps the
+        # call legal, so a refusal here would be a real regression.
+        archivable = [
+            ident for ident in mine
+            if statuses.get(ident, "todo") in ("todo", "done", "blocked")
+        ]
+        if archivable:
+            task_id = rng.choice(archivable)
+            if call("backlog_archive_task", task_id, reason="wont-fix"):
+                archived.add(task_id)
+                forget(task_id)
+                mine.remove(task_id)
+    elif op == "batch":
         value = "high" if index % 2 else "low"
-        call("backlog_batch_update", f"update {task_id} priority {value}")
-    else:
+        result = call("backlog_batch_update", f"update {task_id} priority {value}")
+        if result and "1 applied" in result:
+            priorities[task_id] = value
+    elif op == "phase":
         phase_id = f"p{worker}-{index}"
         if call("backlog_add_phase", phase_id=phase_id, name=f"Phase {worker}-{index}"):
             created.append(["phase", phase_id])
+            note = f"phase from w{worker} op {index}"
+            if call("backlog_update_phase", phase_id, "description", note):
+                phase_notes[phase_id] = note
+    elif op == "epic":
+        epic_id = f"w{worker}-e{index}"
+        if call("backlog_add_epic", epic_id=epic_id, name=f"Epic {worker}-{index}",
+                done_when="stress epic complete"):
+            created.append(["epic", epic_id])
+            note = f"epic from w{worker} op {index}"
+            if call("backlog_update_epic", epic_id, "description", note):
+                epic_notes[epic_id] = note
+    else:
+        # An epic created, populated and archived through real tools; the
+        # archive must cascade to the task the epic owns.
+        epic_id = f"w{worker}-a{index}"
+        if not call("backlog_add_epic", epic_id=epic_id,
+                    name=f"Archived {worker}-{index}",
+                    done_when="stress epic archived"):
+            continue
+        created.append(["epic", epic_id])
+        cascaded = add_task(epic_id, f"w{worker} cascade {index}")
+        if cascaded and call("backlog_archive_epic", epic_id, reason="wont-fix"):
+            archived_epics.append([epic_id, cascaded])
 
 report_path.write_text(
     json.dumps(
@@ -496,9 +599,16 @@ report_path.write_text(
             "worker": worker,
             "created": created,
             "branches": branches,
+            "human_actions": human_actions,
+            "priorities": priorities,
+            "epic_notes": epic_notes,
+            "phase_notes": phase_notes,
             "archived": sorted(archived),
-            "seqs": seqs,
+            "archived_epics": archived_epics,
+            "ok": ok,
             "errors": errors,
+            "error_samples": error_samples,
+            "seqs": seqs,
         }
     ),
     encoding="utf-8",
@@ -506,15 +616,65 @@ report_path.write_text(
 '''
 
 
+# Tools whose arguments the worker always constructs legally.  A refusal from one
+# of these is a regression, not a business rule, so zero is the bound.
+MUST_NOT_ERROR = (
+    "backlog_add_task",
+    "backlog_update_task",
+    "backlog_add_epic",
+    "backlog_update_epic",
+    "backlog_archive_epic",
+    "backlog_add_phase",
+    "backlog_update_phase",
+)
+
+# Every field class the stress test asserts survival for.  A class that comes back
+# empty would make its survival loop iterate over nothing and pass vacuously, so
+# each one has to be non-empty across the run.
+ASSERTED_CLASSES = (
+    "branches",
+    "human_actions",
+    "priorities",
+    "epic_notes",
+    "phase_notes",
+    "archived",
+    "archived_epics",
+)
+
+# Operations that must have succeeded at least once somewhere in the run.
+REQUIRED_OPS = (
+    "backlog_add_task",
+    "backlog_update_task",
+    "backlog_pick_task",
+    "backlog_record_gate",
+    "backlog_record_merge",
+    "backlog_complete_task",
+    "backlog_archive_task",
+    "backlog_batch_update",
+    "backlog_add_epic",
+    "backlog_update_epic",
+    "backlog_archive_epic",
+    "backlog_add_phase",
+    "backlog_update_phase",
+)
+
+
 @pytest.mark.slow
 def test_mixed_public_tool_operations_across_processes_never_lose_a_write(tmp_path):
     """The acceptance case: N processes x M real public tool calls on one store.
 
-    Every worker drives the real MCP tool functions in a real OS process — add,
-    update, gate, merge, pick, complete, archive, batch update, add phase — against
-    one shared store.  Afterwards every committed sequence must exist, every id must
-    be unique (defect 5), every asserted field must have survived (defects 2-4), no
-    dirty or temp file may remain, and rows and files must agree both ways.
+    Every worker drives the real MCP tool functions in a real OS process — task
+    add / update / pick / gate / merge / complete / archive / batch update, phase
+    add and update, epic add, update and archive — against one shared store.
+    Afterwards every committed sequence must exist, every id must be unique
+    (defect 5), every asserted field must have survived (defects 2-4), no dirty or
+    temp file may remain, and rows and files must agree both ways.
+
+    Anti-vacuity is enforced explicitly: each asserted field class must be
+    non-empty across the run, each required operation must have succeeded at least
+    once, and the tools whose arguments are always legal must have refused nothing.
+    Without that, a mix that silently stopped producing expectations would leave
+    the survival loops iterating over nothing and the test would pass on air.
 
     Profile is 8 processes x 200 operations by default; override with
     `TM_STRESS_PROCESSES` / `TM_STRESS_OPS` when debugging locally.
@@ -557,7 +717,34 @@ def test_mixed_public_tool_operations_across_processes_never_lose_a_write(tmp_pa
 
     results = [json.loads(path.read_text(encoding="utf-8")) for path in reports]
 
-    # Ids are globally unique: no two workers ever received the same new id.
+    # ── the mix actually ran, and ran legally ────────────────────────────
+    samples = [line for result in results for line in result["error_samples"]]
+    refused = _totals(results, "errors")
+    illegal = {tool: count for tool, count in refused.items() if tool in MUST_NOT_ERROR}
+    assert not illegal, (
+        f"tools whose arguments are always legal were refused: {illegal}; samples: {samples[:8]}"
+    )
+    succeeded = _totals(results, "ok")
+    missing_ops = [tool for tool in REQUIRED_OPS if not succeeded.get(tool)]
+    assert not missing_ops, (
+        f"these operations never succeeded, so the mix did not exercise them: "
+        f"{missing_ops}; successes: {succeeded}; refusals: {refused}; samples: {samples[:8]}"
+    )
+    sizes = {name: sum(len(result[name]) for result in results) for name in ASSERTED_CLASSES}
+    empty = [name for name, size in sizes.items() if size == 0]
+    assert not empty, (
+        f"no expectations were recorded for {empty}, so their survival checks would "
+        f"assert nothing; class sizes: {sizes}; refusals: {refused}; samples: {samples[:8]}"
+    )
+    # Refusals from the state-dependent tools are legitimate (a gate out of order,
+    # a completion blocked) but must stay a minority of what the run attempted.
+    attempted = sum(succeeded.values()) + sum(refused.values())
+    assert sum(refused.values()) <= attempted // 2, (
+        f"{sum(refused.values())} of {attempted} tool calls were refused; "
+        f"breakdown {refused}; samples: {samples[:8]}"
+    )
+
+    # ── ids are globally unique: no two workers received the same new id ──
     seen: dict[tuple[str, str], int] = {}
     for result in results:
         for kind, ident in result["created"]:
@@ -570,23 +757,45 @@ def test_mixed_public_tool_operations_across_processes_never_lose_a_write(tmp_pa
 
     data = _committed(backlog_path)
     tasks = _tasks(data)
-    known_phases = {phase["id"] for phase in data.get("phases", []) or []}
+    rows = {
+        (row["kind"], row["id"]): row
+        for row in _rows(
+            backlog_path,
+            "SELECT kind,id,archived,doc FROM entities WHERE deleted=0",
+        )
+    }
     archived_rows = {
-        row["id"]
-        for row in _rows(backlog_path, "SELECT id FROM entities WHERE kind='task' AND archived=1")
+        ident for (kind, ident), row in rows.items() if kind == "task" and row["archived"]
     }
 
     for result in results:
         for kind, ident in result["created"]:
+            assert (kind, ident) in rows, f"{kind} {ident} vanished from the store"
             if kind == "task":
                 assert ident in tasks or ident in archived_rows, f"task {ident} vanished"
-            else:
-                assert ident in known_phases, f"phase {ident} vanished"
         for task_id, branch in result["branches"].items():
             assert tasks[task_id]["branch"] == branch, f"{task_id} branch reverted"
             assert _file_task(backlog_path, task_id)["branch"] == branch
+        for task_id, action in result["human_actions"].items():
+            assert tasks[task_id].get("human_action") == action, f"{task_id} human_action reverted"
+            assert _file_task(backlog_path, task_id).get("human_action") == action
+        for task_id, priority in result["priorities"].items():
+            assert tasks[task_id].get("priority") == priority, f"{task_id} priority reverted"
+        for epic_id, note in result["epic_notes"].items():
+            assert _doc(rows[("epic", epic_id)]).get("description") == note, (
+                f"epic {epic_id} description reverted"
+            )
+        for phase_id, note in result["phase_notes"].items():
+            assert _doc(rows[("phase", phase_id)]).get("description") == note, (
+                f"phase {phase_id} description reverted"
+            )
         for task_id in result["archived"]:
             assert task_id in archived_rows, f"{task_id} archive did not reach the row"
+            assert (backlog_path / "tasks" / "archive" / f"{task_id}.md").exists()
+        for epic_id, task_id in result["archived_epics"]:
+            assert rows[("epic", epic_id)]["archived"], f"epic {epic_id} archive did not reach the row"
+            assert _doc(rows[("epic", epic_id)]).get("status") == "archived"
+            assert task_id in archived_rows, f"epic {epic_id} archive did not cascade to {task_id}"
             assert (backlog_path / "tasks" / "archive" / f"{task_id}.md").exists()
 
     # Every sequence a worker was told about is a real committed change row.
@@ -600,8 +809,9 @@ def test_mixed_public_tool_operations_across_processes_never_lose_a_write(tmp_pa
     assert status.quarantined_files == (), status.quarantined_files
     _assert_projection_matches_rows(backlog_path)
     print(
-        f"\nstress profile: {workers} processes x {ops} ops, "
-        f"{len(seen)} entities created, {elapsed:.1f}s wall clock"
+        f"\nstress profile: {workers} processes x {ops} ops, {len(seen)} entities created, "
+        f"{attempted} tool calls ({sum(refused.values())} legitimately refused), "
+        f"asserted {sizes}, {elapsed:.1f}s wall clock"
     )
 
 
