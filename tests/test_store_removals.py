@@ -319,7 +319,7 @@ def test_canonicalize_layout_is_a_noop_once_the_store_owns_the_projection(one_ta
 def test_migrate_v4_does_not_drop_store_rows(one_task):
     root, task_id = one_task
     result = bs.backlog_migrate_v4()
-    assert "Already on v4" in result, result
+    assert "Adopted into the store" in result, result
     assert _fresh_row(root, "task", task_id)["deleted"] == 0
     assert _committed_task(root, task_id)["title"] == "Archivable"
 
@@ -327,7 +327,7 @@ def test_migrate_v4_does_not_drop_store_rows(one_task):
 def test_migrate_v3_does_not_drop_store_rows(one_task):
     root, task_id = one_task
     result = bs.backlog_migrate_v3()
-    assert "Already on v3" in result, result
+    assert "Adopted into the store" in result, result
     assert _fresh_row(root, "task", task_id)["deleted"] == 0
 
 
