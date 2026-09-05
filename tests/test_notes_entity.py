@@ -1,15 +1,8 @@
 """Notes (sticky) entity — file helper tests."""
 import pytest
 
-from taskmaster.taskmaster_v3 import (
-    archive_note,
-    list_notes,
-    next_note_id,
-    note_path,
-    read_note,
-    update_note,
-    write_note,
-)
+from taskmaster.taskmaster_v3 import list_notes, note_path, read_note
+from tests.entity_helpers import (archive_note, update_note, write_note)
 
 
 @pytest.fixture()
@@ -88,10 +81,13 @@ def test_archive_note_missing_raises(bp):
         archive_note(bp, "NOTE-999")
 
 
-def test_next_note_id_skips_archived(bp):
+def test_note_ids_skip_archived(bp):
     nid, _ = write_note(bp, text="a", author="user")
     archive_note(bp, nid)
-    assert next_note_id(bp) == "NOTE-002"  # archive still counts
+    # The store allocates from every row it holds, archived included, so an
+    # archived NOTE-001 can never have its id handed out again.
+    nid, _ = write_note(bp, text="second")
+    assert nid == "NOTE-002"
 
 
 def test_list_notes_pinned_first_then_newest(bp):

@@ -80,7 +80,10 @@ SOURCE_GLOBS: tuple[tuple[str, str], ...] = (
     ("handover", "handovers/*.md"),
     ("handover", "handovers/archive/*.md"),
     ("decision", "decisions/*.md"),
-    ("idea", "ideas/*.md"),
+    # `ideas/IDEAS.md` is derived output regenerated from the idea rows (R2),
+    # not an entity: globbing `*.md` indexed it as an idea called "IDEAS" and
+    # put a phantom row in every search result.
+    ("idea", "ideas/IDEA-*.md"),
 )
 
 _CODE_EXTS = (

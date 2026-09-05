@@ -1,5 +1,6 @@
 """Unit tests for the Ideas data layer in taskmaster_v3."""
 from pathlib import Path
+import tests.entity_helpers as entity_helpers  # noqa: E402
 
 
 def test_idea_path_returns_expected_location(tmp_path):
@@ -39,24 +40,29 @@ def test_list_idea_ids_sorted_numerically(tmp_path):
     assert list_idea_ids(bp) == ["IDEA-001", "IDEA-002", "IDEA-010"]
 
 
-def test_next_idea_id_first(tmp_path):
-    from taskmaster.taskmaster_v3 import next_idea_id
+def test_idea_id_first(tmp_path):
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
-    assert next_idea_id(bp) == "IDEA-001"
+    iid, _ = entity_helpers.write_idea(bp, title="first")
+    assert iid == "IDEA-001"
 
 
-def test_next_idea_id_after_existing(tmp_path):
-    from taskmaster.taskmaster_v3 import next_idea_id, idea_dir
+def test_idea_id_after_existing(tmp_path):
+    from taskmaster.taskmaster_v3 import idea_dir
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     d = idea_dir(bp)
     d.mkdir(parents=True)
-    (d / "IDEA-007.md").write_text("---\nid: IDEA-007\n---\n")
-    (d / "IDEA-003.md").write_text("---\nid: IDEA-003\n---\n")
-    assert next_idea_id(bp) == "IDEA-008"
+    for ident in ("IDEA-007", "IDEA-003"):
+        (d / f"{ident}.md").write_text(
+            f"---\nid: {ident}\ntitle: seed\ncreated: '2026-01-01T00:00:00Z'\n"
+            f"created_by: user\n---\n"
+        )
+    iid, _ = entity_helpers.write_idea(bp, title="next")
+    assert iid == "IDEA-008"
 
 
 def test_write_idea_minimal(tmp_path):
-    from taskmaster.taskmaster_v3 import write_idea, read_idea
+    from taskmaster.taskmaster_v3 import (read_idea)
+    from tests.entity_helpers import (write_idea)
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     iid, path = write_idea(bp, title="Per-task spike budgets")
@@ -76,10 +82,11 @@ def test_write_idea_minimal(tmp_path):
 
 
 def test_write_idea_full_payload(tmp_path):
-    from taskmaster.taskmaster_v3 import write_idea, read_idea
+    from taskmaster.taskmaster_v3 import (read_idea)
+    from tests.entity_helpers import (write_idea)
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
-    iid, _ = write_idea(
+    iid, _ = entity_helpers.write_idea(
         bp,
         title="Auto-tag from git diff",
         body="## Why\n\nLink ideas to recent files.",
@@ -100,7 +107,7 @@ def test_write_idea_full_payload(tmp_path):
 
 def test_write_idea_rejects_empty_title(tmp_path):
     import pytest as _pytest
-    from taskmaster.taskmaster_v3 import write_idea
+    from tests.entity_helpers import (write_idea)
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     with _pytest.raises(ValueError, match="title"):
@@ -108,7 +115,8 @@ def test_write_idea_rejects_empty_title(tmp_path):
 
 
 def test_write_idea_appends_to_index(tmp_path):
-    from taskmaster.taskmaster_v3 import write_idea, ideas_index_path
+    from taskmaster.taskmaster_v3 import (ideas_index_path)
+    from tests.entity_helpers import (write_idea)
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     write_idea(bp, title="First idea")
@@ -128,7 +136,7 @@ def test_write_idea_appends_to_index(tmp_path):
 
 
 def test_write_idea_sequential_ids(tmp_path):
-    from taskmaster.taskmaster_v3 import write_idea
+    from tests.entity_helpers import (write_idea)
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     a, _ = write_idea(bp, title="a")
@@ -138,20 +146,22 @@ def test_write_idea_sequential_ids(tmp_path):
 
 
 def test_update_idea_status(tmp_path):
-    from taskmaster.taskmaster_v3 import write_idea, update_idea, read_idea
+    from taskmaster.taskmaster_v3 import (read_idea)
+    from tests.entity_helpers import (write_idea, update_idea)
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
-    iid, _ = write_idea(bp, title="An idea")
+    iid, _ = entity_helpers.write_idea(bp, title="An idea")
     update_idea(bp, iid, status="parking-lot")
     fm, _ = read_idea(bp, iid)
     assert fm["status"] == "parking-lot"
 
 
 def test_update_idea_archive_sets_flag_and_strikes_index(tmp_path):
-    from taskmaster.taskmaster_v3 import write_idea, update_idea, read_idea, ideas_index_path
+    from taskmaster.taskmaster_v3 import (read_idea, ideas_index_path)
+    from tests.entity_helpers import (write_idea, update_idea)
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
-    iid, _ = write_idea(bp, title="Drop-this idea")
+    iid, _ = entity_helpers.write_idea(bp, title="Drop-this idea")
     update_idea(bp, iid, archived=True)
     fm, _ = read_idea(bp, iid)
     assert fm["archived"] is True
@@ -161,30 +171,33 @@ def test_update_idea_archive_sets_flag_and_strikes_index(tmp_path):
 
 
 def test_update_idea_promote_records_task_id(tmp_path):
-    from taskmaster.taskmaster_v3 import write_idea, update_idea, read_idea
+    from taskmaster.taskmaster_v3 import (read_idea)
+    from tests.entity_helpers import (write_idea, update_idea)
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
-    iid, _ = write_idea(bp, title="Becomes a task")
+    iid, _ = entity_helpers.write_idea(bp, title="Becomes a task")
     update_idea(bp, iid, promoted_to="T-XYZ")
     fm, _ = read_idea(bp, iid)
     assert fm["promoted_to"] == "T-XYZ"
 
 
 def test_update_idea_body_replacement(tmp_path):
-    from taskmaster.taskmaster_v3 import write_idea, update_idea, read_idea
+    from taskmaster.taskmaster_v3 import (read_idea)
+    from tests.entity_helpers import (write_idea, update_idea)
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
-    iid, _ = write_idea(bp, title="An idea", body="old body")
+    iid, _ = entity_helpers.write_idea(bp, title="An idea", body="old body")
     update_idea(bp, iid, body="new body")
     _, body = read_idea(bp, iid)
     assert body == "new body"
 
 
 def test_update_idea_preserves_body_when_not_passed(tmp_path):
-    from taskmaster.taskmaster_v3 import write_idea, update_idea, read_idea
+    from taskmaster.taskmaster_v3 import (read_idea)
+    from tests.entity_helpers import (write_idea, update_idea)
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
-    iid, _ = write_idea(bp, title="Keep me", body="original body")
+    iid, _ = entity_helpers.write_idea(bp, title="Keep me", body="original body")
     update_idea(bp, iid, status="exploring")
     _, body = read_idea(bp, iid)
     assert body == "original body"
@@ -192,7 +205,7 @@ def test_update_idea_preserves_body_when_not_passed(tmp_path):
 
 def test_update_idea_unknown_id_raises(tmp_path):
     import pytest as _pytest
-    from taskmaster.taskmaster_v3 import update_idea
+    from tests.entity_helpers import (update_idea)
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     with _pytest.raises(FileNotFoundError):
@@ -207,7 +220,8 @@ def test_list_ideas_empty(tmp_path):
 
 
 def test_list_ideas_returns_summaries_newest_first(tmp_path):
-    from taskmaster.taskmaster_v3 import write_idea, list_ideas
+    from taskmaster.taskmaster_v3 import (list_ideas)
+    from tests.entity_helpers import (write_idea)
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     write_idea(bp, title="oldest")
@@ -221,7 +235,8 @@ def test_list_ideas_returns_summaries_newest_first(tmp_path):
 
 
 def test_list_ideas_excludes_archived_by_default(tmp_path):
-    from taskmaster.taskmaster_v3 import write_idea, update_idea, list_ideas
+    from taskmaster.taskmaster_v3 import (list_ideas)
+    from tests.entity_helpers import (write_idea, update_idea)
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     a, _ = write_idea(bp, title="active")
@@ -233,7 +248,8 @@ def test_list_ideas_excludes_archived_by_default(tmp_path):
 
 
 def test_list_ideas_includes_archived_when_requested(tmp_path):
-    from taskmaster.taskmaster_v3 import write_idea, update_idea, list_ideas
+    from taskmaster.taskmaster_v3 import (list_ideas)
+    from tests.entity_helpers import (write_idea, update_idea)
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     write_idea(bp, title="active")
@@ -244,7 +260,8 @@ def test_list_ideas_includes_archived_when_requested(tmp_path):
 
 
 def test_list_ideas_filter_by_status(tmp_path):
-    from taskmaster.taskmaster_v3 import write_idea, list_ideas
+    from taskmaster.taskmaster_v3 import (list_ideas)
+    from tests.entity_helpers import (write_idea)
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     write_idea(bp, title="exploring one", status="exploring")
@@ -254,7 +271,8 @@ def test_list_ideas_filter_by_status(tmp_path):
 
 
 def test_list_ideas_filter_by_tag(tmp_path):
-    from taskmaster.taskmaster_v3 import write_idea, list_ideas
+    from taskmaster.taskmaster_v3 import (list_ideas)
+    from tests.entity_helpers import (write_idea)
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     write_idea(bp, title="perf", tags=["perf", "automation"])
@@ -264,7 +282,8 @@ def test_list_ideas_filter_by_tag(tmp_path):
 
 
 def test_list_ideas_filter_by_related_task(tmp_path):
-    from taskmaster.taskmaster_v3 import write_idea, list_ideas
+    from taskmaster.taskmaster_v3 import (list_ideas)
+    from tests.entity_helpers import (write_idea)
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     write_idea(bp, title="linked", related_tasks=["v3-release-007"])
@@ -274,10 +293,11 @@ def test_list_ideas_filter_by_related_task(tmp_path):
 
 
 def test_list_ideas_idea_id_returns_full_record(tmp_path):
-    from taskmaster.taskmaster_v3 import write_idea, list_ideas
+    from taskmaster.taskmaster_v3 import (list_ideas)
+    from tests.entity_helpers import (write_idea)
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
-    iid, _ = write_idea(bp, title="single", body="full body content")
+    iid, _ = entity_helpers.write_idea(bp, title="single", body="full body content")
     out = list_ideas(bp, idea_id=iid)
     assert len(out) == 1
     # Single-id returns body too
@@ -285,7 +305,8 @@ def test_list_ideas_idea_id_returns_full_record(tmp_path):
 
 
 def test_list_ideas_limit(tmp_path):
-    from taskmaster.taskmaster_v3 import write_idea, list_ideas
+    from taskmaster.taskmaster_v3 import (list_ideas)
+    from tests.entity_helpers import (write_idea)
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     for i in range(5):
@@ -296,7 +317,8 @@ def test_list_ideas_limit(tmp_path):
 
 def test_list_ideas_summary_false_includes_body(tmp_path):
     """summary=False augments each summary record with its full body."""
-    from taskmaster.taskmaster_v3 import write_idea, list_ideas
+    from taskmaster.taskmaster_v3 import (list_ideas)
+    from tests.entity_helpers import (write_idea)
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     write_idea(bp, title="A", body="alpha body")
@@ -308,7 +330,8 @@ def test_list_ideas_summary_false_includes_body(tmp_path):
 
 def test_list_ideas_summary_true_omits_body(tmp_path):
     """summary=True (default) omits body to keep payloads small."""
-    from taskmaster.taskmaster_v3 import write_idea, list_ideas
+    from taskmaster.taskmaster_v3 import (list_ideas)
+    from tests.entity_helpers import (write_idea)
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     write_idea(bp, title="solo", body="some body content")
@@ -323,14 +346,15 @@ def test_write_idea_concurrent_allocations_unique(tmp_path):
     won the race) and then calling write_idea — it should bump to IDEA-002
     rather than overwriting.
     """
-    from taskmaster.taskmaster_v3 import write_idea, idea_path
+    from taskmaster.taskmaster_v3 import (idea_path)
+    from tests.entity_helpers import (write_idea)
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     # Pre-create IDEA-001 to simulate another writer holding the slot.
     pre = idea_path(bp, "IDEA-001")
     pre.parent.mkdir(parents=True, exist_ok=True)
     pre.touch()
-    iid, _ = write_idea(bp, title="should-bump")
+    iid, _ = entity_helpers.write_idea(bp, title="should-bump")
     assert iid == "IDEA-002"
     # The pre-touched IDEA-001 file is left untouched (empty).
     assert pre.read_text(encoding="utf-8") == ""

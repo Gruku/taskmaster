@@ -11,13 +11,8 @@ sys.path.insert(0, str(PLUGIN_ROOT))
 
 from taskmaster import backlog_server  # noqa: E402
 
-from taskmaster.taskmaster_v3 import (
-    HANDOVER_KINDS,
-    HANDOVER_KIND_TO_VIEWER_KIND,
-    apply_supersession,
-    read_handover,
-    write_handover,
-)
+from taskmaster.taskmaster_v3 import (HANDOVER_KINDS, HANDOVER_KIND_TO_VIEWER_KIND, read_handover)
+from tests.entity_helpers import (apply_supersession, write_handover)
 
 
 def test_handover_kinds_match_spec():

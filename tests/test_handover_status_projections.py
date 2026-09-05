@@ -10,6 +10,7 @@ sys.path.insert(0, str(PLUGIN_ROOT))
 
 from taskmaster import backlog_server  # noqa: E402
 from taskmaster import taskmaster_v3 as v3  # noqa: E402
+import tests.entity_helpers as entity_helpers  # noqa: E402
 
 
 def _setup(tmp_path, monkeypatch):
@@ -33,8 +34,8 @@ def test_list_sessions_projects_per_handover_status(tmp_path, monkeypatch):
     bp, _ = _setup(tmp_path, monkeypatch)
     # Same thread → one lane with both handovers (list_sessions groups by
     # `thread` now, not by task-id/time-gap clustering).
-    v3.write_handover(bp, tldr="open work", session_kind="end-of-day", task_ids=["T-1"], thread="t-1", when="2026-05-08")
-    v3.write_handover(bp, tldr="auto bookkeeping", session_kind="auto-stage", task_ids=["T-1"], thread="t-1", when="2026-05-08")
+    entity_helpers.write_handover(bp, tldr="open work", session_kind="end-of-day", task_ids=["T-1"], thread="t-1", when="2026-05-08")
+    entity_helpers.write_handover(bp, tldr="auto bookkeeping", session_kind="auto-stage", task_ids=["T-1"], thread="t-1", when="2026-05-08")
 
     sessions = v3.list_sessions()
     assert sessions, "expected at least one session"
@@ -50,7 +51,7 @@ def test_list_sessions_projects_per_handover_status(tmp_path, monkeypatch):
 
 def test_get_task_related_projects_status(tmp_path, monkeypatch):
     bp, _ = _setup(tmp_path, monkeypatch)
-    v3.write_handover(bp, tldr="for T-1", session_kind="end-of-day", task_ids=["T-1"])
+    entity_helpers.write_handover(bp, tldr="for T-1", session_kind="end-of-day", task_ids=["T-1"])
     # Find _get_task_related — it lives in backlog_server.py and is invoked via the /related endpoint.
     # The function may have a different name; locate it.
     import inspect

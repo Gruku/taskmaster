@@ -475,6 +475,8 @@ rng = random.Random(worker)
 own_epic = f"w{worker}"
 mine = []                 # live task ids this worker created and still tracks
 created = []              # (kind, id) creations, to prove ids are globally unique
+captured = {}             # kind -> ids successfully read back out of a create result
+unparsed = {}             # kind -> creates that succeeded but whose id could not be read
 branches = {}             # task id -> asserted branch
 human_actions = {}        # task id -> asserted human_action
 priorities = {}           # task id -> asserted priority
@@ -490,6 +492,7 @@ errors = {}               # tool -> refused call count
 error_samples = []
 seqs = []
 ID_PATTERN = re.compile(r"Added `([^`]+)`")
+ENTITY_ID_PATTERN = re.compile("(?:created|written): ([A-Za-z0-9_.-]+)")
 
 
 def note_seq():
@@ -520,6 +523,25 @@ def add_task(epic, label):
     return match.group(1)
 
 
+def add_entity(kind, tool, **kwargs):
+    """Create one non-task entity and record its id for the uniqueness check.
+
+    A create whose result wording stops matching `ENTITY_ID_PATTERN` would
+    otherwise drop out of the uniqueness check in silence while `REQUIRED_OPS`
+    still passed, so the miss is counted and asserted on afterwards.
+    """
+    result = call(tool, **kwargs)
+    if not result:
+        return None
+    match = ENTITY_ID_PATTERN.search(result)
+    if not match:
+        unparsed[kind] = unparsed.get(kind, 0) + 1
+        return None
+    captured[kind] = captured.get(kind, 0) + 1
+    created.append([kind, match.group(1)])
+    return match.group(1)
+
+
 def forget(task_id):
     branches.pop(task_id, None)
     human_actions.pop(task_id, None)
@@ -531,12 +553,15 @@ def forget(task_id):
 # attempted at least once even on a reduced debugging profile.  The interleaving
 # across processes stays racy; only the coverage is pinned.
 WEIGHTS = [
-    ("add", 0.30), ("branch", 0.16), ("human", 0.09), ("pick", 0.07),
-    ("gate", 0.06), ("merge", 0.05), ("complete", 0.05), ("archive", 0.04),
-    ("batch", 0.04), ("phase", 0.04), ("epic", 0.05), ("epic_archive", 0.05),
+    ("add", 0.24), ("branch", 0.13), ("human", 0.07), ("pick", 0.06),
+    ("gate", 0.05), ("merge", 0.04), ("complete", 0.04), ("archive", 0.03),
+    ("batch", 0.03), ("phase", 0.03), ("epic", 0.04), ("epic_archive", 0.04),
+    ("bug", 0.05), ("issue", 0.04), ("decision", 0.04), ("idea", 0.04),
+    ("note", 0.04), ("handover", 0.04), ("area", 0.02),
 ]
 SWEEP = ["add", "add", "branch", "human", "pick", "gate", "merge", "add",
-         "complete", "archive", "add", "batch", "phase", "epic", "epic_archive"]
+         "complete", "archive", "add", "batch", "phase", "epic", "epic_archive",
+         "bug", "issue", "decision", "idea", "note", "handover", "area"]
 
 
 def pick_op(index):
@@ -621,6 +646,38 @@ for index in range(ops):
             note = f"epic from w{worker} op {index}"
             if call("backlog_update_epic", epic_id, "description", note):
                 epic_notes[epic_id] = note
+    elif op == "bug":
+        # The numeric-id kinds race the same allocator tasks do: two processes
+        # must never be handed one B-NNN.
+        add_entity("bug", "backlog_bug_create", title=f"w{worker} bug {index}")
+    elif op == "issue":
+        add_entity(
+            "issue", "backlog_issue_create",
+            title=f"w{worker} issue {index}", severity="P2",
+            evidence=f"recurred in w{worker} op {index}",
+        )
+    elif op == "decision":
+        add_entity(
+            "decision", "backlog_decision_create",
+            title=f"w{worker} decision {index}", options=["a", "b"],
+        )
+    elif op == "idea":
+        add_entity("idea", "backlog_idea_create", title=f"w{worker} idea {index}")
+    elif op == "note":
+        add_entity(
+            "note", "backlog_note", action="create", text=f"w{worker} note {index}"
+        )
+    elif op == "handover":
+        # Slug ids collide by design, so the store's suffix search is what keeps
+        # these unique; the uniqueness assertion below is the check on it.
+        add_entity(
+            "handover", "backlog_handover_create",
+            tldr=f"w{worker} handover {index}", next_action="carry on",
+        )
+    elif op == "area":
+        area_id = f"w{worker}-area-{index}"
+        if call("backlog_area_create", area_id=area_id, name=f"Area {worker}-{index}"):
+            created.append(["area", area_id])
     else:
         # An epic created, populated and archived through real tools; the
         # archive must cascade to the task the epic owns.
@@ -639,6 +696,8 @@ report_path.write_text(
         {
             "worker": worker,
             "created": created,
+            "captured": captured,
+            "unparsed": unparsed,
             "branches": branches,
             "human_actions": human_actions,
             "priorities": priorities,
@@ -670,6 +729,13 @@ MUST_NOT_ERROR = (
     "backlog_archive_epic",
     "backlog_add_phase",
     "backlog_update_phase",
+    "backlog_bug_create",
+    "backlog_issue_create",
+    "backlog_decision_create",
+    "backlog_idea_create",
+    "backlog_note",
+    "backlog_handover_create",
+    "backlog_area_create",
 )
 
 # Every field class the stress test asserts survival for.  A class that comes back
@@ -689,6 +755,10 @@ ASSERTED_CLASSES = (
 )
 
 # Operations that must have succeeded at least once somewhere in the run.
+# The kinds `add_entity` captures ids for. Areas use a caller-derived id and
+# are appended directly, so they are not in this set.
+ENTITY_KINDS_CREATED = ("bug", "issue", "decision", "idea", "note", "handover")
+
 REQUIRED_OPS = (
     "backlog_add_task",
     "backlog_update_task",
@@ -703,6 +773,13 @@ REQUIRED_OPS = (
     "backlog_archive_epic",
     "backlog_add_phase",
     "backlog_update_phase",
+    "backlog_bug_create",
+    "backlog_issue_create",
+    "backlog_decision_create",
+    "backlog_idea_create",
+    "backlog_note",
+    "backlog_handover_create",
+    "backlog_area_create",
 )
 
 
@@ -725,6 +802,10 @@ def test_mixed_public_tool_operations_across_processes_never_lose_a_write(tmp_pa
 
     Profile is 8 processes x 200 operations by default; override with
     `TM_STRESS_PROCESSES` / `TM_STRESS_OPS` when debugging locally.
+
+    Marked `slow`: it is roughly half the suite's wall clock, so the fast
+    development loop is `uv run pytest -q -m "not slow"`.  Nothing deselects it
+    otherwise — the full run, and CI, still execute it at the default profile.
     """
     workers, ops = STRESS_PROCESSES, STRESS_OPS
     root = tmp_path / "repo"
@@ -801,6 +882,28 @@ def test_mixed_public_tool_operations_across_processes_never_lose_a_write(tmp_pa
             )
             seen[key] = result["worker"]
     assert len(seen) > workers, f"only {len(seen)} entities created — the mix did not run"
+
+    # Anti-vacuity on the ids themselves: every entity kind the mix creates has
+    # to have contributed at least one id to the check above, and no successful
+    # create may have had its id go unparsed.
+    captured_by_kind: dict[str, int] = {}
+    unparsed_by_kind: dict[str, int] = {}
+    for result in results:
+        for kind, count in (result.get("captured") or {}).items():
+            captured_by_kind[kind] = captured_by_kind.get(kind, 0) + count
+        for kind, count in (result.get("unparsed") or {}).items():
+            unparsed_by_kind[kind] = unparsed_by_kind.get(kind, 0) + count
+    assert unparsed_by_kind == {}, (
+        f"a create succeeded but its id could not be read out of the result, so it "
+        f"never entered the uniqueness check: {unparsed_by_kind}"
+    )
+    missing_kinds = [
+        kind for kind in ENTITY_KINDS_CREATED if not captured_by_kind.get(kind)
+    ]
+    assert not missing_kinds, (
+        f"no ids captured for {missing_kinds}, so their uniqueness was not checked; "
+        f"captured: {captured_by_kind}"
+    )
 
     data = _committed(backlog_path)
     tasks = _tasks(data)

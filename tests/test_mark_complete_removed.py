@@ -17,5 +17,5 @@ def test_mark_task_handovers_complete_not_importable():
 
 def test_smart_auto_close_handovers_is_importable():
     """The replacement must be present."""
-    from taskmaster.taskmaster_v3 import smart_auto_close_handovers
+    from tests.entity_helpers import (smart_auto_close_handovers)
     assert callable(smart_auto_close_handovers)

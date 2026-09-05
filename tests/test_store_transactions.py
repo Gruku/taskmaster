@@ -13,6 +13,7 @@ import sys
 import textwrap
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Iterator
@@ -614,3 +615,458 @@ def test_active_transaction_ignores_a_different_store_path(
     other.mkdir(parents=True)
     with opened.transaction_dict(tool="scoped") as _data:
         assert store.active_transaction(other / "backlog.yaml") is None
+
+
+def _entity_doc(kind: str, ident: str, **extra: Any) -> dict[str, Any]:
+    doc: dict[str, Any] = {"id": ident, "title": f"{kind} {ident}", "status": "open"}
+    doc.update(extra)
+    return doc
+
+
+def test_list_returns_live_rows_with_bodies_ordered_by_id(
+    transaction_store: tuple[Any, Path],
+) -> None:
+    opened, _backlog_path = transaction_store
+    with opened.transaction(tool="seed-bugs") as tx:
+        tx.create("bug", _entity_doc("bug", "B-002"), body="Second body.")
+        tx.create("bug", _entity_doc("bug", "B-001"), body="First body.")
+        tx.create("bug", _entity_doc("bug", "B-003"))
+
+    with opened.transaction(tool="list-bugs") as tx:
+        rows = tx.list("bug")
+
+    assert [ident for ident, _doc, _body in rows] == ["B-001", "B-002", "B-003"]
+    assert [body for _ident, _doc, body in rows] == ["First body.", "Second body.", None]
+    assert rows[0][1]["title"] == "bug B-001"
+
+
+def test_list_hides_archived_and_tombstoned_rows_unless_asked(
+    transaction_store: tuple[Any, Path],
+) -> None:
+    opened, _backlog_path = transaction_store
+    with opened.transaction(tool="seed-notes") as tx:
+        tx.create("note", _entity_doc("note", "NOTE-001"))
+        tx.create("note", _entity_doc("note", "NOTE-002"))
+        tx.create("note", _entity_doc("note", "NOTE-003"))
+        tx.archive("note", "NOTE-002")
+        tx.delete("note", "NOTE-003")
+
+    with opened.transaction(tool="list-notes") as tx:
+        live = tx.list("note")
+        including_archived = tx.list("note", include_archived=True)
+
+    assert [ident for ident, _doc, _body in live] == ["NOTE-001"]
+    assert [ident for ident, _doc, _body in including_archived] == [
+        "NOTE-001",
+        "NOTE-002",
+    ]
+
+
+def test_list_of_an_unknown_kind_is_empty(
+    transaction_store: tuple[Any, Path],
+) -> None:
+    opened, _backlog_path = transaction_store
+    with opened.transaction(tool="list-nothing") as tx:
+        assert tx.list("bug") == []
+
+
+def test_linear_enqueue_returns_a_seq_that_pending_reads_back(
+    transaction_store: tuple[Any, Path],
+) -> None:
+    opened, _backlog_path = transaction_store
+    with opened.transaction(tool="enqueue-linear") as tx:
+        first = tx.linear_enqueue("push", "e-001", "linear-acme-ENG-1", {"reason": "status"})
+        second = tx.linear_enqueue("push", "e-002", None, None)
+
+    assert first != second
+    pending = opened.linear_pending(10)
+    assert [item["seq"] for item in pending] == [first, second]
+    assert pending[0] == {
+        "seq": first,
+        "op": "push",
+        "target_id": "e-001",
+        "tracker_id": "linear-acme-ENG-1",
+        "payload": {"reason": "status"},
+        "state": "pending",
+        "attempts": 0,
+        "last_error": None,
+        "claimed_by": None,
+        "claimed_at": None,
+    }
+    assert pending[1]["payload"] is None
+    assert opened.linear_pending(1) == [pending[0]]
+
+
+def test_linear_enqueue_dedupes_a_pending_push_for_the_same_target(
+    transaction_store: tuple[Any, Path],
+) -> None:
+    opened, _backlog_path = transaction_store
+    with opened.transaction(tool="enqueue-linear-twice") as tx:
+        first = tx.linear_enqueue("push", "e-001", "linear-acme-ENG-1", None)
+        again = tx.linear_enqueue("push", "e-001", "linear-acme-ENG-1", None)
+
+    assert again == first
+    assert [item["seq"] for item in opened.linear_pending(10)] == [first]
+
+
+def test_linear_mark_commits_its_own_transaction(
+    transaction_store: tuple[Any, Path],
+) -> None:
+    opened, backlog_path = transaction_store
+    with opened.transaction(tool="enqueue-linear") as tx:
+        seq = tx.linear_enqueue("push", "e-001", None, None)
+
+    opened.linear_mark(seq, state="failed", error="429 from Linear")
+
+    assert opened.linear_pending(10) == []
+    with _connect(backlog_path) as connection:
+        row = connection.execute(
+            "SELECT state,attempts,last_error FROM linear_queue WHERE seq=?", (seq,)
+        ).fetchone()
+    assert row["state"] == "failed"
+    assert row["attempts"] == 1
+    assert row["last_error"] == "429 from Linear"
+
+    # A mark without an error is not a failed attempt, so the counter holds:
+    # `attempts` has to mean "retries burned", or the park threshold is wrong.
+    opened.linear_mark(seq, state="pending")
+    reopened = opened.linear_pending(10)
+    assert [item["seq"] for item in reopened] == [seq]
+    assert reopened[0]["attempts"] == 1
+    assert reopened[0]["last_error"] is None
+
+
+def test_linear_enqueue_dedupe_fills_gaps_without_rewriting_history(
+    transaction_store: tuple[Any, Path],
+) -> None:
+    """The second enqueue knows the tracker the first one lacked, but the row
+    must keep the timestamp of the moment the target first went dirty."""
+    opened, _backlog_path = transaction_store
+    with opened.transaction(tool="enqueue-linear-partial") as tx:
+        first = tx.linear_enqueue("push", "e-001", None, {"enqueued_at": "2026-09-01T10:00:00Z"})
+        again = tx.linear_enqueue(
+            "push", "e-001", "linear-acme-ENG-1", {"enqueued_at": "2026-09-02T11:00:00Z", "why": "status"},
+        )
+
+    assert again == first
+    row = opened.linear_pending(10)[0]
+    assert row["tracker_id"] == "linear-acme-ENG-1"
+    assert row["payload"] == {"enqueued_at": "2026-09-01T10:00:00Z", "why": "status"}
+
+
+def test_linear_rows_shows_settled_and_parked_rows_that_pending_hides(
+    transaction_store: tuple[Any, Path],
+) -> None:
+    opened, _backlog_path = transaction_store
+    with opened.transaction(tool="enqueue-linear-three") as tx:
+        done = tx.linear_enqueue("push", "e-001", None, None)
+        parked = tx.linear_enqueue("push", "e-002", None, None)
+        waiting = tx.linear_enqueue("push", "e-003", None, None)
+    opened.linear_mark(done, state="done")
+    opened.linear_mark(parked, state="failed", error="auth rejected")
+
+    assert [row["seq"] for row in opened.linear_rows()] == [done, parked, waiting]
+    assert [row["seq"] for row in opened.linear_rows(states=("pending", "failed"))] == [
+        parked,
+        waiting,
+    ]
+    assert [row["seq"] for row in opened.linear_pending(10)] == [waiting]
+
+
+def test_linear_requeue_unparks_only_the_rows_it_is_given(
+    transaction_store: tuple[Any, Path],
+) -> None:
+    """Parking is what stops a dead push burning round-trips, so coming back
+    has to be explicit and scoped — a retry for one target must not revive
+    another target's parked row."""
+    opened, _backlog_path = transaction_store
+    with opened.transaction(tool="enqueue-linear-pair") as tx:
+        mine = tx.linear_enqueue("push", "e-001", None, None)
+        theirs = tx.linear_enqueue("push", "e-002", None, None)
+    opened.linear_mark(mine, state="failed", error="dead")
+    opened.linear_mark(theirs, state="failed", error="also dead")
+
+    assert opened.linear_requeue([mine]) == 1
+
+    revived = opened.linear_pending(10)
+    assert [row["seq"] for row in revived] == [mine]
+    assert revived[0]["attempts"] == 0
+    assert revived[0]["last_error"] is None
+    assert [row["state"] for row in opened.linear_rows() if row["seq"] == theirs] == [
+        "failed"
+    ]
+
+
+def test_linear_rows_with_an_empty_state_filter_returns_nothing(
+    transaction_store: tuple[Any, Path],
+) -> None:
+    """`states=()` means no state qualifies. Building `IN ()` from it is a SQL
+    syntax error, which is not what an empty filter should mean."""
+    opened, _backlog_path = transaction_store
+    with opened.transaction(tool="enqueue-linear-one") as tx:
+        tx.linear_enqueue("push", "e-001", None, None)
+
+    assert opened.linear_rows(states=()) == []
+    assert len(opened.linear_rows()) == 1
+
+
+def test_linear_pending_filters_targets_before_the_limit(
+    transaction_store: tuple[Any, Path],
+) -> None:
+    opened, _backlog_path = transaction_store
+    with opened.transaction(tool="enqueue-linear-many") as tx:
+        for index in range(5):
+            tx.linear_enqueue("push", f"filler-{index}", None, None)
+        wanted = tx.linear_enqueue("push", "e-001", None, None)
+
+    assert [row["seq"] for row in opened.linear_pending(2, targets={"e-001"})] == [
+        wanted
+    ]
+    assert opened.linear_pending(10, targets=set()) == []
+
+
+def test_linear_requeue_of_nothing_is_a_no_op(
+    transaction_store: tuple[Any, Path],
+) -> None:
+    opened, _backlog_path = transaction_store
+    assert opened.linear_requeue([]) == 0
+
+
+def test_linear_mark_rejects_an_unknown_seq(
+    transaction_store: tuple[Any, Path],
+) -> None:
+    opened, _backlog_path = transaction_store
+    with pytest.raises(KeyError):
+        opened.linear_mark(9999, state="done")
+
+
+def test_legacy_linear_queue_json_is_imported_once_and_the_file_removed(
+    tmp_path: Path,
+) -> None:
+    store.reset_for_tests()
+    backlog_path = _write_v4_project(tmp_path)
+    queue_file = backlog_path.parent / "integrations" / "linear-queue.json"
+    queue_file.parent.mkdir(parents=True, exist_ok=True)
+    queue_file.write_text(
+        json.dumps(
+            [
+                {
+                    "op": "push",
+                    "target_id": "e-001",
+                    "tracker_id": "linear-acme-ENG-1",
+                    "enqueued_at": "2026-09-01T10:00:00Z",
+                    "attempts": 2,
+                    "last_error": "transient",
+                },
+                {
+                    "op": "push",
+                    "target_id": "e-002",
+                    "tracker_id": None,
+                    "enqueued_at": "2026-09-01T10:05:00Z",
+                    "attempts": 0,
+                    "last_error": None,
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+    try:
+        opened = store.open_store(backlog_path, session="linear-queue-import")
+        pending = opened.linear_pending(10)
+        assert [item["target_id"] for item in pending] == ["e-001", "e-002"]
+        assert pending[0]["tracker_id"] == "linear-acme-ENG-1"
+        assert pending[0]["attempts"] == 2
+        assert pending[0]["last_error"] == "transient"
+        assert pending[0]["payload"] == {"enqueued_at": "2026-09-01T10:00:00Z"}
+        assert not queue_file.exists()
+
+        store.reset_for_tests()
+        reopened = store.open_store(backlog_path, session="linear-queue-reopen")
+        with reopened.transaction(tool="scan-after-import"):
+            pass
+        assert [item["target_id"] for item in reopened.linear_pending(10)] == [
+            "e-001",
+            "e-002",
+        ]
+    finally:
+        store.reset_for_tests()
+
+
+def test_an_unreadable_legacy_linear_queue_is_quarantined_once(
+    tmp_path: Path,
+) -> None:
+    """Left in place, a corrupt queue file was re-parsed and re-warned by every
+    later transaction forever; moving it aside costs one rename and keeps the
+    bytes for a human."""
+    store.reset_for_tests()
+    backlog_path = _write_v4_project(tmp_path)
+    queue_file = backlog_path.parent / "integrations" / "linear-queue.json"
+    queue_file.parent.mkdir(parents=True, exist_ok=True)
+    queue_file.write_text("{not json", encoding="utf-8")
+    try:
+        opened = store.open_store(backlog_path, session="linear-queue-corrupt")
+        with opened.transaction(tool="scan-after-corrupt"):
+            pass
+
+        assert not queue_file.exists()
+        quarantined = sorted(queue_file.parent.glob("linear-queue.json.corrupt-*"))
+        assert len(quarantined) == 1
+        assert quarantined[0].read_text(encoding="utf-8") == "{not json"
+
+        with opened.transaction(tool="scan-again"):
+            pass
+        assert sorted(queue_file.parent.glob("linear-queue.json.corrupt-*")) == quarantined
+    finally:
+        store.reset_for_tests()
+
+
+def test_legacy_linear_queue_entries_sharing_a_target_keep_the_worst_history(
+    tmp_path: Path,
+) -> None:
+    """Two legacy entries fold onto one row; the later one must not reset the
+    attempt count and un-park a push that had already exhausted its retries."""
+    store.reset_for_tests()
+    backlog_path = _write_v4_project(tmp_path)
+    queue_file = backlog_path.parent / "integrations" / "linear-queue.json"
+    queue_file.parent.mkdir(parents=True, exist_ok=True)
+    queue_file.write_text(
+        json.dumps(
+            [
+                {"op": "push", "target_id": "e-001", "attempts": 4, "last_error": "dead"},
+                {"op": "push", "target_id": "e-001", "attempts": 0, "last_error": None},
+            ]
+        ),
+        encoding="utf-8",
+    )
+    try:
+        opened = store.open_store(backlog_path, session="linear-queue-dupes")
+        pending = opened.linear_pending(10)
+        assert len(pending) == 1
+        assert pending[0]["attempts"] == 4
+        assert pending[0]["last_error"] == "dead"
+    finally:
+        store.reset_for_tests()
+
+
+def test_force_scan_on_next_read_defeats_the_read_throttle(
+    transaction_store: tuple[Any, Path],
+) -> None:
+    opened, backlog_path = transaction_store
+    assert _task(opened.load_dict(), "e-001")["title"] == "Task 1"
+
+    task_file = backlog_path.parent / "tasks" / "e-001.md"
+    frontmatter, body = v3.parse_frontmatter(task_file.read_text(encoding="utf-8"))
+    frontmatter["title"] = "Edited by hand"
+    task_file.write_text(v3.render_frontmatter(frontmatter, body), encoding="utf-8")
+
+    assert _task(opened.load_dict(), "e-001")["title"] == "Task 1"
+    opened.force_scan_on_next_read()
+    assert _task(opened.load_dict(), "e-001")["title"] == "Edited by hand"
+
+
+def test_linear_mark_rereads_the_connection_after_waiting_for_the_writer_mutex(
+    transaction_store: tuple[Any, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A recovery that lands while `linear_mark` queues for the lock must not
+    leave it writing through the handle it held before waiting."""
+    opened, _backlog_path = transaction_store
+    with opened.transaction(tool="enqueue-linear") as tx:
+        seq = tx.linear_enqueue("push", "e-001", None, None)
+
+    real_mutex = type(opened)._writer_mutex
+    retired: list[Any] = []
+
+    @contextmanager
+    def recovering_mutex(self: Any, **kwargs: Any) -> Iterator[None]:
+        with real_mutex(self, **kwargs):
+            if not retired:
+                stale = self.connection
+                # Stand in for a concurrent recovery: the identity check in the
+                # `connection` property closes this handle and opens another.
+                store._CONNECTION_IDENTITIES[id(stale)] = (-1, -1)
+                retired.append(stale)
+                assert self.connection is not stale
+            yield
+
+    monkeypatch.setattr(store.Store, "_writer_mutex", recovering_mutex)
+    opened.linear_mark(seq, state="failed", error="boom")
+    monkeypatch.undo()
+
+    assert retired and retired[0] is not opened.connection
+    assert opened.linear_pending(10) == []
+    with _connect(_backlog_path) as connection:
+        row = connection.execute(
+            "SELECT state,last_error FROM linear_queue WHERE seq=?", (seq,)
+        ).fetchone()
+    assert (row["state"], row["last_error"]) == ("failed", "boom")
+
+
+# -- C2: the legacy Linear queue file survives until its import commits --
+
+
+def _queue_path(backlog_path: Path) -> Path:
+    return backlog_path.parent / "integrations" / "linear-queue.json"
+
+
+def _seed_legacy_queue(backlog_path: Path, entries: list[dict[str, Any]]) -> Path:
+    path = _queue_path(backlog_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(entries), encoding="utf-8")
+    return path
+
+
+def test_legacy_queue_file_is_not_removed_before_its_import_commits(
+    transaction_store: tuple[Any, Path],
+) -> None:
+    """A crash between the removal and COMMIT would lose the only copy of the
+    pending pushes: the rows roll back and the file is already gone. So the
+    file must still be on disk for the whole transaction that imports it."""
+    opened, backlog_path = transaction_store
+    path = _seed_legacy_queue(backlog_path, [{"op": "push", "target_id": "e-001"}])
+
+    with opened.transaction(tool="import-legacy-queue"):
+        assert path.exists(), "queue file went away before its import committed"
+
+    assert not path.exists(), "queue file must be gone once the import committed"
+    assert [row["target_id"] for row in opened.linear_pending(10)] == ["e-001"]
+
+
+def test_rolled_back_import_leaves_the_legacy_queue_file_intact(
+    transaction_store: tuple[Any, Path],
+) -> None:
+    opened, backlog_path = transaction_store
+    payload = [{"op": "push", "target_id": "e-002"}]
+    path = _seed_legacy_queue(backlog_path, payload)
+
+    with pytest.raises(RuntimeError):
+        with opened.transaction(tool="import-then-fail"):
+            raise RuntimeError("boom")
+
+    assert json.loads(path.read_text(encoding="utf-8")) == payload
+    assert opened.linear_pending(10) == []
+
+
+def test_queue_file_surviving_a_crash_after_commit_is_removed_not_reimported(
+    transaction_store: tuple[Any, Path],
+) -> None:
+    """Crash after COMMIT but before the file is cleaned up: the rows are
+    durable and the file is still there. The next transaction must clean it up
+    without enqueueing the same pushes a second time."""
+    opened, backlog_path = transaction_store
+    payload = [{"op": "push", "target_id": "e-003"}]
+    path = _seed_legacy_queue(backlog_path, payload)
+
+    with opened.transaction(tool="import-legacy-queue"):
+        pass
+    pending = opened.linear_pending(10)
+    assert len(pending) == 1
+    opened.linear_mark(pending[0]["seq"], state="done")
+
+    # The post-commit cleanup never ran.
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with opened.transaction(tool="rescan"):
+        pass
+
+    assert not path.exists()
+    assert opened.linear_pending(10) == []

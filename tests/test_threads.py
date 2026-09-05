@@ -6,33 +6,19 @@ import yaml
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT))
 
-from taskmaster.taskmaster_v3 import (
-    normalize_thread_name,
-    read_handover,
-    write_handover,
-    handover_path,
-    _handover_index_entry,
-)
-from taskmaster.taskmaster_v3 import (
-    THREAD_STATUSES,
-    sync_handover_index,
-    sync_thread_registry,
-    update_handover_status,
-    update_thread_status,
-)
-from taskmaster.taskmaster_v3 import (
-    archive_handover,
-    list_sessions,
-    list_threads,
-    resolve_thread,
-)
-from taskmaster.taskmaster_v3 import apply_supersession, backfill_threads
+from taskmaster.taskmaster_v3 import (normalize_thread_name, read_handover, handover_path, _handover_index_entry)
+from tests.entity_helpers import (transaction as entity_transaction, taskmaster_backlog, write_handover)
+from taskmaster.taskmaster_v3 import (THREAD_STATUSES, update_thread_status)
+from tests.entity_helpers import (sync_handover_index, sync_thread_registry, update_handover_status)
+from taskmaster.taskmaster_v3 import (list_sessions, list_threads, resolve_thread)
+from tests.entity_helpers import (archive_handover)
+from tests.entity_helpers import (apply_supersession, backfill_threads)
 
 
 def _setup(tmp_path):
-    bp = tmp_path / "backlog.yaml"
+    bp = taskmaster_backlog(tmp_path)
     bp.write_text(yaml.safe_dump({"meta": {}, "epics": []}))
-    (tmp_path / "handovers").mkdir()
+    (bp.parent / "handovers").mkdir()
     return bp
 
 
@@ -156,8 +142,12 @@ def test_registry_prunes_vanished_thread_and_its_override(tmp_path):
     update_thread_status(data, bp, name="thread-a", status="parked")
     assert "thread-a" in data["thread_meta"]
 
-    for hid in (a1, a2):
-        handover_path(bp, hid).unlink()
+    # The store is the authority now, so a vanished thread means deleted rows,
+    # not deleted files - unlinking the markdown alone is an external edit the
+    # next scan simply re-exports.
+    with entity_transaction(bp) as tx:
+        for hid in (a1, a2):
+            tx.delete("handover", hid)
 
     sync_thread_registry(data, bp)
     assert "thread-a" not in data["threads"]

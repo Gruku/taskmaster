@@ -9,18 +9,14 @@ import yaml
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT))
 
-from taskmaster.taskmaster_v3 import (
-    read_handover,
-    update_handover_status,
-    write_handover,
-    HANDOVER_STATUSES,
-)
+from taskmaster.taskmaster_v3 import (read_handover, HANDOVER_STATUSES)
+from tests.entity_helpers import (taskmaster_backlog, update_handover_status, write_handover)
 
 
 def _setup(tmp_path):
-    bp = tmp_path / "backlog.yaml"
+    bp = taskmaster_backlog(tmp_path)
     bp.write_text(yaml.safe_dump({"meta": {}, "epics": []}))
-    (tmp_path / "handovers").mkdir()
+    (bp.parent / "handovers").mkdir()
     return bp
 
 
@@ -46,7 +42,7 @@ def test_open_handover_stays_open_on_task_pick(tmp_path):
 
 def test_closed_handover_skipped_by_smart_close(tmp_path):
     """Already-closed handovers (e.g. auto-stage) are not touched by smart-close."""
-    from taskmaster.taskmaster_v3 import smart_auto_close_handovers
+    from tests.entity_helpers import (smart_auto_close_handovers)
     bp = _setup(tmp_path)
     hid, _ = write_handover(bp, tldr="auto", session_kind="auto-stage", task_ids=["T-1"])
     fm_before, _ = read_handover(bp, hid)
@@ -63,7 +59,7 @@ def test_closed_handover_skipped_by_smart_close(tmp_path):
 
 
 def test_user_set_handover_not_mutated_by_smart_close(tmp_path):
-    from taskmaster.taskmaster_v3 import smart_auto_close_handovers
+    from tests.entity_helpers import (smart_auto_close_handovers)
     bp = _setup(tmp_path)
     hid, _ = write_handover(bp, tldr="t", session_kind="end-of-day", task_ids=["T-1"])
     update_handover_status(bp, handover_id=hid, status="open", reason="dismissed")

@@ -5,11 +5,8 @@ import yaml
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT))
 
-from taskmaster.taskmaster_v3 import (
-    read_handover,
-    smart_auto_close_handovers,
-    write_handover,
-)
+from taskmaster.taskmaster_v3 import (read_handover)
+from tests.entity_helpers import (taskmaster_backlog, smart_auto_close_handovers, write_handover)
 
 _DONE_TASKS = {"T-1", "T-2", "T-archived"}
 _ARCHIVED_TASKS = {"T-archived"}
@@ -17,9 +14,9 @@ _ALL_TERMINAL = _DONE_TASKS | _ARCHIVED_TASKS
 
 
 def _setup(tmp_path):
-    bp = tmp_path / "backlog.yaml"
+    bp = taskmaster_backlog(tmp_path)
     bp.write_text(yaml.safe_dump({"meta": {}, "epics": []}))
-    (tmp_path / "handovers").mkdir()
+    (bp.parent / "handovers").mkdir()
     return bp
 
 
@@ -89,7 +86,7 @@ def test_smart_close_partial_task_ids_keeps_open(tmp_path):
 
 
 def test_smart_close_skips_already_closed(tmp_path):
-    from taskmaster.taskmaster_v3 import update_handover_status
+    from tests.entity_helpers import (update_handover_status)
     bp = _setup(tmp_path)
     hid, _ = write_handover(
         bp,
@@ -106,7 +103,7 @@ def test_smart_close_skips_already_closed(tmp_path):
 
 
 def test_smart_close_skips_superseded(tmp_path):
-    from taskmaster.taskmaster_v3 import update_handover_status
+    from tests.entity_helpers import (update_handover_status)
     bp = _setup(tmp_path)
     hid, _ = write_handover(
         bp,

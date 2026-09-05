@@ -9,7 +9,8 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT))
 
 from taskmaster import backlog_server  # noqa: E402
-from taskmaster.taskmaster_v3 import read_handover, write_handover
+from taskmaster.taskmaster_v3 import (read_handover)
+from tests.entity_helpers import (write_handover)
 
 
 def _make_backlog(tmp_path, monkeypatch):

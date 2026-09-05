@@ -4,11 +4,12 @@ import pytest
 import yaml
 
 from taskmaster import taskmaster_v3 as tm
+import tests.entity_helpers as entity_helpers  # noqa: E402
 
 
 @pytest.fixture
 def backlog(tmp_path):
-    bp = tmp_path / "backlog.yaml"
+    bp = entity_helpers.taskmaster_backlog(tmp_path)
     bp.write_text("meta:\n  schema_version: 3\nepics: []\n", encoding="utf-8")
     return bp
 
@@ -19,16 +20,21 @@ def test_decision_dir_is_created_on_first_use(backlog):
     assert d.parent == backlog.parent
 
 
-def test_next_decision_id_allocates_DEC_001_when_empty(backlog):
-    assert tm.next_decision_id(backlog) == "DEC-001"
+def test_decision_id_allocates_DEC_001_when_empty(backlog):
+    did, _ = entity_helpers.write_decision(backlog, title="first", options=["a", "b"])
+    assert did == "DEC-001"
 
 
-def test_next_decision_id_increments_past_existing(backlog):
+def test_decision_id_increments_past_existing(backlog):
     d = tm.decision_dir(backlog)
     d.mkdir(parents=True)
-    (d / "DEC-001.md").write_text("---\nid: DEC-001\n---\n", encoding="utf-8")
-    (d / "DEC-007.md").write_text("---\nid: DEC-007\n---\n", encoding="utf-8")
-    assert tm.next_decision_id(backlog) == "DEC-008"
+    for ident in ("DEC-001", "DEC-007"):
+        (d / f"{ident}.md").write_text(
+            f"---\nid: {ident}\nstatus: open\noptions: [a, b]\n---\n", encoding="utf-8"
+        )
+    # The allocator counts the ids already on disk, so it never reuses DEC-007.
+    did, _ = entity_helpers.write_decision(backlog, title="next", options=["a", "b"])
+    assert did == "DEC-008"
 
 
 def test_validate_decision_rejects_unknown_status():
@@ -69,7 +75,7 @@ def test_validate_decision_dropped_requires_reason():
 
 
 def test_write_decision_creates_file_with_frontmatter(backlog):
-    did, target = tm.write_decision(
+    did, target = entity_helpers.write_decision(
         backlog,
         title="Land ue-plugin-086 fix",
         options=[
@@ -102,6 +108,6 @@ def test_write_decision_creates_file_with_frontmatter(backlog):
 
 def test_write_decision_rejects_invalid(backlog):
     with pytest.raises(ValueError):
-        tm.write_decision(backlog, title="Bad", options=["only-one"])
+        entity_helpers.write_decision(backlog, title="Bad", options=["only-one"])
     with pytest.raises(ValueError, match="title is required"):
-        tm.write_decision(backlog, title="  ", options=["a", "b"])
+        entity_helpers.write_decision(backlog, title="  ", options=["a", "b"])

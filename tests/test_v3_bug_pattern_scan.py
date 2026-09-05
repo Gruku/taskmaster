@@ -20,7 +20,8 @@ def test_bug_signature_requires_min_three_tokens():
 
 
 def test_scan_bug_patterns_groups_matches(tmp_path):
-    from taskmaster.taskmaster_v3 import write_bug, scan_bug_patterns
+    from taskmaster.taskmaster_v3 import (scan_bug_patterns)
+    from tests.entity_helpers import (write_bug)
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     bp.write_text("schema_version: 3\n")
@@ -34,7 +35,8 @@ def test_scan_bug_patterns_groups_matches(tmp_path):
 
 
 def test_scan_bug_patterns_threshold_at_least_two(tmp_path):
-    from taskmaster.taskmaster_v3 import write_bug, scan_bug_patterns
+    from taskmaster.taskmaster_v3 import (scan_bug_patterns)
+    from tests.entity_helpers import (write_bug)
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     bp.write_text("schema_version: 3\n")
@@ -56,14 +58,15 @@ def _make_backlog(tmp_path):
 
 def test_scan_open_only_excludes_archived_bug(tmp_path):
     """B-024: scan_bug_patterns(open_only=True) must exclude archived/non-open bugs."""
-    from taskmaster.taskmaster_v3 import write_bug, scan_bug_patterns, archive_bug
+    from taskmaster.taskmaster_v3 import (scan_bug_patterns)
+    from tests.entity_helpers import (write_bug, archive_bug)
     bp = _make_backlog(tmp_path)
     # Two open bugs that cluster together
     b1, _ = write_bug(bp, title="Connection timeout reader client socket", components=["net"], discovered_by="user")
     b2, _ = write_bug(bp, title="Connection timeout reader client socket retry", components=["net"], discovered_by="user")
     # A third bug with same cluster tokens but written as shelved (non-open) then promoted
     # Write it open first, then use update_bug to set promoted status for archiving
-    from taskmaster.taskmaster_v3 import update_bug
+    from tests.entity_helpers import (update_bug)
     b3, _ = write_bug(bp, title="Connection timeout reader client socket fallback", components=["net"], discovered_by="user")
     update_bug(bp, b3, status="promoted", promoted_to="ISS-001")
     archive_bug(bp, b3)
@@ -84,10 +87,11 @@ def test_scan_open_only_excludes_archived_bug(tmp_path):
 
 def test_scan_open_only_false_includes_non_open(tmp_path):
     """B-024: open_only=False (default) includes all bugs regardless of status."""
-    from taskmaster.taskmaster_v3 import write_bug, scan_bug_patterns, archive_bug
+    from taskmaster.taskmaster_v3 import (scan_bug_patterns)
+    from tests.entity_helpers import (write_bug, archive_bug)
     bp = _make_backlog(tmp_path)
     b1, _ = write_bug(bp, title="Database connection timeout client socket reader", components=["db"], discovered_by="user")
-    from taskmaster.taskmaster_v3 import update_bug
+    from tests.entity_helpers import (update_bug)
     b2, _ = write_bug(bp, title="Database connection timeout client socket writer", components=["db"], discovered_by="user")
     update_bug(bp, b2, status="promoted", promoted_to="ISS-001")
     archive_bug(bp, b2)

@@ -1,9 +1,9 @@
 """Tests for the Linear sync worker (linear-004 piece 2/3).
 
-The worker reads state from disk, builds payloads via the mapper, calls
-the Linear client, and writes back the Tracker file on success. The queue
-file is the source of truth for "what still needs pushing" — drain on a
-restored backup is meaningful because the queue persists.
+The worker reads state from the store, builds payloads via the mapper, calls
+the Linear client, and writes back the Tracker row on success. The store's
+`linear_queue` table is the source of truth for "what still needs pushing" —
+drain after a restart is meaningful because the queue is a committed row.
 """
 import json
 import sys
@@ -17,22 +17,40 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT))
 
 from taskmaster.integrations.linear.client import LinearAPIError, LinearClient  # noqa: E402
+from taskmaster import store as _store  # noqa: E402
 from taskmaster.integrations.linear.worker import (  # noqa: E402
     MAX_ATTEMPTS,
     drain,
     enqueue,
     push_task,
-    queue_path,
-    read_queue,
 )
-from taskmaster.taskmaster_v3 import write_tracker  # noqa: E402
+from tests.entity_helpers import taskmaster_backlog, write_tracker  # noqa: E402
+
+
+def _enqueue(bp: Path, **kwargs) -> int:
+    """Queue one push the way a tool does: inside a store transaction."""
+    with _store.open_store(bp).transaction(tool="test-enqueue") as tx:
+        return enqueue(tx, **kwargs)
+
+
+def _rows(bp: Path, *states: str) -> list[dict]:
+    return _store.open_store(bp).linear_rows(states=states or None)
+
+
+def _queued(bp: Path) -> list[dict]:
+    """Rows a caller still has to act on: pending plus parked."""
+    return _rows(bp, "pending", "failed")
+
+
+def _drain(bp: Path, client, config, **kwargs) -> dict:
+    return drain(_store.open_store(bp), client, config, **kwargs)
 
 
 # ── Fixtures ───────────────────────────────────────────────────
 
 
 def _make_backlog(tmp_path: Path, *, task_id: str = "linear-001", tracker_id: str | None = None) -> Path:
-    bp = tmp_path / "backlog.yaml"
+    bp = taskmaster_backlog(tmp_path)
     task = {
         "id": task_id,
         "title": "Some task",
@@ -47,6 +65,12 @@ def _make_backlog(tmp_path: Path, *, task_id: str = "linear-001", tracker_id: st
         "meta": {"updated": "2026-01-01"},
         "epics": [{"id": "test-epic", "name": "Test", "tasks": [task]}],
     }))
+    # Adopt the projection before the test enqueues anything, so the first scan
+    # (which rewrites backlog.yaml into rows) happens before the queue rows the
+    # test is about, not in the middle of them.
+    from taskmaster import store as _store
+
+    _store.open_store(bp).load_dict()
     return bp
 
 
@@ -77,31 +101,32 @@ def _make_client(handler) -> LinearClient:
 
 
 def _backlog_data(bp: Path) -> dict:
-    with bp.open() as f:
-        return yaml.safe_load(f)
+    # Read through the store: the first tracker write adopts the projection and
+    # moves tasks out of backlog.yaml, so a raw parse would see empty epics.
+    from taskmaster import store as _store
+
+    return _store.open_store(bp).load_dict()
 
 
 # ── Queue file basics ──────────────────────────────────────────
 
 
-def test_queue_path_lives_under_integrations(tmp_path):
-    bp = tmp_path / "backlog.yaml"
-    assert queue_path(bp) == bp.parent / "integrations" / "linear-queue.json"
-
-
-def test_read_queue_returns_empty_when_missing(tmp_path):
-    bp = tmp_path / "backlog.yaml"
-    assert read_queue(bp) == []
-
-
-def test_enqueue_creates_queue_file_and_appends_item(tmp_path):
+def test_enqueue_returns_a_seq_the_store_reads_back(tmp_path):
     bp = _make_backlog(tmp_path)
-    enqueue(bp, op="task_upsert", target_id="linear-001", tracker_id="linear-cm-eng-1")
-    items = read_queue(bp)
-    assert len(items) == 1
+    seq = _enqueue(bp, op="task_upsert", target_id="linear-001", tracker_id="linear-cm-eng-1")
+    items = _rows(bp)
+    assert [i["seq"] for i in items] == [seq]
     assert items[0]["op"] == "task_upsert"
     assert items[0]["target_id"] == "linear-001"
     assert items[0]["tracker_id"] == "linear-cm-eng-1"
+    assert items[0]["state"] == "pending"
+    assert items[0]["payload"]["enqueued_at"]
+
+
+def test_enqueue_never_writes_the_legacy_queue_file(tmp_path):
+    bp = _make_backlog(tmp_path)
+    _enqueue(bp, op="task_upsert", target_id="linear-001")
+    assert not (bp.parent / "integrations" / "linear-queue.json").exists()
 
 
 def test_enqueue_dedupes_same_target_same_op(tmp_path):
@@ -109,17 +134,30 @@ def test_enqueue_dedupes_same_target_same_op(tmp_path):
     ONE queue entry — the drain re-reads the latest task state, so a
     stack of pending mutations is wasted work."""
     bp = _make_backlog(tmp_path)
-    enqueue(bp, op="task_upsert", target_id="linear-001")
-    enqueue(bp, op="task_upsert", target_id="linear-001")
-    enqueue(bp, op="task_upsert", target_id="linear-001")
-    assert len(read_queue(bp)) == 1
+    _enqueue(bp, op="task_upsert", target_id="linear-001")
+    _enqueue(bp, op="task_upsert", target_id="linear-001")
+    _enqueue(bp, op="task_upsert", target_id="linear-001")
+    assert len(_rows(bp)) == 1
+
+
+def test_enqueue_dedupe_keeps_the_first_timestamp_and_fills_in_a_tracker(tmp_path):
+    """A re-enqueue adds what the row lacks without rewriting its history: the
+    queue row still says when the target first went dirty."""
+    bp = _make_backlog(tmp_path)
+    _enqueue(bp, op="task_upsert", target_id="linear-001")
+    first = _rows(bp)[0]
+    _enqueue(bp, op="task_upsert", target_id="linear-001", tracker_id="linear-cm-eng-1")
+    again = _rows(bp)[0]
+    assert again["seq"] == first["seq"]
+    assert again["tracker_id"] == "linear-cm-eng-1"
+    assert again["payload"]["enqueued_at"] == first["payload"]["enqueued_at"]
 
 
 def test_enqueue_keeps_different_targets_separate(tmp_path):
     bp = _make_backlog(tmp_path)
-    enqueue(bp, op="task_upsert", target_id="linear-001")
-    enqueue(bp, op="task_upsert", target_id="linear-002")
-    assert len(read_queue(bp)) == 2
+    _enqueue(bp, op="task_upsert", target_id="linear-001")
+    _enqueue(bp, op="task_upsert", target_id="linear-002")
+    assert len(_rows(bp)) == 2
 
 
 # ── push_task: skip paths ──────────────────────────────────────
@@ -250,11 +288,11 @@ def test_push_task_returns_permanent_on_401(tmp_path):
 # ── drain ──────────────────────────────────────────────────────
 
 
-def test_drain_removes_successful_items_from_queue(tmp_path):
+def test_drain_settles_successful_items(tmp_path):
     bp = _make_backlog(tmp_path, tracker_id="linear-cm-eng-1")
     write_tracker(bp, external_system="linear", instance_alias="cm",
                   external_key="ENG-1", title="x", status="x")
-    enqueue(bp, op="task_upsert", target_id="linear-001")
+    _enqueue(bp, op="task_upsert", target_id="linear-001")
 
     def handler(request):
         return httpx.Response(200, json={
@@ -262,22 +300,25 @@ def test_drain_removes_successful_items_from_queue(tmp_path):
         })
 
     client = _make_client(handler)
-    counts = drain(bp, client, _make_config(), backlog_data=_backlog_data(bp))
+    counts = _drain(bp, client, _make_config(), backlog_data=_backlog_data(bp))
     assert counts["ok"] == 1
-    assert read_queue(bp) == []
+    assert _queued(bp) == []
+    settled = _rows(bp)
+    assert [(r["state"], r["attempts"]) for r in settled] == [("done", 0)]
 
 
 def test_drain_keeps_failed_items_in_queue(tmp_path):
     bp = _make_backlog(tmp_path, tracker_id="linear-cm-eng-1")
     write_tracker(bp, external_system="linear", instance_alias="cm",
                   external_key="ENG-1", title="x", status="x")
-    enqueue(bp, op="task_upsert", target_id="linear-001")
+    _enqueue(bp, op="task_upsert", target_id="linear-001")
 
     client = _make_client(lambda r: httpx.Response(500))
-    counts = drain(bp, client, _make_config(), backlog_data=_backlog_data(bp))
+    counts = _drain(bp, client, _make_config(), backlog_data=_backlog_data(bp))
     assert counts["transient"] == 1
-    remaining = read_queue(bp)
+    remaining = _queued(bp)
     assert len(remaining) == 1
+    assert remaining[0]["state"] == "pending"
     assert remaining[0]["attempts"] == 1
     assert remaining[0]["last_error"]
 
@@ -285,8 +326,48 @@ def test_drain_keeps_failed_items_in_queue(tmp_path):
 def test_drain_no_op_when_queue_empty(tmp_path):
     bp = _make_backlog(tmp_path)
     client = _make_client(lambda r: httpx.Response(500))
-    counts = drain(bp, client, _make_config(), backlog_data=_backlog_data(bp))
+    counts = _drain(bp, client, _make_config(), backlog_data=_backlog_data(bp))
     assert counts == {"ok": 0, "skipped": 0, "transient": 0, "permanent": 0, "unknown": 0}
+
+
+def test_scoped_drain_finds_its_target_behind_a_full_batch(tmp_path, monkeypatch):
+    """The target filter has to run in the query, before the row limit. Filtering
+    an already-truncated page drains nothing and still reports success."""
+    import taskmaster.integrations.linear.worker as _w
+
+    bp = _make_backlog(tmp_path, tracker_id="linear-cm-eng-1")
+    write_tracker(bp, external_system="linear", instance_alias="cm",
+                  external_key="ENG-1", title="x", status="x")
+    monkeypatch.setattr(_w, "DRAIN_BATCH", 3)
+    with _store.open_store(bp).transaction(tool="test-seed-many") as tx:
+        for index in range(5):
+            tx.linear_enqueue("task_upsert", f"filler-{index}", None, None)
+        enqueue(tx, op="task_upsert", target_id="linear-001")
+
+    def handler(request):
+        return httpx.Response(200, json={
+            "data": {"issueUpdate": {"issue": {"id": "iss-uuid", "identifier": "ENG-1"}}},
+        })
+
+    counts = _w.drain(
+        _store.open_store(bp), _make_client(handler), _make_config(),
+        backlog_data=_backlog_data(bp), only_targets={"linear-001"},
+    )
+    assert counts["ok"] == 1, "the scoped target sat past the batch limit"
+    assert [row["target_id"] for row in _queued(bp)] == [
+        f"filler-{index}" for index in range(5)
+    ]
+
+
+def test_drain_reads_nothing_when_scoped_to_an_empty_target_set(tmp_path):
+    bp = _make_backlog(tmp_path)
+    _enqueue(bp, op="task_upsert", target_id="linear-001")
+    client = _make_client(lambda r: httpx.Response(500))  # would fail if called
+    counts = _drain(
+        bp, client, _make_config(), backlog_data=_backlog_data(bp), only_targets=set(),
+    )
+    assert counts["ok"] == 0 and counts["transient"] == 0
+    assert len(_queued(bp)) == 1
 
 
 # ── B-027: error classification from the structured flag, not substrings ──
@@ -328,7 +409,7 @@ def test_drain_parks_transient_after_max_attempts_and_stops_calling_api(tmp_path
     bp = _make_backlog(tmp_path, tracker_id="linear-cm-eng-1")
     write_tracker(bp, external_system="linear", instance_alias="cm",
                   external_key="ENG-1", title="x", status="x")
-    enqueue(bp, op="task_upsert", target_id="linear-001")
+    _enqueue(bp, op="task_upsert", target_id="linear-001")
 
     calls = {"n": 0}
 
@@ -339,17 +420,17 @@ def test_drain_parks_transient_after_max_attempts_and_stops_calling_api(tmp_path
     client = _make_client(handler)
 
     for _ in range(MAX_ATTEMPTS):
-        drain(bp, client, _make_config(), backlog_data=_backlog_data(bp))
+        _drain(bp, client, _make_config(), backlog_data=_backlog_data(bp))
 
-    item = read_queue(bp)[0]
-    assert item["permanent"] is True
+    item = _queued(bp)[0]
+    assert item["state"] == "failed"
     assert item["attempts"] == MAX_ATTEMPTS
 
     calls_before = calls["n"]
-    counts = drain(bp, client, _make_config(), backlog_data=_backlog_data(bp))
+    counts = _drain(bp, client, _make_config(), backlog_data=_backlog_data(bp))
     assert calls["n"] == calls_before, "parked item must not re-issue the API call"
-    assert counts["permanent"] == 1
-    assert len(read_queue(bp)) == 1  # kept for /linear status visibility
+    assert counts["permanent"] == 0, "a parked row is not re-counted on later drains"
+    assert len(_queued(bp)) == 1  # kept for /linear status visibility
 
 
 # ── B-030: keep not_found; never silently drop an unknown status ──
@@ -358,22 +439,28 @@ def test_drain_parks_transient_after_max_attempts_and_stops_calling_api(tmp_path
 def test_drain_keeps_not_found_item_in_queue(tmp_path):
     """skipped:not_found may be a stale snapshot — keep the pending push."""
     bp = _make_backlog(tmp_path)  # 'ghost' is not in the backlog
-    enqueue(bp, op="task_upsert", target_id="ghost")
+    _enqueue(bp, op="task_upsert", target_id="ghost")
     client = _make_client(lambda r: httpx.Response(200, json={"data": {}}))
-    counts = drain(bp, client, _make_config(), backlog_data=_backlog_data(bp))
+    counts = _drain(bp, client, _make_config(), backlog_data=_backlog_data(bp))
     assert counts["skipped"] == 1
-    assert len(read_queue(bp)) == 1  # not dropped
+    still = _queued(bp)
+    assert len(still) == 1  # not dropped
+    assert still[0]["state"] == "pending"
 
 
 def test_drain_keeps_item_on_unrecognized_status(tmp_path, monkeypatch):
     import taskmaster.integrations.linear.worker as _w
     bp = _make_backlog(tmp_path, tracker_id="linear-cm-eng-1")
-    enqueue(bp, op="task_upsert", target_id="linear-001")
+    _enqueue(bp, op="task_upsert", target_id="linear-001")
     monkeypatch.setattr(_w, "push_task", lambda *a, **k: {"status": "weird:unknown"})
     client = _make_client(lambda r: httpx.Response(200, json={"data": {}}))
-    counts = _w.drain(bp, client, _make_config(), backlog_data=_backlog_data(bp))
+    counts = _w.drain(
+        _store.open_store(bp), client, _make_config(), backlog_data=_backlog_data(bp)
+    )
     assert counts["unknown"] == 1
-    assert len(read_queue(bp)) == 1
+    kept = _queued(bp)
+    assert len(kept) == 1
+    assert kept[0]["last_error"] == "unrecognized push status 'weird:unknown'"
 
 
 # ── B-031: persist the returned UUID and use it for subsequent updates ──

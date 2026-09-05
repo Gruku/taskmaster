@@ -17,7 +17,8 @@ import pytest
 
 from taskmaster import backlog_server
 
-from taskmaster.taskmaster_v3 import write_handover, read_handover
+from taskmaster.taskmaster_v3 import (read_handover)
+from tests.entity_helpers import (write_handover)
 
 
 # ── local fixture ─────────────────────────────────────────────────────────────

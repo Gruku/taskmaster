@@ -84,7 +84,7 @@ def _seed(
     """
     tm = repo / ".taskmaster"
     (tm / "tasks").mkdir(parents=True, exist_ok=True)
-    # PROGRESS.md must exist so regenerate_progress_dashboard() can read it.
+    # PROGRESS.md must exist so the store's export can read it.
     (tm / "PROGRESS.md").write_text("## Changelog\n", encoding="utf-8")
 
     (tm / "project.yaml").write_text(
@@ -267,3 +267,52 @@ def test_recorder_never_blocks(tmp_path):
     """Even with a completely broken environment (no .taskmaster), exit is 0."""
     r = run(_merge_payload("git merge feature/x", exit_code=0), tmp_path)
     assert r.returncode == 0
+
+
+def test_merge_inside_a_linked_worktree_stamps_the_main_checkout(tmp_path):
+    """A merge run in a worktree must land in the checkout that owns the backlog.
+
+    The worktree has no `.taskmaster/` of its own, and no TASKMASTER_ROOT is
+    set: the git common dir is the only thing that can point the recorder at
+    the main checkout, which is what `resolve_root` is for.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-b", "master", str(repo)], check=True, capture_output=True)
+    for key, value in (("user.email", "test@test.com"), ("user.name", "Test")):
+        subprocess.run(["git", "-C", str(repo), "config", key, value],
+                       check=True, capture_output=True)
+    (repo / "README.md").write_text("hi", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "README.md"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-m", "init"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "checkout", "-b", "feature/x"],
+                   check=True, capture_output=True)
+    (repo / "f.txt").write_text("feature", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "f.txt"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-m", "feat"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "checkout", "master"], check=True, capture_output=True)
+
+    tid = _seed(repo, branch="feature/x")
+
+    worktree = tmp_path / "wt"
+    subprocess.run(["git", "-C", str(repo), "worktree", "add", "-b", "stage",
+                    str(worktree), "master"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(worktree), "merge", "--no-ff", "feature/x",
+                    "-m", "merge"], check=True, capture_output=True)
+    assert not (worktree / ".taskmaster").exists()
+
+    env = dict(os.environ)
+    env.pop("TASKMASTER_ROOT", None)
+    r = subprocess.run(
+        [sys.executable, HOOK],
+        input=json.dumps(_merge_payload("git merge --no-ff feature/x", exit_code=0)),
+        text=True,
+        capture_output=True,
+        cwd=str(worktree),
+        env=env,
+        timeout=60,
+    )
+    assert r.returncode == 0, r.stderr
+
+    heavy = _read_heavy_merge_status(repo, tid)
+    assert [key for key in heavy if key.endswith("stage")], heavy

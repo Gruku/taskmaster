@@ -308,3 +308,55 @@ def test_duplicate_area_and_tracker_ids_fail_clearly(
 
     with instance.transaction(tool=f"verify-{kind}-id") as tx:
         assert tx.get(kind, requested_id)["title"] == "original"
+
+
+def test_handover_id_is_derived_from_the_document_date_and_tldr(opened_store):
+    _store_api, instance, _backlog_path = opened_store
+
+    with instance.transaction(tool="allocate-handover") as tx:
+        allocated = tx.allocate_id(
+            "handover", {"date": "2026-09-05", "tldr": "Ship the store"}
+        )
+
+    assert allocated == "2026-09-05-ship-the-store"
+
+
+def test_handover_id_suffixes_past_slugs_already_taken(opened_store):
+    _store_api, instance, _backlog_path = opened_store
+    doc = {"date": "2026-09-05", "tldr": "Ship the store", "status": "open"}
+
+    with instance.transaction(tool="seed-handovers") as tx:
+        first = tx.create("handover", dict(doc, title="First"))
+        second = tx.create("handover", dict(doc, title="Second"))
+        third = tx.allocate_id("handover", doc)
+
+    assert first == "2026-09-05-ship-the-store"
+    assert second == "2026-09-05-ship-the-store-2"
+    assert third == "2026-09-05-ship-the-store-3"
+
+
+def test_handover_allocation_requires_a_date_and_tldr(opened_store):
+    _store_api, instance, _backlog_path = opened_store
+
+    with pytest.raises(ValueError, match="(?i)tldr"):
+        with instance.transaction(tool="allocate-handover-without-tldr") as tx:
+            tx.allocate_id("handover", {"date": "2026-09-05"})
+
+
+def test_issue_allocation_sees_the_archive_directory(opened_store):
+    _store_api, instance, backlog_path = opened_store
+    _write_orphan(backlog_path, "issues/archive", "issue", "ISS-042")
+
+    with instance.transaction(tool="allocate-issue-after-archive") as tx:
+        allocated = tx.allocate_id("issue", {})
+
+    assert allocated == "ISS-043"
+
+
+def test_area_and_tracker_ids_stay_caller_derived(opened_store):
+    _store_api, instance, _backlog_path = opened_store
+
+    for kind in ("area", "tracker"):
+        with pytest.raises(ValueError, match="caller-derived"):
+            with instance.transaction(tool=f"allocate-{kind}") as tx:
+                tx.allocate_id(kind, {"name": "Nope"})

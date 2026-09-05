@@ -4,6 +4,7 @@ tool that returns an error cannot leave a half-applied mutation behind.
 """
 from __future__ import annotations
 
+import re
 import threading
 from pathlib import Path
 
@@ -19,6 +20,21 @@ def _bp(root: Path) -> Path:
 
 def _max_seq(root: Path) -> int:
     return store.status(_bp(root)).max_seq
+
+
+def _said(result: str) -> str:
+    """A tool result without the metadata `_with_seq` appends.
+
+    Both the `[seq N]` suffix and any `(export pending: …)` notice: leaving the
+    notice in place turned an exact-tail assertion into a false failure the
+    moment an export lagged.
+    """
+    trimmed = re.sub(r"\s*\[seq \d+\]$", "", result.strip())
+    while True:
+        stripped = re.sub(r"\s*\(export pending: [^)]*\)$", "", trimmed)
+        if stripped == trimmed:
+            return trimmed
+        trimmed = stripped
 
 
 def _committed_task(root: Path, task_id: str) -> dict:
@@ -135,7 +151,7 @@ def test_update_task_response_is_rendered_from_committed_state(two_tasks):
     """The field/value path is the one that renders after commit."""
     root, task_id, _ = two_tasks
     out = bs.backlog_update_task(task_id, field="priority", value="high")
-    assert out.endswith("high"), out
+    assert _said(out).endswith("high"), out
     assert _committed_task(root, task_id)["priority"] == "high"
 
 
@@ -152,7 +168,7 @@ def test_update_task_response_says_so_when_the_write_did_not_persist(
 
     monkeypatch.setattr(store.Transaction, "_capture_committed", capture_without_the_task)
     out = bs.backlog_update_task(task_id, field="priority", value="low")
-    assert out.endswith(bs.NOT_PERSISTED), out
+    assert _said(out).endswith(bs.NOT_PERSISTED), out
 
 
 @pytest.mark.parametrize(
@@ -170,14 +186,14 @@ def test_update_task_response_keeps_the_callers_representation(
     _root, task_id, _ = two_tasks
     out = bs.backlog_update_task(task_id, field=field, value=value)
     assert "Error" not in out, out
-    assert out.endswith(f"→ {expected}"), out
+    assert _said(out).endswith(f"→ {expected}"), out
 
 
 def test_update_task_response_renders_a_committed_dependency_list(two_tasks):
     _root, first, second = two_tasks
     out = bs.backlog_update_task(first, field="depends_on", value=second)
     assert "Error" not in out, out
-    assert out.endswith(f"→ {second}"), out
+    assert _said(out).endswith(f"→ {second}"), out
 
 
 def test_committed_field_display_never_falls_back_to_the_request():
@@ -382,3 +398,57 @@ def test_task_detail_endpoint_finds_a_task_on_a_store_adopted_project(two_tasks)
     assert full["epic"] == "test-epic"
     assert full["notes"] == "detail note"
     assert bs._load_task_full("no-such-task") is None
+
+
+# ── the projection-overlay branch in `_load_task_full_identified` ─────────
+# It reads heavy fields back out of `tasks/<id>.md` for tasks the store does
+# not own as rows.  On a v4 project every task is a row, so the branch is dead
+# there; the only path that still reaches it is a v3 backlog whose slim task
+# index lives inline in backlog.yaml — pinned by
+# tests/test_iss_003_regression.py, which is why the branch survives.
+
+
+def test_a_v4_snapshot_owns_every_task_as_a_row(two_tasks):
+    """No task can miss the store on v4, so the file overlay cannot fire."""
+    _root, task_id, other_id = two_tasks
+    snapshot, _etag = bs._load_snapshot()
+    assert not isinstance(snapshot.get("tasks"), list), (
+        "a v4 snapshot must not carry a slim top-level task index"
+    )
+    owned = {
+        task["id"]
+        for epic in snapshot.get("epics") or []
+        for task in epic.get("tasks") or []
+    }
+    assert {task_id, other_id} <= owned
+
+
+def test_a_v3_slim_index_is_the_one_path_left_into_the_overlay(tmp_path, monkeypatch):
+    """Documents why the branch stays: a v3 task is not a store row."""
+    monkeypatch.delenv("TASKMASTER_ROOT", raising=False)
+    backlog = tmp_path / ".taskmaster" / "backlog.yaml"
+    (tmp_path / ".taskmaster" / "tasks").mkdir(parents=True)
+    backlog.write_text(
+        "schema_version: 3\n"
+        "meta: {project: overlay}\n"
+        "epics: [{id: e1, name: Epic One}]\n"
+        "tasks:\n"
+        "  - {id: t-001, title: Task one, status: todo, epic: e1}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".taskmaster" / "tasks" / "t-001.md").write_text(
+        "---\nid: t-001\ntitle: Task one\nnotes: only in the file\n---\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(bs, "ROOT", tmp_path)
+    monkeypatch.setattr(bs, "CONFIG_PATH", tmp_path / ".taskmaster" / "missing.json")
+    monkeypatch.setattr(bs, "LEGACY_CONFIG_PATH", tmp_path / ".claude" / "missing.json")
+
+    snapshot, _etag = bs._load_snapshot()
+    assert isinstance(snapshot.get("tasks"), list), "v3 keeps a slim top-level index"
+    assert not any(
+        task.get("id") == "t-001"
+        for epic in snapshot.get("epics") or []
+        for task in epic.get("tasks") or []
+    ), "a v3 task is not a store row, which is what the overlay compensates for"
+    assert bs._load_task_full("t-001")["notes"] == "only in the file"
