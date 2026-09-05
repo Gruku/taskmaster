@@ -430,3 +430,316 @@ verification have shipped.
   tool calls against one shared store — 777 entities created, 2,186 tool calls (30 legitimately refused), 363.8s wall clock, with every operation class asserted from committed rows.
 - Do not claim the full migration complete until steps 3–5 and real CodeMaestro open/status
   verification have shipped.
+
+---
+
+# Steps 3–5 — written 2026-09-05 after Step 2 merged (`e9026e7`)
+
+> **For agentic workers:** REQUIRED SUB-SKILL: superpowers:subagent-driven-development. One
+> fresh implementer per section below, TDD inside each, one commit per section, review between
+> sections. Code map with line numbers at commit `c67ecf5`:
+> `.superpowers/sdd/2026-09-05-sqlite-store-steps-3-5/code-map.md` (gitignored workspace).
+
+**Goal:** finish the spec: every kind and every writer on the store, derived index absorbed,
+hooks and viewer store-backed, docs and scripts updated, release cut.
+
+**Branch/worktree:** `feature/sqlite-store-step-3` at `.worktrees/sqlite-store-step-3` (from
+`c67ecf5`). Steps 3, 4 and 5 all land on this one branch as separate commits per section; the
+branch is merged into `master` once per step (`--no-ff`) after that step's review gate.
+
+**Spec:** `docs/specs/2026-09-04-sqlite-store-design.md` §3.3–§3.9, §4.2–§4.8, §5, §6.
+
+## Global constraints (in force for every section)
+
+- `taskmaster/store.py` remains the only module that opens the database or writes a projection
+  file. `taskmaster_v3.py` keeps pure parse/render/validate/path helpers and loses every writer.
+- Every public tool call owns exactly one store transaction; nested calls reuse it.
+- Removal is never implicit; archive/delete are explicit `tx.archive` / `tx.delete` calls.
+- Responses are rendered from committed state; a failed commit raises, never returns success.
+- Ids are allocated inside the creating transaction from authoritative state.
+- No file under `.taskmaster/` is written by anything but `store.py`; the test guard enforces it.
+- Do not push. Do not touch `uv.lock`. Full suite: `uv run pytest -q --basetemp=%TEMP%\tm-pytest`.
+  Fast loop: `uv run pytest -q -m "not slow"` once §3.1 lands.
+- Every new file starts with a 1–3 line `User intent:` header comment.
+
+## Rulings (made on the user's behalf; reverse if wrong)
+
+| # | Ruling | Why |
+|---|---|---|
+| R1 | Tracker canonical path is `trackers/<id>.md` (today's writer). `integrations/trackers/*.md` stays an import fallback and is moved to the canonical path on first export. | Matches current `write_tracker`; the store already does this. |
+| R2 | `ideas/IDEAS.md` becomes derived output: the exporter regenerates it whenever an `idea` row is touched, the scan never imports it. | It is an index, not an entity; two writers of one file is the defect we are removing. |
+| R3 | The `bugs`/`issues`/`handovers`/`trackers` index arrays inside `backlog.yaml` stay (git-facing summary) but are rebuilt from store rows inside the transaction, never from a directory glob. | Keeps the projection shape stable for 5.2.x readers and `PROGRESS.md`. |
+| R4 | Validators (`_validate_bug` … `_validate_area`) run at the tool boundary before `tx.create`/`tx.put`; they stay in `taskmaster_v3.py` as pure functions. | The store is kind-agnostic; invariants belong to the kind. |
+| R5 | Handover id suffixing (`-2`, `-3`) moves into `Transaction.allocate_id("handover", doc)` using `id_taken`. Area/tracker ids stay caller-derived and a collision raises. | Spec §3.5 verbatim. |
+| R6 | Committed-state rendering is generalized with a per-call renderer **stack** on the frame; `[seq N]` is appended by `_transactional` to every latched tool's string result. | Closes the nested-frame clobber; spec §3.8. |
+| R7 | The 8×200 stress test keeps its default profile and gains `@pytest.mark.slow`; the fast loop is `-m "not slow"` (native pytest, no config needed). | Plan §2.4 mandated the default; the marker costs nothing. |
+| R8 | The Linear queue moves to the `linear_queue` table; `linear-queue.json` is imported once on first open if present, then removed by the store. | Spec §4.3. |
+| R9 | `index.py` is deleted except `normalize_task_anchor`, `normalize_location`, `extract_prose_paths`, `infer_repo`, `REVERSE_TYPE`, which move to a new `taskmaster/paths.py`. `local/index.db` is unlinked by `backlog_index_status(rebuild=True)` and ignored otherwise. | Spec §4.7, decision 5. |
+| R10 | Hooks never trigger a full import. `edit_resurface` and `merge_gate_decide` open `store.db` (normal connection, query guard) when it exists, else fall back to reading files and log. | Spec §4.5. |
+| R11 | Step 5 CodeMaestro verification runs against a **copy** of `C:\Users\gruku\Files\Work\CodeMaestro\.taskmaster` in the scratchpad, not the live repo. Opening the live repo (which migrates it) is left to the user. | Adopting rewrites 2.2k files in the user's real project. |
+| R12 | Version bumps to `6.0.0`. | Breaking: legacy layouts refused, `context` gone from backlog.yaml, index.db gone. |
+
+---
+
+## Step 3 — every writer on the store; hot-path row API; status tool; `[seq N]`
+
+### 3.1 Test infrastructure first
+
+**Files:** `tests/conftest.py`, `tests/test_store_concurrency.py`, `tests/test_store_bypass.py`.
+
+- Extend `_GUARDED_DIRS` to `("tasks","epics","phases","bugs","issues","handovers","decisions",
+  "ideas","notes","areas","trackers","integrations")`; teach `_guard_path` about
+  `handovers/_archive/<year>/` and `notes/_archive/` (two levels) and about `ideas/IDEAS.md`
+  and `integrations/linear-queue.json` (file names, like `backlog.yaml`).
+- Invert `test_guard_lets_non_task_entity_writers_through` into
+  `test_guard_trips_on_a_production_bug_file_write` (a `_write_as_production` into `bugs/`
+  raises). Add one parametrized red test per kind directory.
+- `@pytest.mark.slow` on the 8×200 stress test (R7). Document `-m "not slow"` in its docstring.
+- Commit: `test(store): guard every entity directory and mark the stress run slow`. The suite
+  is now red for every non-task writer — that is the point; sections 3.2–3.5 turn it green.
+
+### 3.2 Store API additions
+
+**Files:** `taskmaster/store.py`, `tests/test_store_transactions.py`, `tests/test_store_id_allocation.py`, `tests/test_store_projection.py`.
+
+Red tests, then implement:
+
+- `Transaction.list(kind, *, include_archived=False) -> list[tuple[str, dict, str | None]]`
+  returning `(id, doc, body)` for live rows of `kind`, deterministic order by id.
+- `Transaction.allocate_id("handover", doc)` derives `make_handover_id(doc["date"], doc["tldr"])`
+  and suffixes `-2`, `-3`, … while `id_taken` (R5). `issue` allocation must see
+  `issues/archive/` (already does via `_known_entity_files`; add the regression test).
+- Exporter: `ideas/IDEAS.md` rendered from idea rows whenever any `idea` row is in
+  `_export_keys` (R2); the file is recorded in `projection` with kind `ideas-index`, id NULL,
+  and `_scan_projection` skips kind `ideas-index` files (never parsed, hash refreshed only).
+  Renderer: move the body of `taskmaster_v3._write_ideas_index` to a pure function
+  `render_ideas_index(entries) -> str` in `taskmaster_v3.py`.
+- Archive moves for `bug`, `issue`, `note`, `handover` go through `tx.archive` and the existing
+  `_entity_path(..., archived=True)`; add a test per kind that the old file is gone, the new
+  file exists, and both `projection` rows are updated in one transaction.
+- Linear queue (R8): `Transaction.linear_enqueue(op, target_id, tracker_id, payload) -> int`,
+  `Store.linear_pending(limit) -> list[dict]`, `Store.linear_mark(seq, *, state, error=None)`
+  (each `mark` is its own short `BEGIN IMMEDIATE`). First open imports
+  `integrations/linear-queue.json` rows as `state='pending'` and deletes the file inside that
+  transaction.
+- `Store.force_scan_on_next_read()` public method replacing external pokes of
+  `_last_read_scan_clock`.
+- Commit: `feat(store): list rows, handover ids, ideas index, archive moves, linear queue`.
+
+### 3.3 Non-task writers through the store
+
+**Files:** `taskmaster/backlog_server.py`, `taskmaster/taskmaster_v3.py`,
+`tests/test_store_server_integration.py`, plus the existing per-kind test files (`test_areas.py`,
+`test_decision_*.py`, `test_handover_*.py`, `test_api_notes.py`, …) only where their asserted
+persistence boundary moves.
+
+For each kind, in this order — bug, issue, decision, idea, note, area, tracker, handover:
+
+- Every tool/viewer handler listed in code-map §A.2 gets `@_transactional` (or its viewer
+  equivalent `_transaction(tool="viewer:…")`) and replaces the `taskmaster_v3` writer call with
+  `tx = _store_tx()`; doc validated by the kind validator (R4); `tx.create(kind, doc, body=body)`
+  / `tx.put` / `tx.archive`. Reads inside those tools use `tx.get`/`tx.list`, never `read_*`.
+- The `sync_*_index(backlog_data, backlog_path)` helpers change signature to
+  `sync_*_index(backlog_data, rows)` where `rows` is `tx.list(kind)` output (R3);
+  `sync_handover_index` archives overflow via `tx.archive("handover", id)` — pass `tx` in.
+  `sync_thread_registry` likewise.
+- Composite ops stay one transaction: `promote_bugs_to_issue` (bug puts + issue create),
+  `backlog_complete_task` (task + handover smart-close + bug archive), `link_decision_to_handover`,
+  `backlog_link_create/remove/reconcile` (rewrite `write_entity_anywhere` so **every** kind goes
+  through the configured store hook, not only tasks; `read_entity_anywhere` reads `tx.get`).
+- Delete from `taskmaster_v3.py`: `write_bug`, `update_bug`, `archive_bug`, `write_issue`,
+  `update_issue`, `write_handover`, `apply_supersession`, `apply_handover_review_flag`,
+  `update_handover_status`, `smart_auto_close_handovers` (becomes a pure planner returning ids
+  to close), `backfill_handover_status`, `migrate_handover_statuses` (pure: returns the new
+  docs), `archive_handover`, `write_decision`, `update_decision`, `resolve_decision`,
+  `drop_decision`, `link_decision_to_handover`, `write_idea`, `update_idea`, `_write_ideas_index`,
+  `write_note`, `update_note`, `archive_note`, `write_area`, `update_area`, `write_tracker`,
+  `update_tracker`, `next_bug_id`, `next_issue_id`, `next_decision_id`, `next_idea_id`,
+  `next_note_id`, the `list_*_ids` globbers used only by writers, `atomic_write` callers for
+  `project.yaml` (`backlog_project_set/init` → `tx.put("project", …)`), and
+  `_write_local_meta_cache`'s `_atomic_write` (route through a `Store.write_local_cache(name, bytes)`
+  helper so the guard's stack rule holds).
+- Delete `_sync_projection()` and all seven call sites; delete `_store_for_read()` and the poke
+  in `_store_read_task`; `_load_snapshot` uses `_store()`.
+- `_ensure_handover_status_backfilled`: set the durable flag whether or not the call owned the
+  transaction (code-map §A.2 defect).
+- `backlog_update_epic(id, "status", "archived")` applies the same task cascade as the batch
+  path (step-2 re-review item).
+- Read tools for these kinds (`backlog_bug_list/get`, `backlog_issue_list/get`,
+  `backlog_handover_list/get`, `backlog_idea_list/get`, `backlog_note_list/get`,
+  `backlog_area_list/get`, `backlog_decision_list/get`) read from `load_dict()` rows: extend
+  `Store._load_cached_dict_from_connection` so the compat dict carries a private
+  `_rows: {kind: {id: (doc, body)}}` map for the non-task kinds (runtime-only, stripped by
+  `_flatten_backlog_dict`), and `backlog_bug_list` stops mutating the dict.
+- Tests: per kind, one create/update/archive round trip asserting the committed row **and** the
+  exported file; one two-process id-allocation test per numeric kind (extend the stress worker
+  op mix with `bug_create`, `issue_create`, `decision_create`, `idea_create`, `note_create`,
+  `handover_create`, `area_create` and add them to `REQUIRED_OPS`); one test that
+  `linear-queue.json` is imported then absent; one test that `IDEAS.md` regenerates on idea
+  create and is never imported.
+- Commit per kind group is acceptable; final commit: `feat(server): move every entity writer onto the store`.
+
+### 3.4 Hot-path row API and generalized committed rendering
+
+**Files:** `taskmaster/backlog_server.py`, `tests/test_committed_response_rendering.py`,
+`tests/test_store_server_integration.py`.
+
+- `_TxFrame.renderers: list` (stack). `_render_after_commit(renderer)` pushes; `_transactional`
+  snapshots the stack depth before calling `fn`, and on a **nested** call (frame already
+  active) pops anything pushed by the nested body after it returns and discards it, so only
+  the outermost tool's renderer survives (R6). Test: `backlog_complete_task` calling into an
+  update path returns complete-task's own string.
+- Convert `backlog_update_task`, `backlog_record_gate`, `backlog_skip_gate`,
+  `backlog_record_merge`, `backlog_add_task`, `backlog_complete_task`, `backlog_pick_task`,
+  `backlog_batch_update`, `backlog_note` to `tx.get`/`tx.put`/`tx.create` on `("task", id)`
+  rows for the task they touch (epic/phase lookups may still use the dict). Each renders via
+  `_render_after_commit` from `committed[("task", id)]`; `backlog_batch_update` renders each
+  line from its own committed doc.
+- `_transactional` appends ` [seq N]` (N = `frame.tx.seq`) to every latched tool's string
+  result; viewer JSON responses carry `"seq": N`. Test: every mutating public tool's result
+  matches `r"\[seq \d+\]$"` and the number exists in `changes`.
+- `regenerate_context` runs once per transaction (on latch), not three times;
+  `regenerate_progress_dashboard` is either called from the exporter's PROGRESS.md path or
+  deleted with its six no-op monkeypatches.
+- `_load_task_full_identified`'s projection-overlay branch: add a test that it is unreachable
+  on a v4 project, then delete the branch if the test proves it; keep it only if a v3 path
+  still reaches it, with the test documenting which.
+- Commit: `feat(server): row API for the hot path, committed rendering everywhere, [seq N]`.
+
+### 3.5 `backlog_store_status` and the Linear worker
+
+**Files:** `taskmaster/backlog_server.py`, `taskmaster/integrations/linear/worker.py`,
+`tests/test_store_status_tool.py` (new), `tests/test_linear_*.py` as affected.
+
+- New MCP tool `backlog_store_status()` beside `backlog_index_status`, rendering
+  `Store.status()` per spec §3.8: root + resolution source, schema version, db/WAL sizes, last
+  20 changes, dirty and quarantined files, live sessions, filesystem warning, merge conflicts
+  in 24 h, `corrupt-*` files, pending Linear queue count.
+- `worker.enqueue` → `tx.linear_enqueue` (inside the caller's transaction);
+  `worker.drain` → `Store.linear_pending` + per-item `linear_mark` in short transactions;
+  delete `queue_path`, `read_queue`, `_write_queue`.
+- Commit: `feat(server): backlog_store_status; Linear queue drains from the store`.
+
+### 3.6 Step 3 verification and gate
+
+```powershell
+uv run pytest -q -m "not slow" --basetemp=%TEMP%\tm-pytest
+uv run pytest -q tests/test_store_concurrency.py --basetemp=%TEMP%\tm-pytest
+uv run pytest -q --basetemp=%TEMP%\tm-pytest
+```
+
+Then a fresh-context whole-step review (opus) plus a Codex adversarial review, focused on:
+allowlist completeness (grep `taskmaster/` for `write_text|atomic_write|os.replace|rename|unlink`
+outside `store.py`), composite-op atomicity, renderer stack correctness, id allocation under the
+extended stress mix, and the `IDEAS.md` / `linear-queue.json` one-way files. Fix every
+critical/important finding with a red test first. Update the changelog boundary paragraph to
+"defects 1–5 fixed for every kind". Merge to `master` with `--no-ff`.
+
+---
+
+## Step 4 — absorb `index.py`; viewer reads; hooks
+
+### 4.1 Absorb the derived index
+
+**Files:** create `taskmaster/paths.py`; delete `taskmaster/index.py`; modify
+`taskmaster/store.py`, `taskmaster/backlog_server.py`, `hooks/edit_resurface.py`, `README.md`;
+tests `tests/test_index_*.py` → rewritten as `tests/test_store_derived_queries.py`,
+`tests/test_backlog_query.py`, `tests/test_backlog_search_fts.py`, `tests/test_edit_resurface_hook.py`.
+
+- Move the five helpers named in R9 to `paths.py`; `store.py` imports from there.
+- `backlog_query` runs its guarded SQL against `store.db` (`Store.connection` in a `BEGIN`
+  snapshot); docstring documents `entities`, `changes`, `projection`, `sessions`, `linear_queue`,
+  `links`, `related`, `entity_paths`, `handover_tasks`, `entity_fts`.
+- `_search_via_index` queries `entity_fts` in the store; never builds anything.
+- `_load_snapshot` stops calling `build_index`; `INDEX_REFRESH_BUDGET_S`, `_log_index_error`,
+  `local/index.log` go away. `backlog_index_status` reports derived-table row counts and last
+  rebuild from the store and, with `rebuild=True`, calls `rebuild_derived()` and unlinks a
+  legacy `local/index.db` (R9).
+- Delete the CLI entry at the bottom of `backlog_server.py` that called `index.build_index`.
+- Commit: `refactor(index): derived tables live in the store; index.py removed`.
+
+### 4.2 Viewer reads and the artifact root
+
+**Files:** `taskmaster/backlog_server.py`, `taskmaster/taskmaster_v3.py`,
+`tests/test_v4_server.py`, `tests/test_api_notes.py`, `tests/test_epic_detail_endpoint.py`.
+
+- `GET /api/bugs`, `/api/issues`, `/api/ideas`, `/api/notes` serve rows from `_load_snapshot()`
+  (the `_rows` map from §3.3) and carry the snapshot ETag; delete `list_issue_ids_cwd`,
+  `load_issue`, `_resolve_artifact_root` and its two viewer uses.
+- `_viewer_etag()` on a network-filesystem store returns `f"{token}:{max_seq}"` from
+  `load_dict_with_identity` rather than `":0"`; viewer `_serve_json`/PATCH surface a
+  legacy-layout refusal as 409 with the actionable message (step-2 re-review item).
+- Full `LEGAL_STATUS_TRANSITIONS` applied in batch and viewer paths, not only for `archived`.
+- Commit: `feat(viewer): every GET serves committed store rows under one ETag`.
+
+### 4.3 Hooks
+
+**Files:** `hooks/edit_resurface.py`, `hooks/merge_gate_decide.py`, `hooks/merge_recorder_stamp.py`,
+`tests/test_edit_resurface_hook.py`, `tests/test_merge_gate_decide.py` (create if absent).
+
+- Shared root resolution: `taskmaster.store.resolve_root(cwd)` (already handles
+  `TASKMASTER_ROOT` and the git common dir) used by all three hooks.
+- `edit_resurface`: open `<root>/.taskmaster/local/store.db` if present; staleness =
+  `MAX(changes.seq)` versus the seq stored in `local/hook-seen/`; query `entity_paths` + `related`
+  in the store; if the db is absent, print nothing and exit 0 (never import in a hook, R10).
+- `merge_gate_decide`: query `entities WHERE kind='task' AND json_extract(doc,'$.branch')=?` for
+  the source branch's task and its gate state; fallback to `iter_task_files` only when the db is
+  absent, with a log line.
+- `merge_recorder_stamp`: keep delegating to `backlog_record_merge`; add the common-dir root
+  resolution before importing `backlog_server` so a linked worktree stamps the main store.
+- Commit: `feat(hooks): resurface and merge gates read the store, never import`.
+
+### 4.4 Step 4 verification and gate
+
+Same three commands as §3.6; fresh-context review focused on query-guard coverage of the new
+tables, hook fail-open behaviour, and viewer ETag consistency. Merge to `master` with `--no-ff`.
+
+---
+
+## Step 5 — scripts, docs, release, CodeMaestro verification
+
+### 5.1 Scripts through the store
+
+**Files:** `scripts/backfill_tldr.py`, `scripts/migrate_links.py`, `scripts/migrate_handover_statuses.py`, `tests/test_scripts_store.py` (new).
+
+- Each script opens the store via `store.open_store(root)` and runs its edits as one
+  `store.transaction(tool="scripts/<name>")` using `tx.list`/`tx.put`; `save_v3` and raw
+  `write_text` calls are removed. `--dry-run` stays. `migrate_handover_statuses.py` no longer
+  tells the user to run `backlog_handover_resync`.
+- Commit: `refactor(scripts): maintenance scripts write through the store`.
+
+### 5.2 Docs, skills, playbooks, changelog, version
+
+**Files:** `README.md`, `docs/TASKMASTER.md`, `skills/*/SKILL.md` and `playbooks/*/playbook.md`
+that mention `backlog_index_status`, `index.db`, or the Linear retry queue; `CHANGELOG.md`;
+`pyproject.toml`; `docs/specs/2026-09-04-sqlite-store-design.md` status line.
+
+- README index section rewritten: one database, `backlog_store_status`, `[seq N]` meaning per
+  decision 7, legacy-layout refusal, per-repository backlog (decision 2).
+- Skill/playbook text: add a short "Verifying writes" paragraph to `taskmaster`, `pick-task`,
+  `review-gate`, `end-session`, `handover`, `bug`, `issue`, `linear` skills: a result ending in
+  `[seq N]` is committed; `backlog_store_status` shows dirty/quarantined files and busy holders.
+  Skill lint tests (`tests/test_*_skill_lint.py`) must stay green — check their budgets.
+- CHANGELOG: replace the "Unreleased — SQLite store, steps 1 and 2" entry with a `6.0.0` entry
+  covering steps 1–5 (breaking list: legacy layout refusal, `context` removed from backlog.yaml,
+  `index.db` gone, `linear-queue.json` gone, `IDEAS.md` derived, backlog per repository).
+- `pyproject.toml` version `6.0.0` (R12). Spec status line → "implemented 6.0.0".
+- Commit: `docs: 6.0.0 — SQLite store complete`.
+
+### 5.3 CodeMaestro verification (copy, R11)
+
+- Copy `C:\Users\gruku\Files\Work\CodeMaestro\.taskmaster` into a scratchpad directory with a
+  `.git` initialized (`git init` so root resolution works), set `TASKMASTER_ROOT` to it, and in a
+  subprocess: `backlog_store_status()`, `backlog_status()`, `backlog_list_tasks(limit=5)`,
+  one `backlog_update_task` on a real task id, `backlog_store_status()` again. Record: import
+  time, task/epic/bug/handover row counts versus file counts, quarantined files (list them),
+  the `[seq N]` of the update, and that the update's file changed and nothing else did
+  (`git status --short` on the copy shows exactly the touched files plus the dropped `context`
+  block). Write the numbers into the handoff and the plan's execution status.
+- Do **not** open the live CodeMaestro checkout.
+
+### 5.4 Step 5 gate and handoff
+
+Full suite green; fresh-context review of the docs for claims not backed by code; merge to
+`master` with `--no-ff`; write `docs/handoffs/2026-09-05-sqlite-store-complete.md` with the
+merge SHAs, the CodeMaestro copy numbers, and the remaining deferred items (if any). Do not push.
