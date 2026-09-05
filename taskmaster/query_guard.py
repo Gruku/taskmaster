@@ -1,4 +1,4 @@
-# User intent: let the agent run arbitrary SELECTs over the derived backlog index without ever
+# User intent: let the agent run arbitrary SELECTs over the backlog store without ever
 # being able to write to it. Two independent gates — a textual guard on the statement and an
 # sqlite3 authorizer on the connection — so a bypass of one is still stopped by the other.
 from __future__ import annotations
@@ -7,8 +7,6 @@ import re
 import sqlite3
 import time
 
-from taskmaster.index import TABLES
-
 # `LIMIT` caps rows, not work: a cross join or a runaway recursive CTE can burn minutes
 # inside one MCP call. The progress handler aborts the statement past this deadline.
 QUERY_TIMEOUT_S = 5.0
@@ -16,12 +14,29 @@ QUERY_TIMEOUT_S = 5.0
 # promptly, large enough that the callback is not the bottleneck.
 PROGRESS_INSTRUCTIONS = 10_000
 
+# The tables `backlog_query` may read, named here rather than imported from
+# `store` so the guard has no dependency on the module it guards. `meta` (store
+# bookkeeping) and `projection_base` (whole file bodies as blobs) are absent on
+# purpose: neither answers a backlog question and the second dumps a document per
+# row. `tests/test_backlog_query.py` pins this list against the live schema.
+TABLES = (
+    "entities", "changes", "projection", "sessions", "linear_queue",
+    "entity_paths", "links", "related", "handover_tasks", "entity_fts",
+)
+
 # The schema summary appended to every error, so a failed query self-corrects.
 SCHEMA_SUMMARY = (
-    "entities(id,kind,status,title,epic,phase,lane,repo,priority,created,updated,archived,file)\n"
-    "entity_paths(entity_id,path,match_kind,source) links(src,type,dst,derived)\n"
-    "handovers(id,thread,tldr,next_action,session_kind,branch,tip_commit,supersedes)\n"
-    "handover_tasks(handover_id,task_id) related(a,b,via,weight) entity_fts(id,kind,title,body)"
+    "entities(kind,id,epic,status,archived,deleted,doc,body,rev,updated_seq)"
+    "  -- doc is JSON: json_extract(doc,'$.title')\n"
+    "entity_paths(kind,id,path,match_kind,source)"
+    " links(src_kind,src_id,type,dst_kind,dst_id,derived)\n"
+    "related(a_kind,a_id,b_kind,b_id,via,weight) handover_tasks(handover_id,task_id)"
+    " entity_fts(kind,id,title,body)\n"
+    "changes(seq,ts,session,tool,kind,id,op,fields,before,after)"
+    " sessions(session,pid,host,started,last_seen,cwd,current_tool)\n"
+    "projection(file,kind,id,content_hash,mtime,size,dirty,quarantined,exported_seq)\n"
+    "linear_queue(seq,op,target_id,tracker_id,payload,state,attempts,last_error,"
+    "claimed_by,claimed_at)"
 )
 
 # FTS5 keeps its own shadow tables; a MATCH query reads them and sqlite_master directly.
@@ -135,7 +150,7 @@ _ACTION_NAMES = {
 
 
 class Authorizer:
-    """Callable sqlite3 authorizer: read the index tables, nothing else.
+    """Callable sqlite3 authorizer: read the store tables, nothing else.
 
     Instantiate one per query, passing that query's `declared_names`. It remembers
     the first thing it denied so the tool can say *what* was refused — SQLite's own

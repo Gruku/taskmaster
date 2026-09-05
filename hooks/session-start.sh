@@ -14,10 +14,6 @@ Install: https://docs.astral.sh/uv/getting-started/installation/
 WARN
 fi
 
-# Determine plugin root directory
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
-PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-
 # Escape string for JSON embedding
 escape_for_json() {
     local s="$1"
@@ -48,11 +44,5 @@ cat <<EOF
   }
 }
 EOF
-
-# Warm the derived index in the background, after the JSON is printed so a slow
-# uv start can never delay the hook.
-if command -v uv >/dev/null 2>&1 && [ -f ".taskmaster/backlog.yaml" ]; then
-  (uv run "${PLUGIN_ROOT}/backlog_server.py" --build-index >/dev/null 2>&1 &)
-fi
 
 exit 0

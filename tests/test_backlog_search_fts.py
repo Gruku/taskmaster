@@ -1,6 +1,6 @@
-# User intent: prove backlog_search reaches every entity kind through the FTS5 index, filters by
-# kind, survives punctuation in the query, and still answers from the substring scan when the
-# derived index is unavailable — so search never regresses on a machine without an index.db.
+# User intent: prove backlog_search reaches every entity kind through the store's FTS5 table,
+# filters by kind, survives punctuation in the query, and still answers from the substring scan
+# when the store is unreadable — so search never regresses into an error.
 from __future__ import annotations
 
 import shutil
@@ -18,12 +18,11 @@ FIXTURE_SRC = PLUGIN_ROOT / "tests" / "fixtures" / "index_backlog" / ".taskmaste
 
 @pytest.fixture()
 def indexed_server(tmp_taskmaster):
-    """`tmp_taskmaster` with the index fixture copied in and the index built."""
+    """`tmp_taskmaster` with the fixture projection adopted into the store."""
     from taskmaster import backlog_server as bs  # noqa: PLC0415
-    from taskmaster.index import build_index  # noqa: PLC0415
 
     shutil.copytree(FIXTURE_SRC, tmp_taskmaster / ".taskmaster", dirs_exist_ok=True)
-    build_index(bs._backlog_path())
+    bs._load()
     return bs
 
 
@@ -87,27 +86,40 @@ def test_result_list_is_capped_at_fifteen(indexed_server, monkeypatch):
     assert len([ln for ln in out.splitlines() if ln.startswith("- ")]) == 2
 
 
-def test_search_fallback_without_index(tmp_taskmaster, monkeypatch):
+def test_search_fallback_when_the_store_is_unreadable(tmp_taskmaster, monkeypatch):
     from taskmaster import backlog_server as bs  # noqa: PLC0415
-    from taskmaster import index  # noqa: PLC0415
 
-    monkeypatch.setattr(
-        index, "open_ro", lambda bp: (_ for _ in ()).throw(FileNotFoundError()))
     bs.backlog_add_epic("e1", "Epic one", "the widget works")
     bs.backlog_add_phase("dev", "Development")
     bs.backlog_add_task("Widget frobnicator", "e1", phase="dev")
+    monkeypatch.setattr(bs, "_search_via_index", lambda query, kinds: None)
     out = bs.backlog_search("frobnicator")
     assert "— Widget frobnicator (medium, e1, todo)" in out
 
 
-def test_fallback_is_used_when_the_index_errors(indexed_server, monkeypatch):
-    """A broken index must not surface an error — the substring scan answers instead."""
+def test_fallback_is_used_when_the_fts_query_errors(indexed_server, monkeypatch):
+    """A broken FTS read must not surface an error — the substring scan answers instead."""
     import sqlite3  # noqa: PLC0415
 
-    from taskmaster import index  # noqa: PLC0415
+    real_store = indexed_server._store
 
-    monkeypatch.setattr(
-        index, "open_ro", lambda bp: (_ for _ in ()).throw(sqlite3.OperationalError("boom")))
+    class BrokenConnection:
+        def execute(self, *args, **kwargs):
+            raise sqlite3.OperationalError("boom")
+
+    class BrokenStore:
+        connection = BrokenConnection()
+
+    # Only the FTS path is broken; `_load()` still runs against the real store,
+    # which is what the substring fallback reads.
+    calls = {"n": 0}
+
+    def flaky():
+        calls["n"] += 1
+        return BrokenStore() if calls["n"] > 1 else real_store()
+
+    indexed_server._load()
+    monkeypatch.setattr(indexed_server, "_store", flaky)
     out = indexed_server.backlog_search("usage")
     assert "Error" not in out
     assert "eng-001" in out
@@ -115,7 +127,7 @@ def test_fallback_is_used_when_the_index_errors(indexed_server, monkeypatch):
 
 
 def test_search_sees_out_of_band_edits_without_another_tool_call(indexed_server, tmp_taskmaster):
-    """`backlog_search` calls `_load()`, which refreshes the index, so a file edit is visible."""
+    """`backlog_search` calls `_load()`, which adopts the edited file, so it is visible."""
     import os  # noqa: PLC0415
 
     bug = tmp_taskmaster / ".taskmaster" / "bugs" / "B-001.md"
@@ -126,27 +138,22 @@ def test_search_sees_out_of_band_edits_without_another_tool_call(indexed_server,
     stamp = os.path.getmtime(bug) + 5
     os.utime(bug, (stamp, stamp))
 
+    # The store imports hand edits at most once every two seconds on a read path;
+    # the fixture's own load just consumed that window.
+    indexed_server._store().force_scan_on_next_read()
     out = indexed_server.backlog_search("Quokkasaurus")
     assert "- `B-001` — Quokkasaurus rows are double counted (bug, open)" in out
 
 
-def test_archived_entities_still_appear(indexed_server, tmp_taskmaster):
+def test_archived_entities_still_appear(indexed_server):
     """Ruling: archived items stay in results — the old scan included them and status is shown."""
-    import os  # noqa: PLC0415
-
-    backlog = tmp_taskmaster / ".taskmaster" / "backlog.yaml"  # eng-002 is the only `status: done`
-    backlog.write_text(
-        backlog.read_text(encoding="utf-8").replace("status: done", "status: archived"),
-        encoding="utf-8")
-    stamp = os.path.getmtime(backlog) + 5
-    os.utime(backlog, (stamp, stamp))
-
+    indexed_server.backlog_archive_task("eng-002")  # the fixture's only `status: done` task
     out = indexed_server.backlog_search("usage")
     assert "- `eng-002` — Seed the usage table (medium, eng, archived)" in out
 
 
-def test_search_finds_a_task_by_branch_via_the_index(indexed_server):
-    """Branch names are in the FTS body now; a non-task result proves this is not the fallback."""
+def test_search_finds_a_task_by_branch_via_the_store(indexed_server):
+    """Branch names are in the FTS body; the header count proves this is not the fallback."""
     out = indexed_server.backlog_search("quokka-rework")
     assert "- `eng-001` — Rework model usage accounting (high, eng, in-progress)" in out
     assert out.startswith("**1 match** for `quokka-rework`:")

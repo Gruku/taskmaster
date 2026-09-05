@@ -390,7 +390,7 @@ def test_index_rebuild_goes_through_the_store_and_keeps_store_db(tm_epic_phase):
     finally:
         store.Store.rebuild_derived = real
     assert calls, "backlog_index_status(rebuild=True) skipped Store.rebuild_derived"
-    assert "Index:" in out
+    assert "Store:" in out and "Rows: entities=" in out
     assert db.exists(), "the derived rebuild deleted store.db"
     after = store.status(_bp(tm_epic_phase))
     assert after.creation_token == before.creation_token

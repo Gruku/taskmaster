@@ -1,6 +1,7 @@
-# User intent: prove the read-only SQL door onto the derived index cannot be turned into a
+# User intent: prove the read-only SQL door onto the backlog store cannot be turned into a
 # write door — the guard rejects writes, PRAGMA, ATTACH and stacked statements, the authorizer
-# is defense in depth, and the tool renders a capped table with a schema hint on errors.
+# is defense in depth, the reader never takes a write lock or outlives its call, and the tool
+# renders a capped table with a schema hint on errors.
 from __future__ import annotations
 
 import shutil
@@ -20,12 +21,11 @@ FIXTURE_SRC = PLUGIN_ROOT / "tests" / "fixtures" / "index_backlog" / ".taskmaste
 
 @pytest.fixture()
 def indexed_server(tmp_taskmaster):
-    """`tmp_taskmaster` with the index fixture copied in and the index built."""
+    """`tmp_taskmaster` with the fixture projection adopted into `local/store.db`."""
     from taskmaster import backlog_server as bs  # noqa: PLC0415
-    from taskmaster.index import build_index  # noqa: PLC0415
 
     shutil.copytree(FIXTURE_SRC, tmp_taskmaster / ".taskmaster", dirs_exist_ok=True)
-    build_index(bs._backlog_path())
+    bs._load()
     return bs
 
 
@@ -63,7 +63,7 @@ def test_write_capable_function_is_unavailable(indexed_server):
     assert out.startswith("Error:")
 
 
-def test_authorizer_is_the_thing_stopping_off_index_reads(indexed_server):
+def test_authorizer_is_the_thing_stopping_off_store_reads(indexed_server):
     """Would fail if the authorizer were removed: both queries are valid read-only SQL."""
     allowed = indexed_server.backlog_query("SELECT count(*) AS n FROM sqlite_master")
     assert not allowed.startswith("Error:")
@@ -79,12 +79,13 @@ def test_limit_clamped(indexed_server):
 def test_docstring_examples_run(indexed_server):
     """The three queries advertised in the tool description must actually work."""
     bugs = indexed_server.backlog_query(
-        "SELECT id,status,title FROM entities WHERE kind='bug' AND status IN ('open','adopted')")
-    assert "B-001" in bugs
+        "SELECT id,status,json_extract(doc,'$.title') AS title FROM entities "
+        "WHERE kind='bug' AND deleted=0 AND status IN ('open','adopted')")
+    assert "B-001" in bugs and "Usage rows are double counted" in bugs
 
     paths = indexed_server.backlog_query(
-        "SELECT e.id,e.kind,e.status,e.title FROM entity_paths p "
-        "JOIN entities e ON e.id=p.entity_id WHERE p.path LIKE '%model.py'")
+        "SELECT e.kind,e.id,e.status FROM entity_paths p "
+        "JOIN entities e ON e.kind=p.kind AND e.id=p.id WHERE p.path LIKE '%model.py'")
     assert "B-001" in paths and not paths.startswith("Error:")
 
     # FTS5 needs its shadow tables and an internal `PRAGMA data_version`.
@@ -138,8 +139,8 @@ def test_aggregate_over_a_cte_is_allowed(indexed_server):
     assert not out.startswith("Error:") and "5" in out
 
     linked = indexed_server.backlog_query(
-        "WITH RECURSIVE reach(id) AS (SELECT 'B-001' UNION SELECT l.dst FROM links l "
-        "JOIN reach r ON l.src=r.id) SELECT count(*) AS n FROM reach")
+        "WITH RECURSIVE reach(id) AS (SELECT 'B-001' UNION SELECT l.dst_id FROM links l "
+        "JOIN reach r ON l.src_id=r.id) SELECT count(*) AS n FROM reach")
     assert not linked.startswith("Error:")
 
 
@@ -210,49 +211,61 @@ def test_guard_keeps_the_query_it_returns():
     assert validate("  SELECT 1  ;  ") == "SELECT 1"
 
 
-def test_query_builds_the_index_when_missing(indexed_server):
-    from taskmaster import index  # noqa: PLC0415
+def test_query_answers_from_a_cold_store(tmp_taskmaster):
+    """No warm-up call: the query itself opens the store and adopts the projection."""
+    from taskmaster import backlog_server as bs  # noqa: PLC0415
 
-    db = index.db_path(indexed_server._backlog_path())
-    db.unlink()
-    assert not db.exists()
-    out = indexed_server.backlog_query("SELECT id FROM entities ORDER BY id", limit=5)
-    assert "B-001" in out and db.exists()
+    shutil.copytree(FIXTURE_SRC, tmp_taskmaster / ".taskmaster", dirs_exist_ok=True)
+    out = bs.backlog_query("SELECT id FROM entities ORDER BY id", limit=5)
+    assert "B-001" in out and not out.startswith("Error:")
+    assert (tmp_taskmaster / ".taskmaster" / "local" / "store.db").exists()
+
+
+def test_allowlist_matches_the_live_store_schema(indexed_server):
+    """Every readable table must exist, and the store's private ones must stay out."""
+    from taskmaster.query_guard import TABLES  # noqa: PLC0415
+
+    live = {row[0] for row in indexed_server._store().connection.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
+    assert set(TABLES) <= live, set(TABLES) - live
+    assert live - set(TABLES) >= {"meta", "projection_base"}
+    for table in ("meta", "projection_base"):
+        assert indexed_server.backlog_query(
+            f"SELECT count(*) FROM {table}").startswith("Error: not authorized:")
+
+
+def test_reader_leaves_no_transaction_and_takes_no_write_lock(indexed_server):
+    """Spec §3.1: a read holds no cursor and no snapshot across tool calls."""
+    import sqlite3  # noqa: PLC0415
+
+    con = indexed_server._store().connection
+    out = indexed_server.backlog_query("SELECT id FROM entities ORDER BY id")
+    assert not out.startswith("Error:")
+    assert not con.in_transaction
+
+    # A concurrent writer must be able to take the write lock during a query, so
+    # the query's own BEGIN has to be deferred rather than immediate.
+    writer = sqlite3.connect(indexed_server._store().db_path, timeout=1.0)
+    try:
+        writer.execute("BEGIN IMMEDIATE")
+        assert not indexed_server.backlog_query(
+            "SELECT count(*) AS n FROM entities").startswith("Error:")
+    finally:
+        writer.rollback()
+        writer.close()
+
+
+def test_a_failed_query_still_clears_the_authorizer(indexed_server):
+    """A denial must not leave the shared connection unable to write afterwards."""
+    assert indexed_server.backlog_query("SELECT count(*) FROM meta").startswith("Error:")
+    con = indexed_server._store().connection
+    assert not con.in_transaction
+    indexed_server.backlog_add_phase("later", "Later")  # writes through the same connection
+    assert "later" in indexed_server.backlog_query(
+        "SELECT id FROM entities WHERE kind='phase'")
 
 
 def test_long_cells_are_truncated(indexed_server):
     out = indexed_server.backlog_query("SELECT hex(zeroblob(200)) AS wide")
     cell = out.splitlines()[1]
     assert len(cell) == 80
-
-
-def test_cold_build_does_not_eat_the_query_deadline(tmp_taskmaster, monkeypatch):
-    """The 5 s clock covers the query only — a first-ever call builds, then queries.
-
-    Regression guard: the Deadline used to be constructed before the cold build,
-    so the very first `backlog_query` on a project spent its whole budget
-    indexing and returned a timeout instead of rows.
-    """
-    import time  # noqa: PLC0415
-
-    from taskmaster import backlog_server as bs  # noqa: PLC0415
-    from taskmaster import index as _index  # noqa: PLC0415
-    from taskmaster import query_guard  # noqa: PLC0415
-
-    shutil.copytree(FIXTURE_SRC, tmp_taskmaster / ".taskmaster", dirs_exist_ok=True)
-    assert not _index.db_path(bs._backlog_path()).exists()
-    monkeypatch.setattr(query_guard, "QUERY_TIMEOUT_S", 0.5)
-    # The handler only aborts while a statement is executing, and the fixture is
-    # far too small to reach the real instruction interval — so make every step
-    # check the clock, which is what exposes a deadline that started too early.
-    monkeypatch.setattr(query_guard, "PROGRESS_INSTRUCTIONS", 1)
-    real_build = _index.build_index
-
-    def slow_build(*args, **kwargs):
-        time.sleep(1.0)  # longer than the whole patched query timeout
-        return real_build(*args, **kwargs)
-
-    monkeypatch.setattr(_index, "build_index", slow_build)
-    out = bs.backlog_query("SELECT id FROM entities ORDER BY id", limit=5)
-    assert not out.startswith("Error:"), out
-    assert "rows (capped)" in out and "B-001" in out
