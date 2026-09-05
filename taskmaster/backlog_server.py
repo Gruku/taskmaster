@@ -2127,7 +2127,7 @@ def backlog_index_status(rebuild: bool = False) -> str:
     return _render_index_report(bp, report)
 
 
-def _render_store_report(status: "store.StoreStatus", linear_pending: int) -> str:
+def _render_store_report(status: "store.StoreStatus") -> str:
     """Format a `store.StoreStatus` as the `backlog_store_status` body.
 
     Every field spec §3.8 names gets a line even when it is empty, so a reader
@@ -2149,7 +2149,7 @@ def _render_store_report(status: "store.StoreStatus", linear_pending: int) -> st
         listing("Quarantined", status.quarantined_files),
         listing("Corrupt", status.corrupt_files),
         f"Merge conflicts (24 h): {status.merge_conflicts_24h}",
-        f"Linear queue: {linear_pending} pending",
+        f"Linear queue: {status.linear_pending} pending",
         f"Warning: {status.warning or 'none'}",
     ]
 
@@ -2177,14 +2177,20 @@ def backlog_store_status() -> str:
     The store is the authority: root and how it was resolved, schema version,
     database and WAL size, the last 20 changes, dirty and quarantined
     projection files, live sessions, any filesystem warning, merge conflicts in
-    the last 24 hours, recovered `corrupt-*` databases, and the pending Linear
-    push count. Read-only — it never writes or rebuilds anything.
+    the last 24 hours, databases an earlier recovery moved aside, and the
+    pending Linear push count.
+
+    Genuinely read-only: it will not create a store that does not exist yet, and
+    it will not move a damaged one aside. Either is reported on the `Warning:`
+    line and left for you to act on, because a diagnostic that repairs the
+    evidence is worse than one that says nothing.
     """
     bp = _backlog_path()
     if not bp.exists():
         return f"no backlog found at {bp}"
-    opened = _store_for(bp)
-    return _render_store_report(opened.status(), len(opened.linear_pending()))
+    # No `_configure_store_derivers()`: nothing here exports or regenerates, so
+    # the read does not need the derivation hooks and does not install them.
+    return _render_store_report(store.read_only_status(bp))
 
 
 def _render_query_table(description, rows: list, limit: int) -> str:
@@ -10319,11 +10325,16 @@ def backlog_linear_status() -> str:
             "permanent_failures": 0,
             "oldest_enqueued_at": None,
             "last_error": None,
+            "warning": None,
         }, indent=2)
 
     # `done` rows are settled history; the depth a caller acts on is what is
-    # still pending plus what is parked awaiting an explicit retry.
-    rows = _store_for(bp).linear_rows(states=("pending", "failed"))
+    # still pending plus what is parked awaiting an explicit retry. On a network
+    # root with no usable store there are no rows to read, and the queue reads
+    # answer empty rather than raising — the warning is the useful part.
+    opened = _store_for(bp)
+    degraded = opened.projection_only_reason()
+    rows = opened.linear_rows(states=("pending", "failed"))
     pending = [row for row in rows if row["state"] == "pending"]
     parked = [row for row in rows if row["state"] == "failed"]
 
@@ -10346,6 +10357,7 @@ def backlog_linear_status() -> str:
         "permanent_failures": len(parked),
         "oldest_enqueued_at": oldest_at,
         "last_error": last_error,
+        "warning": degraded,
     }, indent=2)
 
 
@@ -10372,6 +10384,14 @@ def backlog_linear_retry(target_id: str = "") -> str:
     if cfg is None:
         return json.dumps({"error": "linear.yaml not found — run backlog_linear_bootstrap_apply first."})
 
+    # A drain is a queue write, and on a network root with no usable store there
+    # is no queue to write. Say so before spending a token lookup and an HTTP
+    # client on it.
+    st = _store_for(bp)
+    degraded = st.projection_only_reason()
+    if degraded:
+        return json.dumps({"error": f"store unavailable on network storage: {degraded}"})
+
     try:
         from taskmaster.taskmaster_v3 import get_linear_workspace, resolve_linear_token
         workspace = get_linear_workspace(cfg)
@@ -10391,7 +10411,6 @@ def backlog_linear_retry(target_id: str = "") -> str:
     # gets a fresh budget (routine drains never see parked rows at all). Rows for
     # other targets are not touched, so a target-scoped retry cannot lose them
     # and a crash mid-drain leaves them exactly as they were (B-029).
-    st = _store_for(bp)
     candidates = [
         row
         for row in st.linear_rows(states=("pending", "failed"))

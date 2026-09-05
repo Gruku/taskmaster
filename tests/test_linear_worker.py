@@ -330,6 +330,46 @@ def test_drain_no_op_when_queue_empty(tmp_path):
     assert counts == {"ok": 0, "skipped": 0, "transient": 0, "permanent": 0, "unknown": 0}
 
 
+def test_scoped_drain_finds_its_target_behind_a_full_batch(tmp_path, monkeypatch):
+    """The target filter has to run in the query, before the row limit. Filtering
+    an already-truncated page drains nothing and still reports success."""
+    import taskmaster.integrations.linear.worker as _w
+
+    bp = _make_backlog(tmp_path, tracker_id="linear-cm-eng-1")
+    write_tracker(bp, external_system="linear", instance_alias="cm",
+                  external_key="ENG-1", title="x", status="x")
+    monkeypatch.setattr(_w, "DRAIN_BATCH", 3)
+    with _store.open_store(bp).transaction(tool="test-seed-many") as tx:
+        for index in range(5):
+            tx.linear_enqueue("task_upsert", f"filler-{index}", None, None)
+        enqueue(tx, op="task_upsert", target_id="linear-001")
+
+    def handler(request):
+        return httpx.Response(200, json={
+            "data": {"issueUpdate": {"issue": {"id": "iss-uuid", "identifier": "ENG-1"}}},
+        })
+
+    counts = _w.drain(
+        _store.open_store(bp), _make_client(handler), _make_config(),
+        backlog_data=_backlog_data(bp), only_targets={"linear-001"},
+    )
+    assert counts["ok"] == 1, "the scoped target sat past the batch limit"
+    assert [row["target_id"] for row in _queued(bp)] == [
+        f"filler-{index}" for index in range(5)
+    ]
+
+
+def test_drain_reads_nothing_when_scoped_to_an_empty_target_set(tmp_path):
+    bp = _make_backlog(tmp_path)
+    _enqueue(bp, op="task_upsert", target_id="linear-001")
+    client = _make_client(lambda r: httpx.Response(500))  # would fail if called
+    counts = _drain(
+        bp, client, _make_config(), backlog_data=_backlog_data(bp), only_targets=set(),
+    )
+    assert counts["ok"] == 0 and counts["transient"] == 0
+    assert len(_queued(bp)) == 1
+
+
 # ── B-027: error classification from the structured flag, not substrings ──
 
 

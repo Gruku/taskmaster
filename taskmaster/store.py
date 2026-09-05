@@ -233,6 +233,7 @@ class StoreStatus:
     merge_conflicts_24h: int = 0
     warning: str | None = None
     corrupt_files: tuple[str, ...] = ()
+    linear_pending: int = 0
 
 
 _STATE_LOCK = threading.RLock()
@@ -521,6 +522,9 @@ def _read_file_snapshot(path: Path) -> tuple[bytes, os.stat_result]:
     return content, stat
 
 
+SQLITE_HEADER = b"SQLite format 3\x00"
+
+
 def _read_sqlite_header(path: Path) -> bytes:
     with path.open("rb") as handle:
         return handle.read(16)
@@ -548,12 +552,15 @@ def _local_pid_alive(pid: int | None) -> bool:
     return True
 
 
-def open_store(
-    backlog_path: Path | None = None,
-    *,
-    root: Path | None = None,
-    session: str | None = None,
-) -> "Store":
+def _resolve_for(backlog_path: Path | None, root: Path | None) -> RootResolution:
+    """Where this project's store lives, without opening or creating anything.
+
+    Split out of `open_store` so a read-only caller can learn the root, the
+    resolution source and the database path without `_ensure_open` running --
+    that call creates the database, preps the schema, recovers export intents
+    and can move a damaged file aside, none of which a diagnostic may do.
+    `_STATE_LOCK` is re-entrant, so `open_store` may already hold it.
+    """
     global _ROOT_RESOLUTION
     with _STATE_LOCK:
         if backlog_path is not None:
@@ -601,7 +608,17 @@ def open_store(
                 f"projection schema {forward} is newer than supported schema "
                 f"{PROJECTION_SCHEMA}; upgrade Taskmaster"
             )
+        return resolved
 
+
+def open_store(
+    backlog_path: Path | None = None,
+    *,
+    root: Path | None = None,
+    session: str | None = None,
+) -> "Store":
+    with _STATE_LOCK:
+        resolved = _resolve_for(backlog_path, root)
         path = db_path(resolved.backlog_path)
         instance = _STORES.get(path)
         if instance is None:
@@ -609,6 +626,22 @@ def open_store(
             _STORES[path] = instance
         instance._ensure_open()
         return instance
+
+
+def read_only_status(
+    backlog_path: Path | None = None, *, root: Path | None = None
+) -> StoreStatus:
+    """`Store.read_only_status` for a project that may never have been opened.
+
+    `open_store` opens as a side effect, so a diagnostic cannot go through it.
+    An already-open store is reused when there is one -- it reads through its
+    own read-only connection either way -- and otherwise a throwaway `Store` is
+    built from the resolution alone and never registered.
+    """
+    with _STATE_LOCK:
+        resolved = _resolve_for(backlog_path, root)
+        instance = _STORES.get(db_path(resolved.backlog_path))
+    return (instance or Store(resolved)).read_only_status()
 
 
 def close_thread_connection() -> None:
@@ -1757,6 +1790,22 @@ class Store:
             "last_error": row["last_error"],
         }
 
+    def projection_only_reason(self) -> str | None:
+        """Why this store cannot be queried or written, or None when it can.
+
+        On a network root with no usable database the store degrades to reading
+        the projection files, and the queue tables simply are not there.  A
+        caller that would otherwise hit `unable to open database file` asks this
+        first and says something useful instead.
+        """
+        self._ensure_open()
+        if not self._network_projection_only:
+            return None
+        return (
+            _network_filesystem_reason(self.root)
+            or "store.db is unavailable, so only the projection files can be read"
+        )
+
     def linear_rows(
         self, *, states: Sequence[str] | None = None
     ) -> list[dict[str, Any]]:
@@ -1765,8 +1814,13 @@ class Store:
         `linear_pending` is the drain's read; this is the reporting read, so
         parked (`failed`) and settled (`done`) rows stay visible to
         `backlog_linear_status` and to the un-park that `/linear retry` runs.
+
+        An explicitly empty `states` means "no state qualifies" and returns
+        nothing, rather than building `IN ()` and raising a syntax error.
         """
         self._ensure_open()
+        if self._network_projection_only or (states is not None and not states):
+            return []
         sql = self._LINEAR_COLUMNS
         params: tuple[Any, ...] = ()
         if states is not None:
@@ -1787,6 +1841,9 @@ class Store:
         writer lock.  Returns how many rows changed.
         """
         self._ensure_open()
+        degraded = self.projection_only_reason()
+        if degraded:
+            raise RuntimeError(f"cannot write the Linear queue: {degraded}")
         wanted = [int(seq) for seq in seqs]
         if not wanted:
             return 0
@@ -1812,16 +1869,28 @@ class Store:
                 raise
         return int(cursor.rowcount)
 
-    def linear_pending(self, limit: int = 100) -> list[dict[str, Any]]:
-        """The oldest pending Linear pushes, `limit` at most, oldest first."""
+    def linear_pending(
+        self, limit: int = 100, *, targets: Sequence[str] | None = None
+    ) -> list[dict[str, Any]]:
+        """The oldest pending Linear pushes, `limit` at most, oldest first.
+
+        `targets` filters before the limit, not after: a scoped retry whose rows
+        sit behind hundreds of other pending pushes has to find them, and a
+        filter applied to an already-truncated page would silently drain
+        nothing and report success.
+        """
         self._ensure_open()
+        if self._network_projection_only or (targets is not None and not targets):
+            return []
+        sql = self._LINEAR_COLUMNS + " WHERE state='pending'"
+        params: list[Any] = []
+        if targets is not None:
+            sql += " AND target_id IN (" + ",".join("?" for _ in targets) + ")"
+            params.extend(targets)
+        params.append(limit)
         return [
             self._linear_row(row)
-            for row in self.connection.execute(
-                self._LINEAR_COLUMNS
-                + " WHERE state='pending' ORDER BY seq LIMIT ?",
-                (limit,),
-            )
+            for row in self.connection.execute(sql + " ORDER BY seq LIMIT ?", params)
         ]
 
     def linear_mark(self, seq: int, *, state: str, error: str | None = None) -> None:
@@ -1835,6 +1904,9 @@ class Store:
         like it burned a retry.
         """
         self._ensure_open()
+        degraded = self.projection_only_reason()
+        if degraded:
+            raise RuntimeError(f"cannot write the Linear queue: {degraded}")
         if self.connection.in_transaction:
             raise RuntimeError("linear_mark needs its own transaction")
         with self._writer_mutex():
@@ -1998,33 +2070,45 @@ class Store:
                 return True
         return False
 
-    def status(self) -> StoreStatus:
-        self._ensure_open()
-        network_reason = _network_filesystem_reason(self.root)
-        if self._network_projection_only:
-            projection_schema = _projection_schema(self.backlog_path)
-            return StoreStatus(
-                root=self.root,
-                db_path=self.db_path,
-                creation_token="",
-                max_seq=0,
-                dirty_files=(),
-                quarantined_files=(),
-                resolution_source=self.resolution.source,
-                schema_version=0,
-                db_size=self.db_path.stat().st_size if self.db_path.exists() else 0,
-                wal_size=0,
-                warning=network_reason or self.resolution.filesystem_warning,
-                corrupt_files=tuple(
-                    sorted(
-                        path.name
-                        for path in self.db_path.parent.glob("store.db.corrupt-*")
-                    )
-                )
-                if self.db_path.parent.exists()
-                else (),
-            )
-        connection = self.connection
+    def _corrupt_backup_names(self) -> tuple[str, ...]:
+        """Names of databases an earlier recovery moved aside, oldest first."""
+        if not self.db_path.parent.exists():
+            return ()
+        return tuple(
+            sorted(path.name for path in self.db_path.parent.glob("store.db.corrupt-*"))
+        )
+
+    def _degraded_status(self, *, warning: str | None) -> StoreStatus:
+        """What the report can still say when the database cannot be read.
+
+        Everything here comes from the filesystem, so it answers on a network
+        share, before a store exists, and over an unreadable file alike -- the
+        three situations an operator is most likely to be running the tool in.
+        """
+        return StoreStatus(
+            root=self.root,
+            db_path=self.db_path,
+            creation_token="",
+            max_seq=0,
+            dirty_files=(),
+            quarantined_files=(),
+            resolution_source=self.resolution.source,
+            schema_version=0,
+            db_size=self.db_path.stat().st_size if self.db_path.exists() else 0,
+            wal_size=0,
+            warning=warning,
+            corrupt_files=self._corrupt_backup_names(),
+        )
+
+    def _status_from(
+        self, connection: sqlite3.Connection, *, warning: str | None
+    ) -> StoreStatus:
+        """Read the whole report off one connection under a single snapshot.
+
+        Taken as one `BEGIN` so the change log, the session list and the Linear
+        queue depth all describe the same instant; a report stitched from
+        separate reads can show a change whose queue row it does not.
+        """
         owns_snapshot = not connection.in_transaction
         if owns_snapshot:
             connection.execute("BEGIN")
@@ -2083,6 +2167,11 @@ class Store:
                     (cutoff_24h,),
                 ).fetchone()[0]
             )
+            queued = int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM linear_queue WHERE state='pending'"
+                ).fetchone()[0]
+            )
             if owns_snapshot:
                 connection.commit()
         except BaseException:
@@ -2092,7 +2181,7 @@ class Store:
         return StoreStatus(
             root=self.root,
             db_path=self.db_path,
-            creation_token=token_row[0],
+            creation_token=token_row[0] if token_row else "",
             max_seq=seq,
             dirty_files=dirty,
             quarantined_files=quarantined,
@@ -2105,11 +2194,69 @@ class Store:
             recent_changes=recent,
             live_sessions=live,
             merge_conflicts_24h=merge_conflicts,
-            warning=network_reason or self.resolution.filesystem_warning,
-            corrupt_files=tuple(
-                sorted(path.name for path in self.db_path.parent.glob("store.db.corrupt-*"))
-            ),
+            warning=warning,
+            corrupt_files=self._corrupt_backup_names(),
+            linear_pending=queued,
         )
+
+    def status(self) -> StoreStatus:
+        self._ensure_open()
+        warning = (
+            _network_filesystem_reason(self.root) or self.resolution.filesystem_warning
+        )
+        if self._network_projection_only:
+            return self._degraded_status(warning=warning)
+        return self._status_from(self.connection, warning=warning)
+
+    def read_only_status(self) -> StoreStatus:
+        """`status()` without any of the writing that opening a store does.
+
+        `status()` goes through `_ensure_open`, which creates the database when
+        it is missing, preps the schema and recovers export intents under
+        `BEGIN IMMEDIATE`, and moves a bad file aside as `store.db.corrupt-*`.
+        A diagnostic must do none of that: an operator runs it *because* they
+        suspect the store is broken, and a tool that repairs the evidence before
+        they can look at it is worse than one that says nothing.  So this
+        reports a missing or unreadable database instead of acting on it, and
+        reads through its own short-lived read-only connection.
+        """
+        network_reason = _network_filesystem_reason(self.root)
+        base_warning = network_reason or self.resolution.filesystem_warning
+        if not (self.db_path.exists() and self.db_path.stat().st_size):
+            return self._degraded_status(
+                warning=base_warning
+                or "no store yet: store.db is created on the first read or write"
+            )
+        try:
+            header = _read_sqlite_header(self.db_path)
+        except OSError as exc:
+            return self._degraded_status(warning=f"store.db is unreadable: {exc}")
+        if header != SQLITE_HEADER:
+            return self._degraded_status(
+                warning="store.db is not a SQLite database; it has been left "
+                "exactly as it is -- inspect it before running a tool that writes"
+            )
+        try:
+            connection = sqlite3.connect(
+                f"file:{self.db_path.as_posix()}?mode=ro",
+                timeout=BUSY_TIMEOUT_MS / 1000,
+                isolation_level=None,
+                uri=True,
+                check_same_thread=False,
+            )
+        except sqlite3.Error as exc:
+            return self._degraded_status(warning=f"store.db cannot be opened: {exc}")
+        try:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA query_only=ON")
+            return self._status_from(connection, warning=base_warning)
+        except sqlite3.DatabaseError as exc:
+            return self._degraded_status(
+                warning=f"store.db could not be read: {exc}; it has been left "
+                "exactly as it is -- inspect it before running a tool that writes"
+            )
+        finally:
+            connection.close()
 
     def _begin_immediate(self, connection: sqlite3.Connection) -> None:
         try:

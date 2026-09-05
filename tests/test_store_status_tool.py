@@ -24,8 +24,8 @@ from taskmaster import store as _store  # noqa: E402
 
 
 @pytest.fixture
-def project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A real v4 project with the server's path resolver pointed at it."""
+def bare_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A real v4 project whose store has deliberately never been opened."""
     backlog_path = tmp_path / ".taskmaster" / "backlog.yaml"
     backlog_path.parent.mkdir(parents=True)
     backlog_path.write_text(
@@ -46,8 +46,27 @@ def project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         encoding="utf-8",
     )
     monkeypatch.setattr(backlog_server, "_backlog_path", lambda: backlog_path)
-    _store.open_store(backlog_path).load_dict()
     return backlog_path
+
+
+@pytest.fixture
+def project(bare_project: Path) -> Path:
+    """`bare_project` with the store adopted, as any tool call would leave it."""
+    _store.open_store(bare_project).load_dict()
+    return bare_project
+
+
+@pytest.fixture
+def network_root(monkeypatch: pytest.MonkeyPatch) -> str:
+    """Make every root look like a network share, as the store's own probe does.
+
+    The store degrades to projection-only there: it opens the database `mode=ro`
+    and, when there is no database at all, does not open one. Everything that
+    reads a table has to survive that.
+    """
+    reason = "store.db lives on a network filesystem"
+    monkeypatch.setattr(_store, "_network_filesystem_reason", lambda root: reason)
+    return reason
 
 
 def _report(project: Path) -> str:
@@ -188,30 +207,6 @@ def test_report_says_none_rather_than_omitting_an_empty_warning(
     assert _line(_report(project), "Warning:") == "Warning: none"
 
 
-def test_report_surfaces_a_filesystem_warning(
-    project: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    opened = _store.open_store(project)
-    status = opened.status()
-    monkeypatch.setattr(
-        _store.Store,
-        "status",
-        lambda self: _store.StoreStatus(
-            **{
-                **{
-                    field: getattr(status, field)
-                    for field in status.__dataclass_fields__
-                },
-                "warning": "store.db lives on a network filesystem",
-            }
-        ),
-    )
-    assert (
-        _line(_report(project), "Warning:")
-        == "Warning: store.db lives on a network filesystem"
-    )
-
-
 def test_reporting_never_writes_to_the_store(project: Path) -> None:
     """The tool is a read: it must not advance the change log or dirty a file."""
     opened = _store.open_store(project)
@@ -231,3 +226,73 @@ def test_report_explains_itself_when_there_is_no_backlog(
     missing = tmp_path / ".taskmaster" / "backlog.yaml"
     monkeypatch.setattr(backlog_server, "_backlog_path", lambda: missing)
     assert backlog_server.backlog_store_status() == f"no backlog found at {missing}"
+
+
+def test_report_answers_on_a_network_share_with_no_store(
+    bare_project: Path, network_root: str
+) -> None:
+    """The one situation the `Warning:` line exists for must not be the one the
+    tool raises in. The store degrades to projection-only on a share; every line
+    of the report still has to come back."""
+    report = backlog_server.backlog_store_status()
+
+    assert network_root in _line(report, "Warning:")
+    assert _line(report, "Linear queue:") == "Linear queue: 0 pending"
+    assert _line(report, "Changes (last 0):") == "Changes (last 0):"
+    assert _line(report, "Sessions:") == "Sessions: 0 live"
+
+
+def test_report_answers_on_a_network_share_that_has_a_store(
+    project: Path, network_root: str
+) -> None:
+    report = backlog_server.backlog_store_status()
+    assert network_root in _line(report, "Warning:")
+    assert _line(report, "Linear queue:").endswith("pending")
+
+
+def test_reporting_does_not_create_a_store(bare_project: Path) -> None:
+    """A diagnostic that adopts a whole project on first touch is not a
+    diagnostic. Nothing under `local/` may appear."""
+    local = bare_project.parent / "local"
+    assert not (local / "store.db").exists()
+
+    report = backlog_server.backlog_store_status()
+
+    assert not (local / "store.db").exists()
+    assert "no store yet" in _line(report, "Warning:")
+    assert _line(report, "Size:").startswith("Size: db=0 B")
+
+
+def test_reporting_a_damaged_store_leaves_it_exactly_as_it_is(
+    bare_project: Path,
+) -> None:
+    """An operator runs this *because* they suspect the store is broken. Moving
+    the evidence aside before they can look at it is the failure."""
+    db = _store.db_path(bare_project)
+    db.parent.mkdir(parents=True, exist_ok=True)
+    db.write_bytes(b"this is not a database")
+
+    report = backlog_server.backlog_store_status()
+
+    assert db.read_bytes() == b"this is not a database"
+    assert sorted(db.parent.glob("store.db.corrupt-*")) == []
+    assert _line(report, "Corrupt:") == "Corrupt: 0"
+    warning = _line(report, "Warning:")
+    assert "not a SQLite database" in warning
+    assert "NOT" not in warning or "left exactly as it is" in warning
+
+
+def test_reporting_a_truncated_store_reports_rather_than_recovers(
+    bare_project: Path,
+) -> None:
+    """A file with the right header but garbage after it is the corruption the
+    store would normally recover from; the report must only describe it."""
+    db = _store.db_path(bare_project)
+    db.parent.mkdir(parents=True, exist_ok=True)
+    db.write_bytes(_store.SQLITE_HEADER + b"\x00" * 400)
+
+    report = backlog_server.backlog_store_status()
+
+    assert sorted(db.parent.glob("store.db.corrupt-*")) == []
+    assert db.stat().st_size == len(_store.SQLITE_HEADER) + 400
+    assert _line(report, "Warning:") != "Warning: none"

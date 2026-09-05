@@ -795,6 +795,34 @@ def test_linear_requeue_unparks_only_the_rows_it_is_given(
     ]
 
 
+def test_linear_rows_with_an_empty_state_filter_returns_nothing(
+    transaction_store: tuple[Any, Path],
+) -> None:
+    """`states=()` means no state qualifies. Building `IN ()` from it is a SQL
+    syntax error, which is not what an empty filter should mean."""
+    opened, _backlog_path = transaction_store
+    with opened.transaction(tool="enqueue-linear-one") as tx:
+        tx.linear_enqueue("push", "e-001", None, None)
+
+    assert opened.linear_rows(states=()) == []
+    assert len(opened.linear_rows()) == 1
+
+
+def test_linear_pending_filters_targets_before_the_limit(
+    transaction_store: tuple[Any, Path],
+) -> None:
+    opened, _backlog_path = transaction_store
+    with opened.transaction(tool="enqueue-linear-many") as tx:
+        for index in range(5):
+            tx.linear_enqueue("push", f"filler-{index}", None, None)
+        wanted = tx.linear_enqueue("push", "e-001", None, None)
+
+    assert [row["seq"] for row in opened.linear_pending(2, targets={"e-001"})] == [
+        wanted
+    ]
+    assert opened.linear_pending(10, targets=set()) == []
+
+
 def test_linear_requeue_of_nothing_is_a_no_op(
     transaction_store: tuple[Any, Path],
 ) -> None:

@@ -216,9 +216,10 @@ def drain(
     that spans the HTTP call, so a crash mid-drain loses at most the outcome of
     the request in flight and every other row keeps its state (B-029).
 
-    If `only_targets` is given, items whose `target_id` is not in the set are
-    skipped without an API call and without a mark, so a target-scoped retry
-    leaves other targets' rows exactly as it found them.
+    If `only_targets` is given the filter runs in the query, before the row
+    limit, so a target-scoped retry finds its rows even when hundreds of other
+    pushes are queued ahead of them. Other targets' rows are never read, never
+    called for, and never marked.
 
     At most `DRAIN_BATCH` rows per call; the remainder stays pending.
 
@@ -227,11 +228,8 @@ def drain(
     backlog_path = store.backlog_path
     counts = {"ok": 0, "skipped": 0, "transient": 0, "permanent": 0, "unknown": 0}
 
-    for item in store.linear_pending(DRAIN_BATCH):
+    for item in store.linear_pending(DRAIN_BATCH, targets=only_targets):
         target_id = item["target_id"]
-        if only_targets is not None and target_id not in only_targets:
-            continue
-
         op = item["op"]
         if op == "task_upsert":
             result = push_task(

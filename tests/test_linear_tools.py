@@ -401,6 +401,35 @@ def test_status_reflects_queue_items(tmp_path, monkeypatch):
     assert result["oldest_enqueued_at"] == "2026-01-01T10:00:00Z"
 
 
+def test_status_answers_on_a_network_share_instead_of_raising(tmp_path, monkeypatch):
+    """Regression: the file-backed queue read a JSON file, which works on a
+    share. The table-backed one must not raise there."""
+    bp = _make_backlog(tmp_path)
+    monkeypatch.setattr(backlog_server, "_backlog_path", lambda: bp)
+    monkeypatch.setattr(
+        _store, "_network_filesystem_reason", lambda root: "network filesystem",
+    )
+
+    result = json.loads(backlog_server.backlog_linear_status())
+    assert result["queue_depth"] == 0
+    assert result["pending"] == 0
+    assert result["warning"] == "network filesystem"
+
+
+def test_retry_says_the_store_is_unavailable_on_network_storage(tmp_path, monkeypatch):
+    bp = _make_backlog(tmp_path, with_tracker=True)
+    _make_mapped_linear_yaml(tmp_path)
+    monkeypatch.setattr(backlog_server, "_backlog_path", lambda: bp)
+    monkeypatch.setenv("TASKMASTER_LINEAR_TOKEN_CM", "lin_tok_test")
+    monkeypatch.setattr(
+        _store, "_network_filesystem_reason", lambda root: "network filesystem",
+    )
+
+    result = json.loads(backlog_server.backlog_linear_retry())
+    assert "store unavailable on network storage" in result["error"]
+    assert "network filesystem" in result["error"]
+
+
 # ── backlog_linear_retry ────────────────────────────────────────
 
 
