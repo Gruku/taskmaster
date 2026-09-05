@@ -217,7 +217,13 @@ def _guard_path(target):
     if path.name in _GUARDED_ROOT_FILES:
         backlog_dir = _backlog_dir(path.parent)
         if backlog_dir is not None:
-            return backlog_dir
+            # `backlog_init` writes `taskmaster.json` while scaffolding a
+            # project, before any store exists to route it through — the same
+            # bootstrap exemption `backlog.yaml` gets. Once the store is there,
+            # every write to it is guarded.
+            if (backlog_dir / "local" / "store.db").exists():
+                return backlog_dir
+            return None
     if path.name in _GUARDED_FILES:
         # No bootstrap exemption: both are regenerated from committed rows, so
         # there is never a legitimate first write outside the store.
