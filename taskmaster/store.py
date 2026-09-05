@@ -18,7 +18,9 @@ import re
 import shutil
 import socket
 import sqlite3
-import subprocess
+# The git probes moved to `taskmaster.root`, which uses this same module
+# object; tests that simulate a missing repository patch `store.subprocess`.
+import subprocess  # noqa: F401
 import threading
 import time
 import uuid
@@ -34,6 +36,22 @@ import yaml
 
 from taskmaster import yaml_io
 from taskmaster.index import extract_prose_paths, normalize_location, normalize_task_anchor
+# Root resolution lives in a standard-library-only module so the hooks, which
+# run under the system interpreter, share this exact rule without importing
+# yaml.  Re-exported here: `store.resolve_root` stays the public entry point,
+# and the module globals stay monkeypatchable for the callers below.
+from taskmaster.root import (  # noqa: F401
+    DB_RELPATH,
+    RootResolution,
+    _absolute,
+    _backlog_dir,
+    _cloud_filesystem_reason,
+    _git_checkout_root,
+    _git_common_root,
+    _network_filesystem_reason,
+    db_path,
+    resolve_root,
+)
 from taskmaster.taskmaster_v3 import (
     BODY_KEY,
     EPIC_HEAVY_FIELDS,
@@ -62,7 +80,6 @@ from taskmaster.taskmaster_v3 import (
 
 SCHEMA_VERSION = 1
 PROJECTION_SCHEMA = 5
-DB_RELPATH = Path("local") / "store.db"
 BUSY_TIMEOUT_MS = 30_000
 HEARTBEAT_INTERVAL_SECONDS = 20.0
 _MONOTONIC = time.monotonic
@@ -222,14 +239,6 @@ def unsafe_storage_reason(path: Path) -> str | None:
 
 
 @dataclass(frozen=True)
-class RootResolution:
-    root: Path
-    backlog_path: Path
-    source: str
-    filesystem_warning: str | None = None
-
-
-@dataclass(frozen=True)
 class StoreStatus:
     root: Path
     db_path: Path
@@ -303,130 +312,6 @@ def _after_fork_child() -> None:
 
 if hasattr(os, "register_at_fork"):
     os.register_at_fork(after_in_child=_after_fork_child)
-
-
-def _absolute(path: Path) -> Path:
-    return path.expanduser().resolve(strict=False)
-
-
-def _git_common_root(start: Path) -> Path | None:
-    try:
-        proc = subprocess.run(
-            ["git", "-C", str(start), "rev-parse", "--git-common-dir"],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    common = Path(proc.stdout.strip())
-    if not common.is_absolute():
-        common = start / common
-    return _absolute(common).parent
-
-
-def _git_checkout_root(start: Path) -> Path | None:
-    try:
-        proc = subprocess.run(
-            ["git", "-C", str(start), "rev-parse", "--show-toplevel"],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return _absolute(Path(proc.stdout.strip()))
-
-
-def _cloud_filesystem_reason(path: Path) -> str | None:
-    lower = str(path).replace("\\", "/").lower()
-    markers = (
-        "/onedrive/",
-        "/dropbox/",
-        "/google drive/",
-        "/google drivefs/",
-        "/icloud drive/",
-        "/cloudstorage/",
-        "/mobile documents/",
-    )
-    if any(marker in f"/{lower.strip('/')} /" for marker in markers):
-        return "cloud-synced local folder detected; SQLite WAL remains host-local"
-    return None
-
-
-def _network_filesystem_reason(path: Path) -> str | None:
-    """Return why *path* is unsafe for WAL, or ``None`` for host-local storage.
-
-    The function is intentionally small and monkeypatchable.  Windows UNC and
-    remote drives are detected here; POSIX filesystem type probing is best
-    effort because reads must continue even when the platform cannot classify.
-    """
-    raw = str(_absolute(path))
-    if raw.startswith("\\\\") or raw.startswith("//"):
-        return "network filesystem (UNC path) is unsafe for SQLite WAL"
-    if os.name == "nt":
-        try:
-            import ctypes
-
-            drive = Path(raw).drive
-            if drive:
-                drive_type = ctypes.windll.kernel32.GetDriveTypeW(f"{drive}\\")
-                if drive_type == 4:  # DRIVE_REMOTE
-                    return "network filesystem (remote drive) is unsafe for SQLite WAL"
-        except (AttributeError, OSError):
-            pass
-    elif Path("/proc/mounts").exists():
-        try:
-            candidates: list[tuple[int, str]] = []
-            for line in Path("/proc/mounts").read_text(encoding="utf-8").splitlines():
-                parts = line.split()
-                if len(parts) < 3:
-                    continue
-                mount = parts[1].replace("\\040", " ")
-                if raw == mount or raw.startswith(mount.rstrip("/") + "/"):
-                    candidates.append((len(mount), parts[2].lower()))
-            if candidates and max(candidates)[1] in {"nfs", "nfs4", "cifs", "smbfs"}:
-                return f"network filesystem ({max(candidates)[1]}) is unsafe for SQLite WAL"
-        except OSError:
-            pass
-    return None
-
-
-def resolve_root(
-    start: Path | None = None, *, explicit_root: Path | None = None
-) -> RootResolution:
-    start_path = _absolute(start or Path.cwd())
-    source = "cwd"
-    if explicit_root is not None:
-        root = _absolute(explicit_root)
-        source = "explicit"
-    elif os.environ.get("TASKMASTER_ROOT"):
-        root = _absolute(Path(os.environ["TASKMASTER_ROOT"]))
-        source = "env"
-    else:
-        common_root = _git_common_root(start_path)
-        if common_root is not None:
-            root = common_root
-            source = "git-common-dir"
-        else:
-            root = start_path
-    return RootResolution(
-        root=root,
-        backlog_path=root / ".taskmaster",
-        source=source,
-        filesystem_warning=_cloud_filesystem_reason(root),
-    )
-
-
-def _backlog_dir(path: Path) -> Path:
-    path = _absolute(path)
-    return path.parent if path.name == "backlog.yaml" else path
-
-
-def db_path(backlog_path: Path) -> Path:
-    return _backlog_dir(backlog_path) / DB_RELPATH
 
 
 def _json(value: Any) -> str:
