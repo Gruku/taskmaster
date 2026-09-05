@@ -46,8 +46,13 @@ def test_batch_update_refuses_todo_to_done(laned_task):
 
 
 def test_batch_status_op_refuses_todo_to_done(laned_task):
+    """The `status <id> done` shorthand runs the completion guard before the
+    transition table, so the refusal names the states a task may be completed
+    *from* — the more actionable half of the same rule. Either message is a
+    refusal; what matters is that the move does not land."""
     out = bs.backlog_batch_update(operations="status test-epic-001 done")
-    assert "illegal transition" in out, out
+    assert "cannot complete from `todo`" in out or "illegal transition" in out, out
+    assert "0 applied" in out, out
     assert _status_of("test-epic-001") == "todo"
 
 

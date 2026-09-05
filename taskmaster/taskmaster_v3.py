@@ -2359,14 +2359,20 @@ def _bug_signature(fm: dict[str, Any]) -> tuple | None:
 
 
 def scan_bug_patterns(
-    backlog_path: Path,
-    include_archive: bool = True,
+    rows: "Iterable[tuple[str, Mapping[str, Any], str | None]]",
     open_only: bool = False,
 ) -> list[dict[str, Any]]:
     """Return a list of pattern groups: [{signature, bug_ids: [B-001, B-007, ...]}, ...].
 
-    Only groups with ≥2 bugs are returned. Includes archive by default so that
-    historical resolved bugs contribute to recurrence counts.
+    `rows` is `Transaction.list("bug")` output — the committed bug documents.
+    This used to glob `bugs/*.md`, which described the export rather than the
+    store: a bug whose file write failed its retry was invisible to the
+    scanner, and a stale file clustered on text nobody wrote any more. The
+    recurrence signal here is what promotes bugs to an Issue, so it has to be
+    computed from what the store holds. The caller decides whether archived
+    rows are in scope, since that is a row filter now, not a second directory.
+
+    Only groups with ≥2 bugs are returned.
 
     Two bugs cluster together when they share the same component set AND their
     title token sets overlap by Jaccard ≥ 0.5. The canonical signature for a
@@ -2374,18 +2380,15 @@ def scan_bug_patterns(
     """
     # Collect (bid, comps_tuple, tokens_frozenset) for each bug with a valid sig.
     entries: list[tuple[str, tuple, frozenset]] = []
-    for bid in list_bug_ids(backlog_path, include_archive=include_archive):
-        try:
-            fm, _ = read_bug(backlog_path, bid)
-        except (OSError, ValueError):
-            continue
+    for bid, doc, _body in rows:
+        fm = dict(doc)
         if open_only and fm.get("status") != "open":
             continue
         sig = _bug_signature(fm)
         if sig is None:
             continue
         comps, tokens_tuple = sig
-        entries.append((bid, comps, frozenset(tokens_tuple)))
+        entries.append((str(fm.get("id") or bid), comps, frozenset(tokens_tuple)))
 
     # Union-Find clustering by component equality + Jaccard ≥ 0.5.
     parent: dict[int, int] = {i: i for i in range(len(entries))}

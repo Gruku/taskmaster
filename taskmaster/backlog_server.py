@@ -4757,7 +4757,8 @@ def backlog_bug_pattern_scan(mode: str = "all") -> str:
         return "No backlog found."
     include_archive = (mode == "all")
     open_only = (mode == "open_only")
-    groups = _scan_bug_patterns(bp, include_archive=include_archive, open_only=open_only)
+    rows = _dict_rows(_load(), "bug", include_archived=include_archive)
+    groups = _scan_bug_patterns(rows, open_only=open_only)
     if not groups:
         return "No bug patterns found (need >=2 matching signatures)."
     lines = [f"Found {len(groups)} pattern group(s):"]
@@ -8816,6 +8817,15 @@ class ViewerWriteRejected(ValueError):
         self.errors = dict(errors)
 
 
+class ViewerCompletionBlocked(Exception):
+    """A viewer write would complete a task whose blocking gates are outstanding.
+
+    Separate from `ViewerWriteRejected` because it is not a malformed patch: the
+    field values are fine and the state of the world is what refuses the move,
+    which is a 409, not a 422.
+    """
+
+
 class ViewerPreconditionFailed(Exception):
     """`If-Match` did not match committed state; carries the current revision."""
 
@@ -8922,6 +8932,14 @@ def _viewer_update_task(
         errors.update(_archived_transition_error(task, patch))
         if errors:
             raise ViewerWriteRejected(errors)
+        # The board is not a way around the gates. `backlog_update_task` and
+        # `backlog_complete_task` both refuse `-> done` while a lane'd task has
+        # outstanding blocking reviews; without this the same move landed by
+        # drag-and-drop and the gates were simply skipped.
+        if patch.get("status") == "done" and task.get("status") != "done":
+            block = _completion_block_reason(task)
+            if block:
+                raise ViewerCompletionBlocked(block)
         before_status = task.get("status")
         before_epic = task.get("epic") or _epic.get("id")
         task.update(patch)
@@ -9773,6 +9791,12 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 found = _find_task(data, tid)
                 if found is not None:
                     errors.update(_archived_transition_error(found[0], patch))
+                    # Preview and write run the same gate: a validate that says
+                    # "ok" for a move the write refuses is worse than no preview.
+                    if patch.get("status") == "done" and found[0].get("status") != "done":
+                        block = _completion_block_reason(found[0])
+                        if block:
+                            errors["status"] = block
             self._send_json(200, {"ok": len(errors) == 0, "errors": errors})
             return
 
@@ -9901,7 +9925,6 @@ class ViewerHandler(BaseHTTPRequestHandler):
         m = re.fullmatch(r"/api/bugs/pattern-scan", clean_path_post)
         if m:
             from taskmaster.taskmaster_v3 import scan_bug_patterns as _scan_bug_patterns_http
-            bp = _backlog_path()
             length = int(self.headers.get("Content-Length") or 0)
             raw = self.rfile.read(length).decode("utf-8") if length else ""
             try:
@@ -9911,8 +9934,15 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 return
             mode = payload.get("mode", "all")
             include_archive = (mode != "end_of_task")
-            groups = _scan_bug_patterns_http(bp, include_archive=include_archive)
-            self._send_json(200, {"groups": groups})
+            snapshot = self._snapshot()
+            if snapshot is None:
+                self._send_json(200, {"groups": []})
+                return
+            data, etag = snapshot
+            groups = _scan_bug_patterns_http(
+                _dict_rows(data, "bug", include_archived=include_archive)
+            )
+            self._send_json(200, {"groups": groups}, etag=etag)
             return
 
         m = re.fullmatch(r"/api/bugs/promote", clean_path_post)
@@ -10046,6 +10076,8 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 self._send_json(200, {"ok": True, "task": task}, etag=_viewer_etag())
             except ViewerPreconditionFailed as e:
                 self._send_stale(task_id, e.current_etag)
+            except ViewerCompletionBlocked as e:
+                self._send_json(409, {"ok": False, "error": str(e)})
             except ViewerWriteRejected as e:
                 self._send_json(422, {"ok": False, "errors": e.errors})
             except KeyError as e:
@@ -10079,6 +10111,8 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 self._send_json(200, {"ok": True, "task": task}, etag=_viewer_etag())
             except ViewerPreconditionFailed as e:
                 self._send_stale(task_id, e.current_etag)
+            except ViewerCompletionBlocked as e:
+                self._send_json(409, {"ok": False, "error": str(e)})
             except ViewerWriteRejected as e:
                 self._send_json(422, {"ok": False, "errors": e.errors})
             except KeyError as e:

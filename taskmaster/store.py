@@ -2741,6 +2741,11 @@ class Store:
                 for order, task in enumerate(epic.get("tasks") or [], start=1):
                     task.setdefault("epic", epic.get("id"))
                     task.setdefault("order", float(order))
+        # Absence never deletes data: an entity a hand edit left without an id
+        # cannot be a row, so name it rather than drop it on the floor.
+        for note in name_missing_ids(data):
+            tx.warnings.append(note)
+            tx.log_entries.append(note)
         self._import_linear_queue(tx)
         for key, (doc, body) in _flatten_backlog_dict(data).items():
             tx._import_row(key[0], key[1], doc, body)
@@ -4500,6 +4505,76 @@ def _merge_change_details(
     if conflicts:
         before["_conflicts"] = conflicts
     return fields, before, after
+
+
+_ID_SAFE_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _kebab(text: str) -> str:
+    """A safe, deterministic identifier fragment from free text, or ""."""
+    return _ID_SAFE_RE.sub("-", str(text or "").strip().lower()).strip("-")
+
+
+def _unique_id(candidate: str, taken: set[str], fallback: str) -> str:
+    """`candidate`, or the first free `<candidate>-<n>`; `fallback` when empty."""
+    base = candidate or fallback
+    if base not in taken:
+        taken.add(base)
+        return base
+    suffix = 2
+    while f"{base}-{suffix}" in taken:
+        suffix += 1
+    chosen = f"{base}-{suffix}"
+    taken.add(chosen)
+    return chosen
+
+
+def name_missing_ids(data: dict[str, Any]) -> list[str]:
+    """Give every id-less epic, phase and task an id, in place.
+
+    Absence never deletes data (design spec decision 4), but the store keys rows
+    by id: an epic, phase or task that a hand edit left without one was dropped
+    by `_flatten_backlog_dict` on adoption, taking its description, body and
+    every task under it with it, silently.
+
+    Epics and phases are named from their `name` (kebab-cased, suffixed on
+    collision) so the id a user sees afterwards is recognisable and stable
+    across re-adoption. Tasks follow their epic's `<epic>-<NNN>` convention
+    because that is what `next_task_id` allocates and what every reference to a
+    task looks like. Returns one line per id assigned, for the caller to log.
+    """
+    notes: list[str] = []
+    for field, fallback in (("epics", "epic"), ("phases", "phase")):
+        entries = data.get(field) or []
+        taken = {
+            str(entry.get("id")) for entry in entries if isinstance(entry, dict) and entry.get("id")
+        }
+        for entry in entries:
+            if not isinstance(entry, dict) or entry.get("id"):
+                continue
+            ident = _unique_id(_kebab(entry.get("name") or entry.get("title")), taken, fallback)
+            entry["id"] = ident
+            notes.append(f"named id-less {fallback} {ident!r} from its name")
+
+    for epic in data.get("epics") or []:
+        if not isinstance(epic, dict):
+            continue
+        tasks = epic.get("tasks") or []
+        epic_id = str(epic.get("id") or "epic")
+        taken = {str(t.get("id")) for t in tasks if isinstance(t, dict) and t.get("id")}
+        highest = 0
+        for tid in taken:
+            match = re.search(r"(\d+)$", tid)
+            if match:
+                highest = max(highest, int(match.group(1)))
+        for task in tasks:
+            if not isinstance(task, dict) or task.get("id"):
+                continue
+            highest += 1
+            ident = _unique_id(f"{epic_id}-{highest:03d}", taken, f"{epic_id}-001")
+            task["id"] = ident
+            notes.append(f"named id-less task {ident!r} in epic {epic_id!r}")
+    return notes
 
 
 def _flatten_backlog_dict(
