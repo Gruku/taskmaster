@@ -998,3 +998,73 @@ def test_linear_mark_rereads_the_connection_after_waiting_for_the_writer_mutex(
             "SELECT state,last_error FROM linear_queue WHERE seq=?", (seq,)
         ).fetchone()
     assert (row["state"], row["last_error"]) == ("failed", "boom")
+
+
+# -- C2: the legacy Linear queue file survives until its import commits --
+
+
+def _queue_path(backlog_path: Path) -> Path:
+    return backlog_path.parent / "integrations" / "linear-queue.json"
+
+
+def _seed_legacy_queue(backlog_path: Path, entries: list[dict[str, Any]]) -> Path:
+    path = _queue_path(backlog_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(entries), encoding="utf-8")
+    return path
+
+
+def test_legacy_queue_file_is_not_removed_before_its_import_commits(
+    transaction_store: tuple[Any, Path],
+) -> None:
+    """A crash between the removal and COMMIT would lose the only copy of the
+    pending pushes: the rows roll back and the file is already gone. So the
+    file must still be on disk for the whole transaction that imports it."""
+    opened, backlog_path = transaction_store
+    path = _seed_legacy_queue(backlog_path, [{"op": "push", "target_id": "e-001"}])
+
+    with opened.transaction(tool="import-legacy-queue"):
+        assert path.exists(), "queue file went away before its import committed"
+
+    assert not path.exists(), "queue file must be gone once the import committed"
+    assert [row["target_id"] for row in opened.linear_pending(10)] == ["e-001"]
+
+
+def test_rolled_back_import_leaves_the_legacy_queue_file_intact(
+    transaction_store: tuple[Any, Path],
+) -> None:
+    opened, backlog_path = transaction_store
+    payload = [{"op": "push", "target_id": "e-002"}]
+    path = _seed_legacy_queue(backlog_path, payload)
+
+    with pytest.raises(RuntimeError):
+        with opened.transaction(tool="import-then-fail"):
+            raise RuntimeError("boom")
+
+    assert json.loads(path.read_text(encoding="utf-8")) == payload
+    assert opened.linear_pending(10) == []
+
+
+def test_queue_file_surviving_a_crash_after_commit_is_removed_not_reimported(
+    transaction_store: tuple[Any, Path],
+) -> None:
+    """Crash after COMMIT but before the file is cleaned up: the rows are
+    durable and the file is still there. The next transaction must clean it up
+    without enqueueing the same pushes a second time."""
+    opened, backlog_path = transaction_store
+    payload = [{"op": "push", "target_id": "e-003"}]
+    path = _seed_legacy_queue(backlog_path, payload)
+
+    with opened.transaction(tool="import-legacy-queue"):
+        pass
+    pending = opened.linear_pending(10)
+    assert len(pending) == 1
+    opened.linear_mark(pending[0]["seq"], state="done")
+
+    # The post-commit cleanup never ran.
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with opened.transaction(tool="rescan"):
+        pass
+
+    assert not path.exists()
+    assert opened.linear_pending(10) == []

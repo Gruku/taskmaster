@@ -75,6 +75,7 @@ _CORRUPTION_MARKERS = ("malformed", "not a database", "file is encrypted")
 _IDEAS_INDEX_KIND = "ideas-index"
 _IDEAS_INDEX_REL = "ideas/IDEAS.md"
 _PROGRESS_REL = "local/PROGRESS.md"
+_LINEAR_QUEUE_RECEIPT_KEY = "linear_queue_import_receipt"
 _PROGRESS_LOG_KEY = "pending_progress_log"
 _PROGRESS_APPLIED_KEY = "progress_log"
 # The session-log region of PROGRESS.md shows this many entries. Bounded so one
@@ -1951,11 +1952,24 @@ class Store:
         """Adopt a legacy `integrations/linear-queue.json` into `linear_queue`.
 
         Called from bootstrap and from every scan, because a project migrated
-        before the table existed still has its pending pushes on disk.  Removing
-        the file inside the caller's transaction is what makes this idempotent.
+        before the table existed still has its pending pushes on disk.
+
+        The file is the only copy of those pending pushes, so it is never
+        removed inside this transaction: a crash between the removal and COMMIT
+        would roll the rows back with the file already gone.  Instead the
+        transaction commits a receipt naming the digest it imported, and the
+        removal runs after COMMIT.  A file that outlives its own receipt -- a
+        crash in that window -- is recognised on the next scan and removed
+        without importing its entries twice.
         """
         path = self.backlog_path / _LINEAR_QUEUE_REL
+        receipt = self._linear_queue_receipt(tx.connection)
         if not path.exists():
+            if receipt is not None:
+                # The removal landed; the receipt has nothing left to protect.
+                tx.connection.execute(
+                    "DELETE FROM meta WHERE key=?", (_LINEAR_QUEUE_RECEIPT_KEY,)
+                )
             return
         try:
             prior = path.read_bytes()
@@ -1979,6 +1993,20 @@ class Store:
                 )
             tx.warnings.append(f"linear queue import failed: {exc}")
             tx.log_entries.append(f"linear queue import failed: {exc!r}")
+            if receipt is not None:
+                tx.connection.execute(
+                    "DELETE FROM meta WHERE key=?", (_LINEAR_QUEUE_RECEIPT_KEY,)
+                )
+            return
+        digest = hashlib.sha1(prior).hexdigest()
+        if receipt == digest:
+            # These exact bytes were imported by a transaction that committed;
+            # only its post-commit removal was lost.  Re-importing would
+            # duplicate every push it already enqueued.
+            tx._post_commit_removals.append(path)
+            tx.log_entries.append(
+                f"{_LINEAR_QUEUE_REL} already imported (receipt {digest[:12]}); removing"
+            )
             return
         for item in raw if isinstance(raw, list) else []:
             if not isinstance(item, dict):
@@ -1995,6 +2023,13 @@ class Store:
             seq = tx.linear_enqueue(op, target_id, item.get("tracker_id"), payload or None)
             attempts = int(item.get("attempts") or 0)
             last_error = item.get("last_error")
+            if item.get("permanent"):
+                # The legacy queue's terminal state. Importing it as pending
+                # hands a dead push straight back to the next drain and hides
+                # it from the parked count the status tool reports.
+                tx.connection.execute(
+                    "UPDATE linear_queue SET state='failed' WHERE seq=?", (seq,)
+                )
             if attempts or last_error:
                 # Two legacy entries can share (op, target_id); `linear_enqueue`
                 # folds them onto one row, so keep the worst history rather than
@@ -2005,11 +2040,20 @@ class Store:
                     "last_error=COALESCE(?,last_error) WHERE seq=?",
                     (attempts, last_error, seq),
                 )
-        # Not a projection file, so it carries no export intent; the in-process
-        # rollback path restores it if this transaction never commits.
-        tx._replaced_files.setdefault(path, prior)
-        path.unlink()
-        tx.log_entries.append(f"imported and removed {_LINEAR_QUEUE_REL}")
+        tx.connection.execute(
+            "INSERT INTO meta(key,value) VALUES(?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (_LINEAR_QUEUE_RECEIPT_KEY, digest),
+        )
+        tx._post_commit_removals.append(path)
+        tx.log_entries.append(f"imported {_LINEAR_QUEUE_REL}; removing after commit")
+
+    def _linear_queue_receipt(self, connection: sqlite3.Connection) -> str | None:
+        """Digest of the legacy queue file whose import last committed, if any."""
+        row = connection.execute(
+            "SELECT value FROM meta WHERE key=?", (_LINEAR_QUEUE_RECEIPT_KEY,)
+        ).fetchone()
+        return None if row is None else str(row[0])
 
     def _maybe_scan_on_read(self) -> None:
         """Import hand edits at most once per two seconds for read callers."""
@@ -2059,10 +2103,14 @@ class Store:
             path.relative_to(self.backlog_path).as_posix(): path
             for _kind, _ident, path in self._known_entity_files()
         }
-        for name in ("backlog.yaml", "project.yaml"):
+        for name in ("backlog.yaml", "project.yaml", _IDEAS_INDEX_REL):
             path = self.backlog_path / name
             if path.exists():
                 actual[name] = path
+        # `_known_entity_files` deliberately lists only entities, so a derived
+        # projection row like the ideas index would otherwise never appear in
+        # `actual` and the two sets would differ forever -- a writer
+        # transaction and a full scan on every read past the throttle.
         if set(known) != set(actual):
             return True
         for rel, path in actual.items():
@@ -3666,6 +3714,7 @@ class Transaction:
         self._export_backlog = False
         self._export_ideas = False
         self._replaced_files: dict[Path, bytes | None] = {}
+        self._post_commit_removals: list[Path] = []
         self._reserved_keys: set[tuple[str, str]] = set()
         self._force_progress = False
         intent_token = uuid.uuid4().hex
@@ -4081,6 +4130,12 @@ class Transaction:
         self.seq = seq
         self.log_entries.append(f"imported {kind}:{ident} at seq {seq}")
         self._derived_keys.add((kind, ident))
+        if kind == "idea":
+            # `ideas/IDEAS.md` is derived from the idea rows (R2). An import is
+            # the one row change that does not go through `create`/`put`, so
+            # without this a hand-edited or freshly discovered idea leaves the
+            # index stale -- or, on a first v4 import, absent.
+            self._export_ideas = True
 
     def _record_change(
         self,
@@ -4129,6 +4184,17 @@ class Transaction:
     def _finish_committed(self) -> None:
         self.committed.update(self._pending_committed)
         self._pending_committed.clear()
+        for path in self._post_commit_removals:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as exc:
+                # The committed receipt is what makes this recoverable: the
+                # next scan sees the same bytes, skips the import and retries
+                # the removal.  Never fail a committed transaction over it.
+                self.log_entries.append(
+                    f"post-commit removal pending {path.name}: {exc!r}"
+                )
+        self._post_commit_removals.clear()
         for entry in self.log_entries:
             self.store._log(entry)
         self.log_entries.clear()
