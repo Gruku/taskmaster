@@ -7451,6 +7451,7 @@ def _archive_epic_cascade(epic: dict, epic_id: str, reason: str) -> int:
     epic["archive_reason"] = reason
     epic["archived"] = now
     _archive_entity("epic", epic_id, epic)
+    _store_tx().put("epic", epic_id, {k: v for k, v in epic.items() if k != "tasks"})
 
     cascaded = 0
     for task in epic.get("tasks", []) or []:
@@ -7460,6 +7461,11 @@ def _archive_epic_cascade(epic: dict, epic_id: str, reason: str) -> int:
             task["archived"] = now
             task.pop("locked_by", None)
             _archive_entity("task", task["id"], task)
+            # The archive flag alone is not the cascade: without writing the
+            # document, a later operation in the same batch refreshes this
+            # dict node from a row that still holds the pre-cascade status,
+            # lock and missing reason, and silently reverts all three.
+            _tx_put_task(task, epic)
             cascaded += 1
     return cascaded
 
@@ -10293,12 +10299,13 @@ def backlog_project_ship_order() -> list[str]:
 
 
 @mcp.tool()
+@_transactional("backlog_project_set")
 def backlog_project_set(yaml_content: str) -> str:
     """Write .taskmaster/project.yaml with strict validation.
 
     Raises ValueError if YAML is malformed or schema invalid. The manifest is
     a store-owned entity, so the write commits through a store transaction.
-    Returns the absolute path written.
+    Returns the absolute path written, followed by the committed `[seq N]`.
     """
     try:
         data = yaml_io.safe_load(yaml_content) or {}
@@ -10316,22 +10323,45 @@ def backlog_project_set(yaml_content: str) -> str:
     return str(path)
 
 
-def _write_project_manifest(path: Path, document: dict) -> None:
+def _write_project_manifest(
+    path: Path, document: dict, *, create_only: bool = False
+) -> None:
     """Commit `project.yaml` through the store that owns its directory.
 
     The store knows `project` as a kind and renders the file itself, so the
     manifest can no longer be written behind its back and silently reverted by
     the next scan.
+
+    `create_only` makes this an initialization: the existence check is the
+    project *row*, read inside the writer transaction. Checking the projection
+    file outside it let two initializers both pass and the second replace the
+    first's committed manifest, and let a scaffold land on a real project whose
+    first export had failed.
     """
-    backlog_path = path.parent / "backlog.yaml"
-    with _transaction(tool="backlog_project_set", backlog_path=backlog_path) as data:
+    def apply() -> None:
         tx = _store_tx()
         try:
             tx.get("project", "__project__")
         except KeyError:
             tx.create("project", document, body=None, requested_id="__project__")
         else:
+            if create_only:
+                raise ValueError(
+                    f"{path} already has a project manifest — refusing to "
+                    "overwrite (edit it directly)"
+                )
             tx.put("project", "__project__", document)
+
+    if _active_tx() is not None:
+        # The tool decorator already owns the transaction; joining it is what
+        # keeps one public call to one transaction, and stops a second store
+        # being opened when the manifest path and `_backlog_path()` disagree.
+        apply()
+        _mutate_and_save(_load())
+        return
+    backlog_path = path.parent / "backlog.yaml"
+    with _transaction(tool="backlog_project_set", backlog_path=backlog_path) as data:
+        apply()
         _mutate_and_save(data)
 
 
@@ -10346,10 +10376,12 @@ def _slugify(name: str) -> str:
 
 
 @mcp.tool()
+@_transactional("backlog_project_init")
 def backlog_project_init(name: str, slug: str = "") -> str:
     """Scaffold a minimal valid project.yaml. Refuses to overwrite.
 
-    Returns a confirmation message including the path written.
+    Returns a confirmation message including the path written, followed by the
+    committed `[seq N]`.
     """
     if not name or not name.strip():
         raise ValueError("name: required (project name must be non-empty)")
@@ -10373,7 +10405,7 @@ def backlog_project_init(name: str, slug: str = "") -> str:
     ok, errs = validate_manifest_dict(scaffold)
     if not ok:
         raise ValueError("refusing to write invalid manifest: " + "; ".join(errs))
-    _write_project_manifest(path, scaffold)
+    _write_project_manifest(path, scaffold, create_only=True)
     return f"Created {path}"
 
 
