@@ -245,14 +245,19 @@ def _is_under(path: Path, directory: Path) -> bool:
 
 
 def _bypass_offender():
-    """None when this write is legitimate, else the offending entry point."""
-    import inspect  # noqa: PLC0415
+    """None when this write is legitimate, else the offending entry point.
 
-    frames = inspect.stack()
-    try:
-        files = [Path(frame.filename) for frame in frames]
-    finally:
-        del frames
+    Walks the frames with `sys._getframe` rather than `inspect.stack()`: the
+    latter resolves source context for every frame, and this runs on every
+    guarded write in the suite — including the store's own temp-file opens.
+    """
+    import sys as _sys  # noqa: PLC0415
+
+    files = []
+    frame = _sys._getframe(1)
+    while frame is not None:
+        files.append(Path(frame.f_code.co_filename))
+        frame = frame.f_back
     entry = None
     for path in reversed(files):  # outermost frame first
         if path == _STORE_FILE:
