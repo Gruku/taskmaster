@@ -1506,22 +1506,50 @@ class Store:
                     _ACTIVE_DICT.value = prior
 
     def load_dict(self) -> dict[str, Any]:
+        return self.load_dict_with_identity()[0]
+
+    def load_dict_with_identity(self) -> tuple[dict[str, Any], str, int]:
+        """The compatibility dict plus `(creation_token, max_seq)` for its snapshot.
+
+        A caller that stamps an ETag on what it just read has to take both from
+        one snapshot; reading the payload and the identity separately let a
+        concurrent commit slip between them, so an old payload could be served
+        under a newer revision and a following edit would overwrite the newer
+        state while its precondition still matched.
+        """
         self._ensure_open()
         active = getattr(_ACTIVE_DICT, "value", None)
         if active is not None and active[0] == self.db_path:
-            return active[1]
+            connection = active[2].connection
+            token = connection.execute(
+                "SELECT value FROM meta WHERE key='creation_token'"
+            ).fetchone()[0]
+            max_seq = int(
+                connection.execute(
+                    "SELECT COALESCE(MAX(seq),0) FROM changes"
+                ).fetchone()[0]
+            )
+            return active[1], token, max_seq
         if self._network_projection_only:
             data = self._bootstrap_backlog_data()
             data.setdefault("context", {})
             if _CONTEXT_BUILDER is not None:
                 _CONTEXT_BUILDER(data)
-            return data
+            return data, "", 0
         self._maybe_scan_on_read()
         connection = self.connection
         owns_snapshot = not connection.in_transaction
         if owns_snapshot:
             connection.execute("BEGIN")
         try:
+            token = connection.execute(
+                "SELECT value FROM meta WHERE key='creation_token'"
+            ).fetchone()[0]
+            max_seq = int(
+                connection.execute(
+                    "SELECT COALESCE(MAX(seq),0) FROM changes"
+                ).fetchone()[0]
+            )
             data = self._load_cached_dict_from_connection(connection)
             if owns_snapshot:
                 connection.commit()
@@ -1529,7 +1557,7 @@ class Store:
             if owns_snapshot and connection.in_transaction:
                 connection.rollback()
             raise
-        return data
+        return data, token, max_seq
 
     def _load_cached_dict_from_connection(
         self, connection: sqlite3.Connection, *, publish: bool = True

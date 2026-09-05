@@ -661,10 +661,20 @@ def _load() -> dict:
     nested loads in complete_task / link expansion / Linear enqueue all mutate
     one shared tree instead of forking a second, stale copy.
     """
+    return _load_snapshot()[0]
+
+
+def _load_snapshot() -> tuple[dict, str]:
+    """`_load()` plus the ETag of the snapshot the payload came from.
+
+    A GET that reads the payload and the revision separately can hand out an old
+    payload under a newer ETag, and the edit that follows then passes its
+    precondition while overwriting the newer state.
+    """
     bp = _backlog_path()
     if not bp.exists():
         raise FileNotFoundError(bp)
-    data = _store_for_read().load_dict()
+    data, token, max_seq = _store_for_read().load_dict_with_identity()
     _normalize_loaded(data)
     if not data.get("context"):
         regenerate_context(data)
@@ -673,7 +683,7 @@ def _load() -> dict:
         _index.build_index(bp, data, budget_s=INDEX_REFRESH_BUDGET_S)
     except Exception as exc:  # index is derived; never break a tool call
         _log_index_error(bp, exc)
-    return data
+    return data, f"{token}:{max_seq}"
 
 
 def _write_local_meta_cache(backlog_path: Path, payload: dict) -> None:
@@ -7629,6 +7639,29 @@ class ViewerWriteRejected(ValueError):
         self.errors = dict(errors)
 
 
+class ViewerPreconditionFailed(Exception):
+    """`If-Match` did not match committed state; carries the current revision."""
+
+    def __init__(self, current_etag: str):
+        super().__init__("stale")
+        self.current_etag = current_etag
+
+
+def _check_if_match(if_match: str | None) -> None:
+    """Fail the write when `If-Match` no longer names committed state.
+
+    Called *inside* the write transaction, after the store has imported and
+    taken the writer lock: comparing before the transaction opened left a window
+    in which a peer could commit and this request would then overwrite it and
+    still answer 200.
+    """
+    if not if_match:
+        return
+    current = _viewer_etag()
+    if if_match.strip('"') != current:
+        raise ViewerPreconditionFailed(current)
+
+
 def _archived_transition_error(task: dict | None, patch: dict) -> dict:
     """Reject a status change out of `archived` the transition table forbids.
 
@@ -7664,7 +7697,9 @@ def _viewer_etag() -> str:
     return f"{status.creation_token}:{status.max_seq}"
 
 
-def _viewer_update_task(task_id: str, patch: dict, *, method: str = "PATCH") -> dict:
+def _viewer_update_task(
+    task_id: str, patch: dict, *, method: str = "PATCH", if_match: str | None = None
+) -> dict:
     """Apply a partial update to a task inside one store transaction.
 
     Mirrors the timestamp stamping the old `taskmaster_v3.update_task` did:
@@ -7675,6 +7710,7 @@ def _viewer_update_task(task_id: str, patch: dict, *, method: str = "PATCH") -> 
     from taskmaster.taskmaster_v3 import validate_task_write  # noqa: PLC0415
 
     with _transaction(tool=f"viewer:{method} /api/tasks") as data:
+        _check_if_match(if_match)
         found = _find_task(data, task_id)
         if found is None:
             raise KeyError(f"task {task_id} not found")
@@ -7686,8 +7722,21 @@ def _viewer_update_task(task_id: str, patch: dict, *, method: str = "PATCH") -> 
         if errors:
             raise ViewerWriteRejected(errors)
         before_status = task.get("status")
+        before_epic = task.get("epic") or _epic.get("id")
         task.update(patch)
         after_status = task.get("status")
+        moved_to = patch.get("epic")
+        if moved_to and moved_to != before_epic:
+            # The task has to leave one epic's list and join the other's; leaving
+            # it in place with a rewritten `epic` field produced a row whose
+            # parent and field disagreed.
+            target = next(
+                (e for e in data.get("epics") or [] if e.get("id") == moved_to), None
+            )
+            if target is None:
+                raise ViewerWriteRejected({"epic": f"unknown epic: {moved_to}"})
+            _epic["tasks"] = [t for t in _epic.get("tasks") or [] if t is not task]
+            target.setdefault("tasks", []).append(task)
         if after_status != before_status:
             if after_status == "in-progress" and not task.get("started"):
                 task["started"] = _now_iso()
@@ -7741,9 +7790,10 @@ def _viewer_create_task(payload: dict) -> str:
     return new_id
 
 
-def _viewer_archive_task(task_id: str) -> None:
+def _viewer_archive_task(task_id: str, *, if_match: str | None = None) -> None:
     """Soft-delete a task: status flip plus the explicit store archive."""
     with _transaction(tool="viewer:POST /api/tasks/archive") as data:
+        _check_if_match(if_match)
         found = _find_task(data, task_id)
         if found is None:
             raise KeyError(f"task {task_id} not found")
@@ -7757,18 +7807,29 @@ def _viewer_archive_task(task_id: str) -> None:
 
 
 def _load_task_full(task_id: str) -> dict | None:
-    """Merge backlog.yaml index entry with the per-task markdown file body.
-    Returns None if the task id is not in the index.
+    """The task detail the viewer renders, derived only from committed store state.
+
+    It used to overlay the store document with the contents of `tasks/<id>.md`.
+    That file is a projection: it lags whenever an export is dirty, and in a
+    linked worktree it is a different, older file entirely, so the viewer showed
+    stale prose under a current ETag and the next edit wrote that prose back.
+    The stored body is the same text without the lag.
+    Returns None if the task id is unknown.
     """
+    return _load_task_full_identified(task_id)[0]
+
+
+def _load_task_full_identified(task_id: str) -> tuple[dict | None, str]:
+    """`_load_task_full` plus the ETag of the one snapshot it was read from."""
     import re
 
     backlog_path = _backlog_path()
     if not backlog_path.exists():
-        return None
-    # Route through _load(): the v4 projection keeps no task index in
+        return None, ""
+    # Route through the store: the v4 projection keeps no task index in
     # backlog.yaml, and a call nested inside an open transaction must see the
     # in-flight tree rather than the last exported file.
-    backlog = _load()
+    backlog, etag = _load_snapshot()
     tasks = backlog.get("tasks")
     if not isinstance(tasks, list):
         tasks = [
@@ -7778,49 +7839,63 @@ def _load_task_full(task_id: str) -> dict | None:
         ]
     index_entry = next((t for t in tasks if t.get("id") == task_id), None)
     if index_entry is None:
-        return None
+        return None, etag
+    store_owned = any(
+        task.get("id") == task_id
+        for epic in (backlog.get("epics") or [])
+        for task in (epic.get("tasks") or [])
+    )
 
     out = dict(index_entry)
     out.setdefault("docs", {})
     out.setdefault("description", "")
     out.setdefault("notes", "")
     out.setdefault("review_instructions", "")
-    out.setdefault("_body", "")
+    if store_owned:
+        body = out.pop(_BODY_KEY, "") or ""
+    else:
+        # A v3 backlog keeps a slim inline task index and leaves the heavy
+        # fields in `tasks/<id>.md`, which the store does not own as a row.
+        # There is no committed document to prefer, so the file is still the
+        # only source for them.
+        body = ""
+        legacy_path = backlog_path.parent / "tasks" / f"{task_id}.md"
+        if legacy_path.exists():
+            raw = legacy_path.read_text(encoding="utf-8")
+            match = re.match(r"^---\n(.*?)\n---\n(.*)$", raw, re.DOTALL)
+            if match:
+                try:
+                    frontmatter = yaml_io.safe_load(match.group(1)) or {}
+                except Exception:
+                    frontmatter = {}
+                body = match.group(2)
+                for key in (*_HEAVY_FIELDS, "patchnote", "release",
+                            "worktree", "spec_review", "locked_by"):
+                    if key in frontmatter:
+                        out[key] = frontmatter[key]
+            else:
+                body = raw
+    out["_body"] = body
 
-    md_path = backlog_path.parent / "tasks" / f"{task_id}.md"
-    if md_path.exists():
-        raw = md_path.read_text(encoding="utf-8")
-        fm_match = re.match(r"^---\n(.*?)\n---\n(.*)$", raw, re.DOTALL)
-        if fm_match:
-            try:
-                fm = yaml_io.safe_load(fm_match.group(1)) or {}
-            except Exception:
-                fm = {}
-            body = fm_match.group(2)
-            for k in (*_HEAVY_FIELDS, "patchnote", "release",
-                      "worktree", "spec_review", "locked_by"):
-                if k in fm:
-                    out[k] = fm[k]
-        else:
-            body = raw
-        out["_body"] = body
+    # A legacy body still carries `## Description` / `## Notes` sections that v4
+    # keeps as fields; when it does, the body wins, exactly as it did before.
+    sections: dict[str, list[str]] = {}
+    current: str | None = None
+    for line in body.splitlines():
+        m = re.match(r"^## +(.+?)\s*$", line)
+        if m:
+            current = m.group(1).strip().lower()
+            sections[current] = []
+            continue
+        if current is not None:
+            sections[current].append(line)
+    for key in ("description", "notes", "specification", "plan",
+                "review instructions", "activity", "patchnote"):
+        if key in sections:
+            out_key = key.replace(" ", "_")
+            out[out_key] = "\n".join(sections[key]).strip()
+    return out, etag
 
-        sections: dict[str, list[str]] = {}
-        current: str | None = None
-        for line in body.splitlines():
-            m = re.match(r"^## +(.+?)\s*$", line)
-            if m:
-                current = m.group(1).strip().lower()
-                sections[current] = []
-                continue
-            if current is not None:
-                sections[current].append(line)
-        for key in ("description", "notes", "specification", "plan",
-                    "review instructions", "activity", "patchnote"):
-            if key in sections:
-                out_key = key.replace(" ", "_")
-                out[out_key] = "\n".join(sections[key]).strip()
-    return out
 
 
 def _load_epic_full(epic_id: str) -> dict | None:
@@ -8047,11 +8122,11 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 self._send_json(200, related)
                 return
             if "/" not in rest and rest:
-                full = _load_task_full(rest)
+                full, etag = _load_task_full_identified(rest)
                 if full is None:
                     self._send_json(404, {"ok": False, "error": f"task {rest} not found"})
                     return
-                self._send_json(200, full, etag=_viewer_etag())
+                self._send_json(200, full, etag=etag)
                 return
             self.send_error(HTTPStatus.NOT_FOUND)
         elif clean_path.startswith("/api/epic/"):
@@ -8300,7 +8375,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
 
     def _serve_json(self) -> None:
         try:
-            data = _load()
+            data, etag = _load_snapshot()
             data.setdefault("meta", {})["_version"] = VERSION
             if not isinstance(data.get("tasks"), list):
                 data["tasks"] = [
@@ -8317,7 +8392,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
                     data["phases"],
                     key=lambda p: (p.get("order") if p.get("order") is not None else 999),
                 )
-            self._send_json(200, data, etag=_viewer_etag())
+            self._send_json(200, data, etag=etag)
         except Exception as e:
             self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(e))
 
@@ -8497,23 +8572,11 @@ class ViewerHandler(BaseHTTPRequestHandler):
         m = re.fullmatch(r"/api/tasks/([A-Za-z0-9_\-]+)/archive", self.path)
         if m:
             task_id = m.group(1)
-            # If-Match check
-            if_match = self.headers.get("If-Match")
-            if if_match:
-                if_match = if_match.strip('"')
-                current_etag = _viewer_etag()
-                if if_match != current_etag:
-                    current = _load_task_full(task_id)
-                    self._send_json(409, {
-                        "ok": False, "error": "stale",
-                        "current_etag": current_etag,
-                        "current": current,
-                    })
-                    return
             try:
-                _viewer_archive_task(task_id)
-                new_etag = _viewer_etag()
-                self._send_json(200, {"ok": True}, etag=new_etag)
+                _viewer_archive_task(task_id, if_match=self.headers.get("If-Match"))
+                self._send_json(200, {"ok": True}, etag=_viewer_etag())
+            except ViewerPreconditionFailed as e:
+                self._send_stale(task_id, e.current_etag)
             except KeyError as e:
                 self._send_json(404, {"ok": False, "error": str(e)})
             except Exception as e:
@@ -8768,23 +8831,13 @@ class ViewerHandler(BaseHTTPRequestHandler):
             if not isinstance(full, dict):
                 self._send_json(400, {"ok": False, "error": "body must be object"})
                 return
-            # If-Match check
-            if_match = self.headers.get("If-Match")
-            if if_match:
-                if_match = if_match.strip('"')
-                current_etag = _viewer_etag()
-                if if_match != current_etag:
-                    current = _load_task_full(task_id)
-                    self._send_json(409, {
-                        "ok": False, "error": "stale",
-                        "current_etag": current_etag,
-                        "current": current,
-                    })
-                    return
             try:
-                task = _viewer_update_task(task_id, full, method="PUT")
-                new_etag = _viewer_etag()
-                self._send_json(200, {"ok": True, "task": task}, etag=new_etag)
+                task = _viewer_update_task(
+                    task_id, full, method="PUT", if_match=self.headers.get("If-Match")
+                )
+                self._send_json(200, {"ok": True, "task": task}, etag=_viewer_etag())
+            except ViewerPreconditionFailed as e:
+                self._send_stale(task_id, e.current_etag)
             except ViewerWriteRejected as e:
                 self._send_json(422, {"ok": False, "errors": e.errors})
             except KeyError as e:
@@ -8809,23 +8862,13 @@ class ViewerHandler(BaseHTTPRequestHandler):
             if not isinstance(patch, dict):
                 self._send_json(400, {"ok": False, "error": "patch must be object"})
                 return
-            # If-Match check
-            if_match = self.headers.get("If-Match")
-            if if_match:
-                if_match = if_match.strip('"')
-                current_etag = _viewer_etag()
-                if if_match != current_etag:
-                    current = _load_task_full(task_id)
-                    self._send_json(409, {
-                        "ok": False, "error": "stale",
-                        "current_etag": current_etag,
-                        "current": current,
-                    })
-                    return
             try:
-                task = _viewer_update_task(task_id, patch)
-                new_etag = _viewer_etag()
-                self._send_json(200, {"ok": True, "task": task}, etag=new_etag)
+                task = _viewer_update_task(
+                    task_id, patch, if_match=self.headers.get("If-Match")
+                )
+                self._send_json(200, {"ok": True, "task": task}, etag=_viewer_etag())
+            except ViewerPreconditionFailed as e:
+                self._send_stale(task_id, e.current_etag)
             except ViewerWriteRejected as e:
                 self._send_json(422, {"ok": False, "errors": e.errors})
             except KeyError as e:
@@ -8835,6 +8878,15 @@ class ViewerHandler(BaseHTTPRequestHandler):
             return
 
         self.send_error(404)
+
+    def _send_stale(self, task_id: str, current_etag: str) -> None:
+        """The unchanged 409 contract, with the revision the write lost to."""
+        current, _etag = _load_task_full_identified(task_id)
+        self._send_json(409, {
+            "ok": False, "error": "stale",
+            "current_etag": current_etag,
+            "current": current,
+        })
 
     def _send_json(self, status: int, payload: dict, etag: str | None = None):
         """Serialize *payload* as JSON and write the complete HTTP response."""

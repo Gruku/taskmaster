@@ -4588,9 +4588,20 @@ def validate_task_write(
     # Compose the proposed state.
     proposed = {**(me or {}), **patch}  # noqa: F841 — kept for future cross-field rules
 
-    # Epic must exist.
-    if "epic" in patch and patch["epic"] and patch["epic"] not in epic_ids:
-        errors["epic"] = f"unknown epic: {patch['epic']}"
+    # Identity is immutable.  A patch that renamed a task used to commit a copy
+    # under the new id while the original row survived, so the board showed the
+    # task twice and later edits went to whichever one the reader found first.
+    if "id" in patch and task_id != "<new>" and str(patch["id"]) != task_id:
+        errors["id"] = f"task id is immutable: {task_id} cannot become {patch['id']}"
+
+    # Epic must exist, and a task must always have one: an epic-less task is
+    # unreachable through every compatibility read, which is data loss dressed
+    # up as a successful update.
+    if "epic" in patch:
+        if not patch["epic"]:
+            errors["epic"] = "epic is required — a task cannot be left without one"
+        elif patch["epic"] not in epic_ids:
+            errors["epic"] = f"unknown epic: {patch['epic']}"
 
     # Area must exist (areas live in files, not `data`).
     if "area" in patch and patch["area"] and patch["area"] not in list_area_ids(bp):
