@@ -442,7 +442,7 @@ def _store_for_read() -> "store.Store":
     onto the store and this drops back to the throttled read.
     """
     instance = _store()
-    instance._last_read_scan_clock = None
+    instance.force_scan_on_next_read()
     return instance
 
 
@@ -787,7 +787,7 @@ def _store_read_task(backlog_path: Path | None, task_id: str) -> dict | None:
     if not bp.exists():
         return None
     instance = _store_for(bp)
-    instance._last_read_scan_clock = None
+    instance.force_scan_on_next_read()
     data = instance.load_dict()
     _normalize_loaded(data)
     found = _find_task(data, task_id)

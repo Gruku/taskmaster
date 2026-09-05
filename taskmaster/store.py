@@ -49,9 +49,11 @@ from taskmaster.taskmaster_v3 import (
     load_v3,
     load_v4,
     legacy_links_to_typed,
+    make_handover_id,
     parse_frontmatter,
     phase_file_path,
     render_frontmatter,
+    render_ideas_index,
     task_file_path,
     task_v4_from_file,
     task_v4_to_file,
@@ -68,6 +70,11 @@ _BACKLOG_ID = "__backlog__"
 _PROJECT_ID = "__project__"
 _RETRYABLE_REPLACE_ERRNOS = {5, 13, 32, errno.EACCES, errno.EPERM}
 _CORRUPTION_MARKERS = ("malformed", "not a database", "file is encrypted")
+# `ideas/IDEAS.md` is derived output, not an entity: the exporter regenerates it
+# from the idea rows and the scan refreshes its hash without ever parsing it.
+_IDEAS_INDEX_KIND = "ideas-index"
+_IDEAS_INDEX_REL = "ideas/IDEAS.md"
+_LINEAR_QUEUE_REL = "integrations/linear-queue.json"
 
 
 SCHEMA_SQL = """
@@ -1661,6 +1668,106 @@ class Store:
             _CONTEXT_BUILDER(data)
         return data
 
+    def force_scan_on_next_read(self) -> None:
+        """Drop the read-scan throttle so the next read re-imports hand edits."""
+        self._last_read_scan_clock = None
+
+    def linear_pending(self, limit: int = 100) -> list[dict[str, Any]]:
+        """The oldest pending Linear pushes, `limit` at most, oldest first."""
+        self._ensure_open()
+        return [
+            {
+                "seq": int(row["seq"]),
+                "op": row["op"],
+                "target_id": row["target_id"],
+                "tracker_id": row["tracker_id"],
+                "payload": _from_json(row["payload"], None),
+                "state": row["state"],
+                "attempts": int(row["attempts"] or 0),
+                "last_error": row["last_error"],
+            }
+            for row in self.connection.execute(
+                "SELECT seq,op,target_id,tracker_id,payload,state,attempts,last_error "
+                "FROM linear_queue WHERE state='pending' ORDER BY seq LIMIT ?",
+                (limit,),
+            )
+        ]
+
+    def linear_mark(self, seq: int, *, state: str, error: str | None = None) -> None:
+        """Record the outcome of one drain attempt on queue row `seq`.
+
+        Its own short `BEGIN IMMEDIATE` so a drain that spends seconds in HTTP
+        never holds the writer lock across a round-trip.  The store keeps no
+        retry policy: `attempts` counts marks, the caller chooses the state.
+        """
+        self._ensure_open()
+        if self.connection.in_transaction:
+            raise RuntimeError("linear_mark needs its own transaction")
+        with self._writer_mutex():
+            # Re-read under the mutex, as `transaction` does: a recovery that
+            # finished while this caller queued for the lock closes the handle
+            # we would otherwise have captured before waiting.
+            connection = self.connection
+            if connection.in_transaction:
+                raise RuntimeError("linear_mark needs its own transaction")
+            self._begin_immediate(connection)
+            try:
+                cursor = connection.execute(
+                    "UPDATE linear_queue SET state=?,last_error=?,attempts=attempts+1 "
+                    "WHERE seq=?",
+                    (state, error, seq),
+                )
+                if cursor.rowcount == 0:
+                    raise KeyError(f"linear queue row {seq} not found")
+                connection.commit()
+            except BaseException:
+                if connection.in_transaction:
+                    connection.rollback()
+                raise
+
+    def _import_linear_queue(self, tx: "Transaction") -> None:
+        """Adopt a legacy `integrations/linear-queue.json` into `linear_queue`.
+
+        Called from bootstrap and from every scan, because a project migrated
+        before the table existed still has its pending pushes on disk.  Removing
+        the file inside the caller's transaction is what makes this idempotent.
+        """
+        path = self.backlog_path / _LINEAR_QUEUE_REL
+        if not path.exists():
+            return
+        try:
+            prior = path.read_bytes()
+            raw = json.loads(prior.decode("utf-8"))
+        except (OSError, UnicodeError, ValueError) as exc:
+            tx.warnings.append(f"linear queue import failed: {exc}")
+            tx.log_entries.append(f"linear queue import failed: {exc!r}")
+            return
+        for item in raw if isinstance(raw, list) else []:
+            if not isinstance(item, dict):
+                continue
+            op = str(item.get("op") or "")
+            target_id = str(item.get("target_id") or "")
+            if not op or not target_id:
+                continue
+            payload = {
+                key: value
+                for key, value in item.items()
+                if key not in {"op", "target_id", "tracker_id", "attempts", "last_error"}
+            }
+            seq = tx.linear_enqueue(op, target_id, item.get("tracker_id"), payload or None)
+            attempts = int(item.get("attempts") or 0)
+            last_error = item.get("last_error")
+            if attempts or last_error:
+                tx.connection.execute(
+                    "UPDATE linear_queue SET attempts=?,last_error=? WHERE seq=?",
+                    (attempts, last_error, seq),
+                )
+        # Not a projection file, so it carries no export intent; the in-process
+        # rollback path restores it if this transaction never commits.
+        tx._replaced_files.setdefault(path, prior)
+        path.unlink()
+        tx.log_entries.append(f"imported and removed {_LINEAR_QUEUE_REL}")
+
     def _maybe_scan_on_read(self) -> None:
         """Import hand edits at most once per two seconds for read callers."""
         now = time.monotonic()
@@ -2093,6 +2200,7 @@ class Store:
                 for order, task in enumerate(epic.get("tasks") or [], start=1):
                     task.setdefault("epic", epic.get("id"))
                     task.setdefault("order", float(order))
+        self._import_linear_queue(tx)
         for key, (doc, body) in _flatten_backlog_dict(data).items():
             tx._import_row(key[0], key[1], doc, body)
 
@@ -2254,6 +2362,7 @@ class Store:
             )
 
     def _scan_projection(self, tx: "Transaction") -> None:
+        self._import_linear_queue(tx)
         generation = self._git_generation()
         generation_row = tx.connection.execute(
             "SELECT value FROM meta WHERE key='last_scan_generation'"
@@ -2281,6 +2390,8 @@ class Store:
                         tx._export_keys.add((row["kind"], row["id"]))
                 elif row["kind"] == "backlog":
                     tx._export_backlog = True
+                elif row["kind"] == _IDEAS_INDEX_KIND:
+                    tx._export_ideas = True
                 continue
             if not force_hash and rel not in {"backlog.yaml", "project.yaml"}:
                 try:
@@ -2306,7 +2417,19 @@ class Store:
                 if row["kind"] == "backlog":
                     self._merge_dirty_backlog_edit(tx, row, content, stat)
                     continue
+                if row["kind"] == _IDEAS_INDEX_KIND:
+                    # A pending export outranks whatever is on disk: refreshing
+                    # the hash here would launder the failure into "clean".
+                    tx._export_ideas = True
+                    continue
                 self._merge_dirty_external_edit(tx, row, content, stat)
+                continue
+            if row["kind"] == _IDEAS_INDEX_KIND:
+                # Derived output (R2): a hand edit is not an entity change, so
+                # only the hash moves.  The next idea write regenerates it.
+                self._record_projection_bytes(
+                    tx.connection, rel, _IDEAS_INDEX_KIND, None, content, stat
+                )
                 continue
             if row["kind"] == "backlog":
                 self._import_backlog_file(tx, path, content, stat)
@@ -2659,6 +2782,8 @@ class Store:
         ).fetchall():
             if row["id"]:
                 tx._export_keys.add((row["kind"], row["id"]))
+            elif row["kind"] == _IDEAS_INDEX_KIND:
+                tx._export_ideas = True
             else:
                 tx._export_backlog = True
 
@@ -2817,8 +2942,26 @@ class Store:
             if not row:
                 continue
             self._export_entity_row(tx, row)
+        if tx._export_ideas or any(kind == "idea" for kind, _ in tx._export_keys):
+            self._export_ideas_index(tx)
         if tx._export_backlog:
             self._export_backlog(tx)
+
+    def _export_ideas_index(self, tx: "Transaction") -> None:
+        """Regenerate `ideas/IDEAS.md` from the idea rows this store holds."""
+        entries = [
+            _from_json(row["doc"], {})
+            for row in tx.connection.execute(
+                "SELECT doc FROM entities WHERE kind='idea' AND deleted=0 ORDER BY id"
+            )
+        ]
+        content = render_ideas_index(entries).encode("utf-8")
+        seq = int(
+            tx.connection.execute("SELECT COALESCE(MAX(seq),0) FROM changes").fetchone()[0]
+        )
+        self._replace_projection(
+            tx, _IDEAS_INDEX_REL, _IDEAS_INDEX_KIND, None, content, seq
+        )
 
     def _regenerate_progress_if_due(self, tx: "Transaction") -> None:
         if _PROGRESS_RENDERER is None or tx.seq is None:
@@ -3177,6 +3320,7 @@ class Transaction:
         self._export_keys: set[tuple[str, str]] = set()
         self._derived_keys: set[tuple[str, str]] = set()
         self._export_backlog = False
+        self._export_ideas = False
         self._replaced_files: dict[Path, bytes | None] = {}
         self._reserved_keys: set[tuple[str, str]] = set()
         intent_token = uuid.uuid4().hex
@@ -3194,6 +3338,48 @@ class Transaction:
         if row["body"]:
             doc[BODY_KEY] = row["body"]
         return doc
+
+    def list(
+        self, kind: str, *, include_archived: bool = False
+    ) -> list[tuple[str, dict[str, Any], str | None]]:
+        """Every live row of `kind` as `(id, doc, body)`, ordered by id.
+
+        Tools that used to glob a directory read the authority through this
+        instead, so a list and the write that follows it see the same snapshot.
+        Tombstoned rows are never returned; archived rows only on request.
+        """
+        sql = "SELECT id,doc,body FROM entities WHERE kind=? AND deleted=0"
+        if not include_archived:
+            sql += " AND archived=0"
+        return [
+            (row["id"], _from_json(row["doc"], {}), row["body"])
+            for row in self.connection.execute(sql + " ORDER BY id", (kind,))
+        ]
+
+    def linear_enqueue(
+        self,
+        op: str,
+        target_id: str,
+        tracker_id: str | None = None,
+        payload: Mapping[str, Any] | None = None,
+    ) -> int:
+        """Queue one Linear push inside this transaction; returns its seq.
+
+        De-duplicates on `(op, target_id)` among pending rows: the drain re-reads
+        task state, so stacking requests for one target is wasted round-trips.
+        """
+        existing = self.connection.execute(
+            "SELECT seq FROM linear_queue WHERE op=? AND target_id=? AND state='pending'",
+            (op, target_id),
+        ).fetchone()
+        if existing:
+            return int(existing[0])
+        cursor = self.connection.execute(
+            "INSERT INTO linear_queue(op,target_id,tracker_id,payload,state,attempts,last_error) "
+            "VALUES(?,?,?,?,'pending',0,NULL)",
+            (op, target_id, tracker_id, None if payload is None else _json(payload)),
+        )
+        return int(cursor.lastrowid)
 
     def put(
         self, kind: str, ident: str, doc: Mapping[str, Any], body: str | None = None
@@ -3352,6 +3538,21 @@ class Transaction:
             "idea": "IDEA-",
             "note": "NOTE-",
         }
+        if kind == "handover":
+            # Slug ids collide by design (one date, similar tldrs), so the
+            # suffix search belongs here, next to `id_taken`, rather than in a
+            # filesystem probe that cannot see rows this transaction created.
+            date_str = str(doc.get("date") or "").strip()
+            tldr = str(doc.get("tldr") or "").strip()
+            if not date_str or not tldr:
+                raise ValueError("handover date and tldr are required for id allocation")
+            base = make_handover_id(date_str, tldr)
+            ident = base
+            suffix = 2
+            while self._id_taken(kind, ident):
+                ident = f"{base}-{suffix}"
+                suffix += 1
+            return ident
         if kind == "task":
             epic = str(doc.get("epic") or "").strip()
             if not epic:

@@ -17,7 +17,7 @@ import re
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable, Mapping
 
 import yaml
 
@@ -3504,12 +3504,37 @@ def _read_ideas_index(backlog_path: Path) -> list[str]:
     return [line for line in p.read_text(encoding="utf-8").splitlines() if line.startswith("- ")]
 
 
+def _ideas_index_text(lines: list[str]) -> str:
+    """Canonical IDEAS.md byte shape: the header plus the supplied data lines."""
+    return "# Ideas\n\n" + "\n".join(lines) + ("\n" if lines else "")
+
+
+def render_ideas_index(entries: Iterable[Mapping[str, Any]]) -> str:
+    """Render the whole IDEAS.md index from idea frontmatter documents.
+
+    Pure: the store calls this with its own idea rows and owns the write, so the
+    index is derived output rather than a second writer of the same file.
+    Newest first, ties broken by id so the render is deterministic.
+    """
+    # A hand-edited idea file can reach the store without a title; rendering it
+    # blank beats raising out of an exporter that owns unrelated writes too.
+    ordered = sorted(
+        (
+            dict(entry, title=entry.get("title") or "")
+            for entry in entries
+            if entry.get("id")
+        ),
+        key=lambda fm: (str(fm.get("created") or ""), str(fm.get("id") or "")),
+        reverse=True,
+    )
+    return _ideas_index_text([_idea_index_line(fm) for fm in ordered])
+
+
 def _write_ideas_index(backlog_path: Path, lines: list[str]) -> None:
     """Write IDEAS.md with the canonical header + the supplied data lines."""
     p = ideas_index_path(backlog_path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    body = "# Ideas\n\n" + "\n".join(lines) + ("\n" if lines else "")
-    atomic_write(p, body)
+    atomic_write(p, _ideas_index_text(lines))
 
 
 def _index_upsert_line(lines: list[str], idea_id: str, new_line: str) -> list[str]:
