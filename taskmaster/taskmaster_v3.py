@@ -1833,11 +1833,24 @@ def smart_auto_close_handovers(
     return {"closed": closed, "flagged": flagged}
 
 
-def flag_open_reason(backlog_path: Path, handover_id: str) -> str | None:
+def flag_open_reason(
+    backlog_path: Path,
+    handover_id: str,
+    *,
+    doc: "Mapping[str, Any] | None" = None,
+) -> str | None:
     """Return the `flag_reason` string for an open handover, or None if absent.
 
-    Returns None for closed/superseded handovers — those are not flagged.
+    Returns None for closed/superseded handovers — those are not flagged. A
+    caller holding the store row passes it as `doc`; the file read is the
+    fallback for one that does not, and is behind the projection whenever an
+    export has failed.
     """
+    if doc is not None:
+        fm: Mapping[str, Any] = doc
+        if fm.get("status") != "open":
+            return None
+        return fm.get("flag_reason") or None
     try:
         fm, _ = read_handover(backlog_path, handover_id)
     except (OSError, ValueError):
@@ -4436,21 +4449,33 @@ def continuity_items(
     *,
     include_auto_stage: bool = False,
     now: datetime | None = None,
+    handover_rows: "Iterable[tuple[str, Mapping[str, Any], str | None]] | None" = None,
 ) -> list[dict[str, Any]]:
-    """Project all backlog entities to a unified ContinuityItem list."""
+    """Project all backlog entities to a unified ContinuityItem list.
+
+    `handover_rows` is `Transaction.list("handover")` output. The caller passes
+    the rows it already holds so the rail reports what the store committed; the
+    directory scan below is the fallback for a caller that has no store.
+    """
     items: list[dict[str, Any]] = []
 
     # Handovers. Promote the most-recent N done handovers to 'resume' so the
     # rail surfaces useful recent history alongside currently-open ones.
     handover_items: list[dict[str, Any]] = []
-    for hid in list_handover_ids(backlog_path):
-        try:
-            fm, _ = read_handover(backlog_path, hid)
-        except (OSError, ValueError):
-            continue
+    if handover_rows is None:
+        rows: list[tuple[str, Mapping[str, Any], str | None]] = []
+        for hid in list_handover_ids(backlog_path):
+            try:
+                fm, body = read_handover(backlog_path, hid)
+            except (OSError, ValueError):
+                continue
+            rows.append((hid, fm, body))
+    else:
+        rows = sort_handover_rows(handover_rows)
+    for _hid, fm, _body in rows:
         if not include_auto_stage and fm.get("session_kind") == "auto-stage":
             continue
-        handover_items.append(_handover_to_item(fm, now))
+        handover_items.append(_handover_to_item(dict(fm), now))
     handover_items.sort(key=lambda it: it.get("timestamp") or "", reverse=True)
     done_promoted = 0
     for it in handover_items:

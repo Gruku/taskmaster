@@ -242,18 +242,18 @@ def _ensure_handover_status_backfilled() -> None:
 
 
 def _get_open_handovers_for_task(bp: Path, task_id: str) -> list[str]:
-    """Scan handovers dir for open handovers referencing task_id."""
-    hdir = bp.parent / "handovers"
-    if not hdir.exists():
-        return []
+    """Open handovers referencing `task_id`, read from the store rows.
+
+    Globbing `handovers/*.md` under-reported whenever the projection was behind
+    the rows -- an export that failed its retry, or network storage the store
+    cannot export to at all -- so a task looked free of open handovers while
+    the store held them.
+    """
+    rows = _tx_rows("handover") if _active_tx() is not None else _dict_rows(_load(), "handover")
     result = []
-    for path in sorted(hdir.glob("*.md")):
-        try:
-            fm, _ = _read_handover(bp, path.stem)
-        except Exception:
-            continue
+    for hid, fm, _body in rows:
         if fm.get("status") == "open" and task_id in (fm.get("task_ids") or []):
-            result.append(fm.get("id") or path.stem)
+            result.append(fm.get("id") or hid)
     return result
 
 
@@ -3685,10 +3685,12 @@ def backlog_thread_resume(ref: str) -> str:
     except KeyError:
         return (f"No thread or handover matches {ref!r}. "
                 f"See `backlog_thread_list()` for open threads.")
-    try:
-        fm, body = _read_handover(bp, hid)
-    except FileNotFoundError:
-        return f"Thread {tname!r} resolved to {hid}, but the file is missing — run `backlog_handover_resync`."
+    row = _dict_row(data, "handover", hid)
+    if row is None:
+        return f"Thread {tname!r} resolved to {hid}, but no such handover exists."
+    fm, body = row
+    fm = {key: value for key, value in fm.items() if key != _BODY_KEY}
+    body = body or ""
     t = (data.get("threads") or {}).get(tname) or {}
     header = [
         f"# Thread: {tname or '(none — standalone handover)'}",
@@ -5068,7 +5070,11 @@ def backlog_continuity_items(
     bp = _backlog_path()
     if not bp.exists():
         return json.dumps({"items": [], "view": view, "error": "no backlog"})
-    items = _continuity_items(bp, include_auto_stage=include_auto_stage)
+    items = _continuity_items(
+        bp,
+        include_auto_stage=include_auto_stage,
+        handover_rows=_dict_rows(_load(), "handover"),
+    )
     return json.dumps({"items": items, "view": view}, default=str)
 
 
