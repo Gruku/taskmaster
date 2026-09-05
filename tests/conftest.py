@@ -163,6 +163,10 @@ _MAX_KIND_DEPTH = 3
 # `backlog.yaml` is owned: the regenerated ideas index and the Linear queue.
 # Guarding the name catches a writer staging one outside its kind directory.
 _GUARDED_FILES = ("IDEAS.md", "linear-queue.json")
+# Configuration that lives at the backlog root rather than in a kind directory.
+# It is shared state under `.taskmaster/` like everything else here, and the
+# store owns its read-modify-write.
+_GUARDED_ROOT_FILES = ("linear.yaml",)
 _PACKAGE_DIR = PLUGIN_ROOT / "taskmaster"
 _HOOKS_DIR = PLUGIN_ROOT / "hooks"
 _STORE_FILE = _PACKAGE_DIR / "store.py"
@@ -170,6 +174,11 @@ _STORE_FILE = _PACKAGE_DIR / "store.py"
 # projection *before* the store adopts it.  Production never enters here first —
 # every real entry point is an MCP tool or a viewer handler in backlog_server.
 _SEED_ENTRY_FILE = _PACKAGE_DIR / "taskmaster_v3.py"
+
+
+# Captured before any test patches it, so a test can tell the guard's wrapper
+# from the real thing.
+_REAL_PATH_OPEN = Path.open
 
 
 class ProjectionBypassError(AssertionError):
@@ -205,6 +214,10 @@ def _guard_path(target):
         if not path.exists() and not (path.parent / "local" / "store.db").exists():
             return None
         return path.parent
+    if path.name in _GUARDED_ROOT_FILES:
+        backlog_dir = _backlog_dir(path.parent)
+        if backlog_dir is not None:
+            return backlog_dir
     if path.name in _GUARDED_FILES:
         # No bootstrap exemption: both are regenerated from committed rows, so
         # there is never a legitimate first write outside the store.
@@ -291,6 +304,7 @@ def projection_bypass_guard(request, monkeypatch):
     real_unlink = Path.unlink
     real_remove = os.remove
     real_rename = Path.rename
+    real_open = _REAL_PATH_OPEN
 
     def atomic_write(path, content):
         _check(path, "taskmaster_v3.atomic_write")
@@ -329,6 +343,13 @@ def projection_bypass_guard(request, monkeypatch):
         _check(target, "Path.rename")
         return real_rename(self, target)
 
+    def open_(self, mode="r", *args, **kwargs):
+        # A raw write open truncates exactly like `write_text`; leaving it
+        # unwatched made the guard a matter of which primitive a bypass picked.
+        if any(flag in mode for flag in ("w", "a", "x", "+")):
+            _check(self, f"Path.open({mode!r})")
+        return real_open(self, mode, *args, **kwargs)
+
     monkeypatch.setattr(taskmaster_v3, "atomic_write", atomic_write)
     monkeypatch.setattr(taskmaster_v3, "write_task_file", write_task_file)
     monkeypatch.setattr(Path, "write_text", write_text)
@@ -338,4 +359,5 @@ def projection_bypass_guard(request, monkeypatch):
     monkeypatch.setattr(Path, "unlink", unlink)
     monkeypatch.setattr(os, "remove", remove)
     monkeypatch.setattr(Path, "rename", rename)
+    monkeypatch.setattr(Path, "open", open_)
     yield

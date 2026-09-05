@@ -568,6 +568,10 @@ def _store_tx() -> "store.Transaction":
     return tx
 
 
+class _AliasExists(Exception):
+    """A workspace alias already present when the config lock was taken."""
+
+
 def _archive_entity(kind: str, ident: str, entity: dict | None = None) -> None:
     """Archive one task/epic/phase in the store, not just in the dict.
 
@@ -10580,15 +10584,6 @@ def backlog_linear_bootstrap_apply(
     bp = _backlog_path()
     cfg_path = linear_config_path(bp)
 
-    if cfg_path.exists():
-        with cfg_path.open("r", encoding="utf-8") as f:
-            cfg = yaml_io.safe_load(f) or {}
-        existing_aliases = {ws.get("alias") for ws in cfg.get("workspaces") or []}
-        if workspace_alias in existing_aliases:
-            return json.dumps({"error": f"workspace alias {workspace_alias!r} already exists in linear.yaml"})
-    else:
-        cfg = {}
-
     ws_entry: dict = {
         "alias": workspace_alias,
         "team_id": team_id,
@@ -10599,18 +10594,28 @@ def backlog_linear_bootstrap_apply(
     if pm:
         ws_entry["priority_mapping"] = pm
 
-    cfg.setdefault("workspaces", []).append(ws_entry)
-    if default_workspace:
-        cfg["default_workspace"] = workspace_alias
+    def _add_workspace(cfg: dict) -> dict:
+        # The collision check, the append and the write are one critical
+        # section held by the store: doing them around an unlocked read let two
+        # agents adding different aliases both report success with only one
+        # addition surviving.
+        existing = {ws.get("alias") for ws in cfg.get("workspaces") or []}
+        if workspace_alias in existing:
+            raise _AliasExists(workspace_alias)
+        cfg.setdefault("workspaces", []).append(dict(ws_entry))
+        if default_workspace:
+            cfg["default_workspace"] = workspace_alias
+        _validate_linear_config(cfg)
+        return cfg
 
     try:
-        _validate_linear_config(cfg)
+        _store_for(bp).update_root_config(cfg_path.name, _add_workspace)
+    except _AliasExists:
+        return json.dumps({
+            "error": f"workspace alias {workspace_alias!r} already exists in linear.yaml"
+        })
     except ValueError as e:
         return json.dumps({"error": f"config validation failed: {e}"})
-
-    cfg_path.parent.mkdir(parents=True, exist_ok=True)
-    with cfg_path.open("w", encoding="utf-8") as f:
-        yaml.dump(cfg, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
 
     return json.dumps({
         "ok": True,

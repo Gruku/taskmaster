@@ -1729,6 +1729,47 @@ class Store:
             rows[kind][ident] = (doc, body)
         return {kind: dict(sorted(entries.items())) for kind, entries in rows.items()}
 
+    def update_root_config(self, name: str, mutate: "Callable[[dict], dict]") -> dict:
+        """Read-modify-write one root config file under the cross-process lock.
+
+        `linear.yaml` sits beside the projection and is shared by every agent
+        on the repo. Reading it, appending a workspace and truncating it back
+        outside any lock let two agents both report success while only one
+        addition survived. Holding the writer mutex across the whole cycle is
+        what makes the second one see the first.
+
+        `mutate` receives the current document (empty when the file is absent)
+        and returns what to write; raising from it leaves the file untouched.
+        Returns the document written.
+        """
+        _validate_safe_identifier(Path(name).stem)
+        if Path(name).name != name or not name.endswith((".yaml", ".yml")):
+            raise ValueError(f"not a root config file name: {name!r}")
+        self._ensure_open()
+        path = self.backlog_path / name
+        with self._writer_mutex():
+            current: dict[str, Any] = {}
+            if path.exists():
+                try:
+                    loaded = yaml_io.safe_load(path.read_text(encoding="utf-8"))
+                except (OSError, UnicodeError, yaml.YAMLError) as exc:
+                    raise ValueError(f"cannot read {name}: {exc}") from exc
+                if loaded is not None and not isinstance(loaded, dict):
+                    raise ValueError(f"{name} top-level must be a mapping")
+                current = loaded or {}
+            updated = mutate(current)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            payload = yaml.dump(
+                updated, default_flow_style=False, sort_keys=False, allow_unicode=True
+            )
+            temp = path.with_name(f"{path.name}.tmp.{self.session}")
+            with temp.open("w", encoding="utf-8", newline="\n") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp, path)
+        return updated
+
     def write_local_cache(self, name: str, data: bytes) -> None:
         """Write one derived file under `local/cache/`, atomically.
 
