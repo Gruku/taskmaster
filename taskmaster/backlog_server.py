@@ -230,7 +230,7 @@ def _ensure_handover_status_backfilled() -> None:
     except Exception as exc:
         # The store could not commit or export. This runs from several handover
         # tools, so it must not block them - but it must leave a trace.
-        _log_index_error(bp, exc)
+        _log_swallowed_error("handover status backfill", exc)
         return
 
     # Only a transaction this call owned *and* latched proves the durable marker
@@ -861,25 +861,17 @@ def _normalize_priority(value: str) -> str:
     return _LEGACY_TO_NAME.get(value, value)
 
 
-# The index refresh rides along on every tool call, so it gets a short budget:
-# past it the build stops early and reports itself stale rather than stalling the
-# tool. The SessionStart warm runs unbudgeted and catches up.
-INDEX_REFRESH_BUDGET_S = 1.5
-INDEX_LOG_MAX_BYTES = 1024 * 1024
-INDEX_LOG_KEEP_BYTES = 512 * 1024
+def _log_swallowed_error(what: str, exc: BaseException) -> None:
+    """Report a failure a tool deliberately survives. Never raises.
 
-
-def _log_index_error(bp: Path, exc: BaseException) -> None:
-    """Append one line to `.taskmaster/local/index.log`. Never raises."""
+    These are best-effort side tasks — a handover backfill, a Linear enqueue —
+    whose failure must not break the mutation that triggered them. A bare `pass`
+    made them invisible, and the store is the only writer allowed under
+    `.taskmaster/`, so the trace goes to stderr, where the MCP host logs it.
+    """
     try:
-        log = bp.parent / "local" / "index.log"
-        log.parent.mkdir(parents=True, exist_ok=True)
-        if log.exists() and log.stat().st_size > INDEX_LOG_MAX_BYTES:
-            tail = log.read_bytes()[-INDEX_LOG_KEEP_BYTES:]
-            log.write_bytes(tail)
         stamp = datetime.now(timezone.utc).isoformat()
-        with log.open("a", encoding="utf-8") as fh:
-            fh.write(f"{stamp} {exc!r}\n")
+        print(f"{stamp} taskmaster: {what} failed: {exc!r}", file=sys.stderr, flush=True)
     except Exception:  # logging must never break the tool call either
         pass
 
@@ -908,11 +900,6 @@ def _load_snapshot() -> tuple[dict, str]:
     _normalize_loaded(data)
     if not data.get("context"):
         regenerate_context(data)
-    try:
-        from taskmaster import index as _index  # noqa: PLC0415 - optional, derived
-        _index.build_index(bp, data, budget_s=INDEX_REFRESH_BUDGET_S)
-    except Exception as exc:  # index is derived; never break a tool call
-        _log_index_error(bp, exc)
     return data, f"{token}:{max_seq}"
 
 
@@ -1796,10 +1783,7 @@ def _enqueue_linear_push_if_synced(task_id: str, task: dict | None = None) -> No
         # Sync failures must not break the local mutation -- but a bare `pass`
         # made a broken enqueue invisible: the task changes, no push is queued,
         # and nothing anywhere says why.
-        try:
-            _log_index_error(_backlog_path(), exc)
-        except Exception:
-            pass
+        _log_swallowed_error("Linear enqueue", exc)
 
 
 def _deep_merge(dst: dict, src: dict) -> dict:
@@ -2307,61 +2291,50 @@ def backlog_get_task(
     return "\n".join(lines)
 
 
-# Report label -> index table name. `fts` is shortened; the rest match 1:1.
-_INDEX_ROW_LABELS = (
-    ("entities", "entities"), ("entity_paths", "entity_paths"), ("links", "links"),
-    ("handovers", "handovers"), ("related", "related"), ("fts", "entity_fts"),
-)
+# A leftover `local/index.db` from a 5.2.x install, plus the log that shipped
+# with it. They are read by nothing now; a rebuild is the one moment we are
+# already touching derived state, so it is where they get swept up.
+_LEGACY_INDEX_RELPATHS = (Path("local") / "index.db", Path("local") / "index.log")
 
 
-def _render_index_report(bp: Path, report) -> str:
-    """Format an `index.IndexReport` as the five-line `backlog_index_status` body."""
-    from taskmaster import index as _index  # noqa: PLC0415
-
-    def yn(flag: bool) -> str:
-        return "yes" if flag else "no"
-
-    counts = report.row_counts or {}
-    rows = " ".join(f"{label}={counts.get(table, 0)}" for label, table in _INDEX_ROW_LABELS)
-    lines = [
-        f"Index: {_index.db_path(bp)}",
-        f"Built: {report.built_at}  (full rebuild: {yn(report.full_rebuild)}, "
-        f"stale: {yn(report.stale)}, {report.elapsed_ms} ms, loader={yaml_io.LOADER_NAME})",
+def _render_derived_report(status: dict, db_file: Path) -> str:
+    """Format `Store.derived_status()` as the `backlog_index_status` body."""
+    counts = status.get("row_counts") or {}
+    rows = " ".join(f"{table}={counts.get(table, 0)}" for table in
+                    ("entities", *store.DERIVED_TABLES))
+    rebuilt = status.get("rebuilt_at") or "never (kept current per transaction)"
+    return "\n".join([
+        f"Store: {db_file}",
+        f"Rebuilt: {rebuilt}  (loader={yaml_io.LOADER_NAME})",
         f"Rows: {rows}",
-    ]
-    pending = report.pending_files or []
-    lines.append(f"Pending: {len(pending)} files"
-                 + (f"  {', '.join(pending[:10])}" if pending else ""))
-    errors = report.errors or []
-    lines.append(f"Errors: {len(errors)}"
-                 + (f"  {'; '.join(errors[:5])}" if errors else ""))
-    return "\n".join(lines)
+    ])
 
 
 @mcp.tool()
 def backlog_index_status(rebuild: bool = False) -> str:
-    """Report the state of the derived SQLite index (`.taskmaster/local/index.db`).
+    """Report the state of the store's derived tables (FTS, paths, links, related).
 
-    The index is derived and disposable — it is refreshed on every backlog tool
-    call and rebuilt from the files whenever it is missing or stale.
+    They live in `.taskmaster/local/store.db` beside the authoritative rows and are
+    refreshed inside the transaction of every tool call, so they are never stale.
 
     Args:
-        rebuild: Delete the index and build it from scratch before reporting.
+        rebuild: Recompute every derived table from the entity rows before reporting.
+            The authoritative tables are not touched and no file is re-read.
     """
-    from taskmaster import index as _index  # noqa: PLC0415
-
     bp = _backlog_path()
+    if not bp.exists():
+        # Same answer as `backlog_store_status`: a diagnostic must report on a
+        # project that has no backlog yet, and must not open a store beside one
+        # that does not exist. `rebuild=True` has nothing to rebuild either.
+        return f"no backlog found at {bp}"
+    st = _store()
     if rebuild:
-        # `index.db` is a disposable read cache and may be deleted. `store.db`
-        # is the authority and is never unlinked or replaced — its derived
-        # tables are rebuilt in place, inside a store transaction.
-        if bp.exists():
-            _store().rebuild_derived()
-        _index.db_path(bp).unlink(missing_ok=True)
-        report = _index.build_index(bp)
-    else:
-        report = _index.last_report(bp) or _index.build_index(bp)
-    return _render_index_report(bp, report)
+        # Derived rows only: `entities`, `changes` and `projection` are the
+        # authority and a rebuild must never be able to lose one of them.
+        st.rebuild_derived()
+        for relpath in _LEGACY_INDEX_RELPATHS:
+            (bp.parent / relpath).unlink(missing_ok=True)
+    return _render_derived_report(st.derived_status(), st.db_path)
 
 
 def _render_store_report(status: "store.StoreStatus") -> str:
@@ -2451,18 +2424,23 @@ def _render_query_table(description, rows: list, limit: int) -> str:
 
 @mcp.tool()
 def backlog_query(sql: str, limit: int = 50) -> str:
-    """Read-only SQL over the derived backlog index (.taskmaster/local/index.db). Use it to dig
-    deeper than the one-line edit hook: closed history for a path, titles, related entities, FTS.
+    """Read-only SQL over the backlog store (.taskmaster/local/store.db). Use it to dig deeper
+    than the one-line edit hook: closed history for a path, titles, related entities, FTS.
 
-    Tables: entities(id,kind,status,title,epic,phase,lane,repo,priority,created,updated,archived,file)
-      entity_paths(entity_id,path,match_kind,source) links(src,type,dst,derived)
-      handovers(id,thread,tldr,next_action,session_kind,branch,tip_commit,supersedes)
-      handover_tasks(handover_id,task_id) related(a,b,via,weight) entity_fts(id,kind,title,body)
-    kind: task|epic|bug|issue|handover|decision|idea. Open statuses: task todo|in-progress|blocked|in-review,
-    bug open|adopted, issue open|investigating, handover open.
+    Tables: entities(kind,id,epic,status,archived,deleted,doc,body,rev,updated_seq) — `doc` is the
+      whole document as JSON, so titles and other fields come from json_extract(doc,'$.title')
+      entity_paths(kind,id,path,match_kind,source) links(src_kind,src_id,type,dst_kind,dst_id,derived)
+      related(a_kind,a_id,b_kind,b_id,via,weight) handover_tasks(handover_id,task_id)
+      entity_fts(kind,id,title,body) changes(seq,ts,session,tool,kind,id,op,fields,before,after)
+      projection(file,kind,id,content_hash,mtime,size,dirty,quarantined,exported_seq)
+      sessions(session,pid,host,started,last_seen,cwd,current_tool)
+      linear_queue(seq,op,target_id,tracker_id,payload,state,attempts,last_error,claimed_by,claimed_at)
+    kind: task|epic|phase|bug|issue|handover|decision|idea|note|area|tracker. Open statuses: task
+    todo|in-progress|blocked|in-review, bug open|adopted, issue open|investigating, handover open.
+    Rows with deleted=1 are tombstones — filter them out unless you are reading history.
     Examples:
-      SELECT id,status,title FROM entities WHERE kind='bug' AND repo='facade' AND status IN ('open','adopted')
-      SELECT e.id,e.kind,e.status,e.title FROM entity_paths p JOIN entities e ON e.id=p.entity_id WHERE p.path LIKE '%ModelUsageService.cs'
+      SELECT id,status,json_extract(doc,'$.title') AS title FROM entities WHERE kind='bug' AND deleted=0 AND status IN ('open','adopted')
+      SELECT e.kind,e.id,e.status FROM entity_paths p JOIN entities e ON e.kind=p.kind AND e.id=p.id WHERE p.path LIKE '%ModelUsageService.cs'
       SELECT id,title FROM entity_fts WHERE entity_fts MATCH 'credit exhaustion' AND kind='handover' ORDER BY bm25(entity_fts) LIMIT 10
 
     Args:
@@ -2471,28 +2449,43 @@ def backlog_query(sql: str, limit: int = 50) -> str:
             identifier — quote string values with single quotes. Queries are cut off after 5 s.
         limit: row cap, 1..500 (default 50).
     """
-    from taskmaster import index as _index  # noqa: PLC0415
     from taskmaster import query_guard  # noqa: PLC0415
 
     limit = max(1, min(500, limit))
-    bp = _backlog_path()
     con = None
     guard = None
     deadline = None
+    started = False
     try:
         statement = query_guard.validate(sql)
         guard = query_guard.Authorizer(query_guard.declared_names(statement))
-        if not _index.db_path(bp).exists():
-            _index.build_index(bp)
-        # The clock starts after the cold build: a first-ever call would
-        # otherwise spend the whole 5 s indexing and time out before it queried.
+        st = _store()
+        # The tables are the answer here, so nothing else on this path adopts a
+        # hand-edited file the way `_load()` does for every other read tool.
+        st.scan_for_read()
+        con = st.connection
+        if con.in_transaction:
+            raise ValueError("backlog_query cannot run inside another store transaction")
+        # A plain BEGIN takes a read snapshot and no write lock, so a concurrent
+        # writer is never blocked by a long query, and the query never sees a
+        # half-applied transaction. Every row is fetched before the tool returns:
+        # no cursor and no snapshot outlives this call.
+        #
+        # This is the store's read/write connection -- `store.py` is the only
+        # module that opens the database, so there is no `mode=ro` handle to
+        # borrow. The authorizer below is therefore load-bearing, not defence in
+        # depth: it is the only thing between a crafted statement and a write.
+        con.execute("BEGIN")
+        started = True
         deadline = query_guard.Deadline(query_guard.QUERY_TIMEOUT_S)
-        con = _index.open_ro(bp)
         con.set_authorizer(guard)
         con.set_progress_handler(deadline, query_guard.PROGRESS_INSTRUCTIONS)
         cur = con.execute(f"SELECT * FROM ({statement}) LIMIT {limit + 1}")
-        return _render_query_table(cur.description, cur.fetchall(), limit)
-    except (sqlite3.Error, ValueError, OSError) as exc:
+        rows = cur.fetchall()
+        description = cur.description
+        cur.close()
+        return _render_query_table(description, rows, limit)
+    except (sqlite3.Error, ValueError, OSError, store.LegacyLayoutError) as exc:
         # SQLite reports both an abort and a denial as a bare message with no object,
         # so prefer what the handler and the authorizer actually recorded.
         if deadline is not None and deadline.expired:
@@ -2504,10 +2497,15 @@ def backlog_query(sql: str, limit: int = 50) -> str:
         return f"Error: {reason}\n\nSchema: {query_guard.SCHEMA_SUMMARY}"
     finally:
         if con is not None:
-            con.close()
+            # Both must come off before the rollback: the authorizer would deny
+            # the transaction statement, and the handler would abort it.
+            con.set_authorizer(None)
+            con.set_progress_handler(None, 0)
+            if started and con.in_transaction:
+                con.rollback()
 
 
-# Entity kinds the derived index carries; anything else passed in `kinds` is ignored.
+# Entity kinds `backlog_search` reports; anything else passed in `kinds` is ignored.
 _SEARCH_KINDS = ("task", "epic", "bug", "issue", "handover", "decision", "idea")
 _SEARCH_LIMIT = 15
 
@@ -2534,48 +2532,46 @@ def _render_search_row(row) -> str:
 def _search_via_index(query: str, kinds: list[str] | None) -> str | None:
     """FTS5 search across every entity kind, or None to tell the caller to fall back.
 
-    Returns None when the index is missing or any SQLite error occurs — the substring scan can
-    always answer for tasks, so search must never surface an error from here. The index is
-    deliberately not built on this path: a cold build costs ~20 s, far too long for a search.
+    Returns None when the store is unreadable or any SQLite error occurs — the substring scan
+    can always answer for tasks, so search must never surface an error from here. It reads the
+    store's `entity_fts` table and builds nothing: the table is maintained per transaction.
     """
-    from taskmaster import index as _index  # noqa: PLC0415
-
     match = _fts_match_expression(query)
     if not match:
         return None
-    selected = [k for k in kinds if k in _SEARCH_KINDS] if kinds else []
-    con = None
+    # A filter of only unknown kinds searches everything, as it always has.
+    selected = [k for k in kinds or () if k in _SEARCH_KINDS] or list(_SEARCH_KINDS)
     try:
-        con = _index.open_ro(_backlog_path())
-        where = "WHERE entity_fts MATCH ?"
-        params: list[str] = [match]
-        if selected:
-            where += " AND e.kind IN (" + ",".join("?" * len(selected)) + ")"
-            params.extend(selected)
-        source = f"FROM entity_fts JOIN entities e ON e.id = entity_fts.id {where}"
+        con = _store().connection
+        # `backlog` and `project` are whole-file documents, not work items: they
+        # are indexed so `backlog_query` can reach them, and excluded here so a
+        # common word cannot return the entire backlog as one result row.
+        where = ("WHERE entity_fts MATCH ? AND e.deleted=0 AND e.kind IN ("
+                 + ",".join("?" * len(selected)) + ")")
+        params: list[str] = [match, *selected]
+        source = ("FROM entity_fts JOIN entities e "
+                  f"ON e.kind = entity_fts.kind AND e.id = entity_fts.id {where}")
         total = con.execute(f"SELECT COUNT(*) {source}", params).fetchone()[0]
         if not total:
             # Not "No tasks": this path searches every kind, and `kinds` may
             # have excluded tasks entirely.
             return f"No matches for `{query}`"
         rows = con.execute(
-            "SELECT entity_fts.id, e.kind, e.status, e.title, e.priority, e.epic, "
+            "SELECT entity_fts.id, e.kind, e.status, entity_fts.title, "
+            "json_extract(e.doc,'$.priority') AS priority, e.epic, "
             "bm25(entity_fts) AS rank "
             f"{source} ORDER BY rank LIMIT {int(_SEARCH_LIMIT)}", params).fetchall()
-    except (sqlite3.Error, OSError, ValueError):
+    except (sqlite3.Error, OSError, ValueError, store.LegacyLayoutError):
         return None
-    finally:
-        if con is not None:
-            con.close()
 
-    body = "\n".join(f"- {_render_search_row(r[:6])}" for r in rows)
+    body = "\n".join(f"- {_render_search_row(tuple(r)[:6])}" for r in rows)
     return f"**{total} match{'es' if total != 1 else ''}** for `{query}`:\n" + body
 
 
 @mcp.tool()
 def backlog_search(query: str, kinds: list[str] | None = None) -> str:
     """Full-text search across every backlog entity — tasks, epics, bugs, issues, handovers,
-    decisions and ideas — ranked by relevance (bm25) over the derived index.
+    decisions and ideas — ranked by relevance (bm25) over the store's FTS index.
 
     Args:
         query: Search text (case-insensitive). Matched against titles and bodies (notes,
@@ -2585,15 +2581,15 @@ def backlog_search(query: str, kinds: list[str] | None = None) -> str:
     """
     if isinstance(kinds, str):  # tolerate kinds="bug" from a loose caller
         kinds = [kinds]
-    # _load() performs the bounded incremental index refresh every other tool relies on, so the
-    # FTS path below sees out-of-band file edits without any other tool call having run.
+    # _load() opens the store, which adopts any out-of-band file edit and refreshes the
+    # derived tables in the same transaction, so the FTS path below is never behind the files.
     data = _load()
 
     indexed = _search_via_index(query, kinds)
     if indexed is not None:
         return indexed
 
-    # Fallback: index missing or unreadable. Substring scan over tasks only, unchanged.
+    # Fallback: the store is unreadable. Substring scan over tasks only, unchanged.
     q = query.lower()
     scored: list[tuple[int, str]] = []
 
@@ -10915,30 +10911,12 @@ def backlog_linear_retry(target_id: str = "") -> str:
     return json.dumps({"ok": True, "counts": counts}, indent=2)
 
 
-def _build_index_cli(argv: list[str]) -> int:
-    """`--build-index [path]`: refresh the derived index and print the report."""
-    import dataclasses  # noqa: PLC0415
-
-    from taskmaster import index as _index  # noqa: PLC0415
-
-    rest = argv[argv.index("--build-index") + 1:]
-    positional = next((a for a in rest if not a.startswith("-")), None)
-    bp = _index.resolve_backlog_path(Path(positional)) if positional else _backlog_path()
-    if not bp.exists():
-        print(f"no backlog found at {bp}", file=sys.stderr)
-        return 1
-    print(json.dumps(dataclasses.asdict(_index.build_index(bp)), indent=2))
-    return 0
-
-
 # Importing this module is what makes the shared entity dispatcher store-aware.
 _configure_entity_io()
 
 
 def main() -> None:
     """Entry point for both `taskmaster/backlog_server.py` and the root shim."""
-    if "--build-index" in sys.argv:
-        sys.exit(_build_index_cli(sys.argv))
     mcp.run()
 
 

@@ -35,7 +35,12 @@ from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 import yaml
 
 from taskmaster import yaml_io
-from taskmaster.index import extract_prose_paths, normalize_location, normalize_task_anchor
+from taskmaster.paths import (
+    as_list,
+    extract_prose_paths,
+    normalize_location,
+    normalize_task_anchor,
+)
 # Root resolution lives in a standard-library-only module so the hooks, which
 # run under the system interpreter, share this exact rule without importing
 # yaml.  Re-exported here: `store.resolve_root` stays the public entry point,
@@ -103,6 +108,26 @@ _PROGRESS_APPLIED_KEY = "progress_log"
 # meta row cannot grow without limit on a long-lived project.
 _PROGRESS_LOG_CAP = 200
 _LINEAR_QUEUE_REL = "integrations/linear-queue.json"
+# Tables `_refresh_derived` owns outright: every row in them is recomputed from
+# `entities`, so dropping and rebuilding them can never lose authoritative state.
+# `backlog_index_status` reports exactly this list.
+DERIVED_TABLES = ("entity_fts", "entity_paths", "links", "related", "handover_tasks")
+_DERIVED_REBUILT_KEY = "derived_rebuilt_at"
+# Document fields whose prose is worth matching in `backlog_search`. `branch` and
+# the `docs` values are here because the substring search this FTS index replaced
+# scored them directly, and dropping them silently lost `search <branch-name>`.
+_FTS_PROSE_FIELDS = (
+    "description",
+    "notes",
+    "review_instructions",
+    "next_action",
+    "tldr",
+    "impact",
+    "evidence",
+    "options",
+    "branch",
+    "done_when",
+)
 # Kinds whose rows the compatibility dict carries verbatim under `_rows`, so a
 # list/get tool reads committed store state instead of re-parsing markdown.
 _DICT_ROW_KINDS = (
@@ -1765,6 +1790,20 @@ class Store:
         """Drop the read-scan throttle so the next read re-imports hand edits."""
         self._last_read_scan_clock = None
 
+    def scan_for_read(self) -> None:
+        """Import hand edits before a read that does not go through `load_dict`.
+
+        `load_dict_with_identity` runs this on the way past, so every tool that
+        reads the compatibility dict adopts a hand-edited file for free. A tool
+        that queries the tables directly -- `backlog_query` -- has to ask, or it
+        serves pre-edit rows while the files on disk say otherwise (spec §3.4).
+        Throttled and best-effort, exactly as the dict path is.
+        """
+        self._ensure_open()
+        if self._network_projection_only:
+            return
+        self._maybe_scan_on_read()
+
     _LINEAR_COLUMNS = (
         "SELECT seq,op,target_id,tracker_id,payload,state,attempts,last_error,"
         "claimed_by,claimed_at FROM linear_queue"
@@ -2483,6 +2522,10 @@ class Store:
                 for row in rows:
                     tx._derived_keys.add((row["kind"], row["id"]))
                 self._refresh_derived(tx)
+                tx.connection.execute(
+                    "INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)",
+                    (_DERIVED_REBUILT_KEY, _now()),
+                )
                 connection.commit()
         except BaseException:
             if connection.in_transaction:
@@ -2493,6 +2536,28 @@ class Store:
                 self._try_register_session(connection, current_tool=None)
             except sqlite3.Error:
                 pass
+
+    def derived_status(self) -> dict[str, Any]:
+        """Row counts for the derived tables plus when they were last rebuilt whole.
+
+        `rebuilt_at` is None until a `rebuild_derived()` runs: ordinary tool calls
+        refresh only the keys they touched, so there is no whole-table build to
+        date. It is a health report, never a freshness precondition.
+        """
+        connection = self.connection
+        counts = {
+            table: int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+            for table in DERIVED_TABLES
+        }
+        counts["entities"] = int(
+            connection.execute(
+                "SELECT COUNT(*) FROM entities WHERE deleted=0"
+            ).fetchone()[0]
+        )
+        row = connection.execute(
+            "SELECT value FROM meta WHERE key=?", (_DERIVED_REBUILT_KEY,)
+        ).fetchone()
+        return {"row_counts": counts, "rebuilt_at": row[0] if row else None}
 
     def _load_dict_from_connection(self, connection: sqlite3.Connection) -> dict[str, Any]:
         row = connection.execute(
@@ -3269,26 +3334,29 @@ class Store:
                 continue
             doc = _from_json(row["doc"], {})
             title = str(doc.get("title") or doc.get("name") or doc.get("tldr") or "")
-            prose = "\n".join(
-                str(doc.get(field) or "")
-                for field in ("description", "notes", "review_instructions", "next_action")
-            )
+            parts = [str(doc.get(field) or "") for field in _FTS_PROSE_FIELDS]
+            docs = doc.get("docs")
+            if isinstance(docs, dict):
+                parts.extend(str(value or "") for value in docs.values())
+            anchors = [
+                normalize_task_anchor(str(anchor), doc.get("sub_repo"))
+                for anchor in as_list(doc.get("anchors"))
+            ]
+            parts.extend(path for path, _ in anchors)
             if row["body"]:
-                prose = f"{prose}\n{row['body']}"
+                parts.append(str(row["body"]))
+            prose = "\n".join(part for part in parts if part)
             tx.connection.execute(
                 "INSERT INTO entity_fts(kind,id,title,body) VALUES(?,?,?,?)",
                 (kind, ident, title, prose),
             )
-            for anchor in doc.get("anchors") or []:
-                value, match_kind = normalize_task_anchor(
-                    str(anchor), doc.get("sub_repo")
-                )
+            for value, match_kind in anchors:
                 tx.connection.execute(
                     "INSERT INTO entity_paths(kind,id,path,match_kind,source) VALUES(?,?,?,?,?)",
                     (kind, ident, value, match_kind, "anchors"),
                 )
             located: set[str] = set()
-            for location in doc.get("location") or []:
+            for location in as_list(doc.get("location")):
                 value = normalize_location(str(location))
                 located.add(value)
                 tx.connection.execute(
@@ -3313,21 +3381,39 @@ class Store:
                     "VALUES(?,?,?,?,?,0)",
                     (kind, ident, link_type, target_kind, target_id),
                 )
-                reverse = REVERSE_TYPE.get(link_type)
-                if reverse:
-                    tx.connection.execute(
-                        "INSERT OR IGNORE INTO links(src_kind,src_id,type,dst_kind,dst_id,derived) "
-                        "VALUES(?,?,?,?,?,1)",
-                        (target_kind, target_id, reverse, kind, ident),
-                    )
             if kind == "handover":
-                for task_id in doc.get("task_ids") or []:
+                for task_id in as_list(doc.get("task_ids")):
                     tx.connection.execute(
                         "INSERT INTO handover_tasks(handover_id,task_id) VALUES(?,?)",
                         (ident, str(task_id)),
                     )
         if tx._derived_keys:
+            self._close_reverse_links(tx.connection)
             self._rebuild_related(tx.connection)
+
+    @staticmethod
+    def _close_reverse_links(connection: sqlite3.Connection) -> None:
+        """Re-derive every mirror edge from the declared ones.
+
+        A mirror lives under the *target* entity, so it is owned by no document
+        and cannot be maintained while walking the touched keys: writing it when
+        the source is refreshed and deleting it when the target is refreshed made
+        the mirror's survival depend on the iteration order of a set. Wiping
+        `derived=1` and re-deriving the whole table is order-free, and it drops
+        mirrors whose forward edge has since been removed. A pair both sides
+        declare is stored once, as `derived=0`.
+        """
+        connection.execute("DELETE FROM links WHERE derived=1")
+        for link_type, reverse in REVERSE_TYPE.items():
+            connection.execute(
+                "INSERT OR IGNORE INTO links(src_kind,src_id,type,dst_kind,dst_id,derived) "
+                "SELECT l.dst_kind, l.dst_id, ?, l.src_kind, l.src_id, 1 FROM links l "
+                "WHERE l.type=? AND l.derived=0 AND NOT EXISTS ("
+                "  SELECT 1 FROM links m WHERE m.derived=0 AND m.type=?"
+                "  AND m.src_kind=l.dst_kind AND m.src_id=l.dst_id"
+                "  AND m.dst_kind=l.src_kind AND m.dst_id=l.src_id)",
+                (reverse, link_type, reverse),
+            )
 
     @staticmethod
     def _kind_for_id(connection: sqlite3.Connection, ident: str) -> str:
