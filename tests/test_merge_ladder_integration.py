@@ -24,7 +24,7 @@ Module-level slow marker so CI can filter; tests are NOT skipped.
 Path note: hooks are launched by ABSOLUTE path; subprocess cwd is set to the
 temp repo root so both hooks' decision modules resolve the project root via
 Path.cwd() exactly as in production.  TASKMASTER_ROOT is also set in the
-recorder env so backlog_server._load()/_save() round-trips against the temp repo.
+recorder env so backlog_server._load()/_mutate_and_save() round-trips against the temp repo.
 """
 from __future__ import annotations
 
@@ -413,7 +413,7 @@ def test_approve_bypass_and_retry_survives(tmp_path):
     # per-task file entirely when it has no HEAVY_FIELDS content and no
     # body — id+title mirrored into frontmatter don't count — and step D's
     # recorder round-trips the WHOLE backlog through backlog_server's
-    # _load()/_save(), which would otherwise prune this file before step F.
+    # _load()/_mutate_and_save(), which would otherwise prune this file before step F.
     write_task_file(
         tm / "tasks" / "integ-002.md",
         {"id": "integ-002", "title": "Other task"},

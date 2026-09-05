@@ -232,14 +232,17 @@ def test_advance_phase_archives_the_done_tasks_it_sweeps(tm_epic_phase):
     assert not _live_task_file(root, "test-epic-001").exists()
 
 
-def test_batch_pick_of_an_archived_task_returns_it_to_the_live_dir(one_task):
+def test_batch_pick_refuses_an_archived_task(one_task):
+    """`backlog_pick_task` has always refused an archived source; so must the
+    batch op, which would otherwise silently un-archive it (task 2.3 review)."""
     root, task_id = one_task
     bs.backlog_archive_task(task_id, reason="deprecated")
-    bs.backlog_batch_update(f"pick {task_id}")
+    out = bs.backlog_batch_update(f"pick {task_id}")
+    assert "archived" in out.lower(), out
     row = _fresh_row(root, "task", task_id)
-    assert row["archived"] == 0, "batch pick left an archived row behind"
-    assert _live_task_file(root, task_id).exists()
-    assert _committed_task(root, task_id)["status"] == "in-progress"
+    assert row["archived"] == 1, "batch pick un-archived an archived task"
+    assert _archived_task_file(root, task_id).exists()
+    assert _committed_task(root, task_id)["status"] == "archived"
 
 
 # ── moves and dict-level removal ─────────────────────────

@@ -64,7 +64,7 @@ def test_mutate_and_save_outside_a_transaction_raises(tmp_taskmaster):
 def test_save_outside_a_transaction_raises(tmp_taskmaster):
     data = bs._load()
     with pytest.raises(RuntimeError):
-        bs._save(data)
+        bs._mutate_and_save(data)
 
 
 def test_mutate_and_save_rejects_a_foreign_dict(tmp_taskmaster):

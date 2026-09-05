@@ -11,7 +11,6 @@ tested in isolation. It owns:
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -4517,130 +4516,15 @@ def compute_issue_aging(issue: dict, aging_cfg: dict, now=None) -> dict:
     return {"percent": pct, "tier": tier}
 
 
-# ── Edit-in-UI write primitives (v3-edit Phase A) ──────────────────
-
-import contextlib
-
-_threadlocal_locks: dict[str, "threading.Lock"] = {}
-
-
-@contextlib.contextmanager
-def with_file_lock(path: Path):
-    """Per-file mutex for write paths.
-
-    Uses a `.lock` sidecar adjacent to the target file. Falls back to a
-    threading-local lock if the `filelock` package isn't available — local
-    use is single-process so this is acceptable; future cross-process
-    safety lands when filelock becomes a hard dep.
-    """
-    try:
-        from filelock import FileLock
-        lock = FileLock(str(path) + ".lock", timeout=5)
-        with lock:
-            yield
-    except ImportError:
-        import threading
-        lock = _threadlocal_locks.setdefault(str(path), threading.Lock())
-        with lock:
-            yield
+# ── Edit-in-UI helpers (v3-edit Phase A) ──────────────────────
+# `with_file_lock`, `create_task`, `update_task` and `archive_task` used to
+# live here and rewrote the projection under a sidecar `.lock`. The store
+# owns those writes now (see `backlog_server._viewer_*`), so only the pure
+# validation helper below remains.
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _find_task_in_yaml(data: dict, task_id: str) -> tuple[dict, dict] | None:
-    """Return (epic_dict, task_dict) for a v2-nested layout, or None."""
-    for epic in data.get("epics") or []:
-        for t in epic.get("tasks") or []:
-            if t.get("id") == task_id:
-                return epic, t
-    return None
-
-
-def update_task(task_id: str, patch: dict, backlog_path: Path | None = None) -> dict:
-    """Apply a partial update to a task. Returns the new task dict.
-
-    - Auto-stamps `started` on first transition into `in-progress` (or any
-      non-todo state from `todo`).
-    - Auto-stamps `completed` on transition into `done`.
-    - Never overwrites `started`/`completed` once set.
-    """
-    bp = backlog_path or _resolve_backlog_path()
-    with with_file_lock(bp):
-        raw = yaml_io.safe_load(bp.read_text(encoding="utf-8")) or {}
-        version = detect_schema_version(raw)
-        if version >= SCHEMA_V4:
-            from copy import deepcopy
-
-            data = load_v4(bp)
-            snapshot = deepcopy(data)
-        else:
-            data = raw
-            snapshot = None
-        found = _find_task_in_yaml(data, task_id)
-        if found is None:
-            raise KeyError(f"task {task_id} not found")
-        epic, task = found
-        before_status = task.get("status")
-        for k, v in patch.items():
-            task[k] = v
-        after_status = task.get("status")
-        if after_status != before_status:
-            if after_status == "in-progress" and not task.get("started"):
-                task["started"] = _now_iso()
-            if after_status == "done" and not task.get("completed"):
-                task["completed"] = _now_iso()
-        # done clears the human-only blocker (parity with every other done path).
-        if after_status == "done":
-            task.pop("human_action", None)
-        task["last_referenced"] = _now_iso()
-        if version >= SCHEMA_V4:
-            save_v4(bp, data, snapshot=snapshot)
-        else:
-            atomic_write(bp, yaml.safe_dump(data, sort_keys=False))
-        return dict(task)
-
-
-def create_task(payload: dict, backlog_path: Path | None = None) -> str:
-    """Create a new task under the given epic. Returns assigned id."""
-    bp = backlog_path or _resolve_backlog_path()
-    epic_id = payload.get("epic")
-    if not epic_id:
-        raise ValueError("epic is required")
-    with with_file_lock(bp):
-        data = yaml_io.safe_load(bp.read_text(encoding="utf-8")) or {}
-        epic = next((e for e in (data.get("epics") or []) if e.get("id") == epic_id), None)
-        if epic is None:
-            raise KeyError(f"epic {epic_id} not found")
-        existing_ids = {t.get("id") for t in (epic.get("tasks") or [])}
-        # Generate next id like e1-002.
-        n = 1
-        while f"{epic_id}-{n:03d}" in existing_ids:
-            n += 1
-        new_id = f"{epic_id}-{n:03d}"
-        new_task = {
-            "id": new_id,
-            "title": payload.get("title", ""),
-            "status": payload.get("status", "todo"),
-            "priority": payload.get("priority", "medium"),
-            "created": _now_iso(),
-            "last_referenced": _now_iso(),
-        }
-        # Pass through other supplied fields (phase, anchors, depends_on, etc).
-        for k, v in payload.items():
-            if k not in ("epic", "id"):
-                new_task[k] = v
-        epic.setdefault("tasks", []).append(new_task)
-        atomic_write(bp, yaml.safe_dump(data, sort_keys=False))
-        return new_id
-
-
-def archive_task(task_id: str, backlog_path: Path | None = None) -> None:
-    """Soft-delete: set status to 'archived'. The existing
-    backlog_archive_task MCP tool already does this for v2 backlogs;
-    we mirror the behavior here so HTTP shares the code path."""
-    update_task(task_id, {"status": "archived"}, backlog_path=backlog_path)
 
 
 def _resolve_backlog_path() -> Path:
@@ -4738,22 +4622,6 @@ def _has_cycle_to(adj: dict, target: str) -> bool:
         seen.add(cur)
         stack.extend(adj.get(cur, []))
     return False
-
-
-def compute_etag(path: Path) -> str:
-    """Stable, cheap ETag derived from file mtime + content hash.
-
-    Returns an 16-hex-char string suitable for HTTP ETag headers.
-    """
-    if not path.exists():
-        return ""
-    st = path.stat()
-    h = hashlib.sha1()
-    h.update(str(st.st_mtime_ns).encode())
-    # Also hash content so two writes with identical content (e.g. same byte
-    # body) collapse to the same etag — desirable for cache stability.
-    h.update(path.read_bytes())
-    return h.hexdigest()[:16]
 
 
 # ----------------------------------------------------------------------------
@@ -4992,6 +4860,34 @@ def _load_task_entities(backlog_path: Path) -> tuple[dict[str, Any], bool]:
     is_v4 = detect_schema_version(raw) >= SCHEMA_V4
     return (load_v4(backlog_path) if is_v4 else load_v3(backlog_path), is_v4)
 
+# Tasks, epics and phases are owned by `taskmaster.store`; this module keeps
+# only the parsers, renderers, path helpers and merge logic. `backlog_server`
+# installs the store-backed task reader/writer here at import time so the shared
+# link and auto-link engine below never writes `tasks/<id>.md` itself.
+_TASK_IO: dict[str, Any] = {"read": None, "write": None}
+
+
+def configure_task_io(*, read, write) -> None:
+    """Point the entity dispatcher at the store's task reader/writer."""
+    _TASK_IO["read"] = read
+    _TASK_IO["write"] = write
+
+
+def _task_io(name: str):
+    handler = _TASK_IO[name]
+    if handler is None:
+        # Importing the server installs the hooks; do it lazily to stay free of
+        # an import cycle.
+        from taskmaster import backlog_server  # noqa: PLC0415,F401
+
+        handler = _TASK_IO[name]
+    if handler is None:  # pragma: no cover - defensive
+        raise RuntimeError(
+            "task IO is owned by taskmaster.store; call configure_task_io first"
+        )
+    return handler
+
+
 def read_entity_anywhere(
     backlog_path: Path,
     entity_id: str,
@@ -5013,14 +4909,12 @@ def read_entity_anywhere(
     if kind is None:
         return None
     if kind == "task":
-        data, _ = _load_task_entities(backlog_path)
-        for epic in data.get("epics", []):
-            for task in epic.get("tasks", []):
-                if task.get("id") == entity_id:
-                    if fallback:
-                        _fallback_links_if_absent(task, "task")
-                    return task
-        return None
+        task = _task_io("read")(backlog_path, entity_id)
+        if task is None:
+            return None
+        if fallback:
+            _fallback_links_if_absent(task, "task")
+        return task
     reader = {
         "handover": read_handover,
         "issue":    read_issue,
@@ -5041,34 +4935,18 @@ def read_entity_anywhere(
 def write_entity_anywhere(backlog_path: Path, entity: dict) -> None:
     """Persist an entity's frontmatter + body via the right writer.
 
-    For tasks: round-trips through load_v3/save_v3 so the slim index stays
-    consistent. For non-task entities: writes the per-entity markdown file
-    via write_task_file (path lookup by kind). The body is read from
-    entity[BODY_KEY] (popped to avoid persisting that key as frontmatter).
+    For tasks: hands the whole document to the store, which owns the task,
+    epic and phase projection. For non-task entities: writes the per-entity
+    markdown file via write_task_file (path lookup by kind). The body is read
+    from entity[BODY_KEY] (popped to avoid persisting that key as frontmatter).
     """
     entity_id = entity.get("id")
     kind = entity_kind_of(entity_id)
     if kind is None:
         raise ValueError(f"unknown entity kind for id={entity_id!r}")
     if kind == "task":
-        data, is_v4 = _load_task_entities(backlog_path)
-        if is_v4:
-            from copy import deepcopy
-
-            snapshot = deepcopy(data)
-        for epic in data.get("epics", []):
-            tasks = epic.get("tasks", [])
-            for i, task in enumerate(tasks):
-                if task.get("id") == entity_id:
-                    # Strip body-key before persisting (save_v3 routes it through
-                    # _split_task_for_v3 which already understands BODY_KEY).
-                    tasks[i] = dict(entity)
-                    if is_v4:
-                        save_v4(backlog_path, data, snapshot=snapshot)
-                    else:
-                        save_v3(backlog_path, data)
-                    return
-        raise KeyError(f"task {entity_id!r} not found")
+        _task_io("write")(backlog_path, dict(entity))
+        return
     # Non-task: split frontmatter vs body, then write via the path helper.
     fm = dict(entity)
     body = fm.pop(BODY_KEY, "") or ""

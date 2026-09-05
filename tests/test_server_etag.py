@@ -70,9 +70,9 @@ def test_patch_with_stale_etag_returns_409(server_etag):
     old_etag = get_resp.headers.get("ETag")
     # Bypass If-Match by issuing without the header (server allows missing
     # If-Match for backwards compat — see implementation note in Step 3).
-    # To force a real change, call update_task directly:
-    from taskmaster.taskmaster_v3 import update_task
-    update_task("e1-001", {"title": "Changed by other"})
+    # To force a real change, drive the same store-backed write the viewer uses:
+    from taskmaster.backlog_server import _viewer_update_task
+    _viewer_update_task("e1-001", {"title": "Changed by other"})
     resp = _request("PATCH", f"{server_etag}/api/tasks/e1-001",
                     {"title": "My change"}, headers={"If-Match": old_etag})
     assert resp.status == 409

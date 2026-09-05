@@ -64,7 +64,7 @@ def test_active_tasks_sort_before_todo_and_done(tm_epic_phase):
         for t in data["epics"][0]["tasks"]:
             if t["id"] in statuses:
                 t["status"] = statuses[t["id"]]
-        bs._save(data)
+        bs._mutate_and_save(data)
     out = backlog_list_tasks()
     rows = [line for line in out.splitlines() if line.startswith("- ")]
     order = [r.split("`")[1] for r in rows]

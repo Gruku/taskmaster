@@ -51,7 +51,7 @@ def run(payload: dict, cwd: Path) -> subprocess.CompletedProcess:
 
     cwd=<repo> drives merge_recorder_stamp.py's Path.cwd() (no env seam in our
     code).  TASKMASTER_ROOT=<repo> points backlog_server's storage layer at the
-    same repo so its _load()/_save() round-trip against the seeded backlog.
+    same repo so its _load()/_mutate_and_save() round-trip against the seeded backlog.
     """
     env = dict(os.environ)
     env["TASKMASTER_ROOT"] = str(cwd)
