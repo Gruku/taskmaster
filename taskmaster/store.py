@@ -173,6 +173,22 @@ CREATE INDEX IF NOT EXISTS ix_changes_entity ON changes(kind, id, seq);
 """
 
 
+class LegacyLayoutError(RuntimeError):
+    """The backlog is not at `<root>/.taskmaster`, so no store may be opened.
+
+    The store is only ever `<root>/.taskmaster/local/store.db` (design spec
+    §"Root resolution").  Silently redirecting a `.claude/` or root-layout
+    backlog to `<root>/.taskmaster` opened an empty database beside the real
+    backlog and reported "no tasks"; refusing is the only safe answer, and
+    `backlog_canonicalize_layout` is the one supported way forward.
+    """
+
+
+def unsafe_storage_reason(path: Path) -> str | None:
+    """Why `path` cannot host a SQLite store (network filesystem), or None."""
+    return _network_filesystem_reason(path)
+
+
 @dataclass(frozen=True)
 class RootResolution:
     root: Path
@@ -525,6 +541,12 @@ def open_store(
             backlog_dir = _backlog_dir(backlog_path)
             resolved = _EXPLICIT_RESOLUTIONS.get(backlog_dir)
             if resolved is None:
+                if backlog_dir.name != ".taskmaster":
+                    raise LegacyLayoutError(
+                        f"backlog lives at {backlog_dir}; the store is only ever at "
+                        f"<project root>/.taskmaster/local/store.db. Run "
+                        f"backlog_canonicalize_layout first to move it."
+                    )
                 checkout_root = _git_checkout_root(backlog_dir.parent)
                 common_root = (
                     _git_common_root(backlog_dir.parent)
@@ -657,10 +679,27 @@ def configure_derivers(
 def load_dict(backlog_path: Path | None = None) -> dict[str, Any]:
     active = getattr(_ACTIVE_DICT, "value", None)
     if active is not None:
-        active_path, data = active
+        active_path, data, _tx = active
         if backlog_path is None or db_path(backlog_path) == active_path:
             return data
     return open_store(backlog_path=backlog_path).load_dict()
+
+
+def active_transaction(backlog_path: Path | None = None) -> "Transaction | None":
+    """The `Transaction` behind the thread's open `transaction_dict`, if any.
+
+    The compatibility dict cannot express a removal — a key deleted from
+    ``epics``/``phases``/a task list is ignored by the write-back — so a caller
+    that needs to archive or delete an entity has to reach the transaction and
+    say so explicitly.  Returns ``None`` outside a transaction.
+    """
+    active = getattr(_ACTIVE_DICT, "value", None)
+    if active is None:
+        return None
+    active_path, _data, tx = active
+    if backlog_path is None or db_path(backlog_path) == active_path:
+        return tx
+    return None
 
 
 @contextmanager
@@ -1455,7 +1494,7 @@ class Store:
             data = self._load_cached_dict_from_connection(tx.connection, publish=False)
             snapshot = copy.deepcopy(data)
             prior = getattr(_ACTIVE_DICT, "value", None)
-            _ACTIVE_DICT.value = (self.db_path, data)
+            _ACTIVE_DICT.value = (self.db_path, data, tx)
             try:
                 yield data
                 self._apply_dict_diff(tx, snapshot, data)
@@ -1467,22 +1506,50 @@ class Store:
                     _ACTIVE_DICT.value = prior
 
     def load_dict(self) -> dict[str, Any]:
+        return self.load_dict_with_identity()[0]
+
+    def load_dict_with_identity(self) -> tuple[dict[str, Any], str, int]:
+        """The compatibility dict plus `(creation_token, max_seq)` for its snapshot.
+
+        A caller that stamps an ETag on what it just read has to take both from
+        one snapshot; reading the payload and the identity separately let a
+        concurrent commit slip between them, so an old payload could be served
+        under a newer revision and a following edit would overwrite the newer
+        state while its precondition still matched.
+        """
         self._ensure_open()
         active = getattr(_ACTIVE_DICT, "value", None)
         if active is not None and active[0] == self.db_path:
-            return active[1]
+            connection = active[2].connection
+            token = connection.execute(
+                "SELECT value FROM meta WHERE key='creation_token'"
+            ).fetchone()[0]
+            max_seq = int(
+                connection.execute(
+                    "SELECT COALESCE(MAX(seq),0) FROM changes"
+                ).fetchone()[0]
+            )
+            return active[1], token, max_seq
         if self._network_projection_only:
             data = self._bootstrap_backlog_data()
             data.setdefault("context", {})
             if _CONTEXT_BUILDER is not None:
                 _CONTEXT_BUILDER(data)
-            return data
+            return data, "", 0
         self._maybe_scan_on_read()
         connection = self.connection
         owns_snapshot = not connection.in_transaction
         if owns_snapshot:
             connection.execute("BEGIN")
         try:
+            token = connection.execute(
+                "SELECT value FROM meta WHERE key='creation_token'"
+            ).fetchone()[0]
+            max_seq = int(
+                connection.execute(
+                    "SELECT COALESCE(MAX(seq),0) FROM changes"
+                ).fetchone()[0]
+            )
             data = self._load_cached_dict_from_connection(connection)
             if owns_snapshot:
                 connection.commit()
@@ -1490,7 +1557,7 @@ class Store:
             if owns_snapshot and connection.in_transaction:
                 connection.rollback()
             raise
-        return data
+        return data, token, max_seq
 
     def _load_cached_dict_from_connection(
         self, connection: sqlite3.Connection, *, publish: bool = True
@@ -2014,7 +2081,12 @@ class Store:
     def _import_projection(self, tx: "Transaction", *, full: bool = False) -> None:
         backlog_file = self.backlog_path / "backlog.yaml"
         data = self._bootstrap_backlog_data()
-        if detect_schema_version(data) < SCHEMA_V4:
+        # A pre-v4 projection splits a task across backlog.yaml (slim fields)
+        # and tasks/<id>.md (heavy fields only). `_bootstrap_backlog_data`
+        # already merged the two halves, so the per-file import below must not
+        # replace that row with the heavy-only document.
+        legacy_projection = detect_schema_version(data) < SCHEMA_V4
+        if legacy_projection:
             data["version"] = SCHEMA_V4
             data.setdefault("meta", {})["schema_version"] = SCHEMA_V4
             for epic in data.get("epics") or []:
@@ -2055,6 +2127,15 @@ class Store:
                                 kind, content.decode("utf-8")
                             )
                             self._validate_projected_identity(kind, ident, parsed_doc)
+                            if kind == "task" and legacy_projection:
+                                current = tx.connection.execute(
+                                    "SELECT doc FROM entities WHERE kind=? AND id=?",
+                                    (kind, ident),
+                                ).fetchone()
+                                if current:
+                                    merged = _from_json(current["doc"], {})
+                                    merged.update(parsed_doc)
+                                    parsed_doc = merged
                             if kind in {"epic", "phase"}:
                                 current = tx.connection.execute(
                                     "SELECT doc FROM entities WHERE kind=? AND id=?",
@@ -3219,6 +3300,32 @@ class Transaction:
         self.seq = seq
         self._mark(kind, ident)
 
+    def unarchive(self, kind: str, ident: str) -> None:
+        """Undo `archive`: clear the flag so the projection returns to the live path.
+
+        The inverse matters because `put` never lowers the flag on its own — it
+        falls back to the stored value for any document that omits ``archived``,
+        so an archive would otherwise be a one-way door.
+        """
+        row = self.connection.execute(
+            "SELECT doc,archived,deleted FROM entities WHERE kind=? AND id=?", (kind, ident)
+        ).fetchone()
+        if not row or row["deleted"]:
+            raise KeyError(f"{kind} {ident} not found")
+        if not row["archived"]:
+            return
+        doc = _from_json(row["doc"], {})
+        doc.pop("archived", None)
+        seq = self._record_change(
+            kind, ident, "unarchive", ["archived"], {"archived": True}, {"archived": False}
+        )
+        self.connection.execute(
+            "UPDATE entities SET archived=0,doc=?,rev=rev+1,updated_seq=? WHERE kind=? AND id=?",
+            (_json(doc), seq, kind, ident),
+        )
+        self.seq = seq
+        self._mark(kind, ident)
+
     def delete(self, kind: str, ident: str) -> None:
         row = self.connection.execute(
             "SELECT deleted FROM entities WHERE kind=? AND id=?", (kind, ident)
@@ -3272,6 +3379,15 @@ class Transaction:
             if match:
                 maximum = max(maximum, int(match.group(1)))
         return f"{prefix}{maximum + 1:03d}"
+
+    def id_taken(self, kind: str, ident: str) -> bool:
+        """True when `ident` is already live, tombstoned-reserved or on disk.
+
+        Public because callers that allocate an id themselves (a caller-supplied
+        `task_id`) must be able to refuse the collision with a readable message
+        instead of letting `create` raise out of the transaction.
+        """
+        return self._id_taken(kind, ident)
 
     def _id_taken(self, kind: str, ident: str) -> bool:
         if self.connection.execute(
@@ -3510,6 +3626,18 @@ def _flatten_backlog_dict(
     data: Mapping[str, Any],
 ) -> dict[tuple[str, str], tuple[dict[str, Any], str | None]]:
     result: dict[tuple[str, str], tuple[dict[str, Any], str | None]] = {}
+
+    def claim(key: tuple[str, str], value: tuple[dict[str, Any], str | None]) -> None:
+        # Two documents under one id used to collapse silently here, which turned
+        # an accidental duplicate create into an update that replaced the live
+        # entity's fields.  A duplicate is never a legal write-back.
+        if key in result:
+            raise ValueError(
+                f"{key[0]} {key[1]} appears twice in the backlog dict; a create "
+                f"cannot reuse an existing id"
+            )
+        result[key] = value
+
     backlog_doc = {
         key: copy.deepcopy(value)
         for key, value in data.items()
@@ -3518,24 +3646,24 @@ def _flatten_backlog_dict(
     }
     if isinstance(backlog_doc.get("meta"), dict):
         backlog_doc["meta"].pop("updated", None)
-    result[("backlog", _BACKLOG_ID)] = (_clean_doc(backlog_doc), None)
+    claim(("backlog", _BACKLOG_ID), (_clean_doc(backlog_doc), None))
     for epic in data.get("epics") or []:
         epic_doc = {key: copy.deepcopy(value) for key, value in epic.items() if key != "tasks"}
         epic_doc, body = _split_body(epic_doc)
         ident = str(epic_doc.get("id") or "")
         if ident:
-            result[("epic", ident)] = (epic_doc, body)
+            claim(("epic", ident), (epic_doc, body))
         for task in epic.get("tasks") or []:
             task_doc, task_body = _split_body(task)
             task_id = str(task_doc.get("id") or "")
             if task_id:
                 task_doc.setdefault("epic", ident)
-                result[("task", task_id)] = (task_doc, task_body)
+                claim(("task", task_id), (task_doc, task_body))
     for phase in data.get("phases") or []:
         phase_doc, body = _split_body(phase)
         ident = str(phase_doc.get("id") or "")
         if ident:
-            result[("phase", ident)] = (phase_doc, body)
+            claim(("phase", ident), (phase_doc, body))
     return result
 
 

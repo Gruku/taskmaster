@@ -114,13 +114,16 @@ def test_fresh_project_init_v2_then_migrate_to_v3(tmp_path, monkeypatch):
         r = backlog_server.backlog_add_task(title=title, epic="core", priority="medium", phase="dev")
         assert "Error" not in r
 
-    raw2 = yaml.safe_load(bp.read_text(encoding="utf-8"))
-    assert len(raw2["epics"][0]["tasks"]) == 3
+    # The store adopts the projection into v4 on first load, which moves
+    # the task index out of backlog.yaml and into tasks/<id>.md.
+    assert len(v3.load_v4(bp)["epics"][0]["tasks"]) == 3
 
     # 3. Migrate to v3 — must redirect _backlog_path to same .taskmaster/backlog.yaml
     r3 = backlog_server.backlog_migrate_v3()
     assert "Migrated v2" in r3 or "v3" in r3.lower()
-    assert v3.detect_schema_version(yaml.safe_load(bp.read_text(encoding="utf-8"))) == v3.SCHEMA_V3
+    # The store has already adopted the projection into v4, which is at or
+    # beyond the layout this migration targets.
+    assert v3.detect_schema_version(yaml.safe_load(bp.read_text(encoding="utf-8"))) >= v3.SCHEMA_V3
 
     # 4. Idempotent: second migration returns "already on v3" path
     r4 = backlog_server.backlog_migrate_v3()
@@ -149,9 +152,9 @@ def test_fresh_v3_init_skips_migration(tmp_path, monkeypatch):
     )
     assert "Error" not in r
 
-    # The task should exist; v3 backlog should still detect as v3
-    data = v3.load_v3(bp)
-    assert v3.detect_schema_version(data) == v3.SCHEMA_V3
+    # The task exists, and the store has adopted the projection into v4.
+    data = v3.load_v4(bp)
+    assert v3.detect_schema_version(data) == v3.SCHEMA_V4
     tasks = data["epics"][0]["tasks"]
     assert len(tasks) == 1
     assert tasks[0]["title"] == "Auth refactor"
@@ -245,8 +248,7 @@ def test_v3_pick_complete_full_lifecycle(tmp_path, monkeypatch):
     assert "Error" not in picked
     assert task_id in picked
 
-    data = v3.load_v3(bp)
-    task, _ = v3.load_v3(bp)["epics"][0]["tasks"][0], None
+    data = v3.load_v4(bp)
     task = data["epics"][0]["tasks"][0]
     assert task["status"] == "in-progress"
     assert task.get("started")
@@ -263,7 +265,7 @@ def test_v3_pick_complete_full_lifecycle(tmp_path, monkeypatch):
     assert "Error" not in completed
     assert "Completed" in completed or task_id in completed
 
-    data2 = v3.load_v3(bp)
+    data2 = v3.load_v4(bp)
     task2 = data2["epics"][0]["tasks"][0]
     assert task2["status"] == "done"
     assert task2.get("completed")

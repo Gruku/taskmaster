@@ -49,7 +49,8 @@ def test_invalid_gate_and_verdict_rejected(tm_epic_phase):
 def test_record_gate_laneless_task_allowed_no_order_check(tm_epic_phase):
     out = _bs.backlog_add_task("laneless", epic="test-epic", phase="dev", priority="medium")
     tid = re.search(r"[a-z0-9-]+-\d{3}", out).group(0)
-    data = _bs._load(); t, _ = _bs._find_task(data, tid); t.pop("lane", None); _bs._mutate_and_save(data)
+    with _bs._transaction(tool="test-setup") as data:
+        t, _ = _bs._find_task(data, tid); t.pop("lane", None); _bs._mutate_and_save(data)
     msg = _bs.backlog_record_gate(tid, "review-gate", verdict="pass")
     assert "Error" not in msg
 

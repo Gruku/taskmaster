@@ -59,12 +59,12 @@ def test_active_tasks_sort_before_todo_and_done(tm_epic_phase):
     # Seed statuses directly — transition legality (gates) is not under test here.
     from taskmaster import backlog_server as bs
 
-    data = bs._load()
     statuses = {"T-001": "done", "T-002": "in-progress", "T-003": "in-review"}
-    for t in data["epics"][0]["tasks"]:
-        if t["id"] in statuses:
-            t["status"] = statuses[t["id"]]
-    bs._save(data)
+    with bs._transaction(tool="test-setup") as data:
+        for t in data["epics"][0]["tasks"]:
+            if t["id"] in statuses:
+                t["status"] = statuses[t["id"]]
+        bs._mutate_and_save(data)
     out = backlog_list_tasks()
     rows = [line for line in out.splitlines() if line.startswith("- ")]
     order = [r.split("`")[1] for r in rows]

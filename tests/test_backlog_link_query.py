@@ -82,11 +82,14 @@ def test_query_existing_source_no_links_returns_empty_list(tm_dir):
     T-004 is added to the epic but has no link_create calls, so edges_from
     returns an empty list rather than an error.
     """
-    import yaml
+    # The projection keeps tasks in tasks/<id>.md, so seed the new task there.
+    from taskmaster.taskmaster_v3 import task_v4_to_file, write_task_file
     bp = tm_dir / "backlog.yaml"
-    data = yaml.safe_load(bp.read_text())
-    data["epics"][0]["tasks"].append({"id": "T-004", "title": "Fourth", "status": "todo"})
-    bp.write_text(yaml.safe_dump(data))
+    frontmatter, body = task_v4_to_file(
+        {"id": "T-004", "title": "Fourth", "status": "todo", "epic": "e1",
+         "order": 4.0}
+    )
+    write_task_file(tm_dir / "tasks" / "T-004.md", frontmatter, body)
 
     out = bs.backlog_link_query(source="T-004")
     assert out == "[]", f"Expected '[]' for source with no links, got: {out!r}"

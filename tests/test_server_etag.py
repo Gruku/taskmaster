@@ -13,7 +13,8 @@ def server_etag(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     from taskmaster import backlog_server
     monkeypatch.setattr(backlog_server, "ROOT", tmp_path)
-    bp = tmp_path / "backlog.yaml"
+    bp = tmp_path / ".taskmaster" / "backlog.yaml"
+    bp.parent.mkdir(parents=True, exist_ok=True)
     bp.write_text(yaml.safe_dump({
         "meta": {"project": "test"},
         "epics": [{"id": "e1", "name": "E1", "status": "active",
@@ -70,17 +71,21 @@ def test_patch_with_stale_etag_returns_409(server_etag):
     old_etag = get_resp.headers.get("ETag")
     # Bypass If-Match by issuing without the header (server allows missing
     # If-Match for backwards compat — see implementation note in Step 3).
-    # To force a real change, call update_task directly:
-    from taskmaster.taskmaster_v3 import update_task
-    update_task("e1-001", {"title": "Changed by other"})
+    # To force a real change, drive the same store-backed write the viewer uses:
+    from taskmaster.backlog_server import _viewer_update_task
+    _viewer_update_task("e1-001", {"title": "Changed by other"})
     resp = _request("PATCH", f"{server_etag}/api/tasks/e1-001",
                     {"title": "My change"}, headers={"If-Match": old_etag})
     assert resp.status == 409
     body = json.loads(resp.read())
     assert body["ok"] is False
     assert body.get("error") == "stale"
-    assert "current" in body
     assert "current_etag" in body
+    # The stale payload must carry the current task so the viewer can show a
+    # diff; a null `current` is what a v4-blind task read produced.
+    assert body.get("current") is not None
+    assert body["current"]["id"] == "e1-001"
+    assert body["current"]["title"] == "Changed by other"
 
 
 def test_patch_without_if_match_proceeds(server_etag):

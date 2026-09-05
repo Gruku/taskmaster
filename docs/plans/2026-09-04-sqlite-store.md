@@ -403,3 +403,30 @@ verification have shipped.
 - The implementation received a fresh adversarial review; confirmed critical and high findings
   were resolved with regression coverage before commit.
 - Step 2 remains planned above and is intentionally not implemented in this commit.
+
+## Execution status — 2026-09-05 (step 2)
+
+- Step 2 is implemented on `feature/sqlite-store-step-2`: every task, epic and phase read
+  and write in `backlog_server.py` runs inside one store transaction per public tool call,
+  the projection bypass writers for those three kinds are gone, and the viewer reads and
+  writes committed state.
+- A whole-branch review (Claude) and an adversarial review (Codex, `codex-review.md`)
+  produced twelve findings; all twelve were closed in a single fix wave, each with a
+  regression test observed failing first. See `fix-wave-report.md`.
+- Boundary, unchanged from the plan: defects 1–5 are fixed **for tasks, epics and phases
+  only**. Bug, issue, handover, decision, idea, note, area and tracker writers stay on the
+  compatibility allowlist and **their id allocation is still not concurrency-safe**. Step 3
+  moves them onto the store.
+- Also deferred to step 3: generalizing committed-state response rendering beyond
+  `backlog_update_task`. Every other mutating tool renders from the in-flight transaction
+  dict, which is safe only because a failed commit raises instead of returning success.
+- New in step 2, and breaking: a `.claude/` or project-root backlog is refused with an
+  actionable message rather than silently redirected to an empty store. The one supported
+  route forward is `backlog_canonicalize_layout`, which now also moves `epics/`, `phases/`,
+  `bugs/`, `decisions/`, `ideas/`, `notes/` and `integrations/`, and refuses to run on
+  network storage.
+- Full repository suite after the fix wave: 1,926 passed and 1 skipped in 13m30s.
+- Committed stress profile (plan-mandated, run by default): 8 processes x 200 real public
+  tool calls against one shared store — 777 entities created, 2,186 tool calls (30 legitimately refused), 363.8s wall clock, with every operation class asserted from committed rows.
+- Do not claim the full migration complete until steps 3–5 and real CodeMaestro open/status
+  verification have shipped.

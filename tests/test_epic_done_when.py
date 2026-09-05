@@ -111,13 +111,13 @@ def test_update_epic_area_known_accepted(tmp_taskmaster):
 
 
 def test_validate_warns_on_legacy_epic_without_done_when(tmp_taskmaster):
-    data = _load()
-    data["epics"].append({
-        "id": "legacy-epic", "name": "Legacy Epic", "status": "active",
-        "created": "2026-01-01", "tasks": [],
-    })
-    from taskmaster.backlog_server import _mutate_and_save
-    _mutate_and_save(data)
+    from taskmaster.backlog_server import _mutate_and_save, _transaction
+    with _transaction(tool="test-setup") as data:
+        data["epics"].append({
+            "id": "legacy-epic", "name": "Legacy Epic", "status": "active",
+            "created": "2026-01-01", "tasks": [],
+        })
+        _mutate_and_save(data)
     out = backlog_validate()
     assert "legacy-epic" in out
     assert "done_when" in out.lower()

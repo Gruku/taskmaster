@@ -4,7 +4,8 @@ Skill auto-offers (handover/issue prompts in start/pick/end-session)
 silently skipped when backlog.yaml had v3 content but missing
 `schema_version: 3` marker. Two-pronged fix:
 
-1. `_ensure_v3_marker` runs after each v3 entity-write, promoting the marker.
+1. The store stamps `schema_version` on the projection it owns, so any
+   project it adopts reports at least v3.
 2. `_effective_schema_version` reports v3 when v3 entity content exists,
    so `backlog_status` shows `Schema: v3` and skill gates fire.
 """
@@ -56,26 +57,27 @@ def test_effective_schema_version_respects_explicit_marker(server_at):
     assert server_at._effective_schema_version(data) == 3
 
 
-def test_ensure_v3_marker_writes_marker_when_missing(server_at, tmp_path):
+def test_store_adoption_promotes_a_missing_marker(server_at, tmp_path):
+    """The marker used to be bumped by a raw `_ensure_v3_marker` write."""
     bp = _write_backlog(
         tmp_path,
         "meta: {project: test}\n"
         "epics: [{id: e1, name: Epic, tasks: []}]\n",
     )
-    server_at._ensure_v3_marker(bp)
+    server_at._sync_projection()
     raw = yaml.safe_load(bp.read_text(encoding="utf-8"))
-    assert raw["meta"]["schema_version"] == 3
+    assert int(raw["meta"]["schema_version"]) >= 3
 
 
-def test_ensure_v3_marker_idempotent(server_at, tmp_path):
+def test_store_adoption_leaves_an_existing_marker_alone(server_at, tmp_path):
     bp = _write_backlog(
         tmp_path,
-        "meta: {project: test, schema_version: 3}\n"
+        "meta: {project: test, schema_version: 4}\n"
         "epics: [{id: e1, name: Epic, tasks: []}]\n",
     )
-    before = bp.read_text(encoding="utf-8")
-    server_at._ensure_v3_marker(bp)
-    assert bp.read_text(encoding="utf-8") == before
+    server_at._sync_projection()
+    raw = yaml.safe_load(bp.read_text(encoding="utf-8"))
+    assert int(raw["meta"]["schema_version"]) == 4
 
 
 def test_issue_create_auto_promotes_marker(server_at, tmp_path):
@@ -94,8 +96,10 @@ def test_issue_create_auto_promotes_marker(server_at, tmp_path):
         impact="Test",
     )
     assert "Issue created" in result, result
+    # The store adopts a v3 projection into the v4 layout on first load, so the
+    # marker the issue write promotes lands at v4.
     raw = yaml.safe_load(bp.read_text(encoding="utf-8"))
-    assert raw["meta"]["schema_version"] == 3
+    assert raw["meta"]["schema_version"] == 4
 
 
 def test_backlog_status_emits_schema_line(server_at, tmp_path):
@@ -110,7 +114,7 @@ def test_backlog_status_emits_schema_line(server_at, tmp_path):
     (tmp_path / ".taskmaster" / "tasks").mkdir()
 
     out = server_at.backlog_status()
-    assert out.splitlines()[0].startswith("**Schema:** v3"), out
+    assert out.splitlines()[0].startswith("**Schema:** v4"), out
 
 
 def test_backlog_status_schema_line_uses_effective_version(server_at, tmp_path):
@@ -124,4 +128,4 @@ def test_backlog_status_schema_line_uses_effective_version(server_at, tmp_path):
     )
 
     out = server_at.backlog_status()
-    assert out.splitlines()[0].startswith("**Schema:** v3"), out
+    assert out.splitlines()[0].startswith("**Schema:** v4"), out

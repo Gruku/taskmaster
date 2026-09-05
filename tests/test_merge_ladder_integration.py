@@ -24,7 +24,7 @@ Module-level slow marker so CI can filter; tests are NOT skipped.
 Path note: hooks are launched by ABSOLUTE path; subprocess cwd is set to the
 temp repo root so both hooks' decision modules resolve the project root via
 Path.cwd() exactly as in production.  TASKMASTER_ROOT is also set in the
-recorder env so backlog_server._load()/_save() round-trips against the temp repo.
+recorder env so backlog_server._load()/_mutate_and_save() round-trips against the temp repo.
 """
 from __future__ import annotations
 
@@ -242,17 +242,23 @@ def _read_heavy_merge_status(repo: Path, tid: str) -> dict:
 
 
 def _read_slim_merge_gate_state(repo: Path, tid: str) -> str:
-    """Read merge_gate_state from the SLIM backlog.yaml (proves slim mirror)."""
+    """Read the merge_gate_state mirror, proving merge_status stays heavy.
+
+    The store keeps the projection in v4 layout, where the task index lives in
+    tasks/<id>.md rather than inline in backlog.yaml, so the mirror is read
+    from the task file and backlog.yaml is checked for the heavy-field leak.
+    """
     bp = repo / ".taskmaster" / "backlog.yaml"
-    data = yaml.safe_load(bp.read_text(encoding="utf-8")) or {}
-    for epic in data.get("epics", []):
-        for t in epic.get("tasks", []):
-            if t.get("id") == tid:
-                assert "merge_status" not in t, (
-                    "merge_status leaked into slim backlog.yaml — must be heavy"
-                )
-                return t.get("merge_gate_state", "")
-    return ""
+    assert "merge_status" not in bp.read_text(encoding="utf-8"), (
+        "merge_status leaked into backlog.yaml - must be heavy"
+    )
+    tf = repo / ".taskmaster" / "tasks" / f"{tid}.md"
+    if not tf.exists():
+        return ""
+    text = tf.read_text(encoding="utf-8")
+    assert text.startswith("---"), f"task file missing frontmatter: {text[:80]!r}"
+    data = yaml.safe_load(text.split("---", 2)[1]) or {}
+    return data.get("merge_gate_state", "") or ""
 
 
 # --------------------------------------------------------------------------- #
@@ -407,7 +413,7 @@ def test_approve_bypass_and_retry_survives(tmp_path):
     # per-task file entirely when it has no HEAVY_FIELDS content and no
     # body — id+title mirrored into frontmatter don't count — and step D's
     # recorder round-trips the WHOLE backlog through backlog_server's
-    # _load()/_save(), which would otherwise prune this file before step F.
+    # _load()/_mutate_and_save(), which would otherwise prune this file before step F.
     write_task_file(
         tm / "tasks" / "integ-002.md",
         {"id": "integ-002", "title": "Other task"},

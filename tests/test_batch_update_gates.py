@@ -71,11 +71,11 @@ def test_batch_laneless_complete_unaffected(tm_epic_phase):
     """Laneless tasks are exempt from the completion gate; complete op must succeed."""
     tid = _make_task(lane="express", status="in-progress")
     # Remove the lane so the task is laneless (exempt from gate checks)
-    data = _bs._load()
-    task, _ = _bs._find_task(data, tid)
-    task.pop("lane", None)
-    task.pop("gate_state", None)
-    _bs._mutate_and_save(data)
+    with _bs._transaction(tool="test-setup") as data:
+        task, _ = _bs._find_task(data, tid)
+        task.pop("lane", None)
+        task.pop("gate_state", None)
+        _bs._mutate_and_save(data)
 
     out = _bs.backlog_batch_update(f"complete {tid}")
 

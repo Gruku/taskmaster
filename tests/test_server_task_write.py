@@ -15,7 +15,8 @@ def server_with_backlog(tmp_path, monkeypatch):
     # of when backlog_server was first imported (ROOT is set at import time).
     from taskmaster import backlog_server
     monkeypatch.setattr(backlog_server, "ROOT", tmp_path)
-    bp = tmp_path / "backlog.yaml"
+    bp = tmp_path / ".taskmaster" / "backlog.yaml"
+    bp.parent.mkdir(parents=True, exist_ok=True)
     bp.write_text(yaml.safe_dump({
         "meta": {"project": "test"},
         "epics": [{"id": "e1", "name": "E1", "status": "active",

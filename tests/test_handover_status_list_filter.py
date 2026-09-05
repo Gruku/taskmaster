@@ -17,10 +17,11 @@ from taskmaster.taskmaster_v3 import sync_handover_index, write_handover
 
 
 def _setup(tmp_path, monkeypatch):
-    bp = tmp_path / "backlog.yaml"
+    bp = tmp_path / ".taskmaster" / "backlog.yaml"
+    bp.parent.mkdir(parents=True, exist_ok=True)
     bp.write_text(yaml.safe_dump({"meta": {"updated": "2026-05-09"}, "epics": []}))
-    (tmp_path / "handovers").mkdir()
-    monkeypatch.setattr(backlog_server, "ROOT", bp.parent)
+    (bp.parent / "handovers").mkdir()
+    monkeypatch.setattr(backlog_server, "ROOT", tmp_path)
     monkeypatch.setattr(backlog_server, "_backlog_path", lambda: bp)
     return bp
 

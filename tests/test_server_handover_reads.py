@@ -24,15 +24,16 @@ from taskmaster.taskmaster_v3 import (
 
 def _make_backlog(tmp_path: Path) -> Path:
     """Create a minimal v2 backlog.yaml + handovers/ directory."""
-    bp = tmp_path / "backlog.yaml"
+    bp = tmp_path / ".taskmaster" / "backlog.yaml"
+    bp.parent.mkdir(parents=True, exist_ok=True)
     bp.write_text(yaml.safe_dump({"meta": {"updated": "2026-01-01"}, "epics": []}))
-    (tmp_path / "handovers").mkdir()
+    (bp.parent / "handovers").mkdir()
     return bp
 
 
 def _set_backlog_root(monkeypatch, bp: Path):
     """Redirect backlog_server's ROOT and _backlog_path to tmp_path."""
-    monkeypatch.setattr(backlog_server, "ROOT", bp.parent)
+    monkeypatch.setattr(backlog_server, "ROOT", bp.parent.parent)
     monkeypatch.setattr(backlog_server, "_backlog_path", lambda: bp)
 
 

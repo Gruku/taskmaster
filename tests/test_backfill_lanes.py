@@ -6,9 +6,10 @@ from taskmaster import taskmaster_v3 as tv
 def test_backfill_sets_lane_and_grandfathers_passed_gates(tm_epic_phase):
     tid = re.search(r"[a-z0-9-]+-\d{3}",
                     _bs.backlog_add_task("legacy", epic="test-epic", phase="dev", priority="high")).group(0)
-    data = _bs._load(); t, _ = _bs._find_task(data, tid)
-    t.pop("lane", None); t.pop("gate_state", None); t["status"] = "in-review"
-    _bs._mutate_and_save(data)
+    with _bs._transaction(tool="test-setup") as data:
+        t, _ = _bs._find_task(data, tid)
+        t.pop("lane", None); t.pop("gate_state", None); t["status"] = "in-review"
+        _bs._mutate_and_save(data)
 
     out = _bs.backlog_backfill_lanes()
     assert "1" in out   # one task migrated

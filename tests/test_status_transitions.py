@@ -52,5 +52,6 @@ def test_in_review_allowed_with_outstanding_gates(tm_epic_phase):
 def test_laneless_skips_transition_table(tm_epic_phase):
     tid = re.search(r"[a-z0-9-]+-\d{3}",
                     _bs.backlog_add_task("s", epic="test-epic", phase="dev", priority="medium")).group(0)
-    data = _bs._load(); t, _ = _bs._find_task(data, tid); t.pop("lane", None); _bs._mutate_and_save(data)
+    with _bs._transaction(tool="test-setup") as data:
+        t, _ = _bs._find_task(data, tid); t.pop("lane", None); _bs._mutate_and_save(data)
     assert "Error" not in _bs.backlog_update_task(tid, "status", "done")   # laneless = old permissive behavior

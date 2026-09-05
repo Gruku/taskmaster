@@ -7,6 +7,20 @@ Versions follow [SemVer](https://semver.org/spec/v2.0.0.html) — major bumps
 indicate schema breaks or removed surfaces.
 
 ---
+## Unreleased — SQLite store, steps 1 and 2
+
+**SQLite is the runtime authority for tasks, epics and phases.** `.taskmaster/local/store.db` now holds the backlog; `backlog.yaml` and the per-entity markdown files are a Git-facing projection the store exports. One public tool call owns exactly one store transaction, so two agents writing at the same time no longer overwrite each other: the module-level snapshot and the file lock that lost those writes are gone. Design: `docs/specs/2026-09-04-sqlite-store-design.md`.
+
+Defects 1–5 from that spec are fixed **for tasks, epics and phases only**. Task, epic and phase ids are allocated inside the writing transaction from authoritative state, so an id is never handed out twice — including from a linked worktree whose files lag the store.
+
+The compatibility allowlist is unchanged and still writes its own markdown: **handovers** (`write_handover`, `apply_supersession`, `apply_handover_review_flag`, `update_handover_status`, `smart_auto_close_handovers`, `backfill_handover_status`, `migrate_handover_statuses`, `backfill_threads`), **bugs** (`write_bug`, `update_bug`, `promote_bugs_to_issue`), **issues** (`write_issue`, `update_issue`), **decisions** (`write_decision`, `update_decision`, `resolve_decision`, `drop_decision`, `link_decision_to_handover`), **ideas** (`write_idea`, `update_idea`, `_write_ideas_index`), **notes** (`write_note`, `update_note`, `archive_note`), **areas** (`write_area`, `update_area`) and **trackers** (`write_tracker`, `update_tracker`). **Ids for those kinds are not concurrency-safe yet** — two agents creating a bug or a handover at the same moment can still collide. Spec step 3 moves them onto the store.
+
+**Breaking: a legacy `.claude/` or project-root backlog now has to be migrated before the server will read it.** The store exists at exactly one location, `<project root>/.taskmaster/local/store.db`. Opening a backlog anywhere else used to redirect silently and bootstrap an empty database beside the real backlog; it now refuses with an actionable message and every tool returns that message instead. Run `backlog_canonicalize_layout` once — it moves `backlog.yaml`, `PROGRESS.md` and every artifact directory (now including `epics/`, `phases/`, `bugs/`, `decisions/`, `ideas/`, `notes/` and `integrations/`, which earlier releases left behind), and refuses to run on network storage.
+
+The viewer reads and writes committed state. Task detail is derived from the store rather than overlaid with the projection file, so a dirty export or a linked worktree can no longer show stale prose under a current ETag. `If-Match` is evaluated inside the write transaction, closing the window in which another agent's commit was overwritten with a 200; a GET takes its payload and its ETag from one snapshot. A viewer PATCH can no longer clear a task's epic or change its id, and a legal epic move re-parents the task explicitly.
+
+Known scope limit: only `backlog_update_task` renders its response from the committing transaction's captured result. Every other mutating tool renders from the in-flight transaction dict, which is safe because a failed commit raises rather than returning success. Generalizing committed-state rendering to the remaining tools is a step-3 item.
+
 ## 5.2.0
 
 **Derived index and ambient resurfacing.** A disposable SQLite/FTS5 index at `.taskmaster/local/index.db` is now built from `backlog.yaml` and every entity file, refreshed inside every tool call within a 1.5s budget, and warmed in the background at SessionStart; delete it any time and it rebuilds. It tracks entities, entity paths, links (with derived reverse rows), handovers, handover tasks, and implicit `related` edges via shared paths or handovers, at schema version 4.

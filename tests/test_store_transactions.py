@@ -531,3 +531,86 @@ def test_reset_for_tests_prevents_same_path_cache_contamination(tmp_path: Path) 
         assert _task(second, "e-001")["title"] == "Second generation 1"
     finally:
         store.reset_for_tests()
+
+
+def test_unarchive_returns_the_projection_file_to_the_live_path(
+    transaction_store: tuple[Any, Path],
+) -> None:
+    """`archive` must not be a one-way door: `put` never lowers the flag itself."""
+    opened, backlog_path = transaction_store
+    tasks_dir = backlog_path.parent / "tasks"
+    with opened.transaction(tool="archive") as tx:
+        tx.archive("task", "e-001")
+    assert (tasks_dir / "archive" / "e-001.md").exists()
+    assert not (tasks_dir / "e-001.md").exists()
+
+    with opened.transaction(tool="unarchive") as tx:
+        tx.unarchive("task", "e-001")
+
+    connection = _connect(backlog_path)
+    try:
+        row = _entity(connection, "e-001")
+        assert row["archived"] == 0
+        assert "archived" not in _json(row["doc"])
+    finally:
+        connection.close()
+    assert (tasks_dir / "e-001.md").exists()
+    assert not (tasks_dir / "archive" / "e-001.md").exists()
+
+
+def test_unarchive_is_a_noop_on_a_live_entity(
+    transaction_store: tuple[Any, Path],
+) -> None:
+    opened, backlog_path = transaction_store
+    connection = _connect(backlog_path)
+    try:
+        before = _max_seq(connection)
+        with opened.transaction(tool="unarchive") as tx:
+            tx.unarchive("task", "e-001")
+        assert _max_seq(_connect(backlog_path)) == before
+    finally:
+        connection.close()
+
+
+def test_unarchive_rejects_an_unknown_entity(
+    transaction_store: tuple[Any, Path],
+) -> None:
+    opened, _backlog_path = transaction_store
+    with pytest.raises(KeyError):
+        with opened.transaction(tool="unarchive") as tx:
+            tx.unarchive("task", "does-not-exist")
+
+
+def test_active_transaction_is_the_one_behind_the_compatibility_dict(
+    transaction_store: tuple[Any, Path],
+) -> None:
+    """The dict cannot express a removal, so callers need the transaction itself."""
+    opened, backlog_path = transaction_store
+    assert store.active_transaction() is None
+    with opened.transaction_dict(tool="archive-through-the-dict") as data:
+        tx = store.active_transaction()
+        assert tx is not None
+        assert tx.connection is opened.connection
+        assert store.active_transaction(backlog_path) is tx
+        _task(data, "e-002")["title"] = "Renamed inside the same transaction"
+        tx.archive("task", "e-001")
+    assert store.active_transaction() is None
+
+    connection = _connect(backlog_path)
+    try:
+        assert _entity(connection, "e-001")["archived"] == 1
+        assert _json(_entity(connection, "e-002")["doc"])["title"] == (
+            "Renamed inside the same transaction"
+        )
+    finally:
+        connection.close()
+
+
+def test_active_transaction_ignores_a_different_store_path(
+    transaction_store: tuple[Any, Path], tmp_path: Path
+) -> None:
+    opened, _backlog_path = transaction_store
+    other = tmp_path / "elsewhere" / ".taskmaster"
+    other.mkdir(parents=True)
+    with opened.transaction_dict(tool="scoped") as _data:
+        assert store.active_transaction(other / "backlog.yaml") is None

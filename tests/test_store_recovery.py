@@ -504,23 +504,36 @@ def test_read_side_projection_scan_does_not_wait_for_writer_mutex(tmp_path):
     task_path.write_text(store.render_frontmatter(frontmatter, body), encoding="utf-8")
     entered = threading.Event()
     release = threading.Event()
+    # The assertion is "the read did not queue behind the writer", not "the read
+    # was fast": an absolute millisecond budget flakes under full-suite load.
+    # Hold the mutex for a long, explicit interval and require the read to
+    # return in a small fraction of it.
+    hold_seconds = 2.0
 
     def hold_mutex():
         with opened._writer_mutex():
             entered.set()
-            assert release.wait(timeout=5)
+            assert release.wait(timeout=hold_seconds + 5)
 
     thread = threading.Thread(target=hold_mutex)
     thread.start()
     assert entered.wait(timeout=5)
     started = time.monotonic()
+    # `elapsed` is assigned outside the try so a load_dict() failure surfaces as
+    # itself rather than as a NameError from the assertion below.
+    elapsed = float("inf")
     try:
         stale = opened.load_dict()
+        elapsed = time.monotonic() - started
+        time.sleep(max(0.0, hold_seconds - elapsed))
     finally:
         release.set()
-        thread.join(timeout=5)
+        thread.join(timeout=10)
 
-    assert time.monotonic() - started < 0.05
+    assert elapsed < hold_seconds / 4, (
+        f"the read waited {elapsed:.3f}s while the writer mutex was held for "
+        f"{hold_seconds}s — it queued behind the writer"
+    )
     assert _task(stale)["title"] == "Projected title"
 
 

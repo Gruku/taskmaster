@@ -20,11 +20,33 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "slow: marks tests as slow (real git/bash subprocess)"
     )
+    config.addinivalue_line(
+        "markers",
+        "allow_projection_bypass: disable the store projection write guard",
+    )
 
 # Make `import skill_budget_helper` work from tests that live in this directory.
 TESTS_ROOT = Path(__file__).resolve().parent
 if str(TESTS_ROOT) not in sys.path:
     sys.path.insert(0, str(TESTS_ROOT))
+
+
+@pytest.fixture(autouse=True)
+def _store_isolation():
+    """Never let one test's SQLite store, cache, or root resolution leak forward.
+
+    The server now routes every load/mutate through `taskmaster.store`, which
+    keeps process-global connections, a dict cache and a resolved root.  Tests
+    reuse `tmp_path` names and monkeypatch the root, so both ends need a reset.
+    """
+    from taskmaster import store  # noqa: PLC0415 — imported after sys.path setup
+
+    store.reset_for_tests()
+    try:
+        yield
+    finally:
+        store.reset_for_tests()
+        store.close_thread_connection()
 
 
 @pytest.fixture()
@@ -33,7 +55,7 @@ def tmp_taskmaster(tmp_path, monkeypatch):
 
     Provides:
     - tmp_path/.taskmaster/backlog.yaml  (v3 schema with `meta.schema_version: 3`,
-      empty epics/phases lists, `meta.updated` stub required by _save())
+      empty epics/phases lists, `meta.updated` stub required by _mutate_and_save())
     - tmp_path/.taskmaster/PROGRESS.md   (stub with `## Changelog` header, required
       by regenerate_progress_dashboard() which reads it before rewriting)
     - tmp_path/.taskmaster/tasks/
@@ -62,7 +84,7 @@ def tmp_taskmaster(tmp_path, monkeypatch):
     (tm_dir / "local" / "PROGRESS.md").write_text("## Changelog\n", encoding="utf-8")
 
     # Write a minimal v3 backlog.
-    # meta.updated is required by _save(); meta.schema_version is the v3 marker
+    # meta.updated is required by _mutate_and_save(); meta.schema_version is the v3 marker
     # that _detect_schema_version reads to dispatch to load_v3/save_v3.
     backlog = {
         "version": 3,
@@ -95,6 +117,12 @@ def tmp_taskmaster(tmp_path, monkeypatch):
     # keep this as a safety net for code paths that call Path.cwd() at runtime.
     monkeypatch.chdir(tmp_path)
 
+    # The projection was just written; drop any store bound to a stale
+    # view of this path so the first load bootstraps from these files.
+    from taskmaster import store  # noqa: PLC0415
+
+    store.reset_for_tests()
+
     return tmp_path
 
 
@@ -105,3 +133,164 @@ def tm_epic_phase(tmp_taskmaster):
     backlog_server.backlog_add_epic(epic_id="test-epic", name="Test Epic", done_when="all test tasks complete")
     backlog_server.backlog_add_phase(phase_id="dev", name="Development")
     return tmp_taskmaster
+
+
+# ── Projection bypass guard ────────────────────────────────────────────────
+# `taskmaster.store` is the only writer allowed to touch the task/epic/phase
+# projection (`backlog.yaml`, `tasks/`, `epics/`, `phases/`).  Anything else
+# reaching those paths is a lost write waiting to happen, so the guard turns it
+# into a loud, immediate failure during the test run.
+
+_GUARDED_DIRS = ("tasks", "epics", "phases")
+_PACKAGE_DIR = PLUGIN_ROOT / "taskmaster"
+_HOOKS_DIR = PLUGIN_ROOT / "hooks"
+_STORE_FILE = _PACKAGE_DIR / "store.py"
+# The one legacy module tests may still drive directly to seed a v3/v4
+# projection *before* the store adopts it.  Production never enters here first —
+# every real entry point is an MCP tool or a viewer handler in backlog_server.
+_SEED_ENTRY_FILE = _PACKAGE_DIR / "taskmaster_v3.py"
+
+
+class ProjectionBypassError(AssertionError):
+    """Raised when production code writes the projection outside the store."""
+
+
+def _guard_path(target):
+    """The backlog directory this write belongs to, or None when unguarded."""
+    try:
+        path = Path(target)
+    except TypeError:
+        return None
+    if path.name == "backlog.yaml":
+        # `backlog_init` writes the very first backlog.yaml; there is no store
+        # to route it through yet, and the store adopts it on the next read.
+        if not path.exists() and not (path.parent / "local" / "store.db").exists():
+            return None
+        return path.parent
+    parent = path.parent
+    if parent.name == "archive":
+        parent = parent.parent
+    if parent.name not in _GUARDED_DIRS:
+        return None
+    backlog_dir = parent.parent
+    if backlog_dir.name == ".taskmaster" or (backlog_dir / "backlog.yaml").exists():
+        return backlog_dir
+    return None
+
+
+def _is_under(path: Path, directory: Path) -> bool:
+    try:
+        path.relative_to(directory)
+    except ValueError:
+        return False
+    return True
+
+
+def _bypass_offender():
+    """None when this write is legitimate, else the offending entry point."""
+    import inspect  # noqa: PLC0415
+
+    frames = inspect.stack()
+    try:
+        files = [Path(frame.filename) for frame in frames]
+    finally:
+        del frames
+    entry = None
+    for path in reversed(files):  # outermost frame first
+        if path == _STORE_FILE:
+            return None  # the store owns the projection
+        if entry is None and (
+            _is_under(path, _PACKAGE_DIR) or _is_under(path, _HOOKS_DIR)
+        ):
+            entry = path
+    if entry is None:
+        return None  # a test seeding files itself, before any store bootstrap
+    if entry == _SEED_ENTRY_FILE:
+        return None  # legacy pure-module helper driven straight from a test
+    return str(entry)
+
+
+@pytest.fixture(autouse=True)
+def projection_bypass_guard(request, monkeypatch):
+    """Fail any production write to the task/epic/phase projection.
+
+    Opt out with `@pytest.mark.allow_projection_bypass` for the handful of tests
+    that deliberately drive a legacy migration writer.
+    """
+    if request.node.get_closest_marker("allow_projection_bypass"):
+        yield
+        return
+
+    import os  # noqa: PLC0415
+    import shutil  # noqa: PLC0415
+
+    from taskmaster import taskmaster_v3  # noqa: PLC0415
+
+    def _check(target, primitive: str) -> None:
+        if _guard_path(target) is None:
+            return
+        offender = _bypass_offender()
+        if offender is None:
+            return
+        raise ProjectionBypassError(
+            f"projection bypass: {primitive} wrote {target!r} from {offender}; "
+            "task/epic/phase writes must go through taskmaster.store"
+        )
+
+    real_atomic_write = taskmaster_v3.atomic_write
+    real_write_task_file = taskmaster_v3.write_task_file
+    real_write_text = Path.write_text
+    real_write_bytes = Path.write_bytes
+    real_replace = os.replace
+    real_move = shutil.move
+    real_unlink = Path.unlink
+    real_remove = os.remove
+    real_rename = Path.rename
+
+    def atomic_write(path, content):
+        _check(path, "taskmaster_v3.atomic_write")
+        return real_atomic_write(path, content)
+
+    def write_task_file(path, frontmatter, body):
+        _check(path, "taskmaster_v3.write_task_file")
+        return real_write_task_file(path, frontmatter, body)
+
+    def write_text(self, *args, **kwargs):
+        _check(self, "Path.write_text")
+        return real_write_text(self, *args, **kwargs)
+
+    def write_bytes(self, data):
+        _check(self, "Path.write_bytes")
+        return real_write_bytes(self, data)
+
+    def replace(src, dst, **kwargs):
+        _check(dst, "os.replace")
+        return real_replace(src, dst, **kwargs)
+
+    def move(src, dst, *args, **kwargs):
+        _check(dst, "shutil.move")
+        return real_move(src, dst, *args, **kwargs)
+
+    def unlink(self, *args, **kwargs):
+        _check(self, "Path.unlink")
+        return real_unlink(self, *args, **kwargs)
+
+    def remove(path, **kwargs):
+        _check(path, "os.remove")
+        return real_remove(path, **kwargs)
+
+    def rename(self, target):
+        _check(self, "Path.rename")
+        _check(target, "Path.rename")
+        return real_rename(self, target)
+
+    monkeypatch.setattr(taskmaster_v3, "atomic_write", atomic_write)
+    monkeypatch.setattr(taskmaster_v3, "write_task_file", write_task_file)
+    monkeypatch.setattr(Path, "write_text", write_text)
+    monkeypatch.setattr(Path, "write_bytes", write_bytes)
+    monkeypatch.setattr(os, "replace", replace)
+    monkeypatch.setattr(shutil, "move", move)
+    monkeypatch.setattr(Path, "unlink", unlink)
+    monkeypatch.setattr(os, "remove", remove)
+    monkeypatch.setattr(Path, "rename", rename)
+    yield

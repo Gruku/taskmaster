@@ -36,7 +36,8 @@ def test_viewer_kind_mapping_covers_all_storage_kinds():
 
 
 def _make_backlog(tmp_path: Path) -> Path:
-    bp = tmp_path / "backlog.yaml"
+    bp = tmp_path / ".taskmaster" / "backlog.yaml"
+    bp.parent.mkdir(parents=True, exist_ok=True)
     bp.write_text(yaml.safe_dump({"meta": {"updated": "2026-01-01"}, "epics": []}))
     (tmp_path / "handovers").mkdir()
     return bp
