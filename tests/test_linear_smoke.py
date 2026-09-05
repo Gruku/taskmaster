@@ -34,7 +34,8 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT))
 
 from taskmaster.integrations.linear.client import LinearClient  # noqa: E402
-from taskmaster.integrations.linear.worker import drain, enqueue, read_queue  # noqa: E402
+from taskmaster import store as _store  # noqa: E402
+from taskmaster.integrations.linear.worker import drain, enqueue  # noqa: E402
 from taskmaster.taskmaster_v3 import read_tracker  # noqa: E402
 from tests.entity_helpers import (taskmaster_backlog, write_tracker)
 
@@ -126,21 +127,24 @@ def test_smoke_full_push_round_trip(tmp_path, capsys):
     data["epics"][0]["tasks"][0]["tracker_id"] = tracker_id
     bp.write_text(yaml.safe_dump(data))
 
-    enqueue(bp, op="task_upsert", target_id=task_id, tracker_id=tracker_id)
-    assert len(read_queue(bp)) == 1
+    st = _store.open_store(bp)
+    with st.transaction(tool="linear-smoke") as tx:
+        enqueue(tx, op="task_upsert", target_id=task_id, tracker_id=tracker_id)
+    assert len(st.linear_pending()) == 1
 
     backlog_data = yaml.safe_load(bp.read_text())
-    counts = drain(bp, client, config, backlog_data=backlog_data)
+    counts = drain(st, client, config, backlog_data=backlog_data)
     assert counts.get("ok") == 1, f"first drain expected ok=1, got {counts!r}"
-    assert read_queue(bp) == []
+    assert st.linear_pending() == []
 
     tracker_fm, _ = read_tracker(bp, tracker_id)
     assert tracker_fm.get("last_pushed"), "tracker did not record last_pushed after successful push"
     assert tracker_fm.get("push_hash"), "tracker did not record push_hash after successful push"
     first_hash = tracker_fm["push_hash"]
 
-    enqueue(bp, op="task_upsert", target_id=task_id, tracker_id=tracker_id)
-    counts2 = drain(bp, client, config, backlog_data=backlog_data)
+    with st.transaction(tool="linear-smoke") as tx:
+        enqueue(tx, op="task_upsert", target_id=task_id, tracker_id=tracker_id)
+    counts2 = drain(st, client, config, backlog_data=backlog_data)
     assert counts2.get("skipped") == 1, (
         f"second drain should hit the push_hash skip (unchanged state), got {counts2!r}"
     )

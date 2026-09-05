@@ -17,7 +17,7 @@ sys.path.insert(0, str(PLUGIN_ROOT))
 
 from taskmaster import backlog_server  # noqa: E402
 from taskmaster.integrations.linear.client import LinearClient  # noqa: E402
-from taskmaster.integrations.linear.worker import read_queue, _write_queue  # noqa: E402
+from taskmaster import store as _store  # noqa: E402
 from tests.entity_helpers import write_tracker  # noqa: E402
 
 
@@ -45,6 +45,52 @@ def _make_backlog(tmp_path: Path, *, with_tracker: bool = False) -> Path:
         "phases": [],
     }))
     return bp
+
+
+def _make_mapped_linear_yaml(tmp_path: Path) -> None:
+    """linear.yaml complete enough that a push actually maps and succeeds.
+
+    `_make_linear_yaml` omits the status mapping, so every push under it fails
+    as `error:permanent` — fine for the tools that never push, useless for the
+    drain tests that need a real outcome.
+    """
+    (tmp_path / ".taskmaster" / "linear.yaml").write_text(yaml.safe_dump({
+        "workspaces": [{
+            "alias": "cm", "team_id": "team-uuid-42",
+            "token_env": "TASKMASTER_LINEAR_TOKEN_CM",
+            "status_mapping": {
+                "todo": "state-todo",
+                "in-progress": "state-progress",
+                "done": "state-done",
+            },
+            "priority_mapping": {"critical": 1, "high": 2, "medium": 3, "low": 4},
+        }],
+        "default_workspace": "cm",
+    }))
+
+
+def _queue(bp: Path) -> list[dict]:
+    """The Linear queue as a caller sees it: pending plus parked rows."""
+    return _store.open_store(bp).linear_rows(states=("pending", "failed"))
+
+
+def _seed_queue(bp: Path, items: list[dict]) -> list[int]:
+    """Put rows in the store's queue the way a mutating tool would."""
+    seqs = []
+    with _store.open_store(bp).transaction(tool="test-seed") as tx:
+        for item in items:
+            seqs.append(tx.linear_enqueue(
+                item.get("op", "task_upsert"),
+                item["target_id"],
+                item.get("tracker_id"),
+                {"enqueued_at": item["enqueued_at"]} if item.get("enqueued_at") else None,
+            ))
+    for seq, item in zip(seqs, items):
+        if item.get("state"):
+            _store.open_store(bp).linear_mark(
+                seq, state=item["state"], error=item.get("last_error"),
+            )
+    return seqs
 
 
 def _make_linear_yaml(tmp_path: Path) -> None:
@@ -342,11 +388,10 @@ def test_status_reflects_queue_items(tmp_path, monkeypatch):
     bp = _make_backlog(tmp_path)
     monkeypatch.setattr(backlog_server, "_backlog_path", lambda: bp)
 
-    _write_queue(bp, [
-        {"op": "task_upsert", "target_id": "ts-001", "enqueued_at": "2026-01-01T10:00:00Z",
-         "attempts": 0, "last_error": None, "permanent": False},
-        {"op": "task_upsert", "target_id": "ts-002", "enqueued_at": "2026-01-02T10:00:00Z",
-         "attempts": 3, "last_error": "auth rejected", "permanent": True},
+    _seed_queue(bp, [
+        {"target_id": "ts-001", "enqueued_at": "2026-01-01T10:00:00Z"},
+        {"target_id": "ts-002", "enqueued_at": "2026-01-02T10:00:00Z",
+         "state": "failed", "last_error": "auth rejected"},
     ])
     result = json.loads(backlog_server.backlog_linear_status())
     assert result["queue_depth"] == 2
@@ -355,12 +400,41 @@ def test_status_reflects_queue_items(tmp_path, monkeypatch):
     assert result["oldest_enqueued_at"] == "2026-01-01T10:00:00Z"
 
 
+def test_status_answers_on_a_network_share_instead_of_raising(tmp_path, monkeypatch):
+    """Regression: the file-backed queue read a JSON file, which works on a
+    share. The table-backed one must not raise there."""
+    bp = _make_backlog(tmp_path)
+    monkeypatch.setattr(backlog_server, "_backlog_path", lambda: bp)
+    monkeypatch.setattr(
+        _store, "_network_filesystem_reason", lambda root: "network filesystem",
+    )
+
+    result = json.loads(backlog_server.backlog_linear_status())
+    assert result["queue_depth"] == 0
+    assert result["pending"] == 0
+    assert result["warning"] == "network filesystem"
+
+
+def test_retry_says_the_store_is_unavailable_on_network_storage(tmp_path, monkeypatch):
+    bp = _make_backlog(tmp_path, with_tracker=True)
+    _make_mapped_linear_yaml(tmp_path)
+    monkeypatch.setattr(backlog_server, "_backlog_path", lambda: bp)
+    monkeypatch.setenv("TASKMASTER_LINEAR_TOKEN_CM", "lin_tok_test")
+    monkeypatch.setattr(
+        _store, "_network_filesystem_reason", lambda root: "network filesystem",
+    )
+
+    result = json.loads(backlog_server.backlog_linear_retry())
+    assert "store unavailable on network storage" in result["error"]
+    assert "network filesystem" in result["error"]
+
+
 # ── backlog_linear_retry ────────────────────────────────────────
 
 
 def test_retry_drains_all_when_no_target(tmp_path, monkeypatch):
     bp = _make_backlog(tmp_path, with_tracker=True)
-    _make_linear_yaml(tmp_path)
+    _make_mapped_linear_yaml(tmp_path)
     write_tracker(bp, external_system="linear", instance_alias="cm",
                   external_key="ENG-1", title="My task", status="todo")
     monkeypatch.setattr(backlog_server, "_backlog_path", lambda: bp)
@@ -378,26 +452,17 @@ def test_retry_drains_all_when_no_target(tmp_path, monkeypatch):
 
     monkeypatch.setattr(_lc_mod, "LinearClient", fake_client_cls)
 
-    # Enqueue one item
-    from taskmaster.integrations.linear.worker import enqueue
-    enqueue(bp, op="task_upsert", target_id="ts-001", tracker_id="linear-cm-eng-1")
+    _seed_queue(bp, [{"target_id": "ts-001", "tracker_id": "linear-cm-eng-1"}])
 
     result = json.loads(backlog_server.backlog_linear_retry())
     assert result["ok"] is True
-    # Queue should be empty or have only one item
     assert isinstance(result["counts"], dict)
+    assert _queue(bp) == [], "a drained item must not stay queued"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="R8: the store adopts integrations/linear-queue.json on first open and "
-    "removes it, so the file-backed retry path is empty until task 3.5 points "
-    "worker.enqueue/drain at the linear_queue table.  Task 3.5 must delete this "
-    "marker: strict, so it fails the suite once the table-backed path lands.",
-)
 def test_retry_target_id_filters_queue(tmp_path, monkeypatch):
     bp = _make_backlog(tmp_path, with_tracker=True)
-    _make_linear_yaml(tmp_path)
+    _make_mapped_linear_yaml(tmp_path)
     write_tracker(bp, external_system="linear", instance_alias="cm",
                   external_key="ENG-1", title="My task", status="todo")
     monkeypatch.setattr(backlog_server, "_backlog_path", lambda: bp)
@@ -414,21 +479,50 @@ def test_retry_target_id_filters_queue(tmp_path, monkeypatch):
 
     monkeypatch.setattr(_lc_mod, "LinearClient", fake_client_cls)
 
-    # Enqueue two items
-    from taskmaster.integrations.linear.worker import enqueue
-    enqueue(bp, op="task_upsert", target_id="ts-001", tracker_id="linear-cm-eng-1")
-    _write_queue(bp, read_queue(bp) + [
-        {"op": "task_upsert", "target_id": "other-task", "tracker_id": None,
-         "enqueued_at": "2026-01-01T10:00:00Z", "attempts": 0, "last_error": None}
+    _seed_queue(bp, [
+        {"target_id": "ts-001", "tracker_id": "linear-cm-eng-1"},
+        {"target_id": "other-task", "enqueued_at": "2026-01-01T10:00:00Z"},
     ])
 
     result = json.loads(backlog_server.backlog_linear_retry(target_id="ts-001"))
     assert result["ok"] is True
 
-    # other-task should still be in queue
-    remaining = read_queue(bp)
-    remaining_ids = [i["target_id"] for i in remaining]
-    assert "other-task" in remaining_ids
+    # other-task should still be queued, and untouched by the scoped drain
+    remaining = _queue(bp)
+    assert [i["target_id"] for i in remaining] == ["other-task"]
+    assert remaining[0]["attempts"] == 0
+    assert remaining[0]["last_error"] is None
+
+
+def test_retry_gives_a_half_exhausted_pending_item_a_fresh_budget(tmp_path, monkeypatch):
+    """B-028: `/linear retry` is the operator saying "try this properly again",
+    so it clears the attempts a still-pending row has already burned — not only
+    the parked flag."""
+    bp = _make_backlog(tmp_path, with_tracker=True)
+    _make_mapped_linear_yaml(tmp_path)
+    write_tracker(bp, external_system="linear", instance_alias="cm",
+                  external_key="ENG-1", title="My task", status="todo")
+    monkeypatch.setattr(backlog_server, "_backlog_path", lambda: bp)
+    monkeypatch.setenv("TASKMASTER_LINEAR_TOKEN_CM", "lin_tok_test")
+
+    import taskmaster.integrations.linear.client as _lc_mod
+    monkeypatch.setattr(
+        _lc_mod, "LinearClient",
+        lambda token, **kw: _client_with_handler(
+            lambda req: httpx.Response(500), token=token,
+        ),
+    )
+
+    seq, = _seed_queue(bp, [{"target_id": "ts-001", "tracker_id": "linear-cm-eng-1"}])
+    store = _store.open_store(bp)
+    for _ in range(3):
+        store.linear_mark(seq, state="pending", error="503 from Linear")
+    assert _queue(bp)[0]["attempts"] == 3
+
+    result = json.loads(backlog_server.backlog_linear_retry(target_id="ts-001"))
+    assert result["ok"] is True
+    # Cleared to 0, then this drain's own failure counted: one, not four.
+    assert _queue(bp)[0]["attempts"] == 1
 
 
 def test_retry_error_when_no_linear_yaml(tmp_path, monkeypatch):
@@ -440,13 +534,6 @@ def test_retry_error_when_no_linear_yaml(tmp_path, monkeypatch):
     assert "linear.yaml" in result["error"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="R8: the store adopts integrations/linear-queue.json on first open and "
-    "removes it, so the file-backed retry path is empty until task 3.5 points "
-    "worker.enqueue/drain at the linear_queue table.  Task 3.5 must delete this "
-    "marker: strict, so it fails the suite once the table-backed path lands.",
-)
 def test_retry_target_preserves_other_items_when_drain_crashes(tmp_path, monkeypatch):
     """B-029: a target-scoped retry must not destroy other targets' queued items
     if the drain crashes mid-flight. With the old subset-write-then-restore, the
@@ -464,14 +551,12 @@ def test_retry_target_preserves_other_items_when_drain_crashes(tmp_path, monkeyp
         lambda token, **kw: _client_with_handler(lambda req: _ok({}), token=token),
     )
 
-    from taskmaster.integrations.linear.worker import enqueue
-    enqueue(bp, op="task_upsert", target_id="ts-001", tracker_id="linear-cm-eng-1")
-    _write_queue(bp, read_queue(bp) + [
-        {"op": "task_upsert", "target_id": "other-task", "tracker_id": None,
-         "enqueued_at": "2026-01-01T10:00:00Z", "attempts": 0, "last_error": None}
+    _seed_queue(bp, [
+        {"target_id": "ts-001", "tracker_id": "linear-cm-eng-1"},
+        {"target_id": "other-task", "enqueued_at": "2026-01-01T10:00:00Z"},
     ])
 
-    # Make the drain explode after the retry has rewritten the full queue.
+    # Make the drain explode after the retry has un-parked its targets.
     import taskmaster.integrations.linear.worker as _wmod
 
     def _boom(*a, **k):
@@ -482,32 +567,17 @@ def test_retry_target_preserves_other_items_when_drain_crashes(tmp_path, monkeyp
     with pytest.raises(RuntimeError):
         backlog_server.backlog_linear_retry(target_id="ts-001")
 
-    remaining_ids = [i["target_id"] for i in read_queue(bp)]
+    remaining_ids = [i["target_id"] for i in _queue(bp)]
     assert "other-task" in remaining_ids, "other target's item was lost on crash"
     assert "ts-001" in remaining_ids, "retried item should also remain (never drained)"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="R8: the store adopts integrations/linear-queue.json on first open and "
-    "removes it, so the file-backed retry path is empty until task 3.5 points "
-    "worker.enqueue/drain at the linear_queue table.  Task 3.5 must delete this "
-    "marker: strict, so it fails the suite once the table-backed path lands.",
-)
 def test_retry_unparks_permanent_item(tmp_path, monkeypatch):
     """B-028: an explicit /linear retry clears the parked flag so a previously
     permanent failure gets one fresh attempt."""
     bp = _make_backlog(tmp_path, with_tracker=True)
-    # Config needs a status_mapping so the push can actually succeed once un-parked.
-    (tmp_path / ".taskmaster" / "linear.yaml").write_text(yaml.safe_dump({
-        "workspaces": [{
-            "alias": "cm", "team_id": "team-uuid-42",
-            "token_env": "TASKMASTER_LINEAR_TOKEN_CM",
-            "status_mapping": {"todo": "state-todo", "in-progress": "state-progress", "done": "state-done"},
-            "priority_mapping": {"critical": 1, "high": 2, "medium": 3, "low": 4},
-        }],
-        "default_workspace": "cm",
-    }))
+    # The mapped config: the push has to actually succeed once un-parked.
+    _make_mapped_linear_yaml(tmp_path)
     write_tracker(bp, external_system="linear", instance_alias="cm",
                   external_key="ENG-1", title="My task", status="todo")
     monkeypatch.setattr(backlog_server, "_backlog_path", lambda: bp)
@@ -522,14 +592,15 @@ def test_retry_unparks_permanent_item(tmp_path, monkeypatch):
         ),
     )
 
-    # A parked (permanent) item on disk.
-    _write_queue(bp, [
-        {"op": "task_upsert", "target_id": "ts-001", "tracker_id": "linear-cm-eng-1",
-         "enqueued_at": "2026-01-01T10:00:00Z", "attempts": 7,
-         "last_error": "dead", "permanent": True}
+    # A parked (failed) queue row: a routine drain would never look at it again.
+    _seed_queue(bp, [
+        {"target_id": "ts-001", "tracker_id": "linear-cm-eng-1",
+         "enqueued_at": "2026-01-01T10:00:00Z", "state": "failed",
+         "last_error": "dead"},
     ])
+    assert [r["state"] for r in _queue(bp)] == ["failed"]
 
     result = json.loads(backlog_server.backlog_linear_retry(target_id="ts-001"))
     assert result["ok"] is True
-    # Un-parked and successfully pushed → removed from the queue.
-    assert read_queue(bp) == []
+    # Un-parked and successfully pushed → nothing left for a caller to act on.
+    assert _queue(bp) == []

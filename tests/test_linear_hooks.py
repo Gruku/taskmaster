@@ -14,7 +14,7 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT))
 
 from taskmaster import backlog_server  # noqa: E402
-from taskmaster.integrations.linear.worker import read_queue  # noqa: E402
+from taskmaster import store as _store  # noqa: E402
 from tests.entity_helpers import write_tracker  # noqa: E402
 
 
@@ -71,6 +71,12 @@ def _setup_project(
     return bp
 
 
+
+def _queue(bp) -> list[dict]:
+    """The Linear queue as the store holds it — pending plus parked rows."""
+    return _store.open_store(bp).linear_rows(states=("pending", "failed"))
+
+
 # ── Hook behaviour: enqueue ────────────────────────────────────
 
 
@@ -82,7 +88,7 @@ def test_update_task_enqueues_linear_push_when_synced(tmp_path, monkeypatch):
 
     backlog_server.backlog_update_task("ts-001", "priority", "high")
 
-    items = read_queue(bp)
+    items = _queue(bp)
     assert len(items) == 1
     assert items[0]["op"] == "task_upsert"
     assert items[0]["target_id"] == "ts-001"
@@ -100,7 +106,7 @@ def test_complete_task_enqueues_linear_push(tmp_path, monkeypatch):
     backlog_server.backlog_update_task("ts-001", "status", "in-progress")
     backlog_server.backlog_complete_task("ts-001")
 
-    items = read_queue(bp)
+    items = _queue(bp)
     # De-duped on (op, target_id); both mutations hit the same item.
     assert len(items) == 1
     assert items[0]["target_id"] == "ts-001"
@@ -113,7 +119,7 @@ def test_archive_task_enqueues_linear_push(tmp_path, monkeypatch):
 
     backlog_server.backlog_archive_task("ts-001", reason="superseded")
 
-    items = read_queue(bp)
+    items = _queue(bp)
     assert len(items) == 1
     assert items[0]["target_id"] == "ts-001"
 
@@ -130,7 +136,7 @@ def test_update_task_no_enqueue_when_linear_yaml_missing(tmp_path, monkeypatch):
 
     backlog_server.backlog_update_task("ts-001", "priority", "high")
 
-    assert read_queue(bp) == []
+    assert _queue(bp) == []
     assert not (tmp_path / ".taskmaster" / "integrations" / "linear-queue.json").exists()
 
 
@@ -143,7 +149,7 @@ def test_update_task_no_enqueue_when_task_has_no_tracker(tmp_path, monkeypatch):
 
     backlog_server.backlog_update_task("ts-001", "priority", "high")
 
-    assert read_queue(bp) == []
+    assert _queue(bp) == []
 
 
 def test_hook_swallows_exceptions(tmp_path, monkeypatch):
