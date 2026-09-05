@@ -142,11 +142,11 @@ def smart_auto_close_handovers(
             triggering_task_id=triggering_task_id,
             done_or_archived_ids=done_or_archived_ids,
         )
-        for hid, doc in plan["closed"] + plan["flagged"]:
-            tx.put("handover", hid, doc)
+        for hid, doc, body in plan["closed"] + plan["flagged"]:
+            tx.put("handover", hid, doc, body=body)
     return {
-        "closed": [hid for hid, _doc in plan["closed"]],
-        "flagged": [hid for hid, _doc in plan["flagged"]],
+        "closed": [hid for hid, _doc, _body in plan["closed"]],
+        "flagged": [hid for hid, _doc, _body in plan["flagged"]],
     }
 
 
@@ -155,9 +155,9 @@ def backfill_handover_status(backlog_data: dict, backlog_path: Path) -> list[str
         flipped = tm.backfill_handover_status(
             backlog_data, tx.list("handover", include_archived=True)
         )
-        for hid, doc in flipped:
-            tx.put("handover", hid, doc)
-    return [hid for hid, _doc in flipped]
+        for hid, doc, body in flipped:
+            tx.put("handover", hid, doc, body=body)
+    return [hid for hid, _doc, _body in flipped]
 
 
 def migrate_handover_statuses(
@@ -169,17 +169,17 @@ def migrate_handover_statuses(
             tx.list("handover", include_archived=True),
             done_or_archived_ids=done_or_archived_ids,
         )
-        for hid, doc in plan["migrated"]:
-            tx.put("handover", hid, doc)
-    return {"migrated": [hid for hid, _doc in plan["migrated"]]}
+        for hid, doc, body in plan["migrated"]:
+            tx.put("handover", hid, doc, body=body)
+    return {"migrated": [hid for hid, _doc, _body in plan["migrated"]]}
 
 
 def backfill_threads(backlog_path: Path, backlog_data: dict | None = None) -> dict:
     with transaction(backlog_path) as tx:
         plan = tm.backfill_threads(tx.list("handover"), backlog_data=backlog_data)
-        for hid, doc in plan["stamped"]:
-            tx.put("handover", hid, doc)
-    return {"stamped": [hid for hid, _doc in plan["stamped"]], "groups": plan["groups"]}
+        for hid, doc, body in plan["stamped"]:
+            tx.put("handover", hid, doc, body=body)
+    return {"stamped": [hid for hid, _doc, _body in plan["stamped"]], "groups": plan["groups"]}
 
 
 def sync_handover_index(backlog_data: dict, backlog_path: Path, cap: int | None = None) -> dict:

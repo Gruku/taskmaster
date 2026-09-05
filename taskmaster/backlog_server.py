@@ -217,8 +217,8 @@ def _ensure_handover_status_backfilled() -> None:
                     from taskmaster.taskmaster_v3 import backfill_handover_status as _bf
                     tx = _store_tx()
                     flipped = _bf(data, tx.list("handover", include_archived=True))
-                    for handover_id, document in flipped:
-                        tx.put("handover", handover_id, document)
+                    for handover_id, document, body in flipped:
+                        tx.put("handover", handover_id, document, body=body)
                     _sync_handover_index_tx(data)
                     _mutate_and_save(data)
                     latched = True
@@ -3600,8 +3600,8 @@ def backlog_handover_resync() -> str:
     from taskmaster.taskmaster_v3 import backfill_threads as _backfill_threads
     tx = _store_tx()
     backfill = _backfill_threads(tx.list("handover"), backlog_data=data)
-    for handover_id, document in backfill["stamped"]:
-        tx.put("handover", handover_id, document)
+    for handover_id, document, body in backfill["stamped"]:
+        tx.put("handover", handover_id, document, body=body)
     _sync_handover_index_tx(data)
     _mutate_and_save(data)
     n = len(data.get("handovers") or [])
@@ -6259,15 +6259,15 @@ def _smart_close_handovers_in_tx(data: dict, task_id: str) -> list[str]:
             done_or_archived_ids=terminal,
         )
         flipped = plan["closed"] + plan["flagged"]
-        for handover_id, document in flipped:
-            tx.put("handover", handover_id, document)
+        for handover_id, document, body in flipped:
+            tx.put("handover", handover_id, document, body=body)
     except Exception:
         return []
     if flipped:
         data2 = _load()
         _sync_handover_index_tx(data2)
         _mutate_and_save(data2)
-    return [handover_id for handover_id, _doc in flipped]
+    return [handover_id for handover_id, _doc, _body in flipped]
 
 
 def _open_bugs_for_task(bp, task_id: str) -> tuple[list[str], list[str]]:

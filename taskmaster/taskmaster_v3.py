@@ -1771,7 +1771,7 @@ def smart_auto_close_handovers(
     *,
     triggering_task_id: str,
     done_or_archived_ids: set[str],
-) -> dict[str, list[tuple[str, dict[str, Any]]]]:
+) -> dict[str, list[tuple[str, dict[str, Any], str | None]]]:
     """Plan the smart auto-close rule over live handover rows. Pure.
 
     `rows` is `Transaction.list("handover")` output — `(id, doc, body)`. Nothing
@@ -1786,12 +1786,14 @@ def smart_auto_close_handovers(
 
     Otherwise: leave open and stamp a flag reason.
 
-    Returns {"closed": [(id, doc)], "flagged": [(id, doc)]}.
+    Returns {"closed": [(id, doc, body)], "flagged": [(id, doc, body)]}. The
+    row's existing body rides along untouched so the caller can hand it back to
+    `tx.put`; a planner that dropped it would erase the handover's narrative.
     """
-    closed: list[tuple[str, dict[str, Any]]] = []
-    flagged: list[tuple[str, dict[str, Any]]] = []
+    closed: list[tuple[str, dict[str, Any], str | None]] = []
+    flagged: list[tuple[str, dict[str, Any], str | None]] = []
 
-    for hid, doc, _body in rows:
+    for hid, doc, body in rows:
         fm = dict(doc)
         if fm.get("status") != "open":
             continue
@@ -1814,7 +1816,7 @@ def smart_auto_close_handovers(
                 f"auto-closed: all task_ids done, triggering task {triggering_task_id}"
             )
             fm.pop("flag_reason", None)
-            closed.append((hid, fm))
+            closed.append((hid, fm, body))
         else:
             reasons: list[str] = []
             if not all_tasks_terminal:
@@ -1826,7 +1828,7 @@ def smart_auto_close_handovers(
             if not kind_eligible:
                 reasons.append(f"session_kind={session_kind!r} preserved for context")
             fm["flag_reason"] = "; ".join(reasons)
-            flagged.append((hid, fm))
+            flagged.append((hid, fm, body))
 
     return {"closed": closed, "flagged": flagged}
 
@@ -1848,18 +1850,19 @@ def flag_open_reason(backlog_path: Path, handover_id: str) -> str | None:
 def backfill_handover_status(
     backlog_data: dict[str, Any],
     rows: "Iterable[tuple[str, Mapping[str, Any], str | None]]",
-) -> list[tuple[str, dict[str, Any]]]:
+) -> list[tuple[str, dict[str, Any], str | None]]:
     """Plan the one-time `status: open` backfill over handover rows. Pure.
 
     No-op (empty list) if `handover_status_backfilled` is already truthy.
-    Stamps the marker on `backlog_data` and returns `(id, doc)` pairs for the
-    caller to commit; the archived tail is included because the caller passes
-    `include_archived=True` rows.
+    Stamps the marker on `backlog_data` and returns `(id, doc, body)` triples
+    for the caller to commit; the archived tail is included because the caller
+    passes `include_archived=True` rows. The body rides along untouched so the
+    caller hands it back to `tx.put` rather than erasing the narrative.
     """
     if backlog_data.get("handover_status_backfilled"):
         return []
-    flipped: list[tuple[str, dict[str, Any]]] = []
-    for hid, doc, _body in rows:
+    flipped: list[tuple[str, dict[str, Any], str | None]] = []
+    for hid, doc, body in rows:
         if "status" in doc:
             continue
         fm = dict(doc)
@@ -1870,7 +1873,7 @@ def backfill_handover_status(
         fm["status_changed"] = stamp
         fm["status_reason"] = "backfilled by handover-status migration"
         fm["status_user_set"] = False
-        flipped.append((hid, fm))
+        flipped.append((hid, fm, body))
     backlog_data["handover_status_backfilled"] = True
     return flipped
 
@@ -1886,7 +1889,7 @@ def migrate_handover_statuses(
     rows: "Iterable[tuple[str, Mapping[str, Any], str | None]]",
     *,
     done_or_archived_ids: set[str],
-) -> dict[str, list[tuple[str, dict[str, Any]]]]:
+) -> dict[str, list[tuple[str, dict[str, Any], str | None]]]:
     """Plan the one-shot legacy-enum translation over handover rows. Pure.
 
     Mapping:
@@ -1896,13 +1899,14 @@ def migrate_handover_statuses(
       - "done" + NOT eligible  ->  "open"  (context still relevant)
 
     Idempotent: empty plan if `_MIGRATION_V2_KEY` is truthy. Returns
-    {"migrated": [(id, doc)]} for the caller to commit.
+    {"migrated": [(id, doc, body)]} for the caller to commit; the row's body
+    rides along so committing the plan cannot erase the narrative.
     """
     if backlog_data.get(_MIGRATION_V2_KEY):
         return {"migrated": []}
 
-    migrated: list[tuple[str, dict[str, Any]]] = []
-    for hid, doc, _body in rows:
+    migrated: list[tuple[str, dict[str, Any], str | None]] = []
+    for hid, doc, body in rows:
         old_status = doc.get("status", "")
         if old_status in HANDOVER_STATUSES:
             continue
@@ -1939,7 +1943,7 @@ def migrate_handover_statuses(
             fm["status_changed"] = now
             fm["status_reason"] = f"migrated from unknown status {old_status!r}"
 
-        migrated.append((hid, fm))
+        migrated.append((hid, fm, body))
 
     backlog_data[_MIGRATION_V2_KEY] = True
     return {"migrated": migrated}
@@ -2186,15 +2190,18 @@ def backfill_threads(
     other, or when they share a task id. Name precedence per group: epic id
     containing any member task -> first member task id -> newest member's id
     with the date prefix stripped. Idempotent; rows already carrying `thread`
-    are untouched. Returns {"stamped": [(id, doc)], "groups": N} for the caller
-    to commit.
+    are untouched. Returns {"stamped": [(id, doc, body)], "groups": N} for the
+    caller to commit; each row's body rides along so committing the stamp
+    cannot erase the narrative.
     """
     ordered = sort_handover_rows(rows)
     fms: dict[str, dict[str, Any]] = {}
-    for hid, doc, _body in ordered:
+    bodies: dict[str, str | None] = {}
+    for hid, doc, body in ordered:
         if (doc or {}).get("thread"):
             continue
         fms[hid] = dict(doc or {})
+        bodies[hid] = body
     if not fms:
         return {"stamped": [], "groups": 0}
 
@@ -2233,7 +2240,7 @@ def backfill_threads(
             if t.get("id") and epic.get("id"):
                 task_to_epic[t["id"]] = epic["id"]
 
-    stamped: list[tuple[str, dict[str, Any]]] = []
+    stamped: list[tuple[str, dict[str, Any], str | None]] = []
     for members in groups.values():
         members.sort(key=lambda h: str(fms[h].get("created") or fms[h].get("date") or ""))
         newest = members[-1]
@@ -2251,7 +2258,7 @@ def backfill_threads(
             name = normalize_thread_name(re.sub(r"^\d{4}-\d{2}-\d{2}-", "", newest))
         for hid in members:
             fms[hid]["thread"] = name
-            stamped.append((hid, fms[hid]))
+            stamped.append((hid, fms[hid], bodies[hid]))
 
     return {"stamped": stamped, "groups": len(groups)}
 
