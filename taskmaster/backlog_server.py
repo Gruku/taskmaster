@@ -1553,8 +1553,13 @@ def _enqueue_linear_push_if_synced(task_id: str, task: dict | None = None) -> No
         tracker_id = task.get("tracker_id")
         if not tracker_id or not str(tracker_id).startswith("linear-"):
             return
-        from taskmaster.integrations.linear.worker import enqueue as _linear_enqueue
-        _linear_enqueue(bp, op="task_upsert", target_id=task_id, tracker_id=tracker_id)
+        from taskmaster.integrations.linear import worker as _worker
+        # Inside the caller's transaction: the queue row and the mutation that
+        # produced it commit together, so a rolled-back edit cannot leave a
+        # push queued and a committed edit cannot lose one.
+        _worker.enqueue(
+            _store_tx(), op="task_upsert", target_id=task_id, tracker_id=tracker_id
+        )
     except Exception:
         # Sync failures must not break the local mutation.
         pass
@@ -2120,6 +2125,66 @@ def backlog_index_status(rebuild: bool = False) -> str:
     else:
         report = _index.last_report(bp) or _index.build_index(bp)
     return _render_index_report(bp, report)
+
+
+def _render_store_report(status: "store.StoreStatus", linear_pending: int) -> str:
+    """Format a `store.StoreStatus` as the `backlog_store_status` body.
+
+    Every field spec §3.8 names gets a line even when it is empty, so a reader
+    comparing two reports never has to work out whether a missing line means
+    "none" or "this build does not report it".
+    """
+    def listing(label: str, names) -> str:
+        names = list(names)
+        shown = f"  {', '.join(names[:10])}" if names else ""
+        more = f" (+{len(names) - 10} more)" if len(names) > 10 else ""
+        return f"{label}: {len(names)}{shown}{more}"
+
+    lines = [
+        f"Store: {status.db_path}",
+        f"Root: {status.root}  (resolved via {status.resolution_source or 'unknown'}, "
+        f"schema v{status.schema_version}, token {status.creation_token or 'none'})",
+        f"Size: db={status.db_size} B  wal={status.wal_size} B  max seq={status.max_seq}",
+        listing("Dirty", status.dirty_files),
+        listing("Quarantined", status.quarantined_files),
+        listing("Corrupt", status.corrupt_files),
+        f"Merge conflicts (24 h): {status.merge_conflicts_24h}",
+        f"Linear queue: {linear_pending} pending",
+        f"Warning: {status.warning or 'none'}",
+    ]
+
+    lines.append(f"Sessions: {len(status.live_sessions)} live")
+    for session in status.live_sessions:
+        lines.append(
+            f"  {session.get('session')}  pid={session.get('pid')}"
+            f"@{session.get('host')}  last_seen={session.get('last_seen')}"
+            f"  tool={session.get('current_tool') or '-'}"
+        )
+
+    lines.append(f"Changes (last {len(status.recent_changes)}):")
+    for change in status.recent_changes:
+        lines.append(
+            f"  [{change.get('seq')}] {change.get('ts')}  {change.get('tool') or '-'}"
+            f"  {change.get('op')} {change.get('kind')}/{change.get('id')}"
+        )
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def backlog_store_status() -> str:
+    """Report the state of the SQLite store (`.taskmaster/local/store.db`).
+
+    The store is the authority: root and how it was resolved, schema version,
+    database and WAL size, the last 20 changes, dirty and quarantined
+    projection files, live sessions, any filesystem warning, merge conflicts in
+    the last 24 hours, recovered `corrupt-*` databases, and the pending Linear
+    push count. Read-only — it never writes or rebuilds anything.
+    """
+    bp = _backlog_path()
+    if not bp.exists():
+        return f"no backlog found at {bp}"
+    opened = _store_for(bp)
+    return _render_store_report(opened.status(), len(opened.linear_pending()))
 
 
 def _render_query_table(description, rows: list, limit: int) -> str:
@@ -10241,31 +10306,44 @@ def backlog_linear_show(tracker_id: str) -> str:
 def backlog_linear_status() -> str:
     """Return a summary of the Linear sync queue state.
 
-    Includes: queue depth, oldest pending item's enqueued_at, count of permanent
-    failures, and the last error message if any. No network calls.
+    Includes: queue depth, oldest pending item's enqueued_at, count of parked
+    (permanently failed) items, and the last error message if any. No network calls.
     """
     import json
-    from taskmaster.integrations.linear.worker import read_queue
 
     bp = _backlog_path()
-    items = read_queue(bp) if bp.exists() else []
+    if not bp.exists():
+        return json.dumps({
+            "queue_depth": 0,
+            "pending": 0,
+            "permanent_failures": 0,
+            "oldest_enqueued_at": None,
+            "last_error": None,
+        }, indent=2)
 
-    permanent_count = sum(1 for i in items if i.get("permanent"))
-    pending = [i for i in items if not i.get("permanent")]
-    oldest_at = None
-    if pending:
-        oldest_at = min((i.get("enqueued_at") or "") for i in pending) or None
+    # `done` rows are settled history; the depth a caller acts on is what is
+    # still pending plus what is parked awaiting an explicit retry.
+    rows = _store_for(bp).linear_rows(states=("pending", "failed"))
+    pending = [row for row in rows if row["state"] == "pending"]
+    parked = [row for row in rows if row["state"] == "failed"]
+
+    stamps = [
+        (row["payload"] or {}).get("enqueued_at")
+        for row in pending
+        if (row["payload"] or {}).get("enqueued_at")
+    ]
+    oldest_at = min(stamps) if stamps else None
 
     last_error = None
-    for item in reversed(items):
-        if item.get("last_error"):
-            last_error = item["last_error"]
+    for row in reversed(rows):
+        if row["last_error"]:
+            last_error = row["last_error"]
             break
 
     return json.dumps({
-        "queue_depth": len(items),
+        "queue_depth": len(rows),
         "pending": len(pending),
-        "permanent_failures": permanent_count,
+        "permanent_failures": len(parked),
         "oldest_enqueued_at": oldest_at,
         "last_error": last_error,
     }, indent=2)
@@ -10308,28 +10386,24 @@ def backlog_linear_retry(target_id: str = "") -> str:
 
     data = _load()
 
-    # An explicit retry is the un-park action: clear permanent/attempts on the
-    # items being retried so a previously-parked push gets one fresh attempt
-    # (routine drains still skip parked items). The full queue is rewritten with
-    # cleared flags, then drained with a target filter — so a target-scoped retry
-    # never removes other targets' items from disk and a crash mid-drain cannot
-    # lose them (B-029).
-    all_items = _worker.read_queue(bp)
-    targets_present = False
-    for it in all_items:
-        if target_id and it.get("target_id") != target_id:
-            continue
-        targets_present = True
-        it.pop("permanent", None)
-        it["attempts"] = 0
-        it["last_error"] = None
+    # An explicit retry is the un-park action: every row for the targets being
+    # retried goes back to `pending` with a cleared attempt count, so a dead push
+    # gets a fresh budget (routine drains never see parked rows at all). Rows for
+    # other targets are not touched, so a target-scoped retry cannot lose them
+    # and a crash mid-drain leaves them exactly as they were (B-029).
+    st = _store_for(bp)
+    candidates = [
+        row
+        for row in st.linear_rows(states=("pending", "failed"))
+        if not target_id or row["target_id"] == target_id
+    ]
 
-    if target_id and not targets_present:
+    if target_id and not candidates:
         return json.dumps({"error": f"no queued items for target_id {target_id!r}"})
 
-    _worker._write_queue(bp, all_items)
+    st.linear_requeue(row["seq"] for row in candidates)
     counts = _worker.drain(
-        bp, client, cfg, backlog_data=data,
+        st, client, cfg, backlog_data=data,
         only_targets={target_id} if target_id else None,
     )
 

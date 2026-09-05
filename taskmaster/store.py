@@ -28,7 +28,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterator, Mapping
+from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 import yaml
 
@@ -1739,23 +1739,87 @@ class Store:
         """Drop the read-scan throttle so the next read re-imports hand edits."""
         self._last_read_scan_clock = None
 
+    _LINEAR_COLUMNS = (
+        "SELECT seq,op,target_id,tracker_id,payload,state,attempts,last_error "
+        "FROM linear_queue"
+    )
+
+    @staticmethod
+    def _linear_row(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "seq": int(row["seq"]),
+            "op": row["op"],
+            "target_id": row["target_id"],
+            "tracker_id": row["tracker_id"],
+            "payload": _from_json(row["payload"], None),
+            "state": row["state"],
+            "attempts": int(row["attempts"] or 0),
+            "last_error": row["last_error"],
+        }
+
+    def linear_rows(
+        self, *, states: Sequence[str] | None = None
+    ) -> list[dict[str, Any]]:
+        """Every Linear queue row, oldest first, optionally filtered by state.
+
+        `linear_pending` is the drain's read; this is the reporting read, so
+        parked (`failed`) and settled (`done`) rows stay visible to
+        `backlog_linear_status` and to the un-park that `/linear retry` runs.
+        """
+        self._ensure_open()
+        sql = self._LINEAR_COLUMNS
+        params: tuple[Any, ...] = ()
+        if states is not None:
+            placeholders = ",".join("?" for _ in states)
+            sql += f" WHERE state IN ({placeholders})"
+            params = tuple(states)
+        return [
+            self._linear_row(row)
+            for row in self.connection.execute(sql + " ORDER BY seq", params)
+        ]
+
+    def linear_requeue(self, seqs: Iterable[int]) -> int:
+        """Return the given queue rows to `pending` with a cleared attempt count.
+
+        The un-park action behind `/linear retry`: parking is what stops a dead
+        push from burning round-trips, so the only way back is explicit.  Its own
+        short transaction, like `linear_mark`, so no HTTP is ever held under the
+        writer lock.  Returns how many rows changed.
+        """
+        self._ensure_open()
+        wanted = [int(seq) for seq in seqs]
+        if not wanted:
+            return 0
+        if self.connection.in_transaction:
+            raise RuntimeError("linear_requeue needs its own transaction")
+        with self._writer_mutex():
+            connection = self.connection
+            if connection.in_transaction:
+                raise RuntimeError("linear_requeue needs its own transaction")
+            self._recover_export_intents(connection)
+            self._begin_immediate(connection)
+            try:
+                placeholders = ",".join("?" for _ in wanted)
+                cursor = connection.execute(
+                    "UPDATE linear_queue SET state='pending',attempts=0,last_error=NULL"
+                    f" WHERE seq IN ({placeholders})",
+                    tuple(wanted),
+                )
+                connection.commit()
+            except BaseException:
+                if connection.in_transaction:
+                    connection.rollback()
+                raise
+        return int(cursor.rowcount)
+
     def linear_pending(self, limit: int = 100) -> list[dict[str, Any]]:
         """The oldest pending Linear pushes, `limit` at most, oldest first."""
         self._ensure_open()
         return [
-            {
-                "seq": int(row["seq"]),
-                "op": row["op"],
-                "target_id": row["target_id"],
-                "tracker_id": row["tracker_id"],
-                "payload": _from_json(row["payload"], None),
-                "state": row["state"],
-                "attempts": int(row["attempts"] or 0),
-                "last_error": row["last_error"],
-            }
+            self._linear_row(row)
             for row in self.connection.execute(
-                "SELECT seq,op,target_id,tracker_id,payload,state,attempts,last_error "
-                "FROM linear_queue WHERE state='pending' ORDER BY seq LIMIT ?",
+                self._LINEAR_COLUMNS
+                + " WHERE state='pending' ORDER BY seq LIMIT ?",
                 (limit,),
             )
         ]
@@ -1765,7 +1829,10 @@ class Store:
 
         Its own short `BEGIN IMMEDIATE` so a drain that spends seconds in HTTP
         never holds the writer lock across a round-trip.  The store keeps no
-        retry policy: `attempts` counts marks, the caller chooses the state.
+        retry policy: the caller chooses the state, and `attempts` counts only
+        *failed* attempts -- a mark carrying an `error`.  A success mark leaves
+        the counter alone, so a row that succeeded on its first try never looks
+        like it burned a retry.
         """
         self._ensure_open()
         if self.connection.in_transaction:
@@ -1777,12 +1844,17 @@ class Store:
             connection = self.connection
             if connection.in_transaction:
                 raise RuntimeError("linear_mark needs its own transaction")
+            # Same recovery the writing `transaction` path runs before it takes
+            # the lock: this is a full BEGIN IMMEDIATE, so an export interrupted
+            # by a crash must be reconciled here too rather than waiting for the
+            # next entity write.
+            self._recover_export_intents(connection)
             self._begin_immediate(connection)
             try:
                 cursor = connection.execute(
-                    "UPDATE linear_queue SET state=?,last_error=?,attempts=attempts+1 "
-                    "WHERE seq=?",
-                    (state, error, seq),
+                    "UPDATE linear_queue SET state=?,last_error=?,"
+                    "attempts=attempts+? WHERE seq=?",
+                    (state, error, 1 if error is not None else 0, seq),
                 )
                 if cursor.rowcount == 0:
                     raise KeyError(f"linear queue row {seq} not found")
@@ -1806,6 +1878,22 @@ class Store:
             prior = path.read_bytes()
             raw = json.loads(prior.decode("utf-8"))
         except (OSError, UnicodeError, ValueError) as exc:
+            # Leaving an unreadable file in place made every later transaction
+            # re-parse it and re-warn forever.  Move it aside once, under a name
+            # the import never looks at, so the failure is preserved for a human
+            # but costs nothing on the next scan.
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+            quarantine = path.with_name(f"{path.name}.corrupt-{stamp}")
+            try:
+                path.rename(quarantine)
+            except OSError as move_error:  # pragma: no cover - filesystem refusal
+                tx.log_entries.append(
+                    f"linear queue quarantine failed: {move_error!r}"
+                )
+            else:
+                tx.log_entries.append(
+                    f"quarantined unreadable {_LINEAR_QUEUE_REL} as {quarantine.name}"
+                )
             tx.warnings.append(f"linear queue import failed: {exc}")
             tx.log_entries.append(f"linear queue import failed: {exc!r}")
             return
@@ -1825,8 +1913,13 @@ class Store:
             attempts = int(item.get("attempts") or 0)
             last_error = item.get("last_error")
             if attempts or last_error:
+                # Two legacy entries can share (op, target_id); `linear_enqueue`
+                # folds them onto one row, so keep the worst history rather than
+                # letting the last one seen reset the attempt count to zero and
+                # un-park a push that had already exhausted its retries.
                 tx.connection.execute(
-                    "UPDATE linear_queue SET attempts=?,last_error=? WHERE seq=?",
+                    "UPDATE linear_queue SET attempts=MAX(attempts,?),"
+                    "last_error=COALESCE(?,last_error) WHERE seq=?",
                     (attempts, last_error, seq),
                 )
         # Not a projection file, so it carries no export intent; the in-process
@@ -3434,13 +3527,30 @@ class Transaction:
 
         De-duplicates on `(op, target_id)` among pending rows: the drain re-reads
         task state, so stacking requests for one target is wasted round-trips.
+        A de-duped call still folds in what it knows -- a `tracker_id` the first
+        call lacked, and payload keys the row is missing -- but never overwrites
+        a key the row already carries, so the row keeps the moment the target
+        first went dirty rather than sliding forward on every re-enqueue.
         """
         existing = self.connection.execute(
-            "SELECT seq FROM linear_queue WHERE op=? AND target_id=? AND state='pending'",
+            "SELECT seq,tracker_id,payload FROM linear_queue "
+            "WHERE op=? AND target_id=? AND state='pending'",
             (op, target_id),
         ).fetchone()
         if existing:
-            return int(existing[0])
+            seq = int(existing["seq"])
+            merged = _from_json(existing["payload"], None)
+            if payload:
+                merged = {**dict(payload), **(merged or {})}
+            self.connection.execute(
+                "UPDATE linear_queue SET tracker_id=?,payload=? WHERE seq=?",
+                (
+                    existing["tracker_id"] if tracker_id is None else tracker_id,
+                    None if merged is None else _json(merged),
+                    seq,
+                ),
+            )
+            return seq
         cursor = self.connection.execute(
             "INSERT INTO linear_queue(op,target_id,tracker_id,payload,state,attempts,last_error) "
             "VALUES(?,?,?,?,'pending',0,NULL)",
