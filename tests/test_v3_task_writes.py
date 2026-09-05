@@ -15,7 +15,8 @@ def v2_backlog(tmp_path, monkeypatch):
     monkeypatch.setattr(bs, "ROOT", tmp_path)
     monkeypatch.setattr(bs, "CONFIG_PATH", tmp_path / ".taskmaster" / "missing.json")
     monkeypatch.setattr(bs, "LEGACY_CONFIG_PATH", tmp_path / ".claude" / "missing.json")
-    bp = tmp_path / "backlog.yaml"
+    bp = tmp_path / ".taskmaster" / "backlog.yaml"
+    bp.parent.mkdir(parents=True, exist_ok=True)
     bp.write_text(yaml.safe_dump({
         "meta": {"project": "test"},
         "epics": [

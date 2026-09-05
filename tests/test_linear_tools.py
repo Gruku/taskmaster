@@ -25,7 +25,8 @@ from taskmaster.taskmaster_v3 import write_tracker  # noqa: E402
 
 
 def _make_backlog(tmp_path: Path, *, with_tracker: bool = False) -> Path:
-    bp = tmp_path / "backlog.yaml"
+    bp = tmp_path / ".taskmaster" / "backlog.yaml"
+    bp.parent.mkdir(parents=True, exist_ok=True)
     task: dict = {
         "id": "ts-001",
         "title": "My task",
@@ -47,7 +48,7 @@ def _make_backlog(tmp_path: Path, *, with_tracker: bool = False) -> Path:
 
 
 def _make_linear_yaml(tmp_path: Path) -> None:
-    (tmp_path / "linear.yaml").write_text(yaml.safe_dump({
+    (tmp_path / ".taskmaster" / "linear.yaml").write_text(yaml.safe_dump({
         "workspaces": [{
             "alias": "cm",
             "team_id": "team-uuid-42",
@@ -129,7 +130,7 @@ def test_bootstrap_apply_creates_new_file(tmp_path, monkeypatch):
         token_env="TASKMASTER_LINEAR_TOKEN_CM",
     ))
     assert result["ok"] is True
-    cfg_path = tmp_path / "linear.yaml"
+    cfg_path = tmp_path / ".taskmaster" / "linear.yaml"
     assert cfg_path.exists()
     cfg = yaml.safe_load(cfg_path.read_text())
     assert cfg["default_workspace"] == "cm"
@@ -148,7 +149,7 @@ def test_bootstrap_apply_appends_workspace(tmp_path, monkeypatch):
         default_workspace=False,
     ))
     assert result["ok"] is True
-    cfg = yaml.safe_load((tmp_path / "linear.yaml").read_text())
+    cfg = yaml.safe_load((tmp_path / ".taskmaster" / "linear.yaml").read_text())
     aliases = {ws["alias"] for ws in cfg["workspaces"]}
     assert "cm" in aliases
     assert "prod" in aliases
@@ -179,7 +180,7 @@ def test_bootstrap_apply_parses_status_mapping(tmp_path, monkeypatch):
         status_mapping="todo:state-1,in-progress:state-2",
     ))
     assert result["ok"] is True
-    cfg = yaml.safe_load((tmp_path / "linear.yaml").read_text())
+    cfg = yaml.safe_load((tmp_path / ".taskmaster" / "linear.yaml").read_text())
     ws = cfg["workspaces"][0]
     assert ws["status_mapping"]["todo"] == "state-1"
     assert ws["status_mapping"]["in-progress"] == "state-2"
@@ -212,7 +213,7 @@ def test_link_creates_tracker_and_sets_tracker_id(tmp_path, monkeypatch):
     assert result["tracker_id"] == "linear-cm-eng-42"
 
     # Tracker file exists
-    tp = tmp_path / "trackers" / "linear-cm-eng-42.md"
+    tp = tmp_path / ".taskmaster" / "trackers" / "linear-cm-eng-42.md"
     assert tp.exists()
 
     # Task has tracker_id set (the projection keeps tasks in tasks/<id>.md)
@@ -262,7 +263,7 @@ def test_unlink_clears_tracker_id(tmp_path, monkeypatch):
     assert "tracker_id" not in task or not task.get("tracker_id")
 
     # Tracker file is still on disk
-    assert (tmp_path / "trackers" / "linear-cm-eng-1.md").exists()
+    assert (tmp_path / ".taskmaster" / "trackers" / "linear-cm-eng-1.md").exists()
 
 
 def test_unlink_idempotent_when_no_tracker(tmp_path, monkeypatch):
@@ -478,7 +479,7 @@ def test_retry_unparks_permanent_item(tmp_path, monkeypatch):
     permanent failure gets one fresh attempt."""
     bp = _make_backlog(tmp_path, with_tracker=True)
     # Config needs a status_mapping so the push can actually succeed once un-parked.
-    (tmp_path / "linear.yaml").write_text(yaml.safe_dump({
+    (tmp_path / ".taskmaster" / "linear.yaml").write_text(yaml.safe_dump({
         "workspaces": [{
             "alias": "cm", "team_id": "team-uuid-42",
             "token_env": "TASKMASTER_LINEAR_TOKEN_CM",

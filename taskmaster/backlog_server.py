@@ -39,7 +39,48 @@ from taskmaster.blast_radius import (
     analyze_evidence,
 )
 
-mcp = FastMCP("taskmaster")
+def _guard_legacy_layout(fn):
+    """Turn a refused legacy layout into a tool result, never a traceback.
+
+    `store.open_store` refuses any backlog directory that is not `.taskmaster`
+    (there is exactly one store location).  Every MCP tool goes through this
+    wrapper so the caller reads the actionable message instead of a stack trace
+    or, worse, an empty backlog.
+    """
+
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except store.LegacyLayoutError as exc:
+            return f"Error: {exc}"
+
+    return wrapper
+
+
+class _GuardedToolRegistrar:
+    """`FastMCP`, with the legacy-layout guard applied to every tool it registers.
+
+    Wrapping at registration is the only chokepoint that cannot be forgotten
+    when a new tool is added; everything else on the server is delegated.
+    """
+
+    def __init__(self, inner):
+        self._inner = inner
+
+    def tool(self, *args, **kwargs):
+        decorator = self._inner.tool(*args, **kwargs)
+
+        def register(fn):
+            return decorator(_guard_legacy_layout(fn))
+
+        return register
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
+mcp = _GuardedToolRegistrar(FastMCP("taskmaster"))
 
 # Repo/plugin root — this module lives in the taskmaster/ package, one level down.
 SCRIPT_DIR = Path(__file__).resolve().parent.parent
@@ -82,8 +123,6 @@ from taskmaster.taskmaster_v3 import (
     HEAVY_FIELDS as _HEAVY_FIELDS,
     detect_schema_version as _detect_schema_version,
     atomic_write as _atomic_write,
-    next_task_id,
-    next_task_order,
     migrate_v2_to_v3 as _migrate_v2_to_v3,
     migrate_v3_to_v4 as _migrate_v3_to_v4,
     write_handover as _write_handover,
@@ -2672,6 +2711,14 @@ def backlog_canonicalize_layout(dry_run: bool = False) -> str:
         dry_run: When true, returns the move plan without modifying anything.
     """
     from taskmaster.taskmaster_v3 import canonicalize_layout
+    # Projection-only (network) storage has no store to migrate into and no
+    # writer lock to serialize this move; refuse rather than half-migrate.
+    unsafe = store.unsafe_storage_reason(ROOT)
+    if unsafe:
+        return (
+            f"Error: refusing to canonicalize the layout on this storage — "
+            f"{unsafe}. Move the project to local disk first."
+        )
     summary = canonicalize_layout(ROOT, dry_run=dry_run)
     status = summary["status"]
 
@@ -4840,29 +4887,17 @@ def backlog_add_task(
     if not epic_obj:
         return f"Error: epic `{epic}` not found. Valid epics: {_epic_names(data)}"
 
-    # Resolve task ID: caller-supplied or auto-generated
+    # Resolve task ID: caller-supplied or allocated from authoritative state.
+    # The old filesystem scan saw only this checkout, so a linked worktree whose
+    # files lagged the store handed back an id the store already held — and the
+    # compatibility write-back then replaced that task instead of creating one.
+    tx = _store_tx()
     if task_id:
-        if _find_task(data, task_id):
+        if _find_task(data, task_id) or tx.id_taken("task", task_id):
             return f"Error: task ID `{task_id}` already exists"
         new_id = task_id
     else:
-        # v4: allocate by directory scan (honors concurrent creates); v3: legacy
-        # in-memory scan (per-task files aren't the enumeration source there).
-        if _detect_schema_version(data) >= SCHEMA_V4:
-            new_id = next_task_id(_backlog_path(), epic)
-        else:
-            tasks = epic_obj.get("tasks", [])
-            max_suffix = 0
-            prefix = f"{epic}-"
-            for t in tasks:
-                tid = t["id"]
-                if tid.startswith(prefix):
-                    suffix_str = tid[len(prefix):]
-                    try:
-                        max_suffix = max(max_suffix, int(suffix_str))
-                    except ValueError:
-                        pass
-            new_id = f"{epic}-{max_suffix + 1:03d}"
+        new_id = tx.allocate_id("task", {"epic": epic})
 
     # tldr: use supplied value, or auto-generate from notes/title
     tldr_autogen = False
@@ -4938,7 +4973,15 @@ def backlog_add_task(
 
     if _detect_schema_version(data) >= SCHEMA_V4:
         new_task["epic"] = epic
-        new_task["order"] = next_task_order(_backlog_path(), epic)
+        # Ordering comes from the transaction's own view of the epic, not from a
+        # second filesystem scan that a peer's commit could already have outrun.
+        orders: list[float] = []
+        for sibling in epic_obj.get("tasks") or []:
+            try:
+                orders.append(float(sibling["order"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+        new_task["order"] = (max(orders) + 1.0) if orders else 1.0
 
     if "tasks" not in epic_obj:
         epic_obj["tasks"] = []
@@ -7679,11 +7722,9 @@ def _viewer_create_task(payload: dict) -> str:
         )
         if epic is None:
             raise KeyError(f"epic {epic_id} not found")
-        existing = {t.get("id") for t in epic.get("tasks") or []}
-        n = 1
-        while f"{epic_id}-{n:03d}" in existing:
-            n += 1
-        new_id = f"{epic_id}-{n:03d}"
+        # Same authority as backlog_add_task: the store's tombstone-aware
+        # allocator, never a scan of this checkout's task list alone.
+        new_id = _store_tx().allocate_id("task", {"epic": epic_id})
         task = {
             "id": new_id,
             "title": payload.get("title", ""),
@@ -7921,6 +7962,16 @@ def _load_related_for_task(task_id: str) -> dict | None:
 
 class ViewerHandler(BaseHTTPRequestHandler):
     """Serves the backlog viewer HTML and YAML data."""
+
+    def handle_one_request(self) -> None:
+        """Answer a refused legacy layout with a body, never a bare traceback."""
+        try:
+            super().handle_one_request()
+        except store.LegacyLayoutError as exc:
+            try:
+                self._send_json(409, {"ok": False, "error": str(exc)})
+            except Exception:
+                pass
 
     def do_GET(self) -> None:
         import re

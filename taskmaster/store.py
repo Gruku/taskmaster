@@ -173,6 +173,22 @@ CREATE INDEX IF NOT EXISTS ix_changes_entity ON changes(kind, id, seq);
 """
 
 
+class LegacyLayoutError(RuntimeError):
+    """The backlog is not at `<root>/.taskmaster`, so no store may be opened.
+
+    The store is only ever `<root>/.taskmaster/local/store.db` (design spec
+    §"Root resolution").  Silently redirecting a `.claude/` or root-layout
+    backlog to `<root>/.taskmaster` opened an empty database beside the real
+    backlog and reported "no tasks"; refusing is the only safe answer, and
+    `backlog_canonicalize_layout` is the one supported way forward.
+    """
+
+
+def unsafe_storage_reason(path: Path) -> str | None:
+    """Why `path` cannot host a SQLite store (network filesystem), or None."""
+    return _network_filesystem_reason(path)
+
+
 @dataclass(frozen=True)
 class RootResolution:
     root: Path
@@ -525,6 +541,12 @@ def open_store(
             backlog_dir = _backlog_dir(backlog_path)
             resolved = _EXPLICIT_RESOLUTIONS.get(backlog_dir)
             if resolved is None:
+                if backlog_dir.name != ".taskmaster":
+                    raise LegacyLayoutError(
+                        f"backlog lives at {backlog_dir}; the store is only ever at "
+                        f"<project root>/.taskmaster/local/store.db. Run "
+                        f"backlog_canonicalize_layout first to move it."
+                    )
                 checkout_root = _git_checkout_root(backlog_dir.parent)
                 common_root = (
                     _git_common_root(backlog_dir.parent)
@@ -3330,6 +3352,15 @@ class Transaction:
                 maximum = max(maximum, int(match.group(1)))
         return f"{prefix}{maximum + 1:03d}"
 
+    def id_taken(self, kind: str, ident: str) -> bool:
+        """True when `ident` is already live, tombstoned-reserved or on disk.
+
+        Public because callers that allocate an id themselves (a caller-supplied
+        `task_id`) must be able to refuse the collision with a readable message
+        instead of letting `create` raise out of the transaction.
+        """
+        return self._id_taken(kind, ident)
+
     def _id_taken(self, kind: str, ident: str) -> bool:
         if self.connection.execute(
             "SELECT 1 FROM entities WHERE kind=? AND id=?", (kind, ident)
@@ -3567,6 +3598,18 @@ def _flatten_backlog_dict(
     data: Mapping[str, Any],
 ) -> dict[tuple[str, str], tuple[dict[str, Any], str | None]]:
     result: dict[tuple[str, str], tuple[dict[str, Any], str | None]] = {}
+
+    def claim(key: tuple[str, str], value: tuple[dict[str, Any], str | None]) -> None:
+        # Two documents under one id used to collapse silently here, which turned
+        # an accidental duplicate create into an update that replaced the live
+        # entity's fields.  A duplicate is never a legal write-back.
+        if key in result:
+            raise ValueError(
+                f"{key[0]} {key[1]} appears twice in the backlog dict; a create "
+                f"cannot reuse an existing id"
+            )
+        result[key] = value
+
     backlog_doc = {
         key: copy.deepcopy(value)
         for key, value in data.items()
@@ -3575,24 +3618,24 @@ def _flatten_backlog_dict(
     }
     if isinstance(backlog_doc.get("meta"), dict):
         backlog_doc["meta"].pop("updated", None)
-    result[("backlog", _BACKLOG_ID)] = (_clean_doc(backlog_doc), None)
+    claim(("backlog", _BACKLOG_ID), (_clean_doc(backlog_doc), None))
     for epic in data.get("epics") or []:
         epic_doc = {key: copy.deepcopy(value) for key, value in epic.items() if key != "tasks"}
         epic_doc, body = _split_body(epic_doc)
         ident = str(epic_doc.get("id") or "")
         if ident:
-            result[("epic", ident)] = (epic_doc, body)
+            claim(("epic", ident), (epic_doc, body))
         for task in epic.get("tasks") or []:
             task_doc, task_body = _split_body(task)
             task_id = str(task_doc.get("id") or "")
             if task_id:
                 task_doc.setdefault("epic", ident)
-                result[("task", task_id)] = (task_doc, task_body)
+                claim(("task", task_id), (task_doc, task_body))
     for phase in data.get("phases") or []:
         phase_doc, body = _split_body(phase)
         ident = str(phase_doc.get("id") or "")
         if ident:
-            result[("phase", ident)] = (phase_doc, body)
+            claim(("phase", ident), (phase_doc, body))
     return result
 
 

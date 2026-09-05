@@ -29,7 +29,8 @@ def _setup_project(
 ) -> Path:
     """Lay down backlog.yaml + (optionally) linear.yaml + (optionally) a Tracker
     file for a task with a linear tracker_id. Returns the backlog path."""
-    bp = tmp_path / "backlog.yaml"
+    bp = tmp_path / ".taskmaster" / "backlog.yaml"
+    bp.parent.mkdir(parents=True, exist_ok=True)
     task = {
         "id": "ts-001",
         "title": "Test task",
@@ -49,7 +50,7 @@ def _setup_project(
     }))
 
     if with_linear_config:
-        (tmp_path / "linear.yaml").write_text(yaml.safe_dump({
+        (tmp_path / ".taskmaster" / "linear.yaml").write_text(yaml.safe_dump({
             "workspaces": [{
                 "alias": "cm",
                 "team_id": "team-uuid",
@@ -134,7 +135,7 @@ def test_update_task_no_enqueue_when_linear_yaml_missing(tmp_path, monkeypatch):
     backlog_server.backlog_update_task("ts-001", "priority", "high")
 
     assert read_queue(bp) == []
-    assert not (tmp_path / "integrations" / "linear-queue.json").exists()
+    assert not (tmp_path / ".taskmaster" / "integrations" / "linear-queue.json").exists()
 
 
 def test_update_task_no_enqueue_when_task_has_no_tracker(tmp_path, monkeypatch):

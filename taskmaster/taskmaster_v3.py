@@ -1279,14 +1279,25 @@ def migrate_v3_to_v4(backlog_path: Path) -> dict[str, Any]:
 # Items the canonicalizer moves. Anything outside this list is left alone —
 # .claude/ in particular holds Claude Code's own files (settings.json, hooks/,
 # etc.) which must never be touched.
+# Every artifact the store treats as backlog content.  A directory left out of
+# this list is stranded at the legacy location while the canonical layout
+# bootstraps without it, so this must stay in step with
+# `store.Store._known_entity_files`.
 _CANONICALIZE_ITEMS: tuple[str, ...] = (
     "backlog.yaml",
     "PROGRESS.md",
     "viewer.json",
     "tasks",
+    "epics",
+    "phases",
+    "bugs",
     "handovers",
     "issues",
+    "decisions",
+    "ideas",
+    "notes",
     "trackers",
+    "integrations",
     "auto",
     "areas",
 )
