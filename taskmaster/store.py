@@ -1620,6 +1620,10 @@ class Store:
         if self._network_projection_only:
             data = self._bootstrap_backlog_data()
             data.setdefault("context", {})
+            # Every non-task read tool serves `_rows` now. Without one here the
+            # bugs, issues, handovers, decisions, ideas, notes, areas and
+            # trackers sitting on this network share would read as absent.
+            data["_rows"] = self._entity_rows_from_projection()
             if _CONTEXT_BUILDER is not None:
                 _CONTEXT_BUILDER(data)
             return data, "", 0
@@ -1696,6 +1700,34 @@ class Store:
         ):
             rows[row["kind"]][row["id"]] = (_from_json(row["doc"], {}), row["body"])
         return rows
+
+    def _entity_rows_from_projection(
+        self,
+    ) -> dict[str, dict[str, tuple[dict[str, Any], str | None]]]:
+        """`{kind: {id: (doc, body)}}` built from the projection files alone.
+
+        The read-only shape of `_entity_rows_from_connection`, for a network
+        root with no usable database. Archived entities are included and carry
+        `archived: True`, exactly as the database rows do, so the callers that
+        filter on it behave the same either way. A file that will not parse is
+        skipped rather than failing the whole read: the alternative is a listing
+        that raises instead of showing the entities that are fine.
+        """
+        rows: dict[str, dict[str, tuple[dict[str, Any], str | None]]] = {
+            kind: {} for kind in _DICT_ROW_KINDS
+        }
+        for kind, ident, path in self._known_entity_files():
+            if kind not in rows:
+                continue
+            try:
+                doc, body = self._parse_entity_file(kind, path)
+                self._validate_projected_identity(kind, ident, doc)
+            except (OSError, ValueError, yaml.YAMLError):
+                continue
+            if _is_archive_path(path, self.backlog_path):
+                doc["archived"] = True
+            rows[kind][ident] = (doc, body)
+        return {kind: dict(sorted(entries.items())) for kind, entries in rows.items()}
 
     def write_local_cache(self, name: str, data: bytes) -> None:
         """Write one derived file under `local/cache/`, atomically.
