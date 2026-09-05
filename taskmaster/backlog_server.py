@@ -6405,8 +6405,40 @@ def backlog_update_epic(epic_id: str, field: str, value: str) -> str:
 
     old_value = epic.get(field, "")
     epic[field] = value
+    if field == "status":
+        # Moving an archived epic back to active must clear the row's archive
+        # flag; a document-only status change left the row archived for good.
+        _apply_archive_transition(
+            "epic", epic_id, epic, before=str(old_value), after=value
+        )
     _mutate_and_save(data)
     return f"Updated epic `{epic_id}` field `{field}`: `{old_value}` → `{value}`"
+
+
+def _archive_epic_cascade(epic: dict, epic_id: str, reason: str) -> int:
+    """Archive an epic and every live task under it; returns the cascade count.
+
+    One policy, shared by `backlog_archive_epic` and the batch `update_epic`
+    op: a batch archive that skipped the cascade left live tasks pointing at an
+    archived epic, and a status flip with no `tx.archive` left the row's archive
+    flag at 0 so the projection never moved.
+    """
+    now = _now()
+    epic["status"] = "archived"
+    epic["archive_reason"] = reason
+    epic["archived"] = now
+    _archive_entity("epic", epic_id, epic)
+
+    cascaded = 0
+    for task in epic.get("tasks", []) or []:
+        if task.get("status") != "archived":
+            task["status"] = "archived"
+            task["archive_reason"] = reason
+            task["archived"] = now
+            task.pop("locked_by", None)
+            _archive_entity("task", task["id"], task)
+            cascaded += 1
+    return cascaded
 
 
 @mcp.tool()
@@ -6430,22 +6462,7 @@ def backlog_archive_epic(epic_id: str, reason: str = "done") -> str:
     if epic.get("status") == "archived":
         return f"Error: epic `{epic_id}` is already archived"
 
-    now = _now()
-    epic["status"] = "archived"
-    epic["archive_reason"] = reason
-    epic["archived"] = now
-
-    _archive_entity("epic", epic_id, epic)
-
-    cascaded = 0
-    for task in epic.get("tasks", []):
-        if task.get("status") != "archived":
-            task["status"] = "archived"
-            task["archive_reason"] = reason
-            task["archived"] = now
-            task.pop("locked_by", None)
-            _archive_entity("task", task["id"], task)
-            cascaded += 1
+    cascaded = _archive_epic_cascade(epic, epic_id, reason)
 
     _mutate_and_save(data)
     return f"Archived epic `{epic_id}` — {epic.get('name', epic_id)} ({cascaded} tasks cascaded, reason: {reason})"
@@ -6615,7 +6632,15 @@ def backlog_update_phase(phase_id: str, field: str, value: str) -> str:
                 ph["start_date"] = _today()
         if value == "done":
             ph["completed"] = _now()
+        before_status = str(ph.get("status") or "")
         ph["status"] = value
+        if value == "archived":
+            ph["archived"] = _now()
+        # Phases keep no archive directory, but the row flag still has to agree
+        # with the document, and the change log has to record the transition.
+        _apply_archive_transition(
+            "phase", phase_id, ph, before=before_status, after=value
+        )
     elif field == "order":
         try:
             ph["order"] = int(value)
@@ -7297,7 +7322,25 @@ def backlog_batch_update(operations: str) -> str:
             if field == "status" and value not in VALID_EPIC_STATUSES:
                 errors.append(f"epic `{epic_id}`: invalid status `{value}`")
                 continue
+            if field == "status" and value == "archived":
+                # Same policy as backlog_archive_epic: the cascade is the point
+                # of archiving an epic, and the batch must not skip it.
+                if epic.get("status") == "archived":
+                    errors.append(f"epic `{epic_id}`: already archived")
+                    continue
+                cascaded = _archive_epic_cascade(epic, epic_id, "done")
+                results.append(
+                    f"epic `{epic_id}`.status → archived "
+                    f"({cascaded} tasks cascaded)"
+                )
+                changed = True
+                continue
+            before_value = str(epic.get(field, "") or "")
             epic[field] = value
+            if field == "status":
+                _apply_archive_transition(
+                    "epic", epic_id, epic, before=before_value, after=value
+                )
             results.append(f"epic `{epic_id}`.{field} → {value}")
             changed = True
 
