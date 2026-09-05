@@ -64,7 +64,7 @@ def test_store_adoption_promotes_a_missing_marker(server_at, tmp_path):
         "meta: {project: test}\n"
         "epics: [{id: e1, name: Epic, tasks: []}]\n",
     )
-    server_at._sync_projection()
+    server_at._store().load_dict()
     raw = yaml.safe_load(bp.read_text(encoding="utf-8"))
     assert int(raw["meta"]["schema_version"]) >= 3
 
@@ -75,7 +75,7 @@ def test_store_adoption_leaves_an_existing_marker_alone(server_at, tmp_path):
         "meta: {project: test, schema_version: 4}\n"
         "epics: [{id: e1, name: Epic, tasks: []}]\n",
     )
-    server_at._sync_projection()
+    server_at._store().load_dict()
     raw = yaml.safe_load(bp.read_text(encoding="utf-8"))
     assert int(raw["meta"]["schema_version"]) == 4
 

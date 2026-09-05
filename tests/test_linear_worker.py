@@ -25,14 +25,14 @@ from taskmaster.integrations.linear.worker import (  # noqa: E402
     queue_path,
     read_queue,
 )
-from taskmaster.taskmaster_v3 import write_tracker  # noqa: E402
+from tests.entity_helpers import taskmaster_backlog, write_tracker  # noqa: E402
 
 
 # ── Fixtures ───────────────────────────────────────────────────
 
 
 def _make_backlog(tmp_path: Path, *, task_id: str = "linear-001", tracker_id: str | None = None) -> Path:
-    bp = tmp_path / "backlog.yaml"
+    bp = taskmaster_backlog(tmp_path)
     task = {
         "id": task_id,
         "title": "Some task",
@@ -47,6 +47,12 @@ def _make_backlog(tmp_path: Path, *, task_id: str = "linear-001", tracker_id: st
         "meta": {"updated": "2026-01-01"},
         "epics": [{"id": "test-epic", "name": "Test", "tasks": [task]}],
     }))
+    # Adopt the projection before the test enqueues anything: the store imports
+    # and removes a legacy `integrations/linear-queue.json` on every scan, so a
+    # first open after an enqueue would swallow the item under test.
+    from taskmaster import store as _store
+
+    _store.open_store(bp).load_dict()
     return bp
 
 
@@ -77,20 +83,23 @@ def _make_client(handler) -> LinearClient:
 
 
 def _backlog_data(bp: Path) -> dict:
-    with bp.open() as f:
-        return yaml.safe_load(f)
+    # Read through the store: the first tracker write adopts the projection and
+    # moves tasks out of backlog.yaml, so a raw parse would see empty epics.
+    from taskmaster import store as _store
+
+    return _store.open_store(bp).load_dict()
 
 
 # ── Queue file basics ──────────────────────────────────────────
 
 
 def test_queue_path_lives_under_integrations(tmp_path):
-    bp = tmp_path / "backlog.yaml"
+    bp = taskmaster_backlog(tmp_path)
     assert queue_path(bp) == bp.parent / "integrations" / "linear-queue.json"
 
 
 def test_read_queue_returns_empty_when_missing(tmp_path):
-    bp = tmp_path / "backlog.yaml"
+    bp = taskmaster_backlog(tmp_path)
     assert read_queue(bp) == []
 
 

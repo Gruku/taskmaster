@@ -7,14 +7,8 @@ from __future__ import annotations
 
 import pytest
 
-from taskmaster.taskmaster_v3 import (
-    area_path,
-    list_area_ids,
-    list_areas,
-    read_area,
-    update_area,
-    write_area,
-)
+from taskmaster.taskmaster_v3 import (area_path, list_area_ids, list_areas, read_area)
+from tests.entity_helpers import (update_area, write_area)
 
 
 @pytest.fixture()

@@ -75,6 +75,18 @@ _CORRUPTION_MARKERS = ("malformed", "not a database", "file is encrypted")
 _IDEAS_INDEX_KIND = "ideas-index"
 _IDEAS_INDEX_REL = "ideas/IDEAS.md"
 _LINEAR_QUEUE_REL = "integrations/linear-queue.json"
+# Kinds whose rows the compatibility dict carries verbatim under `_rows`, so a
+# list/get tool reads committed store state instead of re-parsing markdown.
+_DICT_ROW_KINDS = (
+    "bug",
+    "issue",
+    "handover",
+    "decision",
+    "idea",
+    "note",
+    "area",
+    "tracker",
+)
 
 
 SCHEMA_SQL = """
@@ -1578,13 +1590,68 @@ class Store:
         cached = _CACHE.get(self.db_path)
         if cached and cached[0] == token:
             if cached[1] == max_seq:
-                return copy.deepcopy(cached[2])
-            data = self._refresh_cached_dict(connection, cached[2], cached[1])
+                # Already current: reuse it, but still fall through so the row
+                # map below is attached. Returning early here handed read tools
+                # a dict with no `_rows` at all.
+                data = cached[2]
+                publish = False
+            else:
+                data = self._refresh_cached_dict(connection, cached[2], cached[1])
         else:
             data = self._load_dict_from_connection(connection)
         if publish:
             _CACHE[self.db_path] = (token, max_seq, copy.deepcopy(data))
-        return copy.deepcopy(data)
+        result = copy.deepcopy(data)
+        # Attached outside the cache entry so the incremental refresh above never
+        # has to keep it in step: it is one query against the same snapshot.
+        result["_rows"] = self._entity_rows_from_connection(connection)
+        return result
+
+    def _entity_rows_from_connection(
+        self, connection: sqlite3.Connection
+    ) -> dict[str, dict[str, tuple[dict[str, Any], str | None]]]:
+        """`{kind: {id: (doc, body)}}` for every non-task entity kind.
+
+        Read tools for bugs, issues, handovers, decisions, ideas, notes, areas
+        and trackers render from this instead of globbing their directory, so a
+        read and the write that follows it see one snapshot. Archived rows are
+        included; their document carries `archived: True` and callers filter.
+        """
+        rows: dict[str, dict[str, tuple[dict[str, Any], str | None]]] = {
+            kind: {} for kind in _DICT_ROW_KINDS
+        }
+        placeholders = ",".join("?" for _ in _DICT_ROW_KINDS)
+        for row in connection.execute(
+            f"SELECT kind,id,doc,body FROM entities WHERE deleted=0 AND kind IN ({placeholders}) "
+            "ORDER BY id",
+            _DICT_ROW_KINDS,
+        ):
+            rows[row["kind"]][row["id"]] = (_from_json(row["doc"], {}), row["body"])
+        return rows
+
+    def write_local_cache(self, name: str, data: bytes) -> None:
+        """Write one derived file under `local/cache/`, atomically.
+
+        Nothing reads these back as authority — they exist so an external tool
+        can cheaply see when the backlog last changed. It lives here because
+        `store.py` is the only module allowed to write inside `.taskmaster/`.
+        """
+        # The whole name, not just its stem: a separator anywhere in it would
+        # let a caller write outside `local/cache/`.
+        _validate_safe_identifier(name)
+        cache_dir = self.db_path.parent / "cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        target = cache_dir / name
+        temp = target.with_name(f"{target.name}.tmp.{self.session}")
+        try:
+            with temp.open("wb") as handle:
+                handle.write(data)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp, target)
+        except BaseException:
+            temp.unlink(missing_ok=True)
+            raise
 
     def _refresh_cached_dict(
         self,

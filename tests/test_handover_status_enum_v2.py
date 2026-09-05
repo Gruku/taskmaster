@@ -5,18 +5,16 @@ import yaml
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT))
 
-from taskmaster.taskmaster_v3 import HANDOVER_STATUSES, write_handover, read_handover
-from taskmaster.taskmaster_v3 import (
-    apply_supersession,
-    backfill_handover_status,
-    write_task_file,
-)
+from taskmaster.taskmaster_v3 import (HANDOVER_STATUSES, read_handover)
+from tests.entity_helpers import (taskmaster_backlog, write_handover)
+from taskmaster.taskmaster_v3 import (write_task_file)
+from tests.entity_helpers import (apply_supersession, backfill_handover_status)
 
 
 def _setup(tmp_path):
-    bp = tmp_path / "backlog.yaml"
+    bp = taskmaster_backlog(tmp_path)
     bp.write_text(yaml.safe_dump({"meta": {}, "epics": []}))
-    (tmp_path / "handovers").mkdir()
+    (bp.parent / "handovers").mkdir()
     return bp
 
 
@@ -49,7 +47,7 @@ def test_write_handover_auto_stage_defaults_to_closed(tmp_path):
 
 def test_update_handover_status_rejects_old_enum(tmp_path):
     import pytest
-    from taskmaster.taskmaster_v3 import update_handover_status
+    from tests.entity_helpers import (update_handover_status)
     bp = _setup(tmp_path)
     hid, _ = write_handover(bp, tldr="test", session_kind="end-of-day")
     with pytest.raises(ValueError, match="open"):
@@ -68,7 +66,8 @@ def test_apply_supersession_sets_superseded_status(tmp_path):
 
 def test_backfill_legacy_handovers_get_open_not_done(tmp_path):
     """Legacy handovers without status get 'open', not 'done'."""
-    bp, hd = tmp_path / "backlog.yaml", tmp_path / "handovers"
+    bp = taskmaster_backlog(tmp_path)
+    hd = bp.parent / "handovers"
     bp.write_text(yaml.safe_dump({"meta": {}, "epics": []}))
     hd.mkdir()
     legacy_fm = {

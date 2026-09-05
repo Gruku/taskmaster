@@ -1,6 +1,7 @@
 """Helpers and write paths for the Bug artifact."""
 from pathlib import Path
 import pytest
+import tests.entity_helpers as entity_helpers  # noqa: E402
 
 
 def test_bug_path_resolves_under_bugs_dir(tmp_path):
@@ -17,23 +18,27 @@ def test_bug_archive_path_resolves_under_archive_dir(tmp_path):
     assert out == bp.parent / "bugs" / "archive" / "B-001.md"
 
 
-def test_next_bug_id_first_is_B001(tmp_path):
-    from taskmaster.taskmaster_v3 import next_bug_id
+def test_bug_id_first_is_B001(tmp_path):
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     (bp.parent / "bugs").mkdir(parents=True)
-    assert next_bug_id(bp) == "B-001"
+    bid, _ = entity_helpers.write_bug(bp, title="first")
+    assert bid == "B-001"
 
 
-def test_next_bug_id_increments_max(tmp_path):
-    from taskmaster.taskmaster_v3 import next_bug_id
+def test_bug_id_increments_max(tmp_path):
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bugs = bp.parent / "bugs"
     bugs.mkdir(parents=True)
-    (bugs / "B-001.md").write_text("---\nid: B-001\n---\n")
-    (bugs / "B-007.md").write_text("---\nid: B-007\n---\n")
+    for ident in ("B-001", "B-007"):
+        (bugs / f"{ident}.md").write_text(
+            f"---\nid: {ident}\nstatus: open\ndiscovered_by: user\ntitle: seed\n---\n"
+        )
     (bugs / "archive").mkdir()
-    (bugs / "archive" / "B-005.md").write_text("---\nid: B-005\n---\n")  # archived counts
-    assert next_bug_id(bp) == "B-008"
+    (bugs / "archive" / "B-005.md").write_text(
+        "---\nid: B-005\nstatus: fixed\nfix_commit: abc\ndiscovered_by: user\ntitle: old\n---\n"
+    )  # archived counts
+    bid, _ = entity_helpers.write_bug(bp, title="next")
+    assert bid == "B-008"
 
 
 def test_list_bug_ids_excludes_archive_by_default(tmp_path):
@@ -48,7 +53,8 @@ def test_list_bug_ids_excludes_archive_by_default(tmp_path):
 
 
 def test_write_bug_creates_file_and_returns_id_path(tmp_path):
-    from taskmaster.taskmaster_v3 import write_bug, read_bug
+    from taskmaster.taskmaster_v3 import (read_bug)
+    from tests.entity_helpers import (write_bug)
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     bp.write_text("schema_version: 3\n")
@@ -70,11 +76,11 @@ def test_write_bug_creates_file_and_returns_id_path(tmp_path):
 
 
 def test_update_bug_status_to_fixed_requires_commit(tmp_path):
-    from taskmaster.taskmaster_v3 import write_bug, update_bug
+    from tests.entity_helpers import (write_bug, update_bug)
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     bp.write_text("schema_version: 3\n")
-    bid, _ = write_bug(bp, title="t", discovered_by="user")
+    bid, _ = entity_helpers.write_bug(bp, title="t", discovered_by="user")
     with pytest.raises(ValueError, match="status=fixed requires fix_commit"):
         update_bug(bp, bid, status="fixed")
     fm, _ = update_bug(bp, bid, status="fixed", fix_commit="abcd1234")
@@ -83,7 +89,7 @@ def test_update_bug_status_to_fixed_requires_commit(tmp_path):
 
 
 def test_sync_bug_index_lists_active_only(tmp_path):
-    from taskmaster.taskmaster_v3 import write_bug, update_bug, archive_bug, sync_bug_index
+    from tests.entity_helpers import (write_bug, update_bug, archive_bug, sync_bug_index)
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True)
     bp.write_text("schema_version: 3\n")

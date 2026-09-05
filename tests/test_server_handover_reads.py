@@ -13,10 +13,7 @@ sys.path.insert(0, str(PLUGIN_ROOT))
 
 from taskmaster import backlog_server  # noqa: E402
 
-from taskmaster.taskmaster_v3 import (
-    sync_handover_index as _sync_handover_index,
-    write_handover,
-)
+from tests.entity_helpers import (sync_handover_index as _sync_handover_index, write_handover)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────

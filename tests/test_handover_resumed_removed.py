@@ -19,11 +19,12 @@ def test_pick_task_does_not_corrupt_handover_status(tmp_path):
     """Regression: pick-task on a task with a related open handover must not
     write invalid status values into the handover's frontmatter."""
     import yaml
-    from taskmaster.taskmaster_v3 import read_handover, write_handover, HANDOVER_STATUSES
+    from taskmaster.taskmaster_v3 import (read_handover, HANDOVER_STATUSES)
+    from tests.entity_helpers import (taskmaster_backlog, write_handover)
 
-    bp = tmp_path / "backlog.yaml"
+    bp = taskmaster_backlog(tmp_path)
     bp.write_text(yaml.safe_dump({"meta": {}, "epics": []}))
-    (tmp_path / "handovers").mkdir()
+    (bp.parent / "handovers").mkdir()
 
     hid, _ = write_handover(
         bp,

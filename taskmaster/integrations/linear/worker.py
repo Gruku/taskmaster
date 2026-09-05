@@ -132,13 +132,17 @@ def push_task(
             "reason": f"linear.yaml has no workspace with alias {alias!r}",
         }
 
-    # Read existing tracker for linear_issue_id + prev push_hash
-    from taskmaster.taskmaster_v3 import read_tracker, update_tracker
+    # Read existing tracker for linear_issue_id + prev push_hash. The tracker is
+    # a store row like everything else, so both the read and the write below go
+    # through the server's entity IO rather than touching `trackers/<id>.md`.
+    from taskmaster import backlog_server as _bs
 
-    try:
-        tracker_fm, _ = read_tracker(backlog_path, tracker_id)
-    except (OSError, ValueError) as e:
-        return {"status": "error:permanent", "reason": f"cannot read tracker {tracker_id}: {e}"}
+    tracker_fm = _bs._store_read_entity(backlog_path, "tracker", tracker_id)
+    if tracker_fm is None:
+        return {
+            "status": "error:permanent",
+            "reason": f"cannot read tracker {tracker_id}: not found",
+        }
 
     # Prefer the stored Linear UUID over the human external_key for the
     # issueUpdate id (B-031). The UUID is stable across team-key renames /
@@ -173,16 +177,18 @@ def push_task(
     # stable id rather than the human key (B-031).
     returned_uuid = result.get("id")
     try:
-        update_tracker(
-            backlog_path,
-            tracker_id,
+        from taskmaster.taskmaster_v3 import BODY_KEY, apply_tracker_updates
+
+        updated = apply_tracker_updates(
+            {k: v for k, v in tracker_fm.items() if k != BODY_KEY},
             last_pushed=_now_iso(),
             push_hash=new_hash,
             linear_issue_id=returned_uuid or linear_issue_id,
             title=task.get("title", tracker_fm.get("title", "")),
             status=task.get("status", tracker_fm.get("status", "")),
         )
-    except (OSError, ValueError) as e:
+        _bs._store_write_entity(backlog_path, "tracker", updated)
+    except (OSError, ValueError, KeyError) as e:
         # Push succeeded but local cache update failed. Don't requeue
         # (would cause a duplicate push); surface as a stale-cache warning.
         return {

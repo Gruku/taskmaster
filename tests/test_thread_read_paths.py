@@ -12,7 +12,7 @@ import yaml
 
 from taskmaster import backlog_server as bs
 from taskmaster import store
-from taskmaster.taskmaster_v3 import write_handover
+from tests.entity_helpers import (write_handover)
 
 
 def _seed(root: Path) -> Path:

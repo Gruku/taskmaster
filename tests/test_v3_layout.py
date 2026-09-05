@@ -10,6 +10,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from taskmaster import taskmaster_v3 as v3  # noqa: E402
+import tests.entity_helpers as entity_helpers  # noqa: E402
 
 
 class TestSchemaVersionDetection:
@@ -394,7 +395,7 @@ class TestHandoverHelpers:
 class TestWriteHandover:
     def test_write_basic(self, tmp_path: Path):
         bp = tmp_path / ".taskmaster" / "backlog.yaml"
-        hid, target = v3.write_handover(
+        hid, target = entity_helpers.write_handover(
             bp,
             tldr="Login impl, OAuth pending",
             next_action="Resume IMPLEMENT once legal confirms.",
@@ -416,25 +417,25 @@ class TestWriteHandover:
     def test_empty_tldr_rejected(self, tmp_path: Path):
         bp = tmp_path / ".taskmaster" / "backlog.yaml"
         with pytest.raises(ValueError):
-            v3.write_handover(bp, tldr="")
+            entity_helpers.write_handover(bp, tldr="")
 
     def test_id_collision_gets_suffix(self, tmp_path: Path):
         bp = tmp_path / ".taskmaster" / "backlog.yaml"
-        hid1, _ = v3.write_handover(bp, tldr="Same", when="2026-04-26", body="first")
-        hid2, _ = v3.write_handover(bp, tldr="Same", when="2026-04-26", body="second")
+        hid1, _ = entity_helpers.write_handover(bp, tldr="Same", when="2026-04-26", body="first")
+        hid2, _ = entity_helpers.write_handover(bp, tldr="Same", when="2026-04-26", body="second")
         assert hid1 != hid2
         assert hid1 == "2026-04-26-same"
         assert hid2 == "2026-04-26-same-2"
 
     def test_context_size_optional_field(self, tmp_path: Path):
         bp = tmp_path / ".taskmaster" / "backlog.yaml"
-        hid, _ = v3.write_handover(bp, tldr="Big session", when="2026-04-26", context_size_at_write="320k")
+        hid, _ = entity_helpers.write_handover(bp, tldr="Big session", when="2026-04-26", context_size_at_write="320k")
         fm, _ = v3.read_handover(bp, hid)
         assert fm["context_size_at_write"] == "320k"
 
     def test_omit_context_size_when_unset(self, tmp_path: Path):
         bp = tmp_path / ".taskmaster" / "backlog.yaml"
-        hid, _ = v3.write_handover(bp, tldr="Small", when="2026-04-26")
+        hid, _ = entity_helpers.write_handover(bp, tldr="Small", when="2026-04-26")
         fm, _ = v3.read_handover(bp, hid)
         assert "context_size_at_write" not in fm
 
@@ -447,9 +448,9 @@ class TestListHandovers:
 
     def test_sorted_newest_first(self, tmp_path: Path):
         bp = tmp_path / ".taskmaster" / "backlog.yaml"
-        v3.write_handover(bp, tldr="A", when="2026-04-25")
-        v3.write_handover(bp, tldr="B", when="2026-04-26")
-        v3.write_handover(bp, tldr="C", when="2026-04-24")
+        entity_helpers.write_handover(bp, tldr="A", when="2026-04-25")
+        entity_helpers.write_handover(bp, tldr="B", when="2026-04-26")
+        entity_helpers.write_handover(bp, tldr="C", when="2026-04-24")
         ids = v3.list_handover_ids(bp)
         assert ids[0].startswith("2026-04-26")
         assert ids[-1].startswith("2026-04-24")
@@ -462,10 +463,10 @@ class TestHandoverIndex:
 
     def test_sync_populates_index(self, tmp_path: Path):
         bp = self._bp(tmp_path)
-        v3.write_handover(bp, tldr="First", when="2026-04-25", task_ids=["T-1"])
-        v3.write_handover(bp, tldr="Second", when="2026-04-26", task_ids=["T-2"])
+        entity_helpers.write_handover(bp, tldr="First", when="2026-04-25", task_ids=["T-1"])
+        entity_helpers.write_handover(bp, tldr="Second", when="2026-04-26", task_ids=["T-2"])
         data: dict = {}
-        v3.sync_handover_index(data, bp)
+        entity_helpers.sync_handover_index(data, bp)
         assert len(data["handovers"]) == 2
         assert data["handovers"][0]["id"].startswith("2026-04-26")
         assert data["handovers"][0]["task_ids"] == ["T-2"]
@@ -474,9 +475,9 @@ class TestHandoverIndex:
         bp = self._bp(tmp_path)
         # Write 5 handovers, cap at 3 → 2 archived.
         for i in range(5):
-            v3.write_handover(bp, tldr=f"h{i}", when=f"2026-04-{20 + i}")
+            entity_helpers.write_handover(bp, tldr=f"h{i}", when=f"2026-04-{20 + i}")
         data: dict = {}
-        v3.sync_handover_index(data, bp, cap=3)
+        entity_helpers.sync_handover_index(data, bp, cap=3)
         assert len(data["handovers"]) == 3
         archive = bp.parent / "handovers" / "_archive" / "2026"
         assert archive.exists()
@@ -491,7 +492,7 @@ class TestHandoverIndex:
 
     def test_index_entry_shape(self, tmp_path: Path):
         bp = self._bp(tmp_path)
-        v3.write_handover(
+        entity_helpers.write_handover(
             bp,
             tldr="Day end",
             next_action="Resume",
@@ -500,7 +501,7 @@ class TestHandoverIndex:
             when="2026-04-26",
         )
         data: dict = {}
-        v3.sync_handover_index(data, bp)
+        entity_helpers.sync_handover_index(data, bp)
         entry = data["handovers"][0]
         # id, date, tldr, next_action, task_ids, session_kind, status, created, flag_reason
         # status and created were added by the handover-status feature (Tasks 1-12)
@@ -514,11 +515,11 @@ class TestHandoverIndex:
 
     def test_archive_year_inferred(self, tmp_path: Path):
         bp = self._bp(tmp_path)
-        v3.write_handover(bp, tldr="x", when="2025-12-31")
-        v3.write_handover(bp, tldr="y", when="2026-01-01")
-        v3.write_handover(bp, tldr="z", when="2026-04-26")
+        entity_helpers.write_handover(bp, tldr="x", when="2025-12-31")
+        entity_helpers.write_handover(bp, tldr="y", when="2026-01-01")
+        entity_helpers.write_handover(bp, tldr="z", when="2026-04-26")
         data: dict = {}
-        v3.sync_handover_index(data, bp, cap=1)
+        entity_helpers.sync_handover_index(data, bp, cap=1)
         # 2 archived, split across years
         assert (bp.parent / "handovers" / "_archive" / "2025").exists()
         assert (bp.parent / "handovers" / "_archive" / "2026").exists()
@@ -530,15 +531,17 @@ class TestIssues:
 
     def test_next_id_allocates_sequentially(self, tmp_path: Path):
         bp = self._bp(tmp_path)
-        assert v3.next_issue_id(bp) == "ISS-001"
-        v3.write_issue(bp, title="A", severity="P1", impact="fixture evidence.")
-        assert v3.next_issue_id(bp) == "ISS-002"
-        v3.write_issue(bp, title="B", severity="P0", impact="fixture evidence.")
-        assert v3.next_issue_id(bp) == "ISS-003"
+        first, _ = entity_helpers.write_issue(
+            bp, title="A", severity="P1", impact="fixture evidence."
+        )
+        second, _ = entity_helpers.write_issue(
+            bp, title="B", severity="P0", impact="fixture evidence."
+        )
+        assert [first, second] == ["ISS-001", "ISS-002"]
 
     def test_create_and_read_roundtrip(self, tmp_path: Path):
         bp = self._bp(tmp_path)
-        iid, target = v3.write_issue(
+        iid, target = entity_helpers.write_issue(
             bp,
             title="Login accepts whitespace password",
             severity="P1",
@@ -563,46 +566,46 @@ class TestIssues:
     def test_invalid_severity_rejected(self, tmp_path: Path):
         bp = self._bp(tmp_path)
         with pytest.raises(ValueError):
-            v3.write_issue(bp, title="x", severity="urgent")
+            entity_helpers.write_issue(bp, title="x", severity="urgent")
 
     def test_invalid_status_rejected(self, tmp_path: Path):
         bp = self._bp(tmp_path)
         with pytest.raises(ValueError):
-            v3.write_issue(bp, title="x", severity="P1", status="bogus")
+            entity_helpers.write_issue(bp, title="x", severity="P1", status="bogus")
 
     def test_fixed_requires_fixed_in_task(self, tmp_path: Path):
         bp = self._bp(tmp_path)
-        iid, _ = v3.write_issue(bp, title="x", severity="P1", impact="fixture evidence.")
+        iid, _ = entity_helpers.write_issue(bp, title="x", severity="P1", impact="fixture evidence.")
         with pytest.raises(ValueError):
-            v3.update_issue(bp, iid, status="fixed")
+            entity_helpers.update_issue(bp, iid, status="fixed")
 
     def test_fixed_with_task_sets_resolved(self, tmp_path: Path):
         bp = self._bp(tmp_path)
-        iid, _ = v3.write_issue(bp, title="x", severity="P1", impact="fixture evidence.")
-        fm, _ = v3.update_issue(bp, iid, status="fixed", fixed_in_task="features-007")
+        iid, _ = entity_helpers.write_issue(bp, title="x", severity="P1", impact="fixture evidence.")
+        fm, _ = entity_helpers.update_issue(bp, iid, status="fixed", fixed_in_task="features-007")
         assert fm["status"] == "fixed"
         assert fm["resolved"]  # ISO date populated
 
     def test_duplicate_requires_target(self, tmp_path: Path):
         bp = self._bp(tmp_path)
-        iid, _ = v3.write_issue(bp, title="x", severity="P1", impact="fixture evidence.")
+        iid, _ = entity_helpers.write_issue(bp, title="x", severity="P1", impact="fixture evidence.")
         with pytest.raises(ValueError):
-            v3.update_issue(bp, iid, status="duplicate")
-        v3.update_issue(bp, iid, status="duplicate", duplicate_of="ISS-002")  # ok
+            entity_helpers.update_issue(bp, iid, status="duplicate")
+        entity_helpers.update_issue(bp, iid, status="duplicate", duplicate_of="ISS-002")  # ok
 
     def test_index_sorted_by_severity(self, tmp_path: Path):
         bp = self._bp(tmp_path)
-        v3.write_issue(bp, title="low", severity="P3", impact="fixture evidence.")
-        v3.write_issue(bp, title="critical", severity="P0", impact="fixture evidence.")
-        v3.write_issue(bp, title="high", severity="P1", impact="fixture evidence.")
+        entity_helpers.write_issue(bp, title="low", severity="P3", impact="fixture evidence.")
+        entity_helpers.write_issue(bp, title="critical", severity="P0", impact="fixture evidence.")
+        entity_helpers.write_issue(bp, title="high", severity="P1", impact="fixture evidence.")
         data: dict = {}
-        v3.sync_issue_index(data, bp)
+        entity_helpers.sync_issue_index(data, bp)
         sevs = [e["severity"] for e in data["issues"]]
         assert sevs == ["P0", "P1", "P3"]
 
     def test_index_entry_is_slim(self, tmp_path: Path):
         bp = self._bp(tmp_path)
-        v3.write_issue(
+        entity_helpers.write_issue(
             bp,
             title="x",
             severity="P2",
@@ -610,7 +613,7 @@ class TestIssues:
             body="long body" * 1000,
         )
         data: dict = {}
-        v3.sync_issue_index(data, bp)
+        entity_helpers.sync_issue_index(data, bp)
         entry = data["issues"][0]
         # impact, body etc not in index
         assert set(entry.keys()) <= {
@@ -655,17 +658,17 @@ class TestV3EndToEndRoundtrip:
         v3.save_v3(bp, original)
 
         # Mutate via the layered helpers: add handover, issue
-        v3.write_handover(bp, tldr="day end", task_ids=["T-001"], when="2026-04-26")
-        v3.write_issue(bp, title="bug", severity="P1", impact="fixture evidence.", related_tasks=["T-001"])
+        entity_helpers.write_handover(bp, tldr="day end", task_ids=["T-001"], when="2026-04-26")
+        entity_helpers.write_issue(bp, title="bug", severity="P1", impact="fixture evidence.", related_tasks=["T-001"])
 
-        # Sync indexes (what the MCP tools do after each create)
-        loaded = v3.load_v3(bp)
-        v3.sync_handover_index(loaded, bp)
-        v3.sync_issue_index(loaded, bp)
-        v3.save_v3(bp, loaded)
+        # Sync indexes (what the MCP tools do after each create). The store
+        # adopted the v3 projection on the first write above, so the read-back
+        # comes from it rather than from a second parse of backlog.yaml.
+        from taskmaster import store as _store
 
-        # Read everything back and assert nothing got lost
-        roundtripped = v3.load_v3(bp)
+        roundtripped = _store.open_store(bp).load_dict()
+        entity_helpers.sync_handover_index(roundtripped, bp)
+        entity_helpers.sync_issue_index(roundtripped, bp)
         t1 = roundtripped["epics"][0]["tasks"][0]
         assert t1["description"] == "Wire login form"
         assert t1["notes"] == "cookie scope concern"

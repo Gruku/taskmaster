@@ -35,7 +35,8 @@ sys.path.insert(0, str(PLUGIN_ROOT))
 
 from taskmaster.integrations.linear.client import LinearClient  # noqa: E402
 from taskmaster.integrations.linear.worker import drain, enqueue, read_queue  # noqa: E402
-from taskmaster.taskmaster_v3 import write_tracker, read_tracker  # noqa: E402
+from taskmaster.taskmaster_v3 import read_tracker  # noqa: E402
+from tests.entity_helpers import (taskmaster_backlog, write_tracker)
 
 
 SMOKE_TOKEN = os.environ.get("TASKMASTER_LINEAR_SMOKE_TOKEN")
@@ -48,7 +49,7 @@ pytestmark = pytest.mark.skipif(
 
 
 def _build_backlog(tmp_path: Path, task_id: str, tracker_id: str | None) -> Path:
-    bp = tmp_path / "backlog.yaml"
+    bp = taskmaster_backlog(tmp_path)
     task = {
         "id": task_id,
         "title": f"TM smoke test [{task_id}]",

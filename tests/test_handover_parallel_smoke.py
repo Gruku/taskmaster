@@ -7,22 +7,14 @@ import yaml
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT))
 
-from taskmaster.taskmaster_v3 import (
-    HANDOVER_STATUSES,
-    flag_open_reason,
-    list_handover_ids,
-    migrate_handover_statuses,
-    read_handover,
-    smart_auto_close_handovers,
-    update_handover_status,
-    write_handover,
-)
+from taskmaster.taskmaster_v3 import (HANDOVER_STATUSES, flag_open_reason, list_handover_ids, read_handover)
+from tests.entity_helpers import (taskmaster_backlog, migrate_handover_statuses, smart_auto_close_handovers, update_handover_status, write_handover)
 
 
 def _setup(tmp_path):
-    bp = tmp_path / "backlog.yaml"
+    bp = taskmaster_backlog(tmp_path)
     bp.write_text(yaml.safe_dump({"meta": {}, "epics": []}))
-    (tmp_path / "handovers").mkdir()
+    (bp.parent / "handovers").mkdir()
     return bp
 
 
@@ -98,7 +90,7 @@ def test_new_enum_values_are_valid_statuses():
 def test_migration_runs_on_legacy_data(tmp_path):
     bp = _setup(tmp_path)
     from taskmaster.taskmaster_v3 import write_task_file
-    hd = tmp_path / "handovers"
+    hd = bp.parent / "handovers"
     legacy_fm = {
         "id": "2025-06-01-legacy",
         "date": "2025-06-01",

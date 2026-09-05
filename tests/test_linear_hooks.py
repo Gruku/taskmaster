@@ -15,7 +15,7 @@ sys.path.insert(0, str(PLUGIN_ROOT))
 
 from taskmaster import backlog_server  # noqa: E402
 from taskmaster.integrations.linear.worker import read_queue  # noqa: E402
-from taskmaster.taskmaster_v3 import write_tracker  # noqa: E402
+from tests.entity_helpers import write_tracker  # noqa: E402
 
 
 # ── Helpers ────────────────────────────────────────────────────

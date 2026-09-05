@@ -2,6 +2,7 @@ from pathlib import Path
 import pytest
 
 from taskmaster import taskmaster_v3 as tm
+import tests.entity_helpers as entity_helpers  # noqa: E402
 
 
 @pytest.fixture
@@ -12,7 +13,7 @@ def backlog_with_handover(tmp_path):
         "meta:\n  schema_version: 3\nepics: []\nhandovers: []\n",
         encoding="utf-8",
     )
-    hid, _ = tm.write_handover(
+    hid, _ = entity_helpers.write_handover(
         bp,
         tldr="shipped X",
         next_action="resume Y on feature/foo",
@@ -41,7 +42,7 @@ def test_continuity_item_from_handover_populates_required_fields(backlog_with_ha
 
 def test_continuity_item_filters_auto_stage_by_default(backlog_with_handover):
     bp, _ = backlog_with_handover
-    tm.write_handover(bp, tldr="auto-stage stub", session_kind="auto-stage")
+    entity_helpers.write_handover(bp, tldr="auto-stage stub", session_kind="auto-stage")
     items_default = tm.continuity_items(bp)
     assert not any(i["type"] == "handover" and i["title"] == "auto-stage stub"
                    for i in items_default)
@@ -61,7 +62,7 @@ def test_continuity_handover_open_routes_resume_any_age(backlog_with_handover):
     # Post-Plan-B enum rename: "in-progress" folded into "open". Open handovers
     # of any age route to resume (continuity polish 3.3.0 rule preserved).
     bp, hid = backlog_with_handover
-    tm.update_handover_status(bp, handover_id=hid, status="open")
+    entity_helpers.update_handover_status(bp, handover_id=hid, status="open")
     items = tm.continuity_items(bp)
     h = [i for i in items if i["type"] == "handover"][0]
     assert h["status"] == "open"
@@ -81,12 +82,12 @@ def test_continuity_handover_promotes_top_done_to_resume(tmp_path):
     cap = tm.RESUME_RECENT_DONE_CAP
     written = []
     for i in range(cap + 2):
-        hid, _ = tm.write_handover(
+        hid, _ = entity_helpers.write_handover(
             bp,
             tldr=f"done handover {i}",
             session_kind="end-of-day",
         )
-        tm.update_handover_status(bp, handover_id=hid, status="closed")
+        entity_helpers.update_handover_status(bp, handover_id=hid, status="closed")
         written.append(hid)
     items = tm.continuity_items(bp)
     han = [i for i in items if i["type"] == "handover"]
@@ -103,7 +104,7 @@ def test_continuity_handover_promotes_top_done_to_resume(tmp_path):
 
 def test_continuity_open_decision_routes_to_decide(backlog_with_handover):
     bp, _ = backlog_with_handover
-    tm.write_decision(bp, title="pick a path",
+    entity_helpers.write_decision(bp, title="pick a path",
                       options=["a", "b"], recommendation=1)
     items = tm.continuity_items(bp)
     decs = [i for i in items if i["type"] == "decision"]
@@ -113,8 +114,8 @@ def test_continuity_open_decision_routes_to_decide(backlog_with_handover):
 
 def test_continuity_resolved_decision_routes_to_ambient(backlog_with_handover):
     bp, _ = backlog_with_handover
-    tm.write_decision(bp, title="x", options=["a", "b"])
-    tm.resolve_decision(bp, "DEC-001", resolved_with=1)
+    entity_helpers.write_decision(bp, title="x", options=["a", "b"])
+    entity_helpers.resolve_decision(bp, "DEC-001", resolved_with=1)
     items = tm.continuity_items(bp)
     assert all(i["action_class"] != "decide" for i in items if i["type"] == "decision")
 

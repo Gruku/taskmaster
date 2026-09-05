@@ -122,28 +122,33 @@ from taskmaster.taskmaster_v3 import (
     HANDOVER_KINDS,
     HEAVY_FIELDS as _HEAVY_FIELDS,
     detect_schema_version as _detect_schema_version,
-    atomic_write as _atomic_write,
     migrate_v2_to_v3 as _migrate_v2_to_v3,
     migrate_v3_to_v4 as _migrate_v3_to_v4,
-    write_handover as _write_handover,
+    build_handover_doc as _build_handover_doc,
+    handover_path as _handover_path,
     read_handover as _read_handover,
-    apply_supersession as _apply_supersession,
-    apply_handover_review_flag as _apply_handover_review_flag,
-    update_handover_status as _update_handover_status,
-    list_handover_ids as _list_handover_ids,
+    supersede_handover_doc as _supersede_handover_doc,
+    flag_handover_doc_for_review as _flag_handover_doc_for_review,
+    set_handover_status_doc as _set_handover_status_doc,
     sync_handover_index as _sync_handover_index,
+    sort_handover_rows as _sort_handover_rows,
     derive_thread_name as _derive_thread_name,
     ISSUE_STATUSES,
     ISSUE_SEVERITIES,
-    write_issue as _write_issue,
-    read_issue as _read_issue,
-    update_issue as _update_issue,
-    list_issue_ids as _list_issue_ids,
+    BUG_STATUSES,
+    build_bug_doc as _build_bug_doc,
+    apply_bug_updates as _apply_bug_updates,
+    assert_bug_archivable as _assert_bug_archivable,
+    bug_path as _bug_path,
+    sync_bug_index as _sync_bug_index,
+    build_issue_doc as _build_issue_doc,
+    issue_path as _issue_path,
+    apply_issue_updates as _apply_issue_updates,
     sync_issue_index as _sync_issue_index,
     EXTERNAL_SYSTEMS,
-    write_tracker as _write_tracker,
+    build_tracker_doc as _build_tracker_doc,
     read_tracker as _read_tracker,
-    update_tracker as _update_tracker,
+    apply_tracker_updates as _apply_tracker_updates,
     list_tracker_ids as _list_tracker_ids,
     sync_tracker_index as _sync_tracker_index,
     make_tracker_id as _make_tracker_id,
@@ -153,19 +158,16 @@ from taskmaster.taskmaster_v3 import (
     linked_issues_for_tracker as _linked_issues_for_tracker,
     _validate_tracker as _validate_tracker_fm,
     load_linear_config as _load_linear_config,
-    write_idea as _write_idea,
-    read_idea as _read_idea,
-    update_idea as _update_idea,
-    list_ideas as _list_ideas,
-    write_decision as _write_decision,
-    read_decision as _read_decision,
-    update_decision as _update_decision,
-    resolve_decision as _resolve_decision,
-    drop_decision as _drop_decision,
-    list_decision_ids as _list_decision_ids,
+    build_idea_doc as _build_idea_doc,
+    idea_path as _idea_path,
+    apply_idea_updates as _apply_idea_updates,
+    build_decision_doc as _build_decision_doc,
+    apply_decision_patch as _apply_decision_patch,
+    resolve_decision_doc as _resolve_decision_doc,
+    drop_decision_doc as _drop_decision_doc,
+    link_decision_doc_to_handover as _link_decision_doc_to_handover,
     decision_path as _decision_path,
     continuity_items as _continuity_items,
-    write_task_file as _write_task_file,
     load_viewer_prefs,
     save_viewer_prefs,
     list_sessions,
@@ -186,38 +188,56 @@ _HANDOVER_STATUS_BACKFILL_RAN = False
 
 
 def _ensure_handover_status_backfilled() -> None:
-    """One-shot legacy backfill. Runs in its own transaction when called first."""
+    """One-shot legacy backfill, at most one write transaction per project."""
     global _HANDOVER_STATUS_BACKFILL_RAN
     if _HANDOVER_STATUS_BACKFILL_RAN:
         return
     bp = _backlog_path()
     if not bp.exists():
         return
-    # Only a transaction this call owns proves the backfill is durable.  Joining
-    # a caller's transaction means an outer rollback can still discard it, so the
-    # flag stays unset and the next call re-checks instead of skipping forever.
+
     owns_transaction = _active_tx() is None
+    if owns_transaction:
+        # Read first. A project backfilled in an earlier run must not open
+        # BEGIN IMMEDIATE on every handover list and get just to learn that.
+        # Only committed state can answer, so this shortcut is skipped when a
+        # caller's transaction is open — its dict may hold an uncommitted marker.
+        try:
+            if _load().get("handover_status_backfilled"):
+                _HANDOVER_STATUS_BACKFILL_RAN = True
+                return
+        except Exception:
+            return
+
+    latched = False
     try:
         with _transaction(tool="_ensure_handover_status_backfilled") as data:
             try:
-                if data.get("handover_status_backfilled"):
-                    return
-                from taskmaster.taskmaster_v3 import backfill_handover_status as _bf
-                flipped = _bf(data, bp)
-                if flipped or "handover_status_backfilled" in data:
-                    _sync_handover_index(data, bp)
+                if not data.get("handover_status_backfilled"):
+                    from taskmaster.taskmaster_v3 import backfill_handover_status as _bf
+                    tx = _store_tx()
+                    flipped = _bf(data, tx.list("handover", include_archived=True))
+                    for handover_id, document in flipped:
+                        tx.put("handover", handover_id, document)
+                    _sync_handover_index_tx(data)
                     _mutate_and_save(data)
+                    latched = True
             except Exception:
                 # A backfill that cannot read its own inputs stays a no-op, as
                 # before. Commit and export failures are raised by the context
                 # exit below, outside this guard, so they are never discarded.
-                return
+                latched = False
     except Exception as exc:
         # The store could not commit or export. This runs from several handover
         # tools, so it must not block them - but it must leave a trace.
         _log_index_error(bp, exc)
         return
-    if owns_transaction:
+
+    # Only a transaction this call owned *and* latched proves the durable marker
+    # survived. A nested run rides on a caller transaction that can still roll
+    # back, so it never sets the flag; the read above is what spares that case
+    # the repeated writer lock.
+    if owns_transaction and latched:
         _HANDOVER_STATUS_BACKFILL_RAN = True
 
 
@@ -433,19 +453,6 @@ def _store() -> "store.Store":
     return _store_for()
 
 
-def _store_for_read() -> "store.Store":
-    """The store, with its read-scan throttle cleared.
-
-    Bugs, issues, handovers and the link tools still write entity files behind
-    the store's back, so a server read that sat behind the store's two-second
-    read-scan throttle would miss their edits. Spec step 3 moves those writers
-    onto the store and this drops back to the throttled read.
-    """
-    instance = _store()
-    instance.force_scan_on_next_read()
-    return instance
-
-
 def _normalize_loaded(data: dict) -> None:
     """Backfill `created` and normalize legacy P-code priorities in place."""
     for epic in data.get("epics", []) or []:
@@ -539,6 +546,92 @@ def _apply_archive_transition(
         _archive_entity(kind, ident, entity)
     elif before == "archived":
         _unarchive_entity(kind, ident, entity)
+
+
+# ── Row access for the non-task kinds ────────────────────────────
+# Bugs, issues, handovers, decisions, ideas, notes, areas and trackers live in
+# the store like everything else. Reads take their rows off the compatibility
+# dict's private `_rows` map; writes take them off the open transaction, so a
+# list and the write that follows it always see one snapshot.
+
+_ROW_INDEX_SYNCERS = {
+    "bug": ("bugs", _sync_bug_index),
+    "issue": ("issues", _sync_issue_index),
+    "tracker": ("trackers", _sync_tracker_index),
+}
+
+
+def _dict_rows(data: dict, kind: str, *, include_archived: bool = False) -> list:
+    """`(id, doc, body)` rows of one kind from a loaded compatibility dict.
+
+    Archived rows carry `archived: True` on the document itself, so a caller
+    that wants only the live set filters here rather than re-globbing a
+    directory the store already owns.
+    """
+    rows = (data.get("_rows") or {}).get(kind) or {}
+    out = []
+    for ident in sorted(rows):
+        doc, body = rows[ident]
+        if not include_archived and doc.get("archived"):
+            continue
+        out.append((ident, doc, body))
+    return out
+
+
+def _dict_row(data: dict, kind: str, ident: str):
+    """One `(doc, body)` row, or None. Archived rows are visible."""
+    return ((data.get("_rows") or {}).get(kind) or {}).get(ident)
+
+
+def _tx_rows(kind: str, *, include_archived: bool = False) -> list:
+    """`(id, doc, body)` rows of one kind from the open transaction."""
+    return _store_tx().list(kind, include_archived=include_archived)
+
+
+def _tx_doc(kind: str, ident: str) -> tuple[dict, str]:
+    """The open transaction's `(document, body)` for one entity.
+
+    Raises KeyError when the entity does not exist, which every caller turns
+    into its own not-found message.
+    """
+    doc = _store_tx().get(kind, ident)
+    body = doc.pop(_BODY_KEY, "") or ""
+    return doc, body
+
+
+def _derived_index(kind: str, rows: list) -> list:
+    """The index array a kind's rows would produce, without touching the dict.
+
+    Read tools render from this instead of re-syncing the live transaction
+    dict — a list is a read and must not leave a mutation behind.
+    """
+    field, syncer = _ROW_INDEX_SYNCERS[kind]
+    holder: dict = {}
+    syncer(holder, rows)
+    return holder[field]
+
+
+def _sync_bug_index_tx(data: dict) -> None:
+    _sync_bug_index(data, _tx_rows("bug"))
+
+
+def _sync_issue_index_tx(data: dict) -> None:
+    _sync_issue_index(data, _tx_rows("issue"))
+
+
+def _sync_tracker_index_tx(data: dict) -> None:
+    _sync_tracker_index(data, _tx_rows("tracker"))
+
+
+def _sync_handover_index_tx(data: dict) -> None:
+    """Rebuild the handover index and thread registry from the store's rows.
+
+    The transaction is handed in so overflow past the 30-entry cap is archived
+    with an explicit `tx.archive` — the file move to `handovers/_archive/<year>/`
+    is the exporter's, not a rename behind the store's back.
+    """
+    tx = _store_tx()
+    _sync_handover_index(data, tx.list("handover"), tx=tx)
 
 
 def _render_after_commit(renderer) -> None:
@@ -691,7 +784,7 @@ def _load_snapshot() -> tuple[dict, str]:
     bp = _backlog_path()
     if not bp.exists():
         raise FileNotFoundError(bp)
-    data, token, max_seq = _store_for_read().load_dict_with_identity()
+    data, token, max_seq = _store().load_dict_with_identity()
     _normalize_loaded(data)
     if not data.get("context"):
         regenerate_context(data)
@@ -709,11 +802,12 @@ def _write_local_meta_cache(backlog_path: Path, payload: dict) -> None:
     Purely derived and unversioned: nothing in the server, the store or the
     viewer reads it back, and no code path treats it as a source of truth for
     `meta.updated` or anything else. It exists so an external tool can cheaply
-    see when the backlog last changed.
+    see when the backlog last changed. The bytes leave through the store because
+    `store.py` is the only module allowed to write under `.taskmaster/`.
     """
-    cache_dir = backlog_path.parent / "local" / "cache"
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    _atomic_write(cache_dir / "meta.json", json.dumps(payload, indent=2) + "\n")
+    payload_bytes = (json.dumps(payload, indent=2) + chr(10)).encode("utf-8")
+    _store_for(backlog_path).write_local_cache("meta.json", payload_bytes)
+
 
 def _has_v3_content(data: dict) -> bool:
     """True when the backlog has any v3 narrative-continuity entity content.
@@ -750,24 +844,77 @@ def _find_task(data: dict, task_id: str) -> tuple[dict, dict] | None:
     return None
 
 
-def _sync_projection() -> None:
-    """Bootstrap the store before a raw entity reader parses the files.
-
-    Bugs, issues, handovers, decisions, ideas, notes, areas and trackers still
-    read and write their own markdown. Opening the store first means they never
-    observe the projection mid-migration - the store may rewrite a v3 layout
-    into v4 on its first load. Spec step 3 moves those writers onto the store
-    and this helper goes away with them.
-    """
-    if _backlog_path().exists():
-        _store_for_read().load_dict()
-
-
 # ── Store-owned entity IO for the generic link/auto-link engine ────────────
 # `taskmaster_v3.read_entity_anywhere` / `write_entity_anywhere` dispatch every
 # *task* through these two hooks, so the shared link, inverse-sync and
 # auto-link machinery commits through a store transaction instead of
 # rewriting `tasks/<id>.md` behind the store's back.
+
+
+def _store_read_entity(backlog_path: Path | None, kind: str, entity_id: str) -> dict | None:
+    """A *copy* of the committed (or in-flight) entity document, or None.
+
+    Tasks come off the transaction dict (identity-stable); every other kind
+    comes off its store row. Never the live object: `read_entity_anywhere`
+    mutates what it returns (it synthesizes a legacy `links` array for
+    unmigrated projects) and documents that as read-only, so handing out the
+    live document would let the next commit persist that synthesis.
+    """
+    if kind == "task":
+        return _store_read_task(backlog_path, entity_id)
+    if _active_tx() is not None:
+        try:
+            return _store_tx().get(kind, entity_id)
+        except KeyError:
+            return None
+    bp = Path(backlog_path) if backlog_path else _backlog_path()
+    if not bp.exists():
+        return None
+    rows = (_store_for(bp).load_dict().get("_rows") or {}).get(kind) or {}
+    row = rows.get(entity_id)
+    if row is None:
+        return None
+    doc, body = row
+    entity = deepcopy(doc)
+    if body:
+        entity[_BODY_KEY] = body
+    return entity
+
+
+def _store_write_entity(backlog_path: Path | None, kind: str, entity: dict) -> None:
+    """Persist a whole entity document through the store.
+
+    Joins the caller's transaction when there is one so a link and its inverse
+    land in a single commit; opens its own otherwise. Every kind goes through
+    here now, so the shared link engine can no longer rewrite an entity file
+    behind the store's back.
+    """
+    if kind == "task":
+        _store_write_task(backlog_path, entity)
+        return
+    document = dict(entity)
+    entity_id = document.get("id")
+    body = document.pop(_BODY_KEY, None)
+
+    def apply() -> None:
+        tx = _store_tx()
+        # Upsert, matching the writer this replaced: the link engine and the
+        # migration script both hand over whole documents for ids that may not
+        # have a row yet.
+        try:
+            tx.put(kind, entity_id, document, body=body or "")
+        except KeyError:
+            tx.create(kind, document, body=body or "", requested_id=entity_id)
+
+    if _active_tx() is not None:
+        apply()
+        return
+    with _transaction(
+        tool=f"store:write-{kind}",
+        backlog_path=Path(backlog_path) if backlog_path else None,
+    ) as data:
+        apply()
+        _mutate_and_save(data)
 
 
 def _store_read_task(backlog_path: Path | None, task_id: str) -> dict | None:
@@ -786,9 +933,7 @@ def _store_read_task(backlog_path: Path | None, task_id: str) -> dict | None:
     bp = Path(backlog_path) if backlog_path else _backlog_path()
     if not bp.exists():
         return None
-    instance = _store_for(bp)
-    instance.force_scan_on_next_read()
-    data = instance.load_dict()
+    data = _store_for(bp).load_dict()
     _normalize_loaded(data)
     found = _find_task(data, task_id)
     return deepcopy(found[0]) if found else None
@@ -842,7 +987,7 @@ def _configure_entity_io() -> None:
     """Install the task read/write hooks on the shared entity dispatcher."""
     from taskmaster import taskmaster_v3 as _v3  # noqa: PLC0415
 
-    _v3.configure_task_io(read=_store_read_task, write=_store_write_task)
+    _v3.configure_entity_io(read=_store_read_entity, write=_store_write_entity)
 
 
 def _auto_link_task_in_tx(data: dict, task_id: str) -> list[str]:
@@ -2661,7 +2806,6 @@ def backlog_migrate_v3() -> str:
     bp = _backlog_path()
     if not bp.exists():
         return f"Error: no backlog found at {bp}. Run `backlog_init` first."
-    _sync_projection()
     summary = _migrate_v2_to_v3(bp)
 
     if summary["status"] == "already_v3":
@@ -2691,7 +2835,6 @@ def backlog_migrate_v4() -> str:
     backlog_path = _backlog_path()
     if not backlog_path.exists():
         return f"Error: no backlog found at {backlog_path}. Run `backlog_init` first."
-    _sync_projection()
     summary = _migrate_v3_to_v4(backlog_path)
     if summary["status"] == "already_v4":
         return (
@@ -2814,6 +2957,91 @@ def backlog_canonicalize_layout(dry_run: bool = False) -> str:
     return "\n".join(out)
 
 
+def _handover_create_in_tx(
+    *,
+    tldr: str,
+    next_action: str = "",
+    body: str = "",
+    task_ids: list | None = None,
+    session_kind: str = "continuity",
+    thread: str | None = None,
+    when: str | None = None,
+    context_size_at_write: str | None = None,
+    supersedes: str | None = None,
+    branch: str | None = None,
+    tip_commit: str | None = None,
+    flag_for_review: bool = False,
+    review_reason: str = "",
+    open_decisions: list | None = None,
+    resolved_this_session: list | None = None,
+):
+    """Create one handover row and everything that must commit with it.
+
+    Returns `(handover_id, superseded_warning | None)`, or an error string. The
+    supersession, the review flag and the `open_decisions` back-references all
+    ride the caller's transaction, so a handover that names a decision can never
+    half-land. Shared with the test seeding shim so both drive one code path.
+    """
+    tx = _store_tx()
+    try:
+        document, handover_body = _build_handover_doc(
+            tldr=tldr,
+            next_action=next_action,
+            body=body,
+            task_ids=task_ids or [],
+            session_kind=session_kind,
+            thread=thread,
+            when=when,
+            context_size_at_write=context_size_at_write,
+            supersedes=supersedes,
+            branch=branch,
+            tip_commit=tip_commit,
+            open_decisions=open_decisions,
+            resolved_this_session=resolved_this_session,
+        )
+        hid = tx.create("handover", document, body=handover_body)
+    except ValueError as exc:
+        return str(exc)
+
+    superseded_warning = None
+    if supersedes:
+        try:
+            old_doc, old_body = _tx_doc("handover", supersedes)
+        except KeyError:
+            superseded_warning = (
+                f"WARNING: supersedes={supersedes} not found on disk; old "
+                f"handover not updated."
+            )
+        else:
+            new_doc, new_body = _supersede_handover_doc(old_doc, old_body, new_id=hid)
+            tx.put("handover", supersedes, new_doc, body=new_body)
+
+    if flag_for_review:
+        flagged_doc, flagged_body = _tx_doc("handover", hid)
+        tx.put(
+            "handover",
+            hid,
+            _flag_handover_doc_for_review(flagged_doc, review_reason=review_reason or ""),
+            body=flagged_body,
+        )
+
+    # A handover that names open decisions back-references itself on each one,
+    # inside this same transaction so the pair can never half-land.
+    for decision_id in document.get("open_decisions") or []:
+        try:
+            decision_doc, decision_body = _tx_doc("decision", decision_id)
+        except KeyError:
+            continue  # decision was deleted; don't fail the handover write
+        linked = _link_decision_doc_to_handover(decision_doc, hid)
+        if linked is not None:
+            tx.put("decision", decision_id, linked, body=decision_body)
+
+    data = _load()
+    _sync_handover_index_tx(data)
+    _mutate_and_save(data)
+    return hid, superseded_warning
+
+
 @mcp.tool()
 @_transactional("backlog_handover_create")
 def backlog_handover_create(
@@ -2862,43 +3090,25 @@ def backlog_handover_create(
         thread_name = _derive_thread_name(
             task_ids or [], tldr, data, bundle_slug=bundle.get("slug", "") or ""
         )
-    try:
-        hid, target = _write_handover(
-            bp,
-            tldr=tldr,
-            next_action=next_action,
-            body=body,
-            task_ids=task_ids or [],
-            session_kind=session_kind,
-            thread=thread_name,
-            context_size_at_write=context_size_at_write or None,
-            supersedes=supersedes or None,
-            branch=branch or None,
-            tip_commit=tip_commit or None,
-        )
-    except ValueError as exc:
-        return f"Error: {exc}"
-
-    superseded_warning = None
-    if supersedes:
-        try:
-            _apply_supersession(bp, old_id=supersedes, new_id=hid)
-        except FileNotFoundError:
-            superseded_warning = (
-                f"WARNING: supersedes={supersedes} not found on disk; old "
-                f"handover not updated."
-            )
-
-    if flag_for_review:
-        try:
-            _apply_handover_review_flag(
-                bp, handover_id=hid, review_reason=review_reason or ""
-            )
-        except FileNotFoundError as exc:
-            return f"Error: handover not found: {exc}."
-
-    _sync_handover_index(data, bp)
-    _mutate_and_save(data)
+    outcome = _handover_create_in_tx(
+        tldr=tldr,
+        next_action=next_action,
+        body=body,
+        task_ids=task_ids or [],
+        session_kind=session_kind,
+        thread=thread_name,
+        context_size_at_write=context_size_at_write or None,
+        supersedes=supersedes or None,
+        branch=branch or None,
+        tip_commit=tip_commit or None,
+        flag_for_review=flag_for_review,
+        review_reason=review_reason,
+    )
+    if isinstance(outcome, str):
+        return f"Error: {outcome}"
+    hid, superseded_warning = outcome
+    target = _handover_path(bp, hid)
+    data = _load()
 
     # Plan C: auto-detect inline ID mentions, materialize as `references` links.
     try:
@@ -3031,16 +3241,12 @@ def backlog_handover_get(
     if not bp.exists():
         return "No backlog found."
     _ensure_handover_status_backfilled()
-    try:
-        fm, body = _read_handover(bp, handover_id)
-    except FileNotFoundError:
-        # Maybe it's archived?
-        archive_root = bp.parent / "handovers" / "_archive"
-        candidates = list(archive_root.rglob(f"{handover_id}.md")) if archive_root.exists() else []
-        if not candidates:
-            return f"Handover not found: {handover_id}"
-        from taskmaster.taskmaster_v3 import read_task_file as _read_task_file
-        fm, body = _read_task_file(candidates[0])
+    # The row map carries archived handovers too, so the old `_archive/` rglob
+    # fallback is gone with the file read it backed up.
+    row = _dict_row(_load(), "handover", handover_id)
+    if row is None:
+        return f"Handover not found: {handover_id}"
+    fm, body = row[0], row[1] or ""
 
     # ── sections-only mode ───────────────────────────────────────────────────
     if sections is not None and not sections:
@@ -3093,8 +3299,11 @@ def backlog_handover_resync() -> str:
     _ensure_handover_status_backfilled()
     data = _load()
     from taskmaster.taskmaster_v3 import backfill_threads as _backfill_threads
-    backfill = _backfill_threads(bp, backlog_data=data)
-    _sync_handover_index(data, bp)
+    tx = _store_tx()
+    backfill = _backfill_threads(tx.list("handover"), backlog_data=data)
+    for handover_id, document in backfill["stamped"]:
+        tx.put("handover", handover_id, document)
+    _sync_handover_index_tx(data)
     _mutate_and_save(data)
     n = len(data.get("handovers") or [])
     extra = f" Backfilled thread on {len(backfill['stamped'])} legacy handover(s)." if backfill["stamped"] else ""
@@ -3116,11 +3325,11 @@ def _threads_data(bp: Path) -> dict:
     try:
         with _transaction(tool="backlog_thread_index_backfill") as tx_data:
             if "threads" not in tx_data:
-                _sync_handover_index(tx_data, bp)
+                _sync_handover_index_tx(tx_data)
                 _mutate_and_save(tx_data)
     except RuntimeError:
         # Projection-only storage: serve the derived index without persisting it.
-        _sync_handover_index(data, bp)
+        _sync_handover_index(data, _dict_rows(data, "handover"))
         return data
     return _load()
 
@@ -3199,7 +3408,7 @@ def backlog_thread_update(name: str, status: str, reason: str = "") -> str:
         return "No backlog found."
     data = _load()
     if "threads" not in data:
-        _sync_handover_index(data, bp)
+        _sync_handover_index_tx(data)
     from taskmaster.taskmaster_v3 import update_thread_status as _update_thread_status
     try:
         _update_thread_status(data, bp, name=name, status=status, reason=reason)
@@ -3253,7 +3462,6 @@ def backlog_link_create(source: str, target: str, type: str, note: str = "") -> 
     domain; target entity exists; depends_on writes don't create cycles.
     Idempotent — re-running with the same args is a no-op.
     """
-    _sync_projection()
     from taskmaster.taskmaster_v3 import (
         LINK_TYPES, is_valid_link, entity_kind_of,
         read_entity_anywhere, write_entity_anywhere, add_link, entity_links,
@@ -3324,7 +3532,6 @@ def backlog_link_remove(source: str, target: str, type: str = "") -> str:
 
     If `type` is omitted, removes all link types between the pair.
     """
-    _sync_projection()
     from taskmaster.taskmaster_v3 import (
         LINK_TYPES, entity_kind_of, read_entity_anywhere, write_entity_anywhere,
         remove_link, entity_links, sync_inverse,
@@ -3374,7 +3581,6 @@ def backlog_link_query(source: str = "", target: str = "", type: str = "",
     With depth>1, traverses transitively along the same `type`. Returns a JSON
     array of {source, target, type} entries.
     """
-    _sync_projection()
     import json as _json
     from taskmaster.taskmaster_v3 import (
         entity_kind_of, read_entity_anywhere, entity_links,
@@ -3456,7 +3662,6 @@ def backlog_link_validate() -> str:
     Links to archived entities (status: archived) are flagged in
     `archived_targets` but NOT auto-removed.
     """
-    _sync_projection()
     import json as _json
     from taskmaster.taskmaster_v3 import (
         REVERSE_TYPE, read_entity_anywhere, entity_links, find_cycle,
@@ -3559,6 +3764,7 @@ def backlog_link_reconcile() -> str:
 
 
 @mcp.tool()
+@_transactional("backlog_handover_supersede")
 def backlog_handover_supersede(old_id: str, new_id: str) -> str:
     """Mark an existing handover as superseded by another.
 
@@ -3575,11 +3781,19 @@ def backlog_handover_supersede(old_id: str, new_id: str) -> str:
     if not bp.exists():
         return "No backlog found."
     _ensure_handover_status_backfilled()
+    tx = _store_tx()
+    if not tx.id_taken("handover", new_id):
+        return f"Error: handover not found: {new_id}."
     try:
-        old_path = _apply_supersession(bp, old_id=old_id, new_id=new_id)
-    except FileNotFoundError as exc:
-        return f"Error: handover not found: {exc}."
-    return f"Superseded {old_id} → {new_id} ({old_path.name} updated)."
+        old_doc, old_body = _tx_doc("handover", old_id)
+    except KeyError:
+        return f"Error: handover not found: {old_id}."
+    document, new_body = _supersede_handover_doc(old_doc, old_body, new_id=new_id)
+    tx.put("handover", old_id, document, body=new_body)
+    data = _load()
+    _sync_handover_index_tx(data)
+    _mutate_and_save(data)
+    return f"Superseded {old_id} \u2192 {new_id} ({old_id}.md updated)."
 
 
 @mcp.tool()
@@ -3603,16 +3817,31 @@ def backlog_handover_update_status(
     if not bp.exists():
         return "No backlog found."
     _ensure_handover_status_backfilled()
+    fm = _handover_set_status(handover_id, status=status, reason=reason)
+    if isinstance(fm, str):
+        return fm
+    data = _load()
+    _sync_handover_index_tx(data)
+    _mutate_and_save(data)
+    return f"Handover {handover_id} \u2192 status={fm['status']} (user-set)."
+
+
+def _handover_set_status(handover_id: str, *, status: str, reason: str = ""):
+    """Apply a user-set status to one handover inside the open transaction.
+
+    Returns the new document, or an error string. Shared by the MCP tool and
+    the viewer's POST handler so both run exactly one code path.
+    """
     try:
-        fm, _ = _update_handover_status(bp, handover_id=handover_id, status=status, reason=reason)
+        document, body = _tx_doc("handover", handover_id)
+    except KeyError:
+        return f"Handover not found: {handover_id}"
+    try:
+        updated = _set_handover_status_doc(document, status=status, reason=reason)
     except ValueError as exc:
         return f"Error: {exc}"
-    except FileNotFoundError:
-        return f"Handover not found: {handover_id}"
-    data = _load()
-    _sync_handover_index(data, bp)
-    _mutate_and_save(data)
-    return f"Handover {handover_id} → status={fm['status']} (user-set)."
+    _store_tx().put("handover", handover_id, updated, body=body)
+    return updated
 
 
 @mcp.tool()
@@ -3660,8 +3889,7 @@ def backlog_issue_create(
         tldr = extract_tldr(impact) or title[:TLDR_MAX_CHARS]
         tldr_autogen = True
     try:
-        iid, target = _write_issue(
-            bp,
+        document = _build_issue_doc(
             title=title,
             severity=severity,
             evidence=evidence,
@@ -3670,15 +3898,16 @@ def backlog_issue_create(
             location=location or [],
             related_tasks=related_tasks or [],
             discovered_by=discovered_by,
-            body=body,
             tldr=tldr,
             tldr_autogen=tldr_autogen,
         )
+        iid = _store_tx().create("issue", document, body=body)
     except ValueError as exc:
         return f"Error: {exc}"
+    target = _issue_path(bp, iid)
 
     data = _load()
-    _sync_issue_index(data, bp)
+    _sync_issue_index_tx(data)
     _mutate_and_save(data)
 
     # Plan C: auto-detect inline ID mentions, materialize as `references` links.
@@ -3715,7 +3944,10 @@ def backlog_issue_list(
     if not bp.exists():
         return "No backlog found."
     data = _load()
-    entries = data.get("issues") or []
+    rows = _dict_rows(data, "issue")
+    docs = {ident: doc for ident, doc, _body in rows}
+    bodies = {ident: (body or "") for ident, _doc, body in rows}
+    entries = _derived_index("issue", rows)
     if severity:
         entries = [e for e in entries if e.get("severity") == severity]
     if status:
@@ -3731,25 +3963,19 @@ def backlog_issue_list(
             f"- {e['id']} {e.get('severity', '?')} {e.get('status', '?'):14} "
             f"— {e.get('title', '')}{comps_tag}"
         )
-        # In slim mode, enrich with tldr from file (index omits tldr)
+        # In slim mode, enrich with tldr from the row (the index omits tldr).
+        fm = docs.get(e["id"]) or {}
         if not verbose:
-            try:
-                fm, _ = _read_issue(bp, e["id"])
-                tldr = fm.get("tldr", "")
-                if tldr:
-                    line += f" — {tldr}"
-            except (FileNotFoundError, OSError):
-                pass
+            tldr = fm.get("tldr", "")
+            if tldr:
+                line += f" \u2014 {tldr}"
         lines.append(line)
         if verbose:
-            try:
-                fm, body = _read_issue(bp, e["id"])
-                if fm.get("tldr"):
-                    lines.append(f"  tldr: {fm['tldr']}")
-                if body and body.strip():
-                    lines.append(f"  body: {body.strip()[:200]}")
-            except (FileNotFoundError, OSError):
-                pass
+            if fm.get("tldr"):
+                lines.append(f"  tldr: {fm['tldr']}")
+            body = bodies.get(e["id"]) or ""
+            if body.strip():
+                lines.append(f"  body: {body.strip()[:200]}")
     footer = _overflow_footer(overflow, "issues")
     if footer:
         lines.append(footer)
@@ -3775,10 +4001,10 @@ def backlog_issue_get(
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    try:
-        fm, body = _read_issue(bp, issue_id)
-    except FileNotFoundError:
+    row = _dict_row(_load(), "issue", issue_id)
+    if row is None:
         return f"Issue not found: {issue_id}"
+    fm, body = row[0], row[1] or ""
 
     # ── sections-only mode ───────────────────────────────────────────────────
     if sections is not None and not sections:
@@ -3855,14 +4081,18 @@ def backlog_issue_update(issue_id: str, field: str, value: str = "") -> str:
     body = value if field == "body" else ""
 
     try:
-        fm, _ = _update_issue(bp, issue_id, **updates)
-    except FileNotFoundError:
+        document, stored_body = _tx_doc("issue", issue_id)
+    except KeyError:
         return f"Issue not found: {issue_id}"
+    new_body = updates.pop("body", stored_body)
+    try:
+        fm = _apply_issue_updates(document, **updates)
     except ValueError as exc:
         return f"Error: {exc}"
+    _store_tx().put("issue", issue_id, fm, body=new_body)
 
     data = _load()
-    _sync_issue_index(data, bp)
+    _sync_issue_index_tx(data)
     _mutate_and_save(data)
 
     # Plan C: auto-detect inline ID mentions on body updates.
@@ -3883,10 +4113,10 @@ def backlog_issue_resync() -> str:
     if not bp.exists():
         return "No backlog found."
     data = _load()
-    _sync_issue_index(data, bp)
+    _sync_issue_index_tx(data)
     _mutate_and_save(data)
     n = len(data.get("issues") or [])
-    return f"Issue index resynced — {n} entries."
+    return f"Issue index resynced \u2014 {n} entries."
 
 
 # ── Bug MCP tools ─────────────────────────────────────────────────────────────
@@ -3920,27 +4150,56 @@ def backlog_bug_create(
         location: file:line refs.
         body: Markdown body for repro/notes.
     """
-    from taskmaster.taskmaster_v3 import write_bug as _write_bug, sync_bug_index as _sync_bug_index
     bp = _backlog_path()
     if not bp.exists():
         return f"Error: no backlog found at {bp}. Run `backlog_init` first."
+    result = _bug_create_in_tx(
+        title=title,
+        found_in=found_in or None,
+        discovered_by=discovered_by,
+        severity=severity or None,
+        components=components or [],
+        location=location or [],
+        body=body,
+    )
+    if isinstance(result, str):
+        return f"Error: {result}"
+    bid, target = result
+    return f"Bug created: {bid} \u2014 {title}\nFile: {target.relative_to(ROOT)}"
+
+
+def _bug_create_in_tx(
+    *,
+    title: str,
+    found_in: str | None,
+    discovered_by: str,
+    severity: str | None,
+    components: list,
+    location: list,
+    body: str,
+):
+    """Create one Bug row and refresh the index inside the open transaction.
+
+    Returns `(id, path)` or an error string. Shared by the MCP tool and the
+    viewer's POST handler so both run exactly one code path.
+    """
+    from taskmaster.taskmaster_v3 import build_bug_doc as _build_bug_doc, bug_path as _bug_path
     try:
-        bid, target = _write_bug(
-            bp,
+        document = _build_bug_doc(
             title=title,
-            found_in=found_in or None,
+            found_in=found_in,
             discovered_by=discovered_by,
-            severity=severity or None,
-            components=components or [],
-            location=location or [],
-            body=body,
+            severity=severity,
+            components=components,
+            location=location,
         )
+        bid = _store_tx().create("bug", document, body=body)
     except ValueError as exc:
-        return f"Error: {exc}"
+        return str(exc)
     data = _load()
-    _sync_bug_index(data, bp)
+    _sync_bug_index_tx(data)
     _mutate_and_save(data)
-    return f"Bug created: {bid} — {title}\nFile: {target.relative_to(ROOT)}"
+    return bid, _bug_path(_backlog_path(), bid)
 
 
 @mcp.tool()
@@ -3961,30 +4220,22 @@ def backlog_bug_list(
             reports how many were hidden.
         include_archive: If True, also include archived bugs.
     """
-    from taskmaster.taskmaster_v3 import (
-        sync_bug_index as _sync_bug_index,
-        list_bug_ids as _list_bug_ids,
-        read_bug as _read_bug,
-    )
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
     data = _load()
-    _sync_bug_index(data, bp)
-    entries = list(data.get("bugs") or [])
+    # A list is a read: derive the index from the rows rather than re-syncing
+    # (and thereby mutating) the caller's dict.
+    entries = list(_derived_index("bug", _dict_rows(data, "bug")))
     if include_archive:
         active_ids = {e["id"] for e in entries}
-        for bid in _list_bug_ids(bp, include_archive=True):
+        for bid, fm, _body in _dict_rows(data, "bug", include_archived=True):
             if bid in active_ids:
                 continue
-            try:
-                fm, _ = _read_bug(bp, bid)
-            except (OSError, ValueError):
-                continue
             entries.append({
-                "id": fm["id"],
-                "title": fm["title"],
-                "status": fm["status"],
+                "id": fm.get("id", bid),
+                "title": fm.get("title"),
+                "status": fm.get("status"),
                 "components": fm.get("components"),
                 "found_in": fm.get("found_in"),
                 "discovered": fm.get("discovered"),
@@ -4018,14 +4269,13 @@ def backlog_bug_get(bug_id: str, verbose: bool = False) -> str:
         bug_id: Bug ID (e.g. B-001).
         verbose: If True, return full frontmatter + body. Default is slim view.
     """
-    from taskmaster.taskmaster_v3 import read_bug as _read_bug
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    try:
-        fm, body = _read_bug(bp, bug_id)
-    except FileNotFoundError:
+    row = _dict_row(_load(), "bug", bug_id)
+    if row is None:
         return f"Bug not found: {bug_id}"
+    fm, body = row[0], row[1] or ""
     if verbose:
         fm_lines = [f"  {k}: {v}" for k, v in fm.items()]
         return "---\n" + "\n".join(fm_lines) + "\n---\n" + body
@@ -4054,7 +4304,7 @@ def backlog_bug_update(bug_id: str, field: str, value: str = "") -> str:
     in a prior call): status=fixed needs fix_commit, status=adopted needs
     adopted_into, status=promoted needs promoted_to.
     """
-    from taskmaster.taskmaster_v3 import update_bug as _update_bug, sync_bug_index as _sync_bug_index, BUG_STATUSES
+    from taskmaster.taskmaster_v3 import BUG_STATUSES
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
@@ -4066,16 +4316,34 @@ def backlog_bug_update(bug_id: str, field: str, value: str = "") -> str:
         updates: dict[str, Any] = {field: [x.strip() for x in value.split(",") if x.strip()]}
     else:
         updates = {field: value}
+    result = _bug_update_in_tx(bug_id, updates)
+    if isinstance(result, str):
+        return result
+    return f"Bug updated: {bug_id} \u2014 status={result['status']}"
+
+
+def _bug_update_in_tx(bug_id: str, updates: dict):
+    """Apply field updates to one Bug row inside the open transaction.
+
+    Returns the new document, or an error string. Shared by the MCP tool and
+    the viewer's POST handler.
+    """
+    from taskmaster.taskmaster_v3 import apply_bug_updates as _apply_bug_updates
     try:
-        fm, _ = _update_bug(bp, bug_id, **updates)
-    except FileNotFoundError:
+        document, stored_body = _tx_doc("bug", bug_id)
+    except KeyError:
         return f"Bug not found: {bug_id}"
+    updates = dict(updates)
+    new_body = updates.pop("body", stored_body)
+    try:
+        fm = _apply_bug_updates(document, **updates)
     except ValueError as exc:
         return f"Error: {exc}"
+    _store_tx().put("bug", bug_id, fm, body=new_body)
     data = _load()
-    _sync_bug_index(data, bp)
+    _sync_bug_index_tx(data)
     _mutate_and_save(data)
-    return f"Bug updated: {bug_id} — status={fm['status']}"
+    return fm
 
 
 @mcp.tool()
@@ -4089,20 +4357,36 @@ def backlog_bug_archive(bug_id: str) -> str:
     Args:
         bug_id: Bug ID (e.g. B-001).
     """
-    from taskmaster.taskmaster_v3 import archive_bug as _archive_bug, sync_bug_index as _sync_bug_index
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
+    error = _bug_archive_in_tx(bug_id)
+    if error is not None:
+        return error
+    return f"Bug archived: {bug_id}"
+
+
+def _bug_archive_in_tx(bug_id: str) -> str | None:
+    """Archive one Bug row inside the open transaction; None on success.
+
+    The file move to `bugs/archive/` is the exporter's job — the archive flag
+    on the row is what decides where the projection lives.
+    """
+    from taskmaster.taskmaster_v3 import assert_bug_archivable as _assert_bug_archivable
+    tx = _store_tx()
     try:
-        _archive_bug(bp, bug_id)
-    except FileNotFoundError:
+        document, _body = _tx_doc("bug", bug_id)
+    except KeyError:
         return f"Bug not found: {bug_id}"
+    try:
+        _assert_bug_archivable(document)
     except ValueError as exc:
         return f"Error: {exc}"
+    tx.archive("bug", bug_id)
     data = _load()
-    _sync_bug_index(data, bp)
+    _sync_bug_index_tx(data)
     _mutate_and_save(data)
-    return f"Bug archived: {bug_id}"
+    return None
 
 
 @mcp.tool()
@@ -4160,34 +4444,91 @@ def backlog_bug_promote(
         components: Component tags for the Issue. Inferred from bugs if omitted.
         body: Markdown body for the new Issue.
     """
-    from taskmaster.taskmaster_v3 import (
-        promote_bugs_to_issue as _promote,
-        sync_bug_index as _sync_bug_index,
-        sync_issue_index as _sync_issue_index,
-    )
     bp = _backlog_path()
     if not bp.exists():
         return f"Error: no backlog found at {bp}. Run `backlog_init` first."
+    result = _promote_bugs_in_tx(
+        bug_ids=list(bug_ids or []),
+        title=title,
+        severity=severity,
+        evidence_text=evidence_text,
+        components=components or None,
+        body=body,
+    )
+    if not isinstance(result, str):
+        return f"Promoted {len(bug_ids)} bug(s) to {result[0]}."
+    return f"Error: {result}"
+
+
+def _promote_bugs_in_tx(
+    *,
+    bug_ids: list,
+    title: str,
+    severity: str,
+    evidence_text: str,
+    components: list | None,
+    body: str,
+):
+    """Create an Issue from N Bugs and mark each Bug promoted. One transaction.
+
+    Returns `(issue_id,)` on success or an error string. The issue create and
+    every bug flip commit together: a half-applied promotion would leave bugs
+    pointing at an issue that does not exist.
+    """
+    from taskmaster.taskmaster_v3 import (
+        apply_bug_updates as _apply_bug_updates,
+        build_issue_doc as _build_issue_doc_local,
+    )
+    if not bug_ids:
+        return "bug_ids must be non-empty"
+    if not evidence_text or not evidence_text.strip():
+        return "evidence_text is required (cite recurrence/systemic/outstanding)"
+
+    tx = _store_tx()
+    sources: dict = {}
+    for bid in bug_ids:
+        try:
+            sources[bid] = _tx_doc("bug", bid)
+        except KeyError:
+            return f"bug {bid} not found"
+
+    if components is None:
+        comps: set = set()
+        for bid in bug_ids:
+            for component in sources[bid][0].get("components") or []:
+                comps.add(component)
+        components = sorted(comps)
+
     try:
-        iid = _promote(
-            bp,
-            bug_ids=list(bug_ids or []),
+        issue_doc = _build_issue_doc_local(
             title=title,
             severity=severity,
-            evidence_text=evidence_text,
-            components=components or None,
-            body=body,
+            impact=evidence_text,  # repurpose impact as the evidence narrative
+            evidence=evidence_text,
+            components=components,
+            promoted_from=list(bug_ids),
         )
+        iid = tx.create("issue", issue_doc, body=body)
+        for bid in bug_ids:
+            document, stored_body = sources[bid]
+            tx.put(
+                "bug",
+                bid,
+                _apply_bug_updates(document, status="promoted", promoted_to=iid),
+                body=stored_body,
+            )
     except ValueError as exc:
-        return f"Error: {exc}"
+        return str(exc)
+
     data = _load()
-    _sync_bug_index(data, bp)
-    _sync_issue_index(data, bp)
+    _sync_bug_index_tx(data)
+    _sync_issue_index_tx(data)
     _mutate_and_save(data)
-    return f"Promoted {len(bug_ids)} bug(s) to {iid}."
+    return (iid,)
 
 
 @mcp.tool()
+@_transactional("backlog_decision_create")
 def backlog_decision_create(
     title: str,
     options: list[str],
@@ -4217,8 +4558,7 @@ def backlog_decision_create(
     if not bp.exists():
         return f"Error: no backlog found at {bp}. Run `backlog_init` first."
     try:
-        did, target = _write_decision(
-            bp,
+        document = _build_decision_doc(
             title=title,
             options=options,
             recommendation=recommendation,
@@ -4226,12 +4566,13 @@ def backlog_decision_create(
             related_issues=related_issues or [],
             branch=branch,
             raised_in=raised_in,
-            body=body,
         )
+        did = _store_tx().create("decision", document, body=body)
     except ValueError as exc:
         return f"Error: {exc}"
-    _sync_projection()
-    return f"Decision created: {did} — {title}\nFile: {target.relative_to(ROOT)}"
+    _mutate_and_save(_load())
+    target = _decision_path(bp, did)
+    return f"Decision created: {did} \u2014 {title}\nFile: {target.relative_to(ROOT)}"
 
 
 @mcp.tool()
@@ -4281,13 +4622,8 @@ def backlog_decision_list(
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    ids = _list_decision_ids(bp)
     rows: list[str] = []
-    for did in ids:
-        try:
-            fm, _ = _read_decision(bp, did)
-        except (OSError, ValueError):
-            continue
+    for did, fm, _body in _dict_rows(_load(), "decision"):
         if status != "all" and fm.get("status") != status:
             continue
         if task_id and fm.get("task_id") != task_id:
@@ -4306,15 +4642,15 @@ def backlog_decision_list(
 
 def backlog_decision_get(decision_id: str) -> str:
     """Return full decision frontmatter + body as readable text."""
-    bp = _backlog_path()
-    try:
-        fm, body = _read_decision(bp, decision_id)
-    except FileNotFoundError:
+    row = _dict_row(_load(), "decision", decision_id)
+    if row is None:
         return f"Decision not found: {decision_id}"
+    fm, body = row[0], row[1] or ""
     lines = [f"{k}: {v}" for k, v in fm.items()]
     return "\n".join(lines) + "\n\n---\n" + body
 
 
+@_transactional("backlog_decision_resolve")
 def backlog_decision_resolve(
     decision_id: str,
     resolved_with: int,
@@ -4322,32 +4658,67 @@ def backlog_decision_resolve(
     resolved_in: str = "",
 ) -> str:
     """Resolve a decision with a chosen option (1-indexed)."""
-    bp = _backlog_path()
-    try:
-        fm = _resolve_decision(
-            bp, decision_id,
-            resolved_with=int(resolved_with),
-            rationale=rationale,
-            resolved_in=resolved_in or None,
-        )
-    except (ValueError, FileNotFoundError) as exc:
-        return f"Error: {exc}"
+    result = _decision_resolve_in_tx(
+        decision_id,
+        resolved_with=int(resolved_with),
+        rationale=rationale,
+        resolved_in=resolved_in or None,
+    )
+    if isinstance(result, str):
+        return result
     return (
-        f"Decision {decision_id} resolved with option {fm['resolved_with']}: "
-        f"\"{fm['options'][fm['resolved_with'] - 1]}\""
+        f"Decision {decision_id} resolved with option {result['resolved_with']}: "
+        f"\"{result['options'][result['resolved_with'] - 1]}\""
     )
 
 
+def _decision_resolve_in_tx(
+    decision_id: str, *, resolved_with: int, rationale: str = "", resolved_in: str | None = None
+):
+    """Resolve one decision row inside the open transaction; doc or error string."""
+    try:
+        document, body = _tx_doc("decision", decision_id)
+    except KeyError:
+        return f"Error: Decision not found: {decision_id}"
+    try:
+        fm = _resolve_decision_doc(
+            document,
+            resolved_with=resolved_with,
+            rationale=rationale,
+            resolved_in=resolved_in,
+        )
+    except ValueError as exc:
+        return f"Error: {exc}"
+    _store_tx().put("decision", decision_id, fm, body=body)
+    _mutate_and_save(_load())
+    return fm
+
+
+@_transactional("backlog_decision_drop")
 def backlog_decision_drop(decision_id: str, reason: str) -> str:
     """Drop a decision with a reason (no option picked)."""
-    bp = _backlog_path()
-    try:
-        _drop_decision(bp, decision_id, reason=reason)
-    except (ValueError, FileNotFoundError) as exc:
-        return f"Error: {exc}"
+    result = _decision_drop_in_tx(decision_id, reason=reason)
+    if isinstance(result, str):
+        return result
     return f"Decision {decision_id} dropped: {reason}"
 
 
+def _decision_drop_in_tx(decision_id: str, *, reason: str):
+    """Drop one decision row inside the open transaction; doc or error string."""
+    try:
+        document, body = _tx_doc("decision", decision_id)
+    except KeyError:
+        return f"Error: Decision not found: {decision_id}"
+    try:
+        fm = _drop_decision_doc(document, reason=reason)
+    except ValueError as exc:
+        return f"Error: {exc}"
+    _store_tx().put("decision", decision_id, fm, body=body)
+    _mutate_and_save(_load())
+    return fm
+
+
+@_transactional("backlog_decision_update")
 def backlog_decision_update(
     decision_id: str,
     title: str = "",
@@ -4356,7 +4727,6 @@ def backlog_decision_update(
     body: str = "",
 ) -> str:
     """Edit a decision in place (pre-resolution fields only)."""
-    bp = _backlog_path()
     patch: dict = {}
     if title:
         patch["title"] = title
@@ -4365,12 +4735,15 @@ def backlog_decision_update(
     if recommendation is not None:
         patch["recommendation"] = recommendation
     try:
-        fm = _update_decision(bp, decision_id, patch)
-    except (ValueError, FileNotFoundError) as exc:
+        document, stored_body = _tx_doc("decision", decision_id)
+    except KeyError:
+        return f"Error: Decision not found: {decision_id}"
+    try:
+        fm = _apply_decision_patch(document, patch)
+    except ValueError as exc:
         return f"Error: {exc}"
-    if body:
-        cur_fm, _ = _read_decision(bp, decision_id)
-        _write_task_file(_decision_path(bp, decision_id), cur_fm, body)
+    _store_tx().put("decision", decision_id, fm, body=body or stored_body)
+    _mutate_and_save(_load())
     return f"Decision {decision_id} updated."
 
 
@@ -4397,6 +4770,7 @@ def backlog_continuity_items(
 
 
 @mcp.tool()
+@_transactional("backlog_idea_create")
 def backlog_idea_create(
     title: str,
     body: str = "",
@@ -4433,21 +4807,20 @@ def backlog_idea_create(
     if not tldr:
         tldr = extract_tldr(body) or title[:TLDR_MAX_CHARS]
         tldr_autogen = True
-    try:
-        iid, target = _write_idea(
-            bp,
-            title=title,
-            body=body,
-            tags=tags or [],
-            status=status,
-            related_tasks=related_tasks or [],
-            related_issues=related_issues or [],
-            created_by=created_by,
-            tldr=tldr,
-            tldr_autogen=tldr_autogen,
-        )
-    except ValueError as exc:
-        return f"Error: {exc}"
+    result = _idea_create_in_tx(
+        title=title,
+        body=body,
+        tags=tags or [],
+        status=status,
+        related_tasks=related_tasks or [],
+        related_issues=related_issues or [],
+        created_by=created_by,
+        tldr=tldr,
+        tldr_autogen=tldr_autogen,
+    )
+    if isinstance(result, str):
+        return f"Error: {result}"
+    iid, target = result
 
     # Plan C: auto-detect inline ID mentions, materialize as `references` links.
     try:
@@ -4459,7 +4832,42 @@ def backlog_idea_create(
         rel = target.relative_to(ROOT)
     except ValueError:
         rel = target
-    return f"Idea created: {iid} — {title}\nFile: {rel}"
+    return f"Idea created: {iid} \u2014 {title}\nFile: {rel}"
+
+
+def _idea_create_in_tx(
+    *,
+    title: str,
+    body: str = "",
+    tags: list | None = None,
+    status: str = "",
+    related_tasks: list | None = None,
+    related_issues: list | None = None,
+    created_by: str = "Claude",
+    tldr: str = "",
+    tldr_autogen: bool = False,
+):
+    """Create one idea row inside the open transaction; `(id, path)` or an error.
+
+    `ideas/IDEAS.md` is regenerated by the exporter from the idea rows, so
+    nothing here writes it. Shared by the MCP tool and the viewer's POST.
+    """
+    try:
+        document = _build_idea_doc(
+            title=title,
+            tags=tags or [],
+            status=status,
+            related_tasks=related_tasks or [],
+            related_issues=related_issues or [],
+            created_by=created_by,
+            tldr=tldr,
+            tldr_autogen=tldr_autogen,
+        )
+        iid = _store_tx().create("idea", document, body=body)
+    except ValueError as exc:
+        return str(exc)
+    _mutate_and_save(_load())
+    return iid, _idea_path(_backlog_path(), iid)
 
 
 @mcp.tool()
@@ -4483,8 +4891,9 @@ def backlog_idea_list(
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
+    data = _load()
     if idea_id:
-        out = _list_ideas(bp, idea_id=idea_id)
+        out = _idea_records(data, idea_id=idea_id)
         if not out:
             return f"Idea not found: {idea_id}"
         rec = out[0]
@@ -4492,14 +4901,13 @@ def backlog_idea_list(
         fm_lines = [f"  {k}: {v}" for k, v in rec.items()]
         return "---\n" + "\n".join(fm_lines) + "\n---\n" + body
 
-    entries = _list_ideas(
-        bp,
+    entries = _idea_records(
+        data,
         status=status or None,
         tag=tag or None,
         archived=archived,
         related_task=related_task or None,
         related_issue=related_issue or None,
-        limit=None,  # fetch all; cap here (below) so we can report overflow
         summary=not verbose,
     )
     if not entries:
@@ -4525,6 +4933,50 @@ def backlog_idea_list(
     return "\n".join(lines)
 
 
+def _idea_records(
+    data: dict,
+    *,
+    idea_id: str | None = None,
+    status: str | None = None,
+    tag: str | None = None,
+    archived: bool = False,
+    related_task: str | None = None,
+    related_issue: str | None = None,
+    summary: bool = True,
+) -> list[dict]:
+    """Idea documents from the store's rows, newest-first, filters ANDed.
+
+    The row map replaces the old `ideas/IDEA-*.md` glob: a list and the write
+    that follows it now read one snapshot. `summary=True` omits the body.
+    """
+    if idea_id:
+        row = _dict_row(data, "idea", idea_id)
+        if row is None:
+            return []
+        return [{**row[0], "body": (row[1] or "").rstrip("\n")}]
+
+    out: list[dict] = []
+    for _iid, fm, body in _dict_rows(data, "idea", include_archived=True):
+        if not archived and fm.get("archived"):
+            continue
+        if status is not None and (fm.get("status") or "") != status:
+            continue
+        if tag is not None and tag not in (fm.get("tags") or []):
+            continue
+        if related_task is not None and related_task not in (fm.get("related_tasks") or []):
+            continue
+        if related_issue is not None and related_issue not in (fm.get("related_issues") or []):
+            continue
+        out.append(dict(fm) if summary else {**fm, "body": (body or "").rstrip("\n")})
+
+    def _sort_key(entry: dict) -> tuple:
+        match = re.search(r"(\d+)$", entry.get("id", ""))
+        return (entry.get("created", ""), int(match.group(1)) if match else 0)
+
+    out.sort(key=_sort_key, reverse=True)
+    return out
+
+
 @mcp.tool()
 def backlog_idea_get(
     idea_id: str,
@@ -4547,10 +4999,10 @@ def backlog_idea_get(
         return "Error: sections=[] requested no sections; pass sections=None for the slim view or name at least one section"
     if sections:
         return "Error: ideas have no canonical body sections — use verbose=True to read the full body."
-    try:
-        fm, body = _read_idea(bp, idea_id)
-    except FileNotFoundError:
+    row = _dict_row(_load(), "idea", idea_id)
+    if row is None:
         return f"Idea not found: {idea_id}"
+    fm, body = row[0], (row[1] or "").rstrip("\n")
 
     # ── verbose mode ─────────────────────────────────────────────────────────
     if verbose:
@@ -4583,6 +5035,7 @@ IDEA_UPDATE_FIELDS = IDEA_UPDATE_LIST_FIELDS | IDEA_UPDATE_SCALAR_FIELDS | {"arc
 
 
 @mcp.tool()
+@_transactional("backlog_idea_update")
 def backlog_idea_update(idea_id: str, field: str, value: str = "") -> str:
     """Set one field on an idea. List fields take a comma-separated value; an
     empty value clears the field.
@@ -4606,12 +5059,25 @@ def backlog_idea_update(idea_id: str, field: str, value: str = "") -> str:
         updates = {field: value}
     body = value if field == "body" else ""
 
+    tx = _store_tx()
     try:
-        fm, _ = _update_idea(bp, idea_id, **updates)
-    except FileNotFoundError:
+        document, stored_body = _tx_doc("idea", idea_id)
+    except KeyError:
         return f"Idea not found: {idea_id}"
+    new_body = updates.pop("body", stored_body)
+    archived = updates.pop("archived", None)
+    try:
+        fm = _apply_idea_updates(document, **updates)
     except ValueError as exc:
         return f"Error: {exc}"
+    tx.put("idea", idea_id, fm, body=new_body)
+    # Archival is never implicit: the flag on the row is what the store acts on,
+    # so it moves through the explicit archive/unarchive calls.
+    if archived is True:
+        tx.archive("idea", idea_id)
+    elif archived is False:
+        tx.unarchive("idea", idea_id)
+    _mutate_and_save(_load())
 
     # Plan C: auto-detect inline ID mentions on body updates.
     if body:
@@ -4654,6 +5120,7 @@ def backlog_note(
     return f"Error: unknown action {action!r}"
 
 
+@_transactional("backlog_note_create")
 def backlog_note_create(text: str, pinned: bool = False) -> str:
     """Write a sticky note onto the user's Desk (dashboard).
 
@@ -4666,16 +5133,64 @@ def backlog_note_create(text: str, pinned: bool = False) -> str:
     bp = _backlog_path()
     if not bp.exists():
         return f"Error: no backlog found at {bp}. Run `backlog_init` first."
-    from taskmaster.taskmaster_v3 import write_note as _write_note
-    try:
-        nid, target = _write_note(bp, text=text, author="claude", pinned=pinned)
-    except ValueError as exc:
-        return f"Error: {exc}"
+    result = _note_create_in_tx(text=text, author="claude", pinned=pinned)
+    if isinstance(result, str):
+        return f"Error: {result}"
+    nid, target = result
     try:
         rel = target.relative_to(ROOT)
     except ValueError:
         rel = target
     return f"Note created: {nid}\nFile: {rel}"
+
+
+def _note_create_in_tx(*, text: str, author: str, pinned: bool):
+    """Create one note row inside the open transaction; `(id, path)` or an error."""
+    from taskmaster.taskmaster_v3 import (
+        build_note_doc as _build_note_doc,
+        note_path as _note_path,
+    )
+    try:
+        document, body = _build_note_doc(text=text, author=author, pinned=pinned)
+        nid = _store_tx().create("note", document, body=body)
+    except ValueError as exc:
+        return str(exc)
+    _mutate_and_save(_load())
+    return nid, _note_path(_backlog_path(), nid)
+
+
+def _note_update_in_tx(note_id: str, *, text: str | None, pinned: bool | None):
+    """Patch one note row inside the open transaction; None on success."""
+    from taskmaster.taskmaster_v3 import apply_note_updates as _apply_note_updates
+    try:
+        document, body = _tx_doc("note", note_id)
+    except KeyError:
+        return f"Note not found: {note_id}"
+    try:
+        fm, new_body = _apply_note_updates(document, body, text=text, pinned=pinned)
+    except ValueError as exc:
+        return f"Error: {exc}"
+    _store_tx().put("note", note_id, fm, body=new_body)
+    _mutate_and_save(_load())
+    return None
+
+
+def _note_archive_in_tx(note_id: str):
+    """Archive one note row inside the open transaction; None on success.
+
+    The document keeps the `archived_at` stamp; the move into `notes/_archive/`
+    follows from the row's archive flag, which `tx.archive` owns.
+    """
+    from taskmaster.taskmaster_v3 import archive_note_doc as _archive_note_doc
+    tx = _store_tx()
+    try:
+        document, body = _tx_doc("note", note_id)
+    except KeyError:
+        return f"Note not found: {note_id}"
+    tx.put("note", note_id, _archive_note_doc(document), body=body)
+    tx.archive("note", note_id)
+    _mutate_and_save(_load())
+    return None
 
 
 def backlog_note_list(include_archived: bool = False, limit: int = DEFAULT_LIST_LIMIT) -> str:
@@ -4687,8 +5202,7 @@ def backlog_note_list(include_archived: bool = False, limit: int = DEFAULT_LIST_
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    from taskmaster.taskmaster_v3 import list_notes as _list_notes
-    notes = _list_notes(bp, include_archived=include_archived)
+    notes = _note_records(_load(), include_archived=include_archived)
     if not notes:
         return "Desk is clear — no notes."
     notes, overflow = _cap_list(notes, limit)
@@ -4705,20 +5219,41 @@ def backlog_note_list(include_archived: bool = False, limit: int = DEFAULT_LIST_
     return "\n".join(lines)
 
 
+def _note_records(data: dict, *, include_archived: bool = False) -> list[dict]:
+    """Note documents with bodies, pinned first then created desc (id desc tiebreak)."""
+    out: list[dict] = []
+    for _nid, fm, body in _dict_rows(data, "note", include_archived=include_archived):
+        out.append({**fm, "body": (body or "").rstrip("\n")})
+
+    def _num(note: dict) -> int:
+        match = re.search(r"(\d+)$", note.get("id", ""))
+        return int(match.group(1)) if match else 0
+
+    # Numeric-id tiebreak prevents nondeterminism when created timestamps tie.
+    def _key(note: dict) -> tuple:
+        return (note.get("created", ""), _num(note))
+
+    pinned = [n for n in out if n.get("pinned")]
+    unpinned = [n for n in out if not n.get("pinned")]
+    pinned.sort(key=_key, reverse=True)
+    unpinned.sort(key=_key, reverse=True)
+    return pinned + unpinned
+
+
 def backlog_note_get(note_id: str) -> str:
     """Read one sticky note in full (frontmatter + complete text)."""
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    from taskmaster.taskmaster_v3 import read_note as _read_note
-    try:
-        fm, body = _read_note(bp, note_id)
-    except FileNotFoundError:
+    row = _dict_row(_load(), "note", note_id)
+    if row is None:
         return f"Note not found: {note_id}"
+    fm, body = row[0], (row[1] or "").rstrip("\n")
     fm_lines = [f"  {k}: {v}" for k, v in fm.items()]
     return "---\n" + "\n".join(fm_lines) + "\n---\n" + body
 
 
+@_transactional("backlog_note_update")
 def backlog_note_update(note_id: str, text: str = "", pinned: bool | None = None) -> str:
     """Edit a sticky note's text and/or pin state. Author is immutable —
     a user-authored note stays user-authored even if Claude edits it
@@ -4726,27 +5261,22 @@ def backlog_note_update(note_id: str, text: str = "", pinned: bool | None = None
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    from taskmaster.taskmaster_v3 import update_note as _update_note
-    try:
-        _update_note(bp, note_id, text=text or None, pinned=pinned)
-    except FileNotFoundError:
-        return f"Note not found: {note_id}"
-    except ValueError as exc:
-        return f"Error: {exc}"
+    error = _note_update_in_tx(note_id, text=text or None, pinned=pinned)
+    if error is not None:
+        return error
     return f"Note updated: {note_id}"
 
 
+@_transactional("backlog_note_archive")
 def backlog_note_archive(note_id: str) -> str:
     """Archive a sticky note (moves it off the Desk into notes/_archive/).
     Never archive user-authored notes unless the user explicitly asks."""
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    from taskmaster.taskmaster_v3 import archive_note as _archive_note
-    try:
-        _archive_note(bp, note_id)
-    except FileNotFoundError:
-        return f"Note not found: {note_id}"
+    error = _note_archive_in_tx(note_id)
+    if error is not None:
+        return error
     return f"Note archived: {note_id}"
 
 
@@ -4756,6 +5286,7 @@ ALLOWED_AREA_FIELDS = {"name", "description", "anchors"}
 
 
 @mcp.tool()
+@_transactional("backlog_area_create")
 def backlog_area_create(
     area_id: str, name: str, description: str = "", anchors: list[str] | None = None
 ) -> str:
@@ -4769,7 +5300,10 @@ def backlog_area_create(
     bp = _backlog_path()
     if not bp.exists():
         return f"Error: no backlog found at {bp}. Run `backlog_init` first."
-    from taskmaster.taskmaster_v3 import write_area as _write_area
+    from taskmaster.taskmaster_v3 import (
+        area_path as _area_path,
+        validate_area_doc as _validate_area_doc,
+    )
     fm = {
         "id": area_id,
         "name": name,
@@ -4777,15 +5311,23 @@ def backlog_area_create(
         "anchors": list(anchors) if anchors else [],
         "created": _now(),
     }
+    tx = _store_tx()
     try:
-        target = _write_area(bp, fm, "")
+        document = _validate_area_doc(fm)
     except ValueError as exc:
         return f"Error: {exc}"
+    # Area ids are caller-derived, so a collision is a user error with a
+    # readable message rather than an exception out of the transaction.
+    if tx.id_taken("area", area_id):
+        return f"Error: area `{area_id}` already exists"
+    tx.create("area", document, body="")
+    _mutate_and_save(_load())
+    target = _area_path(bp, area_id)
     try:
         rel = target.relative_to(ROOT)
     except ValueError:
         rel = target
-    return f"Area created: {area_id} — {name}\nFile: {rel}"
+    return f"Area created: {area_id} \u2014 {name}\nFile: {rel}"
 
 
 @mcp.tool()
@@ -4798,8 +5340,7 @@ def backlog_area_list(limit: int = DEFAULT_LIST_LIMIT) -> str:
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    from taskmaster.taskmaster_v3 import list_areas as _list_areas
-    areas = _list_areas(bp)
+    areas = [dict(doc) for _aid, doc, _body in _dict_rows(_load(), "area")]
     if not areas:
         return "No areas defined."
     areas, overflow = _cap_list(areas, limit)
@@ -4821,11 +5362,10 @@ def backlog_area_get(area_id: str) -> str:
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    from taskmaster.taskmaster_v3 import read_area as _read_area
-    try:
-        fm, body = _read_area(bp, area_id)
-    except FileNotFoundError:
+    row = _dict_row(_load(), "area", area_id)
+    if row is None:
         return f"Area not found: {area_id}"
+    fm, body = row[0], (row[1] or "").rstrip("\n")
     fm_lines = [f"  {k}: {v}" for k, v in fm.items()]
     out = "---\n" + "\n".join(fm_lines) + "\n---"
     if body:
@@ -4834,6 +5374,7 @@ def backlog_area_get(area_id: str) -> str:
 
 
 @mcp.tool()
+@_transactional("backlog_area_update")
 def backlog_area_update(area_id: str, field: str, value: str) -> str:
     """Update a single field on an Area.
 
@@ -4848,7 +5389,7 @@ def backlog_area_update(area_id: str, field: str, value: str) -> str:
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    from taskmaster.taskmaster_v3 import update_area as _update_area
+    from taskmaster.taskmaster_v3 import apply_area_updates as _apply_area_updates
     if field == "anchors":
         try:
             parsed = json.loads(value)
@@ -4860,12 +5401,16 @@ def backlog_area_update(area_id: str, field: str, value: str) -> str:
     else:
         updates = {field: value}
     try:
-        _update_area(bp, area_id, updates)
-    except FileNotFoundError:
+        document, body = _tx_doc("area", area_id)
+    except KeyError:
         return f"Area not found: {area_id}"
+    try:
+        fm = _apply_area_updates(document, updates)
     except ValueError as exc:
         return f"Error: {exc}"
-    return f"Area updated: {area_id} — field `{field}`"
+    _store_tx().put("area", area_id, fm, body=body)
+    _mutate_and_save(_load())
+    return f"Area updated: {area_id} \u2014 field `{field}`"
 
 
 @mcp.tool()
@@ -5337,6 +5882,39 @@ def _append_changelog(
     return f"\n\n**Session logged** to PROGRESS.md changelog."
 
 
+def _smart_close_handovers_in_tx(data: dict, task_id: str) -> list[str]:
+    """Auto-close or flag the open handovers a terminal task belongs to.
+
+    Runs on the caller's transaction so the handover flips commit with the task
+    transition that caused them. Best-effort: a handover the planner cannot
+    evaluate leaves the task change alone.
+    """
+    try:
+        from taskmaster.taskmaster_v3 import smart_auto_close_handovers as _smart_close
+        terminal: set[str] = set()
+        for epic in data.get("epics", []):
+            for task in epic.get("tasks", []):
+                if task.get("status") in ("done", "archived"):
+                    terminal.add(task["id"])
+        terminal.add(task_id)  # the one we just transitioned
+        tx = _store_tx()
+        plan = _smart_close(
+            tx.list("handover"),
+            triggering_task_id=task_id,
+            done_or_archived_ids=terminal,
+        )
+        flipped = plan["closed"] + plan["flagged"]
+        for handover_id, document in flipped:
+            tx.put("handover", handover_id, document)
+    except Exception:
+        return []
+    if flipped:
+        data2 = _load()
+        _sync_handover_index_tx(data2)
+        _mutate_and_save(data2)
+    return [handover_id for handover_id, _doc in flipped]
+
+
 def _open_bugs_for_task(bp, task_id: str) -> tuple[list[str], list[str]]:
     """Return (open_bugs, fixed_bugs) whose found_in matches task_id.
 
@@ -5344,18 +5922,11 @@ def _open_bugs_for_task(bp, task_id: str) -> tuple[list[str], list[str]]:
     must still gate task id "test-epic-001". Shared by complete_task and batch_update
     so both honor the same close-gate.
     """
-    from taskmaster.taskmaster_v3 import (
-        list_bug_ids as _list_bug_ids,
-        read_bug as _read_bug,
-    )
     open_bugs: list[str] = []
     fixed_bugs: list[str] = []
     tid = (task_id or "").casefold()
-    for bid in _list_bug_ids(bp):
-        try:
-            bfm, _ = _read_bug(bp, bid)
-        except (OSError, ValueError):
-            continue
+    rows = _tx_rows("bug") if _active_tx() is not None else _dict_rows(_load(), "bug")
+    for bid, bfm, _body in rows:
         if (bfm.get("found_in") or "").casefold() == tid:
             st = bfm.get("status")
             if st == "open":
@@ -5440,10 +6011,7 @@ def backlog_complete_task(
 
     # Bug close-gate (per bug-tier redesign)
     bp = _backlog_path()
-    from taskmaster.taskmaster_v3 import (
-        archive_bug as _archive_bug,
-        sync_bug_index as _sync_bug_index,
-    )
+    from taskmaster.taskmaster_v3 import assert_bug_archivable as _assert_bug_archivable
     open_bugs, fixed_bugs = _open_bugs_for_task(bp, task_id)
     if open_bugs:
         return (
@@ -5492,38 +6060,28 @@ def backlog_complete_task(
                 _clear_session_bundle()
 
     if target_status == "done":
-        try:
-            from taskmaster.taskmaster_v3 import smart_auto_close_handovers as _smart_close
-            # Collect done/archived task IDs from backlog for smart-close evaluation.
-            _all_terminal: set[str] = set()
-            for _epic in data.get("epics", []):
-                for _t in _epic.get("tasks", []):
-                    if _t.get("status") in ("done", "archived"):
-                        _all_terminal.add(_t["id"])
-            _all_terminal.add(task_id)  # the one we just transitioned
-            smart_close_result = _smart_close(
-                _backlog_path(),
-                triggering_task_id=task_id,
-                done_or_archived_ids=_all_terminal,
-            )
-            flipped_handovers = smart_close_result["closed"] + smart_close_result["flagged"]
-        except Exception:
-            flipped_handovers = []
-        if flipped_handovers:
-            data2 = _load()
-            _sync_handover_index(data2, _backlog_path())
-            _mutate_and_save(data2)
+        _smart_close_handovers_in_tx(data, task_id)
 
-    # Archive bugs that were fixed during this task (per bug-tier redesign)
+    # Archive bugs that were fixed during this task (per bug-tier redesign).
+    # Same transaction as the completion: a task that closed its bugs and a
+    # rollback of that completion must not leave the bugs filed.
     if target_status == "done" and fixed_bugs:
+        archived_any = False
         for bid in fixed_bugs:
             try:
-                _archive_bug(bp, bid)
-            except (OSError, ValueError):
-                pass
-        data3 = _load()
-        _sync_bug_index(data3, bp)
-        _mutate_and_save(data3)
+                document, _body = _tx_doc("bug", bid)
+            except KeyError:
+                continue
+            try:
+                _assert_bug_archivable(document)
+            except ValueError:
+                continue
+            _store_tx().archive("bug", bid)
+            archived_any = True
+        if archived_any:
+            data3 = _load()
+            _sync_bug_index_tx(data3)
+            _mutate_and_save(data3)
 
     # Append changelog entry if session summary provided
     changelog_msg = ""
@@ -5650,26 +6208,7 @@ def backlog_archive_task(task_id: str, reason: str = "done") -> str:
     _enqueue_linear_push_if_synced(task_id, task=task)
 
     # Smart-close open handovers that reference this task.
-    try:
-        from taskmaster.taskmaster_v3 import smart_auto_close_handovers as _smart_close
-        _all_terminal: set[str] = set()
-        for _epic in data.get("epics", []):
-            for _t in _epic.get("tasks", []):
-                if _t.get("status") in ("done", "archived"):
-                    _all_terminal.add(_t["id"])
-        _all_terminal.add(task_id)  # the one we just archived
-        smart_close_result = _smart_close(
-            _backlog_path(),
-            triggering_task_id=task_id,
-            done_or_archived_ids=_all_terminal,
-        )
-        flipped_handovers = smart_close_result["closed"] + smart_close_result["flagged"]
-        if flipped_handovers:
-            data2 = _load()
-            _sync_handover_index(data2, _backlog_path())
-            _mutate_and_save(data2)
-    except Exception:
-        pass
+    _smart_close_handovers_in_tx(data, task_id)
 
     return f"Archived `{task_id}` — {task['title']} (reason: {reason})"
 
@@ -8346,15 +8885,14 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 limit = int(qs.get("limit", ["100"])[0])
             except (TypeError, ValueError):
                 limit = 100
-            entries = _list_ideas(
-                bp,
+            entries = _idea_records(
+                _store_for(bp).load_dict(),
                 status=status,
                 tag=tag,
                 archived=archived,
                 related_task=related_task,
-                limit=max(1, limit),
                 summary=summary,
-            )
+            )[: max(1, limit)]
             self._send_json(200, {"ideas": entries})
             return
         elif clean_path == "/api/continuity":
@@ -8367,9 +8905,11 @@ class ViewerHandler(BaseHTTPRequestHandler):
             return
         elif m := re.fullmatch(r"/api/decisions/([A-Za-z0-9_\-]+)", clean_path):
             decision_id = m.group(1)
-            bp = _backlog_path()
+            row = _dict_row(_load(), "decision", decision_id)
             try:
-                fm, body = _read_decision(bp, decision_id)
+                if row is None:
+                    raise FileNotFoundError(decision_id)
+                fm, body = row[0], row[1] or ""
                 self._send_json(200, {**fm, "body": body})
             except FileNotFoundError:
                 self._send_json(404, {"ok": False, "error": f"decision {decision_id} not found"})
@@ -8490,7 +9030,6 @@ class ViewerHandler(BaseHTTPRequestHandler):
         import re
 
         if self.path == "/api/ideas":
-            from taskmaster.taskmaster_v3 import _resolve_artifact_root
             length = int(self.headers.get("Content-Length") or 0)
             raw = self.rfile.read(length).decode("utf-8") if length else ""
             try:
@@ -8502,14 +9041,15 @@ class ViewerHandler(BaseHTTPRequestHandler):
             if not title:
                 self._send_json(400, {"ok": False, "error": "title is required"})
                 return
-            artifact_root = _resolve_artifact_root()
-            bp = artifact_root / "backlog.yaml"
+            # One store root per process (spec decision 2): resolving the
+            # artifact root separately here opened a second store, and the dict
+            # `_idea_create_in_tx` loaded then belonged to neither transaction.
+            bp = _backlog_path()
             if not bp.exists():
                 self._send_json(400, {"ok": False, "error": f"no backlog at {bp}"})
                 return
-            try:
-                iid, target = _write_idea(
-                    bp,
+            with _transaction(tool="viewer:POST /api/ideas"):
+                result = _idea_create_in_tx(
                     title=title,
                     body=payload.get("body", ""),
                     tags=payload.get("tags") or [],
@@ -8518,14 +9058,14 @@ class ViewerHandler(BaseHTTPRequestHandler):
                     related_issues=payload.get("related_issues") or [],
                     created_by=payload.get("created_by", "user"),
                 )
-            except ValueError as e:
-                self._send_json(400, {"ok": False, "error": str(e)})
+            if isinstance(result, str):
+                self._send_json(400, {"ok": False, "error": result})
                 return
+            iid, target = result
             self._send_json(201, {"ok": True, "id": iid, "path": str(target)})
             return
 
         if self.path == "/api/notes":
-            from taskmaster.taskmaster_v3 import write_note as _write_note
             length = int(self.headers.get("Content-Length") or 0)
             raw = self.rfile.read(length).decode("utf-8") if length else ""
             try:
@@ -8541,20 +9081,18 @@ class ViewerHandler(BaseHTTPRequestHandler):
             if not bp.exists():
                 self._send_json(400, {"ok": False, "error": f"no backlog at {bp}"})
                 return
-            try:
-                nid, _target = _write_note(
-                    bp, text=text, author="user",
-                    pinned=bool(payload.get("pinned", False)),
+            with _transaction(tool="viewer:POST /api/notes"):
+                result = _note_create_in_tx(
+                    text=text, author="user", pinned=bool(payload.get("pinned", False))
                 )
-            except ValueError as e:
-                self._send_json(400, {"ok": False, "error": str(e)})
+            if isinstance(result, str):
+                self._send_json(400, {"ok": False, "error": result})
                 return
-            self._send_json(201, {"ok": True, "id": nid})
+            self._send_json(201, {"ok": True, "id": result[0]})
             return
 
         m = re.fullmatch(r"/api/notes/([A-Za-z0-9_\-]+)/(update|archive)", self.path)
         if m:
-            from taskmaster.taskmaster_v3 import update_note as _update_note, archive_note as _archive_note
             note_id, action = m.group(1), m.group(2)
             length = int(self.headers.get("Content-Length") or 0)
             raw = self.rfile.read(length).decode("utf-8") if length else ""
@@ -8563,23 +9101,20 @@ class ViewerHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._send_json(400, {"ok": False, "error": f"invalid JSON: {e}"})
                 return
-            bp = _backlog_path()
-            try:
+            with _transaction(tool=f"viewer:POST /api/notes/{action}"):
                 if action == "archive":
-                    _archive_note(bp, note_id)
+                    error = _note_archive_in_tx(note_id)
                 else:
                     text = payload.get("text")
                     pinned = payload.get("pinned")
-                    _update_note(
-                        bp, note_id,
+                    error = _note_update_in_tx(
+                        note_id,
                         text=(text.strip() if isinstance(text, str) and text.strip() else None),
                         pinned=(bool(pinned) if pinned is not None else None),
                     )
-            except FileNotFoundError:
-                self._send_json(404, {"ok": False, "error": f"note {note_id} not found"})
-                return
-            except ValueError as e:
-                self._send_json(400, {"ok": False, "error": str(e)})
+            if error is not None:
+                status = 404 if error.startswith("Note not found") else 400
+                self._send_json(status, {"ok": False, "error": error})
                 return
             self._send_json(200, {"ok": True, "id": note_id})
             return
@@ -8596,18 +9131,15 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 return
             status = payload.get("status", "")
             reason = payload.get("reason", "")
-            try:
-                from taskmaster.taskmaster_v3 import update_handover_status as _update
-                fm, _ = _update(_backlog_path(), handover_id=handover_id, status=status, reason=reason)
-            except ValueError as exc:
-                self._send_json(400, {"ok": False, "error": str(exc)})
-                return
-            except FileNotFoundError:
-                self._send_json(404, {"ok": False, "error": f"handover not found: {handover_id}"})
-                return
             with _transaction(tool="viewer:POST /api/handovers/status") as data:
-                _sync_handover_index(data, _backlog_path())
-                _mutate_and_save(data)
+                fm = _handover_set_status(handover_id, status=status, reason=reason)
+                if not isinstance(fm, str):
+                    _sync_handover_index_tx(data)
+                    _mutate_and_save(data)
+            if isinstance(fm, str):
+                code = 404 if fm.startswith("Handover not found") else 400
+                self._send_json(code, {"ok": False, "error": fm})
+                return
             self._send_json(200, {"ok": True, "id": handover_id, "status": fm["status"]})
             return
 
@@ -8687,14 +9219,15 @@ class ViewerHandler(BaseHTTPRequestHandler):
             if resolved_with is None:
                 self._send_json(400, {"ok": False, "error": "resolved_with is required"})
                 return
-            bp = _backlog_path()
-            try:
-                fm = _resolve_decision(bp, decision_id, resolved_with=int(resolved_with), rationale=rationale)
-                self._send_json(200, {"ok": True, "id": decision_id, "status": fm.get("status")})
-            except FileNotFoundError:
-                self._send_json(404, {"ok": False, "error": f"decision {decision_id} not found"})
-            except ValueError as e:
-                self._send_json(400, {"ok": False, "error": str(e)})
+            with _transaction(tool="viewer:POST /api/decisions/resolve"):
+                fm = _decision_resolve_in_tx(
+                    decision_id, resolved_with=int(resolved_with), rationale=rationale
+                )
+            if isinstance(fm, str):
+                code = 404 if "not found" in fm else 400
+                self._send_json(code, {"ok": False, "error": fm})
+                return
+            self._send_json(200, {"ok": True, "id": decision_id, "status": fm.get("status")})
             return
 
         m = re.fullmatch(r"/api/decisions/([A-Za-z0-9_\-]+)/drop", self.path)
@@ -8708,21 +9241,19 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 self._send_json(400, {"ok": False, "error": f"invalid JSON: {e}"})
                 return
             reason = payload.get("reason", "")
-            bp = _backlog_path()
-            try:
-                fm = _drop_decision(bp, decision_id, reason=reason)
-                self._send_json(200, {"ok": True, "id": decision_id, "status": fm.get("status")})
-            except FileNotFoundError:
-                self._send_json(404, {"ok": False, "error": f"decision {decision_id} not found"})
-            except ValueError as e:
-                self._send_json(400, {"ok": False, "error": str(e)})
+            with _transaction(tool="viewer:POST /api/decisions/drop"):
+                fm = _decision_drop_in_tx(decision_id, reason=reason)
+            if isinstance(fm, str):
+                code = 404 if "not found" in fm else 400
+                self._send_json(code, {"ok": False, "error": fm})
+                return
+            self._send_json(200, {"ok": True, "id": decision_id, "status": fm.get("status")})
             return
 
         # ── Bug HTTP routes ───────────────────────────────────────────────────────
         clean_path_post = self.path.split("?")[0].rstrip("/")
 
         if clean_path_post == "/api/bugs":
-            from taskmaster.taskmaster_v3 import write_bug as _write_bug_http, sync_bug_index as _sync_bug_index_http
             length = int(self.headers.get("Content-Length") or 0)
             raw = self.rfile.read(length).decode("utf-8") if length else ""
             try:
@@ -8738,9 +9269,8 @@ class ViewerHandler(BaseHTTPRequestHandler):
             if not bp.exists():
                 self._send_json(400, {"ok": False, "error": f"no backlog at {bp}"})
                 return
-            try:
-                bid, target = _write_bug_http(
-                    bp,
+            with _transaction(tool="viewer:POST /api/bugs"):
+                result = _bug_create_in_tx(
                     title=title,
                     found_in=payload.get("found_in") or None,
                     discovered_by=payload.get("discovered_by", "user"),
@@ -8749,12 +9279,10 @@ class ViewerHandler(BaseHTTPRequestHandler):
                     location=payload.get("location") or [],
                     body=payload.get("body", ""),
                 )
-            except ValueError as e:
-                self._send_json(400, {"ok": False, "error": str(e)})
+            if isinstance(result, str):
+                self._send_json(400, {"ok": False, "error": result})
                 return
-            with _transaction(tool="viewer:POST /api/bugs") as data:
-                _sync_bug_index_http(data, bp)
-                _mutate_and_save(data)
+            bid, target = result
             self._send_json(201, {"ok": True, "id": bid, "path": str(target)})
             return
 
@@ -8777,11 +9305,6 @@ class ViewerHandler(BaseHTTPRequestHandler):
 
         m = re.fullmatch(r"/api/bugs/promote", clean_path_post)
         if m:
-            from taskmaster.taskmaster_v3 import (
-                promote_bugs_to_issue as _promote_http,
-                sync_bug_index as _sync_bug_index_http2,
-                sync_issue_index as _sync_issue_index_http,
-            )
             bp = _backlog_path()
             length = int(self.headers.get("Content-Length") or 0)
             raw = self.rfile.read(length).decode("utf-8") if length else ""
@@ -8806,9 +9329,8 @@ class ViewerHandler(BaseHTTPRequestHandler):
             if not evidence_text:
                 self._send_json(400, {"ok": False, "error": "evidence_text is required"})
                 return
-            try:
-                iid = _promote_http(
-                    bp,
+            with _transaction(tool="viewer:POST /api/bugs/promote"):
+                result = _promote_bugs_in_tx(
                     bug_ids=list(bug_ids),
                     title=title,
                     severity=severity,
@@ -8816,41 +9338,30 @@ class ViewerHandler(BaseHTTPRequestHandler):
                     components=payload.get("components") or None,
                     body=payload.get("body", ""),
                 )
-            except ValueError as e:
-                self._send_json(400, {"ok": False, "error": str(e)})
+            if isinstance(result, str):
+                self._send_json(400, {"ok": False, "error": result})
                 return
-            with _transaction(tool="viewer:POST /api/bugs/promote") as data:
-                _sync_bug_index_http2(data, bp)
-                _sync_issue_index_http(data, bp)
-                _mutate_and_save(data)
-            self._send_json(201, {"ok": True, "issue_id": iid})
+            self._send_json(201, {"ok": True, "issue_id": result[0]})
             return
 
         m = re.fullmatch(r"/api/bugs/([A-Za-z0-9_\-]+)/archive", clean_path_post)
         if m:
             bug_id = m.group(1)
-            from taskmaster.taskmaster_v3 import archive_bug as _archive_bug_http, sync_bug_index as _sync_bug_index_http3
-            bp = _backlog_path()
             length = int(self.headers.get("Content-Length") or 0)
             self.rfile.read(length)  # consume body
-            try:
-                _archive_bug_http(bp, bug_id)
-            except FileNotFoundError:
-                self._send_json(404, {"ok": False, "error": f"bug {bug_id} not found"})
+            with _transaction(tool="viewer:POST /api/bugs/archive"):
+                error = _bug_archive_in_tx(bug_id)
+            if error is not None:
+                code = 404 if error.startswith("Bug not found") else 400
+                self._send_json(code, {"ok": False, "error": error})
                 return
-            except ValueError as e:
-                self._send_json(400, {"ok": False, "error": str(e)})
-                return
-            with _transaction(tool="viewer:POST /api/bugs/archive") as data:
-                _sync_bug_index_http3(data, bp)
-                _mutate_and_save(data)
             self._send_json(200, {"ok": True, "id": bug_id})
             return
 
         m = re.fullmatch(r"/api/bugs/([A-Za-z0-9_\-]+)", clean_path_post)
         if m:
             bug_id = m.group(1)
-            from taskmaster.taskmaster_v3 import update_bug as _update_bug_http, sync_bug_index as _sync_bug_index_http4, BUG_STATUSES as _BUG_STATUSES_HTTP
+            from taskmaster.taskmaster_v3 import BUG_STATUSES as _BUG_STATUSES_HTTP
             bp = _backlog_path()
             length = int(self.headers.get("Content-Length") or 0)
             raw = self.rfile.read(length).decode("utf-8") if length else ""
@@ -8871,17 +9382,12 @@ class ViewerHandler(BaseHTTPRequestHandler):
             for field in ("components", "location"):
                 if field in payload and payload[field] is not None:
                     updates[field] = payload[field]
-            try:
-                fm, _ = _update_bug_http(bp, bug_id, **updates)
-            except FileNotFoundError:
-                self._send_json(404, {"ok": False, "error": f"bug {bug_id} not found"})
+            with _transaction(tool="viewer:PATCH /api/bugs"):
+                fm = _bug_update_in_tx(bug_id, updates)
+            if isinstance(fm, str):
+                code = 404 if fm.startswith("Bug not found") else 400
+                self._send_json(code, {"ok": False, "error": fm})
                 return
-            except ValueError as e:
-                self._send_json(400, {"ok": False, "error": str(e)})
-                return
-            with _transaction(tool="viewer:PATCH /api/bugs") as data:
-                _sync_bug_index_http4(data, bp)
-                _mutate_and_save(data)
             self._send_json(200, {"ok": True, "id": bug_id, "status": fm["status"]})
             return
 
@@ -9283,8 +9789,9 @@ def backlog_project_ship_order() -> list[str]:
 def backlog_project_set(yaml_content: str) -> str:
     """Write .taskmaster/project.yaml with strict validation.
 
-    Raises ValueError if YAML is malformed or schema invalid. Atomic write
-    using the existing _atomic_write helper. Returns the absolute path written.
+    Raises ValueError if YAML is malformed or schema invalid. The manifest is
+    a store-owned entity, so the write commits through a store transaction.
+    Returns the absolute path written.
     """
     try:
         data = yaml_io.safe_load(yaml_content) or {}
@@ -9298,9 +9805,27 @@ def backlog_project_set(yaml_content: str) -> str:
     path = project_yaml_path(root)
     _ensure_taskmaster_dir(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    rendered = yaml.safe_dump(data, sort_keys=False, allow_unicode=True, default_flow_style=False)
-    _atomic_write(path, rendered)
+    _write_project_manifest(path, data)
     return str(path)
+
+
+def _write_project_manifest(path: Path, document: dict) -> None:
+    """Commit `project.yaml` through the store that owns its directory.
+
+    The store knows `project` as a kind and renders the file itself, so the
+    manifest can no longer be written behind its back and silently reverted by
+    the next scan.
+    """
+    backlog_path = path.parent / "backlog.yaml"
+    with _transaction(tool="backlog_project_set", backlog_path=backlog_path) as data:
+        tx = _store_tx()
+        try:
+            tx.get("project", "__project__")
+        except KeyError:
+            tx.create("project", document, body=None, requested_id="__project__")
+        else:
+            tx.put("project", "__project__", document)
+        _mutate_and_save(data)
 
 
 def _ensure_taskmaster_dir(path: Path) -> None:
@@ -9341,10 +9866,7 @@ def backlog_project_init(name: str, slug: str = "") -> str:
     ok, errs = validate_manifest_dict(scaffold)
     if not ok:
         raise ValueError("refusing to write invalid manifest: " + "; ".join(errs))
-    _atomic_write(
-        path,
-        yaml.safe_dump(scaffold, sort_keys=False, allow_unicode=True, default_flow_style=False),
-    )
+    _write_project_manifest(path, scaffold)
     return f"Created {path}"
 
 
@@ -9599,23 +10121,29 @@ def backlog_linear_link(task_id: str, external_key: str, workspace_alias: str = 
         return json.dumps({"error": f"task {task_id!r} already has tracker_id {existing_tracker!r} — unlink first"})
 
     tracker_id = _make_tracker_id("linear", alias, external_key)
-    tp = _tracker_path(bp, tracker_id)
-    if tp.exists():
-        return json.dumps({"error": f"tracker file already exists at {tp} — it may be linked to another task"})
+    tx = _store_tx()
+    if tx.id_taken("tracker", tracker_id):
+        return json.dumps({
+            "error": f"tracker {tracker_id} already exists \u2014 it may be linked to another task"
+        })
 
     try:
-        _write_tracker(
-            bp,
-            external_system="linear",
-            instance_alias=alias,
-            external_key=external_key,
-            title=task.get("title", external_key),
-            status=task.get("status", "todo"),
+        tx.create(
+            "tracker",
+            _build_tracker_doc(
+                external_system="linear",
+                instance_alias=alias,
+                external_key=external_key,
+                title=task.get("title", external_key),
+                status=task.get("status", "todo"),
+            ),
+            body="",
         )
-    except (ValueError, OSError) as e:
+    except ValueError as e:
         return json.dumps({"error": f"failed to write tracker: {e}"})
 
     task["tracker_id"] = tracker_id
+    _sync_tracker_index_tx(data)
     _mutate_and_save(data)
 
     return json.dumps({"ok": True, "tracker_id": tracker_id, "task_id": task_id})

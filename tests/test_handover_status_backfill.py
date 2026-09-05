@@ -6,13 +6,14 @@ import yaml
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT))
 
-from taskmaster.taskmaster_v3 import backfill_handover_status, read_handover, write_task_file
+from taskmaster.taskmaster_v3 import (read_handover, write_task_file)
+from tests.entity_helpers import (taskmaster_backlog, backfill_handover_status)
 
 
 def _setup(tmp_path):
-    bp = tmp_path / "backlog.yaml"
+    bp = taskmaster_backlog(tmp_path)
     bp.write_text(yaml.safe_dump({"meta": {}, "epics": []}))
-    hd = tmp_path / "handovers"
+    hd = bp.parent / "handovers"
     hd.mkdir()
     return bp, hd
 

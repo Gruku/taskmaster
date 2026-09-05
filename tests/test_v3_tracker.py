@@ -9,27 +9,18 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT))
 
 from taskmaster.taskmaster_v3 import (  # noqa: E402
-    EXTERNAL_SYSTEMS,
-    _CANONICALIZE_ITEMS,
-    _ISSUE_INDEX_FIELDS,
-    linked_issues_for_tracker,
-    linked_tasks_for_tracker,
-    list_tracker_ids,
-    make_tracker_id,
-    read_tracker,
-    sync_tracker_index,
-    tracker_dir,
-    tracker_path,
-    update_tracker,
-    write_tracker,
+    EXTERNAL_SYSTEMS, _CANONICALIZE_ITEMS, _ISSUE_INDEX_FIELDS,
+    linked_issues_for_tracker, linked_tasks_for_tracker, list_tracker_ids,
+    make_tracker_id, read_tracker, tracker_dir, tracker_path,
 )
+from tests.entity_helpers import (taskmaster_backlog, sync_tracker_index, update_tracker, write_tracker)
 
 
 # ── Fixtures ───────────────────────────────────────────────────
 
 
 def _make_backlog(tmp_path: Path) -> Path:
-    bp = tmp_path / "backlog.yaml"
+    bp = taskmaster_backlog(tmp_path)
     bp.write_text(yaml.safe_dump({"meta": {"updated": "2026-01-01"}, "epics": []}))
     return bp
 
@@ -357,7 +348,8 @@ def test_issue_index_now_carries_tracker_id():
 
 def test_write_issue_with_tracker_id_persists(tmp_path):
     """Issues accept a tracker_id and round-trip it through write/read."""
-    from taskmaster.taskmaster_v3 import write_issue, read_issue
+    from taskmaster.taskmaster_v3 import (read_issue)
+    from tests.entity_helpers import (write_issue)
     bp = _make_backlog(tmp_path)
     (bp.parent / "issues").mkdir(parents=True, exist_ok=True)
 
@@ -436,8 +428,8 @@ def test_update_tracker_omitted_field_is_left_untouched(tmp_path):
 
 
 def test_update_tracker_rejects_id_mismatch(tmp_path):
-    """If a caller passes a tracker_id that doesn't match the file's
-    frontmatter id, raise rather than write to a ghost path."""
+    """A tracker file whose frontmatter id disagrees with its path stem is
+    refused at import, so no ghost row ever reaches an update."""
     bp = _make_backlog(tmp_path)
     # Manually craft a file whose path stem disagrees with its frontmatter id.
     tracker_dir(bp).mkdir(parents=True, exist_ok=True)
@@ -453,7 +445,7 @@ def test_update_tracker_rejects_id_mismatch(tmp_path):
         "---\n",
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="does not match requested"):
+    with pytest.raises(FileNotFoundError):
         update_tracker(bp, "jira-cm-cm-1", status="Done")
 
 

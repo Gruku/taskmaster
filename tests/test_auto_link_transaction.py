@@ -60,12 +60,12 @@ def _task(backlog_path: Path, task_id: str) -> dict:
 def test_a_concurrent_task_update_survives_idea_auto_linking(project, monkeypatch):
     """A peer commit landing while the link is being written must not be reverted."""
     backlog_path = project
-    real_read = v3._TASK_IO["read"]
+    real_read = v3._ENTITY_IO["read"]
     racer: dict[str, threading.Thread] = {}
     reads = {"count": 0}
 
-    def racing_read(bp, task_id):
-        document = real_read(bp, task_id)
+    def racing_read(bp, kind, task_id):
+        document = real_read(bp, kind, task_id)
         # The lost-update window is the inverse-sync read (the second one), not
         # the existence check that precedes it.
         if task_id == "T-001":
@@ -83,7 +83,7 @@ def test_a_concurrent_task_update_survives_idea_auto_linking(project, monkeypatc
             thread.join(timeout=2.0)
         return document
 
-    monkeypatch.setitem(v3._TASK_IO, "read", racing_read)
+    monkeypatch.setitem(v3._ENTITY_IO, "read", racing_read)
 
     bs.backlog_idea_create(title="Link it", body="This relates to T-001.")
 
