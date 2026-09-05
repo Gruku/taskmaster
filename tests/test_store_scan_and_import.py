@@ -1,5 +1,5 @@
-"""User intent: the projection scan and the legacy imports must settle. A hand
-edit to an idea has to reach `IDEAS.md`, an unchanged project must stop
+"""User intent: the projection scan and the legacy imports must settle. A first
+import has to produce `IDEAS.md`, an unchanged project must stop
 rescanning itself forever, and a Linear push that legacy state had parked for
 good must not silently come back as pending.
 """
@@ -56,26 +56,44 @@ def _write_idea_file(backlog_path: Path, ident: str, title: str) -> Path:
 # -- C12: an imported idea edit regenerates the derived index ----------------
 
 
-def test_importing_an_idea_edit_regenerates_the_ideas_index(
+def test_a_first_import_of_ideas_creates_the_derived_index(
     scan_store: tuple[Any, Path],
 ) -> None:
-    """`IDEAS.md` is derived output, so the import that changes an idea row is
-    the only thing that can refresh it. Without that, the readers show the new
-    title while the index on disk still shows the old one."""
+    """`IDEAS.md` is derived output and nothing but the exporter writes it, so
+    on a first v4 import -- where the ideas arrive through the import path and
+    never through `create`/`put` -- the index would otherwise never exist."""
     opened, backlog_path = scan_store
     _write_idea_file(backlog_path, "IDEA-001", "Original title")
     with opened.transaction(tool="first-scan"):
         pass
 
     index = backlog_path.parent / "ideas" / "IDEAS.md"
-    assert index.exists(), "bootstrap left the derived index absent"
+    assert index.exists(), "the first import left the derived index absent"
     assert "Original title" in index.read_text(encoding="utf-8")
+
+
+def test_a_later_idea_write_picks_up_a_hand_edit(
+    scan_store: tuple[Any, Path],
+) -> None:
+    """Known gap, pinned so it cannot get worse: a hand edit to an existing
+    idea does not refresh the index on its own -- regenerating on every import
+    made eight concurrent writers rewrite the shared file under the writer lock
+    and starved it -- but the next idea write does pick the edit up."""
+    opened, backlog_path = scan_store
+    _write_idea_file(backlog_path, "IDEA-001", "Original title")
+    with opened.transaction(tool="first-scan"):
+        pass
+    index = backlog_path.parent / "ideas" / "IDEAS.md"
 
     _write_idea_file(backlog_path, "IDEA-001", "Edited by hand")
     with opened.transaction(tool="rescan"):
         pass
+    with opened.transaction(tool="another-idea") as tx:
+        tx.create("idea", {"id": "IDEA-002", "title": "Second", "status": "exploring"})
 
-    assert "Edited by hand" in index.read_text(encoding="utf-8")
+    text = index.read_text(encoding="utf-8")
+    assert "Edited by hand" in text, text
+    assert "Second" in text, text
 
 
 # -- C13: an unchanged project stops rescanning ------------------------------

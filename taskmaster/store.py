@@ -4337,11 +4337,22 @@ class Transaction:
         self.seq = seq
         self.log_entries.append(f"imported {kind}:{ident} at seq {seq}")
         self._derived_keys.add((kind, ident))
-        if kind == "idea":
-            # `ideas/IDEAS.md` is derived from the idea rows (R2). An import is
-            # the one row change that does not go through `create`/`put`, so
-            # without this a hand-edited or freshly discovered idea leaves the
-            # index stale -- or, on a first v4 import, absent.
+        if kind == "idea" and not self.connection.execute(
+            "SELECT 1 FROM projection WHERE file=?", (_IDEAS_INDEX_REL,)
+        ).fetchone():
+            # `ideas/IDEAS.md` is derived from the idea rows (R2), and nothing
+            # else creates it: on a first v4 import the ideas arrive through
+            # this path and the index would otherwise never exist at all.
+            #
+            # Only that case. Regenerating on *every* idea import looks right
+            # and is not: each process that imports an idea renders the whole
+            # shared index and rewrites it inside its own writer transaction,
+            # so eight concurrent writers turn one idea into eight file
+            # replaces under the lock and starve it. Measured: the 8x200
+            # cross-process stress run went from passing to a 30 s writer
+            # timeout. A hand edit to an existing idea therefore still leaves
+            # the index stale until the next idea write; that gap is filed
+            # rather than paid for with a lock-starving write amplification.
             self._export_ideas = True
 
     def _record_change(

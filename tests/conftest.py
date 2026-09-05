@@ -166,7 +166,7 @@ _GUARDED_FILES = ("IDEAS.md", "linear-queue.json")
 # Configuration that lives at the backlog root rather than in a kind directory.
 # It is shared state under `.taskmaster/` like everything else here, and the
 # store owns its read-modify-write.
-_GUARDED_ROOT_FILES = ("linear.yaml",)
+_GUARDED_ROOT_FILES = ("linear.yaml", "taskmaster.json")
 _PACKAGE_DIR = PLUGIN_ROOT / "taskmaster"
 _HOOKS_DIR = PLUGIN_ROOT / "hooks"
 _STORE_FILE = _PACKAGE_DIR / "store.py"
