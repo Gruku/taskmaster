@@ -402,15 +402,28 @@ import copy as _copy
 
 
 class _TxFrame:
-    """The active transaction for one thread: its dict, latch, renderer and result."""
+    """The active transaction for one thread: its dict, latch, renderers and result."""
 
-    __slots__ = ("data", "latched", "renderer", "backlog_path", "tx", "committed")
+    __slots__ = (
+        "data",
+        "latched",
+        "renderers",
+        "backlog_path",
+        "tx",
+        "committed",
+        "changelog_entries",
+    )
 
     def __init__(self, data: dict, backlog_path: "Path"):
         self.data = data
         self.backlog_path = backlog_path
         self.latched = False
-        self.renderer = None
+        # A stack, not a slot: nested tool calls share this frame, and a nested
+        # body's renderer must never become the outer tool's response.
+        self.renderers: list = []
+        # Changelog paragraphs waiting to be spliced into PROGRESS.md by the
+        # store's export, which is the only writer of that file.
+        self.changelog_entries: list[str] = []
         self.tx = None
         # Filled once the transaction commits: the documents this writer itself
         # committed, keyed by (kind, id).  A response rendered from these can
@@ -438,7 +451,7 @@ def _configure_store_derivers() -> None:
     clears the hooks, so this is re-applied on every store access.
     """
     store.configure_derivers(
-        context_builder=lambda data: regenerate_context(data),
+        context_builder=_derive_context,
         progress_renderer=lambda data, existing: _render_progress_dashboard(data, existing),
     )
 
@@ -453,17 +466,23 @@ def _store() -> "store.Store":
     return _store_for()
 
 
+def _normalize_task(task: dict) -> dict:
+    """Backfill `created` and normalize legacy P-code priorities on one task."""
+    if not task.get("created"):
+        task["created"] = (
+            task.get("started") or task.get("completed") or "2025-01-01T00:00"
+        )
+    priority = task.get("priority", "")
+    if priority in _LEGACY_TO_NAME:
+        task["priority"] = _LEGACY_TO_NAME[priority]
+    return task
+
+
 def _normalize_loaded(data: dict) -> None:
     """Backfill `created` and normalize legacy P-code priorities in place."""
     for epic in data.get("epics", []) or []:
         for task in epic.get("tasks", []) or []:
-            if not task.get("created"):
-                task["created"] = (
-                    task.get("started") or task.get("completed") or "2025-01-01T00:00"
-                )
-            priority = task.get("priority", "")
-            if priority in _LEGACY_TO_NAME:
-                task["priority"] = _LEGACY_TO_NAME[priority]
+            _normalize_task(task)
 
 
 @contextmanager
@@ -485,9 +504,18 @@ def _transaction(*, tool: str, backlog_path: "Path | None" = None):
             frame = _TxFrame(data, instance.backlog_path / "backlog.yaml")
             frame.tx = store.active_transaction()
             _TX_STATE.frame = frame
+            # Cleared up front so a rolled-back transaction cannot leave the
+            # previous call's sequence looking like this one's result.
+            _TX_STATE.last_seq = None
+            # The same list object, reachable after the frame is torn down:
+            # the store's PROGRESS.md export runs once the frame is gone.
+            _TX_STATE.changelog = frame.changelog_entries
             try:
                 _normalize_loaded(data)
-                regenerate_context(data)
+                # No context rebuild here: the store's dict loader already
+                # derived it, and `_mutate_and_save` re-derives it once on the
+                # latch. Doing it on entry as well cost a third full pass over
+                # every task for every tool call, mutating or not.
                 yield data
                 if not frame.latched:
                     raise _UnlatchedTransaction
@@ -495,8 +523,28 @@ def _transaction(*, tool: str, backlog_path: "Path | None" = None):
                 _TX_STATE.frame = None
         if frame is not None and frame.tx is not None:
             frame.committed = dict(frame.tx.committed)
+            _TX_STATE.last_seq = frame.tx.seq
     except _UnlatchedTransaction:
         pass
+    finally:
+        _TX_STATE.changelog = None
+
+
+def _last_commit_seq() -> int | None:
+    """The `changes.seq` this thread's most recent commit ended at.
+
+    The viewer's JSON answers carry it for the same reason tool strings do: a
+    caller can tie the response to the exact commit, and a stale reply is
+    recognisable instead of merely looking plausible.
+    """
+    return getattr(_TX_STATE, "last_seq", None)
+
+
+def _json_with_seq(payload: dict) -> dict:
+    seq = _last_commit_seq()
+    if seq is not None:
+        payload.setdefault("seq", seq)
+    return payload
 
 
 def _store_tx() -> "store.Transaction":
@@ -644,7 +692,37 @@ def _render_after_commit(renderer) -> None:
     """
     frame = _active_tx()
     if frame is not None:
-        frame.renderer = renderer
+        frame.renderers.append(renderer)
+
+
+def _with_seq(result, frame: "_TxFrame"):
+    """Stamp the committed `changes.seq` onto a tool result.
+
+    Every mutation is a row in `changes`; naming that row in the response is
+    what lets a caller (or a reviewer reading a transcript) tie the answer to
+    the exact commit that produced it instead of trusting the prose.
+    """
+    seq = getattr(frame.tx, "seq", None) if frame.tx is not None else None
+    if seq is None:
+        return result
+    if isinstance(result, dict):
+        result.setdefault("seq", seq)
+        return result
+    if not isinstance(result, str):
+        return result
+    stripped = result.lstrip()
+    if stripped.startswith("{"):
+        # A tool whose result is a JSON object carries the sequence as a field.
+        # Appending the marker to the text would corrupt the payload for every
+        # caller that parses it — the linear tools do exactly that.
+        try:
+            payload = json.loads(result)
+        except ValueError:
+            payload = None
+        if isinstance(payload, dict):
+            payload.setdefault("seq", seq)
+            return json.dumps(payload)
+    return f"{result} [seq {seq}]"
 
 
 def _transactional(tool: str):
@@ -653,23 +731,33 @@ def _transactional(tool: str):
     def decorate(fn):
         @wraps(fn)
         def wrapper(*args, **kwargs):
-            if _active_tx() is not None:
-                return fn(*args, **kwargs)
+            outer = _active_tx()
+            if outer is not None:
+                # Nested: the outermost tool owns the response. Anything this
+                # body registers is discarded when it returns, so a nested
+                # renderer can no longer overwrite the outer tool's own.
+                depth = len(outer.renderers)
+                try:
+                    return fn(*args, **kwargs)
+                finally:
+                    del outer.renderers[depth:]
             if not _backlog_path().exists():
                 # No projection yet: behave exactly as before rather than
                 # bootstrapping a database next to a missing backlog.
                 return fn(*args, **kwargs)
-            renderer = None
             committed_frame = None
+            renderer = None
             with _transaction(tool=tool) as _data:
                 result = fn(*args, **kwargs)
                 frame = _active_tx()
                 if frame is not None and frame.latched:
-                    renderer = frame.renderer
+                    renderer = frame.renderers[-1] if frame.renderers else None
                     committed_frame = frame
-            if renderer is not None and committed_frame is not None:
-                return renderer(committed_frame.committed)
-            return result
+            if committed_frame is None:
+                return result
+            if renderer is not None:
+                result = renderer(committed_frame.committed)
+            return _with_seq(result, committed_frame)
 
         return wrapper
 
@@ -842,6 +930,52 @@ def _find_task(data: dict, task_id: str) -> tuple[dict, dict] | None:
             if task["id"] == task_id:
                 return task, epic
     return None
+
+
+# ── Hot-path task rows ───────────────────────────────────
+# The nine task-mutating tools read and write the `("task", id)` row rather
+# than relying on the compatibility dict's end-of-transaction diff, so the
+# document a tool mutates is the document the store holds, and the response is
+# rendered from what the store actually committed.
+
+
+def _tx_task(data: dict, task_id: str) -> tuple[dict, dict] | None:
+    """`(task, epic)` for a hot-path tool, with the task read from its row.
+
+    The dict node is refreshed from the row in place, so navigation helpers
+    that walk `data` and the row about to be written cannot disagree — even
+    when an earlier writer in this same transaction already touched the task.
+    """
+    found = _find_task(data, task_id)
+    if not found:
+        return None
+    node, epic = found
+    try:
+        document = _store_tx().get("task", task_id)
+    except (KeyError, RuntimeError):
+        # No row yet (a legacy projection, or no transaction at all): the dict
+        # node is the only copy there is.
+        return node, epic
+    document.setdefault("epic", str(epic.get("id") or ""))
+    node.clear()
+    node.update(document)
+    return _normalize_task(node), epic
+
+
+def _tx_put_task(task: dict, epic: dict | None = None) -> None:
+    """Write one task row through the open transaction."""
+    document = dict(task)
+    if epic is not None:
+        document.setdefault("epic", str(epic.get("id") or ""))
+    _store_tx().put("task", str(document.get("id") or ""), document)
+
+
+def _committed_task_field(committed: dict, task_id: str, field: str, default: str = "") -> str:
+    """One field of the task this writer committed, as plain text."""
+    document = committed.get(("task", task_id))
+    if not document or field not in document:
+        return default
+    return _format_task_field(document[field])
 
 
 # ── Store-owned entity IO for the generic link/auto-link engine ────────────
@@ -1073,7 +1207,20 @@ def _format_task_field(value) -> str:
     return str(value)
 
 
-def _committed_field_display(committed_docs, task_id: str, field: str, expected) -> str:
+def _expected_field(entity: dict, field: str):
+    """Snapshot what a tool just wrote, for comparison against the commit.
+
+    The sentinel must keep its identity: deep-copying it produced a different
+    object, so a deliberately cleared field compared unequal to itself and a
+    successful removal rendered as "(not persisted)".
+    """
+    stored = entity.get(field, _MISSING_FIELD)
+    return stored if stored is _MISSING_FIELD else deepcopy(stored)
+
+
+def _committed_field_display(
+    committed_docs, task_id: str, field: str, expected, kind: str = "task"
+) -> str:
     """Render `field` from this writer's own commit, or say it did not land.
 
     `committed_docs` is the `{(kind, id): document}` map the store captured
@@ -1083,7 +1230,7 @@ def _committed_field_display(committed_docs, task_id: str, field: str, expected)
     deliberately removed reads back as an empty string, matching the old
     response for a cleared field.
     """
-    document = committed_docs.get(("task", task_id))
+    document = committed_docs.get((kind, task_id))
     if document is None:
         return NOT_PERSISTED
     committed = document.get(field, _MISSING_FIELD)
@@ -1267,6 +1414,16 @@ def _epic_status_label(status: str) -> str:
 
 
 def regenerate_context(data: dict) -> None:
+    """Derive `data["context"]` for one tool call.
+
+    Named separately from `_derive_context` so the server-side derivation can be
+    counted on its own: the store calls the implementation directly when it
+    builds a dict, and that is not a tool-call cost.
+    """
+    _derive_context(data)
+
+
+def _derive_context(data: dict) -> None:
     all_tasks = []
     for epic in data["epics"]:
         for t in epic.get("tasks", []):
@@ -1397,20 +1554,30 @@ def regenerate_context(data: dict) -> None:
     data["context"]["stale"] = stale[:10]
 
 
-def regenerate_progress_dashboard(data: dict) -> None:
-    """Rewrite PROGRESS.md above the '## Changelog' line."""
-    path = _progress_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    progress_text = path.read_text(encoding="utf-8") if path.exists() else "## Changelog\n"
-    path.write_text(_render_progress_dashboard(data, progress_text), encoding="utf-8")
+def _splice_changelog_entries(progress_text: str, entries: list[str]) -> str:
+    """Insert `entries` immediately after the `## Changelog` marker, newest first."""
+    if not entries:
+        return progress_text
+    block = "\n\n".join(entry.rstrip("\n") for entry in reversed(entries))
+    marker = "## Changelog"
+    idx = progress_text.find(marker)
+    if idx == -1:
+        return progress_text.rstrip("\n") + f"\n\n{marker}\n\n{block}\n"
+    insert_at = idx + len(marker)
+    return progress_text[:insert_at] + "\n\n" + block + "\n" + progress_text[insert_at:]
 
 
 def _render_progress_dashboard(data: dict, progress_text: str) -> str:
     """Pure renderer: the dashboard for `data` spliced above the changelog.
 
     The store calls this after a commit, so PROGRESS.md always reflects
-    committed state rather than a caller's in-flight dict.
+    committed state rather than a caller's in-flight dict.  Changelog
+    paragraphs queued by the tool in flight are spliced in here too, because
+    the store's export is the only writer PROGRESS.md has.
     """
+    pending = getattr(_TX_STATE, "changelog", None)
+    if pending:
+        progress_text = _splice_changelog_entries(progress_text, pending)
 
     changelog_marker = "## Changelog"
     idx = progress_text.find(changelog_marker)
@@ -5141,6 +5308,11 @@ def backlog_note_create(text: str, pinned: bool = False) -> str:
         rel = target.relative_to(ROOT)
     except ValueError:
         rel = target
+    _render_after_commit(
+        lambda committed: f"Note created: {nid}\nFile: {rel}"
+        if committed.get(("note", nid)) is not None
+        else f"Note created: {NOT_PERSISTED}"
+    )
     return f"Note created: {nid}\nFile: {rel}"
 
 
@@ -5264,6 +5436,11 @@ def backlog_note_update(note_id: str, text: str = "", pinned: bool | None = None
     error = _note_update_in_tx(note_id, text=text or None, pinned=pinned)
     if error is not None:
         return error
+    _render_after_commit(
+        lambda committed: f"Note updated: {note_id}"
+        if committed.get(("note", note_id)) is not None
+        else f"Note updated: {NOT_PERSISTED}"
+    )
     return f"Note updated: {note_id}"
 
 
@@ -5277,6 +5454,11 @@ def backlog_note_archive(note_id: str) -> str:
     error = _note_archive_in_tx(note_id)
     if error is not None:
         return error
+    _render_after_commit(
+        lambda committed: f"Note archived: {note_id}"
+        if (committed.get(("note", note_id)) or {}).get("archived")
+        else f"Note archived: {NOT_PERSISTED}"
+    )
     return f"Note archived: {note_id}"
 
 
@@ -5584,6 +5766,10 @@ def backlog_add_task(
                 continue
         new_task["order"] = (max(orders) + 1.0) if orders else 1.0
 
+    # Create the row first: the id was allocated from the store, so the store
+    # is where the create belongs. Mirroring it into the dict afterwards keeps
+    # navigation in this same call (the budget count below) consistent.
+    tx.create("task", new_task, requested_id=new_id)
     if "tasks" not in epic_obj:
         epic_obj["tasks"] = []
     epic_obj["tasks"].append(new_task)
@@ -5608,6 +5794,18 @@ def backlog_add_task(
                 f"(this epic's `max_tasks` cap: {max_tasks})."
             )
 
+    epic_name = epic_obj["name"]
+
+    def _render(committed: dict) -> str:
+        document = committed.get(("task", new_id))
+        if document is None:
+            return f"Added `{new_id}` — {NOT_PERSISTED}"
+        return (
+            f"Added `{new_id}` — {document.get('title', '')} "
+            f"({document.get('priority', '')}) under {epic_name}" + budget_warning
+        )
+
+    _render_after_commit(_render)
     return f"Added `{new_id}` — {title} ({priority}) under {epic_obj['name']}" + budget_warning
 
 
@@ -5663,7 +5861,7 @@ def backlog_pick_task(task_id: str, force: bool = False) -> str:
                session ended without releasing the lock.
     """
     data = _load()
-    result = _find_task(data, task_id)
+    result = _tx_task(data, task_id)
     if not result:
         return f"Error: task `{task_id}` not found"
 
@@ -5703,6 +5901,8 @@ def backlog_pick_task(task_id: str, force: bool = False) -> str:
                 m["locked_by"] = SESSION_ID
                 m["branch"] = branch
                 m["worktree"] = worktree
+                member_found = _find_task(data, m["id"])
+                _tx_put_task(m, member_found[1] if member_found else None)
             _mutate_and_save(data)
         _set_session_task(task, epic)  # picked member stays "current task"
         _set_session_bundle({
@@ -5738,18 +5938,28 @@ def backlog_pick_task(task_id: str, force: bool = False) -> str:
                 )
             # Force-claim: transfer lock to this session
             task["locked_by"] = SESSION_ID
+            _tx_put_task(task, epic)
             _mutate_and_save(data)
         # Idempotent: update session state and lock, return details without mutation
         if not locked_by:
             task["locked_by"] = SESSION_ID
+            _tx_put_task(task, epic)
             _mutate_and_save(data)
         _set_session_task(task, epic)
         sub_repo = task.get("sub_repo", "")
         branch = task.get("branch", "")
         worktree = task.get("worktree", "")
         worktree_instruction = _build_worktree_instruction(task_id, sub_repo, branch, worktree)
+        context_text = _task_context(data, task, epic)
+        _render_after_commit(
+            lambda committed: f"Already in progress: `{task_id}` — "
+            + (_committed_task_field(committed, task_id, "title") or NOT_PERSISTED)
+            + "\n\n"
+            + context_text
+            + worktree_instruction
+        )
         # Open handovers stay open automatically under the new model — no resumed transition needed.
-        return f"Already in progress: `{task_id}` — {task['title']}\n\n" + _task_context(data, task, epic) + worktree_instruction
+        return f"Already in progress: `{task_id}` — {task['title']}\n\n" + context_text + worktree_instruction
 
     if status not in ("todo", "in-review"):
         # blocked/done tasks cannot be picked — use backlog_update_task to change status first
@@ -5779,6 +5989,7 @@ def backlog_pick_task(task_id: str, force: bool = False) -> str:
     task["started"] = task.get("started") or _now()
     task["locked_by"] = SESSION_ID
 
+    _tx_put_task(task, epic)
     _mutate_and_save(data)
     _set_session_task(task, epic)
 
@@ -5787,9 +5998,19 @@ def backlog_pick_task(task_id: str, force: bool = False) -> str:
     branch = task.get("branch", "")
     worktree = task.get("worktree", "")
     worktree_instruction = _build_worktree_instruction(task_id, sub_repo, branch, worktree)
+    context_text = _task_context(data, task, epic)
 
+    def _render(committed: dict) -> str:
+        document = committed.get(("task", task_id)) or {}
+        if document.get("status") != "in-progress":
+            head = f"Picked `{task_id}` — {NOT_PERSISTED}"
+        else:
+            head = f"Picked `{task_id}` — {document.get('title', '')} (locked to this session)"
+        return head + dep_warning + "\n\n" + context_text + worktree_instruction
+
+    _render_after_commit(_render)
     # Open handovers stay open automatically under the new model — no resumed transition needed.
-    return f"Picked `{task_id}` — {task['title']} (locked to this session)" + dep_warning + "\n\n" + _task_context(data, task, epic) + worktree_instruction
+    return f"Picked `{task_id}` — {task['title']} (locked to this session)" + dep_warning + "\n\n" + context_text + worktree_instruction
 
 
 def _append_changelog(
@@ -5801,7 +6022,12 @@ def _append_changelog(
     auto: bool = False,
     auto_stats: str = "",
 ) -> str:
-    """Insert a changelog entry into PROGRESS.md right after the '## Changelog' marker.
+    """Queue a changelog entry for PROGRESS.md, to be written by the store.
+
+    The paragraph is handed to the open transaction rather than written here:
+    PROGRESS.md gets exactly one writer, the store's export path, so a session
+    summary and the task transition that produced it land in the same commit
+    and can never half-apply.
 
     Returns a confirmation message for the tool response.
     """
@@ -5810,17 +6036,8 @@ def _append_changelog(
     if auto:
         heading = f"### {_today()} — auto"
         entry = f"{heading}\n{auto_stats}\nTasks touched: {tasks_touched}\n"
-        try:
-            text = _progress_path().read_text(encoding="utf-8")
-        except FileNotFoundError:
+        if not _queue_changelog_entry(entry):
             return "No PROGRESS.md found."
-        marker = "## Changelog"
-        idx = text.find(marker)
-        if idx == -1:
-            return "No changelog section found."
-        insert_pos = idx + len(marker)
-        new_text = text[:insert_pos] + "\n\n" + entry + text[insert_pos:]
-        _progress_path().write_text(new_text, encoding="utf-8")
         return f"\nSession auto-logged to PROGRESS.md."
 
     heading = f"### {_today()} — {title}"
@@ -5867,19 +6084,27 @@ def _append_changelog(
     lines.append("")
 
     entry = "\n".join(lines)
-
-    # Insert into PROGRESS.md after ## Changelog
-    progress_text = _progress_path().read_text(encoding="utf-8")
-    changelog_marker = "## Changelog"
-    idx = progress_text.find(changelog_marker)
-    if idx == -1:
-        progress_text += f"\n{changelog_marker}\n\n{entry}"
-    else:
-        insert_point = idx + len(changelog_marker)
-        progress_text = progress_text[:insert_point] + "\n\n" + entry + progress_text[insert_point:]
-
-    _progress_path().write_text(progress_text, encoding="utf-8")
+    if not _queue_changelog_entry(entry):
+        return "No PROGRESS.md found."
     return f"\n\n**Session logged** to PROGRESS.md changelog."
+
+
+def _queue_changelog_entry(entry: str) -> bool:
+    """Hand one changelog paragraph to the open transaction's progress export.
+
+    False when there is no transaction to carry it — the caller then reports
+    that nothing was logged rather than writing the file behind the store.
+    """
+    frame = _active_tx()
+    if frame is None:
+        return False
+    frame.changelog_entries.append(entry)
+    tx = frame.tx
+    if tx is not None:
+        # The dashboard export is throttled to once per 5 s per store; a session
+        # summary is not something to drop because another tool ran a moment ago.
+        tx.request_progress_export()
+    return True
 
 
 def _smart_close_handovers_in_tx(data: dict, task_id: str) -> list[str]:
@@ -5991,7 +6216,7 @@ def backlog_complete_task(
         return f"Error: target_status must be 'done' or 'in-review', got '{target_status}'"
 
     data = _load()
-    result = _find_task(data, task_id)
+    result = _tx_task(data, task_id)
     if not result:
         return f"Error: task `{task_id}` not found"
 
@@ -6041,6 +6266,7 @@ def backlog_complete_task(
     if release:
         task["release"] = release
 
+    _tx_put_task(task, epic)
     _mutate_and_save(data)
     _enqueue_linear_push_if_synced(task_id, task=task)
     if target_status == "done":
@@ -6099,6 +6325,18 @@ def backlog_complete_task(
         suggestion = f"\n\n**Next in {epic['name']}:** `{n['id']}` — {n['title']} ({n.get('priority', 'medium')})"
 
     status_label = "Completed" if target_status == "done" else "Moved to in-review"
+
+    def _render(committed: dict) -> str:
+        document = committed.get(("task", task_id)) or {}
+        if document.get("status") != target_status:
+            return f"{status_label} `{task_id}` — {NOT_PERSISTED}" + changelog_msg + suggestion
+        return (
+            f"{status_label} `{task_id}` — {document.get('title', '')}"
+            + changelog_msg
+            + suggestion
+        )
+
+    _render_after_commit(_render)
     return f"{status_label} `{task_id}` — {task['title']}" + changelog_msg + suggestion
 
 
@@ -6368,22 +6606,34 @@ def backlog_update_task(
     # Keyword style: tldr= / next_step= kwargs take precedence over field/value.
     if tldr or next_step:
         data = _load()
-        result = _find_task(data, task_id)
+        result = _tx_task(data, task_id)
         if not result:
             return f"Error: task `{task_id}` not found"
         task, epic = result
         _touch_task(task)
-        updated = []
+        written = []
         if tldr:
             task["tldr"] = tldr
             task.pop("tldr_autogen", None)  # caller-supplied tldr is no longer auto-generated
-            updated.append(f"tldr → {tldr}")
+            written.append("tldr")
         if next_step:
             task["next_step"] = next_step
-            updated.append(f"next_step → {next_step}")
+            written.append("next_step")
+        expected = {field: _expected_field(task, field) for field in written}
+        _tx_put_task(task, epic)
         _mutate_and_save(data)
         _enqueue_linear_push_if_synced(task_id, task=task)
-        return f"Updated `{task_id}`: " + "; ".join(updated)
+        _render_after_commit(
+            lambda committed: f"Updated `{task_id}`: "
+            + "; ".join(
+                f"{name} → "
+                + _committed_field_display(committed, task_id, name, expected[name])
+                for name in written
+            )
+        )
+        return f"Updated `{task_id}`: " + "; ".join(
+            f"{name} → {tldr if name == 'tldr' else next_step}" for name in written
+        )
 
     # Classic field/value style
     if not field:
@@ -6392,7 +6642,7 @@ def backlog_update_task(
         return f"Error: field `{field}` not allowed. Allowed: {', '.join(sorted(ALLOWED_FIELDS))}"
 
     data = _load()
-    result = _find_task(data, task_id)
+    result = _tx_task(data, task_id)
     if not result:
         return f"Error: task `{task_id}` not found"
 
@@ -6563,14 +6813,11 @@ def backlog_update_task(
         except Exception:
             pass
 
+    expected = _expected_field(task, field)
+    _tx_put_task(task, epic)
     _mutate_and_save(data)
     _enqueue_linear_push_if_synced(task_id, task=task)
 
-    # The sentinel must keep its identity: deep-copying it produced a different
-    # object, so a deliberately cleared field compared unequal to itself and a
-    # successful removal rendered as "(not persisted)".
-    stored = task.get(field, _MISSING_FIELD)
-    expected = stored if stored is _MISSING_FIELD else deepcopy(stored)
     _render_after_commit(
         lambda committed: f"Updated `{task_id}` field `{field}` → "
         + _committed_field_display(committed, task_id, field, expected)
@@ -6619,7 +6866,7 @@ def backlog_record_gate(
             return f"Error: status gate `{gate}` requires status=\"done\", got `{status or '(none)'}`"
 
     data = _load()
-    result = _find_task(data, task_id)
+    result = _tx_task(data, task_id)
     if not result:
         return f"Error: task `{task_id}` not found"
     task, _epic = result
@@ -6654,8 +6901,13 @@ def backlog_record_gate(
 
     task.setdefault("gates", {})[gate] = rec
     task["gate_state"] = _compute_gate_state(task)
+    _tx_put_task(task, _epic)
     _mutate_and_save(data)
     outcome = verdict if is_verdict else "done"
+    _render_after_commit(
+        lambda committed: f"Recorded gate `{gate}` = {outcome} for `{task_id}` "
+        f"(state: {_committed_task_field(committed, task_id, 'gate_state') or 'laneless'})"
+    )
     return f"Recorded gate `{gate}` = {outcome} for `{task_id}` (state: {task['gate_state'] or 'laneless'})"
 
 
@@ -6690,7 +6942,7 @@ def backlog_record_merge(task_id: str, rung: str, sha: str, merged_at: str = "")
     if not (sha or "").strip():
         return "Error: sha is required"
     data = _load()
-    result = _find_task(data, task_id)
+    result = _tx_task(data, task_id)
     if not result:
         return f"Error: task `{task_id}` not found"
     task, _epic = result
@@ -6699,7 +6951,22 @@ def backlog_record_merge(task_id: str, rung: str, sha: str, merged_at: str = "")
         "merged_at": merged_at or _now(), "merge_commit": sha,
     }
     task["merge_gate_state"] = _compute_merge_gate_state(task, _resolved_merge_targets())
+    _tx_put_task(task, _epic)
     _mutate_and_save(data)
+
+    def _render(committed: dict) -> str:
+        document = committed.get(("task", task_id)) or {}
+        recorded = ((document.get("merge_status") or {}).get(rung) or {}).get(
+            "merge_commit", ""
+        )
+        ladder = _committed_task_field(committed, task_id, "merge_gate_state")
+        shown = str(recorded)[:7] if recorded else NOT_PERSISTED
+        return (
+            f"Recorded merge for rung `{rung}` on `{task_id}` "
+            f"(sha={shown}, ladder: {ladder or 'none'})"
+        )
+
+    _render_after_commit(_render)
     return f"Recorded merge for rung `{rung}` on `{task_id}` (sha={sha[:7]}, ladder: {task['merge_gate_state'] or 'none'})"
 
 
@@ -6722,7 +6989,7 @@ def backlog_skip_gate(task_id: str, gate: str, reason: str, by: str = "claude") 
         return f"Error: skip_gate requires a non-empty reason (this is the audit trail)."
 
     data = _load()
-    result = _find_task(data, task_id)
+    result = _tx_task(data, task_id)
     if not result:
         return f"Error: task `{task_id}` not found"
     task, _epic = result
@@ -6732,7 +6999,22 @@ def backlog_skip_gate(task_id: str, gate: str, reason: str, by: str = "claude") 
         "skipped": True, "reason": reason.strip(), "by": by, "at": _now(),
     }
     task["gate_state"] = _compute_gate_state(task)
+    _tx_put_task(task, _epic)
     _mutate_and_save(data)
+
+    def _render(committed: dict) -> str:
+        document = committed.get(("task", task_id)) or {}
+        record = (document.get("gates") or {}).get(gate) or {}
+        # The audit trail is only worth anything if it is the stored reason,
+        # not the one the caller passed in and the store may not have kept.
+        if not record.get("skipped"):
+            return f"⚠ Skipped gate `{gate}` for `{task_id}` — reason: {NOT_PERSISTED}"
+        return (
+            f"⚠ Skipped gate `{gate}` for `{task_id}` — "
+            f"reason: {record.get('reason', '')} (by {record.get('by', '')})"
+        )
+
+    _render_after_commit(_render)
     return f"⚠ Skipped gate `{gate}` for `{task_id}` — reason: {reason.strip()} (by {by})"
 
 
@@ -6748,10 +7030,10 @@ def backlog_clear_gate(task_id: str, gate: str) -> str:
     if gate not in _VALID_GATES:
         return f"Error: invalid gate `{gate}`. Valid: {', '.join(_VALID_GATES)}"
     data = _load()
-    result = _find_task(data, task_id)
+    result = _tx_task(data, task_id)
     if not result:
         return f"Error: task `{task_id}` not found"
-    task, _ = result
+    task, epic = result
     _touch_task(task)
     gates = task.get("gates") or {}
     if gate not in gates:
@@ -6759,7 +7041,16 @@ def backlog_clear_gate(task_id: str, gate: str) -> str:
     del gates[gate]
     task["gates"] = gates
     task["gate_state"] = _compute_gate_state(task)
+    _tx_put_task(task, epic)
     _mutate_and_save(data)
+
+    def _render(committed: dict) -> str:
+        document = committed.get(("task", task_id))
+        if document is None or gate in (document.get("gates") or {}):
+            return f"Cleared gate `{gate}` on `{task_id}` — {NOT_PERSISTED}"
+        return f"Cleared gate `{gate}` on `{task_id}`"
+
+    _render_after_commit(_render)
     return f"Cleared gate `{gate}` on `{task_id}`"
 
 
@@ -7643,7 +7934,19 @@ def backlog_batch_update(operations: str) -> str:
     data = _load()
     results: list[str] = []
     errors: list[str] = []
+    # One renderer per applied line, so each line reports what the store kept
+    # for *its own* entity rather than what the loop believed it had written.
+    line_renderers: list = []
     changed = False
+
+    def _status_line(entity_id: str, expected_status: str, suffix: str = ""):
+        def render(committed: dict) -> str:
+            document = committed.get(("task", entity_id))
+            if document is None or document.get("status") != expected_status:
+                return f"`{entity_id}` → {NOT_PERSISTED}"
+            return f"`{entity_id}` → {expected_status}{suffix}"
+
+        return render
 
     for line in operations.strip().split("\n"):
         line = line.strip()
@@ -7661,7 +7964,7 @@ def backlog_batch_update(operations: str) -> str:
             if field not in ALLOWED_FIELDS:
                 errors.append(f"`{task_id}`: field `{field}` not allowed")
                 continue
-            result = _find_task(data, task_id)
+            result = _tx_task(data, task_id)
             if not result:
                 errors.append(f"`{task_id}`: not found")
                 continue
@@ -7764,7 +8067,15 @@ def backlog_batch_update(operations: str) -> str:
                     task["area"] = value
             else:
                 task[field] = value
+            expected = _expected_field(task, field)
+            _tx_put_task(task, epic)
             results.append(f"`{task_id}`.{field} → {value}")
+            line_renderers.append(
+                lambda committed, tid=task_id, fld=field, exp=expected: (
+                    f"`{tid}`.{fld} → "
+                    + _committed_field_display(committed, tid, fld, exp)
+                )
+            )
             changed = True
 
         elif op == "status" and len(parts) >= 3:
@@ -7772,7 +8083,7 @@ def backlog_batch_update(operations: str) -> str:
             if new_status not in VALID_STATUSES:
                 errors.append(f"`{task_id}`: invalid status `{new_status}`")
                 continue
-            result = _find_task(data, task_id)
+            result = _tx_task(data, task_id)
             if not result:
                 errors.append(f"`{task_id}`: not found")
                 continue
@@ -7821,12 +8132,14 @@ def backlog_batch_update(operations: str) -> str:
             )
             if new_status not in ("in-progress",):
                 task.pop("locked_by", None)
+            _tx_put_task(task, epic)
             results.append(f"`{task_id}` → {new_status}")
+            line_renderers.append(_status_line(task_id, new_status))
             changed = True
 
         elif op == "complete" and len(parts) >= 2:
             task_id = parts[1]
-            result = _find_task(data, task_id)
+            result = _tx_task(data, task_id)
             if not result:
                 errors.append(f"`{task_id}`: not found")
                 continue
@@ -7855,13 +8168,15 @@ def backlog_batch_update(operations: str) -> str:
                 task["completed"] = _now()
             task.pop("locked_by", None)
             task.pop("human_action", None)
+            _tx_put_task(task, epic)
             results.append(f"`{task_id}` → done")
+            line_renderers.append(_status_line(task_id, "done"))
             changed = True
 
         elif op == "archive" and len(parts) >= 2:
             task_id = parts[1]
             reason = parts[2] if len(parts) > 2 else "done"
-            result = _find_task(data, task_id)
+            result = _tx_task(data, task_id)
             if not result:
                 errors.append(f"`{task_id}`: not found")
                 continue
@@ -7872,13 +8187,18 @@ def backlog_batch_update(operations: str) -> str:
             task.pop("locked_by", None)
             if not already_archived:
                 task["archived"] = _now()
+            # Archive first, then write: the explicit archive is what records
+            # the transition, and a put that had already raised the row's flag
+            # would turn it into a silent no-op.
             _archive_entity("task", task_id, task)
+            _tx_put_task(task, epic)
             results.append(f"`{task_id}` → archived ({reason})")
+            line_renderers.append(_status_line(task_id, "archived", f" ({reason})"))
             changed = True
 
         elif op == "pick" and len(parts) >= 2:
             task_id = parts[1]
-            result = _find_task(data, task_id)
+            result = _tx_task(data, task_id)
             if not result:
                 errors.append(f"`{task_id}`: not found")
                 continue
@@ -7896,7 +8216,9 @@ def backlog_batch_update(operations: str) -> str:
             _apply_archive_transition(
                 "task", task_id, task, before=prior_status, after="in-progress"
             )
+            _tx_put_task(task, epic)
             results.append(f"`{task_id}` → in-progress")
+            line_renderers.append(_status_line(task_id, "in-progress"))
             changed = True
 
         elif op == "update_epic" and len(parts) >= 4:
@@ -7922,6 +8244,15 @@ def backlog_batch_update(operations: str) -> str:
                     f"epic `{epic_id}`.status → archived "
                     f"({cascaded} tasks cascaded)"
                 )
+                line_renderers.append(
+                    lambda committed, eid=epic_id, n=cascaded: (
+                        f"epic `{eid}`.status → "
+                        + _committed_field_display(
+                            committed, eid, "status", "archived", kind="epic"
+                        )
+                        + f" ({n} tasks cascaded)"
+                    )
+                )
                 changed = True
                 continue
             before_value = str(epic.get(field, "") or "")
@@ -7930,7 +8261,14 @@ def backlog_batch_update(operations: str) -> str:
                 _apply_archive_transition(
                     "epic", epic_id, epic, before=before_value, after=value
                 )
+            expected_epic = _expected_field(epic, field)
             results.append(f"epic `{epic_id}`.{field} → {value}")
+            line_renderers.append(
+                lambda committed, eid=epic_id, fld=field, exp=expected_epic: (
+                    f"epic `{eid}`.{fld} → "
+                    + _committed_field_display(committed, eid, fld, exp, kind="epic")
+                )
+            )
             changed = True
 
         else:
@@ -7939,17 +8277,21 @@ def backlog_batch_update(operations: str) -> str:
     if changed:
         _mutate_and_save(data)
 
-    summary = f"**Batch update:** {len(results)} applied"
-    if errors:
-        summary += f", {len(errors)} errors"
-    summary += "\n\n"
+    def _summary(lines: list[str]) -> str:
+        text = f"**Batch update:** {len(lines)} applied"
+        if errors:
+            text += f", {len(errors)} errors"
+        text += "\n\n"
+        if lines:
+            text += "**Applied:**\n" + "\n".join(f"- {r}" for r in lines) + "\n"
+        if errors:
+            text += "\n**Errors:**\n" + "\n".join(f"- {e}" for e in errors) + "\n"
+        return text
 
-    if results:
-        summary += "**Applied:**\n" + "\n".join(f"- {r}" for r in results) + "\n"
-    if errors:
-        summary += "\n**Errors:**\n" + "\n".join(f"- {e}" for e in errors) + "\n"
-
-    return summary
+    _render_after_commit(
+        lambda committed: _summary([render(committed) for render in line_renderers])
+    )
+    return _summary(results)
 
 
 @mcp.tool()
@@ -8672,6 +9014,9 @@ class ViewerHandler(BaseHTTPRequestHandler):
 
     def handle_one_request(self) -> None:
         """Answer a refused legacy layout with a body, never a bare traceback."""
+        # One request must never inherit the sequence of the previous one on
+        # this thread; only a commit made while serving it may set one.
+        _TX_STATE.last_seq = None
         try:
             super().handle_one_request()
         except store.LegacyLayoutError as exc:
@@ -9484,7 +9829,18 @@ class ViewerHandler(BaseHTTPRequestHandler):
         })
 
     def _send_json(self, status: int, payload: dict, etag: str | None = None):
-        """Serialize *payload* as JSON and write the complete HTTP response."""
+        """Serialize *payload* as JSON and write the complete HTTP response.
+
+        A successful mutation carries the `changes.seq` its commit ended at, the
+        JSON counterpart of the `[seq N]` suffix on a tool's string result.
+        """
+        if (
+            isinstance(payload, dict)
+            and payload.get("ok")
+            and 200 <= status < 300
+            and self.command in ("POST", "PATCH", "PUT", "DELETE")
+        ):
+            payload = _json_with_seq(dict(payload))
         body = json.dumps(payload, default=str).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")

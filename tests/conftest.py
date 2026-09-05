@@ -57,7 +57,7 @@ def tmp_taskmaster(tmp_path, monkeypatch):
     - tmp_path/.taskmaster/backlog.yaml  (v3 schema with `meta.schema_version: 3`,
       empty epics/phases lists, `meta.updated` stub required by _mutate_and_save())
     - tmp_path/.taskmaster/PROGRESS.md   (stub with `## Changelog` header, required
-      by regenerate_progress_dashboard() which reads it before rewriting)
+      by the store's PROGRESS.md export, which reads it before rewriting)
     - tmp_path/.taskmaster/tasks/
     - tmp_path/.taskmaster/handovers/
     - tmp_path/.taskmaster/issues/
@@ -79,7 +79,7 @@ def tmp_taskmaster(tmp_path, monkeypatch):
     for subdir in ("tasks", "handovers", "issues", "ideas", "local", "local/cache"):
         (tm_dir / subdir).mkdir(parents=True, exist_ok=True)
 
-    # PROGRESS.md must exist so regenerate_progress_dashboard() can read it.
+    # PROGRESS.md must exist so the store's export can read it.
     (tm_dir / "PROGRESS.md").write_text("## Changelog\n", encoding="utf-8")
     (tm_dir / "local" / "PROGRESS.md").write_text("## Changelog\n", encoding="utf-8")
 

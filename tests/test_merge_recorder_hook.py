@@ -84,7 +84,7 @@ def _seed(
     """
     tm = repo / ".taskmaster"
     (tm / "tasks").mkdir(parents=True, exist_ok=True)
-    # PROGRESS.md must exist so regenerate_progress_dashboard() can read it.
+    # PROGRESS.md must exist so the store's export can read it.
     (tm / "PROGRESS.md").write_text("## Changelog\n", encoding="utf-8")
 
     (tm / "project.yaml").write_text(

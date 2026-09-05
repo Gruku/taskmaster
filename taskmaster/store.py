@@ -2166,9 +2166,15 @@ class Store:
         after_rows = _flatten_backlog_dict(after)
         for key, (doc, body) in after_rows.items():
             if key not in before_rows:
-                tx.create(key[0], doc, body=body, requested_id=key[1])
-                continue
-            old_doc, old_body = before_rows[key]
+                if key not in tx._committed_keys:
+                    tx.create(key[0], doc, body=body, requested_id=key[1])
+                    continue
+                # A tool that called `tx.create` itself and then mirrored the
+                # new entity into the dict is not asking for a second create;
+                # the row already exists, so this is an update like any other.
+                old_doc, old_body = None, None
+            else:
+                old_doc, old_body = before_rows[key]
             if old_doc != doc or old_body != body:
                 materialized = copy.deepcopy(doc)
                 if body:
@@ -3035,7 +3041,8 @@ class Store:
             return
         now = time.monotonic()
         if (
-            self._last_progress_clock is not None
+            not tx._force_progress
+            and self._last_progress_clock is not None
             and now - self._last_progress_clock < 5.0
         ):
             return
@@ -3390,9 +3397,19 @@ class Transaction:
         self._export_ideas = False
         self._replaced_files: dict[Path, bytes | None] = {}
         self._reserved_keys: set[tuple[str, str]] = set()
+        self._force_progress = False
         intent_token = uuid.uuid4().hex
         self._intent_path = self.store.db_path.parent / f"export-intent.{intent_token}.json"
         self._intent_entries: dict[str, dict[str, str | None]] = {}
+
+    def request_progress_export(self) -> None:
+        """Force this commit to regenerate PROGRESS.md, ignoring the throttle.
+
+        The 5 s throttle exists so a burst of edits does not rewrite the
+        dashboard repeatedly. Content that only this transaction carries — a
+        session changelog entry — has nowhere else to land, so it opts out.
+        """
+        self._force_progress = True
 
     def get(self, kind: str, ident: str) -> dict[str, Any]:
         row = self.connection.execute(

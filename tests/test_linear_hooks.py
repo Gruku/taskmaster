@@ -78,7 +78,6 @@ def test_update_task_enqueues_linear_push_when_synced(tmp_path, monkeypatch):
     bp = _setup_project(tmp_path)
     monkeypatch.setattr(backlog_server, "_backlog_path", lambda: bp)
     # Avoid touching PROGRESS.md regen (the helper writes alongside backlog)
-    monkeypatch.setattr(backlog_server, "regenerate_progress_dashboard", lambda *a, **k: None)
     monkeypatch.setattr(backlog_server, "regenerate_context", lambda *a, **k: None)
 
     backlog_server.backlog_update_task("ts-001", "priority", "high")
@@ -96,7 +95,6 @@ def test_complete_task_enqueues_linear_push(tmp_path, monkeypatch):
     # by using update_task to flip status (which also enqueues, but the
     # de-dupe means only one queue item ends up there).
     monkeypatch.setattr(backlog_server, "_backlog_path", lambda: bp)
-    monkeypatch.setattr(backlog_server, "regenerate_progress_dashboard", lambda *a, **k: None)
     monkeypatch.setattr(backlog_server, "regenerate_context", lambda *a, **k: None)
 
     backlog_server.backlog_update_task("ts-001", "status", "in-progress")
@@ -111,7 +109,6 @@ def test_complete_task_enqueues_linear_push(tmp_path, monkeypatch):
 def test_archive_task_enqueues_linear_push(tmp_path, monkeypatch):
     bp = _setup_project(tmp_path)
     monkeypatch.setattr(backlog_server, "_backlog_path", lambda: bp)
-    monkeypatch.setattr(backlog_server, "regenerate_progress_dashboard", lambda *a, **k: None)
     monkeypatch.setattr(backlog_server, "regenerate_context", lambda *a, **k: None)
 
     backlog_server.backlog_archive_task("ts-001", reason="superseded")
@@ -129,7 +126,6 @@ def test_update_task_no_enqueue_when_linear_yaml_missing(tmp_path, monkeypatch):
     silently a no-op and no queue file is created."""
     bp = _setup_project(tmp_path, with_linear_config=False, with_tracker=False)
     monkeypatch.setattr(backlog_server, "_backlog_path", lambda: bp)
-    monkeypatch.setattr(backlog_server, "regenerate_progress_dashboard", lambda *a, **k: None)
     monkeypatch.setattr(backlog_server, "regenerate_context", lambda *a, **k: None)
 
     backlog_server.backlog_update_task("ts-001", "priority", "high")
@@ -143,7 +139,6 @@ def test_update_task_no_enqueue_when_task_has_no_tracker(tmp_path, monkeypatch):
     yet. Mutation goes through; no enqueue."""
     bp = _setup_project(tmp_path, with_tracker=False)
     monkeypatch.setattr(backlog_server, "_backlog_path", lambda: bp)
-    monkeypatch.setattr(backlog_server, "regenerate_progress_dashboard", lambda *a, **k: None)
     monkeypatch.setattr(backlog_server, "regenerate_context", lambda *a, **k: None)
 
     backlog_server.backlog_update_task("ts-001", "priority", "high")
@@ -156,7 +151,6 @@ def test_hook_swallows_exceptions(tmp_path, monkeypatch):
     still succeed and return success — sync is non-fatal."""
     bp = _setup_project(tmp_path)
     monkeypatch.setattr(backlog_server, "_backlog_path", lambda: bp)
-    monkeypatch.setattr(backlog_server, "regenerate_progress_dashboard", lambda *a, **k: None)
     monkeypatch.setattr(backlog_server, "regenerate_context", lambda *a, **k: None)
 
     # Replace the worker.enqueue import target with one that explodes

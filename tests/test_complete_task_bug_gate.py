@@ -22,7 +22,7 @@ def _setup_task(tmp_path: Path, task_id: str = "test-epic-001") -> str:
     """Ensure PROGRESS.md exists, then create an epic/phase/task and pick it.
 
     The running_server fixture creates .taskmaster/backlog.yaml but not
-    PROGRESS.md (required by regenerate_progress_dashboard).  We create it
+    PROGRESS.md (required by the store's PROGRESS.md export).  We create it
     here so backlog_add_* calls that call _mutate_and_save() succeed.
     """
     progress = tmp_path / ".taskmaster" / "PROGRESS.md"

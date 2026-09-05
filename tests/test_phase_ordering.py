@@ -67,7 +67,7 @@ def out_of_order_project(tmp_path, monkeypatch):
     tm = tmp_path / ".taskmaster"
     tm.mkdir()
     (tm / "backlog.yaml").write_text(BACKLOG_YAML, encoding="utf-8")
-    # PROGRESS.md is required by _mutate_and_save → regenerate_progress_dashboard.
+    # PROGRESS.md is required by the store's PROGRESS.md export.
     (tm / "PROGRESS.md").write_text("", encoding="utf-8")
 
     from taskmaster import backlog_server

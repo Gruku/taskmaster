@@ -59,7 +59,6 @@ def _make_linear_yaml(tmp_path: Path) -> None:
 
 
 def _suppress_hooks(monkeypatch) -> None:
-    monkeypatch.setattr(backlog_server, "regenerate_progress_dashboard", lambda *a, **k: None)
     monkeypatch.setattr(backlog_server, "regenerate_context", lambda *a, **k: None)
 
 
