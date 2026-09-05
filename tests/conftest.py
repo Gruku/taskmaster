@@ -136,12 +136,29 @@ def tm_epic_phase(tmp_taskmaster):
 
 
 # ── Projection bypass guard ────────────────────────────────────────────────
-# `taskmaster.store` is the only writer allowed to touch the task/epic/phase
-# projection (`backlog.yaml`, `tasks/`, `epics/`, `phases/`).  Anything else
+# `taskmaster.store` is the only writer allowed to touch the backlog projection
+# (`backlog.yaml` plus every entity directory beside it).  Anything else
 # reaching those paths is a lost write waiting to happen, so the guard turns it
 # into a loud, immediate failure during the test run.
 
-_GUARDED_DIRS = ("tasks", "epics", "phases")
+_GUARDED_DIRS = (
+    "tasks",
+    "epics",
+    "phases",
+    "bugs",
+    "issues",
+    "handovers",
+    "decisions",
+    "ideas",
+    "notes",
+    "areas",
+    "trackers",
+    "integrations",
+)
+# A projection file is at most this many directory levels below its kind
+# directory: `bugs/B-1.md` (1), `notes/_archive/N-1.md` and
+# `integrations/trackers/t.md` (2), `handovers/_archive/<year>/h.md` (3).
+_MAX_KIND_DEPTH = 3
 _PACKAGE_DIR = PLUGIN_ROOT / "taskmaster"
 _HOOKS_DIR = PLUGIN_ROOT / "hooks"
 _STORE_FILE = _PACKAGE_DIR / "store.py"
@@ -155,8 +172,24 @@ class ProjectionBypassError(AssertionError):
     """Raised when production code writes the projection outside the store."""
 
 
+def _backlog_dir(directory: Path):
+    """`directory` when it is a backlog root, else None."""
+    if directory.name == ".taskmaster" or (directory / "backlog.yaml").exists():
+        return directory
+    return None
+
+
 def _guard_path(target):
-    """The backlog directory this write belongs to, or None when unguarded."""
+    """The backlog directory this write belongs to, or None when unguarded.
+
+    Climbs from the file to its kind directory so the nested shapes are covered
+    as well as the flat ones: `tasks/archive/` and `bugs/archive/`,
+    `notes/_archive/`, the `handovers/_archive/<year>/` year bucket and the
+    `integrations/trackers/` import fallback.  Files named by convention rather
+    than by id — the derived `ideas/IDEAS.md` index and the Linear queue at
+    `integrations/linear-queue.json` — sit directly inside a guarded directory
+    and are covered by the same walk.
+    """
     try:
         path = Path(target)
     except TypeError:
@@ -168,13 +201,14 @@ def _guard_path(target):
             return None
         return path.parent
     parent = path.parent
-    if parent.name == "archive":
+    for _ in range(_MAX_KIND_DEPTH):
+        if parent.name in _GUARDED_DIRS:
+            backlog_dir = _backlog_dir(parent.parent)
+            if backlog_dir is not None:
+                return backlog_dir
+        if parent == parent.parent:  # filesystem root
+            break
         parent = parent.parent
-    if parent.name not in _GUARDED_DIRS:
-        return None
-    backlog_dir = parent.parent
-    if backlog_dir.name == ".taskmaster" or (backlog_dir / "backlog.yaml").exists():
-        return backlog_dir
     return None
 
 
@@ -212,7 +246,7 @@ def _bypass_offender():
 
 @pytest.fixture(autouse=True)
 def projection_bypass_guard(request, monkeypatch):
-    """Fail any production write to the task/epic/phase projection.
+    """Fail any production write to the backlog projection.
 
     Opt out with `@pytest.mark.allow_projection_bypass` for the handful of tests
     that deliberately drive a legacy migration writer.
@@ -234,7 +268,7 @@ def projection_bypass_guard(request, monkeypatch):
             return
         raise ProjectionBypassError(
             f"projection bypass: {primitive} wrote {target!r} from {offender}; "
-            "task/epic/phase writes must go through taskmaster.store"
+            "backlog entity writes must go through taskmaster.store"
         )
 
     real_atomic_write = taskmaster_v3.atomic_write

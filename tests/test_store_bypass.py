@@ -1,7 +1,8 @@
-# User intent: prove no production code writes the task/epic/phase projection
-# behind the SQLite store's back — the viewer, the link tools and the schema
-# marker all commit through a store transaction, and the guard says so loudly.
-"""Bypass-guard tests for the store projection boundary (spec §2.3)."""
+# User intent: prove no production code writes the backlog projection behind
+# the SQLite store's back — every entity directory, not just tasks — so the
+# viewer, the link tools and the schema marker all commit through a store
+# transaction and the guard says so loudly when something does not.
+"""Bypass-guard tests for the store projection boundary (spec §2.3, §3.1)."""
 from __future__ import annotations
 
 import json
@@ -92,12 +93,48 @@ def test_guard_lets_the_store_write_the_projection(tm_epic_phase):
     assert (tm_epic_phase / ".taskmaster" / "backlog.yaml").exists()
 
 
-def test_guard_lets_non_task_entity_writers_through(tm_epic_phase):
-    """Bugs and friends stay on the narrow step-3 allowlist."""
-    out = bs.backlog_bug_create(title="A bug", severity="P2",
-                                found_in="tests", body="repro")
-    assert "Error" not in out, out
-    assert list((tm_epic_phase / ".taskmaster" / "bugs").glob("*.md"))
+def test_guard_trips_on_a_production_bug_file_write(tmp_taskmaster):
+    """Bugs left the narrow step-3 allowlist: the store owns them too."""
+    target = tmp_taskmaster / ".taskmaster" / "bugs" / "B-001.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with pytest.raises(AssertionError, match="projection bypass"):
+        _write_as_production(target)
+    assert not target.exists()
+
+
+# Every entity directory the store owns, including the nested shapes: the two
+# `archive/` conventions, the `handovers/_archive/<year>/` year bucket, the
+# derived `ideas/IDEAS.md` index, the Linear queue file and the
+# `integrations/trackers/` import fallback.
+_GUARDED_TARGETS = (
+    "bugs/B-001.md",
+    "bugs/archive/B-001.md",
+    "issues/ISS-001.md",
+    "handovers/2026-09-05-session.md",
+    "handovers/_archive/2026/2026-09-05-session.md",
+    "decisions/DEC-001.md",
+    "ideas/I-001.md",
+    "ideas/IDEAS.md",
+    "notes/N-001.md",
+    "notes/_archive/N-001.md",
+    "areas/backend.md",
+    "trackers/linear-acme-eng-1.md",
+    "integrations/linear-queue.json",
+    "integrations/trackers/linear-acme-eng-1.md",
+)
+
+
+@pytest.mark.parametrize("relative", _GUARDED_TARGETS)
+def test_guard_trips_on_a_production_write_to_every_entity_path(
+    tmp_taskmaster, relative
+):
+    target = tmp_taskmaster / ".taskmaster" / Path(relative)
+    # Create the directory so an unguarded write really lands on disk — without
+    # it a miss would raise FileNotFoundError and read as a pass.
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with pytest.raises(AssertionError, match="projection bypass"):
+        _write_as_production(target)
+    assert not target.exists()
 
 
 # ── the schema marker no longer writes backlog.yaml ────────────────────────

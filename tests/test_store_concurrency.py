@@ -725,6 +725,10 @@ def test_mixed_public_tool_operations_across_processes_never_lose_a_write(tmp_pa
 
     Profile is 8 processes x 200 operations by default; override with
     `TM_STRESS_PROCESSES` / `TM_STRESS_OPS` when debugging locally.
+
+    Marked `slow`: it is roughly half the suite's wall clock, so the fast
+    development loop is `uv run pytest -q -m "not slow"`.  Nothing deselects it
+    otherwise — the full run, and CI, still execute it at the default profile.
     """
     workers, ops = STRESS_PROCESSES, STRESS_OPS
     root = tmp_path / "repo"
