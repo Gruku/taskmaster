@@ -11,8 +11,12 @@ server, never by this hook) and prints at most one `additionalContext` line.
 The store is the runtime authority, so there is no such thing as a stale
 read: what the hook must avoid instead is repeating a line the agent has
 already seen. `MAX(changes.seq)` is recorded beside each memoised line in
-`local/hook-seen/`; an unchanged seq means the answer cannot have changed
-and the query is skipped entirely.
+`local/hook-seen/`; an unchanged seq for that path means the answer cannot
+have changed and the query is skipped entirely.
+
+Root resolution is the shared rule, so outside a git repository the hook
+walks up to the nearest ancestor holding a backlog exactly as the server
+does — an edit from a subdirectory still finds the project.
 
 Imports are limited to the standard library plus `taskmaster.root`, which is
 itself standard-library-only. Hooks run under the system interpreter, not the
@@ -132,27 +136,38 @@ def _glob_match(pattern: str, rel: str) -> bool:
 
 
 def _connect_ro(db_file) -> sqlite3.Connection:
-    """Read-only handle. The hook must never open a write transaction, let
-    alone write a row — the server owns every write to the store."""
-    uri = Path(db_file).resolve().as_uri()
+    """A connection that can read the store and can never write to it.
+
+    `mode=ro` is deliberately not used: a read-only open cannot create the
+    `-shm` a WAL database needs, and SQLite defers that failure to the first
+    statement rather than to the open, so the error would surface far from
+    here (design spec 3.1). `mode=rw` gets the same write guard from
+    `query_only` and, unlike a bare path, cannot bring a missing store into
+    existence — a hook must never create one. The probe statement makes an
+    unusable database fail here, where the caller can log it and go quiet.
+    """
+    uri = Path(db_file).resolve().as_uri() + "?mode=rw"
+    con = sqlite3.connect(uri, uri=True, timeout=BUSY_TIMEOUT_SECONDS)
     try:
-        return sqlite3.connect(uri + "?mode=ro", uri=True, timeout=BUSY_TIMEOUT_SECONDS)
-    except sqlite3.OperationalError:
-        # A WAL database cannot be opened `mode=ro` when its `-shm` is absent
-        # and cannot be created (design spec 3.1). `query_only` keeps the
-        # guarantee that matters: this connection can never write a row.
-        con = sqlite3.connect(uri + "?mode=rw", uri=True, timeout=BUSY_TIMEOUT_SECONDS)
         con.execute("PRAGMA query_only=ON")
-        return con
+        con.execute("SELECT 1").fetchone()
+    except BaseException:
+        con.close()
+        raise
+    return con
 
 
 def max_change_seq(db_file) -> int:
     """`MAX(changes.seq)` — the store revision this answer belongs to."""
     con = _connect_ro(db_file)
     try:
-        row = con.execute("SELECT MAX(seq) FROM changes").fetchone()
+        return _max_change_seq(con)
     finally:
         con.close()
+
+
+def _max_change_seq(con: sqlite3.Connection) -> int:
+    row = con.execute("SELECT MAX(seq) FROM changes").fetchone()
     return int(row[0]) if row and row[0] is not None else 0
 
 
@@ -164,41 +179,42 @@ def resolve(db_file, rel: str) -> ResolveResult:
     """
     con = _connect_ro(db_file)
     try:
-        rows = con.execute(_MATCH_SQL, (rel,)).fetchall()
-
-        matched: dict = {}
-        for kind, eid, status, archived, match_kind, path, source in rows:
-            if match_kind == "glob" and not _glob_match(path, rel):
-                continue
-            entry = matched.get((kind, eid))
-            if entry is None:
-                matched[(kind, eid)] = entry = [status, archived, False]
-            if source in STRUCTURAL_SOURCES:
-                entry[2] = True
-
-        listed = []
-        closed = 0
-        prose = 0
-        for (kind, eid), (status, archived, structural) in matched.items():
-            if kind not in KIND_ORDER:
-                prose += 1
-                continue
-            # Handovers carry no anchors/location field at all — prose is the
-            # only path signal they can ever have, so it is the one that counts
-            # for them.
-            if not structural and kind != "handover":
-                prose += 1
-            elif not archived and (status or "") in OPEN_STATUS[kind]:
-                listed.append(Entry(eid, kind, status or ""))
-            else:
-                closed += 1
-
-        listed.sort(key=lambda e: (KIND_ORDER[e.kind], e.id))
-        related = _count_related(con, listed, matched)
+        return _resolve(con, rel)
     finally:
         con.close()
 
-    return ResolveResult(listed, closed, prose, related)
+
+def _resolve(con: sqlite3.Connection, rel: str) -> ResolveResult:
+    rows = con.execute(_MATCH_SQL, (rel,)).fetchall()
+
+    matched: dict = {}
+    for kind, eid, status, archived, match_kind, path, source in rows:
+        if match_kind == "glob" and not _glob_match(path, rel):
+            continue
+        entry = matched.get((kind, eid))
+        if entry is None:
+            matched[(kind, eid)] = entry = [status, archived, False]
+        if source in STRUCTURAL_SOURCES:
+            entry[2] = True
+
+    listed = []
+    closed = 0
+    prose = 0
+    for (kind, eid), (status, archived, structural) in matched.items():
+        if kind not in KIND_ORDER:
+            prose += 1
+            continue
+        # Handovers carry no anchors/location field at all — prose is the only
+        # path signal they can ever have, so it is the one that counts for them.
+        if not structural and kind != "handover":
+            prose += 1
+        elif not archived and (status or "") in OPEN_STATUS[kind]:
+            listed.append(Entry(eid, kind, status or ""))
+        else:
+            closed += 1
+
+    listed.sort(key=lambda e: (KIND_ORDER[e.kind], e.id))
+    return ResolveResult(listed, closed, prose, _count_related(con, listed, matched))
 
 
 def _count_related(con, listed: list, matched: dict) -> int:
@@ -326,19 +342,31 @@ def seen_path(root: Path, session_id: str) -> Path:
 
 
 def load_seen(path: Path) -> dict:
-    """`{"seq": int, "lines": {rel: line}}`, tolerating an older list file."""
+    """`{rel: [seq, line]}` — the line last shown for a path, and when.
+
+    The seq belongs to the path, not to the file: one seq for the whole session
+    would let a print for one path mark every other path as already answered,
+    and a genuinely changed line would then never be shown again. Older file
+    shapes (a bare list of paths, or a single top-level seq) are read as empty
+    rather than misread.
+    """
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
-        return {"seq": -1, "lines": {}}
-    if isinstance(data, dict):
-        lines = data.get("lines")
-        seq = data.get("seq")
-        return {
-            "seq": seq if isinstance(seq, int) else -1,
-            "lines": lines if isinstance(lines, dict) else {},
-        }
-    return {"seq": -1, "lines": {}}
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    seen = {}
+    for rel, entry in data.items():
+        if (
+            isinstance(rel, str)
+            and isinstance(entry, list)
+            and len(entry) == 2
+            and isinstance(entry[0], int)
+            and isinstance(entry[1], str)
+        ):
+            seen[rel] = [entry[0], entry[1]]
+    return seen
 
 
 def record_seen(path: Path, seen: dict) -> None:
@@ -411,23 +439,30 @@ def main() -> int:
             log_reason(root, f"no store at {db_file}; staying quiet")
             return 0
 
-        seq = max_change_seq(db_file)
         seen_file = seen_path(root, session_id if isinstance(session_id, str) else "")
         seen = load_seen(seen_file)
-        previous = seen["lines"].get(rel)
-        if previous is not None and seen["seq"] == seq:
-            return 0
+        entry = seen.get(rel)
 
-        result = resolve(db_file, rel)
+        connection = _connect_ro(db_file)
+        try:
+            seq = _max_change_seq(connection)
+            if entry is not None and entry[0] == seq:
+                # This path was answered at this exact store revision; nothing
+                # can have changed, so the query is skipped entirely.
+                return 0
+            result = _resolve(connection, rel)
+        finally:
+            connection.close()
+
         if not result.listed:
             return 0
 
         line = format_line(rel, result)
-        seen["seq"] = seq
+        previous = entry[1] if entry is not None else None
         # Recorded only now: dedupe suppresses a repeat of a line the agent has
         # already seen, so a silent edit must not burn the path. Otherwise the
         # first edit before a bug is filed would mute every later edit.
-        seen["lines"][rel] = line
+        seen[rel] = [seq, line]
         record_seen(seen_file, seen)
         if line == previous:
             return 0

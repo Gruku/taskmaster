@@ -309,11 +309,62 @@ def test_missing_store_falls_back_to_files_and_logs(tmp_path, monkeypatch, decid
     assert "no store" in log
 
 
-def test_corrupt_store_fails_open_and_logs(stored_project, decide_module):
-    (stored_project / ".taskmaster" / "local" / "store.db").write_bytes(b"not a database")
-    assert decide_module.decide("feature/x", stored_project) == "ALLOW"
-    log = (stored_project / ".taskmaster" / "local" / "hook.log").read_text(encoding="utf-8")
-    assert "store" in log
+def test_corrupt_store_falls_back_to_the_projection(tmp_path, monkeypatch, decide_module):
+    """A broken store must not be a way to walk a merge past the gate."""
+    root = tmp_path / "proj"
+    monkeypatch.setenv("TASKMASTER_ROOT", str(root))
+    _write_projection(root, policy=True)
+    (root / ".taskmaster" / "tasks" / "T-001.md").write_text(
+        "---\nid: T-001\ntitle: Test task\n---\n", encoding="utf-8")
+    _adopt(root)
+    (root / ".taskmaster" / "local" / "store.db").write_bytes(b"not a database")
+
+    assert decide_module.decide("feature/x", root).startswith("BLOCK:T-001:")
+    log = (root / ".taskmaster" / "local" / "hook.log").read_text(encoding="utf-8")
+    assert "store unreadable" in log
+
+
+def test_unreadable_wal_store_falls_back_to_the_projection(
+    tmp_path, monkeypatch, decide_module
+):
+    """The real failure mode: a WAL store whose `-shm` cannot be created.
+
+    SQLite defers that to the first statement, so a guard wrapped around the
+    open alone would let the error escape and fail the gate open.
+    """
+    root = tmp_path / "proj"
+    monkeypatch.setenv("TASKMASTER_ROOT", str(root))
+    _write_projection(root, policy=True)
+    (root / ".taskmaster" / "tasks" / "T-001.md").write_text(
+        "---\nid: T-001\ntitle: Test task\n---\n", encoding="utf-8")
+    _adopt(root)
+    local = root / ".taskmaster" / "local"
+    assert (local / "store.db").is_file()
+    for leftover in ("store.db-shm", "store.db-wal"):
+        if (local / leftover).exists():
+            (local / leftover).unlink()
+    (local / "store.db-shm").mkdir()
+
+    assert decide_module.decide("feature/x", root).startswith("BLOCK:T-001:")
+    log = (local / "hook.log").read_text(encoding="utf-8")
+    assert "store unreadable" in log
+
+
+def test_the_read_connection_cannot_write_or_create_a_store(stored_project, decide_module):
+    """`query_only` on a normal connection, not a `mode=ro` URI (spec 3.1)."""
+    db = stored_project / ".taskmaster" / "local" / "store.db"
+    con = decide_module._connect_ro(db)
+    try:
+        assert con.execute("PRAGMA query_only").fetchone()[0] == 1
+        with pytest.raises(sqlite3.OperationalError):
+            con.execute("DELETE FROM entities")
+    finally:
+        con.close()
+
+    missing = stored_project / ".taskmaster" / "local" / "absent.db"
+    with pytest.raises(sqlite3.OperationalError):
+        decide_module._connect_ro(missing)
+    assert not missing.exists()
 
 
 def test_no_project_at_all_allows(tmp_path, monkeypatch, decide_module):

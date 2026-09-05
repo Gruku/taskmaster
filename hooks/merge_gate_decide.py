@@ -17,9 +17,10 @@ Prints one of:
 
 The root is `taskmaster.root.resolve_root` — the same rule the server uses —
 so a merge run inside a linked worktree is judged against the main checkout's
-store. When `<root>/.taskmaster/local/store.db` exists every answer comes from
-it; when it does not, the projection is parsed instead and the reason is
-logged. A hook never imports a backlog into a store (spec §4.5, R10).
+store. When `<root>/.taskmaster/local/store.db` exists and can be read, every
+answer comes from it; when it is absent or unreadable, the projection is
+parsed instead and the reason is logged, so a broken store cannot quietly
+disable the gate. A hook never imports a backlog into a store (spec §4.5, R10).
 
 CARDINAL RULE: FAIL-OPEN.  Every uncertainty, error, or missing piece
 prints "ALLOW".  The ENTIRE body is wrapped in a top-level try/except so a
@@ -46,6 +47,7 @@ _TASK_BY_BRANCH_SQL = (
     "SELECT id, doc FROM entities"
     " WHERE kind='task' AND deleted=0 AND archived=0"
     "   AND json_extract(doc,'$.branch')=?"
+    " ORDER BY id"
 )
 
 
@@ -80,6 +82,7 @@ def _git_rev_parse(branch: str, cwd: Path) -> str | None:
 
 
 def _walk_up_for_backlog(start: Path) -> Path | None:
+    """Fallback walk for a plugin whose `taskmaster` package is missing."""
     current = Path(start).resolve()
     while True:
         if (current / ".taskmaster").is_dir():
@@ -93,8 +96,8 @@ def project_root(cwd: Path) -> Path | None:
     """The checkout whose `.taskmaster/` governs this merge, or None.
 
     `resolve_root` is the shared rule (`TASKMASTER_ROOT`, else the git common
-    dir, else cwd); an explicitly pinned root that has no backlog is an answer,
-    not a reason to go looking elsewhere.
+    dir, else the nearest ancestor holding a backlog); an explicitly pinned
+    root that has no backlog is an answer, not a reason to go looking elsewhere.
     """
     try:
         from taskmaster.root import resolve_root
@@ -102,28 +105,44 @@ def project_root(cwd: Path) -> Path | None:
         resolution = resolve_root(Path(cwd))
         if (resolution.root / ".taskmaster").is_dir():
             return resolution.root
-        if resolution.source in ("env", "explicit"):
-            return None
+        return None
     except Exception:
-        pass
-    return _walk_up_for_backlog(Path(cwd))
+        return _walk_up_for_backlog(Path(cwd))
+
+
+def _store_path(root: Path) -> Path:
+    """`<root>/.taskmaster/local/store.db`, from the shared definition."""
+    try:
+        from taskmaster.root import db_path
+
+        return db_path(root / ".taskmaster")
+    except Exception:
+        return root / ".taskmaster" / "local" / "store.db"
 
 
 # ── Store path ──────────────────────────────────────────────────
 
 
 def _connect_ro(db_file: Path) -> sqlite3.Connection:
-    """Read-only handle: the gate must never write a row or hold a lock."""
-    uri = Path(db_file).resolve().as_uri()
+    """A connection that can read the store and can never write to it.
+
+    `mode=ro` is deliberately not used: a read-only open cannot create the
+    `-shm` a WAL database needs, and SQLite defers that failure to the first
+    statement rather than to the open (design spec 3.1) — so a gate written
+    around it would fail open at a distance instead of here. `mode=rw` takes
+    its write guard from `query_only` and still refuses to create a missing
+    store. The probe statement moves an unusable database's failure to this
+    function, where the caller can fall back to the projection.
+    """
+    uri = Path(db_file).resolve().as_uri() + "?mode=rw"
+    con = sqlite3.connect(uri, uri=True, timeout=BUSY_TIMEOUT_SECONDS)
     try:
-        return sqlite3.connect(uri + "?mode=ro", uri=True, timeout=BUSY_TIMEOUT_SECONDS)
-    except sqlite3.OperationalError:
-        # A WAL database cannot be opened `mode=ro` when its `-shm` is absent
-        # and cannot be created (design spec 3.1). Failing open here would
-        # disable the gate; `query_only` reads instead, and still writes nothing.
-        con = sqlite3.connect(uri + "?mode=rw", uri=True, timeout=BUSY_TIMEOUT_SECONDS)
         con.execute("PRAGMA query_only=ON")
-        return con
+        con.execute("SELECT 1").fetchone()
+    except BaseException:
+        con.close()
+        raise
+    return con
 
 
 def _task_for_branch(con: sqlite3.Connection, src: str):
@@ -135,7 +154,7 @@ def _task_for_branch(con: sqlite3.Connection, src: str):
             (ident, doc)
             for ident, doc in con.execute(
                 "SELECT id, doc FROM entities"
-                " WHERE kind='task' AND deleted=0 AND archived=0"
+                " WHERE kind='task' AND deleted=0 AND archived=0 ORDER BY id"
             )
             if json.loads(doc).get("branch") == src
         ]
@@ -146,7 +165,8 @@ def _task_for_branch(con: sqlite3.Connection, src: str):
 
 def _policy_on(con: sqlite3.Connection) -> bool:
     row = con.execute(
-        "SELECT doc FROM entities WHERE kind='project' AND deleted=0 LIMIT 1"
+        "SELECT doc FROM entities"
+        " WHERE kind='project' AND deleted=0 AND archived=0 ORDER BY id LIMIT 1"
     ).fetchone()
     if not row:
         return False
@@ -296,15 +316,17 @@ def decide(src: str, cwd: Path) -> str:
     if root is None:
         return "ALLOW"
 
-    db_file = root / ".taskmaster" / "local" / "store.db"
+    db_file = _store_path(root)
     if db_file.is_file():
         try:
             return decide_from_store(db_file, src, cwd)
         except Exception as exc:
-            _log(root, f"store unreadable ({exc!r}); failing open")
-            return "ALLOW"
-
-    _log(root, f"no store at {db_file}; reading the projection instead")
+            # An unreadable store is the moment the projection is worth most:
+            # falling straight to ALLOW would disable the gate on a machine
+            # where the backlog is still perfectly legible on disk.
+            _log(root, f"store unreadable ({exc!r}); reading the projection instead")
+    else:
+        _log(root, f"no store at {db_file}; reading the projection instead")
     try:
         return decide_from_files(root, src, cwd)
     except Exception:

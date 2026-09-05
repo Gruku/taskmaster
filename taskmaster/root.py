@@ -6,8 +6,9 @@
 
 `taskmaster.store` re-exports every name defined here, so `store.resolve_root`
 stays the public entry point and there is exactly one implementation of the
-rule (``TASKMASTER_ROOT`` -> git common dir -> cwd).  Hooks import this module
-directly because it costs nothing but the standard library.
+rule (``TASKMASTER_ROOT`` -> git common dir -> nearest ancestor holding a
+backlog -> cwd).  Hooks import this module directly because it costs nothing
+but the standard library.
 """
 from __future__ import annotations
 
@@ -117,6 +118,24 @@ def _network_filesystem_reason(path: Path) -> str | None:
     return None
 
 
+def walk_up_for_backlog(start: Path) -> Path | None:
+    """Nearest ancestor of `start` (itself included) that owns a backlog.
+
+    A `.taskmaster/backlog.yaml` is the strong signal and wins outright; a bare
+    `.taskmaster/` directory is accepted only when no ancestor has the file, so
+    a half-initialised directory cannot shadow the real project above it.
+    """
+    start = _absolute(start)
+    candidates = [start, *start.parents]
+    for candidate in candidates:
+        if (candidate / ".taskmaster" / "backlog.yaml").is_file():
+            return candidate
+    for candidate in candidates:
+        if (candidate / ".taskmaster").is_dir():
+            return candidate
+    return None
+
+
 def resolve_root(
     start: Path | None = None, *, explicit_root: Path | None = None
 ) -> RootResolution:
@@ -134,7 +153,16 @@ def resolve_root(
             root = common_root
             source = "git-common-dir"
         else:
-            root = start_path
+            # Outside a repository there is no checkout boundary to lean on, so
+            # the backlog itself marks the root. Without this a tool or hook run
+            # from a subdirectory resolves to a root with no `.taskmaster/` and
+            # reports an empty project.
+            walked = walk_up_for_backlog(start_path)
+            if walked is not None:
+                root = walked
+                source = "walk-up"
+            else:
+                root = start_path
     return RootResolution(
         root=root,
         backlog_path=root / ".taskmaster",

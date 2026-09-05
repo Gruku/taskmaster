@@ -207,6 +207,28 @@ def test_linked_worktree_reads_the_main_checkout_store(tmp_path):
     assert not (worktree / ".taskmaster").exists()
 
 
+def test_non_git_project_is_found_from_a_subdirectory(tmp_path):
+    """Outside a repository the backlog itself marks the root.
+
+    The hook fires with the editor's cwd, which is routinely a subdirectory;
+    resolving to that directory verbatim would silence the hook for every
+    project that is not a git checkout.
+    """
+    root = _synthetic_root(tmp_path, [
+        ("B-1", "bug", "open", "svc/deep/a.py", "exact", "location")])
+    nested = root / "svc" / "deep"
+    nested.mkdir(parents=True)
+    (nested / "a.py").write_text("x", encoding="utf-8")
+    assert not (root / ".git").exists()
+
+    env = dict(os.environ)
+    env.pop("TASKMASTER_ROOT", None)
+    payload_from_nested = payload(root, "svc/deep/a.py")
+    payload_from_nested["cwd"] = str(nested)
+    assert context(run(payload_from_nested, nested, env=env)) == (
+        "TM: svc/deep/a.py → B-1 open")
+
+
 def test_dedupe_per_session(stored_root):
     _run(stored_root, "api/src/svc/model.py")
     assert _run(stored_root, "api/src/svc/model.py").stdout == ""
@@ -237,6 +259,34 @@ def test_an_unrelated_change_does_not_repeat_the_same_line(tmp_path):
     _append_rows(root, [("B-901", "bug", "open", "svc/elsewhere.py", "exact", "location")],
                  bump_seq=True)
     assert _run(root, "svc/a.py").stdout == ""
+
+
+def test_one_paths_print_does_not_answer_for_another(tmp_path):
+    """The seq is recorded per path, not per session file.
+
+    A single top-level seq would let the print for one path mark every other
+    path as already answered at that revision, and the second path's changed
+    line would never be shown.
+    """
+    root = _synthetic_root(tmp_path, [
+        ("B-1", "bug", "open", "svc/a.py", "exact", "location"),
+        ("B-2", "bug", "open", "svc/b.py", "exact", "location"),
+    ])
+    (root / "svc").mkdir(parents=True)
+    for name in ("a.py", "b.py"):
+        (root / "svc" / name).write_text("x", encoding="utf-8")
+
+    assert context(_run(root, "svc/a.py")) == "TM: svc/a.py → B-1 open"
+    assert context(_run(root, "svc/b.py")) == "TM: svc/b.py → B-2 open"
+
+    # One change touching both paths, then b is edited first and prints.
+    _append_rows(root, [
+        ("B-3", "bug", "open", "svc/a.py", "exact", "location"),
+        ("B-4", "bug", "open", "svc/b.py", "exact", "location"),
+    ], bump_seq=True)
+    assert context(_run(root, "svc/b.py")) == "TM: svc/b.py → B-2 open, B-4 open"
+    # a's line changed too, and b's print must not have answered for it.
+    assert context(_run(root, "svc/a.py")) == "TM: svc/a.py → B-1 open, B-3 open"
 
 
 def test_silent_edit_does_not_burn_the_dedupe_slot(tmp_path):
@@ -415,20 +465,33 @@ def _insert(con: sqlite3.Connection, rows, archived=(), deleted=()) -> None:
                     "values (?,?,?,?,?)", (kind, eid, path, mk, source))
 
 
-def _synthetic_root(tmp_path: Path, rows, archived=(), deleted=()) -> Path:
+def _synthetic_root(tmp_path: Path, rows, archived=(), deleted=(), *, wal=False) -> Path:
     """A project root whose store.db holds exactly `rows`.
 
     rows: (entity_id, kind, status, path, match_kind, source)
+    `wal` puts the database in the journal mode production uses, which is the
+    mode whose read path has the `-shm` constraint.
     """
     root = tmp_path / "syn"
     (root / ".taskmaster" / "local").mkdir(parents=True)
     (root / ".taskmaster" / "backlog.yaml").write_text("version: 4\n", encoding="utf-8")
     con = sqlite3.connect(root / ".taskmaster" / "local" / "store.db")
+    if wal:
+        con.execute("PRAGMA journal_mode=WAL")
     con.executescript(store.SCHEMA_SQL)
     _insert(con, rows, archived, deleted)
     con.commit()
     con.close()
     return root
+
+
+def _block_shm(root: Path) -> None:
+    """Make the store unreadable the way a read-only directory would.
+
+    A directory sitting where the `-shm` must go is the portable way to deny
+    its creation; SQLite then fails on the first statement, not on the open.
+    """
+    (root / ".taskmaster" / "local" / "store.db-shm").mkdir()
 
 
 def _append_rows(root: Path, rows, *, bump_seq: bool = False) -> None:
@@ -529,29 +592,22 @@ def test_open_status_vocab(tmp_path):
     assert res.closed == 3
 
 
-def test_connect_falls_back_to_query_only_when_read_only_open_fails(tmp_path, monkeypatch):
-    """A WAL store whose `-shm` cannot be created refuses a `mode=ro` open.
+def test_connection_reads_a_wal_store_and_cannot_write_to_it(tmp_path):
+    """The read path must survive a real WAL store with no `-shm` on disk.
 
-    Going quiet there would hide the backlog on exactly the machines that need
-    it most, so the hook reads through a `query_only` connection instead — which
-    still cannot write a row.
+    `mode=ro` cannot create the `-shm` a WAL database needs and defers that
+    failure to the first statement, so the guard is `query_only` on a normal
+    connection instead (design spec 3.1).
     """
     mod = _load_hook_module()
     root = _synthetic_root(tmp_path, [
-        ("B-1", "bug", "open", "a/b.py", "exact", "location")])
+        ("B-1", "bug", "open", "a/b.py", "exact", "location")], wal=True)
     db = root / ".taskmaster" / "local" / "store.db"
-    real_connect = mod.sqlite3.connect
-
-    def refuse_read_only(database, *args, **kwargs):
-        if isinstance(database, str) and "mode=ro" in database:
-            raise mod.sqlite3.OperationalError("unable to open database file")
-        return real_connect(database, *args, **kwargs)
-
-    monkeypatch.setattr(mod.sqlite3, "connect", refuse_read_only)
-    assert [e.id for e in _resolve(mod, root, "a/b.py").listed] == ["B-1"]
+    assert not (db.parent / "store.db-shm").exists()
 
     con = mod._connect_ro(db)
     try:
+        assert con.execute("SELECT count(*) FROM entities").fetchone()[0] == 1
         assert con.execute("PRAGMA query_only").fetchone()[0] == 1
         with pytest.raises(mod.sqlite3.OperationalError):
             con.execute(
@@ -559,6 +615,32 @@ def test_connect_falls_back_to_query_only_when_read_only_open_fails(tmp_path, mo
                 "body,rev,updated_seq) VALUES('bug','B-2',NULL,'open',0,0,'{}','',1,0)")
     finally:
         con.close()
+    assert [e.id for e in _resolve(mod, root, "a/b.py").listed] == ["B-1"]
+
+
+def test_connection_never_brings_a_missing_store_into_existence(tmp_path):
+    """A hook must not create the store it failed to find (R10)."""
+    mod = _load_hook_module()
+    missing = tmp_path / "nowhere" / "store.db"
+    missing.parent.mkdir()
+    with pytest.raises(mod.sqlite3.OperationalError):
+        mod._connect_ro(missing)
+    assert not missing.exists()
+
+
+def test_an_unreadable_store_is_silent_and_logged_not_a_crash(tmp_path):
+    """The failure lands on the first statement, so the guard must cover it."""
+    root = _synthetic_root(tmp_path, [
+        ("B-1", "bug", "open", "svc/a.py", "exact", "location")], wal=True)
+    (root / "svc").mkdir(parents=True)
+    (root / "svc" / "a.py").write_text("x", encoding="utf-8")
+    _block_shm(root)
+
+    result = _run(root, "svc/a.py")
+    assert result.returncode == 0
+    assert result.stdout == ""
+    log = (root / ".taskmaster" / "local" / "hook.log").read_text(encoding="utf-8")
+    assert "unable to open database file" in log
 
 
 def test_query_budget_under_50ms(tmp_path):

@@ -204,6 +204,55 @@ def test_non_git_start_directory_is_the_absolute_normalized_fallback(
     _assert_resolution(resolution, start, "cwd")
 
 
+def test_non_git_start_walks_up_to_the_nearest_backlog(tmp_path, monkeypatch):
+    """Outside a repository the backlog marks the root, not the cwd.
+
+    Resolving a subdirectory to itself opens an empty store beside the real
+    project and reports no tasks, which is the same failure the legacy-layout
+    refusal exists to prevent.
+    """
+    project = tmp_path / "project"
+    _write_projection(project, project="walked-up")
+    start = project / "src" / "deep"
+    start.mkdir(parents=True)
+
+    def no_repository(*_args, **_kwargs):
+        raise subprocess.CalledProcessError(128, "git")
+
+    monkeypatch.setattr(store.subprocess, "run", no_repository)
+
+    _assert_resolution(store.resolve_root(start), project, "walk-up")
+
+
+def test_walk_up_prefers_the_ancestor_that_owns_a_backlog_file(tmp_path, monkeypatch):
+    """A bare `.taskmaster/` must not shadow a real project above it."""
+    outer = tmp_path / "outer"
+    _write_projection(outer, project="outer-authority")
+    inner = outer / "vendor" / "half-initialised"
+    (inner / ".taskmaster").mkdir(parents=True)
+    start = inner / "src"
+    start.mkdir()
+
+    def no_repository(*_args, **_kwargs):
+        raise subprocess.CalledProcessError(128, "git")
+
+    monkeypatch.setattr(store.subprocess, "run", no_repository)
+
+    _assert_resolution(store.resolve_root(start), outer, "walk-up")
+
+
+def test_environment_root_still_wins_over_the_walk_up(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    _write_projection(project)
+    start = project / "src"
+    start.mkdir()
+    env_root = tmp_path / "environment-root"
+    env_root.mkdir()
+    monkeypatch.setenv("TASKMASTER_ROOT", str(env_root))
+
+    _assert_resolution(store.resolve_root(start), env_root, "env")
+
+
 def test_db_path_is_under_the_backlog_local_directory(tmp_path):
     backlog_path = (tmp_path / "repo" / ".taskmaster").resolve()
 
