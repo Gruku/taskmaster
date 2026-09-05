@@ -805,6 +805,22 @@ def _store_write_task(backlog_path: Path | None, entity: dict) -> None:
         apply(data)
 
 
+def _auto_link_entity(backlog_path: Path, entity_id: str) -> list[str]:
+    """Run inline-mention auto-linking inside one store transaction.
+
+    The inverse `referenced_by` link lands on a *task*, so the target's read and
+    write have to share a transaction: reading committed state, letting a peer
+    commit, then writing the whole stale document back reverted that peer's
+    branch or status change while the link itself survived.
+    """
+    from taskmaster.taskmaster_v3 import auto_link_on_save  # noqa: PLC0415
+
+    added: list[str] = []
+    with _transaction(tool="auto-link") as _data:
+        added = auto_link_on_save(backlog_path, entity_id)
+    return added
+
+
 def _configure_entity_io() -> None:
     """Install the task read/write hooks on the shared entity dispatcher."""
     from taskmaster import taskmaster_v3 as _v3  # noqa: PLC0415
@@ -2866,9 +2882,8 @@ def backlog_handover_create(
     _mutate_and_save(data)
 
     # Plan C: auto-detect inline ID mentions, materialize as `references` links.
-    from taskmaster.taskmaster_v3 import auto_link_on_save as _auto_link_on_save
     try:
-        _auto_link_on_save(bp, hid)
+        _auto_link_entity(bp, hid)
     except Exception:
         pass
 
@@ -3067,8 +3082,31 @@ def backlog_handover_resync() -> str:
     return f"Handover index resynced — {n} entries in `backlog.yaml`.{extra}"
 
 
+def _threads_data(bp: Path) -> dict:
+    """Backlog state with the thread index present, taking no writer lock to read.
+
+    Listing threads is a read.  Entering a transaction unconditionally queued
+    every listing behind the writer and, on projection-only (network) storage
+    where the store refuses to write at all, failed outright.  The one-off
+    backfill still commits when it is genuinely missing; on a read-only store it
+    is derived in memory and left uncommitted.
+    """
+    data = _load()
+    if "threads" in data:
+        return data
+    try:
+        with _transaction(tool="backlog_thread_index_backfill") as tx_data:
+            if "threads" not in tx_data:
+                _sync_handover_index(tx_data, bp)
+                _mutate_and_save(tx_data)
+    except RuntimeError:
+        # Projection-only storage: serve the derived index without persisting it.
+        _sync_handover_index(data, bp)
+        return data
+    return _load()
+
+
 @mcp.tool()
-@_transactional("backlog_thread_list")
 def backlog_thread_list(include_closed: bool = False) -> str:
     """The thread board — open (and parked) lines of work with their stable
     resume tokens. Resume one with `backlog_thread_resume(<name>)`.
@@ -3079,10 +3117,7 @@ def backlog_thread_list(include_closed: bool = False) -> str:
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    data = _load()
-    if "threads" not in data:
-        _sync_handover_index(data, bp)
-        _mutate_and_save(data)
+    data = _threads_data(bp)
     from taskmaster.taskmaster_v3 import list_threads as _list_threads
     rows = _list_threads(data)
     if not include_closed:
@@ -3104,7 +3139,6 @@ def backlog_thread_list(include_closed: bool = False) -> str:
 
 
 @mcp.tool()
-@_transactional("backlog_thread_resume")
 def backlog_thread_resume(ref: str) -> str:
     """Resume a thread: returns its newest handover in full (frontmatter +
     body) in one call. `ref` is a thread name OR any handover id (stale dated
@@ -3113,10 +3147,7 @@ def backlog_thread_resume(ref: str) -> str:
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    data = _load()
-    if "threads" not in data:
-        _sync_handover_index(data, bp)
-        _mutate_and_save(data)
+    data = _threads_data(bp)
     from taskmaster.taskmaster_v3 import resolve_thread as _resolve_thread
     try:
         tname, hid = _resolve_thread(data, bp, ref)
@@ -3632,9 +3663,8 @@ def backlog_issue_create(
     _mutate_and_save(data)
 
     # Plan C: auto-detect inline ID mentions, materialize as `references` links.
-    from taskmaster.taskmaster_v3 import auto_link_on_save as _auto_link_on_save
     try:
-        _auto_link_on_save(bp, iid)
+        _auto_link_entity(bp, iid)
     except Exception:
         pass
 
@@ -3818,9 +3848,8 @@ def backlog_issue_update(issue_id: str, field: str, value: str = "") -> str:
 
     # Plan C: auto-detect inline ID mentions on body updates.
     if body:
-        from taskmaster.taskmaster_v3 import auto_link_on_save as _auto_link_on_save
         try:
-            _auto_link_on_save(bp, issue_id)
+            _auto_link_entity(bp, issue_id)
         except Exception:
             pass
 
@@ -4402,9 +4431,8 @@ def backlog_idea_create(
         return f"Error: {exc}"
 
     # Plan C: auto-detect inline ID mentions, materialize as `references` links.
-    from taskmaster.taskmaster_v3 import auto_link_on_save as _auto_link_on_save
     try:
-        _auto_link_on_save(bp, iid)
+        _auto_link_entity(bp, iid)
     except Exception:
         pass
 
@@ -4568,9 +4596,8 @@ def backlog_idea_update(idea_id: str, field: str, value: str = "") -> str:
 
     # Plan C: auto-detect inline ID mentions on body updates.
     if body:
-        from taskmaster.taskmaster_v3 import auto_link_on_save as _auto_link_on_save
         try:
-            _auto_link_on_save(bp, idea_id)
+            _auto_link_entity(bp, idea_id)
         except Exception:
             pass
 
@@ -8207,11 +8234,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
             return
         elif clean_path == "/api/threads":
             from taskmaster.taskmaster_v3 import list_threads as _list_threads_http
-            with _transaction(tool="viewer:GET /api/threads") as data:
-                if "threads" not in data:
-                    _sync_handover_index(data, _backlog_path())
-                    _mutate_and_save(data)
-            self._send_json(200, _list_threads_http(data))
+            self._send_json(200, _list_threads_http(_threads_data(_backlog_path())))
             return
         elif clean_path == "/api/sessions":
             self._send_json(200, list_sessions())
