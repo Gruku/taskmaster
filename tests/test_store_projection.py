@@ -1,6 +1,7 @@
 """Contract tests for exporting and recovering the SQLite file projection."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -351,3 +352,169 @@ def test_postcommit_intent_cleanup_failure_does_not_report_transaction_failure(
 
     assert tx.committed[("task", "core-001")]["title"] == "Committed once"
     assert parse_frontmatter(task_path.read_text(encoding="utf-8"))[0]["title"] == "Committed once"
+
+
+_ARCHIVE_MOVE_CASES = (
+    ("bug", "B-001", "bugs/B-001.md", "bugs/archive/B-001.md"),
+    ("issue", "ISS-001", "issues/ISS-001.md", "issues/archive/ISS-001.md"),
+    ("note", "NOTE-001", "notes/NOTE-001.md", "notes/_archive/NOTE-001.md"),
+    (
+        "handover",
+        "2026-09-05-ship-it",
+        "handovers/2026-09-05-ship-it.md",
+        "handovers/_archive/2026/2026-09-05-ship-it.md",
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    ("kind", "ident", "live_rel", "archived_rel"),
+    _ARCHIVE_MOVE_CASES,
+    ids=[case[0] for case in _ARCHIVE_MOVE_CASES],
+)
+def test_archive_moves_the_projection_file_and_both_rows(
+    tmp_path, store_api, kind, ident, live_rel, archived_rel
+):
+    backlog_path, _task_path = _write_v4_projection(tmp_path)
+    instance = store_api.open_store(
+        backlog_path=backlog_path, session=f"archive-move-{kind}"
+    )
+    document = {"id": ident, "title": f"{kind} under test", "status": "open"}
+    if kind == "handover":
+        document.update({"date": "2026-09-05", "tldr": "Ship it"})
+    with instance.transaction(tool=f"create-{kind}") as tx:
+        tx.create(kind, document, body="Body text.")
+
+    live = backlog_path.parent / live_rel
+    archived = backlog_path.parent / archived_rel
+    assert live.exists()
+
+    with instance.transaction(tool=f"archive-{kind}") as tx:
+        tx.archive(kind, ident)
+
+    assert not live.exists()
+    assert archived.exists()
+    frontmatter, body = parse_frontmatter(archived.read_text(encoding="utf-8"))
+    assert frontmatter["id"] == ident
+    assert frontmatter["archived"] is True
+    assert body.strip() == "Body text."
+
+    rows = _query(
+        store_api,
+        backlog_path,
+        "SELECT file FROM projection WHERE kind=? AND id=? ORDER BY file",
+        (kind, ident),
+    )
+    assert [row["file"] for row in rows] == [archived_rel]
+    assert not _query(
+        store_api, backlog_path, "SELECT file FROM projection WHERE file=?", (live_rel,)
+    )
+    entity = _query(
+        store_api,
+        backlog_path,
+        "SELECT archived FROM entities WHERE kind=? AND id=?",
+        (kind, ident),
+    )
+    assert [row["archived"] for row in entity] == [1]
+    assert not _query(
+        store_api,
+        backlog_path,
+        "SELECT seq FROM changes WHERE op='export-fail'",
+    )
+
+
+def _seed_ideas(instance) -> None:
+    with instance.transaction(tool="create-ideas") as tx:
+        tx.create(
+            "idea",
+            {
+                "id": "IDEA-001",
+                "title": "First",
+                "created": "2026-09-01T10:00:00Z",
+                "status": "",
+                "archived": False,
+            },
+            body="One.",
+        )
+        tx.create(
+            "idea",
+            {
+                "id": "IDEA-002",
+                "title": "Second",
+                "created": "2026-09-02T11:30:00Z",
+                "status": "shipped",
+                "archived": False,
+            },
+            body="Two.",
+        )
+
+
+def test_ideas_index_is_rendered_from_idea_rows(tmp_path, store_api):
+    backlog_path, _task_path = _write_v4_projection(tmp_path)
+    instance = store_api.open_store(
+        backlog_path=backlog_path, session="ideas-index-export"
+    )
+    _seed_ideas(instance)
+
+    index = backlog_path.parent / "ideas" / "IDEAS.md"
+    assert index.read_text(encoding="utf-8").splitlines() == [
+        "# Ideas",
+        "",
+        "- 2026-09-02 11:30 — [IDEA-002](IDEA-002.md) — Second _(shipped)_",
+        "- 2026-09-01 10:00 — [IDEA-001](IDEA-001.md) — First",
+    ]
+
+    rows = _query(
+        store_api,
+        backlog_path,
+        "SELECT kind,id FROM projection WHERE file='ideas/IDEAS.md'",
+    )
+    assert [(row["kind"], row["id"]) for row in rows] == [("ideas-index", None)]
+    assert not _query(
+        store_api, backlog_path, "SELECT id FROM entities WHERE kind='ideas-index'"
+    )
+
+    with instance.transaction(tool="archive-idea") as tx:
+        tx.archive("idea", "IDEA-001")
+
+    assert index.read_text(encoding="utf-8").splitlines()[3] == (
+        "- 2026-09-01 10:00 — [IDEA-001](IDEA-001.md) — ~~First~~ _(archived)_"
+    )
+
+
+def test_hand_edited_ideas_index_is_never_parsed_back_into_a_row(tmp_path, store_api):
+    backlog_path, _task_path = _write_v4_projection(tmp_path)
+    instance = store_api.open_store(
+        backlog_path=backlog_path, session="ideas-index-scan"
+    )
+    _seed_ideas(instance)
+
+    index = backlog_path.parent / "ideas" / "IDEAS.md"
+    hand_edit = "# Ideas\n\nhand written, not frontmatter\n"
+    index.write_text(hand_edit, encoding="utf-8")
+
+    with instance.transaction(tool="scan-after-hand-edit"):
+        pass
+
+    assert index.read_text(encoding="utf-8") == hand_edit
+    assert not _query(
+        store_api, backlog_path, "SELECT id FROM entities WHERE kind='ideas-index'"
+    )
+    rows = _query(
+        store_api,
+        backlog_path,
+        "SELECT content_hash,dirty,quarantined FROM projection "
+        "WHERE file='ideas/IDEAS.md'",
+    )
+    assert len(rows) == 1
+    assert rows[0]["dirty"] == 0
+    assert rows[0]["quarantined"] == 0
+    assert rows[0]["content_hash"] == hashlib.sha1(index.read_bytes()).hexdigest()
+    assert not [
+        warning
+        for warning in _query(
+            store_api,
+            backlog_path,
+            "SELECT id FROM changes WHERE op='export-fail'",
+        )
+    ]
