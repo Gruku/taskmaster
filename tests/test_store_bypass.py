@@ -137,6 +137,19 @@ def test_guard_trips_on_a_production_write_to_every_entity_path(
     assert not target.exists()
 
 
+# `ideas/IDEAS.md` and `integrations/linear-queue.json` are derived files the
+# store owns by name, not only by the directory they normally sit in.  A writer
+# that stages either one at the backlog root must trip the guard too.
+@pytest.mark.parametrize("filename", ["IDEAS.md", "linear-queue.json"])
+def test_guard_trips_on_a_derived_file_staged_outside_its_kind_directory(
+    tmp_taskmaster, filename
+):
+    target = tmp_taskmaster / ".taskmaster" / filename
+    with pytest.raises(AssertionError, match="projection bypass"):
+        _write_as_production(target)
+    assert not target.exists()
+
+
 # ── the schema marker no longer writes backlog.yaml ────────────────────────
 
 

@@ -159,6 +159,10 @@ _GUARDED_DIRS = (
 # directory: `bugs/B-1.md` (1), `notes/_archive/N-1.md` and
 # `integrations/trackers/t.md` (2), `handovers/_archive/<year>/h.md` (3).
 _MAX_KIND_DEPTH = 3
+# Derived files the store owns by name as well as by directory, the way
+# `backlog.yaml` is owned: the regenerated ideas index and the Linear queue.
+# Guarding the name catches a writer staging one outside its kind directory.
+_GUARDED_FILES = ("IDEAS.md", "linear-queue.json")
 _PACKAGE_DIR = PLUGIN_ROOT / "taskmaster"
 _HOOKS_DIR = PLUGIN_ROOT / "hooks"
 _STORE_FILE = _PACKAGE_DIR / "store.py"
@@ -187,8 +191,9 @@ def _guard_path(target):
     `notes/_archive/`, the `handovers/_archive/<year>/` year bucket and the
     `integrations/trackers/` import fallback.  Files named by convention rather
     than by id — the derived `ideas/IDEAS.md` index and the Linear queue at
-    `integrations/linear-queue.json` — sit directly inside a guarded directory
-    and are covered by the same walk.
+    `integrations/linear-queue.json` — are matched by name first, so they are
+    guarded anywhere under a backlog root and not only in their canonical
+    directory; the walk then covers them there as well.
     """
     try:
         path = Path(target)
@@ -200,6 +205,12 @@ def _guard_path(target):
         if not path.exists() and not (path.parent / "local" / "store.db").exists():
             return None
         return path.parent
+    if path.name in _GUARDED_FILES:
+        # No bootstrap exemption: both are regenerated from committed rows, so
+        # there is never a legitimate first write outside the store.
+        backlog_dir = _backlog_dir(path.parent)
+        if backlog_dir is not None:
+            return backlog_dir
     parent = path.parent
     for _ in range(_MAX_KIND_DEPTH):
         if parent.name in _GUARDED_DIRS:
