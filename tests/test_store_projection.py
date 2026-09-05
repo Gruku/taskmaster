@@ -518,3 +518,20 @@ def test_hand_edited_ideas_index_is_never_parsed_back_into_a_row(tmp_path, store
             "SELECT id FROM changes WHERE op='export-fail'",
         )
     ]
+
+
+def test_deleted_ideas_index_is_regenerated_on_the_next_scan(tmp_path, store_api):
+    backlog_path, _task_path = _write_v4_projection(tmp_path)
+    instance = store_api.open_store(
+        backlog_path=backlog_path, session="ideas-index-restore"
+    )
+    _seed_ideas(instance)
+
+    index = backlog_path.parent / "ideas" / "IDEAS.md"
+    expected = index.read_text(encoding="utf-8")
+    index.unlink()
+
+    with instance.transaction(tool="scan-after-index-deleted"):
+        pass
+
+    assert index.read_text(encoding="utf-8") == expected
