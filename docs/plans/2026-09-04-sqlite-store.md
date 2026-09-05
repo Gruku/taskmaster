@@ -743,3 +743,25 @@ that mention `backlog_index_status`, `index.db`, or the Linear retry queue; `CHA
 Full suite green; fresh-context review of the docs for claims not backed by code; merge to
 `master` with `--no-ff`; write `docs/handoffs/2026-09-05-sqlite-store-complete.md` with the
 merge SHAs, the CodeMaestro copy numbers, and the remaining deferred items (if any). Do not push.
+
+## Execution status — 2026-09-06 (step 3, plus 4.3 and 5.1)
+
+- Step 3 is implemented on `feature/sqlite-store-step-3`: every entity kind (bug, issue,
+  handover, decision, idea, note, area, tracker) plus `project.yaml`, `linear.yaml`, the Linear
+  queue and `PROGRESS.md` write through the store; the test guard covers every directory and
+  file under `.taskmaster/`; the nine hot-path tools use the row API; every mutating tool
+  renders from committed state and ends in `[seq N]`; `backlog_store_status` exists and is
+  genuinely read-only; the read-scan throttle poke and `_sync_projection` are gone.
+- Reviews: five per-task reviews with fix rounds, a whole-branch review (Claude opus) and a
+  Codex adversarial review; their 13 Important findings were fixed in one wave and re-reviewed
+  clean. Rulings R1–R12 stand; additional rulings are in the SDD ledger and the step handoff.
+- Also merged into this branch ahead of their steps because they touch disjoint files:
+  task 4.3 (hooks read the store via the shared root rule in `taskmaster/root.py`) and
+  task 5.1 (maintenance scripts write through the store).
+- Full suite on the merged branch: 2,152 passed, 1 skipped, 5 failed, all five the
+  handover-migration script unpacking pairs where the fix wave widened planner rows to
+  triples; fixed in `82a3a06` (25 covering tests green). The 8×200 stress test passed.
+- Known gaps carried to step 4/5: a hand edit to an existing `IDEA-*.md` refreshes
+  `ideas/IDEAS.md` only on the next idea write (regenerating on every import starved the
+  writer lock under 8 processes); the bypass guard intercepts `Path.open` but not builtin
+  `open`; an explicit Linear retry can requeue a row a drain has claimed.
