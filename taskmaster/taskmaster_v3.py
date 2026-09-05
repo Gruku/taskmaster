@@ -4533,17 +4533,30 @@ def _resolve_backlog_path() -> Path:
     return _backlog_path()
 
 
-def validate_task_write(task_id: str, patch: dict, backlog_path: Path | None = None) -> dict[str, str]:
+def validate_task_write(
+    task_id: str,
+    patch: dict,
+    backlog_path: Path | None = None,
+    *,
+    data: dict | None = None,
+) -> dict[str, str]:
     """Run cross-entity validation for a proposed task write.
 
     Returns a dict { field: error_message }. Empty dict means valid.
     Pure function — does not persist.
+
+    Pass `data` to validate against state the caller already holds. Every
+    production caller does: the store is authoritative, so a gate that read the
+    projection files itself could not see a concurrent committed write and
+    would decide on stale state. The file read below is the fallback for tests
+    and tools that have no store transaction open.
     """
     bp = backlog_path or _resolve_backlog_path()
-    # Read through the schema-appropriate loader: the v4 projection keeps the
-    # task index in tasks/<id>.md, so a raw backlog.yaml read finds no tasks and
-    # every patch is rejected as "task not found".
-    data, _is_v4 = _load_task_entities(bp)
+    if data is None:
+        # Read through the schema-appropriate loader: the v4 projection keeps
+        # the task index in tasks/<id>.md, so a raw backlog.yaml read finds no
+        # tasks and every patch is rejected as "task not found".
+        data, _is_v4 = _load_task_entities(bp)
     errors: dict[str, str] = {}
 
     # Build helper maps.

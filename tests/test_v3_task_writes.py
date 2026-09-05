@@ -72,7 +72,11 @@ def test_update_task_does_not_overwrite_existing_started(v2_backlog):
     bs._viewer_update_task(
         "e1-001", {"status": "in-progress", "started": "2026-01-01"}
     )
-    bs._viewer_update_task("e1-001", {"status": "in-review"})
+    # `in-review` needs a human_action now that the helper owns the validation
+    # gate the HTTP handler used to run ahead of it.
+    bs._viewer_update_task(
+        "e1-001", {"status": "in-review", "human_action": "add the API key"}
+    )
     assert _task(v2_backlog)["started"] == "2026-01-01"
 
 
@@ -83,8 +87,11 @@ def test_create_task_assigns_id_under_epic(v2_backlog):
 
 
 def test_create_task_unknown_epic_raises(v2_backlog):
-    with pytest.raises(KeyError):
+    # Rejected by the in-transaction validation gate, which reports the field.
+    with pytest.raises((KeyError, bs.ViewerWriteRejected)) as excinfo:
         bs._viewer_create_task({"title": "x", "epic": "missing"})
+    if isinstance(excinfo.value, bs.ViewerWriteRejected):
+        assert "epic" in excinfo.value.errors
 
 
 def test_archive_task_moves_to_archived_status(v2_backlog):

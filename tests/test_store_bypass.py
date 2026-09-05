@@ -367,3 +367,127 @@ def test_batch_status_refuses_an_illegal_transition_out_of_archived(archived_tas
     out = bs.backlog_batch_update(operations="status test-epic-001 done")
     assert "archived" in out.lower() or "transition" in out.lower(), out
     assert _row(archived_task, "task", "test-epic-001")["archived"] == 1
+
+
+# ── fix round 1: a read must not write ─────────────────────────────────────
+
+
+@pytest.fixture()
+def legacy_dep_tasks(tmp_taskmaster):
+    """Two tasks with a legacy `depends_on` and no `links` array.
+
+    `read_entity_anywhere`'s fallback synthesizes `links` from `depends_on` on
+    every read; the store must never commit that synthesis.
+    """
+    backlog = _bp(tmp_taskmaster)
+    backlog.write_text(
+        yaml.safe_dump({
+            "meta": {"schema_version": 3},
+            "project": "test-project",
+            "epics": [{"id": "e1", "name": "E", "tasks": [
+                {"id": "T-001", "title": "A", "status": "todo",
+                 "depends_on": ["T-002"]},
+                {"id": "T-002", "title": "B", "status": "todo"},
+            ]}],
+            "phases": [],
+        }),
+        encoding="utf-8",
+    )
+    store.reset_for_tests()
+    return tmp_taskmaster
+
+
+def test_read_entity_anywhere_does_not_commit_synthesized_links(legacy_dep_tasks):
+    from taskmaster import taskmaster_v3 as v3
+
+    root = legacy_dep_tasks
+    with bs._transaction(tool="test:read-then-write") as data:
+        entity = v3.read_entity_anywhere(_bp(root), "T-001")
+        assert entity is not None
+        assert entity.get("links"), "the read fallback should synthesize links"
+        bs._mutate_and_save(data)
+    committed = _tasks(root)["T-001"]
+    assert not committed.get("links"), (
+        "read_entity_anywhere's read-only fallback was committed by the "
+        "next _mutate_and_save"
+    )
+    assert committed.get("depends_on") == ["T-002"]
+
+
+def test_store_read_task_returns_a_copy_of_the_transaction_document(legacy_dep_tasks):
+    root = legacy_dep_tasks
+    with bs._transaction(tool="test:identity") as data:
+        live = bs._find_task(data, "T-001")[0]
+        read = bs._store_read_task(_bp(root), "T-001")
+        assert read is not None
+        assert read == live
+        assert read is not live, "_store_read_task handed out the live tx document"
+        read["title"] = "mutated by a reader"
+        bs._mutate_and_save(data)
+    assert _tasks(root)["T-001"]["title"] == "A"
+
+
+# ── fix round 1: the viewer cannot un-archive ──────────────────────────────
+
+
+@pytest.fixture()
+def archived_viewer(viewer):
+    base, root = viewer
+    out = bs.backlog_archive_task(task_id="test-epic-001", reason="wont-fix")
+    assert "Error" not in out, out
+    assert _row(root, "task", "test-epic-001")["archived"] == 1
+    return base, root
+
+
+def _archived_file(root: Path, task_id: str = "test-epic-001") -> Path:
+    return root / ".taskmaster" / "tasks" / "archive" / f"{task_id}.md"
+
+
+def _live_file(root: Path, task_id: str = "test-epic-001") -> Path:
+    return root / ".taskmaster" / "tasks" / f"{task_id}.md"
+
+
+@pytest.mark.parametrize("method", ["PATCH", "PUT"])
+def test_viewer_cannot_unarchive_a_task_with_an_illegal_transition(
+    archived_viewer, method
+):
+    base, root = archived_viewer
+    resp = _request(method, f"{base}/api/tasks/test-epic-001", {"status": "done"})
+    assert resp.status == 422, resp.status
+    body = json.loads(resp.read())
+    assert body["ok"] is False
+    assert "status" in body["errors"], body
+    assert _row(root, "task", "test-epic-001")["archived"] == 1
+    assert _archived_file(root).exists()
+    assert not _live_file(root).exists()
+
+
+def test_viewer_may_still_return_an_archived_task_to_todo(archived_viewer):
+    base, root = archived_viewer
+    resp = _request("PATCH", f"{base}/api/tasks/test-epic-001", {"status": "todo"})
+    assert resp.status == 200, resp.read()
+    assert _row(root, "task", "test-epic-001")["archived"] == 0
+    assert _live_file(root).exists()
+
+
+# ── fix round 1: the viewer validates against committed store state ────────
+
+
+def test_viewer_patch_validates_against_the_store_not_the_projection_file(viewer):
+    base, root = viewer
+    # A projection file the store still has a row for: the store is
+    # authoritative, so a validation gate that reads the file sees nothing.
+    _live_file(root).unlink()
+    resp = _request("PATCH", f"{base}/api/tasks/test-epic-001", {"title": "From store"})
+    assert resp.status == 200, (resp.status, resp.read())
+    assert _tasks(root)["test-epic-001"]["title"] == "From store"
+
+
+def test_viewer_post_validates_deps_against_the_store(viewer):
+    base, root = viewer
+    _live_file(root).unlink()
+    resp = _request("POST", f"{base}/api/tasks", {
+        "epic": "test-epic", "title": "New", "depends_on": ["test-epic-001"],
+    })
+    assert resp.status == 201, (resp.status, resp.read())
+    assert "test-epic-002" in _tasks(root)

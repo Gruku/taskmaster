@@ -705,11 +705,18 @@ def _sync_projection() -> None:
 
 
 def _store_read_task(backlog_path: Path | None, task_id: str) -> dict | None:
-    """The committed (or in-flight) task document, or None."""
+    """A *copy* of the committed (or in-flight) task document, or None.
+
+    Never the live transaction dict: `read_entity_anywhere` mutates what it
+    returns (it synthesizes a legacy `links` array for unmigrated projects) and
+    documents that as read-only, so handing out the live document would let the
+    next `_mutate_and_save` in the same transaction commit that synthesis.
+    `_store_write_task` replaces the whole document, so nothing needs identity.
+    """
     frame = _active_tx()
     if frame is not None:
         found = _find_task(frame.data, task_id)
-        return found[0] if found else None
+        return deepcopy(found[0]) if found else None
     bp = Path(backlog_path) if backlog_path else _backlog_path()
     if not bp.exists():
         return None
@@ -718,7 +725,7 @@ def _store_read_task(backlog_path: Path | None, task_id: str) -> dict | None:
     data = instance.load_dict()
     _normalize_loaded(data)
     found = _find_task(data, task_id)
-    return found[0] if found else None
+    return deepcopy(found[0]) if found else None
 
 
 def _store_write_task(backlog_path: Path | None, entity: dict) -> None:
@@ -7571,6 +7578,37 @@ def _compute_recent_events(since_iso: str) -> list:
 # file mtime, so a viewer PATCH can no longer race an MCP write.
 
 
+class ViewerWriteRejected(ValueError):
+    """A viewer write the store refuses; carries a field-keyed error map."""
+
+    def __init__(self, errors: dict):
+        super().__init__("; ".join(f"{k}: {v}" for k, v in errors.items()))
+        self.errors = dict(errors)
+
+
+def _archived_transition_error(task: dict | None, patch: dict) -> dict:
+    """Reject a status change out of `archived` the transition table forbids.
+
+    `validate_task_write` applies no transition table by design, and
+    `_apply_archive_transition` un-archives on any `archived -> other`, so
+    without this a viewer `PATCH {"status": "done"}` silently resurrects an
+    archived task — the same defect fixed for batch pick.
+    """
+    before = (task or {}).get("status")
+    after = patch.get("status")
+    if before != "archived" or after is None or after == before:
+        return {}
+    legal = LEGAL_STATUS_TRANSITIONS["archived"]
+    if after in legal:
+        return {}
+    return {
+        "status": (
+            f"illegal transition `archived` → `{after}`. "
+            f"Legal: {', '.join(sorted(legal))}"
+        )
+    }
+
+
 def _viewer_etag() -> str:
     """`<creation_token>:<max_seq>` — the store's committed identity."""
     bp = _backlog_path()
@@ -7591,12 +7629,19 @@ def _viewer_update_task(task_id: str, patch: dict, *, method: str = "PATCH") -> 
     overwritten, and `human_action` cleared on `done`.
     """
     from taskmaster.taskmaster_v3 import _now_iso  # noqa: PLC0415
+    from taskmaster.taskmaster_v3 import validate_task_write  # noqa: PLC0415
 
     with _transaction(tool=f"viewer:{method} /api/tasks") as data:
         found = _find_task(data, task_id)
         if found is None:
             raise KeyError(f"task {task_id} not found")
         task, _epic = found
+        errors = validate_task_write(task_id, patch, _backlog_path(), data=data)
+        if "_task" in errors:
+            raise KeyError(errors["_task"])
+        errors.update(_archived_transition_error(task, patch))
+        if errors:
+            raise ViewerWriteRejected(errors)
         before_status = task.get("status")
         task.update(patch)
         after_status = task.get("status")
@@ -7619,12 +7664,16 @@ def _viewer_update_task(task_id: str, patch: dict, *, method: str = "PATCH") -> 
 def _viewer_create_task(payload: dict) -> str:
     """Create a task under an existing epic. Returns the assigned id."""
     from taskmaster.taskmaster_v3 import _now_iso  # noqa: PLC0415
+    from taskmaster.taskmaster_v3 import validate_task_write  # noqa: PLC0415
 
     epic_id = payload.get("epic")
     if not epic_id:
         raise ValueError("epic is required")
     new_id = ""
     with _transaction(tool="viewer:POST /api/tasks") as data:
+        errors = validate_task_write("<new>", payload, _backlog_path(), data=data)
+        if errors:
+            raise ViewerWriteRejected(errors)
         epic = next(
             (e for e in data.get("epics") or [] if e.get("id") == epic_id), None
         )
@@ -8358,7 +8407,17 @@ class ViewerHandler(BaseHTTPRequestHandler):
             tid = payload.get("task_id") or "<new>"
             patch = payload.get("patch") or {}
             from taskmaster.taskmaster_v3 import validate_task_write
-            errors = validate_task_write(tid, patch)
+            # Preview and write must run the same gate against the same state:
+            # the store, not the projection files.
+            try:
+                data = _load()
+            except FileNotFoundError:
+                data = None
+            errors = validate_task_write(tid, patch, data=data)
+            if data is not None and tid != "<new>":
+                found = _find_task(data, tid)
+                if found is not None:
+                    errors.update(_archived_transition_error(found[0], patch))
             self._send_json(200, {"ok": len(errors) == 0, "errors": errors})
             return
 
@@ -8372,15 +8431,12 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 self._send_json(400, {"ok": False, "error": f"invalid JSON: {e}"})
                 return
             try:
-                from taskmaster.taskmaster_v3 import validate_task_write
-                errors = validate_task_write("<new>", payload)
-                if errors:
-                    self._send_json(422, {"ok": False, "errors": errors})
-                    return
                 new_id = _viewer_create_task(payload)
                 # Look up the new task to return.
                 task = _load_task_full(new_id) or {"id": new_id}
                 self._send_json(201, {"ok": True, "task": task})
+            except ViewerWriteRejected as e:
+                self._send_json(422, {"ok": False, "errors": e.errors})
             except (KeyError, ValueError) as e:
                 self._send_json(400, {"ok": False, "error": str(e)})
             except Exception as e:
@@ -8675,17 +8731,11 @@ class ViewerHandler(BaseHTTPRequestHandler):
                     })
                     return
             try:
-                from taskmaster.taskmaster_v3 import validate_task_write
-                errors = validate_task_write(task_id, full)
-                if "_task" in errors:
-                    self._send_json(404, {"ok": False, "error": errors["_task"]})
-                    return
-                if errors:
-                    self._send_json(422, {"ok": False, "errors": errors})
-                    return
                 task = _viewer_update_task(task_id, full, method="PUT")
                 new_etag = _viewer_etag()
                 self._send_json(200, {"ok": True, "task": task}, etag=new_etag)
+            except ViewerWriteRejected as e:
+                self._send_json(422, {"ok": False, "errors": e.errors})
             except KeyError as e:
                 self._send_json(404, {"ok": False, "error": str(e)})
             return
@@ -8722,17 +8772,11 @@ class ViewerHandler(BaseHTTPRequestHandler):
                     })
                     return
             try:
-                from taskmaster.taskmaster_v3 import validate_task_write
-                errors = validate_task_write(task_id, patch)
-                if "_task" in errors:
-                    self._send_json(404, {"ok": False, "error": errors["_task"]})
-                    return
-                if errors:
-                    self._send_json(422, {"ok": False, "errors": errors})
-                    return
                 task = _viewer_update_task(task_id, patch)
                 new_etag = _viewer_etag()
                 self._send_json(200, {"ok": True, "task": task}, etag=new_etag)
+            except ViewerWriteRejected as e:
+                self._send_json(422, {"ok": False, "errors": e.errors})
             except KeyError as e:
                 self._send_json(404, {"ok": False, "error": str(e)})
             except Exception as e:
