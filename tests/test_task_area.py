@@ -103,7 +103,8 @@ def test_task_area_slim_roundtrip(tm_epic_phase):
     task_id = out.split("`")[1]
 
     bp = tm_epic_phase / ".taskmaster" / "backlog.yaml"
-    v3.save_v4(bp, v3.load_v4(bp))
+    # The store exported this task on write; reading the projection back is what
+    # proves `area` survived the slim round trip.
     reloaded = v3.load_v4(bp)
     task, _ = _find_task(reloaded, task_id)
     assert task["area"] == "desktop-app"

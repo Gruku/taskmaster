@@ -26,8 +26,13 @@ def _setup(tmp_path, monkeypatch):
     (root / "handovers").mkdir()
     monkeypatch.setattr(backlog_server, "ROOT", tmp_path)
     monkeypatch.setattr(backlog_server, "_backlog_path", lambda: bp)
-    monkeypatch.setattr(v3, "_resolve_artifact_root", lambda: root)
     return bp, root
+
+
+def _rows(bp):
+    """The handover rows `list_sessions` now takes, read off the files this
+    test seeds. Production hands it `Transaction.list("handover")`."""
+    return [(hid, *v3.read_handover(bp, hid)) for hid in v3.list_handover_ids(bp)]
 
 
 def test_list_sessions_projects_per_handover_status(tmp_path, monkeypatch):
@@ -37,7 +42,7 @@ def test_list_sessions_projects_per_handover_status(tmp_path, monkeypatch):
     entity_helpers.write_handover(bp, tldr="open work", session_kind="end-of-day", task_ids=["T-1"], thread="t-1", when="2026-05-08")
     entity_helpers.write_handover(bp, tldr="auto bookkeeping", session_kind="auto-stage", task_ids=["T-1"], thread="t-1", when="2026-05-08")
 
-    sessions = v3.list_sessions()
+    sessions = v3.list_sessions(_rows(bp))
     assert sessions, "expected at least one session"
     handovers = sessions[0]["handovers"]
     assert len(handovers) == 2

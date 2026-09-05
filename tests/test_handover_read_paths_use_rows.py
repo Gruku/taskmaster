@@ -22,7 +22,6 @@ def no_markdown_reads(monkeypatch):
 
     monkeypatch.setattr(v3, "read_handover", refuse)
     monkeypatch.setattr(v3, "list_handover_ids", refuse)
-    monkeypatch.setattr(bs, "_read_handover", refuse)
     return monkeypatch
 
 

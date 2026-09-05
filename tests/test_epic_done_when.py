@@ -35,10 +35,10 @@ def test_add_epic_with_done_when_succeeds_and_survives_reload(tmp_taskmaster):
     e = _epic(data, "asset-engine")
     assert e["done_when"] == "ingest + thumbnail + CDN pipeline ships"
 
-    # Round-trip through save_v3/load_v3 — slim survival.
+    # Slim survival: the store already exported this epic, so reading the
+    # projection back is the round trip.
     bp = tmp_taskmaster / ".taskmaster" / "backlog.yaml"
-    v3.save_v3(bp, v3.load_v3(bp))
-    reloaded = v3.load_v3(bp)
+    reloaded = v3.load_v4(bp)
     assert _epic(reloaded, "asset-engine")["done_when"] == (
         "ingest + thumbnail + CDN pipeline ships"
     )

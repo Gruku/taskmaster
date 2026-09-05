@@ -84,7 +84,11 @@ def _v3_backlog_with_epic_and_task(tmp_path: Path) -> tuple[Path, str, str]:
         "handovers": [],
         "issues": [],
     }
-    v3.save_v3(bp, data)
+    # Seed the projection directly and let the store adopt it on first open —
+    # `taskmaster_v3` has no writers any more, the store owns every file under
+    # `.taskmaster/`.
+    bp.parent.mkdir(parents=True, exist_ok=True)
+    bp.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
     # Write PROGRESS.md so complete_task / pick_task don't error
     progress = bp.parent / "PROGRESS.md"
     progress.write_text("# smoke-test Progress\n\n## Dashboard\n\n---\n\n## Changelog\n", encoding="utf-8")

@@ -341,9 +341,13 @@ def test_viewer_idea_post_uses_one_root_when_cwd_and_project_root_diverge(
         "meta:\n  schema_version: 3\nepics: []\nphases: []\n", encoding="utf-8"
     )
     monkeypatch.chdir(decoy)
-    from taskmaster.taskmaster_v3 import _resolve_artifact_root
+    # The CWD-flavour resolver is gone; the store's own root resolution is the
+    # only one left, and from the decoy it lands on the decoy.
+    from taskmaster import store as _store
 
-    assert _resolve_artifact_root() != _bp(root).parent, "the roots did not diverge"
+    assert _store.resolve_root(decoy).backlog_path != _bp(root).parent, (
+        "the roots did not diverge"
+    )
 
     handler = bs.ViewerHandler.__new__(bs.ViewerHandler)
     handler.path = "/api/ideas"

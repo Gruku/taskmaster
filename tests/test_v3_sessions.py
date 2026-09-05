@@ -1,20 +1,18 @@
 import textwrap
 
 
-def _write_handover(tmp_path, name: str, body: dict, body_md: str = "..."):
-    import yaml
-    p = tmp_path / ".taskmaster" / "handovers" / name
-    p.parent.mkdir(parents=True, exist_ok=True)
-    fm = yaml.safe_dump(body, sort_keys=False).rstrip()
-    p.write_text(f"---\n{fm}\n---\n\n{body_md}\n", encoding="utf-8")
-    return p
+# `list_sessions` / `get_session_detail` take the store's committed handover
+# rows now. Globbing `handovers/*.md` described the export, not the store: a
+# handover whose file write failed, or a project on network storage the store
+# cannot export to, vanished from the timeline while the row was right there.
+def _row(body: dict, body_md: str = "..."):
+    return (body["id"], body, body_md)
 
 
-def test_list_sessions_synthesises_from_handovers(tmp_path, monkeypatch):
+def test_list_sessions_synthesises_from_handovers():
     from taskmaster.taskmaster_v3 import list_sessions
-    monkeypatch.chdir(tmp_path)
 
-    _write_handover(tmp_path, "2026-04-26-1640-foo.md", {
+    foo = _row({
         "id": "2026-04-26-1640-foo",
         "date": "2026-04-26T16:40:00Z",
         "tldr": "...", "next_action": "...",
@@ -22,7 +20,7 @@ def test_list_sessions_synthesises_from_handovers(tmp_path, monkeypatch):
         "session_kind": "context-handoff",
         "context_size_at_write": 0.8,
     })
-    _write_handover(tmp_path, "2026-04-26-1648-bar.md", {
+    bar = _row({
         "id": "2026-04-26-1648-bar",
         "date": "2026-04-26T16:48:00Z",
         "tldr": "...", "next_action": "...",
@@ -31,7 +29,7 @@ def test_list_sessions_synthesises_from_handovers(tmp_path, monkeypatch):
         "context_size_at_write": 0.9,
     })
 
-    sessions = list_sessions()
+    sessions = list_sessions([foo, bar])
     # Threadless handovers each form their own solo lane — no clustering.
     assert len(sessions) == 2
     by_id = {s["id"]: s for s in sessions}
@@ -47,38 +45,37 @@ def test_list_sessions_synthesises_from_handovers(tmp_path, monkeypatch):
     assert "parallel_with" not in s
 
 
-def test_list_sessions_solo_lanes_for_overlapping_threadless_handovers(tmp_path, monkeypatch):
+def test_list_sessions_solo_lanes_for_overlapping_threadless_handovers():
     from taskmaster.taskmaster_v3 import list_sessions
-    monkeypatch.chdir(tmp_path)
+
     # Two threadless handovers, same time window, different task scopes.
     # Each forms its own lane now — overlap is a viewer-side rendering concern,
     # not something list_sessions tracks (parallel_with is gone).
-    _write_handover(tmp_path, "2026-04-26-1408-a.md", {
+    first = _row({
         "id": "2026-04-26-1408-a",
         "date": "2026-04-26T14:08:00Z",
         "tldr": "...", "next_action": "...",
         "task_ids": ["T-100"], "session_kind": "end-of-day",
         "context_size_at_write": 0.5,
     })
-    _write_handover(tmp_path, "2026-04-26-1410-b.md", {
+    second = _row({
         "id": "2026-04-26-1410-b",
         "date": "2026-04-26T14:10:00Z",
         "tldr": "...", "next_action": "...",
         "task_ids": ["T-200"], "session_kind": "end-of-day",
         "context_size_at_write": 0.5,
     })
-    sessions = list_sessions()
+    sessions = list_sessions([first, second])
     assert len(sessions) == 2
     by_id = {s["id"]: s for s in sessions}
     assert set(by_id) == {"2026-04-26-1408-a", "2026-04-26-1410-b"}
     assert all("parallel_with" not in s for s in sessions)
 
 
-def test_get_session_detail_bundles_handovers(tmp_path, monkeypatch):
+def test_get_session_detail_bundles_handovers():
     from taskmaster.taskmaster_v3 import get_session_detail
-    monkeypatch.chdir(tmp_path)
 
-    _write_handover(tmp_path, "2026-04-26-1640-foo.md", {
+    foo = _row({
         "id": "2026-04-26-1640-foo",
         "date": "2026-04-26T16:40:00Z",
         "tldr": "Stitched the gate", "next_action": "Rebase",
@@ -86,7 +83,7 @@ def test_get_session_detail_bundles_handovers(tmp_path, monkeypatch):
         "context_size_at_write": 0.8,
     }, body_md="Resume by running pytest -k gate.")
 
-    detail = get_session_detail("2026-04-26-1640-foo")
+    detail = get_session_detail("2026-04-26-1640-foo", [foo])
     assert detail["session"]["id"] == "2026-04-26-1640-foo"
     assert len(detail["handovers"]) == 1
     h = detail["handovers"][0]
@@ -97,8 +94,7 @@ def test_get_session_detail_bundles_handovers(tmp_path, monkeypatch):
     assert detail["task_ids"] == ["T-148"]
 
 
-def test_get_session_detail_returns_none_when_missing(tmp_path, monkeypatch):
+def test_get_session_detail_returns_none_when_missing():
     from taskmaster.taskmaster_v3 import get_session_detail
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / ".taskmaster").mkdir()
-    assert get_session_detail("SES-9999") is None
+
+    assert get_session_detail("SES-9999", []) is None

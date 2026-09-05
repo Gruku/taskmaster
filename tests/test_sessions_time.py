@@ -38,25 +38,24 @@ def test_handover_time_raises_when_no_date_or_created():
         _handover_time({"id": "2026-05-19-broken"})
 
 
-def _write_handover(tmp_path, name, body):
-    import yaml
-    p = tmp_path / ".taskmaster" / "handovers" / name
-    p.parent.mkdir(parents=True, exist_ok=True)
-    fm = yaml.safe_dump(body, sort_keys=False).rstrip()
-    p.write_text(f"---\n{fm}\n---\n\nbody\n", encoding="utf-8")
-    return p
+# `list_sessions` reads the store's committed handover rows, so the fixtures
+# below are rows. A file the store has not imported is not a handover, and a
+# handover the store holds may have no file at all (a failed export, or network
+# storage the store cannot export to) — which is why the timeline stopped
+# globbing `handovers/*.md`.
+def _row(body):
+    return (body["id"], body, "body")
 
 
-def test_session_start_end_use_handover_created(tmp_path, monkeypatch):
+def test_session_start_end_use_handover_created():
     from taskmaster.taskmaster_v3 import list_sessions
 
-    monkeypatch.chdir(tmp_path)
 
     # Two handovers in the same thread, real wall-clock times 20 minutes apart.
     # `date` is date-only (the production shape); `created` carries the precise time.
     # Shared `thread` puts both in one lane — list_sessions groups by thread now,
     # not by task-id/time-gap clustering.
-    _write_handover(tmp_path, "2026-05-19-first.md", {
+    first = _row({
         "id": "2026-05-19-first",
         "date": "2026-05-19",
         "created": "2026-05-19T14:23:00+00:00",
@@ -67,7 +66,7 @@ def test_session_start_end_use_handover_created(tmp_path, monkeypatch):
         "session_kind": "context-handoff",
         "context_size_at_write": 0.5,
     })
-    _write_handover(tmp_path, "2026-05-19-second.md", {
+    second = _row({
         "id": "2026-05-19-second",
         "date": "2026-05-19",
         "created": "2026-05-19T14:43:00+00:00",
@@ -79,7 +78,7 @@ def test_session_start_end_use_handover_created(tmp_path, monkeypatch):
         "context_size_at_write": 0.6,
     })
 
-    sessions = list_sessions()
+    sessions = list_sessions([first, second])
     assert len(sessions) == 1
     s = sessions[0]
     assert s["start"] == "2026-05-19T14:23:00+00:00"
@@ -87,13 +86,12 @@ def test_session_start_end_use_handover_created(tmp_path, monkeypatch):
     assert s["duration"] == 20 * 60  # 1200 seconds
 
 
-def test_session_with_only_date_field_marks_time_resolution(tmp_path, monkeypatch):
+def test_session_with_only_date_field_marks_time_resolution():
     """A session built from a legacy handover (no `created`) is tagged as
     date-only so the viewer can render the date without inventing a time."""
     from taskmaster.taskmaster_v3 import list_sessions
 
-    monkeypatch.chdir(tmp_path)
-    _write_handover(tmp_path, "2026-05-13-legacy.md", {
+    legacy = _row({
         "id": "2026-05-13-legacy",
         "date": "2026-05-13",   # date-only, no `created`
         "tldr": "...",
@@ -103,16 +101,15 @@ def test_session_with_only_date_field_marks_time_resolution(tmp_path, monkeypatc
         "context_size_at_write": 0.5,
     })
 
-    sessions = list_sessions()
+    sessions = list_sessions([legacy])
     assert len(sessions) == 1
     assert sessions[0]["time_resolution"] == "date-only"
 
 
-def test_session_with_created_marks_time_resolution_full(tmp_path, monkeypatch):
+def test_session_with_created_marks_time_resolution_full():
     from taskmaster.taskmaster_v3 import list_sessions
 
-    monkeypatch.chdir(tmp_path)
-    _write_handover(tmp_path, "2026-05-19-modern.md", {
+    modern = _row({
         "id": "2026-05-19-modern",
         "date": "2026-05-19",
         "created": "2026-05-19T14:23:00+00:00",
@@ -123,6 +120,6 @@ def test_session_with_created_marks_time_resolution_full(tmp_path, monkeypatch):
         "context_size_at_write": 0.5,
     })
 
-    sessions = list_sessions()
+    sessions = list_sessions([modern])
     assert len(sessions) == 1
     assert sessions[0]["time_resolution"] == "full"

@@ -28,7 +28,7 @@ import weakref
 import warnings
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
@@ -314,8 +314,27 @@ if hasattr(os, "register_at_fork"):
     os.register_at_fork(after_in_child=_after_fork_child)
 
 
+def _json_default(value: Any) -> str:
+    """Render what YAML produced but JSON cannot hold, as its ISO-8601 text.
+
+    An unquoted `date: 2026-04-26T16:40:00Z` in a handover's frontmatter parses
+    to a `datetime`, and the import that met one raised `TypeError` out of
+    `_record_change` — taking down the whole bootstrap, not just that file. A
+    hand-edited timestamp must not cost a project its store.
+    """
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
 def _json(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=_json_default,
+    )
 
 
 def _from_json(value: str | None, default: Any = None) -> Any:
@@ -1345,6 +1364,37 @@ class Store:
             stop.set()
             worker.join(timeout=1.0)
 
+    def _relocate_machine_local_state(self) -> None:
+        """Move a pre-v4 project's machine-local files under `local/`.
+
+        `viewer.json` and `auto/` are per-machine state, not shared backlog
+        content, and v4 put them under `local/`. This ran in the old
+        `migrate_v3_to_v4` file writer; adoption is the only migration now, so
+        it has to run here or the reader — which looks under `local/` as soon as
+        the project reads as v4 — silently loses the user's saved viewer prefs
+        to a fresh set of defaults. `snapshots/` is the retired pre-v4 backup
+        directory and goes with them.
+        """
+        root = self.backlog_path
+        target = root / "local"
+        for name in ("viewer.json", "auto"):
+            source = root / name
+            if not source.exists() or (target / name).exists():
+                continue
+            target.mkdir(parents=True, exist_ok=True)
+            try:
+                os.replace(source, target / name)
+            except OSError:
+                # Losing the relocation is survivable (defaults are rebuilt);
+                # failing the whole store open over it is not.
+                pass
+        snapshots = root / "snapshots"
+        if snapshots.is_dir():
+            try:
+                shutil.rmtree(snapshots)
+            except OSError:
+                pass
+
     def _bootstrap(self, connection: sqlite3.Connection) -> None:
         original_version = SCHEMA_V4
         backlog_file = self.backlog_path / "backlog.yaml"
@@ -1371,6 +1421,7 @@ class Store:
                 )
                 tx._export_backlog = True
                 self._export_touched(tx)
+                self._relocate_machine_local_state()
             else:
                 self._export_backlog(tx, force=True)
             self._flush_reservations(tx)
@@ -1511,7 +1562,8 @@ class Store:
             data["_rows"] = self._entity_rows_from_projection()
             if _CONTEXT_BUILDER is not None:
                 _CONTEXT_BUILDER(data)
-            return data, "", 0
+            token, seq = self._projection_identity()
+            return data, token, seq
         self._maybe_scan_on_read()
         connection = self.connection
         owns_snapshot = not connection.in_transaction
@@ -1585,6 +1637,30 @@ class Store:
         ):
             rows[row["kind"]][row["id"]] = (_from_json(row["doc"], {}), row["body"])
         return rows
+
+    def _projection_identity(self) -> tuple[str, int]:
+        """A `(token, seq)` pair that moves whenever the projection does.
+
+        There is no `changes` table on a network root, so the database identity
+        every caller stamps on a read degrades to `("", 0)` — a constant, which
+        made the viewer's ETag the fixed string `":0"` for the life of the
+        project. Stat the projection instead: name, size and mtime of
+        `backlog.yaml` and every entity file, digested. It is not a sequence
+        number and never claims to be one — the token is prefixed `projection-`
+        so nothing mistakes it for a store token — but it does change when the
+        data changes, which is the whole contract an ETag has to keep.
+        """
+        digest = hashlib.sha256()
+        paths = [self.backlog_path / "backlog.yaml"]
+        paths.extend(path for _kind, _ident, path in self._known_entity_files())
+        for path in sorted(paths):
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            digest.update(str(path).encode("utf-8", "replace"))
+            digest.update(f"{stat.st_size}:{stat.st_mtime_ns}".encode("ascii"))
+        return f"projection-{digest.hexdigest()[:16]}", 0
 
     def _entity_rows_from_projection(
         self,
@@ -2221,18 +2297,24 @@ class Store:
             sorted(path.name for path in self.db_path.parent.glob("store.db.corrupt-*"))
         )
 
-    def _degraded_status(self, *, warning: str | None) -> StoreStatus:
+    def _degraded_status(
+        self, *, warning: str | None, identity: tuple[str, int] | None = None
+    ) -> StoreStatus:
         """What the report can still say when the database cannot be read.
 
         Everything here comes from the filesystem, so it answers on a network
         share, before a store exists, and over an unreadable file alike -- the
         three situations an operator is most likely to be running the tool in.
+        `identity` is the projection-derived `(token, seq)` a projection-only
+        store reads under, passed in so the report and the ETag served beside it
+        never disagree about which revision the caller is looking at.
         """
+        token, seq = identity or ("", 0)
         return StoreStatus(
             root=self.root,
             db_path=self.db_path,
-            creation_token="",
-            max_seq=0,
+            creation_token=token,
+            max_seq=seq,
             dirty_files=(),
             quarantined_files=(),
             resolution_source=self.resolution.source,
@@ -2349,7 +2431,9 @@ class Store:
             _network_filesystem_reason(self.root) or self.resolution.filesystem_warning
         )
         if self._network_projection_only:
-            return self._degraded_status(warning=warning)
+            return self._degraded_status(
+                warning=warning, identity=self._projection_identity()
+            )
         return self._status_from(self.connection, warning=warning)
 
     def read_only_status(self) -> StoreStatus:
