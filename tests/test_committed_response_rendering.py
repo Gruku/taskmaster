@@ -356,7 +356,7 @@ def test_a_failed_progress_export_keeps_the_paragraph_and_says_so(
     ).read_text(encoding="utf-8")
 
     pending = _pending_progress_log(project)
-    assert any("Survives the failure" in entry for entry in pending), pending
+    assert any("Survives the failure" in entry["text"] for entry in pending), pending
 
 
 def test_the_next_transaction_writes_the_paragraph_the_failed_export_kept(
@@ -393,3 +393,125 @@ def test_a_rolled_back_transaction_queues_no_paragraph(project):
     )
     assert out.startswith("Error:"), out
     assert _pending_progress_log(project) == []
+
+
+# ── fix round 2: the session log is regenerated, never appended ──────────
+
+
+def _session_log_region(backlog_path: Path) -> str:
+    text = (backlog_path / "local" / "PROGRESS.md").read_text(encoding="utf-8")
+    begin = text.find(bs.SESSION_LOG_BEGIN)
+    end = text.find(bs.SESSION_LOG_END)
+    assert begin != -1 and end > begin, text
+    return text[begin:end]
+
+
+def _fail_once_after_the_file_write(monkeypatch) -> dict:
+    """Raise inside the commit path, after PROGRESS.md has already been written.
+
+    `_flush_reservations` runs between the export and `connection.commit()`, so
+    this reproduces exactly the window the file can outrun the database in.
+    """
+    real_flush = store.Store._flush_reservations
+    armed = {"on": True}
+
+    def fail_after_the_export(self, tx):
+        # Only the transaction that actually applied a paragraph: the export
+        # sets the applied log a few lines earlier in this same commit path.
+        if armed["on"] and tx.applied_progress_log():
+            armed["on"] = False
+            raise RuntimeError("commit path failed after PROGRESS.md was written")
+        return real_flush(self, tx)
+
+    monkeypatch.setattr(store.Store, "_flush_reservations", fail_after_the_export)
+    return armed
+
+
+def test_a_rollback_after_the_file_write_does_not_duplicate_the_paragraph(
+    project, monkeypatch
+):
+    """The file can outrun the commit; the retry must regenerate, not append."""
+    broken = _break_the_progress_export(monkeypatch)
+    _complete_with_a_summary("Only once")
+    broken["on"] = False
+    assert _pending_progress_log(project), "the failed export must keep it queued"
+
+    _fail_once_after_the_file_write(monkeypatch)
+    with pytest.raises(RuntimeError):
+        bs.backlog_update_task("core-001", "branch", "feature/rolled-back")
+
+    text = (project / "local" / "PROGRESS.md").read_text(encoding="utf-8")
+    assert "Only once" in text, "the file ran ahead of the commit, as designed"
+    assert _pending_progress_log(project), "the rollback must un-apply the paragraph"
+
+    bs.backlog_update_task("core-001", "branch", "feature/after-rollback")
+
+    text = (project / "local" / "PROGRESS.md").read_text(encoding="utf-8")
+    assert text.count("Only once") == 1, text
+    assert text.count("- landed the thing") == 1, text
+    assert _pending_progress_log(project) == []
+
+
+def test_a_paragraph_whose_transaction_rolled_back_leaves_the_file(
+    project, monkeypatch
+):
+    """The region equals the applied log, so an uncommitted session cannot linger."""
+    _fail_once_after_the_file_write(monkeypatch)
+    bs.backlog_pick_task("core-001")
+    for gate in _outstanding_gates("core-001"):
+        bs.backlog_skip_gate("core-001", gate, "not applicable in this test")
+    with pytest.raises(RuntimeError):
+        bs.backlog_complete_task(
+            "core-001", session_title="Never committed", done="- rolled back"
+        )
+    assert "Never committed" in (
+        project / "local" / "PROGRESS.md"
+    ).read_text(encoding="utf-8")
+
+    bs.backlog_update_task("core-001", "branch", "feature/converge")
+
+    text = (project / "local" / "PROGRESS.md").read_text(encoding="utf-8")
+    assert "Never committed" not in text, text
+
+
+def test_two_sessions_each_appear_once_and_the_newest_is_first(project):
+    for index, title in enumerate(("First session", "Second session")):
+        with bs._transaction(tool=f"session-{index}") as data:
+            bs._queue_changelog_entry(f"### {title}")
+            data["epics"][0]["tasks"][0]["branch"] = f"feature/{index}"
+            bs._mutate_and_save(data)
+
+    region = _session_log_region(project)
+    assert region.count("First session") == 1, region
+    assert region.count("Second session") == 1, region
+    assert region.index("Second session") < region.index("First session"), region
+
+
+def test_content_outside_the_session_log_region_is_never_touched(project):
+    progress = project / "local" / "PROGRESS.md"
+    progress.write_text(
+        "## Changelog\n\n### 2020-01-01 — written by a human\n\nKeep me.\n",
+        encoding="utf-8",
+    )
+    bs.backlog_pick_task("core-001")
+    for gate in _outstanding_gates("core-001"):
+        bs.backlog_skip_gate("core-001", gate, "not applicable in this test")
+    bs.backlog_complete_task("core-001", session_title="Machine written", done="- x")
+
+    text = progress.read_text(encoding="utf-8")
+    assert "written by a human" in text, text
+    assert "Keep me." in text, text
+    assert text.index("Machine written") < text.index("written by a human"), text
+
+
+def test_the_applied_session_log_is_bounded(project, monkeypatch):
+    monkeypatch.setattr(store, "_PROGRESS_LOG_CAP", 2)
+    for index in range(3):
+        with bs._transaction(tool=f"log-{index}") as data:
+            bs._queue_changelog_entry(f"### entry {index}")
+            data["epics"][0]["tasks"][0]["branch"] = f"feature/{index}"
+            bs._mutate_and_save(data)
+
+    region = _session_log_region(project)
+    assert "entry 0" not in region, region
+    assert "entry 1" in region and "entry 2" in region, region

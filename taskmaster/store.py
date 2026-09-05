@@ -76,6 +76,10 @@ _IDEAS_INDEX_KIND = "ideas-index"
 _IDEAS_INDEX_REL = "ideas/IDEAS.md"
 _PROGRESS_REL = "local/PROGRESS.md"
 _PROGRESS_LOG_KEY = "pending_progress_log"
+_PROGRESS_APPLIED_KEY = "progress_log"
+# The session-log region of PROGRESS.md shows this many entries. Bounded so one
+# meta row cannot grow without limit on a long-lived project.
+_PROGRESS_LOG_CAP = 200
 _LINEAR_QUEUE_REL = "integrations/linear-queue.json"
 # Kinds whose rows the compatibility dict carries verbatim under `_rows`, so a
 # list/get tool reads committed store state instead of re-parsing markdown.
@@ -1499,8 +1503,13 @@ class Store:
                     connection.rollback()
             raise
         finally:
-            if not committed and connection.in_transaction:
-                connection.rollback()
+            if not committed:
+                if connection.in_transaction:
+                    connection.rollback()
+                # The throttle clock is in memory and the rollback is not, so a
+                # failed commit would otherwise suppress the next dashboard
+                # export and leave PROGRESS.md showing work that never landed.
+                self._last_progress_clock = None
             try:
                 self._try_register_session(
                     connection, current_tool=None, session_id=activity_session
@@ -3052,12 +3061,13 @@ class Store:
             and now - self._last_progress_clock < 5.0
         ):
             return
+        entries = (tx.applied_progress_log() + pending)[-_PROGRESS_LOG_CAP:]
         target = self.db_path.parent / "PROGRESS.md"
         temp = target.with_name(f"{target.name}.tmp.{self.session}")
         try:
             existing = target.read_text(encoding="utf-8") if target.exists() else ""
             rendered = _PROGRESS_RENDERER(
-                self._load_dict_from_connection(tx.connection), existing, pending
+                self._load_dict_from_connection(tx.connection), existing, entries
             )
             target.parent.mkdir(parents=True, exist_ok=True)
             with temp.open("w", encoding="utf-8", newline="\n") as handle:
@@ -3071,9 +3081,12 @@ class Store:
                     "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                     (str(tx.seq),),
                 )
-            # Consumed only once the bytes are on disk, and inside this same
-            # transaction, so a rollback leaves the paragraphs still queued.
-            tx.clear_progress_log()
+            # Applied only once the bytes are on disk, and inside this same
+            # transaction. A rollback after this point un-applies the move as
+            # well, and the next export regenerates the same region from the
+            # same entries rather than appending them a second time.
+            if pending:
+                tx.apply_progress_log(entries)
             self._last_progress_clock = now
         except Exception as exc:
             temp.unlink(missing_ok=True)
@@ -3428,13 +3441,25 @@ class Transaction:
         """
         self._force_progress = True
 
-    def pending_progress_log(self) -> list[str]:
-        """Changelog paragraphs committed but not yet written into PROGRESS.md."""
+    def _progress_entries(self, key: str) -> list[dict[str, Any]]:
         row = self.connection.execute(
-            "SELECT value FROM meta WHERE key=?", (_PROGRESS_LOG_KEY,)
+            "SELECT value FROM meta WHERE key=?", (key,)
         ).fetchone()
         entries = _from_json(row[0], []) if row else []
-        return [str(entry) for entry in entries] if isinstance(entries, list) else []
+        if not isinstance(entries, list):
+            return []
+        return [
+            entry if isinstance(entry, dict) else {"ts": "", "text": str(entry)}
+            for entry in entries
+        ]
+
+    def pending_progress_log(self) -> list[dict[str, Any]]:
+        """Changelog paragraphs committed but not yet written into PROGRESS.md."""
+        return self._progress_entries(_PROGRESS_LOG_KEY)
+
+    def applied_progress_log(self) -> list[dict[str, Any]]:
+        """Changelog paragraphs the session log in PROGRESS.md is rendered from."""
+        return self._progress_entries(_PROGRESS_APPLIED_KEY)
 
     def queue_progress_log(self, entry: str) -> None:
         """Persist one changelog paragraph until PROGRESS.md carries it.
@@ -3446,13 +3471,27 @@ class Transaction:
         next transaction retries the file.
         """
         pending = self.pending_progress_log()
-        pending.append(entry)
+        pending.append({"ts": _now(), "text": entry})
         self.connection.execute(
             "INSERT INTO meta(key,value) VALUES(?,?) "
             "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             (_PROGRESS_LOG_KEY, _json(pending)),
         )
         self._force_progress = True
+
+    def apply_progress_log(self, entries: list[dict[str, Any]]) -> None:
+        """Move the pending paragraphs into the applied log, inside this transaction.
+
+        The applied log is what the file's session-log region renders from, so
+        a rollback that undoes this move also un-applies the entries and the
+        next export regenerates the identical region rather than a doubled one.
+        """
+        self.connection.execute(
+            "INSERT INTO meta(key,value) VALUES(?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (_PROGRESS_APPLIED_KEY, _json(entries)),
+        )
+        self.clear_progress_log()
 
     def clear_progress_log(self) -> None:
         self.connection.execute("DELETE FROM meta WHERE key=?", (_PROGRESS_LOG_KEY,))

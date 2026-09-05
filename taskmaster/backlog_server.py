@@ -1582,38 +1582,70 @@ def _derive_context(data: dict) -> None:
     data["context"]["stale"] = stale[:10]
 
 
-def _splice_changelog_entries(progress_text: str, entries: list[str]) -> str:
-    """Insert `entries` immediately after the `## Changelog` marker, newest first."""
-    if not entries:
-        return progress_text
-    block = "\n\n".join(entry.rstrip("\n") for entry in reversed(entries))
+SESSION_LOG_BEGIN = "<!-- taskmaster:session-log -->"
+SESSION_LOG_END = "<!-- /taskmaster:session-log -->"
+
+
+def _render_session_log(entries: list) -> str:
+    """The marker-delimited block the store owns inside the changelog section.
+
+    Regenerated whole from the applied log every time, never appended to. The
+    export writes PROGRESS.md before its SQL transaction commits, so a failure
+    between the two used to leave a paragraph on disk that the retry appended a
+    second time; rewriting a delimited region from durable rows makes the retry
+    produce the identical file instead.
+    """
+    paragraphs = []
+    for entry in reversed(entries):
+        text = (entry.get("text") if isinstance(entry, dict) else entry) or ""
+        text = str(text).strip("\n")
+        if text:
+            paragraphs.append(text)
+    body = "\n\n".join(paragraphs)
+    return f"{SESSION_LOG_BEGIN}\n\n{body}\n\n{SESSION_LOG_END}\n" if body else (
+        f"{SESSION_LOG_BEGIN}\n{SESSION_LOG_END}\n"
+    )
+
+
+def _changelog_section(existing_tail: str, entries: list) -> str:
+    """`existing_tail` with the session-log region replaced by `entries`.
+
+    Anything outside the two markers — a hand-written entry, history from
+    before the store owned this file — is left exactly as it was found.
+    """
     marker = "## Changelog"
-    idx = progress_text.find(marker)
-    if idx == -1:
-        return progress_text.rstrip("\n") + f"\n\n{marker}\n\n{block}\n"
-    insert_at = idx + len(marker)
-    return progress_text[:insert_at] + "\n\n" + block + "\n" + progress_text[insert_at:]
+    tail = existing_tail[len(marker):] if existing_tail.startswith(marker) else existing_tail
+    block = _render_session_log(entries)
+    begin = tail.find(SESSION_LOG_BEGIN)
+    end = tail.find(SESSION_LOG_END)
+    if begin != -1 and end > begin:
+        rest = tail[end + len(SESSION_LOG_END):].lstrip("\n")
+        suffix = "\n" + rest if rest else ""
+        return marker + tail[:begin] + block + suffix
+    if not entries:
+        return existing_tail or (marker + "\n")
+    rest = tail.lstrip("\n")
+    suffix = "\n" + rest if rest else ""
+    return marker + "\n\n" + block + suffix
 
 
 def _render_progress_dashboard(
-    data: dict, progress_text: str, pending: "list[str] | None" = None
+    data: dict, progress_text: str, entries: "list | None" = None
 ) -> str:
-    """Pure renderer: the dashboard for `data` spliced above the changelog.
+    """Pure renderer: the dashboard for `data` above the changelog section.
 
     The store calls this after a commit, so PROGRESS.md always reflects
-    committed state rather than a caller's in-flight dict.  `pending` holds the
-    changelog paragraphs the store has committed but not yet written; they are
-    spliced in here because the store's export is PROGRESS.md's only writer.
+    committed state rather than a caller's in-flight dict.  `entries` is the
+    store's applied session log; the region it owns inside the changelog is
+    rebuilt from it, so running the export twice writes the same file.
     """
-    if pending:
-        progress_text = _splice_changelog_entries(progress_text, pending)
-
     changelog_marker = "## Changelog"
     idx = progress_text.find(changelog_marker)
-    if idx == -1:
-        changelog_section = ""
+    existing_tail = "" if idx == -1 else progress_text[idx:]
+    if entries is None:
+        changelog_section = existing_tail
     else:
-        changelog_section = progress_text[idx:]
+        changelog_section = _changelog_section(existing_tail, entries)
 
     project_name = data["meta"].get("project", "Project")
 
