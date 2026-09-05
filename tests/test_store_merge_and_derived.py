@@ -423,7 +423,7 @@ def test_context_is_derived_in_memory_and_progress_is_throttled(project, monkeyp
     def context_builder(data):
         data["context"] = {"task_count": sum(len(e["tasks"]) for e in data["epics"])}
 
-    def progress_renderer(data, existing):
+    def progress_renderer(data, existing, pending):
         rendered.append((data["context"]["task_count"], existing))
         return f"tasks={data['context']['task_count']}\n"
 

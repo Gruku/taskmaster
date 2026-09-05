@@ -411,7 +411,7 @@ class _TxFrame:
         "backlog_path",
         "tx",
         "committed",
-        "changelog_entries",
+        "export_warnings",
     )
 
     def __init__(self, data: dict, backlog_path: "Path"):
@@ -421,9 +421,9 @@ class _TxFrame:
         # A stack, not a slot: nested tool calls share this frame, and a nested
         # body's renderer must never become the outer tool's response.
         self.renderers: list = []
-        # Changelog paragraphs waiting to be spliced into PROGRESS.md by the
-        # store's export, which is the only writer of that file.
-        self.changelog_entries: list[str] = []
+        # `export pending: …` notices this transaction raised, appended to the
+        # tool result so a caller is never told a write landed when it did not.
+        self.export_warnings: list[str] = []
         self.tx = None
         # Filled once the transaction commits: the documents this writer itself
         # committed, keyed by (kind, id).  A response rendered from these can
@@ -452,7 +452,7 @@ def _configure_store_derivers() -> None:
     """
     store.configure_derivers(
         context_builder=_derive_context,
-        progress_renderer=lambda data, existing: _render_progress_dashboard(data, existing),
+        progress_renderer=_render_progress_dashboard,
     )
 
 
@@ -507,9 +507,7 @@ def _transaction(*, tool: str, backlog_path: "Path | None" = None):
             # Cleared up front so a rolled-back transaction cannot leave the
             # previous call's sequence looking like this one's result.
             _TX_STATE.last_seq = None
-            # The same list object, reachable after the frame is torn down:
-            # the store's PROGRESS.md export runs once the frame is gone.
-            _TX_STATE.changelog = frame.changelog_entries
+            _TX_STATE.export_warnings = []
             try:
                 _normalize_loaded(data)
                 # No context rebuild here: the store's dict loader already
@@ -524,10 +522,14 @@ def _transaction(*, tool: str, backlog_path: "Path | None" = None):
         if frame is not None and frame.tx is not None:
             frame.committed = dict(frame.tx.committed)
             _TX_STATE.last_seq = frame.tx.seq
+            frame.export_warnings = [
+                warning
+                for warning in frame.tx.warnings
+                if warning.startswith("export pending:")
+            ]
+            _TX_STATE.export_warnings = list(frame.export_warnings)
     except _UnlatchedTransaction:
         pass
-    finally:
-        _TX_STATE.changelog = None
 
 
 def _last_commit_seq() -> int | None:
@@ -544,6 +546,9 @@ def _json_with_seq(payload: dict) -> dict:
     seq = _last_commit_seq()
     if seq is not None:
         payload.setdefault("seq", seq)
+    notices = getattr(_TX_STATE, "export_warnings", None)
+    if notices:
+        payload.setdefault("export_pending", list(notices))
     return payload
 
 
@@ -696,33 +701,56 @@ def _render_after_commit(renderer) -> None:
 
 
 def _with_seq(result, frame: "_TxFrame"):
-    """Stamp the committed `changes.seq` onto a tool result.
+    """Stamp the committed `changes.seq` and any export notice onto a result.
 
     Every mutation is a row in `changes`; naming that row in the response is
     what lets a caller (or a reviewer reading a transcript) tie the answer to
-    the exact commit that produced it instead of trusting the prose.
+    the exact commit that produced it instead of trusting the prose. An
+    `export pending: …` notice rides along for the opposite reason: the commit
+    landed but a file the caller can see did not, and silence would read as
+    success (spec §3.6).
     """
     seq = getattr(frame.tx, "seq", None) if frame.tx is not None else None
-    if seq is None:
+    notices = list(frame.export_warnings)
+    if seq is None and not notices:
         return result
     if isinstance(result, dict):
-        result.setdefault("seq", seq)
+        if seq is not None:
+            result.setdefault("seq", seq)
+        if notices:
+            result.setdefault("export_pending", notices)
         return result
     if not isinstance(result, str):
         return result
-    stripped = result.lstrip()
-    if stripped.startswith("{"):
-        # A tool whose result is a JSON object carries the sequence as a field.
-        # Appending the marker to the text would corrupt the payload for every
-        # caller that parses it — the linear tools do exactly that.
-        try:
-            payload = json.loads(result)
-        except ValueError:
-            payload = None
+    payload = _as_json_result(result)
+    if payload is not None:
+        # A tool whose result is itself JSON carries both as fields. Appending
+        # text would corrupt the payload for every caller that parses it — the
+        # Linear tools do exactly that.
         if isinstance(payload, dict):
-            payload.setdefault("seq", seq)
+            if seq is not None:
+                payload.setdefault("seq", seq)
+            if notices:
+                payload.setdefault("export_pending", notices)
             return json.dumps(payload)
-    return f"{result} [seq {seq}]"
+        # A JSON array has nowhere to put a field and nowhere safe to put a
+        # suffix, so it is left exactly as the tool produced it.
+        return result
+    for notice in notices:
+        result = f"{result} ({notice})"
+    return f"{result} [seq {seq}]" if seq is not None else result
+
+
+def _as_json_result(result: str):
+    """The parsed payload when a tool's string result is itself JSON, else None."""
+    stripped = result.lstrip()
+    if not stripped[:1] in ("{", "["):
+        return None
+    try:
+        parsed = json.loads(result)
+    except ValueError:
+        return None
+    return parsed if isinstance(parsed, (dict, list)) else None
 
 
 def _transactional(tool: str):
@@ -1567,15 +1595,16 @@ def _splice_changelog_entries(progress_text: str, entries: list[str]) -> str:
     return progress_text[:insert_at] + "\n\n" + block + "\n" + progress_text[insert_at:]
 
 
-def _render_progress_dashboard(data: dict, progress_text: str) -> str:
+def _render_progress_dashboard(
+    data: dict, progress_text: str, pending: "list[str] | None" = None
+) -> str:
     """Pure renderer: the dashboard for `data` spliced above the changelog.
 
     The store calls this after a commit, so PROGRESS.md always reflects
-    committed state rather than a caller's in-flight dict.  Changelog
-    paragraphs queued by the tool in flight are spliced in here too, because
-    the store's export is the only writer PROGRESS.md has.
+    committed state rather than a caller's in-flight dict.  `pending` holds the
+    changelog paragraphs the store has committed but not yet written; they are
+    spliced in here because the store's export is PROGRESS.md's only writer.
     """
-    pending = getattr(_TX_STATE, "changelog", None)
     if pending:
         progress_text = _splice_changelog_entries(progress_text, pending)
 
@@ -6037,7 +6066,7 @@ def _append_changelog(
         heading = f"### {_today()} — auto"
         entry = f"{heading}\n{auto_stats}\nTasks touched: {tasks_touched}\n"
         if not _queue_changelog_entry(entry):
-            return "No PROGRESS.md found."
+            return "\nNot logged: no open transaction to commit the changelog with."
         return f"\nSession auto-logged to PROGRESS.md."
 
     heading = f"### {_today()} — {title}"
@@ -6085,25 +6114,23 @@ def _append_changelog(
 
     entry = "\n".join(lines)
     if not _queue_changelog_entry(entry):
-        return "No PROGRESS.md found."
+        return "\n\nNot logged: no open transaction to commit the changelog with."
     return f"\n\n**Session logged** to PROGRESS.md changelog."
 
 
 def _queue_changelog_entry(entry: str) -> bool:
-    """Hand one changelog paragraph to the open transaction's progress export.
+    """Commit one changelog paragraph as a row, for the store's export to write.
 
-    False when there is no transaction to carry it — the caller then reports
-    that nothing was logged rather than writing the file behind the store.
+    False when there is no open transaction to carry it — the caller then
+    reports that nothing was logged rather than writing the file behind the
+    store. The paragraph is persisted rather than held in memory so a failed
+    PROGRESS.md write cannot destroy the only copy of it.
     """
-    frame = _active_tx()
-    if frame is None:
+    try:
+        tx = _store_tx()
+    except RuntimeError:
         return False
-    frame.changelog_entries.append(entry)
-    tx = frame.tx
-    if tx is not None:
-        # The dashboard export is throttled to once per 5 s per store; a session
-        # summary is not something to drop because another tool ran a moment ago.
-        tx.request_progress_export()
+    tx.queue_progress_log(entry)
     return True
 
 
@@ -6904,10 +6931,23 @@ def backlog_record_gate(
     _tx_put_task(task, _epic)
     _mutate_and_save(data)
     outcome = verdict if is_verdict else "done"
-    _render_after_commit(
-        lambda committed: f"Recorded gate `{gate}` = {outcome} for `{task_id}` "
-        f"(state: {_committed_task_field(committed, task_id, 'gate_state') or 'laneless'})"
-    )
+
+    def _render(committed: dict) -> str:
+        document = committed.get(("task", task_id)) or {}
+        record = (document.get("gates") or {}).get(gate) or {}
+        # The outcome has to come out of the commit, not out of the request:
+        # reading it back from `outcome` reported a wholly lost write as a
+        # successful gate recording.
+        stored = record.get("verdict") if is_verdict else record.get("status")
+        if stored != outcome:
+            return f"Recorded gate `{gate}` for `{task_id}` — {NOT_PERSISTED}"
+        state = _committed_task_field(committed, task_id, "gate_state")
+        return (
+            f"Recorded gate `{gate}` = {stored} for `{task_id}` "
+            f"(state: {state or 'laneless'})"
+        )
+
+    _render_after_commit(_render)
     return f"Recorded gate `{gate}` = {outcome} for `{task_id}` (state: {task['gate_state'] or 'laneless'})"
 
 
@@ -7939,12 +7979,18 @@ def backlog_batch_update(operations: str) -> str:
     line_renderers: list = []
     changed = False
 
-    def _status_line(entity_id: str, expected_status: str, suffix: str = ""):
+    def _status_line(entity_id: str, expected_status: str, reason_field: str = ""):
         def render(committed: dict) -> str:
             document = committed.get(("task", entity_id))
             if document is None or document.get("status") != expected_status:
                 return f"`{entity_id}` → {NOT_PERSISTED}"
-            return f"`{entity_id}` → {expected_status}{suffix}"
+            if not reason_field:
+                return f"`{entity_id}` → {expected_status}"
+            # The parenthetical is the stored reason, not the requested one.
+            return (
+                f"`{entity_id}` → {expected_status} "
+                f"({document.get(reason_field, NOT_PERSISTED)})"
+            )
 
         return render
 
@@ -8193,7 +8239,7 @@ def backlog_batch_update(operations: str) -> str:
             _archive_entity("task", task_id, task)
             _tx_put_task(task, epic)
             results.append(f"`{task_id}` → archived ({reason})")
-            line_renderers.append(_status_line(task_id, "archived", f" ({reason})"))
+            line_renderers.append(_status_line(task_id, "archived", "archive_reason"))
             changed = True
 
         elif op == "pick" and len(parts) >= 2:
@@ -9014,9 +9060,11 @@ class ViewerHandler(BaseHTTPRequestHandler):
 
     def handle_one_request(self) -> None:
         """Answer a refused legacy layout with a body, never a bare traceback."""
-        # One request must never inherit the sequence of the previous one on
-        # this thread; only a commit made while serving it may set one.
+        # One request must never inherit the sequence or the export notices of
+        # the previous one on this thread; only a commit made while serving it
+        # may set them.
         _TX_STATE.last_seq = None
+        _TX_STATE.export_warnings = []
         try:
             super().handle_one_request()
         except store.LegacyLayoutError as exc:

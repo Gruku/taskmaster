@@ -176,8 +176,12 @@ def _seq_of(result: str) -> int:
     return int(match.group(1))
 
 
-def test_every_mutating_tool_reports_the_sequence_it_committed(project):
-    """A result names the `changes` row that produced it, or it is unverifiable."""
+def test_mutating_tools_report_the_sequence_they_committed(project):
+    """A result names the `changes` row that produced it, or it is unverifiable.
+
+    A sample across the hot path and the entity writers, not every one of the
+    48 transactional tools; the suffix itself is applied by `_transactional`.
+    """
     import sqlite3
 
     results = [
@@ -213,8 +217,12 @@ def test_a_rejected_tool_call_reports_no_sequence(project):
     assert "[seq" not in out, out
 
 
-def test_context_is_derived_once_per_tool_call(project, monkeypatch):
-    """Deriving it on transaction entry as well was a wasted full pass."""
+def test_the_server_derives_context_once_per_tool_call(project, monkeypatch):
+    """Deriving it on transaction entry as well was a wasted full pass.
+
+    This counts the server's own derivation only. The store derives context
+    again when it builds a dict, which is a different cost and not this one.
+    """
     calls = []
     real = bs.regenerate_context
     monkeypatch.setattr(
@@ -264,3 +272,124 @@ def test_a_json_result_carries_the_sequence_as_a_field_not_a_suffix():
     assert json.loads(bs._with_seq('{"ok": true}', frame)) == {"ok": True, "seq": 42}
     assert bs._with_seq("plain text", frame) == "plain text [seq 42]"
     assert bs._with_seq("{not json after all", frame) == "{not json after all [seq 42]"
+
+
+# ── fix round 1 ──────────────────────────────────────────────────────────
+
+
+def _drop_task_from_the_commit(monkeypatch, task_id: str) -> None:
+    """Make the store commit but report nothing committed for `task_id`."""
+    real_capture = store.Transaction._capture_committed
+
+    def capture_without_the_task(self):
+        real_capture(self)
+        self._pending_committed.pop(("task", task_id), None)
+
+    monkeypatch.setattr(
+        store.Transaction, "_capture_committed", capture_without_the_task
+    )
+
+
+def test_record_gate_reports_a_lost_write_instead_of_the_requested_verdict(
+    project, monkeypatch
+):
+    """Echoing `verdict` turned a wholly lost write into a success message."""
+    _drop_task_from_the_commit(monkeypatch, "core-001")
+    out = bs.backlog_record_gate("core-001", "spec-review", verdict="pass")
+    assert bs.NOT_PERSISTED in out, out
+    assert "= pass" not in out, out
+
+
+def test_record_gate_reports_the_committed_verdict_when_the_write_lands(project):
+    out = bs.backlog_record_gate("core-001", "spec-review", verdict="pass")
+    assert "Recorded gate `spec-review` = pass for `core-001`" in out, out
+    assert bs.NOT_PERSISTED not in out, out
+
+
+def test_record_gate_reports_a_lost_status_gate_too(project, monkeypatch):
+    _drop_task_from_the_commit(monkeypatch, "core-001")
+    out = bs.backlog_record_gate("core-001", "impl", status="done")
+    assert bs.NOT_PERSISTED in out, out
+
+
+# ── the changelog paragraph is a committed row, not a value in memory ────
+
+
+def _break_the_progress_export(monkeypatch) -> dict:
+    """Make the PROGRESS.md write fail the way a locked file would.
+
+    Returns a flag the caller flips to let the next write through; undoing the
+    patch wholesale would also undo the fixture's own root patching.
+    """
+    armed = {"on": True}
+    real_replace = store.os.replace
+
+    def refuse_progress(src, dst, *args, **kwargs):
+        if armed["on"] and str(dst).endswith("PROGRESS.md"):
+            raise PermissionError("PROGRESS.md is locked")
+        return real_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(store.os, "replace", refuse_progress)
+    return armed
+
+
+def _complete_with_a_summary(title: str) -> str:
+    bs.backlog_pick_task("core-001")
+    for gate in _outstanding_gates("core-001"):
+        bs.backlog_skip_gate("core-001", gate, "not applicable in this test")
+    return bs.backlog_complete_task(
+        "core-001", session_title=title, done="- landed the thing"
+    )
+
+
+def test_a_failed_progress_export_keeps_the_paragraph_and_says_so(
+    project, monkeypatch
+):
+    """The paragraph survives in the store and the caller is told the file lagged."""
+    _break_the_progress_export(monkeypatch)
+    out = _complete_with_a_summary("Survives the failure")
+
+    assert "export pending: local/PROGRESS.md" in out, out
+    assert re.search(r"\[seq \d+\]$", out.strip()), out
+    assert "Survives the failure" not in (
+        project / "local" / "PROGRESS.md"
+    ).read_text(encoding="utf-8")
+
+    pending = _pending_progress_log(project)
+    assert any("Survives the failure" in entry for entry in pending), pending
+
+
+def test_the_next_transaction_writes_the_paragraph_the_failed_export_kept(
+    project, monkeypatch
+):
+    armed = _break_the_progress_export(monkeypatch)
+    _complete_with_a_summary("Written on the retry")
+    armed["on"] = False
+
+    bs.backlog_update_task("core-001", "branch", "feature/retry")
+
+    text = (project / "local" / "PROGRESS.md").read_text(encoding="utf-8")
+    assert "Written on the retry" in text, text
+    assert _pending_progress_log(project) == []
+
+
+def _pending_progress_log(backlog_path: Path) -> list:
+    import sqlite3
+
+    store.reset_for_tests()
+    connection = sqlite3.connect(backlog_path / "local" / "store.db")
+    try:
+        row = connection.execute(
+            "SELECT value FROM meta WHERE key='pending_progress_log'"
+        ).fetchone()
+    finally:
+        connection.close()
+    return json.loads(row[0]) if row else []
+
+
+def test_a_rolled_back_transaction_queues_no_paragraph(project):
+    out = bs.backlog_complete_task(
+        "core-001", session_title="Never happened", done="- nope"
+    )
+    assert out.startswith("Error:"), out
+    assert _pending_progress_log(project) == []

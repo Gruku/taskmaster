@@ -74,6 +74,8 @@ _CORRUPTION_MARKERS = ("malformed", "not a database", "file is encrypted")
 # from the idea rows and the scan refreshes its hash without ever parsing it.
 _IDEAS_INDEX_KIND = "ideas-index"
 _IDEAS_INDEX_REL = "ideas/IDEAS.md"
+_PROGRESS_REL = "local/PROGRESS.md"
+_PROGRESS_LOG_KEY = "pending_progress_log"
 _LINEAR_QUEUE_REL = "integrations/linear-queue.json"
 # Kinds whose rows the compatibility dict carries verbatim under `_rows`, so a
 # list/get tool reads committed store state instead of re-parsing markdown.
@@ -3037,11 +3039,15 @@ class Store:
         )
 
     def _regenerate_progress_if_due(self, tx: "Transaction") -> None:
-        if _PROGRESS_RENDERER is None or tx.seq is None:
+        if _PROGRESS_RENDERER is None:
+            return
+        pending = tx.pending_progress_log()
+        if tx.seq is None and not pending:
             return
         now = time.monotonic()
         if (
             not tx._force_progress
+            and not pending
             and self._last_progress_clock is not None
             and now - self._last_progress_clock < 5.0
         ):
@@ -3051,7 +3057,7 @@ class Store:
         try:
             existing = target.read_text(encoding="utf-8") if target.exists() else ""
             rendered = _PROGRESS_RENDERER(
-                self._load_dict_from_connection(tx.connection), existing
+                self._load_dict_from_connection(tx.connection), existing, pending
             )
             target.parent.mkdir(parents=True, exist_ok=True)
             with temp.open("w", encoding="utf-8", newline="\n") as handle:
@@ -3059,15 +3065,26 @@ class Store:
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temp, target)
-            tx.connection.execute(
-                "INSERT INTO meta(key,value) VALUES('last_progress_seq',?) "
-                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                (str(tx.seq),),
-            )
+            if tx.seq is not None:
+                tx.connection.execute(
+                    "INSERT INTO meta(key,value) VALUES('last_progress_seq',?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    (str(tx.seq),),
+                )
+            # Consumed only once the bytes are on disk, and inside this same
+            # transaction, so a rollback leaves the paragraphs still queued.
+            tx.clear_progress_log()
             self._last_progress_clock = now
         except Exception as exc:
             temp.unlink(missing_ok=True)
             self._log(f"progress export failed: {exc!r}")
+            if pending:
+                # The paragraphs stay in `meta`, so the next transaction
+                # retries them; the caller is told, rather than left believing
+                # the session summary reached the file.
+                tx.warnings.append(
+                    f"export pending: {_PROGRESS_REL} — retried on next call"
+                )
 
     def _log(self, message: str) -> None:
         path = self.db_path.parent / "store.log"
@@ -3410,6 +3427,35 @@ class Transaction:
         session changelog entry — has nowhere else to land, so it opts out.
         """
         self._force_progress = True
+
+    def pending_progress_log(self) -> list[str]:
+        """Changelog paragraphs committed but not yet written into PROGRESS.md."""
+        row = self.connection.execute(
+            "SELECT value FROM meta WHERE key=?", (_PROGRESS_LOG_KEY,)
+        ).fetchone()
+        entries = _from_json(row[0], []) if row else []
+        return [str(entry) for entry in entries] if isinstance(entries, list) else []
+
+    def queue_progress_log(self, entry: str) -> None:
+        """Persist one changelog paragraph until PROGRESS.md carries it.
+
+        The paragraph is a row, not a value held in memory by the calling tool:
+        the dashboard export is best-effort, and text that exists nowhere else
+        would be destroyed by a failed write while the tool reported success.
+        Stored here it commits with the transition that produced it, and the
+        next transaction retries the file.
+        """
+        pending = self.pending_progress_log()
+        pending.append(entry)
+        self.connection.execute(
+            "INSERT INTO meta(key,value) VALUES(?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (_PROGRESS_LOG_KEY, _json(pending)),
+        )
+        self._force_progress = True
+
+    def clear_progress_log(self) -> None:
+        self.connection.execute("DELETE FROM meta WHERE key=?", (_PROGRESS_LOG_KEY,))
 
     def get(self, kind: str, ident: str) -> dict[str, Any]:
         row = self.connection.execute(

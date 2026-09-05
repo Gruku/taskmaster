@@ -116,3 +116,60 @@ def test_archive_missing_404(server_with_root):
         assert False, "expected 404"
     except urllib.error.HTTPError as e:
         assert e.code == 404
+
+
+# ── `seq` on a mutating viewer response (task 3.4) ────────────────────────
+
+
+def _max_seq(bp: Path) -> int:
+    """`MAX(changes.seq)` read straight from the file.
+
+    Deliberately not through `taskmaster.store`: resetting or opening the
+    store from the test thread would disturb the connection the running
+    server thread is using.
+    """
+    import sqlite3
+
+    connection = sqlite3.connect(bp.parent / "local" / "store.db")
+    try:
+        return int(
+            connection.execute("SELECT COALESCE(MAX(seq),0) FROM changes").fetchone()[0]
+        )
+    finally:
+        connection.close()
+
+
+def test_a_mutating_post_reports_the_sequence_it_committed(server_with_root):
+    """The viewer's JSON counterpart of the `[seq N]` suffix on a tool result."""
+    base, _s, bp = server_with_root
+    status, out = _post(base, "/api/notes", {"text": "seq please"})
+    assert status == 201 and out["ok"] is True
+    assert out["seq"] == _max_seq(bp), out
+
+
+def test_a_second_mutation_reports_a_later_sequence(server_with_root):
+    base, _s, bp = server_with_root
+    _, first = _post(base, "/api/notes", {"text": "one"})
+    _, second = _post(base, "/api/notes/NOTE-001/update", {"text": "two"})
+    assert second["seq"] > first["seq"], (first, second)
+    assert second["seq"] == _max_seq(bp), second
+
+
+def test_a_read_carries_no_sequence(server_with_root):
+    """`seq` attests to a commit; a GET made none."""
+    base, _s, _bp = server_with_root
+    _post(base, "/api/notes", {"text": "one"})
+    _status, listing = _get(base, "/api/notes")
+    assert "seq" not in listing, listing
+
+
+def test_a_rejected_mutation_carries_no_sequence(server_with_root):
+    """A request that commits nothing must not inherit the previous one's."""
+    base, _s, _bp = server_with_root
+    _post(base, "/api/notes", {"text": "one"})
+    try:
+        _post(base, "/api/notes", {"text": "  "})
+        raise AssertionError("expected 400")
+    except urllib.error.HTTPError as exc:
+        body = json.loads(exc.read().decode("utf-8"))
+    assert "seq" not in body, body
