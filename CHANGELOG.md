@@ -7,6 +7,11 @@ Versions follow [SemVer](https://semver.org/spec/v2.0.0.html) — major bumps
 indicate schema breaks or removed surfaces.
 
 ---
+## 6.0.1
+
+- `scripts/migrate_links` no longer drops `task.depends_on`: the field is live schema every dependency gate reads, so migrating a backlog no longer silently unblocks every task.
+
+---
 ## 6.0.0
 
 **SQLite is the runtime authority for the backlog.** `.taskmaster/local/store.db` now holds the backlog; `backlog.yaml` and the per-entity markdown files are a Git-facing projection the store exports. One public tool call owns exactly one store transaction, so two agents writing at the same time no longer overwrite each other: the module-level snapshot and the file lock that lost those writes are gone. Design: `docs/specs/2026-09-04-sqlite-store-design.md`.

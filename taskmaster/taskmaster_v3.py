@@ -810,8 +810,13 @@ def legacy_links_to_typed(entity: dict, kind: str) -> list[dict]:
     return out
 
 
+# Fields the link migration may remove once they are mirrored into `links`.
+# `task.depends_on` is deliberately NOT here: it is live schema, not legacy.
+# Every dependency gate (next_available, pick_task, validate, blast_radius,
+# batch_preview) reads the scalar field and never the `links` array, so
+# dropping it would silently unblock every task in a migrated backlog.
 _LEGACY_FIELDS_TO_DROP: dict[str, tuple[str, ...]] = {
-    "task":     ("depends_on", "related_issues"),
+    "task":     ("related_issues",),
     "issue":    ("related_tasks", "fixed_in_task", "duplicate_of"),
     "handover": ("supersedes", "superseded_by"),
     "idea":     ("related_tasks",),

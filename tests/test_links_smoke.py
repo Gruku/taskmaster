@@ -155,8 +155,10 @@ def test_migration_from_legacy_project(tmp_path):
     t1 = read_entity_anywhere(d / "backlog.yaml", "T-001")
     assert {"type": "depends_on", "target": "T-002"} in entity_links(t1)
     assert {"type": "relates_to", "target": "ISS-001"} in entity_links(t1)
-    assert "depends_on" not in t1  # legacy field dropped
-    assert "related_issues" not in t1
+    # `depends_on` is live schema the dependency gates still read, so the
+    # migration mirrors it into `links` and leaves the field in place.
+    assert t1["depends_on"] == ["T-002"]
+    assert "related_issues" not in t1  # legacy field dropped
 
     # Inverses materialized.
     t2 = read_entity_anywhere(d / "backlog.yaml", "T-002")
