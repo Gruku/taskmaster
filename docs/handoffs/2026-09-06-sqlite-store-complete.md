@@ -16,7 +16,7 @@
 | step-4b | `35f1204` | viewer GETs on committed rows; migrate tools adopt through the store; viewer gates |
 | step-4fix | `e80f09f` | step-4 review fixes + real-backlog adoption fixes (V1–V6) |
 | step-5b | `4457329` | 6.0.0 docs, playbooks, changelog, version |
-| step-5c | PENDING | docs touch-up for the fix-wave behaviours + adoption timing |
+| step-5c | (this merge) | docs touch-up for the fix-wave behaviours, adoption timing, plan status, this handoff |
 
 **Push status:** nothing has left the machine. Version is `6.0.0` in `pyproject.toml` and both plugin manifests.
 
@@ -26,8 +26,22 @@
 
 ## Gate results
 
-- Final full suite on master `4457329`: PENDING (see final-full-suite.log; fill in).
-- Final real-backlog run (5.3, on a scratchpad COPY of CodeMaestro's `.taskmaster`, 3,391 files): PENDING (fill in: adoption time, rows vs files, quarantined, second cold open, one write touching one file).
+- Final full suite on master `4457329`: **2,247 passed, 1 skipped, 0 failed** in 20m39s (default 8×200 stress profile included).
+- Final real-backlog run (5.3, on a scratchpad COPY of CodeMaestro's `.taskmaster`, 3,391 files): **PASS**.
+
+  | Measure | Result |
+  |---|---|
+  | Cold adoption (first `backlog_status()`) | 363.9 s (was 458.2 s before verification was added; reproduced 364.2 s) |
+  | Second cold open after deleting `local/store.db*` | 98.0 s, succeeds (first pass died with ValueError) |
+  | Third cold open | 94.3 s, zero files changed (byte-stable) |
+  | Rows | 3,445 = task 2,301, bug 462, handover 363, epic 156, issue 65, decision 35, idea 26, phase 18, note 17, backlog+project 2 |
+  | Projection | 3,445 files, dirty 0, quarantined 4 (pre-existing damage: one conflict-marker bug, three bad-frontmatter archived handovers) |
+  | Warm reads | status 2.3 s, list_tasks 1.1 s, get_task 0.5 s, bug_list 0.3 s, handover_list 1.3 s, store_status 0.1 s, query 0.2 s |
+  | One `backlog_update_task` | 8.3 s, `[seq 3446]`, changed exactly that task's file plus `local/PROGRESS.md`, no `created` sentinel anywhere |
+  | Adoption diff | 1,956 modified / 274 deleted (archive moves) / 90 new; every hunk real, zero whole-file line-ending diffs (was 169); `PROGRESS.md` and `snapshots/` moved under `local/` |
+  | Hooks | 0.10–0.14 s; resurface emits then dedupes; merge gate ALLOW (policy off) |
+
+  Notes only: one-time `meta` key reorder in backlog.yaml on first re-import (4 lines, converges); adoption blocks ~6 min with no progress output; the 4 quarantine reasons are re-logged on every warm tool call (store.log grows; implies a per-call re-scan of quarantined files); files created or archive-moved during adoption are written LF while in-place rewrites keep CRLF, so `tasks/` ends mixed.
 - Reviews: five step-3 task reviews, three step-4 task reviews, two docs reviews, two whole-step reviews, two Codex adversarial reviews, two fix waves (step 3: 16 findings; step 4: 19 findings + V1–V6 from the real backlog, two rounds), one final whole-branch review ("Ready with fixes" — gate conditions only). Every finding is either fixed with a red test or listed below.
 
 ## What 6.0.0 changes (short form; the CHANGELOG entry has the citations)
@@ -65,7 +79,8 @@ Plan rulings R1–R12 are in the plan. Session rulings, in order:
 - `_projection_identity` stats every entity file per read on network roots (twice since X8); `backlog_query` runs on the read/write connection with the authorizer as the only write barrier.
 - Test-only: the bypass guard intercepts `Path.open` but not builtin `open`; `_said()` strips only `[seq N]`; two timing/urlopen flakes under load.
 - Cosmetic: cold reopen reorders `meta` keys; `force_scan_on_next_read` has no production caller; three dead writers remain in `taskmaster_v3.py` (`atomic_write`, `write_task_file`, viewer-prefs writer).
-- Performance: first adoption of a 2,300-file backlog is export-bound (per-file fsync + round-trip verification + CRLF probe). Not optimised by ruling.
+- Performance: first adoption of a 2,300-file backlog is export-bound (~6 min; per-file fsync + round-trip verification + CRLF probe) and shows no progress output. Not optimised by ruling.
+- From the final 5.3 run: quarantine reasons re-logged on every warm call (store.log unbounded); new/archive-moved files written LF next to CRLF in-place rewrites (mixed endings in `tasks/`).
 
 ## Working-tree notes
 

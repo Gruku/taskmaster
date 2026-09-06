@@ -51,7 +51,7 @@ Every kind — task, epic, phase, bug, issue, handover, decision, idea, note, ar
 
 ### Known limitations
 
-- **The first adoption of a large backlog takes minutes.** It is export-bound: adoption rewrites and verifies every projection file once. A 2,300-file backlog measured about 458 s before the round-trip verification pass was added. First adoption of a 2,300-file backlog took N s with verification. Every later open is incremental and costs nothing like it.
+- **The first adoption of a large backlog takes minutes.** It is export-bound: adoption rewrites and verifies every projection file once. A 2,300-file backlog measured about 458 s before the round-trip verification pass was added. First adoption of a 2,300-file backlog took 364 s with verification (second and later cold opens ~95 s). Every later open is incremental and costs nothing like it.
 - A hand edit to an `IDEA-*.md` file does not refresh `ideas/IDEAS.md` until the next idea write.
 - The test-only projection-bypass guard does not intercept the builtin `open`, so a writer that uses it directly would not be caught by the guard (no shipped code path does).
 - An explicit Linear retry can requeue a row another session has already claimed.
