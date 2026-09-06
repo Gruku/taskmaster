@@ -3855,10 +3855,42 @@ class Store:
             self._verify_round_trip(kind, ident, rel, content, heavy, rendered_body)
         elif kind == "project":
             content = yaml.dump(doc, default_flow_style=False, sort_keys=False, allow_unicode=True).encode("utf-8")
+            self._verify_yaml_round_trip(kind, ident, rel, content, doc)
         else:
             content = render_frontmatter(doc, body).encode("utf-8")
             self._verify_round_trip(kind, ident, rel, content, doc, body)
         self._replace_projection(tx, rel, kind, ident, content, row["updated_seq"])
+
+    def _verify_yaml_round_trip(
+        self,
+        kind: str,
+        ident: str | None,
+        rel: str,
+        content: bytes,
+        expected: Mapping[str, Any],
+    ) -> None:
+        """`_verify_round_trip` for the whole-document YAML files.
+
+        `project.yaml` carries the conventions and policies every gate reads. It
+        has no frontmatter, so it needs the plain loader rather than
+        `_parse_entity_text`, but it is on the same adoption path and answers
+        the same question: can this be read back?
+        """
+        if not self._verify_exports:
+            return
+        written = _match_line_endings(content, self.backlog_path / rel)
+        try:
+            reloaded = yaml_io.safe_load(written.decode("utf-8")) or {}
+        except (UnicodeError, ValueError, yaml.YAMLError) as exc:
+            raise AdoptionRoundTripError(
+                f"adoption refused: {rel} cannot be read back ({exc}). "
+                f"Nothing was changed."
+            ) from exc
+        if reloaded != dict(expected):
+            raise AdoptionRoundTripError(
+                f"adoption refused: the {kind} {ident or ''!r} does not survive a "
+                f"round trip through {rel}. Nothing was changed."
+            )
 
     def _verify_round_trip(
         self,
