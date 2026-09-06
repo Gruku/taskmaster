@@ -2734,6 +2734,13 @@ class Store:
         # already merged the two halves, so the per-file import below must not
         # replace that row with the heavy-only document.
         legacy_projection = detect_schema_version(data) < SCHEMA_V4
+        # Absence never deletes data: an entity a hand edit left without an id
+        # cannot be a row, so name it rather than drop it on the floor. This runs
+        # *before* the legacy `epic` backfill below — naming afterwards left a
+        # task under an id-less epic carrying `epic: None`, belonging to nothing.
+        for note in name_missing_ids(data, known_ids=lambda kind: self._known_ids(tx, kind)):
+            tx.warnings.append(note)
+            tx.log_entries.append(note)
         if legacy_projection:
             data["version"] = SCHEMA_V4
             data.setdefault("meta", {})["schema_version"] = SCHEMA_V4
@@ -2741,11 +2748,6 @@ class Store:
                 for order, task in enumerate(epic.get("tasks") or [], start=1):
                     task.setdefault("epic", epic.get("id"))
                     task.setdefault("order", float(order))
-        # Absence never deletes data: an entity a hand edit left without an id
-        # cannot be a row, so name it rather than drop it on the floor.
-        for note in name_missing_ids(data):
-            tx.warnings.append(note)
-            tx.log_entries.append(note)
         self._import_linear_queue(tx)
         for key, (doc, body) in _flatten_backlog_dict(data).items():
             tx._import_row(key[0], key[1], doc, body)
@@ -2856,6 +2858,27 @@ class Store:
                 project_content,
                 project_stat,
             )
+
+    def _known_ids(self, tx: "Transaction", kind: str) -> set[str]:
+        """Every id of `kind` the store knows: rows, reserved ids, files on disk.
+
+        The same three sources `Transaction.allocate_id` consults. An id
+        synthesized without them can land on a leftover `tasks/<epic>-NNN.md`,
+        and the per-file import that follows upserts, so the stray file's fields
+        would merge into the entity that was just named.
+        """
+        known = {
+            row[0]
+            for row in tx.connection.execute(
+                "SELECT id FROM entities WHERE kind=?", (kind,)
+            )
+        }
+        known |= set(self._load_reserved_ids().get(kind, set()))
+        known |= {
+            ident for file_kind, ident, _path in self._known_entity_files()
+            if file_kind == kind
+        }
+        return known
 
     def _known_entity_files(self) -> list[tuple[str, str, Path]]:
         specs = (
@@ -4529,7 +4552,11 @@ def _unique_id(candidate: str, taken: set[str], fallback: str) -> str:
     return chosen
 
 
-def name_missing_ids(data: dict[str, Any]) -> list[str]:
+def name_missing_ids(
+    data: dict[str, Any],
+    *,
+    known_ids: "Callable[[str], set[str]] | None" = None,
+) -> list[str]:
     """Give every id-less epic, phase and task an id, in place.
 
     Absence never deletes data (design spec decision 4), but the store keys rows
@@ -4537,41 +4564,64 @@ def name_missing_ids(data: dict[str, Any]) -> list[str]:
     by `_flatten_backlog_dict` on adoption, taking its description, body and
     every task under it with it, silently.
 
+    `known_ids(kind)` returns every id of that kind the store already knows —
+    rows, reserved ids and entity files on disk — the same three sources
+    `Transaction.allocate_id` consults. Without it a synthesized task id could
+    land on a leftover `tasks/<epic>-NNN.md`, and the per-file import that
+    follows upserts, so the stray file's fields would merge into the task that
+    was just named.
+
     Epics and phases are named from their `name` (kebab-cased, suffixed on
     collision) so the id a user sees afterwards is recognisable and stable
-    across re-adoption. Tasks follow their epic's `<epic>-<NNN>` convention
-    because that is what `next_task_id` allocates and what every reference to a
-    task looks like. Returns one line per id assigned, for the caller to log.
+    across re-adoption. Tasks follow their epic's `<epic>-<NNN>` convention at
+    one past the highest number anything knows about, which is exactly what
+    `allocate_id` would hand out. Returns one line per id assigned, for the
+    caller to log.
     """
+    lookup = known_ids or (lambda _kind: set())
     notes: list[str] = []
-    for field, fallback in (("epics", "epic"), ("phases", "phase")):
+    for field, kind, fallback in (
+        ("epics", "epic", "epic"),
+        ("phases", "phase", "phase"),
+    ):
         entries = data.get(field) or []
+        missing = [
+            entry for entry in entries
+            if isinstance(entry, dict) and not entry.get("id")
+        ]
+        if not missing:
+            continue
         taken = {
             str(entry.get("id")) for entry in entries if isinstance(entry, dict) and entry.get("id")
         }
-        for entry in entries:
-            if not isinstance(entry, dict) or entry.get("id"):
-                continue
+        taken |= lookup(kind)
+        for entry in missing:
             ident = _unique_id(_kebab(entry.get("name") or entry.get("title")), taken, fallback)
             entry["id"] = ident
-            notes.append(f"named id-less {fallback} {ident!r} from its name")
+            notes.append(f"named id-less {kind} {ident!r} from its name")
 
     for epic in data.get("epics") or []:
         if not isinstance(epic, dict):
             continue
         tasks = epic.get("tasks") or []
+        missing = [task for task in tasks if isinstance(task, dict) and not task.get("id")]
+        if not missing:
+            continue
         epic_id = str(epic.get("id") or "epic")
+        prefix = f"{epic_id}-"
         taken = {str(t.get("id")) for t in tasks if isinstance(t, dict) and t.get("id")}
+        taken |= lookup("task")
         highest = 0
         for tid in taken:
-            match = re.search(r"(\d+)$", tid)
+            match = re.fullmatch(re.escape(prefix) + r"(\d+)", tid)
             if match:
                 highest = max(highest, int(match.group(1)))
-        for task in tasks:
-            if not isinstance(task, dict) or task.get("id"):
-                continue
+        for task in missing:
             highest += 1
-            ident = _unique_id(f"{epic_id}-{highest:03d}", taken, f"{epic_id}-001")
+            while f"{prefix}{highest:03d}" in taken:
+                highest += 1
+            ident = f"{prefix}{highest:03d}"
+            taken.add(ident)
             task["id"] = ident
             notes.append(f"named id-less task {ident!r} in epic {epic_id!r}")
     return notes

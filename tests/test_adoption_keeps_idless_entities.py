@@ -115,3 +115,79 @@ def test_an_idless_task_survives_under_its_epics_numbering(tmp_path):
     assert added["title"] == "Hand added"
     assert added["notes"] == "keep me"
     store.reset_for_tests()
+
+
+# ── the synthesized id must not collide with what the store already knows ────
+
+
+def test_idless_task_skips_a_number_a_leftover_file_already_uses(tmp_path):
+    """A leftover `tasks/<epic>-NNN.md` one past the highest visible id must not
+    be reused: `_import_projection` upserts every task file afterwards, so a
+    reused number silently merges the stray file's fields into the new task."""
+    bp = _seed(tmp_path, {
+        "meta": {"project": "hand-edited", "schema_version": 3},
+        "epics": [{"id": "e", "name": "E", "status": "active", "tasks": [
+            {"id": "e-001", "title": "Numbered", "status": "todo"},
+            {"title": "Hand added", "status": "todo"},
+        ]}],
+        "phases": [],
+    })
+    # A stray file at the number naive `highest + 1` numbering would pick.
+    v3.write_task_file(
+        v3.task_file_path(bp, "e-002"),
+        {"id": "e-002", "title": "Leftover from an earlier run", "epic": "e",
+         "status": "done", "order": 2.0},
+        "leftover body",
+    )
+
+    opened = store.open_store(backlog_path=bp, session="idless-task-collision")
+    tasks = {t["id"]: t for e in opened.load_dict()["epics"] for t in e["tasks"]}
+
+    assert tasks["e-002"]["title"] == "Leftover from an earlier run", tasks
+    added = next(t for tid, t in tasks.items() if tid not in {"e-001", "e-002"})
+    assert added["title"] == "Hand added", tasks
+    assert added["status"] == "todo"
+    store.reset_for_tests()
+
+
+def test_a_task_under_an_idless_epic_gets_that_epics_synthesized_id(tmp_path):
+    """The legacy `epic` backfill must run after the epic has been named, or the
+    task lands with `epic: None` and belongs to nothing."""
+    bp = _seed(tmp_path, {
+        "meta": {"project": "hand-edited", "schema_version": 3},
+        "epics": [{"name": "Asset Engine", "status": "active", "tasks": [
+            {"id": "ae-1", "title": "Ingest", "status": "todo"},
+        ]}],
+        "phases": [],
+    })
+    opened = store.open_store(backlog_path=bp, session="idless-epic-task")
+
+    data = opened.load_dict()
+    epic = data["epics"][0]
+    assert epic["id"] == "asset-engine"
+    task = epic["tasks"][0]
+    assert task["epic"] == "asset-engine", task
+    exported = v3.task_file_path(bp, "ae-1")
+    assert exported.exists()
+    fm, _ = v3.read_task_file(exported)
+    assert fm["epic"] == "asset-engine", fm
+    store.reset_for_tests()
+
+
+def test_an_idless_task_under_an_idless_epic_is_numbered_from_that_epic(tmp_path):
+    bp = _seed(tmp_path, {
+        "meta": {"project": "hand-edited", "schema_version": 3},
+        "epics": [{"name": "Asset Engine", "status": "active", "tasks": [
+            {"title": "Ingest", "status": "todo", "notes": "keep me"},
+        ]}],
+        "phases": [],
+    })
+    opened = store.open_store(backlog_path=bp, session="idless-both")
+
+    epic = opened.load_dict()["epics"][0]
+    assert epic["id"] == "asset-engine"
+    task = epic["tasks"][0]
+    assert task["id"] == "asset-engine-001", task
+    assert task["epic"] == "asset-engine", task
+    assert task["notes"] == "keep me"
+    store.reset_for_tests()
