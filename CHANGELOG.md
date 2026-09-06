@@ -10,6 +10,7 @@ indicate schema breaks or removed surfaces.
 ## 6.0.1
 
 - `scripts/migrate_links` no longer drops `task.depends_on`, `issue.fixed_in_task` or `issue.duplicate_of`: all three are live schema the server still reads, so migrating a backlog no longer silently unblocks every task or leaves a resolved issue unwritable.
+- `scripts/migrate_links --restore-scalars` rebuilds `task.depends_on`, `issue.fixed_in_task` and `issue.duplicate_of` from the typed links for backlogs an earlier run already stripped, so their dependency gates see their edges again. A project with a store is repaired through one transaction, archived entities included; a pre-6.0.0 projection with no store is spliced on disk instead, line by line, in both the v3 epic tree and the v4 `tasks/<id>.md` shards — so adopting SQLite is never a precondition for the repair.
 
 ---
 ## 6.0.0
