@@ -239,6 +239,15 @@ Older v2 and v3 backlogs are adopted on first open and projected back as v4;
 `backlog_migrate_v4` (or its alias `backlog_migrate_v3`) runs that adoption
 explicitly and reports the row counts.
 
+Adoption checks itself. Every file it renders is parsed back and compared
+against what it was rendered from before anything lands on disk, and a file
+that does not survive that round trip refuses the whole adoption by name,
+leaving the project untouched. Machine-local files — `viewer.json`, `auto/`,
+`snapshots/` and `PROGRESS.md` — are moved under `local/`, never deleted, and
+never overwritten. Budget for it once on a large backlog: adoption rewrites and
+verifies every projection file, which takes minutes on a few thousand files.
+Every later open is incremental.
+
 ## Repository layout
 
 ```text
