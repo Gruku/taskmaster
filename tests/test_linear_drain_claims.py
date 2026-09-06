@@ -175,3 +175,74 @@ def test_a_claim_abandoned_by_a_crashed_drain_is_recoverable(tmp_path):
     # The dead drain's mark must not settle a row it no longer owns.
     assert opened.linear_mark(seq, state="done", owner="dead-drain") is False
     assert opened.linear_mark(seq, state="done", owner="live-drain") is True
+
+
+def _second_connection(bp: Path) -> "_store.Store":
+    """A Store on its own SQLite connection, as a second process would have.
+
+    `open_store` caches one instance per database, so a test that needs a claim
+    and a retry to meet the way two processes meet has to build the second one
+    itself.
+    """
+    opened = _store.Store(_store._resolve_for(bp, None))
+    opened._ensure_open()
+    return opened
+
+
+def test_a_retry_cannot_requeue_a_row_a_drain_is_pushing(tmp_path):
+    """The double-push: an explicit retry used to reset a claimed row to
+    pending, so a second drain claimed and pushed what the first drain still
+    had in flight. Claim and retry have to be mutually exclusive."""
+    bp = _make_backlog(tmp_path, tracker_id="linear-cm-eng-1")
+    _seed_tracker(bp)
+    seq = _enqueue(bp, op="task_upsert", target_id="linear-001",
+                   tracker_id="linear-cm-eng-1")
+
+    drain_store = _store.open_store(bp)
+    retry_store = _second_connection(bp)
+
+    claimed = drain_store.linear_claim(10, owner="drain-a")
+    assert [row["seq"] for row in claimed] == [seq]
+
+    # The retry lands while the push is still in flight: it must leave the row
+    # alone rather than handing it to somebody else.
+    assert retry_store.linear_requeue([seq]) == 0
+    row = retry_store.linear_rows()[0]
+    assert row["state"] == "claimed"
+    assert row["claimed_by"] == "drain-a"
+
+    # ...so no second drain finds anything to push.
+    assert retry_store.linear_claim(10, owner="drain-b") == []
+
+    # And the owning drain still settles its own row.
+    assert drain_store.linear_mark(seq, state="done", owner="drain-a") is True
+
+
+def test_a_retry_still_unparks_a_claim_whose_lease_expired(tmp_path):
+    """The exclusion is against a *live* claim. A drain that died mid-push
+    leaves a claim nobody will ever settle, and the retry has to reach it."""
+    bp = _make_backlog(tmp_path, tracker_id="linear-cm-eng-1")
+    _seed_tracker(bp)
+    seq = _enqueue(bp, op="task_upsert", target_id="linear-001",
+                   tracker_id="linear-cm-eng-1")
+
+    opened = _store.open_store(bp)
+    assert opened.linear_claim(10, owner="dead-drain")
+
+    assert opened.linear_requeue([seq], lease_seconds=0.0) == 1
+    row = opened.linear_rows()[0]
+    assert row["state"] == "pending"
+    assert row["claimed_by"] is None
+
+
+def test_a_retry_leaves_a_parked_row_reachable(tmp_path):
+    """The un-park itself must keep working: only `claimed` is off limits."""
+    bp = _make_backlog(tmp_path, tracker_id="linear-cm-eng-1")
+    _seed_tracker(bp)
+    seq = _enqueue(bp, op="task_upsert", target_id="linear-001",
+                   tracker_id="linear-cm-eng-1")
+
+    opened = _store.open_store(bp)
+    opened.linear_mark(seq, state="failed", error="dead")
+    assert opened.linear_requeue([seq]) == 1
+    assert opened.linear_rows()[0]["state"] == "pending"

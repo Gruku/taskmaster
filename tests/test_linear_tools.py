@@ -624,3 +624,88 @@ def test_retry_unparks_permanent_item(tmp_path, monkeypatch):
     assert result["ok"] is True
     # Un-parked and successfully pushed → nothing left for a caller to act on.
     assert _queue(bp) == []
+
+
+# ── 6.0.1 follow-ups ────────────────────────────────────────────
+
+
+def _store_log(bp: Path) -> str:
+    return (_store.open_store(bp).db_path.parent / "store.log").read_text(
+        encoding="utf-8",
+    )
+
+
+def test_retry_during_an_in_flight_drain_pushes_once(tmp_path, monkeypatch):
+    """The double-push, end to end: an operator running `/linear retry` while a
+    drain is mid-request must not get the same push issued twice."""
+    bp = _make_backlog(tmp_path, with_tracker=True)
+    _make_mapped_linear_yaml(tmp_path)
+    write_tracker(bp, external_system="linear", instance_alias="cm",
+                  external_key="ENG-1", title="My task", status="todo")
+    monkeypatch.setattr(backlog_server, "_backlog_path", lambda: bp)
+    monkeypatch.setenv("TASKMASTER_LINEAR_TOKEN_CM", "lin_tok_test")
+
+    pushes: list[str] = []
+    nested: dict = {}
+
+    import taskmaster.integrations.linear.client as _lc_mod
+
+    def fake_client_cls(token, **kwargs):
+        def handler(req):
+            pushes.append("push")
+            if len(pushes) == 1:
+                # The operator retries while this request is still open.
+                nested["result"] = json.loads(backlog_server.backlog_linear_retry())
+            return _ok({"issueUpdate": {"issue": {"id": "lin-id-1",
+                                                  "identifier": "ENG-1"}}})
+        return _client_with_handler(handler, token=token)
+
+    monkeypatch.setattr(_lc_mod, "LinearClient", fake_client_cls)
+    _seed_queue(bp, [{"target_id": "ts-001", "tracker_id": "linear-cm-eng-1"}])
+
+    result = json.loads(backlog_server.backlog_linear_retry())
+    assert result["ok"] is True
+    assert pushes == ["push"], "the row was pushed more than once"
+    assert nested["result"]["in_flight_skipped"] == 1
+    assert _queue(bp) == []
+
+
+def test_status_counts_enqueues_that_failed(tmp_path, monkeypatch):
+    """A swallowed enqueue used to be invisible: the task changed, no push was
+    queued, and the status said the queue was clean."""
+    bp = _make_backlog(tmp_path, with_tracker=True)
+    monkeypatch.setattr(backlog_server, "_backlog_path", lambda: bp)
+    _store.open_store(bp).log_linear_enqueue_failure("ts-001", RuntimeError("boom"))
+
+    result = json.loads(backlog_server.backlog_linear_status())
+    assert result["failed_enqueues"] == 1
+
+    log = _store_log(bp)
+    assert "ts-001" in log and "boom" in log
+
+
+def test_a_broken_enqueue_is_logged_and_still_lets_the_write_through(
+    tmp_path, monkeypatch,
+):
+    bp = _make_backlog(tmp_path, with_tracker=True)
+    _make_linear_yaml(tmp_path)
+    monkeypatch.setattr(backlog_server, "_backlog_path", lambda: bp)
+
+    import taskmaster.integrations.linear.worker as _wmod
+
+    def _boom(*a, **k):
+        raise RuntimeError("queue write refused")
+
+    # The hook runs on the caller's transaction; this test is the failure of the
+    # enqueue itself, not of finding a transaction to run it on.
+    monkeypatch.setattr(backlog_server, "_store_tx", lambda: None)
+    monkeypatch.setattr(_wmod, "enqueue", _boom)
+
+    # The calling write must survive.
+    backlog_server._enqueue_linear_push_if_synced("ts-001")
+
+    result = json.loads(backlog_server.backlog_linear_status())
+    assert result["failed_enqueues"] == 1
+    log = _store_log(bp)
+    assert "ts-001" in log
+    assert "queue write refused" in log

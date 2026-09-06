@@ -7,6 +7,13 @@ Versions follow [SemVer](https://semver.org/spec/v2.0.0.html) — major bumps
 indicate schema breaks or removed surfaces.
 
 ---
+## 6.0.1
+
+- Linear: an explicit `/linear retry` no longer requeues a row a drain currently holds, so the same push can no longer be issued twice; a claim whose lease has expired is still reachable, and the retry reports `in_flight_skipped`.
+- Linear: an enqueue the write survives is now recorded in `store.log` with the task id and the reason, and `backlog_linear_status` reports `failed_enqueues`.
+- `backlog_store_status`: the `Corrupt` line now counts a quarantined legacy `integrations/linear-queue.json` alongside moved-aside databases.
+
+---
 ## 6.0.0
 
 **SQLite is the runtime authority for the backlog.** `.taskmaster/local/store.db` now holds the backlog; `backlog.yaml` and the per-entity markdown files are a Git-facing projection the store exports. One public tool call owns exactly one store transaction, so two agents writing at the same time no longer overwrite each other: the module-level snapshot and the file lock that lost those writes are gone. Design: `docs/specs/2026-09-04-sqlite-store-design.md`.

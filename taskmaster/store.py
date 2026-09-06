@@ -139,6 +139,9 @@ _PROGRESS_APPLIED_KEY = "progress_log"
 # meta row cannot grow without limit on a long-lived project.
 _PROGRESS_LOG_CAP = 200
 _LINEAR_QUEUE_REL = "integrations/linear-queue.json"
+# Prefix every swallowed enqueue failure carries in `store.log`, so the count
+# behind the Linear status output has something exact to match on.
+_LINEAR_ENQUEUE_FAILURE_MARKER = "linear enqueue failed for"
 # Tables `_refresh_derived` owns outright: every row in them is recomputed from
 # `entities`, so dropping and rebuilding them can never lose authoritative state.
 # `backlog_index_status` reports exactly this list.
@@ -2078,7 +2081,12 @@ class Store:
             for row in self.connection.execute(sql + " ORDER BY seq", params)
         ]
 
-    def linear_requeue(self, seqs: Iterable[int]) -> int:
+    def linear_requeue(
+        self,
+        seqs: Iterable[int],
+        *,
+        lease_seconds: float = LINEAR_CLAIM_LEASE_SECONDS,
+    ) -> int:
         """Return the given queue rows to `pending` with a cleared attempt count.
 
         The un-park action behind `/linear retry`: parking is what stops a dead
@@ -2086,9 +2094,14 @@ class Store:
         short transaction, like `linear_mark`, so no HTTP is ever held under the
         writer lock.  Returns how many rows changed.
 
-        Any claim is dropped with the state: an explicit retry outranks a drain
-        that still holds the row, and clearing the owner is what stops that
-        drain from later marking a row that is pending again as settled.
+        A row a drain currently holds is *not* one of them.  Resetting a live
+        claim to `pending` handed the request to whichever drain claimed it
+        next while the first drain still had it open at Linear, so the same
+        push went out twice; claim and retry are mutually exclusive instead,
+        decided here under the one `BEGIN IMMEDIATE` that also does the reset.
+        The exclusion is against a *live* claim only: a drain that died
+        mid-push leaves a claim nobody will settle, so once its lease has
+        expired the retry reaches the row exactly as `linear_claim` would.
         """
         self._ensure_open()
         degraded = self.projection_only_reason()
@@ -2110,8 +2123,10 @@ class Store:
                 cursor = connection.execute(
                     "UPDATE linear_queue SET state='pending',attempts=0,"
                     "last_error=NULL,claimed_by=NULL,claimed_at=NULL"
-                    f" WHERE seq IN ({placeholders})",
-                    tuple(wanted),
+                    f" WHERE seq IN ({placeholders})"
+                    " AND (state<>'claimed' OR claimed_at IS NULL"
+                    " OR claimed_at<=?)",
+                    (*wanted, time.time() - lease_seconds),
                 )
                 connection.commit()
             except BaseException:
@@ -2465,12 +2480,24 @@ class Store:
         return False
 
     def _corrupt_backup_names(self) -> tuple[str, ...]:
-        """Names of databases an earlier recovery moved aside, oldest first."""
-        if not self.db_path.parent.exists():
-            return ()
-        return tuple(
-            sorted(path.name for path in self.db_path.parent.glob("store.db.corrupt-*"))
-        )
+        """What an earlier recovery moved aside, oldest first.
+
+        Databases and the legacy Linear queue alike: an unreadable
+        `integrations/linear-queue.json` is quarantined the same way a corrupt
+        database is, and the pushes it held are gone until someone looks at it,
+        so leaving it off this line hid the loss entirely.
+        """
+        names: list[str] = []
+        if self.db_path.parent.exists():
+            names.extend(
+                path.name for path in self.db_path.parent.glob("store.db.corrupt-*")
+            )
+        queue_dir = (self.backlog_path / _LINEAR_QUEUE_REL).parent
+        if queue_dir.exists():
+            names.extend(
+                path.name for path in queue_dir.glob("linear-queue.json.corrupt-*")
+            )
+        return tuple(sorted(names))
 
     def _degraded_status(
         self, *, warning: str | None, identity: tuple[str, int] | None = None
@@ -3854,6 +3881,34 @@ class Store:
                 tx.warnings.append(
                     f"export pending: {_PROGRESS_REL} — retried on next call"
                 )
+
+    def log_linear_enqueue_failure(self, target_id: str, reason: object) -> None:
+        """Record one enqueue the calling write deliberately survived.
+
+        A failed enqueue is silent by construction: the task change commits, no
+        push is queued, and nothing downstream notices.  The line goes to
+        `store.log` rather than a table because the failure that produced it may
+        well be the store refusing writes, and the count read back off it is
+        what puts the loss on the Linear status output.  Never raises.
+        """
+        self._log(f"{_LINEAR_ENQUEUE_FAILURE_MARKER} {target_id}: {reason!r}")
+
+    def linear_enqueue_failures(self) -> int:
+        """How many enqueue failures `store.log` still records.
+
+        The log is trimmed to its last 512 KB once it passes a megabyte, so this
+        is "recent", not "ever" -- a count that under-reports an ancient failure
+        is still the difference between an operator seeing the loss and not.
+        """
+        path = self.db_path.parent / "store.log"
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return 0
+        return sum(
+            1 for line in text.splitlines()
+            if _LINEAR_ENQUEUE_FAILURE_MARKER in line
+        )
 
     def _log(self, message: str) -> None:
         path = self.db_path.parent / "store.log"

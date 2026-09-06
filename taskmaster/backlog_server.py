@@ -1838,6 +1838,13 @@ def _enqueue_linear_push_if_synced(task_id: str, task: dict | None = None) -> No
         # made a broken enqueue invisible: the task changes, no push is queued,
         # and nothing anywhere says why.
         _log_swallowed_error("Linear enqueue", exc)
+        # stderr alone is only as durable as the host's console, and nothing
+        # reads it back. The same failure goes to `store.log` naming the task
+        # that lost its push, which is what `backlog_linear_status` counts.
+        try:
+            _store_for(_backlog_path()).log_linear_enqueue_failure(task_id, exc)
+        except Exception as log_exc:  # the report must not break the write either
+            _log_swallowed_error("Linear enqueue failure logging", log_exc)
 
 
 def _deep_merge(dst: dict, src: dict) -> dict:
@@ -11012,6 +11019,7 @@ def backlog_linear_status() -> str:
             "permanent_failures": 0,
             "oldest_enqueued_at": None,
             "last_error": None,
+            "failed_enqueues": 0,
             "warning": None,
         }, indent=2)
 
@@ -11046,6 +11054,10 @@ def backlog_linear_status() -> str:
         "permanent_failures": len(parked),
         "oldest_enqueued_at": oldest_at,
         "last_error": last_error,
+        # Pushes that never became queue rows at all: the enqueue hook survives
+        # its own failures so the local write still lands, so this count is the
+        # only place a lost push shows up.
+        "failed_enqueues": opened.linear_enqueue_failures(),
         "warning": degraded,
     }, indent=2)
 
@@ -11109,13 +11121,22 @@ def backlog_linear_retry(target_id: str = "") -> str:
     if target_id and not candidates:
         return json.dumps({"error": f"no queued items for target_id {target_id!r}"})
 
-    st.linear_requeue(row["seq"] for row in candidates)
+    # A row a drain is pushing right now is deliberately not un-parked: doing so
+    # would let the next drain claim a request that is still open at Linear and
+    # push it a second time. The caller is told how many it skipped, because a
+    # retry that reports nothing drained is otherwise indistinguishable from a
+    # retry that had nothing to do.
+    requeued = st.linear_requeue(row["seq"] for row in candidates)
     counts = _worker.drain(
         st, client, cfg, backlog_data=data,
         only_targets={target_id} if target_id else None,
     )
 
-    return json.dumps({"ok": True, "counts": counts}, indent=2)
+    return json.dumps({
+        "ok": True,
+        "counts": counts,
+        "in_flight_skipped": len(candidates) - requeued,
+    }, indent=2)
 
 
 # Importing this module is what makes the shared entity dispatcher store-aware.
