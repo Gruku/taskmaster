@@ -273,6 +273,18 @@ CREATE INDEX IF NOT EXISTS ix_changes_entity ON changes(kind, id, seq);
 """
 
 
+class AdoptionRoundTripError(RuntimeError):
+    """Adoption rendered a file it cannot read back, so it refuses to commit.
+
+    Adoption rewrites the whole projection in one transaction — 2,300 files on
+    a real backlog — and used to commit that tree without ever proving it could
+    reopen it. When it could not, the projection was unloadable and the store
+    that could still answer was gone the moment `local/` was cleaned or the repo
+    was cloned somewhere else. Refusing the adoption leaves the user with the
+    tree they started from, which they can still open with the previous version.
+    """
+
+
 class LegacyLayoutError(RuntimeError):
     """The backlog is not at `<root>/.taskmaster`, so no store may be opened.
 
@@ -754,6 +766,11 @@ class Store:
         self._connection_creation_state = threading.local()
         self._network_projection_only = False
         self._bootstrap_quarantine: dict[str, str] = {}
+        # Adoption rewrites the whole projection at once and has to prove it can
+        # read the result back before it commits (see `_verify_round_trip`).
+        # Ordinary writes touch a file or two and are re-read by the next scan,
+        # so they do not pay for the check.
+        self._verify_exports = False
         self._last_progress_clock: float | None = None
         self._last_read_scan_clock: float | None = None
 
@@ -1485,6 +1502,7 @@ class Store:
                 original_version = SCHEMA_V4
         committed = False
         self._begin_immediate(connection)
+        self._verify_exports = True
         try:
             tx = Transaction(self, connection, tool="bootstrap")
             self._import_projection(tx, full=True)
@@ -1513,6 +1531,8 @@ class Store:
                 if connection.in_transaction:
                     connection.rollback()
             raise
+        finally:
+            self._verify_exports = False
         self._checkpoint_passive(connection)
 
     @contextmanager
@@ -3794,6 +3814,7 @@ class Store:
         if kind == "task":
             fm, rendered_body = task_v4_to_file(doc | ({BODY_KEY: body} if body else {}))
             content = render_frontmatter(fm, rendered_body).encode("utf-8")
+            self._verify_round_trip(kind, ident, rel, content, doc, body)
         elif kind in {"epic", "phase"}:
             heavy_fields = EPIC_HEAVY_FIELDS if kind == "epic" else PHASE_HEAVY_FIELDS
             _slim, heavy, rendered_body = _split_entity_for_v3(
@@ -3809,11 +3830,63 @@ class Store:
                     tx.connection.execute("DELETE FROM projection_base WHERE file=?", (old_rel,))
                 return
             content = render_frontmatter(heavy, rendered_body).encode("utf-8")
+            self._verify_round_trip(kind, ident, rel, content, heavy, rendered_body)
         elif kind == "project":
             content = yaml.dump(doc, default_flow_style=False, sort_keys=False, allow_unicode=True).encode("utf-8")
         else:
             content = render_frontmatter(doc, body).encode("utf-8")
+            self._verify_round_trip(kind, ident, rel, content, doc, body)
         self._replace_projection(tx, rel, kind, ident, content, row["updated_seq"])
+
+    def _verify_round_trip(
+        self,
+        kind: str,
+        ident: str,
+        rel: str,
+        content: bytes,
+        expected_doc: Mapping[str, Any],
+        expected_body: str | None,
+    ) -> None:
+        """Prove the rendered bytes parse back to what they were rendered from.
+
+        Only during adoption, and always before `os.replace`: the 458-second
+        migration commits a rewrite of every file in the project, and there was
+        nothing in the path that checked the result was still readable. When it
+        was not — an epic whose identity the import had dropped — the next cold
+        open of the migrated tree raised before any tool ran, and the store that
+        could still answer had been the only copy.
+
+        The comparison is against what this render was given, parsed by the same
+        `_parse_entity_text` the scan uses, so anything the renderer and the
+        parser disagree about (a title YAML quotes one way and reads back
+        another, a body whose fences swallow the frontmatter) is caught here.
+        """
+        if not self._verify_exports:
+            return
+        try:
+            actual_doc, actual_body = self._parse_entity_text(
+                kind, content.decode("utf-8")
+            )
+        except (UnicodeError, ValueError, yaml.YAMLError) as exc:
+            raise AdoptionRoundTripError(
+                f"adoption refused: the {kind} {ident!r} rendered to {rel}, which "
+                f"cannot be read back ({exc}). Nothing was changed."
+            ) from exc
+        wanted_doc = _clean_doc(dict(expected_doc))
+        wanted_body = (expected_body or "").removesuffix("\n") or None
+        if actual_doc != wanted_doc or actual_body != wanted_body:
+            differing = sorted(
+                key for key in set(actual_doc) | set(wanted_doc)
+                if actual_doc.get(key) != wanted_doc.get(key)
+            )
+            detail = (
+                f"fields {differing}" if differing else "the body"
+            )
+            raise AdoptionRoundTripError(
+                f"adoption refused: the {kind} {ident!r} does not survive a "
+                f"round trip through {rel} ({detail} read back differently). "
+                f"Nothing was changed."
+            )
 
     def _remove_projection_file(
         self,

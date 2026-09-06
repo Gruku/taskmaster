@@ -153,6 +153,70 @@ def test_a_task_with_no_epic_is_an_orphan_not_a_shared_bucket(tmp_path):
     assert "loose-001" in (data.get("_orphan_tasks") or []), data.get("_orphan_tasks")
 
 
+# ── adoption proves it can read back what it wrote ───────────────────────────
+
+
+def test_adoption_refuses_to_commit_a_file_it_cannot_read_back(tmp_path, monkeypatch):
+    """The general property behind the epic-identity bug: the 458-second
+    migration rewrote every file in the project and committed the result
+    without ever checking it was still loadable. When it was not, the store
+    that could still answer was the only copy — and `local/` is gitignored."""
+    import pytest  # noqa: PLC0415
+
+    bp = _seed(tmp_path, {
+        "version": 3, "project": "t",
+        "meta": {"updated": "", "schema_version": 3},
+        "epics": [{"id": "e", "name": "E", "status": "active", "tasks": [
+            {"id": "e-001", "title": "Fine", "status": "todo", "notes": "n"},
+        ]}],
+        "phases": [], "context": {},
+    })
+    baseline = bp.read_text(encoding="utf-8")
+
+    # A renderer that drops a field is exactly the class of defect the check
+    # exists for: the bytes are valid, they simply are not the entity.
+    real_render = store.render_frontmatter
+
+    def lossy(frontmatter, body):
+        if frontmatter.get("id") == "e-001":
+            frontmatter = {k: v for k, v in frontmatter.items() if k != "notes"}
+        return real_render(frontmatter, body)
+
+    monkeypatch.setattr(store, "render_frontmatter", lossy)
+
+    with pytest.raises(store.AdoptionRoundTripError) as caught:
+        store.open_store(backlog_path=bp, session="round-trip-refused")
+
+    assert "e-001" in str(caught.value), str(caught.value)
+    assert "Nothing was changed" in str(caught.value)
+    # The tree the user started from is intact.
+    assert bp.read_text(encoding="utf-8") == baseline
+    assert not v3.task_file_path(bp, "e-001").exists()
+    store.reset_for_tests()
+
+
+def test_an_ordinary_adoption_passes_the_round_trip_check(tmp_path):
+    bp = _seed(tmp_path, {
+        "version": 3, "project": "t",
+        "meta": {"updated": "", "schema_version": 3},
+        "epics": [{"id": "e", "name": "E: colon, and #hash", "status": "active",
+                   "description": "heavy", "tasks": [
+                       {"id": "e-001", "title": "A 'quoted' title",
+                        "status": "todo", "notes": "line one\nline two"},
+                   ]}],
+        "phases": [{"id": "p", "name": "P", "order": 1, "description": "d"}],
+        "context": {},
+    })
+
+    loaded = store.open_store(backlog_path=bp, session="round-trip-ok").load_dict()
+
+    task = loaded["epics"][0]["tasks"][0]
+    assert task["title"] == "A 'quoted' title"
+    assert task["notes"] == "line one\nline two"
+    assert loaded["epics"][0]["name"] == "E: colon, and #hash"
+    store.reset_for_tests()
+
+
 # ── the dashboard survives an epic with no name ──────────────────────────────
 
 
