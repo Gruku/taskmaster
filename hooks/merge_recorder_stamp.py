@@ -40,7 +40,12 @@ from pathlib import Path
 # level up. Subprocess invocation puts hooks/ on sys.path, not the root.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-BUSY_TIMEOUT_SECONDS = 2.0
+# The store's own busy timeout, not the merge gate's short one. This hook runs
+# after a *successful* merge and is not latency-critical, and a merge landing
+# while another process holds the writer is ordinary: giving up after two
+# seconds silently dropped the stamp, where the old path through
+# `backlog_server._load()` waited the full thirty.
+BUSY_TIMEOUT_SECONDS = 30.0
 LOG_MAX_BYTES = 1024 * 1024
 LOG_KEEP_BYTES = 512 * 1024
 
@@ -105,6 +110,7 @@ def task_id_for_branch(db_file: Path, src: str) -> str | None:
     uri = Path(db_file).resolve().as_uri() + "?mode=rw"
     con = sqlite3.connect(uri, uri=True, timeout=BUSY_TIMEOUT_SECONDS)
     try:
+        con.execute(f"PRAGMA busy_timeout={int(BUSY_TIMEOUT_SECONDS * 1000)}")
         con.execute("PRAGMA query_only=ON")
         try:
             rows = con.execute(_TASK_BY_BRANCH_SQL, (src,)).fetchall()

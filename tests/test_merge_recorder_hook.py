@@ -314,6 +314,54 @@ def test_a_merge_in_a_fresh_clone_builds_no_store(tmp_path):
     assert log.exists() and "no store" in log.read_text(encoding="utf-8")
 
 
+def test_the_branch_lookup_waits_for_the_writer_like_the_store_does(tmp_path):
+    """A merge landing while another process holds the writer is ordinary. The
+    lookup connected with a two-second busy timeout, so contention made it raise
+    and the stamp was silently dropped — where the old path through
+    `backlog_server._load()` waited the store's full thirty seconds."""
+    import importlib.util  # noqa: PLC0415
+    import sqlite3  # noqa: PLC0415
+
+    from taskmaster import store  # noqa: PLC0415
+
+    stamp_path = PLUGIN_ROOT / "hooks" / "merge_recorder_stamp.py"
+    spec = importlib.util.spec_from_file_location("merge_recorder_stamp_t", stamp_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert module.BUSY_TIMEOUT_SECONDS == store.BUSY_TIMEOUT_MS / 1000, (
+        "the lookup must wait as long as the store itself does"
+    )
+
+    # …and the lookup really waits: an EXCLUSIVE lock does block a reader, and
+    # a two-second budget gives up under one that clears in two and a half.
+    import threading  # noqa: PLC0415
+    import time  # noqa: PLC0415
+
+    tid = _seed(tmp_path, branch="feature/x")
+    db = tmp_path / ".taskmaster" / "local" / "store.db"
+    holding = threading.Event()
+
+    def hold_exclusive():
+        con = sqlite3.connect(str(db), timeout=30)
+        try:
+            con.execute("PRAGMA busy_timeout=30000")
+            con.execute("BEGIN EXCLUSIVE")
+            holding.set()
+            time.sleep(2.5)
+            con.rollback()
+        finally:
+            con.close()
+
+    worker = threading.Thread(target=hold_exclusive, daemon=True)
+    worker.start()
+    assert holding.wait(timeout=10), "the lock was never taken"
+    try:
+        assert module.task_id_for_branch(db, "feature/x") == tid
+    finally:
+        worker.join(timeout=15)
+
+
 def test_an_untracked_branch_never_opens_the_store_for_writing(tmp_path):
     """The branch lookup is a read. With a store present but no task on this
     branch, nothing may be written — the recorder used to reach that answer
