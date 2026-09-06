@@ -92,6 +92,11 @@ _BACKLOG_ID = "__backlog__"
 _PROJECT_ID = "__project__"
 _RETRYABLE_REPLACE_ERRNOS = {5, 13, 32, errno.EACCES, errno.EPERM}
 
+# How many times a projection-only read re-runs when the files moved underneath
+# it. A share that changes three times during one read is being written
+# continuously; a fourth attempt would not settle either.
+_PROJECTION_IDENTITY_ATTEMPTS = 3
+
 # Enough of a file to tell CRLF from LF without reading a 977 KB changelog back
 # on every export: the first newline decides.
 _LINE_ENDING_PROBE_BYTES = 8192
@@ -1652,16 +1657,33 @@ class Store:
             )
             return active[1], token, max_seq
         if self._network_projection_only:
-            data = self._bootstrap_backlog_data()
-            data.setdefault("context", {})
-            # Every non-task read tool serves `_rows` now. Without one here the
-            # bugs, issues, handovers, decisions, ideas, notes, areas and
-            # trackers sitting on this network share would read as absent.
-            data["_rows"] = self._entity_rows_from_projection()
+            # The payload and the ETag have to describe one revision. Reading
+            # the documents first and stamping them with an identity taken
+            # afterwards returned old content under the new revision's ETag, so
+            # a client cached the stale payload and its `If-Match` write still
+            # passed. Bracket the read instead, and retry while the files move.
+            for _attempt in range(_PROJECTION_IDENTITY_ATTEMPTS):
+                before, _seq = self._projection_identity()
+                data = self._bootstrap_backlog_data()
+                data.setdefault("context", {})
+                # Every non-task read tool serves `_rows` now. Without one here
+                # the bugs, issues, handovers, decisions, ideas, notes, areas
+                # and trackers sitting on this network share would read as
+                # absent.
+                data["_rows"] = self._entity_rows_from_projection()
+                after, seq = self._projection_identity()
+                if after == before:
+                    if _CONTEXT_BUILDER is not None:
+                        _CONTEXT_BUILDER(data)
+                    return data, after, seq
+            # A share being written continuously still has to answer. The last
+            # read is stamped with the identity taken *before* it — the
+            # conservative half of the pair: an ETag older than the payload
+            # makes a later `If-Match` fail, where a newer one would let a write
+            # built on a mixed read through.
             if _CONTEXT_BUILDER is not None:
                 _CONTEXT_BUILDER(data)
-            token, seq = self._projection_identity()
-            return data, token, seq
+            return data, before, seq
         self._maybe_scan_on_read()
         connection = self.connection
         owns_snapshot = not connection.in_transaction

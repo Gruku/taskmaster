@@ -4088,18 +4088,44 @@ def _idea_to_item(idea: dict[str, Any], now: datetime | None = None) -> dict[str
     }
 
 
+def _rows_of(data: "Mapping[str, Any] | None", kind: str):
+    """`(id, doc, body)` rows of one kind out of a loaded compatibility dict.
+
+    `None` when the caller passed no dict, which is what selects the directory
+    scan. Archived rows carry `archived: True` and are dropped here, the same
+    filter `backlog_server._dict_rows` applies.
+    """
+    if data is None:
+        return None
+    rows = (data.get("_rows") or {}).get(kind)
+    if rows is None:
+        return None
+    return [
+        (ident, rows[ident][0], rows[ident][1])
+        for ident in sorted(rows)
+        if not rows[ident][0].get("archived")
+    ]
+
+
 def continuity_items(
     backlog_path: Path,
     *,
     include_auto_stage: bool = False,
     now: datetime | None = None,
     handover_rows: "Iterable[tuple[str, Mapping[str, Any], str | None]] | None" = None,
+    data: "Mapping[str, Any] | None" = None,
 ) -> list[dict[str, Any]]:
     """Project all backlog entities to a unified ContinuityItem list.
 
-    `handover_rows` is `Transaction.list("handover")` output. The caller passes
-    the rows it already holds so the rail reports what the store committed; the
-    directory scan below is the fallback for a caller that has no store.
+    `handover_rows` is `Transaction.list("handover")` output and `data` is the
+    store's compatibility dict. A caller that holds either passes it so the rail
+    reports what the store committed (design spec decision 1: nothing parses
+    files to answer a query on a warm store); the directory scan is the fallback
+    for a caller with no store.
+
+    Tasks in particular *have* to come from `data`: the v4 exporter strips
+    `tasks` from every epic in `backlog.yaml`, so reading them from the file
+    yielded nothing at all and the rail showed no task items on any v4 project.
     """
     items: list[dict[str, Any]] = []
 
@@ -4129,19 +4155,27 @@ def continuity_items(
     items.extend(handover_items)
 
     # Decisions.
-    for did in list_decision_ids(backlog_path):
-        try:
-            fm, _ = read_decision(backlog_path, did)
-        except (OSError, ValueError):
-            continue
-        items.append(_decision_to_item(fm, now))
+    decision_rows = _rows_of(data, "decision")
+    if decision_rows is None:
+        for did in list_decision_ids(backlog_path):
+            try:
+                fm, _ = read_decision(backlog_path, did)
+            except (OSError, ValueError):
+                continue
+            items.append(_decision_to_item(fm, now))
+    else:
+        for _did, doc, _body in decision_rows:
+            items.append(_decision_to_item(dict(doc), now))
 
-    # Tasks (from backlog.yaml epics).
-    try:
-        data = yaml_io.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
-    except (OSError, yaml.YAMLError):
-        data = {}
-    for epic in data.get("epics", []) or []:
+    # Tasks.
+    if data is None:
+        try:
+            tree = yaml_io.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
+        except (OSError, yaml.YAMLError):
+            tree = {}
+    else:
+        tree = data
+    for epic in tree.get("epics", []) or []:
         for t in epic.get("tasks", []) or []:
             tid = t.get("id")
             if not tid:
@@ -4149,20 +4183,30 @@ def continuity_items(
             items.append(_task_to_item(t, tid, now))
 
     # Issues.
-    for iid in list_issue_ids(backlog_path):
-        try:
-            fm, _ = read_issue(backlog_path, iid)
-        except (OSError, ValueError):
-            continue
-        items.append(_issue_to_item(fm, now))
+    issue_rows = _rows_of(data, "issue")
+    if issue_rows is None:
+        for iid in list_issue_ids(backlog_path):
+            try:
+                fm, _ = read_issue(backlog_path, iid)
+            except (OSError, ValueError):
+                continue
+            items.append(_issue_to_item(fm, now))
+    else:
+        for _iid, doc, _body in issue_rows:
+            items.append(_issue_to_item(dict(doc), now))
 
     # Ideas.
-    for idid in list_idea_ids(backlog_path):
-        try:
-            fm, _ = read_idea(backlog_path, idid)
-        except (OSError, ValueError):
-            continue
-        items.append(_idea_to_item(fm, now))
+    idea_rows = _rows_of(data, "idea")
+    if idea_rows is None:
+        for idid in list_idea_ids(backlog_path):
+            try:
+                fm, _ = read_idea(backlog_path, idid)
+            except (OSError, ValueError):
+                continue
+            items.append(_idea_to_item(fm, now))
+    else:
+        for _idid, doc, _body in idea_rows:
+            items.append(_idea_to_item(dict(doc), now))
 
     return items
 

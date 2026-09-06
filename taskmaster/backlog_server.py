@@ -747,6 +747,11 @@ def _render_after_commit(renderer) -> None:
         frame.renderers.append(renderer)
 
 
+def _append_seq(result: str, seq: int | None) -> str:
+    """`result [seq N]`, the suffix `_with_seq` puts on a string answer."""
+    return f"{result} [seq {seq}]" if seq is not None else result
+
+
 def _with_seq(result, frame: "_TxFrame"):
     """Stamp the committed `changes.seq` and any export notice onto a result.
 
@@ -785,7 +790,7 @@ def _with_seq(result, frame: "_TxFrame"):
         return result
     for notice in notices:
         result = f"{result} ({notice})"
-    return f"{result} [seq {seq}]" if seq is not None else result
+    return _append_seq(result, seq)
 
 
 def _as_json_result(result: str):
@@ -3236,7 +3241,12 @@ def _adopt_project_into_store(tool: str) -> str:
     if st.warning:
         lines.append(f"- Warning: {st.warning}")
     lines.append("Run `backlog_store_status` any time for the full report.")
-    return "\n".join(lines)
+    # Adoption mutates, so its answer names the commit it produced, like every
+    # other mutating tool (R6, decision 7). It is not `@_transactional` — the
+    # adoption happens inside the store's own bootstrap transaction, which is
+    # already closed by the time `_load()` returns — so the seq is taken from
+    # the committed state rather than from a frame.
+    return _append_seq("\n".join(lines), st.max_seq)
 
 
 @mcp.tool()
@@ -5179,10 +5189,14 @@ def backlog_continuity_items(
     bp = _backlog_path()
     if not bp.exists():
         return json.dumps({"items": [], "view": view, "error": "no backlog"})
+    # One loaded tree for every kind the rail projects: tasks come from its
+    # epics (backlog.yaml has none on v4), and the rest from its `_rows`.
+    tree = _load()
     items = _continuity_items(
         bp,
         include_auto_stage=include_auto_stage,
-        handover_rows=_dict_rows(_load(), "handover"),
+        handover_rows=_dict_rows(tree, "handover"),
+        data=tree,
     )
     return json.dumps({"items": items, "view": view}, default=str)
 
@@ -10941,13 +10955,11 @@ def backlog_linear_list() -> str:
     if not bp.exists():
         return json.dumps({"trackers": []})
 
+    # `tracker` is a row-backed kind: reading `trackers/*.md` here made a
+    # tracker whose export had not landed read as absent (decision 1).
     out = []
-    for tid in _list_tracker_ids(bp):
+    for tid, fm, _body in _dict_rows(_load(), "tracker"):
         if not tid.startswith("linear-"):
-            continue
-        try:
-            fm, _ = _read_tracker(bp, tid)
-        except (OSError, yaml.YAMLError):
             continue
         out.append({
             "id": fm.get("id"),
@@ -10976,15 +10988,11 @@ def backlog_linear_show(tracker_id: str) -> str:
     if not bp.exists():
         return json.dumps({"error": "No backlog found."})
 
-    tp = _tracker_path(bp, tracker_id)
-    if not tp.exists():
+    row = _dict_row(_load(), "tracker", tracker_id)
+    if row is None:
         return json.dumps({"error": f"tracker {tracker_id!r} not found"})
 
-    try:
-        fm, body = _read_tracker(bp, tracker_id)
-    except (OSError, yaml.YAMLError) as e:
-        return json.dumps({"error": f"cannot read tracker: {e}"})
-
+    fm, body = row[0], row[1] or ""
     return json.dumps({"frontmatter": fm, "body": body}, indent=2, default=str)
 
 

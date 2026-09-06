@@ -72,6 +72,9 @@ def test_migrate_v3_adopts_through_the_store(v2_project):
     assert ids == ["e1-001"], ids
     # And the report names what the store now holds.
     assert "task: 1" in out and "epic: 1" in out, out
+    # Adoption mutates, so its answer names the commit, like every other
+    # mutating tool (R6, decision 7). It used to print `max seq` in prose only.
+    assert out.rstrip().endswith("]") and "[seq " in out, out
 
 
 def test_migrate_v4_adopts_through_the_store(v2_project):

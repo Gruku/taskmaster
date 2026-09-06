@@ -371,6 +371,26 @@ def test_show_404_for_missing_tracker(tmp_path, monkeypatch):
     assert "error" in result
 
 
+def test_list_and_show_read_rows_not_tracker_files(tmp_path, monkeypatch):
+    """`tracker` is a row-backed kind. Reading `trackers/*.md` here made a
+    tracker whose export had not landed read as absent (decision 1)."""
+    from taskmaster import taskmaster_v3 as v3  # noqa: PLC0415
+
+    bp = _make_backlog(tmp_path)
+    _make_linear_yaml(tmp_path)
+    write_tracker(bp, external_system="linear", instance_alias="cm",
+                  external_key="ENG-11", title="Row backed", status="todo")
+    monkeypatch.setattr(backlog_server, "_backlog_path", lambda: bp)
+    # The row is committed; the file is what a failed export would leave behind.
+    backlog_server._load()
+    v3.tracker_path(bp, "linear-cm-eng-11").unlink()
+
+    listed = json.loads(backlog_server.backlog_linear_list())
+    assert "linear-cm-eng-11" in [t["id"] for t in listed["trackers"]], listed
+    shown = json.loads(backlog_server.backlog_linear_show("linear-cm-eng-11"))
+    assert shown["frontmatter"]["title"] == "Row backed", shown
+
+
 # ── backlog_linear_status ───────────────────────────────────────
 
 
