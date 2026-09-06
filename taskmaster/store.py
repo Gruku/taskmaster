@@ -91,6 +91,32 @@ _MONOTONIC = time.monotonic
 _BACKLOG_ID = "__backlog__"
 _PROJECT_ID = "__project__"
 _RETRYABLE_REPLACE_ERRNOS = {5, 13, 32, errno.EACCES, errno.EPERM}
+
+# Enough of a file to tell CRLF from LF without reading a 977 KB changelog back
+# on every export: the first newline decides.
+_LINE_ENDING_PROBE_BYTES = 8192
+
+
+def _uses_crlf(path: Path) -> bool:
+    """True when the file on disk already uses CRLF line endings."""
+    try:
+        with path.open("rb") as handle:
+            head = handle.read(_LINE_ENDING_PROBE_BYTES)
+    except OSError:
+        return False
+    index = head.find(b"\n")
+    return index > 0 and head[index - 1] == 0x0D
+
+
+def _match_line_endings(content: bytes, path: Path) -> bytes:
+    """`content` (rendered with LF) in the line-ending style `path` already has.
+
+    A file that does not exist yet keeps LF: there is nothing to match, and LF
+    is what the repository stores.
+    """
+    if not _uses_crlf(path):
+        return content
+    return content.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
 _CORRUPTION_MARKERS = ("malformed", "not a database", "file is encrypted")
 # `ideas/IDEAS.md` is derived output, not an entity: the exporter regenerates it
 # from the idea rows and the scan refreshes its hash without ever parsing it.
@@ -3923,6 +3949,14 @@ class Store:
             tx.warnings.append(f"export pending: {rel} is quarantined")
             tx.log_entries.append(f"projection export suppressed for quarantined {rel}")
             return
+        # Everything is rendered with LF. Writing that over a CRLF working tree
+        # (`core.autocrlf=true`, the Windows default) rewrites every line of
+        # every file it touches: on a 2.2k-task backlog the adoption showed up
+        # as a 2,300-file diff, and every later `git diff` on the backlog was
+        # unreadable. Match what the file already uses; a new file gets LF.
+        content = _match_line_endings(content, self.backlog_path / rel)
+        # The hash is taken on the bytes actually written, or the next scan
+        # reads the file as edited out of band and re-imports it forever.
         digest = hashlib.sha1(content).hexdigest()
         if existing and existing["content_hash"] == digest:
             path = self.backlog_path / rel
