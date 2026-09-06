@@ -217,7 +217,7 @@ def test_migrate_links_translates_and_reconciles_in_one_transaction(
 
     issue_doc, issue_body = _row(root, "issue", "ISS-001")
     assert {"type": "fixed_in_task", "target": "T-001"} in entity_links(issue_doc)
-    assert "fixed_in_task" not in issue_doc
+    assert issue_doc["fixed_in_task"] == "T-001"  # live schema, kept
     assert issue_body == "Issue body."
 
     summary = json.loads(capsys.readouterr().out)
@@ -270,6 +270,44 @@ def test_migrate_links_keeps_depends_on_on_a_second_run(legacy_links, capsys):
     assert _changes(root, "scripts/migrate_links") == first
     assert json.loads(capsys.readouterr().out)["status"] == "no changes"
     assert _row(root, "task", "T-001")[0]["depends_on"] == ["T-002"]
+
+
+def test_migrate_links_keeps_the_issue_resolution_fields(tm_epic_phase, capsys):
+    """`fixed_in_task` and `duplicate_of` are live schema too.
+
+    `_validate_issue` requires them for status=fixed and status=duplicate, and
+    it runs on every write — so dropping them on migration makes an already
+    resolved issue permanently unwritable through the server.
+    """
+    from taskmaster import backlog_server as bs
+
+    root = tm_epic_phase
+    bs.backlog_add_task(title="Fix it", epic="test-epic", phase="dev",
+                        tldr="a", options={"task_id": "T-001"})
+    bs.backlog_issue_create(title="Flaky", severity="P2",
+                            evidence="recurs every run", impact="tests flap")
+    bs.backlog_issue_create(title="Flaky again", severity="P2",
+                            evidence="recurs every run", impact="tests flap")
+    bs.backlog_issue_update("ISS-001", "fixed_in_task", "T-001")
+    bs.backlog_issue_update("ISS-001", "status", "fixed")
+    bs.backlog_issue_update("ISS-002", "duplicate_of", "ISS-001")
+    bs.backlog_issue_update("ISS-002", "status", "duplicate")
+
+    assert links_script.main(["--root", str(root)]) == 0
+    capsys.readouterr()
+
+    # A resolved issue is still writable through the server after migrating.
+    out = bs.backlog_issue_update("ISS-001", "impact", "tests flap on CI")
+    assert not out.startswith("Error"), out
+    out = bs.backlog_issue_update("ISS-002", "impact", "same as ISS-001")
+    assert not out.startswith("Error"), out
+
+    fixed = _row(root, "issue", "ISS-001")[0]
+    assert fixed["fixed_in_task"] == "T-001"
+    assert {"type": "fixed_in_task", "target": "T-001"} in entity_links(fixed)
+    dupe = _row(root, "issue", "ISS-002")[0]
+    assert dupe["duplicate_of"] == "ISS-001"
+    assert {"type": "duplicate_of", "target": "ISS-001"} in entity_links(dupe)
 
 
 def test_migrate_links_reports_an_orphan_target(tm_epic_phase, capsys):

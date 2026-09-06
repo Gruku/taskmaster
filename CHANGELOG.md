@@ -9,7 +9,7 @@ indicate schema breaks or removed surfaces.
 ---
 ## 6.0.1
 
-- `scripts/migrate_links` no longer drops `task.depends_on`: the field is live schema every dependency gate reads, so migrating a backlog no longer silently unblocks every task.
+- `scripts/migrate_links` no longer drops `task.depends_on`, `issue.fixed_in_task` or `issue.duplicate_of`: all three are live schema the server still reads, so migrating a backlog no longer silently unblocks every task or leaves a resolved issue unwritable.
 
 ---
 ## 6.0.0

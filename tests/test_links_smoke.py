@@ -167,4 +167,6 @@ def test_migration_from_legacy_project(tmp_path):
     iss = read_entity_anywhere(d / "backlog.yaml", "ISS-001")
     assert {"type": "fixed_in_task", "target": "T-001"} in entity_links(iss)
     assert {"type": "fixes",         "target": "ISS-001"} in entity_links(t1)
-    assert "fixed_in_task" not in iss  # legacy field dropped
+    # `fixed_in_task` is live schema the issue validator requires on
+    # status=fixed, so the migration mirrors it and keeps the field.
+    assert iss["fixed_in_task"] == "T-001"
