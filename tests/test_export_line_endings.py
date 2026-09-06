@@ -251,3 +251,67 @@ def test_archiving_an_lf_file_keeps_lf_at_the_new_path(tmp_path, monkeypatch):
     assert archived.exists()
     assert b"\r\n" not in archived.read_bytes()
     store.reset_for_tests()
+
+
+def _write_lf(path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(text.encode("utf-8"))
+
+
+def _detector(bp):
+    """A store object that has not opened its database — detection only."""
+    return store.Store(store._resolve_for(bp, None))
+
+
+_TASK_TEXT = (
+    "---\nid: {ident}\ntitle: T\nepic: e\nstatus: todo\n"
+    "priority: high\norder: 1.0\ncreated: '2026-01-01T00:00'\n---\n"
+    "the body\n"
+)
+
+
+def test_detection_survives_sample_directories_that_do_not_exist(tmp_path):
+    """A backlog with no `bugs/` or `issues/` is the normal case, and listing a
+    directory that is not there must not abort the write that asked."""
+    bp = _seed_crlf(tmp_path)
+    assert not (bp.parent / "bugs").exists()
+
+    assert _detector(bp)._detect_dominant_line_ending() is True
+
+
+def test_a_directory_votes_with_its_size_not_with_its_sample(tmp_path):
+    """Sampling is capped per directory, so an unweighted vote let 40 files in
+    two small directories outvote two thousand CRLF tasks."""
+    bp = _seed_crlf(tmp_path)
+    for index in range(100):
+        _write_crlf(
+            bp.parent / "tasks" / f"e-1{index:02d}.md",
+            _TASK_TEXT.format(ident=f"e-1{index:02d}"),
+        )
+    for folder, prefix in (("bugs", "B"), ("issues", "ISS")):
+        (bp.parent / folder).mkdir(parents=True, exist_ok=True)
+        for index in range(20):
+            _write_lf(
+                bp.parent / folder / f"{prefix}-{index:02d}.md",
+                _TASK_TEXT.format(ident=f"{prefix}-{index:02d}"),
+            )
+
+    assert _detector(bp)._detect_dominant_line_ending() is True
+
+
+def test_a_small_crlf_directory_does_not_outvote_a_large_lf_one(tmp_path):
+    """The weighting has to cut both ways, or it is just a thumb on the scale."""
+    bp = _seed(tmp_path)
+    for index in range(100):
+        _write_lf(
+            bp.parent / "tasks" / f"e-1{index:02d}.md",
+            _TASK_TEXT.format(ident=f"e-1{index:02d}"),
+        )
+    (bp.parent / "bugs").mkdir(parents=True, exist_ok=True)
+    for index in range(20):
+        _write_crlf(
+            bp.parent / "bugs" / f"B-{index:02d}.md",
+            _TASK_TEXT.format(ident=f"B-{index:02d}"),
+        )
+
+    assert _detector(bp)._detect_dominant_line_ending() is False

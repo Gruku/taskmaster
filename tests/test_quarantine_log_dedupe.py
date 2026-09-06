@@ -151,3 +151,30 @@ def test_an_unparseable_project_yaml_is_logged_once(tmp_path, store_api):
 
     lines = _log_lines(store_api, backlog_path, "quarantined project.yaml")
     assert len(lines) == 1, lines
+
+
+def test_a_reason_is_not_marked_logged_when_the_log_cannot_be_written(
+    tmp_path, store_api
+):
+    """A signature that outlives the line it stands for silences that reason for
+    good. An unwritable `store.log` must leave the reason still owed."""
+    backlog_path, task_path = _write_v4_projection(tmp_path)
+    opened = store_api.open_store(backlog_path=backlog_path, session="log-failure")
+    log = store_api.db_path(backlog_path).parent / "store.log"
+    if log.exists():
+        log.unlink()
+    # A directory at the path makes the append fail the way an unwritable file
+    # does, without depending on how the platform enforces permissions.
+    log.mkdir()
+
+    task_path.write_text("---\nid: [broken\n---\n", encoding="utf-8")
+    with opened.transaction(tool="read-while-log-is-unwritable"):
+        pass
+    assert "tasks/core-001.md" in opened.status().quarantined_files
+
+    log.rmdir()
+    with opened.transaction(tool="read-once-the-log-works"):
+        pass
+
+    lines = _log_lines(store_api, backlog_path, "quarantined tasks/core-001.md")
+    assert len(lines) == 1, lines
