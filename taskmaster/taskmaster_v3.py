@@ -1078,7 +1078,12 @@ def load_v4(backlog_path: Path) -> dict[str, Any]:
     key `_orphan_tasks` (surfaced by backlog_validate, stripped on save).
     """
     data = yaml_io.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
-    epic_ids = {e.get("id") for e in data.get("epics", [])}
+    # An epic with no id contributed `None` to this set, which made `None` a
+    # real bucket key: every task file with no `epic:` was filed under it, and
+    # the same list was then handed to *every* id-less epic below, so one task
+    # appeared under two parents and the import refused the duplicate. A task
+    # whose epic cannot be named is an orphan, which is what the report is for.
+    epic_ids = {e.get("id") for e in data.get("epics", []) if e.get("id")}
     tasks_by_epic: dict[str, list[dict[str, Any]]] = {}
     orphans: list[str] = []
     for tf in iter_task_files(backlog_path):

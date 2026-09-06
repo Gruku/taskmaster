@@ -2895,9 +2895,17 @@ class Store:
                                         merged.pop(field, None)
                                 # An `epics/<id>.md` that backlog.yaml never
                                 # mentions has no slim half to merge with, so
-                                # the row used to arrive with no `id` field at
-                                # all and every reader that keys on it raised.
-                                # The file's stem *is* the id.
+                                # this used to keep the heavy fields and throw
+                                # the file's own `id` and `title` away —
+                                # permanently. The export then wrote `- {}`
+                                # into backlog.yaml and a title-less file, the
+                                # epic's name survived nowhere on disk, and the
+                                # next cold open refused the projection
+                                # outright. The stem *is* the id, and the
+                                # frontmatter is the only copy of the rest, so
+                                # it fills in whatever the row does not have.
+                                for field, value in parsed_doc.items():
+                                    merged.setdefault(field, value)
                                 merged.setdefault("id", ident)
                                 parsed_doc = merged
                             if _is_archive_path(path, self.backlog_path):

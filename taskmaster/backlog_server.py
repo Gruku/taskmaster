@@ -1454,11 +1454,14 @@ def _derive_context(data: dict) -> None:
         s = t.get("status", "todo")
         status_counts[s] = status_counts.get(s, 0) + 1
 
+        # A hand-edited or half-recovered entity can be missing any of these.
+        # The context block is built on every load, so an unguarded index here
+        # took down every tool that reads the backlog, not just the dashboard.
         if s in ("in-progress", "in-review"):
             entry = {
-                "id": t["id"],
-                "title": t["title"],
-                "epic": epic["id"],
+                "id": t.get("id", ""),
+                "title": t.get("title", ""),
+                "epic": epic.get("id", ""),
                 "branch": t.get("branch", ""),
             }
             if t.get("locked_by"):
@@ -1466,9 +1469,9 @@ def _derive_context(data: dict) -> None:
             in_progress.append(entry)
         elif s == "blocked":
             blocked.append({
-                "id": t["id"],
-                "title": t["title"],
-                "epic": epic["id"],
+                "id": t.get("id", ""),
+                "title": t.get("title", ""),
+                "epic": epic.get("id", ""),
                 "blockers": t.get("blockers", ""),
             })
         elif s == "done" and t.get("completed"):
@@ -1477,13 +1480,16 @@ def _derive_context(data: dict) -> None:
     # recent_completed: last 5 by completed date
     done_tasks.sort(key=lambda t: str(t.get("completed", "")), reverse=True)
     recent_completed = [
-        {"id": t["id"], "title": t["title"], "completed": str(t["completed"])}
+        {"id": t.get("id", ""), "title": t.get("title", ""),
+         "completed": str(t.get("completed", ""))}
         for t in done_tasks[:5]
     ]
 
     # next_up: top 3 priority todo across active epics, filtered to active phase
     active_ph = _active_phase(data)
-    task_statuses: dict[str, str] = {t["id"]: t.get("status", "todo") for t, _ in all_tasks}
+    task_statuses: dict[str, str] = {
+        t.get("id", ""): t.get("status", "todo") for t, _ in all_tasks
+    }
     todo_tasks = []
     for t, epic in all_tasks:
         if t.get("status") != "todo" or epic.get("status") != "active":
@@ -1862,10 +1868,14 @@ def backlog_status(verbose: bool = False) -> str:
         focus = "—"
         for t in active_tasks:
             if t.get("status") in ("in-progress", "in-review"):
-                focus = t["title"]
+                focus = t.get("title") or t.get("id") or "—"
                 break
-        name = epic["name"]
-        if _epic_stats(data, epic["id"])["closeable"]:
+        # The dashboard is the first call of every session. One epic with no
+        # `name` used to take it down with a KeyError while every neighbouring
+        # access here already used `.get`; an unnamed epic is a thing to show,
+        # not a reason to show nothing.
+        name = epic.get("name") or epic.get("id") or "(unnamed epic)"
+        if _epic_stats(data, epic.get("id"))["closeable"]:
             name = f"{name} [closeable]"
         lines.append(f"| {name} | {_epic_status_label(epic.get('status', 'planned'))} | {done_count}/{total} | {focus} |")
 
