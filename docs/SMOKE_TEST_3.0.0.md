@@ -80,8 +80,8 @@ Open `backlog_open_viewer`:
 
 ## 8. Migration safety
 
-- [ ] On a v3 backlog, run `backlog_migrate_v3` again → verify "already on v3" no-op response
-- [ ] On a v3 backlog, `git restore .taskmaster/backlog.yaml && rm -rf .taskmaster/tasks/` → verify backlog is back to v2 form (rollback works)
+- [ ] On a v3 backlog, run `backlog_migrate_v3` again → verify the idempotent `Adopted into the store (backlog_migrate_v3).` report with unchanged row counts
+- [ ] Delete a `.taskmaster/tasks/<id>.md` file → verify the next tool call re-exports it from the store. Since 6.0.0 the absence of a file never deletes a row, so removing projection files is no longer a rollback path
 
 ## 9. No regressions vs 1.11
 

@@ -5,7 +5,7 @@
 # Derived Index, Ambient Resurfacing, and SQL Query — Design
 
 **Date:** 2026-09-03
-**Status:** approved design, not yet planned
+**Status:** superseded by the SQLite store (6.0.0) — `index.db` is absorbed into `.taskmaster/local/store.db`; see `2026-09-04-sqlite-store-design.md`
 **Case study:** `C:\Users\gruku\Files\Work\CodeMaestro\.taskmaster`
 
 ## 1. Problem

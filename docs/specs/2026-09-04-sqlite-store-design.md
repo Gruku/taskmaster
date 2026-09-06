@@ -5,7 +5,7 @@
 # SQLite Store: Concurrent Multi-Agent Writes — Design
 
 **Date:** 2026-09-04 (rev 2, after adversarial spec review: Claude opus + Codex, 36 findings)
-**Status:** spec-reviewed, ready for implementation planning
+**Status:** implemented 6.0.0
 **Supersedes:** the write half of `taskmaster_v3.py` (save_v3/save_v4, snapshot diffing,
 atomic_write callers, viewer `create_task`, `with_file_lock`)
 **Builds on:** `2026-09-03-derived-index-ambient-resurfacing-design.md` (index.db is absorbed)

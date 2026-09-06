@@ -211,9 +211,10 @@ All tools are prefixed with `backlog_`. These are the low-level building blocks 
 | `backlog_status` | Full dashboard: epic table, in-progress, blocked, next-up, stats, phase |
 | `backlog_list_tasks` | Filtered list. Params: `epic`, `status`, `priority`, `phase` |
 | `backlog_get_task(task_id)` | Full task detail with epic context, deps, docs, related tasks |
-| `backlog_search(query, kinds?)` | FTS5-ranked search across all entity kinds (tasks, bugs, issues, decisions, handovers, ideas); `kinds` filters the set; falls back to substring search when the index is unavailable |
-| `backlog_query(sql, limit?)` | Read-only SELECT/WITH query directly over the derived index (`.taskmaster/local/index.db`) |
-| `backlog_index_status(rebuild?)` | Derived index health: schema version, row counts, active YAML loader; `rebuild` forces a full rebuild |
+| `backlog_search(query, kinds?)` | FTS5-ranked search across all entity kinds (tasks, bugs, issues, decisions, handovers, ideas); `kinds` filters the set; falls back to substring search when the store's FTS is unavailable |
+| `backlog_query(sql, limit?)` | Guarded read-only SELECT/WITH query directly over the store (`.taskmaster/local/store.db`) |
+| `backlog_store_status` | Store health: root and how it was resolved, schema version, db/WAL size, dirty and quarantined projection files, live sessions, recent changes, pending Linear pushes. Never creates or repairs a store |
+| `backlog_index_status(rebuild?)` | Derived-table row counts and the active YAML loader; `rebuild` recomputes the derived tables and unlinks a legacy `local/index.db` |
 | `backlog_dependencies(task_id)` | Upstream (depends-on) and downstream (unblocks) graph |
 | `backlog_next_available` | Ready-to-work tasks: todo in active epics, deps satisfied, phase-filtered |
 | `backlog_validate` | Integrity check: dangling deps, circular deps, missing dates, status inconsistencies |
@@ -243,7 +244,7 @@ All tools are prefixed with `backlog_`. These are the low-level building blocks 
 
 ## Data Model
 
-The `backlog.yaml` file is the single source of truth. **Never edit it directly** — always use MCP tools, which own the schema and handle validation.
+`.taskmaster/local/store.db` is the runtime source of truth; `backlog.yaml` and the per-entity Markdown files are the Git-facing projection the store exports. **Never edit them directly** — always use MCP tools, which own the schema and handle validation. A hand edit is imported on the next tool call, but only the store decides what the files then say.
 
 ### Structure
 
@@ -255,15 +256,6 @@ meta:
     fan_out_threshold: 5          # Avg fan-out above this = "shared" directory (default: 5)
     max_file_scan: 1000           # Max files to scan for import tracing (default: 1000)
     shared_dirs: []               # Explicit shared directories, supplements auto-detection
-
-context:                          # Auto-regenerated on every save
-  active_epic: "auth"
-  in_progress: [{id, title, epic, branch, locked_by}]
-  blocked: [{id, title, epic, blockers}]
-  recent_completed: [{id, title, completed}]
-  next_up: [{id, title, priority, epic}]
-  stats: {total, done, in_progress, in_review, todo, blocked, archived}
-  active_phase: {id, name, stats, target_date, start_date}
 
 epics:
   - id: "auth"
@@ -317,9 +309,9 @@ phases:
 | `blast_radius_depth` | string | Optional depth override for blast radius analysis: `shallow` (0-1 hop) or `deep` (2 hops). Overrides the adaptive heuristic. |
 | `last_referenced` | string | ISO timestamp, updated by pick/update/complete (mutations); reads do not bump it |
 
-### Context Block
+### Context Block (removed in 6.0.0)
 
-The `context` section at the top of `backlog.yaml` is auto-regenerated on every save. It provides a quick snapshot for tools and skills to read without parsing the full task tree. Do not edit it manually.
+Earlier releases wrote a derived `context:` block at the top of `backlog.yaml`. The store no longer exports it (`taskmaster/store.py:3803`); the same snapshot comes from `backlog_status`, or from `backlog_query` against the store.
 
 ---
 
