@@ -8,7 +8,7 @@ Taskmaster is a local-first task and backlog system for AI-assisted software
 projects. It gives Claude Code and Codex a shared MCP core, disciplined workflow
 playbooks, durable session continuity, and a fast browser-based project board.
 
-[![Version](https://img.shields.io/badge/version-6.0.0-7c3aed?style=flat-square)](https://github.com/Gruku/taskmaster/releases)
+[![Version](https://img.shields.io/badge/version-6.0.1-7c3aed?style=flat-square)](https://github.com/Gruku/taskmaster/releases)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776ab?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-22c55e?style=flat-square)](LICENSE)
 [![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-d97706?style=flat-square)](https://docs.anthropic.com/en/docs/claude-code)
