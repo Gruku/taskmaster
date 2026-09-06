@@ -184,14 +184,15 @@ committed but a file the caller can see did not, the result also carries
 `(export pending: <file> — retried on next call)` — the write landed, only the
 export is being retried. `backlog_store_status` is the health report: root and
 how it was resolved, database and WAL size, dirty and quarantined projection
-files, live sessions holding the writer, recent changes, and the pending Linear
-push count. It is genuinely read-only — it never creates a store that does not
-exist and never moves a damaged one aside.
+files, live sessions, recent changes, and the pending Linear push count. It is
+genuinely read-only — it never creates a store that does not exist and never
+moves a damaged one aside.
 
 Editing a file that a task, bug, issue, or handover already tracks prints a
 single ambient line naming the open items it touches, e.g.
 `TM: <path> → <open ids...> (+N closed, +N prose)`; it stays silent when
-nothing tracks the file. `backlog_query(sql, limit)` runs guarded read-only SQL
+nothing tracks the file, and also when there is no store yet, since a hook
+never builds one. `backlog_query(sql, limit)` runs guarded read-only SQL
 directly over the store for ad hoc lookups, `backlog_search` ranks across every
 entity kind through the store's FTS, and `backlog_index_status` reports the
 derived tables and rebuilds them on demand.

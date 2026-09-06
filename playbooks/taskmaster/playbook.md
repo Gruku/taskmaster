@@ -53,4 +53,4 @@ Deepen specific entities directly — no skill re-invocation needed:
 | "full task details" | `backlog_get_task("T-001", verbose=True)` |
 | "details on ISS-014" | `backlog_issue_get("ISS-014", verbose=True)` |
 
-**Verifying writes.** A result ending in `[seq N]` is committed; `(export pending: …)` means the row committed and the file is being retried. `backlog_store_status` shows dirty/quarantined files and busy holders.
+**Verifying writes.** A result ending in `[seq N]` is committed; `(export pending: …)` means the row committed and the file is being retried. `backlog_store_status` shows dirty/quarantined files and live sessions.

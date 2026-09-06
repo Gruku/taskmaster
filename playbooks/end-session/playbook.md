@@ -33,6 +33,7 @@ Check schema: `backlog_status` first line shows `Schema: v<N>`.
 **2. Patchnote (optional).** 1-2 sentences for user-visible changes. Skip for internal tasks. See `references/summary-modes.md`.
 
 **3. Session title.** `{Topic}: {Brief Description}`.
+
 **4. Target status.** Default `done` — Claude complete + gates passed. Target `in-review` ONLY when a human-only action blocks the task (API key, LLM config, account access); pass it as `human_action` (short imperative, e.g. "add OPENAI_API_KEY to .env") — `backlog_complete_task` rejects in-review without it. See `references/summary-modes.md`.
 
 **5. Skip review gate.** Call `backlog_complete_task` directly. Only ask on genuine ambiguity.
@@ -68,7 +69,7 @@ Note: `backlog_complete_task` enforces this server-side too.
 **7. Worktree cleanup (done tasks only).** Skip for in-review.
 
 - **Single task:** offer `git worktree remove .worktrees/{task_id}`.
-- **Bundle:** offer `git worktree remove .worktrees/{slug}` **only when all members are `done` or descoped** — check `_get_session_bundle()` first. Never `--force` (guard-hooks blocks it).
+- **Bundle:** offer `git worktree remove .worktrees/{slug}` **only when all members are `done` or descoped** — check `_get_session_bundle()` first. Never `--force` (guard-hooks blocks it) and never `rm -rf`.
 
 **8. Commit tracking files.** Stage backlog.yaml, PROGRESS.md, .taskmaster/handovers/, issues/, tasks/. Commit with `chore: log session - {topic}`.
 
@@ -78,7 +79,7 @@ Note: `backlog_complete_task` enforces this server-side too.
 
 `todo -> in-progress -> in-review -> done -> archived`. In-review = blocked on a human-only action (`human_action` says what); done = Claude complete + gates passed (human review is downstream, not on the board).
 
-**Verifying writes.** A result ending in `[seq N]` is committed; `(export pending: …)` means the row committed and the file is being retried. `backlog_store_status` shows dirty/quarantined files and busy holders.
+**Verifying writes.** A result ending in `[seq N]` is committed; `(export pending: …)` means the row committed and the file is being retried. `backlog_store_status` shows dirty/quarantined files and live sessions.
 
 ## Additional Resources
 

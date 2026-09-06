@@ -48,7 +48,7 @@ Call `backlog_migrate_v3()`. Surface the response verbatim. A success starts `Ad
 
 ## Verifying writes
 
-A mutating result ending in `[seq N]` is committed; `(export pending: <file> — retried on next call)` means the row committed and only the file export is being retried. `backlog_store_status` shows dirty and quarantined files and the sessions holding the writer.
+A mutating result ending in `[seq N]` is committed; `(export pending: <file> — retried on next call)` means the row committed and only the file export is being retried. `backlog_store_status` shows dirty and quarantined files and the live sessions the store is tracking.
 
 ## Steps 5-7
 
