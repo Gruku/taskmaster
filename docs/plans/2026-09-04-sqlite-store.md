@@ -765,3 +765,21 @@ merge SHAs, the CodeMaestro copy numbers, and the remaining deferred items (if a
   `ideas/IDEAS.md` only on the next idea write (regenerating on every import starved the
   writer lock under 8 processes); the bypass guard intercepts `Path.open` but not builtin
   `open`; an explicit Linear retry can requeue a row a drain has claimed.
+
+## Execution status — 2026-09-06 (steps 4–5)
+
+- Step 4 is merged on `master`: 4.1 (`index.py` absorbed into the store; `taskmaster/paths.py`;
+  `backlog_query`/`backlog_search` on the store; `Store.scan_for_read()`), 4.2 (viewer GETs on
+  committed rows under one ETag; legacy-layout 409; full transition table plus the completion
+  gate on the board; `backlog_migrate_v3/_v4` canonicalize then adopt through the store;
+  `scan_bug_patterns` on rows), 4.3 (hooks read the store in query-only mode via the shared
+  root rule in `taskmaster/root.py`; never bootstrap or import).
+- A whole-step review (Claude) and a Codex adversarial review produced 11 Important findings;
+  the real-backlog verification (5.3, on a copy of CodeMaestro's `.taskmaster`) produced 3
+  Critical and 4 Important more. All were fixed in one wave (two rounds), each with a red test.
+- Step 5: scripts write through the store (5.1); docs, playbooks, changelog and version 6.0.0
+  (5.2); real-backlog verification (5.3) — numbers in `docs/handoffs/2026-09-06-sqlite-store-complete.md`.
+- Final whole-branch review: "Ready with fixes" with gate conditions only (fill the adoption
+  timing, green suite, final 5.3 pass). Follow-up bugs and documented limitations are listed in
+  the handoff.
+- Not pushed. The live CodeMaestro checkout was never opened (ruling R11).
