@@ -46,12 +46,13 @@ plain-text, reviewable project data.
   and ideas survive chat boundaries.
 - **Real workflow discipline** — task selection, dependency checks, planning,
   spec review, implementation review, and end-of-session capture.
-- **Team-friendly storage** — schema v4 stores tasks as individual Markdown
-  files with a slim YAML index and merge-aware writes.
+- **Concurrent-safe storage** — a SQLite store is the runtime authority and one
+  tool call is one transaction, so parallel agents never overwrite each other;
+  Markdown and YAML files stay the Git-facing projection.
 - **Local visual workspace** — kanban, tables, epics, sessions, issues, and task
   details in a browser UI served by the same backend.
 - **Your repository stays yours** — no hosted account and no proprietary data
-  format; the source of truth is committed alongside the code.
+  format; the projection is committed alongside the code.
 
 ## Quick start
 
@@ -154,22 +155,47 @@ Taskmaster separates intent from mechanics:
 
 1. **Skills** recognize what you mean and run the appropriate workflow.
 2. **The MCP server** validates reads, writes, state transitions, and links.
-3. **Repository files** preserve shared state in human-readable Markdown and YAML.
+3. **The SQLite store** is the runtime authority; the Markdown and YAML files are the
+   Git-facing projection it exports.
 4. **The viewer** renders the same state without becoming a second source of truth.
 
-### Derived index and ambient resurfacing
+### One store, one authority
 
-A disposable SQLite/FTS5 index at `.taskmaster/local/index.db` is built from
-`backlog.yaml` and every entity file, refreshed within every tool call, and
-warmed in the background at session start. Delete it any time — it rebuilds
-from source on the next tool call.
+`.taskmaster/local/store.db` holds the backlog. `backlog.yaml`, `tasks/*.md`,
+`epics/*.md` and every other entity file are the Git-facing projection the
+store exports after each commit; the SQLite database is what a tool reads and
+writes. One public tool call owns exactly one transaction, so two agents
+writing at the same moment no longer overwrite each other, and an id is never
+handed out twice. The 5.2.0 derived index is absorbed into the same database —
+`local/index.db` is gone. The store itself is machine-local: `.taskmaster/local/`
+gets a `.gitignore` of `*` on first open, so only the projection is committed.
+
+The store lives at exactly one place: `<repository root>/.taskmaster/local/`,
+resolved from `TASKMASTER_ROOT`, else the Git common directory, else the
+nearest ancestor holding a `.taskmaster/`. **The backlog is per repository, not
+per branch** — every linked worktree of a checkout shares one store. A legacy
+`.claude/` or project-root backlog is refused with an actionable message until
+`backlog_canonicalize_layout` moves it into `.taskmaster/`.
+
+Every mutating tool proves its own commit. A string result ends in `[seq N]`,
+naming the row in the `changes` table that the commit produced; a
+JSON-returning tool carries the same number in a `seq` key. When the row
+committed but a file the caller can see did not, the result also carries
+`(export pending: <file> — retried on next call)` — the write landed, only the
+export is being retried. `backlog_store_status` is the health report: root and
+how it was resolved, database and WAL size, dirty and quarantined projection
+files, live sessions, recent changes, and the pending Linear push count. It is
+genuinely read-only — it never creates a store that does not exist and never
+moves a damaged one aside.
 
 Editing a file that a task, bug, issue, or handover already tracks prints a
 single ambient line naming the open items it touches, e.g.
 `TM: <path> → <open ids...> (+N closed, +N prose)`; it stays silent when
-nothing tracks the file. `backlog_query(sql, limit)` runs read-only SQL
-directly over the index for ad hoc lookups, and `backlog_index_status`
-reports index health and rebuilds it on demand.
+nothing tracks the file, and also when there is no store yet, since a hook
+never builds one. `backlog_query(sql, limit)` runs guarded read-only SQL
+directly over the store for ad hoc lookups, `backlog_search` ranks across every
+entity kind through the store's FTS, and `backlog_index_status` reports the
+derived tables and rebuilds them on demand.
 
 ## Built-in workflows
 
@@ -203,11 +229,15 @@ New projects use the v4 layout:
 ├── decisions/            # Open and resolved decisions
 ├── handovers/            # Continuity between sessions
 ├── ideas/                # Lightweight future possibilities
-└── local/                # Machine-local cache and viewer state
+├── notes/                # Desk notes
+├── integrations/         # Linear and other tracker config
+└── local/                # store.db (the authority), PROGRESS.md, viewer state
 ```
 
-Older v2 and v3 backlogs remain supported. Migration to sharded v4 storage is
-available through the `backlog_migrate_v4` MCP tool.
+Everything above `local/` is the Git-facing projection the store exports.
+Older v2 and v3 backlogs are adopted on first open and projected back as v4;
+`backlog_migrate_v4` (or its alias `backlog_migrate_v3`) runs that adoption
+explicitly and reports the row counts.
 
 ## Repository layout
 

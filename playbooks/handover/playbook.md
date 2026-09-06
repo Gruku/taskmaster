@@ -56,3 +56,5 @@ The `Resume:` line is the server's final line verbatim; pasting the thread name 
 - `references/supersession.md` — chained-supersession algorithm
 - `references/triage.md` — triage loop algorithm
 - `templates/body.md` — body skeleton
+
+**Verifying writes.** A result ending in `[seq N]` is committed; `(export pending: …)` means the row committed and the file is being retried. `backlog_store_status` shows dirty/quarantined files and live sessions.

@@ -1,13 +1,13 @@
 # Taskmaster Router
 
-Two lanes: small direct changes stay lightweight; anything with scope, design, or continuity is tracked. This skill detects what the user wants and routes accordingly.
+Two lanes: small direct changes stay lightweight; anything with scope, design, or continuity is tracked.
 
 Every playbook path below also exists as a native skill on Claude Code/ZCode:
 `taskmaster:<name>`, where `<name>` is the playbook directory name.
 
 ## Direct-change lane
 
-When **all** hold, just make the change — no sub-skill, no backlog writes, commit normally: the user asked for **this specific change** directly (not "track it"/"make a task"); a **single sitting**; **no open design decisions**; **roughly ≤3 files**. Routing a one-line fix through router → pick-task → gates wastes tokens.
+When **all** hold, just make the change — no sub-skill, no backlog writes, commit normally: the user asked for **this specific change** directly (not "track it"/"make a task"); a **single sitting**; **no open design decisions**; **roughly ≤3 files**.
 
 **Escalation.** The moment a direct change grows — design question, follow-ups, or won't finish this session — say so and route through the tracked lane.
 
@@ -40,17 +40,11 @@ Full routing table + word-agnostic intake algorithm: read `references/routing-ta
 - Pure git operations (commit, push, branch) — git directly
 - PR security reviews — dedicated review tools
 
-## When Multiple Intents Match
-
-Handle sequentially — complete the first action before starting the second.
-
-## When to Deepen
-
-When routes are ambiguous (handover vs end-session, issue vs task), read `references/disambiguation.md`.
+**Multiple intents:** handle them sequentially. **Ambiguous route** (handover vs end-session, issue vs task): read `references/disambiguation.md`.
 
 ## Mid-session deepening
 
-Skills stay in glance mode. Deepen specific entities directly — no skill re-invocation needed:
+Deepen specific entities directly — no skill re-invocation needed:
 
 | User asks for | Call |
 |---|---|
@@ -58,3 +52,5 @@ Skills stay in glance mode. Deepen specific entities directly — no skill re-in
 | "read the plan for T-001" | `backlog_get_task("T-001", sections=["plan"])` |
 | "full task details" | `backlog_get_task("T-001", verbose=True)` |
 | "details on ISS-014" | `backlog_issue_get("ISS-014", verbose=True)` |
+
+**Verifying writes.** A result ending in `[seq N]` is committed; `(export pending: …)` means the row committed and the file is being retried. `backlog_store_status` shows dirty/quarantined files and live sessions.

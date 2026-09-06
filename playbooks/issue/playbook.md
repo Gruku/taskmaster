@@ -52,3 +52,7 @@ Full per-entry-point subflows in `references/entry-point-flows.md`. Bar criteria
 - `references/auto-extraction.md` — per-field extraction sources and fallbacks
 - `references/entry-point-flows.md` — full subflow per entry point
 - `templates/issue-body.md` — Repro / Expected / Investigation notes skeleton
+
+## Verifying writes
+
+A mutating result ending in `[seq N]` is committed — that is the `changes` row the transaction produced. `(export pending: <file> — retried on next call)` means the row committed and only the file export is being retried; the write is not lost. `backlog_store_status` shows dirty and quarantined files and the live sessions the store is tracking.

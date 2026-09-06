@@ -76,3 +76,7 @@ Descope is always explicit, never silent. Make four separate `backlog_update_tas
 - **`taskmaster:spec-review`** — pre-implementation adversarial review of the spec/plan.
 - **`/code-review`** (claude-plugins-official) — post-PR review, fans out agents, posts to GitHub.
 - **`/codex:adversarial-review`** — challenges design choices; spec-review uses a prose-friendly equivalent.
+
+## Verifying writes
+
+A mutating result ending in `[seq N]` is committed — that is the `changes` row the transaction produced. `(export pending: <file> — retried on next call)` means the row committed and only the file export is being retried; the write is not lost. `backlog_store_status` shows dirty and quarantined files and the live sessions the store is tracking.

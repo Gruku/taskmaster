@@ -109,3 +109,7 @@ Call `backlog_linear(action="show", tracker_id="linear-cm-eng-42")`. Returns the
 - **Never** invoke `mcp__linear-server__*` tools as part of bootstrap or runtime. The whole point of the GraphQL pipeline is to avoid the token cost. `mcp__linear-server__*` is for ad-hoc dev/debug only.
 - Sync direction is push-only in v1 — local TM is authoritative. If a teammate edits the Linear issue, their change is overwritten on the next TM mutation. Tell the user this if they ask.
 - Sync failures never block local mutations — the local write always succeeds, the Linear push is best-effort. If `status` shows a backlog, it's a sync problem, not a local problem.
+
+## Verifying writes
+
+A mutating result ending in `[seq N]` is committed — that is the `changes` row the transaction produced. `(export pending: <file> — retried on next call)` means the row committed and only the file export is being retried; the write is not lost. `backlog_store_status` shows dirty and quarantined files and the live sessions the store is tracking.
