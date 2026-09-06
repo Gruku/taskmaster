@@ -106,15 +106,61 @@ def test_a_raw_projection_write_from_scripts_trips_the_guard(tm_epic_phase):
         exec(code, {"target": target})
 
 
+_FORBIDDEN_WRITERS = ("write_text", "write_bytes", "save_v3", "save_v4",
+                      "atomic_write", "write_entity_anywhere", "write_task_file")
+
+# The single exemption: `migrate_links.restore_scalars_in_files` repairs a
+# pre-6.0.0 projection that has no store to route through, and raises the
+# moment `local/store.db` exists. Everything else still goes through the store
+# — including the same rescue, which switches to `restore_scalars_in_store`
+# for any project that has one.
+_RESCUE_FUNCTION = "restore_scalars_in_files"
+
+
+def _function_line_span(source: str, name: str) -> range:
+    import ast  # noqa: PLC0415
+
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return range(node.lineno, (node.end_lineno or node.lineno) + 1)
+    raise AssertionError(f"{name} is gone — re-check the exemption below")
+
+
 def test_scripts_carry_no_projection_writer():
     """No script reaches the projection with a raw writer any more."""
-    forbidden = ("write_text", "write_bytes", "save_v3", "save_v4",
-                 "atomic_write", "write_entity_anywhere", "write_task_file")
-    for name in ("backfill_tldr.py", "migrate_links.py",
-                 "migrate_handover_statuses.py"):
+    for name in ("backfill_tldr.py", "migrate_handover_statuses.py"):
         source = (SCRIPTS_DIR / name).read_text(encoding="utf-8")
-        for token in forbidden:
+        for token in _FORBIDDEN_WRITERS:
             assert token not in source, f"{name} still calls {token}"
+
+
+def test_the_only_projection_writer_is_the_storeless_rescue():
+    """`migrate_links` may write files, but only from the rescue function."""
+    source = (SCRIPTS_DIR / "migrate_links.py").read_text(encoding="utf-8")
+    allowed = _function_line_span(source, _RESCUE_FUNCTION)
+    for lineno, line in enumerate(source.splitlines(), start=1):
+        for token in _FORBIDDEN_WRITERS:
+            if token in line:
+                assert lineno in allowed, (
+                    f"migrate_links.py:{lineno} calls {token} outside "
+                    f"{_RESCUE_FUNCTION}()")
+
+
+def test_the_file_rescue_refuses_to_race_a_store(tmp_path):
+    """The exemption is only sound while the file path still refuses."""
+    from scripts import migrate_links  # noqa: PLC0415
+
+    (tmp_path / "local").mkdir()
+    (tmp_path / "local" / "store.db").write_bytes(b"")
+    with pytest.raises(RuntimeError, match="restore through the store"):
+        migrate_links.restore_scalars_in_files(tmp_path, dry_run=True)
+
+
+def test_a_project_with_a_store_is_routed_to_the_store_path():
+    """A store-bearing project must never reach the raw-writing path."""
+    source = (SCRIPTS_DIR / "migrate_links.py").read_text(encoding="utf-8")
+    assert "restore_scalars_in_store\n" in source
+    assert '(directory / "local" / "store.db").exists()' in source
 
 
 # ── backfill_tldr ──────────────────────────────────────────────────────────
