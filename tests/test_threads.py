@@ -241,8 +241,11 @@ def test_list_sessions_one_lane_per_thread(tmp_path, monkeypatch):
     bp = _setup(tmp_path)
     a1, a2, b1 = _write3(bp)
     solo, _ = write_handover(bp, tldr="threadless legacy", when="2026-07-09")
-    monkeypatch.chdir(tmp_path)
-    rows = list_sessions()
+    # `list_sessions` takes the store's committed handover rows; this test seeds
+    # files, so it reads them back into rows the same way the importer would.
+    from taskmaster.taskmaster_v3 import list_handover_ids, read_handover
+    handover_rows = [(hid, *read_handover(bp, hid)) for hid in list_handover_ids(bp)]
+    rows = list_sessions(handover_rows)
     by_id = {r["id"]: r for r in rows}
     assert set(by_id) == {"thread-a", "thread-b", solo}
     assert by_id["thread-a"]["handover_ids"] == [a1, a2]

@@ -86,7 +86,7 @@ def test_cycle_prevention_blocks_3_node(tm_dir):
 
 def test_auto_detection_e2e(tmp_taskmaster):
     # Seed task files so auto-link target resolution sees them under v4.
-    from taskmaster import taskmaster_v3 as v3
+    from taskmaster import store
 
     backlog_path = tmp_taskmaster / ".taskmaster" / "backlog.yaml"
     data = yaml.safe_load(backlog_path.read_text(encoding="utf-8"))
@@ -97,7 +97,12 @@ def test_auto_detection_e2e(tmp_taskmaster):
             {"id": "T-003", "title": "Third", "tldr": "x", "status": "todo", "epic": "e1", "order": 3.0},
         ],
     }]
-    v3.save_v4(backlog_path, data)
+    # v3 shape so the store's adoption scan reads the inline task list; the
+    # store owns every write under `.taskmaster/` now, so the seed is a plain
+    # file and the first store open imports it.
+    data.setdefault("meta", {})["schema_version"] = 3
+    backlog_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    store.reset_for_tests()
     # Use a handover with date-slug id (real production format).
     bs.backlog_handover_create(task_ids=["T-001"], tldr="some work", next_action="",
                                body="Picked up T-001, next start T-002, also see T-003.")

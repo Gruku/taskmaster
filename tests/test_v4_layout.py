@@ -197,103 +197,104 @@ class TestV4Allocators:
         assert v3.order_between(1.0, 2.0) == 1.5
 
 
-class TestSaveV4:
-    def test_writes_task_files_and_slim_backlog(self, tmp_path):
+class TestStoreExport:
+    """`save_v4` is gone — the store owns every write under `.taskmaster/`.
+
+    These are the same contracts, asserted against the exporter that replaced
+    it: every task field lands in `tasks/<id>.md`, `backlog.yaml` carries no
+    task lists, `meta.updated` is never written, and no `_private` key reaches
+    the projection at any nesting level.
+    """
+
+    def _adopt(self, tmp_path, data):
+        from taskmaster import store
+
         tm = tmp_path / ".taskmaster"
-        (tm / "tasks").mkdir(parents=True)
+        tm.mkdir(parents=True, exist_ok=True)
+        (tm / "PROGRESS.md").write_text("## Changelog\n", encoding="utf-8")
         bp = tm / "backlog.yaml"
-        bp.write_text(yaml.dump({"meta": {"project": "t", "schema_version": 4},
-                                 "epics": [{"id": "e", "name": "E"}], "phases": []}))
-        data = {
-            "meta": {"project": "t", "schema_version": 4},
+        bp.write_text(yaml.dump(data), encoding="utf-8")
+        store.reset_for_tests()
+        return bp, store.open_store(backlog_path=bp, session="v4-export-test")
+
+    def test_writes_task_files_and_slim_backlog(self, tmp_path):
+        bp, _opened = self._adopt(tmp_path, {
+            "meta": {"project": "t", "schema_version": 3},
             "epics": [{"id": "e", "name": "E", "tasks": [
                 {"id": "e-001", "title": "A", "epic": "e", "order": 1.0, "status": "todo"},
             ]}],
             "phases": [],
-        }
-        v3.save_v4(bp, data)
-        # task file exists with all fields
-        fm, _ = v3.read_task_file(tm / "tasks" / "e-001.md")
+        })
+        fm, _ = v3.read_task_file(bp.parent / "tasks" / "e-001.md")
         assert fm["title"] == "A" and fm["epic"] == "e" and fm["status"] == "todo"
-        # backlog.yaml carries NO task list
         on_disk = yaml.safe_load(bp.read_text())
         assert "tasks" not in on_disk["epics"][0]
 
     def test_round_trip_identity(self, tmp_path):
-        tm = tmp_path / ".taskmaster"
-        (tm / "tasks").mkdir(parents=True)
-        bp = tm / "backlog.yaml"
-        bp.write_text(yaml.dump({"meta": {"schema_version": 4}, "epics": [], "phases": []}))
-        data = {
-            "meta": {"schema_version": 4},
+        bp, opened = self._adopt(tmp_path, {
+            "meta": {"schema_version": 3},
             "epics": [{"id": "e", "name": "E", "tasks": [
                 {"id": "e-001", "title": "A", "epic": "e", "order": 1.0},
                 {"id": "e-002", "title": "B", "epic": "e", "order": 2.0,
                  v3.BODY_KEY: "## Notes\n\nbody"},
             ]}],
             "phases": [],
-        }
-        v3.save_v4(bp, data)
-        reloaded = v3.load_v4(bp)
+        })
+        reloaded = opened.load_dict()
         tasks = reloaded["epics"][0]["tasks"]
         assert [t["id"] for t in tasks] == ["e-001", "e-002"]
-        assert tasks[1][v3.BODY_KEY] == "## Notes\n\nbody"
-
-    def test_private_keys_not_persisted(self, tmp_path):
-        tm = tmp_path / ".taskmaster"
-        (tm / "tasks").mkdir(parents=True)
-        bp = tm / "backlog.yaml"
-        bp.write_text(yaml.dump({"meta": {"schema_version": 4}, "epics": [], "phases": []}))
-        data = {"meta": {"schema_version": 4}, "epics": [], "phases": [],
-                "_orphan_tasks": ["x-001"]}
-        v3.save_v4(bp, data)
-        assert "_orphan_tasks" not in yaml.safe_load(bp.read_text())
+        assert tasks[1][v3.BODY_KEY].removesuffix("\n") == "## Notes\n\nbody"
 
     def test_meta_updated_not_written(self, tmp_path):
-        tm = tmp_path / ".taskmaster"
-        (tm / "tasks").mkdir(parents=True)
-        bp = tm / "backlog.yaml"
-        bp.write_text(yaml.dump({"meta": {"schema_version": 4}, "epics": [], "phases": []}))
-        data = {"meta": {"schema_version": 4, "updated": "2026-07-11"},
-                "epics": [], "phases": []}
-        v3.save_v4(bp, data)
+        bp, _opened = self._adopt(tmp_path, {
+            "meta": {"schema_version": 3, "updated": "2026-07-11"},
+            "epics": [], "phases": [],
+        })
         assert "updated" not in yaml.safe_load(bp.read_text())["meta"]
 
-    def test_private_fields_never_persist_at_any_level(self, tmp_path):
-        tm = tmp_path / ".taskmaster"
-        (tm / "tasks").mkdir(parents=True)
-        bp = tm / "backlog.yaml"
-        bp.write_text(yaml.dump({"meta": {"schema_version": 4}, "epics": [], "phases": []}))
-        data = {
-            "meta": {
-                "schema_version": 4,
-                "_private": "meta",
-                "settings": {"keep": True, "_private": "nested-meta"},
-            },
-            "epics": [{
-                "id": "e", "name": "E", "_private": "epic",
-                "settings": {"keep": True, "_private": "nested-epic"},
-                v3.BODY_KEY: "epic body",
-                "tasks": [{
-                    "id": "e-001", "title": "A", "epic": "e", "order": 1.0,
-                    "_private": "task",
-                    "settings": {
-                        "keep": True,
-                        "_private": "nested-task",
-                        "items": [{"keep": True, "_private": "nested-list"}],
-                    },
-                    v3.BODY_KEY: "task body",
-                }],
-            }],
-            "phases": [{
-                "id": "p", "name": "P", "_private": "phase",
-                "settings": {"keep": True, "_private": "nested-phase"},
-                v3.BODY_KEY: "phase body",
-            }],
+    def test_private_keys_are_stripped_at_every_level(self, tmp_path):
+        """`_v4_strip_private_fields` is the surviving helper the exporter uses;
+        a `_private` key must not reach the projection from any depth."""
+        stripped = v3._v4_strip_private_fields({
+            "keep": True,
             "_private": "root",
-        }
+            "settings": {
+                "keep": True,
+                "_private": "nested",
+                "items": [{"keep": True, "_private": "in-list"}],
+            },
+            v3.BODY_KEY: "body",
+        })
 
-        v3.save_v4(bp, data)
+        def assert_no_private_keys(value):
+            if isinstance(value, dict):
+                assert all(not key.startswith("_") for key in value)
+                for child in value.values():
+                    assert_no_private_keys(child)
+            elif isinstance(value, list):
+                for child in value:
+                    assert_no_private_keys(child)
+
+        assert_no_private_keys(stripped)
+        assert stripped["settings"] == {"keep": True, "items": [{"keep": True}]}
+        # `preserve_body=True` is how the exporter keeps the body it is about to
+        # write while still dropping every other private key.
+        kept = v3._v4_strip_private_fields(
+            {"keep": True, "_private": "x", v3.BODY_KEY: "body"}, preserve_body=True
+        )
+        assert kept[v3.BODY_KEY] == "body"
+        assert "_private" not in kept
+
+    def test_private_fields_never_reach_the_projection(self, tmp_path):
+        bp, _opened = self._adopt(tmp_path, {
+            "meta": {"schema_version": 3, "settings": {"keep": True}},
+            "epics": [{"id": "e", "name": "E", "tasks": [
+                {"id": "e-001", "title": "A", "epic": "e", "order": 1.0,
+                 "settings": {"keep": True, "items": [{"keep": True}]},
+                 v3.BODY_KEY: "task body"},
+            ]}],
+            "phases": [{"id": "p", "name": "P", v3.BODY_KEY: "phase body"}],
+        })
 
         def assert_no_private_keys(value):
             if isinstance(value, dict):
@@ -306,147 +307,63 @@ class TestSaveV4:
 
         on_disk = yaml.safe_load(bp.read_text())
         assert_no_private_keys(on_disk)
-        assert on_disk["meta"]["settings"] == {"keep": True}
-        assert on_disk["epics"][0]["settings"] == {"keep": True}
-        assert on_disk["phases"][0]["settings"] == {"keep": True}
-
-        task_fm, task_body = v3.read_task_file(tm / "tasks" / "e-001.md")
-        epic_fm, epic_body = v3.read_task_file(tm / "epics" / "e.md")
-        phase_fm, phase_body = v3.read_task_file(tm / "phases" / "p.md")
+        task_fm, task_body = v3.read_task_file(bp.parent / "tasks" / "e-001.md")
         assert_no_private_keys(task_fm)
-        assert_no_private_keys(epic_fm)
-        assert_no_private_keys(phase_fm)
-        assert task_fm["settings"] == {
-            "keep": True, "items": [{"keep": True}],
-        }
+        assert task_fm["settings"] == {"keep": True, "items": [{"keep": True}]}
         assert task_body.removesuffix("\n") == "task body"
-        assert epic_body.removesuffix("\n") == "epic body"
-        assert phase_body.removesuffix("\n") == "phase body"
 
 
-class TestDirtyScopedSave:
-    def _project(self, tmp_path):
-        tm = tmp_path / ".taskmaster"
-        (tm / "tasks").mkdir(parents=True)
-        bp = tm / "backlog.yaml"
-        bp.write_text(yaml.dump({"meta": {"schema_version": 4}, "epics": [], "phases": []}))
-        data = {"meta": {"schema_version": 4}, "phases": [],
-                "epics": [{"id": "e", "name": "E", "tasks": [
-                    {"id": "e-001", "title": "A", "epic": "e", "order": 1.0},
-                    {"id": "e-002", "title": "B", "epic": "e", "order": 2.0},
-                ]}]}
-        v3.save_v4(bp, data)   # baseline write of both files
-        return bp, data
-
-    def test_unchanged_task_file_not_rewritten(self, tmp_path):
-        import copy
-        bp, data = self._project(tmp_path)
-        snapshot = copy.deepcopy(data)
-        f1 = bp.parent / "tasks" / "e-001.md"
-        f2 = bp.parent / "tasks" / "e-002.md"
-        m1_before, m2_before = f1.stat().st_mtime_ns, f2.stat().st_mtime_ns
-        # Touch only e-002 in memory.
-        data["epics"][0]["tasks"][1]["title"] = "B-renamed"
-        # Make mtime resolution observable.
-        os.utime(f1, ns=(m1_before, m1_before))
-        os.utime(f2, ns=(m2_before, m2_before))
-        v3.save_v4(bp, data, snapshot=snapshot)
-        assert f1.stat().st_mtime_ns == m1_before  # unchanged task not rewritten
-        fm2, _ = v3.read_task_file(f2)
-        assert fm2["title"] == "B-renamed"
-
-    def test_new_task_written(self, tmp_path):
-        import copy
-        bp, data = self._project(tmp_path)
-        snapshot = copy.deepcopy(data)
-        data["epics"][0]["tasks"].append(
-            {"id": "e-003", "title": "C", "epic": "e", "order": 3.0})
-        v3.save_v4(bp, data, snapshot=snapshot)
-        assert (bp.parent / "tasks" / "e-003.md").exists()
-
-    def test_removed_task_file_deleted(self, tmp_path):
-        import copy
-        bp, data = self._project(tmp_path)
-        snapshot = copy.deepcopy(data)
-        data["epics"][0]["tasks"] = [t for t in data["epics"][0]["tasks"] if t["id"] != "e-002"]
-        v3.save_v4(bp, data, snapshot=snapshot)
-        assert not (bp.parent / "tasks" / "e-002.md").exists()
-        assert (bp.parent / "tasks" / "e-001.md").exists()
+# `TestDirtyScopedSave` covered `save_v4(snapshot=...)`: writing only the tasks
+# that changed and deleting the file of one that went away. The store replaced
+# that with per-row export intents and explicit `tx.archive`/`tx.delete`, and
+# the successor coverage lives in tests/test_store_projection.py (missing file
+# re-exported, archive moves the file, export failure stays dirty and drains)
+# and tests/test_store_removals.py.
 
 
-class TestConcurrentDiskMerge:
-    def _project(self, tmp_path):
-        import copy
-        tm = tmp_path / ".taskmaster"
-        (tm / "tasks").mkdir(parents=True)
-        bp = tm / "backlog.yaml"
-        bp.write_text(yaml.dump({"meta": {"schema_version": 4}, "epics": [], "phases": []}))
-        data = {"meta": {"schema_version": 4}, "phases": [],
-                "epics": [{"id": "e", "name": "E", "tasks": [
-                    {"id": "e-001", "title": "A", "epic": "e", "order": 1.0,
-                     "status": "todo", "priority": "medium"},
-                ]}]}
-        v3.save_v4(bp, data)
-        return bp, data, copy.deepcopy(data)
+class TestThreeWayFieldMerge:
+    """`_three_way_merge_fields` survived `save_v4` and is what the store's
+    dirty-projection merge (`Store._merge_dirty_external_edit`) runs, so the
+    concurrent-edit contract is asserted directly on it here. The end-to-end
+    path is tests/test_store_merge_and_derived.py."""
 
-    def test_disjoint_disk_field_preserved(self, tmp_path):
-        bp, data, snapshot = self._project(tmp_path)
-        # Another process adds `assignee` on disk (a field we never touched).
-        f = bp.parent / "tasks" / "e-001.md"
-        fm, body = v3.read_task_file(f)
-        fm["assignee"] = "jdoe"
-        v3.write_task_file(f, fm, body)
-        # We change only `status` in memory.
-        data["epics"][0]["tasks"][0]["status"] = "in-progress"
-        v3.save_v4(bp, data, snapshot=snapshot)
-        fm2, _ = v3.read_task_file(f)
-        assert fm2["status"] == "in-progress"   # our change
-        assert fm2["assignee"] == "jdoe"       # disk-only change preserved
+    BASE = {"id": "e-001", "title": "A", "status": "todo", "priority": "medium"}
 
-    def test_same_field_in_memory_wins(self, tmp_path):
-        bp, data, snapshot = self._project(tmp_path)
-        f = bp.parent / "tasks" / "e-001.md"
-        fm, body = v3.read_task_file(f)
-        fm["title"] = "disk title"
-        v3.write_task_file(f, fm, body)
-        data["epics"][0]["tasks"][0]["title"] = "memory title"
-        v3.save_v4(bp, data, snapshot=snapshot)
-        fm2, _ = v3.read_task_file(f)
-        assert fm2["title"] == "memory title"
+    def test_disjoint_remote_field_preserved(self):
+        theirs = {**self.BASE, "assignee": "jdoe"}
+        ours = {**self.BASE, "status": "in-progress"}
+        merged = v3._three_way_merge_fields(self.BASE, ours, theirs)
+        assert merged["status"] == "in-progress"   # our change
+        assert merged["assignee"] == "jdoe"        # remote-only change preserved
 
-    def test_disk_only_change_kept_when_field_untouched(self, tmp_path):
-        bp, data, snapshot = self._project(tmp_path)
-        f = bp.parent / "tasks" / "e-001.md"
-        fm, body = v3.read_task_file(f)
-        fm["title"] = "disk title"
-        v3.write_task_file(f, fm, body)
-        # We change a DIFFERENT field, leaving title at its snapshot value.
-        data["epics"][0]["tasks"][0]["status"] = "done"
-        v3.save_v4(bp, data, snapshot=snapshot)
-        fm2, _ = v3.read_task_file(f)
-        assert fm2["title"] == "disk title"   # remote change survives
-        assert fm2["status"] == "done"
+    def test_same_field_local_wins(self):
+        theirs = {**self.BASE, "title": "disk title"}
+        ours = {**self.BASE, "title": "memory title"}
+        merged = v3._three_way_merge_fields(self.BASE, ours, theirs)
+        assert merged["title"] == "memory title"
 
-    def test_disk_private_fields_are_rejected_without_losing_legitimate_edits(
-        self, tmp_path
-    ):
-        bp, data, snapshot = self._project(tmp_path)
-        f = bp.parent / "tasks" / "e-001.md"
-        fm, _ = v3.read_task_file(f)
-        fm["assignee"] = "jdoe"
-        fm["_disk_private"] = "must not persist"
-        fm["metadata"] = {
-            "label": "keep",
-            "_nested_private": {"secret": True},
-        }
-        v3.write_task_file(f, fm, "disk body")
+    def test_remote_change_kept_when_field_untouched(self):
+        theirs = {**self.BASE, "title": "disk title"}
+        ours = {**self.BASE, "status": "done"}
+        merged = v3._three_way_merge_fields(self.BASE, ours, theirs)
+        assert merged["title"] == "disk title"   # remote change survives
+        assert merged["status"] == "done"
 
-        data["epics"][0]["tasks"][0]["status"] = "done"
-        v3.save_v4(bp, data, snapshot=snapshot)
+    def test_deletion_on_either_side_is_a_change(self):
+        ours = {k: v for k, v in self.BASE.items() if k != "priority"}
+        merged = v3._three_way_merge_fields(self.BASE, ours, dict(self.BASE))
+        assert "priority" not in merged
 
-        merged_fm, merged_body = v3.read_task_file(f)
-        assert merged_fm["status"] == "done"
-        assert merged_fm["assignee"] == "jdoe"
-        assert merged_fm["metadata"] == {"label": "keep"}
-        assert "_disk_private" not in merged_fm
-        assert merged_body.removesuffix("\n") == "disk body"
+    def test_remote_private_fields_are_rejected_before_the_merge(self):
+        """The exporter strips private keys off the disk document first, so a
+        hand-edited `_private` cannot ride a legitimate remote edit into the
+        projection."""
+        disk = {**self.BASE, "assignee": "jdoe", "_disk_private": "must not persist",
+                "metadata": {"label": "keep", "_nested_private": {"secret": True}}}
+        theirs = v3._v4_strip_private_fields(disk)
+        ours = {**self.BASE, "status": "done"}
+        merged = v3._three_way_merge_fields(self.BASE, ours, theirs)
+        assert merged["status"] == "done"
+        assert merged["assignee"] == "jdoe"
+        assert merged["metadata"] == {"label": "keep"}
+        assert "_disk_private" not in merged

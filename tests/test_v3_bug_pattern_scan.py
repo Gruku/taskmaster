@@ -1,5 +1,22 @@
-"""Pattern-match signatures and cross-bug grouping."""
+"""Pattern-match signatures and cross-bug grouping.
+
+`scan_bug_patterns` takes committed bug rows now, not a backlog path: globbing
+`bugs/*.md` described the export rather than the store, so a bug whose file
+write failed its retry was invisible to the scanner that decides whether a
+defect recurs. `_rows(bp)` below reads the files this file seeds back into the
+row shape `Transaction.list("bug")` produces.
+"""
 import pytest
+
+
+def _rows(bp, *, include_archive=True):
+    from taskmaster.taskmaster_v3 import list_bug_ids, read_bug
+
+    out = []
+    for bid in list_bug_ids(bp, include_archive=include_archive):
+        fm, body = read_bug(bp, bid)
+        out.append((bid, fm, body))
+    return out
 
 
 def test_bug_signature_normalizes_title_and_components():
@@ -28,7 +45,7 @@ def test_scan_bug_patterns_groups_matches(tmp_path):
     b1, _ = write_bug(bp, title="Path mismatch in v3 reader", components=["taskmaster"], discovered_by="user")
     b2, _ = write_bug(bp, title="Path mismatch in v3 reader (handover)", components=["taskmaster"], discovered_by="user")
     b3, _ = write_bug(bp, title="Unrelated bug about something else entirely", components=["viewer"], discovered_by="user")
-    groups = scan_bug_patterns(bp)
+    groups = scan_bug_patterns(_rows(bp))
     assert len(groups) == 1
     assert sorted(groups[0]["bug_ids"]) == sorted([b1, b2])
     assert b3 not in groups[0]["bug_ids"]
@@ -41,7 +58,7 @@ def test_scan_bug_patterns_threshold_at_least_two(tmp_path):
     bp.parent.mkdir(parents=True)
     bp.write_text("schema_version: 3\n")
     write_bug(bp, title="Unique single occurrence here", components=["x"], discovered_by="user")
-    assert scan_bug_patterns(bp) == []
+    assert scan_bug_patterns(_rows(bp)) == []
 
 
 # ---------------------------------------------------------------------------
@@ -71,13 +88,13 @@ def test_scan_open_only_excludes_archived_bug(tmp_path):
     update_bug(bp, b3, status="promoted", promoted_to="ISS-001")
     archive_bug(bp, b3)
 
-    # include_archive=True (default) should include all three
-    groups_all = scan_bug_patterns(bp, include_archive=True)
+    # Archived rows in scope should include all three
+    groups_all = scan_bug_patterns(_rows(bp, include_archive=True))
     all_ids = [bid for g in groups_all for bid in g["bug_ids"]]
-    assert b3 in all_ids, "include_archive=True must include archived bug"
+    assert b3 in all_ids, "archived rows in scope must include the archived bug"
 
     # open_only=True must exclude the archived bug
-    groups_open = scan_bug_patterns(bp, open_only=True)
+    groups_open = scan_bug_patterns(_rows(bp, include_archive=True), open_only=True)
     open_ids = [bid for g in groups_open for bid in g["bug_ids"]]
     assert b3 not in open_ids, "open_only=True must exclude archived bug"
     # b1 and b2 are still open and should cluster
@@ -95,7 +112,7 @@ def test_scan_open_only_false_includes_non_open(tmp_path):
     b2, _ = write_bug(bp, title="Database connection timeout client socket writer", components=["db"], discovered_by="user")
     update_bug(bp, b2, status="promoted", promoted_to="ISS-001")
     archive_bug(bp, b2)
-    groups = scan_bug_patterns(bp, include_archive=True, open_only=False)
+    groups = scan_bug_patterns(_rows(bp, include_archive=True), open_only=False)
     all_ids = [bid for g in groups for bid in g["bug_ids"]]
     assert b2 in all_ids
 

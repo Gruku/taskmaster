@@ -145,7 +145,7 @@ def test_auto_link_scans_task_body_key(tm_dir):
 
 
 def _seed_two_tasks(tmp_taskmaster) -> None:
-    from taskmaster import taskmaster_v3 as v3
+    from taskmaster import store
 
     backlog_path = tmp_taskmaster / ".taskmaster" / "backlog.yaml"
     data = yaml.safe_load(backlog_path.read_text(encoding="utf-8"))
@@ -155,7 +155,12 @@ def _seed_two_tasks(tmp_taskmaster) -> None:
             {"id": "T-005", "title": "Fifth", "tldr": "x", "status": "todo", "epic": "e1", "order": 2.0},
         ],
     }]
-    v3.save_v4(backlog_path, data)
+    # v3 shape so the store's adoption scan reads the inline task list; the
+    # store owns every write under `.taskmaster/` now, so the seed is a plain
+    # file and the first store open imports it.
+    data.setdefault("meta", {})["schema_version"] = 3
+    backlog_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    store.reset_for_tests()
 
 def test_handover_create_auto_links_on_save(tmp_taskmaster):
     """backlog_handover_create wires auto_link_on_save."""

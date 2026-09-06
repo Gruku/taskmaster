@@ -122,11 +122,8 @@ from taskmaster.taskmaster_v3 import (
     HANDOVER_KINDS,
     HEAVY_FIELDS as _HEAVY_FIELDS,
     detect_schema_version as _detect_schema_version,
-    migrate_v2_to_v3 as _migrate_v2_to_v3,
-    migrate_v3_to_v4 as _migrate_v3_to_v4,
     build_handover_doc as _build_handover_doc,
     handover_path as _handover_path,
-    read_handover as _read_handover,
     supersede_handover_doc as _supersede_handover_doc,
     flag_handover_doc_for_review as _flag_handover_doc_for_review,
     set_handover_status_doc as _set_handover_status_doc,
@@ -3094,64 +3091,107 @@ def backlog_init(project_name: str = "", location: str = "tracked", schema_versi
     )
 
 
-@mcp.tool()
-def backlog_migrate_v3() -> str:
-    """Migrate this project's backlog to v3 layout (slim index + per-task files).
+# The row kinds the compatibility dict carries under `_rows`. Tasks, epics and
+# phases are not among them — they are counted off the dict's own tree.
+_MIGRATION_ROW_KINDS = (
+    "bug", "issue", "handover", "decision", "idea", "note", "area", "tracker",
+)
 
-    v3 introduces narrative-continuity features (handovers, issues,
-    auto modes). The on-disk shape changes: heavy task fields (description, notes,
-    docs, review_instructions) move out of `backlog.yaml` into per-task files at
-    `tasks/<id>.md`. Slim metadata (id, title, status, priority, etc.) stays in
-    `backlog.yaml` as the index.
 
-    The migration is idempotent — running on a v3 backlog is a no-op. The in-memory
-    shape is identical across versions, so existing tools/skills keep working.
+def _adopt_project_into_store(tool: str) -> str:
+    """Canonicalize the layout if needed, open the store, report what it holds.
+
+    There is no separate v2->v3->v4 file rewrite any more: the store adopts
+    whatever schema it finds on first open (design spec decision 9) and every
+    later read serves rows, so a migration tool that wrote the projection
+    itself would be a second writer racing the one that owns it. What is left
+    for these tools to do is the one thing the store cannot do for itself —
+    move a `.claude/` or root-layout project to `<root>/.taskmaster`, which the
+    store refuses to open — and then report the adopted counts.
     """
+    from taskmaster.taskmaster_v3 import canonicalize_layout  # noqa: PLC0415
+
+    unsafe = store.unsafe_storage_reason(ROOT)
+    if unsafe:
+        return (
+            f"Error: refusing to migrate on this storage — {unsafe}. "
+            f"Move the project to local disk first."
+        )
+    summary = canonicalize_layout(ROOT, dry_run=False)
+    status = summary["status"]
+    if status == "no_backlog":
+        return f"Error: no backlog found under {ROOT}. Run `backlog_init` first."
+    if status == "ambiguous":
+        srcs = ", ".join(summary.get("sources_found", []))
+        return (
+            f"Error: multiple backlog.yaml files exist ({srcs}). Keep one before "
+            f"migrating."
+        )
+    if status == "conflicts":
+        rows = "\n".join(f"  {c['src']}  →  {c['dst']}" for c in summary["conflicts"])
+        return (
+            "Error: the canonical layout already holds different content. Nothing "
+            f"moved. Resolve manually:\n{rows}"
+        )
+    moved = len(summary.get("moved") or []) if status == "migrated" else 0
+
     bp = _backlog_path()
     if not bp.exists():
         return f"Error: no backlog found at {bp}. Run `backlog_init` first."
-    summary = _migrate_v2_to_v3(bp)
+    # Opening the store *is* the migration: the scan imports the projection and
+    # the schema is rewritten to v4 under the writer lock.
+    data = _load()
+    rows = data.get("_rows") or {}
+    st = _store().status()
 
-    if summary["status"] == "already_v3":
-        return (
-            f"Already on v3 — {summary['tasks_total']} tasks, no changes made.\n"
-            f"Backlog at: {bp.relative_to(ROOT)}"
-        )
-    files = summary["task_files_written"]
-    files_msg = (
-        f"Wrote {len(files)} per-task files under `tasks/`."
-        if files
-        else "No tasks had heavy content — only the index was rewritten."
-    )
-    return (
-        f"Migrated v2 → v3.\n"
-        f"- Tasks: {summary['tasks_total']}\n"
-        f"- {files_msg}\n"
-        f"- Index: {bp.relative_to(ROOT)}\n"
-        f"\nv3 features (handovers, issues, auto modes) will land in "
-        f"subsequent slices."
-    )
+    epics = data.get("epics") or []
+    counts = [
+        f"task: {sum(len(e.get('tasks') or []) for e in epics)}",
+        f"epic: {len(epics)}",
+        f"phase: {len(data.get('phases') or [])}",
+    ]
+    for kind in _MIGRATION_ROW_KINDS:
+        total = len(rows.get(kind) or {})
+        if total:
+            counts.append(f"{kind}: {total}")
+
+    lines = [
+        f"Adopted into the store ({tool}).",
+        f"- Store: {st.db_path}  (store schema v{st.schema_version}, max seq {st.max_seq})",
+        f"- Rows — {', '.join(counts)}",
+    ]
+    if moved:
+        lines.insert(1, f"- Canonicalized `{summary['source']}` → `.taskmaster/`: {moved} file(s) moved.")
+    if st.quarantined_files:
+        lines.append(f"- Quarantined: {len(st.quarantined_files)} file(s) — {', '.join(st.quarantined_files[:10])}")
+    if st.dirty_files:
+        lines.append(f"- Dirty: {len(st.dirty_files)} file(s) awaiting export")
+    if st.warning:
+        lines.append(f"- Warning: {st.warning}")
+    lines.append("Run `backlog_store_status` any time for the full report.")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def backlog_migrate_v3() -> str:
+    """Adopt this project's backlog into the SQLite store.
+
+    Kept under its historical name so existing skills and docs keep working.
+    There is no longer a v2/v3/v4 file rewrite step: the store adopts whatever
+    schema it finds when it first opens the project, so this tool moves a
+    legacy `.claude/` or root layout into `.taskmaster/` (the only place a store
+    may live) and then opens it. Idempotent — running it on an adopted project
+    just reports the counts.
+    """
+    return _adopt_project_into_store("backlog_migrate_v3")
 
 
 @mcp.tool()
 def backlog_migrate_v4() -> str:
-    """Migrate this project to v4 sharded per-task storage."""
-    backlog_path = _backlog_path()
-    if not backlog_path.exists():
-        return f"Error: no backlog found at {backlog_path}. Run `backlog_init` first."
-    summary = _migrate_v3_to_v4(backlog_path)
-    if summary["status"] == "already_v4":
-        return (
-            f"Already on v4 — {summary['tasks_total']} tasks, no changes made.\n"
-            f"Backlog at: {backlog_path.relative_to(ROOT)}"
-        )
-    return (
-        "Migrated v3 -> v4.\n"
-        f"- Tasks: {summary['tasks_total']} (all fields now in tasks/<id>.md)\n"
-        f"- Index: {backlog_path.relative_to(ROOT)} (slim — no task lists)\n"
-        "- Local state moved into local/; snapshots/ removed.\n"
-        "- Restart the MCP server to pick up the new schema."
-    )
+    """Adopt this project's backlog into the SQLite store (alias of
+    `backlog_migrate_v3` — one adoption path, two historical names)."""
+    return _adopt_project_into_store("backlog_migrate_v4")
+
 
 @mcp.tool()
 @_transactional("backlog_backfill_lanes")
@@ -4713,7 +4753,8 @@ def backlog_bug_pattern_scan(mode: str = "all") -> str:
         return "No backlog found."
     include_archive = (mode == "all")
     open_only = (mode == "open_only")
-    groups = _scan_bug_patterns(bp, include_archive=include_archive, open_only=open_only)
+    rows = _dict_rows(_load(), "bug", include_archived=include_archive)
+    groups = _scan_bug_patterns(rows, open_only=open_only)
     if not groups:
         return "No bug patterns found (need >=2 matching signatures)."
     lines = [f"Found {len(groups)} pattern group(s):"]
@@ -5742,7 +5783,7 @@ def backlog_area_update(area_id: str, field: str, value: str) -> str:
 def viewer_prefs_get() -> str:
     """Return current viewer prefs as JSON."""
     import json
-    prefs = load_viewer_prefs()
+    prefs = load_viewer_prefs(_backlog_path())
     return json.dumps(prefs, indent=2)
 
 
@@ -5759,9 +5800,10 @@ def viewer_prefs_set(patch_json: str) -> str:
     if not isinstance(patch, dict):
         return "Error: patch must be a JSON object"
 
-    prefs = load_viewer_prefs()
+    bp = _backlog_path()
+    prefs = load_viewer_prefs(bp)
     _deep_merge(prefs, patch)
-    save_viewer_prefs(prefs)
+    save_viewer_prefs(bp, prefs)
     return "ok"
 
 
@@ -6801,15 +6843,13 @@ def backlog_update_task(
         if value == "in-review" and value != cur and not (task.get("human_action") or "").strip():
             return (f"Error: `in-review` means blocked on a human-only action; set human_action first: "
                     f"backlog_update_task('{task_id}', 'human_action', '<what the human must do>')")
-        if task.get("lane") and value != cur:
-            allowed = LEGAL_STATUS_TRANSITIONS.get(cur, set())
-            if value not in allowed:
-                return (f"Error: illegal transition `{cur}` → `{value}` for `{task_id}`. "
-                        f"Legal: {', '.join(sorted(allowed)) or '(none)'}.")
-            if value == "done":
-                block = _completion_block_reason(task)
-                if block:
-                    return block
+        refusal = illegal_transition_message(task, value)
+        if refusal:
+            return f"Error: `{task_id}`: {refusal}."
+        if task.get("lane") and value != cur and value == "done":
+            block = _completion_block_reason(task)
+            if block:
+                return block
         if value == "done":
             task.pop("human_action", None)
         task["status"] = value
@@ -8143,17 +8183,9 @@ def backlog_batch_update(operations: str) -> str:
                 if value == "in-review" and task.get("status") != "in-review" and not (task.get("human_action") or "").strip():
                     errors.append(f"`{task_id}`: in-review requires human_action — set it first via backlog_update_task")
                     continue
-                cur_status = task.get("status", "todo")
-                if (
-                    cur_status == "archived"
-                    and value != cur_status
-                    and value not in LEGAL_STATUS_TRANSITIONS["archived"]
-                ):
-                    errors.append(
-                        f"`{task_id}`: illegal transition `archived` -> `{value}`. "
-                        "Legal: "
-                        + ", ".join(sorted(LEGAL_STATUS_TRANSITIONS["archived"]))
-                    )
+                refusal = illegal_transition_message(task, value)
+                if refusal:
+                    errors.append(f"`{task_id}`: {refusal}")
                     continue
                 if value == "done":
                     task.pop("human_action", None)
@@ -8257,23 +8289,20 @@ def backlog_batch_update(operations: str) -> str:
             if new_status == "in-review" and task.get("status") != "in-review" and not (task.get("human_action") or "").strip():
                 errors.append(f"`{task_id}`: in-review requires human_action — set it first via backlog_update_task")
                 continue
-            if (
-                task.get("status") == "archived"
-                and new_status != "archived"
-                and new_status not in LEGAL_STATUS_TRANSITIONS["archived"]
-            ):
-                errors.append(
-                    f"`{task_id}`: illegal transition `archived` -> `{new_status}`. "
-                    "Legal: "
-                    + ", ".join(sorted(LEGAL_STATUS_TRANSITIONS["archived"]))
-                )
-                continue
             if new_status == "done":
                 # Same lifecycle guard + close-gate as backlog_complete_task (B-049).
+                # It runs before the transition table so a refused completion
+                # keeps naming the states a task may be completed *from*, which
+                # is the more actionable half of the same refusal.
                 cur_status = task.get("status", "todo")
                 if cur_status not in ("in-progress", "in-review", "blocked"):
                     errors.append(f"`{task_id}`: cannot complete from `{cur_status}` (expected in-progress/in-review/blocked)")
                     continue
+            refusal = illegal_transition_message(task, new_status)
+            if refusal:
+                errors.append(f"`{task_id}`: {refusal}")
+                continue
+            if new_status == "done":
                 open_bugs, _ = _open_bugs_for_task(_backlog_path(), task_id)
                 if open_bugs:
                     errors.append(f"`{task_id}`: {len(open_bugs)} open bug(s) linked via found_in: {', '.join(open_bugs)}")
@@ -8524,8 +8553,13 @@ def backlog_batch_preview(operations: str) -> str:
                 previews.append(f"- `{task_id}`: Missing target status for `status` operation")
                 continue
             new_status = parts[2]
+            refusal = illegal_transition_message(task, new_status)
             if new_status not in VALID_STATUSES:
                 previews.append(f"- `{task_id}`: Invalid status `{new_status}`")
+            elif refusal:
+                # A preview that promises a move the write refuses is worse than
+                # no preview: it sends the operator to a batch that half-applies.
+                previews.append(f"- `{task_id}`: {refusal}")
             else:
                 previews.append(f"- `{task_id}` ({current_status} → {new_status}): {task['title']}")
 
@@ -8779,6 +8813,15 @@ class ViewerWriteRejected(ValueError):
         self.errors = dict(errors)
 
 
+class ViewerCompletionBlocked(Exception):
+    """A viewer write would complete a task whose blocking gates are outstanding.
+
+    Separate from `ViewerWriteRejected` because it is not a malformed patch: the
+    field values are fine and the state of the world is what refuses the move,
+    which is a 409, not a 422.
+    """
+
+
 class ViewerPreconditionFailed(Exception):
     """`If-Match` did not match committed state; carries the current revision."""
 
@@ -8802,39 +8845,63 @@ def _check_if_match(if_match: str | None) -> None:
         raise ViewerPreconditionFailed(current)
 
 
-def _archived_transition_error(task: dict | None, patch: dict) -> dict:
-    """Reject a status change out of `archived` the transition table forbids.
+def illegal_transition_message(task: dict | None, after: str | None) -> str | None:
+    """Why moving `task` to `after` is refused, or None when it is allowed.
 
-    `validate_task_write` applies no transition table by design, and
-    `_apply_archive_transition` un-archives on any `archived -> other`, so
-    without this a viewer `PATCH {"status": "done"}` silently resurrects an
-    archived task — the same defect fixed for batch pick.
+    One rule, applied by `backlog_update_task`, by batch and by the viewer, so
+    the board cannot make a move the tool refuses. The rule is the one
+    `backlog_update_task` has always applied:
+
+    - a same-status write is never a transition, and is always allowed;
+    - a task with a lane is held to the full `LEGAL_STATUS_TRANSITIONS` table;
+    - a laneless (pre-lane, grandfathered) task keeps the permissive behaviour,
+      except that it may still only leave `archived` the way the table says.
+
+    The `archived` row is unconditional because `_apply_archive_transition`
+    un-archives on any `archived -> other`: without it a viewer
+    `PATCH {"status": "done"}` silently resurrects an archived task.
     """
-    before = (task or {}).get("status")
-    after = patch.get("status")
-    if before != "archived" or after is None or after == before:
-        return {}
-    legal = LEGAL_STATUS_TRANSITIONS["archived"]
+    before = (task or {}).get("status", "todo")
+    if after is None or after == before:
+        return None
+    if before != "archived" and not (task or {}).get("lane"):
+        return None
+    legal = LEGAL_STATUS_TRANSITIONS.get(before, set())
     if after in legal:
-        return {}
-    return {
-        "status": (
-            f"illegal transition `archived` → `{after}`. "
-            f"Legal: {', '.join(sorted(legal))}"
-        )
-    }
+        return None
+    return (
+        f"illegal transition `{before}` → `{after}`. "
+        f"Legal: {', '.join(sorted(legal)) or '(none)'}"
+    )
+
+
+def _archived_transition_error(task: dict | None, patch: dict) -> dict:
+    """`illegal_transition_message` in the `{field: error}` shape the viewer
+    write path collects errors in."""
+    message = illegal_transition_message(task, patch.get("status"))
+    return {"status": message} if message else {}
 
 
 def _viewer_etag() -> str:
-    """`<creation_token>:<max_seq>` — the store's committed identity."""
+    """`<creation_token>:<max_seq>` — the store's committed identity.
+
+    Taken from `load_dict_with_identity`, the same call every GET's payload
+    comes from, rather than from `status()`. On a network filesystem the store
+    runs projection-only and `status()` degrades to an empty token and seq 0, so
+    every revision of such a project answered the constant `":0"` — an ETag that
+    never moves is worse than none, because a client caches the first payload
+    forever and an `If-Match` write always passes.
+    """
     bp = _backlog_path()
     if not bp.exists():
         return ""
     try:
-        status = _store().status()
+        _data, token, max_seq = _store().load_dict_with_identity()
+    except store.LegacyLayoutError:
+        raise
     except Exception:  # an unreadable store must not break a read-only GET
         return ""
-    return f"{status.creation_token}:{status.max_seq}"
+    return f"{token}:{max_seq}"
 
 
 def _viewer_update_task(
@@ -8861,6 +8928,14 @@ def _viewer_update_task(
         errors.update(_archived_transition_error(task, patch))
         if errors:
             raise ViewerWriteRejected(errors)
+        # The board is not a way around the gates. `backlog_update_task` and
+        # `backlog_complete_task` both refuse `-> done` while a lane'd task has
+        # outstanding blocking reviews; without this the same move landed by
+        # drag-and-drop and the gates were simply skipped.
+        if patch.get("status") == "done" and task.get("status") != "done":
+            block = _completion_block_reason(task)
+            if block:
+                raise ViewerCompletionBlocked(block)
         before_status = task.get("status")
         before_epic = task.get("epic") or _epic.get("id")
         task.update(patch)
@@ -9044,15 +9119,26 @@ def _load_epic_full(epic_id: str) -> dict | None:
     rollup, a blocked/blockers attention list, and a slim task list.
 
     Returns None if the epic id is unknown. Mirrors _load_task_full but
-    routes through _load() (which reads committed store state) so heavy fields that
+    routes through the store snapshot (committed state) so heavy fields that
     /api/backlog strips are present here.
     """
+    return _load_epic_full_identified(epic_id)[0]
+
+
+def _load_epic_full_identified(epic_id: str) -> tuple[dict | None, str]:
+    """`_load_epic_full` plus the ETag of the one snapshot it was read from.
+
+    The route used to take the payload from `_load()` and the revision from a
+    second `_viewer_etag()` call. A commit landing between the two handed the
+    viewer an old epic under a newer revision, and the edit that followed passed
+    its own precondition while overwriting the newer state.
+    """
     if not _backlog_path().exists():
-        return None
-    data = _load()
+        return None, ""
+    data, etag = _load_snapshot()
     epic = _find_epic(data, epic_id)
     if epic is None:
-        return None
+        return None, etag
 
     out = {k: v for k, v in epic.items() if k != "tasks"}
     out.setdefault("description", "")
@@ -9082,7 +9168,7 @@ def _load_epic_full(epic_id: str) -> dict | None:
          "design_change": t.get("design_change")}
         for t in epic.get("tasks", [])
     ]
-    return out
+    return out, etag
 
 
 def _load_related_for_task(task_id: str) -> dict | None:
@@ -9252,7 +9338,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
             viewer_root = SCRIPT_DIR / "viewer"
             self._serve_file(viewer_root / "dev" / "edit-demo.html", "text/html")
         elif clean_path == "/api/viewer/prefs":
-            self._send_json(200, load_viewer_prefs())
+            self._send_json(200, load_viewer_prefs(_backlog_path()))
             return
         elif clean_path == "/backlog.yaml":
             self._serve_file(_backlog_path(), "text/yaml")
@@ -9277,11 +9363,11 @@ class ViewerHandler(BaseHTTPRequestHandler):
         elif clean_path.startswith("/api/epic/"):
             eid = clean_path[len("/api/epic/"):].rstrip("/")
             if eid and "/" not in eid:
-                full = _load_epic_full(eid)
+                full, etag = _load_epic_full_identified(eid)
                 if full is None:
                     self._send_json(404, {"ok": False, "error": f"epic {eid} not found"})
                     return
-                self._send_json(200, full, etag=_viewer_etag())
+                self._send_json(200, full, etag=etag)
                 return
             self.send_error(HTTPStatus.NOT_FOUND)
         elif clean_path == "/api/backlog":
@@ -9312,79 +9398,81 @@ class ViewerHandler(BaseHTTPRequestHandler):
             self._send_json(200, _list_threads_http(_threads_data(_backlog_path())))
             return
         elif clean_path == "/api/sessions":
-            self._send_json(200, list_sessions())
+            snapshot = self._snapshot()
+            if snapshot is None:
+                self._send_json(200, [])
+                return
+            data, etag = snapshot
+            self._send_json(200, list_sessions(_dict_rows(data, "handover")), etag=etag)
             return
         elif clean_path.startswith("/api/sessions/"):
             sid = clean_path[len("/api/sessions/"):]
-            detail = get_session_detail(sid)
+            snapshot = self._snapshot()
+            detail = (
+                None if snapshot is None
+                else get_session_detail(sid, _dict_rows(snapshot[0], "handover"))
+            )
             if detail is None:
                 self._send_json(404, {"ok": False, "error": f"unknown session {sid}"})
                 return
-            self._send_json(200, detail)
+            self._send_json(200, detail, etag=snapshot[1])
             return
         elif clean_path.startswith("/api/bugs"):
             from urllib.parse import urlparse, parse_qs
-            from taskmaster.taskmaster_v3 import (
-                list_bug_ids as _list_bug_ids_http,
-                read_bug as _read_bug_http,
-            )
-            bp = _backlog_path()
             qs = parse_qs(urlparse(self.path).query)
             include_archive = qs.get("include_archive", ["false"])[0].strip().lower() in ("1", "true", "yes", "on")
             status_filter = qs.get("status", [""])[0]
             found_in_filter = qs.get("found_in", [""])[0]
+            snapshot = self._snapshot()
+            if snapshot is None:
+                self._send_json(200, [])
+                return
+            data, etag = snapshot
             bugs = []
-            for bid in _list_bug_ids_http(bp, include_archive=include_archive):
-                try:
-                    fm, body = _read_bug_http(bp, bid)
-                except Exception:
-                    continue
+            for _bid, fm, body in _dict_rows(data, "bug", include_archived=include_archive):
                 summary = {k: v for k, v in fm.items() if k != "_body"}
-                summary["summary"] = body.strip()
+                summary["summary"] = (body or "").strip()
                 bugs.append(summary)
             if status_filter:
                 bugs = [b for b in bugs if b.get("status") == status_filter]
             if found_in_filter:
                 bugs = [b for b in bugs if b.get("found_in") == found_in_filter]
-            self._send_json(200, bugs)
+            self._send_json(200, bugs, etag=etag)
             return
         elif clean_path.startswith("/api/issues"):
-            import json
             from urllib.parse import urlparse, parse_qs
-            from taskmaster.taskmaster_v3 import (
-                list_issue_ids_cwd, load_issue, compute_issue_aging, severity_label,
-            )
+            from taskmaster.taskmaster_v3 import compute_issue_aging, severity_label
             qs = parse_qs(urlparse(self.path).query)
             include_resolved = qs.get("include_resolved", ["true"])[0].lower() != "false"
-            prefs = load_viewer_prefs()
+            snapshot = self._snapshot()
+            if snapshot is None:
+                self._send_json(200, {"issues": []})
+                return
+            data, etag = snapshot
+            prefs = load_viewer_prefs(_backlog_path())
             aging_cfg = prefs.get("issues", {}).get("aging", {})
             issues = []
-            for iid in list_issue_ids_cwd():
-                try:
-                    issue = load_issue(iid)
-                except Exception:
-                    continue
-                if not include_resolved and issue.get("status") in ("fixed", "wontfix"):
+            for _iid, fm, body in _dict_rows(data, "issue"):
+                if not include_resolved and fm.get("status") in ("fixed", "wontfix"):
                     continue
                 try:
-                    summary = {k: v for k, v in issue.items() if k != "_body"}
+                    summary = {k: v for k, v in fm.items() if k != "_body"}
                     summary["severity_label"] = severity_label(summary.get("severity", "P2"))
-                    summary["aging"] = compute_issue_aging(issue, aging_cfg)
-                    summary["summary"] = (issue.get("_body") or "").strip()
+                    summary["aging"] = compute_issue_aging(dict(fm), aging_cfg)
+                    summary["summary"] = (body or "").strip()
                     issues.append(summary)
                 except Exception:
                     # One bad issue must not blank the whole screen. ISS-005.
                     continue
-            self._send_json(200, {"issues": issues})
+            self._send_json(200, {"issues": issues}, etag=etag)
             return
         elif clean_path.startswith("/api/ideas"):
             from urllib.parse import urlparse, parse_qs
-            from taskmaster.taskmaster_v3 import _resolve_artifact_root
-            artifact_root = _resolve_artifact_root()
-            bp = artifact_root / "backlog.yaml"
-            if not bp.exists():
+            snapshot = self._snapshot()
+            if snapshot is None:
                 self._send_json(200, {"ideas": []})
                 return
+            data, etag = snapshot
             qs = parse_qs(urlparse(self.path).query)
             archived = qs.get("archived", ["false"])[0].lower() == "true"
             status = qs.get("status", [""])[0] or None
@@ -9399,14 +9487,14 @@ class ViewerHandler(BaseHTTPRequestHandler):
             except (TypeError, ValueError):
                 limit = 100
             entries = _idea_records(
-                _store_for(bp).load_dict(),
+                data,
                 status=status,
                 tag=tag,
                 archived=archived,
                 related_task=related_task,
                 summary=summary,
             )[: max(1, limit)]
-            self._send_json(200, {"ideas": entries})
+            self._send_json(200, {"ideas": entries}, etag=etag)
             return
         elif clean_path == "/api/continuity":
             import json
@@ -9418,35 +9506,51 @@ class ViewerHandler(BaseHTTPRequestHandler):
             return
         elif m := re.fullmatch(r"/api/decisions/([A-Za-z0-9_\-]+)", clean_path):
             decision_id = m.group(1)
-            row = _dict_row(_load(), "decision", decision_id)
-            try:
-                if row is None:
-                    raise FileNotFoundError(decision_id)
-                fm, body = row[0], row[1] or ""
-                self._send_json(200, {**fm, "body": body})
-            except FileNotFoundError:
+            snapshot = self._snapshot()
+            row = None if snapshot is None else _dict_row(snapshot[0], "decision", decision_id)
+            if row is None:
                 self._send_json(404, {"ok": False, "error": f"decision {decision_id} not found"})
+                return
+            fm, body = row[0], row[1] or ""
+            self._send_json(200, {**fm, "body": body}, etag=snapshot[1])
             return
         elif m := re.fullmatch(r"/api/handover/([A-Za-z0-9_\-]+)", clean_path):
             handover_id = m.group(1)
-            bp = _backlog_path()
-            try:
-                fm, body = _read_handover(bp, handover_id)
-                self._send_json(200, {**fm, "body": body})
-            except FileNotFoundError:
+            snapshot = self._snapshot()
+            row = None if snapshot is None else _dict_row(snapshot[0], "handover", handover_id)
+            if row is None:
                 self._send_json(404, {"ok": False, "error": f"handover {handover_id} not found"})
+                return
+            fm, body = row[0], row[1] or ""
+            self._send_json(200, {**fm, "body": body}, etag=snapshot[1])
             return
         elif clean_path == "/api/notes":
             from urllib.parse import urlparse, parse_qs
-            from taskmaster.taskmaster_v3 import list_notes as _list_notes
             qs = parse_qs(urlparse(self.path).query)
             include_archived = qs.get("include_archived", ["0"])[0] in ("1", "true")
-            bp = _backlog_path()
-            notes = _list_notes(bp, include_archived=include_archived) if bp.exists() else []
-            self._send_json(200, {"notes": notes})
+            snapshot = self._snapshot()
+            if snapshot is None:
+                self._send_json(200, {"notes": []})
+                return
+            data, etag = snapshot
+            notes = _note_records(data, include_archived=include_archived)
+            self._send_json(200, {"notes": notes}, etag=etag)
             return
         else:
             self.send_error(HTTPStatus.NOT_FOUND)
+
+    def _snapshot(self):
+        """`(data, etag)` for one GET, or None when the project has no backlog.
+
+        Every list endpoint reads through this, so a screen built from several
+        GETs is built from one committed revision: taking the payload from one
+        read and the revision from another let a client cache an old list under
+        a newer ETag and then pass its own `If-Match` while overwriting a peer.
+        """
+        try:
+            return _load_snapshot()
+        except FileNotFoundError:
+            return None
 
     def _serve_file(self, path: Path, content_type: str) -> None:
         try:
@@ -9535,6 +9639,11 @@ class ViewerHandler(BaseHTTPRequestHandler):
                     key=lambda p: (p.get("order") if p.get("order") is not None else 999),
                 )
             self._send_json(200, data, etag=etag)
+        except store.LegacyLayoutError as exc:
+            # A layout the store refuses is a conflict the operator can fix, not
+            # a server fault: 500 sent the viewer into its generic error state
+            # and hid the one instruction that resolves it.
+            self._send_json(409, {"ok": False, "error": str(exc)})
         except Exception as e:
             self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(e))
 
@@ -9678,6 +9787,12 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 found = _find_task(data, tid)
                 if found is not None:
                     errors.update(_archived_transition_error(found[0], patch))
+                    # Preview and write run the same gate: a validate that says
+                    # "ok" for a move the write refuses is worse than no preview.
+                    if patch.get("status") == "done" and found[0].get("status") != "done":
+                        block = _completion_block_reason(found[0])
+                        if block:
+                            errors["status"] = block
             self._send_json(200, {"ok": len(errors) == 0, "errors": errors})
             return
 
@@ -9699,6 +9814,8 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 self._send_json(422, {"ok": False, "errors": e.errors})
             except (KeyError, ValueError) as e:
                 self._send_json(400, {"ok": False, "error": str(e)})
+            except store.LegacyLayoutError as exc:
+                self._send_json(409, {"ok": False, "error": str(exc)})
             except Exception as e:
                 self._send_json(500, {"ok": False, "error": str(e)})
             return
@@ -9713,6 +9830,8 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 self._send_stale(task_id, e.current_etag)
             except KeyError as e:
                 self._send_json(404, {"ok": False, "error": str(e)})
+            except store.LegacyLayoutError as exc:
+                self._send_json(409, {"ok": False, "error": str(exc)})
             except Exception as e:
                 self._send_json(500, {"ok": False, "error": str(e)})
             return
@@ -9802,7 +9921,6 @@ class ViewerHandler(BaseHTTPRequestHandler):
         m = re.fullmatch(r"/api/bugs/pattern-scan", clean_path_post)
         if m:
             from taskmaster.taskmaster_v3 import scan_bug_patterns as _scan_bug_patterns_http
-            bp = _backlog_path()
             length = int(self.headers.get("Content-Length") or 0)
             raw = self.rfile.read(length).decode("utf-8") if length else ""
             try:
@@ -9812,8 +9930,15 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 return
             mode = payload.get("mode", "all")
             include_archive = (mode != "end_of_task")
-            groups = _scan_bug_patterns_http(bp, include_archive=include_archive)
-            self._send_json(200, {"groups": groups})
+            snapshot = self._snapshot()
+            if snapshot is None:
+                self._send_json(200, {"groups": []})
+                return
+            data, etag = snapshot
+            groups = _scan_bug_patterns_http(
+                _dict_rows(data, "bug", include_archived=include_archive)
+            )
+            self._send_json(200, {"groups": groups}, etag=etag)
             return
 
         m = re.fullmatch(r"/api/bugs/promote", clean_path_post)
@@ -9921,9 +10046,10 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 self._send_json(400, {"ok": False, "error": "patch must be a JSON object"})
                 return
 
-            prefs = load_viewer_prefs()
+            bp = _backlog_path()
+            prefs = load_viewer_prefs(bp)
             _deep_merge(prefs, patch)
-            save_viewer_prefs(prefs)
+            save_viewer_prefs(bp, prefs)
             self._send_json(200, {"ok": True})
             return
 
@@ -9946,10 +10072,14 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 self._send_json(200, {"ok": True, "task": task}, etag=_viewer_etag())
             except ViewerPreconditionFailed as e:
                 self._send_stale(task_id, e.current_etag)
+            except ViewerCompletionBlocked as e:
+                self._send_json(409, {"ok": False, "error": str(e)})
             except ViewerWriteRejected as e:
                 self._send_json(422, {"ok": False, "errors": e.errors})
             except KeyError as e:
                 self._send_json(404, {"ok": False, "error": str(e)})
+            except store.LegacyLayoutError as exc:
+                self._send_json(409, {"ok": False, "error": str(exc)})
             return
 
         self.send_response(404)
@@ -9977,10 +10107,14 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 self._send_json(200, {"ok": True, "task": task}, etag=_viewer_etag())
             except ViewerPreconditionFailed as e:
                 self._send_stale(task_id, e.current_etag)
+            except ViewerCompletionBlocked as e:
+                self._send_json(409, {"ok": False, "error": str(e)})
             except ViewerWriteRejected as e:
                 self._send_json(422, {"ok": False, "errors": e.errors})
             except KeyError as e:
                 self._send_json(404, {"ok": False, "error": str(e)})
+            except store.LegacyLayoutError as exc:
+                self._send_json(409, {"ok": False, "error": str(exc)})
             except Exception as e:
                 self._send_json(500, {"ok": False, "error": str(e)})
             return
@@ -10197,35 +10331,6 @@ def backlog_open_viewer() -> str:
     url = f"http://127.0.0.1:{port}/"
     webbrowser.open(url)
     return f"Opened backlog viewer at {url}"
-
-
-def issue_list_extended(include_resolved: bool = True) -> str:
-    """List all issues with computed aging tier per severity base."""
-    import json as _json
-    from taskmaster.taskmaster_v3 import (
-        list_issue_ids_cwd, load_issue, compute_issue_aging, severity_label, load_viewer_prefs,
-    )
-
-    prefs = load_viewer_prefs()
-    aging_cfg = prefs.get("issues", {}).get("aging", {})
-    out = []
-    for iid in list_issue_ids_cwd():
-        try:
-            issue = load_issue(iid)
-        except Exception:
-            continue
-        if not include_resolved and issue.get("status") in ("fixed", "wontfix"):
-            continue
-        try:
-            summary = {k: v for k, v in issue.items() if k != "_body"}
-            summary["severity_label"] = severity_label(summary.get("severity", "P2"))
-            summary["aging"] = compute_issue_aging(issue, aging_cfg)
-            summary["summary"] = (issue.get("_body") or "").strip()
-            out.append(summary)
-        except Exception:
-            # One bad issue must not blank the whole list. ISS-005.
-            continue
-    return _json.dumps({"issues": out}, indent=2, default=str)
 
 
 # --- .taskmaster/project.yaml (Project manifest) ---

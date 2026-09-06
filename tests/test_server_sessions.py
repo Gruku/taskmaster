@@ -16,6 +16,14 @@ def running_server(tmp_path, monkeypatch):
     (tmp_path / ".taskmaster" / "backlog.yaml").write_text(
         "meta:\n  project: test\nepics: []\nphases: []\n"
     )
+    (tmp_path / ".taskmaster" / "PROGRESS.md").write_text("## Changelog\n")
+    # The sessions endpoints read the store's handover rows now, and the store
+    # resolves from ROOT like every other write. This fixture used to lean on the
+    # CWD-flavour reader — the ISS-004 divergence this change removes.
+    from taskmaster import backlog_server as _bs
+    monkeypatch.setattr(_bs, "ROOT", tmp_path)
+    monkeypatch.setattr(_bs, "CONFIG_PATH", tmp_path / ".taskmaster" / "taskmaster.json")
+    monkeypatch.setattr(_bs, "LEGACY_CONFIG_PATH", tmp_path / ".claude" / "taskmaster.json")
     from taskmaster.backlog_server import _make_server
     server, port = _make_server(host="127.0.0.1", port=0)
     t = threading.Thread(target=server.serve_forever, daemon=True)

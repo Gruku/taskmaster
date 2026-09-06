@@ -199,10 +199,33 @@ class TestV3LoadSave:
             "phases": [],
         }
 
-    def test_save_writes_slim_index_and_task_files(self, tmp_path: Path):
+    def _write_v3_projection(self, tmp_path: Path) -> Path:
+        """Lay out the v3 files `load_v3` reads: slim index plus body files.
+
+        `save_v3` used to produce this shape. It is gone — the store owns every
+        write under `.taskmaster/` — so the fixture writes the same layout with
+        the pure primitives that remain, and `load_v3` stays under test.
+        """
+        import yaml as _y
+
         bp = tmp_path / ".taskmaster" / "backlog.yaml"
+        bp.parent.mkdir(parents=True, exist_ok=True)
         data = self._v3_backlog()
-        v3.save_v3(bp, data)
+        slim = {**data, "epics": []}
+        for epic in data["epics"]:
+            slim_tasks = []
+            for task in epic["tasks"]:
+                lean, heavy, body = v3._split_task_for_v3(task)
+                if any(field in heavy for field in v3.HEAVY_FIELDS) or body:
+                    v3.write_task_file(v3.task_file_path(bp, task["id"]), heavy, body)
+                slim_tasks.append(lean)
+            slim["epics"].append({**{k: v for k, v in epic.items() if k != "tasks"},
+                                  "tasks": slim_tasks})
+        bp.write_text(_y.dump(slim), encoding="utf-8")
+        return bp
+
+    def test_v3_projection_splits_heavy_fields_out_of_the_index(self, tmp_path: Path):
+        bp = self._write_v3_projection(tmp_path)
 
         # Slim index: heavy fields stripped from yaml task entries
         import yaml as _y
@@ -219,9 +242,7 @@ class TestV3LoadSave:
         assert not (tmp_path / ".taskmaster" / "tasks" / "T-002.md").exists()
 
     def test_load_merges_heavy_fields_back(self, tmp_path: Path):
-        bp = tmp_path / ".taskmaster" / "backlog.yaml"
-        original = self._v3_backlog()
-        v3.save_v3(bp, original)
+        bp = self._write_v3_projection(tmp_path)
         loaded = v3.load_v3(bp)
 
         t1 = loaded["epics"][0]["tasks"][0]
@@ -234,9 +255,8 @@ class TestV3LoadSave:
         assert v3.BODY_KEY not in t2
 
     def test_roundtrip_preserves_data(self, tmp_path: Path):
-        bp = tmp_path / ".taskmaster" / "backlog.yaml"
+        bp = self._write_v3_projection(tmp_path)
         original = self._v3_backlog()
-        v3.save_v3(bp, original)
         loaded = v3.load_v3(bp)
 
         # All task fields survive the roundtrip
@@ -266,93 +286,13 @@ class TestV3LoadSave:
         assert v3.task_file_path(bp, "T-001") == tmp_path / ".taskmaster" / "tasks" / "T-001.md"
 
 
-class TestMigrateV2ToV3:
-    def _v2_backlog(self) -> dict:
-        # Note: no schema_version → implies v2 (legacy)
-        return {
-            "meta": {"project": "p", "updated": "2026-04-26"},
-            "context": {},
-            "epics": [
-                {
-                    "id": "e1",
-                    "name": "Features",
-                    "tasks": [
-                        {
-                            "id": "T-001",
-                            "title": "Has body fields",
-                            "status": "todo",
-                            "description": "Detailed description.",
-                            "notes": "A note.",
-                        },
-                        {
-                            "id": "T-002",
-                            "title": "Empty task",
-                            "status": "todo",
-                        },
-                    ],
-                }
-            ],
-            "phases": [],
-        }
-
-    def _write_v2(self, tmp_path: Path) -> Path:
-        import yaml as _y
-        bp = tmp_path / ".taskmaster" / "backlog.yaml"
-        bp.parent.mkdir(parents=True)
-        bp.write_text(_y.dump(self._v2_backlog()), encoding="utf-8")
-        return bp
-
-    def test_migrate_writes_schema_version(self, tmp_path: Path):
-        bp = self._write_v2(tmp_path)
-        summary = v3.migrate_v2_to_v3(bp)
-        assert summary["status"] == "migrated"
-        assert summary["schema_before"] == v3.SCHEMA_V2
-        assert summary["schema_after"] == v3.SCHEMA_V3
-
-        import yaml as _y
-        loaded = _y.safe_load(bp.read_text(encoding="utf-8"))
-        assert loaded["meta"]["schema_version"] == v3.SCHEMA_V3
-
-    def test_migrate_extracts_heavy_fields(self, tmp_path: Path):
-        bp = self._write_v2(tmp_path)
-        v3.migrate_v2_to_v3(bp)
-
-        # Heavy fields stripped from yaml
-        import yaml as _y
-        loaded = _y.safe_load(bp.read_text(encoding="utf-8"))
-        t1 = loaded["epics"][0]["tasks"][0]
-        assert "description" not in t1
-        assert "notes" not in t1
-        assert t1["title"] == "Has body fields"
-
-        # Per-task file written for T-001 only
-        assert (tmp_path / ".taskmaster" / "tasks" / "T-001.md").exists()
-        assert not (tmp_path / ".taskmaster" / "tasks" / "T-002.md").exists()
-
-    def test_migration_is_lossless(self, tmp_path: Path):
-        bp = self._write_v2(tmp_path)
-        original = self._v2_backlog()
-        v3.migrate_v2_to_v3(bp)
-        loaded = v3.load_v3(bp)
-        t1 = loaded["epics"][0]["tasks"][0]
-        orig_t1 = original["epics"][0]["tasks"][0]
-        assert t1["description"] == orig_t1["description"]
-        assert t1["notes"] == orig_t1["notes"]
-        assert t1["title"] == orig_t1["title"]
-        assert t1["status"] == orig_t1["status"]
-
-    def test_idempotent(self, tmp_path: Path):
-        bp = self._write_v2(tmp_path)
-        v3.migrate_v2_to_v3(bp)
-        summary2 = v3.migrate_v2_to_v3(bp)
-        assert summary2["status"] == "already_v3"
-        assert summary2["task_files_written"] == []
-
-    def test_summary_lists_written_files(self, tmp_path: Path):
-        bp = self._write_v2(tmp_path)
-        summary = v3.migrate_v2_to_v3(bp)
-        assert "tasks/T-001.md" in summary["task_files_written"][0].replace("\\", "/")
-        assert len(summary["task_files_written"]) == 1
+# `taskmaster_v3.migrate_v2_to_v3` is gone: the store adopts whatever schema it
+# finds on first open (design spec decision 9), so there is no separate file
+# rewrite to test. What that class covered — a v2 backlog gaining a schema
+# marker, heavy fields moving into per-entity files, losslessness and
+# idempotence — is covered against the real path in
+# tests/test_migrate_tools_through_store.py and
+# tests/test_epic_phase_bodies.py::test_adoption_writes_epic_phase_and_task_files_from_a_v2_backlog.
 
 
 class TestHandoverHelpers:
@@ -655,7 +595,11 @@ class TestV3EndToEndRoundtrip:
             "handovers": [],
             "issues": [],
         }
-        v3.save_v3(bp, original)
+        # Seed the v3 projection; the store adopts it on the first open below.
+        import yaml as _y
+
+        bp.parent.mkdir(parents=True, exist_ok=True)
+        bp.write_text(_y.dump(original), encoding="utf-8")
 
         # Mutate via the layered helpers: add handover, issue
         entity_helpers.write_handover(bp, tldr="day end", task_ids=["T-001"], when="2026-04-26")
@@ -681,9 +625,16 @@ class TestV3EndToEndRoundtrip:
         assert len(roundtripped["issues"]) == 1
         assert roundtripped["issues"][0]["severity"] == "P1"
 
-    def test_save_preserves_unrelated_top_level_keys(self, tmp_path: Path):
-        # save_v3 must not strip top-level keys it doesn't know about
+    def test_adoption_preserves_unrelated_top_level_keys(self, tmp_path: Path):
+        # The store's export must not strip top-level keys it doesn't know
+        # about; `context` is the one deliberate exception (runtime-derived, so
+        # it is dropped from the projection by design).
+        import yaml as _y
+        from taskmaster import store as _store
+
         bp = tmp_path / ".taskmaster" / "backlog.yaml"
+        bp.parent.mkdir(parents=True, exist_ok=True)
+        (bp.parent / "PROGRESS.md").write_text("## Changelog\n", encoding="utf-8")
         data = {
             "meta": {"schema_version": 3},
             "context": {"active_epic": "auth"},
@@ -692,11 +643,13 @@ class TestV3EndToEndRoundtrip:
             "custom_field": {"foo": "bar"},
             "another": [1, 2, 3],
         }
-        v3.save_v3(bp, data)
-        loaded = v3.load_v3(bp)
-        assert loaded["custom_field"] == {"foo": "bar"}
-        assert loaded["another"] == [1, 2, 3]
-        assert loaded["context"] == {"active_epic": "auth"}
+        bp.write_text(_y.dump(data), encoding="utf-8")
+        _store.reset_for_tests()
+        _store.open_store(backlog_path=bp, session="top-level-keys-test")
+        projected = _y.safe_load(bp.read_text(encoding="utf-8"))
+        assert projected["custom_field"] == {"foo": "bar"}
+        assert projected["another"] == [1, 2, 3]
+        assert "context" not in projected
 
     def test_v2_backlog_without_v3_indexes_loads_clean(self, tmp_path: Path):
         # A pristine v2 file (no schema_version, no handovers/issues) should
@@ -717,8 +670,13 @@ class TestV3EndToEndRoundtrip:
         assert v3.detect_schema_version(raw) == v3.SCHEMA_V2
         assert "handovers" not in raw
 
-    def test_per_task_file_persists_across_n_saves(self, tmp_path: Path):
+    def test_per_task_file_persists_across_n_writes(self, tmp_path: Path):
+        import yaml as _y
+        from taskmaster import store as _store
+
         bp = tmp_path / ".taskmaster" / "backlog.yaml"
+        bp.parent.mkdir(parents=True, exist_ok=True)
+        (bp.parent / "PROGRESS.md").write_text("## Changelog\n", encoding="utf-8")
         data = {
             "meta": {"schema_version": 3},
             "epics": [
@@ -728,13 +686,17 @@ class TestV3EndToEndRoundtrip:
             ],
             "phases": [],
         }
-        v3.save_v3(bp, data)
+        bp.write_text(_y.dump(data), encoding="utf-8")
+        _store.reset_for_tests()
+        opened = _store.open_store(backlog_path=bp, session="n-writes-test")
         for i in range(5):
-            loaded = v3.load_v3(bp)
-            loaded["epics"][0]["tasks"][0]["description"] = f"iteration {i}"
-            v3.save_v3(bp, loaded)
-        final = v3.load_v3(bp)
+            with _store.transaction(backlog_path=bp, tool="n-writes") as tx:
+                doc = tx.get("task", "T-1")
+                doc["description"] = f"iteration {i}"
+                tx.put("task", "T-1", doc)
+        final = opened.load_dict()
         assert final["epics"][0]["tasks"][0]["description"] == "iteration 4"
+        assert "iteration 4" in v3.task_file_path(bp, "T-1").read_text(encoding="utf-8")
 
 
 def test_viewer_prefs_defaults_have_all_expected_keys():
@@ -760,24 +722,33 @@ def test_viewer_prefs_defaults_have_all_expected_keys():
     assert VIEWER_PREFS_DEFAULTS["screens"]["task_detail"]["view"] == "A"
 
 
+# Viewer prefs take the resolved backlog path now instead of re-deriving a root
+# from the current working directory. The CWD flavour diverged from the writer on
+# `.claude/` and root-layout projects (ISS-004), so every reader in the package
+# takes the path its caller already resolved.
+def _prefs_bp(tmp_path):
+    bp = tmp_path / ".taskmaster" / "backlog.yaml"
+    bp.parent.mkdir(parents=True, exist_ok=True)
+    return bp
+
+
 def test_viewer_prefs_round_trip(tmp_path, monkeypatch):
     from taskmaster.taskmaster_v3 import (
         load_viewer_prefs, save_viewer_prefs, VIEWER_PREFS_DEFAULTS,
     )
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / ".taskmaster").mkdir()
+    bp = _prefs_bp(tmp_path)
 
     # Empty first read returns defaults (and creates the file)
-    p1 = load_viewer_prefs()
+    p1 = load_viewer_prefs(bp)
     assert p1 == VIEWER_PREFS_DEFAULTS
     assert (tmp_path / ".taskmaster" / "viewer.json").exists()
 
     # Mutate, save, re-read
     p1["theme"] = "light"
     p1["kanban"]["filters"]["search"] = "auth"
-    save_viewer_prefs(p1)
+    save_viewer_prefs(bp, p1)
 
-    p2 = load_viewer_prefs()
+    p2 = load_viewer_prefs(bp)
     assert p2["theme"] == "light"
     assert p2["kanban"]["filters"]["search"] == "auth"
 
@@ -786,13 +757,12 @@ def test_viewer_prefs_tolerates_stale_use_v3(tmp_path, monkeypatch):
     without error and never appear in the defaults."""
     import json
     from taskmaster.taskmaster_v3 import load_viewer_prefs, VIEWER_PREFS_DEFAULTS
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / ".taskmaster").mkdir()
+    bp = _prefs_bp(tmp_path)
     (tmp_path / ".taskmaster" / "viewer.json").write_text(
         json.dumps({"schema_version": 1, "use_v3": True, "theme": "dark"})
     )
     assert "use_v3" not in VIEWER_PREFS_DEFAULTS
-    prefs = load_viewer_prefs()  # must not raise
+    prefs = load_viewer_prefs(bp)  # must not raise
     assert prefs["theme"] == "dark"
     assert prefs["card_density"] == "full"  # defaults still fill in
 
@@ -801,13 +771,12 @@ def test_viewer_prefs_unknown_keys_preserved_on_save(tmp_path, monkeypatch):
     """Forward-compat: don't strip keys we don't know about."""
     import json
     from taskmaster.taskmaster_v3 import load_viewer_prefs, save_viewer_prefs
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / ".taskmaster").mkdir()
+    bp = _prefs_bp(tmp_path)
     (tmp_path / ".taskmaster" / "viewer.json").write_text(
         json.dumps({"schema_version": 1, "future_field": "preserve_me", "theme": "dark"})
     )
-    prefs = load_viewer_prefs()
-    save_viewer_prefs(prefs)
+    prefs = load_viewer_prefs(bp)
+    save_viewer_prefs(bp, prefs)
     saved = json.loads((tmp_path / ".taskmaster" / "viewer.json").read_text())
     assert saved["future_field"] == "preserve_me"
 
@@ -820,8 +789,9 @@ def test_viewer_prefs_set_merges_patch(tmp_path, monkeypatch):
     from taskmaster.taskmaster_v3 import save_viewer_prefs, load_viewer_prefs, VIEWER_PREFS_DEFAULTS
     from copy import deepcopy
     monkeypatch.chdir(tmp_path)
-    (tmp_path / ".taskmaster").mkdir()
-    save_viewer_prefs(deepcopy(VIEWER_PREFS_DEFAULTS))
+    bp = _prefs_bp(tmp_path)
+    bp.write_text("meta:\n  project: t\nepics: []\nphases: []\n", encoding="utf-8")
+    save_viewer_prefs(bp, deepcopy(VIEWER_PREFS_DEFAULTS))
 
     # backlog_server imports fastmcp which has a known mcp version mismatch in this
     # environment (Icon not exported). Mock fastmcp with a passthrough decorator so the
@@ -834,12 +804,18 @@ def test_viewer_prefs_set_merges_patch(tmp_path, monkeypatch):
         fake_fastmcp = MagicMock()
         fake_fastmcp.FastMCP.return_value.tool = _passthrough_tool
         monkeypatch.setitem(sys.modules, "fastmcp", fake_fastmcp)
+    from taskmaster import backlog_server as _bs  # type: ignore
     from taskmaster.backlog_server import viewer_prefs_set  # type: ignore
+
+    # The prefs tools resolve from ROOT like every other path now.
+    monkeypatch.setattr(_bs, "ROOT", tmp_path)
+    monkeypatch.setattr(_bs, "CONFIG_PATH", tmp_path / ".taskmaster" / "taskmaster.json")
+    monkeypatch.setattr(_bs, "LEGACY_CONFIG_PATH", tmp_path / ".claude" / "taskmaster.json")
 
     msg = viewer_prefs_set('{"theme": "light", "kanban": {"filters": {"search": "auth"}}}')
     assert "ok" in msg.lower()
 
-    prefs = load_viewer_prefs()
+    prefs = load_viewer_prefs(bp)
     assert prefs["theme"] == "light"
     assert prefs["kanban"]["filters"]["search"] == "auth"
     # unspecified key retains default
@@ -852,9 +828,10 @@ def test_load_viewer_prefs_corrupt_file_resets_to_defaults(tmp_path, monkeypatch
     from taskmaster import taskmaster_v3 as v3
     p = tmp_path / "viewer.json"
     p.write_text('{"theme": "dark"}   }\n  }\n}', encoding="utf-8")
-    monkeypatch.setattr(v3, "viewer_prefs_path", lambda: p)
-    prefs = v3.load_viewer_prefs()
+    monkeypatch.setattr(v3, "viewer_prefs_path", lambda _bp: p)
+    bp = tmp_path / ".taskmaster" / "backlog.yaml"
+    prefs = v3.load_viewer_prefs(bp)
     assert prefs["schema_version"] == v3.VIEWER_PREFS_DEFAULTS["schema_version"]
     assert (tmp_path / "viewer.json.corrupt").exists()
     # The rewritten file parses cleanly on the next load.
-    assert v3.load_viewer_prefs()["theme"] == v3.VIEWER_PREFS_DEFAULTS["theme"]
+    assert v3.load_viewer_prefs(bp)["theme"] == v3.VIEWER_PREFS_DEFAULTS["theme"]

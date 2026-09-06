@@ -8,7 +8,7 @@ from taskmaster import backlog_server as bs
 
 
 def _seed_two_tasks(tmp_taskmaster: Path) -> None:
-    from taskmaster import taskmaster_v3 as v3
+    from taskmaster import store
 
     backlog_path = tmp_taskmaster / ".taskmaster" / "backlog.yaml"
     data = yaml.safe_load(backlog_path.read_text(encoding="utf-8"))
@@ -18,7 +18,12 @@ def _seed_two_tasks(tmp_taskmaster: Path) -> None:
             {"id": "T-002", "title": "Second", "tldr": "Second task.", "status": "todo", "epic": "e1", "order": 2.0},
         ],
     }]
-    v3.save_v4(backlog_path, data)
+    # v3 shape so the store's adoption scan reads the inline task list; the
+    # store owns every write under `.taskmaster/` now, so the seed is a plain
+    # file and the first store open imports it.
+    data.setdefault("meta", {})["schema_version"] = 3
+    backlog_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    store.reset_for_tests()
 
 def test_slim_get_task_groups_links_by_type(tmp_taskmaster):
     _seed_two_tasks(tmp_taskmaster)

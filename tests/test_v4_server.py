@@ -96,7 +96,8 @@ class TestLocalRelocation:
 
     def test_viewer_prefs_under_local(self, v4_project):
         from taskmaster import taskmaster_v3 as v3
-        assert v3.viewer_prefs_path().parent.name == "local"
+        bp = v4_project / ".taskmaster" / "backlog.yaml"
+        assert v3.viewer_prefs_path(bp).parent.name == "local"
 
     def test_meta_updated_cached_locally(self, v4_project):
         import json
