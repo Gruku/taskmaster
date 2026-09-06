@@ -171,6 +171,7 @@ def _seed_backlog(
     tid: str = "integ-001",
     branch: str = "feature/integ",
     gates: dict | None = None,
+    extra_tasks: "list[dict] | None" = None,
 ) -> str:
     """Seed .taskmaster/project.yaml + backlog.yaml with policy=on and one task.
 
@@ -211,7 +212,11 @@ def _seed_backlog(
         "project": "integ",
         "meta": {"project": "integ", "schema_version": 3, "updated": "2026-01-01"},
         "context": {},
-        "epics": [{"id": "core", "name": "Core", "tasks": [task]}],
+        # Extra tasks are seeded here rather than appended afterwards: adoption
+        # moves the task index into `tasks/<id>.md` and strips it from
+        # backlog.yaml, so a later edit of `epics[0]["tasks"]` has nothing to
+        # append to.
+        "epics": [{"id": "core", "name": "Core", "tasks": [task, *(extra_tasks or [])]}],
         "phases": [],
     }
     (tm / "backlog.yaml").write_text(yaml.dump(backlog, allow_unicode=True), encoding="utf-8")
@@ -221,6 +226,17 @@ def _seed_backlog(
         if gates:
             fm["gates"] = gates
         write_task_file(tm / "tasks" / f"{tid}.md", fm, "")
+
+    # Adopt the projection, the way the server would on the project's first
+    # tool call. The merge recorder never bootstraps a store itself (R10) — a
+    # PostToolUse hook that created the database, took the writer mutex and
+    # imported the whole backlog would be running a migration nobody asked for
+    # — so it records nothing until a store exists.
+    from taskmaster import store  # noqa: PLC0415
+
+    store.reset_for_tests()
+    store.open_store(root=repo, session="merge-ladder-seed")
+    store.reset_for_tests()
 
     return tid
 
@@ -393,31 +409,34 @@ def test_approve_bypass_and_retry_survives(tmp_path):
 
     _init_repo(tmp_path, target=target, feature=feature)
     # Seed task for feature (no gates — this would normally block)
-    _seed_backlog(tmp_path, tid=tid, branch=feature, gates={})
-    # Also add a task for feature2 so the gate actually evaluates it
-    tm = tmp_path / ".taskmaster"
-    raw = yaml.safe_load((tm / "backlog.yaml").read_text(encoding="utf-8"))
-    raw["epics"][0]["tasks"].append({
+    # A second task for feature2, so the gate actually evaluates it.
+    _seed_backlog(tmp_path, tid=tid, branch=feature, gates={}, extra_tasks=[{
         "id": "integ-002",
         "title": "Other task",
         "status": "in-progress",
         "priority": "medium",
         "created": "2026-01-01T00:00",
         "branch": feature2,
-    })
-    (tm / "backlog.yaml").write_text(yaml.dump(raw, allow_unicode=True), encoding="utf-8")
-    # v3: gates is a HEAVY field — write a real task file (no `gates` key)
-    # so merge_gate_decide.py hits the confident "no gate -> BLOCK" path in
-    # step F below, instead of "missing task file -> fail-open ALLOW". Give
-    # it a non-empty body: save_v3 (taskmaster_v3.py:4301-4307) deletes a
-    # per-task file entirely when it has no HEAVY_FIELDS content and no
-    # body — id+title mirrored into frontmatter don't count — and step D's
-    # recorder round-trips the WHOLE backlog through backlog_server's
-    # _load()/_mutate_and_save(), which would otherwise prune this file before step F.
+    }])
+    tm = tmp_path / ".taskmaster"
+    # The task file carries no `gates` key, so merge_gate_decide.py hits the
+    # confident "no gate -> BLOCK" path in step F below rather than the
+    # fail-open one. It carries the whole v4 frontmatter, including `branch`:
+    # the store scans the projection on the next write and a half-written file
+    # would replace the adopted row with one the gate cannot match to a branch.
     write_task_file(
         tm / "tasks" / "integ-002.md",
-        {"id": "integ-002", "title": "Other task"},
-        "Task body so the file survives the step-D save_v3 round-trip.\n",
+        {
+            "id": "integ-002",
+            "title": "Other task",
+            "epic": "core",
+            "status": "in-progress",
+            "priority": "medium",
+            "created": "2026-01-01T00:00",
+            "branch": feature2,
+            "order": 2.0,
+        },
+        "Task body so the file survives the step-D export round-trip.\n",
     )
 
     # --- A. Touch fresh approval file ---
