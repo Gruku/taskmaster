@@ -1410,23 +1410,30 @@ class Store:
         """
         root = self.backlog_path
         target = root / "local"
-        for name in ("viewer.json", "auto", "snapshots"):
+        # `PROGRESS.md` moves with them: `_progress_path` returns
+        # `local/PROGRESS.md` the moment the project reads as v4, so leaving the
+        # file at its pre-v4 path strands it. The next session log then creates
+        # an empty one and the user's whole changelog history vanishes from the
+        # dashboard while the real file sits unreferenced beside it.
+        for name in ("viewer.json", "auto", "snapshots", "PROGRESS.md"):
             source = root / name
             if not source.exists():
                 continue
             target.mkdir(parents=True, exist_ok=True)
             destination = target / name
             if destination.exists():
-                if name != "snapshots":
+                if name in ("viewer.json", "auto"):
                     # Machine-local state already relocated by an earlier open:
                     # the destination is the live copy and wins.
                     continue
-                # A backup directory is never overwritten, and never dropped
-                # because the name is taken: it goes to the first free suffix.
+                # A backup or a changelog is never overwritten, and never
+                # dropped because the name is taken: it goes to the first free
+                # suffix, so the operator can reconcile the two by hand.
+                stem, dot, extension = name.partition(".")
                 suffix = 2
-                while (target / f"{name}-{suffix}").exists():
+                while (target / f"{stem}-{suffix}{dot}{extension}").exists():
                     suffix += 1
-                destination = target / f"{name}-{suffix}"
+                destination = target / f"{stem}-{suffix}{dot}{extension}"
             try:
                 os.replace(source, destination)
             except OSError:
@@ -1434,11 +1441,9 @@ class Store:
                 # and a backup left in place is still a backup); failing the
                 # whole store open over it is not.
                 continue
-            if name == "snapshots" and tx is not None:
+            if name in ("snapshots", "PROGRESS.md") and tx is not None:
                 relative = destination.relative_to(root).as_posix()
-                note = (
-                    f"moved the pre-v4 backup directory `snapshots/` to `{relative}`"
-                )
+                note = f"moved `{name}` to `{relative}`"
                 tx.warnings.append(note)
                 tx.log_entries.append(note)
 

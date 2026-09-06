@@ -475,11 +475,53 @@ def _normalize_task(task: dict) -> dict:
     return task
 
 
-def _normalize_loaded(data: dict) -> None:
-    """Backfill `created` and normalize legacy P-code priorities in place."""
+_MISSING = object()
+
+_NORMALIZED_FIELDS = ("created", "priority")
+
+
+def _normalize_loaded(data: dict) -> list[tuple[dict, str, object, object]]:
+    """Backfill `created` and normalize legacy P-code priorities in place.
+
+    Returns `(task, field, synthesized, prior)` for every value it invented, so
+    a mutating caller can put the entity back the way it found it before the
+    write-back diff runs. These are display values, not facts: `created` falls
+    back to a fixed sentinel date the task never had.
+    """
+    invented: list[tuple[dict, str, object, object]] = []
     for epic in data.get("epics", []) or []:
         for task in epic.get("tasks", []) or []:
+            prior = {
+                field: task.get(field, _MISSING) for field in _NORMALIZED_FIELDS
+            }
             _normalize_task(task)
+            for field, was in prior.items():
+                now = task.get(field, _MISSING)
+                if now is not was and now != was:
+                    invented.append((task, field, now, was))
+    return invented
+
+
+def _drop_normalization(invented: list[tuple[dict, str, object, object]]) -> None:
+    """Undo `_normalize_loaded`'s backfills that nothing else has overwritten.
+
+    The dict write-back diffs against a snapshot taken *before* normalization
+    ran, so without this every task the backfill touched counted as edited: one
+    `backlog_update_task` produced a second `changes` row and rewrote an
+    unrelated task's file, stamping it with a `created` date it never had. On a
+    backlog with hundreds of pre-`created` tasks the first write of a session
+    rewrote all of them, and "exactly the touched file changed" was false.
+
+    A field the tool itself set no longer holds the synthesized value, so it is
+    left alone and persists.
+    """
+    for task, field, synthesized, prior in invented:
+        if task.get(field, _MISSING) != synthesized:
+            continue
+        if prior is _MISSING:
+            task.pop(field, None)
+        else:
+            task[field] = prior
 
 
 @contextmanager
@@ -506,12 +548,16 @@ def _transaction(*, tool: str, backlog_path: "Path | None" = None):
             _TX_STATE.last_seq = None
             _TX_STATE.export_warnings = []
             try:
-                _normalize_loaded(data)
+                invented = _normalize_loaded(data)
                 # No context rebuild here: the store's dict loader already
                 # derived it, and `_mutate_and_save` re-derives it once on the
                 # latch. Doing it on entry as well cost a third full pass over
                 # every task for every tool call, mutating or not.
                 yield data
+                # …and out again before the write-back diff: a backfill is a
+                # display value, and persisting it turned one tool call into a
+                # rewrite of every task that happened to lack a `created`.
+                _drop_normalization(invented)
                 if not frame.latched:
                     raise _UnlatchedTransaction
             finally:

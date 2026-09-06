@@ -75,6 +75,29 @@ def test_relocating_snapshots_never_overwrites_an_existing_destination(tmp_path)
     store.reset_for_tests()
 
 
+def test_adoption_relocates_progress_md_to_the_v4_path(tmp_path):
+    """`_progress_path` returns `local/PROGRESS.md` the moment the project reads
+    as v4. Leaving the file at its pre-v4 path stranded it: the next session log
+    created an empty one and the user's whole changelog vanished from the
+    dashboard while the real file sat unreferenced beside it."""
+    bp = _seed(tmp_path, {
+        "version": 3, "project": "t",
+        "meta": {"updated": "", "schema_version": 3},
+        "epics": [], "phases": [], "context": {},
+    })
+    (bp.parent / "PROGRESS.md").write_text(
+        "## Changelog\n\n- 2026-01-01 the whole history\n", encoding="utf-8"
+    )
+
+    store.open_store(backlog_path=bp, session="progress-relocation-test")
+
+    moved = bp.parent / "local" / "PROGRESS.md"
+    assert moved.exists(), sorted(p.name for p in (bp.parent / "local").iterdir())
+    assert "the whole history" in moved.read_text(encoding="utf-8")
+    assert not (bp.parent / "PROGRESS.md").exists()
+    store.reset_for_tests()
+
+
 # ── a synthesized task id never collides with another epic's task ────────────
 
 
