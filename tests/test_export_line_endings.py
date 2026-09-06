@@ -16,16 +16,19 @@ from taskmaster import taskmaster_v3 as v3
 
 
 def _seed(tmp_path):
+    """An LF project. The bytes are written explicitly: `Path.write_text` on
+    Windows translates `\\n` to CRLF, which would seed a CRLF project instead
+    and hide what these tests are about."""
     tm = tmp_path / ".taskmaster"
     tm.mkdir(parents=True, exist_ok=True)
-    (tm / "PROGRESS.md").write_text("## Changelog\n", encoding="utf-8")
+    (tm / "PROGRESS.md").write_bytes(b"## Changelog\n")
     bp = tm / "backlog.yaml"
-    bp.write_text(yaml.safe_dump({
+    bp.write_bytes(yaml.safe_dump({
         "version": 4, "project": "t",
         "meta": {"updated": "", "schema_version": 4},
         "epics": [{"id": "e", "name": "E", "status": "active"}],
         "phases": [{"id": "dev", "name": "Dev", "status": "active", "order": 1}],
-    }, sort_keys=False), encoding="utf-8")
+    }, sort_keys=False).encode("utf-8"))
     store.reset_for_tests()
     return bp
 
@@ -156,3 +159,159 @@ def test_the_recorded_hash_matches_the_bytes_on_disk(tmp_path, monkeypatch):
     assert "Error" not in bs.backlog_update_task("e-001", "notes", "again")
     assert b"\r\n" in task_file.read_bytes()
     store.reset_for_tests()
+
+
+def _seed_crlf(tmp_path):
+    """A project whose git-facing files are all CRLF — a Windows checkout."""
+    tm = tmp_path / ".taskmaster"
+    tm.mkdir(parents=True, exist_ok=True)
+    (tm / "PROGRESS.md").write_text("## Changelog\n", encoding="utf-8")
+    bp = tm / "backlog.yaml"
+    bp.write_bytes(yaml.safe_dump({
+        "version": 4, "project": "t",
+        "meta": {"updated": "", "schema_version": 4},
+        "epics": [{"id": "e", "name": "E", "status": "active"}],
+        "phases": [{"id": "dev", "name": "Dev", "status": "active", "order": 1}],
+    }, sort_keys=False).replace("\n", "\r\n").encode("utf-8"))
+    _write_crlf(v3.task_file_path(bp, "e-001"), (
+        "---\nid: e-001\ntitle: CRLF task\nepic: e\nstatus: todo\n"
+        "priority: high\norder: 1.0\ncreated: '2026-01-01T00:00'\n---\n"
+        "the body\n"
+    ))
+    store.reset_for_tests()
+    return bp
+
+
+def _assert_pure_crlf(path) -> None:
+    written = path.read_bytes()
+    assert b"\r\n" in written, written[:120]
+    assert b"\n" not in written.replace(b"\r\n", b""), (
+        f"{path.name} has mixed line endings"
+    )
+
+
+def test_a_new_file_on_a_crlf_project_is_written_with_crlf(tmp_path, monkeypatch):
+    """Adoption of a CRLF backlog creates ~90 new files. Written LF they sit
+    next to 2,000 CRLF files and every later diff on them is a whole-file flip."""
+    from taskmaster import backlog_server as bs  # noqa: PLC0415
+
+    bp = _seed_crlf(tmp_path)
+    monkeypatch.setenv("TASKMASTER_ROOT", str(tmp_path))
+    monkeypatch.setattr(bs, "ROOT", tmp_path)
+    store.open_store(backlog_path=bp, session="crlf-new-file")
+
+    created = bs.backlog_add_task(title="Fresh", epic="e", phase="dev", tldr="t")
+    assert "Error" not in created, created
+
+    new_files = [
+        path for path in sorted((bp.parent / "tasks").glob("*.md"))
+        if path.name != "e-001.md"
+    ]
+    assert new_files, "no new task file was exported"
+    _assert_pure_crlf(new_files[0])
+    store.reset_for_tests()
+
+
+def test_archiving_a_crlf_file_keeps_crlf_at_the_new_path(tmp_path, monkeypatch):
+    """The archive move deletes the old path before the new one is written, so
+    there was nothing left to probe and the moved file landed LF."""
+    from taskmaster import backlog_server as bs  # noqa: PLC0415
+
+    bp = _seed_crlf(tmp_path)
+    monkeypatch.setenv("TASKMASTER_ROOT", str(tmp_path))
+    monkeypatch.setattr(bs, "ROOT", tmp_path)
+    store.open_store(backlog_path=bp, session="crlf-archive")
+
+    assert "Error" not in bs.backlog_archive_task("e-001", reason="deprecated")
+
+    archived = bp.parent / "tasks" / "archive" / "e-001.md"
+    assert archived.exists(), sorted((bp.parent / "tasks").rglob("*.md"))
+    _assert_pure_crlf(archived)
+    store.reset_for_tests()
+
+
+def test_archiving_an_lf_file_keeps_lf_at_the_new_path(tmp_path, monkeypatch):
+    from taskmaster import backlog_server as bs  # noqa: PLC0415
+
+    bp = _seed(tmp_path)
+    task_file = v3.task_file_path(bp, "e-001")
+    task_file.parent.mkdir(parents=True, exist_ok=True)
+    task_file.write_bytes((
+        "---\nid: e-001\ntitle: LF task\nepic: e\nstatus: todo\n"
+        "priority: high\norder: 1.0\ncreated: '2026-01-01T00:00'\n---\n"
+        "the body\n"
+    ).encode("utf-8"))
+    monkeypatch.setenv("TASKMASTER_ROOT", str(tmp_path))
+    monkeypatch.setattr(bs, "ROOT", tmp_path)
+    store.open_store(backlog_path=bp, session="lf-archive")
+
+    assert "Error" not in bs.backlog_archive_task("e-001", reason="deprecated")
+
+    archived = bp.parent / "tasks" / "archive" / "e-001.md"
+    assert archived.exists()
+    assert b"\r\n" not in archived.read_bytes()
+    store.reset_for_tests()
+
+
+def _write_lf(path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(text.encode("utf-8"))
+
+
+def _detector(bp):
+    """A store object that has not opened its database — detection only."""
+    return store.Store(store._resolve_for(bp, None))
+
+
+_TASK_TEXT = (
+    "---\nid: {ident}\ntitle: T\nepic: e\nstatus: todo\n"
+    "priority: high\norder: 1.0\ncreated: '2026-01-01T00:00'\n---\n"
+    "the body\n"
+)
+
+
+def test_detection_survives_sample_directories_that_do_not_exist(tmp_path):
+    """A backlog with no `bugs/` or `issues/` is the normal case, and listing a
+    directory that is not there must not abort the write that asked."""
+    bp = _seed_crlf(tmp_path)
+    assert not (bp.parent / "bugs").exists()
+
+    assert _detector(bp)._detect_dominant_line_ending() is True
+
+
+def test_a_directory_votes_with_its_size_not_with_its_sample(tmp_path):
+    """Sampling is capped per directory, so an unweighted vote let 40 files in
+    two small directories outvote two thousand CRLF tasks."""
+    bp = _seed_crlf(tmp_path)
+    for index in range(100):
+        _write_crlf(
+            bp.parent / "tasks" / f"e-1{index:02d}.md",
+            _TASK_TEXT.format(ident=f"e-1{index:02d}"),
+        )
+    for folder, prefix in (("bugs", "B"), ("issues", "ISS")):
+        (bp.parent / folder).mkdir(parents=True, exist_ok=True)
+        for index in range(20):
+            _write_lf(
+                bp.parent / folder / f"{prefix}-{index:02d}.md",
+                _TASK_TEXT.format(ident=f"{prefix}-{index:02d}"),
+            )
+
+    assert _detector(bp)._detect_dominant_line_ending() is True
+
+
+def test_a_small_crlf_directory_does_not_outvote_a_large_lf_one(tmp_path):
+    """The weighting has to cut both ways, or it is just a thumb on the scale."""
+    bp = _seed(tmp_path)
+    for index in range(100):
+        _write_lf(
+            bp.parent / "tasks" / f"e-1{index:02d}.md",
+            _TASK_TEXT.format(ident=f"e-1{index:02d}"),
+        )
+    (bp.parent / "bugs").mkdir(parents=True, exist_ok=True)
+    for index in range(20):
+        _write_crlf(
+            bp.parent / "bugs" / f"B-{index:02d}.md",
+            _TASK_TEXT.format(ident=f"B-{index:02d}"),
+        )
+
+    assert _detector(bp)._detect_dominant_line_ending() is False

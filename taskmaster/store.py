@@ -100,26 +100,53 @@ _PROJECTION_IDENTITY_ATTEMPTS = 3
 # Enough of a file to tell CRLF from LF without reading a 977 KB changelog back
 # on every export: the first newline decides.
 _LINE_ENDING_PROBE_BYTES = 8192
+# How many existing files decide a project's dominant line ending, and where to
+# look for them. Bounded so detection costs a handful of opens rather than a
+# walk of a 2,300-file backlog.
+_LINE_ENDING_SAMPLE_PER_DIR = 20
+_LINE_ENDING_SAMPLE_DIRS = (
+    "tasks", "bugs", "issues", "handovers", "decisions",
+    "ideas", "notes", "epics", "phases", "areas", "trackers",
+)
 
 
-def _uses_crlf(path: Path) -> bool:
-    """True when the file on disk already uses CRLF line endings."""
+def _probe_crlf(path: Path) -> bool | None:
+    """The line-ending style of the file on disk, or None when it has none.
+
+    None means there is nothing to match: the file is missing, unreadable, or
+    holds no newline in the probe window. The caller decides what such a file
+    gets written with.
+    """
     try:
         with path.open("rb") as handle:
             head = handle.read(_LINE_ENDING_PROBE_BYTES)
     except OSError:
-        return False
+        return None
     index = head.find(b"\n")
+    if index < 0:
+        return None
     return index > 0 and head[index - 1] == 0x0D
 
 
-def _match_line_endings(content: bytes, path: Path) -> bytes:
+def _uses_crlf(path: Path) -> bool:
+    """True when the file on disk already uses CRLF line endings."""
+    return _probe_crlf(path) is True
+
+
+def _match_line_endings(
+    content: bytes, path: Path, default_crlf: bool = False
+) -> bytes:
     """`content` (rendered with LF) in the line-ending style `path` already has.
 
-    A file that does not exist yet keeps LF: there is nothing to match, and LF
-    is what the repository stores.
+    A file with nothing on disk to probe takes `default_crlf`. That is what
+    adopting a CRLF backlog needs: the files it creates and the ones it moves
+    into `archive/` have no bytes at their new path, and writing those LF left
+    `tasks/` carrying two styles at once.
     """
-    if not _uses_crlf(path):
+    crlf = _probe_crlf(path)
+    if crlf is None:
+        crlf = default_crlf
+    if not crlf:
         return content
     return content.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
 _CORRUPTION_MARKERS = ("malformed", "not a database", "file is encrypted")
@@ -147,6 +174,9 @@ _LINEAR_ENQUEUE_FAILURE_MARKER = "linear enqueue failed for"
 # `backlog_index_status` reports exactly this list.
 DERIVED_TABLES = ("entity_fts", "entity_paths", "links", "related", "handover_tasks")
 _DERIVED_REBUILT_KEY = "derived_rebuilt_at"
+# What `store.log` has already been told about each quarantined file, so a file
+# that can never be repaired is recorded once instead of once per warm read.
+_QUARANTINE_LOG_KEY = "quarantine_log"
 # Document fields whose prose is worth matching in `backlog_search`. `branch` and
 # the `docs` values are here because the substring search this FTS index replaced
 # scored them directly, and dropping them silently lost `search <branch-name>`.
@@ -774,6 +804,7 @@ class Store:
         self._connection_creation_state = threading.local()
         self._network_projection_only = False
         self._bootstrap_quarantine: dict[str, str] = {}
+        self._dominant_crlf: bool | None = None
         # Adoption rewrites the whole projection at once and has to prove it can
         # read the result back before it commits (see `_verify_round_trip`).
         # Ordinary writes touch a file or two and are re-read by the next scan,
@@ -2997,8 +3028,7 @@ class Store:
                 tx.connection.execute(
                     "UPDATE projection SET quarantined=1 WHERE file='backlog.yaml'"
                 )
-                tx.warnings.append(f"quarantined backlog.yaml: {exc}")
-                tx.log_entries.append(f"quarantined backlog.yaml: {exc}")
+                self._note_quarantine(tx, "backlog.yaml", exc)
         for kind, ident, path in self._known_entity_files():
             if kind in {"task", "epic", "phase"}:
                 rel = path.relative_to(self.backlog_path).as_posix()
@@ -3091,8 +3121,7 @@ class Store:
                         tx.connection.execute(
                             "UPDATE projection SET quarantined=1 WHERE file=?", (rel,)
                         )
-                        tx.warnings.append(f"quarantined {rel}: {quarantine_error}")
-                        tx.log_entries.append(f"quarantined {rel}: {quarantine_error}")
+                        self._note_quarantine(tx, rel, quarantine_error)
                 continue
             try:
                 content, stat = _read_file_snapshot(path)
@@ -3279,8 +3308,7 @@ class Store:
                     tx.connection.execute(
                         "UPDATE projection SET quarantined=1,dirty=0 WHERE file=?", (rel,)
                     )
-                    tx.warnings.append(f"quarantined {rel}: {exc}")
-                    tx.log_entries.append(f"quarantined {rel}: {exc}")
+                    self._note_quarantine(tx, rel, exc)
                     continue
                 tx._import_row("project", row["id"] or _PROJECT_ID, doc, None)
                 self._record_projection_bytes(
@@ -3296,8 +3324,7 @@ class Store:
                 tx.connection.execute(
                     "UPDATE projection SET quarantined=1,dirty=0 WHERE file=?", (rel,)
                 )
-                tx.warnings.append(f"quarantined {rel}: {exc}")
-                tx.log_entries.append(f"quarantined {rel}: {exc}")
+                self._note_quarantine(tx, rel, exc)
                 continue
             if row["kind"] in {"epic", "phase"}:
                 current = tx.connection.execute(
@@ -3345,8 +3372,7 @@ class Store:
                     tx.connection.execute(
                         "UPDATE projection SET quarantined=1 WHERE file=?", (rel,)
                     )
-                tx.warnings.append(f"quarantined {rel}: {exc}")
-                tx.log_entries.append(f"quarantined {rel}: {exc}")
+                self._note_quarantine(tx, rel, exc)
                 continue
             if _is_archive_path(path, self.backlog_path):
                 doc["archived"] = True
@@ -3372,8 +3398,8 @@ class Store:
                     stat,
                 )
             except (OSError, ValueError, yaml.YAMLError) as exc:
-                tx.warnings.append(f"quarantined project.yaml: {exc}")
-                tx.log_entries.append(f"quarantined project.yaml: {exc}")
+                self._note_quarantine(tx, "project.yaml", exc)
+        self._prune_quarantine_log(tx)
         tx.connection.execute(
             "INSERT INTO meta(key,value) VALUES('last_scan_generation',?) "
             "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -3421,8 +3447,7 @@ class Store:
             tx.connection.execute(
                 "UPDATE projection SET quarantined=1 WHERE file=?", (rel,)
             )
-            tx.warnings.append(f"quarantined {rel}: {exc}")
-            tx.log_entries.append(f"quarantined {rel}: {exc}")
+            self._note_quarantine(tx, rel, exc)
             return
         our_doc = _from_json(entity["doc"], {})
         our_body = entity["body"]
@@ -3493,8 +3518,7 @@ class Store:
             tx.connection.execute(
                 "UPDATE projection SET quarantined=1 WHERE file='backlog.yaml'"
             )
-            tx.warnings.append(f"quarantined backlog.yaml: {exc}")
-            tx.log_entries.append(f"quarantined backlog.yaml: {exc}")
+            self._note_quarantine(tx, "backlog.yaml", exc)
             return
 
         base_rows = _flatten_backlog_dict(base)
@@ -3589,8 +3613,7 @@ class Store:
             tx.connection.execute(
                 "UPDATE projection SET quarantined=1,dirty=0 WHERE file='backlog.yaml'"
             )
-            tx.warnings.append(f"quarantined backlog.yaml: {exc}")
-            tx.log_entries.append(f"quarantined backlog.yaml: {exc}")
+            self._note_quarantine(tx, "backlog.yaml", exc)
             return
         rows = _flatten_backlog_dict(raw)
         for key, (doc, body) in rows.items():
@@ -3816,7 +3839,9 @@ class Store:
         seq = int(
             tx.connection.execute("SELECT COALESCE(MAX(seq),0) FROM changes").fetchone()[0]
         )
-        content = _match_line_endings(content, self.backlog_path / _IDEAS_INDEX_REL)
+        content = self._match_project_line_endings(
+            content, self.backlog_path / _IDEAS_INDEX_REL
+        )
         self._verify_text_round_trip(_IDEAS_INDEX_REL, content)
         self._replace_projection(
             tx, _IDEAS_INDEX_REL, _IDEAS_INDEX_KIND, None, content, seq,
@@ -3910,7 +3935,123 @@ class Store:
             if _LINEAR_ENQUEUE_FAILURE_MARKER in line
         )
 
-    def _log(self, message: str) -> None:
+    def _match_project_line_endings(
+        self, content: bytes, path: Path, prior_crlf: bool | None = None
+    ) -> bytes:
+        """Write `content` the way this project writes files.
+
+        `prior_crlf` is the style of the bytes this write replaces when they
+        live at another path — an archive move, whose old file is deleted before
+        the new one is written. Without it there is nothing to probe and the
+        move silently changed the file's line endings.
+        """
+        default = self._dominant_line_ending_crlf() if prior_crlf is None else prior_crlf
+        return _match_line_endings(content, path, default)
+
+    def _dominant_line_ending_crlf(self) -> bool:
+        """Whether this project's git-facing files are mostly CRLF.
+
+        Adoption of a Windows checkout rewrites every file in place, preserving
+        each file's own style, but the files it *creates* had no style to
+        preserve and landed LF next to two thousand CRLF ones. Sampling what is
+        already there is what makes a new file match its neighbours. A project
+        with nothing to sample keeps LF, which is what the repository stores.
+        """
+        if self._dominant_crlf is None:
+            self._dominant_crlf = self._detect_dominant_line_ending()
+        return self._dominant_crlf
+
+    def _detect_dominant_line_ending(self) -> bool:
+        crlf = lf = 0.0
+        for name in ("backlog.yaml", "project.yaml"):
+            probe = _probe_crlf(self.backlog_path / name)
+            if probe is True:
+                crlf += 1
+            elif probe is False:
+                lf += 1
+        for folder in _LINE_ENDING_SAMPLE_DIRS:
+            directory = self.backlog_path / folder
+            try:
+                # Listed eagerly, inside the guard: `Path.iterdir` is lazy on
+                # 3.11, so a project with no `bugs/` raised FileNotFoundError
+                # out of the loop below and took the write that asked with it.
+                # `os.listdir` also avoids a stat per name on a 2,300-file tree.
+                names = [
+                    name for name in os.listdir(directory) if name.endswith(".md")
+                ]
+            except OSError:
+                continue
+            if not names:
+                continue
+            sampled_crlf = sampled_lf = 0
+            for name in names[:_LINE_ENDING_SAMPLE_PER_DIR]:
+                probe = _probe_crlf(directory / name)
+                if probe is True:
+                    sampled_crlf += 1
+                elif probe is False:
+                    sampled_lf += 1
+            sampled = sampled_crlf + sampled_lf
+            if not sampled:
+                continue
+            # A directory votes with how many files it holds, not with how many
+            # of them were sampled: 20 read out of 2,300 tasks otherwise lost to
+            # 40 read out of two small directories.
+            weight = len(names) / sampled
+            crlf += sampled_crlf * weight
+            lf += sampled_lf * weight
+        return crlf > lf
+
+    def _note_quarantine(self, tx: "Transaction", rel: str, reason: object) -> None:
+        """Warn the caller every time; write `store.log` only when this is news.
+
+        A file that can never be repaired — git conflict markers, frontmatter
+        damaged before the store existed — is re-read, re-parsed and
+        re-quarantined by every warm scan, because a quarantined row opts out
+        of the stat/hash shortcut. Appending the reason each time grew
+        `local/store.log` without bound on the real backlog (four such files).
+        The warning still reaches the caller on every read; only the durable log
+        is deduplicated, keyed on the reason and the file's mtime so a
+        differently-broken edit is still recorded.
+        """
+        message = f"quarantined {rel}: {reason}"
+        tx.warnings.append(message)
+        try:
+            mtime: float | None = (self.backlog_path / rel).stat().st_mtime
+        except OSError:
+            mtime = None
+        signature = [message, mtime]
+        if tx.quarantine_log_signature(rel) == signature:
+            return
+        # The line is appended before the signature is recorded, and the
+        # signature is committed with the transaction. A signature that
+        # outlived the line it stands for — an unwritable `store.log`, a crash
+        # between COMMIT and a post-commit append — would silence that reason
+        # for good. The other direction only costs a repeated line after a
+        # rollback, which is the safe way to be wrong about a log.
+        if self._log(message):
+            tx.record_quarantine_log(rel, signature)
+
+    def _prune_quarantine_log(self, tx: "Transaction") -> None:
+        """Forget files that are gone or repaired, so a relapse is logged again.
+
+        `project.yaml` is deliberately kept while it exists but has no
+        projection row: an unparseable one never gets a row, and that is exactly
+        the path that re-logged on every scan.
+        """
+        stale = []
+        for rel in tx.quarantine_log_files():
+            if not (self.backlog_path / rel).exists():
+                stale.append(rel)
+                continue
+            row = tx.connection.execute(
+                "SELECT quarantined FROM projection WHERE file=?", (rel,)
+            ).fetchone()
+            if row is not None and not row["quarantined"]:
+                stale.append(rel)
+        tx.drop_quarantine_log(stale)
+
+    def _log(self, message: str) -> bool:
+        """Append one line to `store.log`. False when it did not get there."""
         path = self.db_path.parent / "store.log"
         try:
             if path.exists() and path.stat().st_size > 1024 * 1024:
@@ -3919,7 +4060,8 @@ class Store:
             with path.open("a", encoding="utf-8") as handle:
                 handle.write(f"{_now()} {message}\n")
         except OSError:
-            pass
+            return False
+        return True
 
     def _export_entity_row(self, tx: "Transaction", row: sqlite3.Row) -> None:
         kind, ident = row["kind"], row["id"]
@@ -3942,6 +4084,16 @@ class Store:
         if target is None:
             return
         rel = target.relative_to(self.backlog_path).as_posix()
+        # An archive move writes a path that does not exist yet and deletes the
+        # old one below, so the style the file already had has to be read while
+        # it is still there — otherwise the move rewrites every line of it.
+        moved_crlf: bool | None = None
+        if not target.exists():
+            for old_row in old_rows:
+                probe = _probe_crlf(self.backlog_path / old_row["file"])
+                if probe is not None:
+                    moved_crlf = probe
+                    break
         for old_row in old_rows:
             prior_rel = old_row["file"]
             if prior_rel == rel:
@@ -3989,7 +4141,9 @@ class Store:
         # Matched here, once, so the verification below reads exactly the bytes
         # that land and `_replace_projection` does not probe the file a second
         # time — two extra opens per file across a 2,300-file adoption.
-        content = _match_line_endings(content, self.backlog_path / rel)
+        content = self._match_project_line_endings(
+            content, self.backlog_path / rel, moved_crlf
+        )
         if expected is None:
             self._verify_yaml_round_trip(kind, ident, rel, content, doc)
         else:
@@ -4230,7 +4384,9 @@ class Store:
         data["meta"] = meta
         content = yaml.dump(data, default_flow_style=False, sort_keys=False, allow_unicode=True).encode("utf-8")
         seq = int(tx.connection.execute("SELECT COALESCE(MAX(seq),0) FROM changes").fetchone()[0])
-        content = _match_line_endings(content, self.backlog_path / "backlog.yaml")
+        content = self._match_project_line_endings(
+            content, self.backlog_path / "backlog.yaml"
+        )
         self._verify_backlog_round_trip(content, data)
         self._replace_projection(
             tx, "backlog.yaml", "backlog", None, content, seq, line_endings_matched=True
@@ -4300,7 +4456,7 @@ class Store:
         # round trip first — has already matched them and says so, so the probe
         # runs once per exported file rather than twice.
         if not line_endings_matched:
-            content = _match_line_endings(content, self.backlog_path / rel)
+            content = self._match_project_line_endings(content, self.backlog_path / rel)
         # The hash is taken on the bytes actually written, or the next scan
         # reads the file as edited out of band and re-imports it forever.
         digest = hashlib.sha1(content).hexdigest()
@@ -4428,6 +4584,8 @@ class Transaction:
         self._post_commit_removals: list[Path] = []
         self._reserved_keys: set[tuple[str, str]] = set()
         self._force_progress = False
+        self._quarantine_log_state: dict[str, Any] | None = None
+        self._quarantine_log_dirty = False
         intent_token = uuid.uuid4().hex
         self._intent_path = self.store.db_path.parent / f"export-intent.{intent_token}.json"
         self._intent_entries: dict[str, dict[str, str | None]] = {}
@@ -4440,6 +4598,60 @@ class Transaction:
         session changelog entry — has nowhere else to land, so it opts out.
         """
         self._force_progress = True
+
+    def _quarantine_log(self) -> dict[str, Any]:
+        """What `store.log` already records for each quarantined file.
+
+        Read once and edited in memory: a scan that quarantines many files at
+        once would otherwise rewrite the whole JSON document per file.
+        """
+        if self._quarantine_log_state is None:
+            row = self.connection.execute(
+                "SELECT value FROM meta WHERE key=?", (_QUARANTINE_LOG_KEY,)
+            ).fetchone()
+            state = _from_json(row[0], {}) if row else {}
+            self._quarantine_log_state = state if isinstance(state, dict) else {}
+        return self._quarantine_log_state
+
+    def quarantine_log_files(self) -> tuple[str, ...]:
+        return tuple(self._quarantine_log())
+
+    def quarantine_log_signature(self, rel: str) -> Any:
+        return self._quarantine_log().get(rel)
+
+    def record_quarantine_log(self, rel: str, signature: Any) -> None:
+        self._quarantine_log()[rel] = signature
+        self._quarantine_log_dirty = True
+
+    def drop_quarantine_log(self, rels: Sequence[str]) -> None:
+        if not rels:
+            return
+        state = self._quarantine_log()
+        for rel in rels:
+            state.pop(rel, None)
+        self._quarantine_log_dirty = True
+
+    def flush_quarantine_log(self) -> None:
+        """Persist the edits once, inside the transaction that made them.
+
+        Called from `_capture_committed`, so the state rolls back with the
+        transaction: a reason recorded here but never committed is logged again
+        on the next read rather than being lost.
+        """
+        if not self._quarantine_log_dirty:
+            return
+        state = self._quarantine_log()
+        if state:
+            self.connection.execute(
+                "INSERT INTO meta(key,value) VALUES(?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (_QUARANTINE_LOG_KEY, _json(state)),
+            )
+        else:
+            self.connection.execute(
+                "DELETE FROM meta WHERE key=?", (_QUARANTINE_LOG_KEY,)
+            )
+        self._quarantine_log_dirty = False
 
     def _progress_entries(self, key: str) -> list[dict[str, Any]]:
         row = self.connection.execute(
@@ -4893,6 +5105,7 @@ class Transaction:
 
     def _capture_committed(self) -> None:
         """Snapshot return payloads while this writer still owns the lock."""
+        self.flush_quarantine_log()
         for kind, ident in self._committed_keys:
             row = self.connection.execute(
                 "SELECT doc,body,deleted FROM entities WHERE kind=? AND id=?", (kind, ident)
