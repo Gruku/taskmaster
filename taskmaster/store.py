@@ -3885,9 +3885,12 @@ class Store:
         """
         if not self._verify_exports:
             return
+        # The same transform `_replace_projection` will apply, so what is parsed
+        # here is byte-for-byte what lands on disk.
+        written = _match_line_endings(content, self.backlog_path / rel)
         try:
             actual_doc, actual_body = self._parse_entity_text(
-                kind, content.decode("utf-8")
+                kind, written.decode("utf-8")
             )
         except (UnicodeError, ValueError, yaml.YAMLError) as exc:
             raise AdoptionRoundTripError(

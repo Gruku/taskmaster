@@ -96,6 +96,37 @@ def test_an_lf_file_is_not_converted(tmp_path, monkeypatch):
     assert b"\r\n" not in task_file.read_bytes()
 
 
+def test_adopting_a_crlf_projection_passes_the_round_trip_check(tmp_path):
+    """Adoption verifies the bytes it is about to write, and on a Windows
+    checkout those bytes are CRLF. The two have to agree or every adoption on
+    Windows refuses itself."""
+    tm = tmp_path / ".taskmaster"
+    tm.mkdir(parents=True)
+    (tm / "PROGRESS.md").write_text("## Changelog\n", encoding="utf-8")
+    bp = tm / "backlog.yaml"
+    bp.write_bytes(yaml.safe_dump({
+        "version": 3, "project": "t",
+        "meta": {"updated": "", "schema_version": 3},
+        "epics": [{"id": "e", "name": "E", "status": "active",
+                   "description": "heavy", "tasks": [
+                       {"id": "e-001", "title": "CRLF", "status": "todo",
+                        "notes": "line one\nline two"},
+                   ]}],
+        "phases": [], "context": {},
+    }, sort_keys=False).replace("\n", "\r\n").encode("utf-8"))
+    _write_crlf(v3.task_file_path(bp, "e-001"), (
+        "---\nid: e-001\ntitle: CRLF\nepic: e\nstatus: todo\n---\nbody\n"
+    ))
+    store.reset_for_tests()
+
+    loaded = store.open_store(backlog_path=bp, session="crlf-adoption").load_dict()
+
+    task = loaded["epics"][0]["tasks"][0]
+    assert task["notes"] == "line one\nline two", task
+    assert b"\r\n" in v3.task_file_path(bp, "e-001").read_bytes()
+    store.reset_for_tests()
+
+
 def test_the_recorded_hash_matches_the_bytes_on_disk(tmp_path, monkeypatch):
     """The content hash has to be taken on what was written, or the next scan
     reads the file as edited out of band and re-imports it forever."""
