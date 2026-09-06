@@ -1389,7 +1389,7 @@ class Store:
             stop.set()
             worker.join(timeout=1.0)
 
-    def _relocate_machine_local_state(self) -> None:
+    def _relocate_machine_local_state(self, tx: "Transaction | None" = None) -> None:
         """Move a pre-v4 project's machine-local files under `local/`.
 
         `viewer.json` and `auto/` are per-machine state, not shared backlog
@@ -1398,27 +1398,49 @@ class Store:
         it has to run here or the reader — which looks under `local/` as soon as
         the project reads as v4 — silently loses the user's saved viewer prefs
         to a fresh set of defaults. `snapshots/` is the retired pre-v4 backup
-        directory and goes with them.
+        directory and moves with them.
+
+        Nothing here deletes. This used to `rmtree` `snapshots/`, which was
+        defensible while only an operator calling `backlog_migrate_v4` could
+        reach it; it now runs from `_bootstrap` the first time *any* tool —
+        a read tool, a viewer GET — opens a pre-v4 project, with no
+        confirmation and outside the SQL rollback, and `snapshots/` is the one
+        directory that could have recovered the project from a bad adoption.
+        Absence never deletes data (design spec decision 4).
         """
         root = self.backlog_path
         target = root / "local"
-        for name in ("viewer.json", "auto"):
+        for name in ("viewer.json", "auto", "snapshots"):
             source = root / name
-            if not source.exists() or (target / name).exists():
+            if not source.exists():
                 continue
             target.mkdir(parents=True, exist_ok=True)
+            destination = target / name
+            if destination.exists():
+                if name != "snapshots":
+                    # Machine-local state already relocated by an earlier open:
+                    # the destination is the live copy and wins.
+                    continue
+                # A backup directory is never overwritten, and never dropped
+                # because the name is taken: it goes to the first free suffix.
+                suffix = 2
+                while (target / f"{name}-{suffix}").exists():
+                    suffix += 1
+                destination = target / f"{name}-{suffix}"
             try:
-                os.replace(source, target / name)
+                os.replace(source, destination)
             except OSError:
-                # Losing the relocation is survivable (defaults are rebuilt);
-                # failing the whole store open over it is not.
-                pass
-        snapshots = root / "snapshots"
-        if snapshots.is_dir():
-            try:
-                shutil.rmtree(snapshots)
-            except OSError:
-                pass
+                # Losing the relocation is survivable (defaults are rebuilt,
+                # and a backup left in place is still a backup); failing the
+                # whole store open over it is not.
+                continue
+            if name == "snapshots" and tx is not None:
+                relative = destination.relative_to(root).as_posix()
+                note = (
+                    f"moved the pre-v4 backup directory `snapshots/` to `{relative}`"
+                )
+                tx.warnings.append(note)
+                tx.log_entries.append(note)
 
     def _bootstrap(self, connection: sqlite3.Connection) -> None:
         original_version = SCHEMA_V4
@@ -1446,7 +1468,7 @@ class Store:
                 )
                 tx._export_backlog = True
                 self._export_touched(tx)
-                self._relocate_machine_local_state()
+                self._relocate_machine_local_state(tx)
             else:
                 self._export_backlog(tx, force=True)
             self._flush_reservations(tx)
@@ -2871,6 +2893,12 @@ class Store:
                                         merged[field] = parsed_doc[field]
                                     else:
                                         merged.pop(field, None)
+                                # An `epics/<id>.md` that backlog.yaml never
+                                # mentions has no slim half to merge with, so
+                                # the row used to arrive with no `id` field at
+                                # all and every reader that keys on it raised.
+                                # The file's stem *is* the id.
+                                merged.setdefault("id", ident)
                                 parsed_doc = merged
                             if _is_archive_path(path, self.backlog_path):
                                 parsed_doc["archived"] = True
@@ -4686,6 +4714,21 @@ def name_missing_ids(
             entry["id"] = ident
             notes.append(f"named id-less {kind} {ident!r} from its name")
 
+    # One task-id set for the whole backlog, not one per epic. A task moved
+    # between epics keeps its old `<epic>-NNN` id, so an id-less task under
+    # epic `a` and an existing `a-001` parked under epic `b` both live in the
+    # same namespace: naming from epic `a`'s own list alone handed out `a-001`
+    # a second time and `_flatten_backlog_dict` aborted the entire adoption
+    # over the duplicate.
+    task_ids = set(lookup("task"))
+    for epic in data.get("epics") or []:
+        if not isinstance(epic, dict):
+            continue
+        task_ids |= {
+            str(t.get("id"))
+            for t in epic.get("tasks") or []
+            if isinstance(t, dict) and t.get("id")
+        }
     for epic in data.get("epics") or []:
         if not isinstance(epic, dict):
             continue
@@ -4695,8 +4738,7 @@ def name_missing_ids(
             continue
         epic_id = str(epic.get("id") or "epic")
         prefix = f"{epic_id}-"
-        taken = {str(t.get("id")) for t in tasks if isinstance(t, dict) and t.get("id")}
-        taken |= lookup("task")
+        taken = task_ids
         highest = 0
         for tid in taken:
             match = re.fullmatch(re.escape(prefix) + r"(\d+)", tid)
