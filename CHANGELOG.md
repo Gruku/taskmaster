@@ -7,6 +7,13 @@ Versions follow [SemVer](https://semver.org/spec/v2.0.0.html) — major bumps
 indicate schema breaks or removed surfaces.
 
 ---
+## 6.0.1
+
+**A permanently quarantined file is logged once, not on every read.** A file the store cannot parse — git conflict markers, frontmatter damaged years ago — opts out of the scan's stat/hash shortcut, so every warm tool call re-read it, re-quarantined it and appended the same reason to `local/store.log`. Four such files grew the log without bound. `Store._note_quarantine` now warns the caller every time but writes the log only when the reason or the file's mtime is new, keyed in the `meta` row `quarantine_log`; `Store._prune_quarantine_log` forgets a file once it is repaired or removed, so a relapse is recorded again. An unparseable `project.yaml`, which never gets a projection row at all, took the same path and is covered too.
+
+**A file created or archive-moved on a CRLF project is written CRLF.** In-place rewrites already preserved each file's own line endings, but a path with no bytes to probe fell back to LF, so adoption of a Windows backlog left `tasks/` carrying both styles. `_probe_crlf` now separates "this file is LF" from "there is nothing to match", `Store._dominant_line_ending_crlf` samples the project's existing entity files once per store to decide what a new file gets, and `Store._export_entity_row` reads the old path's style before the archive move deletes it, so a moved file keeps the endings it had. A project with nothing to sample still gets LF.
+
+---
 ## 6.0.0
 
 **SQLite is the runtime authority for the backlog.** `.taskmaster/local/store.db` now holds the backlog; `backlog.yaml` and the per-entity markdown files are a Git-facing projection the store exports. One public tool call owns exactly one store transaction, so two agents writing at the same time no longer overwrite each other: the module-level snapshot and the file lock that lost those writes are gone. Design: `docs/specs/2026-09-04-sqlite-store-design.md`.
