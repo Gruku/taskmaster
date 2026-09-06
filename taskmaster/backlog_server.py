@@ -8886,6 +8886,30 @@ def illegal_transition_message(task: dict | None, after: str | None) -> str | No
     )
 
 
+def _invalid_status_error(patch: dict) -> dict:
+    """`{"status": …}` when the write supplies a status that is not one.
+
+    `illegal_transition_message` reads `after is None` as "no status in this
+    write" and allows it, so `{"status": null}` skipped the transition table
+    entirely and `task.update(patch)` persisted a null the MCP tools reject and
+    the board cannot place in any column. An *absent* `status` key is still a
+    write that names no status and is untouched here; an explicitly supplied
+    one has to be a real status.
+    """
+    if "status" not in patch:
+        return {}
+    supplied = patch["status"]
+    if supplied in VALID_STATUSES:
+        return {}
+    shown = "null" if supplied is None else repr(supplied)
+    return {
+        "status": (
+            f"invalid status {shown}. "
+            f"Valid: {', '.join(sorted(VALID_STATUSES))}"
+        )
+    }
+
+
 def _archived_transition_error(task: dict | None, patch: dict) -> dict:
     """`illegal_transition_message` in the `{field: error}` shape the viewer
     write path collects errors in."""
@@ -8936,6 +8960,7 @@ def _viewer_update_task(
         errors = validate_task_write(task_id, patch, _backlog_path(), data=data)
         if "_task" in errors:
             raise KeyError(errors["_task"])
+        errors.update(_invalid_status_error(patch))
         errors.update(_archived_transition_error(task, patch))
         if errors:
             raise ViewerWriteRejected(errors)
@@ -8990,6 +9015,7 @@ def _viewer_create_task(payload: dict) -> str:
     new_id = ""
     with _transaction(tool="viewer:POST /api/tasks") as data:
         errors = validate_task_write("<new>", payload, _backlog_path(), data=data)
+        errors.update(_invalid_status_error(payload))
         if errors:
             raise ViewerWriteRejected(errors)
         epic = next(
@@ -9794,6 +9820,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
             except FileNotFoundError:
                 data = None
             errors = validate_task_write(tid, patch, data=data)
+            errors.update(_invalid_status_error(patch))
             if data is not None and tid != "<new>":
                 found = _find_task(data, tid)
                 if found is not None:
