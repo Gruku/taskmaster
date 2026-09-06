@@ -102,3 +102,51 @@ def test_a_non_done_move_is_unaffected_by_the_gates(server):
     status, body = _request("PATCH", f"{server}/api/tasks/test-epic-001", {"status": "blocked"})
     assert status == 200, (status, body)
     assert _status_of("test-epic-001") == "blocked"
+
+
+# ── a supplied status is a real status ───────────────────────────────────────
+
+
+def test_patching_a_null_status_is_refused(server):
+    """`{"status": null}` passed every gate: `illegal_transition_message`
+    returns None for `after is None`, so the transition table was skipped and
+    `task.update(patch)` persisted a null status the MCP tools reject and the
+    board cannot place in any column."""
+    status, body = _request("PATCH", f"{server}/api/tasks/test-epic-001", {"status": None})
+    assert status in (400, 409, 422), (status, body)
+    assert "status" in json.dumps(body), body
+    assert _status_of("test-epic-001") == "in-progress"
+
+
+def test_patching_an_unknown_status_is_refused(server):
+    status, body = _request("PATCH", f"{server}/api/tasks/test-epic-001", {"status": "wip"})
+    assert status in (400, 409, 422), (status, body)
+    assert _status_of("test-epic-001") == "in-progress"
+
+
+def test_putting_a_null_status_is_refused(server):
+    full = bs._load_task_full("test-epic-001")
+    full["status"] = None
+    status, body = _request("PUT", f"{server}/api/tasks/test-epic-001", full)
+    assert status in (400, 409, 422), (status, body)
+    assert _status_of("test-epic-001") == "in-progress"
+
+
+def test_a_patch_that_names_no_status_is_still_allowed(server):
+    """An absent `status` is not a null one: a title-only edit must still pass."""
+    status, body = _request("PATCH", f"{server}/api/tasks/test-epic-001", {"title": "Renamed"})
+    assert status == 200, (status, body)
+    assert _status_of("test-epic-001") == "in-progress"
+
+
+def test_validate_preview_agrees_about_a_null_status(server):
+    """Preview and write run the same gate: a validate that says "ok" for a
+    write the board refuses is worse than no preview at all."""
+    status, body = _request(
+        "POST",
+        f"{server}/api/tasks/validate",
+        {"task_id": "test-epic-001", "patch": {"status": None}},
+    )
+    assert status == 200, (status, body)
+    assert body["ok"] is False, body
+    assert "status" in body["errors"], body

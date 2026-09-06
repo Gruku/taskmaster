@@ -28,14 +28,107 @@ cwd=<project> (prod inherits it; tests pass cwd=) targets the right project.
 """
 from __future__ import annotations
 
+import json
 import os
+import sqlite3
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 # This script lives in hooks/; the taskmaster package is at the repo root one
 # level up. Subprocess invocation puts hooks/ on sys.path, not the root.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# The store's own busy timeout, not the merge gate's short one. This hook runs
+# after a *successful* merge and is not latency-critical, and a merge landing
+# while another process holds the writer is ordinary: giving up after two
+# seconds silently dropped the stamp, where the old path through
+# `backlog_server._load()` waited the full thirty.
+BUSY_TIMEOUT_SECONDS = 30.0
+LOG_MAX_BYTES = 1024 * 1024
+LOG_KEEP_BYTES = 512 * 1024
+
+_TASK_BY_BRANCH_SQL = (
+    "SELECT id, doc FROM entities"
+    " WHERE kind='task' AND deleted=0 AND archived=0"
+    "   AND json_extract(doc,'$.branch')=?"
+    " ORDER BY id"
+)
+
+
+def _log(root: Path, reason: str) -> None:
+    """One line saying why no stamp was written. Never raises."""
+    try:
+        log = root / ".taskmaster" / "local" / "hook.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with log.open("a", encoding="utf-8") as fh:
+            fh.write(f"{time.time()} merge_recorder_stamp: {reason}\n")
+        if log.stat().st_size > LOG_MAX_BYTES:
+            log.write_bytes(log.read_bytes()[-LOG_KEEP_BYTES:])
+    except Exception:
+        pass
+
+
+def resolve_root(cwd: Path) -> Path | None:
+    """The checkout whose `.taskmaster/` owns this merge, or None.
+
+    `TASKMASTER_ROOT` wins, exactly as it does for the server; otherwise the
+    shared resolver walks to the git common dir, which is what makes a merge
+    run inside a linked worktree stamp the main checkout.
+    """
+    pinned = os.environ.get("TASKMASTER_ROOT")
+    if pinned:
+        root = Path(pinned)
+        return root if (root / ".taskmaster").is_dir() else None
+    try:
+        from taskmaster.root import resolve_root as _resolve
+
+        root = _resolve(Path(cwd)).root
+    except Exception:
+        return None
+    return root if (root / ".taskmaster").is_dir() else None
+
+
+def store_path(root: Path) -> Path:
+    """`<root>/.taskmaster/local/store.db`, from the shared definition."""
+    try:
+        from taskmaster.root import db_path
+
+        return db_path(root / ".taskmaster")
+    except Exception:
+        return root / ".taskmaster" / "local" / "store.db"
+
+
+def task_id_for_branch(db_file: Path, src: str) -> str | None:
+    """The id of the task whose `branch` is `src`, read without opening a store.
+
+    A plain sqlite read, `query_only`, on a database that must already exist:
+    `mode=rw` refuses to create one. Going through `backlog_server._load()` for
+    this lookup is what let a PostToolUse hook bootstrap a whole project.
+    """
+    uri = Path(db_file).resolve().as_uri() + "?mode=rw"
+    con = sqlite3.connect(uri, uri=True, timeout=BUSY_TIMEOUT_SECONDS)
+    try:
+        con.execute(f"PRAGMA busy_timeout={int(BUSY_TIMEOUT_SECONDS * 1000)}")
+        con.execute("PRAGMA query_only=ON")
+        try:
+            rows = con.execute(_TASK_BY_BRANCH_SQL, (src,)).fetchall()
+        except sqlite3.OperationalError:
+            # An interpreter whose SQLite lacks JSON1 still has to answer.
+            rows = [
+                (ident, doc)
+                for ident, doc in con.execute(
+                    "SELECT id, doc FROM entities"
+                    " WHERE kind='task' AND deleted=0 AND archived=0 ORDER BY id"
+                )
+                if json.loads(doc).get("branch") == src
+            ]
+    finally:
+        con.close()
+    for ident, _doc in rows:
+        return ident
+    return None
 
 
 def pin_root(cwd: Path) -> None:
@@ -85,27 +178,34 @@ def stamp(src: str, cwd: Path) -> None:
     recompute happen via the canonical path.
     """
     pin_root(cwd)
+    root = resolve_root(cwd)
+    if root is None:
+        return
+
+    # Hooks never bootstrap (R10). Without this check the branch lookup below
+    # went through `backlog_server._load()`, which opens the store — and on a
+    # fresh clone that holds projection files but no `store.db` yet, opening it
+    # *creates* the database, takes the writer mutex, imports the whole backlog
+    # and can rewrite every projection file. That is a migration nobody asked
+    # for, run off a merge, before the recorder has even found a matching task.
+    db_file = store_path(root)
+    if not db_file.is_file():
+        _log(root, f"no store at {db_file}; not recording this merge")
+        return
+
+    # The lookup is a read, and it is answered by a read.
+    try:
+        tid = task_id_for_branch(db_file, src)
+    except Exception as exc:
+        _log(root, f"store unreadable ({exc!r}); not recording this merge")
+        return
+    if not tid:
+        return
+
     try:
         from taskmaster import backlog_server as _bs
     except Exception:
         # Import failure -> fail safe: no stamp, never blocks.
-        return
-
-    # Find the task whose branch == SRC (grab its id for the recorder).
-    try:
-        data = _bs._load()
-    except Exception:
-        return
-
-    tid = None
-    for epic in (data.get("epics") or []):
-        for t in (epic.get("tasks") or []):
-            if t.get("branch") == src:
-                tid = t.get("id")
-                break
-        if tid:
-            break
-    if not tid:
         return
 
     # Determine current branch (the merge TARGET, post-merge HEAD).

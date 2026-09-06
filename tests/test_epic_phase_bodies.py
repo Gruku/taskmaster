@@ -129,7 +129,14 @@ def test_existing_backlog_migrates_on_first_open(tmp_path):
     assert reloaded["epics"][0]["description"].startswith("Ingest")
 
 
-def test_store_drops_an_epic_or_phase_with_no_id(tmp_path):
+def test_store_names_an_epic_or_phase_with_no_id(tmp_path):
+    """Absence never deletes data (design spec decision 4).
+
+    An id-less epic or phase used to be dropped by `_flatten_backlog_dict`,
+    taking its description, body and every task under it with it. Adoption now
+    synthesizes an id from the entity's name and keeps the entity, so the
+    projection carries a real `epics/<id>.md` and `phases/<id>.md`.
+    """
     bp = tmp_path / ".taskmaster" / "backlog.yaml"
     bp.parent.mkdir(parents=True, exist_ok=True)
     data = {
@@ -147,21 +154,99 @@ def test_store_drops_an_epic_or_phase_with_no_id(tmp_path):
     }
     bp.write_text(yaml.safe_dump(data), encoding="utf-8")
     (bp.parent / "PROGRESS.md").write_text("## Changelog\n", encoding="utf-8")
-    _adopt(bp)
-    # No stray file is written for an id-less entity: an entity the store cannot
-    # name is not a row.
-    epics_dir = bp.parent / "epics"
-    phases_dir = bp.parent / "phases"
-    assert not (epics_dir.exists() and any(epics_dir.iterdir()))
-    assert not (phases_dir.exists() and any(phases_dir.iterdir()))
-    # `save_v3` used to keep such an entity inline. The store cannot: rows are
-    # keyed by id, so an id-less epic or phase does not survive adoption. This
-    # asserts the behaviour rather than endorsing it — every epic and phase a
-    # taskmaster tool creates has an id, so only a hand-edited backlog can hit
-    # this, and it is recorded here so the loss is visible.
+    opened = _adopt(bp)
+
+    loaded = opened.load_dict()
+    assert [e["id"] for e in loaded["epics"]] == ["no-id-epic"]
+    assert [p["id"] for p in loaded["phases"]] == ["no-id-phase"]
+    assert loaded["epics"][0]["description"] == "Epic without an id."
+    assert loaded["phases"][0]["description"] == "Phase without an id."
+
+    # The synthesized id reaches both halves of the projection.
     slim = yaml.safe_load(bp.read_text(encoding="utf-8"))
-    assert slim["epics"] == []
-    assert slim["phases"] == []
+    assert [e["id"] for e in slim["epics"]] == ["no-id-epic"]
+    assert [p["id"] for p in slim["phases"]] == ["no-id-phase"]
+    epic_md = v3.epic_file_path(bp, "no-id-epic")
+    phase_md = v3.phase_file_path(bp, "no-id-phase")
+    assert epic_md.exists() and "Epic without an id." in epic_md.read_text(encoding="utf-8")
+    assert phase_md.exists() and "Phase without an id." in phase_md.read_text(encoding="utf-8")
+
+
+def test_a_synthesized_epic_or_phase_id_skips_an_existing_file(tmp_path):
+    """`_known_ids` has to include `epics/*.md` and `phases/*.md`.
+
+    A leftover `epics/<kebab>.md` from an earlier run holds a different entity.
+    Reusing its id would make the per-file import upsert that file's heavy
+    fields onto the entity just named, merging two epics into one row.
+    """
+    bp = tmp_path / ".taskmaster" / "backlog.yaml"
+    bp.parent.mkdir(parents=True, exist_ok=True)
+    bp.write_text(yaml.safe_dump({
+        "version": 3, "project": "t",
+        "meta": {"updated": "", "schema_version": 3},
+        "epics": [{"name": "Asset Engine", "status": "active",
+                   "description": "the id-less one", "tasks": []}],
+        "phases": [{"name": "Ship V3", "status": "active", "order": 1,
+                    "description": "the id-less phase"}],
+        "context": {},
+    }), encoding="utf-8")
+    (bp.parent / "PROGRESS.md").write_text("## Changelog\n", encoding="utf-8")
+    # Leftover files sitting on exactly the kebab-cased ids naming would pick.
+    v3.write_task_file(
+        v3.epic_file_path(bp, "asset-engine"),
+        {"id": "asset-engine", "title": "Asset Engine",
+         "description": "a leftover epic"},
+        "leftover epic body",
+    )
+    v3.write_task_file(
+        v3.phase_file_path(bp, "ship-v3"),
+        {"id": "ship-v3", "title": "Ship V3", "description": "a leftover phase"},
+        "leftover phase body",
+    )
+
+    opened = _adopt(bp)
+    loaded = opened.load_dict()
+
+    epics = {e["id"]: e for e in loaded["epics"]}
+    phases = {p["id"]: p for p in loaded["phases"]}
+    assert "asset-engine-2" in epics, sorted(epics)
+    assert epics["asset-engine-2"]["description"] == "the id-less one"
+    assert "ship-v3-2" in phases, sorted(phases)
+    assert phases["ship-v3-2"]["description"] == "the id-less phase"
+
+
+def test_an_orphan_epic_file_imports_under_its_stem_as_id(tmp_path):
+    """`epics/<id>.md` that backlog.yaml never mentions has no slim half.
+
+    The merge that follows started from an empty document, so the row landed
+    with no `id` key at all and every reader that keys on `epic["id"]` raised a
+    KeyError on the whole listing. The file's stem is the id.
+    """
+    bp = tmp_path / ".taskmaster" / "backlog.yaml"
+    bp.parent.mkdir(parents=True, exist_ok=True)
+    bp.write_text(yaml.safe_dump({
+        "version": 3, "project": "t",
+        "meta": {"updated": "", "schema_version": 3},
+        "epics": [], "phases": [], "context": {},
+    }), encoding="utf-8")
+    (bp.parent / "PROGRESS.md").write_text("## Changelog\n", encoding="utf-8")
+    v3.write_task_file(
+        v3.epic_file_path(bp, "orphan-epic"),
+        {"id": "orphan-epic", "title": "Orphan", "description": "nobody indexed me"},
+        "orphan body",
+    )
+    v3.write_task_file(
+        v3.phase_file_path(bp, "orphan-phase"),
+        {"id": "orphan-phase", "title": "Orphan Phase", "description": "nor me"},
+        "orphan phase body",
+    )
+
+    loaded = _adopt(bp).load_dict()
+
+    epics = {e["id"]: e for e in loaded["epics"]}
+    phases = {p["id"]: p for p in loaded["phases"]}
+    assert epics["orphan-epic"]["description"] == "nobody indexed me"
+    assert phases["orphan-phase"]["description"] == "nor me"
 
 
 def test_adoption_writes_epic_phase_and_task_files_from_a_v2_backlog(tmp_path):

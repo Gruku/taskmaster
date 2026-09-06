@@ -268,6 +268,38 @@ def test_backlog_get_reports_legacy_layout_as_409(legacy_layout_server):
     assert "backlog_canonicalize_layout" in body["error"], body
 
 
+@pytest.mark.parametrize("path", [
+    "/api/bugs",
+    "/api/issues",
+    "/api/ideas",
+    "/api/notes",
+    "/api/sessions",
+    "/api/sessions/2026-09-01-fixture",
+    "/api/decisions/DEC-001",
+    "/api/handover/2026-09-01-fixture",
+    "/api/epic/test-epic",
+])
+def test_every_row_backed_get_reports_legacy_layout_as_409(legacy_layout_server, path):
+    """`_snapshot()` caught only FileNotFoundError, so `store.LegacyLayoutError`
+    escaped every GET 4.2 moved off `_serve_json`. The client got a dropped
+    connection and a server-side traceback instead of the 409 carrying the one
+    instruction that fixes the layout — precisely the case that message is for.
+    """
+    base, _root = legacy_layout_server
+    resp = _request("GET", f"{base}{path}")
+    assert resp.status == 409, (path, resp.status)
+    body = json.loads(resp.read())
+    assert "backlog_canonicalize_layout" in body["error"], body
+
+
+def test_pattern_scan_reports_legacy_layout_as_409(legacy_layout_server):
+    base, _root = legacy_layout_server
+    resp = _request("POST", f"{base}/api/bugs/pattern-scan", {})
+    assert resp.status == 409, resp.status
+    body = json.loads(resp.read())
+    assert "backlog_canonicalize_layout" in body["error"], body
+
+
 def test_patch_reports_legacy_layout_as_409(legacy_layout_server):
     base, _root = legacy_layout_server
     resp = _request("PATCH", f"{base}/api/tasks/test-epic-001", {"title": "Renamed"})

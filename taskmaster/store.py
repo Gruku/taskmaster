@@ -91,6 +91,37 @@ _MONOTONIC = time.monotonic
 _BACKLOG_ID = "__backlog__"
 _PROJECT_ID = "__project__"
 _RETRYABLE_REPLACE_ERRNOS = {5, 13, 32, errno.EACCES, errno.EPERM}
+
+# How many times a projection-only read re-runs when the files moved underneath
+# it. A share that changes three times during one read is being written
+# continuously; a fourth attempt would not settle either.
+_PROJECTION_IDENTITY_ATTEMPTS = 3
+
+# Enough of a file to tell CRLF from LF without reading a 977 KB changelog back
+# on every export: the first newline decides.
+_LINE_ENDING_PROBE_BYTES = 8192
+
+
+def _uses_crlf(path: Path) -> bool:
+    """True when the file on disk already uses CRLF line endings."""
+    try:
+        with path.open("rb") as handle:
+            head = handle.read(_LINE_ENDING_PROBE_BYTES)
+    except OSError:
+        return False
+    index = head.find(b"\n")
+    return index > 0 and head[index - 1] == 0x0D
+
+
+def _match_line_endings(content: bytes, path: Path) -> bytes:
+    """`content` (rendered with LF) in the line-ending style `path` already has.
+
+    A file that does not exist yet keeps LF: there is nothing to match, and LF
+    is what the repository stores.
+    """
+    if not _uses_crlf(path):
+        return content
+    return content.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
 _CORRUPTION_MARKERS = ("malformed", "not a database", "file is encrypted")
 # `ideas/IDEAS.md` is derived output, not an entity: the exporter regenerates it
 # from the idea rows and the scan refreshes its hash without ever parsing it.
@@ -245,6 +276,18 @@ CREATE INDEX IF NOT EXISTS ix_handover_tasks_pair ON handover_tasks(handover_id,
 CREATE INDEX IF NOT EXISTS ix_entities_kind_status ON entities(kind, status);
 CREATE INDEX IF NOT EXISTS ix_changes_entity ON changes(kind, id, seq);
 """
+
+
+class AdoptionRoundTripError(RuntimeError):
+    """Adoption rendered a file it cannot read back, so it refuses to commit.
+
+    Adoption rewrites the whole projection in one transaction — 2,300 files on
+    a real backlog — and used to commit that tree without ever proving it could
+    reopen it. When it could not, the projection was unloadable and the store
+    that could still answer was gone the moment `local/` was cleaned or the repo
+    was cloned somewhere else. Refusing the adoption leaves the user with the
+    tree they started from, which they can still open with the previous version.
+    """
 
 
 class LegacyLayoutError(RuntimeError):
@@ -728,6 +771,11 @@ class Store:
         self._connection_creation_state = threading.local()
         self._network_projection_only = False
         self._bootstrap_quarantine: dict[str, str] = {}
+        # Adoption rewrites the whole projection at once and has to prove it can
+        # read the result back before it commits (see `_verify_round_trip`).
+        # Ordinary writes touch a file or two and are re-read by the next scan,
+        # so they do not pay for the check.
+        self._verify_exports = False
         self._last_progress_clock: float | None = None
         self._last_read_scan_clock: float | None = None
 
@@ -1001,7 +1049,18 @@ class Store:
             "SELECT COUNT(*) FROM entities WHERE deleted=0"
         ).fetchone()[0]
         if count == 0 and (not self._bootstrapped or not database_existed):
-            self._bootstrap(connection)
+            try:
+                self._bootstrap(connection)
+            except AdoptionRoundTripError:
+                # A refused adoption must leave the project exactly as it was.
+                # `open_store` created and committed the schema before bootstrap
+                # began, so refusing left an empty-but-valid `store.db` behind —
+                # and the merge gate reads an existing store as authoritative
+                # (it fails open on one it cannot use) rather than falling back
+                # to the projection, so the leftover silently disabled the gate.
+                if not database_existed:
+                    self._discard_empty_database(connection)
+                raise
         elif not self._reservation_path.exists():
             self._reserve_ids(
                 (row["kind"], row["id"])
@@ -1288,6 +1347,36 @@ class Store:
                 target = self.db_path.with_name(f"store.db.{label}-{stamp}{suffix}")
                 shutil.copy2(candidate, target)
 
+    def _discard_empty_database(self, connection: sqlite3.Connection) -> None:
+        """Delete the database this open created, after a refused adoption.
+
+        The schema is created and committed before `_bootstrap` runs, so a
+        refusal otherwise leaves an empty-but-valid `store.db` on disk. Both
+        hooks treat an existing store as the authority — `merge_gate_decide`
+        fails *open* on one it cannot use rather than reading the projection,
+        and `merge_recorder_stamp` records nothing without one — so the leftover
+        turns a refused adoption into a silently disabled merge gate. Removing
+        it puts the project back in the state the hooks handle correctly:
+        no store, read the files.
+
+        Best effort. A file another process still holds is left alone; the empty
+        store is a nuisance, and failing the refusal over it would replace a
+        clear error with an obscure one.
+        """
+        try:
+            if connection.in_transaction:
+                connection.rollback()
+            connection.close()
+        except sqlite3.Error:
+            pass
+        close_thread_connection()
+        for suffix in ("-wal", "-shm", ""):
+            try:
+                Path(f"{self.db_path}{suffix}").unlink(missing_ok=True)
+            except OSError:
+                self._log(f"could not remove {self.db_path}{suffix} after a refused adoption")
+        self._bootstrapped = False
+
     def _rename_database_family(self, label: str) -> None:
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         for suffix in ("", "-wal", "-shm"):
@@ -1389,7 +1478,7 @@ class Store:
             stop.set()
             worker.join(timeout=1.0)
 
-    def _relocate_machine_local_state(self) -> None:
+    def _relocate_machine_local_state(self, tx: "Transaction | None" = None) -> None:
         """Move a pre-v4 project's machine-local files under `local/`.
 
         `viewer.json` and `auto/` are per-machine state, not shared backlog
@@ -1398,27 +1487,54 @@ class Store:
         it has to run here or the reader — which looks under `local/` as soon as
         the project reads as v4 — silently loses the user's saved viewer prefs
         to a fresh set of defaults. `snapshots/` is the retired pre-v4 backup
-        directory and goes with them.
+        directory and moves with them.
+
+        Nothing here deletes. This used to `rmtree` `snapshots/`, which was
+        defensible while only an operator calling `backlog_migrate_v4` could
+        reach it; it now runs from `_bootstrap` the first time *any* tool —
+        a read tool, a viewer GET — opens a pre-v4 project, with no
+        confirmation and outside the SQL rollback, and `snapshots/` is the one
+        directory that could have recovered the project from a bad adoption.
+        Absence never deletes data (design spec decision 4).
         """
         root = self.backlog_path
         target = root / "local"
-        for name in ("viewer.json", "auto"):
+        # `PROGRESS.md` moves with them: `_progress_path` returns
+        # `local/PROGRESS.md` the moment the project reads as v4, so leaving the
+        # file at its pre-v4 path strands it. The next session log then creates
+        # an empty one and the user's whole changelog history vanishes from the
+        # dashboard while the real file sits unreferenced beside it.
+        for name in ("viewer.json", "auto", "snapshots", "PROGRESS.md"):
             source = root / name
-            if not source.exists() or (target / name).exists():
+            if not source.exists():
                 continue
             target.mkdir(parents=True, exist_ok=True)
+            destination = target / name
+            if destination.exists():
+                if name in ("viewer.json", "auto"):
+                    # Machine-local state already relocated by an earlier open:
+                    # the destination is the live copy and wins.
+                    continue
+                # A backup or a changelog is never overwritten, and never
+                # dropped because the name is taken: it goes to the first free
+                # suffix, so the operator can reconcile the two by hand.
+                stem, dot, extension = name.partition(".")
+                suffix = 2
+                while (target / f"{stem}-{suffix}{dot}{extension}").exists():
+                    suffix += 1
+                destination = target / f"{stem}-{suffix}{dot}{extension}"
             try:
-                os.replace(source, target / name)
+                os.replace(source, destination)
             except OSError:
-                # Losing the relocation is survivable (defaults are rebuilt);
-                # failing the whole store open over it is not.
-                pass
-        snapshots = root / "snapshots"
-        if snapshots.is_dir():
-            try:
-                shutil.rmtree(snapshots)
-            except OSError:
-                pass
+                # Losing the relocation is survivable (defaults are rebuilt,
+                # and a backup left in place is still a backup); failing the
+                # whole store open over it is not.
+                continue
+            if name in ("snapshots", "PROGRESS.md") and tx is not None:
+                relative = destination.relative_to(root).as_posix()
+                note = f"moved `{name}` to `{relative}`"
+                tx.warnings.append(note)
+                tx.log_entries.append(note)
 
     def _bootstrap(self, connection: sqlite3.Connection) -> None:
         original_version = SCHEMA_V4
@@ -1432,6 +1548,7 @@ class Store:
                 original_version = SCHEMA_V4
         committed = False
         self._begin_immediate(connection)
+        self._verify_exports = True
         try:
             tx = Transaction(self, connection, tool="bootstrap")
             self._import_projection(tx, full=True)
@@ -1446,7 +1563,7 @@ class Store:
                 )
                 tx._export_backlog = True
                 self._export_touched(tx)
-                self._relocate_machine_local_state()
+                self._relocate_machine_local_state(tx)
             else:
                 self._export_backlog(tx, force=True)
             self._flush_reservations(tx)
@@ -1460,6 +1577,8 @@ class Store:
                 if connection.in_transaction:
                     connection.rollback()
             raise
+        finally:
+            self._verify_exports = False
         self._checkpoint_passive(connection)
 
     @contextmanager
@@ -1579,16 +1698,33 @@ class Store:
             )
             return active[1], token, max_seq
         if self._network_projection_only:
-            data = self._bootstrap_backlog_data()
-            data.setdefault("context", {})
-            # Every non-task read tool serves `_rows` now. Without one here the
-            # bugs, issues, handovers, decisions, ideas, notes, areas and
-            # trackers sitting on this network share would read as absent.
-            data["_rows"] = self._entity_rows_from_projection()
+            # The payload and the ETag have to describe one revision. Reading
+            # the documents first and stamping them with an identity taken
+            # afterwards returned old content under the new revision's ETag, so
+            # a client cached the stale payload and its `If-Match` write still
+            # passed. Bracket the read instead, and retry while the files move.
+            for _attempt in range(_PROJECTION_IDENTITY_ATTEMPTS):
+                before, _seq = self._projection_identity()
+                data = self._bootstrap_backlog_data()
+                data.setdefault("context", {})
+                # Every non-task read tool serves `_rows` now. Without one here
+                # the bugs, issues, handovers, decisions, ideas, notes, areas
+                # and trackers sitting on this network share would read as
+                # absent.
+                data["_rows"] = self._entity_rows_from_projection()
+                after, seq = self._projection_identity()
+                if after == before:
+                    if _CONTEXT_BUILDER is not None:
+                        _CONTEXT_BUILDER(data)
+                    return data, after, seq
+            # A share being written continuously still has to answer. The last
+            # read is stamped with the identity taken *before* it — the
+            # conservative half of the pair: an ETag older than the payload
+            # makes a later `If-Match` fail, where a newer one would let a write
+            # built on a mixed read through.
             if _CONTEXT_BUILDER is not None:
                 _CONTEXT_BUILDER(data)
-            token, seq = self._projection_identity()
-            return data, token, seq
+            return data, before, seq
         self._maybe_scan_on_read()
         connection = self.connection
         owns_snapshot = not connection.in_transaction
@@ -2871,6 +3007,45 @@ class Store:
                                         merged[field] = parsed_doc[field]
                                     else:
                                         merged.pop(field, None)
+                                if current is None:
+                                    # An `epics/<id>.md` that backlog.yaml never
+                                    # mentions has no slim half to merge with,
+                                    # so this used to keep the heavy fields and
+                                    # throw the file's own identity away —
+                                    # permanently. The export then wrote `- {}`
+                                    # into backlog.yaml and a title-less file,
+                                    # the epic's name survived nowhere on disk,
+                                    # and the next cold open refused the
+                                    # projection outright. For an orphan the
+                                    # file is the only copy, so it supplies
+                                    # everything the row lacks.
+                                    #
+                                    # Only for an orphan. `_split_entity_for_v3`
+                                    # mirrors a readability `title` into every
+                                    # heavy file and `_merge_entity_from_v3`
+                                    # ignores it coming back; absorbing it into
+                                    # the row put a second display field into
+                                    # `backlog.yaml` on the first cold reopen of
+                                    # *every* project, and it never moved again,
+                                    # so a later rename left a stale name beside
+                                    # the real one.
+                                    for field, value in parsed_doc.items():
+                                        if field == "title":
+                                            continue
+                                        merged.setdefault(field, value)
+                                    if not merged.get("name"):
+                                        # …and the mirror is where an orphan's
+                                        # display name survives, so it is
+                                        # recovered as `name` — the field every
+                                        # reader uses — rather than as the
+                                        # duplicate that drifts.
+                                        recovered = (
+                                            parsed_doc.get("name")
+                                            or parsed_doc.get("title")
+                                        )
+                                        if recovered:
+                                            merged["name"] = recovered
+                                merged.setdefault("id", ident)
                                 parsed_doc = merged
                             if _is_archive_path(path, self.backlog_path):
                                 parsed_doc["archived"] = True
@@ -3614,8 +3789,11 @@ class Store:
         seq = int(
             tx.connection.execute("SELECT COALESCE(MAX(seq),0) FROM changes").fetchone()[0]
         )
+        content = _match_line_endings(content, self.backlog_path / _IDEAS_INDEX_REL)
+        self._verify_text_round_trip(_IDEAS_INDEX_REL, content)
         self._replace_projection(
-            tx, _IDEAS_INDEX_REL, _IDEAS_INDEX_KIND, None, content, seq
+            tx, _IDEAS_INDEX_REL, _IDEAS_INDEX_KIND, None, content, seq,
+            line_endings_matched=True,
         )
 
     def _regenerate_progress_if_due(self, tx: "Transaction") -> None:
@@ -3724,9 +3902,13 @@ class Store:
             old_rel = rel
         doc = _from_json(row["doc"], {})
         body = row["body"] or ""
+        # `(expected_doc, expected_body)` for the round-trip check, or None for a
+        # whole-document YAML file, which has its own comparison.
+        expected: tuple[Mapping[str, Any], str | None] | None
         if kind == "task":
             fm, rendered_body = task_v4_to_file(doc | ({BODY_KEY: body} if body else {}))
             content = render_frontmatter(fm, rendered_body).encode("utf-8")
+            expected = (doc, body)
         elif kind in {"epic", "phase"}:
             heavy_fields = EPIC_HEAVY_FIELDS if kind == "epic" else PHASE_HEAVY_FIELDS
             _slim, heavy, rendered_body = _split_entity_for_v3(
@@ -3742,11 +3924,177 @@ class Store:
                     tx.connection.execute("DELETE FROM projection_base WHERE file=?", (old_rel,))
                 return
             content = render_frontmatter(heavy, rendered_body).encode("utf-8")
+            expected = (heavy, rendered_body)
         elif kind == "project":
             content = yaml.dump(doc, default_flow_style=False, sort_keys=False, allow_unicode=True).encode("utf-8")
+            expected = None
         else:
             content = render_frontmatter(doc, body).encode("utf-8")
-        self._replace_projection(tx, rel, kind, ident, content, row["updated_seq"])
+            expected = (doc, body)
+        # Matched here, once, so the verification below reads exactly the bytes
+        # that land and `_replace_projection` does not probe the file a second
+        # time — two extra opens per file across a 2,300-file adoption.
+        content = _match_line_endings(content, self.backlog_path / rel)
+        if expected is None:
+            self._verify_yaml_round_trip(kind, ident, rel, content, doc)
+        else:
+            self._verify_round_trip(kind, ident, rel, content, *expected)
+        self._replace_projection(
+            tx, rel, kind, ident, content, row["updated_seq"],
+            line_endings_matched=True,
+        )
+
+    def _verify_backlog_round_trip(
+        self, content: bytes, expected: Mapping[str, Any]
+    ) -> None:
+        """`backlog.yaml` has to parse back to the index it was rendered from.
+
+        It is the file the epic-identity bug actually corrupted — `- {}` was
+        written here — and its failure is what made the next cold open raise
+        before any tool ran. It is written through `_replace_projection`
+        directly rather than through `_export_entity_row`, so the per-entity
+        check never saw it; and on a project that already reads as v4 the
+        bootstrap writes *only* this file, so without this the check verified
+        nothing at all on that path.
+
+        The comparison is the index the rest of the store keys on: every epic
+        and phase entry, and `meta`. The task lists are not here (they live in
+        `tasks/<id>.md` on v4), and `context` is derived.
+        """
+        if not self._verify_exports:
+            return
+        try:
+            reloaded = yaml_io.safe_load(content.decode("utf-8")) or {}
+            _validate_backlog_document(reloaded)
+        except (UnicodeError, ValueError, yaml.YAMLError) as exc:
+            raise AdoptionRoundTripError(
+                f"adoption refused: backlog.yaml cannot be read back ({exc}). "
+                f"Nothing was changed."
+            ) from exc
+        for field in ("epics", "phases"):
+            wanted = [_clean_doc(dict(entry)) for entry in expected.get(field) or []]
+            actual = [_clean_doc(dict(entry)) for entry in reloaded.get(field) or []]
+            if actual != wanted:
+                missing = sorted(
+                    str(entry.get("id") or "(no id)")
+                    for entry in wanted
+                    if entry not in actual
+                )
+                raise AdoptionRoundTripError(
+                    f"adoption refused: backlog.yaml does not survive a round "
+                    f"trip — {field} {missing or 'read back differently'}. "
+                    f"Nothing was changed."
+                )
+        if reloaded.get("meta") != dict(expected.get("meta") or {}):
+            raise AdoptionRoundTripError(
+                "adoption refused: backlog.yaml does not survive a round trip — "
+                "`meta` reads back differently. Nothing was changed."
+            )
+
+    def _verify_text_round_trip(self, rel: str, content: bytes) -> None:
+        """A derived text file has at least to be the text it was rendered as.
+
+        `ideas/IDEAS.md` is an index nothing re-parses (R2), so there is no
+        document to compare it against — but it is written on the same adoption
+        path, and a render that is not decodable text is still a file the user
+        is handed.
+        """
+        if not self._verify_exports:
+            return
+        try:
+            decoded = content.decode("utf-8")
+        except UnicodeError as exc:
+            raise AdoptionRoundTripError(
+                f"adoption refused: {rel} is not valid UTF-8 ({exc}). "
+                f"Nothing was changed."
+            ) from exc
+        if "\x00" in decoded:
+            raise AdoptionRoundTripError(
+                f"adoption refused: {rel} contains a NUL byte, so it is not the "
+                f"text it was rendered as. Nothing was changed."
+            )
+
+    def _verify_yaml_round_trip(
+        self,
+        kind: str,
+        ident: str | None,
+        rel: str,
+        content: bytes,
+        expected: Mapping[str, Any],
+    ) -> None:
+        """`_verify_round_trip` for the whole-document YAML files.
+
+        `project.yaml` carries the conventions and policies every gate reads. It
+        has no frontmatter, so it needs the plain loader rather than
+        `_parse_entity_text`, but it is on the same adoption path and answers
+        the same question: can this be read back?
+        """
+        if not self._verify_exports:
+            return
+        try:
+            reloaded = yaml_io.safe_load(content.decode("utf-8")) or {}
+        except (UnicodeError, ValueError, yaml.YAMLError) as exc:
+            raise AdoptionRoundTripError(
+                f"adoption refused: {rel} cannot be read back ({exc}). "
+                f"Nothing was changed."
+            ) from exc
+        if reloaded != dict(expected):
+            raise AdoptionRoundTripError(
+                f"adoption refused: the {kind} {ident or ''!r} does not survive a "
+                f"round trip through {rel}. Nothing was changed."
+            )
+
+    def _verify_round_trip(
+        self,
+        kind: str,
+        ident: str,
+        rel: str,
+        content: bytes,
+        expected_doc: Mapping[str, Any],
+        expected_body: str | None,
+    ) -> None:
+        """Prove the rendered bytes parse back to what they were rendered from.
+
+        Only during adoption, and always before `os.replace`: the 458-second
+        migration commits a rewrite of every file in the project, and there was
+        nothing in the path that checked the result was still readable. When it
+        was not — an epic whose identity the import had dropped — the next cold
+        open of the migrated tree raised before any tool ran, and the store that
+        could still answer had been the only copy.
+
+        The comparison is against what this render was given, parsed by the same
+        `_parse_entity_text` the scan uses, so anything the renderer and the
+        parser disagree about (a title YAML quotes one way and reads back
+        another, a body whose fences swallow the frontmatter) is caught here.
+        """
+        if not self._verify_exports:
+            return
+        # `content` has already been through `_match_line_endings`, so what is
+        # parsed here is byte-for-byte what lands on disk.
+        try:
+            actual_doc, actual_body = self._parse_entity_text(
+                kind, content.decode("utf-8")
+            )
+        except (UnicodeError, ValueError, yaml.YAMLError) as exc:
+            raise AdoptionRoundTripError(
+                f"adoption refused: the {kind} {ident!r} rendered to {rel}, which "
+                f"cannot be read back ({exc}). Nothing was changed."
+            ) from exc
+        wanted_doc = _clean_doc(dict(expected_doc))
+        wanted_body = (expected_body or "").removesuffix("\n") or None
+        if actual_doc != wanted_doc or actual_body != wanted_body:
+            differing = sorted(
+                key for key in set(actual_doc) | set(wanted_doc)
+                if actual_doc.get(key) != wanted_doc.get(key)
+            )
+            detail = (
+                f"fields {differing}" if differing else "the body"
+            )
+            raise AdoptionRoundTripError(
+                f"adoption refused: the {kind} {ident!r} does not survive a "
+                f"round trip through {rel} ({detail} read back differently). "
+                f"Nothing was changed."
+            )
 
     def _remove_projection_file(
         self,
@@ -3827,7 +4175,11 @@ class Store:
         data["meta"] = meta
         content = yaml.dump(data, default_flow_style=False, sort_keys=False, allow_unicode=True).encode("utf-8")
         seq = int(tx.connection.execute("SELECT COALESCE(MAX(seq),0) FROM changes").fetchone()[0])
-        self._replace_projection(tx, "backlog.yaml", "backlog", None, content, seq)
+        content = _match_line_endings(content, self.backlog_path / "backlog.yaml")
+        self._verify_backlog_round_trip(content, data)
+        self._replace_projection(
+            tx, "backlog.yaml", "backlog", None, content, seq, line_endings_matched=True
+        )
 
     def _entity_path(self, kind: str, ident: str, archived: bool) -> Path | None:
         if kind != "project":
@@ -3871,6 +4223,7 @@ class Store:
         ident: str | None,
         content: bytes,
         exported_seq: int,
+        line_endings_matched: bool = False,
     ) -> None:
         existing = tx.connection.execute(
             "SELECT content_hash,quarantined FROM projection WHERE file=?", (rel,)
@@ -3882,6 +4235,19 @@ class Store:
             tx.warnings.append(f"export pending: {rel} is quarantined")
             tx.log_entries.append(f"projection export suppressed for quarantined {rel}")
             return
+        # Everything is rendered with LF. Writing that over a CRLF working tree
+        # (`core.autocrlf=true`, the Windows default) rewrites every line of
+        # every file it touches: on a 2.2k-task backlog the adoption showed up
+        # as a 2,300-file diff, and every later `git diff` on the backlog was
+        # unreadable. Match what the file already uses; a new file gets LF.
+        #
+        # A caller that had to know the final bytes — anything that verified the
+        # round trip first — has already matched them and says so, so the probe
+        # runs once per exported file rather than twice.
+        if not line_endings_matched:
+            content = _match_line_endings(content, self.backlog_path / rel)
+        # The hash is taken on the bytes actually written, or the next scan
+        # reads the file as edited out of band and re-imports it forever.
         digest = hashlib.sha1(content).hexdigest()
         if existing and existing["content_hash"] == digest:
             path = self.backlog_path / rel
@@ -4686,6 +5052,21 @@ def name_missing_ids(
             entry["id"] = ident
             notes.append(f"named id-less {kind} {ident!r} from its name")
 
+    # One task-id set for the whole backlog, not one per epic. A task moved
+    # between epics keeps its old `<epic>-NNN` id, so an id-less task under
+    # epic `a` and an existing `a-001` parked under epic `b` both live in the
+    # same namespace: naming from epic `a`'s own list alone handed out `a-001`
+    # a second time and `_flatten_backlog_dict` aborted the entire adoption
+    # over the duplicate.
+    task_ids = set(lookup("task"))
+    for epic in data.get("epics") or []:
+        if not isinstance(epic, dict):
+            continue
+        task_ids |= {
+            str(t.get("id"))
+            for t in epic.get("tasks") or []
+            if isinstance(t, dict) and t.get("id")
+        }
     for epic in data.get("epics") or []:
         if not isinstance(epic, dict):
             continue
@@ -4695,8 +5076,7 @@ def name_missing_ids(
             continue
         epic_id = str(epic.get("id") or "epic")
         prefix = f"{epic_id}-"
-        taken = {str(t.get("id")) for t in tasks if isinstance(t, dict) and t.get("id")}
-        taken |= lookup("task")
+        taken = task_ids
         highest = 0
         for tid in taken:
             match = re.fullmatch(re.escape(prefix) + r"(\d+)", tid)

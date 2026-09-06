@@ -104,6 +104,10 @@ def test_fallback_is_used_when_the_fts_query_errors(indexed_server, monkeypatch)
     real_store = indexed_server._store
 
     class BrokenConnection:
+        # A real connection always reports its transaction state; the double has
+        # to as well, now that the FTS path opens its own read snapshot.
+        in_transaction = False
+
         def execute(self, *args, **kwargs):
             raise sqlite3.OperationalError("boom")
 
@@ -166,3 +170,33 @@ def test_kinds_accepts_a_bare_string(indexed_server):
     out = indexed_server.backlog_search("usage", kinds="bug")
     assert "B-001" in out and "B-002" in out
     assert "eng-001" not in out and "ISS-001" not in out
+
+
+def test_the_count_and_the_rows_come_from_one_snapshot(indexed_server):
+    """`_load()` releases its snapshot before the FTS queries run, so a commit
+    landing between the count and the result query answered "1 match" above an
+    empty list. Both statements have to sit inside one read transaction."""
+    con = indexed_server._store().connection
+    statements: list[str] = []
+    con.set_trace_callback(statements.append)
+    try:
+        out = indexed_server.backlog_search("usage")
+    finally:
+        con.set_trace_callback(None)
+    assert "eng-001" in out
+
+    upper = [s.strip().upper() for s in statements]
+    count = next(i for i, s in enumerate(upper) if s.startswith("SELECT COUNT(*)"))
+    rows = next(i for i, s in enumerate(upper) if "BM25(ENTITY_FTS)" in s)
+    assert count < rows, statements
+    # An open snapshot at the count: the last transaction statement before it
+    # is a BEGIN, not the COMMIT that ended `_load()`'s own transaction.
+    opened = [
+        i for i, s in enumerate(upper[:count])
+        if s.startswith(("BEGIN", "COMMIT", "ROLLBACK"))
+    ]
+    assert opened and upper[opened[-1]].startswith("BEGIN"), statements
+    # …and it is still open at the row query.
+    between = upper[count:rows]
+    assert not any(s.startswith(("COMMIT", "ROLLBACK")) for s in between), statements
+    assert not con.in_transaction, "the read snapshot outlived the call"

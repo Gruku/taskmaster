@@ -250,17 +250,12 @@ def decide_from_files(project_root: Path, src: str, cwd: Path) -> str:
     try:
         import yaml
 
-        backlog_path = None
-        for candidate in [
-            project_root / ".taskmaster" / "backlog.yaml",
-            project_root / ".claude" / "backlog.yaml",
-            project_root / "backlog.yaml",
-        ]:
-            if candidate.is_file():
-                backlog_path = candidate
-                break
-
-        if backlog_path is None:
+        # `project_root` answers only for a root that holds `.taskmaster/`
+        # (both its resolution and its walk-up fallback require the directory),
+        # so the legacy `.claude/` and root-layout candidates this used to probe
+        # were unreachable.
+        backlog_path = project_root / ".taskmaster" / "backlog.yaml"
+        if not backlog_path.is_file():
             return "ALLOW"
 
         raw = yaml.safe_load(backlog_path.read_text(encoding="utf-8")) or {}
@@ -321,12 +316,15 @@ def decide(src: str, cwd: Path) -> str:
         try:
             return decide_from_store(db_file, src, cwd)
         except Exception as exc:
-            # An unreadable store is the moment the projection is worth most:
-            # falling straight to ALLOW would disable the gate on a machine
-            # where the backlog is still perfectly legible on disk.
-            _log(root, f"store unreadable ({exc!r}); reading the projection instead")
-    else:
-        _log(root, f"no store at {db_file}; reading the projection instead")
+            # Once a store exists it is the only source of truth: the
+            # projection is a lagging export of it, so a gate recorded seconds
+            # ago may not have reached `tasks/<id>.md`. Reading the files here
+            # can BLOCK a merge the store already cleared, from a stale failing
+            # gate, and the hook cannot tell that state from a current one. A
+            # gate that cannot read its own authority fails open, loudly.
+            _log(root, f"store unreadable ({exc!r}); allowing the merge")
+            return "ALLOW"
+    _log(root, f"no store at {db_file}; reading the projection instead")
     try:
         return decide_from_files(root, src, cwd)
     except Exception:

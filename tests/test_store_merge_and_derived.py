@@ -396,10 +396,10 @@ def test_archive_move_is_restored_when_later_export_step_rolls_back(
     archive_path = task_path.parent / "archive" / task_path.name
     real_replace = opened._replace_projection
 
-    def fail_archive(tx, rel, kind, ident, content, exported_seq):
+    def fail_archive(tx, rel, kind, ident, content, exported_seq, **kwargs):
         if kind == "task" and rel.startswith("tasks/archive/"):
             raise RuntimeError("fault after old projection removal")
-        return real_replace(tx, rel, kind, ident, content, exported_seq)
+        return real_replace(tx, rel, kind, ident, content, exported_seq, **kwargs)
 
     monkeypatch.setattr(opened, "_replace_projection", fail_archive)
     with pytest.raises(RuntimeError, match="fault after old projection removal"):

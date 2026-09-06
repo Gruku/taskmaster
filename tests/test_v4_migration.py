@@ -5,7 +5,8 @@ finds when it first opens a project (design spec decision 9), so opening the
 store *is* the migration. These are the same contracts, asserted against the
 store: every task field lands in `tasks/<id>.md`, `backlog.yaml` loses its task
 lists and gains the v4 marker, machine-local state moves under `local/`, the
-retired `snapshots/` directory goes away, and re-opening changes nothing.
+retired `snapshots/` backup directory moves there too rather than being
+deleted, and re-opening changes nothing.
 """
 from __future__ import annotations
 
@@ -78,13 +79,16 @@ def test_adoption_moves_all_fields_to_task_files(adopted):
     assert fm2["status"] == "done"
 
 
-def test_adoption_moves_local_and_deletes_snapshots(adopted):
+def test_adoption_moves_local_and_relocates_snapshots(adopted):
     backlog_path, _opened = adopted
     assert (backlog_path.parent / "local" / "viewer.json").exists()
     assert (backlog_path.parent / "local" / "auto" / "state.json").exists()
     assert not (backlog_path.parent / "viewer.json").exists()
     assert not (backlog_path.parent / "auto").exists()
+    # The pre-v4 backup directory leaves its legacy home, but adoption never
+    # destroys it: it is the only thing that could recover a bad adoption.
     assert not (backlog_path.parent / "snapshots").exists()
+    assert (backlog_path.parent / "local" / "snapshots" / "old.json").exists()
 
 
 def test_adoption_is_idempotent(adopted):

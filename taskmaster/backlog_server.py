@@ -475,11 +475,53 @@ def _normalize_task(task: dict) -> dict:
     return task
 
 
-def _normalize_loaded(data: dict) -> None:
-    """Backfill `created` and normalize legacy P-code priorities in place."""
+_MISSING = object()
+
+_NORMALIZED_FIELDS = ("created", "priority")
+
+
+def _normalize_loaded(data: dict) -> list[tuple[dict, str, object, object]]:
+    """Backfill `created` and normalize legacy P-code priorities in place.
+
+    Returns `(task, field, synthesized, prior)` for every value it invented, so
+    a mutating caller can put the entity back the way it found it before the
+    write-back diff runs. These are display values, not facts: `created` falls
+    back to a fixed sentinel date the task never had.
+    """
+    invented: list[tuple[dict, str, object, object]] = []
     for epic in data.get("epics", []) or []:
         for task in epic.get("tasks", []) or []:
+            prior = {
+                field: task.get(field, _MISSING) for field in _NORMALIZED_FIELDS
+            }
             _normalize_task(task)
+            for field, was in prior.items():
+                now = task.get(field, _MISSING)
+                if now is not was and now != was:
+                    invented.append((task, field, now, was))
+    return invented
+
+
+def _drop_normalization(invented: list[tuple[dict, str, object, object]]) -> None:
+    """Undo `_normalize_loaded`'s backfills that nothing else has overwritten.
+
+    The dict write-back diffs against a snapshot taken *before* normalization
+    ran, so without this every task the backfill touched counted as edited: one
+    `backlog_update_task` produced a second `changes` row and rewrote an
+    unrelated task's file, stamping it with a `created` date it never had. On a
+    backlog with hundreds of pre-`created` tasks the first write of a session
+    rewrote all of them, and "exactly the touched file changed" was false.
+
+    A field the tool itself set no longer holds the synthesized value, so it is
+    left alone and persists.
+    """
+    for task, field, synthesized, prior in invented:
+        if task.get(field, _MISSING) != synthesized:
+            continue
+        if prior is _MISSING:
+            task.pop(field, None)
+        else:
+            task[field] = prior
 
 
 @contextmanager
@@ -506,12 +548,16 @@ def _transaction(*, tool: str, backlog_path: "Path | None" = None):
             _TX_STATE.last_seq = None
             _TX_STATE.export_warnings = []
             try:
-                _normalize_loaded(data)
+                invented = _normalize_loaded(data)
                 # No context rebuild here: the store's dict loader already
                 # derived it, and `_mutate_and_save` re-derives it once on the
                 # latch. Doing it on entry as well cost a third full pass over
                 # every task for every tool call, mutating or not.
                 yield data
+                # …and out again before the write-back diff: a backfill is a
+                # display value, and persisting it turned one tool call into a
+                # rewrite of every task that happened to lack a `created`.
+                _drop_normalization(invented)
                 if not frame.latched:
                     raise _UnlatchedTransaction
             finally:
@@ -701,6 +747,11 @@ def _render_after_commit(renderer) -> None:
         frame.renderers.append(renderer)
 
 
+def _append_seq(result: str, seq: int | None) -> str:
+    """`result [seq N]`, the suffix `_with_seq` puts on a string answer."""
+    return f"{result} [seq {seq}]" if seq is not None else result
+
+
 def _with_seq(result, frame: "_TxFrame"):
     """Stamp the committed `changes.seq` and any export notice onto a result.
 
@@ -739,7 +790,7 @@ def _with_seq(result, frame: "_TxFrame"):
         return result
     for notice in notices:
         result = f"{result} ({notice})"
-    return f"{result} [seq {seq}]" if seq is not None else result
+    return _append_seq(result, seq)
 
 
 def _as_json_result(result: str):
@@ -1454,11 +1505,14 @@ def _derive_context(data: dict) -> None:
         s = t.get("status", "todo")
         status_counts[s] = status_counts.get(s, 0) + 1
 
+        # A hand-edited or half-recovered entity can be missing any of these.
+        # The context block is built on every load, so an unguarded index here
+        # took down every tool that reads the backlog, not just the dashboard.
         if s in ("in-progress", "in-review"):
             entry = {
-                "id": t["id"],
-                "title": t["title"],
-                "epic": epic["id"],
+                "id": t.get("id", ""),
+                "title": t.get("title", ""),
+                "epic": epic.get("id", ""),
                 "branch": t.get("branch", ""),
             }
             if t.get("locked_by"):
@@ -1466,9 +1520,9 @@ def _derive_context(data: dict) -> None:
             in_progress.append(entry)
         elif s == "blocked":
             blocked.append({
-                "id": t["id"],
-                "title": t["title"],
-                "epic": epic["id"],
+                "id": t.get("id", ""),
+                "title": t.get("title", ""),
+                "epic": epic.get("id", ""),
                 "blockers": t.get("blockers", ""),
             })
         elif s == "done" and t.get("completed"):
@@ -1477,13 +1531,16 @@ def _derive_context(data: dict) -> None:
     # recent_completed: last 5 by completed date
     done_tasks.sort(key=lambda t: str(t.get("completed", "")), reverse=True)
     recent_completed = [
-        {"id": t["id"], "title": t["title"], "completed": str(t["completed"])}
+        {"id": t.get("id", ""), "title": t.get("title", ""),
+         "completed": str(t.get("completed", ""))}
         for t in done_tasks[:5]
     ]
 
     # next_up: top 3 priority todo across active epics, filtered to active phase
     active_ph = _active_phase(data)
-    task_statuses: dict[str, str] = {t["id"]: t.get("status", "todo") for t, _ in all_tasks}
+    task_statuses: dict[str, str] = {
+        t.get("id", ""): t.get("status", "todo") for t, _ in all_tasks
+    }
     todo_tasks = []
     for t, epic in all_tasks:
         if t.get("status") != "todo" or epic.get("status") != "active":
@@ -1862,10 +1919,14 @@ def backlog_status(verbose: bool = False) -> str:
         focus = "—"
         for t in active_tasks:
             if t.get("status") in ("in-progress", "in-review"):
-                focus = t["title"]
+                focus = t.get("title") or t.get("id") or "—"
                 break
-        name = epic["name"]
-        if _epic_stats(data, epic["id"])["closeable"]:
+        # The dashboard is the first call of every session. One epic with no
+        # `name` used to take it down with a KeyError while every neighbouring
+        # access here already used `.get`; an unnamed epic is a thing to show,
+        # not a reason to show nothing.
+        name = epic.get("name") or epic.get("id") or "(unnamed epic)"
+        if _epic_stats(data, epic.get("id"))["closeable"]:
             name = f"{name} [closeable]"
         lines.append(f"| {name} | {_epic_status_label(epic.get('status', 'planned'))} | {done_count}/{total} | {focus} |")
 
@@ -2538,8 +2599,16 @@ def _search_via_index(query: str, kinds: list[str] | None) -> str | None:
         return None
     # A filter of only unknown kinds searches everything, as it always has.
     selected = [k for k in kinds or () if k in _SEARCH_KINDS] or list(_SEARCH_KINDS)
+    con = None
+    owns_snapshot = False
     try:
         con = _store().connection
+        # The count and the rows are one answer and must come from one snapshot.
+        # `_load()` has already released its own, so a commit landing between
+        # the two queries produced "1 match" above an empty list.
+        owns_snapshot = not con.in_transaction
+        if owns_snapshot:
+            con.execute("BEGIN")
         # `backlog` and `project` are whole-file documents, not work items: they
         # are indexed so `backlog_query` can reach them, and excluded here so a
         # common word cannot return the entire backlog as one result row.
@@ -2560,6 +2629,9 @@ def _search_via_index(query: str, kinds: list[str] | None) -> str | None:
             f"{source} ORDER BY rank LIMIT {int(_SEARCH_LIMIT)}", params).fetchall()
     except (sqlite3.Error, OSError, ValueError, store.LegacyLayoutError):
         return None
+    finally:
+        if owns_snapshot and con is not None and con.in_transaction:
+            con.rollback()
 
     body = "\n".join(f"- {_render_search_row(tuple(r)[:6])}" for r in rows)
     return f"**{total} match{'es' if total != 1 else ''}** for `{query}`:\n" + body
@@ -3169,7 +3241,12 @@ def _adopt_project_into_store(tool: str) -> str:
     if st.warning:
         lines.append(f"- Warning: {st.warning}")
     lines.append("Run `backlog_store_status` any time for the full report.")
-    return "\n".join(lines)
+    # Adoption mutates, so its answer names the commit it produced, like every
+    # other mutating tool (R6, decision 7). It is not `@_transactional` — the
+    # adoption happens inside the store's own bootstrap transaction, which is
+    # already closed by the time `_load()` returns — so the seq is taken from
+    # the committed state rather than from a frame.
+    return _append_seq("\n".join(lines), st.max_seq)
 
 
 @mcp.tool()
@@ -5112,10 +5189,14 @@ def backlog_continuity_items(
     bp = _backlog_path()
     if not bp.exists():
         return json.dumps({"items": [], "view": view, "error": "no backlog"})
+    # One loaded tree for every kind the rail projects: tasks come from its
+    # epics (backlog.yaml has none on v4), and the rest from its `_rows`.
+    tree = _load()
     items = _continuity_items(
         bp,
         include_auto_stage=include_auto_stage,
-        handover_rows=_dict_rows(_load(), "handover"),
+        handover_rows=_dict_rows(tree, "handover"),
+        data=tree,
     )
     return json.dumps({"items": items, "view": view}, default=str)
 
@@ -8875,6 +8956,30 @@ def illegal_transition_message(task: dict | None, after: str | None) -> str | No
     )
 
 
+def _invalid_status_error(patch: dict) -> dict:
+    """`{"status": …}` when the write supplies a status that is not one.
+
+    `illegal_transition_message` reads `after is None` as "no status in this
+    write" and allows it, so `{"status": null}` skipped the transition table
+    entirely and `task.update(patch)` persisted a null the MCP tools reject and
+    the board cannot place in any column. An *absent* `status` key is still a
+    write that names no status and is untouched here; an explicitly supplied
+    one has to be a real status.
+    """
+    if "status" not in patch:
+        return {}
+    supplied = patch["status"]
+    if supplied in VALID_STATUSES:
+        return {}
+    shown = "null" if supplied is None else repr(supplied)
+    return {
+        "status": (
+            f"invalid status {shown}. "
+            f"Valid: {', '.join(sorted(VALID_STATUSES))}"
+        )
+    }
+
+
 def _archived_transition_error(task: dict | None, patch: dict) -> dict:
     """`illegal_transition_message` in the `{field: error}` shape the viewer
     write path collects errors in."""
@@ -8925,6 +9030,7 @@ def _viewer_update_task(
         errors = validate_task_write(task_id, patch, _backlog_path(), data=data)
         if "_task" in errors:
             raise KeyError(errors["_task"])
+        errors.update(_invalid_status_error(patch))
         errors.update(_archived_transition_error(task, patch))
         if errors:
             raise ViewerWriteRejected(errors)
@@ -8979,6 +9085,7 @@ def _viewer_create_task(payload: dict) -> str:
     new_id = ""
     with _transaction(tool="viewer:POST /api/tasks") as data:
         errors = validate_task_write("<new>", payload, _backlog_path(), data=data)
+        errors.update(_invalid_status_error(payload))
         if errors:
             raise ViewerWriteRejected(errors)
         epic = next(
@@ -9783,6 +9890,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
             except FileNotFoundError:
                 data = None
             errors = validate_task_write(tid, patch, data=data)
+            errors.update(_invalid_status_error(patch))
             if data is not None and tid != "<new>":
                 found = _find_task(data, tid)
                 if found is not None:
@@ -10847,13 +10955,11 @@ def backlog_linear_list() -> str:
     if not bp.exists():
         return json.dumps({"trackers": []})
 
+    # `tracker` is a row-backed kind: reading `trackers/*.md` here made a
+    # tracker whose export had not landed read as absent (decision 1).
     out = []
-    for tid in _list_tracker_ids(bp):
+    for tid, fm, _body in _dict_rows(_load(), "tracker"):
         if not tid.startswith("linear-"):
-            continue
-        try:
-            fm, _ = _read_tracker(bp, tid)
-        except (OSError, yaml.YAMLError):
             continue
         out.append({
             "id": fm.get("id"),
@@ -10882,15 +10988,11 @@ def backlog_linear_show(tracker_id: str) -> str:
     if not bp.exists():
         return json.dumps({"error": "No backlog found."})
 
-    tp = _tracker_path(bp, tracker_id)
-    if not tp.exists():
+    row = _dict_row(_load(), "tracker", tracker_id)
+    if row is None:
         return json.dumps({"error": f"tracker {tracker_id!r} not found"})
 
-    try:
-        fm, body = _read_tracker(bp, tracker_id)
-    except (OSError, yaml.YAMLError) as e:
-        return json.dumps({"error": f"cannot read tracker: {e}"})
-
+    fm, body = row[0], row[1] or ""
     return json.dumps({"frontmatter": fm, "body": body}, indent=2, default=str)
 
 

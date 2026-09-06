@@ -309,8 +309,15 @@ def test_missing_store_falls_back_to_files_and_logs(tmp_path, monkeypatch, decid
     assert "no store" in log
 
 
-def test_corrupt_store_falls_back_to_the_projection(tmp_path, monkeypatch, decide_module):
-    """A broken store must not be a way to walk a merge past the gate."""
+def test_corrupt_store_allows_and_logs(tmp_path, monkeypatch, decide_module):
+    """An existing-but-unreadable store fails OPEN, it does not read the files.
+
+    The projection is a lagging export of the store, not a second source of
+    truth: once a store exists, a gate recorded seconds ago may not have
+    reached `tasks/<id>.md` yet. Deciding from the files in that state can
+    BLOCK a merge the store already cleared, and the hook has no way to tell
+    the two apart. So the projection answers only when the store is ABSENT.
+    """
     root = tmp_path / "proj"
     monkeypatch.setenv("TASKMASTER_ROOT", str(root))
     _write_projection(root, policy=True)
@@ -319,18 +326,18 @@ def test_corrupt_store_falls_back_to_the_projection(tmp_path, monkeypatch, decid
     _adopt(root)
     (root / ".taskmaster" / "local" / "store.db").write_bytes(b"not a database")
 
-    assert decide_module.decide("feature/x", root).startswith("BLOCK:T-001:")
+    assert decide_module.decide("feature/x", root) == "ALLOW"
     log = (root / ".taskmaster" / "local" / "hook.log").read_text(encoding="utf-8")
     assert "store unreadable" in log
+    assert "allowing" in log
 
 
-def test_unreadable_wal_store_falls_back_to_the_projection(
-    tmp_path, monkeypatch, decide_module
-):
+def test_unreadable_wal_store_allows_and_logs(tmp_path, monkeypatch, decide_module):
     """The real failure mode: a WAL store whose `-shm` cannot be created.
 
     SQLite defers that to the first statement, so a guard wrapped around the
-    open alone would let the error escape and fail the gate open.
+    open alone would let the error escape — the hook has to catch it around the
+    whole read, and then fail open.
     """
     root = tmp_path / "proj"
     monkeypatch.setenv("TASKMASTER_ROOT", str(root))
@@ -345,9 +352,39 @@ def test_unreadable_wal_store_falls_back_to_the_projection(
             (local / leftover).unlink()
     (local / "store.db-shm").mkdir()
 
-    assert decide_module.decide("feature/x", root).startswith("BLOCK:T-001:")
+    assert decide_module.decide("feature/x", root) == "ALLOW"
     log = (local / "hook.log").read_text(encoding="utf-8")
     assert "store unreadable" in log
+
+
+def test_an_unreadable_store_never_blocks_from_a_stale_projection(
+    tmp_path, monkeypatch, decide_module
+):
+    """The case the ruling is for: the store holds a passing gate the export
+    never reached, so the file still shows the old failing one. Reading the
+    files here blocks a merge the store already cleared."""
+    root = tmp_path / "proj"
+    monkeypatch.setenv("TASKMASTER_ROOT", str(root))
+    _write_projection(root, policy=True)
+    _adopt(root)
+    # The store's copy of the task passes; the projection's copy still fails.
+    _patch_task(
+        root,
+        merge_gate_freshness="any",
+        gates={"review-gate": {"verdict": "pass"}},
+    )
+    (root / ".taskmaster" / "tasks" / "T-001.md").write_text(
+        "---\nid: T-001\ntitle: Test task\nbranch: feature/x\nepic: core\n"
+        "gates:\n  review-gate:\n    verdict: fail\n---\n",
+        encoding="utf-8",
+    )
+    # The files, read on their own, would refuse this merge.
+    assert decide_module.decide_from_files(root, "feature/x", root).startswith(
+        "BLOCK:T-001:"
+    )
+    (root / ".taskmaster" / "local" / "store.db").write_bytes(b"not a database")
+
+    assert decide_module.decide("feature/x", root) == "ALLOW"
 
 
 def test_the_read_connection_cannot_write_or_create_a_store(stored_project, decide_module):
