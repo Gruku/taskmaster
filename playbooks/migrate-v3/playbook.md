@@ -10,7 +10,7 @@ Call `backlog_status`; its first line is `**Schema:** v<N>`. If no backlog exist
 
 ## Step 2: Show pre-flight summary
 
-Gather counts via `backlog_list_tasks` and `backlog_status`. Present: total tasks, active tasks, and what adoption changes on disk — heavy fields land in per-entity files at `.taskmaster/tasks/<id>.md`, the derived `context:` block is dropped from `backlog.yaml`, and id-less epics, phases and tasks are given deterministic ids. For the field-by-field breakdown: `references/v2-vs-v3.md`.
+Gather counts via `backlog_list_tasks` and `backlog_status`. Present: total tasks, active tasks, and what adoption changes on disk — heavy fields land in per-entity files at `.taskmaster/tasks/<id>.md`, the derived `context:` block is dropped from `backlog.yaml`, id-less epics, phases and tasks are given deterministic ids, and `viewer.json`, `auto/`, `snapshots/` and `PROGRESS.md` move under `local/` (moved, never deleted; a taken name gets a `-2` suffix). Warn on a large backlog: adoption rewrites and verifies every projection file once, which takes minutes on a few thousand files. For the field-by-field breakdown: `references/v2-vs-v3.md`.
 
 ## Step 3: Confirm opt-in (confirm with the user — MANDATORY)
 
@@ -44,7 +44,7 @@ AskUserQuestion({
 
 ## Step 4: Run the adoption
 
-Call `backlog_migrate_v3()`. Surface the response verbatim. A success starts `Adopted into the store (backlog_migrate_v3).` and names the store path, the store schema version and max seq, and the row counts per kind; it may add lines for canonicalized files, quarantined or dirty files, and a filesystem warning. Anything starting `Error:` — no backlog, several `backlog.yaml` files, or a canonical layout that already holds different content — is surfaced as-is; stop there.
+Call `backlog_migrate_v3()`. Surface the response verbatim. A success starts `Adopted into the store (backlog_migrate_v3).` and names the store path, the store schema version and max seq, and the row counts per kind; it may add lines for canonicalized files, quarantined or dirty files, and a filesystem warning. Anything starting `Error:` — no backlog, several `backlog.yaml` files, or a canonical layout that already holds different content — is surfaced as-is; stop there. So is `adoption refused: …`, which means a rendered file did not read back as what it was rendered from. It names the entity, nothing on disk was changed, and the empty database the open created is removed. Fix that entity, then re-run; never retry blind.
 
 ## Verifying writes
 
