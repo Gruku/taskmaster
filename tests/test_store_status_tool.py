@@ -321,3 +321,18 @@ def test_read_only_status_reads_a_wal_store_without_its_shm(
     assert "corrupt" not in (status.warning or "").lower(), status.warning
     after = {path.name for path in db.parent.iterdir()}
     assert not [name for name in after - before if "corrupt" in name], after - before
+
+
+def test_report_names_a_quarantined_linear_queue(project: Path) -> None:
+    """A legacy queue file the import could not read is moved aside the same
+    way a corrupt database is, so the Corrupt line has to count it too —
+    otherwise the pushes it held disappear with nothing anywhere saying so."""
+    quarantined = project.parent / "integrations" / (
+        "linear-queue.json.corrupt-20260101T000000Z"
+    )
+    quarantined.parent.mkdir(parents=True, exist_ok=True)
+    quarantined.write_text("{not json", encoding="utf-8")
+
+    corrupt_line = _line(_report(project), "Corrupt:")
+    assert corrupt_line.startswith("Corrupt: 1")
+    assert quarantined.name in corrupt_line
