@@ -2538,8 +2538,16 @@ def _search_via_index(query: str, kinds: list[str] | None) -> str | None:
         return None
     # A filter of only unknown kinds searches everything, as it always has.
     selected = [k for k in kinds or () if k in _SEARCH_KINDS] or list(_SEARCH_KINDS)
+    con = None
+    owns_snapshot = False
     try:
         con = _store().connection
+        # The count and the rows are one answer and must come from one snapshot.
+        # `_load()` has already released its own, so a commit landing between
+        # the two queries produced "1 match" above an empty list.
+        owns_snapshot = not con.in_transaction
+        if owns_snapshot:
+            con.execute("BEGIN")
         # `backlog` and `project` are whole-file documents, not work items: they
         # are indexed so `backlog_query` can reach them, and excluded here so a
         # common word cannot return the entire backlog as one result row.
@@ -2560,6 +2568,9 @@ def _search_via_index(query: str, kinds: list[str] | None) -> str | None:
             f"{source} ORDER BY rank LIMIT {int(_SEARCH_LIMIT)}", params).fetchall()
     except (sqlite3.Error, OSError, ValueError, store.LegacyLayoutError):
         return None
+    finally:
+        if owns_snapshot and con is not None and con.in_transaction:
+            con.rollback()
 
     body = "\n".join(f"- {_render_search_row(tuple(r)[:6])}" for r in rows)
     return f"**{total} match{'es' if total != 1 else ''}** for `{query}`:\n" + body

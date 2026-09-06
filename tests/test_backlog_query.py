@@ -152,6 +152,45 @@ def test_declared_names_finds_cte_names_and_ignores_strings():
     assert declared_names("SELECT 1") == frozenset()
 
 
+def test_a_cte_name_never_authorizes_the_schema_table_it_shadows(indexed_server):
+    """`projection_base` holds whole file bodies as blobs and is off the
+    allowlist on purpose. Declaring a CTE of that name used to add it to the
+    authorizer's readable set, and the authorizer ignored `dbname` — so an
+    explicit `main.projection_base` reached the real table."""
+    out = indexed_server.backlog_query(
+        "WITH projection_base AS (SELECT 1) SELECT * FROM main.projection_base")
+    assert out.startswith("Error:"), out
+    assert "not authorized" in out and "projection_base" in out, out
+
+
+def test_a_window_name_never_authorizes_the_schema_table_it_shadows(indexed_server):
+    """The same hole through a `WINDOW ... AS ()` declaration, which the
+    declared-name regex matches just as readily as a CTE."""
+    out = indexed_server.backlog_query(
+        "SELECT * FROM projection_base WINDOW projection_base AS ()")
+    assert out.startswith("Error:"), out
+    assert "not authorized" in out and "projection_base" in out, out
+
+
+def test_the_authorizer_reads_a_declared_name_only_outside_a_real_schema():
+    import sqlite3
+
+    from taskmaster.query_guard import Authorizer
+
+    az = Authorizer(frozenset({"projection_base"}))
+    # A schema table read, whatever the query declared, is held to the
+    # fixed allowlist.
+    assert az(sqlite3.SQLITE_READ, "projection_base", "content", "main", None) \
+        == sqlite3.SQLITE_DENY
+    assert Authorizer(frozenset({"projection_base"}))(
+        sqlite3.SQLITE_READ, "projection_base", "content", "temp", None
+    ) == sqlite3.SQLITE_DENY
+    # A read reported against no schema is the CTE/window form the allowance exists for.
+    assert Authorizer(frozenset({"c"}))(
+        sqlite3.SQLITE_READ, "c", "x", None, None
+    ) == sqlite3.SQLITE_OK
+
+
 def test_cte_named_after_a_forbidden_object_cannot_reach_it(indexed_server):
     """A CTE name shadows any schema object, so declaring one reaches nothing new."""
     out = indexed_server.backlog_query(

@@ -99,8 +99,11 @@ _DECLARED = re.compile(r"([A-Za-z_][A-Za-z0-9_$]*)\s*(?:\([^()]*\))?\s+AS\s*\(",
 def declared_names(sql: str) -> frozenset[str]:
     """Names the query itself introduces via `WITH ... AS (` or `WINDOW ... AS (`.
 
-    Safe to add to the read allowlist: a CTE name shadows any schema object of the
-    same name for the whole query, so declaring one can never reach a real table.
+    A declared name is honoured only for a read SQLite reports against no schema
+    (see `Authorizer._SCHEMAS`). Treating it as readable everywhere was the hole:
+    a CTE name shadows a schema object for unqualified references, but
+    `main.<name>` still reaches the real table, so declaring `projection_base`
+    and then selecting `main.projection_base` read a blocked table.
     """
     return frozenset(m.group(1) for m in _DECLARED.finditer(_mask(sql)))
 
@@ -157,16 +160,30 @@ class Authorizer:
     "not authorized" carries no object.
     """
 
+    # A read SQLite attributes to one of these is a read of a real schema table,
+    # never of a name the query introduced: a CTE or window name is reported with
+    # no schema at all. The fixed allowlist is the only rule inside them.
+    _SCHEMAS = frozenset({"main", "temp"})
+
     def __init__(self, declared: frozenset[str] = frozenset()) -> None:
-        self.readable = READABLE_TABLES | declared
+        self.readable = READABLE_TABLES
+        self.declared = frozenset(declared)
         self.denial: str | None = None
 
     def __call__(self, action: int, arg1, arg2, dbname, source) -> int:  # noqa: ARG002
         if action in (sqlite3.SQLITE_SELECT, sqlite3.SQLITE_FUNCTION, sqlite3.SQLITE_RECURSIVE):
             # SQLITE_RECURSIVE is the step of a `WITH RECURSIVE` CTE, not a write.
             return sqlite3.SQLITE_OK
-        if action == sqlite3.SQLITE_READ and arg1 in self.readable:
-            return sqlite3.SQLITE_OK
+        if action == sqlite3.SQLITE_READ:
+            if arg1 in self.readable:
+                return sqlite3.SQLITE_OK
+            # `WITH projection_base AS (...) SELECT * FROM main.projection_base`
+            # read the blocked table: the declared name went into the allowlist
+            # and the schema was ignored, so the explicit `main.` qualifier
+            # named the real table while the allowance meant for the CTE let it
+            # through. Declared names authorize nothing inside a real schema.
+            if dbname not in self._SCHEMAS and arg1 in self.declared:
+                return sqlite3.SQLITE_OK
         # FTS5 issues `PRAGMA data_version` internally on every MATCH; it only reads a
         # counter. `validate` already rejects a user-written PRAGMA, so this can only
         # come from inside the virtual table.

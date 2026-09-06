@@ -188,3 +188,42 @@ def test_only_v3_artifacts_moved_other_claude_files_untouched(tmp_path):
     # Backlog moved
     assert (tmp_path / ".taskmaster" / "backlog.yaml").exists()
     assert not (tmp_path / ".claude" / "backlog.yaml").exists()
+
+
+def test_project_and_linear_config_move_with_the_backlog(tmp_path):
+    """`project.yaml` (policies) and `linear.yaml` (tracker config) sit beside
+    backlog.yaml and are read from the canonical location. Left behind by the
+    migration they simply vanish: adoption reads `.taskmaster/`, the policies
+    and the Linear workspaces are gone, and a rerun answers `already_canonical`
+    and never recovers them."""
+    from taskmaster.taskmaster_v3 import canonicalize_layout
+    _write(tmp_path / ".claude" / "backlog.yaml", "meta: {schema_version: 3}\n")
+    _write(tmp_path / ".claude" / "project.yaml", "conventions: {policies: {}}\n")
+    _write(tmp_path / ".claude" / "linear.yaml", "workspaces: [{alias: cm}]\n")
+
+    summary = canonicalize_layout(tmp_path)
+
+    assert summary["status"] == "migrated", summary
+    assert (tmp_path / ".taskmaster" / "project.yaml").read_text(
+        encoding="utf-8") == "conventions: {policies: {}}\n"
+    assert (tmp_path / ".taskmaster" / "linear.yaml").read_text(
+        encoding="utf-8") == "workspaces: [{alias: cm}]\n"
+    assert not (tmp_path / ".claude" / "project.yaml").exists()
+    assert not (tmp_path / ".claude" / "linear.yaml").exists()
+
+
+def test_a_conflicting_project_yaml_aborts_the_migration(tmp_path):
+    """The config files join the conflict-checked inventory, so a destination
+    holding different content stops the whole move rather than clobbering it."""
+    from taskmaster.taskmaster_v3 import canonicalize_layout
+    _write(tmp_path / ".claude" / "backlog.yaml", "meta: {schema_version: 3}\n")
+    _write(tmp_path / ".claude" / "project.yaml", "conventions: {a: 1}\n")
+    _write(tmp_path / ".taskmaster" / "project.yaml", "conventions: {a: 2}\n")
+
+    summary = canonicalize_layout(tmp_path)
+
+    assert summary["status"] == "conflicts", summary
+    assert any("project.yaml" in c["src"] for c in summary["conflicts"]), summary
+    assert (tmp_path / ".claude" / "backlog.yaml").exists(), "nothing moves"
+    assert (tmp_path / ".taskmaster" / "project.yaml").read_text(
+        encoding="utf-8") == "conventions: {a: 2}\n"

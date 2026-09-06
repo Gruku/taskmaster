@@ -1133,6 +1133,14 @@ def load_v4(backlog_path: Path) -> dict[str, Any]:
 # `store.Store._known_entity_files`.
 _CANONICALIZE_ITEMS: tuple[str, ...] = (
     "backlog.yaml",
+    # `project.yaml` (conventions and policies) and `linear.yaml` (tracker
+    # workspaces) live beside backlog.yaml and are only ever read from the
+    # canonical location. Left in the legacy layout they do not fall back —
+    # they vanish: adoption reads `.taskmaster/`, the policies and the Linear
+    # config are simply absent, and a rerun answers `already_canonical` and
+    # never recovers them.
+    "project.yaml",
+    "linear.yaml",
     "PROGRESS.md",
     "viewer.json",
     "tasks",
