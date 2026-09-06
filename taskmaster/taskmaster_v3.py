@@ -810,9 +810,20 @@ def legacy_links_to_typed(entity: dict, kind: str) -> list[dict]:
     return out
 
 
+# Fields the link migration may remove once they are mirrored into `links`.
+# Only fields nothing reads back belong here. Three are deliberately absent
+# because they are live schema, not legacy:
+#   task.depends_on     — every dependency gate (next_available, pick_task,
+#                         validate, blast_radius, batch_preview) reads the
+#                         scalar field and never the `links` array, so
+#                         dropping it silently unblocks every task.
+#   issue.fixed_in_task
+#   issue.duplicate_of  — `_validate_issue` requires them for status=fixed and
+#                         status=duplicate and runs on every write, so dropping
+#                         them makes a resolved issue permanently unwritable.
 _LEGACY_FIELDS_TO_DROP: dict[str, tuple[str, ...]] = {
-    "task":     ("depends_on", "related_issues"),
-    "issue":    ("related_tasks", "fixed_in_task", "duplicate_of"),
+    "task":     ("related_issues",),
+    "issue":    ("related_tasks",),
     "handover": ("supersedes", "superseded_by"),
     "idea":     ("related_tasks",),
 }

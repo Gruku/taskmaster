@@ -12,6 +12,7 @@ indicate schema breaks or removed surfaces.
 - Linear: an explicit `/linear retry` no longer requeues a row a drain currently holds, so the same push can no longer be issued twice; a claim whose lease has expired is still reachable, and the retry reports `in_flight_skipped`.
 - Linear: an enqueue the write survives is now recorded in `store.log` with the task id and the reason, and `backlog_linear_status` reports `failed_enqueues`.
 - `backlog_store_status`: the `Corrupt` line now counts a quarantined legacy `integrations/linear-queue.json` alongside moved-aside databases.
+- `scripts/migrate_links` no longer drops `task.depends_on`, `issue.fixed_in_task` or `issue.duplicate_of`: all three are live schema the server still reads, so migrating a backlog no longer silently unblocks every task or leaves a resolved issue unwritable.
 
 ---
 ## 6.0.0
