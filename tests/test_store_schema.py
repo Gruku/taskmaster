@@ -9,7 +9,6 @@ import subprocess
 import sys
 import threading
 import uuid
-from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -262,7 +261,6 @@ def test_connection_is_reused_per_thread_and_isolated_between_threads(
 
     real_connect = store.sqlite3.connect
     records = []
-    by_thread = defaultdict(list)
     record_lock = threading.Lock()
 
     def recording_connect(*args, **kwargs):
@@ -270,8 +268,28 @@ def test_connection_is_reused_per_thread_and_isolated_between_threads(
         owner = threading.get_ident()
         with record_lock:
             records.append((owner, connection))
-            by_thread[owner].append(id(connection))
         return connection
+
+    def cached_ids(owner):
+        """The connections `owner` still holds, newest last.
+
+        A cold open also announces itself through a short-lived handle so a
+        plain read never waits on the writer mutex to register a session. That
+        handle is closed before the open returns and is not the per-thread
+        cached connection this test is about.
+        """
+        live = []
+        with record_lock:
+            recorded = list(records)
+        for recorded_owner, connection in recorded:
+            if recorded_owner != owner:
+                continue
+            try:
+                connection.execute("SELECT 1")
+            except sqlite3.ProgrammingError:
+                continue
+            live.append(id(connection))
+        return live
 
     monkeypatch.setattr(store.sqlite3, "connect", recording_connect)
 
@@ -287,8 +305,7 @@ def test_connection_is_reused_per_thread_and_isolated_between_threads(
         store.open_store(root=root, session=f"{label}-two")
         owner = threading.get_ident()
         barrier.wait()
-        with record_lock:
-            return owner, tuple(by_thread[owner])
+        return owner, tuple(cached_ids(owner))
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         first = pool.submit(open_twice, "worker-a")
@@ -297,10 +314,10 @@ def test_connection_is_reused_per_thread_and_isolated_between_threads(
         barrier.wait()
         worker_results = [first.result(), second.result()]
 
-    assert len(by_thread[main_thread]) == 1
+    assert len(cached_ids(main_thread)) == 1
     assert len({owner for owner, _ids in worker_results}) == 2
     assert all(len(ids) == 1 for _owner, ids in worker_results)
-    connection_ids = {by_thread[main_thread][0]}
+    connection_ids = {cached_ids(main_thread)[0]}
     connection_ids.update(ids[0] for _owner, ids in worker_results)
     assert len(connection_ids) == 3
 

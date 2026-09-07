@@ -31,6 +31,17 @@ def _isolated_store_state(monkeypatch):
     store.reset_for_tests()
 
 
+def _force_locked_open(monkeypatch):
+    """Make the open take the writer mutex and rebuild the schema.
+
+    A database that exists, reads clean and is already at the current schema is
+    adopted without the mutex and without `_prepare_schema`, so a test that
+    fakes corruption by patching `_prepare_schema` would never reach the
+    contract it is checking.
+    """
+    monkeypatch.setattr(store.Store, "_open_existing_unlocked", lambda self: False)
+
+
 def _write_projection(tmp_path: Path) -> tuple[Path, Path]:
     root = tmp_path / "repo"
     backlog_path = root / ".taskmaster"
@@ -288,6 +299,7 @@ def test_failed_quick_check_rebuild_preserves_dirty_commit_in_backup(
         return real_prepare(self, connection)
 
     monkeypatch.setattr(store.Store, "_prepare_schema", fail_first_quick_check)
+    _force_locked_open(monkeypatch)
     rebuilt = store.open_store(backlog_path=backlog_path, session="rebuild-reader")
 
     assert _task(rebuilt.load_dict())["title"] == "Projected title"
@@ -370,6 +382,7 @@ def test_open_operational_error_never_invokes_recovery(
 
     monkeypatch.setattr(store.Store, "_prepare_schema", fail_prepare)
     monkeypatch.setattr(store.Store, "_recover_corrupt_database", forbidden_recovery)
+    _force_locked_open(monkeypatch)
 
     with pytest.raises(sqlite3.OperationalError, match=re.escape(message)):
         store.open_store(backlog_path=backlog_path, session="transient-open")
@@ -490,7 +503,10 @@ def test_busy_diagnostic_uses_a_separate_bounded_connection(tmp_path, monkeypatc
     diagnostic, args, kwargs = calls[0]
     assert diagnostic is not primary
     assert args[0] == f"file:{opened.db_path.as_posix()}?mode=rw"
-    assert kwargs["timeout"] == 2.0
+    # A diagnostic runs on a store that is by definition contended, so its own
+    # wait is pure added latency on top of the timeout that already expired.
+    assert kwargs["timeout"] == store.Store._DIAGNOSTIC_TIMEOUT_MS / 1000
+    assert store.Store._DIAGNOSTIC_TIMEOUT_MS <= 300
     assert kwargs["uri"] is True
     with pytest.raises(sqlite3.ProgrammingError):
         diagnostic.execute("SELECT 1")
