@@ -83,7 +83,7 @@ from taskmaster.taskmaster_v3 import (
 )
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 PROJECTION_SCHEMA = 5
 BUSY_TIMEOUT_MS = 30_000
 HEARTBEAT_INTERVAL_SECONDS = 20.0
@@ -242,7 +242,9 @@ CREATE TABLE IF NOT EXISTS projection(
   size INTEGER,
   dirty INTEGER DEFAULT 0,
   quarantined INTEGER DEFAULT 0,
-  exported_seq INTEGER
+  exported_seq INTEGER,
+  quarantine_mtime REAL,
+  quarantine_size INTEGER
 );
 CREATE TABLE IF NOT EXISTS projection_base(file TEXT PRIMARY KEY, content BLOB);
 CREATE TABLE IF NOT EXISTS sessions(
@@ -542,6 +544,12 @@ def _read_file_snapshot(path: Path) -> tuple[bytes, os.stat_result]:
 
 SQLITE_HEADER = b"SQLite format 3\x00"
 
+# What a database has to carry before a reader may adopt it without taking the
+# writer mutex to build or upgrade it.
+_REQUIRED_TABLES = frozenset(
+    {"meta", "entities", "changes", "projection", "projection_base", "sessions"}
+)
+
 
 def _read_sqlite_header(path: Path) -> bytes:
     with path.open("rb") as handle:
@@ -812,8 +820,26 @@ class Store:
         self._verify_exports = False
         self._last_progress_clock: float | None = None
         self._last_read_scan_clock: float | None = None
+        self._directory_listings: dict[Path, tuple[list[str], list[str]]] | None = None
+        # The git generation this process has already proved the projection
+        # matches. `last_scan_generation` in `meta` only moves when a scan
+        # commits, so without this a single `git status` would make every
+        # subsequent read re-hash all 2,050 files forever.
+        self._verified_generation: str | None = None
 
     def _git_generation(self) -> str:
+        """A token that moves when git may have rewritten the projection.
+
+        HEAD and ORIG_HEAD are a few dozen bytes and are read in full: a branch
+        switch has to force the hash comparison, because a checkout can restore
+        a file at its old size within the same mtime tick.
+
+        `.git/index` is deliberately reduced to its `(mtime_ns, size)` and never
+        hashed. On a monorepo it is megabytes and it is rewritten by every git
+        command, including read-only ones that merely refresh stat data -- so
+        hashing its content cost a multi-megabyte read twice per store read and
+        still said nothing the stat pair does not.
+        """
         marker = self.root / ".git"
         git_dirs: list[Path] = []
         if marker.is_dir():
@@ -833,7 +859,7 @@ class Store:
             git_dirs.append(common)
         digest = hashlib.sha1()
         for git_dir in git_dirs:
-            for name in ("HEAD", "index", "ORIG_HEAD"):
+            for name in ("HEAD", "ORIG_HEAD"):
                 path = git_dir / name
                 try:
                     content, stat = _read_file_snapshot(path)
@@ -843,6 +869,14 @@ class Store:
                 digest.update(str(stat.st_mtime_ns).encode("ascii"))
                 digest.update(str(stat.st_size).encode("ascii"))
                 digest.update(content)
+            index = git_dir / "index"
+            try:
+                stat = index.stat()
+            except OSError:
+                continue
+            digest.update(str(index).encode("utf-8", "surrogatepass"))
+            digest.update(str(stat.st_mtime_ns).encode("ascii"))
+            digest.update(str(stat.st_size).encode("ascii"))
         return digest.hexdigest()
 
     def _ensure_process(self) -> None:
@@ -857,6 +891,8 @@ class Store:
         self._connection_creation_state = threading.local()
         self._last_progress_clock = None
         self._last_read_scan_clock = None
+        self._directory_listings = None
+        self._verified_generation = None
 
     @property
     def connection(self) -> sqlite3.Connection:
@@ -1038,8 +1074,72 @@ class Store:
         ignore = self.db_path.parent / ".gitignore"
         if not ignore.exists():
             ignore.write_bytes(b"*\n")
+        if self._open_existing_unlocked():
+            return
         with self._writer_mutex():
             self._ensure_open_locked()
+
+    def _open_existing_unlocked(self) -> bool:
+        """Adopt a healthy, current-schema database without the writer mutex.
+
+        A cold process doing a plain read has nothing to create and nothing to
+        upgrade, but it took the same 30 s crash-recovery mutex every writer
+        does -- so a read behind a four-second write waited behind it, and a
+        read behind a stuck one failed after half a minute with nothing to show
+        the caller. The mutex still guards every path that could write: schema
+        creation, a version upgrade, corruption recovery and the first bootstrap
+        all fall through to `_ensure_open_locked`.
+
+        `_recover_export_intents` is deliberately not run here. It runs at the
+        start of every transaction, so the first writer replays whatever this
+        reader saw pending.
+        """
+        try:
+            if not self.db_path.exists() or not self.db_path.stat().st_size:
+                return False
+            if _read_sqlite_header(self.db_path) != SQLITE_HEADER:
+                return False
+        except OSError:
+            return False
+        try:
+            self._prune_corrupt_backups()
+            connection = self.connection
+            # The locked path proves the database is readable before it adopts
+            # it, and a reader that skipped the proof would serve whatever a
+            # corrupt page happened to hold. `quick_check(1)` stops at the first
+            # error; on the 46 MB real-backlog store it costs under 200 ms, once
+            # per process, and only on the cold open.
+            quick = connection.execute("PRAGMA quick_check(1)").fetchone()
+            if not quick or str(quick[0]).lower() != "ok":
+                return False
+            tables = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            if not _REQUIRED_TABLES <= tables:
+                return False
+            metadata = dict(connection.execute("SELECT key,value FROM meta"))
+            if metadata.get("schema_version") != str(SCHEMA_VERSION):
+                return False
+            if "creation_token" not in metadata:
+                return False
+            if not connection.execute(
+                "SELECT 1 FROM entities WHERE deleted=0 LIMIT 1"
+            ).fetchone():
+                # An empty database still owes a bootstrap from the projection.
+                return False
+            self._try_register_session(connection, current_tool=None)
+            if not self._reservation_path.exists():
+                self._reserve_ids(
+                    (row["kind"], row["id"])
+                    for row in connection.execute("SELECT kind,id FROM entities")
+                )
+        except (OSError, sqlite3.Error):
+            return False
+        self._bootstrapped = True
+        return True
 
     def _ensure_open_locked(self) -> None:
         database_existed = self.db_path.exists() and bool(self.db_path.stat().st_size)
@@ -1150,6 +1250,10 @@ class Store:
     _ADDED_COLUMNS = (
         ("linear_queue", "claimed_by", "TEXT"),
         ("linear_queue", "claimed_at", "REAL"),
+        # Schema 2. The stat that produced a quarantine, so a file that can
+        # never be repaired proves itself unchanged without being re-parsed.
+        ("projection", "quarantine_mtime", "REAL"),
+        ("projection", "quarantine_size", "INTEGER"),
     )
 
     @classmethod
@@ -1622,7 +1726,18 @@ class Store:
         tool: str,
         _writer_timeout_ms: int | None = None,
         _diagnose_busy: bool = True,
+        _generation: str | None = None,
+        _probe_only: bool = False,
     ) -> Iterator["Transaction"]:
+        """The one writer path: scan, apply the caller's edits, export, commit.
+
+        `_probe_only` is the read path asking whether disk has anything new. It
+        still takes the writer mutex -- an import is a write like any other --
+        but when the scan turns out to have changed nothing it rolls back
+        instead of running the export/derived/progress pipeline and committing.
+        Ten server processes probing an idle backlog were otherwise committing
+        several times a second between them.
+        """
         self._ensure_open()
         reason = _network_filesystem_reason(self.root)
         if reason:
@@ -1632,6 +1747,7 @@ class Store:
             raise RuntimeError("nested store transactions are not supported")
         tx = Transaction(self, connection, tool=tool)
         committed = False
+        settled = False
         activity_session = f"{self.session}:t{threading.get_ident()}"
         try:
             self._try_register_session(
@@ -1656,17 +1772,26 @@ class Store:
                         )
                     self._recover_export_intents(connection)
                     self._begin_immediate(connection)
-                    self._scan_projection(tx)
+                    baseline = connection.total_changes
+                    self._scan_projection(tx, generation=_generation)
                     self._drain_dirty(tx)
                     yield tx
-                    self._refresh_derived(tx)
-                    self._export_touched(tx)
-                    self._regenerate_progress_if_due(tx)
-                    self._flush_reservations(tx)
-                    tx._capture_committed()
-                    connection.commit()
-                    committed = True
-            tx._finish_committed()
+                    if _probe_only and not tx.touched_anything(baseline):
+                        connection.rollback()
+                        # Nothing was written, so nothing is owed: this is a
+                        # settled read, not a failed write.
+                        committed = True
+                        settled = True
+                    else:
+                        self._refresh_derived(tx)
+                        self._export_touched(tx)
+                        self._regenerate_progress_if_due(tx)
+                        self._flush_reservations(tx)
+                        tx._capture_committed()
+                        connection.commit()
+                        committed = True
+            if not settled:
+                tx._finish_committed()
         except BaseException:
             if not committed:
                 tx._restore_replaced()
@@ -1687,7 +1812,8 @@ class Store:
                 )
             except sqlite3.Error:
                 pass
-        self._checkpoint_passive(connection)
+        if not settled:
+            self._checkpoint_passive(connection)
 
     @contextmanager
     def transaction_dict(self, *, tool: str) -> Iterator[dict[str, Any]]:
@@ -2447,37 +2573,81 @@ class Store:
         self._last_read_scan_clock = now
         if _network_filesystem_reason(self.root):
             return
-        if not self._projection_changed_on_disk():
-            return
-        try:
-            connection = self.connection
-            connection.execute("PRAGMA busy_timeout=0")
+        with self._memoized_entity_files():
+            generation = self._git_generation()
+            if not self._projection_changed_on_disk(generation=generation):
+                # The sweep just proved this generation matches, so the next
+                # read does not repeat it merely because a git command ran.
+                self._verified_generation = generation
+                return
             try:
-                with self.transaction(
-                    tool="projection-read-import",
-                    _writer_timeout_ms=0,
-                    _diagnose_busy=False,
-                ):
-                    pass
-            finally:
-                connection.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
-        except RuntimeError as exc:
-            # A read never waits behind a writer merely to ingest projection
-            # edits.  The next read/transaction will retry the scan.
-            if not str(exc).startswith("store busy for "):
-                raise
+                connection = self.connection
+                connection.execute("PRAGMA busy_timeout=0")
+                try:
+                    with self.transaction(
+                        tool="projection-read-import",
+                        _writer_timeout_ms=0,
+                        _diagnose_busy=False,
+                        _generation=generation,
+                        _probe_only=True,
+                    ):
+                        pass
+                finally:
+                    connection.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
+            except RuntimeError as exc:
+                # A read never waits behind a writer merely to ingest projection
+                # edits.  The next read/transaction will retry the scan.
+                if not str(exc).startswith("store busy for "):
+                    raise
 
-    def _projection_changed_on_disk(self) -> bool:
+    def _quarantine_settled(self, connection: sqlite3.Connection, rel: str) -> bool:
+        """True when `rel` has no projection row but its reason is on record.
+
+        `project.yaml` never gets a projection row when it fails to parse, so
+        the known/actual sets differed on every read and each one opened a
+        writer transaction to rescan a file that will never parse. The
+        quarantine log already remembers the mtime the reason was written for,
+        which is the same proof the stamped rows carry.
+        """
+        row = connection.execute(
+            "SELECT value FROM meta WHERE key=?", (_QUARANTINE_LOG_KEY,)
+        ).fetchone()
+        state = _from_json(row[0], {}) if row else {}
+        signature = state.get(rel) if isinstance(state, dict) else None
+        if not isinstance(signature, list) or len(signature) != 2:
+            return False
+        try:
+            return (self.backlog_path / rel).stat().st_mtime == signature[1]
+        except OSError:
+            return False
+
+    @staticmethod
+    def _quarantine_stamp_matches(row: sqlite3.Row, stat: os.stat_result) -> bool:
+        """True when a quarantined file is byte-for-byte the one that broke.
+
+        The stamp is written only once the reason reached `store.log`, so a
+        quarantine whose log append failed leaves it NULL and gets rescanned.
+        """
+        return (
+            row["quarantine_mtime"] is not None
+            and row["quarantine_mtime"] == stat.st_mtime
+            and row["quarantine_size"] == stat.st_size
+        )
+
+    def _projection_changed_on_disk(self, *, generation: str | None = None) -> bool:
         connection = self.connection
-        rows = self.connection.execute(
-            "SELECT file,content_hash,mtime,size,quarantined FROM projection"
+        rows = connection.execute(
+            "SELECT file,content_hash,mtime,size,quarantined,quarantine_mtime,"
+            "quarantine_size FROM projection"
         ).fetchall()
-        if any(row["quarantined"] for row in rows):
-            return True
+        if generation is None:
+            generation = self._git_generation()
         generation_row = connection.execute(
             "SELECT value FROM meta WHERE key='last_scan_generation'"
         ).fetchone()
-        force_hash = not generation_row or generation_row[0] != self._git_generation()
+        force_hash = (
+            not generation_row or generation_row[0] != generation
+        ) and self._verified_generation != generation
         known = {row["file"]: row["content_hash"] for row in rows}
         by_rel = {row["file"]: row for row in rows}
         actual: dict[str, Path] = {
@@ -2492,18 +2662,34 @@ class Store:
         # projection row like the ideas index would otherwise never appear in
         # `actual` and the two sets would differ forever -- a writer
         # transaction and a full scan on every read past the throttle.
-        if set(known) != set(actual):
+        if set(known) - set(actual):
             return True
+        for rel in set(actual) - set(known):
+            if not self._quarantine_settled(connection, rel):
+                return True
         for rel, path in actual.items():
+            row = by_rel.get(rel)
+            if row is None:
+                continue
             try:
-                row = by_rel[rel]
                 stat = path.stat()
-                candidate = (
-                    force_hash
-                    or rel in {"backlog.yaml", "project.yaml"}
-                    or stat.st_mtime != row["mtime"]
-                    or stat.st_size != row["size"]
-                )
+            except OSError:
+                return True
+            if row["quarantined"]:
+                # A file that cannot be parsed is re-quarantined by every scan,
+                # so short-circuiting on the flag meant the check never
+                # settled.  Its stamp answers the only question that matters:
+                # is this still the same broken bytes?
+                if self._quarantine_stamp_matches(row, stat):
+                    continue
+                return True
+            candidate = (
+                force_hash
+                or rel in {"backlog.yaml", "project.yaml"}
+                or stat.st_mtime != row["mtime"]
+                or stat.st_size != row["size"]
+            )
+            try:
                 if candidate and hashlib.sha1(path.read_bytes()).hexdigest() != known[rel]:
                     return True
             except OSError:
@@ -2728,6 +2914,10 @@ class Store:
                 raise
             raise RuntimeError(self._busy_diagnostic()) from exc
 
+    # A diagnostic runs on a store that is by definition contended, so its own
+    # wait is pure added latency on top of the timeout that already expired.
+    _DIAGNOSTIC_TIMEOUT_MS = 300
+
     def _busy_diagnostic(self) -> str:
         seconds = BUSY_TIMEOUT_MS / 1000
         prefix = f"store busy for {seconds:g}s"
@@ -2735,12 +2925,12 @@ class Store:
         try:
             diagnostic = sqlite3.connect(
                 f"file:{self.db_path.as_posix()}?mode=rw",
-                timeout=2.0,
+                timeout=self._DIAGNOSTIC_TIMEOUT_MS / 1000,
                 isolation_level=None,
                 uri=True,
             )
             diagnostic.row_factory = sqlite3.Row
-            diagnostic.execute("PRAGMA busy_timeout=2000")
+            diagnostic.execute(f"PRAGMA busy_timeout={self._DIAGNOSTIC_TIMEOUT_MS}")
             cutoff_iso = datetime.fromtimestamp(
                 datetime.now(timezone.utc).timestamp() - 60, timezone.utc
             ).isoformat()
@@ -3028,7 +3218,7 @@ class Store:
                 tx.connection.execute(
                     "UPDATE projection SET quarantined=1 WHERE file='backlog.yaml'"
                 )
-                self._note_quarantine(tx, "backlog.yaml", exc)
+                self._stamp_quarantine(tx, "backlog.yaml", exc)
         for kind, ident, path in self._known_entity_files():
             if kind in {"task", "epic", "phase"}:
                 rel = path.relative_to(self.backlog_path).as_posix()
@@ -3121,7 +3311,7 @@ class Store:
                         tx.connection.execute(
                             "UPDATE projection SET quarantined=1 WHERE file=?", (rel,)
                         )
-                        self._note_quarantine(tx, rel, quarantine_error)
+                        self._stamp_quarantine(tx, rel, quarantine_error)
                 continue
             try:
                 content, stat = _read_file_snapshot(path)
@@ -3176,31 +3366,95 @@ class Store:
         }
         return known
 
+    # Ordered canonical-first: a legacy duplicate path is an import fallback
+    # and never overrides the canonical one.
+    _ENTITY_FILE_SPECS = (
+        ("task", ("tasks/*.md", "tasks/archive/*.md")),
+        ("epic", ("epics/*.md",)),
+        ("phase", ("phases/*.md",)),
+        ("bug", ("bugs/*.md", "bugs/archive/*.md")),
+        ("issue", ("issues/*.md", "issues/archive/*.md")),
+        (
+            "handover",
+            ("handovers/*.md", "handovers/_archive/*/*.md", "handovers/archive/*.md"),
+        ),
+        ("decision", ("decisions/*.md",)),
+        ("idea", ("ideas/IDEA-*.md",)),
+        ("note", ("notes/NOTE-*.md", "notes/_archive/NOTE-*.md")),
+        ("area", ("areas/*.md",)),
+        ("tracker", ("trackers/*.md", "integrations/trackers/*.md")),
+    )
+
+    @contextmanager
+    def _memoized_entity_files(self) -> Iterator[None]:
+        """Hold one directory walk for the duration of a read check or a scan.
+
+        The change check and the scan it triggers each want the same inventory,
+        and on the real backlog one walk is 2,050 entries across eleven
+        directories. Nothing under `.taskmaster/` is created between the two,
+        so they share the listing rather than repeating it.
+        """
+        prior = self._directory_listings
+        if prior is None:
+            self._directory_listings = {}
+        try:
+            yield
+        finally:
+            self._directory_listings = prior
+
+    def _directory_listing(self, directory: Path) -> tuple[list[str], list[str]]:
+        """`(file names, subdirectory names)` under `directory`, each sorted.
+
+        One `os.scandir` per directory replaces eighteen `Path.glob` walks: the
+        globs restatted every entry once per pattern and ran the whole tree
+        through `fnmatch` eleven times over.
+        """
+        cache = self._directory_listings
+        if cache is not None:
+            cached = cache.get(directory)
+            if cached is not None:
+                return cached
+        files: list[str] = []
+        directories: list[str] = []
+        try:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    try:
+                        (directories if entry.is_dir() else files).append(entry.name)
+                    except OSError:
+                        files.append(entry.name)
+        except OSError:
+            pass
+        listing = (sorted(files), sorted(directories))
+        if cache is not None:
+            cache[directory] = listing
+        return listing
+
+    def _matching_entity_files(self, pattern: str) -> Iterator[Path]:
+        """Every path under `.taskmaster/` matching one spec pattern, sorted.
+
+        `fnmatch` (not `fnmatchcase`) because `Path.glob` is case-insensitive on
+        Windows and this stands in for it exactly.
+        """
+        head, _, name_pattern = pattern.rpartition("/")
+        parent, star, tail = head.partition("*")
+        if star:
+            root = self.backlog_path / parent.rstrip("/")
+            directories = [root / name for name in self._directory_listing(root)[1]]
+        else:
+            directories = [self.backlog_path / head]
+        for directory in directories:
+            for name in self._directory_listing(directory)[0]:
+                if fnmatch.fnmatch(name, name_pattern):
+                    yield directory / name
+
     def _known_entity_files(self) -> list[tuple[str, str, Path]]:
-        specs = (
-            ("task", ("tasks/*.md", "tasks/archive/*.md")),
-            ("epic", ("epics/*.md",)),
-            ("phase", ("phases/*.md",)),
-            ("bug", ("bugs/*.md", "bugs/archive/*.md")),
-            ("issue", ("issues/*.md", "issues/archive/*.md")),
-            (
-                "handover",
-                ("handovers/*.md", "handovers/_archive/*/*.md", "handovers/archive/*.md"),
-            ),
-            ("decision", ("decisions/*.md",)),
-            ("idea", ("ideas/IDEA-*.md",)),
-            ("note", ("notes/NOTE-*.md", "notes/_archive/NOTE-*.md")),
-            ("area", ("areas/*.md",)),
-            ("tracker", ("trackers/*.md", "integrations/trackers/*.md")),
-        )
         found: dict[tuple[str, str], Path] = {}
-        for kind, patterns in specs:
+        for kind, patterns in self._ENTITY_FILE_SPECS:
             for pattern in patterns:
-                for path in sorted(self.backlog_path.glob(pattern)):
+                for path in self._matching_entity_files(pattern):
                     if path.name.startswith(".") or ".tmp." in path.name or ".corrupt-" in path.name:
                         continue
-                    # Patterns are ordered canonical-first.  Legacy duplicate
-                    # paths are import fallbacks and never override canonical.
                     found.setdefault((kind, path.stem), path)
         return [(kind, ident, path) for (kind, ident), path in found.items()]
 
@@ -3226,16 +3480,25 @@ class Store:
                 f"{kind} path id {ident!r} does not match frontmatter id {declared!r}"
             )
 
-    def _scan_projection(self, tx: "Transaction") -> None:
+    def _scan_projection(
+        self, tx: "Transaction", *, generation: str | None = None
+    ) -> None:
+        """Import whatever changed under `.taskmaster/` since the last scan.
+
+        `generation` is passed in by the read path, which has already computed
+        it for the change check: deriving it twice per read meant two walks of
+        the git directory for one answer.
+        """
         self._import_linear_queue(tx)
-        generation = self._git_generation()
+        if generation is None:
+            generation = self._git_generation()
         generation_row = tx.connection.execute(
             "SELECT value FROM meta WHERE key='last_scan_generation'"
         ).fetchone()
         force_hash = not generation_row or generation_row[0] != generation
         rows = tx.connection.execute(
-            "SELECT file,kind,id,content_hash,mtime,size,dirty,quarantined "
-            "FROM projection ORDER BY file"
+            "SELECT file,kind,id,content_hash,mtime,size,dirty,quarantined,"
+            "quarantine_mtime,quarantine_size FROM projection ORDER BY file"
         ).fetchall()
         known_rel = {row["file"] for row in rows}
         for row in rows:
@@ -3244,7 +3507,9 @@ class Store:
             if not path.exists():
                 if row["quarantined"]:
                     tx.connection.execute(
-                        "UPDATE projection SET quarantined=0 WHERE file=?", (rel,)
+                        "UPDATE projection SET quarantined=0,quarantine_mtime=NULL,"
+                        "quarantine_size=NULL WHERE file=?",
+                        (rel,),
                     )
                 if row["id"]:
                     entity = tx.connection.execute(
@@ -3258,6 +3523,22 @@ class Store:
                 elif row["kind"] == _IDEAS_INDEX_KIND:
                     tx._export_ideas = True
                 continue
+            if row["quarantined"]:
+                try:
+                    broken_stat: os.stat_result | None = path.stat()
+                except OSError:
+                    broken_stat = None
+                if broken_stat is not None and self._quarantine_stamp_matches(
+                    row, broken_stat
+                ):
+                    # Still the same broken bytes.  Re-reading and re-parsing
+                    # them costs two file reads per scan forever and can only
+                    # reach the conclusion already on the row; the caller still
+                    # hears the reason, which is all the re-parse ever produced.
+                    signature = tx.quarantine_log_signature(rel)
+                    if isinstance(signature, list) and signature:
+                        tx.warnings.append(str(signature[0]))
+                    continue
             if not force_hash and rel not in {"backlog.yaml", "project.yaml"}:
                 try:
                     unchanged_stat = path.stat()
@@ -3273,10 +3554,14 @@ class Store:
             content, stat = _read_file_snapshot(path)
             digest = hashlib.sha1(content).hexdigest()
             if digest == row["content_hash"] and not row["quarantined"]:
-                tx.connection.execute(
-                    "UPDATE projection SET mtime=?,size=? WHERE file=?",
-                    (stat.st_mtime, stat.st_size, rel),
-                )
+                # `backlog.yaml` never takes the stat shortcut, so it lands
+                # here on every scan.  Rewriting the same stat back would make
+                # every read-side probe a row change and therefore a commit.
+                if stat.st_mtime != row["mtime"] or stat.st_size != row["size"]:
+                    tx.connection.execute(
+                        "UPDATE projection SET mtime=?,size=? WHERE file=?",
+                        (stat.st_mtime, stat.st_size, rel),
+                    )
                 continue
             if row["dirty"]:
                 if row["kind"] == "backlog":
@@ -3308,7 +3593,7 @@ class Store:
                     tx.connection.execute(
                         "UPDATE projection SET quarantined=1,dirty=0 WHERE file=?", (rel,)
                     )
-                    self._note_quarantine(tx, rel, exc)
+                    self._stamp_quarantine(tx, rel, exc)
                     continue
                 tx._import_row("project", row["id"] or _PROJECT_ID, doc, None)
                 self._record_projection_bytes(
@@ -3324,7 +3609,7 @@ class Store:
                 tx.connection.execute(
                     "UPDATE projection SET quarantined=1,dirty=0 WHERE file=?", (rel,)
                 )
-                self._note_quarantine(tx, rel, exc)
+                self._stamp_quarantine(tx, rel, exc)
                 continue
             if row["kind"] in {"epic", "phase"}:
                 current = tx.connection.execute(
@@ -3372,7 +3657,9 @@ class Store:
                     tx.connection.execute(
                         "UPDATE projection SET quarantined=1 WHERE file=?", (rel,)
                     )
-                self._note_quarantine(tx, rel, exc)
+                    self._stamp_quarantine(tx, rel, exc)
+                else:
+                    self._note_quarantine(tx, rel, exc)
                 continue
             if _is_archive_path(path, self.backlog_path):
                 doc["archived"] = True
@@ -3400,11 +3687,12 @@ class Store:
             except (OSError, ValueError, yaml.YAMLError) as exc:
                 self._note_quarantine(tx, "project.yaml", exc)
         self._prune_quarantine_log(tx)
-        tx.connection.execute(
-            "INSERT INTO meta(key,value) VALUES('last_scan_generation',?) "
-            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (generation,),
-        )
+        if not generation_row or generation_row[0] != generation:
+            tx.connection.execute(
+                "INSERT INTO meta(key,value) VALUES('last_scan_generation',?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (generation,),
+            )
 
     def _merge_dirty_external_edit(
         self,
@@ -3447,7 +3735,7 @@ class Store:
             tx.connection.execute(
                 "UPDATE projection SET quarantined=1 WHERE file=?", (rel,)
             )
-            self._note_quarantine(tx, rel, exc)
+            self._stamp_quarantine(tx, rel, exc)
             return
         our_doc = _from_json(entity["doc"], {})
         our_body = entity["body"]
@@ -3518,7 +3806,7 @@ class Store:
             tx.connection.execute(
                 "UPDATE projection SET quarantined=1 WHERE file='backlog.yaml'"
             )
-            self._note_quarantine(tx, "backlog.yaml", exc)
+            self._stamp_quarantine(tx, "backlog.yaml", exc)
             return
 
         base_rows = _flatten_backlog_dict(base)
@@ -3613,7 +3901,7 @@ class Store:
             tx.connection.execute(
                 "UPDATE projection SET quarantined=1,dirty=0 WHERE file='backlog.yaml'"
             )
-            self._note_quarantine(tx, "backlog.yaml", exc)
+            self._stamp_quarantine(tx, "backlog.yaml", exc)
             return
         rows = _flatten_backlog_dict(raw)
         for key, (doc, body) in rows.items():
@@ -4001,7 +4289,30 @@ class Store:
             lf += sampled_lf * weight
         return crlf > lf
 
-    def _note_quarantine(self, tx: "Transaction", rel: str, reason: object) -> None:
+    def _stamp_quarantine(self, tx: "Transaction", rel: str, reason: object) -> None:
+        """Record the reason and, once it is on record, the stat behind it.
+
+        The stamp is what lets the next scan and the next change check skip a
+        file that can never be repaired. It is written only when the reason is
+        durably accounted for, so a quarantine whose `store.log` append failed
+        is rescanned and logged again rather than silenced for good.
+        """
+        stat: os.stat_result | None = None
+        if self._note_quarantine(tx, rel, reason):
+            try:
+                stat = (self.backlog_path / rel).stat()
+            except OSError:
+                stat = None
+        tx.connection.execute(
+            "UPDATE projection SET quarantine_mtime=?,quarantine_size=? WHERE file=?",
+            (
+                None if stat is None else stat.st_mtime,
+                None if stat is None else stat.st_size,
+                rel,
+            ),
+        )
+
+    def _note_quarantine(self, tx: "Transaction", rel: str, reason: object) -> bool:
         """Warn the caller every time; write `store.log` only when this is news.
 
         A file that can never be repaired — git conflict markers, frontmatter
@@ -4021,7 +4332,7 @@ class Store:
             mtime = None
         signature = [message, mtime]
         if tx.quarantine_log_signature(rel) == signature:
-            return
+            return True
         # The line is appended before the signature is recorded, and the
         # signature is committed with the transaction. A signature that
         # outlived the line it stands for — an unwritable `store.log`, a crash
@@ -4030,6 +4341,8 @@ class Store:
         # rollback, which is the safe way to be wrong about a log.
         if self._log(message):
             tx.record_quarantine_log(rel, signature)
+            return True
+        return False
 
     def _prune_quarantine_log(self, tx: "Transaction") -> None:
         """Forget files that are gone or repaired, so a relapse is logged again.
@@ -4549,10 +4862,12 @@ class Store:
         stat: os.stat_result,
     ) -> None:
         connection.execute(
-            "INSERT INTO projection(file,kind,id,content_hash,mtime,size,dirty,quarantined,exported_seq) "
-            "VALUES(?,?,?,?,?,?,0,0,NULL) ON CONFLICT(file) DO UPDATE SET "
+            "INSERT INTO projection(file,kind,id,content_hash,mtime,size,dirty,quarantined,exported_seq,"
+            "quarantine_mtime,quarantine_size) "
+            "VALUES(?,?,?,?,?,?,0,0,NULL,NULL,NULL) ON CONFLICT(file) DO UPDATE SET "
             "kind=excluded.kind,id=excluded.id,content_hash=excluded.content_hash,"
-            "mtime=excluded.mtime,size=excluded.size,dirty=0,quarantined=0",
+            "mtime=excluded.mtime,size=excluded.size,dirty=0,quarantined=0,"
+            "quarantine_mtime=NULL,quarantine_size=NULL",
             (rel, kind, ident, hashlib.sha1(content).hexdigest(), stat.st_mtime, stat.st_size),
         )
 
@@ -4589,6 +4904,23 @@ class Transaction:
         intent_token = uuid.uuid4().hex
         self._intent_path = self.store.db_path.parent / f"export-intent.{intent_token}.json"
         self._intent_entries: dict[str, dict[str, str | None]] = {}
+
+    def touched_anything(self, baseline: int) -> bool:
+        """Whether this transaction has anything worth committing.
+
+        `total_changes` counts every row the connection has inserted, updated
+        or deleted, which covers the scan and the drain alike. The export flags
+        are checked as well because a file that vanished from disk queues a
+        re-export without touching a row.
+        """
+        return (
+            self.connection.total_changes != baseline
+            or bool(self._export_keys)
+            or self._export_backlog
+            or self._export_ideas
+            or bool(self._post_commit_removals)
+            or self._force_progress
+        )
 
     def request_progress_export(self) -> None:
         """Force this commit to regenerate PROGRESS.md, ignoring the throttle.
