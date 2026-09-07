@@ -7,6 +7,20 @@ Versions follow [SemVer](https://semver.org/spec/v2.0.0.html) — major bumps
 indicate schema breaks or removed surfaces.
 
 ---
+## 6.0.2
+
+**A warm read on a large backlog no longer hangs (B-082).** On a 2,050-task project every read tool ran until the harness gave up: `backlog_list_tasks`, `backlog_status`, `backlog_search` and `backlog_get_task` all timed out, so nobody could list tasks by status. Six defects on the read path compounded:
+
+- **A permanently quarantined file forced a full scan on every read.** `Store._projection_changed_on_disk` returned "changed" whenever any projection row was quarantined, and an unrepairable file is re-quarantined by every scan, so the row never cleared. The `projection` table now carries `quarantine_mtime` and `quarantine_size` (schema 2, added additively — no rebuild), stamped when the reason reaches `local/store.log`, and a quarantined row whose file still matches its stamp is treated as unchanged by both the change check and the scan instead of being re-read and re-parsed twice per scan. A quarantine whose log append failed leaves the stamp unset and is retried, so a reason is never silenced for good. An unparseable `project.yaml`, which never gets a projection row, is settled the same way through the reason already recorded in `quarantine_log`.
+- **The git index was hashed twice per read.** `Store._git_generation` read and SHA-1'd all of `.git/index`, which on a monorepo is megabytes and is rewritten by every git command — so `force_hash` was usually on and every projection file was read and hashed before the scan, then again inside it. HEAD and `ORIG_HEAD` are still hashed in full, so a branch switch still forces the comparison; the index is now reduced to its `(mtime_ns, size)`. The generation is computed once per read and passed into the scan, and a sweep that proves a generation clean is remembered for the process, so one `git status` no longer re-hashes the whole backlog on every later read.
+- **A cold process took the 30 s writer mutex just to open an existing database.** A fresh MCP server doing a plain read queued behind any writer and then failed with nothing to show. A database that exists, passes `quick_check`, and is already at the current schema is now adopted without the mutex; the mutex still guards schema creation, upgrades, corruption recovery and the first bootstrap.
+- **A read that found nothing new still committed.** `Store._maybe_scan_on_read` opened a transaction with an empty body and ran the whole write pipeline — derived tables, exports, PROGRESS.md, checkpoint — every time. A read-side probe whose scan changed no row now rolls back instead. Ten server processes were otherwise committing several times a second on an idle backlog.
+- **The entity inventory ran eighteen globs over eleven kinds, twice per read.** `Store._known_entity_files` now does one `os.scandir` per directory, memoized across a read's change check and the scan it triggers, with the same canonical-first ordering and the same skips for dotfiles, `.tmp.` and `.corrupt-`.
+- **The busy diagnostic added up to two seconds to every busy error.** It opens a second connection to a store that is by definition contended; its own timeout is now capped at 300 ms and it falls back to a message without session rows.
+
+Hand edits are still adopted on the next read — a changed file, a new file, a deleted file and a branch switch all behave as before.
+
+---
 ## 6.0.1
 
 - Linear: an explicit `/linear retry` no longer requeues a row a drain currently holds, so the same push can no longer be issued twice; a claim whose lease has expired is still reachable, and the retry reports `in_flight_skipped`.
