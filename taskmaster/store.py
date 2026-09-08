@@ -83,7 +83,12 @@ from taskmaster.taskmaster_v3 import (
 )
 
 
-SCHEMA_VERSION = 2
+# Bumping this is a one-way door while older processes are still running: a
+# process that meets a version above its own treats the database as
+# incompatible, drops every table and rebuilds it to its own schema. Columns
+# added through `_ADDED_COLUMNS` are applied additively on every open and need
+# no bump, so they stay compatible with a mixed fleet.
+SCHEMA_VERSION = 1
 PROJECTION_SCHEMA = 5
 BUSY_TIMEOUT_MS = 30_000
 HEARTBEAT_INTERVAL_SECONDS = 20.0
@@ -1125,6 +1130,16 @@ class Store:
                 return False
             if "creation_token" not in metadata:
                 return False
+            # The quarantine stamp arrives as an added column, not a version
+            # bump, so the version says nothing about whether it is there. A
+            # database written before it existed has to fall through to the
+            # locked path, which adds it; adopting one unlocked would fail
+            # every later read with `no such column`.
+            columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(projection)")
+            }
+            if not {"quarantine_mtime", "quarantine_size"} <= columns:
+                return False
             if not connection.execute(
                 "SELECT 1 FROM entities WHERE deleted=0 LIMIT 1"
             ).fetchone():
@@ -1250,8 +1265,10 @@ class Store:
     _ADDED_COLUMNS = (
         ("linear_queue", "claimed_by", "TEXT"),
         ("linear_queue", "claimed_at", "REAL"),
-        # Schema 2. The stat that produced a quarantine, so a file that can
-        # never be repaired proves itself unchanged without being re-parsed.
+        # The stat that produced a quarantine, so a file that can never be
+        # repaired proves itself unchanged without being re-parsed. Added
+        # without a version bump: an older process reading this database still
+        # understands every column it knows about.
         ("projection", "quarantine_mtime", "REAL"),
         ("projection", "quarantine_size", "INTEGER"),
     )

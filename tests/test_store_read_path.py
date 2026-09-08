@@ -506,3 +506,47 @@ def test_a_probe_that_only_logs_still_records_its_line(tmp_path, store_api):
 
     assert not queue.exists()
     assert _log_lines(opened, "quarantined unreadable") == 1
+
+
+# -- Defect 8: the new columns must not need a schema version bump ----------
+
+
+def test_the_schema_version_is_unchanged(store_api):
+    """A 6.0.1 process that meets a higher version drops every table and
+    rebuilds it without the new columns, and the two versions then ping-pong."""
+    assert store_api.SCHEMA_VERSION == 1
+
+
+def test_a_database_without_the_quarantine_columns_is_upgraded_on_open(
+    tmp_path, store_api
+):
+    """The columns arrive additively, so their absence -- not a version number
+    -- is what has to send a cold open down the mutex path."""
+    backlog_path, _task_path = _write_v4_projection(tmp_path)
+    opened = store_api.open_store(backlog_path=backlog_path, session="warm")
+    _settle(opened)
+    connection = opened.connection
+    for column in ("quarantine_mtime", "quarantine_size"):
+        connection.execute(f"ALTER TABLE projection DROP COLUMN {column}")
+    connection.commit()
+    store_api.reset_for_tests()
+
+    taken: list[dict] = []
+    real = store_api.Store._writer_mutex
+
+    @contextmanager
+    def spy(self, **kwargs):
+        taken.append(kwargs)
+        with real(self, **kwargs):
+            yield
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(store_api.Store, "_writer_mutex", spy)
+        cold = store_api.open_store(backlog_path=backlog_path, session="cold")
+        data = cold.load_dict()
+    assert taken, "an old database has to take the mutex to gain the columns"
+    columns = {
+        row[1] for row in cold.connection.execute("PRAGMA table_info(projection)")
+    }
+    assert {"quarantine_mtime", "quarantine_size"} <= columns
+    assert data["epics"][0]["tasks"][0]["title"] == "Alpha"
