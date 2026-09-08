@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "taskmaster"
-version = "6.0.1"
+version = "6.0.2"
 description = "Task/backlog management MCP server with narrative continuity (handovers, issues, decisions)"
 readme = "README.md"
 license = { file = "LICENSE" }
