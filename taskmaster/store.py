@@ -4912,6 +4912,12 @@ class Transaction:
         or deleted, which covers the scan and the drain alike. The export flags
         are checked as well because a file that vanished from disk queues a
         re-export without touching a row.
+
+        Pending records count too. A quarantine reason and a log entry are both
+        already on disk in `store.log` by the time the probe decides, and the
+        row that says so is still only in this transaction: rolling it back
+        re-logs the same line on every later read and, for a file that never
+        gets a projection row, leaves the change check unsettled forever.
         """
         return (
             self.connection.total_changes != baseline
@@ -4920,6 +4926,8 @@ class Transaction:
             or self._export_ideas
             or bool(self._post_commit_removals)
             or self._force_progress
+            or self._quarantine_log_dirty
+            or bool(self.log_entries)
         )
 
     def request_progress_export(self) -> None:

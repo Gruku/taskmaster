@@ -454,3 +454,55 @@ def test_the_busy_diagnostic_falls_back_when_the_second_connection_fails(
         patch.setattr(sqlite3, "connect", refusing)
         message = opened._busy_diagnostic()
     assert message.startswith("store busy for ")
+
+
+# -- Defect 7: a rolled-back probe must not discard what it recorded --------
+
+
+def _log_lines(opened, needle: str) -> int:
+    path = opened.db_path.parent / "store.log"
+    if not path.exists():
+        return 0
+    text = path.read_text(encoding="utf-8", errors="replace")
+    return sum(1 for line in text.splitlines() if needle in line)
+
+
+def test_a_broken_project_yaml_settles_after_one_read(tmp_path, store_api):
+    """The reason for an unparseable `project.yaml` lives in the transaction
+    until it commits, and no projection row is written for it -- so the probe
+    rolled back, dropped the record, and every later read re-ran the scan and
+    appended the same line again."""
+    backlog_path, _task_path = _write_v4_projection(tmp_path)
+    opened = store_api.open_store(backlog_path=backlog_path, session="project-yaml")
+    _settle(opened)
+    (backlog_path.parent / "project.yaml").write_text(
+        "- not: a\n- mapping\n", encoding="utf-8"
+    )
+    before = _log_lines(opened, "quarantined project.yaml")
+
+    opened._last_read_scan_clock = None
+    opened._maybe_scan_on_read()
+
+    assert opened._projection_changed_on_disk() is False
+    for _ in range(3):
+        opened._last_read_scan_clock = None
+        opened._maybe_scan_on_read()
+    assert _log_lines(opened, "quarantined project.yaml") - before == 1
+
+
+def test_a_probe_that_only_logs_still_records_its_line(tmp_path, store_api):
+    """An unreadable legacy linear queue is renamed aside on disk and the
+    reason is queued as a log entry. The rename is not undone by a rollback, so
+    a probe that discarded the entry lost the only record of it."""
+    backlog_path, _task_path = _write_v4_projection(tmp_path)
+    opened = store_api.open_store(backlog_path=backlog_path, session="queue")
+    _settle(opened)
+    queue = backlog_path.parent / "integrations" / "linear-queue.json"
+    queue.parent.mkdir(parents=True, exist_ok=True)
+    queue.write_text("{not json", encoding="utf-8")
+
+    with opened.transaction(tool="probe", _probe_only=True):
+        pass
+
+    assert not queue.exists()
+    assert _log_lines(opened, "quarantined unreadable") == 1
