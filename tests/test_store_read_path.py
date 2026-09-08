@@ -6,6 +6,10 @@ read, the git index was hashed twice per read, and a cold process took the
 """
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -593,3 +597,40 @@ def test_two_interleaved_reads_do_not_leak_the_directory_memo(tmp_path, store_ap
     for thread in threads:
         thread.join(10)
     assert seen["after"] is None
+
+
+# -- Round two: the stamp must describe the bytes that actually failed -------
+
+
+def test_a_quarantine_stamp_records_the_bytes_that_failed(tmp_path, store_api):
+    """The stat was taken after the parse, not with the bytes that were parsed.
+
+    An editor saving a repair between the two made the store stamp the *good*
+    file, and every later read and scan then skipped it as "still the same
+    broken bytes" -- for good.
+    """
+    backlog_path, task_path = _write_v4_projection(tmp_path)
+    opened = store_api.open_store(backlog_path=backlog_path, session="stamp")
+    intact = task_path.read_text(encoding="utf-8")
+    _settle(opened)
+    repaired = intact.replace("Alpha", "Repaired")
+    task_path.write_text("---\nid: [broken\n---\n", encoding="utf-8")
+
+    real = type(opened)._note_quarantine
+
+    def racing(self, tx, rel, *args, **kwargs):
+        result = real(self, tx, rel, *args, **kwargs)
+        if rel.endswith("core-001.md"):
+            task_path.write_text(repaired, encoding="utf-8")
+        return result
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(type(opened), "_note_quarantine", racing)
+        with opened.transaction(tool="quarantine"):
+            pass
+
+    assert opened._projection_changed_on_disk() is True
+    with opened.transaction(tool="adopt"):
+        pass
+    assert opened.status().quarantined_files == ()
+    assert opened.load_dict()["epics"][0]["tasks"][0]["title"] == "Repaired"

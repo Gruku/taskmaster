@@ -3244,7 +3244,7 @@ class Store:
                 tx.connection.execute(
                     "UPDATE projection SET quarantined=1 WHERE file='backlog.yaml'"
                 )
-                self._stamp_quarantine(tx, "backlog.yaml", exc)
+                self._stamp_quarantine(tx, "backlog.yaml", exc, backlog_stat)
         for kind, ident, path in self._known_entity_files():
             if kind in {"task", "epic", "phase"}:
                 rel = path.relative_to(self.backlog_path).as_posix()
@@ -3337,7 +3337,7 @@ class Store:
                         tx.connection.execute(
                             "UPDATE projection SET quarantined=1 WHERE file=?", (rel,)
                         )
-                        self._stamp_quarantine(tx, rel, quarantine_error)
+                        self._stamp_quarantine(tx, rel, quarantine_error, stat)
                 continue
             try:
                 content, stat = _read_file_snapshot(path)
@@ -3619,7 +3619,7 @@ class Store:
                     tx.connection.execute(
                         "UPDATE projection SET quarantined=1,dirty=0 WHERE file=?", (rel,)
                     )
-                    self._stamp_quarantine(tx, rel, exc)
+                    self._stamp_quarantine(tx, rel, exc, stat)
                     continue
                 tx._import_row("project", row["id"] or _PROJECT_ID, doc, None)
                 self._record_projection_bytes(
@@ -3635,7 +3635,7 @@ class Store:
                 tx.connection.execute(
                     "UPDATE projection SET quarantined=1,dirty=0 WHERE file=?", (rel,)
                 )
-                self._stamp_quarantine(tx, rel, exc)
+                self._stamp_quarantine(tx, rel, exc, stat)
                 continue
             if row["kind"] in {"epic", "phase"}:
                 current = tx.connection.execute(
@@ -3667,25 +3667,25 @@ class Store:
             rel = path.relative_to(self.backlog_path).as_posix()
             if rel in known_rel:
                 continue
+            # The bytes are taken once and the parse runs against them: the
+            # second read this used to do on failure could pick up a repair
+            # saved in between and stamp the quarantine with the good file.
             try:
                 content, stat = _read_file_snapshot(path)
+            except OSError as exc:
+                self._note_quarantine(tx, rel, exc)
+                continue
+            try:
                 doc, body = self._parse_entity_text(kind, content.decode("utf-8"))
                 self._validate_projected_identity(kind, ident, doc)
-            except (OSError, ValueError, yaml.YAMLError) as exc:
-                try:
-                    content, stat = _read_file_snapshot(path)
-                except OSError:
-                    stat = None
-                if stat is not None:
-                    self._record_projection_bytes(
-                        tx.connection, rel, kind, ident, content, stat
-                    )
-                    tx.connection.execute(
-                        "UPDATE projection SET quarantined=1 WHERE file=?", (rel,)
-                    )
-                    self._stamp_quarantine(tx, rel, exc)
-                else:
-                    self._note_quarantine(tx, rel, exc)
+            except (ValueError, yaml.YAMLError) as exc:
+                self._record_projection_bytes(
+                    tx.connection, rel, kind, ident, content, stat
+                )
+                tx.connection.execute(
+                    "UPDATE projection SET quarantined=1 WHERE file=?", (rel,)
+                )
+                self._stamp_quarantine(tx, rel, exc, stat)
                 continue
             if _is_archive_path(path, self.backlog_path):
                 doc["archived"] = True
@@ -3698,20 +3698,30 @@ class Store:
         if project.exists() and "project.yaml" not in known_rel:
             try:
                 content, stat = _read_file_snapshot(project)
-                doc = yaml_io.safe_load(content.decode("utf-8")) or {}
-                if not isinstance(doc, dict):
-                    raise ValueError("project.yaml must be a mapping")
-                tx._import_row("project", _PROJECT_ID, doc, None)
-                self._record_projection_bytes(
-                    tx.connection,
-                    "project.yaml",
-                    "project",
-                    _PROJECT_ID,
-                    content,
-                    stat,
-                )
-            except (OSError, ValueError, yaml.YAMLError) as exc:
+            except OSError as exc:
                 self._note_quarantine(tx, "project.yaml", exc)
+                content = stat = None  # type: ignore[assignment]
+            if stat is not None:
+                try:
+                    doc = yaml_io.safe_load(content.decode("utf-8")) or {}
+                    if not isinstance(doc, dict):
+                        raise ValueError("project.yaml must be a mapping")
+                    tx._import_row("project", _PROJECT_ID, doc, None)
+                    self._record_projection_bytes(
+                        tx.connection,
+                        "project.yaml",
+                        "project",
+                        _PROJECT_ID,
+                        content,
+                        stat,
+                    )
+                except (ValueError, yaml.YAMLError) as exc:
+                    # The stat that came with the bytes, so a repair saved
+                    # after the parse is not recorded as the state the reason
+                    # was written for. `project.yaml` never gets a projection
+                    # row while it is broken, so this signature is the only
+                    # proof the change check has.
+                    self._note_quarantine(tx, "project.yaml", exc, stat)
         self._prune_quarantine_log(tx)
         if not generation_row or generation_row[0] != generation:
             tx.connection.execute(
@@ -3761,7 +3771,7 @@ class Store:
             tx.connection.execute(
                 "UPDATE projection SET quarantined=1 WHERE file=?", (rel,)
             )
-            self._stamp_quarantine(tx, rel, exc)
+            self._stamp_quarantine(tx, rel, exc, stat)
             return
         our_doc = _from_json(entity["doc"], {})
         our_body = entity["body"]
@@ -3832,7 +3842,7 @@ class Store:
             tx.connection.execute(
                 "UPDATE projection SET quarantined=1 WHERE file='backlog.yaml'"
             )
-            self._stamp_quarantine(tx, "backlog.yaml", exc)
+            self._stamp_quarantine(tx, "backlog.yaml", exc, stat)
             return
 
         base_rows = _flatten_backlog_dict(base)
@@ -3927,7 +3937,7 @@ class Store:
             tx.connection.execute(
                 "UPDATE projection SET quarantined=1,dirty=0 WHERE file='backlog.yaml'"
             )
-            self._stamp_quarantine(tx, "backlog.yaml", exc)
+            self._stamp_quarantine(tx, "backlog.yaml", exc, stat)
             return
         rows = _flatten_backlog_dict(raw)
         for key, (doc, body) in rows.items():
@@ -4315,20 +4325,29 @@ class Store:
             lf += sampled_lf * weight
         return crlf > lf
 
-    def _stamp_quarantine(self, tx: "Transaction", rel: str, reason: object) -> None:
+    def _stamp_quarantine(
+        self,
+        tx: "Transaction",
+        rel: str,
+        reason: object,
+        parsed_stat: os.stat_result,
+    ) -> None:
         """Record the reason and, once it is on record, the stat behind it.
 
         The stamp is what lets the next scan and the next change check skip a
         file that can never be repaired. It is written only when the reason is
         durably accounted for, so a quarantine whose `store.log` append failed
         is rescanned and logged again rather than silenced for good.
+
+        `parsed_stat` is the stat taken with the bytes that failed, never a
+        fresh one: stat-ing the path again here described whatever is on disk
+        *now*. An editor saving a repair between the parse and the stamp then
+        stamped the good file, and the change check and the scan both skipped
+        it as "still the same broken bytes" from then on — permanently.
         """
-        stat: os.stat_result | None = None
-        if self._note_quarantine(tx, rel, reason):
-            try:
-                stat = (self.backlog_path / rel).stat()
-            except OSError:
-                stat = None
+        stat: os.stat_result | None = parsed_stat if self._note_quarantine(
+            tx, rel, reason, parsed_stat
+        ) else None
         tx.connection.execute(
             "UPDATE projection SET quarantine_mtime=?,quarantine_size=? WHERE file=?",
             (
@@ -4338,7 +4357,13 @@ class Store:
             ),
         )
 
-    def _note_quarantine(self, tx: "Transaction", rel: str, reason: object) -> bool:
+    def _note_quarantine(
+        self,
+        tx: "Transaction",
+        rel: str,
+        reason: object,
+        parsed_stat: os.stat_result | None = None,
+    ) -> bool:
         """Warn the caller every time; write `store.log` only when this is news.
 
         A file that can never be repaired — git conflict markers, frontmatter
@@ -4352,10 +4377,16 @@ class Store:
         """
         message = f"quarantined {rel}: {reason}"
         tx.warnings.append(message)
-        try:
-            mtime: float | None = (self.backlog_path / rel).stat().st_mtime
-        except OSError:
-            mtime = None
+        if parsed_stat is not None:
+            # The stat that came with the bytes, for the same reason the stamp
+            # uses it: a repair saved between the parse and this line must not
+            # be recorded as the state the reason was written for.
+            mtime: float | None = parsed_stat.st_mtime
+        else:
+            try:
+                mtime = (self.backlog_path / rel).stat().st_mtime
+            except OSError:
+                mtime = None
         signature = [message, mtime]
         if tx.quarantine_log_signature(rel) == signature:
             return True
