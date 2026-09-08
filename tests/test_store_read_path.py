@@ -388,6 +388,16 @@ def test_the_entity_file_walk_matches_the_glob_it_replaces(tmp_path, store_api):
         path = tm_dir / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("---\nid: x\n---\n", encoding="utf-8")
+    # Mixed-case nested directories holding the same id: `Path.glob` sorted
+    # whole paths, which on Windows compares case-insensitively, so `a` won.
+    for rel in ("handovers/_archive/a/H-7.md", "handovers/_archive/Z/H-7.md"):
+        path = tm_dir / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("---\nid: x\n---\n", encoding="utf-8")
+    (tm_dir / "bugs" / "b-5.md").write_text(
+        "---\nid: x\n---\n", encoding="utf-8"
+    )
+
     # Names the walk must skip, and a legacy duplicate the canonical path wins.
     (tm_dir / "tasks" / ".hidden.md").write_text("x", encoding="utf-8")
     (tm_dir / "tasks" / "core-003.tmp.md").write_text("x", encoding="utf-8")

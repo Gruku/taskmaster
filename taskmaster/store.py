@@ -3549,10 +3549,20 @@ class Store:
             directories = [root / name for name in self._directory_listing(root)[1]]
         else:
             directories = [self.backlog_path / head]
-        for directory in directories:
-            for name in self._directory_listing(directory)[0]:
-                if fnmatch.fnmatch(name, name_pattern):
-                    yield directory / name
+        matches = [
+            directory / name
+            for directory in directories
+            for name in self._directory_listing(directory)[0]
+            if fnmatch.fnmatch(name, name_pattern)
+        ]
+        # `sorted(Path.glob(...))` sorted whole `Path` objects, and on Windows
+        # that comparison is case-insensitive. Sorting bare names instead put
+        # `handovers/_archive/Z/` before `handovers/_archive/a/`, so a
+        # duplicate id across two archive directories resolved to the other
+        # file under the first-wins rule. `os.path.normcase` on the full path
+        # is exactly the key `Path` compares by, on both platforms.
+        matches.sort(key=lambda path: os.path.normcase(str(path)))
+        yield from matches
 
     def _known_entity_files(self) -> list[tuple[str, str, Path]]:
         found: dict[tuple[str, str], Path] = {}
