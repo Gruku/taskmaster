@@ -825,12 +825,26 @@ class Store:
         self._verify_exports = False
         self._last_progress_clock: float | None = None
         self._last_read_scan_clock: float | None = None
-        self._directory_listings: dict[Path, tuple[list[str], list[str]]] | None = None
+        # Per-thread: connections are per-thread and reads run concurrently, so
+        # a memo saved and restored on a shared attribute could be restored
+        # after its owner had already left -- freezing one thread's listing for
+        # the life of the process, which then never sees a new file.
+        self._listing_state = threading.local()
         # The git generation this process has already proved the projection
         # matches. `last_scan_generation` in `meta` only moves when a scan
         # commits, so without this a single `git status` would make every
         # subsequent read re-hash all 2,050 files forever.
         self._verified_generation: str | None = None
+
+    @property
+    def _directory_listings(self) -> dict[Path, tuple[list[str], list[str]]] | None:
+        return getattr(self._listing_state, "cache", None)
+
+    @_directory_listings.setter
+    def _directory_listings(
+        self, value: dict[Path, tuple[list[str], list[str]]] | None
+    ) -> None:
+        self._listing_state.cache = value
 
     def _git_generation(self) -> str:
         """A token that moves when git may have rewritten the projection.
@@ -896,7 +910,7 @@ class Store:
         self._connection_creation_state = threading.local()
         self._last_progress_clock = None
         self._last_read_scan_clock = None
-        self._directory_listings = None
+        self._listing_state = threading.local()
         self._verified_generation = None
 
     @property

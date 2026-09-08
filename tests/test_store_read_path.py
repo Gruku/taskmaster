@@ -550,3 +550,40 @@ def test_a_database_without_the_quarantine_columns_is_upgraded_on_open(
     }
     assert {"quarantine_mtime", "quarantine_size"} <= columns
     assert data["epics"][0]["tasks"][0]["title"] == "Alpha"
+
+
+# -- Defect 9: the directory memo must not leak across threads --------------
+
+
+def test_two_interleaved_reads_do_not_leak_the_directory_memo(tmp_path, store_api):
+    """Connections are per-thread and reads run concurrently, so a memo saved
+    and restored on a shared attribute could be restored after its owner left,
+    freezing the listing for the life of the process."""
+    import threading
+
+    backlog_path, _task_path = _write_v4_projection(tmp_path)
+    opened = store_api.open_store(backlog_path=backlog_path, session="threads")
+    first_in = threading.Event()
+    second_in = threading.Event()
+    first_out = threading.Event()
+    seen: dict[str, object] = {}
+
+    def first() -> None:
+        with opened._memoized_entity_files():
+            first_in.set()
+            second_in.wait(5)
+        first_out.set()
+
+    def second() -> None:
+        first_in.wait(5)
+        with opened._memoized_entity_files():
+            second_in.set()
+            first_out.wait(5)
+        seen["after"] = opened._directory_listings
+
+    threads = [threading.Thread(target=first), threading.Thread(target=second)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(10)
+    assert seen["after"] is None
