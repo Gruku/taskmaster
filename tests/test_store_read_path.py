@@ -6,7 +6,6 @@ read, the git index was hashed twice per read, and a cold process took the
 """
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import sys
@@ -257,24 +256,68 @@ def test_a_cold_open_of_a_current_database_takes_no_writer_mutex(
     assert data["epics"][0]["id"] == "core"
 
 
+_LOCK_HOLDER = """
+# Holds the store's real cross-process writer mutex, the way a stuck writer
+# does: the same lock file, the same byte, from a separate process.
+import os
+import sys
+import time
+
+lock_path, ready_path, seconds = sys.argv[1], sys.argv[2], float(sys.argv[3])
+descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+if os.fstat(descriptor).st_size == 0:
+    os.write(descriptor, b"\\0")
+os.lseek(descriptor, 0, os.SEEK_SET)
+if os.name == "nt":
+    import msvcrt
+
+    msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+else:
+    import fcntl
+
+    fcntl.flock(descriptor, fcntl.LOCK_EX)
+with open(ready_path, "w", encoding="utf-8") as handle:
+    handle.write("held")
+time.sleep(seconds)
+"""
+
+
 def test_a_cold_read_answers_while_the_writer_mutex_is_held(tmp_path, store_api):
+    """The reader must not queue behind a writer that is genuinely stuck, so
+    the lock is held by a second process rather than by a stubbed context
+    manager -- a stub only proves the code avoids one method."""
     backlog_path, _task_path = _write_v4_projection(tmp_path)
     opened = store_api.open_store(backlog_path=backlog_path, session="warm")
     _settle(opened)
+    lock_path = opened.db_path.parent / "store.recovery.lock"
     store_api.reset_for_tests()
 
-    @contextmanager
-    def blocked(self, **kwargs):
-        time.sleep(30)
-        yield
+    script = tmp_path / "hold_writer_mutex.py"
+    script.write_text(_LOCK_HOLDER, encoding="utf-8")
+    ready = tmp_path / "mutex-held.flag"
+    holder = subprocess.Popen(
+        [sys.executable, str(script), str(lock_path), str(ready), "8"]
+    )
+    try:
+        deadline = time.monotonic() + 20
+        while not ready.exists():
+            assert holder.poll() is None, "the lock holder exited before locking"
+            assert time.monotonic() < deadline, "the lock holder never took the lock"
+            time.sleep(0.02)
 
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(store_api.Store, "_writer_mutex", blocked)
         started = time.monotonic()
         cold = store_api.open_store(backlog_path=backlog_path, session="cold")
         data = cold.load_dict()
         elapsed = time.monotonic() - started
-    assert elapsed < 5.0, elapsed
+        assert elapsed < 3.0, elapsed
+
+        # ...and the lock really is the one every writer takes.
+        with pytest.raises(RuntimeError):
+            with cold._writer_mutex(timeout_ms=0, diagnose=False):
+                pass
+    finally:
+        holder.terminate()
+        holder.wait(20)
     assert data["epics"][0]["id"] == "core"
 
 
