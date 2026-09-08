@@ -1163,12 +1163,15 @@ class Store:
             ).fetchone():
                 # An empty database still owes a bootstrap from the projection.
                 return False
-            self._try_register_session(connection, current_tool=None)
             if not self._reservation_path.exists():
-                self._reserve_ids(
-                    (row["kind"], row["id"])
-                    for row in connection.execute("SELECT kind,id FROM entities")
-                )
+                # Writing the reservations here would be a read/merge/replace
+                # with nothing serializing it against a writer doing the same,
+                # so a reservation made between the read and the replace was
+                # lost and the id it protected could be handed out twice.
+                # Rebuilding the file is a write; it belongs to the locked
+                # path, which does it under the mutex every writer takes.
+                return False
+            self._try_register_session(connection, current_tool=None)
         except (OSError, sqlite3.Error):
             return False
         self._bootstrapped = True

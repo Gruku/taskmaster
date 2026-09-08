@@ -718,3 +718,51 @@ def test_another_connections_commit_invalidates_the_verified_generation(
     with opened.transaction(tool="adopt"):
         pass
     assert opened.load_dict()["epics"][0]["tasks"][0]["title"] == "Alfa!"
+
+
+# -- Round two: the unlocked open must not write id reservations ------------
+
+
+def test_a_cold_open_never_reserves_ids_outside_the_writer_mutex(
+    tmp_path, store_api
+):
+    """The unlocked open wrote `id-reservations.json` when the file was
+    missing: read, merge, replace, with nothing serializing it against a
+    writer doing the same. A reservation made between the read and the replace
+    was overwritten, and the id it protected could be handed out twice."""
+    backlog_path, _task_path = _write_v4_projection(tmp_path)
+    opened = store_api.open_store(backlog_path=backlog_path, session="warm")
+    _settle(opened)
+    reservation = opened.db_path.parent / "id-reservations.json"
+    assert reservation.exists()
+    reservation.unlink()
+    store_api.reset_for_tests()
+
+    depth: list[int] = []
+    under_mutex: list[bool] = []
+    real_mutex = store_api.Store._writer_mutex
+    real_reserve = store_api.Store._reserve_ids
+
+    @contextmanager
+    def spy(self, **kwargs):
+        depth.append(1)
+        try:
+            with real_mutex(self, **kwargs):
+                yield
+        finally:
+            depth.pop()
+
+    def watched(self, keys):
+        materialized = list(keys)
+        if materialized:
+            under_mutex.append(bool(depth))
+        return real_reserve(self, materialized)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(store_api.Store, "_writer_mutex", spy)
+        patch.setattr(store_api.Store, "_reserve_ids", watched)
+        cold = store_api.open_store(backlog_path=backlog_path, session="cold")
+        data = cold.load_dict()
+    assert under_mutex and all(under_mutex), under_mutex
+    assert reservation.exists()
+    assert data["epics"][0]["tasks"][0]["title"] == "Alpha"
