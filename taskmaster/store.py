@@ -832,10 +832,14 @@ class Store:
         # the life of the process, which then never sees a new file.
         self._listing_state = threading.local()
         # The git generation this process has already proved the projection
-        # matches. `last_scan_generation` in `meta` only moves when a scan
-        # commits, so without this a single `git status` would make every
-        # subsequent read re-hash all 2,050 files forever.
-        self._verified_generation: str | None = None
+        # matches, paired with the database revision it proved it against.
+        # `last_scan_generation` in `meta` only moves when a scan commits, so
+        # without the memo a single `git status` would make every subsequent
+        # read re-hash all 2,050 files forever; without the revision beside it
+        # the memo outlived its evidence, and another process importing under a
+        # second generation -- then a checkout back to this one -- left this
+        # reader trusting a sweep that no longer described the tree.
+        self._verified_generation: tuple[str, int] | None = None
 
     @property
     def _directory_listings(self) -> dict[Path, tuple[list[str], list[str]]] | None:
@@ -2610,7 +2614,9 @@ class Store:
             if not self._projection_changed_on_disk(generation=generation):
                 # The sweep just proved this generation matches, so the next
                 # read does not repeat it merely because a git command ran.
-                self._verified_generation = generation
+                # The database revision goes with it: any other connection
+                # committing retires the proof rather than outliving it.
+                self._verified_generation = (generation, self._database_revision())
                 return
             try:
                 connection = self.connection
@@ -2631,6 +2637,20 @@ class Store:
                 # edits.  The next read/transaction will retry the scan.
                 if not str(exc).startswith("store busy for "):
                     raise
+
+    def _database_revision(self) -> int:
+        """`PRAGMA data_version`: a counter another connection's commit moves.
+
+        It is the cheapest thing that answers "has anyone else written since I
+        last looked?" -- this connection's own commits deliberately leave it
+        alone, which is exactly the memo's question. An unreadable value is
+        reported as a revision that never matches, so the memo simply expires.
+        """
+        try:
+            row = self.connection.execute("PRAGMA data_version").fetchone()
+        except sqlite3.Error:
+            return -1
+        return -1 if row is None else int(row[0])
 
     def _quarantine_settled(self, connection: sqlite3.Connection, rel: str) -> bool:
         """True when `rel` has no projection row but its reason is on record.
@@ -2708,7 +2728,7 @@ class Store:
         ).fetchone()
         force_hash = (
             not generation_row or generation_row[0] != generation
-        ) and self._verified_generation != generation
+        ) and self._verified_generation != (generation, self._database_revision())
         known = {row["file"]: row["content_hash"] for row in rows}
         by_rel = {row["file"]: row for row in rows}
         actual: dict[str, Path] = {

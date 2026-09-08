@@ -666,3 +666,55 @@ def test_a_branch_switch_notices_a_same_size_repair_of_a_quarantined_file(
         pass
     assert opened.status().quarantined_files == ()
     assert opened.load_dict()["epics"][0]["tasks"][0]["title"] == "Alpha"
+
+
+# -- Round two: the verified-generation memo must expire on someone else's commit
+
+
+def test_another_connections_commit_invalidates_the_verified_generation(
+    tmp_path, store_api
+):
+    """The memo says "this process already proved this generation clean". It
+    was never invalidated, so a store that imported under another generation
+    while this one held the memo -- and a checkout back to the remembered one
+    -- left the reader trusting a sweep that no longer described the tree."""
+    import threading
+
+    backlog_path, task_path = _write_v4_projection(tmp_path)
+    opened = store_api.open_store(backlog_path=backlog_path, session="memo")
+    intact = task_path.read_text(encoding="utf-8")
+    _settle(opened)
+    head = backlog_path.parent.parent / ".git" / "HEAD"
+
+    opened._maybe_scan_on_read()
+    assert opened._verified_generation is not None
+
+    # A second connection -- another process, in production -- scans and
+    # commits under a different generation.
+    head.write_text("ref: refs/heads/other\n", encoding="utf-8")
+    failures: list[BaseException] = []
+
+    def other() -> None:
+        try:
+            with opened.transaction(tool="other-process"):
+                pass
+        except BaseException as exc:  # pragma: no cover - surfaced below
+            failures.append(exc)
+
+    thread = threading.Thread(target=other)
+    thread.start()
+    thread.join(30)
+    assert not failures, failures
+
+    # The checkout comes back to the generation this process remembers, having
+    # rewritten a file at its old size inside one mtime tick.
+    head.write_text("ref: refs/heads/main\n", encoding="utf-8")
+    stamped = task_path.stat()
+    task_path.write_text(intact.replace("Alpha", "Alfa!"), encoding="utf-8")
+    os.utime(task_path, ns=(stamped.st_atime_ns, stamped.st_mtime_ns))
+    assert task_path.stat().st_size == stamped.st_size
+
+    assert opened._projection_changed_on_disk() is True
+    with opened.transaction(tool="adopt"):
+        pass
+    assert opened.load_dict()["epics"][0]["tasks"][0]["title"] == "Alfa!"
