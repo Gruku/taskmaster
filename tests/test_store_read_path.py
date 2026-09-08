@@ -948,3 +948,31 @@ def test_a_read_side_probe_still_exports_a_row_left_dirty(tmp_path, store_api):
     ).fetchone()
     assert row["dirty"] == 0
     assert "title: Alpha" in task_path.read_text(encoding="utf-8")
+
+
+def test_a_settled_probe_records_the_generation_it_verified(tmp_path, store_api):
+    """A probe that finds nothing to write rolls back, and `last_scan_generation`
+    rolls back with it. The sweep still proved the tree matches, so the proof is
+    remembered in the process memo instead of being thrown away with the
+    transaction that produced it."""
+    backlog_path, _task_path = _write_v4_projection(tmp_path)
+    opened = store_api.open_store(backlog_path=backlog_path, session="settled")
+    _settle(opened)
+    opened._verified_generation = None
+    opened._last_read_scan_clock = None
+
+    exported: list[int] = []
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(
+            type(opened), "_projection_changed_on_disk", lambda self, **kwargs: True
+        )
+        patch.setattr(
+            type(opened), "_export_touched", lambda self, tx: exported.append(1)
+        )
+        opened._maybe_scan_on_read()
+    assert exported == [], "the probe committed; this is not the settled case"
+
+    assert opened._verified_generation == (
+        opened._git_generation(),
+        opened._database_revision(),
+    )

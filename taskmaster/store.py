@@ -2640,6 +2640,15 @@ class Store:
                 # edits.  The next read/transaction will retry the scan.
                 if not str(exc).startswith("store busy for "):
                     raise
+                # Nothing was swept, so nothing is proved: the memo is left
+                # alone and the next read repeats the check.
+                return
+            # The probe ran the whole sweep. When it found something to write
+            # it committed `last_scan_generation` with the rest; when it found
+            # nothing it rolled back, and that row went with it. The proof is
+            # the same either way, so it is remembered here rather than left to
+            # depend on whether the transaction happened to commit.
+            self._verified_generation = (generation, self._database_revision())
 
     def _database_revision(self) -> int:
         """`PRAGMA data_version`: a counter another connection's commit moves.
