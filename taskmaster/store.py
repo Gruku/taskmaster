@@ -2669,12 +2669,28 @@ class Store:
         ).fetchone()
         state = _from_json(row[0], {}) if row else {}
         signature = state.get(rel) if isinstance(state, dict) else None
-        if not isinstance(signature, list) or len(signature) != 2:
+        # A signature written before the size and the digest were recorded --
+        # `[message, mtime]` -- cannot settle anything: the mtime alone missed
+        # a timestamp-preserving restore of different bytes entirely. Such a
+        # file is rescanned once, which rewrites the signature in full.
+        if not isinstance(signature, list) or len(signature) != 4:
+            return False
+        _message, mtime, size, digest = signature
+        if digest is None:
             return False
         try:
-            return (self.backlog_path / rel).stat().st_mtime == signature[1]
+            content, stat = _read_file_snapshot(self.backlog_path / rel)
         except OSError:
             return False
+        # The bytes are read rather than stat-ed. This runs only for a file
+        # with no projection row at all -- an unparseable `project.yaml` -- so
+        # it is one small read while that file is broken, and it is the only
+        # thing that catches a same-size repair inside one mtime tick.
+        return (
+            stat.st_mtime == mtime
+            and stat.st_size == size
+            and hashlib.sha1(content).hexdigest() == digest
+        )
 
     @staticmethod
     def _quarantine_stamp_matches(row: sqlite3.Row, stat: os.stat_result) -> bool:
@@ -3785,7 +3801,7 @@ class Store:
                     # was written for. `project.yaml` never gets a projection
                     # row while it is broken, so this signature is the only
                     # proof the change check has.
-                    self._note_quarantine(tx, "project.yaml", exc, stat)
+                    self._note_quarantine(tx, "project.yaml", exc, stat, content)
         self._prune_quarantine_log(tx)
         if not generation_row or generation_row[0] != generation:
             tx.connection.execute(
@@ -4411,7 +4427,7 @@ class Store:
         it as "still the same broken bytes" from then on — permanently.
         """
         stat: os.stat_result | None = parsed_stat if self._note_quarantine(
-            tx, rel, reason, parsed_stat
+            tx, rel, reason, parsed_stat, content
         ) else None
         tx.connection.execute(
             "UPDATE projection SET quarantine_mtime=?,quarantine_size=?,"
@@ -4430,6 +4446,7 @@ class Store:
         rel: str,
         reason: object,
         parsed_stat: os.stat_result | None = None,
+        content: bytes | None = None,
     ) -> bool:
         """Warn the caller every time; write `store.log` only when this is news.
 
@@ -4449,12 +4466,25 @@ class Store:
             # uses it: a repair saved between the parse and this line must not
             # be recorded as the state the reason was written for.
             mtime: float | None = parsed_stat.st_mtime
+            size: int | None = parsed_stat.st_size
         else:
+            mtime = size = None
             try:
-                mtime = (self.backlog_path / rel).stat().st_mtime
+                probe = (self.backlog_path / rel).stat()
             except OSError:
-                mtime = None
-        signature = [message, mtime]
+                probe = None
+            if probe is not None:
+                mtime, size = probe.st_mtime, probe.st_size
+        # The size and the digest sit beside the mtime because a file with no
+        # projection row -- an unparseable `project.yaml` -- has nothing else
+        # to prove itself by, and the mtime alone let a timestamp-preserving
+        # repair go unnoticed for good.
+        signature = [
+            message,
+            mtime,
+            size,
+            None if content is None else hashlib.sha1(content).hexdigest(),
+        ]
         if tx.quarantine_log_signature(rel) == signature:
             return True
         # The line is appended before the signature is recorded, and the

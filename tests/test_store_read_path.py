@@ -766,3 +766,61 @@ def test_a_cold_open_never_reserves_ids_outside_the_writer_mutex(
     assert under_mutex and all(under_mutex), under_mutex
     assert reservation.exists()
     assert data["epics"][0]["tasks"][0]["title"] == "Alpha"
+
+
+# -- Round two: an untracked quarantine must not settle on mtime alone ------
+
+
+def _break_project_yaml(opened, project: Path) -> os.stat_result:
+    project.write_text("- not a mapping\n", encoding="utf-8", newline="\n")
+    _settle(opened)
+    assert opened._projection_changed_on_disk() is False
+    return project.stat()
+
+
+def test_a_timestamp_preserving_repair_of_project_yaml_is_noticed(
+    tmp_path, store_api
+):
+    """`project.yaml` never gets a projection row while it is unparseable, so
+    the quarantine log is the only proof the change check has -- and it
+    recorded the mtime alone. A restore that keeps timestamps (tar, `rsync
+    -t`, a checkout) left the repair invisible for the life of the project."""
+    backlog_path, _task_path = _write_v4_projection(tmp_path)
+    opened = store_api.open_store(backlog_path=backlog_path, session="project-yaml")
+    project = backlog_path.parent / "project.yaml"
+    stamped = _break_project_yaml(opened, project)
+
+    project.write_text("name: repaired-and-longer\n", encoding="utf-8", newline="\n")
+    os.utime(project, ns=(stamped.st_atime_ns, stamped.st_mtime_ns))
+    assert project.stat().st_size != stamped.st_size
+
+    assert opened._projection_changed_on_disk() is True
+    with opened.transaction(tool="adopt"):
+        pass
+    assert opened.connection.execute(
+        "SELECT 1 FROM projection WHERE file='project.yaml'"
+    ).fetchone()
+
+
+def test_a_same_size_repair_of_project_yaml_inside_one_tick_is_noticed(
+    tmp_path, store_api
+):
+    """The size closes the common case; a coarse-timestamp filesystem still
+    leaves a same-size repair inside one mtime tick, so the reason is recorded
+    with the digest of the bytes it was written for."""
+    backlog_path, _task_path = _write_v4_projection(tmp_path)
+    opened = store_api.open_store(backlog_path=backlog_path, session="project-yaml")
+    project = backlog_path.parent / "project.yaml"
+    stamped = _break_project_yaml(opened, project)
+
+    project.write_text("name: repaired2\n", encoding="utf-8", newline="\n")
+    os.utime(project, ns=(stamped.st_atime_ns, stamped.st_mtime_ns))
+    assert project.stat().st_size == stamped.st_size
+    assert project.stat().st_mtime == stamped.st_mtime
+
+    assert opened._projection_changed_on_disk() is True
+    with opened.transaction(tool="adopt"):
+        pass
+    assert opened.connection.execute(
+        "SELECT 1 FROM projection WHERE file='project.yaml'"
+    ).fetchone()
