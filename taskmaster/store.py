@@ -249,7 +249,8 @@ CREATE TABLE IF NOT EXISTS projection(
   quarantined INTEGER DEFAULT 0,
   exported_seq INTEGER,
   quarantine_mtime REAL,
-  quarantine_size INTEGER
+  quarantine_size INTEGER,
+  quarantine_hash TEXT
 );
 CREATE TABLE IF NOT EXISTS projection_base(file TEXT PRIMARY KEY, content BLOB);
 CREATE TABLE IF NOT EXISTS sessions(
@@ -1147,7 +1148,11 @@ class Store:
             columns = {
                 row[1] for row in connection.execute("PRAGMA table_info(projection)")
             }
-            if not {"quarantine_mtime", "quarantine_size"} <= columns:
+            if not {
+                "quarantine_mtime",
+                "quarantine_size",
+                "quarantine_hash",
+            } <= columns:
                 return False
             if not connection.execute(
                 "SELECT 1 FROM entities WHERE deleted=0 LIMIT 1"
@@ -1280,6 +1285,7 @@ class Store:
         # understands every column it knows about.
         ("projection", "quarantine_mtime", "REAL"),
         ("projection", "quarantine_size", "INTEGER"),
+        ("projection", "quarantine_hash", "TEXT"),
     )
 
     @classmethod
@@ -2660,11 +2666,40 @@ class Store:
             and row["quarantine_size"] == stat.st_size
         )
 
+    def _still_the_quarantined_bytes(
+        self,
+        row: sqlite3.Row,
+        path: Path,
+        stat: os.stat_result,
+        *,
+        force_hash: bool,
+    ) -> bool:
+        """Whether a quarantined file still holds the bytes that were stamped.
+
+        `force_hash` is on exactly when git may have rewritten the projection,
+        and a checkout can restore a file at its old size inside one mtime
+        tick -- which is why every other row is hashed rather than stat-ed in
+        that case. The quarantine stamp took the stat shortcut regardless, so a
+        file repaired by a branch switch stayed quarantined for good. Under
+        `force_hash` the stamped digest is compared against the bytes on disk
+        instead; a stamp written before the digest column existed reads NULL
+        and sends the file down the full path.
+        """
+        if not force_hash:
+            return self._quarantine_stamp_matches(row, stat)
+        if row["quarantine_hash"] is None:
+            return False
+        try:
+            content, _stat = _read_file_snapshot(path)
+        except OSError:
+            return False
+        return hashlib.sha1(content).hexdigest() == row["quarantine_hash"]
+
     def _projection_changed_on_disk(self, *, generation: str | None = None) -> bool:
         connection = self.connection
         rows = connection.execute(
             "SELECT file,content_hash,mtime,size,quarantined,quarantine_mtime,"
-            "quarantine_size FROM projection"
+            "quarantine_size,quarantine_hash FROM projection"
         ).fetchall()
         if generation is None:
             generation = self._git_generation()
@@ -2706,7 +2741,9 @@ class Store:
                 # so short-circuiting on the flag meant the check never
                 # settled.  Its stamp answers the only question that matters:
                 # is this still the same broken bytes?
-                if self._quarantine_stamp_matches(row, stat):
+                if self._still_the_quarantined_bytes(
+                    row, path, stat, force_hash=force_hash
+                ):
                     continue
                 return True
             candidate = (
@@ -3244,7 +3281,9 @@ class Store:
                 tx.connection.execute(
                     "UPDATE projection SET quarantined=1 WHERE file='backlog.yaml'"
                 )
-                self._stamp_quarantine(tx, "backlog.yaml", exc, backlog_stat)
+                self._stamp_quarantine(
+                    tx, "backlog.yaml", exc, backlog_content, backlog_stat
+                )
         for kind, ident, path in self._known_entity_files():
             if kind in {"task", "epic", "phase"}:
                 rel = path.relative_to(self.backlog_path).as_posix()
@@ -3337,7 +3376,9 @@ class Store:
                         tx.connection.execute(
                             "UPDATE projection SET quarantined=1 WHERE file=?", (rel,)
                         )
-                        self._stamp_quarantine(tx, rel, quarantine_error, stat)
+                        self._stamp_quarantine(
+                            tx, rel, quarantine_error, content, stat
+                        )
                 continue
             try:
                 content, stat = _read_file_snapshot(path)
@@ -3524,7 +3565,7 @@ class Store:
         force_hash = not generation_row or generation_row[0] != generation
         rows = tx.connection.execute(
             "SELECT file,kind,id,content_hash,mtime,size,dirty,quarantined,"
-            "quarantine_mtime,quarantine_size FROM projection ORDER BY file"
+            "quarantine_mtime,quarantine_size,quarantine_hash FROM projection ORDER BY file"
         ).fetchall()
         known_rel = {row["file"] for row in rows}
         for row in rows:
@@ -3534,7 +3575,7 @@ class Store:
                 if row["quarantined"]:
                     tx.connection.execute(
                         "UPDATE projection SET quarantined=0,quarantine_mtime=NULL,"
-                        "quarantine_size=NULL WHERE file=?",
+                        "quarantine_size=NULL,quarantine_hash=NULL WHERE file=?",
                         (rel,),
                     )
                 if row["id"]:
@@ -3554,8 +3595,8 @@ class Store:
                     broken_stat: os.stat_result | None = path.stat()
                 except OSError:
                     broken_stat = None
-                if broken_stat is not None and self._quarantine_stamp_matches(
-                    row, broken_stat
+                if broken_stat is not None and self._still_the_quarantined_bytes(
+                    row, path, broken_stat, force_hash=force_hash
                 ):
                     # Still the same broken bytes.  Re-reading and re-parsing
                     # them costs two file reads per scan forever and can only
@@ -3619,7 +3660,7 @@ class Store:
                     tx.connection.execute(
                         "UPDATE projection SET quarantined=1,dirty=0 WHERE file=?", (rel,)
                     )
-                    self._stamp_quarantine(tx, rel, exc, stat)
+                    self._stamp_quarantine(tx, rel, exc, content, stat)
                     continue
                 tx._import_row("project", row["id"] or _PROJECT_ID, doc, None)
                 self._record_projection_bytes(
@@ -3635,7 +3676,7 @@ class Store:
                 tx.connection.execute(
                     "UPDATE projection SET quarantined=1,dirty=0 WHERE file=?", (rel,)
                 )
-                self._stamp_quarantine(tx, rel, exc, stat)
+                self._stamp_quarantine(tx, rel, exc, content, stat)
                 continue
             if row["kind"] in {"epic", "phase"}:
                 current = tx.connection.execute(
@@ -3685,7 +3726,7 @@ class Store:
                 tx.connection.execute(
                     "UPDATE projection SET quarantined=1 WHERE file=?", (rel,)
                 )
-                self._stamp_quarantine(tx, rel, exc, stat)
+                self._stamp_quarantine(tx, rel, exc, content, stat)
                 continue
             if _is_archive_path(path, self.backlog_path):
                 doc["archived"] = True
@@ -3771,7 +3812,7 @@ class Store:
             tx.connection.execute(
                 "UPDATE projection SET quarantined=1 WHERE file=?", (rel,)
             )
-            self._stamp_quarantine(tx, rel, exc, stat)
+            self._stamp_quarantine(tx, rel, exc, content, stat)
             return
         our_doc = _from_json(entity["doc"], {})
         our_body = entity["body"]
@@ -3842,7 +3883,7 @@ class Store:
             tx.connection.execute(
                 "UPDATE projection SET quarantined=1 WHERE file='backlog.yaml'"
             )
-            self._stamp_quarantine(tx, "backlog.yaml", exc, stat)
+            self._stamp_quarantine(tx, "backlog.yaml", exc, content, stat)
             return
 
         base_rows = _flatten_backlog_dict(base)
@@ -3937,7 +3978,7 @@ class Store:
             tx.connection.execute(
                 "UPDATE projection SET quarantined=1,dirty=0 WHERE file='backlog.yaml'"
             )
-            self._stamp_quarantine(tx, "backlog.yaml", exc, stat)
+            self._stamp_quarantine(tx, "backlog.yaml", exc, content, stat)
             return
         rows = _flatten_backlog_dict(raw)
         for key, (doc, body) in rows.items():
@@ -4330,6 +4371,7 @@ class Store:
         tx: "Transaction",
         rel: str,
         reason: object,
+        content: bytes,
         parsed_stat: os.stat_result,
     ) -> None:
         """Record the reason and, once it is on record, the stat behind it.
@@ -4349,10 +4391,12 @@ class Store:
             tx, rel, reason, parsed_stat
         ) else None
         tx.connection.execute(
-            "UPDATE projection SET quarantine_mtime=?,quarantine_size=? WHERE file=?",
+            "UPDATE projection SET quarantine_mtime=?,quarantine_size=?,"
+            "quarantine_hash=? WHERE file=?",
             (
                 None if stat is None else stat.st_mtime,
                 None if stat is None else stat.st_size,
+                None if stat is None else hashlib.sha1(content).hexdigest(),
                 rel,
             ),
         )
@@ -4920,11 +4964,11 @@ class Store:
     ) -> None:
         connection.execute(
             "INSERT INTO projection(file,kind,id,content_hash,mtime,size,dirty,quarantined,exported_seq,"
-            "quarantine_mtime,quarantine_size) "
-            "VALUES(?,?,?,?,?,?,0,0,NULL,NULL,NULL) ON CONFLICT(file) DO UPDATE SET "
+            "quarantine_mtime,quarantine_size,quarantine_hash) "
+            "VALUES(?,?,?,?,?,?,0,0,NULL,NULL,NULL,NULL) ON CONFLICT(file) DO UPDATE SET "
             "kind=excluded.kind,id=excluded.id,content_hash=excluded.content_hash,"
             "mtime=excluded.mtime,size=excluded.size,dirty=0,quarantined=0,"
-            "quarantine_mtime=NULL,quarantine_size=NULL",
+            "quarantine_mtime=NULL,quarantine_size=NULL,quarantine_hash=NULL",
             (rel, kind, ident, hashlib.sha1(content).hexdigest(), stat.st_mtime, stat.st_size),
         )
 

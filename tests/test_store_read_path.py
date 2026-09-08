@@ -634,3 +634,35 @@ def test_a_quarantine_stamp_records_the_bytes_that_failed(tmp_path, store_api):
         pass
     assert opened.status().quarantined_files == ()
     assert opened.load_dict()["epics"][0]["tasks"][0]["title"] == "Repaired"
+
+
+# -- Round two: a branch switch must not trust the quarantine stamp ---------
+
+
+def test_a_branch_switch_notices_a_same_size_repair_of_a_quarantined_file(
+    tmp_path, store_api
+):
+    """`force_hash` exists because a checkout can restore a file at its old
+    size inside one mtime tick. The quarantine stamp shortcut ignored it, so a
+    repaired file stayed quarantined for the life of the project."""
+    backlog_path, task_path = _write_v4_projection(tmp_path)
+    opened = store_api.open_store(backlog_path=backlog_path, session="switch")
+    intact = task_path.read_text(encoding="utf-8")
+    broken = intact.replace("id: core-001", "id: [core-01")
+    assert len(broken) == len(intact) and broken != intact
+    task_path.write_text(broken, encoding="utf-8")
+    _settle(opened)
+    assert "tasks/core-001.md" in opened.status().quarantined_files
+
+    stamped = task_path.stat()
+    task_path.write_text(intact, encoding="utf-8")
+    os.utime(task_path, ns=(stamped.st_atime_ns, stamped.st_mtime_ns))
+    assert task_path.stat().st_size == stamped.st_size
+    head = backlog_path.parent.parent / ".git" / "HEAD"
+    head.write_text("ref: refs/heads/other\n", encoding="utf-8")
+
+    assert opened._projection_changed_on_disk() is True
+    with opened.transaction(tool="adopt"):
+        pass
+    assert opened.status().quarantined_files == ()
+    assert opened.load_dict()["epics"][0]["tasks"][0]["title"] == "Alpha"
