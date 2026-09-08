@@ -5077,11 +5077,17 @@ class Transaction:
         are checked as well because a file that vanished from disk queues a
         re-export without touching a row.
 
-        Pending records count too. A quarantine reason and a log entry are both
-        already on disk in `store.log` by the time the probe decides, and the
-        row that says so is still only in this transaction: rolling it back
-        re-logs the same line on every later read and, for a file that never
-        gets a projection row, leaves the change check unsettled forever.
+        Pending records count too, for two different reasons. A quarantine
+        reason is already on disk -- `Store._log` appends it before the
+        signature is recorded -- while the row that says so is still only in
+        this transaction, so rolling it back re-logs the same line on every
+        later read and, for a file that never gets a projection row, leaves
+        the change check unsettled forever. A queued `log_entries` line is the
+        opposite way round: it reaches `store.log` only in `_finish_committed`,
+        after the commit, and it stands for a side effect the filesystem has
+        already taken -- an unreadable `integrations/linear-queue.json` renamed
+        aside, a file removed after import. Rolling the entry back would leave
+        that move with no record of it anywhere.
         """
         return (
             self.connection.total_changes != baseline

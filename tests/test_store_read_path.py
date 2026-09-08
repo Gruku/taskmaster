@@ -877,3 +877,74 @@ def test_a_same_size_repair_of_project_yaml_inside_one_tick_is_noticed(
     assert opened.connection.execute(
         "SELECT 1 FROM projection WHERE file='project.yaml'"
     ).fetchone()
+
+
+# -- Round three: a probe must leave the read path cheaper than it found it -
+
+
+def _scan_generation(opened) -> str | None:
+    row = opened.connection.execute(
+        "SELECT value FROM meta WHERE key='last_scan_generation'"
+    ).fetchone()
+    return None if row is None else row[0]
+
+
+def test_a_probe_after_a_branch_switch_records_the_generation_it_scanned(
+    tmp_path, store_api
+):
+    """`force_hash` is turned off by `last_scan_generation`, and a probe that
+    settles rolls that row back with everything else. The scan writes it
+    whenever the token has moved, which is a row change and therefore a commit,
+    so the next read is cheap again -- if that ever stops being true, every
+    read after a branch switch re-hashes the whole backlog forever."""
+    backlog_path, task_path = _write_v4_projection(tmp_path)
+    opened = store_api.open_store(backlog_path=backlog_path, session="probe-gen")
+    _settle(opened)
+    head = backlog_path.parent.parent / ".git" / "HEAD"
+    head.write_text("ref: refs/heads/other\n", encoding="utf-8")
+    opened._verified_generation = None
+    opened._last_read_scan_clock = None
+
+    with pytest.MonkeyPatch.context() as patch:
+        # The check has said "changed" -- what matters is what the probe
+        # leaves behind, not what made it run.
+        patch.setattr(
+            type(opened), "_projection_changed_on_disk", lambda self, **kwargs: True
+        )
+        opened._maybe_scan_on_read()
+
+    assert _scan_generation(opened) == opened._git_generation()
+
+    reads: list[str] = []
+    original = store_api._read_file_snapshot
+
+    def counting(path):
+        reads.append(str(path))
+        return original(path)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(store_api, "_read_file_snapshot", counting)
+        assert opened._projection_changed_on_disk() is False
+    assert not [name for name in reads if name.endswith("core-001.md")], reads
+
+
+def test_a_read_side_probe_still_exports_a_row_left_dirty(tmp_path, store_api):
+    """A row is dirty when its file was not written. The drain queues it for
+    export, and a probe that discarded that queue would leave the retry to the
+    next write -- on a project nobody is writing to, forever."""
+    backlog_path, task_path = _write_v4_projection(tmp_path)
+    opened = store_api.open_store(backlog_path=backlog_path, session="dirty")
+    _settle(opened)
+    opened.connection.execute(
+        "UPDATE projection SET dirty=1 WHERE file='tasks/core-001.md'"
+    )
+    opened.connection.commit()
+
+    with opened.transaction(tool="probe", _probe_only=True):
+        pass
+
+    row = opened.connection.execute(
+        "SELECT dirty FROM projection WHERE file='tasks/core-001.md'"
+    ).fetchone()
+    assert row["dirty"] == 0
+    assert "title: Alpha" in task_path.read_text(encoding="utf-8")
