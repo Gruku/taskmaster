@@ -851,13 +851,18 @@ class Store:
 
         HEAD and ORIG_HEAD are a few dozen bytes and are read in full: a branch
         switch has to force the hash comparison, because a checkout can restore
-        a file at its old size within the same mtime tick.
+        a file at its old size within the same mtime tick. Their content is the
+        whole token, so a git command that only rewrites a file's timestamps
+        does not move it.
 
-        `.git/index` is deliberately reduced to its `(mtime_ns, size)` and never
-        hashed. On a monorepo it is megabytes and it is rewritten by every git
-        command, including read-only ones that merely refresh stat data -- so
-        hashing its content cost a multi-megabyte read twice per store read and
-        still said nothing the stat pair does not.
+        `.git/index` is deliberately not part of it, not even by its stat.
+        `git status` rewrites the index to refresh its stat cache, so with ten
+        sessions on one repo the token moved every few seconds and every store
+        re-hashed all 2,050 projection files on its next read -- 88 ms each
+        time, and `last_scan_generation` churning with it. What that gives up
+        is a same-size restore inside a single mtime tick on a coarse-timestamp
+        filesystem (FAT/exFAT), which a non-git restore -- tar, `rsync -t` --
+        would miss anyway.
         """
         marker = self.root / ".git"
         git_dirs: list[Path] = []
@@ -881,21 +886,11 @@ class Store:
             for name in ("HEAD", "ORIG_HEAD"):
                 path = git_dir / name
                 try:
-                    content, stat = _read_file_snapshot(path)
+                    content, _stat = _read_file_snapshot(path)
                 except OSError:
                     continue
                 digest.update(str(path).encode("utf-8", "surrogatepass"))
-                digest.update(str(stat.st_mtime_ns).encode("ascii"))
-                digest.update(str(stat.st_size).encode("ascii"))
                 digest.update(content)
-            index = git_dir / "index"
-            try:
-                stat = index.stat()
-            except OSError:
-                continue
-            digest.update(str(index).encode("utf-8", "surrogatepass"))
-            digest.update(str(stat.st_mtime_ns).encode("ascii"))
-            digest.update(str(stat.st_size).encode("ascii"))
         return digest.hexdigest()
 
     def _ensure_process(self) -> None:

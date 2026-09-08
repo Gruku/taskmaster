@@ -184,14 +184,20 @@ def test_the_git_generation_moves_on_a_branch_switch(tmp_path, store_api):
     assert opened._git_generation() != before
 
 
-def test_the_git_generation_moves_when_the_index_size_changes(tmp_path, store_api):
+def test_the_git_generation_ignores_the_index_entirely(tmp_path, store_api):
+    """`git status` rewrites the index to refresh its stat cache, so with ten
+    sessions on one repo the token moved every few seconds and every process
+    re-hashed all 2,050 files on its next read. The index is no longer part of
+    the token at all; what that costs is a same-size restore inside one mtime
+    tick on a coarse-timestamp filesystem, which a non-git restore (tar,
+    `rsync -t`) would miss anyway."""
     backlog_path, _task_path = _write_v4_projection(tmp_path)
     opened = store_api.open_store(backlog_path=backlog_path, session="git-gen")
     index = backlog_path.parent.parent / ".git" / "index"
     index.write_bytes(b"A" * 64)
     before = opened._git_generation()
     index.write_bytes(b"A" * 128)
-    assert opened._git_generation() != before
+    assert opened._git_generation() == before
 
 
 def test_a_read_computes_the_git_generation_once(tmp_path, store_api):
