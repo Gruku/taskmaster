@@ -32,6 +32,12 @@ indexes, use immutable mode, or inspect another connection's uncommitted state.
 The benchmark harnesses use it outside timed regions. This does not replace
 the store's existing startup/recovery logic; its admission changes belong to N01.
 
+The diagnostic requires SQLite 3.44 or newer: that release added virtual-table
+FTS verification to PRAGMA integrity_check ([release notes](https://www.sqlite.org/releaselog/3_44_0.html)).
+Older runtimes are refused explicitly instead of returning an incomplete health
+claim. This is a diagnostic requirement, not a change to ordinary legacy store
+startup. A regression covers the version fence as well as real index damage.
+
 Regression coverage includes peer commits, rollback, deliberately damaged FTS
 content (still detected without repair), missing databases, foreign-key errors,
 and canonical entity/derived/projection comparisons around the original full

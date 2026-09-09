@@ -17,6 +17,10 @@ def check_database(path: Path) -> dict:
     WAL commits. One explicit read transaction covers both checks. Fetch every
     diagnostic, not just the first error. Missing/unreadable files raise.
     """
+    # xIntegrity was added in 3.44. Earlier PRAGMA implementations can return
+    # "ok" without checking FTS content/index agreement at all.
+    if sqlite3.sqlite_version_info < (3, 44, 0):
+        raise RuntimeError("SQLite 3.44 or newer is required for read-only FTS integrity diagnostics")
     uri = Path(path).resolve().as_uri() + "?mode=ro"
     with closing(sqlite3.connect(uri, uri=True, isolation_level=None)) as connection:
         connection.execute("BEGIN")
