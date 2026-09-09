@@ -38,6 +38,7 @@ from pathlib import Path
 # This script lives in hooks/; the taskmaster package is at the repo root one
 # level up. Subprocess invocation puts hooks/ on sys.path, not the root.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from taskmaster.admission import assert_compatible
 
 BUSY_TIMEOUT_SECONDS = 2.0
 LOG_MAX_BYTES = 1024 * 1024
@@ -138,7 +139,8 @@ def _connect_ro(db_file: Path) -> sqlite3.Connection:
     con = sqlite3.connect(uri, uri=True, timeout=BUSY_TIMEOUT_SECONDS)
     try:
         con.execute("PRAGMA query_only=ON")
-        con.execute("SELECT 1").fetchone()
+        con.execute("BEGIN")
+        assert_compatible(con)
     except BaseException:
         con.close()
         raise

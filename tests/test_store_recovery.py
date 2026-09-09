@@ -230,6 +230,8 @@ def test_failed_quick_check_is_treated_as_corruption(tmp_path):
     class FailedQuickCheck:
         @staticmethod
         def execute(statement, _params=()):
+            if statement.startswith("SELECT 1 FROM sqlite_schema"):
+                return SimpleNamespace(fetchone=lambda: None)
             assert statement == "PRAGMA quick_check"
             return SimpleNamespace(fetchone=lambda: ("*** corruption on page 2",))
 
@@ -608,6 +610,9 @@ def test_truncate_checkpoint_failure_is_best_effort(tmp_path, monkeypatch):
     attempted = []
 
     class FailingCheckpointConnection:
+        def fetchone(self):
+            return None
+
         def execute(self, statement):
             attempted.append(statement)
             if statement == "PRAGMA wal_checkpoint(TRUNCATE)":
@@ -629,6 +634,7 @@ def test_truncate_checkpoint_failure_is_best_effort(tmp_path, monkeypatch):
 
     assert attempted == [
         "PRAGMA busy_timeout=0",
+        "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='meta'",
         "PRAGMA wal_checkpoint(TRUNCATE)",
         "close",
     ]

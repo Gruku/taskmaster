@@ -35,6 +35,10 @@ from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 import yaml
 
 from taskmaster import yaml_io
+from taskmaster.admission import (
+    BRIDGE_CAPABILITIES, CLIENT_PROTOCOL, LEGACY_SCHEMA_VERSION,
+    UnsupportedStoreError, assert_compatible,
+)
 from taskmaster.paths import (
     as_list,
     extract_prose_paths,
@@ -88,7 +92,7 @@ from taskmaster.taskmaster_v3 import (
 # incompatible, drops every table and rebuilds it to its own schema. Columns
 # added through `_ADDED_COLUMNS` are applied additively on every open and need
 # no bump, so they stay compatible with a mixed fleet.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = LEGACY_SCHEMA_VERSION
 PROJECTION_SCHEMA = 5
 BUSY_TIMEOUT_MS = 30_000
 HEARTBEAT_INTERVAL_SECONDS = 20.0
@@ -700,8 +704,9 @@ def checkpoint_all() -> None:
                 uri=True,
             )
             connection.execute("PRAGMA busy_timeout=0")
+            assert_compatible(connection)
             connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchall()
-        except sqlite3.Error:
+        except (sqlite3.Error, UnsupportedStoreError):
             pass
         finally:
             if connection is not None:
@@ -927,6 +932,7 @@ class Store:
                 ):
                     raise sqlite3.ProgrammingError("store database generation changed")
                 connection.execute("SELECT 1")
+                assert_compatible(connection)
                 return connection
             except (OSError, sqlite3.ProgrammingError):
                 connections.pop(self.db_path, None)
@@ -960,6 +966,9 @@ class Store:
         try:
             connection.row_factory = sqlite3.Row
             connection.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
+            # Refuse before journal configuration, session registration, schema
+            # preparation or any projection/recovery side effects.
+            assert_compatible(connection)
             if network:
                 connection.execute("PRAGMA query_only=ON")
             else:
@@ -1090,11 +1099,11 @@ class Store:
                     self._ensure_open_locked()
             return
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        if self._open_existing_unlocked():
+            return
         ignore = self.db_path.parent / ".gitignore"
         if not ignore.exists():
             ignore.write_bytes(b"*\n")
-        if self._open_existing_unlocked():
-            return
         with self._writer_mutex():
             self._ensure_open_locked()
 
@@ -1121,8 +1130,8 @@ class Store:
         except OSError:
             return False
         try:
-            self._prune_corrupt_backups()
             connection = self.connection
+            self._prune_corrupt_backups()
             # The locked path proves the database is readable before it adopts
             # it, and a reader that skipped the proof would serve whatever a
             # corrupt page happened to hold. `quick_check(1)` stops at the first
@@ -1179,7 +1188,6 @@ class Store:
 
     def _ensure_open_locked(self) -> None:
         database_existed = self.db_path.exists() and bool(self.db_path.stat().st_size)
-        self._prune_corrupt_backups()
         if self.db_path.exists() and self.db_path.stat().st_size:
             try:
                 header = _read_sqlite_header(self.db_path)
@@ -1190,6 +1198,7 @@ class Store:
         try:
             with self._connection_creation_allowed():
                 connection = self.connection
+            self._prune_corrupt_backups()
             self._begin_immediate(connection)
             try:
                 self._prepare_schema(connection)
@@ -1239,6 +1248,7 @@ class Store:
         self._bootstrapped = True
 
     def _prepare_schema(self, connection: sqlite3.Connection) -> None:
+        assert_compatible(connection)
         try:
             quick = connection.execute("PRAGMA quick_check").fetchone()
         except sqlite3.DatabaseError:
@@ -1264,8 +1274,7 @@ class Store:
         metadata = dict(connection.execute("SELECT key,value FROM meta"))
         version = int(metadata.get("schema_version", "0"))
         if version > SCHEMA_VERSION:
-            self._rebuild_for_version(connection)
-            return
+            raise UnsupportedStoreError(f"Unsupported Taskmaster schema_version={version}")
         self._execute_schema(connection)
         if version < SCHEMA_VERSION:
             connection.execute(
@@ -1308,10 +1317,16 @@ class Store:
                 connection.execute(
                     f"ALTER TABLE {table} ADD COLUMN {column} {decl}"
                 )
+        connection.executemany(
+            "INSERT OR IGNORE INTO meta(key,value) VALUES(?,?)",
+            [("bridge_client_protocol", str(CLIENT_PROTOCOL)),
+             ("bridge_capabilities", BRIDGE_CAPABILITIES)],
+        )
 
-    def _rebuild_for_version(self, connection: sqlite3.Connection) -> None:
-        # A schema incompatibility is not corruption. Rebuild in place so a
-        # live Windows connection never has to rename its own database file.
+    def _rebuild_corrupt_schema(self, connection: sqlite3.Connection) -> None:
+        # Only called after proven corruption and a forensic backup. Unknown
+        # schema versions must never reach destructive recovery.
+        assert_compatible(connection)
         # Drop the virtual table first; its FTS shadow tables disappear with it.
         try:
             self._reserve_ids(
@@ -1339,7 +1354,7 @@ class Store:
             "INSERT INTO meta(key,value) VALUES('creation_token',?)",
             (str(uuid.uuid4()),),
         )
-        self._log("rebuilt store for unsupported schema version")
+        self._log("rebuilt corrupt store after forensic backup")
 
     @property
     def _reservation_path(self) -> Path:
@@ -1507,7 +1522,7 @@ class Store:
             rebuilt = self.connection
             self._begin_immediate(rebuilt)
             try:
-                self._rebuild_for_version(rebuilt)
+                self._rebuild_corrupt_schema(rebuilt)
                 rebuilt.commit()
             except BaseException:
                 if rebuilt.in_transaction:
@@ -1612,11 +1627,14 @@ class Store:
             )
             activity.execute("PRAGMA busy_timeout=0")
             activity.row_factory = sqlite3.Row
+            activity.execute("BEGIN IMMEDIATE")
+            assert_compatible(activity)
             self._register_session(
                 activity,
                 current_tool=current_tool,
                 session_id=session_id or f"{self.session}:t{threading.get_ident()}",
             )
+            activity.commit()
         except sqlite3.OperationalError as exc:
             lowered = str(exc).lower()
             if not any(
@@ -1639,9 +1657,12 @@ class Store:
 
         def heartbeat() -> None:
             while not stop.wait(HEARTBEAT_INTERVAL_SECONDS):
-                self._try_register_session(
-                    connection, current_tool=tool, session_id=session_id
-                )
+                try:
+                    self._try_register_session(
+                        connection, current_tool=tool, session_id=session_id
+                    )
+                except UnsupportedStoreError:
+                    return
 
         worker = threading.Thread(
             target=heartbeat,
@@ -2069,6 +2090,7 @@ class Store:
         self._ensure_open()
         path = self.backlog_path / name
         with self._writer_mutex():
+            assert_compatible(self.connection)
             current: dict[str, Any] = {}
             if path.exists():
                 try:
@@ -2101,6 +2123,8 @@ class Store:
         # The whole name, not just its stem: a separator anywhere in it would
         # let a caller write outside `local/cache/`.
         _validate_safe_identifier(name)
+        if self.db_path.exists():
+            assert_compatible(self.connection)
         cache_dir = self.db_path.parent / "cache"
         cache_dir.mkdir(parents=True, exist_ok=True)
         target = cache_dir / name
@@ -3007,6 +3031,7 @@ class Store:
         try:
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA query_only=ON")
+            assert_compatible(connection)
             return self._status_from(connection, warning=base_warning)
         except sqlite3.DatabaseError as exc:
             return self._degraded_status(
@@ -3024,6 +3049,13 @@ class Store:
             if "locked" not in lowered and "busy" not in lowered:
                 raise
             raise RuntimeError(self._busy_diagnostic()) from exc
+        try:
+            # Recheck under SQLite's writer lock: a peer may have published a
+            # migration fence after this connection's pre-admission check.
+            assert_compatible(connection)
+        except BaseException:
+            connection.rollback()
+            raise
 
     # A diagnostic runs on a store that is by definition contended, so its own
     # wait is pure added latency on top of the timeout that already expired.

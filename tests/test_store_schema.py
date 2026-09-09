@@ -436,7 +436,7 @@ def test_supported_schema_migration_runs_in_place(tmp_path):
     assert metadata["sentinel"] == "preserved"
 
 
-def test_unsupported_schema_version_rebuilds_from_projection(tmp_path):
+def test_unsupported_schema_version_is_refused_without_rebuild(tmp_path):
     root = tmp_path / "repo"
     _write_projection(root, project="rebuilt-project")
     store.open_store(root=root, session="unsupported-source")
@@ -448,13 +448,13 @@ def test_unsupported_schema_version_rebuilds_from_projection(tmp_path):
         connection.execute("INSERT INTO meta(key, value) VALUES('sentinel', 'discarded')")
     store.reset_for_tests()
 
-    store.open_store(root=root, session="unsupported-target")
+    with pytest.raises(RuntimeError, match="Unsupported.*schema_version"):
+        store.open_store(root=root, session="unsupported-target")
 
     metadata = _meta(db)
-    assert metadata["schema_version"] == str(store.SCHEMA_VERSION)
-    assert metadata["creation_token"] != original
-    assert "sentinel" not in metadata
-    assert store.load_dict(root / ".taskmaster")["project"] == "rebuilt-project"
+    assert metadata["schema_version"] == "999"
+    assert metadata["creation_token"] == original
+    assert metadata["sentinel"] == "discarded"
 
 
 def test_newer_projection_schema_is_refused_before_database_creation(tmp_path):
