@@ -423,7 +423,7 @@ explicitly deferred scope when implementation actually occurs.
 | Step | Status | Commit / evidence |
 |---|---|---|
 | N00 | complete locally | [FTS matrix (40 cases), baseline oracles; 129 integration tests passed](../reports/2026-09-09-native-foundation.md) |
-| N01 | planned | — |
+| N01 | complete locally; bridge rollout pending | [292 integration tests passed; admission and cutover contract](../handoffs/2026-09-09-native-client-fencing.md) |
 | N02 | planned | — |
 | N03 | planned | — |
 | N04 | planned | — |
