@@ -56,6 +56,15 @@ def test_diagnostics_do_not_create_missing_database(tmp_path):
     assert not path.exists()
 
 
+def test_diagnostics_refuse_runtime_without_fts_integrity_support(tmp_path, monkeypatch):
+    path = tmp_path / "store.db"
+    with closing(seed(path)):
+        pass
+    monkeypatch.setattr(sqlite3, "sqlite_version_info", (3, 43, 0))
+    with pytest.raises(RuntimeError, match="3.44"):
+        check_database(path)
+
+
 def test_foreign_key_violations_are_separate_from_integrity(tmp_path):
     path = tmp_path / "store.db"
     with closing(seed(path)) as connection:
