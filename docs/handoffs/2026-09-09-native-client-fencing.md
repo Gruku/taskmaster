@@ -9,6 +9,11 @@ Linear claim/config writes and committed viewer state. The new admission suite
 includes 72 cold/warm method/fence combinations, six public entry points, both
 hook connectors and the pre-admitted writer-lock race. `git diff --check` passed.
 
+Read-only cost probe on the existing isolated CodeMaestro copy (3,559 entity
+rows, SQLite 3.47.1): 1,000 warm admission checks averaged 17.84 microseconds.
+This is helper overhead, not an end-to-end latency or percentile claim. Raw
+result: ignored `test-results/native-foundation/admission-cost.json`.
+
 ## Admission behavior
 
 `taskmaster.admission` is standard-library-only so MCP, viewer, scripts and

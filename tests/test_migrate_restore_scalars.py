@@ -155,9 +155,9 @@ def test_restore_changes_only_the_inserted_lines(project):
     import difflib
 
     path = project / ".taskmaster" / "backlog.yaml"
-    before = path.read_text(encoding="utf-8", newline="").splitlines(keepends=True)
+    before = path.read_bytes().decode("utf-8").splitlines(keepends=True)
     _run(project)
-    after = path.read_text(encoding="utf-8", newline="").splitlines(keepends=True)
+    after = path.read_bytes().decode("utf-8").splitlines(keepends=True)
 
     inserted: list[str] = []
     for tag, _i1, _i2, j1, j2 in difflib.SequenceMatcher(
@@ -371,9 +371,9 @@ def test_v4_restore_changes_only_the_inserted_lines(v4_project):
     import difflib
 
     path = v4_project / ".taskmaster" / "tasks" / "T-001.md"
-    before = path.read_text(encoding="utf-8", newline="").splitlines(keepends=True)
+    before = path.read_bytes().decode("utf-8").splitlines(keepends=True)
     _run(v4_project)
-    after = path.read_text(encoding="utf-8", newline="").splitlines(keepends=True)
+    after = path.read_bytes().decode("utf-8").splitlines(keepends=True)
 
     inserted: list[str] = []
     for tag, _i1, _i2, j1, j2 in difflib.SequenceMatcher(

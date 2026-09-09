@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import re
+import sqlite3
 import threading
+from contextlib import closing
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -119,19 +121,30 @@ def test_numeric_allocator_counts_live_archived_and_tombstoned_rows(
     assert allocated == _numeric_id(prefix, 12)
 
 
-def test_tombstoned_id_remains_reserved_after_schema_rebuild(opened_store):
+def test_tombstoned_id_remains_reserved_after_schema_refusal(opened_store):
     store_api, instance, backlog_path = opened_store
     with instance.transaction(tool="reserve-before-rebuild") as tx:
         tx.create("task", _doc("task", "reserved"), requested_id="core-050")
         tx.delete("task", "core-050")
 
+    database = instance.db_path
     instance.connection.execute(
         "UPDATE meta SET value=? WHERE key='schema_version'",
         (str(store_api.SCHEMA_VERSION + 100),),
     )
     store_api.reset_for_tests()
-    rebuilt = store_api.open_store(backlog_path=backlog_path, session="after-rebuild")
-    with rebuilt.transaction(tool="allocate-after-rebuild") as tx:
+    with pytest.raises(RuntimeError, match="Unsupported.*schema_version"):
+        store_api.open_store(backlog_path=backlog_path, session="refused")
+    # Restore only this synthetic fixture's compatibility marker. Refusal must
+    # preserve both the tombstone and its reservation; it must not rebuild.
+    with closing(sqlite3.connect(database, isolation_level=None)) as connection:
+        assert connection.execute(
+            "SELECT deleted FROM entities WHERE kind='task' AND id='core-050'"
+        ).fetchone()[0] == 1
+        connection.execute("UPDATE meta SET value=? WHERE key='schema_version'",
+                           (str(store_api.SCHEMA_VERSION),))
+    reopened = store_api.open_store(backlog_path=backlog_path, session="after-refusal")
+    with reopened.transaction(tool="allocate-after-refusal") as tx:
         allocated = tx.create("task", _doc("task", "next"))
 
     assert allocated == "core-051"

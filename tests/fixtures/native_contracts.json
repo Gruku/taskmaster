@@ -1,0 +1,3826 @@
+{
+  "field_allowlists": {
+    "ALLOWED_AREA_FIELDS": [
+      "anchors",
+      "description",
+      "name"
+    ],
+    "ALLOWED_EPIC_FIELDS": [
+      "area",
+      "components",
+      "description",
+      "design_status",
+      "docs",
+      "done_when",
+      "name",
+      "status"
+    ],
+    "ALLOWED_FIELDS": [
+      "anchors",
+      "area",
+      "blast_radius_depth",
+      "blockers",
+      "branch",
+      "bundle",
+      "component",
+      "depends_on",
+      "design_change",
+      "docs",
+      "estimate",
+      "human_action",
+      "lane",
+      "locked_by",
+      "next_step",
+      "notes",
+      "patchnote",
+      "phase",
+      "priority",
+      "release",
+      "review_instructions",
+      "stage",
+      "status",
+      "sub_repo",
+      "title",
+      "tldr",
+      "worktree"
+    ],
+    "ALLOWED_PHASE_FIELDS": [
+      "deliverables",
+      "description",
+      "docs",
+      "name",
+      "order",
+      "start_date",
+      "status",
+      "target_date"
+    ],
+    "BUG_UPDATE_FIELDS": [
+      "adopted_into",
+      "body",
+      "components",
+      "fix_commit",
+      "location",
+      "promoted_to",
+      "severity",
+      "status",
+      "title"
+    ],
+    "BUG_UPDATE_LIST_FIELDS": [
+      "components",
+      "location"
+    ],
+    "BUG_UPDATE_SCALAR_FIELDS": [
+      "adopted_into",
+      "body",
+      "fix_commit",
+      "promoted_to",
+      "severity",
+      "status",
+      "title"
+    ],
+    "IDEA_UPDATE_FIELDS": [
+      "archived",
+      "body",
+      "promoted_to",
+      "related_issues",
+      "related_tasks",
+      "status",
+      "tags",
+      "title"
+    ],
+    "IDEA_UPDATE_LIST_FIELDS": [
+      "related_issues",
+      "related_tasks",
+      "tags"
+    ],
+    "IDEA_UPDATE_SCALAR_FIELDS": [
+      "body",
+      "promoted_to",
+      "status",
+      "title"
+    ],
+    "ISSUE_UPDATE_FIELDS": [
+      "body",
+      "components",
+      "duplicate_of",
+      "fixed_in_task",
+      "impact",
+      "location",
+      "related_tasks",
+      "severity",
+      "status",
+      "title"
+    ],
+    "ISSUE_UPDATE_LIST_FIELDS": [
+      "components",
+      "location",
+      "related_tasks"
+    ],
+    "ISSUE_UPDATE_SCALAR_FIELDS": [
+      "body",
+      "duplicate_of",
+      "fixed_in_task",
+      "impact",
+      "severity",
+      "status",
+      "title"
+    ],
+    "_NORMALIZED_FIELDS": [
+      "created",
+      "priority"
+    ]
+  },
+  "field_ownership": {
+    "area": {
+      "fields": {
+        "_body": "entity_documents",
+        "anchors": "path_claims",
+        "archived": "entity_core",
+        "body": "entity_documents",
+        "deleted": "entity_core",
+        "description": "entity_extensions",
+        "id": "entity_core",
+        "links": "declared_links",
+        "location": "path_claims",
+        "name": "entity_extensions",
+        "priority": "entity_core",
+        "rev": "entity_core",
+        "status": "entity_core",
+        "title": "entity_core",
+        "updated_seq": "entity_core"
+      },
+      "unknown_field_owner": "entity_extensions"
+    },
+    "backlog": {
+      "fields": {
+        "_body": "entity_documents",
+        "anchors": "path_claims",
+        "archived": "entity_core",
+        "body": "entity_documents",
+        "deleted": "entity_core",
+        "id": "entity_core",
+        "links": "declared_links",
+        "location": "path_claims",
+        "priority": "entity_core",
+        "rev": "entity_core",
+        "status": "entity_core",
+        "title": "entity_core",
+        "updated_seq": "entity_core"
+      },
+      "unknown_field_owner": "configuration"
+    },
+    "bug": {
+      "fields": {
+        "_body": "entity_documents",
+        "adopted_into": "memberships",
+        "anchors": "path_claims",
+        "archived": "entity_core",
+        "body": "entity_documents",
+        "components": "memberships",
+        "deleted": "entity_core",
+        "fix_commit": "entity_extensions",
+        "id": "entity_core",
+        "links": "declared_links",
+        "location": "path_claims",
+        "priority": "entity_core",
+        "promoted_to": "memberships",
+        "rev": "entity_core",
+        "severity": "bug_operational",
+        "status": "entity_core",
+        "title": "entity_core",
+        "updated_seq": "entity_core"
+      },
+      "unknown_field_owner": "entity_extensions"
+    },
+    "decision": {
+      "fields": {
+        "_body": "entity_documents",
+        "anchors": "path_claims",
+        "archived": "entity_core",
+        "body": "entity_documents",
+        "deleted": "entity_core",
+        "id": "entity_core",
+        "links": "declared_links",
+        "location": "path_claims",
+        "priority": "entity_core",
+        "resolved_in": "decision_operational",
+        "resolved_with": "decision_operational",
+        "rev": "entity_core",
+        "status": "entity_core",
+        "task_id": "memberships",
+        "title": "entity_core",
+        "updated_seq": "entity_core"
+      },
+      "unknown_field_owner": "entity_extensions"
+    },
+    "epic": {
+      "fields": {
+        "_body": "entity_documents",
+        "anchors": "path_claims",
+        "archived": "entity_core",
+        "area": "memberships",
+        "body": "entity_documents",
+        "components": "memberships",
+        "deleted": "entity_core",
+        "description": "entity_extensions",
+        "design_status": "entity_extensions",
+        "docs": "entity_extensions",
+        "done_when": "entity_extensions",
+        "id": "entity_core",
+        "links": "declared_links",
+        "location": "path_claims",
+        "name": "epic_operational",
+        "order": "epic_operational",
+        "phase": "epic_operational",
+        "priority": "entity_core",
+        "rev": "entity_core",
+        "status": "entity_core",
+        "title": "entity_core",
+        "updated_seq": "entity_core"
+      },
+      "unknown_field_owner": "entity_extensions"
+    },
+    "handover": {
+      "fields": {
+        "_body": "entity_documents",
+        "anchors": "path_claims",
+        "archived": "entity_core",
+        "body": "entity_documents",
+        "date": "handover_operational",
+        "deleted": "entity_core",
+        "id": "entity_core",
+        "kind": "handover_operational",
+        "links": "declared_links",
+        "location": "path_claims",
+        "priority": "entity_core",
+        "rev": "entity_core",
+        "status": "entity_core",
+        "tasks": "memberships",
+        "thread": "handover_operational",
+        "title": "entity_core",
+        "updated_seq": "entity_core"
+      },
+      "unknown_field_owner": "entity_extensions"
+    },
+    "idea": {
+      "fields": {
+        "_body": "entity_documents",
+        "anchors": "path_claims",
+        "archived": "entity_core",
+        "body": "entity_documents",
+        "deleted": "entity_core",
+        "id": "entity_core",
+        "links": "declared_links",
+        "location": "path_claims",
+        "priority": "entity_core",
+        "promoted_to": "memberships",
+        "related_issues": "memberships",
+        "related_tasks": "memberships",
+        "rev": "entity_core",
+        "status": "entity_core",
+        "tags": "memberships",
+        "title": "entity_core",
+        "updated_seq": "entity_core"
+      },
+      "unknown_field_owner": "entity_extensions"
+    },
+    "issue": {
+      "fields": {
+        "_body": "entity_documents",
+        "anchors": "path_claims",
+        "archived": "entity_core",
+        "body": "entity_documents",
+        "components": "memberships",
+        "deleted": "entity_core",
+        "duplicate_of": "memberships",
+        "fixed_in_task": "memberships",
+        "id": "entity_core",
+        "impact": "entity_extensions",
+        "links": "declared_links",
+        "location": "path_claims",
+        "priority": "entity_core",
+        "related_tasks": "memberships",
+        "rev": "entity_core",
+        "severity": "issue_operational",
+        "status": "entity_core",
+        "title": "entity_core",
+        "updated_seq": "entity_core"
+      },
+      "unknown_field_owner": "entity_extensions"
+    },
+    "note": {
+      "fields": {
+        "_body": "entity_documents",
+        "anchors": "path_claims",
+        "archived": "entity_core",
+        "author": "note_operational",
+        "body": "entity_documents",
+        "deleted": "entity_core",
+        "id": "entity_core",
+        "links": "declared_links",
+        "location": "path_claims",
+        "pinned": "note_operational",
+        "priority": "entity_core",
+        "rev": "entity_core",
+        "status": "entity_core",
+        "title": "entity_core",
+        "updated_seq": "entity_core"
+      },
+      "unknown_field_owner": "entity_extensions"
+    },
+    "phase": {
+      "fields": {
+        "_body": "entity_documents",
+        "anchors": "path_claims",
+        "archived": "entity_core",
+        "body": "entity_documents",
+        "deleted": "entity_core",
+        "deliverables": "entity_extensions",
+        "description": "entity_extensions",
+        "docs": "entity_extensions",
+        "id": "entity_core",
+        "links": "declared_links",
+        "location": "path_claims",
+        "name": "phase_operational",
+        "order": "phase_operational",
+        "priority": "entity_core",
+        "rev": "entity_core",
+        "start_date": "phase_operational",
+        "status": "entity_core",
+        "target_date": "phase_operational",
+        "title": "entity_core",
+        "updated_seq": "entity_core"
+      },
+      "unknown_field_owner": "entity_extensions"
+    },
+    "project": {
+      "fields": {
+        "_body": "entity_documents",
+        "anchors": "path_claims",
+        "archived": "entity_core",
+        "body": "entity_documents",
+        "deleted": "entity_core",
+        "id": "entity_core",
+        "links": "declared_links",
+        "location": "path_claims",
+        "priority": "entity_core",
+        "rev": "entity_core",
+        "status": "entity_core",
+        "title": "entity_core",
+        "updated_seq": "entity_core"
+      },
+      "unknown_field_owner": "configuration"
+    },
+    "task": {
+      "fields": {
+        "_body": "entity_documents",
+        "anchors": "path_claims",
+        "archived": "entity_core",
+        "area": "memberships",
+        "blast_radius_depth": "entity_extensions",
+        "blockers": "entity_extensions",
+        "body": "entity_documents",
+        "branch": "task_operational",
+        "bundle": "memberships",
+        "component": "task_operational",
+        "deleted": "entity_core",
+        "depends_on": "dependencies",
+        "design_change": "task_operational",
+        "docs": "entity_extensions",
+        "epic": "task_operational",
+        "estimate": "task_operational",
+        "human_action": "task_operational",
+        "id": "entity_core",
+        "lane": "task_operational",
+        "links": "declared_links",
+        "location": "path_claims",
+        "locked_by": "task_operational",
+        "next_step": "entity_extensions",
+        "notes": "entity_extensions",
+        "order": "task_operational",
+        "owner": "task_operational",
+        "patchnote": "entity_extensions",
+        "phase": "task_operational",
+        "priority": "entity_core",
+        "release": "entity_extensions",
+        "rev": "entity_core",
+        "review_instructions": "entity_extensions",
+        "stage": "task_operational",
+        "status": "entity_core",
+        "sub_repo": "task_operational",
+        "title": "entity_core",
+        "tldr": "entity_extensions",
+        "updated_seq": "entity_core",
+        "worktree": "task_operational"
+      },
+      "unknown_field_owner": "entity_extensions"
+    },
+    "tracker": {
+      "fields": {
+        "_body": "entity_documents",
+        "anchors": "path_claims",
+        "archived": "entity_core",
+        "body": "entity_documents",
+        "deleted": "entity_core",
+        "external_key": "tracker_operational",
+        "external_system": "tracker_operational",
+        "id": "entity_core",
+        "instance_alias": "tracker_operational",
+        "last_pushed": "tracker_operational",
+        "last_synced": "tracker_operational",
+        "links": "declared_links",
+        "location": "path_claims",
+        "priority": "entity_core",
+        "push_hash": "tracker_operational",
+        "rev": "entity_core",
+        "status": "entity_core",
+        "sync_direction": "tracker_operational",
+        "synced_hash": "tracker_operational",
+        "title": "entity_core",
+        "updated_seq": "entity_core"
+      },
+      "unknown_field_owner": "entity_extensions"
+    }
+  },
+  "http_routes": {
+    "GET": [
+      "/api/backlog",
+      "/api/bugs",
+      "/api/continuity",
+      "/api/dashboard/recent-events",
+      "/api/decisions/([A-Za-z0-9_\\-]+)",
+      "/api/epic/",
+      "/api/handover/([A-Za-z0-9_\\-]+)",
+      "/api/ideas",
+      "/api/identity",
+      "/api/issues",
+      "/api/notes",
+      "/api/session",
+      "/api/sessions",
+      "/api/sessions/",
+      "/api/task/",
+      "/api/threads",
+      "/api/viewer/prefs",
+      "/file/"
+    ],
+    "OPTIONS": [
+      "/api/"
+    ],
+    "PATCH": [
+      "/api/tasks/([A-Za-z0-9_\\-]+)"
+    ],
+    "POST": [
+      "/api/bugs",
+      "/api/bugs/([A-Za-z0-9_\\-]+)",
+      "/api/bugs/([A-Za-z0-9_\\-]+)/archive",
+      "/api/bugs/pattern-scan",
+      "/api/bugs/promote",
+      "/api/decisions/([A-Za-z0-9_\\-]+)/drop",
+      "/api/decisions/([A-Za-z0-9_\\-]+)/resolve",
+      "/api/handover/([A-Za-z0-9_\\-\\.]+)/status",
+      "/api/ideas",
+      "/api/notes",
+      "/api/notes/([A-Za-z0-9_\\-]+)/(update|archive)",
+      "/api/tasks",
+      "/api/tasks/([A-Za-z0-9_\\-]+)/archive",
+      "/api/tasks/validate"
+    ],
+    "PUT": [
+      "/api/tasks/([A-Za-z0-9_\\-]+)",
+      "/api/viewer/prefs"
+    ]
+  },
+  "lifecycle_constants": {
+    "BUG_STATUSES": [
+      "open",
+      "fixed",
+      "shelved",
+      "adopted",
+      "promoted"
+    ],
+    "DECISION_STATUSES": [
+      "open",
+      "resolved",
+      "dropped"
+    ],
+    "DEFAULT_LIST_LIMIT": 50,
+    "HANDOVER_STATUSES": [
+      "open",
+      "closed",
+      "superseded"
+    ],
+    "ISSUE_STATUSES": [
+      "open",
+      "investigating",
+      "fixed",
+      "wontfix",
+      "duplicate"
+    ],
+    "LANE_GATES": {
+      "express": [
+        "impl",
+        "review-gate"
+      ],
+      "full": [
+        "spec",
+        "spec-review",
+        "plan",
+        "plan-review",
+        "tests",
+        "impl",
+        "review-gate"
+      ],
+      "standard": [
+        "spec",
+        "design-review",
+        "tests",
+        "impl",
+        "review-gate"
+      ]
+    },
+    "LEGAL_STATUS_TRANSITIONS": {
+      "archived": [
+        "todo"
+      ],
+      "blocked": [
+        "archived",
+        "in-progress",
+        "in-review",
+        "todo"
+      ],
+      "done": [
+        "archived",
+        "in-review"
+      ],
+      "in-progress": [
+        "archived",
+        "blocked",
+        "done",
+        "in-review",
+        "todo"
+      ],
+      "in-review": [
+        "archived",
+        "blocked",
+        "done",
+        "in-progress"
+      ],
+      "todo": [
+        "archived",
+        "blocked",
+        "in-progress"
+      ]
+    },
+    "THREAD_STATUSES": [
+      "open",
+      "parked",
+      "closed"
+    ],
+    "VALID_DESIGN_STATUSES": [
+      "exploring",
+      "locked",
+      "proposed",
+      "revising"
+    ],
+    "VALID_EPIC_STATUSES": [
+      "active",
+      "archived",
+      "done",
+      "planned"
+    ],
+    "VALID_GATES": [
+      "spec",
+      "plan",
+      "tests",
+      "impl",
+      "spec-review",
+      "plan-review",
+      "design-review",
+      "review-gate"
+    ],
+    "VALID_GATE_VERDICTS": [
+      "pass",
+      "warn",
+      "fail"
+    ],
+    "VALID_LANES": [
+      "full",
+      "standard",
+      "express"
+    ],
+    "VALID_PHASE_STATUSES": [
+      "active",
+      "archived",
+      "done",
+      "planned"
+    ],
+    "VALID_PRIORITIES": [
+      "critical",
+      "high",
+      "low",
+      "medium"
+    ],
+    "VALID_STATUSES": [
+      "archived",
+      "blocked",
+      "done",
+      "in-progress",
+      "in-review",
+      "todo"
+    ],
+    "_SEARCH_LIMIT": 15
+  },
+  "query_schema": "entities(kind,id,epic,status,archived,deleted,doc,body,rev,updated_seq)  -- doc is JSON: json_extract(doc,'$.title')\nentity_paths(kind,id,path,match_kind,source) links(src_kind,src_id,type,dst_kind,dst_id,derived)\nrelated(a_kind,a_id,b_kind,b_id,via,weight) handover_tasks(handover_id,task_id) entity_fts(kind,id,title,body)\nchanges(seq,ts,session,tool,kind,id,op,fields,before,after) sessions(session,pid,host,started,last_seen,cwd,current_tool)\nprojection(file,kind,id,content_hash,mtime,size,dirty,quarantined,exported_seq)\nlinear_queue(seq,op,target_id,tracker_id,payload,state,attempts,last_error,claimed_by,claimed_at)",
+  "route_conditions": {
+    "GET": [
+      "(m := re.fullmatch('/api/decisions/([A-Za-z0-9_\\\\-]+)', clean_path))",
+      "(m := re.fullmatch('/api/handover/([A-Za-z0-9_\\\\-]+)', clean_path))",
+      "clean_path == '/api/backlog'",
+      "clean_path == '/api/continuity'",
+      "clean_path == '/api/identity'",
+      "clean_path == '/api/notes'",
+      "clean_path == '/api/session'",
+      "clean_path == '/api/sessions'",
+      "clean_path == '/api/threads'",
+      "clean_path == '/api/viewer/prefs'",
+      "clean_path == '/backlog.yaml'",
+      "clean_path == '/v3/dev/edit-demo' or clean_path == '/v3/dev/edit-demo/'",
+      "clean_path in ('/', '/index.html', '/v3', '/v3/', '/v3/index.html')",
+      "clean_path.startswith('/api/bugs')",
+      "clean_path.startswith('/api/epic/')",
+      "clean_path.startswith('/api/ideas')",
+      "clean_path.startswith('/api/issues')",
+      "clean_path.startswith('/api/sessions/')",
+      "clean_path.startswith('/api/task/')",
+      "clean_path.startswith('/file/')",
+      "clean_path.startswith('/static/v3/')"
+    ],
+    "OPTIONS": [
+      "not clean_path.startswith('/api/')"
+    ],
+    "PATCH": [],
+    "POST": [],
+    "PUT": []
+  },
+  "sql_tables": [
+    "entities",
+    "changes",
+    "projection",
+    "sessions",
+    "linear_queue",
+    "entity_paths",
+    "links",
+    "related",
+    "handover_tasks",
+    "entity_fts"
+  ],
+  "sql_timeout_seconds": 5.0,
+  "tools": {
+    "backlog_add_epic": {
+      "category": "simple-command",
+      "documentation": "Create a new epic. Epics group related tasks into workstreams and are\nstrictly finite — every epic must say when it's done. If the work can't\nsay when it's done, it's an Area (see `backlog_area_create`), not an epic.\n\nArgs:\n    epic_id: Short kebab-case identifier (e.g., \"auth-system\", \"perf-opt\"). Must be unique. Used as prefix for task IDs.\n    name: Human-readable name (e.g., \"Authentication System\", \"Performance Optimization\")\n    done_when: Required. The concrete condition under which this epic is complete\n        (e.g., \"auth flow ships to prod with SSO + MFA\"). Cannot be empty.\n    description: Brief description of the epic's scope and goals\n    status: Initial status — one of: active, planned (default: planned)\n    area: Optional area id (e.g., \"desktop-app\") this epic lives under. Must\n        match an existing Area from `backlog_area_list`; leave empty if unset.",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "epic_id",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "mode": "positional",
+          "name": "name",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "mode": "positional",
+          "name": "done_when",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "description",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "'planned'",
+          "default_value": "planned",
+          "mode": "positional",
+          "name": "status",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "area",
+          "required": false,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": true
+    },
+    "backlog_add_phase": {
+      "category": "simple-command",
+      "documentation": "Create a new phase. Phases are temporal attention scopes for sequential ordering, NOT feature\ngroupings — features belong in epics. Only one phase is active at a time; tasks are assigned\nto phases to control focus.\n\nArgs:\n    phase_id: Short kebab-case identifier (e.g., \"foundation\", \"mvp\", \"polish\"). Must be unique. Avoid \"p1\"/\"p2\" — too similar to priority names.\n    name: Human-readable name (e.g., \"Foundation\", \"Core Features\", \"Polish & Launch\")\n    description: Brief description of the phase's goals\n    order: Position in the sequence (1, 2, 3...). Auto-assigned if omitted.\n    target_date: Optional target completion date (YYYY-MM-DD format)\n    start_date: Optional start date (YYYY-MM-DD format). Auto-set to today if status is active and omitted.",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "phase_id",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "mode": "positional",
+          "name": "name",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "description",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "order",
+          "required": false,
+          "type": "int | None"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "target_date",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "start_date",
+          "required": false,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": true
+    },
+    "backlog_add_task": {
+      "category": "simple-command",
+      "documentation": "Create a new task under an epic. `phase` is required.\n\nCommon fields are top-level. Rarely-set fields go in `options`:\ndocs (\"key:path;key:path\"), sub_repo, stage (int), estimate (S/M/L),\nanchors (comma-separated globs/URLs), task_id (override the auto id),\narea (existing Area id). depends_on/anchors are comma-separated;\ntldr auto-generates from notes/title when omitted.",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "title",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "mode": "positional",
+          "name": "epic",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "phase",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "'medium'",
+          "default_value": "medium",
+          "mode": "positional",
+          "name": "priority",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "tldr",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "notes",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "next_step",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "depends_on",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "bundle",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "options",
+          "required": false,
+          "type": "dict | None"
+        }
+      ],
+      "returns": "str",
+      "transactional": true
+    },
+    "backlog_advance_phase": {
+      "category": "composite-command",
+      "documentation": "Complete the active phase and activate the next one in sequence.\nArchives all 'done' tasks in the completed phase. Activates the next 'planned' phase by order.\nBlocks if phase has unchecked deliverables unless force=True.\n\nArgs:\n    force: If True, advance even if deliverables are incomplete.",
+      "parameters": [
+        {
+          "default_expression": "False",
+          "default_value": false,
+          "mode": "positional",
+          "name": "force",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "returns": "str",
+      "transactional": true
+    },
+    "backlog_archive_epic": {
+      "category": "composite-command",
+      "documentation": "Archive an epic and all its tasks — hides the epic from the board and default listings.\nCascades: every non-archived task in the epic is also archived with the same reason.\n\nArgs:\n    epic_id: The epic ID (e.g., \"features\", \"infra\")\n    reason: Why the epic is being archived. One of: done, deprecated, duplicate, wont-fix, superseded. Default: done.",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "epic_id",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "default_expression": "'done'",
+          "default_value": "done",
+          "mode": "positional",
+          "name": "reason",
+          "required": false,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": true
+    },
+    "backlog_archive_task": {
+      "category": "simple-command",
+      "documentation": "Archive a task — hides it from the board and default listings.\nTasks with status `done`, `blocked`, or `todo` can be archived. Archiving captures WHY the task\nwas archived (e.g., verified and done, deprecated, duplicate, won't fix).\nNote: `todo` tasks require a reason other than \"done\" (e.g., deprecated, duplicate, wont-fix, superseded).\n\nArgs:\n    task_id: The task ID to archive (e.g., \"ue-plugin-003\")\n    reason: Why the task is being archived. One of: done, deprecated, duplicate, wont-fix, superseded. Default: done.",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "task_id",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "default_expression": "'done'",
+          "default_value": "done",
+          "mode": "positional",
+          "name": "reason",
+          "required": false,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": true
+    },
+    "backlog_area_create": {
+      "category": "simple-command",
+      "documentation": "Create a new Area — a long-lived subsystem/workstream with NO status\nlifecycle (e.g. \"desktop-app\", \"viewer\", \"mcp-server\").\n\nAreas group epics and tasks by where they live in the codebase rather\nthan by when they finish — an area never completes or archives. If an\nepic can say when it's done, it's an epic; if it can't, it's an area.",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "area_id",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "mode": "positional",
+          "name": "name",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "description",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "anchors",
+          "required": false,
+          "type": "list[str] | None"
+        }
+      ],
+      "returns": "str",
+      "transactional": true
+    },
+    "backlog_area_get": {
+      "category": "targeted-query",
+      "documentation": "Read one Area in full (frontmatter + body).",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "area_id",
+          "required": true,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": false
+    },
+    "backlog_area_list": {
+      "category": "targeted-query",
+      "documentation": "List all Areas — long-lived subsystems with no status lifecycle.\n\nReturns one line per area: id, name, anchor count, first line of\ndescription. Caps at `limit` (default 50; 0 = no cap) with an overflow\nfooter.",
+      "parameters": [
+        {
+          "default_expression": "DEFAULT_LIST_LIMIT",
+          "default_value": 50,
+          "mode": "positional",
+          "name": "limit",
+          "required": false,
+          "type": "int"
+        }
+      ],
+      "returns": "str",
+      "transactional": false
+    },
+    "backlog_area_update": {
+      "category": "simple-command",
+      "documentation": "Update a single field on an Area.\n\nArgs:\n    area_id: The area ID (e.g., \"desktop-app\", \"viewer\")\n    field: Field to update — one of: name, description, anchors\n    value: New value. For anchors, pass a JSON array of path/glob\n        strings (e.g., '[\"viewer/**\", \"docs/viewer/**\"]').",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "area_id",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "mode": "positional",
+          "name": "field",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "mode": "positional",
+          "name": "value",
+          "required": true,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": true
+    },
+    "backlog_backfill_lanes": {
+      "category": "maintenance",
+      "documentation": "One-time optional migration: assign a `lane` (by priority) to every task that\nlacks one. For tasks already in-progress/in-review/done, mark their lane's required\ngates skipped(reason=\"grandfathered\") so enforcement never retroactively wedges\nin-flight work. Tasks that already have a lane are left untouched.\n\nArgs:\n    grandfather_active: if true, grandfather gates on non-todo tasks (recommended).",
+      "parameters": [
+        {
+          "default_expression": "True",
+          "default_value": true,
+          "mode": "positional",
+          "name": "grandfather_active",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "returns": "str",
+      "transactional": true
+    },
+    "backlog_batch_preview": {
+      "category": "targeted-query",
+      "documentation": "Preview what a batch of task operations would do without writing to disk.\n\nArgs:\n    operations: Newline-separated list of operations to preview. Each line is:\n        \"complete {task_id}\" — preview marking a task as done\n        \"archive {task_id}\" — preview archiving a task\n        \"pick {task_id}\" — preview picking a task\n        \"status {task_id} {new_status}\" — preview a status change",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "operations",
+          "required": true,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": false
+    },
+    "backlog_batch_update": {
+      "category": "composite-command",
+      "documentation": "Apply multiple task/epic updates in a single atomic operation. One load/save cycle.\n\nUse this instead of calling backlog_update_task repeatedly — it's faster and atomic.\n\nArgs:\n    operations: Newline-separated list of operations. Each line format:\n        \"update {task_id} {field} {value}\" — update a task field\n        \"status {task_id} {new_status}\" — shorthand for status changes\n        \"complete {task_id}\" — mark task done (shorthand for status done)\n        \"archive {task_id} [reason]\" — archive a task (default reason: done)\n        \"pick {task_id}\" — set task to in-progress with started timestamp\n        \"update_epic {epic_id} {field} {value}\" — update an epic field",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "operations",
+          "required": true,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": true
+    },
+    "backlog_blast_radius": {
+      "category": "targeted-query",
+      "documentation": "Analyze the blast radius (impact footprint) of a task.\n\nTwo modes:\n- predictive: metadata-only analysis for pick-task time. Fast, no code tracing.\n- evidence: code-level impact analysis for review-gate time. Traces imports, builds dependency graph.\n\nArgs:\n    task_id: The task ID to analyze (e.g., \"auth-005\")\n    mode: Analysis mode — \"predictive\" or \"evidence\"\n    depth_override: Optional depth override — \"shallow\" (0-1 hop) or \"deep\" (2 hops). Overrides the adaptive heuristic.\n    structured: When True and mode is \"predictive\", return the raw analysis as a JSON string instead of formatted markdown. Used for detection-fallback pipelines.",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "task_id",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "default_expression": "'predictive'",
+          "default_value": "predictive",
+          "mode": "positional",
+          "name": "mode",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "depth_override",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "False",
+          "default_value": false,
+          "mode": "positional",
+          "name": "structured",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "returns": "str",
+      "transactional": false
+    },
+    "backlog_bug_archive": {
+      "category": "simple-command",
+      "documentation": "Move bugs/B-NNN.md to bugs/archive/B-NNN.md.\n\nRefuses if status is open or shelved. Called automatically by task-close\nfor fixed bugs; rarely called directly.\n\nArgs:\n    bug_id: Bug ID (e.g. B-001).",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "bug_id",
+          "required": true,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": true
+    },
+    "backlog_bug_create": {
+      "category": "simple-command",
+      "documentation": "Log a Bug — the user-flagged sink for defects that don't clear the Issue bar.\n\nBugs are project-wide lightweight artifacts (no aging window, no fix-by).\nUse this for one-off defects, cosmetic issues, or anything the user wants\ntracked but that doesn't yet meet the recurring/systemic/outstanding bar.\n\nArgs:\n    title: Required. Short summary.\n    found_in: Optional task ID where the bug was flagged.\n    discovered_by: 'user' (default) or 'claude'. claude is only valid for\n        the offer-on-explicit-finding entry point, never for proactive\n        AI sightings.\n    severity: Optional. P0|P1|P2|P3 if you want a sort hint.\n    components: Affected component tags.\n    location: file:line refs.\n    body: Markdown body for repro/notes.",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "title",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "found_in",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "'user'",
+          "default_value": "user",
+          "mode": "positional",
+          "name": "discovered_by",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "severity",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "components",
+          "required": false,
+          "type": "list[str] | None"
+        },
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "location",
+          "required": false,
+          "type": "list[str] | None"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "body",
+          "required": false,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": true
+    },
+    "backlog_bug_get": {
+      "category": "targeted-query",
+      "documentation": "Read a Bug. Falls through to archive if not in active set.\n\nArgs:\n    bug_id: Bug ID (e.g. B-001).\n    verbose: If True, return full frontmatter + body. Default is slim view.",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "bug_id",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "default_expression": "False",
+          "default_value": false,
+          "mode": "positional",
+          "name": "verbose",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "returns": "str",
+      "transactional": false
+    },
+    "backlog_bug_list": {
+      "category": "targeted-query",
+      "documentation": "List Bugs from the active set (and optionally archive).\n\nDefaults to the active set sorted by (status weight asc, discovered desc).\n\nArgs:\n    status: Filter by status: open, fixed, shelved, adopted, promoted.\n    found_in: Filter by task ID where bug was discovered.\n    limit: Max entries returned (default 50). 0 = no cap. An overflow footer\n        reports how many were hidden.\n    include_archive: If True, also include archived bugs.",
+      "parameters": [
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "status",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "found_in",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "DEFAULT_LIST_LIMIT",
+          "default_value": 50,
+          "mode": "positional",
+          "name": "limit",
+          "required": false,
+          "type": "int"
+        },
+        {
+          "default_expression": "False",
+          "default_value": false,
+          "mode": "positional",
+          "name": "include_archive",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "returns": "str",
+      "transactional": false
+    },
+    "backlog_bug_pattern_scan": {
+      "category": "targeted-query",
+      "documentation": "Run the cross-bug signature scanner and return groups.\n\nmode: \"all\" (default), \"open_only\", \"end_of_task\" (excludes archive).\nReturns a human-readable digest of candidate groups; groups have >=2 bugs.\n\nArgs:\n    mode: Scan scope. \"all\" includes archive, \"end_of_task\" excludes it.",
+      "parameters": [
+        {
+          "default_expression": "'all'",
+          "default_value": "all",
+          "mode": "positional",
+          "name": "mode",
+          "required": false,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": false
+    },
+    "backlog_bug_promote": {
+      "category": "composite-command",
+      "documentation": "Atomic: create an Issue from N Bugs; mark each Bug status=promoted.\n\nThe user must provide evidence_text — this is the systemic/recurring/\noutstanding rationale that the new bar requires. Bugs are marked\npromoted_to=<new ISS-NNN>.\n\nArgs:\n    bug_ids: List of Bug IDs to promote (e.g. [\"B-001\", \"B-002\"]).\n    title: Title for the new Issue.\n    severity: Severity for the new Issue (P0-P3).\n    evidence_text: Required rationale: cite recurrence/systemic/outstanding.\n    components: Component tags for the Issue. Inferred from bugs if omitted.\n    body: Markdown body for the new Issue.",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "bug_ids",
+          "required": true,
+          "type": "list[str]"
+        },
+        {
+          "mode": "positional",
+          "name": "title",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "mode": "positional",
+          "name": "severity",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "mode": "positional",
+          "name": "evidence_text",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "components",
+          "required": false,
+          "type": "list[str] | None"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "body",
+          "required": false,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": true
+    },
+    "backlog_bug_update": {
+      "category": "simple-command",
+      "documentation": "Set one field on a Bug. List fields take a comma-separated value; an\nempty value clears the field.\n\nfield ∈ {status, title, severity, components, location, fix_commit,\nadopted_into, promoted_to, body}. Lifecycle (set the companion field first,\nin a prior call): status=fixed needs fix_commit, status=adopted needs\nadopted_into, status=promoted needs promoted_to.",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "bug_id",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "mode": "positional",
+          "name": "field",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "value",
+          "required": false,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": true
+    },
+    "backlog_canonicalize_layout": {
+      "category": "maintenance",
+      "documentation": "Migrate the v3 backlog from `.claude/` or root layout into canonical `.taskmaster/`.\n\nMoves backlog.yaml + the artifact subdirs (tasks, handovers, issues,\nauto, PROGRESS.md, viewer.json) into `.taskmaster/`.\nIdempotent: re-running on a canonical layout is a no-op. Refuses to clobber:\nif a destination file already holds different content, nothing moves and the\nconflicts are reported. After a successful `.claude/` migration, the redundant\n`.claude/taskmaster.json` config is deleted.\n\nUse this once per project to fix ISS-004 silent divergence between the v3\nhandover writer (which uses `bp.parent / \"handovers\"`) and readers that\nhistorically hard-coded `.taskmaster/`.\n\nArgs:\n    dry_run: When true, returns the move plan without modifying anything.",
+      "parameters": [
+        {
+          "default_expression": "False",
+          "default_value": false,
+          "mode": "positional",
+          "name": "dry_run",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "returns": "str",
+      "transactional": false
+    },
+    "backlog_clear_gate": {
+      "category": "simple-command",
+      "documentation": "Remove a single gate record from a task and recompute gate_state.\n\nArgs:\n    task_id: Task id.\n    gate: The gate to clear (see backlog_record_gate for valid names).",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "task_id",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "mode": "positional",
+          "name": "gate",
+          "required": true,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": true
+    },
+    "backlog_clear_spec_review": {
+      "category": "simple-command",
+      "documentation": "Remove the spec-review gate (and legacy spec_review mirror) from a task.\nUse when the spec was significantly revised and the prior review is no longer valid.\n\nArgs:\n    task_id: The task ID (e.g., \"auth-003\")",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "task_id",
+          "required": true,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": true
+    },
+    "backlog_complete_task": {
+      "category": "composite-command",
+      "documentation": "Mark a task as done (or in-review) and optionally log a session summary to the PROGRESS.md changelog.\n\nWhen session summary fields are provided, a changelog entry is appended automatically.\nThis combines the status transition and session logging into one atomic operation.\n\nUse target_status=\"done\" (default) when Claude's work is complete and gates passed.\nUse target_status=\"in-review\" ONLY when an action that only the human can perform\nblocks the task (API key, LLM config, account access) — pass it as human_action.\n\nAccepts tasks that are in-progress, in-review, or blocked.\n\nArgs:\n    task_id: The task ID to complete (e.g., \"ue-plugin-003\")\n    session_title: Optional session title (e.g., \"C++ Parser: Graph Analysis\"). Auto-prefixed with today's date.\n    done: Optional newline-separated list of accomplishments for the changelog\n    decisions: Optional newline-separated list of decisions made\n    issues: Optional newline-separated list of issues encountered. Use \"None\" if none.\n    tasks_touched: Optional comma-separated task IDs that changed status this session\n    target_status: Target status — \"done\" (default) or \"in-review\" (blocked on a human-only action)\n    human_action: Required with target_status=\"in-review\" (unless already set on the task): short imperative describing the human-only blocker, e.g. \"add OPENAI_API_KEY to .env\". Cleared automatically when the task reaches done.\n    auto_summary: If true, generates a lightweight auto-summary instead of the structured format. Pass git stats as the done field.\n    patchnote: Optional 1-2 sentence user-facing release-note line describing what shipped. Leave empty for internal/infra tasks.\n    release: Optional release bucket this task ships in (e.g., \"pre-alpha\", \"alpha-1.0\"). Groups patchnotes for release notes.",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "task_id",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "session_title",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "done",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "decisions",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "issues",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "tasks_touched",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "'done'",
+          "default_value": "done",
+          "mode": "positional",
+          "name": "target_status",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "human_action",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "False",
+          "default_value": false,
+          "mode": "positional",
+          "name": "auto_summary",
+          "required": false,
+          "type": "bool"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "patchnote",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "release",
+          "required": false,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": true
+    },
+    "backlog_continuity_items": {
+      "category": "targeted-query",
+      "documentation": "Return all continuity items as JSON: {\"items\": [...], \"view\": \"...\"}.\n\n`view` is informational only — the server returns the full set; the client\ndecides grouping (Action / Time / Entity).\n\nArgs:\n    view: \"action\" | \"time\" | \"entity\" (echoed in the response).\n    include_auto_stage: When True, include auto-stage handovers (debug).",
+      "parameters": [
+        {
+          "default_expression": "'action'",
+          "default_value": "action",
+          "mode": "positional",
+          "name": "view",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "False",
+          "default_value": false,
+          "mode": "positional",
+          "name": "include_auto_stage",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "returns": "str",
+      "transactional": false
+    },
+    "backlog_decision": {
+      "actions": {
+        "drop": [
+          {
+            "category": "simple-command",
+            "function": "backlog_decision_drop",
+            "parameters": [
+              {
+                "mode": "positional",
+                "name": "decision_id",
+                "required": true,
+                "type": "str"
+              },
+              {
+                "mode": "positional",
+                "name": "reason",
+                "required": true,
+                "type": "str"
+              }
+            ]
+          }
+        ],
+        "get": [
+          {
+            "category": "targeted-query",
+            "function": "backlog_decision_get",
+            "parameters": [
+              {
+                "mode": "positional",
+                "name": "decision_id",
+                "required": true,
+                "type": "str"
+              }
+            ]
+          }
+        ],
+        "list": [
+          {
+            "category": "targeted-query",
+            "function": "backlog_decision_list",
+            "parameters": [
+              {
+                "default_expression": "'open'",
+                "default_value": "open",
+                "mode": "positional",
+                "name": "status",
+                "required": false,
+                "type": "str"
+              },
+              {
+                "default_expression": "''",
+                "default_value": "",
+                "mode": "positional",
+                "name": "task_id",
+                "required": false,
+                "type": "str"
+              },
+              {
+                "default_expression": "DEFAULT_LIST_LIMIT",
+                "default_value": 50,
+                "mode": "positional",
+                "name": "limit",
+                "required": false,
+                "type": "int"
+              }
+            ]
+          }
+        ],
+        "resolve": [
+          {
+            "category": "simple-command",
+            "function": "backlog_decision_resolve",
+            "parameters": [
+              {
+                "mode": "positional",
+                "name": "decision_id",
+                "required": true,
+                "type": "str"
+              },
+              {
+                "mode": "positional",
+                "name": "resolved_with",
+                "required": true,
+                "type": "int"
+              },
+              {
+                "default_expression": "''",
+                "default_value": "",
+                "mode": "positional",
+                "name": "rationale",
+                "required": false,
+                "type": "str"
+              },
+              {
+                "default_expression": "''",
+                "default_value": "",
+                "mode": "positional",
+                "name": "resolved_in",
+                "required": false,
+                "type": "str"
+              }
+            ]
+          }
+        ],
+        "update": [
+          {
+            "category": "simple-command",
+            "function": "backlog_decision_update",
+            "parameters": [
+              {
+                "mode": "positional",
+                "name": "decision_id",
+                "required": true,
+                "type": "str"
+              },
+              {
+                "default_expression": "''",
+                "default_value": "",
+                "mode": "positional",
+                "name": "title",
+                "required": false,
+                "type": "str"
+              },
+              {
+                "default_expression": "None",
+                "default_value": null,
+                "mode": "positional",
+                "name": "options",
+                "required": false,
+                "type": "list[str] | None"
+              },
+              {
+                "default_expression": "None",
+                "default_value": null,
+                "mode": "positional",
+                "name": "recommendation",
+                "required": false,
+                "type": "int | None"
+              },
+              {
+                "default_expression": "''",
+                "default_value": "",
+                "mode": "positional",
+                "name": "body",
+                "required": false,
+                "type": "str"
+              }
+            ]
+          }
+        ]
+      },
+      "category": "action-router",
+      "documentation": "Read and transition existing decisions (DEC-NNN). To CREATE a decision use\nbacklog_decision_create. Route through the taskmaster:decision skill.\n\nParams by action: list(status, task_id, limit); get(decision_id);\nresolve(decision_id, resolved_with, rationale, resolved_in);\ndrop(decision_id, reason); update(decision_id, title, options,\nrecommendation, body).",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "action",
+          "required": true,
+          "type": "Literal['list', 'get', 'resolve', 'drop', 'update']"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "decision_id",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "'open'",
+          "default_value": "open",
+          "mode": "positional",
+          "name": "status",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "task_id",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "DEFAULT_LIST_LIMIT",
+          "default_value": 50,
+          "mode": "positional",
+          "name": "limit",
+          "required": false,
+          "type": "int"
+        },
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "resolved_with",
+          "required": false,
+          "type": "int | None"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "rationale",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "resolved_in",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "reason",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "title",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "options",
+          "required": false,
+          "type": "list[str] | None"
+        },
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "recommendation",
+          "required": false,
+          "type": "int | None"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "body",
+          "required": false,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": false
+    },
+    "backlog_decision_create": {
+      "category": "simple-command",
+      "documentation": "Write a decision menu as a first-class entity (`DEC-NNN`).\n\nUse when ≥2 mutually exclusive paths need user input. Replaces inline\noption lists in chat — the decision survives the session.\n\nArgs:\n    title: Short summary (≤80 chars).\n    options: At least 2 mutually exclusive paths.\n    recommendation: 1-indexed pick from `options`. None if no preference.\n    task_id: Optional link to the task this decision blocks.\n    related_issues: Optional ISS-NNN list.\n    branch: Optional branch context.\n    raised_in: Optional handover id that surfaced this decision.\n    body: Free-form context (rationale, constraints, links).",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "title",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "mode": "positional",
+          "name": "options",
+          "required": true,
+          "type": "list[str]"
+        },
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "recommendation",
+          "required": false,
+          "type": "int | None"
+        },
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "task_id",
+          "required": false,
+          "type": "str | None"
+        },
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "related_issues",
+          "required": false,
+          "type": "list[str] | None"
+        },
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "branch",
+          "required": false,
+          "type": "str | None"
+        },
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "raised_in",
+          "required": false,
+          "type": "str | None"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "body",
+          "required": false,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": true
+    },
+    "backlog_dependencies": {
+      "category": "targeted-query",
+      "documentation": "Show the full dependency chain for a task — what it depends on (upstream) and what it unblocks (downstream).\n\nArgs:\n    task_id: The task ID (e.g., \"cpp-parser-003\")",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "task_id",
+          "required": true,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": false
+    },
+    "backlog_epic_status": {
+      "category": "targeted-query",
+      "documentation": "Show progress for an epic: status counts, per-component rollup, and the\ndesign-maturity lock. Derived on read from the epic's tasks — no stored rollup.\n\nArgs:\n    epic_id: The epic ID (e.g. \"asset-engine\").",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "epic_id",
+          "required": true,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": false
+    },
+    "backlog_get_task": {
+      "category": "targeted-query",
+      "documentation": "Get details for a single task including epic context and related tasks.\n\nBy default returns a slim view (tldr, status, priority, key links) to\nminimise token cost. Use verbose=True for the full body (notes, review\ninstructions, docs, spec-review record, epic context). Use sections to\npull specific named body sections (e.g. [\"notes\", \"spec\"]). Use\nexpand_links=True to swap dependency/issue IDs for {id, tldr} pills —\nhonored in both slim and verbose modes (uniform across all _get tools).\n\nArgs:\n    task_id: The task ID (e.g., \"ue-plugin-003\")\n    verbose: If True, include full body fields (notes, review_instructions,\n        docs, spec-review, epic context, recently completed tasks).\n    sections: Named sections to include (e.g. [\"notes\", \"spec\"]).\n        Canonical sections for tasks: notes, review_instructions, spec,\n        plan, design, analysis, roadmap.\n    expand_links: If True, replace bare IDs in depends_on,\n        related_issues with {id, tldr} pills.",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "task_id",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "default_expression": "False",
+          "default_value": false,
+          "mode": "positional",
+          "name": "verbose",
+          "required": false,
+          "type": "bool"
+        },
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "sections",
+          "required": false,
+          "type": "list[str] | None"
+        },
+        {
+          "default_expression": "False",
+          "default_value": false,
+          "mode": "positional",
+          "name": "expand_links",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "returns": "str",
+      "transactional": false
+    },
+    "backlog_handover_create": {
+      "category": "composite-command",
+      "documentation": "Write a session handover — a committed markdown artifact for cross-session\ncontinuity. Capture end-of-session context: decisions, blockers, where to\nstart next. body is freeform markdown (Decisions / Blockers / Where I'd\nstart / Open threads).\n\nArgs:\n    tldr: One-line summary. Required.\n    next_action: One-line \"where to start next session.\"\n    body: Markdown body (the four-section narrative).\n    task_ids: Tasks this handover relates to (surfaces in pick-task).\n    session_kind: One of {\", \".join(HANDOVER_KINDS)}.\n    thread: Thread this handover belongs to (stable resume token). Auto-derived from bundle/epic/task/tldr when empty.\n    supersedes: Optional id of an older handover this one supersedes; the old\n        one gets a `superseded_by:` field and a SUPERSEDED callout.\n    flag_for_review: When True, flags this handover for retro extraction.\n    options: Rarely-set fields — branch, tip_commit (frontmatter git\n        context), context_size_at_write (compaction marker), review_reason\n        (used only when flag_for_review).",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "tldr",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "next_action",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "body",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "task_ids",
+          "required": false,
+          "type": "list[str] | None"
+        },
+        {
+          "default_expression": "'end-of-day'",
+          "default_value": "end-of-day",
+          "mode": "positional",
+          "name": "session_kind",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "thread",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "supersedes",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "False",
+          "default_value": false,
+          "mode": "positional",
+          "name": "flag_for_review",
+          "required": false,
+          "type": "bool"
+        },
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "options",
+          "required": false,
+          "type": "dict | None"
+        }
+      ],
+      "returns": "str",
+      "transactional": true
+    },
+    "backlog_handover_get": {
+      "category": "targeted-query",
+      "documentation": "Read a handover's content.\n\nBy default returns a slim view (frontmatter fields only, no body) to\nminimise token cost. Use verbose=True to include the full markdown body.\nUse sections to pull specific named body sections (decisions, notes,\nblockers, where_id_start). Use expand_links=True to expand task_ids to\n`id (tldr)` — honored in both slim and verbose modes.\n\nUse when start-session shows a handover tldr that you want to read in full,\nor when picking a task that has linked handovers.",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "handover_id",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "default_expression": "False",
+          "default_value": false,
+          "mode": "positional",
+          "name": "verbose",
+          "required": false,
+          "type": "bool"
+        },
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "sections",
+          "required": false,
+          "type": "list[str] | None"
+        },
+        {
+          "default_expression": "False",
+          "default_value": false,
+          "mode": "positional",
+          "name": "expand_links",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "returns": "str",
+      "transactional": false
+    },
+    "backlog_handover_list": {
+      "category": "targeted-query",
+      "documentation": "List recent handovers. By default shows slim one-liners (id, date, tldr).\n\nReads from the backlog.yaml index, which is bounded to the most recent 30.\nOlder handovers are still on disk under handovers/_archive/ but not listed\nhere — fetch by id with `backlog_handover_get` if needed.\n\nArgs:\n    task_id: If set, only entries whose `task_ids` list contains this id.\n    session_kind: If set, only entries with this session_kind\n        (e.g. \"end-of-day\", \"context-handoff\", \"milestone-complete\").\n    since: ISO date string (YYYY-MM-DD). If set, only entries whose\n        date prefix is >= since. Raises ValueError for invalid formats.\n    status: One of open, closed, superseded, or \"all\" (default). Filters\n        against the index entry — does not read every file.\n    limit: Max entries returned (default 50). 0 = no cap. An overflow footer\n        reports how many were hidden.\n    verbose: If True, include additional index fields (next_action, task_ids,\n        status) per entry. Slim (default) shows id, date, kind, and tldr.",
+      "parameters": [
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "task_id",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "session_kind",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "since",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "'all'",
+          "default_value": "all",
+          "mode": "positional",
+          "name": "status",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "DEFAULT_LIST_LIMIT",
+          "default_value": 50,
+          "mode": "positional",
+          "name": "limit",
+          "required": false,
+          "type": "int"
+        },
+        {
+          "default_expression": "False",
+          "default_value": false,
+          "mode": "positional",
+          "name": "verbose",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "returns": "str",
+      "transactional": false
+    },
+    "backlog_handover_resync": {
+      "category": "synchronization",
+      "documentation": "Rebuild the handover index in backlog.yaml from disk.\n\nUseful after manual edits to the handovers/ directory (deletes, renames),\nor to enforce the 30-entry cap and archive overflow.",
+      "parameters": [],
+      "returns": "str",
+      "transactional": true
+    },
+    "backlog_handover_supersede": {
+      "category": "composite-command",
+      "documentation": "Mark an existing handover as superseded by another.\n\nEdits the old handover in place: prepends a SUPERSEDED callout, sets\n`superseded_by: <new_id>` in its frontmatter. Use this to repair a\nsupersession chain after the fact (e.g., a handover was written without\n`supersedes=`, but should chain off a prior one).\n\nBoth ids must exist on disk. Idempotent on the same `old_id` — calling it\nagain with a newer `new_id` updates the pointer instead of stacking\ncallouts.",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "old_id",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "mode": "positional",
+          "name": "new_id",
+          "required": true,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": true
+    },
+    "backlog_handover_update_status": {
+      "category": "simple-command",
+      "documentation": "Manually set a handover's status (open / closed / superseded).\n\nMarks status_user_set: true — subsequent auto-transitions (supersession,\ntask-complete, resume) will skip this handover.\n\nArgs:\n    handover_id: The handover id (e.g. \"2026-05-09-shipped-x\").\n    status: One of open, closed, superseded.\n    reason: Optional free-text rationale stored as `status_reason`.",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "handover_id",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "mode": "positional",
+          "name": "status",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "reason",
+          "required": false,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": true
+    },
+    "backlog_idea_create": {
+      "category": "simple-command",
+      "documentation": "Log an idea — a lightweight, unvalidated thought. Lighter than a task.\n\nAn *idea* is a parking lot for things you might want to do, explore, or\nrevisit. It can grow into a task / issue later via linkage.\nTitle is required; everything else is optional. Status is freeform.\n\nArgs:\n    title: Required. Short summary.\n    body: Markdown body — anything goes (sketches, code blocks, prose).\n    tags: Freeform tag strings.\n    status: Freeform status (\"exploring\", \"parking-lot\", \"candidate\", \"\").\n    related_tasks: Task ids this idea relates to.\n    related_issues: Issue ids this idea relates to.\n    created_by: Who logged it (\"Claude\" by default; \"user\" when\n        invoked via /add-idea).\n    tldr: One-line essence of the idea. Auto-generated from body or\n        title if omitted.",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "title",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "body",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "tags",
+          "required": false,
+          "type": "list[str] | None"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "status",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "related_tasks",
+          "required": false,
+          "type": "list[str] | None"
+        },
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "related_issues",
+          "required": false,
+          "type": "list[str] | None"
+        },
+        {
+          "default_expression": "'Claude'",
+          "default_value": "Claude",
+          "mode": "positional",
+          "name": "created_by",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "tldr",
+          "required": false,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": true
+    },
+    "backlog_idea_get": {
+      "category": "targeted-query",
+      "documentation": "Read an idea's content.\n\nBy default returns a slim view (frontmatter fields only, no body) to\nminimise token cost. Use verbose=True for the full body. Ideas do not\nhave canonical body sections, so sections= is not supported (returns\nan error if provided). Use expand_links=True to expand related_tasks\nand related_issues to `id (tldr)` — honored in both slim and verbose modes.",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "idea_id",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "default_expression": "False",
+          "default_value": false,
+          "mode": "positional",
+          "name": "verbose",
+          "required": false,
+          "type": "bool"
+        },
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "sections",
+          "required": false,
+          "type": "list[str] | None"
+        },
+        {
+          "default_expression": "False",
+          "default_value": false,
+          "mode": "positional",
+          "name": "expand_links",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "returns": "str",
+      "transactional": false
+    },
+    "backlog_idea_list": {
+      "category": "targeted-query",
+      "documentation": "List ideas, optionally filtered. With `idea_id`, returns one full record.\n\nWithout `idea_id`, returns slim one-liners (no body) — newest first. Pass\n`verbose=True` to render the full record per entry (heavier payload). Output\ncaps at `limit` with an overflow footer (limit=0 for all). Filters compose as\nAND. By default archived ideas are excluded.",
+      "parameters": [
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "idea_id",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "status",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "tag",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "False",
+          "default_value": false,
+          "mode": "positional",
+          "name": "archived",
+          "required": false,
+          "type": "bool"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "related_task",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "related_issue",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "DEFAULT_LIST_LIMIT",
+          "default_value": 50,
+          "mode": "positional",
+          "name": "limit",
+          "required": false,
+          "type": "int"
+        },
+        {
+          "default_expression": "False",
+          "default_value": false,
+          "mode": "positional",
+          "name": "verbose",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "returns": "str",
+      "transactional": false
+    },
+    "backlog_idea_update": {
+      "category": "simple-command",
+      "documentation": "Set one field on an idea. List fields take a comma-separated value; an\nempty value clears the field.\n\nfield ∈ {title, body, status, tags, related_tasks, related_issues,\npromoted_to, archived}. To promote an idea, set promoted_to then set\narchived=true; archived takes true/false.",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "idea_id",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "mode": "positional",
+          "name": "field",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "value",
+          "required": false,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": true
+    },
+    "backlog_index_status": {
+      "category": "maintenance",
+      "documentation": "Report the state of the store's derived tables (FTS, paths, links, related).\n\nThey live in `.taskmaster/local/store.db` beside the authoritative rows and are\nrefreshed inside the transaction of every tool call, so they are never stale.\n\nArgs:\n    rebuild: Recompute every derived table from the entity rows before reporting.\n        The authoritative tables are not touched and no file is re-read.",
+      "parameters": [
+        {
+          "default_expression": "False",
+          "default_value": false,
+          "mode": "positional",
+          "name": "rebuild",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "returns": "str",
+      "transactional": false
+    },
+    "backlog_init": {
+      "category": "maintenance",
+      "documentation": "Initialize taskmaster in the current project. Creates config, backlog.yaml, and PROGRESS.md.\n\nArgs:\n    project_name: Name for the project. Defaults to the directory name.\n    location: Retained for backwards-compatibility. Only \"tracked\" is accepted —\n              taskmaster always writes to `.taskmaster/` now. Existing\n              `.claude/`-layout projects keep working via the resolver shim;\n              run `backlog_canonicalize_layout` to migrate them.\n    schema_version: 0 → use SCHEMA_DEFAULT (v4, sharded per-task storage) —\n              the default for new projects. 2 (single backlog.yaml) and 3\n              (slim index + per-task files) are legacy schemas retained only\n              for migration tooling and tests; do not pick them for a fresh\n              project. v3/v4 init creates the directory layout up front\n              (tasks/, handovers/, issues/, auto/).",
+      "parameters": [
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "project_name",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "'tracked'",
+          "default_value": "tracked",
+          "mode": "positional",
+          "name": "location",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "0",
+          "default_value": 0,
+          "mode": "positional",
+          "name": "schema_version",
+          "required": false,
+          "type": "int"
+        }
+      ],
+      "returns": "str",
+      "transactional": false
+    },
+    "backlog_issue_create": {
+      "category": "simple-command",
+      "documentation": "Log a systemic or recurring defect as a first-class Issue.\n\nIssues require evidence of recurrence, systemic scope, or outstanding\ncustomer impact — one-off defects should go to `backlog_bug_create` instead.\nA *task* is the unit of work; an *issue* is the unit of broken-ness.\nOne issue can spawn multiple fix attempts; one task can close many issues.\n\nArgs:\n    title: Required. Short summary.\n    severity: One of P0 (data loss/security), P1, P2, P3 (cosmetic).\n    evidence: Required. Cite recurrence/systemic/outstanding criterion.\n    impact: Why this matters (user-visible consequences).\n    components: Tags for which parts of the system are affected.\n    location: file:line refs to relevant code.\n    related_tasks: Task ids attempting or related to this issue.\n    discovered_by: Who/what found it (manual QA, alert, customer report).\n    body: Markdown body for repro steps + investigation notes.\n    tldr: One-line essence of the issue. Auto-generated from impact or\n        title if omitted.",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "title",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "mode": "positional",
+          "name": "severity",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "evidence",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "impact",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "components",
+          "required": false,
+          "type": "list[str] | None"
+        },
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "location",
+          "required": false,
+          "type": "list[str] | None"
+        },
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "related_tasks",
+          "required": false,
+          "type": "list[str] | None"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "discovered_by",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "body",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "tldr",
+          "required": false,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": true
+    },
+    "backlog_issue_get": {
+      "category": "targeted-query",
+      "documentation": "Read an issue's content.\n\nBy default returns a slim view (frontmatter fields only, no body) to\nminimise token cost. Use verbose=True for the full body (repro steps,\ninvestigation notes). Use sections to pull specific named body sections\n(repro, investigation, notes). Use expand_links=True to expand\nrelated_tasks/fixed_in_task to `id (tldr)` — honored in both slim and\nverbose modes.",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "issue_id",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "default_expression": "False",
+          "default_value": false,
+          "mode": "positional",
+          "name": "verbose",
+          "required": false,
+          "type": "bool"
+        },
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "sections",
+          "required": false,
+          "type": "list[str] | None"
+        },
+        {
+          "default_expression": "False",
+          "default_value": false,
+          "mode": "positional",
+          "name": "expand_links",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "returns": "str",
+      "transactional": false
+    },
+    "backlog_issue_list": {
+      "category": "targeted-query",
+      "documentation": "List issues, optionally filtered by severity and/or status.\n\nReads from the backlog.yaml index (sorted P0 → P3). Default lists active\nissues regardless of status — pass `status=open` to focus on what still\nneeds work.\n\nArgs:\n    severity: Filter by severity: P0, P1, P2, P3.\n    status: Filter by status: open, investigating, fixed, wontfix, duplicate.\n    limit: Max entries returned (default 50). 0 = no cap. An overflow footer\n        reports how many were hidden.\n    verbose: If True, include body content (repro steps) per entry. Slim\n        (default) shows id, severity, status, title, and tldr.",
+      "parameters": [
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "severity",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "status",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "DEFAULT_LIST_LIMIT",
+          "default_value": 50,
+          "mode": "positional",
+          "name": "limit",
+          "required": false,
+          "type": "int"
+        },
+        {
+          "default_expression": "False",
+          "default_value": false,
+          "mode": "positional",
+          "name": "verbose",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "returns": "str",
+      "transactional": false
+    },
+    "backlog_issue_resync": {
+      "category": "synchronization",
+      "documentation": "Rebuild the issue index in backlog.yaml from disk.",
+      "parameters": [],
+      "returns": "str",
+      "transactional": true
+    },
+    "backlog_issue_update": {
+      "category": "simple-command",
+      "documentation": "Set one field on an issue. List fields take a comma-separated value; an\nempty value clears the field.\n\nfield ∈ {status, title, severity, impact, components, location,\nrelated_tasks, fixed_in_task, duplicate_of, body}. Lifecycle: status=fixed\nneeds fixed_in_task (set it in a prior call), status=duplicate needs\nduplicate_of; `resolved` auto-fills when status moves to fixed.",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "issue_id",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "mode": "positional",
+          "name": "field",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "value",
+          "required": false,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": true
+    },
+    "backlog_last_session": {
+      "category": "targeted-query",
+      "documentation": "Get the most recent session summary from the PROGRESS.md changelog.\nReturns the last changelog entry (everything between the first and second ### headings).",
+      "parameters": [],
+      "returns": "str",
+      "transactional": false
+    },
+    "backlog_linear": {
+      "actions": {
+        "bootstrap_apply": [
+          {
+            "category": "synchronization",
+            "function": "backlog_linear_bootstrap_apply",
+            "parameters": [
+              {
+                "mode": "positional",
+                "name": "workspace_alias",
+                "required": true,
+                "type": "str"
+              },
+              {
+                "mode": "positional",
+                "name": "team_id",
+                "required": true,
+                "type": "str"
+              },
+              {
+                "mode": "positional",
+                "name": "token_env",
+                "required": true,
+                "type": "str"
+              },
+              {
+                "default_expression": "''",
+                "default_value": "",
+                "mode": "positional",
+                "name": "status_mapping",
+                "required": false,
+                "type": "str"
+              },
+              {
+                "default_expression": "''",
+                "default_value": "",
+                "mode": "positional",
+                "name": "priority_mapping",
+                "required": false,
+                "type": "str"
+              },
+              {
+                "default_expression": "True",
+                "default_value": true,
+                "mode": "positional",
+                "name": "default_workspace",
+                "required": false,
+                "type": "bool"
+              }
+            ]
+          }
+        ],
+        "link": [
+          {
+            "category": "simple-command",
+            "function": "backlog_linear_link",
+            "parameters": [
+              {
+                "mode": "positional",
+                "name": "task_id",
+                "required": true,
+                "type": "str"
+              },
+              {
+                "mode": "positional",
+                "name": "external_key",
+                "required": true,
+                "type": "str"
+              },
+              {
+                "default_expression": "''",
+                "default_value": "",
+                "mode": "positional",
+                "name": "workspace_alias",
+                "required": false,
+                "type": "str"
+              }
+            ]
+          }
+        ],
+        "list": [
+          {
+            "category": "targeted-query",
+            "function": "backlog_linear_list",
+            "parameters": []
+          }
+        ],
+        "probe": [
+          {
+            "category": "external-query",
+            "function": "backlog_linear_probe",
+            "parameters": [
+              {
+                "mode": "positional",
+                "name": "token_env",
+                "required": true,
+                "type": "str"
+              }
+            ]
+          }
+        ],
+        "retry": [
+          {
+            "category": "synchronization",
+            "function": "backlog_linear_retry",
+            "parameters": [
+              {
+                "default_expression": "''",
+                "default_value": "",
+                "mode": "positional",
+                "name": "target_id",
+                "required": false,
+                "type": "str"
+              }
+            ]
+          }
+        ],
+        "show": [
+          {
+            "category": "targeted-query",
+            "function": "backlog_linear_show",
+            "parameters": [
+              {
+                "mode": "positional",
+                "name": "tracker_id",
+                "required": true,
+                "type": "str"
+              }
+            ]
+          }
+        ],
+        "status": [
+          {
+            "category": "targeted-query",
+            "function": "backlog_linear_status",
+            "parameters": []
+          }
+        ],
+        "unlink": [
+          {
+            "category": "simple-command",
+            "function": "backlog_linear_unlink",
+            "parameters": [
+              {
+                "mode": "positional",
+                "name": "task_id",
+                "required": true,
+                "type": "str"
+              }
+            ]
+          }
+        ]
+      },
+      "category": "action-router",
+      "documentation": "Drive Taskmaster's Linear sync. Route through the taskmaster:linear skill.\n\nParams by action: probe(token_env); bootstrap_apply(workspace_alias, team_id,\ntoken_env, status_mapping, priority_mapping, default_workspace);\nlink(task_id, external_key, workspace_alias); unlink(task_id); list();\nshow(tracker_id); status(); retry(target_id).",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "action",
+          "required": true,
+          "type": "Literal['probe', 'bootstrap_apply', 'link', 'unlink', 'list', 'show', 'status', 'retry']"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "task_id",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "external_key",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "workspace_alias",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "token_env",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "team_id",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "status_mapping",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "priority_mapping",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "True",
+          "default_value": true,
+          "mode": "positional",
+          "name": "default_workspace",
+          "required": false,
+          "type": "bool"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "tracker_id",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "target_id",
+          "required": false,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": false
+    },
+    "backlog_link": {
+      "actions": {
+        "create": [
+          {
+            "category": "simple-command",
+            "function": "backlog_link_create",
+            "parameters": [
+              {
+                "mode": "positional",
+                "name": "source",
+                "required": true,
+                "type": "str"
+              },
+              {
+                "mode": "positional",
+                "name": "target",
+                "required": true,
+                "type": "str"
+              },
+              {
+                "mode": "positional",
+                "name": "type",
+                "required": true,
+                "type": "str"
+              },
+              {
+                "default_expression": "''",
+                "default_value": "",
+                "mode": "positional",
+                "name": "note",
+                "required": false,
+                "type": "str"
+              }
+            ]
+          }
+        ],
+        "query": [
+          {
+            "category": "targeted-query",
+            "function": "backlog_link_query",
+            "parameters": [
+              {
+                "default_expression": "''",
+                "default_value": "",
+                "mode": "positional",
+                "name": "source",
+                "required": false,
+                "type": "str"
+              },
+              {
+                "default_expression": "''",
+                "default_value": "",
+                "mode": "positional",
+                "name": "target",
+                "required": false,
+                "type": "str"
+              },
+              {
+                "default_expression": "''",
+                "default_value": "",
+                "mode": "positional",
+                "name": "type",
+                "required": false,
+                "type": "str"
+              },
+              {
+                "default_expression": "1",
+                "default_value": 1,
+                "mode": "positional",
+                "name": "depth",
+                "required": false,
+                "type": "int"
+              }
+            ]
+          }
+        ],
+        "reconcile": [
+          {
+            "category": "maintenance",
+            "function": "backlog_link_reconcile",
+            "parameters": []
+          }
+        ],
+        "remove": [
+          {
+            "category": "simple-command",
+            "function": "backlog_link_remove",
+            "parameters": [
+              {
+                "mode": "positional",
+                "name": "source",
+                "required": true,
+                "type": "str"
+              },
+              {
+                "mode": "positional",
+                "name": "target",
+                "required": true,
+                "type": "str"
+              },
+              {
+                "default_expression": "''",
+                "default_value": "",
+                "mode": "positional",
+                "name": "type",
+                "required": false,
+                "type": "str"
+              }
+            ]
+          }
+        ],
+        "validate": [
+          {
+            "category": "targeted-query",
+            "function": "backlog_link_validate",
+            "parameters": []
+          }
+        ]
+      },
+      "category": "action-router",
+      "documentation": "Manage typed links between entities. The server writes the inverse side\nautomatically and rejects invalid types, kind mismatches, and depends_on\ncycles.\n\nParams by action: create(source, target, type, note);\nremove(source, target, type); query(source, target, type, depth);\nvalidate(); reconcile().",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "action",
+          "required": true,
+          "type": "Literal['create', 'remove', 'query', 'validate', 'reconcile']"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "source",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "target",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "type",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "note",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "1",
+          "default_value": 1,
+          "mode": "positional",
+          "name": "depth",
+          "required": false,
+          "type": "int"
+        }
+      ],
+      "returns": "str",
+      "transactional": false
+    },
+    "backlog_list_tasks": {
+      "category": "targeted-query",
+      "documentation": "List tasks with optional filters. Active tasks sort first; output is\ncapped at `limit` rows with an overflow footer.\n\nArgs:\n    epic: Filter by epic ID\n    status: Filter by status: todo, in-progress, in-review, done, blocked\n    priority: Filter by priority: critical, high, medium, low\n    phase: Filter by phase ID\n    area: Filter by area ID\n    verbose: If True, include heavy fields (notes) per task entry. Slim\n        (default) shows id, title, tldr, priority, epic, and status only.\n    limit: Max rows returned (default 50). 0 = no cap.",
+      "parameters": [
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "epic",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "status",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "priority",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "phase",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "area",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "False",
+          "default_value": false,
+          "mode": "positional",
+          "name": "verbose",
+          "required": false,
+          "type": "bool"
+        },
+        {
+          "default_expression": "50",
+          "default_value": 50,
+          "mode": "positional",
+          "name": "limit",
+          "required": false,
+          "type": "int"
+        }
+      ],
+      "returns": "str",
+      "transactional": false
+    },
+    "backlog_migrate_v3": {
+      "category": "maintenance",
+      "documentation": "Adopt this project's backlog into the SQLite store.\n\nKept under its historical name so existing skills and docs keep working.\nThere is no longer a v2/v3/v4 file rewrite step: the store adopts whatever\nschema it finds when it first opens the project, so this tool moves a\nlegacy `.claude/` or root layout into `.taskmaster/` (the only place a store\nmay live) and then opens it. Idempotent — running it on an adopted project\njust reports the counts.",
+      "parameters": [],
+      "returns": "str",
+      "transactional": false
+    },
+    "backlog_migrate_v4": {
+      "category": "maintenance",
+      "documentation": "Adopt this project's backlog into the SQLite store (alias of\n`backlog_migrate_v3` — one adoption path, two historical names).",
+      "parameters": [],
+      "returns": "str",
+      "transactional": false
+    },
+    "backlog_next_available": {
+      "category": "targeted-query",
+      "documentation": "Show tasks that are ready to work on — todo tasks in active epics with all dependencies satisfied.\nSorted by priority, then by creation date. By default only shows tasks from the active phase;\nset include_future_phases=true to see tasks from all phases.",
+      "parameters": [
+        {
+          "default_expression": "False",
+          "default_value": false,
+          "mode": "positional",
+          "name": "include_future_phases",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "returns": "str",
+      "transactional": false
+    },
+    "backlog_note": {
+      "actions": {
+        "archive": [
+          {
+            "category": "simple-command",
+            "function": "backlog_note_archive",
+            "parameters": [
+              {
+                "mode": "positional",
+                "name": "note_id",
+                "required": true,
+                "type": "str"
+              }
+            ]
+          }
+        ],
+        "create": [
+          {
+            "category": "simple-command",
+            "function": "backlog_note_create",
+            "parameters": [
+              {
+                "mode": "positional",
+                "name": "text",
+                "required": true,
+                "type": "str"
+              },
+              {
+                "default_expression": "False",
+                "default_value": false,
+                "mode": "positional",
+                "name": "pinned",
+                "required": false,
+                "type": "bool"
+              }
+            ]
+          }
+        ],
+        "get": [
+          {
+            "category": "targeted-query",
+            "function": "backlog_note_get",
+            "parameters": [
+              {
+                "mode": "positional",
+                "name": "note_id",
+                "required": true,
+                "type": "str"
+              }
+            ]
+          }
+        ],
+        "list": [
+          {
+            "category": "targeted-query",
+            "function": "backlog_note_list",
+            "parameters": [
+              {
+                "default_expression": "False",
+                "default_value": false,
+                "mode": "positional",
+                "name": "include_archived",
+                "required": false,
+                "type": "bool"
+              },
+              {
+                "default_expression": "DEFAULT_LIST_LIMIT",
+                "default_value": 50,
+                "mode": "positional",
+                "name": "limit",
+                "required": false,
+                "type": "int"
+              }
+            ]
+          }
+        ],
+        "update": [
+          {
+            "category": "simple-command",
+            "function": "backlog_note_update",
+            "parameters": [
+              {
+                "mode": "positional",
+                "name": "note_id",
+                "required": true,
+                "type": "str"
+              },
+              {
+                "default_expression": "''",
+                "default_value": "",
+                "mode": "positional",
+                "name": "text",
+                "required": false,
+                "type": "str"
+              },
+              {
+                "default_expression": "None",
+                "default_value": null,
+                "mode": "positional",
+                "name": "pinned",
+                "required": false,
+                "type": "bool | None"
+              }
+            ]
+          }
+        ]
+      },
+      "category": "action-router",
+      "documentation": "Manage sticky notes on the user's Desk. Notes are the lightest continuity\nsurface: freeform, situational, NOT attached to tasks. Write at most one\nconsolidated note per session, only for loose thoughts that fit no other\nentity (task/idea/issue/handover). Never archive or edit user-authored notes\nunless the user explicitly asks.\n\nParams by action: create(text, pinned); list(include_archived, limit);\nget(note_id); update(note_id, text, pinned); archive(note_id).",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "action",
+          "required": true,
+          "type": "Literal['create', 'list', 'get', 'update', 'archive']"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "note_id",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "text",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "pinned",
+          "required": false,
+          "type": "bool | None"
+        },
+        {
+          "default_expression": "False",
+          "default_value": false,
+          "mode": "positional",
+          "name": "include_archived",
+          "required": false,
+          "type": "bool"
+        },
+        {
+          "default_expression": "DEFAULT_LIST_LIMIT",
+          "default_value": 50,
+          "mode": "positional",
+          "name": "limit",
+          "required": false,
+          "type": "int"
+        }
+      ],
+      "returns": "str",
+      "transactional": false
+    },
+    "backlog_open_viewer": {
+      "category": "host-action",
+      "documentation": "Open the backlog kanban board in the default browser. The viewer auto-loads current data.",
+      "parameters": [],
+      "returns": "str",
+      "transactional": false
+    },
+    "backlog_phase_status": {
+      "category": "targeted-query",
+      "documentation": "Show detailed progress for a phase. Defaults to the active phase.\n\nArgs:\n    phase_id: Phase ID. If omitted, shows the active phase.",
+      "parameters": [
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "phase_id",
+          "required": false,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": false
+    },
+    "backlog_pick_task": {
+      "category": "composite-command",
+      "documentation": "Start working on a task — sets it to in-progress. Idempotent if already in-progress.\n\nArgs:\n    task_id: The task ID to pick (e.g., \"ue-plugin-003\")\n    force: Force-claim the task even if locked by another session. Use when a previous\n           session ended without releasing the lock.",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "task_id",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "default_expression": "False",
+          "default_value": false,
+          "mode": "positional",
+          "name": "force",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "returns": "str",
+      "transactional": true
+    },
+    "backlog_project_error_trace_ladder": {
+      "category": "targeted-query",
+      "documentation": "Return the observability error-trace ladder as a list of dicts.\n\nEmpty list if no manifest. Consumed by IDEA-006 Diagnose-Auth-Or-Not.",
+      "parameters": [],
+      "returns": "list[dict]",
+      "transactional": false
+    },
+    "backlog_project_get": {
+      "category": "targeted-query",
+      "documentation": "Return the full .taskmaster/project.yaml as a dict, or None if missing/invalid.\n\nThe returned dict is the EXPANDED form — every dataclass default is filled\nin (e.g. `project.goal == \"\"` even when the YAML didn't set it). For \"is\nthis field absent in the source?\" queries, use `backlog_project_get_field`\nwhich reads the raw YAML.",
+      "parameters": [],
+      "returns": "dict | None",
+      "transactional": false
+    },
+    "backlog_project_get_field": {
+      "category": "targeted-query",
+      "documentation": "Read a single field via dotted/indexed path from the RAW YAML.\n\nUnlike `backlog_project_get`, this reads the source file directly without\ncoercing through dataclasses — so absent fields return None rather than\ntheir schema defaults. Examples:\n    \"meta.name\"\n    \"repos[0].name\"\n    \"repos[0].branches.protected[0]\"\n\nReturns None if any segment is missing or out of range.",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "path",
+          "required": true,
+          "type": "str"
+        }
+      ],
+      "returns": "Any",
+      "transactional": false
+    },
+    "backlog_project_init": {
+      "category": "simple-command",
+      "documentation": "Scaffold a minimal valid project.yaml. Refuses to overwrite.\n\nReturns a confirmation message including the path written, followed by the\ncommitted `[seq N]`.",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "name",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "slug",
+          "required": false,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": true
+    },
+    "backlog_project_set": {
+      "category": "simple-command",
+      "documentation": "Write .taskmaster/project.yaml with strict validation.\n\nRaises ValueError if YAML is malformed or schema invalid. The manifest is\na store-owned entity, so the write commits through a store transaction.\nReturns the absolute path written, followed by the committed `[seq N]`.",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "yaml_content",
+          "required": true,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": true
+    },
+    "backlog_project_ship_order": {
+      "category": "targeted-query",
+      "documentation": "Return repos in topological dependency order. Empty list if no manifest.\n\nRaises ValueError if depends_on contains a cycle (caught by validator on load).",
+      "parameters": [],
+      "returns": "list[str]",
+      "transactional": false
+    },
+    "backlog_query": {
+      "category": "targeted-query",
+      "documentation": "Read-only SQL over the backlog store (.taskmaster/local/store.db). Use it to dig deeper\nthan the one-line edit hook: closed history for a path, titles, related entities, FTS.\n\nTables: entities(kind,id,epic,status,archived,deleted,doc,body,rev,updated_seq) — `doc` is the\n  whole document as JSON, so titles and other fields come from json_extract(doc,'$.title')\n  entity_paths(kind,id,path,match_kind,source) links(src_kind,src_id,type,dst_kind,dst_id,derived)\n  related(a_kind,a_id,b_kind,b_id,via,weight) handover_tasks(handover_id,task_id)\n  entity_fts(kind,id,title,body) changes(seq,ts,session,tool,kind,id,op,fields,before,after)\n  projection(file,kind,id,content_hash,mtime,size,dirty,quarantined,exported_seq)\n  sessions(session,pid,host,started,last_seen,cwd,current_tool)\n  linear_queue(seq,op,target_id,tracker_id,payload,state,attempts,last_error,claimed_by,claimed_at)\nkind: task|epic|phase|bug|issue|handover|decision|idea|note|area|tracker. Open statuses: task\ntodo|in-progress|blocked|in-review, bug open|adopted, issue open|investigating, handover open.\nRows with deleted=1 are tombstones — filter them out unless you are reading history.\nExamples:\n  SELECT id,status,json_extract(doc,'$.title') AS title FROM entities WHERE kind='bug' AND deleted=0 AND status IN ('open','adopted')\n  SELECT e.kind,e.id,e.status FROM entity_paths p JOIN entities e ON e.kind=p.kind AND e.id=p.id WHERE p.path LIKE '%ModelUsageService.cs'\n  SELECT id,title FROM entity_fts WHERE entity_fts MATCH 'credit exhaustion' AND kind='handover' ORDER BY bm25(entity_fts) LIMIT 10\n\nArgs:\n    sql: one SELECT (or WITH ... SELECT, recursive CTEs allowed). Writes, PRAGMA, ATTACH and\n        multiple statements are rejected, as is a forbidden keyword inside a double-quoted\n        identifier — quote string values with single quotes. Queries are cut off after 5 s.\n    limit: row cap, 1..500 (default 50).",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "sql",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "default_expression": "50",
+          "default_value": 50,
+          "mode": "positional",
+          "name": "limit",
+          "required": false,
+          "type": "int"
+        }
+      ],
+      "returns": "str",
+      "transactional": false
+    },
+    "backlog_record_gate": {
+      "category": "simple-command",
+      "documentation": "Record the outcome of a pipeline gate on a task. Generalizes spec-review to\nevery gate (spec, plan, tests, impl, spec-review, plan-review, design-review,\nreview-gate). Status gates take status=\"done\"; review gates take a verdict in\npass/warn/fail. Overwrites any prior record for that gate.\n\nEnforces ordering: for a task WITH a lane, an earlier required gate must be\nsatisfied (pass/done/skipped) before a later one is recorded.\n\nArgs:\n    task_id: Task id.\n    gate: One of spec|plan|tests|impl|spec-review|plan-review|design-review|review-gate.\n    verdict: pass|warn|fail (for review gates).\n    status: done (for status gates).\n    commit_sha, spec_path, codex_used, critical_count, important_count: optional meta.",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "task_id",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "mode": "positional",
+          "name": "gate",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "verdict",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "status",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "commit_sha",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "spec_path",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "False",
+          "default_value": false,
+          "mode": "positional",
+          "name": "codex_used",
+          "required": false,
+          "type": "bool"
+        },
+        {
+          "default_expression": "0",
+          "default_value": 0,
+          "mode": "positional",
+          "name": "critical_count",
+          "required": false,
+          "type": "int"
+        },
+        {
+          "default_expression": "0",
+          "default_value": 0,
+          "mode": "positional",
+          "name": "important_count",
+          "required": false,
+          "type": "int"
+        }
+      ],
+      "returns": "str",
+      "transactional": true
+    },
+    "backlog_record_merge": {
+      "category": "simple-command",
+      "documentation": "Stamp a merge rung on a task: records that the task's branch landed at `rung`\n(e.g. develop|stage|master) at merge commit `sha`. Idempotent overwrite per rung.\nThe manual fallback for the PostToolUse merge-recorder hook. Not a pipeline gate —\nno ordering is enforced; a rung label outside the ladder (e.g. \"branch:<name>\") is\nstill recorded to preserve the audit trail.\n\nArgs:\n    task_id: Task id.\n    rung: Rung label (ladder label or \"branch:<name>\" for untracked targets).\n    sha: Merge commit SHA.\n    merged_at: ISO timestamp; defaults to now.",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "task_id",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "mode": "positional",
+          "name": "rung",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "mode": "positional",
+          "name": "sha",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "merged_at",
+          "required": false,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": true
+    },
+    "backlog_search": {
+      "category": "targeted-query",
+      "documentation": "Full-text search across every backlog entity — tasks, epics, bugs, issues, handovers,\ndecisions and ideas — ranked by relevance (bm25) over the store's FTS index.\n\nArgs:\n    query: Search text (case-insensitive). Matched against titles and bodies (notes,\n        descriptions, evidence, handover prose). Multiple words are ANDed together.\n    kinds: Optional filter, e.g. [\"bug\", \"issue\"]. Unknown kinds are ignored; omit for all.\n        Valid kinds: task, epic, bug, issue, handover, decision, idea.",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "query",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "kinds",
+          "required": false,
+          "type": "list[str] | None"
+        }
+      ],
+      "returns": "str",
+      "transactional": false
+    },
+    "backlog_set_spec_review": {
+      "category": "simple-command",
+      "documentation": "Record a spec-review pass on a task. Thin alias over backlog_record_gate(gate=\"spec-review\");\nalso keeps the legacy `spec_review` dict for back-compat. Overwrites any prior record.\n\nArgs:\n    task_id: The task ID (e.g., \"auth-003\")\n    verdict: One of \"pass\", \"warn\", \"fail\"\n    spec_path: Path to the spec/plan file that was reviewed\n    codex_used: True if the optional Codex adversarial pass was run\n    critical_count: Number of critical findings\n    important_count: Number of important findings",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "task_id",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "mode": "positional",
+          "name": "verdict",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "mode": "positional",
+          "name": "spec_path",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "default_expression": "False",
+          "default_value": false,
+          "mode": "positional",
+          "name": "codex_used",
+          "required": false,
+          "type": "bool"
+        },
+        {
+          "default_expression": "0",
+          "default_value": 0,
+          "mode": "positional",
+          "name": "critical_count",
+          "required": false,
+          "type": "int"
+        },
+        {
+          "default_expression": "0",
+          "default_value": 0,
+          "mode": "positional",
+          "name": "important_count",
+          "required": false,
+          "type": "int"
+        }
+      ],
+      "returns": "str",
+      "transactional": true
+    },
+    "backlog_skip_gate": {
+      "category": "simple-command",
+      "documentation": "Record an explicit, audited skip of a pipeline gate — the ONLY way past a\nrequired gate without satisfying it. Always succeeds (for a valid gate+reason)\nand is flagged on the dashboard. No silent skips exist anywhere else.\n\nArgs:\n    task_id: Task id.\n    gate: The gate to skip (see backlog_record_gate for valid names).\n    reason: Required non-empty justification (becomes the paper trail).\n    by: \"claude\" or \"user\".",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "task_id",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "mode": "positional",
+          "name": "gate",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "mode": "positional",
+          "name": "reason",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "default_expression": "'claude'",
+          "default_value": "claude",
+          "mode": "positional",
+          "name": "by",
+          "required": false,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": true
+    },
+    "backlog_status": {
+      "category": "targeted-query",
+      "documentation": "Show project dashboard: epic progress table, in-progress tasks, blocked items, next priorities, and stats.\n\nArgs:\n    verbose: If True, include archived task count in stats and show up to\n        10 stale tasks and all next-up items. Default (slim) mode omits\n        archived counts, caps next-up at 5, and caps stale tasks at 3.",
+      "parameters": [
+        {
+          "default_expression": "False",
+          "default_value": false,
+          "mode": "positional",
+          "name": "verbose",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "returns": "str",
+      "transactional": false
+    },
+    "backlog_store_status": {
+      "category": "targeted-query",
+      "documentation": "Report the state of the SQLite store (`.taskmaster/local/store.db`).\n\nThe store is the authority: root and how it was resolved, schema version,\ndatabase and WAL size, the last 20 changes, dirty and quarantined\nprojection files, live sessions, any filesystem warning, merge conflicts in\nthe last 24 hours, databases an earlier recovery moved aside, and the\npending Linear push count.\n\nGenuinely read-only: it will not create a store that does not exist yet, and\nit will not move a damaged one aside. Either is reported on the `Warning:`\nline and left for you to act on, because a diagnostic that repairs the\nevidence is worse than one that says nothing.",
+      "parameters": [],
+      "returns": "str",
+      "transactional": false
+    },
+    "backlog_task_pipeline": {
+      "category": "targeted-query",
+      "documentation": "Show a task's lane, its required gate pipeline, and each gate's recorded\nstate (pass/done/skipped/fail/pending), plus the one-line gate_state and the\nlist of outstanding gates blocking `done`.",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "task_id",
+          "required": true,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": false
+    },
+    "backlog_thread_list": {
+      "category": "targeted-query",
+      "documentation": "The thread board — open (and parked) lines of work with their stable\nresume tokens. Resume one with `backlog_thread_resume(<name>)`.\n\nArgs:\n    include_closed: Also list closed threads (default False).",
+      "parameters": [
+        {
+          "default_expression": "False",
+          "default_value": false,
+          "mode": "positional",
+          "name": "include_closed",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "returns": "str",
+      "transactional": false
+    },
+    "backlog_thread_resume": {
+      "category": "targeted-query",
+      "documentation": "Resume a thread: returns its newest handover in full (frontmatter +\nbody) in one call. `ref` is a thread name OR any handover id (stale dated\nslugs still land on the thread's newest handover).",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "ref",
+          "required": true,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": false
+    },
+    "backlog_thread_update": {
+      "category": "simple-command",
+      "documentation": "Set a thread's status: open / parked / closed. Writing a new handover\ninto the thread later auto-reopens it (override expires).",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "name",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "mode": "positional",
+          "name": "status",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "reason",
+          "required": false,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": true
+    },
+    "backlog_update_epic": {
+      "category": "simple-command",
+      "documentation": "Update a single field on an epic.\n\nArgs:\n    epic_id: The epic ID (e.g., \"cpp-parser\", \"ue-plugin\", \"infra\")\n    field: Field to update — one of: name, status, description, docs\n    value: New value. For status, one of: active, planned, done.\n        For docs, use \"key:path\" format (e.g., \"design:docs/design/foo.md\").\n        Valid doc keys mirror task docs: plan, spec, roadmap, design, analysis.\n        Pass \"key:\" (empty path) to remove a single doc entry.",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "epic_id",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "mode": "positional",
+          "name": "field",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "mode": "positional",
+          "name": "value",
+          "required": true,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": true
+    },
+    "backlog_update_phase": {
+      "category": "simple-command",
+      "documentation": "Update a single field on a phase.\n\nArgs:\n    phase_id: The phase ID (e.g., \"foundation\", \"mvp\")\n    field: Field to update — one of: name, status, description, order, target_date, start_date\n    value: New value. For status: planned, active, done, archived. For order: integer. For dates: YYYY-MM-DD or empty to clear.",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "phase_id",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "mode": "positional",
+          "name": "field",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "mode": "positional",
+          "name": "value",
+          "required": true,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": true
+    },
+    "backlog_update_task": {
+      "category": "simple-command",
+      "documentation": "Update a single field on a task. Status changes trigger appropriate date updates.\n\nTwo calling styles are supported:\n- Field/value style: backlog_update_task(task_id, field, value) — the classic API.\n- Keyword style: backlog_update_task(task_id, tldr=\"...\", next_step=\"...\") — for tldr/next_step.\n\nArgs:\n    task_id: The task ID (e.g., \"ue-plugin-003\")\n    field: Field to update — one of: title, status, priority, notes, branch, worktree, blockers,\n        docs, depends_on, sub_repo, stage, estimate, locked_by, review_instructions, phase,\n        patchnote, release, tldr, next_step, human_action\n    value: New value. Format varies by field:\n        - docs: \"key:path\" (e.g., \"plan:docs/plans/foo.md\")\n        - depends_on: comma-separated task IDs (e.g., \"cpp-parser-002,cpp-parser-003\")\n        - stage: integer\n        - estimate: size string (e.g., \"S\", \"M\", \"L\")\n        - sub_repo: sub-repo directory name for monorepo projects\n        - locked_by: session ID to claim the lock, or \"\" to clear it\n        - phase: phase ID to assign, or \"\" to clear\n        - anchors: comma-separated glob patterns/URLs, or \"\" to clear\n        - patchnote: 1-2 sentence user-facing release-note line, or \"\" to clear\n        - release: release bucket this task ships in (e.g., \"pre-alpha\", \"alpha-1.0\"), or \"\" to clear\n        - area: area id (must match an existing Area from `backlog_area_list`), or \"\" to clear\n    tldr: One-sentence essence of the task (keyword style only).\n    next_step: Concrete immediate action to take on this task (keyword style only).",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "task_id",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "field",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "value",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "tldr",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "next_step",
+          "required": false,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": true
+    },
+    "backlog_validate": {
+      "category": "maintenance",
+      "documentation": "Check backlog integrity: dangling dependency refs, missing dates on done tasks,\ndocs paths that don't exist on disk, circular deps, and status inconsistencies.",
+      "parameters": [],
+      "returns": "str",
+      "transactional": false
+    },
+    "viewer_prefs_get": {
+      "category": "targeted-query",
+      "documentation": "Return current viewer prefs as JSON.",
+      "parameters": [],
+      "returns": "str",
+      "transactional": false
+    },
+    "viewer_prefs_set": {
+      "category": "host-action",
+      "documentation": "Deep-merge a JSON patch into the persisted viewer prefs.\nPatch is a JSON object; only the keys present are updated.",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "patch_json",
+          "required": true,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": false
+    }
+  }
+}
