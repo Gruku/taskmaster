@@ -3,8 +3,10 @@
 
 # Database-native Taskmaster implementation plan
 
-**Status:** M0 (N00–N02) complete locally on `feat/database-native-foundation`.
-Native schema, command/query replacement and rollout remain N03–N17.
+**Status:** N00–N03 complete locally on `feat/database-native-foundation`.
+Command/query replacement and rollout remain N04–N17. Merge the branch only
+after N03–N17 are complete (user instruction, 2026-09-12); the default branch is
+named `master` in this repository.
 **Design:** [database-native design](../specs/2026-09-09-database-native-design.md).
 **Baseline:** 6.0.2, `e9ea119`. Recheck before implementation; the current audit
 reports and benchmark scripts are uncommitted task-owned artifacts.
@@ -426,7 +428,7 @@ explicitly deferred scope when implementation actually occurs.
 | N00 | complete locally | `c940697`, `7470757`; [FTS matrix (40 cases), diagnostic policy and baseline oracles](../reports/2026-09-09-native-foundation.md) |
 | N01 | complete locally; bridge rollout pending | `4aa6694` plus reservation-test follow-up; [admission and cutover contract](../handoffs/2026-09-09-native-client-fencing.md) |
 | N02 | complete locally | [83 tools, route/field/SQL contracts and ownership map; M0 validation below](../specs/2026-09-09-native-compatibility.md) |
-| N03 | planned | — |
+| N03 | complete locally; activation gated | [Schema, transactional backfill, crash tests and 3,559-row copied-fixture evidence](../reports/2026-09-12-native-core.md) |
 | N04 | planned | — |
 | N05 | planned | — |
 | N06 | planned | — |
@@ -447,7 +449,6 @@ collected cases across the initial full run and corrective/completion runs.
 The default 8-process × 200-operation concurrency acceptance test passed in
 575.94 seconds. See [validation evidence](../reports/2026-09-09-native-foundation.md).
 
-**Next implementation action:** N03, concrete native DDL and transactional
-additive backfill from authoritative DB rows, using the N02 ownership map.
-Preserve scalar-versus-list claims and explicit nulls found in the copied data.
-Keep activation gated; no live project migration or installed-plugin changes.
+**Next implementation action:** N04, targeted queries and coherent snapshots;
+then N05 command transactions and durable retry receipts. Keep activation gated;
+no live project migration or installed-plugin changes.
