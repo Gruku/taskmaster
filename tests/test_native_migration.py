@@ -163,6 +163,35 @@ def test_unknown_staging_schema_is_never_rebuilt(legacy):
         assert list(connection.iterdump()) == before
 
 
+def test_unresolved_memberships_retain_their_declared_target_kind(legacy):
+    with closing(sqlite3.connect(legacy, isolation_level=None)) as connection:
+        connection.execute("UPDATE entities SET doc=json_set(doc,'$.promoted_to','ISS-missing') WHERE kind='bug'")
+        connection.execute("UPDATE entities SET doc=json_set(doc,'$.duplicate_of','ISS-missing') WHERE kind='issue'")
+        migrate.backfill(connection)
+        assert connection.execute("SELECT target_kind,target_id,target_key FROM memberships WHERE field IN ('promoted_to','duplicate_of')").fetchall() == [
+            ("issue", "ISS-missing", None), ("issue", "ISS-missing", None)]
+
+
+def test_prior_staging_schema_upgrades_additively_without_changing_keys(legacy):
+    with closing(sqlite3.connect(legacy, isolation_level=None)) as connection:
+        backfill = migrate.backfill
+        backfill(connection)
+        keys = connection.execute("SELECT kind,public_id,entity_key FROM entity_core ORDER BY entity_key").fetchall()
+        for table in ("id_reservations", "id_counters", "external_documents"):
+            connection.execute(f"DROP TABLE {table}")
+        connection.execute("UPDATE native_manifest SET value='1' WHERE key='schema_version'")
+        def interrupted(stage):
+            if stage == "schema":
+                raise RuntimeError("interrupted upgrade")
+        with pytest.raises(RuntimeError, match="interrupted upgrade"):
+            backfill(connection, checkpoint=interrupted)
+        assert connection.execute("SELECT value FROM native_manifest WHERE key='schema_version'").fetchone()[0] == "1"
+        assert not connection.execute("SELECT 1 FROM sqlite_schema WHERE name='id_counters'").fetchone()
+        assert backfill(connection)["state"] == "verified"
+        assert connection.execute("SELECT kind,public_id,entity_key FROM entity_core ORDER BY entity_key").fetchall() == keys
+        assert connection.execute("SELECT COUNT(*) FROM id_counters").fetchone()[0] == 0
+
+
 @pytest.mark.parametrize("stage", migrate.STAGES)
 def test_process_death_rolls_back_uncommitted_backfill(legacy, stage):
     import os

@@ -26,15 +26,36 @@ def probe_capabilities(connection: sqlite3.Connection) -> dict:
         connection.execute("RELEASE native_capability_probe")
 
 
-def manifest(connection: sqlite3.Connection) -> dict:
+def manifest(connection: sqlite3.Connection, *, authorities=("legacy",), allow_prior_staging=False) -> dict:
     if not connection.execute("SELECT 1 FROM sqlite_schema WHERE name='native_manifest' AND type='table'").fetchone():
         raise UnsupportedStoreError("Native backfill has not been verified")
-    result = dict(connection.execute("SELECT key,value FROM native_manifest"))
-    if result.get("schema_version") != str(schema.VERSION) or result.get("protocol") != str(schema.PROTOCOL):
+    result = dict(connection.execute("SELECT key,value FROM native_manifest WHERE key IN "
+                                    "('schema_version','protocol','authority','state','store_id','event_high_water',"
+                                    "'source_digest','local_state_imported')"))
+    versions = {str(schema.VERSION)}
+    if allow_prior_staging and result.get("authority") == "legacy":
+        versions.add("1")
+    if result.get("schema_version") not in versions or result.get("protocol") != str(schema.PROTOCOL):
         raise UnsupportedStoreError("Unsupported native staging schema or protocol")
-    if result.get("authority") != "legacy":
+    if result.get("authority") not in authorities:
         raise UnsupportedStoreError("This staging client cannot access an activated native store")
     return result
+
+
+def assert_native(connection):
+    """Cold/warm native admission. Never fall back to a legacy writer."""
+    metadata = dict(connection.execute("SELECT key,value FROM meta WHERE key IN "
+                                       "('schema_version','minimum_client_protocol','migration_state','creation_token')"))
+    if metadata.get("schema_version") != "2" or metadata.get("minimum_client_protocol") != str(schema.PROTOCOL):
+        raise UnsupportedStoreError("Unsupported native authority schema or protocol")
+    if metadata.get("migration_state", "ready") != "ready":
+        raise UnsupportedStoreError("Native authority migration is not ready")
+    state = manifest(connection, authorities=("native",))
+    if state.get("state") != "ready" or state.get("local_state_imported") != "1":
+        raise UnsupportedStoreError("Native authority or local-state import is not ready")
+    if state.get("store_id") != metadata.get("creation_token"):
+        raise UnsupportedStoreError("Native store identity does not match authority")
+    return state
 
 
 @contextmanager
@@ -44,10 +65,13 @@ def verified_snapshot(connection: sqlite3.Connection):
         raise RuntimeError("verified_snapshot requires its own transaction")
     connection.execute("BEGIN")
     try:
-        assert_compatible(connection)
-        state = manifest(connection)
-        if state.get("state") != "verified":
-            raise UnsupportedStoreError("Native staging data is stale or unverified; repeat backfill")
+        state = manifest(connection, authorities=("legacy", "native"))
+        if state["authority"] == "native":
+            state = assert_native(connection)
+        else:
+            assert_compatible(connection)
+            if state.get("state") != "verified":
+                raise UnsupportedStoreError("Native staging data is stale or unverified; repeat backfill")
         yield state
     finally:
         connection.rollback()

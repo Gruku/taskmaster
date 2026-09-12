@@ -6,7 +6,7 @@ Legacy tables remain the only writer authority until the later adapter cutover.
 """
 import sqlite3
 
-VERSION = 1
+VERSION = 2
 PROTOCOL = 2
 COMMON = {
     "entity_core": "id title status priority archived deleted rev updated_seq",
@@ -57,6 +57,8 @@ DDL = [
     "CREATE INDEX ix_entity_core_kind_status ON entity_core(kind,json_extract(status_json,'$'),archived,deleted,public_id)",
     "CREATE TABLE entity_documents(entity_key INTEGER PRIMARY KEY REFERENCES entity_core(entity_key), "
     "body TEXT, format TEXT NOT NULL DEFAULT 'markdown', " + json_column("body") + ", " + json_column("_body") + ")",
+    "CREATE TABLE external_documents(entity_key INTEGER NOT NULL REFERENCES entity_core(entity_key), section TEXT NOT NULL, "
+    "path TEXT NOT NULL, body TEXT NOT NULL, content_hash TEXT NOT NULL, imported_seq INTEGER NOT NULL, PRIMARY KEY(entity_key,section))",
     # These two old query caches are retained only for exact migration diagnostics.
     "CREATE TABLE compatibility_entity_state(entity_key INTEGER PRIMARY KEY REFERENCES entity_core(entity_key), epic TEXT, status TEXT)",
     "CREATE TABLE entity_extensions(entity_key INTEGER NOT NULL REFERENCES entity_core(entity_key), "
@@ -81,6 +83,8 @@ DDL = [
     "CHECK(state IN ('pending','claimed','exported','superseded','conflict')), lease_owner TEXT, lease_until REAL)",
     "CREATE INDEX ix_projection_jobs_pending ON projection_jobs(state,commit_seq,job_key)",
     "CREATE TABLE sync_state(key TEXT PRIMARY KEY, value_json TEXT NOT NULL CHECK(json_valid(value_json)))",
+    "CREATE TABLE id_reservations(kind TEXT NOT NULL, public_id TEXT NOT NULL, PRIMARY KEY(kind,public_id))",
+    "CREATE TABLE id_counters(kind TEXT NOT NULL, prefix TEXT NOT NULL, high_water INTEGER NOT NULL CHECK(high_water>=0), PRIMARY KEY(kind,prefix))",
     "CREATE TABLE document_search_keys(document_key INTEGER PRIMARY KEY AUTOINCREMENT, entity_key INTEGER NOT NULL UNIQUE REFERENCES entity_core(entity_key))",
     "CREATE VIRTUAL TABLE document_search USING fts5(kind UNINDEXED,id UNINDEXED,title,body,tokenize='porter unicode61')",
 ]
@@ -117,3 +121,16 @@ def create_schema(connection: sqlite3.Connection) -> None:
         raise RuntimeError("schema creation requires an owned transaction")
     for statement in DDL:
         connection.execute(statement)
+
+
+def upgrade_staging(connection: sqlite3.Connection, version: int) -> None:
+    """The only supported older staging schema; caller owns the atomic backfill."""
+    if not connection.in_transaction:
+        raise RuntimeError("staging upgrade requires an owned transaction")
+    if version == VERSION:
+        return
+    if version != 1 or VERSION != 2:
+        raise RuntimeError("unsupported staging upgrade")
+    for statement in DDL:
+        if any(statement.startswith(f"CREATE TABLE {name}(") for name in ("external_documents", "id_reservations", "id_counters")):
+            connection.execute(statement)

@@ -3,8 +3,9 @@
 
 # Database-native Taskmaster implementation plan
 
-**Status:** N00–N03 complete locally on `feat/database-native-foundation`.
-Command/query replacement and rollout remain N04–N17. Merge the branch only
+**Status:** N00–N06 core complete locally; N07 lifecycle port started on
+`feat/database-native-foundation`. This is an intermediate checkpoint.
+Client replacement and rollout remain outstanding. Merge the branch only
 after N03–N17 are complete (user instruction, 2026-09-12); the default branch is
 named `master` in this repository.
 **Design:** [database-native design](../specs/2026-09-09-database-native-design.md).
@@ -429,10 +430,10 @@ explicitly deferred scope when implementation actually occurs.
 | N01 | complete locally; bridge rollout pending | `4aa6694` plus reservation-test follow-up; [admission and cutover contract](../handoffs/2026-09-09-native-client-fencing.md) |
 | N02 | complete locally | [83 tools, route/field/SQL contracts and ownership map; M0 validation below](../specs/2026-09-09-native-compatibility.md) |
 | N03 | complete locally; activation gated | [Schema, transactional backfill, crash tests and 3,559-row copied-fixture evidence](../reports/2026-09-12-native-core.md) |
-| N04 | planned | — |
-| N05 | planned | — |
-| N06 | planned | — |
-| N07 | planned | — |
+| N04 | core complete locally; adapter parity remains N08 | [Bounded reads, snapshots, SQL isolation, stored/external document retrieval](../reports/2026-09-12-native-core.md) |
+| N05 | core complete locally | [Atomic owner, CAS, retry receipts, batches and immutable projection inputs](../reports/2026-09-12-native-core.md) |
+| N06 | core complete locally | [Selective graph/FTS maintenance and full-rebuild equivalence oracles](../reports/2026-09-12-native-core.md) |
+| N07 | in progress | Initial note/decision/bug/issue/idea/handover lifecycle slices; task/epic/phase/gates/promotions/Linear and complete inventory mapping remain |
 | N08 | planned | — |
 | N09 | planned | — |
 | N10 | planned | — |
@@ -449,6 +450,14 @@ collected cases across the initial full run and corrective/completion runs.
 The default 8-process × 200-operation concurrency acceptance test passed in
 575.94 seconds. See [validation evidence](../reports/2026-09-09-native-foundation.md).
 
-**Next implementation action:** N04, targeted queries and coherent snapshots;
-then N05 command transactions and durable retry receipts. Keep activation gated;
-no live project migration or installed-plugin changes.
+**Next implementation action:** finish N07's command inventory and domain
+composites, then N08 client routing and its strict normal-path bypass gate.
+N04 external-document retrieval is implemented; capturing file contents belongs
+to N13 sync/N15 pre-cutover import. Keep activation gated; no live project
+migration or installed-plugin changes. Do not merge the partial core checkpoint.
+
+**Core checkpoint validation (2026-09-12):** 2,509 unique current test cases
+passed across the full run and corrective runs; one live Linear smoke skipped;
+zero unresolved failures or missing collected cases. The existing 8-process ×
+200-operation write-survival acceptance passed in 603.85 seconds. This does not
+substitute for N16's future native-service and viewer acceptance matrix.

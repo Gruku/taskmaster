@@ -88,15 +88,17 @@ def _put_entity(connection, row):
 
 TARGET_KINDS = {
     "depends_on": "task", "tasks": "task", "related_tasks": "task", "task_id": "task",
-    "fixed_in_task": "task", "adopted_into": "task", "related_issues": "issue", "area": "area",
+    "fixed_in_task": "task", "adopted_into": "task", "related_issues": "issue", "area": "area", "duplicate_of": "issue",
 }
 
 
-def _reference(connection, field, value):
+def _reference(connection, field, value, source_kind=None):
     ident = value.get("target") if field == "links" and isinstance(value, dict) else value
     if not isinstance(ident, str) or not ident or (field not in TARGET_KINDS and field not in ("links", "promoted_to", "duplicate_of")):
         return None, None, None
     kind = TARGET_KINDS.get(field)
+    if field == "promoted_to":
+        kind = "issue" if source_kind == "bug" else "task" if source_kind == "idea" else None
     if kind is not None:
         found = connection.execute("SELECT entity_key FROM entity_core WHERE kind=? AND public_id=? AND deleted=0", (kind, ident)).fetchone()
         return kind, ident, found[0] if found else None
@@ -114,7 +116,7 @@ def _put_relations(connection, key, kind, doc):
         shape = "list" if isinstance(value, list) else "scalar"
         connection.execute("INSERT INTO field_shapes VALUES(?,?,?)", (key, field, shape))
         for ordinal, item in enumerate(value if shape == "list" else [value]):
-            target_kind, target_id, target_key = _reference(connection, field, item)
+            target_kind, target_id, target_key = _reference(connection, field, item, kind)
             path_key, value_json = None, encode(item)
             if table == "path_claims" and isinstance(item, str):
                 connection.execute("INSERT OR IGNORE INTO paths(path) VALUES(?)", (item,))
@@ -193,7 +195,7 @@ def backfill(connection: sqlite3.Connection, *, checkpoint=lambda stage: None) -
         raise RuntimeError("backfill requires its own transaction")
     assert_compatible(connection)
     if connection.execute("SELECT 1 FROM sqlite_schema WHERE name='native_manifest'").fetchone():
-        manifest(connection)  # Refuse future staging schemas before DDL/writes.
+        manifest(connection, allow_prior_staging=True)  # Refuse future schemas before writes.
     probe_capabilities(connection)
     foreign_keys = connection.execute("PRAGMA foreign_keys").fetchone()[0]
     connection.execute("PRAGMA foreign_keys=ON")
@@ -205,9 +207,10 @@ def backfill(connection: sqlite3.Connection, *, checkpoint=lambda stage: None) -
             raise UnsupportedStoreError("Backfill requires an initialized schema-1 authority with store identity")
         checkpoint("admitted")
         if connection.execute("SELECT 1 FROM sqlite_schema WHERE name='native_manifest'").fetchone():
-            previous = manifest(connection)
+            previous = manifest(connection, allow_prior_staging=True)
             if previous.get("store_id") != meta["creation_token"]:
                 raise UnsupportedStoreError("Staging store identity does not match authority")
+            schema.upgrade_staging(connection, int(previous["schema_version"]))
             _reset(connection)
         else:
             schema.create_schema(connection)
