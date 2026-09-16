@@ -441,6 +441,27 @@ def _active_tx() -> "_TxFrame | None":
     return getattr(_TX_STATE, "frame", None)
 
 
+def _report_writer_wait(event: "store.WriterWait") -> None:
+    """Say out loud that a tool is queued behind the store's writer mutex.
+
+    A tool that waits the full window used to show the harness nothing at all
+    and then fail, which reads as a hung server rather than as contention. This
+    is the one channel available without an MCP Context: stderr, where the host
+    logs it, with the operation and whoever is probably holding the lock.
+    """
+    try:
+        stamp = datetime.now(timezone.utc).isoformat()
+        print(
+            f"{stamp} taskmaster: {event.operation} has waited "
+            f"{event.waited:.1f}s of {event.deadline:.1f}s for the store writer lock"
+            + (f" -- {event.holders}" if event.holders else ""),
+            file=sys.stderr,
+            flush=True,
+        )
+    except Exception:  # noqa: BLE001 - progress must never break the call
+        pass
+
+
 def _configure_store_derivers() -> None:
     """Point the store at this module's pure derivation helpers.
 
@@ -451,6 +472,7 @@ def _configure_store_derivers() -> None:
         context_builder=_derive_context,
         progress_renderer=_render_progress_dashboard,
     )
+    store.set_wait_observer(_report_writer_wait)
 
 
 def _store_for(backlog_path: "Path | None" = None) -> "store.Store":

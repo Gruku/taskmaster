@@ -386,6 +386,111 @@ class StoreStatus:
     read_scan_skips: int = 0
 
 
+# A caller waiting on the writer mutex gets these while it waits, so a harness
+# that would otherwise show nothing for the whole window can say what is going
+# on and who is holding the lock.
+WRITER_WAIT_FIRST_NOTICE_SECONDS = 0.5
+WRITER_WAIT_NOTICE_INTERVAL_SECONDS = 2.0
+
+
+@dataclass(frozen=True)
+class WriterWait:
+    """One progress notice from a caller queued behind the writer mutex."""
+
+    operation: str
+    waited: float
+    deadline: float
+    holders: str | None = None
+
+
+_WAIT_OBSERVER: "Callable[[WriterWait], None] | None" = None
+
+
+def set_wait_observer(observer: "Callable[[WriterWait], None] | None") -> None:
+    """Install the sink for writer-mutex progress notices, or clear it.
+
+    The store cannot emit MCP progress itself -- it has no Context and no
+    business knowing about one -- so the tool layer registers a sink here and
+    decides what a wait looks like to its caller. An observer that raises is
+    ignored: a progress report must never turn a wait into a failure.
+    """
+    global _WAIT_OBSERVER
+    _WAIT_OBSERVER = observer
+
+
+class _ArrivalGate:
+    """Arrival-ordered admission to one lock file, within this process.
+
+    The cross-process wait is a poll, and a poll has no memory: with ten
+    waiters the next one in is whoever's timer happens to fire first, so a
+    process could sit through the whole 30 s window while later arrivals went
+    ahead of it. Threads in one process can do better than luck, and an MCP
+    server is several threads, so they queue here by arrival and exactly one of
+    them contends for the file lock at a time -- which also means one poller
+    per process rather than one per thread.
+    """
+
+    def __init__(self) -> None:
+        self._condition = threading.Condition(threading.Lock())
+        self._waiting: list[int] = []
+        self._next_ticket = 0
+        self._held = False
+
+    def enter(self) -> int:
+        """Take a ticket. Arrival order is fixed here, not at first wait."""
+        with self._condition:
+            ticket = self._next_ticket
+            self._next_ticket += 1
+            self._waiting.append(ticket)
+            return ticket
+
+    def wait_turn(self, ticket: int, until: float) -> bool:
+        """True once `ticket` holds the gate; False if `until` passed first.
+
+        The ticket survives a False: the caller waits in slices so it can send
+        a progress notice without the condition lock, and re-queueing between
+        slices would put it back behind everyone who arrived while it waited --
+        which is the unfairness this class exists to remove.
+        """
+        with self._condition:
+            while self._held or self._waiting[0] != ticket:
+                remaining = until - _MONOTONIC()
+                if remaining <= 0:
+                    return False
+                self._condition.wait(min(remaining, 0.05))
+            self._waiting.remove(ticket)
+            self._held = True
+            return True
+
+    def leave(self, ticket: int) -> None:
+        """Abandon a ticket that never got its turn.
+
+        Without this the thread behind waits out its own deadline behind a
+        ticket nobody will ever serve.
+        """
+        with self._condition:
+            if ticket in self._waiting:
+                self._waiting.remove(ticket)
+                self._condition.notify_all()
+
+    def release(self) -> None:
+        with self._condition:
+            self._held = False
+            self._condition.notify_all()
+
+
+_ARRIVAL_GATES: dict[Path, _ArrivalGate] = {}
+_ARRIVAL_GATES_LOCK = threading.Lock()
+
+
+def _arrival_gate(path: Path) -> _ArrivalGate:
+    with _ARRIVAL_GATES_LOCK:
+        gate = _ARRIVAL_GATES.get(path)
+        if gate is None:
+            gate = _ARRIVAL_GATES[path] = _ArrivalGate()
+        return gate
+
+
 _STATE_LOCK = threading.RLock()
 _THREAD_STATE = threading.local()
 _ROOT_RESOLUTION: RootResolution | None = None
@@ -732,7 +837,7 @@ def checkpoint_all() -> None:
 
 
 def reset_for_tests() -> None:
-    global _ROOT_RESOLUTION, _CONTEXT_BUILDER, _PROGRESS_RENDERER
+    global _ROOT_RESOLUTION, _CONTEXT_BUILDER, _PROGRESS_RENDERER, _WAIT_OBSERVER
     with _STATE_LOCK:
         seen: set[int] = set()
         for connection in list(_ALL_CONNECTIONS):
@@ -762,6 +867,9 @@ def reset_for_tests() -> None:
         _WARNED_CLOUD_ROOTS.clear()
         _CONTEXT_BUILDER = None
         _PROGRESS_RENDERER = None
+        _WAIT_OBSERVER = None
+        with _ARRIVAL_GATES_LOCK:
+            _ARRIVAL_GATES.clear()
 
 
 def configure_derivers(
@@ -1017,18 +1125,116 @@ class Store:
         finally:
             self._connection_creation_state.allowed = prior
 
+    def _wait_notice(
+        self,
+        *,
+        operation: str | None,
+        started: float,
+        deadline_seconds: float,
+        last_notice: float,
+        diagnose: bool,
+    ) -> float:
+        """Tell the observer how long this caller has been queued. Never raises.
+
+        Returns the clock the next notice is measured from, unchanged when the
+        notice was not due -- so a caller that waits out the whole window is
+        heard from at a steady cadence rather than once at the end, which is
+        what the harness needs in order to show anything at all.
+        """
+        observer = _WAIT_OBSERVER
+        if observer is None or operation is None:
+            return last_notice
+        due = (
+            WRITER_WAIT_FIRST_NOTICE_SECONDS
+            if last_notice == started
+            else WRITER_WAIT_NOTICE_INTERVAL_SECONDS
+        )
+        now = _MONOTONIC()
+        if now - last_notice < due:
+            return last_notice
+        holders = None
+        if diagnose:
+            try:
+                holders = self._busy_diagnostic(waited_seconds=now - started)
+            except Exception:  # noqa: BLE001 - a diagnostic cannot break a wait
+                holders = None
+        try:
+            observer(
+                WriterWait(
+                    operation=operation,
+                    waited=now - started,
+                    deadline=deadline_seconds,
+                    holders=holders,
+                )
+            )
+        except Exception:  # noqa: BLE001 - progress must never fail the wait
+            pass
+        return _MONOTONIC()
+
     @contextmanager
     def _writer_mutex(
-        self, *, timeout_ms: int | None = None, diagnose: bool = True
+        self,
+        *,
+        timeout_ms: int | None = None,
+        diagnose: bool = True,
+        operation: str | None = None,
     ) -> Iterator[None]:
-        """Cross-process crash-recovery gate shared by every writer."""
+        """Cross-process crash-recovery gate shared by every writer.
+
+        `operation` names the caller in the busy diagnostic and in the progress
+        notices, so a wait is attributable to a tool rather than to "the
+        store". `timeout_ms` is the caller's deadline; without one it is the
+        full `BUSY_TIMEOUT_MS`, which is what left a blocked tool silent for
+        thirty seconds and then raised.
+        """
         path = self.db_path.parent / "store.recovery.lock"
         path.parent.mkdir(parents=True, exist_ok=True)
-        descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+        wait_ms = BUSY_TIMEOUT_MS if timeout_ms is None else timeout_ms
+        deadline_seconds = wait_ms / 1000
+        started = _MONOTONIC()
+        deadline = started + deadline_seconds
+        last_notice = started
+
+        def give_up(cause: BaseException | None) -> RuntimeError:
+            message = (
+                self._busy_diagnostic(
+                    waited_seconds=_MONOTONIC() - started, operation=operation
+                )
+                if diagnose
+                else "store busy for read-side projection scan; retry"
+            )
+            error = RuntimeError(message)
+            if cause is not None:
+                error.__cause__ = cause
+            return error
+
+        # Arrival order among this process's own threads, settled before anyone
+        # touches the file lock (see `_ArrivalGate`).
+        gate = _arrival_gate(path)
+        ticket = gate.enter()
+        try:
+            while not gate.wait_turn(ticket, min(deadline, _MONOTONIC() + 0.25)):
+                if _MONOTONIC() >= deadline:
+                    raise give_up(None)
+                last_notice = self._wait_notice(
+                    operation=operation,
+                    started=started,
+                    deadline_seconds=deadline_seconds,
+                    last_notice=last_notice,
+                    diagnose=diagnose,
+                )
+        except BaseException:
+            gate.leave(ticket)
+            raise
+        try:
+            descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+        except BaseException:
+            # The gate is held at this point; a failure to even open the lock
+            # file would otherwise strand every other thread in this process.
+            gate.release()
+            raise
         _OPEN_LOCK_FDS.add(descriptor)
         acquired = False
-        wait_ms = BUSY_TIMEOUT_MS if timeout_ms is None else timeout_ms
-        deadline = _MONOTONIC() + wait_ms / 1000
         try:
             if os.fstat(descriptor).st_size == 0:
                 os.write(descriptor, b"\0")
@@ -1049,15 +1255,24 @@ class Store:
                     if exc.errno not in {errno.EACCES, errno.EAGAIN, 13, 36}:
                         raise
                     if _MONOTONIC() >= deadline:
-                        message = (
-                            self._busy_diagnostic()
-                            if diagnose
-                            else "store busy for read-side projection scan; retry"
-                        )
-                        raise RuntimeError(message) from exc
-                    time.sleep(0.02)
+                        raise give_up(exc) from exc
+                    last_notice = self._wait_notice(
+                        operation=operation,
+                        started=started,
+                        deadline_seconds=deadline_seconds,
+                        last_notice=last_notice,
+                        diagnose=diagnose,
+                    )
+                    # Jittered so peers stop polling in lockstep, and shorter
+                    # the longer this caller has already waited: an unaged
+                    # fixed poll gave a fresh arrival exactly the same odds as
+                    # a process that had been queued for twenty seconds.
+                    elapsed = _MONOTONIC() - started
+                    base = max(0.002, 0.04 / (1.0 + elapsed))
+                    time.sleep(min(base * random.uniform(0.5, 1.5), 0.05))
             yield
         finally:
+            gate.release()
             if acquired:
                 try:
                     os.lseek(descriptor, 0, os.SEEK_SET)
@@ -1841,7 +2056,9 @@ class Store:
                 connection, tool=tool, session_id=activity_session
             ):
                 with self._writer_mutex(
-                    timeout_ms=_writer_timeout_ms, diagnose=_diagnose_busy
+                    timeout_ms=_writer_timeout_ms,
+                    diagnose=_diagnose_busy,
+                    operation=tool,
                 ):
                     current_connection = self.connection
                     if current_connection is not connection:
@@ -2095,7 +2312,13 @@ class Store:
             rows[kind][ident] = (doc, body)
         return {kind: dict(sorted(entries.items())) for kind, entries in rows.items()}
 
-    def update_root_config(self, name: str, mutate: "Callable[[dict], dict]") -> dict:
+    def update_root_config(
+        self,
+        name: str,
+        mutate: "Callable[[dict], dict]",
+        *,
+        timeout_ms: int | None = None,
+    ) -> dict:
         """Read-modify-write one root config file under the cross-process lock.
 
         `linear.yaml` sits beside the projection and is shared by every agent
@@ -2113,7 +2336,7 @@ class Store:
             raise ValueError(f"not a root config file name: {name!r}")
         self._ensure_open()
         path = self.backlog_path / name
-        with self._writer_mutex():
+        with self._writer_mutex(timeout_ms=timeout_ms, operation="update_root_config"):
             assert_compatible(self.connection)
             current: dict[str, Any] = {}
             if path.exists():
@@ -2330,6 +2553,7 @@ class Store:
         seqs: Iterable[int],
         *,
         lease_seconds: float = LINEAR_CLAIM_LEASE_SECONDS,
+        timeout_ms: int | None = None,
     ) -> int:
         """Return the given queue rows to `pending` with a cleared attempt count.
 
@@ -2356,7 +2580,7 @@ class Store:
             return 0
         if self.connection.in_transaction:
             raise RuntimeError("linear_requeue needs its own transaction")
-        with self._writer_mutex():
+        with self._writer_mutex(timeout_ms=timeout_ms, operation="linear_requeue"):
             connection = self.connection
             if connection.in_transaction:
                 raise RuntimeError("linear_requeue needs its own transaction")
@@ -2386,6 +2610,7 @@ class Store:
         targets: Sequence[str] | None = None,
         owner: str,
         lease_seconds: float = LINEAR_CLAIM_LEASE_SECONDS,
+        timeout_ms: int | None = None,
     ) -> list[dict[str, Any]]:
         """Take ownership of up to `limit` pending pushes, oldest first.
 
@@ -2410,7 +2635,7 @@ class Store:
             return []
         if self.connection.in_transaction:
             raise RuntimeError("linear_claim needs its own transaction")
-        with self._writer_mutex():
+        with self._writer_mutex(timeout_ms=timeout_ms, operation="linear_claim"):
             connection = self.connection
             if connection.in_transaction:
                 raise RuntimeError("linear_claim needs its own transaction")
@@ -2481,6 +2706,7 @@ class Store:
         state: str,
         error: str | None = None,
         owner: str | None = None,
+        timeout_ms: int | None = None,
     ) -> bool:
         """Record the outcome of one drain attempt on queue row `seq`.
 
@@ -2502,7 +2728,7 @@ class Store:
             raise RuntimeError(f"cannot write the Linear queue: {degraded}")
         if self.connection.in_transaction:
             raise RuntimeError("linear_mark needs its own transaction")
-        with self._writer_mutex():
+        with self._writer_mutex(timeout_ms=timeout_ms, operation="linear_mark"):
             # Re-read under the mutex, as `transaction` does: a recovery that
             # finished while this caller queued for the lock closes the handle
             # we would otherwise have captured before waiting.
@@ -3142,9 +3368,20 @@ class Store:
     # wait is pure added latency on top of the timeout that already expired.
     _DIAGNOSTIC_TIMEOUT_MS = 300
 
-    def _busy_diagnostic(self) -> str:
-        seconds = BUSY_TIMEOUT_MS / 1000
-        prefix = f"store busy for {seconds:g}s"
+    def _busy_diagnostic(
+        self, *, waited_seconds: float | None = None, operation: str | None = None
+    ) -> str:
+        """Why the store is busy, and for whom.
+
+        `waited_seconds` is what this caller actually waited -- reporting the
+        30 s default to a caller that gave up after 200 ms told them about a
+        deadline they never had. `operation` names them, so a blocked tool is
+        attributable instead of being "the store".
+        """
+        seconds = BUSY_TIMEOUT_MS / 1000 if waited_seconds is None else waited_seconds
+        prefix = f"store busy for {seconds:.3g}s"
+        if operation:
+            prefix += f" while {operation} waited"
         diagnostic: sqlite3.Connection | None = None
         try:
             diagnostic = sqlite3.connect(
@@ -3199,14 +3436,14 @@ class Store:
             )
         return prefix + ("; " + "; ".join(parts) if parts else "; retry")
 
-    def rebuild_derived(self) -> None:
+    def rebuild_derived(self, *, timeout_ms: int | None = None) -> None:
         connection = self.connection
         if connection.in_transaction:
             raise RuntimeError("nested store transactions are not supported")
         tx = Transaction(self, connection, tool="rebuild-derived")
         try:
             self._try_register_session(connection, current_tool="rebuild-derived")
-            with self._writer_mutex():
+            with self._writer_mutex(timeout_ms=timeout_ms, operation="rebuild_derived"):
                 self._begin_immediate(connection)
                 rows = tx.connection.execute(
                     "SELECT kind,id,doc,body FROM entities WHERE deleted=0"
