@@ -1093,8 +1093,7 @@ def _store_read_entity(backlog_path: Path | None, kind: str, entity_id: str) -> 
     bp = Path(backlog_path) if backlog_path else _backlog_path()
     if not bp.exists():
         return None
-    rows = (_store_for(bp).load_dict().get("_rows") or {}).get(kind) or {}
-    row = rows.get(entity_id)
+    row = _store_for(bp).entity_row(kind, entity_id)
     if row is None:
         return None
     doc, body = row
