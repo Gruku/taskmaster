@@ -233,7 +233,7 @@ def test_a_stuck_export_is_named_by_store_status(tmp_path):
 
     status = store_mod.read_only_status(backlog_path)
     assert status.stuck_exports == ("tasks/core-001.md",)
-    from backlog_server import _render_store_report
+    from taskmaster.backlog_server import _render_store_report
 
     assert "tasks/core-001.md" in _render_store_report(status).split("Stuck exports")[1]
 
@@ -269,3 +269,122 @@ def test_a_repaired_file_lets_the_stranded_export_land(tmp_path):
     assert store_mod.read_only_status(backlog_path).stuck_exports == ()
     on_disk = (backlog_path / "tasks" / "core-001.md").read_text(encoding="utf-8")
     assert "Survives the quarantine" in on_disk
+
+
+# ── B-084: writer-mutex fairness ─────────────────────────────────────────────
+
+
+def test_writer_mutex_hands_the_lock_over_in_arrival_order(tmp_path):
+    backlog_path = _build_projection(tmp_path)
+    store_obj = store_mod.open_store(backlog_path=backlog_path)
+    store_obj.load_dict()
+
+    waiters = 8
+    arrived: list[int] = []
+    acquired: list[int] = []
+    order_lock = threading.Lock()
+    started = [threading.Event() for _ in range(waiters)]
+    release = threading.Event()
+
+    def contend(index: int) -> None:
+        with order_lock:
+            arrived.append(index)
+        started[index].set()
+        with store_obj._writer_mutex(timeout_ms=30_000):
+            with order_lock:
+                acquired.append(index)
+            time.sleep(0.005)
+
+    with store_obj._writer_mutex():
+        threads = []
+        for index in range(waiters):
+            thread = threading.Thread(target=contend, args=(index,), daemon=True)
+            thread.start()
+            threads.append(thread)
+            # Stagger so arrival order is unambiguous, and long enough that a
+            # 20 ms poll has run at least once before the next waiter shows up.
+            assert started[index].wait(5)
+            time.sleep(0.05)
+        release.set()
+
+    for thread in threads:
+        thread.join(30)
+    assert acquired == arrived
+
+
+# ── B-083: non-transaction writers wait blind for the full 30 s ──────────────
+
+
+def test_non_transaction_writers_accept_a_deadline(tmp_path):
+    backlog_path = _build_projection(tmp_path)
+    store_obj = store_mod.open_store(backlog_path=backlog_path)
+    store_obj.load_dict()
+
+    with _lock_held_elsewhere(backlog_path):
+        for call in (
+            lambda: store_obj.update_root_config(
+                "linear.yaml", lambda doc: doc, timeout_ms=150
+            ),
+            lambda: store_obj.linear_requeue(state="failed", timeout_ms=150),
+            lambda: store_obj.linear_claim(owner="me", limit=1, timeout_ms=150),
+            lambda: store_obj.linear_mark(1, state="done", timeout_ms=150),
+            lambda: store_obj.rebuild_derived(timeout_ms=150),
+        ):
+            started = time.monotonic()
+            with pytest.raises(RuntimeError, match="store busy for"):
+                call()
+            # The point of the deadline is that the caller hears back long
+            # before the 30 s default.
+            assert time.monotonic() - started < 5.0
+
+
+def test_a_blocked_writer_names_the_operation_and_the_holder(tmp_path):
+    backlog_path = _build_projection(tmp_path)
+    store_obj = store_mod.open_store(backlog_path=backlog_path)
+    store_obj.load_dict()
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    def hold() -> None:
+        holder = store_mod.open_store(backlog_path=backlog_path)
+        with holder.transaction(tool="holder-tool"):
+            entered.set()
+            release.wait(30)
+
+    thread = threading.Thread(target=hold, daemon=True)
+    thread.start()
+    assert entered.wait(15)
+    try:
+        with pytest.raises(RuntimeError) as caught:
+            store_obj.update_root_config(
+                "linear.yaml", lambda doc: doc, timeout_ms=400
+            )
+    finally:
+        release.set()
+        thread.join(30)
+    message = str(caught.value)
+    assert "update_root_config" in message
+    assert "holder-tool" in message
+
+
+def test_a_waiting_writer_reports_progress_to_an_observer(tmp_path):
+    backlog_path = _build_projection(tmp_path)
+    store_obj = store_mod.open_store(backlog_path=backlog_path)
+    store_obj.load_dict()
+
+    seen: list[store_mod.WriterWait] = []
+    store_mod.set_wait_observer(seen.append)
+    try:
+        with _lock_held_elsewhere(backlog_path):
+            with pytest.raises(RuntimeError):
+                store_obj.update_root_config(
+                    "linear.yaml", lambda doc: doc, timeout_ms=1500
+                )
+    finally:
+        store_mod.set_wait_observer(None)
+
+    assert seen, "a caller waiting on the writer mutex was told nothing"
+    assert all(event.operation == "update_root_config" for event in seen)
+    assert seen[0].waited > 0
+    assert seen[0].deadline == pytest.approx(1.5)
