@@ -11,6 +11,7 @@ import re
 import socket
 import sqlite3
 import subprocess
+import queue
 import sys
 import threading
 import urllib.request
@@ -441,6 +442,59 @@ def _active_tx() -> "_TxFrame | None":
     return getattr(_TX_STATE, "frame", None)
 
 
+# Progress notices are handed to a daemon thread rather than written inline.
+# `print(..., flush=True)` blocks when nobody is draining stderr -- a host that
+# has stopped reading, or a harness that collects the pipe only at exit -- and
+# a writer already queued for the lock would then sit there past its own
+# deadline waiting on a *log line*. Measured: a store writer overran a 30 s
+# deadline to 82 s that way. A full queue drops the notice instead; a dropped
+# progress line costs nothing, a stalled writer costs the call.
+_WRITER_WAIT_NOTICES: "queue.Queue[str]" = queue.Queue(maxsize=64)
+_WRITER_WAIT_PUMP: "threading.Thread | None" = None
+_WRITER_WAIT_PUMP_LOCK = threading.Lock()
+
+
+def _drain_writer_wait_notices() -> None:
+    while True:
+        line = _WRITER_WAIT_NOTICES.get()
+        try:
+            print(line, file=sys.stderr, flush=True)
+        except Exception:  # noqa: BLE001 - a closed stderr must not kill the pump
+            pass
+
+
+def _report_writer_wait(event: "store.WriterWait") -> None:
+    """Say out loud that a tool is queued behind the store's writer mutex.
+
+    A tool that waits the full window used to show the harness nothing at all
+    and then fail, which reads as a hung server rather than as contention. This
+    is the one channel available without an MCP Context: stderr, where the host
+    logs it, with the operation and whoever is probably holding the lock.
+    """
+    global _WRITER_WAIT_PUMP
+    try:
+        stamp = datetime.now(timezone.utc).isoformat()
+        line = (
+            f"{stamp} taskmaster: {event.operation} has waited "
+            f"{event.waited:.1f}s of {event.deadline:.1f}s for the store writer lock"
+            + (f" -- {event.holders}" if event.holders else "")
+        )
+        if _WRITER_WAIT_PUMP is None:
+            with _WRITER_WAIT_PUMP_LOCK:
+                if _WRITER_WAIT_PUMP is None:
+                    _WRITER_WAIT_PUMP = threading.Thread(
+                        target=_drain_writer_wait_notices,
+                        name="taskmaster-writer-wait",
+                        daemon=True,
+                    )
+                    _WRITER_WAIT_PUMP.start()
+        _WRITER_WAIT_NOTICES.put_nowait(line)
+    except queue.Full:
+        pass
+    except Exception:  # noqa: BLE001 - progress must never break the call
+        pass
+
+
 def _configure_store_derivers() -> None:
     """Point the store at this module's pure derivation helpers.
 
@@ -451,6 +505,7 @@ def _configure_store_derivers() -> None:
         context_builder=_derive_context,
         progress_renderer=_render_progress_dashboard,
     )
+    store.set_wait_observer(_report_writer_wait)
 
 
 def _store_for(backlog_path: "Path | None" = None) -> "store.Store":
@@ -1071,8 +1126,7 @@ def _store_read_entity(backlog_path: Path | None, kind: str, entity_id: str) -> 
     bp = Path(backlog_path) if backlog_path else _backlog_path()
     if not bp.exists():
         return None
-    rows = (_store_for(bp).load_dict().get("_rows") or {}).get(kind) or {}
-    row = rows.get(entity_id)
+    row = _store_for(bp).entity_row(kind, entity_id)
     if row is None:
         return None
     doc, body = row
@@ -2422,9 +2476,16 @@ def _render_store_report(status: "store.StoreStatus") -> str:
         f"Size: db={status.db_size} B  wal={status.wal_size} B  max seq={status.max_seq}",
         listing("Dirty", status.dirty_files),
         listing("Quarantined", status.quarantined_files),
+        listing("Stuck exports", status.stuck_exports),
         listing("Corrupt", status.corrupt_files),
         f"Merge conflicts (24 h): {status.merge_conflicts_24h}",
         f"Linear queue: {status.linear_pending} pending",
+        f"Read-scan skips: {status.read_scan_skips}"
+        + (
+            "  (store busy: hand edits are not being adopted)"
+            if status.read_scan_skips
+            else ""
+        ),
         f"Warning: {status.warning or 'none'}",
     ]
 

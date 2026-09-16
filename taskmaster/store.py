@@ -35,6 +35,7 @@ from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 import yaml
 
 from taskmaster import yaml_io
+from taskmaster.integrity import check_database
 from taskmaster.admission import (
     BRIDGE_CAPABILITIES, CLIENT_PROTOCOL, LEGACY_SCHEMA_VERSION,
     UnsupportedStoreError, assert_compatible,
@@ -96,6 +97,12 @@ SCHEMA_VERSION = LEGACY_SCHEMA_VERSION
 PROJECTION_SCHEMA = 5
 BUSY_TIMEOUT_MS = 30_000
 HEARTBEAT_INTERVAL_SECONDS = 20.0
+# How long a read trusts its last projection scan before looking again.
+READ_SCAN_THROTTLE_SECONDS = 2.0
+# Consecutive read-side scans skipped because the store was busy before the
+# reader says so out loud. A skipped scan means hand edits sit unadopted, and
+# the state is otherwise indistinguishable from "nothing changed".
+READ_SCAN_SKIP_WARN_AFTER = 5
 _MONOTONIC = time.monotonic
 _BACKLOG_ID = "__backlog__"
 _PROJECT_ID = "__project__"
@@ -203,6 +210,79 @@ _FTS_PROSE_FIELDS = (
 )
 # Kinds whose rows the compatibility dict carries verbatim under `_rows`, so a
 # list/get tool reads committed store state instead of re-parsing markdown.
+_PLAIN_SCALARS = (str, int, float, bool, type(None))
+
+
+def _copy_node(value: Any) -> Any:
+    kind = type(value)
+    if kind is dict:
+        return {key: _copy_node(item) for key, item in value.items()}
+    if kind is list:
+        return [_copy_node(item) for item in value]
+    if kind in _PLAIN_SCALARS:
+        return value
+    return copy.deepcopy(value)
+
+
+def _copy_plain(value: Any) -> Any:
+    """The read path's copy: deep, but without `copy.deepcopy`'s bookkeeping.
+
+    Every read hands the caller its own copy of the compatibility dict, and on
+    a 2,050-task backlog that is ~160k nodes. `copy.deepcopy` maintains a memo
+    of everything it has seen so it can rebuild shared references and cycles;
+    a document that came out of `json.loads` has neither, and the memo is most
+    of the cost. Anything that is not a plain dict/list/scalar -- exact type,
+    so a dict subclass with behaviour is not flattened into a plain one --
+    still goes through `copy.deepcopy`, which keeps the guarantee unchanged
+    for whatever a deriver has attached.
+    """
+    return _copy_node(value)
+
+
+class _LazyEntityRows(Mapping):
+    """`{kind: {id: (doc, body)}}` whose documents are parsed on first access.
+
+    Every read used to JSON-decode every bug, issue, handover, decision, idea,
+    note, area and tracker in the project, including `backlog_get_task`, which
+    wants one task and none of them. The rows are still fetched inside the
+    read's snapshot -- deferring the query would let a concurrent commit land
+    between the payload and the identity stamped on it -- but the decode waits
+    until a caller names the kind, and a kind nobody names is never decoded.
+    """
+
+    __slots__ = ("_raw", "_parsed")
+
+    def __init__(self, raw: dict[str, list[tuple[str, str, str | None]]]) -> None:
+        self._raw = raw
+        self._parsed: dict[str, dict[str, tuple[dict[str, Any], str | None]]] = {}
+
+    def __getitem__(self, kind: str) -> dict[str, tuple[dict[str, Any], str | None]]:
+        parsed = self._parsed.get(kind)
+        if parsed is None:
+            if kind not in self._raw:
+                raise KeyError(kind)
+            parsed = self._parsed[kind] = {
+                ident: (_from_json(doc, {}), body)
+                for ident, doc, body in self._raw[kind]
+            }
+        return parsed
+
+    def __iter__(self):
+        return iter(self._raw)
+
+    def __len__(self) -> int:
+        return len(self._raw)
+
+    def __deepcopy__(self, memo):
+        # The raw rows are immutable text and can be shared; only what a caller
+        # has already been handed needs copying.
+        clone = _LazyEntityRows(self._raw)
+        clone._parsed = {
+            kind: copy.deepcopy(rows, memo) for kind, rows in self._parsed.items()
+        }
+        return clone
+
+
 _DICT_ROW_KINDS = (
     "bug",
     "issue",
@@ -369,6 +449,120 @@ class StoreStatus:
     warning: str | None = None
     corrupt_files: tuple[str, ...] = ()
     linear_pending: int = 0
+    # Projection files the store owes an export it cannot write, because the
+    # file on disk is quarantined. The database holds newer content than the
+    # file and will keep holding it until the file is repaired or removed.
+    stuck_exports: tuple[str, ...] = ()
+    # In-memory, per reporting process: how many read-side projection scans in
+    # a row this process had to skip because the store was busy. It cannot be
+    # read out of the database, so a report built by a process that has never
+    # opened this store reads 0 -- which is what it honestly knows.
+    read_scan_skips: int = 0
+
+
+# A caller waiting on the writer mutex gets these while it waits, so a harness
+# that would otherwise show nothing for the whole window can say what is going
+# on and who is holding the lock.
+WRITER_WAIT_FIRST_NOTICE_SECONDS = 0.5
+WRITER_WAIT_NOTICE_INTERVAL_SECONDS = 2.0
+
+
+@dataclass(frozen=True)
+class WriterWait:
+    """One progress notice from a caller queued behind the writer mutex."""
+
+    operation: str
+    waited: float
+    deadline: float
+    holders: str | None = None
+
+
+_WAIT_OBSERVER: "Callable[[WriterWait], None] | None" = None
+
+
+def set_wait_observer(observer: "Callable[[WriterWait], None] | None") -> None:
+    """Install the sink for writer-mutex progress notices, or clear it.
+
+    The store cannot emit MCP progress itself -- it has no Context and no
+    business knowing about one -- so the tool layer registers a sink here and
+    decides what a wait looks like to its caller. An observer that raises is
+    ignored: a progress report must never turn a wait into a failure.
+    """
+    global _WAIT_OBSERVER
+    _WAIT_OBSERVER = observer
+
+
+class _ArrivalGate:
+    """Arrival-ordered admission to one lock file, within this process.
+
+    The cross-process wait is a poll, and a poll has no memory: with ten
+    waiters the next one in is whoever's timer happens to fire first, so a
+    process could sit through the whole 30 s window while later arrivals went
+    ahead of it. Threads in one process can do better than luck, and an MCP
+    server is several threads, so they queue here by arrival and exactly one of
+    them contends for the file lock at a time -- which also means one poller
+    per process rather than one per thread.
+    """
+
+    def __init__(self) -> None:
+        self._condition = threading.Condition(threading.Lock())
+        self._waiting: list[int] = []
+        self._next_ticket = 0
+        self._held = False
+
+    def enter(self) -> int:
+        """Take a ticket. Arrival order is fixed here, not at first wait."""
+        with self._condition:
+            ticket = self._next_ticket
+            self._next_ticket += 1
+            self._waiting.append(ticket)
+            return ticket
+
+    def wait_turn(self, ticket: int, until: float) -> bool:
+        """True once `ticket` holds the gate; False if `until` passed first.
+
+        The ticket survives a False: the caller waits in slices so it can send
+        a progress notice without the condition lock, and re-queueing between
+        slices would put it back behind everyone who arrived while it waited --
+        which is the unfairness this class exists to remove.
+        """
+        with self._condition:
+            while self._held or self._waiting[0] != ticket:
+                remaining = until - _MONOTONIC()
+                if remaining <= 0:
+                    return False
+                self._condition.wait(min(remaining, 0.05))
+            self._waiting.remove(ticket)
+            self._held = True
+            return True
+
+    def leave(self, ticket: int) -> None:
+        """Abandon a ticket that never got its turn.
+
+        Without this the thread behind waits out its own deadline behind a
+        ticket nobody will ever serve.
+        """
+        with self._condition:
+            if ticket in self._waiting:
+                self._waiting.remove(ticket)
+                self._condition.notify_all()
+
+    def release(self) -> None:
+        with self._condition:
+            self._held = False
+            self._condition.notify_all()
+
+
+_ARRIVAL_GATES: dict[Path, _ArrivalGate] = {}
+_ARRIVAL_GATES_LOCK = threading.Lock()
+
+
+def _arrival_gate(path: Path) -> _ArrivalGate:
+    with _ARRIVAL_GATES_LOCK:
+        gate = _ARRIVAL_GATES.get(path)
+        if gate is None:
+            gate = _ARRIVAL_GATES[path] = _ArrivalGate()
+        return gate
 
 
 _STATE_LOCK = threading.RLock()
@@ -490,6 +684,18 @@ def _is_corruption(exc: BaseException) -> bool:
     ):
         return False
     return any(marker in str(exc).lower() for marker in _CORRUPTION_MARKERS)
+
+
+def _quick_check(connection: sqlite3.Connection, limit: int | None = None) -> str:
+    """The first `PRAGMA quick_check` row on an already-open connection.
+
+    Every retained-connection health probe goes through here so there is one
+    place that names what such a probe is worth: it is a cheap trigger, not a
+    verdict on the file. `""` when the pragma returns no row at all.
+    """
+    pragma = "PRAGMA quick_check" if limit is None else f"PRAGMA quick_check({limit})"
+    row = connection.execute(pragma).fetchone()
+    return "" if row is None else str(row[0])
 
 
 def _projection_schema(backlog_dir: Path) -> int | None:
@@ -717,7 +923,7 @@ def checkpoint_all() -> None:
 
 
 def reset_for_tests() -> None:
-    global _ROOT_RESOLUTION, _CONTEXT_BUILDER, _PROGRESS_RENDERER
+    global _ROOT_RESOLUTION, _CONTEXT_BUILDER, _PROGRESS_RENDERER, _WAIT_OBSERVER
     with _STATE_LOCK:
         seen: set[int] = set()
         for connection in list(_ALL_CONNECTIONS):
@@ -747,6 +953,9 @@ def reset_for_tests() -> None:
         _WARNED_CLOUD_ROOTS.clear()
         _CONTEXT_BUILDER = None
         _PROGRESS_RENDERER = None
+        _WAIT_OBSERVER = None
+        with _ARRIVAL_GATES_LOCK:
+            _ARRIVAL_GATES.clear()
 
 
 def configure_derivers(
@@ -831,6 +1040,13 @@ class Store:
         self._verify_exports = False
         self._last_progress_clock: float | None = None
         self._last_read_scan_clock: float | None = None
+        # A read-side scan that found work but could not take the writer mutex
+        # leaves this set: the next read goes straight back to the (cheap,
+        # non-blocking) mutex attempt instead of re-walking the projection to
+        # rediscover what this one already knows, and instead of waiting out
+        # the throttle it never earned.
+        self._read_scan_pending = False
+        self._read_scan_skips = 0
         # Per-thread: connections are per-thread and reads run concurrently, so
         # a memo saved and restored on a shared attribute could be restored
         # after its owner had already left -- freezing one thread's listing for
@@ -915,6 +1131,8 @@ class Store:
         self._connection_creation_state = threading.local()
         self._last_progress_clock = None
         self._last_read_scan_clock = None
+        self._read_scan_pending = False
+        self._read_scan_skips = 0
         self._listing_state = threading.local()
         self._verified_generation = None
 
@@ -993,18 +1211,122 @@ class Store:
         finally:
             self._connection_creation_state.allowed = prior
 
+    def _wait_notice(
+        self,
+        *,
+        operation: str | None,
+        started: float,
+        deadline_seconds: float,
+        last_notice: float,
+        diagnose: bool,
+    ) -> float:
+        """Tell the observer how long this caller has been queued. Never raises.
+
+        Returns the clock the next notice is measured from, unchanged when the
+        notice was not due -- so a caller that waits out the whole window is
+        heard from at a steady cadence rather than once at the end, which is
+        what the harness needs in order to show anything at all.
+        """
+        observer = _WAIT_OBSERVER
+        if observer is None or operation is None:
+            return last_notice
+        due = (
+            WRITER_WAIT_FIRST_NOTICE_SECONDS
+            if last_notice == started
+            else WRITER_WAIT_NOTICE_INTERVAL_SECONDS
+        )
+        now = _MONOTONIC()
+        if now - last_notice < due:
+            return last_notice
+        holders = None
+        # Only the first notice names holders. `_busy_diagnostic` opens a second
+        # connection to a store that is by definition contended; asking every
+        # two seconds, from every waiter, adds load exactly where there is
+        # already too much, and the answer barely changes.
+        if diagnose and last_notice == started:
+            try:
+                holders = self._busy_diagnostic(waited_seconds=now - started)
+            except Exception:  # noqa: BLE001 - a diagnostic cannot break a wait
+                holders = None
+        try:
+            observer(
+                WriterWait(
+                    operation=operation,
+                    waited=now - started,
+                    deadline=deadline_seconds,
+                    holders=holders,
+                )
+            )
+        except Exception:  # noqa: BLE001 - progress must never fail the wait
+            pass
+        return _MONOTONIC()
+
     @contextmanager
     def _writer_mutex(
-        self, *, timeout_ms: int | None = None, diagnose: bool = True
+        self,
+        *,
+        timeout_ms: int | None = None,
+        diagnose: bool = True,
+        operation: str | None = None,
     ) -> Iterator[None]:
-        """Cross-process crash-recovery gate shared by every writer."""
+        """Cross-process crash-recovery gate shared by every writer.
+
+        `operation` names the caller in the busy diagnostic and in the progress
+        notices, so a wait is attributable to a tool rather than to "the
+        store". `timeout_ms` is the caller's deadline; without one it is the
+        full `BUSY_TIMEOUT_MS`, which is what left a blocked tool silent for
+        thirty seconds and then raised.
+        """
         path = self.db_path.parent / "store.recovery.lock"
         path.parent.mkdir(parents=True, exist_ok=True)
-        descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+        wait_ms = BUSY_TIMEOUT_MS if timeout_ms is None else timeout_ms
+        deadline_seconds = wait_ms / 1000
+        started = _MONOTONIC()
+        deadline = started + deadline_seconds
+        last_notice = started
+
+        def give_up(cause: BaseException | None) -> RuntimeError:
+            message = (
+                self._busy_diagnostic(
+                    waited_seconds=_MONOTONIC() - started, operation=operation
+                )
+                if diagnose
+                else "store busy for read-side projection scan; retry"
+            )
+            error = RuntimeError(message)
+            if cause is not None:
+                error.__cause__ = cause
+            return error
+
+        # Arrival order among this process's own threads, settled before anyone
+        # touches the file lock (see `_ArrivalGate`).
+        gate = _arrival_gate(path)
+        ticket = gate.enter()
+        try:
+            while not gate.wait_turn(ticket, min(deadline, _MONOTONIC() + 0.25)):
+                if _MONOTONIC() >= deadline:
+                    raise give_up(None)
+                last_notice = self._wait_notice(
+                    operation=operation,
+                    started=started,
+                    deadline_seconds=deadline_seconds,
+                    last_notice=last_notice,
+                    diagnose=diagnose,
+                )
+                if _MONOTONIC() >= deadline:
+                    raise give_up(None)
+        except BaseException:
+            gate.leave(ticket)
+            raise
+        try:
+            descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+        except BaseException:
+            # The gate is held at this point; a failure to even open the lock
+            # file would otherwise strand every other thread in this process.
+            gate.release()
+            raise
         _OPEN_LOCK_FDS.add(descriptor)
         acquired = False
-        wait_ms = BUSY_TIMEOUT_MS if timeout_ms is None else timeout_ms
-        deadline = _MONOTONIC() + wait_ms / 1000
         try:
             if os.fstat(descriptor).st_size == 0:
                 os.write(descriptor, b"\0")
@@ -1025,15 +1347,29 @@ class Store:
                     if exc.errno not in {errno.EACCES, errno.EAGAIN, 13, 36}:
                         raise
                     if _MONOTONIC() >= deadline:
-                        message = (
-                            self._busy_diagnostic()
-                            if diagnose
-                            else "store busy for read-side projection scan; retry"
-                        )
-                        raise RuntimeError(message) from exc
-                    time.sleep(0.02)
+                        raise give_up(exc) from exc
+                    last_notice = self._wait_notice(
+                        operation=operation,
+                        started=started,
+                        deadline_seconds=deadline_seconds,
+                        last_notice=last_notice,
+                        diagnose=diagnose,
+                    )
+                    # An observer is someone else's code, and a progress sink
+                    # that blocks -- stderr nobody is draining -- must not carry
+                    # this caller past the deadline it was given.
+                    if _MONOTONIC() >= deadline:
+                        raise give_up(exc) from exc
+                    # Jittered so peers stop polling in lockstep, and shorter
+                    # the longer this caller has already waited: an unaged
+                    # fixed poll gave a fresh arrival exactly the same odds as
+                    # a process that had been queued for twenty seconds.
+                    elapsed = _MONOTONIC() - started
+                    base = max(0.002, 0.04 / (1.0 + elapsed))
+                    time.sleep(min(base * random.uniform(0.5, 1.5), 0.05))
             yield
         finally:
+            gate.release()
             if acquired:
                 try:
                     os.lseek(descriptor, 0, os.SEEK_SET)
@@ -1060,12 +1396,12 @@ class Store:
                 return
             try:
                 connection = self.connection
-                quick = connection.execute("PRAGMA quick_check").fetchone()
+                quick = _quick_check(connection)
                 required = connection.execute(
                     "SELECT COUNT(*) FROM sqlite_master WHERE type='table' "
                     "AND name IN ('meta','entities','changes','projection')"
                 ).fetchone()[0]
-                ready = bool(quick and str(quick[0]).lower() == "ok" and required == 4)
+                ready = bool(quick.lower() == "ok" and required == 4)
             except sqlite3.Error:
                 ready = False
             self._network_projection_only = not ready
@@ -1137,8 +1473,7 @@ class Store:
             # corrupt page happened to hold. `quick_check(1)` stops at the first
             # error; on the 46 MB real-backlog store it costs under 200 ms, once
             # per process, and only on the cold open.
-            quick = connection.execute("PRAGMA quick_check(1)").fetchone()
-            if not quick or str(quick[0]).lower() != "ok":
+            if _quick_check(connection, 1).lower() != "ok":
                 return False
             tables = {
                 row[0]
@@ -1211,7 +1546,14 @@ class Store:
         except sqlite3.DatabaseError as exc:
             if not _is_corruption(exc):
                 raise
-            self._recover_corrupt_database(connection)
+            # Any statement above can carry a corruption marker off the same
+            # stale FTS state, so the confirmation gate sits at the recovery
+            # decision as well as at the pragma verdict.  Unconfirmed, the
+            # answer is a new connection, not a renamed database.
+            if self._corruption_is_real(str(exc)):
+                self._recover_corrupt_database(connection)
+            else:
+                self._discard_retained_connection(connection)
             with self._connection_creation_allowed():
                 connection = self.connection
             self._begin_immediate(connection)
@@ -1250,11 +1592,17 @@ class Store:
     def _prepare_schema(self, connection: sqlite3.Connection) -> None:
         assert_compatible(connection)
         try:
-            quick = connection.execute("PRAGMA quick_check").fetchone()
+            quick = _quick_check(connection)
         except sqlite3.DatabaseError:
             raise
-        if quick and str(quick[0]).lower() != "ok":
-            raise sqlite3.DatabaseError(f"malformed database: quick_check={quick[0]}")
+        if quick and quick.lower() != "ok":
+            # A verdict from this already-open connection is a trigger, not a
+            # finding: confirm it against the committed state before it can
+            # reach recovery.  An unconfirmed one leaves a healthy database
+            # alone -- the stale diagnostic does not impair the connection for
+            # anything else it is about to do here.
+            if self._corruption_is_real(f"quick_check={quick}"):
+                raise sqlite3.DatabaseError(f"malformed database: quick_check={quick}")
 
         has_meta = connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta'"
@@ -1501,6 +1849,66 @@ class Store:
             },
         )
         self._persist_export_intent(tx)
+
+    def _corruption_is_real(self, reason: str) -> bool:
+        """True when the committed file, not a retained connection, is damaged.
+
+        `PRAGMA quick_check` on a connection that has already inspected the
+        FTS5 index reports `malformed inverted index for FTS5 table
+        main.entity_fts` as soon as a peer connection commits to that index
+        (`docs/reports/2026-09-09-native-foundation.md`, N00).  That is runtime
+        state in this process, not damage on disk: across a 20-case matrix on
+        SQLite 3.45.3 and 3.47.1 every fresh read-only snapshot of the same
+        file reported `ok`.  Recovery renames the live database family aside
+        and rebuilds from the file projection, which lags the store and carries
+        no progress entries, session rows, Linear queue claims or quarantine
+        log -- so acting on that verdict destroys committed data.  A verdict is
+        therefore only acted on once a fresh read-only snapshot of the
+        committed state agrees with it.
+
+        This gate does not suppress anything: a snapshot that reports real
+        damage still routes to recovery, and a runtime too old for FTS-aware
+        `integrity_check` cannot second-guess the verdict it already has, so it
+        keeps it.
+        """
+        try:
+            diagnostics = check_database(self.db_path)
+        except RuntimeError:
+            # No FTS-aware `integrity_check` here; nothing better to go on.
+            return True
+        except sqlite3.OperationalError:
+            # The file cannot be opened read-only at all -- missing, locked or
+            # unreadable.  None of those is corruption, and renaming a file we
+            # cannot even read would destroy it on a guess.
+            self._log(f"could not open a read-only snapshot to confirm corruption ({reason})")
+            return False
+        except sqlite3.DatabaseError:
+            # A fresh connection cannot parse the file: the damage is real.
+            return True
+        failures = [
+            str(row) for row in diagnostics["integrity"] if str(row).lower() != "ok"
+        ]
+        if failures:
+            self._log(f"corruption confirmed on a fresh snapshot ({reason}): {'; '.join(failures)}")
+            return True
+        self._log(
+            "retained-connection diagnostic contradicted by a fresh read-only snapshot; "
+            f"the committed database is healthy and was left intact ({reason})"
+        )
+        return False
+
+    def _discard_retained_connection(self, connection: sqlite3.Connection) -> None:
+        """Drop this thread's connections so a retry starts without stale state.
+
+        The FTS5 diagnostic artifact lives in the connection, so the retry has
+        to happen on a new one.  Nothing is renamed, copied or rebuilt here.
+        """
+        try:
+            if connection.in_transaction:
+                connection.rollback()
+        except sqlite3.Error:
+            pass
+        close_thread_connection()
 
     def _recover_corrupt_database(
         self, connection: sqlite3.Connection | None = None
@@ -1817,7 +2225,9 @@ class Store:
                 connection, tool=tool, session_id=activity_session
             ):
                 with self._writer_mutex(
-                    timeout_ms=_writer_timeout_ms, diagnose=_diagnose_busy
+                    timeout_ms=_writer_timeout_ms,
+                    diagnose=_diagnose_busy,
+                    operation=tool,
                 ):
                     current_connection = self.connection
                     if current_connection is not connection:
@@ -1990,8 +2400,12 @@ class Store:
         else:
             data = self._load_dict_from_connection(connection)
         if publish:
-            _CACHE[self.db_path] = (token, max_seq, copy.deepcopy(data))
-        result = copy.deepcopy(data)
+            # `data` is this call's own object either way -- freshly loaded, or
+            # the deep copy `_refresh_cached_dict` made -- so the cache can hold
+            # it and the caller gets one copy rather than two of the whole
+            # 160k-node dict.
+            _CACHE[self.db_path] = (token, max_seq, data)
+        result = _copy_plain(data)
         # Attached outside the cache entry so the incremental refresh above never
         # has to keep it in step: it is one query against the same snapshot.
         result["_rows"] = self._entity_rows_from_connection(connection)
@@ -1999,16 +2413,20 @@ class Store:
 
     def _entity_rows_from_connection(
         self, connection: sqlite3.Connection
-    ) -> dict[str, dict[str, tuple[dict[str, Any], str | None]]]:
+    ) -> "_LazyEntityRows":
         """`{kind: {id: (doc, body)}}` for every non-task entity kind.
 
         Read tools for bugs, issues, handovers, decisions, ideas, notes, areas
         and trackers render from this instead of globbing their directory, so a
         read and the write that follows it see one snapshot. Archived rows are
         included; their document carries `archived: True` and callers filter.
+
+        The rows are fetched here, inside the caller's snapshot; the documents
+        are decoded by `_LazyEntityRows` when a kind is first named, because
+        most reads name none of them.
         """
-        rows: dict[str, dict[str, tuple[dict[str, Any], str | None]]] = {
-            kind: {} for kind in _DICT_ROW_KINDS
+        raw: dict[str, list[tuple[str, str, str | None]]] = {
+            kind: [] for kind in _DICT_ROW_KINDS
         }
         placeholders = ",".join("?" for _ in _DICT_ROW_KINDS)
         for row in connection.execute(
@@ -2016,8 +2434,34 @@ class Store:
             "ORDER BY id",
             _DICT_ROW_KINDS,
         ):
-            rows[row["kind"]][row["id"]] = (_from_json(row["doc"], {}), row["body"])
-        return rows
+            raw[row["kind"]].append((row["id"], row["doc"], row["body"]))
+        return _LazyEntityRows(raw)
+
+    def entity_row(
+        self, kind: str, ident: str
+    ) -> tuple[dict[str, Any], str | None] | None:
+        """One entity's `(doc, body)`, or None -- without building the dict.
+
+        `backlog_get_task` and the link engine's entity read want a single row,
+        and were paying for the whole compatibility dict plus a decode of every
+        non-task entity in the project to get it. This is the same snapshot
+        discipline (a scan first, so a hand edit is adopted) over one indexed
+        lookup. The document is a copy: the caller that replaced this path
+        mutates what it is handed and documents that as read-only.
+        """
+        self._ensure_open()
+        if self._network_projection_only:
+            rows = self._entity_rows_from_projection().get(kind) or {}
+            found = rows.get(ident)
+            return (_copy_plain(found[0]), found[1]) if found else None
+        self._maybe_scan_on_read()
+        row = self.connection.execute(
+            "SELECT doc,body FROM entities WHERE kind=? AND id=? AND deleted=0",
+            (kind, ident),
+        ).fetchone()
+        if row is None:
+            return None
+        return _from_json(row["doc"], {}), row["body"]
 
     def _projection_identity(self) -> tuple[str, int]:
         """A `(token, seq)` pair that moves whenever the projection does.
@@ -2071,7 +2515,13 @@ class Store:
             rows[kind][ident] = (doc, body)
         return {kind: dict(sorted(entries.items())) for kind, entries in rows.items()}
 
-    def update_root_config(self, name: str, mutate: "Callable[[dict], dict]") -> dict:
+    def update_root_config(
+        self,
+        name: str,
+        mutate: "Callable[[dict], dict]",
+        *,
+        timeout_ms: int | None = None,
+    ) -> dict:
         """Read-modify-write one root config file under the cross-process lock.
 
         `linear.yaml` sits beside the projection and is shared by every agent
@@ -2089,7 +2539,7 @@ class Store:
             raise ValueError(f"not a root config file name: {name!r}")
         self._ensure_open()
         path = self.backlog_path / name
-        with self._writer_mutex():
+        with self._writer_mutex(timeout_ms=timeout_ms, operation="update_root_config"):
             assert_compatible(self.connection)
             current: dict[str, Any] = {}
             if path.exists():
@@ -2306,6 +2756,7 @@ class Store:
         seqs: Iterable[int],
         *,
         lease_seconds: float = LINEAR_CLAIM_LEASE_SECONDS,
+        timeout_ms: int | None = None,
     ) -> int:
         """Return the given queue rows to `pending` with a cleared attempt count.
 
@@ -2332,7 +2783,7 @@ class Store:
             return 0
         if self.connection.in_transaction:
             raise RuntimeError("linear_requeue needs its own transaction")
-        with self._writer_mutex():
+        with self._writer_mutex(timeout_ms=timeout_ms, operation="linear_requeue"):
             connection = self.connection
             if connection.in_transaction:
                 raise RuntimeError("linear_requeue needs its own transaction")
@@ -2362,6 +2813,7 @@ class Store:
         targets: Sequence[str] | None = None,
         owner: str,
         lease_seconds: float = LINEAR_CLAIM_LEASE_SECONDS,
+        timeout_ms: int | None = None,
     ) -> list[dict[str, Any]]:
         """Take ownership of up to `limit` pending pushes, oldest first.
 
@@ -2386,7 +2838,7 @@ class Store:
             return []
         if self.connection.in_transaction:
             raise RuntimeError("linear_claim needs its own transaction")
-        with self._writer_mutex():
+        with self._writer_mutex(timeout_ms=timeout_ms, operation="linear_claim"):
             connection = self.connection
             if connection.in_transaction:
                 raise RuntimeError("linear_claim needs its own transaction")
@@ -2457,6 +2909,7 @@ class Store:
         state: str,
         error: str | None = None,
         owner: str | None = None,
+        timeout_ms: int | None = None,
     ) -> bool:
         """Record the outcome of one drain attempt on queue row `seq`.
 
@@ -2478,7 +2931,7 @@ class Store:
             raise RuntimeError(f"cannot write the Linear queue: {degraded}")
         if self.connection.in_transaction:
             raise RuntimeError("linear_mark needs its own transaction")
-        with self._writer_mutex():
+        with self._writer_mutex(timeout_ms=timeout_ms, operation="linear_mark"):
             # Re-read under the mutex, as `transaction` does: a recovery that
             # finished while this caller queued for the lock closes the handle
             # we would otherwise have captured before waiting.
@@ -2625,24 +3078,67 @@ class Store:
         ).fetchone()
         return None if row is None else str(row[0])
 
+    @property
+    def read_scan_skips(self) -> int:
+        """Read-side projection scans this process skipped in a row, store busy.
+
+        Zero whenever a scan last completed -- including one that proved there
+        was nothing to import. A number that keeps climbing means hand edits
+        are sitting on disk unadopted and every read is answering from state
+        that predates them.
+        """
+        return self._read_scan_skips
+
+    def _note_read_scan_skipped(self) -> None:
+        """Remember that a scan with real work to do could not take the mutex.
+
+        The throttle clock is deliberately left alone. It exists to stop a read
+        from re-walking the projection every time, and a skipped attempt walked
+        nothing -- burning the window for it meant that on a continuously busy
+        store the retry never came round while the store was free, so hand
+        edits were never adopted at all. The pending flag makes the retry
+        cheap: the sweep already found the work, so the next read goes straight
+        to the non-blocking mutex attempt rather than rediscovering it.
+        """
+        self._read_scan_pending = True
+        self._read_scan_skips += 1
+        if self._read_scan_skips % READ_SCAN_SKIP_WARN_AFTER:
+            return
+        warnings.warn(
+            f"{self._read_scan_skips} read-side projection scans in a row were "
+            f"skipped because {self.db_path.parent} was busy: hand edits under "
+            f"{self.backlog_path} have not been adopted and reads are answering "
+            "from older state (see backlog_store_status)",
+            RuntimeWarning,
+            stacklevel=4,
+        )
+
     def _maybe_scan_on_read(self) -> None:
         """Import hand edits at most once per two seconds for read callers."""
         now = time.monotonic()
+        pending = self._read_scan_pending
         if (
-            self._last_read_scan_clock is not None
-            and now - self._last_read_scan_clock < 2.0
+            not pending
+            and self._last_read_scan_clock is not None
+            and now - self._last_read_scan_clock < READ_SCAN_THROTTLE_SECONDS
         ):
             return
-        self._last_read_scan_clock = now
         if _network_filesystem_reason(self.root):
+            self._last_read_scan_clock = now
             return
         with self._memoized_entity_files():
             generation = self._git_generation()
-            if not self._projection_changed_on_disk(generation=generation):
+            # A pending scan already knows there is work; re-walking the
+            # projection to be told so again is the expensive half of the read.
+            if not pending and not self._projection_changed_on_disk(
+                generation=generation
+            ):
                 # The sweep just proved this generation matches, so the next
                 # read does not repeat it merely because a git command ran.
                 # The database revision goes with it: any other connection
                 # committing retires the proof rather than outliving it.
+                self._last_read_scan_clock = now
+                self._read_scan_skips = 0
                 self._verified_generation = (generation, self._database_revision())
                 return
             try:
@@ -2666,12 +3162,16 @@ class Store:
                     raise
                 # Nothing was swept, so nothing is proved: the memo is left
                 # alone and the next read repeats the check.
+                self._note_read_scan_skipped()
                 return
             # The probe ran the whole sweep. When it found something to write
             # it committed `last_scan_generation` with the rest; when it found
             # nothing it rolled back, and that row went with it. The proof is
             # the same either way, so it is remembered here rather than left to
             # depend on whether the transaction happened to commit.
+            self._last_read_scan_clock = now
+            self._read_scan_pending = False
+            self._read_scan_skips = 0
             self._verified_generation = (generation, self._database_revision())
 
     def _database_revision(self) -> int:
@@ -2877,6 +3377,7 @@ class Store:
             wal_size=0,
             warning=warning,
             corrupt_files=self._corrupt_backup_names(),
+            read_scan_skips=self._read_scan_skips,
         )
 
     def _status_from(
@@ -2905,6 +3406,13 @@ class Store:
                 row[0]
                 for row in connection.execute(
                     "SELECT file FROM projection WHERE quarantined=1 ORDER BY file"
+                )
+            )
+            stuck = tuple(
+                row[0]
+                for row in connection.execute(
+                    "SELECT file FROM projection WHERE dirty=1 AND quarantined=1 "
+                    "ORDER BY file"
                 )
             )
             seq = int(
@@ -2977,6 +3485,8 @@ class Store:
             warning=warning,
             corrupt_files=self._corrupt_backup_names(),
             linear_pending=queued,
+            stuck_exports=stuck,
+            read_scan_skips=self._read_scan_skips,
         )
 
     def status(self) -> StoreStatus:
@@ -3061,9 +3571,20 @@ class Store:
     # wait is pure added latency on top of the timeout that already expired.
     _DIAGNOSTIC_TIMEOUT_MS = 300
 
-    def _busy_diagnostic(self) -> str:
-        seconds = BUSY_TIMEOUT_MS / 1000
-        prefix = f"store busy for {seconds:g}s"
+    def _busy_diagnostic(
+        self, *, waited_seconds: float | None = None, operation: str | None = None
+    ) -> str:
+        """Why the store is busy, and for whom.
+
+        `waited_seconds` is what this caller actually waited -- reporting the
+        30 s default to a caller that gave up after 200 ms told them about a
+        deadline they never had. `operation` names them, so a blocked tool is
+        attributable instead of being "the store".
+        """
+        seconds = BUSY_TIMEOUT_MS / 1000 if waited_seconds is None else waited_seconds
+        prefix = f"store busy for {seconds:.3g}s"
+        if operation:
+            prefix += f" while {operation} waited"
         diagnostic: sqlite3.Connection | None = None
         try:
             diagnostic = sqlite3.connect(
@@ -3118,14 +3639,14 @@ class Store:
             )
         return prefix + ("; " + "; ".join(parts) if parts else "; retry")
 
-    def rebuild_derived(self) -> None:
+    def rebuild_derived(self, *, timeout_ms: int | None = None) -> None:
         connection = self.connection
         if connection.in_transaction:
             raise RuntimeError("nested store transactions are not supported")
         tx = Transaction(self, connection, tool="rebuild-derived")
         try:
             self._try_register_session(connection, current_tool="rebuild-derived")
-            with self._writer_mutex():
+            with self._writer_mutex(timeout_ms=timeout_ms, operation="rebuild_derived"):
                 self._begin_immediate(connection)
                 rows = tx.connection.execute(
                     "SELECT kind,id,doc,body FROM entities WHERE deleted=0"
@@ -3879,21 +4400,43 @@ class Store:
         entity = tx.connection.execute(
             "SELECT doc,body,rev FROM entities WHERE kind=? AND id=?", (kind, ident)
         ).fetchone()
-        if base_row is None or entity is None:
+        if entity is None:
             return
+        # No base is not "nothing to do". An export suppressed because the file
+        # was quarantined records the debt but writes no base row, so returning
+        # here left the store holding a committed edit it would never write and
+        # the repaired file holding content the store would never import: two
+        # divergent versions, silently, for the life of the project. An empty
+        # base makes every field the two sides disagree on a conflict, which
+        # `_three_way_merge_fields` settles the way it settles every other one
+        # -- local wins, the hand edit's own additions survive, and the whole
+        # thing is recorded as a merge.
+        base_source: bytes | None = (
+            bytes(base_row["content"]) if base_row is not None else None
+        )
+        base_doc: dict[str, Any] = {}
+        base_body: str | None = None
+        if base_source is not None:
+            try:
+                if kind == "project":
+                    loaded = yaml_io.safe_load(base_source.decode("utf-8")) or {}
+                    base_doc = loaded if isinstance(loaded, dict) else {}
+                else:
+                    base_doc, base_body = self._parse_entity_text(
+                        kind, base_source.decode("utf-8")
+                    )
+            except (UnicodeError, ValueError, yaml.YAMLError):
+                # The bytes we were about to overwrite do not parse either.
+                # They are still not a reason to quarantine the file the caller
+                # just repaired; merge against nothing instead.
+                base_doc, base_body = {}, None
         try:
             if kind == "project":
-                base_doc = yaml_io.safe_load(
-                    bytes(base_row["content"]).decode("utf-8")
-                ) or {}
                 their_doc = yaml_io.safe_load(content.decode("utf-8")) or {}
-                if not isinstance(base_doc, dict) or not isinstance(their_doc, dict):
+                if not isinstance(their_doc, dict):
                     raise ValueError("project.yaml must be a mapping")
                 base_body = their_body = None
             else:
-                base_doc, base_body = self._parse_entity_text(
-                    kind, bytes(base_row["content"]).decode("utf-8")
-                )
                 their_doc, their_body = self._parse_entity_text(
                     kind, content.decode("utf-8")
                 )
@@ -3926,7 +4469,21 @@ class Store:
             merged_body=merged_body,
         )
         if not fields:
+            # The repair happens to agree with what the store holds. The row is
+            # still quarantined, and nothing later in the scan clears it, so a
+            # file that is now fine would stay marked broken and its pending
+            # export stranded for good.
+            if projection_row["quarantined"]:
+                tx.connection.execute(
+                    "UPDATE projection SET quarantined=0,quarantine_mtime=NULL,"
+                    "quarantine_size=NULL,quarantine_hash=NULL WHERE file=?",
+                    (rel,),
+                )
+                tx._export_keys.add((kind, ident))
+                tx.log_entries.append(f"quarantine cleared for {rel}; export resumed")
             return
+        if projection_row["quarantined"]:
+            tx.log_entries.append(f"quarantine cleared for {rel}; export resumed")
         seq = tx._record_change(kind, ident, "merge", fields, before, after)
         tx.connection.execute(
             "UPDATE entities SET epic=?,status=?,archived=?,doc=?,body=?,rev=rev+1,updated_seq=? "
@@ -4265,9 +4822,42 @@ class Store:
                         tuple(sorted((left, right))),
                     )
 
+    def _export_blocked_by_quarantine(self, tx: "Transaction", row: sqlite3.Row) -> bool:
+        """True when this entity's file is quarantined and already owes an export.
+
+        `_replace_projection` refuses to write over a quarantined file: it marks
+        the row dirty, warns, and logs the suppression. Rendering the document
+        again on the next write can only reach that same conclusion against the
+        same bytes -- the file has not changed, or the scan would have lifted
+        the quarantine -- so it burns a full render and appends another
+        identical `store.log` line for as long as the file stays broken. The
+        first suppression still goes the long way round, because that is what
+        records the debt; every one after it stops here with the warning the
+        caller needs and nothing else.
+        """
+        target = self._entity_path(row["kind"], row["id"], bool(row["archived"]))
+        if target is None:
+            return False
+        rel = target.relative_to(self.backlog_path).as_posix()
+        existing = tx.connection.execute(
+            "SELECT dirty,quarantined FROM projection WHERE file=?", (rel,)
+        ).fetchone()
+        if not existing or not existing["quarantined"] or not existing["dirty"]:
+            return False
+        tx.warnings.append(f"export pending: {rel} is quarantined")
+        return True
+
     def _export_touched(self, tx: "Transaction") -> None:
         if any(kind in {"backlog", "epic", "phase"} for kind, _ in tx._export_keys):
             tx._export_backlog = True
+        # One question for the whole transaction. Asking it per entity would put
+        # an extra lookup on every export an adoption does -- 2,050 of them --
+        # to answer "no" each time on the store the check exists to protect.
+        blocked_rows = bool(
+            tx.connection.execute(
+                "SELECT EXISTS(SELECT 1 FROM projection WHERE dirty=1 AND quarantined=1)"
+            ).fetchone()[0]
+        )
         for kind, ident in sorted(tx._export_keys):
             if kind == "backlog":
                 continue
@@ -4275,6 +4865,12 @@ class Store:
                 "SELECT * FROM entities WHERE kind=? AND id=?", (kind, ident)
             ).fetchone()
             if not row:
+                continue
+            if (
+                blocked_rows
+                and not row["deleted"]
+                and self._export_blocked_by_quarantine(tx, row)
+            ):
                 continue
             self._export_entity_row(tx, row)
         if tx._export_ideas or any(kind == "idea" for kind, _ in tx._export_keys):
