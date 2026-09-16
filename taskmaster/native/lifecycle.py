@@ -1,13 +1,15 @@
-"""Initial native lifecycle handlers reusing the existing pure domain functions.
+"""Native lifecycle handlers reusing the existing pure domain functions.
 
-Task/epic/phase completion, promotion, gates, Linear and adapter coverage still
-belong to N07; this module does not advertise that the inventory is complete.
+Entity create/update/archive lives here; the task/epic/phase composites, gates,
+claims, links, settings and the Linear outbox live in `workflow`, which shares
+this module's dispatch so a caller sees one operation namespace.
 """
 import inspect
 from functools import lru_cache
 from types import UnionType
 from typing import Any, Union, get_args, get_origin, get_type_hints
 from taskmaster import taskmaster_v3 as domain
+from . import workflow
 
 BUILDERS = {"decision": domain.build_decision_doc, "bug": domain.build_bug_doc,
             "issue": domain.build_issue_doc, "idea": domain.build_idea_doc, "handover": domain.build_handover_doc}
@@ -17,8 +19,9 @@ PATCH_FIELDS = {
     "issue": {"title", "status", "severity", "impact", "fixed_in_task", "duplicate_of", "components", "location", "related_tasks", "body"},
     "idea": {"title", "body", "status", "promoted_to", "tags", "related_tasks", "related_issues", "archived"},
 }
-OPERATIONS = {f"{kind}.create" for kind in BUILDERS} | {f"{kind}.update" for kind in PATCHERS} | {
+ENTITY_OPERATIONS = {f"{kind}.create" for kind in BUILDERS} | {f"{kind}.update" for kind in PATCHERS} | {
     "note.update", "note.archive", "bug.archive", "decision.resolve", "decision.drop", "handover.status", "handover.supersede"}
+OPERATIONS = ENTITY_OPERATIONS | workflow.OPERATIONS
 
 
 def _accepts(value, annotation):
@@ -41,6 +44,8 @@ def _builder_contract(kind):
 
 def validate(operation, arguments):
     from .contracts import _identifier
+    if operation in workflow.OPERATIONS:
+        return workflow.validate(operation, arguments)
     kind, action = operation.split(".")
     if action == "create":
         parameters = dict(arguments)
@@ -98,6 +103,8 @@ def validate(operation, arguments):
 
 
 def apply(transaction, operation, arguments):
+    if operation in workflow.OPERATIONS:
+        return workflow.apply(transaction, operation, arguments)
     kind, action = operation.split(".")
     if action == "create":
         options = dict(arguments)

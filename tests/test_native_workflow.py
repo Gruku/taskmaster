@@ -40,6 +40,17 @@ def workspace(native):
     return native
 
 
+def _queued(connection, target_id):
+    return connection.execute("SELECT op,target_id,tracker_id,state FROM linear_queue "
+                              "WHERE target_id=?", (target_id,)).fetchall()
+
+
+def express(connection, ident, key):
+    """Put a task on the shortest lane and satisfy it, so completion is legal."""
+    run(connection, "task.update", {"id": ident, "field": "lane", "value": "express"}, f"lane-{key}")
+    run(connection, "task.gate", {"id": ident, "gate": "review-gate", "verdict": "pass"}, f"gate-{key}")
+
+
 def fields(connection, kind, ident):
     with Repository(connection).snapshot() as query:
         return query.get(kind, ident)["fields"]
@@ -197,6 +208,7 @@ def test_completion_archives_the_bugs_the_task_fixed_in_the_same_commit(workspac
         bug = created(connection, "bug.create", {"title": "Crash", "found_in": "demo-001"}, "bug")
         run(connection, "bug.update", {"id": bug, "patch": {"status": "fixed", "fix_commit": "abc123"}}, "fix")
         run(connection, "task.pick", {"id": "demo-001", "session": "alpha"}, "claim")
+        express(connection, "demo-001", "complete")
         receipt = run(connection, "task.complete", {"id": "demo-001", "patchnote": "Loader fixed"}, "done")
         assert {row["id"] for row in receipt["affected"]} == {"demo-001", bug}
         with Repository(connection).snapshot() as query:
@@ -204,6 +216,21 @@ def test_completion_archives_the_bugs_the_task_fixed_in_the_same_commit(workspac
             task = query.get("task", "demo-001")["fields"]
         assert task["status"] == "done" and task["patchnote"] == "Loader fixed"
         assert "locked_by" not in task
+
+
+def test_the_session_changelog_paragraph_commits_with_the_transition(workspace):
+    with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
+        run(connection, "task.pick", {"id": "demo-001", "session": "alpha"}, "claim")
+        express(connection, "demo-001", "log")
+        run(connection, "task.complete", {"id": "demo-001", "changelog": "### Session\n- shipped"}, "done")
+        pending = json.loads(connection.execute(
+            "SELECT value_json FROM sync_state WHERE key='pending_progress_log'").fetchone()[0])
+        assert [entry["text"] for entry in pending] == ["### Session\n- shipped"]
+        with pytest.raises(ValueError):
+            run(connection, "task.complete", {"id": "demo-002", "changelog": "lost"}, "rejected")
+        pending = json.loads(connection.execute(
+            "SELECT value_json FROM sync_state WHERE key='pending_progress_log'").fetchone()[0])
+        assert len(pending) == 1
 
 
 def test_in_review_requires_a_human_action(workspace):
@@ -222,6 +249,7 @@ def test_completion_closes_the_open_handover_that_only_named_this_task(workspace
                            {"tldr": "Wrapping demo-001", "task_ids": ["demo-001"],
                             "session_kind": "task-complete"}, "handover")
         run(connection, "task.pick", {"id": "demo-001", "session": "alpha"}, "claim")
+        express(connection, "demo-001", "close")
         run(connection, "task.complete", {"id": "demo-001"}, "done")
         assert fields(connection, "handover", handover)["status"] == "closed"
 
@@ -296,6 +324,7 @@ def test_only_one_phase_is_active_and_advance_archives_done_tasks(workspace):
         run(connection, "phase.update", {"id": "foundation", "field": "deliverables",
                                          "value": json.dumps({"action": "toggle", "index": 0})}, "toggle")
         run(connection, "task.update", {"id": "demo-001", "field": "status", "value": "in-progress"}, "start")
+        express(connection, "demo-001", "advance")
         run(connection, "task.update", {"id": "demo-001", "field": "status", "value": "done"}, "finish")
         run(connection, "phase.advance", {}, "advance")
         with Repository(connection).snapshot() as query:
@@ -339,25 +368,35 @@ def test_bug_promotion_creates_the_issue_and_flips_every_bug_atomically(workspac
 
 def test_a_typed_link_writes_the_inverse_and_refuses_a_dependency_cycle(workspace):
     with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
-        run(connection, "link.create", {"source": "demo-001", "target": "demo-002",
-                                        "type": "depends_on"}, "link")
-        assert fields(connection, "task", "demo-002")["links"] == [{"type": "blocks", "target": "demo-001"}]
+        for suffix in ("1", "2"):
+            run(connection, "task.create", {"title": f"Linked {suffix}", "epic": "demo",
+                                            "phase": "foundation", "task_id": f"T-{suffix}"}, f"t{suffix}")
+        run(connection, "link.create", {"source": "T-1", "target": "T-2", "type": "depends_on",
+                                        "note": "ordering"}, "link")
+        # The note is an operator annotation the tool never stored; the document
+        # must keep the exact two-key link shape the round trip expects.
+        assert fields(connection, "task", "T-1")["links"] == [{"type": "depends_on", "target": "T-2"}]
+        assert fields(connection, "task", "T-2")["links"] == [{"type": "blocks", "target": "T-1"}]
         with pytest.raises(ValueError, match="cycle"):
-            run(connection, "link.create", {"source": "demo-002", "target": "demo-001",
-                                            "type": "depends_on"}, "cycle")
-        run(connection, "link.remove", {"source": "demo-001", "target": "demo-002"}, "unlink")
+            run(connection, "link.create", {"source": "T-2", "target": "T-1", "type": "depends_on"}, "cycle")
+        run(connection, "link.remove", {"source": "T-1", "target": "T-2"}, "unlink")
         with Repository(connection).snapshot() as query:
-            assert "links" not in query.get("task", "demo-001")["fields"]
-            assert "links" not in query.get("task", "demo-002")["fields"]
+            assert "links" not in query.get("task", "T-1")["fields"]
+            assert "links" not in query.get("task", "T-2")["fields"]
 
 
 def test_link_domains_and_unknown_targets_are_refused(workspace):
     with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
+        run(connection, "task.create", {"title": "Prefixed", "epic": "demo", "phase": "foundation",
+                                        "task_id": "T-1"}, "t1")
+        issue = created(connection, "issue.create", {"title": "Known", "severity": "P2",
+                                                     "evidence": "seen"}, "issue")
         with pytest.raises(ValueError, match="invalid source ID"):
-            run(connection, "link.create", {"source": "demo-001", "target": "ISS-001",
-                                            "type": "fixes"}, "kind")
+            run(connection, "link.create", {"source": "demo-001", "target": issue, "type": "fixes"}, "kebab")
+        with pytest.raises(ValueError, match="cannot go from"):
+            run(connection, "link.create", {"source": issue, "target": "T-1", "type": "duplicate_of"}, "domain")
         with pytest.raises(KeyError, match="not found"):
-            run(connection, "link.create", {"source": "T-1", "target": "T-2", "type": "relates_to"}, "absent")
+            run(connection, "link.create", {"source": "T-1", "target": "T-9", "type": "relates_to"}, "absent")
 
 
 def test_auto_link_adds_references_for_inline_mentions_and_skips_unknown_targets(workspace):
@@ -402,6 +441,15 @@ def test_project_settings_create_then_replace_through_one_owner(workspace):
         assert jobs == [("project.yaml",)]
 
 
+def test_project_initialization_refuses_to_overwrite_an_existing_manifest(workspace):
+    with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
+        run(connection, "project.set", {"document": {"meta": {"name": "Demo"}}, "create_only": True}, "init")
+        with pytest.raises(ValueError, match="refusing to overwrite"):
+            run(connection, "project.set", {"document": {"meta": {"name": "Other"}},
+                                            "create_only": True}, "again")
+        assert fields(connection, "project", "__project__")["meta"] == {"name": "Demo"}
+
+
 def test_linking_linear_creates_a_tracker_and_task_edits_enqueue_exactly_one_push(workspace):
     with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
         run(connection, "linear.link", {"task_id": "demo-001", "external_key": "ENG-42",
@@ -411,9 +459,7 @@ def test_linking_linear_creates_a_tracker_and_task_edits_enqueue_exactly_one_pus
         assert fields(connection, "tracker", tracker)["external_key"] == "ENG-42"
         run(connection, "task.update", {"id": "demo-001", "field": "title", "value": "Renamed"}, "rename")
         run(connection, "task.update", {"id": "demo-001", "field": "notes", "value": "More"}, "notes")
-        queued = connection.execute("SELECT op,target_id,tracker_id,state FROM linear_queue "
-                                    "WHERE target_id='demo-001'").fetchall()
-        assert queued == [("task_upsert", "demo-001", tracker, "pending")]
+        assert _queued(connection, "demo-001") == [("task_upsert", "demo-001", tracker, "pending")]
         with pytest.raises(ValueError, match="unlink first"):
             run(connection, "linear.link", {"task_id": "demo-001", "external_key": "ENG-43",
                                             "workspace_alias": "primary"}, "relink")
@@ -426,15 +472,14 @@ def test_unlinking_is_idempotent_and_stops_the_outbox(workspace):
         run(connection, "linear.unlink", {"task_id": "demo-002"}, "unlink")
         result = run(connection, "linear.unlink", {"task_id": "demo-002"}, "again")
         assert result["affected"] == []
-        connection.execute("DELETE FROM linear_queue")
         run(connection, "task.update", {"id": "demo-002", "field": "title", "value": "Quiet"}, "rename")
-        assert connection.execute("SELECT COUNT(*) FROM linear_queue").fetchone()[0] == 0
+        assert _queued(connection, "demo-002") == []
 
 
 def test_an_unsynced_task_edit_queues_nothing_and_rebuilds_no_graph(workspace):
     with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
         result = run(connection, "task.update", {"id": "demo-002", "field": "title", "value": "Retitled"}, "rename")
-        assert connection.execute("SELECT COUNT(*) FROM linear_queue").fetchone()[0] == 0
+        assert _queued(connection, "demo-002") == []
         assert result["work"]["global_graph_rebuilds"] == 0
         assert result["work"]["path_comparisons"] == 0
         assert result["work"]["link_pairs"] == 0
@@ -444,13 +489,12 @@ def test_a_rolled_back_composite_leaves_no_queued_push(workspace):
     with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
         run(connection, "linear.link", {"task_id": "demo-001", "external_key": "ENG-1",
                                         "workspace_alias": "primary"}, "link")
-        connection.execute("DELETE FROM linear_queue")
         with pytest.raises(ValueError):
             run(connection, "batch", {"commands": [
                 {"operation": "task.update", "arguments": {"id": "demo-001", "field": "title", "value": "Kept?"}},
                 {"operation": "task.update", "arguments": {"id": "demo-001", "field": "status", "value": "nonsense"}},
             ]}, "batch")
-        assert connection.execute("SELECT COUNT(*) FROM linear_queue").fetchone()[0] == 0
+        assert _queued(connection, "demo-001") == []
         assert fields(connection, "task", "demo-001")["title"] == "First"
 
 
@@ -465,14 +509,13 @@ def test_a_batch_of_lifecycle_commands_commits_once_or_not_at_all(workspace):
             {"operation": "epic.update", "arguments": {"id": "demo", "field": "status", "value": "active"}},
         ]}, "batch")
         assert {row["id"] for row in receipt["affected"]} == {"demo-001", "demo-002", "demo"}
-        assert connection.execute("SELECT COUNT(*) FROM command_commits").fetchone()[0] == 5
+        assert connection.execute("SELECT COUNT(*) FROM command_commits WHERE operation='batch'").fetchone()[0] == 1
         with pytest.raises(KeyError):
             run(connection, "batch", {"commands": [
-                {"operation": "task.archive", "arguments": {"id": "demo-002", "reason": "duplicate"}},
+                {"operation": "task.update", "arguments": {"id": "demo-002", "field": "title", "value": "Kept?"}},
                 {"operation": "task.archive", "arguments": {"id": "demo-404", "reason": "duplicate"}},
             ]}, "half")
-        with Repository(connection).snapshot() as query:
-            assert not query.get("task", "demo-002")["archived"]
+        assert fields(connection, "task", "demo-002")["title"] == "Second"
 
 
 # ── Inventory coverage ──────────────────────────────────────────────────────
