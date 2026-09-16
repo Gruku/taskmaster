@@ -34,6 +34,16 @@ Three full-suite runs were needed, and the first two each had one failure:
    `test_store_concurrency.py` run (10 passed, 442 s). I could not reproduce it and cannot
    attribute it; it is worth pursuing independently. Recording it here rather than calling
    the branch green without mentioning it.
+
+   One part of it *is* attributable and is not about this cluster: **corruption recovery has
+   no working path on Windows while a peer process still holds the database open.**
+   `_recover_corrupt_database` tried `_rename_database_family("corrupt")`, which failed with
+   `WinError 32` (`os.replace` on an open file), then fell back to
+   `_backup_database_family("corrupt")`, whose `shutil.copy2` failed with `WinError 33`
+   (another process has locked a portion of the file). Both attempts raised, so the tool call
+   died with a `PermissionError` rather than with the corruption diagnosis, and the store was
+   left as it was. That sequence is in `origin/master` (6.0.2) unchanged. The FTS5 corruption
+   that triggered it is a separate, unexplained question.
 3. **Run 3 — clean.**
 
 Caveat worth stating plainly: two of three full-suite runs had a concurrency failure, so
@@ -279,9 +289,15 @@ for a single-entity read) as the transferable number, not the absolute.
 
 ## Things the five records missed
 
-- **B-085's real blast radius is data divergence, not log noise.** A repaired file and a
-  store holding an unwritten edit stayed permanently out of step with nothing reported. The
-  record only asked to bound the retries.
+- **B-085's real blast radius is data divergence, not log noise, and it is shipped.** A
+  repaired file and a store holding an unwritten edit stayed permanently out of step with
+  nothing reported. The record only asked to bound the retries. Both halves of the defect —
+  `_replace_projection`'s quarantine early-return writing no `projection_base` row, and
+  `_merge_dirty_external_edit`'s `if base_row is None … return` — were introduced together in
+  `446b612` ("feat(store): add SQLite authority and projection sync", 2026-09-04) and are
+  present verbatim in `origin/master` at 6.0.2. This is a released defect, not a
+  branch-only one, and deserves its own record and its own changelog line rather than being
+  folded into B-085's.
 - **`_merge_dirty_external_edit` swallowed a missing base generally**, not only after a
   quarantine. Any path that leaves `projection_base` empty while the row is dirty had the
   same silent no-op.
