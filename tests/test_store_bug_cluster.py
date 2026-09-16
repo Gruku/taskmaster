@@ -491,3 +491,37 @@ def test_a_single_entity_read_does_not_load_the_whole_dict(tmp_path, monkeypatch
     # A copy, not the row everyone else reads.
     doc["title"] = "mutated"
     assert store_obj.entity_row("bug", "bug-002")[0]["title"] == "bug 2"
+
+
+def test_the_writer_wait_sink_never_blocks_its_caller(monkeypatch):
+    """A progress line must never be able to stall the writer it describes.
+
+    The first cut wrote the notice inline with `print(..., flush=True)`. A host
+    that has stopped draining stderr -- or a harness that collects the pipe only
+    at exit -- blocks that write, and a caller already queued for the lock then
+    sits there waiting on a *log line*: an 8-process stress run had a writer
+    overrun its 30 s deadline to 82 s that way.
+    """
+    from taskmaster import backlog_server as server
+
+    reached = threading.Event()
+
+    class BlockingStderr:
+        def write(self, text: str) -> int:
+            reached.set()
+            time.sleep(30)
+            return len(text)
+
+        def flush(self) -> None:
+            pass
+
+    monkeypatch.setattr(server.sys, "stderr", BlockingStderr())
+    started = time.monotonic()
+    for index in range(200):
+        server._report_writer_wait(
+            store_mod.WriterWait(
+                operation="update_root_config", waited=float(index), deadline=30.0
+            )
+        )
+    assert time.monotonic() - started < 2.0
+    assert reached.wait(5), "the notice never reached the sink at all"
