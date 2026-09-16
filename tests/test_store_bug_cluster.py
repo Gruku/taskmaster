@@ -325,7 +325,7 @@ def test_non_transaction_writers_accept_a_deadline(tmp_path):
             lambda: store_obj.update_root_config(
                 "linear.yaml", lambda doc: doc, timeout_ms=150
             ),
-            lambda: store_obj.linear_requeue(state="failed", timeout_ms=150),
+            lambda: store_obj.linear_requeue([1], timeout_ms=150),
             lambda: store_obj.linear_claim(owner="me", limit=1, timeout_ms=150),
             lambda: store_obj.linear_mark(1, state="done", timeout_ms=150),
             lambda: store_obj.rebuild_derived(timeout_ms=150),
@@ -388,3 +388,106 @@ def test_a_waiting_writer_reports_progress_to_an_observer(tmp_path):
     assert all(event.operation == "update_root_config" for event in seen)
     assert seen[0].waited > 0
     assert seen[0].deadline == pytest.approx(1.5)
+
+
+# ── B-087: what one read costs ───────────────────────────────────────────────
+
+
+def _seed_entities(backlog_path: Path, per_kind: int = 3) -> None:
+    """A few rows of every non-task kind the compatibility dict carries."""
+    for kind, folder in (
+        ("bug", "bugs"),
+        ("issue", "issues"),
+        ("note", "notes"),
+        ("decision", "decisions"),
+    ):
+        (backlog_path / folder).mkdir(parents=True, exist_ok=True)
+        for index in range(1, per_kind + 1):
+            ident = f"{kind}-{index:03d}"
+            (backlog_path / folder / f"{ident}.md").write_text(
+                render_frontmatter(
+                    {"id": ident, "title": f"{kind} {index}", "status": "open"},
+                    f"## Detail\n\nBody for {ident}.",
+                ),
+                encoding="utf-8",
+            )
+
+
+def test_entity_rows_are_parsed_on_access_not_on_every_read(tmp_path, monkeypatch):
+    backlog_path = _build_projection(tmp_path)
+    _seed_entities(backlog_path)
+    store_obj = store_mod.open_store(backlog_path=backlog_path)
+    data = store_obj.load_dict()
+
+    parsed: list[str] = []
+    original = store_mod._from_json
+
+    def spy(raw, default):
+        parsed.append(raw)
+        return original(raw, default)
+
+    monkeypatch.setattr(store_mod, "_from_json", spy)
+
+    rows = data["_rows"]
+    # Naming the kinds is not reading them.
+    assert set(rows) >= {"bug", "issue", "note", "decision", "handover"}
+    assert parsed == []
+
+    bugs = rows["bug"]
+    assert set(bugs) == {"bug-001", "bug-002", "bug-003"}
+    assert len(parsed) == 3, "reading one kind parsed more than that kind"
+
+
+def test_a_read_hands_back_state_no_other_caller_shares(tmp_path):
+    backlog_path = _build_projection(tmp_path)
+    _seed_entities(backlog_path)
+    store_obj = store_mod.open_store(backlog_path=backlog_path)
+
+    first = store_obj.load_dict()
+    first["epics"][0]["tasks"][0]["title"] = "mutated by the first caller"
+    first["_rows"]["bug"]["bug-001"][0]["title"] = "also mutated"
+
+    second = store_obj.load_dict()
+    assert second["epics"][0]["tasks"][0]["title"] != "mutated by the first caller"
+    assert second["_rows"]["bug"]["bug-001"][0]["title"] == "bug 1"
+
+
+def test_a_read_copies_the_loaded_dict_once(tmp_path, monkeypatch):
+    backlog_path = _build_projection(tmp_path)
+    store_obj = store_mod.open_store(backlog_path=backlog_path)
+    store_obj.load_dict()
+
+    copies: list[int] = []
+    original = store_mod._copy_plain
+
+    def spy(value):
+        copies.append(1)
+        return original(value)
+
+    monkeypatch.setattr(store_mod, "_copy_plain", spy)
+    store_obj.load_dict()
+    assert copies == [1], "the whole dict was copied more than once for one read"
+
+
+def test_a_single_entity_read_does_not_load_the_whole_dict(tmp_path, monkeypatch):
+    backlog_path = _build_projection(tmp_path)
+    _seed_entities(backlog_path)
+    store_obj = store_mod.open_store(backlog_path=backlog_path)
+    store_obj.load_dict()
+
+    loaded: list[str] = []
+    monkeypatch.setattr(
+        store_mod.Store,
+        "_load_cached_dict_from_connection",
+        lambda self, connection, publish=True: loaded.append("whole dict") or {},
+    )
+
+    doc, body = store_obj.entity_row("bug", "bug-002")
+    assert doc["title"] == "bug 2"
+    assert "Body for bug-002" in (body or "")
+    assert loaded == []
+    assert store_obj.entity_row("bug", "nope") is None
+
+    # A copy, not the row everyone else reads.
+    doc["title"] = "mutated"
+    assert store_obj.entity_row("bug", "bug-002")[0]["title"] == "bug 2"
