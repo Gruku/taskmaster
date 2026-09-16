@@ -125,6 +125,33 @@ def test_a_done_task_cannot_be_picked(workspace):
             run(connection, "task.pick", {"id": "demo-001", "session": "alpha"}, "repick")
 
 
+def test_a_bundle_pick_never_resurrects_an_archived_member(workspace):
+    """Bundle pick is the one claim path the transition table does not guard, so
+    an archived member it still counted would come back in-progress *and*
+    archived at once — hidden from the board, exported to tasks/archive/, and
+    holding a live session lock."""
+    with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
+        for ident in ("demo-001", "demo-002"):
+            run(connection, "task.update", {"id": ident, "field": "bundle", "value": "shared"}, f"bundle-{ident}")
+        run(connection, "task.archive", {"id": "demo-002", "reason": "deprecated"}, "archive")
+        run(connection, "task.pick", {"id": "demo-001", "session": "alpha"}, "claim")
+        with Repository(connection).snapshot() as query:
+            stale = query.get("task", "demo-002")
+            assert stale["archived"]
+            assert stale["fields"]["status"] == "archived"
+            assert "locked_by" not in stale["fields"]
+            assert query.get("task", "demo-001")["fields"]["status"] == "in-progress"
+
+
+def test_an_archived_member_cannot_veto_a_bundle_sub_repo_check(workspace):
+    with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
+        run(connection, "task.update", {"id": "demo-002", "field": "sub_repo", "value": "other"}, "repo")
+        run(connection, "task.update", {"id": "demo-002", "field": "bundle", "value": "shared"}, "bundle")
+        run(connection, "task.archive", {"id": "demo-002", "reason": "deprecated"}, "archive")
+        run(connection, "task.update", {"id": "demo-001", "field": "bundle", "value": "shared"}, "join")
+        assert fields(connection, "task", "demo-001")["bundle"] == "shared"
+
+
 def test_picking_a_bundle_member_claims_every_member_on_one_branch(workspace):
     with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
         for ident in ("demo-001", "demo-002"):
@@ -433,23 +460,48 @@ def test_thread_status_overrides_land_on_the_backlog_entity(workspace):
             run(connection, "thread.update", {"name": "absent", "status": "closed"}, "missing")
 
 
+MANIFEST = {"schema_version": 1, "meta": {"name": "Demo", "slug": "demo", "kind": "app"}}
+
+
 def test_project_settings_create_then_replace_through_one_owner(workspace):
     with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
-        run(connection, "project.set", {"document": {"schema_version": 1, "meta": {"name": "Demo"}}}, "create")
-        assert fields(connection, "project", "__project__")["meta"] == {"name": "Demo"}
-        run(connection, "project.set", {"document": {"schema_version": 1, "meta": {"name": "Renamed"}}}, "replace")
-        assert fields(connection, "project", "__project__")["meta"] == {"name": "Renamed"}
+        run(connection, "project.set", {"document": MANIFEST}, "create")
+        assert fields(connection, "project", "__project__")["meta"]["name"] == "Demo"
+        renamed = {**MANIFEST, "meta": {**MANIFEST["meta"], "name": "Renamed"}}
+        run(connection, "project.set", {"document": renamed}, "replace")
+        assert fields(connection, "project", "__project__")["meta"]["name"] == "Renamed"
         jobs = connection.execute("SELECT DISTINCT file FROM projection_jobs WHERE file LIKE '%project%'").fetchall()
         assert jobs == [("project.yaml",)]
 
 
 def test_project_initialization_refuses_to_overwrite_an_existing_manifest(workspace):
     with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
-        run(connection, "project.set", {"document": {"meta": {"name": "Demo"}}, "create_only": True}, "init")
+        run(connection, "project.set", {"document": MANIFEST, "create_only": True}, "init")
         with pytest.raises(ValueError, match="refusing to overwrite"):
-            run(connection, "project.set", {"document": {"meta": {"name": "Other"}},
+            run(connection, "project.set", {"document": {**MANIFEST, "meta": {**MANIFEST["meta"], "name": "Other"}},
                                             "create_only": True}, "again")
-        assert fields(connection, "project", "__project__")["meta"] == {"name": "Demo"}
+        assert fields(connection, "project", "__project__")["meta"]["name"] == "Demo"
+
+
+@pytest.mark.parametrize("document", [
+    {"schema_version": "not-a-number", "meta": 42, "repos": "nope"},
+    {"meta": {"name": "Demo", "slug": "demo"}},                       # no schema_version
+    {"schema_version": 1, "meta": {"name": "Demo"}},                  # no slug
+    {"schema_version": 1, "meta": {"name": "Demo", "slug": "demo"},
+     "repos": [{"name": "a"}]},                                       # repo without a path
+])
+def test_project_settings_refuse_a_manifest_the_loader_cannot_parse(workspace, document):
+    """A committed manifest becomes project.yaml; one the loader cannot read
+    would be written by a call that reported success."""
+    with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
+        statements = []
+        connection.set_trace_callback(statements.append)
+        with pytest.raises(ValueError):
+            run(connection, "project.set", {"document": document}, "invalid")
+        connection.set_trace_callback(None)
+        assert statements == []   # refused at admission, before any database work
+        with pytest.raises(KeyError):
+            fields(connection, "project", "__project__")
 
 
 def test_linking_linear_creates_a_tracker_and_task_edits_enqueue_exactly_one_push(workspace):
