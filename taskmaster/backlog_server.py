@@ -2422,6 +2422,7 @@ def _render_store_report(status: "store.StoreStatus") -> str:
         f"Size: db={status.db_size} B  wal={status.wal_size} B  max seq={status.max_seq}",
         listing("Dirty", status.dirty_files),
         listing("Quarantined", status.quarantined_files),
+        listing("Stuck exports", status.stuck_exports),
         listing("Corrupt", status.corrupt_files),
         f"Merge conflicts (24 h): {status.merge_conflicts_24h}",
         f"Linear queue: {status.linear_pending} pending",

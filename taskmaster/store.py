@@ -375,6 +375,10 @@ class StoreStatus:
     warning: str | None = None
     corrupt_files: tuple[str, ...] = ()
     linear_pending: int = 0
+    # Projection files the store owes an export it cannot write, because the
+    # file on disk is quarantined. The database holds newer content than the
+    # file and will keep holding it until the file is repaired or removed.
+    stuck_exports: tuple[str, ...] = ()
     # In-memory, per reporting process: how many read-side projection scans in
     # a row this process had to skip because the store was busy. It cannot be
     # read out of the database, so a report built by a process that has never
@@ -2975,6 +2979,13 @@ class Store:
                     "SELECT file FROM projection WHERE quarantined=1 ORDER BY file"
                 )
             )
+            stuck = tuple(
+                row[0]
+                for row in connection.execute(
+                    "SELECT file FROM projection WHERE dirty=1 AND quarantined=1 "
+                    "ORDER BY file"
+                )
+            )
             seq = int(
                 connection.execute(
                     "SELECT COALESCE(MAX(seq),0) FROM changes"
@@ -3045,6 +3056,7 @@ class Store:
             warning=warning,
             corrupt_files=self._corrupt_backup_names(),
             linear_pending=queued,
+            stuck_exports=stuck,
             read_scan_skips=self._read_scan_skips,
         )
 
@@ -3948,21 +3960,43 @@ class Store:
         entity = tx.connection.execute(
             "SELECT doc,body,rev FROM entities WHERE kind=? AND id=?", (kind, ident)
         ).fetchone()
-        if base_row is None or entity is None:
+        if entity is None:
             return
+        # No base is not "nothing to do". An export suppressed because the file
+        # was quarantined records the debt but writes no base row, so returning
+        # here left the store holding a committed edit it would never write and
+        # the repaired file holding content the store would never import: two
+        # divergent versions, silently, for the life of the project. An empty
+        # base makes every field the two sides disagree on a conflict, which
+        # `_three_way_merge_fields` settles the way it settles every other one
+        # -- local wins, the hand edit's own additions survive, and the whole
+        # thing is recorded as a merge.
+        base_source: bytes | None = (
+            bytes(base_row["content"]) if base_row is not None else None
+        )
+        base_doc: dict[str, Any] = {}
+        base_body: str | None = None
+        if base_source is not None:
+            try:
+                if kind == "project":
+                    loaded = yaml_io.safe_load(base_source.decode("utf-8")) or {}
+                    base_doc = loaded if isinstance(loaded, dict) else {}
+                else:
+                    base_doc, base_body = self._parse_entity_text(
+                        kind, base_source.decode("utf-8")
+                    )
+            except (UnicodeError, ValueError, yaml.YAMLError):
+                # The bytes we were about to overwrite do not parse either.
+                # They are still not a reason to quarantine the file the caller
+                # just repaired; merge against nothing instead.
+                base_doc, base_body = {}, None
         try:
             if kind == "project":
-                base_doc = yaml_io.safe_load(
-                    bytes(base_row["content"]).decode("utf-8")
-                ) or {}
                 their_doc = yaml_io.safe_load(content.decode("utf-8")) or {}
-                if not isinstance(base_doc, dict) or not isinstance(their_doc, dict):
+                if not isinstance(their_doc, dict):
                     raise ValueError("project.yaml must be a mapping")
                 base_body = their_body = None
             else:
-                base_doc, base_body = self._parse_entity_text(
-                    kind, bytes(base_row["content"]).decode("utf-8")
-                )
                 their_doc, their_body = self._parse_entity_text(
                     kind, content.decode("utf-8")
                 )
@@ -3995,7 +4029,21 @@ class Store:
             merged_body=merged_body,
         )
         if not fields:
+            # The repair happens to agree with what the store holds. The row is
+            # still quarantined, and nothing later in the scan clears it, so a
+            # file that is now fine would stay marked broken and its pending
+            # export stranded for good.
+            if projection_row["quarantined"]:
+                tx.connection.execute(
+                    "UPDATE projection SET quarantined=0,quarantine_mtime=NULL,"
+                    "quarantine_size=NULL,quarantine_hash=NULL WHERE file=?",
+                    (rel,),
+                )
+                tx._export_keys.add((kind, ident))
+                tx.log_entries.append(f"quarantine cleared for {rel}; export resumed")
             return
+        if projection_row["quarantined"]:
+            tx.log_entries.append(f"quarantine cleared for {rel}; export resumed")
         seq = tx._record_change(kind, ident, "merge", fields, before, after)
         tx.connection.execute(
             "UPDATE entities SET epic=?,status=?,archived=?,doc=?,body=?,rev=rev+1,updated_seq=? "
@@ -4334,9 +4382,42 @@ class Store:
                         tuple(sorted((left, right))),
                     )
 
+    def _export_blocked_by_quarantine(self, tx: "Transaction", row: sqlite3.Row) -> bool:
+        """True when this entity's file is quarantined and already owes an export.
+
+        `_replace_projection` refuses to write over a quarantined file: it marks
+        the row dirty, warns, and logs the suppression. Rendering the document
+        again on the next write can only reach that same conclusion against the
+        same bytes -- the file has not changed, or the scan would have lifted
+        the quarantine -- so it burns a full render and appends another
+        identical `store.log` line for as long as the file stays broken. The
+        first suppression still goes the long way round, because that is what
+        records the debt; every one after it stops here with the warning the
+        caller needs and nothing else.
+        """
+        target = self._entity_path(row["kind"], row["id"], bool(row["archived"]))
+        if target is None:
+            return False
+        rel = target.relative_to(self.backlog_path).as_posix()
+        existing = tx.connection.execute(
+            "SELECT dirty,quarantined FROM projection WHERE file=?", (rel,)
+        ).fetchone()
+        if not existing or not existing["quarantined"] or not existing["dirty"]:
+            return False
+        tx.warnings.append(f"export pending: {rel} is quarantined")
+        return True
+
     def _export_touched(self, tx: "Transaction") -> None:
         if any(kind in {"backlog", "epic", "phase"} for kind, _ in tx._export_keys):
             tx._export_backlog = True
+        # One question for the whole transaction. Asking it per entity would put
+        # an extra lookup on every export an adoption does -- 2,050 of them --
+        # to answer "no" each time on the store the check exists to protect.
+        blocked_rows = bool(
+            tx.connection.execute(
+                "SELECT EXISTS(SELECT 1 FROM projection WHERE dirty=1 AND quarantined=1)"
+            ).fetchone()[0]
+        )
         for kind, ident in sorted(tx._export_keys):
             if kind == "backlog":
                 continue
@@ -4344,6 +4425,12 @@ class Store:
                 "SELECT * FROM entities WHERE kind=? AND id=?", (kind, ident)
             ).fetchone()
             if not row:
+                continue
+            if (
+                blocked_rows
+                and not row["deleted"]
+                and self._export_blocked_by_quarantine(tx, row)
+            ):
                 continue
             self._export_entity_row(tx, row)
         if tx._export_ideas or any(kind == "idea" for kind, _ in tx._export_keys):
