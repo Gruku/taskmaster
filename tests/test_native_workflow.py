@@ -5,6 +5,7 @@ domain rules and the queue/graph selectivity the legacy tools guarantee.
 """
 import ast
 from contextlib import closing
+import re
 import json
 from pathlib import Path
 import sqlite3
@@ -123,6 +124,18 @@ def test_a_done_task_cannot_be_picked(workspace):
         run(connection, "task.complete", {"id": "demo-001"}, "done")
         with pytest.raises(ValueError, match="expected one of"):
             run(connection, "task.pick", {"id": "demo-001", "session": "alpha"}, "repick")
+
+
+def test_a_stale_lock_on_a_todo_row_does_not_refuse_the_pick(workspace):
+    """The tool tests the lock only for a row that is already in-progress, so a
+    `todo` row carrying a leftover `locked_by` is picked, not refused. Migrated
+    rows are where that inconsistency arrives."""
+    with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
+        run(connection, "task.update", {"id": "demo-001", "field": "locked_by", "value": "ghost"}, "stale")
+        assert fields(connection, "task", "demo-001")["status"] == "todo"
+        run(connection, "task.pick", {"id": "demo-001", "session": "alpha"}, "claim")
+        stored = fields(connection, "task", "demo-001")
+        assert stored["locked_by"] == "alpha" and stored["status"] == "in-progress"
 
 
 def test_a_bundle_pick_never_resurrects_an_archived_member(workspace):
@@ -530,13 +543,51 @@ def test_unlinking_is_idempotent_and_stops_the_outbox(workspace):
         assert _queued(connection, "demo-002") == []
 
 
+def test_archiving_an_epic_queues_no_linear_push_for_the_cascade(workspace):
+    """The dedicated archive tool enqueues; the epic cascade never does. A
+    200-task epic would otherwise queue 200 pushes against a real workspace
+    from an operation the operator expects to be local."""
+    with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
+        run(connection, "linear.link", {"task_id": "demo-001", "external_key": "ENG-7",
+                                        "workspace_alias": "primary"}, "link")
+        run(connection, "epic.archive", {"id": "demo", "reason": "done"}, "archive")
+        assert _queued(connection, "demo-001") == []
+        with Repository(connection).snapshot() as query:
+            assert query.get("task", "demo-001")["archived"]
+
+
+def test_advancing_a_phase_queues_no_linear_push_for_the_tasks_it_archives(workspace):
+    with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
+        run(connection, "linear.link", {"task_id": "demo-001", "external_key": "ENG-8",
+                                        "workspace_alias": "primary"}, "link")
+        run(connection, "task.update", {"id": "demo-001", "field": "status", "value": "in-progress"}, "start")
+        express(connection, "demo-001", "advance")
+        run(connection, "task.update", {"id": "demo-001", "field": "status", "value": "done"}, "finish")
+        connection.execute("DELETE FROM linear_queue WHERE target_id='demo-001'")
+        run(connection, "phase.advance", {}, "advance")
+        assert _queued(connection, "demo-001") == []
+        with Repository(connection).snapshot() as query:
+            assert query.get("task", "demo-001")["archived"]
+
+
+# The legacy derived graph tables, matched on writes only: reading the native
+# `declared_links` relation is ordinary field assembly, not graph maintenance.
+GRAPH_WRITE = re.compile(r"(?:INSERT INTO|DELETE FROM|UPDATE)\s+(?:related|links|entity_paths|handover_tasks)\b",
+                         re.IGNORECASE)
+
+
 def test_an_unsynced_task_edit_queues_nothing_and_rebuilds_no_graph(workspace):
     with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
+        statements = []
+        connection.set_trace_callback(statements.append)
         result = run(connection, "task.update", {"id": "demo-002", "field": "title", "value": "Retitled"}, "rename")
+        connection.set_trace_callback(None)
         assert _queued(connection, "demo-002") == []
-        assert result["work"]["global_graph_rebuilds"] == 0
         assert result["work"]["path_comparisons"] == 0
         assert result["work"]["link_pairs"] == 0
+        # The counters report work done; this proves the work was never issued.
+        touched = [text for text in statements if GRAPH_WRITE.search(text)]
+        assert touched == [], touched
 
 
 def test_a_rolled_back_composite_leaves_no_queued_push(workspace):
