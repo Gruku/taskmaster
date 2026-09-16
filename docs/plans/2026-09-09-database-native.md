@@ -3,8 +3,8 @@
 
 # Database-native Taskmaster implementation plan
 
-**Status:** N00–N06 core complete locally; N07 lifecycle port started on
-`feat/database-native-foundation`. This is an intermediate checkpoint.
+**Status:** N00–N07 complete locally; the lifecycle port landed on
+`feat/native-n07-lifecycle`. This is an intermediate checkpoint.
 Client replacement and rollout remain outstanding. Merge the branch only
 after N03–N17 are complete (user instruction, 2026-09-12); the default branch is
 named `master` in this repository.
@@ -433,7 +433,7 @@ explicitly deferred scope when implementation actually occurs.
 | N04 | core complete locally; adapter parity remains N08 | [Bounded reads, snapshots, SQL isolation, stored/external document retrieval](../reports/2026-09-12-native-core.md) |
 | N05 | core complete locally | [Atomic owner, CAS, retry receipts, batches and immutable projection inputs](../reports/2026-09-12-native-core.md) |
 | N06 | core complete locally | [Selective graph/FTS maintenance and full-rebuild equivalence oracles](../reports/2026-09-12-native-core.md) |
-| N07 | in progress | Initial note/decision/bug/issue/idea/handover lifecycle slices; task/epic/phase/gates/promotions/Linear and complete inventory mapping remain |
+| N07 | complete locally; activation gated | `ce2e1b9`, `5976d73`, `562708c`; [26 further operations, shared rules layer, inventory coverage and the recorded intentional differences](../reports/2026-09-16-native-n07.md) |
 | N08 | planned | — |
 | N09 | planned | — |
 | N10 | planned | — |
@@ -450,11 +450,23 @@ collected cases across the initial full run and corrective/completion runs.
 The default 8-process × 200-operation concurrency acceptance test passed in
 575.94 seconds. See [validation evidence](../reports/2026-09-09-native-foundation.md).
 
-**Next implementation action:** finish N07's command inventory and domain
-composites, then N08 client routing and its strict normal-path bypass gate.
+**Next implementation action:** N08 client routing and its strict normal-path
+bypass gate. N07's command inventory and domain composites are complete: every
+mutating N02 tool now maps onto a native operation or onto a recorded deferral
+(maintenance/migration to N15, resync to N13, host actions never). Its recorded
+intentional differences — all-or-nothing batches, caller-supplied session
+identity, a tracker-row Linear gate, adapter-owned presentation, and the pending
+changelog living in native `sync_state` rather than the legacy `meta` row — are
+N08/N11 inputs, not open N07 work.
 N04 external-document retrieval is implemented; capturing file contents belongs
 to N13 sync/N15 pre-cutover import. Keep activation gated; no live project
 migration or installed-plugin changes. Do not merge the partial core checkpoint.
+
+**N07 validation (2026-09-16):** 2,569 passed, one live-Linear smoke skipped,
+zero failures or errors, in 1,174.90 seconds single-process on
+`feat/native-n07-lifecycle`. The 60 cases above the 2,509-case baseline are the
+41 native command-family cases and the 19 shared-rules cases. The frozen N02
+contract fixture is unchanged. No benchmark was run; performance stays with N16.
 
 **Core checkpoint validation (2026-09-12):** 2,509 unique current test cases
 passed across the full run and corrective runs; one live Linear smoke skipped;

@@ -3,8 +3,10 @@ native core — task lifecycle, gates, claims, epic/phase transitions, promotion
 typed links, settings and the Linear outbox — in one transaction each, with the
 domain rules and the queue/graph selectivity the legacy tools guarantee.
 """
+import ast
 from contextlib import closing
 import json
+from pathlib import Path
 import sqlite3
 
 import pytest
@@ -578,7 +580,7 @@ DEFERRED = {
 
 def test_every_n02_mutating_tool_maps_onto_a_native_operation():
     from taskmaster.native import lifecycle
-    inventory = json.loads((__import__("pathlib").Path(__file__).resolve().parent
+    inventory = json.loads((Path(__file__).resolve().parent
                             / "fixtures/native_contracts.json").read_text(encoding="utf-8"))
     mutating = {name for name, entry in inventory["tools"].items()
                 if entry["transactional"] or entry["category"] in
@@ -593,9 +595,7 @@ def test_every_n02_mutating_tool_maps_onto_a_native_operation():
 
 
 def test_the_native_core_never_imports_a_remote_client():
-    import ast
-    import pathlib
-    package = pathlib.Path(__file__).resolve().parents[1] / "taskmaster/native"
+    package = Path(__file__).resolve().parents[1] / "taskmaster/native"
     for module in sorted(package.glob("*.py")):
         tree = ast.parse(module.read_text(encoding="utf-8"))
         names = {node.module or "" for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)}
