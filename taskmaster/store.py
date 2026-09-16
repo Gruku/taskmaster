@@ -35,6 +35,7 @@ from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 import yaml
 
 from taskmaster import yaml_io
+from taskmaster.integrity import check_database
 from taskmaster.admission import (
     BRIDGE_CAPABILITIES, CLIENT_PROTOCOL, LEGACY_SCHEMA_VERSION,
     UnsupportedStoreError, assert_compatible,
@@ -1545,7 +1546,14 @@ class Store:
         except sqlite3.DatabaseError as exc:
             if not _is_corruption(exc):
                 raise
-            self._recover_corrupt_database(connection)
+            # Any statement above can carry a corruption marker off the same
+            # stale FTS state, so the confirmation gate sits at the recovery
+            # decision as well as at the pragma verdict.  Unconfirmed, the
+            # answer is a new connection, not a renamed database.
+            if self._corruption_is_real(str(exc)):
+                self._recover_corrupt_database(connection)
+            else:
+                self._discard_retained_connection(connection)
             with self._connection_creation_allowed():
                 connection = self.connection
             self._begin_immediate(connection)
@@ -1588,7 +1596,13 @@ class Store:
         except sqlite3.DatabaseError:
             raise
         if quick and quick.lower() != "ok":
-            raise sqlite3.DatabaseError(f"malformed database: quick_check={quick}")
+            # A verdict from this already-open connection is a trigger, not a
+            # finding: confirm it against the committed state before it can
+            # reach recovery.  An unconfirmed one leaves a healthy database
+            # alone -- the stale diagnostic does not impair the connection for
+            # anything else it is about to do here.
+            if self._corruption_is_real(f"quick_check={quick}"):
+                raise sqlite3.DatabaseError(f"malformed database: quick_check={quick}")
 
         has_meta = connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta'"
@@ -1835,6 +1849,66 @@ class Store:
             },
         )
         self._persist_export_intent(tx)
+
+    def _corruption_is_real(self, reason: str) -> bool:
+        """True when the committed file, not a retained connection, is damaged.
+
+        `PRAGMA quick_check` on a connection that has already inspected the
+        FTS5 index reports `malformed inverted index for FTS5 table
+        main.entity_fts` as soon as a peer connection commits to that index
+        (`docs/reports/2026-09-09-native-foundation.md`, N00).  That is runtime
+        state in this process, not damage on disk: across a 20-case matrix on
+        SQLite 3.45.3 and 3.47.1 every fresh read-only snapshot of the same
+        file reported `ok`.  Recovery renames the live database family aside
+        and rebuilds from the file projection, which lags the store and carries
+        no progress entries, session rows, Linear queue claims or quarantine
+        log -- so acting on that verdict destroys committed data.  A verdict is
+        therefore only acted on once a fresh read-only snapshot of the
+        committed state agrees with it.
+
+        This gate does not suppress anything: a snapshot that reports real
+        damage still routes to recovery, and a runtime too old for FTS-aware
+        `integrity_check` cannot second-guess the verdict it already has, so it
+        keeps it.
+        """
+        try:
+            diagnostics = check_database(self.db_path)
+        except RuntimeError:
+            # No FTS-aware `integrity_check` here; nothing better to go on.
+            return True
+        except sqlite3.OperationalError:
+            # The file cannot be opened read-only at all -- missing, locked or
+            # unreadable.  None of those is corruption, and renaming a file we
+            # cannot even read would destroy it on a guess.
+            self._log(f"could not open a read-only snapshot to confirm corruption ({reason})")
+            return False
+        except sqlite3.DatabaseError:
+            # A fresh connection cannot parse the file: the damage is real.
+            return True
+        failures = [
+            str(row) for row in diagnostics["integrity"] if str(row).lower() != "ok"
+        ]
+        if failures:
+            self._log(f"corruption confirmed on a fresh snapshot ({reason}): {'; '.join(failures)}")
+            return True
+        self._log(
+            "retained-connection diagnostic contradicted by a fresh read-only snapshot; "
+            f"the committed database is healthy and was left intact ({reason})"
+        )
+        return False
+
+    def _discard_retained_connection(self, connection: sqlite3.Connection) -> None:
+        """Drop this thread's connections so a retry starts without stale state.
+
+        The FTS5 diagnostic artifact lives in the connection, so the retry has
+        to happen on a new one.  Nothing is renamed, copied or rebuilt here.
+        """
+        try:
+            if connection.in_transaction:
+                connection.rollback()
+        except sqlite3.Error:
+            pass
+        close_thread_connection()
 
     def _recover_corrupt_database(
         self, connection: sqlite3.Connection | None = None
