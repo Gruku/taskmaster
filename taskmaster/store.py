@@ -96,6 +96,12 @@ SCHEMA_VERSION = LEGACY_SCHEMA_VERSION
 PROJECTION_SCHEMA = 5
 BUSY_TIMEOUT_MS = 30_000
 HEARTBEAT_INTERVAL_SECONDS = 20.0
+# How long a read trusts its last projection scan before looking again.
+READ_SCAN_THROTTLE_SECONDS = 2.0
+# Consecutive read-side scans skipped because the store was busy before the
+# reader says so out loud. A skipped scan means hand edits sit unadopted, and
+# the state is otherwise indistinguishable from "nothing changed".
+READ_SCAN_SKIP_WARN_AFTER = 5
 _MONOTONIC = time.monotonic
 _BACKLOG_ID = "__backlog__"
 _PROJECT_ID = "__project__"
@@ -369,6 +375,11 @@ class StoreStatus:
     warning: str | None = None
     corrupt_files: tuple[str, ...] = ()
     linear_pending: int = 0
+    # In-memory, per reporting process: how many read-side projection scans in
+    # a row this process had to skip because the store was busy. It cannot be
+    # read out of the database, so a report built by a process that has never
+    # opened this store reads 0 -- which is what it honestly knows.
+    read_scan_skips: int = 0
 
 
 _STATE_LOCK = threading.RLock()
@@ -831,6 +842,13 @@ class Store:
         self._verify_exports = False
         self._last_progress_clock: float | None = None
         self._last_read_scan_clock: float | None = None
+        # A read-side scan that found work but could not take the writer mutex
+        # leaves this set: the next read goes straight back to the (cheap,
+        # non-blocking) mutex attempt instead of re-walking the projection to
+        # rediscover what this one already knows, and instead of waiting out
+        # the throttle it never earned.
+        self._read_scan_pending = False
+        self._read_scan_skips = 0
         # Per-thread: connections are per-thread and reads run concurrently, so
         # a memo saved and restored on a shared attribute could be restored
         # after its owner had already left -- freezing one thread's listing for
@@ -915,6 +933,8 @@ class Store:
         self._connection_creation_state = threading.local()
         self._last_progress_clock = None
         self._last_read_scan_clock = None
+        self._read_scan_pending = False
+        self._read_scan_skips = 0
         self._listing_state = threading.local()
         self._verified_generation = None
 
@@ -2625,24 +2645,67 @@ class Store:
         ).fetchone()
         return None if row is None else str(row[0])
 
+    @property
+    def read_scan_skips(self) -> int:
+        """Read-side projection scans this process skipped in a row, store busy.
+
+        Zero whenever a scan last completed -- including one that proved there
+        was nothing to import. A number that keeps climbing means hand edits
+        are sitting on disk unadopted and every read is answering from state
+        that predates them.
+        """
+        return self._read_scan_skips
+
+    def _note_read_scan_skipped(self) -> None:
+        """Remember that a scan with real work to do could not take the mutex.
+
+        The throttle clock is deliberately left alone. It exists to stop a read
+        from re-walking the projection every time, and a skipped attempt walked
+        nothing -- burning the window for it meant that on a continuously busy
+        store the retry never came round while the store was free, so hand
+        edits were never adopted at all. The pending flag makes the retry
+        cheap: the sweep already found the work, so the next read goes straight
+        to the non-blocking mutex attempt rather than rediscovering it.
+        """
+        self._read_scan_pending = True
+        self._read_scan_skips += 1
+        if self._read_scan_skips % READ_SCAN_SKIP_WARN_AFTER:
+            return
+        warnings.warn(
+            f"{self._read_scan_skips} read-side projection scans in a row were "
+            f"skipped because {self.db_path.parent} was busy: hand edits under "
+            f"{self.backlog_path} have not been adopted and reads are answering "
+            "from older state (see backlog_store_status)",
+            RuntimeWarning,
+            stacklevel=4,
+        )
+
     def _maybe_scan_on_read(self) -> None:
         """Import hand edits at most once per two seconds for read callers."""
         now = time.monotonic()
+        pending = self._read_scan_pending
         if (
-            self._last_read_scan_clock is not None
-            and now - self._last_read_scan_clock < 2.0
+            not pending
+            and self._last_read_scan_clock is not None
+            and now - self._last_read_scan_clock < READ_SCAN_THROTTLE_SECONDS
         ):
             return
-        self._last_read_scan_clock = now
         if _network_filesystem_reason(self.root):
+            self._last_read_scan_clock = now
             return
         with self._memoized_entity_files():
             generation = self._git_generation()
-            if not self._projection_changed_on_disk(generation=generation):
+            # A pending scan already knows there is work; re-walking the
+            # projection to be told so again is the expensive half of the read.
+            if not pending and not self._projection_changed_on_disk(
+                generation=generation
+            ):
                 # The sweep just proved this generation matches, so the next
                 # read does not repeat it merely because a git command ran.
                 # The database revision goes with it: any other connection
                 # committing retires the proof rather than outliving it.
+                self._last_read_scan_clock = now
+                self._read_scan_skips = 0
                 self._verified_generation = (generation, self._database_revision())
                 return
             try:
@@ -2666,12 +2729,16 @@ class Store:
                     raise
                 # Nothing was swept, so nothing is proved: the memo is left
                 # alone and the next read repeats the check.
+                self._note_read_scan_skipped()
                 return
             # The probe ran the whole sweep. When it found something to write
             # it committed `last_scan_generation` with the rest; when it found
             # nothing it rolled back, and that row went with it. The proof is
             # the same either way, so it is remembered here rather than left to
             # depend on whether the transaction happened to commit.
+            self._last_read_scan_clock = now
+            self._read_scan_pending = False
+            self._read_scan_skips = 0
             self._verified_generation = (generation, self._database_revision())
 
     def _database_revision(self) -> int:
@@ -2877,6 +2944,7 @@ class Store:
             wal_size=0,
             warning=warning,
             corrupt_files=self._corrupt_backup_names(),
+            read_scan_skips=self._read_scan_skips,
         )
 
     def _status_from(
@@ -2977,6 +3045,7 @@ class Store:
             warning=warning,
             corrupt_files=self._corrupt_backup_names(),
             linear_pending=queued,
+            read_scan_skips=self._read_scan_skips,
         )
 
     def status(self) -> StoreStatus:
