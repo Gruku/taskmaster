@@ -303,6 +303,22 @@ def _bugs_found_in(connection, task_id):
             [ident for ident, status in rows if status == "fixed"])
 
 
+def _bundle_slug(task, ident):
+    """The task's bundle as a slug, or "" when it has none.
+
+    A legacy document can carry a list or mapping here. Binding that into SQL
+    raised a driver error naming no task and left the task unpickable; the
+    refusal has to say which task and what shape.
+    """
+    value = task.get("bundle")
+    if value is None or value == "" or value == [] or value == {}:
+        return ""
+    if not isinstance(value, str):
+        raise ValueError(f"task `{ident}` has a malformed bundle of type "
+                         f"{type(value).__name__}; expected a slug")
+    return value
+
+
 def _bundle_members(connection, slug):
     """Live members of a bundle, excluding archived ones as the tool does.
 
@@ -311,11 +327,26 @@ def _bundle_members(connection, slug):
     into `in-progress` while its archive marker stayed set — hidden from the
     board, exported under tasks/archive/ and holding a live session lock.
     """
+    if not isinstance(slug, str):
+        raise ValueError(f"malformed bundle of type {type(slug).__name__}; expected a slug")
     return [row[0] for row in connection.execute(
         "SELECT c.public_id FROM memberships m JOIN entity_core c ON c.entity_key=m.entity_key "
         "WHERE m.field='bundle' AND c.kind='task' AND c.deleted=0 AND c.archived=0 "
         "AND json_extract(c.status_json,'$') IS NOT 'archived' "
         "AND json_extract(m.value_json,'$')=? ORDER BY c.public_id", (slug,)).fetchall()]
+
+
+def _handovers_naming(connection, task_id):
+    """Live handovers whose `task_ids` membership includes this task.
+
+    The planner skips every handover that does not name the triggering task,
+    so this index lookup selects exactly the rows it can act on — where a full
+    listing paid for the whole handovers directory on every terminal change.
+    """
+    return [row[0] for row in connection.execute(
+        "SELECT c.public_id FROM memberships m JOIN entity_core c ON c.entity_key=m.entity_key "
+        "WHERE m.field='task_ids' AND c.kind='handover' AND c.deleted=0 AND c.archived=0 "
+        "AND m.target_id=? ORDER BY c.public_id", (task_id,)).fetchall()]
 
 
 def _terminal_task_ids(connection):
@@ -423,10 +454,13 @@ def _write_inverse(transaction, target_kind, target, *, source, link_type, remov
 
 def _smart_close_handovers(transaction, task_id):
     """Close or flag the open handovers a terminal task belongs to, atomically."""
+    naming = _handovers_naming(transaction.connection, task_id)
+    if not naming:
+        return
     terminal = _terminal_task_ids(transaction.connection) | {task_id}
     # The planner only carries the body through untouched, so it is never read
-    # here: fetching every handover's prose to close one would be a full scan.
-    rows = [(item["id"], item["fields"], None) for item in _page(transaction.snapshot, "handover")]
+    # here: fetching a handover's prose to close it would be wasted work.
+    rows = [(ident, _entity(transaction, "handover", ident)["fields"], None) for ident in naming]
     plan = domain_v3.smart_auto_close_handovers(rows, triggering_task_id=task_id,
                                                 done_or_archived_ids=terminal)
     for ident, updated, _body in plan["closed"] + plan["flagged"]:
@@ -639,7 +673,7 @@ def _task_pick(transaction, arguments):
     ident, session, force = arguments["id"], arguments["session"], arguments.get("force", False)
     entity = _entity(transaction, "task", ident)
     task = domain.touch(deepcopy(entity["fields"]))
-    slug = task.get("bundle")
+    slug = _bundle_slug(task, ident)
     if slug:
         return _bundle_pick(transaction, ident, slug, session=session, force=force)
     status = task.get("status", "todo")

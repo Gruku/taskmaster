@@ -481,8 +481,13 @@ def test_handover_task_membership_is_a_typed_relation(workspace):
         rows = connection.execute(
             "SELECT c.public_id,m.target_kind,m.target_id FROM memberships m "
             "JOIN entity_core c ON c.entity_key=m.entity_key "
-            "WHERE m.field='task_ids' AND c.kind='handover'").fetchall()
+            "WHERE m.field='task_ids' AND c.kind='handover' AND c.public_id=?", (handover,)).fetchall()
         assert rows == [(handover, "task", "demo-001")]
+        # The backfilled fixture handover carries its own membership rows, so the
+        # relocation covers imported documents and not just newly created ones.
+        assert connection.execute(
+            "SELECT COUNT(*) FROM memberships m JOIN entity_core c ON c.entity_key=m.entity_key "
+            "WHERE m.field='task_ids' AND c.public_id='H-1'").fetchone()[0] == 2
         with Repository(connection).snapshot() as query:
             assert query.relations("handover", handover, field="task_ids")["items"][0]["resolved"]
             referencing = query.references_to("task", "demo-001")["items"]

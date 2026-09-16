@@ -45,7 +45,7 @@ KIND_OWNERS = {
              "dependencies": "depends_on", "memberships": "bundle area"},
     "epic": {"epic_operational": "name order phase", "memberships": "area components"},
     "phase": {"phase_operational": "name order start_date target_date"},
-    "handover": {"handover_operational": "kind date thread", "memberships": "tasks"},
+    "handover": {"handover_operational": "kind date thread", "memberships": "task_ids"},
     "issue": {"issue_operational": "severity", "memberships": "related_tasks components fixed_in_task duplicate_of"},
     "bug": {"bug_operational": "severity", "memberships": "adopted_into components promoted_to"},
     "decision": {"decision_operational": "resolved_with resolved_in", "memberships": "task_id"},

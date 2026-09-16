@@ -34,7 +34,7 @@ def manifest(connection: sqlite3.Connection, *, authorities=("legacy",), allow_p
                                     "'source_digest','local_state_imported')"))
     versions = {str(schema.VERSION)}
     if allow_prior_staging and result.get("authority") == "legacy":
-        versions.add("1")
+        versions.update({"1", "2"})
     if result.get("schema_version") not in versions or result.get("protocol") != str(schema.PROTOCOL):
         raise UnsupportedStoreError("Unsupported native staging schema or protocol")
     if result.get("authority") not in authorities:
