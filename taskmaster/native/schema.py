@@ -6,7 +6,7 @@ Legacy tables remain the only writer authority until the later adapter cutover.
 """
 import sqlite3
 
-VERSION = 2
+VERSION = 3
 PROTOCOL = 2
 COMMON = {
     "entity_core": "id title status priority archived deleted rev updated_seq",
@@ -18,7 +18,7 @@ KINDS = {
              "dependencies": "depends_on", "memberships": "bundle area"},
     "epic": {"epic_operational": "name order phase", "memberships": "area components"},
     "phase": {"phase_operational": "name order start_date target_date"},
-    "handover": {"handover_operational": "kind date thread", "memberships": "tasks"},
+    "handover": {"handover_operational": "kind date thread", "memberships": "task_ids"},
     "issue": {"issue_operational": "severity", "memberships": "related_tasks components fixed_in_task duplicate_of"},
     "bug": {"bug_operational": "severity", "memberships": "adopted_into components promoted_to"},
     "decision": {"decision_operational": "resolved_with resolved_in", "memberships": "task_id"},
@@ -124,13 +124,17 @@ def create_schema(connection: sqlite3.Connection) -> None:
 
 
 def upgrade_staging(connection: sqlite3.Connection, version: int) -> None:
-    """The only supported older staging schema; caller owns the atomic backfill."""
+    """The supported older staging schemas; caller owns the atomic backfill."""
     if not connection.in_transaction:
         raise RuntimeError("staging upgrade requires an owned transaction")
     if version == VERSION:
         return
-    if version != 1 or VERSION != 2:
+    if version not in (1, 2) or VERSION != 3:
         raise RuntimeError("unsupported staging upgrade")
-    for statement in DDL:
-        if any(statement.startswith(f"CREATE TABLE {name}(") for name in ("external_documents", "id_reservations", "id_counters")):
-            connection.execute(statement)
+    if version < 2:
+        for statement in DDL:
+            if any(statement.startswith(f"CREATE TABLE {name}(") for name in ("external_documents", "id_reservations", "id_counters")):
+                connection.execute(statement)
+    # v2 -> v3 moves handover task membership out of the extension bag into the
+    # typed membership table. There is no DDL change; the caller's re-backfill
+    # rewrites every relation, and that is what relocates the existing rows.

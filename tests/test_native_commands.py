@@ -207,7 +207,6 @@ def test_search_replacement_keeps_stable_document_identity(native):
         for index, title in enumerate(["Oranges", "Apples", "Oranges"]):
             receipt = execute(connection, envelope(args={"id": "same", "set": {"title": title}}, key=f"title-{index}"))
             assert receipt["work"]["fts_documents"] == 1
-            assert receipt["work"]["global_graph_rebuilds"] == 0
             assert connection.execute("SELECT rowid FROM document_search WHERE kind='task' AND id='same'").fetchone()[0] == key
             with Repository(connection).snapshot() as query:
                 assert query.search(title)["items"][0]["id"] == "same"

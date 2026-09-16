@@ -96,9 +96,36 @@ LEGACY_CONFIG_PATH = ROOT / ".claude" / "taskmaster.json"
 _plugin_json = SCRIPT_DIR / ".claude-plugin" / "plugin.json"
 VERSION = json.loads(_plugin_json.read_text(encoding="utf-8"))["version"] if _plugin_json.exists() else "0.0.0"
 
-# Priority mapping: canonical names ↔ legacy P-codes
-PRIORITY_NAMES = ("critical", "high", "medium", "low")
-_LEGACY_TO_NAME = {"P0": "critical", "P1": "high", "P2": "medium", "P3": "low"}
+# Priority mapping: canonical names ↔ legacy P-codes. The names, the table
+# and every task/epic/phase rule below come from the one shared domain layer
+# (`taskmaster.native.domain`), so the tools, the viewer and the native command
+# core cannot disagree about a legal transition, a gate or an archive.
+from taskmaster.native.domain import (
+    PRIORITY_NAMES,
+    LEGACY_PRIORITY_TO_NAME as _LEGACY_TO_NAME,
+    normalize_priority as _normalize_priority,
+    illegal_transition_message,
+    completion_block_reason as _completion_block_reason,
+    valid_bundle_slug as _valid_bundle_slug,
+    strictest_lane as _strictest_lane,
+    validate_components as _validate_components,
+    now_stamp as _now,
+    today_stamp as _today,
+    parse_date as _validate_date,
+    ALLOWED_FIELDS,
+    VALID_STATUSES,
+    LEGAL_STATUS_TRANSITIONS,
+    VALID_PRIORITIES,
+    VALID_DOC_KEYS,
+    VALID_ARCHIVE_REASONS,
+    ALLOWED_AREA_FIELDS,
+    VALID_EPIC_STATUSES,
+    ALLOWED_EPIC_FIELDS,
+    VALID_DESIGN_STATUSES,
+    EPIC_DONE_WHEN_REQUIRED_MSG,
+    VALID_PHASE_STATUSES,
+    ALLOWED_PHASE_FIELDS,
+)
 _NAME_TO_LEGACY = {v: k for k, v in _LEGACY_TO_NAME.items()}
 
 # v3 layout primitives (schema versions, atomic writes, etc.) live in taskmaster_v3.
@@ -899,15 +926,6 @@ def _transactional(tool: str):
     return decorate
 
 
-def _today() -> str:
-    return date.today().isoformat()
-
-
-def _now() -> str:
-    """ISO timestamp with minute precision: YYYY-MM-DDTHH:MM"""
-    return datetime.now().strftime("%Y-%m-%dT%H:%M")
-
-
 # ── Unified list-read convention ─────────────────────────
 # Every list tool/action caps at DEFAULT_LIST_LIMIT rows and emits an overflow
 # footer when it truncates, mirroring backlog_list_tasks. limit<=0 means no cap.
@@ -932,14 +950,6 @@ def _overflow_footer(overflow: int, noun: str) -> str:
     return f"…{overflow} more {noun} — narrow with filters or pass limit=0 for all"
 
 
-def _validate_date(s: str) -> date | None:
-    """Parse YYYY-MM-DD string, return date or None if invalid."""
-    try:
-        return datetime.strptime(s, "%Y-%m-%d").date()
-    except ValueError:
-        return None
-
-
 def _time_remaining(target_date_str: str | None) -> str | None:
     """Return human-readable time remaining/overdue, or None if no target."""
     if not target_date_str:
@@ -955,13 +965,6 @@ def _time_remaining(target_date_str: str | None) -> str | None:
             return f"{abs(delta)}d overdue"
     except ValueError:
         return None
-
-
-def _normalize_priority(value: str) -> str:
-    """Normalize a priority value: accept both legacy P0-P3 and new names."""
-    if value in PRIORITY_NAMES:
-        return value
-    return _LEGACY_TO_NAME.get(value, value)
 
 
 def _log_swallowed_error(what: str, exc: BaseException) -> None:
@@ -5797,7 +5800,6 @@ def backlog_note_archive(note_id: str) -> str:
 
 # ── Areas ────────────────────────────────────────────────────────
 
-ALLOWED_AREA_FIELDS = {"name", "description", "anchors"}
 
 
 @mcp.tool()
@@ -6493,18 +6495,6 @@ def _open_bugs_for_task(bp, task_id: str) -> tuple[list[str], list[str]]:
     return open_bugs, fixed_bugs
 
 
-def _completion_block_reason(task) -> str:
-    """Return a rejection message if a lane'd task has unsatisfied required gates, else ''."""
-    if not task.get("lane"):
-        return ""   # laneless => exempt (Spec A rollout rule)
-    outstanding = _outstanding_required_gates(task)
-    if outstanding:
-        return (f"Cannot complete `{task['id']}` — outstanding gates for lane "
-                f"`{task['lane']}`: {', '.join(outstanding)}. "
-                f"Record each (backlog_record_gate) or skip it (backlog_skip_gate).")
-    return ""
-
-
 @mcp.tool()
 @_transactional("backlog_complete_task")
 def backlog_complete_task(
@@ -6736,7 +6726,6 @@ def backlog_release_notes(release: str = "", group_by: str = "epic", include_unr
     return "\n".join(lines).rstrip() + "\n"
 
 
-VALID_ARCHIVE_REASONS = {"done", "deprecated", "duplicate", "wont-fix", "superseded"}
 
 
 @mcp.tool()
@@ -6866,36 +6855,6 @@ def _clear_session_bundle() -> None:
     _session_bundle = None
 
 
-_BUNDLE_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,40}$")
-
-
-def _valid_bundle_slug(value: str) -> bool:
-    """Empty string clears the bundle (descope); otherwise must be lowercase kebab."""
-    return value == "" or bool(_BUNDLE_SLUG_RE.match(value))
-
-
-def _strictest_lane(lanes: list) -> str:
-    """Return the strictest (most gates) lane from a list of lane values (or None/missing)."""
-    order = {"express": 0, "standard": 1, "full": 2}
-    present = [l for l in lanes if l in order] or ["standard"]
-    return max(present, key=lambda l: order[l])
-
-
-ALLOWED_FIELDS = {"title", "status", "priority", "notes", "branch", "worktree", "blockers", "docs", "depends_on", "sub_repo", "stage", "estimate", "locked_by", "review_instructions", "phase", "anchors", "blast_radius_depth", "patchnote", "release", "tldr", "next_step", "component", "design_change", "lane", "bundle", "area", "human_action"}
-VALID_STATUSES = {"todo", "in-progress", "in-review", "done", "archived", "blocked"}
-# Spec A Task 11: forward-transition table enforced on lane'd tasks via
-# backlog_update_task. Laneless tasks are exempt (old permissive behavior).
-# Same-status writes (value == current) bypass the table.
-LEGAL_STATUS_TRANSITIONS = {
-    "todo":        {"in-progress", "blocked", "archived"},
-    "in-progress": {"in-review", "done", "blocked", "todo", "archived"},
-    "in-review":   {"done", "in-progress", "blocked", "archived"},
-    "blocked":     {"todo", "in-progress", "in-review", "archived"},
-    "done":        {"in-review", "archived"},
-    "archived":    {"todo"},
-}
-VALID_PRIORITIES = {"critical", "high", "medium", "low"}
-VALID_DOC_KEYS = {"plan", "spec", "roadmap", "design", "analysis"}
 
 
 @mcp.tool()
@@ -7507,44 +7466,6 @@ def backlog_clear_spec_review(task_id: str) -> str:
     return out
 
 
-VALID_EPIC_STATUSES = {"active", "planned", "done", "archived"}
-ALLOWED_EPIC_FIELDS = {"name", "status", "description", "docs", "components", "design_status", "done_when", "area"}
-VALID_DESIGN_STATUSES = {"exploring", "proposed", "locked", "revising"}
-EPIC_DONE_WHEN_REQUIRED_MSG = (
-    "Epics are finite: 'done_when' is required. "
-    "An epic that can't say when it's done is an area."
-)
-
-
-def _validate_components(components: dict) -> str:
-    """Return '' if the components block is well-formed, else an error string.
-
-    Shape: { <key>: { "title": str, "after": [<other keys>] } }.
-    `after` edges must reference declared component keys (DAG not enforced here).
-    """
-    if not isinstance(components, dict):
-        return "Error: components must be a JSON object {key: {title, after}}"
-    keys = set(components)
-    for key, spec in components.items():
-        if key == "_unassigned":
-            return "Error: `_unassigned` is a reserved component key"
-        if key.lower() == "none":
-            return "Error: `none` (case-insensitive) is a reserved component key"
-        if not isinstance(spec, dict):
-            return f"Error: component `{key}` must be an object with title/after"
-        if "title" in spec and not isinstance(spec["title"], str):
-            return f"Error: component `{key}` title must be a string"
-        after = spec.get("after", [])
-        if not isinstance(after, list):
-            return f"Error: component `{key}` after must be a list of component keys"
-        for ref in after:
-            if ref == key:
-                return f"Error: component `{key}` cannot reference itself in `after`"
-            if ref not in keys:
-                return f"Error: component `{key}` after references unknown component `{ref}`"
-    return ""
-
-
 @mcp.tool()
 @_transactional("backlog_update_epic")
 def backlog_update_epic(epic_id: str, field: str, value: str) -> str:
@@ -7756,10 +7677,6 @@ def backlog_add_epic(
 
 
 # ── Phase Tools ──────────────────────────────────────
-
-
-VALID_PHASE_STATUSES = {"planned", "active", "done", "archived"}
-ALLOWED_PHASE_FIELDS = {"name", "status", "description", "order", "target_date", "start_date", "deliverables", "docs"}
 
 
 @mcp.tool()
@@ -8992,36 +8909,6 @@ def _check_if_match(if_match: str | None) -> None:
     current = _viewer_etag()
     if if_match.strip('"') != current:
         raise ViewerPreconditionFailed(current)
-
-
-def illegal_transition_message(task: dict | None, after: str | None) -> str | None:
-    """Why moving `task` to `after` is refused, or None when it is allowed.
-
-    One rule, applied by `backlog_update_task`, by batch and by the viewer, so
-    the board cannot make a move the tool refuses. The rule is the one
-    `backlog_update_task` has always applied:
-
-    - a same-status write is never a transition, and is always allowed;
-    - a task with a lane is held to the full `LEGAL_STATUS_TRANSITIONS` table;
-    - a laneless (pre-lane, grandfathered) task keeps the permissive behaviour,
-      except that it may still only leave `archived` the way the table says.
-
-    The `archived` row is unconditional because `_apply_archive_transition`
-    un-archives on any `archived -> other`: without it a viewer
-    `PATCH {"status": "done"}` silently resurrects an archived task.
-    """
-    before = (task or {}).get("status", "todo")
-    if after is None or after == before:
-        return None
-    if before != "archived" and not (task or {}).get("lane"):
-        return None
-    legal = LEGAL_STATUS_TRANSITIONS.get(before, set())
-    if after in legal:
-        return None
-    return (
-        f"illegal transition `{before}` → `{after}`. "
-        f"Legal: {', '.join(sorted(legal)) or '(none)'}"
-    )
 
 
 def _invalid_status_error(patch: dict) -> dict:

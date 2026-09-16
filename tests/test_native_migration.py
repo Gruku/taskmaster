@@ -26,7 +26,7 @@ def legacy(tmp_path):
                      "order": 1.5, "human_action": False, "body": "authored body key", "rev": "authored rev", "custom": {"x": [None, True, 3.5]}},
             "epic": {"id": "same", "name": "Epic", "title": "Distinct title", "phase": "P-1", "components": ["A", "A"]},
             "phase": {"id": "P-1", "name": "Phase", "start_date": "2026-09-12", "target_date": None},
-            "handover": {"id": "H-1", "tasks": ["same", "missing"], "kind": "session", "date": "2026-09-12", "thread": None},
+            "handover": {"id": "H-1", "task_ids": ["same", "missing"], "kind": "session", "date": "2026-09-12", "thread": None},
             "issue": {"id": "I-1", "severity": None, "related_tasks": "same", "fixed_in_task": None},
             "bug": {"id": "B-1", "severity": "P1", "adopted_into": ["same"], "archived": None},
             "decision": {"id": "D-1", "task_id": "same", "resolved_in": None, "resolved_with": False},

@@ -3,8 +3,8 @@
 
 # Database-native Taskmaster implementation plan
 
-**Status:** N00–N06 core complete locally; N07 lifecycle port started on
-`feat/database-native-foundation`. This is an intermediate checkpoint.
+**Status:** N00–N07 complete locally; the lifecycle port landed on
+`feat/native-n07-lifecycle`. This is an intermediate checkpoint.
 Client replacement and rollout remain outstanding. Merge the branch only
 after N03–N17 are complete (user instruction, 2026-09-12); the default branch is
 named `master` in this repository.
@@ -246,6 +246,25 @@ Add a bypass gate: native normal reads/commands cannot call `_load()`,
 explicit sync, adoption, compatibility snapshot and maintenance operations.
 Track remaining fallback calls until the normal-path count is zero.
 
+Two N07 constraints bind this step.
+
+**The session changelog forces an explicit choice, and there is no option that
+is merely safe.** The native completion queues its PROGRESS.md paragraph into
+`sync_state.pending_progress_log`, which no exporter reads until N11. Routing
+`backlog_complete_task` as-is therefore stops the paragraph reaching PROGRESS.md
+silently — text that exists nowhere else. Compensating by also calling the
+legacy `_append_changelog` records it in both stores, so it renders twice the
+moment N11's drain lands. Pick one deliberately and write the choice down: either
+keep completion on the legacy writer until N11, or route it and pass the
+paragraph only to the legacy queue, leaving the native argument unused. Do not
+let the adapter do both by default.
+
+**Do not forward a whole `backlog_batch_update` line-set into the native
+structured batch**: the tool applies the lines it can and reports per-line
+errors, while the native batch is all-or-nothing, so the adapter must
+pre-validate lines or one refusal silently discards the rest.
+`tests/test_batch_partial_apply.py` pins the tool's contract.
+
 **Exit:** all legacy tools/routes use the core with compatible receipts/errors;
 full suite and copied-CodeMaestro parity pass. This is M1/M2 local compatibility,
 not asynchronous/native-mode activation.
@@ -298,6 +317,23 @@ existing visibility remains unchanged while the recovery protocol is tested.
 Inject failure before/after DB commit, temp write, replace, manifest update and
 job acknowledgement. Test a newer DB edit and an external file edit while an old
 job is rendering. Compare lossless v4 artifacts and unchanged-byte behavior.
+
+**The exporter must also drain `sync_state.pending_progress_log`.** N07's native
+completion queues its PROGRESS.md session paragraph there, because every write to
+the legacy `meta` row fires the staging-invalidation trigger and would fail the
+command's own authority check. Until this drain lands, that key only accumulates
+and N08 must not route a completion carrying a changelog. Two pending stores now
+exist — the legacy `meta.pending_progress_log` the current exporter reads, and
+the native one — and N15 must reconcile whatever sits in both at cutover rather
+than assuming either is empty.
+
+Two details for whoever builds that drain. The stored shape is the same
+`[{"ts", "text"}, …]` list `store._progress_entries` already parses, so the
+drain needs no format conversion — only a second source. And the writer reads
+and rewrites the whole JSON blob per completion against an unbounded list, so
+it is quadratic in completions over a store's lifetime; the legacy pending list
+has the same property, and the applied-log cap does not bound it. Bound it or
+move it to rows when the drain lands.
 
 **Exit:** no committed effect loses its export intent; no stale job overwrites
 newer content; retry/rollback preserves authored data and local-only state.
@@ -364,7 +400,9 @@ backup/restore tests, operator runbook.
 
 Rehearse the complete bridge → quiesce → reconcile → consistent backup → backfill
 → compare → activate sequence on copies. Preserve historical seq/IDs, queues,
-reservations, quarantine, unknown fields and in-flight export jobs. Refuse active
+reservations, quarantine, unknown fields and in-flight export jobs, and
+reconcile both pending changelog stores (`meta.pending_progress_log` and
+`sync_state.pending_progress_log`) rather than assuming either is empty. Refuse active
 old clients and incompatible launchers; test both warm and cold clients.
 
 Crash at each durable migration stage. Prove pre-activation rollback and post-
@@ -437,13 +475,13 @@ explicitly deferred scope when implementation actually occurs.
 | Step | Status | Commit / evidence |
 |---|---|---|
 | N00 | complete locally | `c940697`, `7470757`; [FTS matrix (40 cases), diagnostic policy and baseline oracles](../reports/2026-09-09-native-foundation.md) |
-| N01 | reopened for B-092, then complete locally; bridge rollout pending | `4aa6694` plus reservation-test follow-up, `92073f2` admission gate; [admission and cutover contract](../handoffs/2026-09-09-native-client-fencing.md), [B-092 false-corruption evidence](../reports/2026-09-16-b092-false-corruption.md) |
+| N01 | reopened for B-092, then complete locally; bridge rollout pending | `4aa6694` plus reservation-test follow-up, `92073f2` admission gate; [admission and cutover contract](../handoffs/2026-09-09-native-client-fencing.md), [diagnosis](../reports/2026-09-16-store-false-corruption.md), [fix evidence, 4/60 → 0/60](../reports/2026-09-16-b092-false-corruption.md) |
 | N02 | complete locally | [83 tools, route/field/SQL contracts and ownership map; M0 validation below](../specs/2026-09-09-native-compatibility.md) |
 | N03 | complete locally; activation gated | [Schema, transactional backfill, crash tests and 3,559-row copied-fixture evidence](../reports/2026-09-12-native-core.md) |
 | N04 | core complete locally; adapter parity remains N08 | [Bounded reads, snapshots, SQL isolation, stored/external document retrieval](../reports/2026-09-12-native-core.md) |
 | N05 | core complete locally | [Atomic owner, CAS, retry receipts, batches and immutable projection inputs](../reports/2026-09-12-native-core.md) |
 | N06 | core complete locally | [Selective graph/FTS maintenance and full-rebuild equivalence oracles](../reports/2026-09-12-native-core.md) |
-| N07 | in progress | Initial note/decision/bug/issue/idea/handover lifecycle slices; task/epic/phase/gates/promotions/Linear and complete inventory mapping remain |
+| N07 | complete locally; activation gated | `ce2e1b9`…`636b563` (13 commits); [26 further operations, shared rules layer, inventory coverage and nine recorded intentional differences](../reports/2026-09-16-native-n07.md). Two adversarial review passes found **eight** defects, all fixed: bundle pick resurrecting archived tasks, unvalidated `project.set` manifests, cascade Linear enqueues in `_epic_archive` and `_phase_advance`, lock-check ordering, a vacuous `global_graph_rebuilds` counter (deleted), handover membership declared as `tasks` instead of `task_ids` (staging schema 3, one-line frozen-contract change), and a raw `sqlite3.ProgrammingError` on a malformed `bundle`. Field shape/presence and transitive purity both verified clean by oracle. |
 | N08 | planned | — |
 | N09 | planned | — |
 | N10 | planned | — |
@@ -460,11 +498,43 @@ collected cases across the initial full run and corrective/completion runs.
 The default 8-process × 200-operation concurrency acceptance test passed in
 575.94 seconds. See [validation evidence](../reports/2026-09-09-native-foundation.md).
 
-**Next implementation action:** finish N07's command inventory and domain
-composites, then N08 client routing and its strict normal-path bypass gate.
+**Next implementation action:** N08 client routing and its strict normal-path
+bypass gate. N07's command inventory and domain composites are complete: every
+mutating N02 tool now maps onto a native operation or onto a recorded deferral
+(maintenance/migration to N15, resync to N13, host actions never). Its recorded
+intentional differences — all-or-nothing batches, caller-supplied session
+identity, a tracker-row Linear gate, adapter-owned presentation, and the pending
+changelog living in native `sync_state` rather than the legacy `meta` row — are
+N08/N11 inputs, not open N07 work.
 N04 external-document retrieval is implemented; capturing file contents belongs
 to N13 sync/N15 pre-cutover import. Keep activation gated; no live project
 migration or installed-plugin changes. Do not merge the partial core checkpoint.
+
+**Staging schema version 3 (2026-09-16):** N07 corrected the handover
+membership declaration from `tasks` to `task_ids`, the field every handover
+document actually carries. Relocating it from the extension bag into the typed
+`memberships` table is a data-placement change that only a re-backfill applies,
+so the staging version moved to 3 and a version-2 staging database refuses
+admission until it is re-backfilled. `upgrade_staging` accepts 1 and 2. This
+also changed the frozen N02 ownership map by one line, correcting it to the
+field that exists.
+
+**N07 validation (2026-09-16):** 2,583 passed, one failed, one live-Linear smoke
+skipped, in 1,080.13 seconds single-process on `feat/native-n07-lifecycle` at
+`c1ef761`. The 75 cases above the 2,509-case baseline are 19 shared-rules, 53
+native command-family and 3 batch-characterization cases; no existing case was
+removed or renamed. The frozen N02 contract fixture changed by exactly one line,
+correcting handover membership ownership to `task_ids`.
+
+The single failure is a **pre-existing store defect**, not an N07 regression:
+`_prepare_schema`'s `PRAGMA quick_check` treats the retained-connection FTS5
+diagnostic that N00 documented as a false positive as real corruption, and
+quarantines a healthy database in response. Reproduced 5/40 in isolation here
+and 0/40 on the base commit, mechanism unidentified. See [a healthy store is
+quarantined as corrupt](../reports/2026-09-16-store-false-corruption.md). It
+belongs to the store's admission and recovery logic, which N00 assigned to N01,
+and is not addressed by this milestone. No benchmark was run; performance stays
+with N16.
 
 **Core checkpoint validation (2026-09-12):** 2,509 unique current test cases
 passed across the full run and corrective runs; one live Linear smoke skipped;

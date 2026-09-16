@@ -87,7 +87,7 @@ def _put_entity(connection, row):
 
 
 TARGET_KINDS = {
-    "depends_on": "task", "tasks": "task", "related_tasks": "task", "task_id": "task",
+    "depends_on": "task", "task_ids": "task", "related_tasks": "task", "task_id": "task",
     "fixed_in_task": "task", "adopted_into": "task", "related_issues": "issue", "area": "area", "duplicate_of": "issue",
 }
 

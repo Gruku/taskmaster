@@ -255,7 +255,7 @@
         "priority": "entity_core",
         "rev": "entity_core",
         "status": "entity_core",
-        "tasks": "memberships",
+        "task_ids": "memberships",
         "thread": "handover_operational",
         "title": "entity_core",
         "updated_seq": "entity_core"

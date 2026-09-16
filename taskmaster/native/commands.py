@@ -5,6 +5,7 @@ Receipts capture committed outcomes inside the writer transaction. New command
 families must use this same owner and the existing domain rules, not fork it.
 """
 from copy import deepcopy
+import re
 import sqlite3
 
 from . import contracts, events, receipts, schema, search, relations
@@ -36,29 +37,72 @@ def _write_field(connection, key, kind, field, value, *, remove=False):
 
 
 PREFIXES = {"note": "NOTE-", "bug": "B-", "issue": "ISS-", "decision": "DEC-", "idea": "IDEA-"}
+# These identities are caller-derived, never allocated: the caller owns the name.
+NAMED_KINDS = ("task", "epic", "phase", "area", "tracker", "project", "backlog")
 
 
-def _reserve_id(connection, kind, doc):
-    if kind == "handover":
+def _taken(connection, kind, ident):
+    return connection.execute("SELECT 1 FROM id_reservations WHERE kind=? AND public_id=? UNION ALL "
+                              "SELECT 1 FROM entity_core WHERE kind=? AND public_id=? LIMIT 1",
+                              (kind, ident, kind, ident)).fetchone() is not None
+
+
+def _high_water(connection, kind, prefix):
+    """Highest number this database has ever handed out under `prefix`.
+
+    The counter is the imported local-state authority; for epic-prefixed task
+    ids a brand-new epic has no counter to import, so the live rows and the
+    tombstone reservations seed it. Both sources are consulted so a removed id
+    is never recycled.
+    """
+    row = connection.execute("SELECT high_water FROM id_counters WHERE kind=? AND prefix=?", (kind, prefix)).fetchone()
+    high = row[0] if row else 0
+    if row is not None and kind != "task":
+        return high
+    if row is None and kind != "task":
+        raise RuntimeError(f"{kind} ID high-water was not imported; refusing allocation")
+    pattern = re.compile(re.escape(prefix) + r"(\d+)$")
+    like = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+    for statement in ("SELECT public_id FROM entity_core WHERE kind=? AND public_id LIKE ? ESCAPE '\\'",
+                      "SELECT public_id FROM id_reservations WHERE kind=? AND public_id LIKE ? ESCAPE '\\'"):
+        for (ident,) in connection.execute(statement, (kind, like)):
+            match = pattern.fullmatch(ident)
+            if match:
+                high = max(high, int(match.group(1)))
+    return high
+
+
+def _reserve_id(connection, kind, doc, requested=None):
+    if requested is not None:
+        if kind != "project":   # the manifest singleton owns a reserved sentinel id
+            contracts._identifier(requested, f"{kind} id")
+        if _taken(connection, kind, requested):
+            raise ValueError(f"{kind} ID `{requested}` already exists")
+        connection.execute("INSERT INTO id_reservations VALUES(?,?)", (kind, requested))
+        return requested
+    if kind == "task":
+        epic = str(doc.get("epic") or "").strip()
+        if not epic:
+            raise ValueError("task epic is required for id allocation")
+        prefix = f"{epic}-"
+    elif kind in NAMED_KINDS:
+        raise ValueError(f"caller-derived id required for {kind}")
+    elif kind == "handover":
         from taskmaster.taskmaster_v3 import make_handover_id
         base = make_handover_id(str(doc["date"]), str(doc["tldr"]))
         ident, suffix = base, 2
-        while connection.execute("SELECT 1 FROM id_reservations WHERE kind=? AND public_id=? UNION ALL "
-                                 "SELECT 1 FROM entity_core WHERE kind=? AND public_id=? LIMIT 1", (kind, ident, kind, ident)).fetchone():
+        while _taken(connection, kind, ident):
             ident, suffix = f"{base}-{suffix}", suffix + 1
         contracts._identifier(ident, "handover id")
         connection.execute("INSERT INTO id_reservations VALUES(?,?)", (kind, ident))
         return ident
-    prefix = PREFIXES[kind]
-    row = connection.execute("SELECT high_water FROM id_counters WHERE kind=? AND prefix=?", (kind, prefix)).fetchone()
-    if row is None:
-        raise RuntimeError(f"{kind} ID high-water was not imported; refusing allocation")
-    high = row[0]
+    else:
+        prefix = PREFIXES[kind]
+    high = _high_water(connection, kind, prefix)
     while True:
         high += 1
         ident = f"{prefix}{high:03d}"
-        if not connection.execute("SELECT 1 FROM id_reservations WHERE kind=? AND public_id=? UNION ALL "
-                                  "SELECT 1 FROM entity_core WHERE kind=? AND public_id=? LIMIT 1", (kind, ident, kind, ident)).fetchone():
+        if not _taken(connection, kind, ident):
             break
     connection.execute("INSERT INTO id_counters VALUES(?,?,?) ON CONFLICT(kind,prefix) DO UPDATE SET high_water=excluded.high_water", (kind, prefix, high))
     connection.execute("INSERT INTO id_reservations VALUES(?,?)", (kind, ident))
@@ -66,8 +110,14 @@ def _reserve_id(connection, kind, doc):
 
 
 def projection_path(kind, ident, archived):
-    directories = {"task": "tasks", "note": "notes", "decision": "decisions", "bug": "bugs", "issue": "issues", "idea": "ideas", "handover": "handovers"}
-    directory = directories[kind]
+    if kind == "project":
+        return "project.yaml"
+    directories = {"task": "tasks", "note": "notes", "decision": "decisions", "bug": "bugs", "issue": "issues",
+                   "idea": "ideas", "handover": "handovers", "epic": "epics", "phase": "phases",
+                   "area": "areas", "tracker": "trackers"}
+    directory = directories.get(kind)
+    if directory is None:
+        return None   # the backlog document is rendered as a whole, not per entity
     if archived and kind in ("task", "bug", "issue"):
         directory += "/archive"
     elif archived and kind == "note":
@@ -86,7 +136,10 @@ class Transaction:
         self.group = None
         self.seq = int(identity["event_high_water"])
         self.affected = {}
-        self.counters = {"fts_documents": 0, "global_graph_rebuilds": 0, "path_comparisons": 0, "link_pairs": 0, "handover_pairs": 0}
+        # Every counter reports work actually issued. A "global rebuild" counter
+        # lived here that nothing could increment, so it proved nothing; the
+        # absence of graph work is asserted directly against the SQL instead.
+        self.counters = {"fts_documents": 0, "path_comparisons": 0, "link_pairs": 0, "handover_pairs": 0}
 
     def _changed(self, key, kind, ident, before, after, body, operation, *, before_body=None, prior_file=None):
         # Canonical JSON equality distinguishes True from 1 and absent from null.
@@ -114,6 +167,8 @@ class Transaction:
         self.affected[(kind, ident)] = {"kind": kind, "id": ident, "revision": entity["revision"], "last_seq": self.seq,
                                        "fields": deepcopy(after)}
         file = projection_path(kind, ident, entity["archived"])
+        if file is None:
+            return
         if prior_file and prior_file != file:
             projected = self.connection.execute("SELECT content_hash FROM projection WHERE file=?", (prior_file,)).fetchone()
             self.connection.execute("INSERT INTO projection_jobs(entity_key,revision,commit_seq,file,effect,input_json,expected_hash) VALUES(?,?,?,?,?,?,?)",
@@ -122,12 +177,13 @@ class Transaction:
         self.connection.execute("INSERT INTO projection_jobs(entity_key,revision,commit_seq,file,effect,input_json,expected_hash) VALUES(?,?,?,?,?,?,?)",
                                 (key, entity["revision"], self.seq, file, "write", encode(entity), projected[0] if projected else None))
 
-    def create(self, kind, doc, body=None):
+    def create(self, kind, doc, body=None, requested_id=None):
         if body is not None and not isinstance(body, str):
             raise ValueError("document body must be text or null")
         doc = deepcopy(doc)
-        ident = _reserve_id(self.connection, kind, doc)
-        doc["id"] = ident
+        ident = _reserve_id(self.connection, kind, doc, requested_id)
+        if kind not in ("backlog", "project"):
+            doc["id"] = ident
         key = _put_entity(self.connection, {"kind": kind, "id": ident, "doc": doc, "body": body,
                                           "rev": 1, "updated_seq": self.seq, "archived": int(bool(doc.get("archived"))),
                                           "deleted": 0, "epic": doc.get("epic"), "status": doc.get("status")})
@@ -138,7 +194,7 @@ class Transaction:
         return ident
 
     def replace(self, kind, ident, after, body, *, before_entity=None):
-        if after.get("id") != ident:
+        if kind not in ("backlog", "project") and after.get("id") != ident:
             raise ValueError("entity identity is immutable")
         if body is not None and not isinstance(body, str):
             raise ValueError("document body must be text or null")
