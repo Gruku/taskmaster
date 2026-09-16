@@ -223,9 +223,21 @@ def test_warm_store_reference_reimports_projection_when_database_disappears(tmp_
     assert _task(opened.load_dict())["title"] == "Projected title"
 
 
-def test_failed_quick_check_is_treated_as_corruption(tmp_path):
+def _damage_fts_index(database: Path) -> None:
+    """Break FTS index/content agreement so a fresh read-only snapshot sees it."""
+    with sqlite3.connect(database) as connection:
+        connection.execute("UPDATE entity_fts_content SET c3='tokens that were never indexed'")
+
+
+def test_failed_quick_check_confirmed_on_disk_is_treated_as_corruption(tmp_path):
+    """Confirmed by a fresh snapshot, a failed quick_check still raises.
+
+    The unconfirmed case -- a retained connection reporting a malformed FTS5
+    index after a peer commit -- belongs to `tests/test_store_false_corruption.py`.
+    """
     backlog_path, _ = _write_projection(tmp_path)
     opened = store.open_store(backlog_path=backlog_path, session="quick-check-test")
+    _damage_fts_index(opened.db_path)
 
     class FailedQuickCheck:
         @staticmethod
@@ -287,20 +299,10 @@ def test_failed_quick_check_rebuild_preserves_dirty_commit_in_backup(
         connection.execute(
             "UPDATE projection SET dirty=1 WHERE file='tasks/core-001.md'"
         )
+        # Real damage, not a simulated exception: recovery only runs on a
+        # verdict a fresh read-only snapshot confirms.
+        connection.execute("UPDATE entity_fts_content SET c3='tokens that were never indexed'")
 
-    real_prepare = store.Store._prepare_schema
-    calls = 0
-
-    def fail_first_quick_check(self, connection):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            raise sqlite3.DatabaseError(
-                "malformed database: quick_check=*** corruption on page 2"
-            )
-        return real_prepare(self, connection)
-
-    monkeypatch.setattr(store.Store, "_prepare_schema", fail_first_quick_check)
     _force_locked_open(monkeypatch)
     rebuilt = store.open_store(backlog_path=backlog_path, session="rebuild-reader")
 
