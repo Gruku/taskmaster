@@ -129,7 +129,10 @@ def signature(node, values):
 
 def inventory():
     tree = parse("taskmaster/backlog_server.py")
-    values = constants(tree)
+    # The task/epic/phase rule constants live in the shared domain layer that the
+    # tools, the viewer and the native core all import, so the inventory reads
+    # them from there. Server-local names still win on any overlap.
+    values = {**constants(parse("taskmaster/native/domain.py")), **constants(tree)}
     functions = {node.name: node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
     tools = {}
     for name, node in functions.items():
