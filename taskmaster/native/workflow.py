@@ -241,6 +241,18 @@ def validate(operation, arguments):
         if not isinstance(arguments.get("document"), dict):
             raise ValueError("project.set requires a manifest object")
         _flag(arguments, "create_only")
+        # A committed manifest becomes project.yaml, so one the loader cannot
+        # parse must be refused here rather than reported as a successful write.
+        # The check is pure — it reads the supplied document, never the file.
+        from taskmaster.project import validate_manifest_dict
+        try:
+            validate_manifest_dict(arguments["document"], raise_on_error=True)
+        except ValueError:
+            raise
+        except Exception as exc:
+            # A malformed section (`"meta": 42`) reaches the validator as an
+            # attribute error; admission always refuses with a value error.
+            raise ValueError(f"invalid project manifest structure: {exc}") from None
     elif operation == "linear.link":
         _keys(arguments, {"task_id", "external_key", "workspace_alias"}, operation)
         _identifier(arguments.get("task_id"), "task id")
@@ -292,10 +304,18 @@ def _bugs_found_in(connection, task_id):
 
 
 def _bundle_members(connection, slug):
+    """Live members of a bundle, excluding archived ones as the tool does.
+
+    The exclusion is load-bearing, not cosmetic: a bundle pick applies no status
+    check of its own, so an archived member counted here would be claimed back
+    into `in-progress` while its archive marker stayed set — hidden from the
+    board, exported under tasks/archive/ and holding a live session lock.
+    """
     return [row[0] for row in connection.execute(
         "SELECT c.public_id FROM memberships m JOIN entity_core c ON c.entity_key=m.entity_key "
-        "WHERE m.field='bundle' AND c.kind='task' AND c.deleted=0 AND json_extract(m.value_json,'$')=? "
-        "ORDER BY c.public_id", (slug,)).fetchall()]
+        "WHERE m.field='bundle' AND c.kind='task' AND c.deleted=0 AND c.archived=0 "
+        "AND json_extract(c.status_json,'$') IS NOT 'archived' "
+        "AND json_extract(m.value_json,'$')=? ORDER BY c.public_id", (slug,)).fetchall()]
 
 
 def _terminal_task_ids(connection):
