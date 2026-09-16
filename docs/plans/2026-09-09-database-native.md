@@ -465,7 +465,7 @@ explicitly deferred scope when implementation actually occurs.
 | Step | Status | Commit / evidence |
 |---|---|---|
 | N00 | complete locally | `c940697`, `7470757`; [FTS matrix (40 cases), diagnostic policy and baseline oracles](../reports/2026-09-09-native-foundation.md) |
-| N01 | complete locally; bridge rollout pending | `4aa6694` plus reservation-test follow-up; [admission and cutover contract](../handoffs/2026-09-09-native-client-fencing.md) |
+| N01 | complete locally; bridge rollout pending; [startup false-corruption follow-up](../reports/2026-09-16-store-false-corruption.md) | `4aa6694` plus reservation-test follow-up; [admission and cutover contract](../handoffs/2026-09-09-native-client-fencing.md) |
 | N02 | complete locally | [83 tools, route/field/SQL contracts and ownership map; M0 validation below](../specs/2026-09-09-native-compatibility.md) |
 | N03 | complete locally; activation gated | [Schema, transactional backfill, crash tests and 3,559-row copied-fixture evidence](../reports/2026-09-12-native-core.md) |
 | N04 | core complete locally; adapter parity remains N08 | [Bounded reads, snapshots, SQL isolation, stored/external document retrieval](../reports/2026-09-12-native-core.md) |
@@ -509,13 +509,22 @@ admission until it is re-backfilled. `upgrade_staging` accepts 1 and 2. This
 also changed the frozen N02 ownership map by one line, correcting it to the
 field that exists.
 
-**N07 validation (2026-09-16):** 2,578 passed, one live-Linear smoke skipped,
-zero failures or errors, in 1,341.98 seconds single-process on
-`feat/native-n07-lifecycle` at `f2dc8ca`. The 69 cases above the 2,509-case
-baseline are 19 shared-rules, 41 native command-family and 9 review-pass cases.
-The frozen N02 contract fixture is unchanged. The second review pass (`58e75a0`,
-`77a522c`) has focused-suite coverage only; a full run precedes integration. No
-benchmark was run; performance stays with N16.
+**N07 validation (2026-09-16):** 2,583 passed, one failed, one live-Linear smoke
+skipped, in 1,080.13 seconds single-process on `feat/native-n07-lifecycle` at
+`c1ef761`. The 75 cases above the 2,509-case baseline are 19 shared-rules, 53
+native command-family and 3 batch-characterization cases; no existing case was
+removed or renamed. The frozen N02 contract fixture changed by exactly one line,
+correcting handover membership ownership to `task_ids`.
+
+The single failure is a **pre-existing store defect**, not an N07 regression:
+`_prepare_schema`'s `PRAGMA quick_check` treats the retained-connection FTS5
+diagnostic that N00 documented as a false positive as real corruption, and
+quarantines a healthy database in response. Reproduced 5/40 in isolation here
+and 0/40 on the base commit, mechanism unidentified. See [a healthy store is
+quarantined as corrupt](../reports/2026-09-16-store-false-corruption.md). It
+belongs to the store's admission and recovery logic, which N00 assigned to N01,
+and is not addressed by this milestone. No benchmark was run; performance stays
+with N16.
 
 **Core checkpoint validation (2026-09-12):** 2,509 unique current test cases
 passed across the full run and corrective runs; one live Linear smoke skipped;
