@@ -500,6 +500,15 @@ N04 external-document retrieval is implemented; capturing file contents belongs
 to N13 sync/N15 pre-cutover import. Keep activation gated; no live project
 migration or installed-plugin changes. Do not merge the partial core checkpoint.
 
+**Staging schema version 3 (2026-09-16):** N07 corrected the handover
+membership declaration from `tasks` to `task_ids`, the field every handover
+document actually carries. Relocating it from the extension bag into the typed
+`memberships` table is a data-placement change that only a re-backfill applies,
+so the staging version moved to 3 and a version-2 staging database refuses
+admission until it is re-backfilled. `upgrade_staging` accepts 1 and 2. This
+also changed the frozen N02 ownership map by one line, correcting it to the
+field that exists.
+
 **N07 validation (2026-09-16):** 2,578 passed, one live-Linear smoke skipped,
 zero failures or errors, in 1,341.98 seconds single-process on
 `feat/native-n07-lifecycle` at `f2dc8ca`. The 69 cases above the 2,509-case
