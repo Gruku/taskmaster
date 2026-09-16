@@ -12,8 +12,33 @@ All five fixes are in `taskmaster/store.py` and `taskmaster/backlog_server.py`.
 `taskmaster/native/` is untouched. No schema version bump, and no new column: nothing here
 needed one, so nothing here makes a 6.0.x process drop and rebuild every table.
 
-Tests: `tests/test_store_bug_cluster.py` (13 cases). Each bug's test landed as its own
+Tests: `tests/test_store_bug_cluster.py` (14 cases). Each bug's test landed as its own
 commit before its fix, and failed at that commit.
+
+**Full suite: 2,523 passed, 1 skipped, 0 failed** (1,023 s, single process, `python -m
+pytest tests/ -q`). That reconciles exactly against the 2,509 passed / 1 skipped baseline
+measured on `feat/database-native-foundation` at `9bf22a8`: 2,509 + 14 new cases = 2,523,
+and the one skip is the live Linear smoke test in both.
+
+Three full-suite runs were needed, and the first two each had one failure:
+
+1. **Run 1 — `test_mixed_public_tool_operations_across_processes_never_lose_a_write`.** A
+   real regression from B-083's progress sink, diagnosed and fixed in `3967324` (see B-083
+   below). Not flakiness.
+2. **Run 2 — `test_two_processes_compat_and_direct_store_transactions_both_survive`.** On-disk
+   FTS5 corruption (`malformed inverted index for FTS5 table main.entity_fts`) in the test's
+   own temporary store, whose recovery then failed on Windows because the peer process still
+   had the file open (`WinError 32` renaming `store.db` aside). Ran 10 times in isolation
+   afterwards: 10 passed. Nothing in this cluster touches `entity_fts`, the derived rebuild,
+   or the recovery rename, and the test passed in runs 1 and 3 and in a dedicated
+   `test_store_concurrency.py` run (10 passed, 442 s). I could not reproduce it and cannot
+   attribute it; it is worth pursuing independently. Recording it here rather than calling
+   the branch green without mentioning it.
+3. **Run 3 — clean.**
+
+Caveat worth stating plainly: two of three full-suite runs had a concurrency failure, so
+"green" here means one clean run plus a diagnosed-and-fixed cause for one of the two
+failures and an unexplained cause for the other.
 
 | Commit | What |
 |---|---|
@@ -25,6 +50,7 @@ commit before its fix, and failed at that commit.
 | `281fc15` | test: B-087 |
 | `4235c7e` | fix: B-083, B-084 |
 | `7d16a26` | fix: B-087 |
+| `3967324` | fix: the B-083 progress sink could stall the writer it described |
 
 ---
 
@@ -146,10 +172,23 @@ invert the layering the module is built on. The seam plus the stderr sink is wha
 reachable today; a future `Context`-aware tool can register a different sink without the
 store changing.
 
+**The sink must never block (found by the stress test, fixed in `3967324`).** The first
+cut wrote each notice inline with `print(..., flush=True)`. That is a blocking call: a host
+that has stopped draining stderr, or a harness that collects the pipe only at exit, stalls
+it, and a caller already queued for the lock then waits on a *log line*. The 8-process
+stress test filled its 64 KB pipe and a writer overran a 30 s deadline to 82.4 s. Notices
+now go to a bounded `queue.Queue(maxsize=64)` drained by a daemon thread and are dropped
+when it is full; only the first notice of a wait names holders, so a contended store is not
+asked for a second connection every two seconds by every waiter; and both wait loops
+re-check the deadline immediately after the notice, so an observer cannot carry a caller
+past the deadline it was given.
+
 **Pinned by.** `test_non_transaction_writers_accept_a_deadline` (all five return in under
 5 s with a 150 ms deadline while another thread holds the lock — before, each waited 30 s),
 `test_a_blocked_writer_names_the_operation_and_the_holder`,
-`test_a_waiting_writer_reports_progress_to_an_observer`.
+`test_a_waiting_writer_reports_progress_to_an_observer`, and
+`test_the_writer_wait_sink_never_blocks_its_caller` (200 notices against a stderr that never
+returns must complete in under 2 s).
 
 ---
 
@@ -252,10 +291,19 @@ for a single-entity read) as the transferable number, not the absolute.
   it does not use. A genuine single-row `backlog_get_task` is a separate piece of work.
 - **`_recover_export_intents` globs `export-intent.*.json` on every transaction** (noted in
   B-087's own Notes as low cost). Still true, still unchanged.
-- **`test_mixed_public_tool_operations_across_processes_never_lose_a_write` is flaky** on
-  this machine: it failed once and passed on an identical re-run of the same code. It is the
-  8-process × 200-operation stress test and takes ~7 minutes of the suite's wall clock on
-  its own. Worth a look independently of this cluster.
+- **The 8-process stress test caught a regression this cluster introduced, and it was not
+  flakiness.** `test_mixed_public_tool_operations_across_processes_never_lose_a_write`
+  failed on the first full-suite run with a worker reporting `store busy for 82.4s while
+  backlog_decision_create waited` — against a 30 s deadline. The cause was the B-083
+  progress sink: it wrote each notice inline with `print(..., flush=True)`, the test
+  collects the worker pipes only at exit, the 64 KB pipe filled, and the write blocked
+  inside the wait loop. A writer queued for the lock was left waiting on a log line. Fixed
+  in `3967324` (bounded queue, daemon drain thread, drop when full; holders only on the
+  first notice; deadline re-checked immediately after every notice) and pinned by
+  `test_the_writer_wait_sink_never_blocks_its_caller`. The stress suite passes on a clean
+  re-run (10 passed, 442 s). Two earlier one-off failures of the same test, which I had
+  written off as flakiness, were almost certainly the same defect at a lower fill level.
+  Lesson worth keeping: *any* new inline write on a hot path is a blocking call.
 - **`httpx` is not installed by `pip install -e .`** but five Linear test modules import it,
   so a fresh venv cannot collect the suite at all until it is added by hand. `pyproject.toml`
   declares no dev extra and no dev dependency group.
