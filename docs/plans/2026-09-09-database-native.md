@@ -236,6 +236,25 @@ Add a bypass gate: native normal reads/commands cannot call `_load()`,
 explicit sync, adoption, compatibility snapshot and maintenance operations.
 Track remaining fallback calls until the normal-path count is zero.
 
+Two N07 constraints bind this step.
+
+**The session changelog forces an explicit choice, and there is no option that
+is merely safe.** The native completion queues its PROGRESS.md paragraph into
+`sync_state.pending_progress_log`, which no exporter reads until N11. Routing
+`backlog_complete_task` as-is therefore stops the paragraph reaching PROGRESS.md
+silently — text that exists nowhere else. Compensating by also calling the
+legacy `_append_changelog` records it in both stores, so it renders twice the
+moment N11's drain lands. Pick one deliberately and write the choice down: either
+keep completion on the legacy writer until N11, or route it and pass the
+paragraph only to the legacy queue, leaving the native argument unused. Do not
+let the adapter do both by default.
+
+**Do not forward a whole `backlog_batch_update` line-set into the native
+structured batch**: the tool applies the lines it can and reports per-line
+errors, while the native batch is all-or-nothing, so the adapter must
+pre-validate lines or one refusal silently discards the rest.
+`tests/test_batch_partial_apply.py` pins the tool's contract.
+
 **Exit:** all legacy tools/routes use the core with compatible receipts/errors;
 full suite and copied-CodeMaestro parity pass. This is M1/M2 local compatibility,
 not asynchronous/native-mode activation.
@@ -288,6 +307,23 @@ existing visibility remains unchanged while the recovery protocol is tested.
 Inject failure before/after DB commit, temp write, replace, manifest update and
 job acknowledgement. Test a newer DB edit and an external file edit while an old
 job is rendering. Compare lossless v4 artifacts and unchanged-byte behavior.
+
+**The exporter must also drain `sync_state.pending_progress_log`.** N07's native
+completion queues its PROGRESS.md session paragraph there, because every write to
+the legacy `meta` row fires the staging-invalidation trigger and would fail the
+command's own authority check. Until this drain lands, that key only accumulates
+and N08 must not route a completion carrying a changelog. Two pending stores now
+exist — the legacy `meta.pending_progress_log` the current exporter reads, and
+the native one — and N15 must reconcile whatever sits in both at cutover rather
+than assuming either is empty.
+
+Two details for whoever builds that drain. The stored shape is the same
+`[{"ts", "text"}, …]` list `store._progress_entries` already parses, so the
+drain needs no format conversion — only a second source. And the writer reads
+and rewrites the whole JSON blob per completion against an unbounded list, so
+it is quadratic in completions over a store's lifetime; the legacy pending list
+has the same property, and the applied-log cap does not bound it. Bound it or
+move it to rows when the drain lands.
 
 **Exit:** no committed effect loses its export intent; no stale job overwrites
 newer content; retry/rollback preserves authored data and local-only state.
@@ -354,7 +390,9 @@ backup/restore tests, operator runbook.
 
 Rehearse the complete bridge → quiesce → reconcile → consistent backup → backfill
 → compare → activate sequence on copies. Preserve historical seq/IDs, queues,
-reservations, quarantine, unknown fields and in-flight export jobs. Refuse active
+reservations, quarantine, unknown fields and in-flight export jobs, and
+reconcile both pending changelog stores (`meta.pending_progress_log` and
+`sync_state.pending_progress_log`) rather than assuming either is empty. Refuse active
 old clients and incompatible launchers; test both warm and cold clients.
 
 Crash at each durable migration stage. Prove pre-activation rollback and post-
@@ -462,11 +500,13 @@ N04 external-document retrieval is implemented; capturing file contents belongs
 to N13 sync/N15 pre-cutover import. Keep activation gated; no live project
 migration or installed-plugin changes. Do not merge the partial core checkpoint.
 
-**N07 validation (2026-09-16):** 2,569 passed, one live-Linear smoke skipped,
-zero failures or errors, in 1,174.90 seconds single-process on
-`feat/native-n07-lifecycle`. The 60 cases above the 2,509-case baseline are the
-41 native command-family cases and the 19 shared-rules cases. The frozen N02
-contract fixture is unchanged. No benchmark was run; performance stays with N16.
+**N07 validation (2026-09-16):** 2,578 passed, one live-Linear smoke skipped,
+zero failures or errors, in 1,341.98 seconds single-process on
+`feat/native-n07-lifecycle` at `f2dc8ca`. The 69 cases above the 2,509-case
+baseline are 19 shared-rules, 41 native command-family and 9 review-pass cases.
+The frozen N02 contract fixture is unchanged. The second review pass (`58e75a0`,
+`77a522c`) has focused-suite coverage only; a full run precedes integration. No
+benchmark was run; performance stays with N16.
 
 **Core checkpoint validation (2026-09-12):** 2,509 unique current test cases
 passed across the full run and corrective runs; one live Linear smoke skipped;
