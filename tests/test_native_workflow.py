@@ -126,6 +126,21 @@ def test_a_done_task_cannot_be_picked(workspace):
             run(connection, "task.pick", {"id": "demo-001", "session": "alpha"}, "repick")
 
 
+def test_a_malformed_bundle_is_refused_by_name_not_by_the_driver(workspace):
+    """A list-valued bundle reaches the store from the legacy format. Binding it
+    into SQL raised a raw driver error naming no task; the tool compares in
+    Python and degrades gracefully."""
+    with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
+        key = connection.execute(
+            "SELECT entity_key FROM entity_core WHERE kind='task' AND public_id='demo-001'").fetchone()[0]
+        connection.execute("INSERT INTO field_shapes VALUES(?,'bundle','list')", (key,))
+        connection.execute("INSERT INTO memberships VALUES(?,'bundle',0,?,NULL,NULL,NULL,NULL)",
+                           (key, '"alpha"'))
+        assert fields(connection, "task", "demo-001")["bundle"] == ["alpha"]
+        with pytest.raises(ValueError, match="demo-001"):
+            run(connection, "task.pick", {"id": "demo-001", "session": "alpha"}, "claim")
+
+
 def test_a_stale_lock_on_a_todo_row_does_not_refuse_the_pick(workspace):
     """The tool tests the lock only for a row that is already in-progress, so a
     `todo` row carrying a leftover `locked_by` is picked, not refused. Migrated
@@ -449,6 +464,54 @@ def test_auto_link_adds_references_for_inline_mentions_and_skips_unknown_targets
                                         "value": f"Follows {issue} and ISS-404"}, "notes")
         assert fields(connection, "task", "demo-001")["links"] == [{"type": "references", "target": issue}]
         assert fields(connection, "issue", issue)["links"] == [{"type": "referenced_by", "target": "demo-001"}]
+
+
+# ── Handover task membership ────────────────────────────────────────────────
+
+
+def test_handover_task_membership_is_a_typed_relation(workspace):
+    """`task_ids` is the field every handover carries; declaring `tasks` sent it
+    to the extension bag, so the membership table stayed empty and nothing could
+    ask which handovers reference a task."""
+    from taskmaster.native import schema
+    assert schema.owner("handover", "task_ids") == "memberships"
+    with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
+        handover = created(connection, "handover.create",
+                           {"tldr": "Covers demo-001", "task_ids": ["demo-001"]}, "handover")
+        rows = connection.execute(
+            "SELECT c.public_id,m.target_kind,m.target_id FROM memberships m "
+            "JOIN entity_core c ON c.entity_key=m.entity_key "
+            "WHERE m.field='task_ids' AND c.kind='handover'").fetchall()
+        assert rows == [(handover, "task", "demo-001")]
+        with Repository(connection).snapshot() as query:
+            assert query.relations("handover", handover, field="task_ids")["items"][0]["resolved"]
+            referencing = query.references_to("task", "demo-001")["items"]
+            assert any(row["kind"] == "handover" and row["id"] == handover for row in referencing)
+
+
+def test_completing_a_task_does_not_scan_every_handover(workspace):
+    """Smart-close reads the membership index, so its cost follows the handovers
+    that name the task, not the size of the handovers directory."""
+    with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
+        handover = created(connection, "handover.create",
+                           {"tldr": "Covers demo-001", "task_ids": ["demo-001"],
+                            "session_kind": "task-complete"}, "related")
+        run(connection, "task.pick", {"id": "demo-001", "session": "alpha"}, "claim")
+        express(connection, "demo-001", "scan")
+        for index in range(6):
+            run(connection, "handover.create", {"tldr": f"Unrelated context {index}",
+                                                "task_ids": ["demo-002"]}, f"noise-{index}")
+        statements = []
+        connection.set_trace_callback(statements.append)
+        run(connection, "task.complete", {"id": "demo-001"}, "done")
+        connection.set_trace_callback(None)
+        # The paginated list over every handover is the scan the membership
+        # index exists to replace; its ordering clause is its signature.
+        scans = [text for text in statements if "ORDER BY c.kind,c.public_id" in text]
+        assert scans == [], scans
+        lookups = [text for text in statements if "FROM memberships" in text]
+        assert lookups, "smart-close did not consult the membership index"
+        assert fields(connection, "handover", handover)["status"] == "closed"
 
 
 # ── Settings, threads and the Linear outbox ─────────────────────────────────
