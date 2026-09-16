@@ -209,6 +209,79 @@ _FTS_PROSE_FIELDS = (
 )
 # Kinds whose rows the compatibility dict carries verbatim under `_rows`, so a
 # list/get tool reads committed store state instead of re-parsing markdown.
+_PLAIN_SCALARS = (str, int, float, bool, type(None))
+
+
+def _copy_node(value: Any) -> Any:
+    kind = type(value)
+    if kind is dict:
+        return {key: _copy_node(item) for key, item in value.items()}
+    if kind is list:
+        return [_copy_node(item) for item in value]
+    if kind in _PLAIN_SCALARS:
+        return value
+    return copy.deepcopy(value)
+
+
+def _copy_plain(value: Any) -> Any:
+    """The read path's copy: deep, but without `copy.deepcopy`'s bookkeeping.
+
+    Every read hands the caller its own copy of the compatibility dict, and on
+    a 2,050-task backlog that is ~160k nodes. `copy.deepcopy` maintains a memo
+    of everything it has seen so it can rebuild shared references and cycles;
+    a document that came out of `json.loads` has neither, and the memo is most
+    of the cost. Anything that is not a plain dict/list/scalar -- exact type,
+    so a dict subclass with behaviour is not flattened into a plain one --
+    still goes through `copy.deepcopy`, which keeps the guarantee unchanged
+    for whatever a deriver has attached.
+    """
+    return _copy_node(value)
+
+
+class _LazyEntityRows(Mapping):
+    """`{kind: {id: (doc, body)}}` whose documents are parsed on first access.
+
+    Every read used to JSON-decode every bug, issue, handover, decision, idea,
+    note, area and tracker in the project, including `backlog_get_task`, which
+    wants one task and none of them. The rows are still fetched inside the
+    read's snapshot -- deferring the query would let a concurrent commit land
+    between the payload and the identity stamped on it -- but the decode waits
+    until a caller names the kind, and a kind nobody names is never decoded.
+    """
+
+    __slots__ = ("_raw", "_parsed")
+
+    def __init__(self, raw: dict[str, list[tuple[str, str, str | None]]]) -> None:
+        self._raw = raw
+        self._parsed: dict[str, dict[str, tuple[dict[str, Any], str | None]]] = {}
+
+    def __getitem__(self, kind: str) -> dict[str, tuple[dict[str, Any], str | None]]:
+        parsed = self._parsed.get(kind)
+        if parsed is None:
+            if kind not in self._raw:
+                raise KeyError(kind)
+            parsed = self._parsed[kind] = {
+                ident: (_from_json(doc, {}), body)
+                for ident, doc, body in self._raw[kind]
+            }
+        return parsed
+
+    def __iter__(self):
+        return iter(self._raw)
+
+    def __len__(self) -> int:
+        return len(self._raw)
+
+    def __deepcopy__(self, memo):
+        # The raw rows are immutable text and can be shared; only what a caller
+        # has already been handed needs copying.
+        clone = _LazyEntityRows(self._raw)
+        clone._parsed = {
+            kind: copy.deepcopy(rows, memo) for kind, rows in self._parsed.items()
+        }
+        return clone
+
+
 _DICT_ROW_KINDS = (
     "bug",
     "issue",
@@ -2231,8 +2304,12 @@ class Store:
         else:
             data = self._load_dict_from_connection(connection)
         if publish:
-            _CACHE[self.db_path] = (token, max_seq, copy.deepcopy(data))
-        result = copy.deepcopy(data)
+            # `data` is this call's own object either way -- freshly loaded, or
+            # the deep copy `_refresh_cached_dict` made -- so the cache can hold
+            # it and the caller gets one copy rather than two of the whole
+            # 160k-node dict.
+            _CACHE[self.db_path] = (token, max_seq, data)
+        result = _copy_plain(data)
         # Attached outside the cache entry so the incremental refresh above never
         # has to keep it in step: it is one query against the same snapshot.
         result["_rows"] = self._entity_rows_from_connection(connection)
@@ -2240,16 +2317,20 @@ class Store:
 
     def _entity_rows_from_connection(
         self, connection: sqlite3.Connection
-    ) -> dict[str, dict[str, tuple[dict[str, Any], str | None]]]:
+    ) -> "_LazyEntityRows":
         """`{kind: {id: (doc, body)}}` for every non-task entity kind.
 
         Read tools for bugs, issues, handovers, decisions, ideas, notes, areas
         and trackers render from this instead of globbing their directory, so a
         read and the write that follows it see one snapshot. Archived rows are
         included; their document carries `archived: True` and callers filter.
+
+        The rows are fetched here, inside the caller's snapshot; the documents
+        are decoded by `_LazyEntityRows` when a kind is first named, because
+        most reads name none of them.
         """
-        rows: dict[str, dict[str, tuple[dict[str, Any], str | None]]] = {
-            kind: {} for kind in _DICT_ROW_KINDS
+        raw: dict[str, list[tuple[str, str, str | None]]] = {
+            kind: [] for kind in _DICT_ROW_KINDS
         }
         placeholders = ",".join("?" for _ in _DICT_ROW_KINDS)
         for row in connection.execute(
@@ -2257,8 +2338,34 @@ class Store:
             "ORDER BY id",
             _DICT_ROW_KINDS,
         ):
-            rows[row["kind"]][row["id"]] = (_from_json(row["doc"], {}), row["body"])
-        return rows
+            raw[row["kind"]].append((row["id"], row["doc"], row["body"]))
+        return _LazyEntityRows(raw)
+
+    def entity_row(
+        self, kind: str, ident: str
+    ) -> tuple[dict[str, Any], str | None] | None:
+        """One entity's `(doc, body)`, or None -- without building the dict.
+
+        `backlog_get_task` and the link engine's entity read want a single row,
+        and were paying for the whole compatibility dict plus a decode of every
+        non-task entity in the project to get it. This is the same snapshot
+        discipline (a scan first, so a hand edit is adopted) over one indexed
+        lookup. The document is a copy: the caller that replaced this path
+        mutates what it is handed and documents that as read-only.
+        """
+        self._ensure_open()
+        if self._network_projection_only:
+            rows = self._entity_rows_from_projection().get(kind) or {}
+            found = rows.get(ident)
+            return (_copy_plain(found[0]), found[1]) if found else None
+        self._maybe_scan_on_read()
+        row = self.connection.execute(
+            "SELECT doc,body FROM entities WHERE kind=? AND id=? AND deleted=0",
+            (kind, ident),
+        ).fetchone()
+        if row is None:
+            return None
+        return _from_json(row["doc"], {}), row["body"]
 
     def _projection_identity(self) -> tuple[str, int]:
         """A `(token, seq)` pair that moves whenever the projection does.
