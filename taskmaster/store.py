@@ -1226,7 +1226,11 @@ class Store:
         if now - last_notice < due:
             return last_notice
         holders = None
-        if diagnose:
+        # Only the first notice names holders. `_busy_diagnostic` opens a second
+        # connection to a store that is by definition contended; asking every
+        # two seconds, from every waiter, adds load exactly where there is
+        # already too much, and the answer barely changes.
+        if diagnose and last_notice == started:
             try:
                 holders = self._busy_diagnostic(waited_seconds=now - started)
             except Exception:  # noqa: BLE001 - a diagnostic cannot break a wait
@@ -1296,6 +1300,8 @@ class Store:
                     last_notice=last_notice,
                     diagnose=diagnose,
                 )
+                if _MONOTONIC() >= deadline:
+                    raise give_up(None)
         except BaseException:
             gate.leave(ticket)
             raise
@@ -1336,6 +1342,11 @@ class Store:
                         last_notice=last_notice,
                         diagnose=diagnose,
                     )
+                    # An observer is someone else's code, and a progress sink
+                    # that blocks -- stderr nobody is draining -- must not carry
+                    # this caller past the deadline it was given.
+                    if _MONOTONIC() >= deadline:
+                        raise give_up(exc) from exc
                     # Jittered so peers stop polling in lockstep, and shorter
                     # the longer this caller has already waited: an unaged
                     # fixed poll gave a fresh arrival exactly the same odds as
