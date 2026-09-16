@@ -2425,6 +2425,12 @@ def _render_store_report(status: "store.StoreStatus") -> str:
         listing("Corrupt", status.corrupt_files),
         f"Merge conflicts (24 h): {status.merge_conflicts_24h}",
         f"Linear queue: {status.linear_pending} pending",
+        f"Read-scan skips: {status.read_scan_skips}"
+        + (
+            "  (store busy: hand edits are not being adopted)"
+            if status.read_scan_skips
+            else ""
+        ),
         f"Warning: {status.warning or 'none'}",
     ]
 
