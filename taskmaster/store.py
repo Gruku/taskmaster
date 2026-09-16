@@ -685,6 +685,18 @@ def _is_corruption(exc: BaseException) -> bool:
     return any(marker in str(exc).lower() for marker in _CORRUPTION_MARKERS)
 
 
+def _quick_check(connection: sqlite3.Connection, limit: int | None = None) -> str:
+    """The first `PRAGMA quick_check` row on an already-open connection.
+
+    Every retained-connection health probe goes through here so there is one
+    place that names what such a probe is worth: it is a cheap trigger, not a
+    verdict on the file. `""` when the pragma returns no row at all.
+    """
+    pragma = "PRAGMA quick_check" if limit is None else f"PRAGMA quick_check({limit})"
+    row = connection.execute(pragma).fetchone()
+    return "" if row is None else str(row[0])
+
+
 def _projection_schema(backlog_dir: Path) -> int | None:
     path = backlog_dir / "backlog.yaml"
     if not path.exists():
@@ -1383,12 +1395,12 @@ class Store:
                 return
             try:
                 connection = self.connection
-                quick = connection.execute("PRAGMA quick_check").fetchone()
+                quick = _quick_check(connection)
                 required = connection.execute(
                     "SELECT COUNT(*) FROM sqlite_master WHERE type='table' "
                     "AND name IN ('meta','entities','changes','projection')"
                 ).fetchone()[0]
-                ready = bool(quick and str(quick[0]).lower() == "ok" and required == 4)
+                ready = bool(quick.lower() == "ok" and required == 4)
             except sqlite3.Error:
                 ready = False
             self._network_projection_only = not ready
@@ -1460,8 +1472,7 @@ class Store:
             # corrupt page happened to hold. `quick_check(1)` stops at the first
             # error; on the 46 MB real-backlog store it costs under 200 ms, once
             # per process, and only on the cold open.
-            quick = connection.execute("PRAGMA quick_check(1)").fetchone()
-            if not quick or str(quick[0]).lower() != "ok":
+            if _quick_check(connection, 1).lower() != "ok":
                 return False
             tables = {
                 row[0]
@@ -1573,11 +1584,11 @@ class Store:
     def _prepare_schema(self, connection: sqlite3.Connection) -> None:
         assert_compatible(connection)
         try:
-            quick = connection.execute("PRAGMA quick_check").fetchone()
+            quick = _quick_check(connection)
         except sqlite3.DatabaseError:
             raise
-        if quick and str(quick[0]).lower() != "ok":
-            raise sqlite3.DatabaseError(f"malformed database: quick_check={quick[0]}")
+        if quick and quick.lower() != "ok":
+            raise sqlite3.DatabaseError(f"malformed database: quick_check={quick}")
 
         has_meta = connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta'"
