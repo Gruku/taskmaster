@@ -136,7 +136,10 @@ class Transaction:
         self.group = None
         self.seq = int(identity["event_high_water"])
         self.affected = {}
-        self.counters = {"fts_documents": 0, "global_graph_rebuilds": 0, "path_comparisons": 0, "link_pairs": 0, "handover_pairs": 0}
+        # Every counter reports work actually issued. A "global rebuild" counter
+        # lived here that nothing could increment, so it proved nothing; the
+        # absence of graph work is asserted directly against the SQL instead.
+        self.counters = {"fts_documents": 0, "path_comparisons": 0, "link_pairs": 0, "handover_pairs": 0}
 
     def _changed(self, key, kind, ident, before, after, body, operation, *, before_body=None, prior_file=None):
         # Canonical JSON equality distinguishes True from 1 and absent from null.

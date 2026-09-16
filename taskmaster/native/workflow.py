@@ -643,12 +643,15 @@ def _task_pick(transaction, arguments):
     if slug:
         return _bundle_pick(transaction, ident, slug, session=session, force=force)
     status = task.get("status", "todo")
-    locked_by = task.get("locked_by")
-    if locked_by and locked_by != session and not force:
-        raise Conflict(f"task `{ident}` is locked by another session (`{locked_by}`)")
     if status not in domain.PICKABLE_FROM:
         raise ValueError(f"task `{ident}` is `{status}`, expected one of: {', '.join(domain.PICKABLE_FROM)}")
     if status == "in-progress":
+        # The lock is only contested for a row already in progress. A todo or
+        # in-review row carrying a leftover `locked_by` — what a migrated row
+        # brings — is claimed, not refused, exactly as the tool does.
+        locked_by = task.get("locked_by")
+        if locked_by and locked_by != session and not force:
+            raise Conflict(f"task `{ident}` is locked by another session (`{locked_by}`)")
         task["locked_by"] = session
     else:
         task = domain.pick_task_doc(task, session=session)
@@ -880,7 +883,10 @@ def _epic_archive(transaction, arguments):
         member = _entity(transaction, "task", item["id"])
         task = domain.archive_task_doc(member["fields"], reason=reason)
         task["archived"] = stamp
-        _write_task(transaction, item["id"], task, member["body"], before_entity=member)
+        # The cascade is a local consequence of archiving the epic, so it queues
+        # nothing: the tool's cascade never enqueues, and a large epic would
+        # otherwise push once per task against a real tracker.
+        _write_task(transaction, item["id"], task, member["body"], before_entity=member, enqueue=False)
     return ident
 
 
@@ -976,7 +982,7 @@ def _phase_advance(transaction, arguments):
         member = _entity(transaction, "task", item["id"])
         task = domain.archive_task_doc(member["fields"], reason="done")
         task["archived"] = stamp
-        _write_task(transaction, item["id"], task, member["body"], before_entity=member)
+        _write_task(transaction, item["id"], task, member["body"], before_entity=member, enqueue=False)
     planned = sorted((p for p in phases if p["fields"].get("status") == "planned"),
                      key=lambda p: (p["fields"].get("order") if isinstance(p["fields"].get("order"), int) else 999,
                                     p["id"]))

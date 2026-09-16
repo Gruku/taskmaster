@@ -128,7 +128,7 @@ def _handover_memberships(connection, ident, before, after):
 
 def maintain(connection, kind, ident, before, after, *, before_body=None, after_body=None):
     """Inputs are canonical affected documents, with None representing deletion."""
-    counts = {"global_graph_rebuilds": 0, "path_comparisons": 0, "link_pairs": 0, "handover_pairs": 0}
+    counts = {"path_comparisons": 0, "link_pairs": 0, "handover_pairs": 0}
     old_paths, new_paths = _paths(before, before_body), _paths(after, after_body)
     if old_paths != new_paths:
         connection.execute("DELETE FROM entity_paths WHERE kind=? AND id=?", (kind, ident))

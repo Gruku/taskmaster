@@ -59,7 +59,6 @@ def test_metadata_only_maintenance_executes_no_graph_sql():
     after = dict(before, title="After", next_step="Continue")
     counts = maintain(connection, "task", "T-1", before, after)
     assert counts["path_comparisons"] == 0
-    assert counts["global_graph_rebuilds"] == 0
     assert statements == []
     connection.close()
 
