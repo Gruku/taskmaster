@@ -110,7 +110,17 @@ test the bridge across MCP, viewer, hooks, scripts and Linear. Inventory install
 launch paths and how they will be stopped/upgraded at real cutover. Protect
 existing open handles; a tracked projection marker alone is not sufficient.
 
-**Exit:** an unknown newer DB is unchanged after every supported entry point.
+Apply N00's diagnostic policy at this admission path, which the first pass of
+this step did not do: a corruption verdict from a retained connection must be
+confirmed against a fresh read-only snapshot before it can reach recovery.
+Until that landed, a peer commit to `entity_fts` made a healthy store's
+`quick_check` report a malformed FTS5 index and the live database family was
+renamed aside and rebuilt from the lagging projection (B-092).
+
+**Exit:** an unknown newer DB is unchanged after every supported entry point,
+**and** no retained-connection diagnostic can rename a healthy database aside
+while genuine, snapshot-confirmed damage is still detected and recovered
+([B-092 evidence](../reports/2026-09-16-b092-false-corruption.md)).
 Bridge installation is a later authorized rollout prerequisite, not performed
 automatically by this step.
 
@@ -427,7 +437,7 @@ explicitly deferred scope when implementation actually occurs.
 | Step | Status | Commit / evidence |
 |---|---|---|
 | N00 | complete locally | `c940697`, `7470757`; [FTS matrix (40 cases), diagnostic policy and baseline oracles](../reports/2026-09-09-native-foundation.md) |
-| N01 | complete locally; bridge rollout pending | `4aa6694` plus reservation-test follow-up; [admission and cutover contract](../handoffs/2026-09-09-native-client-fencing.md) |
+| N01 | reopened for B-092, then complete locally; bridge rollout pending | `4aa6694` plus reservation-test follow-up, `92073f2` admission gate; [admission and cutover contract](../handoffs/2026-09-09-native-client-fencing.md), [B-092 false-corruption evidence](../reports/2026-09-16-b092-false-corruption.md) |
 | N02 | complete locally | [83 tools, route/field/SQL contracts and ownership map; M0 validation below](../specs/2026-09-09-native-compatibility.md) |
 | N03 | complete locally; activation gated | [Schema, transactional backfill, crash tests and 3,559-row copied-fixture evidence](../reports/2026-09-12-native-core.md) |
 | N04 | core complete locally; adapter parity remains N08 | [Bounded reads, snapshots, SQL isolation, stored/external document retrieval](../reports/2026-09-12-native-core.md) |
