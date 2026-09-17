@@ -11,6 +11,7 @@ import re
 import socket
 import sqlite3
 import subprocess
+import queue
 import sys
 import threading
 import urllib.request
@@ -51,11 +52,49 @@ def _guard_legacy_layout(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
         try:
-            return fn(*args, **kwargs)
+            result = fn(*args, **kwargs)
         except store.LegacyLayoutError as exc:
             return f"Error: {exc}"
+        return _attach_conflict_notices(result)
 
     return wrapper
+
+
+def _attach_conflict_notices(result):
+    """Name every flagged file in the result, on every call, until it is resolved.
+
+    A file edited while the store owed it an export is flagged by whichever
+    scan meets it first -- usually inside a read -- and nothing is merged, so
+    the only way anyone learns both versions exist is to be told. Every tool
+    passes through here. The flags are read from their own table in one query,
+    so there is no cursor to lose across restarts or processes and no history
+    scan per call. Advisory: a failure to look never costs the caller the
+    result they asked for.
+    """
+    if store.active_transaction() is not None:
+        # A nested tool call: the outermost one owns the response.
+        return result
+    try:
+        instance = store.opened_store(_backlog_path())
+        if instance is None:
+            return result
+        conflicts = instance.projection_conflicts()
+    except Exception:  # noqa: BLE001 -- advisory, see docstring
+        return result
+    if not conflicts:
+        return result
+    notices = [store.projection_conflict_notice(conflict) for conflict in conflicts]
+    if isinstance(result, dict):
+        result.setdefault("projection_conflicts", notices)
+    elif isinstance(result, str):
+        payload = _as_json_result(result)
+        if isinstance(payload, dict):
+            payload.setdefault("projection_conflicts", notices)
+            result = json.dumps(payload)
+        elif payload is None:
+            result = result + "\n\n" + "\n".join(f"Warning: {notice}" for notice in notices)
+        # A JSON array has nowhere to carry them; the next other result will.
+    return result
 
 
 class _GuardedToolRegistrar:
@@ -441,6 +480,59 @@ def _active_tx() -> "_TxFrame | None":
     return getattr(_TX_STATE, "frame", None)
 
 
+# Progress notices are handed to a daemon thread rather than written inline.
+# `print(..., flush=True)` blocks when nobody is draining stderr -- a host that
+# has stopped reading, or a harness that collects the pipe only at exit -- and
+# a writer already queued for the lock would then sit there past its own
+# deadline waiting on a *log line*. Measured: a store writer overran a 30 s
+# deadline to 82 s that way. A full queue drops the notice instead; a dropped
+# progress line costs nothing, a stalled writer costs the call.
+_WRITER_WAIT_NOTICES: "queue.Queue[str]" = queue.Queue(maxsize=64)
+_WRITER_WAIT_PUMP: "threading.Thread | None" = None
+_WRITER_WAIT_PUMP_LOCK = threading.Lock()
+
+
+def _drain_writer_wait_notices() -> None:
+    while True:
+        line = _WRITER_WAIT_NOTICES.get()
+        try:
+            print(line, file=sys.stderr, flush=True)
+        except Exception:  # noqa: BLE001 - a closed stderr must not kill the pump
+            pass
+
+
+def _report_writer_wait(event: "store.WriterWait") -> None:
+    """Say out loud that a tool is queued behind the store's writer mutex.
+
+    A tool that waits the full window used to show the harness nothing at all
+    and then fail, which reads as a hung server rather than as contention. This
+    is the one channel available without an MCP Context: stderr, where the host
+    logs it, with the operation and whoever is probably holding the lock.
+    """
+    global _WRITER_WAIT_PUMP
+    try:
+        stamp = datetime.now(timezone.utc).isoformat()
+        line = (
+            f"{stamp} taskmaster: {event.operation} has waited "
+            f"{event.waited:.1f}s of {event.deadline:.1f}s for the store writer lock"
+            + (f" -- {event.holders}" if event.holders else "")
+        )
+        if _WRITER_WAIT_PUMP is None:
+            with _WRITER_WAIT_PUMP_LOCK:
+                if _WRITER_WAIT_PUMP is None:
+                    _WRITER_WAIT_PUMP = threading.Thread(
+                        target=_drain_writer_wait_notices,
+                        name="taskmaster-writer-wait",
+                        daemon=True,
+                    )
+                    _WRITER_WAIT_PUMP.start()
+        _WRITER_WAIT_NOTICES.put_nowait(line)
+    except queue.Full:
+        pass
+    except Exception:  # noqa: BLE001 - progress must never break the call
+        pass
+
+
 def _configure_store_derivers() -> None:
     """Point the store at this module's pure derivation helpers.
 
@@ -451,6 +543,7 @@ def _configure_store_derivers() -> None:
         context_builder=_derive_context,
         progress_renderer=_render_progress_dashboard,
     )
+    store.set_wait_observer(_report_writer_wait)
 
 
 def _store_for(backlog_path: "Path | None" = None) -> "store.Store":
@@ -1071,8 +1164,7 @@ def _store_read_entity(backlog_path: Path | None, kind: str, entity_id: str) -> 
     bp = Path(backlog_path) if backlog_path else _backlog_path()
     if not bp.exists():
         return None
-    rows = (_store_for(bp).load_dict().get("_rows") or {}).get(kind) or {}
-    row = rows.get(entity_id)
+    row = _store_for(bp).entity_row(kind, entity_id)
     if row is None:
         return None
     doc, body = row
@@ -2422,9 +2514,17 @@ def _render_store_report(status: "store.StoreStatus") -> str:
         f"Size: db={status.db_size} B  wal={status.wal_size} B  max seq={status.max_seq}",
         listing("Dirty", status.dirty_files),
         listing("Quarantined", status.quarantined_files),
+        listing("Stuck exports", status.stuck_exports),
+        listing("Flagged (both changed; see backlog_resolve_conflict)", status.flagged_files),
         listing("Corrupt", status.corrupt_files),
         f"Merge conflicts (24 h): {status.merge_conflicts_24h}",
         f"Linear queue: {status.linear_pending} pending",
+        f"Read-scan skips: {status.read_scan_skips}"
+        + (
+            "  (store busy: hand edits are not being adopted)"
+            if status.read_scan_skips
+            else ""
+        ),
         f"Warning: {status.warning or 'none'}",
     ]
 
@@ -2466,6 +2566,94 @@ def backlog_store_status() -> str:
     # No `_configure_store_derivers()`: nothing here exports or regenerates, so
     # the read does not need the derivation hooks and does not install them.
     return _render_store_report(store.read_only_status(bp))
+
+
+@mcp.tool()
+def backlog_resolve_conflict(file: str = "", take: str = "") -> str:
+    """List, compare or resolve files flagged because they and the store both changed.
+
+    A projection file (a task, epic or phase file, `backlog.yaml`,
+    `project.yaml`, ...) edited or repaired while the store held a change it
+    had not yet written there is flagged: nothing is merged, the store keeps
+    its version, the file is left exactly as written, and exports to it pause.
+    Every tool result names flagged files until they are resolved.
+
+    - no `file`: list flagged files.
+    - `file` only: show both versions -- the file as last seen and as on disk
+      now, and the exact text the store would write.
+    - `file` and `take="file"`: import the file as it is on disk now; the
+      store's replaced values stay in the change log.
+    - `file` and `take="store"`: write the store's version over the file (or
+      move/remove it if the entity is archived or deleted); the replaced file
+      text is kept in the resolution's change row.
+
+    A resolution always takes one whole file. For `backlog.yaml` that means
+    every epic and phase entry in it at once: there is no per-entity choice, so
+    compare the two versions first and edit the side you keep if it needs
+    pieces of the other.
+
+    Whoever resolves decides; the store never picks a side on its own.
+    """
+    _configure_store_derivers()
+    st = _store()
+    if not file:
+        conflicts = st.projection_conflicts()
+        if not conflicts:
+            return "No flagged files."
+        return "\n".join(
+            [f"{len(conflicts)} flagged file(s):"]
+            + [
+                f"- {c['file']} ({c['kind']} {c['id']}, flagged {c['flagged_at']})"
+                for c in conflicts
+            ]
+        )
+    if not take:
+        detail = st.projection_conflict_detail(file)
+        if detail is None:
+            return f"Error: {file} is not flagged."
+
+        def block(label: str, text: str | None, absent: str) -> str:
+            if text is None:
+                return f"### {label}\n\n({absent})"
+            return f"### {label}\n\n````\n{text.rstrip(chr(10))}\n````"
+
+        parts = [
+            f"## {file} ({detail['kind']} {detail['id']}), flagged {detail['flagged_at']}",
+            block("File on disk now", detail["file_on_disk"], "the file is missing"),
+        ]
+        if detail["file_observed"] != detail["file_on_disk"]:
+            parts.append(block("File as last seen by the store", detail["file_observed"], ""))
+        absent = (
+            f"the store writes this entity to {detail['store_path']} instead"
+            if detail["store_path"]
+            else "the store would write no file here: the entity is deleted or has no file of its own"
+        )
+        parts.append(block("Store version (what take=\"store\" writes)", detail["store_version"], absent))
+        whole = (
+            " Either choice applies to the whole of backlog.yaml, every epic and "
+            "phase entry in it, not to one entity."
+            if file == "backlog.yaml"
+            else ""
+        )
+        parts.append(
+            f'Keep one with backlog_resolve_conflict(file="{file}", take="file") '
+            f'or take="store".{whole}'
+        )
+        return "\n\n".join(parts)
+    try:
+        outcome = st.resolve_projection_conflict(file, take)
+    except ValueError as exc:
+        return f"Error: {exc}"
+    message = f"Resolved {file}: kept the {take} version."
+    if file == "backlog.yaml":
+        message += (
+            " This took the whole file: every epic and phase entry in "
+            "backlog.yaml now comes from the " + take + " version."
+        )
+    pending = [w for w in outcome["warnings"] if "export pending" in w]
+    if pending:
+        message += " (" + "; ".join(pending) + ")"
+    return _append_seq(message, outcome["seq"])
 
 
 def _render_query_table(description, rows: list, limit: int) -> str:

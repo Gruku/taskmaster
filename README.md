@@ -8,7 +8,7 @@ Taskmaster is a local-first task and backlog system for AI-assisted software
 projects. It gives Claude Code and Codex a shared MCP core, disciplined workflow
 playbooks, durable session continuity, and a fast browser-based project board.
 
-[![Version](https://img.shields.io/badge/version-6.0.2-7c3aed?style=flat-square)](https://github.com/Gruku/taskmaster/releases)
+[![Version](https://img.shields.io/badge/version-6.0.3-7c3aed?style=flat-square)](https://github.com/Gruku/taskmaster/releases)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776ab?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-22c55e?style=flat-square)](LICENSE)
 [![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-d97706?style=flat-square)](https://docs.anthropic.com/en/docs/claude-code)
@@ -187,6 +187,11 @@ how it was resolved, database and WAL size, dirty and quarantined projection
 files, live sessions, recent changes, and the pending Linear push count. It is
 genuinely read-only — it never creates a store that does not exist and never
 moves a damaged one aside.
+
+A projection file edited while the store still owed it a change (typically a
+quarantined file repaired by hand) is never merged automatically: both versions
+are kept, exports to that file pause, and every tool result names it until
+`backlog_resolve_conflict(file, take="file"|"store")` keeps one side.
 
 Editing a file that a task, bug, issue, or handover already tracks prints a
 single ambient line naming the open items it touches, e.g.

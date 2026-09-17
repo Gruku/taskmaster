@@ -223,13 +223,27 @@ def test_warm_store_reference_reimports_projection_when_database_disappears(tmp_
     assert _task(opened.load_dict())["title"] == "Projected title"
 
 
-def test_failed_quick_check_is_treated_as_corruption(tmp_path):
+def _damage_fts_index(database: Path) -> None:
+    """Break FTS index/content agreement so a fresh read-only snapshot sees it."""
+    with sqlite3.connect(database) as connection:
+        connection.execute("UPDATE entity_fts_content SET c3='tokens that were never indexed'")
+
+
+def test_failed_quick_check_confirmed_on_disk_is_treated_as_corruption(tmp_path):
+    """Confirmed by a fresh snapshot, a failed quick_check still raises.
+
+    The unconfirmed case -- a retained connection reporting a malformed FTS5
+    index after a peer commit -- belongs to `tests/test_store_false_corruption.py`.
+    """
     backlog_path, _ = _write_projection(tmp_path)
     opened = store.open_store(backlog_path=backlog_path, session="quick-check-test")
+    _damage_fts_index(opened.db_path)
 
     class FailedQuickCheck:
         @staticmethod
         def execute(statement, _params=()):
+            if statement.startswith("SELECT 1 FROM sqlite_schema"):
+                return SimpleNamespace(fetchone=lambda: None)
             assert statement == "PRAGMA quick_check"
             return SimpleNamespace(fetchone=lambda: ("*** corruption on page 2",))
 
@@ -285,20 +299,10 @@ def test_failed_quick_check_rebuild_preserves_dirty_commit_in_backup(
         connection.execute(
             "UPDATE projection SET dirty=1 WHERE file='tasks/core-001.md'"
         )
+        # Real damage, not a simulated exception: recovery only runs on a
+        # verdict a fresh read-only snapshot confirms.
+        connection.execute("UPDATE entity_fts_content SET c3='tokens that were never indexed'")
 
-    real_prepare = store.Store._prepare_schema
-    calls = 0
-
-    def fail_first_quick_check(self, connection):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            raise sqlite3.DatabaseError(
-                "malformed database: quick_check=*** corruption on page 2"
-            )
-        return real_prepare(self, connection)
-
-    monkeypatch.setattr(store.Store, "_prepare_schema", fail_first_quick_check)
     _force_locked_open(monkeypatch)
     rebuilt = store.open_store(backlog_path=backlog_path, session="rebuild-reader")
 
@@ -322,38 +326,42 @@ def test_failed_quick_check_rebuild_preserves_dirty_commit_in_backup(
     assert dirty == 1
 
 
-def test_old_corrupt_backups_are_pruned_but_recent_family_remains_in_status(
-    tmp_path,
+@pytest.mark.parametrize("locked_open", [False, True])
+def test_renamed_aside_databases_are_never_deleted_by_an_open(
+    tmp_path, monkeypatch, locked_open
 ):
+    """A `store.db.corrupt-*` family can be the only copy of committed state.
+
+    6.0.2 renamed healthy stores aside (B-092); the progress entries, sessions
+    and Linear claims written before the rename live nowhere else. Opening a
+    store used to delete families whose mtime was over 7 days old -- and a
+    rename keeps the original mtime, so a family made today could already
+    qualify. No open may delete one, however old it looks.
+    """
     backlog_path, _ = _write_projection(tmp_path)
-    opened = store.open_store(backlog_path=backlog_path, session="prune-test")
+    opened = store.open_store(backlog_path=backlog_path, session="keep-test")
     database = opened.db_path
     store.reset_for_tests()
+    if locked_open:
+        _force_locked_open(monkeypatch)
 
-    old_names = {
-        f"store.db.corrupt-20260801T010203000000Z{suffix}"
+    names = {
+        f"store.db.corrupt-{stamp}{suffix}"
+        for stamp in ("20250101T010203000000Z", "20260903T010203000000Z")
         for suffix in ("", "-wal", "-shm")
     }
-    recent_names = {
-        f"store.db.corrupt-20260903T010203000000Z{suffix}"
-        for suffix in ("", "-wal", "-shm")
-    }
-    old_time = (datetime.now(timezone.utc) - timedelta(days=8)).timestamp()
-    recent_time = (datetime.now(timezone.utc) - timedelta(days=1)).timestamp()
-    for name, modified in [
-        *((name, old_time) for name in old_names),
-        *((name, recent_time) for name in recent_names),
-    ]:
+    ancient = (datetime.now(timezone.utc) - timedelta(days=400)).timestamp()
+    for name in names:
         path = database.parent / name
         path.write_bytes(name.encode("ascii"))
-        os.utime(path, (modified, modified))
+        os.utime(path, (ancient, ancient))
 
-    reopened = store.open_store(backlog_path=backlog_path, session="prune-reader")
+    reopened = store.open_store(backlog_path=backlog_path, session="keep-reader")
+    reopened.load_dict()
     present = {path.name for path in database.parent.glob("store.db.corrupt-*")}
 
-    assert old_names.isdisjoint(present)
-    assert recent_names <= present
-    assert recent_names <= set(reopened.status().corrupt_files)
+    assert names <= present
+    assert names <= set(reopened.status().corrupt_files)
 
 
 @pytest.mark.parametrize(
@@ -608,6 +616,9 @@ def test_truncate_checkpoint_failure_is_best_effort(tmp_path, monkeypatch):
     attempted = []
 
     class FailingCheckpointConnection:
+        def fetchone(self):
+            return None
+
         def execute(self, statement):
             attempted.append(statement)
             if statement == "PRAGMA wal_checkpoint(TRUNCATE)":
@@ -629,6 +640,7 @@ def test_truncate_checkpoint_failure_is_best_effort(tmp_path, monkeypatch):
 
     assert attempted == [
         "PRAGMA busy_timeout=0",
+        "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='meta'",
         "PRAGMA wal_checkpoint(TRUNCATE)",
         "close",
     ]

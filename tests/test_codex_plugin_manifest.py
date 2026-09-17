@@ -28,9 +28,9 @@ def test_distribution_versions_stay_aligned():
     claude = load_json(".claude-plugin/plugin.json")
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
 
-    assert codex["version"] == "6.0.2"
+    assert codex["version"] == "6.0.3"
     assert claude["version"] == codex["version"]
-    assert 'version = "6.0.2"' in pyproject
+    assert 'version = "6.0.3"' in pyproject
     assert f'## {codex["version"]}' in (ROOT / "CHANGELOG.md").read_text(
         encoding="utf-8"
     )

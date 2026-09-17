@@ -35,6 +35,11 @@ from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 import yaml
 
 from taskmaster import yaml_io
+from taskmaster.integrity import check_database
+from taskmaster.admission import (
+    BRIDGE_CAPABILITIES, CLIENT_PROTOCOL, LEGACY_SCHEMA_VERSION,
+    UnsupportedStoreError, assert_compatible,
+)
 from taskmaster.paths import (
     as_list,
     extract_prose_paths,
@@ -88,10 +93,16 @@ from taskmaster.taskmaster_v3 import (
 # incompatible, drops every table and rebuilds it to its own schema. Columns
 # added through `_ADDED_COLUMNS` are applied additively on every open and need
 # no bump, so they stay compatible with a mixed fleet.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = LEGACY_SCHEMA_VERSION
 PROJECTION_SCHEMA = 5
 BUSY_TIMEOUT_MS = 30_000
 HEARTBEAT_INTERVAL_SECONDS = 20.0
+# How long a read trusts its last projection scan before looking again.
+READ_SCAN_THROTTLE_SECONDS = 2.0
+# Consecutive read-side scans skipped because the store was busy before the
+# reader says so out loud. A skipped scan means hand edits sit unadopted, and
+# the state is otherwise indistinguishable from "nothing changed".
+READ_SCAN_SKIP_WARN_AFTER = 5
 _MONOTONIC = time.monotonic
 _BACKLOG_ID = "__backlog__"
 _PROJECT_ID = "__project__"
@@ -199,6 +210,79 @@ _FTS_PROSE_FIELDS = (
 )
 # Kinds whose rows the compatibility dict carries verbatim under `_rows`, so a
 # list/get tool reads committed store state instead of re-parsing markdown.
+_PLAIN_SCALARS = (str, int, float, bool, type(None))
+
+
+def _copy_node(value: Any) -> Any:
+    kind = type(value)
+    if kind is dict:
+        return {key: _copy_node(item) for key, item in value.items()}
+    if kind is list:
+        return [_copy_node(item) for item in value]
+    if kind in _PLAIN_SCALARS:
+        return value
+    return copy.deepcopy(value)
+
+
+def _copy_plain(value: Any) -> Any:
+    """The read path's copy: deep, but without `copy.deepcopy`'s bookkeeping.
+
+    Every read hands the caller its own copy of the compatibility dict, and on
+    a 2,050-task backlog that is ~160k nodes. `copy.deepcopy` maintains a memo
+    of everything it has seen so it can rebuild shared references and cycles;
+    a document that came out of `json.loads` has neither, and the memo is most
+    of the cost. Anything that is not a plain dict/list/scalar -- exact type,
+    so a dict subclass with behaviour is not flattened into a plain one --
+    still goes through `copy.deepcopy`, which keeps the guarantee unchanged
+    for whatever a deriver has attached.
+    """
+    return _copy_node(value)
+
+
+class _LazyEntityRows(Mapping):
+    """`{kind: {id: (doc, body)}}` whose documents are parsed on first access.
+
+    Every read used to JSON-decode every bug, issue, handover, decision, idea,
+    note, area and tracker in the project, including `backlog_get_task`, which
+    wants one task and none of them. The rows are still fetched inside the
+    read's snapshot -- deferring the query would let a concurrent commit land
+    between the payload and the identity stamped on it -- but the decode waits
+    until a caller names the kind, and a kind nobody names is never decoded.
+    """
+
+    __slots__ = ("_raw", "_parsed")
+
+    def __init__(self, raw: dict[str, list[tuple[str, str, str | None]]]) -> None:
+        self._raw = raw
+        self._parsed: dict[str, dict[str, tuple[dict[str, Any], str | None]]] = {}
+
+    def __getitem__(self, kind: str) -> dict[str, tuple[dict[str, Any], str | None]]:
+        parsed = self._parsed.get(kind)
+        if parsed is None:
+            if kind not in self._raw:
+                raise KeyError(kind)
+            parsed = self._parsed[kind] = {
+                ident: (_from_json(doc, {}), body)
+                for ident, doc, body in self._raw[kind]
+            }
+        return parsed
+
+    def __iter__(self):
+        return iter(self._raw)
+
+    def __len__(self) -> int:
+        return len(self._raw)
+
+    def __deepcopy__(self, memo):
+        # The raw rows are immutable text and can be shared; only what a caller
+        # has already been handed needs copying.
+        clone = _LazyEntityRows(self._raw)
+        clone._parsed = {
+            kind: copy.deepcopy(rows, memo) for kind, rows in self._parsed.items()
+        }
+        return clone
+
+
 _DICT_ROW_KINDS = (
     "bug",
     "issue",
@@ -253,6 +337,14 @@ CREATE TABLE IF NOT EXISTS projection(
   quarantine_hash TEXT
 );
 CREATE TABLE IF NOT EXISTS projection_base(file TEXT PRIMARY KEY, content BLOB);
+CREATE TABLE IF NOT EXISTS projection_conflict(
+  file TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  id TEXT,
+  flagged_at TEXT NOT NULL,
+  file_hash TEXT NOT NULL,
+  file_content BLOB NOT NULL
+);
 CREATE TABLE IF NOT EXISTS sessions(
   session TEXT PRIMARY KEY,
   pid INTEGER,
@@ -316,6 +408,7 @@ CREATE INDEX IF NOT EXISTS ix_related_b ON related(b_kind, b_id);
 CREATE INDEX IF NOT EXISTS ix_handover_tasks_pair ON handover_tasks(handover_id, task_id);
 CREATE INDEX IF NOT EXISTS ix_entities_kind_status ON entities(kind, status);
 CREATE INDEX IF NOT EXISTS ix_changes_entity ON changes(kind, id, seq);
+CREATE INDEX IF NOT EXISTS ix_projection_entity ON projection(kind, id);
 """
 
 
@@ -365,6 +458,123 @@ class StoreStatus:
     warning: str | None = None
     corrupt_files: tuple[str, ...] = ()
     linear_pending: int = 0
+    # Projection files the store owes an export it cannot write, because the
+    # file on disk is quarantined. The database holds newer content than the
+    # file and will keep holding it until the file is repaired or removed.
+    stuck_exports: tuple[str, ...] = ()
+    # Files edited while the store owed them an export: both versions kept,
+    # exports paused until `backlog_resolve_conflict` picks one.
+    flagged_files: tuple[str, ...] = ()
+    # In-memory, per reporting process: how many read-side projection scans in
+    # a row this process had to skip because the store was busy. It cannot be
+    # read out of the database, so a report built by a process that has never
+    # opened this store reads 0 -- which is what it honestly knows.
+    read_scan_skips: int = 0
+
+
+# A caller waiting on the writer mutex gets these while it waits, so a harness
+# that would otherwise show nothing for the whole window can say what is going
+# on and who is holding the lock.
+WRITER_WAIT_FIRST_NOTICE_SECONDS = 0.5
+WRITER_WAIT_NOTICE_INTERVAL_SECONDS = 2.0
+
+
+@dataclass(frozen=True)
+class WriterWait:
+    """One progress notice from a caller queued behind the writer mutex."""
+
+    operation: str
+    waited: float
+    deadline: float
+    holders: str | None = None
+
+
+_WAIT_OBSERVER: "Callable[[WriterWait], None] | None" = None
+
+
+def set_wait_observer(observer: "Callable[[WriterWait], None] | None") -> None:
+    """Install the sink for writer-mutex progress notices, or clear it.
+
+    The store cannot emit MCP progress itself -- it has no Context and no
+    business knowing about one -- so the tool layer registers a sink here and
+    decides what a wait looks like to its caller. An observer that raises is
+    ignored: a progress report must never turn a wait into a failure.
+    """
+    global _WAIT_OBSERVER
+    _WAIT_OBSERVER = observer
+
+
+class _ArrivalGate:
+    """Arrival-ordered admission to one lock file, within this process.
+
+    The cross-process wait is a poll, and a poll has no memory: with ten
+    waiters the next one in is whoever's timer happens to fire first, so a
+    process could sit through the whole 30 s window while later arrivals went
+    ahead of it. Threads in one process can do better than luck, and an MCP
+    server is several threads, so they queue here by arrival and exactly one of
+    them contends for the file lock at a time -- which also means one poller
+    per process rather than one per thread.
+    """
+
+    def __init__(self) -> None:
+        self._condition = threading.Condition(threading.Lock())
+        self._waiting: list[int] = []
+        self._next_ticket = 0
+        self._held = False
+
+    def enter(self) -> int:
+        """Take a ticket. Arrival order is fixed here, not at first wait."""
+        with self._condition:
+            ticket = self._next_ticket
+            self._next_ticket += 1
+            self._waiting.append(ticket)
+            return ticket
+
+    def wait_turn(self, ticket: int, until: float) -> bool:
+        """True once `ticket` holds the gate; False if `until` passed first.
+
+        The ticket survives a False: the caller waits in slices so it can send
+        a progress notice without the condition lock, and re-queueing between
+        slices would put it back behind everyone who arrived while it waited --
+        which is the unfairness this class exists to remove.
+        """
+        with self._condition:
+            while self._held or self._waiting[0] != ticket:
+                remaining = until - _MONOTONIC()
+                if remaining <= 0:
+                    return False
+                self._condition.wait(min(remaining, 0.05))
+            self._waiting.remove(ticket)
+            self._held = True
+            return True
+
+    def leave(self, ticket: int) -> None:
+        """Abandon a ticket that never got its turn.
+
+        Without this the thread behind waits out its own deadline behind a
+        ticket nobody will ever serve.
+        """
+        with self._condition:
+            if ticket in self._waiting:
+                self._waiting.remove(ticket)
+                self._condition.notify_all()
+
+    def release(self) -> None:
+        with self._condition:
+            self._held = False
+            self._condition.notify_all()
+
+
+_ARRIVAL_GATES: dict[Path, _ArrivalGate] = {}
+_ARRIVAL_GATES_LOCK = threading.Lock()
+
+
+def _arrival_gate(path: Path) -> _ArrivalGate:
+    with _ARRIVAL_GATES_LOCK:
+        gate = _ARRIVAL_GATES.get(path)
+        if gate is None:
+            gate = _ARRIVAL_GATES[path] = _ArrivalGate()
+        return gate
 
 
 _STATE_LOCK = threading.RLock()
@@ -401,6 +611,7 @@ def _after_fork_child() -> None:
     global _ROOT_RESOLUTION, _STORES, _ALL_CONNECTIONS, _CACHE, _OPEN_LOCK_FDS
     global _CONNECTION_IDENTITIES
     global _EXPLICIT_RESOLUTIONS
+    global _ARRIVAL_GATES, _ARRIVAL_GATES_LOCK
     for descriptor in tuple(_OPEN_LOCK_FDS):
         try:
             os.close(descriptor)
@@ -417,6 +628,11 @@ def _after_fork_child() -> None:
     _ALL_CONNECTIONS = []
     _CONNECTION_IDENTITIES = {}
     _CACHE = {}
+    # Replaced, not cleared: the thread that held the lock, a gate or a ticket
+    # did not survive the fork, so taking the inherited lock to clear it can
+    # hang forever and an inherited gate is never handed on.
+    _ARRIVAL_GATES = {}
+    _ARRIVAL_GATES_LOCK = threading.Lock()
 
 
 if hasattr(os, "register_at_fork"):
@@ -488,6 +704,18 @@ def _is_corruption(exc: BaseException) -> bool:
     return any(marker in str(exc).lower() for marker in _CORRUPTION_MARKERS)
 
 
+def _quick_check(connection: sqlite3.Connection, limit: int | None = None) -> str:
+    """The first `PRAGMA quick_check` row on an already-open connection.
+
+    Every retained-connection health probe goes through here so there is one
+    place that names what such a probe is worth: it is a cheap trigger, not a
+    verdict on the file. `""` when the pragma returns no row at all.
+    """
+    pragma = "PRAGMA quick_check" if limit is None else f"PRAGMA quick_check({limit})"
+    row = connection.execute(pragma).fetchone()
+    return "" if row is None else str(row[0])
+
+
 def _projection_schema(backlog_dir: Path) -> int | None:
     path = backlog_dir / "backlog.yaml"
     if not path.exists():
@@ -553,7 +781,15 @@ SQLITE_HEADER = b"SQLite format 3\x00"
 # What a database has to carry before a reader may adopt it without taking the
 # writer mutex to build or upgrade it.
 _REQUIRED_TABLES = frozenset(
-    {"meta", "entities", "changes", "projection", "projection_base", "sessions"}
+    {
+        "meta",
+        "entities",
+        "changes",
+        "projection",
+        "projection_base",
+        "projection_conflict",
+        "sessions",
+    }
 )
 
 
@@ -700,8 +936,9 @@ def checkpoint_all() -> None:
                 uri=True,
             )
             connection.execute("PRAGMA busy_timeout=0")
+            assert_compatible(connection)
             connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchall()
-        except sqlite3.Error:
+        except (sqlite3.Error, UnsupportedStoreError):
             pass
         finally:
             if connection is not None:
@@ -712,7 +949,7 @@ def checkpoint_all() -> None:
 
 
 def reset_for_tests() -> None:
-    global _ROOT_RESOLUTION, _CONTEXT_BUILDER, _PROGRESS_RENDERER
+    global _ROOT_RESOLUTION, _CONTEXT_BUILDER, _PROGRESS_RENDERER, _WAIT_OBSERVER
     with _STATE_LOCK:
         seen: set[int] = set()
         for connection in list(_ALL_CONNECTIONS):
@@ -742,6 +979,9 @@ def reset_for_tests() -> None:
         _WARNED_CLOUD_ROOTS.clear()
         _CONTEXT_BUILDER = None
         _PROGRESS_RENDERER = None
+        _WAIT_OBSERVER = None
+        with _ARRIVAL_GATES_LOCK:
+            _ARRIVAL_GATES.clear()
 
 
 def configure_derivers(
@@ -767,6 +1007,25 @@ def load_dict(backlog_path: Path | None = None) -> dict[str, Any]:
         if backlog_path is None or db_path(backlog_path) == active_path:
             return data
     return open_store(backlog_path=backlog_path).load_dict()
+
+
+def opened_store(backlog_path: Path | None = None) -> "Store | None":
+    """The store this process already opened for a project, never opening one.
+
+    Only the resolutions an open already cached are consulted: resolving from
+    scratch probes git and the projection schema, which a caller asking "is
+    there anything open?" on every tool call must not pay for.
+    """
+    with _STATE_LOCK:
+        if not _STORES:
+            return None
+        if backlog_path is None:
+            resolved = _ROOT_RESOLUTION
+        else:
+            resolved = _EXPLICIT_RESOLUTIONS.get(_backlog_dir(backlog_path))
+        if resolved is None:
+            return None
+        return _STORES.get(db_path(resolved.backlog_path))
 
 
 def active_transaction(backlog_path: Path | None = None) -> "Transaction | None":
@@ -826,6 +1085,13 @@ class Store:
         self._verify_exports = False
         self._last_progress_clock: float | None = None
         self._last_read_scan_clock: float | None = None
+        # A read-side scan that found work but could not take the writer mutex
+        # leaves this set: the next read goes straight back to the (cheap,
+        # non-blocking) mutex attempt instead of re-walking the projection to
+        # rediscover what this one already knows, and instead of waiting out
+        # the throttle it never earned.
+        self._read_scan_pending = False
+        self._read_scan_skips = 0
         # Per-thread: connections are per-thread and reads run concurrently, so
         # a memo saved and restored on a shared attribute could be restored
         # after its owner had already left -- freezing one thread's listing for
@@ -910,6 +1176,8 @@ class Store:
         self._connection_creation_state = threading.local()
         self._last_progress_clock = None
         self._last_read_scan_clock = None
+        self._read_scan_pending = False
+        self._read_scan_skips = 0
         self._listing_state = threading.local()
         self._verified_generation = None
 
@@ -927,6 +1195,7 @@ class Store:
                 ):
                     raise sqlite3.ProgrammingError("store database generation changed")
                 connection.execute("SELECT 1")
+                assert_compatible(connection)
                 return connection
             except (OSError, sqlite3.ProgrammingError):
                 connections.pop(self.db_path, None)
@@ -960,6 +1229,9 @@ class Store:
         try:
             connection.row_factory = sqlite3.Row
             connection.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
+            # Refuse before journal configuration, session registration, schema
+            # preparation or any projection/recovery side effects.
+            assert_compatible(connection)
             if network:
                 connection.execute("PRAGMA query_only=ON")
             else:
@@ -984,18 +1256,122 @@ class Store:
         finally:
             self._connection_creation_state.allowed = prior
 
+    def _wait_notice(
+        self,
+        *,
+        operation: str | None,
+        started: float,
+        deadline_seconds: float,
+        last_notice: float,
+        diagnose: bool,
+    ) -> float:
+        """Tell the observer how long this caller has been queued. Never raises.
+
+        Returns the clock the next notice is measured from, unchanged when the
+        notice was not due -- so a caller that waits out the whole window is
+        heard from at a steady cadence rather than once at the end, which is
+        what the harness needs in order to show anything at all.
+        """
+        observer = _WAIT_OBSERVER
+        if observer is None or operation is None:
+            return last_notice
+        due = (
+            WRITER_WAIT_FIRST_NOTICE_SECONDS
+            if last_notice == started
+            else WRITER_WAIT_NOTICE_INTERVAL_SECONDS
+        )
+        now = _MONOTONIC()
+        if now - last_notice < due:
+            return last_notice
+        holders = None
+        # Only the first notice names holders. `_busy_diagnostic` opens a second
+        # connection to a store that is by definition contended; asking every
+        # two seconds, from every waiter, adds load exactly where there is
+        # already too much, and the answer barely changes.
+        if diagnose and last_notice == started:
+            try:
+                holders = self._busy_diagnostic(waited_seconds=now - started)
+            except Exception:  # noqa: BLE001 - a diagnostic cannot break a wait
+                holders = None
+        try:
+            observer(
+                WriterWait(
+                    operation=operation,
+                    waited=now - started,
+                    deadline=deadline_seconds,
+                    holders=holders,
+                )
+            )
+        except Exception:  # noqa: BLE001 - progress must never fail the wait
+            pass
+        return _MONOTONIC()
+
     @contextmanager
     def _writer_mutex(
-        self, *, timeout_ms: int | None = None, diagnose: bool = True
+        self,
+        *,
+        timeout_ms: int | None = None,
+        diagnose: bool = True,
+        operation: str | None = None,
     ) -> Iterator[None]:
-        """Cross-process crash-recovery gate shared by every writer."""
+        """Cross-process crash-recovery gate shared by every writer.
+
+        `operation` names the caller in the busy diagnostic and in the progress
+        notices, so a wait is attributable to a tool rather than to "the
+        store". `timeout_ms` is the caller's deadline; without one it is the
+        full `BUSY_TIMEOUT_MS`, which is what left a blocked tool silent for
+        thirty seconds and then raised.
+        """
         path = self.db_path.parent / "store.recovery.lock"
         path.parent.mkdir(parents=True, exist_ok=True)
-        descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+        wait_ms = BUSY_TIMEOUT_MS if timeout_ms is None else timeout_ms
+        deadline_seconds = wait_ms / 1000
+        started = _MONOTONIC()
+        deadline = started + deadline_seconds
+        last_notice = started
+
+        def give_up(cause: BaseException | None) -> RuntimeError:
+            message = (
+                self._busy_diagnostic(
+                    waited_seconds=_MONOTONIC() - started, operation=operation
+                )
+                if diagnose
+                else "store busy for read-side projection scan; retry"
+            )
+            error = RuntimeError(message)
+            if cause is not None:
+                error.__cause__ = cause
+            return error
+
+        # Arrival order among this process's own threads, settled before anyone
+        # touches the file lock (see `_ArrivalGate`).
+        gate = _arrival_gate(path)
+        ticket = gate.enter()
+        try:
+            while not gate.wait_turn(ticket, min(deadline, _MONOTONIC() + 0.25)):
+                if _MONOTONIC() >= deadline:
+                    raise give_up(None)
+                last_notice = self._wait_notice(
+                    operation=operation,
+                    started=started,
+                    deadline_seconds=deadline_seconds,
+                    last_notice=last_notice,
+                    diagnose=diagnose,
+                )
+                if _MONOTONIC() >= deadline:
+                    raise give_up(None)
+        except BaseException:
+            gate.leave(ticket)
+            raise
+        try:
+            descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+        except BaseException:
+            # The gate is held at this point; a failure to even open the lock
+            # file would otherwise strand every other thread in this process.
+            gate.release()
+            raise
         _OPEN_LOCK_FDS.add(descriptor)
         acquired = False
-        wait_ms = BUSY_TIMEOUT_MS if timeout_ms is None else timeout_ms
-        deadline = _MONOTONIC() + wait_ms / 1000
         try:
             if os.fstat(descriptor).st_size == 0:
                 os.write(descriptor, b"\0")
@@ -1016,15 +1392,29 @@ class Store:
                     if exc.errno not in {errno.EACCES, errno.EAGAIN, 13, 36}:
                         raise
                     if _MONOTONIC() >= deadline:
-                        message = (
-                            self._busy_diagnostic()
-                            if diagnose
-                            else "store busy for read-side projection scan; retry"
-                        )
-                        raise RuntimeError(message) from exc
-                    time.sleep(0.02)
+                        raise give_up(exc) from exc
+                    last_notice = self._wait_notice(
+                        operation=operation,
+                        started=started,
+                        deadline_seconds=deadline_seconds,
+                        last_notice=last_notice,
+                        diagnose=diagnose,
+                    )
+                    # An observer is someone else's code, and a progress sink
+                    # that blocks -- stderr nobody is draining -- must not carry
+                    # this caller past the deadline it was given.
+                    if _MONOTONIC() >= deadline:
+                        raise give_up(exc) from exc
+                    # Jittered so peers stop polling in lockstep, and shorter
+                    # the longer this caller has already waited: an unaged
+                    # fixed poll gave a fresh arrival exactly the same odds as
+                    # a process that had been queued for twenty seconds.
+                    elapsed = _MONOTONIC() - started
+                    base = max(0.002, 0.04 / (1.0 + elapsed))
+                    time.sleep(min(base * random.uniform(0.5, 1.5), 0.05))
             yield
         finally:
+            gate.release()
             if acquired:
                 try:
                     os.lseek(descriptor, 0, os.SEEK_SET)
@@ -1051,12 +1441,12 @@ class Store:
                 return
             try:
                 connection = self.connection
-                quick = connection.execute("PRAGMA quick_check").fetchone()
+                quick = _quick_check(connection)
                 required = connection.execute(
                     "SELECT COUNT(*) FROM sqlite_master WHERE type='table' "
                     "AND name IN ('meta','entities','changes','projection')"
                 ).fetchone()[0]
-                ready = bool(quick and str(quick[0]).lower() == "ok" and required == 4)
+                ready = bool(quick.lower() == "ok" and required == 4)
             except sqlite3.Error:
                 ready = False
             self._network_projection_only = not ready
@@ -1090,11 +1480,11 @@ class Store:
                     self._ensure_open_locked()
             return
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        if self._open_existing_unlocked():
+            return
         ignore = self.db_path.parent / ".gitignore"
         if not ignore.exists():
             ignore.write_bytes(b"*\n")
-        if self._open_existing_unlocked():
-            return
         with self._writer_mutex():
             self._ensure_open_locked()
 
@@ -1121,15 +1511,13 @@ class Store:
         except OSError:
             return False
         try:
-            self._prune_corrupt_backups()
             connection = self.connection
             # The locked path proves the database is readable before it adopts
             # it, and a reader that skipped the proof would serve whatever a
             # corrupt page happened to hold. `quick_check(1)` stops at the first
             # error; on the 46 MB real-backlog store it costs under 200 ms, once
             # per process, and only on the cold open.
-            quick = connection.execute("PRAGMA quick_check(1)").fetchone()
-            if not quick or str(quick[0]).lower() != "ok":
+            if _quick_check(connection, 1).lower() != "ok":
                 return False
             tables = {
                 row[0]
@@ -1179,7 +1567,6 @@ class Store:
 
     def _ensure_open_locked(self) -> None:
         database_existed = self.db_path.exists() and bool(self.db_path.stat().st_size)
-        self._prune_corrupt_backups()
         if self.db_path.exists() and self.db_path.stat().st_size:
             try:
                 header = _read_sqlite_header(self.db_path)
@@ -1202,7 +1589,14 @@ class Store:
         except sqlite3.DatabaseError as exc:
             if not _is_corruption(exc):
                 raise
-            self._recover_corrupt_database(connection)
+            # Any statement above can carry a corruption marker off the same
+            # stale FTS state, so the confirmation gate sits at the recovery
+            # decision as well as at the pragma verdict.  Unconfirmed, the
+            # answer is a new connection, not a renamed database.
+            if self._corruption_is_real(str(exc)):
+                self._recover_corrupt_database(connection)
+            else:
+                self._discard_retained_connection(connection)
             with self._connection_creation_allowed():
                 connection = self.connection
             self._begin_immediate(connection)
@@ -1239,12 +1633,19 @@ class Store:
         self._bootstrapped = True
 
     def _prepare_schema(self, connection: sqlite3.Connection) -> None:
+        assert_compatible(connection)
         try:
-            quick = connection.execute("PRAGMA quick_check").fetchone()
+            quick = _quick_check(connection)
         except sqlite3.DatabaseError:
             raise
-        if quick and str(quick[0]).lower() != "ok":
-            raise sqlite3.DatabaseError(f"malformed database: quick_check={quick[0]}")
+        if quick and quick.lower() != "ok":
+            # A verdict from this already-open connection is a trigger, not a
+            # finding: confirm it against the committed state before it can
+            # reach recovery.  An unconfirmed one leaves a healthy database
+            # alone -- the stale diagnostic does not impair the connection for
+            # anything else it is about to do here.
+            if self._corruption_is_real(f"quick_check={quick}"):
+                raise sqlite3.DatabaseError(f"malformed database: quick_check={quick}")
 
         has_meta = connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta'"
@@ -1264,8 +1665,7 @@ class Store:
         metadata = dict(connection.execute("SELECT key,value FROM meta"))
         version = int(metadata.get("schema_version", "0"))
         if version > SCHEMA_VERSION:
-            self._rebuild_for_version(connection)
-            return
+            raise UnsupportedStoreError(f"Unsupported Taskmaster schema_version={version}")
         self._execute_schema(connection)
         if version < SCHEMA_VERSION:
             connection.execute(
@@ -1308,10 +1708,16 @@ class Store:
                 connection.execute(
                     f"ALTER TABLE {table} ADD COLUMN {column} {decl}"
                 )
+        connection.executemany(
+            "INSERT OR IGNORE INTO meta(key,value) VALUES(?,?)",
+            [("bridge_client_protocol", str(CLIENT_PROTOCOL)),
+             ("bridge_capabilities", BRIDGE_CAPABILITIES)],
+        )
 
-    def _rebuild_for_version(self, connection: sqlite3.Connection) -> None:
-        # A schema incompatibility is not corruption. Rebuild in place so a
-        # live Windows connection never has to rename its own database file.
+    def _rebuild_corrupt_schema(self, connection: sqlite3.Connection) -> None:
+        # Only called after proven corruption and a forensic backup. Unknown
+        # schema versions must never reach destructive recovery.
+        assert_compatible(connection)
         # Drop the virtual table first; its FTS shadow tables disappear with it.
         try:
             self._reserve_ids(
@@ -1339,7 +1745,7 @@ class Store:
             "INSERT INTO meta(key,value) VALUES('creation_token',?)",
             (str(uuid.uuid4()),),
         )
-        self._log("rebuilt store for unsupported schema version")
+        self._log("rebuilt corrupt store after forensic backup")
 
     @property
     def _reservation_path(self) -> Path:
@@ -1487,6 +1893,66 @@ class Store:
         )
         self._persist_export_intent(tx)
 
+    def _corruption_is_real(self, reason: str) -> bool:
+        """True when the committed file, not a retained connection, is damaged.
+
+        `PRAGMA quick_check` on a connection that has already inspected the
+        FTS5 index reports `malformed inverted index for FTS5 table
+        main.entity_fts` as soon as a peer connection commits to that index
+        (`docs/reports/2026-09-09-native-foundation.md`, N00).  That is runtime
+        state in this process, not damage on disk: across a 20-case matrix on
+        SQLite 3.45.3 and 3.47.1 every fresh read-only snapshot of the same
+        file reported `ok`.  Recovery renames the live database family aside
+        and rebuilds from the file projection, which lags the store and carries
+        no progress entries, session rows, Linear queue claims or quarantine
+        log -- so acting on that verdict destroys committed data.  A verdict is
+        therefore only acted on once a fresh read-only snapshot of the
+        committed state agrees with it.
+
+        This gate does not suppress anything: a snapshot that reports real
+        damage still routes to recovery, and a runtime too old for FTS-aware
+        `integrity_check` cannot second-guess the verdict it already has, so it
+        keeps it.
+        """
+        try:
+            diagnostics = check_database(self.db_path)
+        except RuntimeError:
+            # No FTS-aware `integrity_check` here; nothing better to go on.
+            return True
+        except sqlite3.OperationalError:
+            # The file cannot be opened read-only at all -- missing, locked or
+            # unreadable.  None of those is corruption, and renaming a file we
+            # cannot even read would destroy it on a guess.
+            self._log(f"could not open a read-only snapshot to confirm corruption ({reason})")
+            return False
+        except sqlite3.DatabaseError:
+            # A fresh connection cannot parse the file: the damage is real.
+            return True
+        failures = [
+            str(row) for row in diagnostics["integrity"] if str(row).lower() != "ok"
+        ]
+        if failures:
+            self._log(f"corruption confirmed on a fresh snapshot ({reason}): {'; '.join(failures)}")
+            return True
+        self._log(
+            "retained-connection diagnostic contradicted by a fresh read-only snapshot; "
+            f"the committed database is healthy and was left intact ({reason})"
+        )
+        return False
+
+    def _discard_retained_connection(self, connection: sqlite3.Connection) -> None:
+        """Drop this thread's connections so a retry starts without stale state.
+
+        The FTS5 diagnostic artifact lives in the connection, so the retry has
+        to happen on a new one.  Nothing is renamed, copied or rebuilt here.
+        """
+        try:
+            if connection.in_transaction:
+                connection.rollback()
+        except sqlite3.Error:
+            pass
+        close_thread_connection()
+
     def _recover_corrupt_database(
         self, connection: sqlite3.Connection | None = None
     ) -> None:
@@ -1507,7 +1973,7 @@ class Store:
             rebuilt = self.connection
             self._begin_immediate(rebuilt)
             try:
-                self._rebuild_for_version(rebuilt)
+                self._rebuild_corrupt_schema(rebuilt)
                 rebuilt.commit()
             except BaseException:
                 if rebuilt.in_transaction:
@@ -1561,15 +2027,6 @@ class Store:
             if candidate.exists():
                 candidate.replace(self.db_path.with_name(f"store.db.{label}-{stamp}{suffix}"))
 
-    def _prune_corrupt_backups(self) -> None:
-        cutoff = time.time() - 7 * 24 * 60 * 60
-        for candidate in self.db_path.parent.glob("store.db.corrupt-*"):
-            try:
-                if candidate.stat().st_mtime < cutoff:
-                    candidate.unlink()
-            except OSError:
-                pass
-
     def _register_session(
         self,
         connection: sqlite3.Connection,
@@ -1612,11 +2069,14 @@ class Store:
             )
             activity.execute("PRAGMA busy_timeout=0")
             activity.row_factory = sqlite3.Row
+            activity.execute("BEGIN IMMEDIATE")
+            assert_compatible(activity)
             self._register_session(
                 activity,
                 current_tool=current_tool,
                 session_id=session_id or f"{self.session}:t{threading.get_ident()}",
             )
+            activity.commit()
         except sqlite3.OperationalError as exc:
             lowered = str(exc).lower()
             if not any(
@@ -1639,9 +2099,12 @@ class Store:
 
         def heartbeat() -> None:
             while not stop.wait(HEARTBEAT_INTERVAL_SECONDS):
-                self._try_register_session(
-                    connection, current_tool=tool, session_id=session_id
-                )
+                try:
+                    self._try_register_session(
+                        connection, current_tool=tool, session_id=session_id
+                    )
+                except UnsupportedStoreError:
+                    return
 
         worker = threading.Thread(
             target=heartbeat,
@@ -1796,7 +2259,9 @@ class Store:
                 connection, tool=tool, session_id=activity_session
             ):
                 with self._writer_mutex(
-                    timeout_ms=_writer_timeout_ms, diagnose=_diagnose_busy
+                    timeout_ms=_writer_timeout_ms,
+                    diagnose=_diagnose_busy,
+                    operation=tool,
                 ):
                     current_connection = self.connection
                     if current_connection is not connection:
@@ -1845,11 +2310,16 @@ class Store:
                 # failed commit would otherwise suppress the next dashboard
                 # export and leave PROGRESS.md showing work that never landed.
                 self._last_progress_clock = None
+            # Bookkeeping only. After a commit it must not turn a write that
+            # landed into a reported failure -- a migration fence published a
+            # moment later refuses it, and a caller told "failed" retries and
+            # duplicates the write. Before a commit it must not replace the
+            # exception that is already on its way out.
             try:
                 self._try_register_session(
                     connection, current_tool=None, session_id=activity_session
                 )
-            except sqlite3.Error:
+            except (sqlite3.Error, UnsupportedStoreError):
                 pass
         if not settled:
             self._checkpoint_passive(connection)
@@ -1969,8 +2439,12 @@ class Store:
         else:
             data = self._load_dict_from_connection(connection)
         if publish:
-            _CACHE[self.db_path] = (token, max_seq, copy.deepcopy(data))
-        result = copy.deepcopy(data)
+            # `data` is this call's own object either way -- freshly loaded, or
+            # the deep copy `_refresh_cached_dict` made -- so the cache can hold
+            # it and the caller gets one copy rather than two of the whole
+            # 160k-node dict.
+            _CACHE[self.db_path] = (token, max_seq, data)
+        result = _copy_plain(data)
         # Attached outside the cache entry so the incremental refresh above never
         # has to keep it in step: it is one query against the same snapshot.
         result["_rows"] = self._entity_rows_from_connection(connection)
@@ -1978,16 +2452,20 @@ class Store:
 
     def _entity_rows_from_connection(
         self, connection: sqlite3.Connection
-    ) -> dict[str, dict[str, tuple[dict[str, Any], str | None]]]:
+    ) -> "_LazyEntityRows":
         """`{kind: {id: (doc, body)}}` for every non-task entity kind.
 
         Read tools for bugs, issues, handovers, decisions, ideas, notes, areas
         and trackers render from this instead of globbing their directory, so a
         read and the write that follows it see one snapshot. Archived rows are
         included; their document carries `archived: True` and callers filter.
+
+        The rows are fetched here, inside the caller's snapshot; the documents
+        are decoded by `_LazyEntityRows` when a kind is first named, because
+        most reads name none of them.
         """
-        rows: dict[str, dict[str, tuple[dict[str, Any], str | None]]] = {
-            kind: {} for kind in _DICT_ROW_KINDS
+        raw: dict[str, list[tuple[str, str, str | None]]] = {
+            kind: [] for kind in _DICT_ROW_KINDS
         }
         placeholders = ",".join("?" for _ in _DICT_ROW_KINDS)
         for row in connection.execute(
@@ -1995,8 +2473,34 @@ class Store:
             "ORDER BY id",
             _DICT_ROW_KINDS,
         ):
-            rows[row["kind"]][row["id"]] = (_from_json(row["doc"], {}), row["body"])
-        return rows
+            raw[row["kind"]].append((row["id"], row["doc"], row["body"]))
+        return _LazyEntityRows(raw)
+
+    def entity_row(
+        self, kind: str, ident: str
+    ) -> tuple[dict[str, Any], str | None] | None:
+        """One entity's `(doc, body)`, or None -- without building the dict.
+
+        `backlog_get_task` and the link engine's entity read want a single row,
+        and were paying for the whole compatibility dict plus a decode of every
+        non-task entity in the project to get it. This is the same snapshot
+        discipline (a scan first, so a hand edit is adopted) over one indexed
+        lookup. The document is a copy: the caller that replaced this path
+        mutates what it is handed and documents that as read-only.
+        """
+        self._ensure_open()
+        if self._network_projection_only:
+            rows = self._entity_rows_from_projection().get(kind) or {}
+            found = rows.get(ident)
+            return (_copy_plain(found[0]), found[1]) if found else None
+        self._maybe_scan_on_read()
+        row = self.connection.execute(
+            "SELECT doc,body FROM entities WHERE kind=? AND id=? AND deleted=0",
+            (kind, ident),
+        ).fetchone()
+        if row is None:
+            return None
+        return _from_json(row["doc"], {}), row["body"]
 
     def _projection_identity(self) -> tuple[str, int]:
         """A `(token, seq)` pair that moves whenever the projection does.
@@ -2050,7 +2554,13 @@ class Store:
             rows[kind][ident] = (doc, body)
         return {kind: dict(sorted(entries.items())) for kind, entries in rows.items()}
 
-    def update_root_config(self, name: str, mutate: "Callable[[dict], dict]") -> dict:
+    def update_root_config(
+        self,
+        name: str,
+        mutate: "Callable[[dict], dict]",
+        *,
+        timeout_ms: int | None = None,
+    ) -> dict:
         """Read-modify-write one root config file under the cross-process lock.
 
         `linear.yaml` sits beside the projection and is shared by every agent
@@ -2068,7 +2578,8 @@ class Store:
             raise ValueError(f"not a root config file name: {name!r}")
         self._ensure_open()
         path = self.backlog_path / name
-        with self._writer_mutex():
+        with self._writer_mutex(timeout_ms=timeout_ms, operation="update_root_config"):
+            assert_compatible(self.connection)
             current: dict[str, Any] = {}
             if path.exists():
                 try:
@@ -2101,6 +2612,8 @@ class Store:
         # The whole name, not just its stem: a separator anywhere in it would
         # let a caller write outside `local/cache/`.
         _validate_safe_identifier(name)
+        if self.db_path.exists():
+            assert_compatible(self.connection)
         cache_dir = self.db_path.parent / "cache"
         cache_dir.mkdir(parents=True, exist_ok=True)
         target = cache_dir / name
@@ -2282,6 +2795,7 @@ class Store:
         seqs: Iterable[int],
         *,
         lease_seconds: float = LINEAR_CLAIM_LEASE_SECONDS,
+        timeout_ms: int | None = None,
     ) -> int:
         """Return the given queue rows to `pending` with a cleared attempt count.
 
@@ -2308,7 +2822,7 @@ class Store:
             return 0
         if self.connection.in_transaction:
             raise RuntimeError("linear_requeue needs its own transaction")
-        with self._writer_mutex():
+        with self._writer_mutex(timeout_ms=timeout_ms, operation="linear_requeue"):
             connection = self.connection
             if connection.in_transaction:
                 raise RuntimeError("linear_requeue needs its own transaction")
@@ -2338,6 +2852,7 @@ class Store:
         targets: Sequence[str] | None = None,
         owner: str,
         lease_seconds: float = LINEAR_CLAIM_LEASE_SECONDS,
+        timeout_ms: int | None = None,
     ) -> list[dict[str, Any]]:
         """Take ownership of up to `limit` pending pushes, oldest first.
 
@@ -2362,7 +2877,7 @@ class Store:
             return []
         if self.connection.in_transaction:
             raise RuntimeError("linear_claim needs its own transaction")
-        with self._writer_mutex():
+        with self._writer_mutex(timeout_ms=timeout_ms, operation="linear_claim"):
             connection = self.connection
             if connection.in_transaction:
                 raise RuntimeError("linear_claim needs its own transaction")
@@ -2433,6 +2948,7 @@ class Store:
         state: str,
         error: str | None = None,
         owner: str | None = None,
+        timeout_ms: int | None = None,
     ) -> bool:
         """Record the outcome of one drain attempt on queue row `seq`.
 
@@ -2454,7 +2970,7 @@ class Store:
             raise RuntimeError(f"cannot write the Linear queue: {degraded}")
         if self.connection.in_transaction:
             raise RuntimeError("linear_mark needs its own transaction")
-        with self._writer_mutex():
+        with self._writer_mutex(timeout_ms=timeout_ms, operation="linear_mark"):
             # Re-read under the mutex, as `transaction` does: a recovery that
             # finished while this caller queued for the lock closes the handle
             # we would otherwise have captured before waiting.
@@ -2601,24 +3117,67 @@ class Store:
         ).fetchone()
         return None if row is None else str(row[0])
 
+    @property
+    def read_scan_skips(self) -> int:
+        """Read-side projection scans this process skipped in a row, store busy.
+
+        Zero whenever a scan last completed -- including one that proved there
+        was nothing to import. A number that keeps climbing means hand edits
+        are sitting on disk unadopted and every read is answering from state
+        that predates them.
+        """
+        return self._read_scan_skips
+
+    def _note_read_scan_skipped(self) -> None:
+        """Remember that a scan with real work to do could not take the mutex.
+
+        The throttle clock is deliberately left alone. It exists to stop a read
+        from re-walking the projection every time, and a skipped attempt walked
+        nothing -- burning the window for it meant that on a continuously busy
+        store the retry never came round while the store was free, so hand
+        edits were never adopted at all. The pending flag makes the retry
+        cheap: the sweep already found the work, so the next read goes straight
+        to the non-blocking mutex attempt rather than rediscovering it.
+        """
+        self._read_scan_pending = True
+        self._read_scan_skips += 1
+        if self._read_scan_skips % READ_SCAN_SKIP_WARN_AFTER:
+            return
+        warnings.warn(
+            f"{self._read_scan_skips} read-side projection scans in a row were "
+            f"skipped because {self.db_path.parent} was busy: hand edits under "
+            f"{self.backlog_path} have not been adopted and reads are answering "
+            "from older state (see backlog_store_status)",
+            RuntimeWarning,
+            stacklevel=4,
+        )
+
     def _maybe_scan_on_read(self) -> None:
         """Import hand edits at most once per two seconds for read callers."""
         now = time.monotonic()
+        pending = self._read_scan_pending
         if (
-            self._last_read_scan_clock is not None
-            and now - self._last_read_scan_clock < 2.0
+            not pending
+            and self._last_read_scan_clock is not None
+            and now - self._last_read_scan_clock < READ_SCAN_THROTTLE_SECONDS
         ):
             return
-        self._last_read_scan_clock = now
         if _network_filesystem_reason(self.root):
+            self._last_read_scan_clock = now
             return
         with self._memoized_entity_files():
             generation = self._git_generation()
-            if not self._projection_changed_on_disk(generation=generation):
+            # A pending scan already knows there is work; re-walking the
+            # projection to be told so again is the expensive half of the read.
+            if not pending and not self._projection_changed_on_disk(
+                generation=generation
+            ):
                 # The sweep just proved this generation matches, so the next
                 # read does not repeat it merely because a git command ran.
                 # The database revision goes with it: any other connection
                 # committing retires the proof rather than outliving it.
+                self._last_read_scan_clock = now
+                self._read_scan_skips = 0
                 self._verified_generation = (generation, self._database_revision())
                 return
             try:
@@ -2642,12 +3201,16 @@ class Store:
                     raise
                 # Nothing was swept, so nothing is proved: the memo is left
                 # alone and the next read repeats the check.
+                self._note_read_scan_skipped()
                 return
             # The probe ran the whole sweep. When it found something to write
             # it committed `last_scan_generation` with the rest; when it found
             # nothing it rolled back, and that row went with it. The proof is
             # the same either way, so it is remembered here rather than left to
             # depend on whether the transaction happened to commit.
+            self._last_read_scan_clock = now
+            self._read_scan_pending = False
+            self._read_scan_skips = 0
             self._verified_generation = (generation, self._database_revision())
 
     def _database_revision(self) -> int:
@@ -2853,6 +3416,7 @@ class Store:
             wal_size=0,
             warning=warning,
             corrupt_files=self._corrupt_backup_names(),
+            read_scan_skips=self._read_scan_skips,
         )
 
     def _status_from(
@@ -2883,6 +3447,24 @@ class Store:
                     "SELECT file FROM projection WHERE quarantined=1 ORDER BY file"
                 )
             )
+            stuck = tuple(
+                row[0]
+                for row in connection.execute(
+                    "SELECT file FROM projection WHERE dirty=1 AND quarantined=1 "
+                    "ORDER BY file"
+                )
+            )
+            try:
+                flagged = tuple(
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT file FROM projection_conflict ORDER BY file"
+                    )
+                )
+            except sqlite3.OperationalError:
+                # A database no 6.0.3 writer has opened yet has no flag table,
+                # and this read never creates one.
+                flagged = ()
             seq = int(
                 connection.execute(
                     "SELECT COALESCE(MAX(seq),0) FROM changes"
@@ -2953,6 +3535,9 @@ class Store:
             warning=warning,
             corrupt_files=self._corrupt_backup_names(),
             linear_pending=queued,
+            stuck_exports=stuck,
+            flagged_files=flagged,
+            read_scan_skips=self._read_scan_skips,
         )
 
     def status(self) -> StoreStatus:
@@ -2965,6 +3550,170 @@ class Store:
                 warning=warning, identity=self._projection_identity()
             )
         return self._status_from(self.connection, warning=warning)
+
+    def projection_conflicts(self) -> list[dict[str, Any]]:
+        """Files flagged because they and the store both changed, oldest first.
+
+        Every tool result asks this, so it is one query against a table that
+        holds only unresolved flags -- empty on a healthy project -- and never
+        against the change history. The table is the state itself, not a
+        cursor over events: after a restart, in a second process and in the
+        process that flagged the file it reads the same rows, and a flag stays
+        listed until it is resolved.
+        """
+        if not self._bootstrapped:
+            self._ensure_open()
+        if self._network_projection_only:
+            return []
+        return [
+            dict(row)
+            for row in self.connection.execute(
+                "SELECT file,kind,id,flagged_at FROM projection_conflict "
+                "ORDER BY flagged_at,file"
+            )
+        ]
+
+    def projection_conflict_detail(self, rel: str) -> dict[str, Any] | None:
+        """Both versions of a flagged file, for a person to compare.
+
+        `file_observed` is what the file held when it was last seen by a scan,
+        `file_on_disk` what it holds now (None when it is gone), and
+        `store_version` the exact text the store would write there -- None
+        when the store would write nothing at this path, because the entity is
+        archived, deleted or has no file of its own; `store_path` then says
+        where the store's version lives instead.
+        """
+        if not self._bootstrapped:
+            self._ensure_open()
+        connection = self.connection
+        row = connection.execute(
+            "SELECT file,kind,id,flagged_at,file_content FROM projection_conflict "
+            "WHERE file=?",
+            (rel,),
+        ).fetchone()
+        if row is None:
+            return None
+        path = self.backlog_path / rel
+        try:
+            on_disk: str | None = path.read_bytes().decode("utf-8", errors="replace")
+        except OSError:
+            on_disk = None
+        store_version, store_path = self._store_version_of(
+            connection, row["kind"], row["id"], rel
+        )
+        return {
+            "file": rel,
+            "kind": row["kind"],
+            "id": row["id"],
+            "flagged_at": row["flagged_at"],
+            "file_observed": bytes(row["file_content"]).decode("utf-8", errors="replace"),
+            "file_on_disk": on_disk,
+            "store_version": store_version,
+            "store_path": store_path,
+        }
+
+    def _store_version_of(
+        self, connection: sqlite3.Connection, kind: str, ident: str | None, rel: str
+    ) -> tuple[str | None, str | None]:
+        """`(text the store would write at rel, where the store's file lives)`."""
+        if kind == "backlog":
+            return self._render_backlog_bytes(connection).decode("utf-8"), rel
+        entity = connection.execute(
+            "SELECT doc,body,archived,deleted FROM entities WHERE kind=? AND id=?",
+            (kind, ident),
+        ).fetchone()
+        if entity is None or entity["deleted"]:
+            return None, None
+        target = self._entity_path(kind, str(ident), bool(entity["archived"]))
+        target_rel = None if target is None else target.relative_to(self.backlog_path).as_posix()
+        rendered = _render_entity_file(kind, _from_json(entity["doc"], {}), entity["body"])
+        if rendered is None:
+            return None, None
+        if target_rel != rel:
+            return None, target_rel
+        return rendered[0].decode("utf-8"), target_rel
+
+    def resolve_projection_conflict(
+        self, rel: str, take: str, *, tool: str = "backlog_resolve_conflict"
+    ) -> dict[str, Any]:
+        """End a flag by keeping one side, chosen by whoever calls this.
+
+        `take="file"` imports the file as it is on disk now, as an ordinary
+        hand edit: the store's values it replaces stay in that import's change
+        row. `take="store"` writes the store's version over the file, or moves
+        or removes it when the entity is archived or deleted; the file text it
+        replaces is kept in the resolution's change row. Raises ValueError for
+        a file that is not flagged, an unknown side, or a file that cannot be
+        taken because it is missing or does not parse -- all before anything
+        is written.
+        """
+        if take not in {"file", "store"}:
+            raise ValueError(f"take must be 'file' or 'store', not {take!r}")
+        with self.transaction(tool=tool) as tx:
+            connection = tx.connection
+            flagged = connection.execute(
+                "SELECT kind,id FROM projection_conflict WHERE file=?", (rel,)
+            ).fetchone()
+            if flagged is None:
+                raise ValueError(f"{rel} is not flagged; there is nothing to resolve")
+            row = connection.execute(
+                "SELECT file,kind,id FROM projection WHERE file=?", (rel,)
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"{rel} has no projection record to resolve against")
+            change_kind = flagged["kind"]
+            change_id = flagged["id"] or (
+                _BACKLOG_ID if change_kind == "backlog" else _PROJECT_ID
+            )
+            path = self.backlog_path / rel
+            if take == "file":
+                try:
+                    content, stat = _read_file_snapshot(path)
+                except OSError as exc:
+                    raise ValueError(f"{rel} cannot be taken: {exc}") from exc
+                try:
+                    rows = self._parse_projected_file(tx, row["kind"], row["id"], content)
+                except (UnicodeError, ValueError, yaml.YAMLError) as exc:
+                    raise ValueError(
+                        f"{rel} cannot be taken: it does not parse ({exc})"
+                    ) from exc
+                if rows is None:
+                    raise ValueError(f"{rel} cannot be taken: it names no entity")
+                store_version, _store_path = self._store_version_of(
+                    connection, row["kind"], row["id"], rel
+                )
+                connection.execute("DELETE FROM projection_conflict WHERE file=?", (rel,))
+                self._apply_projected_file(tx, row, rows, content, stat)
+                # The drain queued this row while it was still dirty; the file
+                # is now what the store holds, and rewriting it would only
+                # reformat the bytes the caller chose to keep.
+                if row["kind"] == "backlog":
+                    tx._export_backlog = False
+                else:
+                    tx._export_keys.discard(
+                        (row["kind"], row["id"] or _PROJECT_ID)
+                    )
+                before = {"file": None, "store": store_version}
+            else:
+                try:
+                    replaced: str | None = path.read_bytes().decode("utf-8", errors="replace")
+                except OSError:
+                    replaced = None
+                connection.execute("DELETE FROM projection_conflict WHERE file=?", (rel,))
+                connection.execute(
+                    "UPDATE projection SET dirty=1,quarantined=0,quarantine_mtime=NULL,"
+                    "quarantine_size=NULL,quarantine_hash=NULL WHERE file=?",
+                    (rel,),
+                )
+                self._queue_export_for_row(tx, row)
+                before = {"file": replaced, "store": None}
+            seq = tx._record_change(
+                change_kind, change_id, "resolve", ["projection"], before,
+                {"file": rel, "took": take},
+            )
+            tx.seq = seq
+            tx.log_entries.append(f"resolved flagged {rel}: kept the {take} version at seq {seq}")
+        return {"file": rel, "took": take, "seq": seq, "warnings": list(tx.warnings)}
 
     def read_only_status(self) -> StoreStatus:
         """`status()` without any of the writing that opening a store does.
@@ -3007,6 +3756,7 @@ class Store:
         try:
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA query_only=ON")
+            assert_compatible(connection)
             return self._status_from(connection, warning=base_warning)
         except sqlite3.DatabaseError as exc:
             return self._degraded_status(
@@ -3024,14 +3774,32 @@ class Store:
             if "locked" not in lowered and "busy" not in lowered:
                 raise
             raise RuntimeError(self._busy_diagnostic()) from exc
+        try:
+            # Recheck under SQLite's writer lock: a peer may have published a
+            # migration fence after this connection's pre-admission check.
+            assert_compatible(connection)
+        except BaseException:
+            connection.rollback()
+            raise
 
     # A diagnostic runs on a store that is by definition contended, so its own
     # wait is pure added latency on top of the timeout that already expired.
     _DIAGNOSTIC_TIMEOUT_MS = 300
 
-    def _busy_diagnostic(self) -> str:
-        seconds = BUSY_TIMEOUT_MS / 1000
-        prefix = f"store busy for {seconds:g}s"
+    def _busy_diagnostic(
+        self, *, waited_seconds: float | None = None, operation: str | None = None
+    ) -> str:
+        """Why the store is busy, and for whom.
+
+        `waited_seconds` is what this caller actually waited -- reporting the
+        30 s default to a caller that gave up after 200 ms told them about a
+        deadline they never had. `operation` names them, so a blocked tool is
+        attributable instead of being "the store".
+        """
+        seconds = BUSY_TIMEOUT_MS / 1000 if waited_seconds is None else waited_seconds
+        prefix = f"store busy for {seconds:.3g}s"
+        if operation:
+            prefix += f" while {operation} waited"
         diagnostic: sqlite3.Connection | None = None
         try:
             diagnostic = sqlite3.connect(
@@ -3086,14 +3854,14 @@ class Store:
             )
         return prefix + ("; " + "; ".join(parts) if parts else "; retry")
 
-    def rebuild_derived(self) -> None:
+    def rebuild_derived(self, *, timeout_ms: int | None = None) -> None:
         connection = self.connection
         if connection.in_transaction:
             raise RuntimeError("nested store transactions are not supported")
         tx = Transaction(self, connection, tool="rebuild-derived")
         try:
             self._try_register_session(connection, current_tool="rebuild-derived")
-            with self._writer_mutex():
+            with self._writer_mutex(timeout_ms=timeout_ms, operation="rebuild_derived"):
                 self._begin_immediate(connection)
                 rows = tx.connection.execute(
                     "SELECT kind,id,doc,body FROM entities WHERE deleted=0"
@@ -3111,9 +3879,10 @@ class Store:
                 connection.rollback()
             raise
         finally:
+            # Bookkeeping after the commit; see `transaction`.
             try:
                 self._try_register_session(connection, current_tool=None)
-            except sqlite3.Error:
+            except (sqlite3.Error, UnsupportedStoreError):
                 pass
 
     def derived_status(self) -> dict[str, Any]:
@@ -3622,10 +4391,14 @@ class Store:
         ).fetchone()
         force_hash = not generation_row or generation_row[0] != generation
         rows = tx.connection.execute(
-            "SELECT file,kind,id,content_hash,mtime,size,dirty,quarantined,"
+            "SELECT file,kind,id,content_hash,mtime,size,dirty,quarantined,exported_seq,"
             "quarantine_mtime,quarantine_size,quarantine_hash FROM projection ORDER BY file"
         ).fetchall()
         known_rel = {row["file"] for row in rows}
+        conflicts = {
+            flagged[0]
+            for flagged in tx.connection.execute("SELECT file FROM projection_conflict")
+        }
         for row in rows:
             rel = row["file"]
             path = self.backlog_path / Path(rel)
@@ -3688,6 +4461,12 @@ class Store:
                         (stat.st_mtime, stat.st_size, rel),
                     )
                 continue
+            if rel in conflicts or (row["dirty"] and row["quarantined"]):
+                # The store holds an edit it never wrote and the file holds
+                # whatever was saved over it. No record says which of the two
+                # anyone meant to keep, so neither is applied to the other.
+                self._hold_divergent_file(tx, row, content, stat)
+                continue
             if row["dirty"]:
                 if row["kind"] == "backlog":
                     self._merge_dirty_backlog_edit(tx, row, content, stat)
@@ -3706,58 +4485,7 @@ class Store:
                     tx.connection, rel, _IDEAS_INDEX_KIND, None, content, stat
                 )
                 continue
-            if row["kind"] == "backlog":
-                self._import_backlog_file(tx, path, content, stat)
-                continue
-            if row["kind"] == "project":
-                try:
-                    doc = yaml_io.safe_load(content.decode("utf-8")) or {}
-                    if not isinstance(doc, dict):
-                        raise ValueError("project.yaml must be a mapping")
-                except (UnicodeError, ValueError, yaml.YAMLError) as exc:
-                    tx.connection.execute(
-                        "UPDATE projection SET quarantined=1,dirty=0 WHERE file=?", (rel,)
-                    )
-                    self._stamp_quarantine(tx, rel, exc, content, stat)
-                    continue
-                tx._import_row("project", row["id"] or _PROJECT_ID, doc, None)
-                self._record_projection_bytes(
-                    tx.connection, rel, "project", row["id"] or _PROJECT_ID, content, stat
-                )
-                continue
-            if not row["id"]:
-                continue
-            try:
-                doc, body = self._parse_entity_text(row["kind"], content.decode("utf-8"))
-                self._validate_projected_identity(row["kind"], row["id"], doc)
-            except (OSError, ValueError, yaml.YAMLError) as exc:
-                tx.connection.execute(
-                    "UPDATE projection SET quarantined=1,dirty=0 WHERE file=?", (rel,)
-                )
-                self._stamp_quarantine(tx, rel, exc, content, stat)
-                continue
-            if row["kind"] in {"epic", "phase"}:
-                current = tx.connection.execute(
-                    "SELECT doc FROM entities WHERE kind=? AND id=?",
-                    (row["kind"], row["id"]),
-                ).fetchone()
-                if current:
-                    merged = _from_json(current["doc"], {})
-                    heavy_fields = (
-                        EPIC_HEAVY_FIELDS
-                        if row["kind"] == "epic"
-                        else PHASE_HEAVY_FIELDS
-                    )
-                    for field in heavy_fields:
-                        if field in doc:
-                            merged[field] = doc[field]
-                        else:
-                            merged.pop(field, None)
-                    doc = merged
-            tx._import_row(row["kind"], row["id"], doc, body)
-            self._record_projection_bytes(
-                tx.connection, rel, row["kind"], row["id"], content, stat
-            )
+            self._import_changed_file(tx, row, content, stat)
 
         # Files created by a hand edit or checkout after bootstrap have no
         # projection row yet. Discover and import them under the same writer
@@ -3829,6 +4557,238 @@ class Store:
                 (generation,),
             )
 
+    def _parse_projected_file(
+        self,
+        tx: "Transaction",
+        kind: str,
+        ident: str | None,
+        content: bytes,
+    ) -> dict[tuple[str, str], tuple[dict[str, Any], str | None]] | None:
+        """The rows importing these bytes would write, keyed by entity.
+
+        Raises when the bytes do not parse. None means the file is not one an
+        import reads (an entity file with no id). An epic or phase file owns
+        only its heavy fields and body, and `backlog.yaml` only the rest, so
+        each is laid over what the store already holds -- the same rows a plain
+        import writes, which is what lets "would importing this change
+        anything?" be answered without importing.
+        """
+        text = content.decode("utf-8")
+        if kind == "backlog":
+            raw = yaml_io.safe_load(text) or {}
+            _validate_backlog_document(raw)
+            rows = _flatten_backlog_dict(raw)
+            for key, (doc, body) in list(rows.items()):
+                if key[0] not in {"epic", "phase"}:
+                    continue
+                current = tx.connection.execute(
+                    "SELECT doc,body FROM entities WHERE kind=? AND id=?", key
+                ).fetchone()
+                if current:
+                    current_doc = _from_json(current["doc"], {})
+                    heavy_fields = (
+                        EPIC_HEAVY_FIELDS if key[0] == "epic" else PHASE_HEAVY_FIELDS
+                    )
+                    for field in heavy_fields:
+                        if field in current_doc:
+                            doc[field] = current_doc[field]
+                    rows[key] = (doc, current["body"])
+            return rows
+        if kind == "project":
+            doc = yaml_io.safe_load(text) or {}
+            if not isinstance(doc, dict):
+                raise ValueError("project.yaml must be a mapping")
+            return {("project", ident or _PROJECT_ID): (doc, None)}
+        if not ident:
+            return None
+        doc, body = self._parse_entity_text(kind, text)
+        self._validate_projected_identity(kind, ident, doc)
+        if kind in {"epic", "phase"}:
+            current = tx.connection.execute(
+                "SELECT doc FROM entities WHERE kind=? AND id=?", (kind, ident)
+            ).fetchone()
+            if current:
+                merged = _from_json(current["doc"], {})
+                heavy_fields = EPIC_HEAVY_FIELDS if kind == "epic" else PHASE_HEAVY_FIELDS
+                for field in heavy_fields:
+                    if field in doc:
+                        merged[field] = doc[field]
+                    else:
+                        merged.pop(field, None)
+                doc = merged
+        return {(kind, ident): (doc, body)}
+
+    def _apply_projected_file(
+        self,
+        tx: "Transaction",
+        row: sqlite3.Row,
+        rows: Mapping[tuple[str, str], tuple[dict[str, Any], str | None]],
+        content: bytes,
+        stat: os.stat_result,
+    ) -> None:
+        for (kind, ident), (doc, body) in rows.items():
+            tx._import_row(kind, ident, doc, body)
+        ident = row["id"]
+        if row["kind"] == "project":
+            ident = ident or _PROJECT_ID
+        self._record_projection_bytes(
+            tx.connection, row["file"], row["kind"], ident, content, stat
+        )
+
+    def _import_changed_file(
+        self,
+        tx: "Transaction",
+        row: sqlite3.Row,
+        content: bytes,
+        stat: os.stat_result,
+    ) -> None:
+        """A hand edit to a file the store owes nothing: the file is imported."""
+        try:
+            rows = self._parse_projected_file(tx, row["kind"], row["id"], content)
+        except (OSError, UnicodeError, ValueError, yaml.YAMLError) as exc:
+            tx.connection.execute(
+                "UPDATE projection SET quarantined=1,dirty=0 WHERE file=?", (row["file"],)
+            )
+            self._stamp_quarantine(tx, row["file"], exc, content, stat)
+            return
+        if rows is None:
+            return
+        self._apply_projected_file(tx, row, rows, content, stat)
+
+    def _import_is_noop(
+        self,
+        tx: "Transaction",
+        row: sqlite3.Row,
+        rows: Mapping[tuple[str, str], tuple[dict[str, Any], str | None]],
+    ) -> bool:
+        """True when importing the file would change nothing the store holds.
+
+        Then the file carries nothing the store lacks, and exporting the store
+        over it loses nothing but formatting. The entity also has to still
+        project to this path: a live file for an archived or deleted entity is
+        a difference even when every field agrees.
+        """
+        for (kind, ident), (doc, body) in rows.items():
+            current = tx.connection.execute(
+                "SELECT doc,body,archived,deleted FROM entities WHERE kind=? AND id=?",
+                (kind, ident),
+            ).fetchone()
+            if current is None or current["deleted"]:
+                return False
+            if _clean_doc(dict(doc)) != _from_json(current["doc"], {}):
+                return False
+            if body != current["body"]:
+                return False
+            if row["kind"] not in {"backlog", "project"}:
+                target = self._entity_path(kind, ident, bool(current["archived"]))
+                if (
+                    target is None
+                    or target.relative_to(self.backlog_path).as_posix() != row["file"]
+                ):
+                    return False
+        return True
+
+    @staticmethod
+    def _queue_export_for_row(tx: "Transaction", row: sqlite3.Row) -> None:
+        if row["kind"] == "backlog":
+            tx._export_backlog = True
+        elif row["kind"] == "project":
+            tx._export_keys.add(("project", row["id"] or _PROJECT_ID))
+        elif row["id"]:
+            tx._export_keys.add((row["kind"], row["id"]))
+
+    def _hold_divergent_file(
+        self,
+        tx: "Transaction",
+        row: sqlite3.Row,
+        content: bytes,
+        stat: os.stat_result,
+    ) -> None:
+        """Keep both versions of a file edited while the store owed it an export.
+
+        Two automatic merges were tried here and both lost data: a merge needs
+        the state both sides last agreed on, and neither a rendered entity nor
+        the change history reproduces what a file held. So nothing is merged.
+        The store keeps its entity, the file stays exactly as written, its
+        bytes are kept in `projection_conflict`, and while that row exists no
+        export may write or remove the file. Only an explicit resolution
+        (`Store.resolve_projection_conflict`) picks a side. A file that agrees
+        with the store after all is no conflict and simply stops being one.
+        """
+        rel = row["file"]
+        try:
+            rows = self._parse_projected_file(tx, row["kind"], row["id"], content)
+        except (OSError, UnicodeError, ValueError, yaml.YAMLError) as exc:
+            # Still broken, or broken again: the debt stays owed, and a flag
+            # keeps the last bytes that did parse.
+            tx.connection.execute(
+                "UPDATE projection SET quarantined=1 WHERE file=?", (rel,)
+            )
+            self._stamp_quarantine(tx, rel, exc, content, stat)
+            return
+        if rows is None:
+            return
+        flagged = tx.connection.execute(
+            "SELECT file_hash FROM projection_conflict WHERE file=?", (rel,)
+        ).fetchone()
+        digest = hashlib.sha1(content).hexdigest()
+        tx.connection.execute(
+            "UPDATE projection SET content_hash=?,mtime=?,size=?,dirty=1,quarantined=0,"
+            "quarantine_mtime=NULL,quarantine_size=NULL,quarantine_hash=NULL WHERE file=?",
+            (digest, stat.st_mtime, stat.st_size, rel),
+        )
+        if self._import_is_noop(tx, row, rows):
+            if flagged is not None:
+                tx.connection.execute(
+                    "DELETE FROM projection_conflict WHERE file=?", (rel,)
+                )
+            self._queue_export_for_row(tx, row)
+            tx.log_entries.append(f"{rel} agrees with the store; export resumed")
+            return
+        ident = row["id"]
+        if row["kind"] == "project":
+            ident = ident or _PROJECT_ID
+        if flagged is None:
+            tx.connection.execute(
+                "INSERT INTO projection_conflict(file,kind,id,flagged_at,file_hash,file_content) "
+                "VALUES(?,?,?,?,?,?)",
+                (rel, row["kind"], ident, _now(), digest, content),
+            )
+            tx.log_entries.append(
+                f"flagged {rel}: edited while the store held an unwritten change; "
+                f"neither version applied, exports paused"
+            )
+        elif flagged["file_hash"] != digest:
+            tx.connection.execute(
+                "UPDATE projection_conflict SET file_hash=?,file_content=? WHERE file=?",
+                (digest, content, rel),
+            )
+        tx.warnings.append(
+            projection_conflict_notice({"file": rel, "kind": row["kind"], "id": ident})
+        )
+
+    @staticmethod
+    def _observed_base(tx: "Transaction", projection_row: sqlite3.Row) -> bytes | None:
+        """The merge base, only when it is bytes the store saw on disk.
+
+        Every base this release writes -- the prior bytes of a failed replace
+        or remove, the bytes a merge consumed -- is the file the projection row
+        last recorded, so its hash is the row's `content_hash`. A base that is
+        not cannot be trusted as what the file held: a rendered entity left by
+        an unreleased 6.0.3 build, or an old base 6.0.2 kept after a merge
+        moved the row on. Such a base is ignored and the file is flagged,
+        because merging against a guess is what lost data.
+        """
+        base_row = tx.connection.execute(
+            "SELECT content FROM projection_base WHERE file=?", (projection_row["file"],)
+        ).fetchone()
+        if base_row is None:
+            return None
+        base = bytes(base_row["content"])
+        if hashlib.sha1(base).hexdigest() != projection_row["content_hash"]:
+            return None
+        return base
+
     def _merge_dirty_external_edit(
         self,
         tx: "Transaction",
@@ -3836,32 +4796,30 @@ class Store:
         content: bytes,
         stat: os.stat_result,
     ) -> None:
+        """Merge a hand edit into a row whose last export failed to land.
+
+        The base is the bytes that export failed to replace: exactly what the
+        file held when the store moved on, so the three-way merge stands on
+        something true. Without those bytes there is nothing to stand on, and
+        the file is held instead of guessed at.
+        """
         rel = projection_row["file"]
         kind = projection_row["kind"]
         ident = projection_row["id"]
         if not ident:
             return
-        base_row = tx.connection.execute(
-            "SELECT content FROM projection_base WHERE file=?", (rel,)
-        ).fetchone()
         entity = tx.connection.execute(
             "SELECT doc,body,rev FROM entities WHERE kind=? AND id=?", (kind, ident)
         ).fetchone()
-        if base_row is None or entity is None:
+        if entity is None:
             return
         try:
             if kind == "project":
-                base_doc = yaml_io.safe_load(
-                    bytes(base_row["content"]).decode("utf-8")
-                ) or {}
                 their_doc = yaml_io.safe_load(content.decode("utf-8")) or {}
-                if not isinstance(base_doc, dict) or not isinstance(their_doc, dict):
+                if not isinstance(their_doc, dict):
                     raise ValueError("project.yaml must be a mapping")
-                base_body = their_body = None
+                their_body = None
             else:
-                base_doc, base_body = self._parse_entity_text(
-                    kind, bytes(base_row["content"]).decode("utf-8")
-                )
                 their_doc, their_body = self._parse_entity_text(
                     kind, content.decode("utf-8")
                 )
@@ -3871,6 +4829,22 @@ class Store:
                 "UPDATE projection SET quarantined=1 WHERE file=?", (rel,)
             )
             self._stamp_quarantine(tx, rel, exc, content, stat)
+            return
+        base = self._observed_base(tx, projection_row)
+        if base is None:
+            self._hold_divergent_file(tx, projection_row, content, stat)
+            return
+        try:
+            base_text = base.decode("utf-8")
+            if kind == "project":
+                base_doc = yaml_io.safe_load(base_text) or {}
+                if not isinstance(base_doc, dict):
+                    raise ValueError("project.yaml must be a mapping")
+                base_body = None
+            else:
+                base_doc, base_body = self._parse_entity_text(kind, base_text)
+        except (UnicodeError, ValueError, yaml.YAMLError):
+            self._hold_divergent_file(tx, projection_row, content, stat)
             return
         our_doc = _from_json(entity["doc"], {})
         our_body = entity["body"]
@@ -3915,6 +4889,15 @@ class Store:
             "WHERE file=?",
             (hashlib.sha1(content).hexdigest(), stat.st_mtime, stat.st_size, rel),
         )
+        # The merge consumed these bytes, so they are what the file and the
+        # store last agreed on. Should the export of the merged result fail
+        # too, the next hand edit has to merge against them, not against the
+        # older base, which would turn every field settled here into a conflict.
+        tx.connection.execute(
+            "INSERT INTO projection_base(file,content) VALUES(?,?) "
+            "ON CONFLICT(file) DO UPDATE SET content=excluded.content",
+            (rel, content),
+        )
         tx.seq = seq
         tx.log_entries.append(f"merged external edit {rel} into {kind}:{ident} at seq {seq}")
         tx._derived_keys.add((kind, ident))
@@ -3927,21 +4910,26 @@ class Store:
         content: bytes,
         stat: os.stat_result,
     ) -> None:
-        base_row = tx.connection.execute(
-            "SELECT content FROM projection_base WHERE file='backlog.yaml'"
-        ).fetchone()
-        if base_row is None:
-            return
         try:
-            base = yaml_io.safe_load(bytes(base_row["content"]).decode("utf-8")) or {}
             theirs = yaml_io.safe_load(content.decode("utf-8")) or {}
-            _validate_backlog_document(base)
             _validate_backlog_document(theirs)
         except (UnicodeError, ValueError, yaml.YAMLError) as exc:
             tx.connection.execute(
                 "UPDATE projection SET quarantined=1 WHERE file='backlog.yaml'"
             )
             self._stamp_quarantine(tx, "backlog.yaml", exc, content, stat)
+            return
+        base_bytes = self._observed_base(tx, projection_row)
+        if base_bytes is None:
+            # Returning here stranded the index for good: the store's edit never
+            # written, the repaired file never read, and nobody told.
+            self._hold_divergent_file(tx, projection_row, content, stat)
+            return
+        try:
+            base = yaml_io.safe_load(base_bytes.decode("utf-8")) or {}
+            _validate_backlog_document(base)
+        except (UnicodeError, ValueError, yaml.YAMLError):
+            self._hold_divergent_file(tx, projection_row, content, stat)
             return
 
         base_rows = _flatten_backlog_dict(base)
@@ -4025,38 +5013,6 @@ class Store:
         )
         tx.seq = seq
         tx._derived_keys.add((kind, ident))
-
-    def _import_backlog_file(
-        self, tx: "Transaction", path: Path, content: bytes, stat: os.stat_result
-    ) -> None:
-        try:
-            raw = yaml_io.safe_load(content.decode("utf-8")) or {}
-            _validate_backlog_document(raw)
-        except (UnicodeError, ValueError, yaml.YAMLError) as exc:
-            tx.connection.execute(
-                "UPDATE projection SET quarantined=1,dirty=0 WHERE file='backlog.yaml'"
-            )
-            self._stamp_quarantine(tx, "backlog.yaml", exc, content, stat)
-            return
-        rows = _flatten_backlog_dict(raw)
-        for key, (doc, body) in rows.items():
-            if key[0] in {"epic", "phase"}:
-                current = tx.connection.execute(
-                    "SELECT doc,body FROM entities WHERE kind=? AND id=?", key
-                ).fetchone()
-                if current:
-                    current_doc = _from_json(current["doc"], {})
-                    heavy_fields = (
-                        EPIC_HEAVY_FIELDS if key[0] == "epic" else PHASE_HEAVY_FIELDS
-                    )
-                    for field in heavy_fields:
-                        if field in current_doc:
-                            doc[field] = current_doc[field]
-                    body = current["body"]
-            tx._import_row(key[0], key[1], doc, body)
-        self._record_projection_bytes(
-            tx.connection, "backlog.yaml", "backlog", None, content, stat
-        )
 
     def _drain_dirty(self, tx: "Transaction") -> None:
         for row in tx.connection.execute(
@@ -4149,7 +5105,7 @@ class Store:
                     )
         if tx._derived_keys:
             self._close_reverse_links(tx.connection)
-            self._rebuild_related(tx.connection)
+            self._rebuild_related(tx.connection, tx._derived_keys)
 
     @staticmethod
     def _close_reverse_links(connection: sqlite3.Connection) -> None:
@@ -4185,18 +5141,59 @@ class Store:
         return str(row[0]) if row else "task"
 
     @staticmethod
-    def _rebuild_related(connection: sqlite3.Connection) -> None:
-        connection.execute("DELETE FROM related")
+    def _rebuild_related(
+        connection: sqlite3.Connection,
+        touched: Iterable[tuple[str, str]] | None = None,
+    ) -> None:
+        """Re-derive `related`, re-pairing only the path rows of `touched` keys.
+
+        A path edge's weight is the number of matching row pairs between two
+        entities, so an edge changes only when one of its two entities' rows
+        did -- and every entity whose `entity_paths` rows changed is in
+        `touched`. Pairing the whole table instead is quadratic: on 3,857 rows
+        it was 7.4M comparisons and most of every write, under the writer lock.
+
+        With `touched`, each touched row is compared against every row, and a
+        pair of two touched rows is counted only from its lower index, so it
+        weighs once as in the full pairing. Past half the rows the full pairing
+        is the cheaper of the two, so it runs instead; `rebuild_derived`, which
+        touches everything, therefore always re-pairs from scratch. Handover
+        edges are rebuilt whole: they are cheap, and a row cannot be traced
+        back to the one handover that produced it.
+        """
         paths = connection.execute(
             "SELECT kind,id,path,match_kind FROM entity_paths "
             "WHERE source IN ('anchors','location') ORDER BY kind,id,path"
         ).fetchall()
         weights: dict[tuple[tuple[str, str], tuple[str, str]], int] = {}
-        for index, left in enumerate(paths):
+        keys = None if touched is None else {(str(k), str(i)) for k, i in touched}
+        if keys is not None:
+            left_rows = [
+                index for index, row in enumerate(paths)
+                if (row["kind"], row["id"]) in keys
+            ]
+            if 2 * len(left_rows) >= len(paths):
+                keys = None
+        if keys is None:
+            connection.execute("DELETE FROM related WHERE via='path'")
+            left_rows = range(len(paths))
+        else:
+            connection.executemany(
+                "DELETE FROM related WHERE via='path' AND a_kind=? AND a_id=?", keys
+            )
+            connection.executemany(
+                "DELETE FROM related WHERE via='path' AND b_kind=? AND b_id=?", keys
+            )
+        for index in left_rows:
+            left = paths[index]
             left_key = (left["kind"], left["id"])
-            for right in paths[index + 1 :]:
+            first = index + 1 if keys is None else 0
+            for other in range(first, len(paths)):
+                right = paths[other]
                 right_key = (right["kind"], right["id"])
                 if left_key == right_key:
+                    continue
+                if keys is not None and other < index and right_key in keys:
                     continue
                 matches = (
                     left["path"] == right["path"]
@@ -4218,6 +5215,7 @@ class Store:
                 "VALUES(?,?,?,?,?,?)",
                 (left[0], left[1], right[0], right[1], "path", weight),
             )
+        connection.execute("DELETE FROM related WHERE via='handover'")
         handovers = connection.execute(
             "SELECT handover_id,task_id FROM handover_tasks ORDER BY handover_id,task_id"
         ).fetchall()
@@ -4233,9 +5231,48 @@ class Store:
                         tuple(sorted((left, right))),
                     )
 
+    def _export_blocked(self, tx: "Transaction", kind: str, ident: str) -> bool:
+        """True when any file of this entity is quarantined or flagged.
+
+        Such a file holds something the store does not: a broken file may
+        carry edits that never parsed, a flagged one a repair nobody has
+        chosen against. Writing the entity -- or moving it to its archive
+        path, or deleting it -- would overwrite or remove that file, so nothing
+        is exported for the entity at all. The rows are marked dirty so the
+        debt is on record, and logged once when they first become so; every
+        later write stops at this lookup with the warning and renders nothing.
+        """
+        blocked = tx.connection.execute(
+            "SELECT p.file,p.dirty,p.quarantined,c.file IS NOT NULL AS flagged "
+            "FROM projection p LEFT JOIN projection_conflict c ON c.file=p.file "
+            "WHERE p.kind=? AND p.id=? AND (p.quarantined=1 OR c.file IS NOT NULL) "
+            "ORDER BY p.file",
+            (kind, ident),
+        ).fetchall()
+        for row in blocked:
+            reason = "flagged" if row["flagged"] else "quarantined"
+            if not row["dirty"]:
+                tx.connection.execute(
+                    "UPDATE projection SET dirty=1 WHERE file=?", (row["file"],)
+                )
+                tx.log_entries.append(
+                    f"projection export suppressed for {reason} {row['file']}"
+                )
+            tx.warnings.append(f"export pending: {row['file']} is {reason}")
+        return bool(blocked)
+
     def _export_touched(self, tx: "Transaction") -> None:
         if any(kind in {"backlog", "epic", "phase"} for kind, _ in tx._export_keys):
             tx._export_backlog = True
+        # One question for the whole transaction. Asking it per entity would put
+        # an extra lookup on every export an adoption does -- 2,050 of them --
+        # to answer "no" each time on the store the check exists to protect.
+        blocked_rows = bool(
+            tx.connection.execute(
+                "SELECT EXISTS(SELECT 1 FROM projection WHERE quarantined=1) "
+                "OR EXISTS(SELECT 1 FROM projection_conflict)"
+            ).fetchone()[0]
+        )
         for kind, ident in sorted(tx._export_keys):
             if kind == "backlog":
                 continue
@@ -4243,6 +5280,8 @@ class Store:
                 "SELECT * FROM entities WHERE kind=? AND id=?", (kind, ident)
             ).fetchone()
             if not row:
+                continue
+            if blocked_rows and self._export_blocked(tx, kind, ident):
                 continue
             self._export_entity_row(tx, row)
         if tx._export_ideas or any(kind == "idea" for kind, _ in tx._export_keys):
@@ -4593,37 +5632,17 @@ class Store:
             tx.connection.execute("DELETE FROM projection_base WHERE file=?", (prior_rel,))
         if any(old_row["file"] == rel for old_row in old_rows):
             old_rel = rel
-        doc = _from_json(row["doc"], {})
-        body = row["body"] or ""
-        # `(expected_doc, expected_body)` for the round-trip check, or None for a
-        # whole-document YAML file, which has its own comparison.
-        expected: tuple[Mapping[str, Any], str | None] | None
-        if kind == "task":
-            fm, rendered_body = task_v4_to_file(doc | ({BODY_KEY: body} if body else {}))
-            content = render_frontmatter(fm, rendered_body).encode("utf-8")
-            expected = (doc, body)
-        elif kind in {"epic", "phase"}:
-            heavy_fields = EPIC_HEAVY_FIELDS if kind == "epic" else PHASE_HEAVY_FIELDS
-            _slim, heavy, rendered_body = _split_entity_for_v3(
-                doc | ({BODY_KEY: body} if body else {}), heavy_fields
-            )
-            if not any(field in heavy for field in heavy_fields) and not rendered_body:
-                if old_rel:
-                    if not self._remove_projection_file(
-                        tx, self.backlog_path / old_rel, kind, ident, old_rel
-                    ):
-                        return
-                    tx.connection.execute("DELETE FROM projection WHERE file=?", (old_rel,))
-                    tx.connection.execute("DELETE FROM projection_base WHERE file=?", (old_rel,))
-                return
-            content = render_frontmatter(heavy, rendered_body).encode("utf-8")
-            expected = (heavy, rendered_body)
-        elif kind == "project":
-            content = yaml.dump(doc, default_flow_style=False, sort_keys=False, allow_unicode=True).encode("utf-8")
-            expected = None
-        else:
-            content = render_frontmatter(doc, body).encode("utf-8")
-            expected = (doc, body)
+        rendered = _render_entity_file(kind, _from_json(row["doc"], {}), row["body"])
+        if rendered is None:
+            if old_rel:
+                if not self._remove_projection_file(
+                    tx, self.backlog_path / old_rel, kind, ident, old_rel
+                ):
+                    return
+                tx.connection.execute("DELETE FROM projection WHERE file=?", (old_rel,))
+                tx.connection.execute("DELETE FROM projection_base WHERE file=?", (old_rel,))
+            return
+        content, expected = rendered
         # Matched here, once, so the verification below reads exactly the bytes
         # that land and `_replace_projection` does not probe the file a second
         # time — two extra opens per file across a 2,300-file adoption.
@@ -4631,7 +5650,9 @@ class Store:
             content, self.backlog_path / rel, moved_crlf
         )
         if expected is None:
-            self._verify_yaml_round_trip(kind, ident, rel, content, doc)
+            self._verify_yaml_round_trip(
+                kind, ident, rel, content, _from_json(row["doc"], {})
+            )
         else:
             self._verify_round_trip(kind, ident, rel, content, *expected)
         self._replace_projection(
@@ -4842,7 +5863,21 @@ class Store:
         return False
 
     def _export_backlog(self, tx: "Transaction", *, force: bool = False) -> None:
-        data = self._load_dict_from_connection(tx.connection)
+        data, content = self._render_backlog(tx.connection)
+        seq = int(tx.connection.execute("SELECT COALESCE(MAX(seq),0) FROM changes").fetchone()[0])
+        self._verify_backlog_round_trip(content, data)
+        self._replace_projection(
+            tx, "backlog.yaml", "backlog", None, content, seq, line_endings_matched=True
+        )
+
+    def _render_backlog_bytes(self, connection: sqlite3.Connection) -> bytes:
+        return self._render_backlog(connection)[1]
+
+    def _render_backlog(
+        self, connection: sqlite3.Connection
+    ) -> tuple[dict[str, Any], bytes]:
+        """The index `backlog.yaml` is exported from, and the bytes it exports as."""
+        data = self._load_dict_from_connection(connection)
         data.pop("context", None)
         data.pop("_orphan_tasks", None)
         slim_epics: list[dict[str, Any]] = []
@@ -4869,14 +5904,10 @@ class Store:
         meta["projection_schema"] = PROJECTION_SCHEMA
         data["meta"] = meta
         content = yaml.dump(data, default_flow_style=False, sort_keys=False, allow_unicode=True).encode("utf-8")
-        seq = int(tx.connection.execute("SELECT COALESCE(MAX(seq),0) FROM changes").fetchone()[0])
         content = self._match_project_line_endings(
             content, self.backlog_path / "backlog.yaml"
         )
-        self._verify_backlog_round_trip(content, data)
-        self._replace_projection(
-            tx, "backlog.yaml", "backlog", None, content, seq, line_endings_matched=True
-        )
+        return data, content
 
     def _entity_path(self, kind: str, ident: str, archived: bool) -> Path | None:
         if kind != "project":
@@ -4923,14 +5954,19 @@ class Store:
         line_endings_matched: bool = False,
     ) -> None:
         existing = tx.connection.execute(
-            "SELECT content_hash,quarantined FROM projection WHERE file=?", (rel,)
+            "SELECT p.content_hash,p.dirty,p.quarantined,c.file IS NOT NULL AS flagged "
+            "FROM projection p LEFT JOIN projection_conflict c ON c.file=p.file "
+            "WHERE p.file=?",
+            (rel,),
         ).fetchone()
-        if existing and existing["quarantined"]:
-            tx.connection.execute(
-                "UPDATE projection SET dirty=1 WHERE file=?", (rel,)
-            )
-            tx.warnings.append(f"export pending: {rel} is quarantined")
-            tx.log_entries.append(f"projection export suppressed for quarantined {rel}")
+        if existing and (existing["quarantined"] or existing["flagged"]):
+            reason = "flagged" if existing["flagged"] else "quarantined"
+            if not existing["dirty"]:
+                tx.connection.execute(
+                    "UPDATE projection SET dirty=1 WHERE file=?", (rel,)
+                )
+                tx.log_entries.append(f"projection export suppressed for {reason} {rel}")
+            tx.warnings.append(f"export pending: {rel} is {reason}")
             return
         # Everything is rendered with LF. Writing that over a CRLF working tree
         # (`core.autocrlf=true`, the Windows default) rewrites every line of
@@ -5698,6 +6734,40 @@ def _split_body(doc: Mapping[str, Any]) -> tuple[dict[str, Any], str | None]:
     return _clean_doc(materialized), body
 
 
+def _render_entity_file(
+    kind: str, doc: Mapping[str, Any], body: str | None
+) -> tuple[bytes, tuple[Mapping[str, Any], str | None] | None] | None:
+    """The bytes an entity projects to, plus what they must read back as.
+
+    The second item is `(expected_doc, expected_body)` for the round-trip
+    check, or None for a whole-document YAML file, which has its own
+    comparison. None overall means the entity has no file of its own: an epic
+    or phase with nothing beyond what `backlog.yaml` already carries.
+    """
+    doc = dict(doc)
+    body = body or ""
+    if kind == "task":
+        fm, rendered_body = task_v4_to_file(doc | ({BODY_KEY: body} if body else {}))
+        return render_frontmatter(fm, rendered_body).encode("utf-8"), (doc, body)
+    if kind in {"epic", "phase"}:
+        heavy_fields = EPIC_HEAVY_FIELDS if kind == "epic" else PHASE_HEAVY_FIELDS
+        _slim, heavy, rendered_body = _split_entity_for_v3(
+            doc | ({BODY_KEY: body} if body else {}), heavy_fields
+        )
+        if not any(field in heavy for field in heavy_fields) and not rendered_body:
+            return None
+        return (
+            render_frontmatter(heavy, rendered_body).encode("utf-8"),
+            (heavy, rendered_body),
+        )
+    if kind == "project":
+        return (
+            yaml.dump(doc, default_flow_style=False, sort_keys=False, allow_unicode=True).encode("utf-8"),
+            None,
+        )
+    return render_frontmatter(doc, body).encode("utf-8"), (doc, body)
+
+
 def _top_level_diff(
     before_doc: Mapping[str, Any], after_doc: Mapping[str, Any]
 ) -> tuple[list[str], dict[str, Any], dict[str, Any]]:
@@ -5767,6 +6837,26 @@ def _merge_change_details(
     if conflicts:
         before["_conflicts"] = conflicts
     return fields, before, after
+
+
+def projection_conflict_notice(conflict: Mapping[str, Any]) -> str:
+    """The line every tool result carries while a file stays flagged."""
+    rel = conflict["file"]
+    kind = conflict.get("kind")
+    if kind == "backlog":
+        what = "the epic and phase index"
+    elif kind == "project":
+        what = "the project manifest"
+    else:
+        what = f"{kind} {conflict.get('id')}"
+    return (
+        f"{rel} ({what}) was edited while the store held a change it had not "
+        f"written there yet, so neither version was applied to the other. Both "
+        f"are kept: the store has its version, the file is untouched, and "
+        f"exports to it are paused. Compare them with "
+        f'backlog_resolve_conflict(file="{rel}"), then keep one with '
+        f'take="file" or take="store".'
+    )
 
 
 _ID_SAFE_RE = re.compile(r"[^a-z0-9]+")
