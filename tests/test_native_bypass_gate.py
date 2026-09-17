@@ -168,6 +168,7 @@ EXERCISES = {
     ("backlog_project_error_trace_ladder", None): lambda: bs.backlog_project_error_trace_ladder(),
     ("backlog_linear", "link"): lambda: bs.backlog_linear(action="link", task_id="test-epic-002", external_key="ENG-9"),
     ("backlog_linear", "unlink"): lambda: bs.backlog_linear(action="unlink", task_id="test-epic-002"),
+    ("backlog_linear", "probe"): lambda: bs.backlog_linear(action="probe", token_env="GATE_UNSET_TOKEN"),
     ("backlog_linear", "list"): lambda: bs.backlog_linear(action="list"),
     ("backlog_linear", "show"): lambda: bs.backlog_linear(action="show", tracker_id="linear-cm-eng-9"),
     ("backlog_linear", "status"): lambda: bs.backlog_linear(action="status"),

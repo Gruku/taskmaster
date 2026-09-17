@@ -241,10 +241,13 @@ def project_init(call, *, name, slug):
 # ── Linear (local actions only) ─────────────────────────────────────────────
 
 
-@adapter("backlog_linear", actions=("link", "unlink", "list", "show", "status"),
+@adapter("backlog_linear", actions=("probe", "link", "unlink", "list", "show", "status"),
          unknown=lambda action: json.dumps({"error": f"unknown action {action!r}"}))
 def linear(call, *, action, task_id, external_key, workspace_alias, token_env, team_id, status_mapping,
            priority_mapping, default_workspace, tracker_id, target_id):
+    if action == "probe":
+        # An external query against Linear's API; it reads no store and no projection.
+        return bs.backlog_linear_probe(token_env)
     backlog = bs._backlog_path()
     if action == "list":
         if not backlog.exists():
