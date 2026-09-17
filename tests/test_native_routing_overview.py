@@ -155,3 +155,14 @@ def test_linear_probe_matches(twins, monkeypatch):
     monkeypatch.setattr(linear_client, "LinearClient", FakeClient)
     legacy, native = twins.same("backlog_linear", action="probe", token_env="PROBE_TOKEN")
     assert json.loads(native)["teams"][0]["users_error"] == "users hidden"
+
+
+def test_validate_matches(twins):
+    twins.same("backlog_validate")
+    twins.same("backlog_add_task", title="Docs task", epic="test-epic", phase="dev",
+               options={"docs": "plan:docs/missing.md;spec:has a space"})
+    twins.same("backlog_update_task", task_id="test-epic-002", field="status", value="in-progress")
+    twins.same("backlog_linear", action="link", task_id="test-epic-001", external_key="ENG-9")
+    twins.same("backlog_handover_create", tldr="Validated handover")
+    legacy, native = twins.same("backlog_validate")
+    assert "docs.plan path not found" in native
