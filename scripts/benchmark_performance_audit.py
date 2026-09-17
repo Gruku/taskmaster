@@ -134,7 +134,7 @@ def algorithms(root, output):
     output.write_text(json.dumps(report, indent=2))
 
 
-def optimized_rebuild(connection):
+def optimized_rebuild(connection, touched=None):
     rows = [tuple(row) for row in connection.execute("SELECT kind,id,path,match_kind FROM entity_paths WHERE source IN ('anchors','location')")]
     weights, _ = grouped_weights(rows, True)
     connection.execute("DELETE FROM related")
