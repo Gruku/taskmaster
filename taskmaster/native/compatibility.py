@@ -11,7 +11,7 @@ from taskmaster import query_guard
 from .migrate import encode, reconstruct_entities
 
 
-def query(source, statement, *, limit=500, timeout=None):
+def query(source, statement, *, limit=500, timeout=None, authorizer=None, deadline=None):
     from .queries import page_limit
     page_limit(limit)
     statement = query_guard.validate(statement)
@@ -46,10 +46,17 @@ def query(source, statement, *, limit=500, timeout=None):
             counts[table] = len(values)
             if values:
                 target.executemany(f'INSERT INTO "{table}" VALUES({",".join("?" for _ in values[0])})', values)
+        # The tool's private tables exist, empty, so a statement naming one is
+        # refused by the authorizer exactly as on the legacy store rather than
+        # failing earlier as a missing table.
+        target.execute("CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT)")
+        target.execute("CREATE TABLE projection_base(file TEXT PRIMARY KEY, content BLOB)")
         target.commit()
-        authorizer = query_guard.Authorizer(query_guard.declared_names(statement))
+        # A caller that reports *why* a statement was refused passes its own
+        # authorizer and deadline and reads `denial`/`expired` off them.
+        authorizer = authorizer or query_guard.Authorizer(query_guard.declared_names(statement))
         target.set_authorizer(authorizer)
-        deadline = query_guard.Deadline(seconds)
+        deadline = deadline or query_guard.Deadline(seconds)
         target.set_progress_handler(deadline, query_guard.PROGRESS_INSTRUCTIONS)
         try:
             cursor = target.execute(statement)

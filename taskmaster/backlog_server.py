@@ -2008,6 +2008,11 @@ def backlog_status(verbose: bool = False) -> str:
     """
     data = _load()
     regenerate_context(data)  # ensure fresh stats without writing
+    return _status_text(data, verbose)
+
+
+def _status_text(data: dict, verbose: bool) -> str:
+    """`backlog_status` over any tree with a derived context; shared with the native adapter."""
     ctx = data["context"]
 
     lines = [f"**Schema:** v{_effective_schema_version(data)}\n"]
@@ -2714,10 +2719,16 @@ def _search_via_index(query: str, kinds: list[str] | None) -> str | None:
         return None
     # A filter of only unknown kinds searches everything, as it always has.
     selected = [k for k in kinds or () if k in _SEARCH_KINDS] or list(_SEARCH_KINDS)
-    con = None
+    try:
+        return _search_index_text(_store().connection, query, selected, match)
+    except (sqlite3.Error, OSError, ValueError, store.LegacyLayoutError):
+        return None
+
+
+def _search_index_text(con, query: str, selected: list, match: str, *, native: bool = False):
+    """The FTS answer over one connection, legacy tables or (`native`) the native core's."""
     owns_snapshot = False
     try:
-        con = _store().connection
         # The count and the rows are one answer and must come from one snapshot.
         # `_load()` has already released its own, so a commit landing between
         # the two queries produced "1 match" above an empty list.
@@ -2727,23 +2738,29 @@ def _search_via_index(query: str, kinds: list[str] | None) -> str | None:
         # `backlog` and `project` are whole-file documents, not work items: they
         # are indexed so `backlog_query` can reach them, and excluded here so a
         # common word cannot return the entire backlog as one result row.
-        where = ("WHERE entity_fts MATCH ? AND e.deleted=0 AND e.kind IN ("
-                 + ",".join("?" * len(selected)) + ")")
+        kinds_sql = ",".join("?" * len(selected))
         params: list[str] = [match, *selected]
-        source = ("FROM entity_fts JOIN entities e "
-                  f"ON e.kind = entity_fts.kind AND e.id = entity_fts.id {where}")
+        if not native:
+            source = ("FROM entity_fts JOIN entities e ON e.kind = entity_fts.kind AND e.id = entity_fts.id "
+                      f"WHERE entity_fts MATCH ? AND e.deleted=0 AND e.kind IN ({kinds_sql})")
+            columns = ("entity_fts.id, e.kind, e.status, entity_fts.title, "
+                       "json_extract(e.doc,'$.priority') AS priority, e.epic, bm25(entity_fts) AS rank ")
+        else:
+            source = ("FROM document_search JOIN document_search_keys k ON k.document_key = document_search.rowid "
+                      "JOIN entity_core c ON c.entity_key = k.entity_key "
+                      "LEFT JOIN task_operational t ON t.entity_key = c.entity_key "
+                      f"WHERE document_search MATCH ? AND c.deleted=0 AND c.kind IN ({kinds_sql})")
+            columns = ("c.public_id, c.kind, json_extract(c.status_json,'$'), document_search.title, "
+                       "json_extract(c.priority_json,'$') AS priority, json_extract(t.epic_json,'$'), "
+                       "bm25(document_search) AS rank ")
         total = con.execute(f"SELECT COUNT(*) {source}", params).fetchone()[0]
         if not total:
             # Not "No tasks": this path searches every kind, and `kinds` may
             # have excluded tasks entirely.
             return f"No matches for `{query}`"
         rows = con.execute(
-            "SELECT entity_fts.id, e.kind, e.status, entity_fts.title, "
-            "json_extract(e.doc,'$.priority') AS priority, e.epic, "
-            "bm25(entity_fts) AS rank "
+            f"SELECT {columns}"
             f"{source} ORDER BY rank LIMIT {int(_SEARCH_LIMIT)}", params).fetchall()
-    except (sqlite3.Error, OSError, ValueError, store.LegacyLayoutError):
-        return None
     finally:
         if owns_snapshot and con is not None and con.in_transaction:
             con.rollback()
@@ -2772,7 +2789,11 @@ def backlog_search(query: str, kinds: list[str] | None = None) -> str:
     indexed = _search_via_index(query, kinds)
     if indexed is not None:
         return indexed
+    return _search_fallback_text(data, query)
 
+
+def _search_fallback_text(data: dict, query: str) -> str:
+    """The substring scan over tasks `backlog_search` falls back to; shared with native."""
     # Fallback: the store is unreadable. Substring scan over tasks only, unchanged.
     q = query.lower()
     scored: list[tuple[int, str]] = []
@@ -8796,8 +8817,11 @@ def backlog_blast_radius(task_id: str, mode: str = "predictive", depth_override:
     """
     if mode not in ("predictive", "evidence"):
         return f"Error: mode must be 'predictive' or 'evidence', got '{mode}'"
+    return _blast_radius_text(_load(), task_id, mode, depth_override, structured)
 
-    data = _load()
+
+def _blast_radius_text(data: dict, task_id: str, mode: str, depth_override: str, structured: bool) -> str:
+    """`backlog_blast_radius` over any task tree; shared with the native adapter."""
     result = _find_task(data, task_id)
     if not result:
         return f"Error: task `{task_id}` not found"
@@ -10588,6 +10612,14 @@ def backlog_project_get() -> dict | None:
     return manifest_to_dict(m) if m is not None else None
 
 
+def _manifest_from_raw(data: "dict | None"):
+    """`load_project_manifest` for an already-read document; shared with native reads."""
+    from taskmaster.project import ProjectManifest, _dict_to_dataclass
+    if data is None:
+        return None
+    return _dict_to_dataclass(ProjectManifest, data)
+
+
 @mcp.tool()
 def backlog_project_get_field(path: str) -> Any:
     """Read a single field via dotted/indexed path from the RAW YAML.
@@ -11050,10 +11082,16 @@ def backlog_linear_list() -> str:
     if not bp.exists():
         return json.dumps({"trackers": []})
 
+    return _linear_list_text(_load())
+
+
+def _linear_list_text(data: dict) -> str:
+    """`backlog_linear(list)` over any compatibility rows; shared with the native adapter."""
+    import json
     # `tracker` is a row-backed kind: reading `trackers/*.md` here made a
     # tracker whose export had not landed read as absent (decision 1).
     out = []
-    for tid, fm, _body in _dict_rows(_load(), "tracker"):
+    for tid, fm, _body in _dict_rows(data, "tracker"):
         if not tid.startswith("linear-"):
             continue
         out.append({
@@ -11083,7 +11121,13 @@ def backlog_linear_show(tracker_id: str) -> str:
     if not bp.exists():
         return json.dumps({"error": "No backlog found."})
 
-    row = _dict_row(_load(), "tracker", tracker_id)
+    return _linear_show_text(_load(), tracker_id)
+
+
+def _linear_show_text(data: dict, tracker_id: str) -> str:
+    """`backlog_linear(show)` over any compatibility rows; shared with the native adapter."""
+    import json
+    row = _dict_row(data, "tracker", tracker_id)
     if row is None:
         return json.dumps({"error": f"tracker {tracker_id!r} not found"})
 
@@ -11116,10 +11160,15 @@ def backlog_linear_status() -> str:
     # root with no usable store there are no rows to read, and the queue reads
     # answer empty rather than raising — the warning is the useful part.
     opened = _store_for(bp)
-    degraded = opened.projection_only_reason()
+    return _linear_status_text(opened.linear_rows(states=("pending", "claimed", "failed")),
+                               opened.linear_enqueue_failures(), opened.projection_only_reason())
+
+
+def _linear_status_text(rows: list, failed_enqueues: int, degraded) -> str:
+    """`backlog_linear(status)` over queue rows; shared with the native adapter."""
+    import json
     # A `claimed` row is one a drain has in flight: still owed, not settled,
     # so it counts as pending rather than vanishing from the depth.
-    rows = opened.linear_rows(states=("pending", "claimed", "failed"))
     pending = [row for row in rows if row["state"] in ("pending", "claimed")]
     parked = [row for row in rows if row["state"] == "failed"]
 
@@ -11145,7 +11194,7 @@ def backlog_linear_status() -> str:
         # Pushes that never became queue rows at all: the enqueue hook survives
         # its own failures so the local write still lands, so this count is the
         # only place a lost push shows up.
-        "failed_enqueues": opened.linear_enqueue_failures(),
+        "failed_enqueues": failed_enqueues,
         "warning": degraded,
     }, indent=2)
 

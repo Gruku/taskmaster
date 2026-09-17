@@ -12,7 +12,7 @@ import pytest
 import yaml
 
 from taskmaster import backlog_server as bs
-from native_twins import make_twins
+from native_twins import make_twins, normalize
 
 MANIFEST = {
     "schema_version": 1,
@@ -120,7 +120,7 @@ def test_linear_local_actions_match(twins):
                    {"action": "unlink", "task_id": "test-epic-001"}, {"action": "unlink", "task_id": "test-epic-001"},
                    {"action": "unlink", "task_id": "ghost-1"}, {"action": "explode"}):
         legacy, native = twins.call("backlog_linear", **kwargs)
-        assert json.loads(twins._rooted(native, twins.native)) == json.loads(twins._rooted(legacy, twins.legacy)), kwargs
+        assert normalize(json.loads(native)) == normalize(json.loads(legacy)), kwargs
     _check(twins)
 
 

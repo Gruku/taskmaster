@@ -141,6 +141,24 @@ EXERCISES = {
     ("backlog_area_update", None): lambda: bs.backlog_area_update(area_id="gate-seed-area", field="anchors",
                                                                   value='["a/**"]'),
     ("viewer_prefs_get", None): lambda: bs.viewer_prefs_get(),
+    ("backlog_status", None): lambda: [bs.backlog_status(), bs.backlog_status(verbose=True)],
+    ("backlog_blast_radius", None): lambda: [bs.backlog_blast_radius(task_id="test-epic-001"),
+                                             bs.backlog_blast_radius(task_id="test-epic-001", structured=True)],
+    ("backlog_search", None): lambda: [bs.backlog_search(query="Gate"), bs.backlog_search(query="gate", kinds=["bug"])],
+    ("backlog_query", None): lambda: bs.backlog_query(sql="SELECT kind,id FROM entities ORDER BY kind,id"),
+    ("backlog_store_status", None): lambda: bs.backlog_store_status(),
+    ("backlog_project_init", None): lambda: bs.backlog_project_init(name="Gate project"),
+    ("backlog_project_set", None): lambda: bs.backlog_project_set(
+        yaml_content="schema_version: 1\nmeta: {name: Gate, slug: gate, kind: app}\n"),
+    ("backlog_project_get", None): lambda: (bs.backlog_project_init(name="Gate project"), bs.backlog_project_get())[1],
+    ("backlog_project_get_field", None): lambda: bs.backlog_project_get_field(path="meta.name"),
+    ("backlog_project_ship_order", None): lambda: bs.backlog_project_ship_order(),
+    ("backlog_project_error_trace_ladder", None): lambda: bs.backlog_project_error_trace_ladder(),
+    ("backlog_linear", "link"): lambda: bs.backlog_linear(action="link", task_id="test-epic-002", external_key="ENG-9"),
+    ("backlog_linear", "unlink"): lambda: bs.backlog_linear(action="unlink", task_id="test-epic-002"),
+    ("backlog_linear", "list"): lambda: bs.backlog_linear(action="list"),
+    ("backlog_linear", "show"): lambda: bs.backlog_linear(action="show", tracker_id="linear-cm-eng-9"),
+    ("backlog_linear", "status"): lambda: bs.backlog_linear(action="status"),
     ("backlog_batch_preview", None): lambda: bs.backlog_batch_preview(
         operations=chr(10).join(["pick test-epic-002", "complete test-epic-001", "status test-epic-001 done"])),
 }
@@ -180,6 +198,9 @@ def rigged(tmp_path, monkeypatch):
         bs.backlog_decision_create(title="Seeded gate decision", options=["a", "b"])
         bs.backlog_area_create(area_id="gate-seed-area", name="Seeded area")
     twins = make_twins(tmp_path, monkeypatch, seed)
+    (twins.native / ".taskmaster" / "linear.yaml").write_text(
+        "version: 1\ndefault_workspace: cm\nworkspaces:\n- {alias: cm, team_id: T1, token_env: GATE_TOKEN}\n",
+        encoding="utf-8")
     (twins.native / ".taskmaster" / "local" / "PROGRESS.md").write_text(
         "## Changelog\n\n### 2026-09-16 — Gate\n- x\n", encoding="utf-8")
     project = twins.native
@@ -207,7 +228,9 @@ def rigged(tmp_path, monkeypatch):
                 relative = path.relative_to(backlog_dir)
             except (TypeError, ValueError, OSError):
                 return False
-            return not relative.parts or relative.parts[0] != "local"
+            # Machine-local state and configuration the store does not own
+            # (Linear workspaces, the layout config) are not the projection.
+            return not relative.parts or relative.parts[0] not in ("local", "linear.yaml", "taskmaster.json")
 
         def guard(label, real, *, method=False, write_ok=False):
             def check(target, args, kwargs):
@@ -276,7 +299,12 @@ FORBIDDEN_NAMES = {
     "glob", "rglob", "iterdir", "listdir", "scandir", "walk", "detect_dominant_crlf",
 }
 # (module, name): explicit export/maintenance operations the gate permits.
-ALLOWLIST = {("projection.py", "detect_dominant_crlf")}
+ALLOWLIST = {
+    # The export drain samples existing files once per process to match line endings.
+    ("projection.py", "detect_dominant_crlf"),
+    # The store-status diagnostic lists databases a recovery moved aside in local/.
+    ("overview.py", "listdir"),
+}
 
 
 def _references(path: Path):
@@ -322,14 +350,7 @@ def inventory_pairs() -> dict:
 
 # The reviewed list of normal-path tools/actions with no native route yet. Routing
 # a family removes its entries here; the N08 exit is an empty set.
-UNROUTED_NORMAL_PATH = {
-    ("backlog_blast_radius", None), ("backlog_linear", "link"), ("backlog_linear", "list"),
-    ("backlog_linear", "show"), ("backlog_linear", "status"), ("backlog_linear", "unlink"),
-    ("backlog_project_error_trace_ladder", None), ("backlog_project_get", None),
-    ("backlog_project_get_field", None), ("backlog_project_init", None),
-    ("backlog_project_set", None), ("backlog_project_ship_order", None), ("backlog_query", None),
-    ("backlog_search", None), ("backlog_status", None), ("backlog_store_status", None),
-}
+UNROUTED_NORMAL_PATH: set = set()
 
 
 def test_the_unrouted_normal_path_ledger_is_exact():

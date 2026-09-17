@@ -1078,6 +1078,21 @@ def detect_dominant_crlf(backlog_path: Path) -> bool:
     return crlf > lf
 
 
+def count_linear_enqueue_failures(local_dir: Path) -> int:
+    """Enqueue failures `store.log` in a store's local directory still records."""
+    path = local_dir / "store.log"
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return 0
+    return sum(1 for line in text.splitlines() if _LINEAR_ENQUEUE_FAILURE_MARKER in line)
+
+
+def linear_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    """One `linear_queue` row as the status and drain code read it."""
+    return Store._linear_row(row)
+
+
 class Store:
     def __init__(self, resolution: RootResolution, *, session: str | None = None):
         self.resolution = resolution
@@ -5034,15 +5049,7 @@ class Store:
         is "recent", not "ever" -- a count that under-reports an ancient failure
         is still the difference between an operator seeing the loss and not.
         """
-        path = self.db_path.parent / "store.log"
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            return 0
-        return sum(
-            1 for line in text.splitlines()
-            if _LINEAR_ENQUEUE_FAILURE_MARKER in line
-        )
+        return count_linear_enqueue_failures(self.db_path.parent)
 
     def _match_project_line_endings(
         self, content: bytes, path: Path, prior_crlf: bool | None = None
