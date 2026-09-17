@@ -845,7 +845,11 @@ def _with_seq(result, frame: "_TxFrame"):
     success (spec §3.6).
     """
     seq = getattr(frame.tx, "seq", None) if frame.tx is not None else None
-    notices = list(frame.export_warnings)
+    return _stamp_result(result, seq, list(frame.export_warnings))
+
+
+def _stamp_result(result, seq: int | None, notices: list[str]):
+    """`_with_seq` for any writer: the legacy frame here, a native receipt in routing."""
     if seq is None and not notices:
         return result
     if isinstance(result, dict):
