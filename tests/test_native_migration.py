@@ -214,3 +214,21 @@ backfill(connection,checkpoint=checkpoint)
         assert not connection.execute("SELECT 1 FROM sqlite_schema WHERE name='native_manifest'").fetchone()
         assert connection.execute("SELECT COUNT(*) FROM entities").fetchone()[0] == 13
         assert migrate.backfill(connection)["state"] == "verified"
+
+
+def test_backfill_keys_follow_legacy_row_order_not_id_order(legacy):
+    """Legacy renders epics and phases in `rowid` order (backlog.yaml order, then
+    creation order). Native export orders by `entity_key`, so a backfill that
+    inserted rows in id order reordered every project's backlog.yaml epic list on
+    its first native write."""
+    with closing(sqlite3.connect(legacy, isolation_level=None)) as connection:
+        for seq, ident in enumerate(("zeta", "alpha"), 50):
+            doc = {"id": ident, "name": ident.title()}
+            connection.execute("INSERT INTO entities VALUES('epic',?,NULL,NULL,0,0,?,NULL,1,?)",
+                               (ident, json.dumps(doc), seq))
+        migrate.backfill(connection)
+        order = [row[0] for row in connection.execute(
+            "SELECT public_id FROM entity_core WHERE kind='epic' ORDER BY entity_key")]
+        legacy_order = [row[0] for row in connection.execute(
+            "SELECT id FROM entities WHERE kind='epic' ORDER BY rowid")]
+    assert order == legacy_order == ["same", "zeta", "alpha"]
