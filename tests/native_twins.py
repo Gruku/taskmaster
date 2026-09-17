@@ -144,16 +144,16 @@ class Twins:
         finally:
             store.reset_for_tests()
 
-    def call(self, name: str, *args, **kwargs):
+    def call(self, tool: str, /, *args, **kwargs):
         results = []
         for root in (self.legacy, self.native):
             with self.at(root):
-                results.append(getattr(bs, name)(*args, **kwargs))
+                results.append(getattr(bs, tool)(*args, **kwargs))
         return tuple(results)
 
-    def same(self, name: str, *args, **kwargs):
-        legacy, native = self.call(name, *args, **kwargs)
-        assert normalize(native) == normalize(legacy), f"{name}: native answer diverged\nlegacy: {legacy!r}\nnative: {native!r}"
+    def same(self, tool: str, /, *args, **kwargs):
+        legacy, native = self.call(tool, *args, **kwargs)
+        assert normalize(native) == normalize(legacy), f"{tool}: native answer diverged\nlegacy: {legacy!r}\nnative: {native!r}"
         return legacy, native
 
     def assert_state_matches(self) -> None:

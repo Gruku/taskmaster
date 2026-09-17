@@ -4,6 +4,7 @@
 """Legacy-shaped reads over one native snapshot."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 from copy import deepcopy
 
 from taskmaster import backlog_server as bs
@@ -142,3 +143,75 @@ def committed(receipts) -> dict:
         for item in receipt["affected"]:
             documents[(item["kind"], item["id"])] = deepcopy(item["fields"])
     return documents
+
+
+ROW_KINDS = ("bug", "issue", "handover", "decision", "idea", "note", "area", "tracker")
+
+
+def bodies(snapshot, kind) -> dict:
+    """`{id: body}` for every entity of a kind that has prose, in one query."""
+    return dict(snapshot.connection.execute(
+        "SELECT c.public_id,d.body FROM entity_core c JOIN entity_documents d USING(entity_key) "
+        "WHERE c.kind=? AND c.deleted=0 AND d.body IS NOT NULL", (kind,)).fetchall())
+
+
+class NativeRows(Mapping):
+    """The legacy dict's `_rows` — `{kind: {id: (doc, body)}}` — decoded per kind on first use."""
+
+    def __init__(self, snapshot):
+        self._snapshot = snapshot
+        self._parsed: dict = {}
+
+    def __getitem__(self, kind):
+        if kind not in ROW_KINDS:
+            raise KeyError(kind)
+        if kind not in self._parsed:
+            prose = bodies(self._snapshot, kind)
+            items = page(self._snapshot, kind, include_archived=True)
+            self._parsed[kind] = {entity["id"]: (deepcopy(entity["fields"]), prose.get(entity["id"]))
+                                  for entity in sorted(items, key=lambda e: e["id"])}
+        return self._parsed[kind]
+
+    def __iter__(self):
+        return iter(ROW_KINDS)
+
+    def __len__(self):
+        return len(ROW_KINDS)
+
+
+def tree(snapshot, *, context=True) -> dict:
+    """The compatibility dict's shape — backlog fields, epics with their tasks, phases,
+    lazily decoded `_rows` and the derived `context` — built from native queries.
+
+    It reads every task, as the legacy dict does; it exists so the whole-backlog
+    read tools render through their own shared presentation code rather than a
+    second copy. Bounded replacements for those reads are N09/N10 work.
+    """
+    backlog = get(snapshot, "backlog", "__backlog__")
+    data = deepcopy(backlog["fields"]) if backlog else {}
+    epic_list = epics(snapshot)
+    by_id = {}
+    for epic in epic_list:
+        epic["tasks"] = []
+        by_id[epic["id"]] = epic
+    prose = bodies(snapshot, "task")
+    orphans = []
+    for entity in page(snapshot, "task", include_archived=True):
+        task = deepcopy(entity["fields"])
+        if prose.get(entity["id"]):
+            task[BODY_KEY] = prose[entity["id"]]
+        epic = by_id.get(task.get("epic"))
+        if epic is None:
+            orphans.append(entity["id"])
+        else:
+            epic["tasks"].append(bs._normalize_task(task))
+    for epic in epic_list:
+        epic["tasks"].sort(key=lambda task: (float(task.get("order", 0.0)), str(task.get("id", ""))))
+    data["epics"] = epic_list
+    data["phases"] = phases(snapshot)
+    data["context"] = {}
+    data["_orphan_tasks"] = orphans
+    if context:
+        bs._derive_context(data)
+    data["_rows"] = NativeRows(snapshot)
+    return data

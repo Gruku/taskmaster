@@ -7890,8 +7890,11 @@ def backlog_phase_status(phase_id: str = "") -> str:
     Args:
         phase_id: Phase ID. If omitted, shows the active phase.
     """
-    data = _load()
+    return _phase_status_text(_load(), phase_id)
 
+
+def _phase_status_text(data: dict, phase_id: str = "") -> str:
+    """`backlog_phase_status` over any epics/phases tree; shared with the native adapter."""
     if phase_id:
         ph = _find_phase(data, phase_id)
         if not ph:
@@ -8057,7 +8060,11 @@ def backlog_epic_status(epic_id: str) -> str:
     Args:
         epic_id: The epic ID (e.g. "asset-engine").
     """
-    data = _load()
+    return _epic_status_text(_load(), epic_id)
+
+
+def _epic_status_text(data: dict, epic_id: str) -> str:
+    """`backlog_epic_status` over any epics/phases tree; shared with the native adapter."""
     epic = _find_epic(data, epic_id)
     if not epic:
         return f"Error: epic `{epic_id}` not found"
