@@ -2587,6 +2587,11 @@ def backlog_resolve_conflict(file: str = "", take: str = "") -> str:
       move/remove it if the entity is archived or deleted); the replaced file
       text is kept in the resolution's change row.
 
+    A resolution always takes one whole file. For `backlog.yaml` that means
+    every epic and phase entry in it at once: there is no per-entity choice, so
+    compare the two versions first and edit the side you keep if it needs
+    pieces of the other.
+
     Whoever resolves decides; the store never picks a side on its own.
     """
     _configure_store_derivers()
@@ -2624,9 +2629,15 @@ def backlog_resolve_conflict(file: str = "", take: str = "") -> str:
             else "the store would write no file here: the entity is deleted or has no file of its own"
         )
         parts.append(block("Store version (what take=\"store\" writes)", detail["store_version"], absent))
+        whole = (
+            " Either choice applies to the whole of backlog.yaml, every epic and "
+            "phase entry in it, not to one entity."
+            if file == "backlog.yaml"
+            else ""
+        )
         parts.append(
             f'Keep one with backlog_resolve_conflict(file="{file}", take="file") '
-            f'or take="store".'
+            f'or take="store".{whole}'
         )
         return "\n\n".join(parts)
     try:
@@ -2634,6 +2645,11 @@ def backlog_resolve_conflict(file: str = "", take: str = "") -> str:
     except ValueError as exc:
         return f"Error: {exc}"
     message = f"Resolved {file}: kept the {take} version."
+    if file == "backlog.yaml":
+        message += (
+            " This took the whole file: every epic and phase entry in "
+            "backlog.yaml now comes from the " + take + " version."
+        )
     pending = [w for w in outcome["warnings"] if "export pending" in w]
     if pending:
         message += " (" + "; ".join(pending) + ")"

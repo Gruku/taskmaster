@@ -4767,6 +4767,28 @@ class Store:
             projection_conflict_notice({"file": rel, "kind": row["kind"], "id": ident})
         )
 
+    @staticmethod
+    def _observed_base(tx: "Transaction", projection_row: sqlite3.Row) -> bytes | None:
+        """The merge base, only when it is bytes the store saw on disk.
+
+        Every base this release writes -- the prior bytes of a failed replace
+        or remove, the bytes a merge consumed -- is the file the projection row
+        last recorded, so its hash is the row's `content_hash`. A base that is
+        not cannot be trusted as what the file held: a rendered entity left by
+        an unreleased 6.0.3 build, or an old base 6.0.2 kept after a merge
+        moved the row on. Such a base is ignored and the file is flagged,
+        because merging against a guess is what lost data.
+        """
+        base_row = tx.connection.execute(
+            "SELECT content FROM projection_base WHERE file=?", (projection_row["file"],)
+        ).fetchone()
+        if base_row is None:
+            return None
+        base = bytes(base_row["content"])
+        if hashlib.sha1(base).hexdigest() != projection_row["content_hash"]:
+            return None
+        return base
+
     def _merge_dirty_external_edit(
         self,
         tx: "Transaction",
@@ -4808,14 +4830,12 @@ class Store:
             )
             self._stamp_quarantine(tx, rel, exc, content, stat)
             return
-        base_row = tx.connection.execute(
-            "SELECT content FROM projection_base WHERE file=?", (rel,)
-        ).fetchone()
-        if base_row is None:
+        base = self._observed_base(tx, projection_row)
+        if base is None:
             self._hold_divergent_file(tx, projection_row, content, stat)
             return
         try:
-            base_text = bytes(base_row["content"]).decode("utf-8")
+            base_text = base.decode("utf-8")
             if kind == "project":
                 base_doc = yaml_io.safe_load(base_text) or {}
                 if not isinstance(base_doc, dict):
@@ -4899,16 +4919,14 @@ class Store:
             )
             self._stamp_quarantine(tx, "backlog.yaml", exc, content, stat)
             return
-        base_row = tx.connection.execute(
-            "SELECT content FROM projection_base WHERE file='backlog.yaml'"
-        ).fetchone()
-        if base_row is None:
+        base_bytes = self._observed_base(tx, projection_row)
+        if base_bytes is None:
             # Returning here stranded the index for good: the store's edit never
             # written, the repaired file never read, and nobody told.
             self._hold_divergent_file(tx, projection_row, content, stat)
             return
         try:
-            base = yaml_io.safe_load(bytes(base_row["content"]).decode("utf-8")) or {}
+            base = yaml_io.safe_load(base_bytes.decode("utf-8")) or {}
             _validate_backlog_document(base)
         except (UnicodeError, ValueError, yaml.YAMLError):
             self._hold_divergent_file(tx, projection_row, content, stat)
