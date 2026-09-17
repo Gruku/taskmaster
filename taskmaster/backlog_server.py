@@ -52,11 +52,52 @@ def _guard_legacy_layout(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
         try:
-            return fn(*args, **kwargs)
+            result = fn(*args, **kwargs)
         except store.LegacyLayoutError as exc:
             return f"Error: {exc}"
+        return _attach_merge_notices(result)
 
     return wrapper
+
+
+def _attach_merge_notices(result):
+    """Tell the caller about merge conflicts a scan settled on their behalf.
+
+    A repaired file whose fields the store had also changed is merged by
+    whichever scan meets it first -- usually inside a read -- and the result of
+    that merge never reached a tool response. Every tool passes through here,
+    so the next response carries it. Advisory: a failure to look never costs
+    the caller the result they asked for.
+    """
+    if store.active_transaction() is not None:
+        # A nested tool call: the outermost one owns the response.
+        return result
+    try:
+        instance = store.opened_store(_backlog_path())
+        if instance is None:
+            return result
+        notices, seq = instance.pending_merge_notices()
+    except Exception:  # noqa: BLE001 -- advisory, see docstring
+        return result
+    if not notices:
+        instance.acknowledge_merge_notices(seq)
+        return result
+    if isinstance(result, dict):
+        result.setdefault("merge_conflicts", notices)
+    elif isinstance(result, str):
+        payload = _as_json_result(result)
+        if isinstance(payload, dict):
+            payload.setdefault("merge_conflicts", notices)
+            result = json.dumps(payload)
+        elif payload is not None:
+            # A JSON array has nowhere to carry them; the next result will.
+            return result
+        else:
+            result = result + "\n\n" + "\n".join(f"Warning: {notice}" for notice in notices)
+    else:
+        return result
+    instance.acknowledge_merge_notices(seq)
+    return result
 
 
 class _GuardedToolRegistrar:
