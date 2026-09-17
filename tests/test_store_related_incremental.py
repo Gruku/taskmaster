@@ -275,6 +275,42 @@ def test_one_touched_key_does_not_compare_every_pair_of_path_rows(monkeypatch):
     assert related_rows(connection) == full_rebuild_oracle(connection)
 
 
+def test_a_real_write_pairs_only_the_rows_it_touched(tmp_taskmaster, monkeypatch):
+    """The same guard through a transaction, so the call site cannot fall back to full."""
+    from taskmaster import backlog_server as bs  # noqa: PLC0415
+
+    bs._load()
+    with store.transaction(tool="related-guard-seed") as tx:
+        for n in range(150):
+            doc = {
+                "id": f"B-{n:03d}", "title": f"bug {n}", "status": "open",
+                "anchors": [f"zz/m{n % 13}/f{n}.py", f"zz/m{n % 11}/"],
+            }
+            tx.create("bug", doc, body="", requested_id=doc["id"])
+    rows = bs._store().connection.execute(
+        "SELECT COUNT(*) FROM entity_paths WHERE source='anchors' AND path LIKE 'zz/%'"
+    ).fetchone()[0]
+    assert rows == 300
+    calls = 0
+    real = fnmatch.fnmatchcase
+
+    def counting(name, pattern):
+        nonlocal calls
+        if name.startswith("zz/"):
+            calls += 1
+        return real(name, pattern)
+
+    monkeypatch.setattr(fnmatch, "fnmatchcase", counting)
+    with store.transaction(tool="related-guard-write") as tx:
+        doc = tx.get("bug", "B-007")
+        doc["anchors"] = ["zz/m3/new.py", "zz/m5/"]
+        tx.put("bug", "B-007", doc)
+    assert calls <= 4 * rows, calls
+    monkeypatch.setattr(fnmatch, "fnmatchcase", real)
+    connection = bs._store().connection
+    assert related_rows(connection) == full_rebuild_oracle(connection)
+
+
 # ── End to end: real transactions, real documents ──
 
 _ANCHORS = ("src/a.py", "src/", "src/*.py", "src/b/", "src/b/c.py", "docs/*", "src/?.py", "lib.py")
