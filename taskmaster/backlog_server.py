@@ -139,6 +139,7 @@ from taskmaster.native.domain import (
     strictest_lane as _strictest_lane,
     validate_components as _validate_components,
     now_stamp as _now,
+    find_phase as _find_phase_in,
     today_stamp as _today,
     parse_date as _validate_date,
     ALLOWED_FIELDS,
@@ -1439,23 +1440,7 @@ def _find_epic(data: dict, epic_id: str) -> dict | None:
 
 def _find_phase(data: dict, phase_id: str) -> dict | None:
     """Find a phase by ID (exact) or name (case-insensitive, whitespace-normalized)."""
-    phases = data.get("phases", [])
-    # Exact ID match first
-    for ph in phases:
-        if ph["id"] == phase_id:
-            return ph
-    # Fuzzy: case-insensitive name match
-    needle = phase_id.strip().lower().replace("-", " ").replace("_", " ")
-    for ph in phases:
-        name = ph.get("name", "").strip().lower().replace("-", " ").replace("_", " ")
-        if name == needle:
-            return ph
-    # Partial: needle is a substring of the name or vice versa
-    for ph in phases:
-        name = ph.get("name", "").strip().lower().replace("-", " ").replace("_", " ")
-        if needle in name or name in needle:
-            return ph
-    return None
+    return _find_phase_in(data.get("phases", []), phase_id)
 
 
 def _active_phase(data: dict) -> dict | None:

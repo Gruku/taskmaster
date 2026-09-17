@@ -6,6 +6,7 @@ import re
 from .migrate import encode
 
 MAX_BYTES = 1024 * 1024
+MAX_BATCH_COMMANDS = 100
 METADATA_FIELDS = frozenset({"title", "priority", "notes", "branch", "worktree", "estimate", "tldr", "next_step"})
 
 
@@ -54,8 +55,8 @@ def validate_operation(operation, arguments, *, in_batch=False):
             raise ValueError("invalid note author")
     elif operation == "batch" and not in_batch:
         commands = arguments.get("commands")
-        if set(arguments) != {"commands"} or not isinstance(commands, list) or not 1 <= len(commands) <= 100:
-            raise ValueError("batch requires 1 to 100 commands")
+        if set(arguments) != {"commands"} or not isinstance(commands, list) or not 1 <= len(commands) <= MAX_BATCH_COMMANDS:
+            raise ValueError(f"batch requires 1 to {MAX_BATCH_COMMANDS} commands")
         for item in commands:
             if not isinstance(item, dict) or set(item) != {"operation", "arguments"}:
                 raise ValueError("invalid batch item")

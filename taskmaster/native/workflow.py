@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 import json
 
 from taskmaster import taskmaster_v3 as domain_v3
-from . import domain
+from . import batch_lines, domain
 from .contracts import Conflict, _identifier
 from .queries import MAX_PAGE
 
@@ -24,6 +24,9 @@ OPERATIONS = TASK_OPERATIONS | {
     "bug.promote", "link.create", "link.remove",
     "area.create", "area.update", "thread.update",
     "project.set", "linear.link", "linear.unlink",
+    # One `backlog_batch_update` line each, applied with that tool's own line
+    # semantics (`native.batch_lines`) inside the all-or-nothing native batch.
+    "task.batch_line", "epic.batch_line",
 }
 
 def _text(arguments, name, *, default=""):
@@ -263,6 +266,18 @@ def validate(operation, arguments):
     elif operation == "linear.unlink":
         _keys(arguments, {"task_id"}, operation)
         _identifier(arguments.get("task_id"), "task id")
+    elif operation == "task.batch_line":
+        _keys(arguments, {"id", "op", "field", "value", "status", "reason"}, operation)
+        _identifier(arguments.get("id"), "task id")
+        if arguments.get("op") not in batch_lines.TASK_OPS:
+            raise ValueError(f"task.batch_line op must be one of {', '.join(batch_lines.TASK_OPS)}")
+        for name in ("field", "value", "status", "reason"):
+            _text(arguments, name)
+    elif operation == "epic.batch_line":
+        _keys(arguments, {"id", "field", "value"}, operation)
+        _identifier(arguments.get("id"), "epic id")
+        _text(arguments, "field")
+        _text(arguments, "value")
     else:
         raise ValueError(f"unsupported operation: {operation}")
 
@@ -1192,6 +1207,60 @@ def _linear_unlink(transaction, arguments):
     return task_id
 
 
+def _ordered(connection, kind):
+    return [row[0] for row in connection.execute(
+        "SELECT public_id FROM entity_core WHERE kind=? AND deleted=0 ORDER BY entity_key", (kind,))]
+
+
+def _batch_lookups(transaction):
+    connection = transaction.connection
+
+    def task_exists(ident):
+        try:
+            task = transaction.snapshot.get("task", ident, fields=["epic"])
+        except KeyError:
+            return False
+        epic = task["fields"].get("epic")
+        return isinstance(epic, str) and _exists(transaction, "epic", epic)
+
+    def find_phase(value):
+        phases = [transaction.snapshot.get("phase", ident)["fields"] for ident in _ordered(connection, "phase")]
+        return domain.find_phase(phases, value)
+
+    def area_error(value):
+        known = sorted(_ordered(connection, "area"))
+        if value in known:
+            return None
+        return f"Error: unknown area `{value}`. Valid: {', '.join(known) or '(none defined)'}"
+
+    return batch_lines.Lookups(task_exists=task_exists, find_phase=find_phase, area_error=area_error,
+                               open_bugs=lambda ident: _bugs_found_in(connection, ident)[0])
+
+
+def _task_batch_line(transaction, arguments):
+    ident = arguments["id"]
+    lookups = _batch_lookups(transaction)
+    entity = _entity(transaction, "task", ident) if lookups.task_exists(ident) else None
+    outcome = batch_lines.apply_task_line(arguments, deepcopy(entity["fields"]) if entity else None,
+                                          lookups, now=domain.now_stamp())
+    if outcome.error:
+        raise ValueError(outcome.error)
+    transaction.replace("task", ident, outcome.doc, entity["body"], before_entity=entity)
+    return ident
+
+
+def _epic_batch_line(transaction, arguments):
+    ident, field, value = arguments["id"], arguments["field"], arguments["value"]
+    entity = _entity(transaction, "epic", ident) if _exists(transaction, "epic", ident) else None
+    outcome = batch_lines.apply_epic_line(ident, field, value, entity["fields"] if entity else None)
+    if outcome.error:
+        raise ValueError(outcome.error)
+    if outcome.cascade:
+        return _epic_archive(transaction, {"id": ident, "reason": "done"})
+    transaction.replace("epic", ident, outcome.doc, entity["body"], before_entity=entity)
+    return ident
+
+
 _HANDLERS = {
     "task.create": _task_create, "task.update": _task_update, "task.pick": _task_pick,
     "task.complete": _task_complete, "task.archive": _task_archive, "task.gate": _task_gate,
@@ -1203,4 +1272,5 @@ _HANDLERS = {
     "bug.promote": _bug_promote, "link.create": _link_create, "link.remove": _link_remove,
     "area.create": _area_create, "area.update": _area_update, "thread.update": _thread_update,
     "project.set": _project_set, "linear.link": _linear_link, "linear.unlink": _linear_unlink,
+    "task.batch_line": _task_batch_line, "epic.batch_line": _epic_batch_line,
 }

@@ -85,7 +85,8 @@ def phases(snapshot) -> list[dict]:
 
 def find_phase(snapshot, phase_id) -> dict | None:
     """`_find_phase`: exact id, then normalized name, then substring match."""
-    return bs._find_phase({"phases": phases(snapshot)}, phase_id)
+    from taskmaster.native.domain import find_phase as find
+    return find(phases(snapshot), phase_id)
 
 
 def area_ids(snapshot) -> list[str]:

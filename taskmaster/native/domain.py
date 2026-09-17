@@ -95,6 +95,23 @@ def parse_date(value: str):
         return None
 
 
+def find_phase(phases, phase_id):
+    """A phase by id (exact), then normalized name, then either name containing the other."""
+    for phase in phases:
+        if phase["id"] == phase_id:
+            return phase
+    needle = phase_id.strip().lower().replace("-", " ").replace("_", " ")
+    for phase in phases:
+        name = phase.get("name", "").strip().lower().replace("-", " ").replace("_", " ")
+        if name == needle:
+            return phase
+    for phase in phases:
+        name = phase.get("name", "").strip().lower().replace("-", " ").replace("_", " ")
+        if needle in name or name in needle:
+            return phase
+    return None
+
+
 def strictest_lane(lanes) -> str:
     order = {"express": 0, "standard": 1, "full": 2}
     present = [lane for lane in lanes if lane in order] or ["standard"]
