@@ -38,7 +38,9 @@ def legacy(tmp_path):
             "project": {"conventions": {"arbitrary": [True, None]}}
         }
         for seq, (kind, doc) in enumerate(docs.items(), 1):
-            ident = doc.get("id", kind)
+            # The backlog row carries the store's real id; N07's thread update
+            # read `backlog`, which only this fixture ever held.
+            ident = doc.get("id", "__backlog__" if kind == "backlog" else kind)
             connection.execute("INSERT INTO entities VALUES(?,?,?,?,?,?,?,?,?,?)",
                 (kind, ident, doc.get("epic"), doc.get("status"), int(kind == "bug"), int(kind == "area"),
                  json.dumps(doc), "Exact prose\r\n\n雪\n" if kind == "task" else None, seq + 3, seq))

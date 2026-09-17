@@ -532,9 +532,12 @@ def test_area_updates_validate_through_the_pure_area_rules(workspace):
 
 
 def test_thread_status_overrides_land_on_the_backlog_entity(workspace):
+    """The row is the store's `__backlog__`, and the thread must exist among the
+    live handovers — the registry is derived from them, not trusted as stored."""
     with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
+        run(connection, "handover.create", {"tldr": "Threaded", "thread": "t"}, "threaded")
         run(connection, "thread.update", {"name": "t", "status": "parked", "reason": "waiting"}, "park")
-        stored = fields(connection, "backlog", "backlog")
+        stored = fields(connection, "backlog", "__backlog__")
         assert stored["threads"]["t"]["status"] == "parked"
         assert stored["thread_meta"]["t"]["reason"] == "waiting"
         with pytest.raises(KeyError):

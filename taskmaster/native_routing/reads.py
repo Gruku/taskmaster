@@ -187,8 +187,9 @@ def tree(snapshot, *, context=True) -> dict:
     read tools render through their own shared presentation code rather than a
     second copy. Bounded replacements for those reads are N09/N10 work.
     """
+    from . import derived
     backlog = get(snapshot, "backlog", "__backlog__")
-    data = deepcopy(backlog["fields"]) if backlog else {}
+    data = derived.apply(snapshot, deepcopy(backlog["fields"]) if backlog else {})
     epic_list = epics(snapshot)
     by_id = {}
     for epic in epic_list:
@@ -215,3 +216,56 @@ def tree(snapshot, *, context=True) -> dict:
         bs._derive_context(data)
     data["_rows"] = NativeRows(snapshot)
     return data
+
+
+def rows_only(snapshot) -> dict:
+    """A compatibility dict carrying only `_rows`, for reads that touch no task tree."""
+    return {"_rows": NativeRows(snapshot)}
+
+
+class _TldrIndex:
+    """`build_tldr_index` answered per id: tasks, live issues and handovers, and ideas."""
+
+    def __init__(self, snapshot):
+        self._snapshot, self._cache = snapshot, {}
+
+    def get(self, ident, default=None):
+        if ident not in self._cache:
+            value = None
+            for kind, archived_ok in (("task", True), ("issue", False), ("handover", False), ("idea", True)):
+                entity = get(self._snapshot, kind, ident) if isinstance(ident, str) else None
+                if entity is None or (entity["archived"] and not archived_ok):
+                    continue
+                if kind == "task" and entity["archived"] and epic_of(self._snapshot, entity["fields"]) is None:
+                    continue
+                if entity["fields"].get("tldr"):
+                    value = entity["fields"]["tldr"]
+            self._cache[ident] = value
+        return self._cache[ident] if self._cache[ident] is not None else default
+
+    def __getitem__(self, ident):
+        value = self.get(ident)
+        if value is None:
+            raise KeyError(ident)
+        return value
+
+    def __contains__(self, ident):
+        return self.get(ident) is not None
+
+
+class NativeLinks:
+    """`_LegacyLinks` over a native snapshot: bounded lookups instead of a tree load and file glob."""
+
+    def __init__(self, snapshot, backlog_path):
+        self._snapshot, self._backlog_path = snapshot, backlog_path
+
+    def tldr_index(self):
+        return _TldrIndex(self._snapshot)
+
+    def peer(self, target):
+        from taskmaster.taskmaster_v3 import entity_kind_of
+        kind = entity_kind_of(target)
+        if kind is None or not self._backlog_path.exists():
+            return None
+        entity = get(self._snapshot, kind, target, body=True)
+        return document(entity) if entity is not None else None

@@ -6,6 +6,8 @@ Test-only activation: no runtime entry point makes a project native.
 from __future__ import annotations
 
 from contextlib import closing, contextmanager
+import datetime as _datetime
+import importlib
 import json
 import os
 from pathlib import Path
@@ -19,8 +21,69 @@ from taskmaster import backlog_server as bs
 from taskmaster import store
 from taskmaster.native.migrate import backfill, reconstruct_entities
 from taskmaster.native_routing import projection
+from taskmaster.native_routing.derived import KEYS as DERIVED_BACKLOG_KEYS
 
 PREFIXES = {"bug": "B-", "issue": "ISS-", "decision": "DEC-", "idea": "IDEA-", "note": "NOTE-"}
+
+
+# ── A shared clock ──────────────────────────────────────────────────────────
+# The twins run one call against the legacy project and then the native one, a
+# few milliseconds apart. Second-resolution timestamps then order entities
+# differently whenever a second boundary falls between the two runs, and a
+# comparison of index order flakes. Both runs of a call read the same instant.
+
+_REAL_DATETIME, _REAL_DATE = _datetime.datetime, _datetime.date
+CLOCK = {"at": _REAL_DATETIME(2026, 9, 17, 12, 0, 0, tzinfo=_datetime.timezone.utc), "tick": True}
+CLOCK_MODULES = ("taskmaster.taskmaster_v3", "taskmaster.native.domain", "taskmaster.native.events",
+                 "taskmaster.native.workflow", "taskmaster.backlog_server", "taskmaster.store",
+                 "taskmaster.native_routing.epics_phases")
+
+
+class _RealCheck(type):
+    def __instancecheck__(cls, instance):
+        return isinstance(instance, cls.__real__)
+
+    def __subclasscheck__(cls, subclass):
+        return issubclass(subclass, cls.__real__)
+
+
+def _instant():
+    at = CLOCK["at"]
+    if CLOCK["tick"]:
+        CLOCK["at"] = at + _datetime.timedelta(seconds=1)
+    return at
+
+
+class FakeDatetime(_REAL_DATETIME, metaclass=_RealCheck):
+    __real__ = _REAL_DATETIME
+
+    @classmethod
+    def now(cls, tz=None):
+        at = _instant()
+        return at.astimezone(tz) if tz is not None else at.replace(tzinfo=None)
+
+    @classmethod
+    def utcnow(cls):
+        return _instant().replace(tzinfo=None)
+
+
+class FakeDate(_REAL_DATE, metaclass=_RealCheck):
+    __real__ = _REAL_DATE
+
+    @classmethod
+    def today(cls):
+        return _instant().date()
+
+
+def install_clock(monkeypatch) -> None:
+    """Every module that timestamps entities reads `CLOCK`; seeding ticks per read."""
+    CLOCK.update(at=_REAL_DATETIME(2026, 9, 17, 12, 0, 0, tzinfo=_datetime.timezone.utc), tick=True)
+    for name in CLOCK_MODULES:
+        module = importlib.import_module(name)
+        if getattr(module, "datetime", None) is _REAL_DATETIME:
+            monkeypatch.setattr(module, "datetime", FakeDatetime)
+        if getattr(module, "date", None) is _REAL_DATE:
+            monkeypatch.setattr(module, "date", FakeDate)
 
 
 def scaffold(root: Path) -> Path:
@@ -41,6 +104,10 @@ def point_server_at(monkeypatch, root: Path) -> None:
     monkeypatch.setattr(bs, "CONFIG_PATH", root / ".taskmaster" / "taskmaster.json")
     monkeypatch.setattr(bs, "LEGACY_CONFIG_PATH", root / ".claude" / "taskmaster.json")
     monkeypatch.chdir(root)
+    # The one-shot legacy handover-status backfill is a process-global latch, so it
+    # would run in whichever test first touched a handover. Native stores never run
+    # it (a cutover must), and twins must not depend on test order.
+    monkeypatch.setattr(bs, "_HANDOVER_STATUS_BACKFILL_RAN", True)
     store.reset_for_tests()
     projection.reset_for_tests()
 
@@ -105,14 +172,14 @@ def committed(root: Path) -> dict:
     return {(k, i): (d, b, bool(a)) for k, i, d, b, a, x in entities if not x}
 
 
-_STAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})?")
 _SEQ = re.compile(r" \[seq \d+\]")
 
 
 def normalize(value):
-    """Clock readings and commit sequences are not compared; everything else is."""
+    """Commit sequences are not compared; everything else is, timestamps included —
+    both runs of a call read one shared clock (see `CLOCK`)."""
     if isinstance(value, str):
-        return _SEQ.sub(" [seq #]", _STAMP.sub("<ts>", value))
+        return _SEQ.sub(" [seq #]", value)
     if isinstance(value, dict):
         return {k: normalize(v) for k, v in value.items() if k != "seq"}
     if isinstance(value, (list, tuple)):
@@ -146,9 +213,13 @@ class Twins:
 
     def call(self, tool: str, /, *args, **kwargs):
         results = []
+        # One instant for both runs of this call, a minute after the last one.
+        instant = CLOCK["at"] + _datetime.timedelta(minutes=1)
         for root in (self.legacy, self.native):
+            CLOCK.update(at=instant, tick=False)
             with self.at(root):
                 results.append(getattr(bs, tool)(*args, **kwargs))
+        CLOCK.update(at=instant, tick=False)
         return tuple(results)
 
     def same(self, tool: str, /, *args, **kwargs):
@@ -161,6 +232,10 @@ class Twins:
         assert sorted(native) == sorted(legacy), "entity sets diverged"
         for key in sorted(legacy):
             (l_doc, l_body, l_arch), (n_doc, n_body, n_arch) = normalize(legacy[key]), normalize(native[key])
+            if key == ("backlog", "__backlog__"):
+                # Derived on native stores; compared through the rendered backlog.yaml.
+                l_doc = {k: v for k, v in l_doc.items() if k not in DERIVED_BACKLOG_KEYS}
+                n_doc = {k: v for k, v in n_doc.items() if k not in DERIVED_BACKLOG_KEYS}
             fields = sorted(f for f in set(l_doc) | set(n_doc) if l_doc.get(f, "<absent>") != n_doc.get(f, "<absent>"))
             assert not fields, f"{key} fields diverged: " + "; ".join(
                 f"{f}: legacy={l_doc.get(f, '<absent>')!r} native={n_doc.get(f, '<absent>')!r}" for f in fields)
@@ -175,6 +250,7 @@ class Twins:
 
 def make_twins(tmp_path: Path, monkeypatch, seed=None) -> Twins:
     """Seed a legacy project through the legacy tools, copy it, activate the copy."""
+    install_clock(monkeypatch)
     legacy = scaffold(tmp_path / "legacy")
     point_server_at(monkeypatch, legacy)
     bs.backlog_add_epic(epic_id="test-epic", name="Test Epic", done_when="all test tasks complete")

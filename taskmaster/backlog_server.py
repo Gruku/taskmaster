@@ -312,12 +312,37 @@ def _get_open_handovers_for_task(bp: Path, task_id: str) -> list[str]:
     return result
 
 
+class _LegacyLinks:
+    """How a legacy read renders link pills: a tldr index and a linked peer.
+
+    Native reads pass their own bounded implementation of the same two lookups,
+    so the renderers below stay the one presentation both authorities share.
+    """
+
+    def __init__(self, data: "dict | None", backlog_path: Path):
+        self._data, self._backlog_path, self._index = data, backlog_path, None
+
+    def tldr_index(self):
+        if self._index is None:
+            data = self._data if self._data is not None else _load()
+            self._index = _build_tldr_index(
+                data,
+                project_root=self._backlog_path.parent.parent if self._backlog_path.exists() else None,
+            )
+        return self._index
+
+    def peer(self, target: str):
+        from taskmaster.taskmaster_v3 import read_entity_anywhere
+        return read_entity_anywhere(self._backlog_path, target) if self._backlog_path.exists() else None
+
+
 def _append_grouped_links_block(
     lines: list[str],
     entity: dict,
     backlog_path: Path,
     *,
     expand_links: bool = False,
+    links: "_LegacyLinks | None" = None,
 ) -> None:
     """Append a Plan C grouped `links:` block to `lines` for slim-view rendering.
 
@@ -325,10 +350,9 @@ def _append_grouped_links_block(
     target IDs for `{id} ({tldr})` pills by reading peer entities.
     Emits nothing when there are no typed links.
     """
-    from taskmaster.taskmaster_v3 import (
-        links_grouped_by_type, read_entity_anywhere,
-    )
+    from taskmaster.taskmaster_v3 import links_grouped_by_type
 
+    links = links or _LegacyLinks(None, backlog_path)
     grouped = links_grouped_by_type(entity)
     if not grouped:
         return
@@ -338,7 +362,7 @@ def _append_grouped_links_block(
         if expand_links:
             pills: list[str] = []
             for tgt in targets:
-                peer = read_entity_anywhere(backlog_path, tgt) if backlog_path.exists() else None
+                peer = links.peer(tgt)
                 tldr = (peer or {}).get("tldr", "") if peer else ""
                 pills.append(f"{tgt} ({tldr})" if tldr else tgt)
             lines.append(f"- {ltype}: [{', '.join(pills)}]")
@@ -355,7 +379,7 @@ _EXPAND_LINK_FIELDS: dict[str, tuple[str, ...]] = {
 }
 
 
-def _expand_fm_links(fm: dict, kind: str, backlog_path: Path) -> dict:
+def _expand_fm_links(fm: dict, kind: str, backlog_path: Path, links: "_LegacyLinks | None" = None) -> dict:
     """Return a copy of `fm` with the kind's link fields rewritten from bare IDs
     to readable `id (tldr)` strings. Keeps expand_links behavior identical
     between slim and verbose reads (tm-audit-007). Unknown IDs render bare.
@@ -363,10 +387,7 @@ def _expand_fm_links(fm: dict, kind: str, backlog_path: Path) -> dict:
     fields = _EXPAND_LINK_FIELDS.get(kind, ())
     if not fields or not any(fm.get(f) for f in fields):
         return fm
-    data = _load()
-    tldr_index = _build_tldr_index(
-        data, project_root=backlog_path.parent.parent if backlog_path.exists() else None
-    )
+    tldr_index = (links or _LegacyLinks(None, backlog_path)).tldr_index()
 
     def _one(i: str) -> str:
         tldr = tldr_index.get(i)
@@ -4455,7 +4476,11 @@ def backlog_issue_list(
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    data = _load()
+    return _issue_list_text(_load(), severity, status, limit, verbose)
+
+
+def _issue_list_text(data: dict, severity: str, status: str, limit: int, verbose: bool) -> str:
+    """`backlog_issue_list` over any compatibility rows; shared with the native adapter."""
     rows = _dict_rows(data, "issue")
     docs = {ident: doc for ident, doc, _body in rows}
     bodies = {ident: (body or "") for ident, _doc, body in rows}
@@ -4513,7 +4538,13 @@ def backlog_issue_get(
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    row = _dict_row(_load(), "issue", issue_id)
+    data = _load()
+    return _issue_get_text(data, issue_id, verbose, sections, expand_links, bp, _LegacyLinks(data, bp))
+
+
+def _issue_get_text(data, issue_id, verbose, sections, expand_links, bp, links) -> str:
+    """`backlog_issue_get` over any compatibility rows; shared with the native adapter."""
+    row = _dict_row(data, "issue", issue_id)
     if row is None:
         return f"Issue not found: {issue_id}"
     fm, body = row[0], row[1] or ""
@@ -4533,7 +4564,7 @@ def backlog_issue_get(
 
     # ── verbose mode ─────────────────────────────────────────────────────────
     if verbose:
-        vfm = _expand_fm_links(fm, "issue", bp) if expand_links else fm
+        vfm = _expand_fm_links(fm, "issue", bp, links) if expand_links else fm
         fm_lines = [f"  {k}: {v}" for k, v in vfm.items()]
         return "---\n" + "\n".join(fm_lines) + "\n---\n" + body
 
@@ -4541,8 +4572,7 @@ def backlog_issue_get(
     slim = _slim_entity(fm, kind="issue")
 
     if expand_links:
-        data = _load()
-        tldr_index = _build_tldr_index(data, project_root=bp.parent.parent if bp.exists() else None)
+        tldr_index = links.tldr_index()
         related_tasks = slim.get("related_tasks") or []
         if related_tasks:
             slim["related_tasks"] = _expand_link_ids(related_tasks, tldr_index)
@@ -4555,7 +4585,7 @@ def backlog_issue_get(
     for k, v in slim.items():
         lines.append(f"**{k}:** {v}")
     # Plan C: emit grouped typed-links block.
-    _append_grouped_links_block(lines, fm, bp, expand_links=expand_links)
+    _append_grouped_links_block(lines, fm, bp, expand_links=expand_links, links=links)
     return "\n".join(lines)
 
 
@@ -4735,7 +4765,11 @@ def backlog_bug_list(
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    data = _load()
+    return _bug_list_text(_load(), status, found_in, limit, include_archive)
+
+
+def _bug_list_text(data: dict, status: str, found_in: str, limit: int, include_archive: bool) -> str:
+    """`backlog_bug_list` over any compatibility rows; shared with the native adapter."""
     # A list is a read: derive the index from the rows rather than re-syncing
     # (and thereby mutating) the caller's dict.
     entries = list(_derived_index("bug", _dict_rows(data, "bug")))
@@ -4784,7 +4818,12 @@ def backlog_bug_get(bug_id: str, verbose: bool = False) -> str:
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    row = _dict_row(_load(), "bug", bug_id)
+    return _bug_get_text(_load(), bug_id, verbose)
+
+
+def _bug_get_text(data: dict, bug_id: str, verbose: bool) -> str:
+    """`backlog_bug_get` over any compatibility rows; shared with the native adapter."""
+    row = _dict_row(data, "bug", bug_id)
     if row is None:
         return f"Bug not found: {bug_id}"
     fm, body = row[0], row[1] or ""
@@ -4917,9 +4956,15 @@ def backlog_bug_pattern_scan(mode: str = "all") -> str:
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
+    return _bug_pattern_text(_load(), mode)
+
+
+def _bug_pattern_text(data: dict, mode: str) -> str:
+    """`backlog_bug_pattern_scan` after its checks; shared with the native adapter."""
+    from taskmaster.taskmaster_v3 import scan_bug_patterns as _scan_bug_patterns
     include_archive = (mode == "all")
     open_only = (mode == "open_only")
-    rows = _dict_rows(_load(), "bug", include_archived=include_archive)
+    rows = _dict_rows(data, "bug", include_archived=include_archive)
     groups = _scan_bug_patterns(rows, open_only=open_only)
     if not groups:
         return "No bug patterns found (need >=2 matching signatures)."
@@ -5135,8 +5180,13 @@ def backlog_decision_list(
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
+    return _decision_list_text(_load(), status, task_id, limit)
+
+
+def _decision_list_text(data: dict, status: str, task_id: str, limit: int) -> str:
+    """`backlog_decision(list)` over any compatibility rows; shared with the native adapter."""
     rows: list[str] = []
-    for did, fm, _body in _dict_rows(_load(), "decision"):
+    for did, fm, _body in _dict_rows(data, "decision"):
         if status != "all" and fm.get("status") != status:
             continue
         if task_id and fm.get("task_id") != task_id:
@@ -5155,7 +5205,12 @@ def backlog_decision_list(
 
 def backlog_decision_get(decision_id: str) -> str:
     """Return full decision frontmatter + body as readable text."""
-    row = _dict_row(_load(), "decision", decision_id)
+    return _decision_get_text(_load(), decision_id)
+
+
+def _decision_get_text(data: dict, decision_id: str) -> str:
+    """`backlog_decision(get)` over any compatibility rows; shared with the native adapter."""
+    row = _dict_row(data, "decision", decision_id)
     if row is None:
         return f"Decision not found: {decision_id}"
     fm, body = row[0], row[1] or ""
@@ -5412,7 +5467,11 @@ def backlog_idea_list(
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    data = _load()
+    return _idea_list_text(_load(), idea_id, status, tag, archived, related_task, related_issue, limit, verbose)
+
+
+def _idea_list_text(data, idea_id, status, tag, archived, related_task, related_issue, limit, verbose) -> str:
+    """`backlog_idea_list` over any compatibility rows; shared with the native adapter."""
     if idea_id:
         out = _idea_records(data, idea_id=idea_id)
         if not out:
@@ -5520,14 +5579,20 @@ def backlog_idea_get(
         return "Error: sections=[] requested no sections; pass sections=None for the slim view or name at least one section"
     if sections:
         return "Error: ideas have no canonical body sections — use verbose=True to read the full body."
-    row = _dict_row(_load(), "idea", idea_id)
+    data = _load()
+    return _idea_get_text(data, idea_id, verbose, expand_links, bp, _LegacyLinks(data, bp))
+
+
+def _idea_get_text(data, idea_id, verbose, expand_links, bp, links) -> str:
+    """`backlog_idea_get` after its section checks; shared with the native adapter."""
+    row = _dict_row(data, "idea", idea_id)
     if row is None:
         return f"Idea not found: {idea_id}"
     fm, body = row[0], (row[1] or "").rstrip("\n")
 
     # ── verbose mode ─────────────────────────────────────────────────────────
     if verbose:
-        vfm = _expand_fm_links(fm, "idea", bp) if expand_links else fm
+        vfm = _expand_fm_links(fm, "idea", bp, links) if expand_links else fm
         fm_lines = [f"  {k}: {v}" for k, v in vfm.items()]
         return "---\n" + "\n".join(fm_lines) + "\n---\n" + body
 
@@ -5535,8 +5600,7 @@ def backlog_idea_get(
     slim = _slim_entity(fm, kind="idea")
 
     if expand_links:
-        data = _load()
-        tldr_index = _build_tldr_index(data, project_root=bp.parent.parent if bp.exists() else None)
+        tldr_index = links.tldr_index()
         for link_field in ("related_tasks", "related_issues"):
             ids = slim.get(link_field) or []
             if ids:
@@ -5546,7 +5610,7 @@ def backlog_idea_get(
     for k, v in slim.items():
         lines.append(f"**{k}:** {v}")
     # Plan C: emit grouped typed-links block.
-    _append_grouped_links_block(lines, fm, bp, expand_links=expand_links)
+    _append_grouped_links_block(lines, fm, bp, expand_links=expand_links, links=links)
     return "\n".join(lines)
 
 

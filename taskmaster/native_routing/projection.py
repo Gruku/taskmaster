@@ -38,6 +38,8 @@ from taskmaster.native.migrate import rows
 from taskmaster.native.queries import Snapshot, _core_columns
 from taskmaster.taskmaster_v3 import BODY_KEY, render_ideas_index
 
+from . import derived
+
 BACKLOG_FILE = "backlog.yaml"
 _BACKLOG_ID = "__backlog__"
 _DOMINANT: dict[Path, bool] = {}
@@ -179,12 +181,12 @@ class _Drain:
         return snapshot._assemble(cores, None, include_body=True)
 
     def derived(self) -> None:
-        seq = self._stale(BACKLOG_FILE, ("backlog", "epic", "phase"))
+        seq = self._stale(BACKLOG_FILE, ("backlog", "epic", "phase") + derived.KINDS)
         if seq is not None and not self._blocked(BACKLOG_FILE):
             snapshot = self._snapshot()
             try:
                 backlog = self._entities(snapshot, "backlog", "entity_key")
-                data = dict(backlog[0]["fields"]) if backlog else {}
+                data = derived.apply(snapshot, dict(backlog[0]["fields"]) if backlog else {})
                 for kind, key in (("epic", "epics"), ("phase", "phases")):
                     data[key] = []
                     for entity in self._entities(snapshot, kind, "entity_key"):

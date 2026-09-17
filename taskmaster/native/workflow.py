@@ -443,6 +443,11 @@ def _auto_link(transaction, kind, ident, doc, body):
         return doc
     existing = {link["target"] for link in domain_v3.entity_links(doc)}
     doc = deepcopy(doc)
+    if kind != "task":
+        # The tools read every non-task entity through `read_entity_anywhere`,
+        # which synthesizes `links` from legacy fields, and write that document
+        # back: the synthesized links persist alongside the new reference.
+        domain_v3._fallback_links_if_absent(doc, kind)
     added = []
     for target in references:
         if target in existing:
@@ -453,14 +458,19 @@ def _auto_link(transaction, kind, ident, doc, body):
         domain_v3.add_link(doc, "references", target)
         added.append((target_kind, target))
     for target_kind, target in added:
-        _write_inverse(transaction, target_kind, target, source=ident, link_type="references")
+        # Targets outside the task tree are likewise read and written back with
+        # their synthesized links; a task source edits tree targets directly.
+        fallback = kind != "task" or target_kind not in ("task", "epic", "phase")
+        _write_inverse(transaction, target_kind, target, source=ident, link_type="references", fallback=fallback)
     return doc
 
 
-def _write_inverse(transaction, target_kind, target, *, source, link_type, remove=False):
+def _write_inverse(transaction, target_kind, target, *, source, link_type, remove=False, fallback=False):
     inverse = domain_v3.REVERSE_TYPE[link_type]
     entity = _entity(transaction, target_kind, target)
     doc = deepcopy(entity["fields"])
+    if fallback:
+        domain_v3._fallback_links_if_absent(doc, target_kind)
     changed = (domain_v3.remove_link(doc, inverse, source) if remove
                else domain_v3.add_link(doc, inverse, source))
     if changed:
@@ -478,9 +488,34 @@ def _smart_close_handovers(transaction, task_id):
     rows = [(ident, _entity(transaction, "handover", ident)["fields"], None) for ident in naming]
     plan = domain_v3.smart_auto_close_handovers(rows, triggering_task_id=task_id,
                                                 done_or_archived_ids=terminal)
-    for ident, updated, _body in plan["closed"] + plan["flagged"]:
+    flipped = plan["closed"] + plan["flagged"]
+    for ident, updated, _body in flipped:
         entity = _entity(transaction, "handover", ident)
         transaction.replace("handover", ident, updated, entity["body"], before_entity=entity)
+    if flipped:
+        archive_handover_overflow(transaction)
+
+
+def live_handover_rows(transaction):
+    """`(id, fields, None)` for every live handover, the rows the tools index."""
+    ids = [row[0] for row in transaction.connection.execute(
+        "SELECT public_id FROM entity_core WHERE kind='handover' AND deleted=0 AND archived=0")]
+    return [(ident, _entity(transaction, "handover", ident)["fields"], None) for ident in ids]
+
+
+def archive_handover_overflow(transaction):
+    """Archive every live handover past the index cap, newest kept, as the tools do.
+
+    The tools archive overflow whenever they resync the handover index — after
+    a handover is created, superseded or has its status set, and after a
+    terminal task closes a handover. The archive marker is `archived: True`,
+    exactly what the tool's `archive` leaves on the document.
+    """
+    ordered = domain_v3.sort_handover_rows(live_handover_rows(transaction))
+    for ident, _fields, _body in ordered[domain_v3.HANDOVER_INDEX_CAP:]:
+        entity = _entity(transaction, "handover", ident)
+        transaction.replace("handover", ident, dict(entity["fields"], archived=True), entity["body"],
+                            before_entity=entity)
 
 
 # ── Command application ─────────────────────────────────────────────────────
@@ -726,7 +761,10 @@ def _bundle_pick(transaction, ident, slug, *, session, force):
     if not bound:
         for member in members:
             entity = entities[member]
-            doc = domain.pick_task_doc(domain.touch(deepcopy(entity["fields"])), session=session)
+            # Only the picked task is referenced; the tool leaves every other
+            # member's `last_referenced` as it was.
+            fields = deepcopy(entity["fields"])
+            doc = domain.pick_task_doc(domain.touch(fields) if member == ident else fields, session=session)
             doc["branch"], doc["worktree"] = branch, worktree
             _write_task(transaction, member, doc, entity["body"], before_entity=entity, enqueue=False)
     return ident
@@ -1158,12 +1196,21 @@ def _area_update(transaction, arguments):
     return ident
 
 
+BACKLOG_ID = "__backlog__"
+
+
 def _thread_update(transaction, arguments):
-    entity = _entity(transaction, "backlog", "backlog")
+    # The backlog row's public id is the store's `__backlog__`; N07 read `backlog`,
+    # which exists only in the migration fixture, so every real store refused.
+    entity = _entity(transaction, "backlog", BACKLOG_ID)
     doc = deepcopy(entity["fields"])
+    # The thread registry is derived from the live handovers, which native
+    # commands do not re-derive into this row; derive it here, as the tool's
+    # index sync would have, before applying the override.
+    domain_v3.sync_thread_registry(doc, live_handover_rows(transaction))
     domain_v3.update_thread_status(doc, None, name=arguments["name"], status=arguments["status"],
                                    reason=arguments.get("reason", ""))
-    transaction.replace("backlog", "backlog", doc, entity["body"], before_entity=entity)
+    transaction.replace("backlog", BACKLOG_ID, doc, entity["body"], before_entity=entity)
     return arguments["name"]
 
 

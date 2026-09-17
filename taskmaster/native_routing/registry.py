@@ -28,7 +28,7 @@ def adapter(tool: str, *, actions: "tuple[str, ...] | None" = None):
 
 def _load_families() -> None:
     # Imported for their registrations; each module is one routed family.
-    from . import batch, epics_phases, notes, tasks  # noqa: F401
+    from . import batch, epics_phases, notes, records, tasks  # noqa: F401
 
 
 def unrouted_message(tool: str, action: str | None = None) -> str:

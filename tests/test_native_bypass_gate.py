@@ -81,6 +81,36 @@ EXERCISES = {
         ("deliverables", '{"action": "add", "text": "ship"}'), ("docs", "plan:p.md"), ("status", "active"))],
     ("backlog_phase_status", None): lambda: bs.backlog_phase_status(),
     ("backlog_advance_phase", None): lambda: bs.backlog_advance_phase(force=True),
+    ("backlog_bug_create", None): lambda: bs.backlog_bug_create(title="Gate bug", found_in="test-epic-001",
+                                                              components=["ui"]),
+    ("backlog_bug_list", None): lambda: bs.backlog_bug_list(include_archive=True),
+    ("backlog_bug_get", None): lambda: [bs.backlog_bug_get(bug_id="B-001"), bs.backlog_bug_get(bug_id="B-001", verbose=True)],
+    ("backlog_bug_update", None): lambda: bs.backlog_bug_update(bug_id="B-001", field="components", value="ui, api"),
+    ("backlog_bug_archive", None): lambda: (bs.backlog_bug_update(bug_id="B-001", field="status", value="shelved"),
+                                            bs.backlog_bug_update(bug_id="B-001", field="fix_commit", value="abc"),
+                                            bs.backlog_bug_update(bug_id="B-001", field="status", value="fixed"),
+                                            bs.backlog_bug_archive(bug_id="B-001")),
+    ("backlog_bug_pattern_scan", None): lambda: bs.backlog_bug_pattern_scan(),
+    ("backlog_bug_promote", None): lambda: bs.backlog_bug_promote(
+        bug_ids=["B-001"], title="Gate issue", severity="P2", evidence_text="recurs", body="see IDEA-001"),
+    ("backlog_issue_create", None): lambda: bs.backlog_issue_create(
+        title="Gate issue", severity="P1", evidence="x", body="mentions IDEA-001", related_tasks=["test-epic-001"]),
+    ("backlog_issue_list", None): lambda: bs.backlog_issue_list(verbose=True),
+    ("backlog_issue_get", None): lambda: [bs.backlog_issue_get(issue_id="ISS-001", **kwargs) for kwargs in (
+        {}, {"verbose": True, "expand_links": True}, {"expand_links": True}, {"sections": ["repro"]})],
+    ("backlog_issue_update", None): lambda: bs.backlog_issue_update(issue_id="ISS-001", field="body", value="IDEA-001"),
+    ("backlog_idea_create", None): lambda: bs.backlog_idea_create(title="Gate idea", body="about ISS-001"),
+    ("backlog_idea_list", None): lambda: [bs.backlog_idea_list(), bs.backlog_idea_list(idea_id="IDEA-001")],
+    ("backlog_idea_get", None): lambda: [bs.backlog_idea_get(idea_id="IDEA-001", **kwargs) for kwargs in (
+        {}, {"verbose": True, "expand_links": True}, {"expand_links": True})],
+    ("backlog_idea_update", None): lambda: bs.backlog_idea_update(idea_id="IDEA-001", field="archived", value="true"),
+    ("backlog_decision_create", None): lambda: bs.backlog_decision_create(title="Gate decision", options=["a", "b"]),
+    ("backlog_decision", "list"): lambda: bs.backlog_decision(action="list", status="all"),
+    ("backlog_decision", "get"): lambda: bs.backlog_decision(action="get", decision_id="DEC-001"),
+    ("backlog_decision", "update"): lambda: bs.backlog_decision(action="update", decision_id="DEC-001", title="t"),
+    ("backlog_decision", "resolve"): lambda: bs.backlog_decision(action="resolve", decision_id="DEC-001",
+                                                                 resolved_with=1),
+    ("backlog_decision", "drop"): lambda: bs.backlog_decision(action="drop", decision_id="DEC-001", reason="no"),
     ("backlog_batch_preview", None): lambda: bs.backlog_batch_preview(
         operations=chr(10).join(["pick test-epic-002", "complete test-epic-001", "status test-epic-001 done"])),
 }
@@ -114,6 +144,10 @@ def rigged(tmp_path, monkeypatch):
         bs.backlog_add_task(title="Gate two", epic="test-epic", phase="dev", depends_on="test-epic-001")
         bs.backlog_update_task(task_id="test-epic-001", field="lane", value="standard")
         bs.backlog_handover_create(tldr="Gate handover", task_ids=["test-epic-001"])
+        bs.backlog_bug_create(title="Seeded gate bug", found_in="test-epic-002")
+        bs.backlog_issue_create(title="Seeded gate issue", severity="P2", evidence="x", related_tasks=["test-epic-001"])
+        bs.backlog_idea_create(title="Seeded gate idea", body="about ISS-001")
+        bs.backlog_decision_create(title="Seeded gate decision", options=["a", "b"])
     twins = make_twins(tmp_path, monkeypatch, seed)
     project = twins.native
     backlog_dir = (project / ".taskmaster").resolve()
@@ -257,26 +291,19 @@ def inventory_pairs() -> dict:
 # a family removes its entries here; the N08 exit is an empty set.
 UNROUTED_NORMAL_PATH = {
     ("backlog_area_create", None), ("backlog_area_get", None), ("backlog_area_list", None),
-    ("backlog_area_update", None), ("backlog_blast_radius", None), ("backlog_bug_archive", None),
-    ("backlog_bug_create", None), ("backlog_bug_get", None), ("backlog_bug_list", None),
-    ("backlog_bug_pattern_scan", None), ("backlog_bug_promote", None), ("backlog_bug_update", None),
-    ("backlog_continuity_items", None), ("backlog_decision", "drop"), ("backlog_decision", "get"),
-    ("backlog_decision", "list"), ("backlog_decision", "resolve"), ("backlog_decision", "update"),
-    ("backlog_decision_create", None), ("backlog_handover_create", None),
+    ("backlog_area_update", None), ("backlog_blast_radius", None),
+    ("backlog_continuity_items", None), ("backlog_handover_create", None),
     ("backlog_handover_get", None), ("backlog_handover_list", None),
     ("backlog_handover_supersede", None), ("backlog_handover_update_status", None),
-    ("backlog_idea_create", None), ("backlog_idea_get", None), ("backlog_idea_list", None),
-    ("backlog_idea_update", None), ("backlog_issue_create", None), ("backlog_issue_get", None),
-    ("backlog_issue_list", None), ("backlog_issue_update", None), ("backlog_last_session", None),
-    ("backlog_linear", "link"), ("backlog_linear", "list"), ("backlog_linear", "show"),
-    ("backlog_linear", "status"), ("backlog_linear", "unlink"), ("backlog_link", "create"),
-    ("backlog_link", "query"), ("backlog_link", "remove"), ("backlog_link", "validate"),
-    ("backlog_project_error_trace_ladder", None), ("backlog_project_get", None),
-    ("backlog_project_get_field", None), ("backlog_project_init", None),
-    ("backlog_project_set", None), ("backlog_project_ship_order", None), ("backlog_query", None),
-    ("backlog_search", None), ("backlog_status", None), ("backlog_store_status", None),
-    ("backlog_thread_list", None), ("backlog_thread_resume", None), ("backlog_thread_update", None),
-    ("viewer_prefs_get", None),
+    ("backlog_last_session", None), ("backlog_linear", "link"), ("backlog_linear", "list"),
+    ("backlog_linear", "show"), ("backlog_linear", "status"), ("backlog_linear", "unlink"),
+    ("backlog_link", "create"), ("backlog_link", "query"), ("backlog_link", "remove"),
+    ("backlog_link", "validate"), ("backlog_project_error_trace_ladder", None),
+    ("backlog_project_get", None), ("backlog_project_get_field", None),
+    ("backlog_project_init", None), ("backlog_project_set", None),
+    ("backlog_project_ship_order", None), ("backlog_query", None), ("backlog_search", None),
+    ("backlog_status", None), ("backlog_store_status", None), ("backlog_thread_list", None),
+    ("backlog_thread_resume", None), ("backlog_thread_update", None), ("viewer_prefs_get", None),
 }
 
 

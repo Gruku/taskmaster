@@ -78,9 +78,18 @@ def test_handover_create_with_supersession_is_one_atomic_command(native):
             old = query.get("handover", first, include_body=True)
             assert old["fields"]["superseded_by"] == new_id
             assert "Original authored body" in old["body"]
+        # N08: a missing superseded handover no longer refuses the new one. The
+        # tool writes the handover and warns; refusing would lose the session's
+        # handover over a stale pointer.
         before = connection.execute("SELECT COUNT(*) FROM entity_core").fetchone()[0]
-        with pytest.raises(KeyError):
-            execute(connection, envelope("handover.create", {"tldr": "Must roll back", "supersedes": "missing"}, key="bad"))
+        third = execute(connection, envelope("handover.create", {"tldr": "Stale pointer", "supersedes": "missing"},
+                                             key="stale"))
+        assert [r["kind"] for r in third["affected"]] == ["handover"]
+        assert connection.execute("SELECT COUNT(*) FROM entity_core").fetchone()[0] == before + 1
+        before = connection.execute("SELECT COUNT(*) FROM entity_core").fetchone()[0]
+        with pytest.raises(ValueError):
+            execute(connection, envelope("handover.create", {"tldr": "Must roll back", "session_kind": "bogus",
+                                                             "supersedes": first}, key="bad"))
         assert connection.execute("SELECT COUNT(*) FROM entity_core").fetchone()[0] == before
 
 

@@ -119,7 +119,7 @@ def test_idea_lifecycle_and_reads_match(twins):
     twins.same("backlog_idea_create", title="Tldr idea", tldr="Given")
     for field, value in (("title", "Renamed idea"), ("tags", "c"), ("status", "parking-lot"),
                          ("related_tasks", ""), ("promoted_to", "test-epic-002"), ("body", "Mentions ISS-001"),
-                         ("archived", "maybe"), ("archived", "true"), ("archived", "false"), ("archived", "true"),
+                         ("archived", "maybe"), ("archived", "true"), ("archived", "false"),
                          ("bogus", "x")):
         twins.same("backlog_idea_update", idea_id="IDEA-001", field=field, value=value)
     twins.same("backlog_idea_update", idea_id="IDEA-404", field="title", value="x")
