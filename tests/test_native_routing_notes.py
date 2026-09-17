@@ -29,7 +29,7 @@ def test_an_unrouted_tool_refuses_on_a_native_store_and_changes_nothing(twins):
     before = committed(twins.native)
     with twins.at(twins.native):
         answer = bs.backlog_migrate_v3()
-    assert answer.startswith("Error:") and "not yet routed through the native core" in answer
+    assert answer.startswith("Error:") and "native authority" in answer and "Nothing was changed." in answer
     assert committed(twins.native) == before
     assert is_native(twins.native) and _manifest_state(twins.native) == "ready"
 

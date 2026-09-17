@@ -2983,6 +2983,47 @@ def backlog_validate() -> str:
     docs paths that don't exist on disk, circular deps, and status inconsistencies."""
     data = _load()
 
+    # The file-backed inputs: tracker files, the Linear config, artifact tldrs.
+    bp = _backlog_path()
+    tracker_issues: list[str] = []
+    trackers: dict[str, dict] = {}
+    for trk_id in set(_list_tracker_ids(bp)):
+        try:
+            fm, _ = _read_tracker(bp, trk_id)
+        except OSError as e:
+            tracker_issues.append(f"tracker `{trk_id}`: cannot read file ({e})")
+            trackers[trk_id] = None
+            continue
+        except yaml.YAMLError as e:
+            tracker_issues.append(f"tracker `{trk_id}`: malformed YAML ({e})")
+            trackers[trk_id] = None
+            continue
+        trackers[trk_id] = fm
+
+    from taskmaster.taskmaster_v3 import read_task_file as _rtf
+    missing_tldr: list[str] = []
+    for subdir in ("issues", "handovers", "ideas"):
+        d = bp.parent / subdir
+        if not d.exists():
+            continue
+        for path in sorted(d.glob("*.md")):
+            try:
+                fm, _ = _rtf(path)
+            except Exception:
+                continue
+            if fm.get("id") and not fm.get("tldr"):
+                missing_tldr.append(fm["id"])
+    return _validate_text(data, trackers, tracker_issues, missing_tldr, bp)
+
+
+def _validate_text(data: dict, trackers: dict, tracker_issues: list[str], missing_tldr: list[str],
+                   bp: Path) -> str:
+    """`backlog_validate` over any tree; shared with the native adapter.
+
+    `trackers` maps each tracker id to its frontmatter (None when unreadable, already
+    reported in `tracker_issues`); `missing_tldr` lists issue/handover/idea ids with
+    no tldr, in report order.
+    """
     # Build task ID set and lookup
     all_task_ids: set[str] = set()
     all_tasks: list[tuple[dict, dict]] = []
@@ -3080,16 +3121,10 @@ def backlog_validate() -> str:
             issues.append(f"`{tid}`: phase `{task_ph}` does not exist")
 
     # 9. Tracker validation: each tracker file's frontmatter is well-formed.
-    bp = _backlog_path()
-    on_disk_tracker_ids: set[str] = set(_list_tracker_ids(bp))
-    for trk_id in on_disk_tracker_ids:
-        try:
-            fm, _ = _read_tracker(bp, trk_id)
-        except OSError as e:
-            issues.append(f"tracker `{trk_id}`: cannot read file ({e})")
-            continue
-        except yaml.YAMLError as e:
-            issues.append(f"tracker `{trk_id}`: malformed YAML ({e})")
+    on_disk_tracker_ids: set[str] = set(trackers)
+    issues.extend(tracker_issues)
+    for trk_id, fm in trackers.items():
+        if fm is None:
             continue
         try:
             _validate_tracker_fm(fm)
@@ -3142,23 +3177,11 @@ def backlog_validate() -> str:
                     f"  warning: task {task['id']} missing tldr — run scripts/backfill_tldr.py"
                 )
 
-    # Also scan artifact dirs for missing tldr
-    bp = _backlog_path()
-    tm_dir = bp.parent
-    from taskmaster.taskmaster_v3 import read_task_file as _rtf
-    for subdir in ("issues", "handovers", "ideas"):
-        d = tm_dir / subdir
-        if not d.exists():
-            continue
-        for path in sorted(d.glob("*.md")):
-            try:
-                fm, _ = _rtf(path)
-            except Exception:
-                continue
-            if fm.get("id") and not fm.get("tldr"):
-                warnings.append(
-                    f"  warning: {fm['id']} missing tldr — run scripts/backfill_tldr.py"
-                )
+    # Also the artifacts (issues, handovers, ideas) missing a tldr
+    for artifact_id in missing_tldr:
+        warnings.append(
+            f"  warning: {artifact_id} missing tldr — run scripts/backfill_tldr.py"
+        )
 
     output_parts: list[str] = []
     if issues:

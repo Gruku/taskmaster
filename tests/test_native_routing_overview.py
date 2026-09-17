@@ -157,12 +157,38 @@ def test_linear_probe_matches(twins, monkeypatch):
     assert json.loads(native)["teams"][0]["users_error"] == "users hidden"
 
 
-def test_validate_matches(twins):
-    twins.same("backlog_validate")
+def _seed_validation_findings():
+    """Rows the tools cannot produce: artifacts without a tldr, a tracker whose
+    frontmatter is invalid, and task/issue tracker ids that match no tracker."""
+    from taskmaster import store
+    _seed()
+    bs.backlog_idea_create(title="Idea without tldr")
+    bs.backlog_handover_create(tldr="Handover losing its tldr")
+    store.reset_for_tests()
+    with store.transaction(tool="test:seed", backlog_path=bs.ROOT / ".taskmaster") as tx:
+        for kind, ident in (("issue", "ISS-001"), ("idea", "IDEA-001")):
+            doc = tx.get(kind, ident)
+            doc.pop("tldr", None)
+            tx.put(kind, ident, doc)
+        task = tx.get("task", "test-epic-002")
+        task["tracker_id"] = "linear-ghost"
+        tx.put("task", "test-epic-002", task)
+        issue = tx.get("issue", "ISS-001")
+        issue["tracker_id"] = "linear-missing"
+        tx.put("issue", "ISS-001", issue)
+        tx.create("tracker", {"id": "linear-bad", "external_system": "linear"}, requested_id="linear-bad")
+    store.reset_for_tests()
+
+
+def test_validate_matches(tmp_path, monkeypatch):
+    twins = make_twins(tmp_path, monkeypatch, _seed_validation_findings)
+    # The legacy issue index refreshes on an issue write; the native one is always derived.
+    twins.same("backlog_issue_update", issue_id="ISS-001", field="severity", value="P2")
+    legacy, native = twins.same("backlog_validate")
+    for finding in ("tracker_id `linear-ghost`", "issue `ISS-001`: tracker_id `linear-missing`", "tracker `",
+                    "IDEA-001 missing tldr", "ISS-001 missing tldr"):
+        assert finding in native, (finding, native)
     twins.same("backlog_add_task", title="Docs task", epic="test-epic", phase="dev",
                options={"docs": "plan:docs/missing.md;spec:has a space"})
-    twins.same("backlog_update_task", task_id="test-epic-002", field="status", value="in-progress")
-    twins.same("backlog_linear", action="link", task_id="test-epic-001", external_key="ENG-9")
-    twins.same("backlog_handover_create", tldr="Validated handover")
     legacy, native = twins.same("backlog_validate")
     assert "docs.plan path not found" in native

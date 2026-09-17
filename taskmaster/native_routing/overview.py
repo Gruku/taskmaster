@@ -328,3 +328,15 @@ def _linear_unlink(call, task_id):
     if refusal:
         return json.dumps({"error": refusal[len("Error: "):]})
     return call.finish(json.dumps({"ok": True, "unlinked": existing, "task_id": task_id}))
+
+
+@adapter("backlog_validate")
+def validate(call):
+    # Trackers and artifact tldrs are rows here, not files: a native store never
+    # re-reads its exports, so there is no file-level malformation to report.
+    with call.read() as snapshot:
+        data = reads.tree(snapshot)
+        trackers = {ident: doc for ident, doc, _body in reads.rows(snapshot, "tracker", include_archived=True)}
+        missing_tldr = [ident for kind in ("issue", "handover", "idea")
+                        for ident, doc, _body in reads.rows(snapshot, kind) if not doc.get("tldr")]
+    return bs._validate_text(data, trackers, [], missing_tldr, bs._backlog_path())
