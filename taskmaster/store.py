@@ -599,6 +599,7 @@ def _after_fork_child() -> None:
     global _ROOT_RESOLUTION, _STORES, _ALL_CONNECTIONS, _CACHE, _OPEN_LOCK_FDS
     global _CONNECTION_IDENTITIES
     global _EXPLICIT_RESOLUTIONS
+    global _ARRIVAL_GATES, _ARRIVAL_GATES_LOCK
     for descriptor in tuple(_OPEN_LOCK_FDS):
         try:
             os.close(descriptor)
@@ -615,6 +616,11 @@ def _after_fork_child() -> None:
     _ALL_CONNECTIONS = []
     _CONNECTION_IDENTITIES = {}
     _CACHE = {}
+    # Replaced, not cleared: the thread that held the lock, a gate or a ticket
+    # did not survive the fork, so taking the inherited lock to clear it can
+    # hang forever and an inherited gate is never handed on.
+    _ARRIVAL_GATES = {}
+    _ARRIVAL_GATES_LOCK = threading.Lock()
 
 
 if hasattr(os, "register_at_fork"):
