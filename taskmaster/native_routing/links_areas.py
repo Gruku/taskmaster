@@ -1,5 +1,5 @@
 # User intent: serve typed links (create/remove/query/validate), areas and the
-# viewer-prefs read from the native core (N08), answering exactly as the legacy
+# viewer prefs and board opening from the native core (N08), answering exactly as the legacy
 # tools do — including the links they synthesize from legacy fields.
 """Link, area and viewer-prefs adapters."""
 from __future__ import annotations
@@ -277,11 +277,38 @@ def area_update(call, *, area_id, field, value):
     return call.finish(f"Area updated: {area_id} — field `{field}`")
 
 
-@adapter("viewer_prefs_get")
-def prefs_get(call):
+def _prefs_v4(call) -> bool:
     # Viewer preferences are machine-local host state, not store authority; the
     # schema that places the file comes from the backlog row, not backlog.yaml.
     with call.read() as snapshot:
         entity = reads.get(snapshot, "backlog", "__backlog__")
-    v4 = v3.detect_schema_version(entity["fields"] if entity else {}) >= v3.SCHEMA_V4
-    return json.dumps(v3.load_viewer_prefs(bs._backlog_path(), v4=v4), indent=2)
+    return v3.detect_schema_version(entity["fields"] if entity else {}) >= v3.SCHEMA_V4
+
+
+@adapter("viewer_prefs_get")
+def prefs_get(call):
+    return json.dumps(v3.load_viewer_prefs(bs._backlog_path(), v4=_prefs_v4(call)), indent=2)
+
+
+@adapter("viewer_prefs_set")
+def prefs_set(call, *, patch_json):
+    try:
+        patch = json.loads(patch_json)
+    except Exception as exc:
+        return f"Error: invalid JSON ({exc})"
+    if not isinstance(patch, dict):
+        return "Error: patch must be a JSON object"
+    v4 = _prefs_v4(call)
+    prefs = v3.load_viewer_prefs(bs._backlog_path(), v4=v4)
+    bs._deep_merge(prefs, patch)
+    v3.save_viewer_prefs(bs._backlog_path(), prefs, v4=v4)
+    return "ok"
+
+
+@adapter("backlog_open_viewer")
+def open_viewer(call):
+    # A host action: the board it opens is served by the native viewer routes.
+    port = bs._start_viewer_server()
+    url = f"http://127.0.0.1:{port}/"
+    bs.webbrowser.open(url)
+    return f"Opened backlog viewer at {url}"

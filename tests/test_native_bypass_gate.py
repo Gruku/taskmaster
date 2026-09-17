@@ -35,6 +35,16 @@ class BypassViolation(BaseException):
 
 # ── Dynamic gate ────────────────────────────────────────────────────────────
 
+def _opened_viewer():
+    # A host action: start (a stub of) the server and open the board, never a browser.
+    real = bs.webbrowser.open, bs._start_viewer_server
+    bs.webbrowser.open, bs._start_viewer_server = (lambda url: True), (lambda: 6899)
+    try:
+        return bs.backlog_open_viewer()
+    finally:
+        bs.webbrowser.open, bs._start_viewer_server = real
+
+
 EXERCISES = {
     ("backlog_note", "create"): lambda: bs.backlog_note(action="create", text="gate note"),
     ("backlog_note", "list"): lambda: bs.backlog_note(action="list", include_archived=True),
@@ -141,6 +151,8 @@ EXERCISES = {
     ("backlog_area_update", None): lambda: bs.backlog_area_update(area_id="gate-seed-area", field="anchors",
                                                                   value='["a/**"]'),
     ("viewer_prefs_get", None): lambda: bs.viewer_prefs_get(),
+    ("viewer_prefs_set", None): lambda: bs.viewer_prefs_set(patch_json='{"theme": "dark"}'),
+    ("backlog_open_viewer", None): lambda: _opened_viewer(),
     ("backlog_status", None): lambda: [bs.backlog_status(), bs.backlog_status(verbose=True)],
     ("backlog_blast_radius", None): lambda: [bs.backlog_blast_radius(task_id="test-epic-001"),
                                              bs.backlog_blast_radius(task_id="test-epic-001", structured=True)],

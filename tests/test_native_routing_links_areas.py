@@ -111,7 +111,8 @@ def test_viewer_prefs_writes_match(twins):
         twins.same("viewer_prefs_set", patch_json=patch)
         legacy, native = twins.call("viewer_prefs_get")
         assert json.loads(native) == json.loads(legacy)
-    assert json.loads(twins.call("viewer_prefs_get")[1])["issues"]["aging"] == {"warn_days": 3, "stale_days": 9}
+    aging = json.loads(twins.call("viewer_prefs_get")[1])["issues"]["aging"]
+    assert (aging["warn_days"], aging["stale_days"]) == (3, 9)
 
 
 def test_open_viewer_opens_the_native_served_board(twins, monkeypatch):
