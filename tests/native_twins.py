@@ -108,6 +108,9 @@ def point_server_at(monkeypatch, root: Path) -> None:
     # would run in whichever test first touched a handover. Native stores never run
     # it (a cutover must), and twins must not depend on test order.
     monkeypatch.setattr(bs, "_HANDOVER_STATUS_BACKFILL_RAN", True)
+    # The session bundle is process-global too, and `test_bundle_pick` leaves it set:
+    # it names every auto-derived handover thread, so it must not leak in.
+    monkeypatch.setattr(bs, "_session_bundle", None)
     store.reset_for_tests()
     projection.reset_for_tests()
 
