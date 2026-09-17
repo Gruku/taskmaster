@@ -131,3 +131,27 @@ def test_store_status_reports_every_section_for_a_native_store(twins):
     labels = lambda text: [line.split(":", 1)[0] for line in text.splitlines() if not line.startswith("  ")]
     assert labels(native) == labels(legacy)
     assert "schema v2" in native and "Warning: none" in native
+
+
+def test_linear_probe_matches(twins, monkeypatch):
+    from taskmaster.integrations.linear import client as linear_client
+
+    class FakeClient:
+        def __init__(self, token):
+            self.token = token
+
+        def list_teams(self):
+            return [{"id": "T1", "name": "Eng", "key": "ENG"}]
+
+        def list_issue_statuses(self, team):
+            return [{"id": "S1", "name": "Todo"}]
+
+        def list_users(self, team):
+            raise linear_client.LinearAPIError("users hidden")
+
+    monkeypatch.delenv("PROBE_TOKEN", raising=False)
+    twins.same("backlog_linear", action="probe", token_env="PROBE_TOKEN")
+    monkeypatch.setenv("PROBE_TOKEN", "secret")
+    monkeypatch.setattr(linear_client, "LinearClient", FakeClient)
+    legacy, native = twins.same("backlog_linear", action="probe", token_env="PROBE_TOKEN")
+    assert json.loads(native)["teams"][0]["users_error"] == "users hidden"
