@@ -2288,11 +2288,16 @@ class Store:
                 # failed commit would otherwise suppress the next dashboard
                 # export and leave PROGRESS.md showing work that never landed.
                 self._last_progress_clock = None
+            # Bookkeeping only. After a commit it must not turn a write that
+            # landed into a reported failure -- a migration fence published a
+            # moment later refuses it, and a caller told "failed" retries and
+            # duplicates the write. Before a commit it must not replace the
+            # exception that is already on its way out.
             try:
                 self._try_register_session(
                     connection, current_tool=None, session_id=activity_session
                 )
-            except sqlite3.Error:
+            except (sqlite3.Error, UnsupportedStoreError):
                 pass
         if not settled:
             self._checkpoint_passive(connection)
@@ -3749,9 +3754,10 @@ class Store:
                 connection.rollback()
             raise
         finally:
+            # Bookkeeping after the commit; see `transaction`.
             try:
                 self._try_register_session(connection, current_tool=None)
-            except sqlite3.Error:
+            except (sqlite3.Error, UnsupportedStoreError):
                 pass
 
     def derived_status(self) -> dict[str, Any]:
