@@ -633,3 +633,96 @@ def test_a_store_from_before_the_flag_table_gets_it_on_open(tmp_path):
     reopened = store_mod.open_store(backlog_path=backlog_path)
     assert reopened.projection_conflicts() == []
     assert store_mod.read_only_status(backlog_path).flagged_files == ()
+
+
+def test_a_failed_export_with_an_observed_base_still_merges(tmp_path, monkeypatch):
+    backlog_path, store_obj = _fresh(tmp_path)
+    with monkeypatch.context() as patch:
+        _fail_export_to(patch, _task_path(backlog_path))
+        _put(store_obj, "task", "core-001", dict(DOC, title="Store title"), "## Notes\n\nIntact.")
+    text = _task_path(backlog_path).read_text(encoding="utf-8")
+    edited = text.replace("## Notes", "## Notes\n\nHand line.")
+    _task_path(backlog_path).write_text(edited, encoding="utf-8")
+    _scan(store_obj)
+
+    doc, body = _entity(store_obj)
+    assert doc["title"] == "Store title" and "Hand line." in body
+    assert _flagged(store_obj) == []
+
+
+@pytest.mark.parametrize("base", ["rendered", "stale"])
+def test_a_base_the_store_did_not_observe_on_disk_is_not_merged_against(
+    tmp_path, monkeypatch, base
+):
+    """A rendered base (left by the unreleased merge redesign) or bytes the file
+    no longer held when the row moved on cannot be told from a guess, so the
+    edit is flagged rather than merged against it."""
+    backlog_path, store_obj = _fresh(tmp_path)
+    with monkeypatch.context() as patch:
+        _fail_export_to(patch, _task_path(backlog_path))
+        _put(store_obj, "task", "core-001", dict(DOC, title="Store title"), "## Notes\n\nIntact.")
+    if base == "rendered":
+        planted = render_frontmatter(
+            {"id": "core-001", "title": "Store title", "status": "todo", "epic": "core", "order": 1.0},
+            "## Notes\n\nIntact.",
+        ).encode("utf-8")
+    else:
+        planted = _task_path(backlog_path).read_bytes().replace(b"Task 1", b"Older title")
+    _sql(store_obj, "UPDATE projection_base SET content=? WHERE file='tasks/core-001.md'", (planted,))
+    edited = _write_task(backlog_path, dict(DOC, title="Hand title"))
+    _scan(store_obj)
+
+    assert _entity(store_obj)[0]["title"] == "Store title"
+    _assert_flag_holds(store_obj, _task_path(backlog_path), "tasks/core-001.md", edited)
+    assert not _sql(store_obj, "SELECT 1 FROM changes WHERE id='core-001' AND op='merge'")
+
+
+def test_rescanning_an_unchanged_flagged_file_does_not_rewrite_its_bytes(tmp_path):
+    backlog_path, store_obj, _repaired = _flag_core_001(tmp_path)
+    backlog = backlog_path / "backlog.yaml"
+    backlog.write_text(backlog.read_text(encoding="utf-8") + "<<<<<<< HEAD\n", encoding="utf-8")
+    _scan(store_obj)
+    epic = _entity(store_obj, "epic", "core")[0]
+    _put(store_obj, "epic", "core", dict(epic, status="done"))
+    doc = yaml.safe_load(backlog.read_text(encoding="utf-8").split("<<<<<<<")[0])
+    doc["phases"][0]["name"] = "Renamed"
+    backlog.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+    _scan(store_obj)
+    assert set(_flagged(store_obj)) == {"tasks/core-001.md", "backlog.yaml"}
+
+    # backlog.yaml is hashed on every scan; a branch switch hashes every file.
+    _sql(store_obj, "DELETE FROM meta WHERE key='last_scan_generation'")
+    statements: list[str] = []
+    connection = store_obj.connection
+    connection.set_trace_callback(statements.append)
+    try:
+        for _ in range(3):
+            with store_obj.transaction(tool="rescan"):
+                pass
+    finally:
+        connection.set_trace_callback(None)
+    assert any("FROM projection_conflict" in s for s in statements), "no scan ran"
+    assert not [s for s in statements if "projection_conflict" in s and ("UPDATE" in s or "INSERT" in s)]
+
+
+@pytest.mark.allow_projection_bypass
+def test_resolving_backlog_yaml_says_it_takes_the_whole_file(tm_epic_phase):
+    from taskmaster import backlog_server
+
+    backlog = tm_epic_phase / ".taskmaster" / "backlog.yaml"
+    good = backlog.read_text(encoding="utf-8")
+    backlog.write_text(good + "<<<<<<< HEAD\n", encoding="utf-8")
+    backlog_server._store()._last_read_scan_clock = None
+    backlog_server.backlog_status()
+    backlog_server.backlog_update_phase("dev", "status", "done")
+    doc = yaml.safe_load(good)
+    doc["epics"][0]["name"] = "Renamed by hand"
+    backlog.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+    backlog_server._store()._last_read_scan_clock = None
+    backlog_server.backlog_status()
+
+    shown = backlog_server.backlog_resolve_conflict(file="backlog.yaml")
+    assert "whole of backlog.yaml" in shown
+    resolved = backlog_server.backlog_resolve_conflict(file="backlog.yaml", take="store")
+    assert "took the whole file" in resolved
+    assert "whole" in backlog_server.backlog_resolve_conflict.__doc__
