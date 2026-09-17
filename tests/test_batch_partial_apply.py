@@ -2,14 +2,27 @@
 a bad line reports an error and the good lines still commit. The native core's
 structured batch is all-or-nothing by design, so an adapter that forwards a
 whole line-set into it would silently discard the good lines; without this test
-that regression is invisible.
+that regression is invisible. Every case runs against a legacy store and against
+a natively activated one, so the contract binds the N08 adapter too.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from taskmaster import backlog_server as bs
 from taskmaster import store
+from native_twins import activate_native, committed, is_native
+
+
+@pytest.fixture(params=["legacy", "native"])
+def tm_epic_phase(request, tm_epic_phase):
+    """The same contract on a legacy store and, through the N08 adapter, a native one."""
+    if request.param == "native":
+        activate_native(tm_epic_phase)
+        assert is_native(tm_epic_phase)
+    return tm_epic_phase
 
 
 def _bp(root: Path) -> Path:
@@ -18,6 +31,8 @@ def _bp(root: Path) -> Path:
 
 def _committed_task(root: Path, task_id: str) -> dict:
     store.reset_for_tests()
+    if is_native(root):
+        return committed(root)[("task", task_id)][0]
     with store.transaction(backlog_path=_bp(root), tool="test-read") as tx:
         return dict(tx.get("task", task_id))
 
