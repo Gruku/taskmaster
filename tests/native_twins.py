@@ -222,9 +222,17 @@ class Twins:
         CLOCK.update(at=instant, tick=False)
         return tuple(results)
 
+    def _rooted(self, value, root):
+        """An answer with its own project root spelled `<root>`: the twins live apart."""
+        if isinstance(value, str):
+            for spelling in {str(root.resolve()), str(root)}:
+                value = value.replace(spelling, "<root>")
+        return value
+
     def same(self, tool: str, /, *args, **kwargs):
         legacy, native = self.call(tool, *args, **kwargs)
-        assert normalize(native) == normalize(legacy), f"{tool}: native answer diverged\nlegacy: {legacy!r}\nnative: {native!r}"
+        assert normalize(self._rooted(native, self.native)) == normalize(self._rooted(legacy, self.legacy)), (
+            f"{tool}: native answer diverged" + chr(10) + f"legacy: {legacy!r}" + chr(10) + f"native: {native!r}")
         return legacy, native
 
     def assert_state_matches(self) -> None:
