@@ -173,6 +173,9 @@ _HOOKS_DIR = PLUGIN_ROOT / "hooks"
 # backlog, so a raw write from one is the same lost-write bug as from a tool.
 _SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 _STORE_FILE = _PACKAGE_DIR / "store.py"
+# A native-authority store has no legacy writer; its projection files are written
+# only by the native compatibility drain (N08), the native counterpart of the store.
+_NATIVE_EXPORT_FILE = _PACKAGE_DIR / "native_routing" / "projection.py"
 # The one legacy module tests may still drive directly to seed a v3/v4
 # projection *before* the store adopts it.  Production never enters here first —
 # every real entry point is an MCP tool or a viewer handler in backlog_server.
@@ -269,8 +272,8 @@ def _bypass_offender():
         frame = frame.f_back
     entry = None
     for path in reversed(files):  # outermost frame first
-        if path == _STORE_FILE:
-            return None  # the store owns the projection
+        if path in (_STORE_FILE, _NATIVE_EXPORT_FILE):
+            return None  # the store (or, on a native store, its drain) owns the projection
         if entry is None and (
             _is_under(path, _PACKAGE_DIR)
             or _is_under(path, _HOOKS_DIR)

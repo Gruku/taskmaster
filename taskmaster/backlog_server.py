@@ -59,6 +59,35 @@ def _guard_legacy_layout(fn):
     return wrapper
 
 
+def _route_native(fn):
+    """Serve this tool from the native core when the project's store is native.
+
+    The capability check runs before any legacy transaction or store open, on
+    every outermost call. A call nested inside a legacy transaction is by
+    definition on a legacy store and skips it. For a legacy store the check
+    answers `NotImplemented` and the tool runs exactly as it always has.
+    """
+
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if _active_tx() is None:
+            try:
+                backlog_path = _backlog_path()
+            except RuntimeError:
+                backlog_path = None
+            if backlog_path is not None:
+                from taskmaster.native_routing import registry as _native_registry
+
+                answer = _native_registry.route(
+                    fn.__name__, fn, backlog_path, SESSION_ID, args, kwargs
+                )
+                if answer is not NotImplemented:
+                    return answer
+        return fn(*args, **kwargs)
+
+    return wrapper
+
+
 class _GuardedToolRegistrar:
     """`FastMCP`, with the legacy-layout guard applied to every tool it registers.
 
@@ -73,7 +102,7 @@ class _GuardedToolRegistrar:
         decorator = self._inner.tool(*args, **kwargs)
 
         def register(fn):
-            return decorator(_guard_legacy_layout(fn))
+            return decorator(_guard_legacy_layout(_route_native(fn)))
 
         return register
 
@@ -5714,7 +5743,11 @@ def backlog_note_list(include_archived: bool = False, limit: int = DEFAULT_LIST_
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    notes = _note_records(_load(), include_archived=include_archived)
+    return _render_note_list(_note_records(_load(), include_archived=include_archived), limit)
+
+
+def _render_note_list(notes: list[dict], limit: int) -> str:
+    """The note list answer; shared with the native adapter."""
     if not notes:
         return "Desk is clear — no notes."
     notes, overflow = _cap_list(notes, limit)
@@ -5736,6 +5769,11 @@ def _note_records(data: dict, *, include_archived: bool = False) -> list[dict]:
     out: list[dict] = []
     for _nid, fm, body in _dict_rows(data, "note", include_archived=include_archived):
         out.append({**fm, "body": (body or "").rstrip("\n")})
+    return _order_note_records(out)
+
+
+def _order_note_records(out: list[dict]) -> list[dict]:
+    """Pinned first, then created desc with a numeric-id tiebreak; shared with native."""
 
     def _num(note: dict) -> int:
         match = re.search(r"(\d+)$", note.get("id", ""))
@@ -5760,7 +5798,12 @@ def backlog_note_get(note_id: str) -> str:
     row = _dict_row(_load(), "note", note_id)
     if row is None:
         return f"Note not found: {note_id}"
-    fm, body = row[0], (row[1] or "").rstrip("\n")
+    return _render_note_get(row[0], row[1])
+
+
+def _render_note_get(fm: dict, body: str | None) -> str:
+    """One note in full; shared with the native adapter."""
+    body = (body or "").rstrip("\n")
     fm_lines = [f"  {k}: {v}" for k, v in fm.items()]
     return "---\n" + "\n".join(fm_lines) + "\n---\n" + body
 
