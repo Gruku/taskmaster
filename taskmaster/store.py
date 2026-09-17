@@ -4692,9 +4692,10 @@ class Store:
 
         Stores written before 6.0.3 hold dirty, quarantined rows with no base
         row. The entity is walked back through every change the file never
-        received: those after `exported_seq` when the file was last written by
-        an export, or after the entity's latest import when it was last read
-        from disk. Starting too early only re-reverses changes both sides
+        received: those after `exported_seq`, the last export, or after the
+        entity's latest import for a file that was never exported. An import
+        does not move `exported_seq`, so a file hand-edited since its last
+        export walks back further than it needs to. Starting too early only re-reverses changes both sides
         already hold, which merge as agreement; starting too late would let a
         stale file silently revert store edits, so there is no guess at a later
         point. Any change that cannot be reversed exactly means no base, never
