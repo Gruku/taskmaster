@@ -1490,7 +1490,6 @@ class Store:
             return False
         try:
             connection = self.connection
-            self._prune_corrupt_backups()
             # The locked path proves the database is readable before it adopts
             # it, and a reader that skipped the proof would serve whatever a
             # corrupt page happened to hold. `quick_check(1)` stops at the first
@@ -1556,7 +1555,6 @@ class Store:
         try:
             with self._connection_creation_allowed():
                 connection = self.connection
-            self._prune_corrupt_backups()
             self._begin_immediate(connection)
             try:
                 self._prepare_schema(connection)
@@ -2006,15 +2004,6 @@ class Store:
             candidate = Path(f"{self.db_path}{suffix}")
             if candidate.exists():
                 candidate.replace(self.db_path.with_name(f"store.db.{label}-{stamp}{suffix}"))
-
-    def _prune_corrupt_backups(self) -> None:
-        cutoff = time.time() - 7 * 24 * 60 * 60
-        for candidate in self.db_path.parent.glob("store.db.corrupt-*"):
-            try:
-                if candidate.stat().st_mtime < cutoff:
-                    candidate.unlink()
-            except OSError:
-                pass
 
     def _register_session(
         self,
