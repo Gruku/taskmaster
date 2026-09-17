@@ -188,6 +188,11 @@ files, live sessions, recent changes, and the pending Linear push count. It is
 genuinely read-only — it never creates a store that does not exist and never
 moves a damaged one aside.
 
+A projection file edited while the store still owed it a change (typically a
+quarantined file repaired by hand) is never merged automatically: both versions
+are kept, exports to that file pause, and every tool result names it until
+`backlog_resolve_conflict(file, take="file"|"store")` keeps one side.
+
 Editing a file that a task, bug, issue, or handover already tracks prints a
 single ambient line naming the open items it touches, e.g.
 `TM: <path> → <open ids...> (+N closed, +N prose)`; it stays silent when
