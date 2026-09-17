@@ -17,7 +17,8 @@ def _seed():
     bs.backlog_add_epic(epic_id="other", name="Other Epic", done_when="never", description="Second")
     bs.backlog_area_create(area_id="viewer", name="Viewer")
     for title, epic, phase, priority in (("One", "test-epic", "dev", "high"), ("Two", "test-epic", "dev", "low"),
-                                         ("Three", "other", "later", "medium"), ("Four", "other", "dev", "medium")):
+                                         ("Three", "other", "later", "medium"), ("Four", "other", "dev", "medium"),
+                                         ("Five", "other", "dev", "low")):
         bs.backlog_add_task(title=title, epic=epic, phase=phase, priority=priority)
     bs.backlog_update_task(task_id="test-epic-002", field="lane", value="express")
     bs.backlog_pick_task(task_id="test-epic-002")
@@ -73,6 +74,10 @@ def test_epic_docs_set_then_clear_and_status_round_trip(twins):
 
 
 def test_archive_epic_cascade_matches(twins):
+    twins.same("backlog_update_task", task_id="other-001", field="lane", value="express")
+    twins.same("backlog_pick_task", task_id="other-001")
+    twins.same("backlog_record_gate", task_id="other-001", gate="review-gate", verdict="pass")
+    twins.same("backlog_complete_task", task_id="other-001")
     twins.same("backlog_archive_epic", epic_id="other", reason="nonsense")
     twins.same("backlog_archive_epic", epic_id="ghost")
     twins.same("backlog_archive_epic", epic_id="other", reason="superseded")

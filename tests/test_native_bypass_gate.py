@@ -70,6 +70,17 @@ EXERCISES = {
         "update test-epic-001 depends_on test-epic-002", "update test-epic-001 phase Development",
         "status test-epic-002 in-progress", "complete test-epic-002", "pick test-epic-001",
         "archive test-epic-002 wont-fix", "update_epic test-epic name Renamed"])),
+    ("backlog_add_epic", None): lambda: bs.backlog_add_epic(epic_id="gate-epic", name="Gate", done_when="x"),
+    ("backlog_update_epic", None): lambda: [bs.backlog_update_epic(epic_id="test-epic", field=f, value=v) for f, v in (
+        ("name", "Renamed"), ("docs", "plan:p.md"), ("components", '{"ui": {"title": "UI", "after": []}}'),
+        ("design_status", "locked"), ("status", "active"))],
+    ("backlog_archive_epic", None): lambda: bs.backlog_archive_epic(epic_id="test-epic", reason="superseded"),
+    ("backlog_epic_status", None): lambda: bs.backlog_epic_status(epic_id="test-epic"),
+    ("backlog_add_phase", None): lambda: bs.backlog_add_phase(phase_id="gate-phase", name="Gate phase"),
+    ("backlog_update_phase", None): lambda: [bs.backlog_update_phase(phase_id="Development", field=f, value=v) for f, v in (
+        ("deliverables", '{"action": "add", "text": "ship"}'), ("docs", "plan:p.md"), ("status", "active"))],
+    ("backlog_phase_status", None): lambda: bs.backlog_phase_status(),
+    ("backlog_advance_phase", None): lambda: bs.backlog_advance_phase(force=True),
     ("backlog_batch_preview", None): lambda: bs.backlog_batch_preview(
         operations=chr(10).join(["pick test-epic-002", "complete test-epic-001", "status test-epic-001 done"])),
 }
@@ -245,15 +256,13 @@ def inventory_pairs() -> dict:
 # The reviewed list of normal-path tools/actions with no native route yet. Routing
 # a family removes its entries here; the N08 exit is an empty set.
 UNROUTED_NORMAL_PATH = {
-    ("backlog_add_epic", None), ("backlog_add_phase", None), ("backlog_advance_phase", None),
-    ("backlog_archive_epic", None), ("backlog_area_create", None), ("backlog_area_get", None),
-    ("backlog_area_list", None), ("backlog_area_update", None), ("backlog_blast_radius", None),
-    ("backlog_bug_archive", None), ("backlog_bug_create", None), ("backlog_bug_get", None),
-    ("backlog_bug_list", None), ("backlog_bug_pattern_scan", None), ("backlog_bug_promote", None),
-    ("backlog_bug_update", None), ("backlog_continuity_items", None), ("backlog_decision", "drop"),
-    ("backlog_decision", "get"), ("backlog_decision", "list"), ("backlog_decision", "resolve"),
-    ("backlog_decision", "update"), ("backlog_decision_create", None),
-    ("backlog_epic_status", None), ("backlog_handover_create", None),
+    ("backlog_area_create", None), ("backlog_area_get", None), ("backlog_area_list", None),
+    ("backlog_area_update", None), ("backlog_blast_radius", None), ("backlog_bug_archive", None),
+    ("backlog_bug_create", None), ("backlog_bug_get", None), ("backlog_bug_list", None),
+    ("backlog_bug_pattern_scan", None), ("backlog_bug_promote", None), ("backlog_bug_update", None),
+    ("backlog_continuity_items", None), ("backlog_decision", "drop"), ("backlog_decision", "get"),
+    ("backlog_decision", "list"), ("backlog_decision", "resolve"), ("backlog_decision", "update"),
+    ("backlog_decision_create", None), ("backlog_handover_create", None),
     ("backlog_handover_get", None), ("backlog_handover_list", None),
     ("backlog_handover_supersede", None), ("backlog_handover_update_status", None),
     ("backlog_idea_create", None), ("backlog_idea_get", None), ("backlog_idea_list", None),
@@ -262,13 +271,12 @@ UNROUTED_NORMAL_PATH = {
     ("backlog_linear", "link"), ("backlog_linear", "list"), ("backlog_linear", "show"),
     ("backlog_linear", "status"), ("backlog_linear", "unlink"), ("backlog_link", "create"),
     ("backlog_link", "query"), ("backlog_link", "remove"), ("backlog_link", "validate"),
-    ("backlog_phase_status", None), ("backlog_project_error_trace_ladder", None),
-    ("backlog_project_get", None), ("backlog_project_get_field", None),
-    ("backlog_project_init", None), ("backlog_project_set", None),
-    ("backlog_project_ship_order", None), ("backlog_query", None), ("backlog_search", None),
-    ("backlog_status", None), ("backlog_store_status", None), ("backlog_thread_list", None),
-    ("backlog_thread_resume", None), ("backlog_thread_update", None), ("backlog_update_epic", None),
-    ("backlog_update_phase", None), ("viewer_prefs_get", None),
+    ("backlog_project_error_trace_ladder", None), ("backlog_project_get", None),
+    ("backlog_project_get_field", None), ("backlog_project_init", None),
+    ("backlog_project_set", None), ("backlog_project_ship_order", None), ("backlog_query", None),
+    ("backlog_search", None), ("backlog_status", None), ("backlog_store_status", None),
+    ("backlog_thread_list", None), ("backlog_thread_resume", None), ("backlog_thread_update", None),
+    ("viewer_prefs_get", None),
 }
 
 

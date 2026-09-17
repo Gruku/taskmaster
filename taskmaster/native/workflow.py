@@ -1032,14 +1032,18 @@ def _phase_advance(transaction, arguments):
         task = domain.archive_task_doc(member["fields"], reason="done")
         task["archived"] = stamp
         _write_task(transaction, item["id"], task, member["body"], before_entity=member, enqueue=False)
+    # Ties on `order` go to the older phase, as the tool's stable sort over the
+    # phase list (creation order) resolves them — not to the lower id.
+    rank = {ident: n for n, ident in enumerate(_ordered(transaction.connection, "phase"))}
     planned = sorted((p for p in phases if p["fields"].get("status") == "planned"),
                      key=lambda p: (p["fields"].get("order") if isinstance(p["fields"].get("order"), int) else 999,
-                                    p["id"]))
+                                    rank.get(p["id"], 0)))
     if not planned:
         return active["id"]
     following = _entity(transaction, "phase", planned[0]["id"])
     doc = dict(following["fields"], status="active")
-    doc.setdefault("start_date", domain.today_stamp())
+    if not doc.get("start_date"):
+        doc["start_date"] = domain.today_stamp()
     transaction.replace("phase", planned[0]["id"], doc, following["body"], before_entity=following)
     return planned[0]["id"]
 
