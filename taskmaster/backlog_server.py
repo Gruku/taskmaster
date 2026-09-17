@@ -458,7 +458,12 @@ def _progress_path() -> Path:
         raw = yaml_io.safe_load(backlog.read_text(encoding="utf-8")) or {}
     except (OSError, yaml.YAMLError):
         return legacy_progress
-    if _detect_schema_version(raw) >= SCHEMA_V4:
+    return _progress_path_for(raw, backlog, legacy_progress)
+
+
+def _progress_path_for(backlog_doc: dict, backlog: Path, legacy_progress: Path) -> Path:
+    """Where PROGRESS.md lives for a backlog document; shared with the native adapter."""
+    if _detect_schema_version(backlog_doc) >= SCHEMA_V4:
         return backlog.parent / "local" / "PROGRESS.md"
     return legacy_progress
 
@@ -3695,7 +3700,11 @@ def backlog_handover_list(
     if not bp.exists():
         return "No backlog found."
     _ensure_handover_status_backfilled()
-    data = _load()
+    return _handover_list_text(_load(), task_id, session_kind, since, status, limit, verbose)
+
+
+def _handover_list_text(data, task_id, session_kind, since, status, limit, verbose) -> str:
+    """`backlog_handover_list` over any backlog document; shared with the native adapter."""
     entries = list(data.get("handovers") or [])
 
     # Validate `since` before filtering so we fail fast on bad input.
@@ -3772,9 +3781,15 @@ def backlog_handover_get(
     if not bp.exists():
         return "No backlog found."
     _ensure_handover_status_backfilled()
+    data = _load()
+    return _handover_get_text(data, handover_id, verbose, sections, expand_links, bp, _LegacyLinks(data, bp))
+
+
+def _handover_get_text(data, handover_id, verbose, sections, expand_links, bp, links) -> str:
+    """`backlog_handover_get` over any compatibility rows; shared with the native adapter."""
     # The row map carries archived handovers too, so the old `_archive/` rglob
     # fallback is gone with the file read it backed up.
-    row = _dict_row(_load(), "handover", handover_id)
+    row = _dict_row(data, "handover", handover_id)
     if row is None:
         return f"Handover not found: {handover_id}"
     fm, body = row[0], row[1] or ""
@@ -3794,7 +3809,7 @@ def backlog_handover_get(
 
     # ── verbose mode ─────────────────────────────────────────────────────────
     if verbose:
-        vfm = _expand_fm_links(fm, "handover", bp) if expand_links else fm
+        vfm = _expand_fm_links(fm, "handover", bp, links) if expand_links else fm
         fm_lines = [f"  {k}: {v}" for k, v in vfm.items()]
         return "---\n" + "\n".join(fm_lines) + "\n---\n" + body
 
@@ -3802,8 +3817,7 @@ def backlog_handover_get(
     slim = _slim_entity(fm, kind="handover")
 
     if expand_links:
-        data = _load()
-        tldr_index = _build_tldr_index(data, project_root=bp.parent.parent if bp.exists() else None)
+        tldr_index = links.tldr_index()
         task_ids = slim.get("task_ids") or []
         if task_ids:
             slim["task_ids"] = _expand_link_ids(task_ids, tldr_index)
@@ -3812,7 +3826,7 @@ def backlog_handover_get(
     for k, v in slim.items():
         lines.append(f"**{k}:** {v}")
     # Plan C: emit grouped typed-links block.
-    _append_grouped_links_block(lines, fm, bp, expand_links=expand_links)
+    _append_grouped_links_block(lines, fm, bp, expand_links=expand_links, links=links)
     return "\n".join(lines)
 
 
@@ -3876,7 +3890,11 @@ def backlog_thread_list(include_closed: bool = False) -> str:
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    data = _threads_data(bp)
+    return _thread_list_text(_threads_data(bp), include_closed)
+
+
+def _thread_list_text(data: dict, include_closed: bool) -> str:
+    """`backlog_thread_list` over any backlog document; shared with the native adapter."""
     from taskmaster.taskmaster_v3 import list_threads as _list_threads
     rows = _list_threads(data)
     if not include_closed:
@@ -3906,10 +3924,14 @@ def backlog_thread_resume(ref: str) -> str:
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    data = _threads_data(bp)
+    return _thread_resume_text(_threads_data(bp), bp, ref)
+
+
+def _thread_resume_text(data: dict, bp: Path, ref: str, find_handover=None) -> str:
+    """`backlog_thread_resume` over any backlog document; shared with the native adapter."""
     from taskmaster.taskmaster_v3 import resolve_thread as _resolve_thread
     try:
-        tname, hid = _resolve_thread(data, bp, ref)
+        tname, hid = _resolve_thread(data, bp, ref, find_handover)
     except KeyError:
         return (f"No thread or handover matches {ref!r}. "
                 f"See `backlog_thread_list()` for open threads.")
@@ -6885,8 +6907,13 @@ def _git_subprocess_kwargs() -> dict:
 def backlog_last_session() -> str:
     """Get the most recent session summary from the PROGRESS.md changelog.
     Returns the last changelog entry (everything between the first and second ### headings)."""
+    return _last_session_text(_progress_path())
+
+
+def _last_session_text(progress: Path) -> str:
+    """`backlog_last_session` for a resolved PROGRESS.md; shared with the native adapter."""
     try:
-        text = _progress_path().read_text(encoding="utf-8")
+        text = progress.read_text(encoding="utf-8")
     except FileNotFoundError:
         return "No PROGRESS.md found."
 

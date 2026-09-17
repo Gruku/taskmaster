@@ -2007,6 +2007,7 @@ def resolve_thread(
     backlog_data: dict[str, Any],
     backlog_path: Path,
     ref: str,
+    find_handover: "Callable[[str], dict[str, Any] | None] | None" = None,
 ) -> tuple[str, str]:
     """Resolve a resume token to (thread_name, newest_handover_id).
 
@@ -2021,15 +2022,19 @@ def resolve_thread(
         return name, threads[name]["handover_ids"][-1]
 
     fm: dict[str, Any] | None = None
-    p = handover_path(backlog_path, ref)
-    if p.exists():
-        fm, _ = read_task_file(p)
+    if find_handover is not None:
+        # A store-backed caller answers from rows, live or archived.
+        fm = find_handover(ref)
     else:
-        archive_root = handover_dir(backlog_path) / "_archive"
-        if archive_root.exists():
-            hits = list(archive_root.rglob(f"{ref}.md"))
-            if hits:
-                fm, _ = read_task_file(hits[0])
+        p = handover_path(backlog_path, ref)
+        if p.exists():
+            fm, _ = read_task_file(p)
+        else:
+            archive_root = handover_dir(backlog_path) / "_archive"
+            if archive_root.exists():
+                hits = list(archive_root.rglob(f"{ref}.md"))
+                if hits:
+                    fm, _ = read_task_file(hits[0])
     if fm is None:
         raise KeyError(ref)
     tname = fm.get("thread") or ""
