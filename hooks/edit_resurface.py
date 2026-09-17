@@ -38,7 +38,7 @@ from pathlib import Path
 # This script lives in hooks/; the taskmaster package is at the repo root one
 # level up. Subprocess invocation puts hooks/ on sys.path, not the root.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from taskmaster.admission import assert_compatible
+from taskmaster.native_routing import hook_reads
 
 try:
     from taskmaster.root import (
@@ -152,7 +152,7 @@ def _connect_ro(db_file) -> sqlite3.Connection:
     try:
         con.execute("PRAGMA query_only=ON")
         con.execute("BEGIN")
-        assert_compatible(con)
+        hook_reads.admit(con)
     except BaseException:
         con.close()
         raise
@@ -169,6 +169,9 @@ def max_change_seq(db_file) -> int:
 
 
 def _max_change_seq(con: sqlite3.Connection) -> int:
+    if hook_reads.is_native(con):
+        # A native store's revision is its domain event high water.
+        return hook_reads.revision(con)
     row = con.execute("SELECT MAX(seq) FROM changes").fetchone()
     return int(row[0]) if row and row[0] is not None else 0
 
@@ -187,7 +190,8 @@ def resolve(db_file, rel: str) -> ResolveResult:
 
 
 def _resolve(con: sqlite3.Connection, rel: str) -> ResolveResult:
-    rows = con.execute(_MATCH_SQL, (rel,)).fetchall()
+    native = hook_reads.is_native(con)
+    rows = con.execute(hook_reads.PATH_MATCH_SQL if native else _MATCH_SQL, (rel,)).fetchall()
 
     matched: dict = {}
     for kind, eid, status, archived, match_kind, path, source in rows:
@@ -216,10 +220,10 @@ def _resolve(con: sqlite3.Connection, rel: str) -> ResolveResult:
             closed += 1
 
     listed.sort(key=lambda e: (KIND_ORDER[e.kind], e.id))
-    return ResolveResult(listed, closed, prose, _count_related(con, listed, matched))
+    return ResolveResult(listed, closed, prose, _count_related(con, listed, matched, native))
 
 
-def _count_related(con, listed: list, matched: dict) -> int:
+def _count_related(con, listed: list, matched: dict, native: bool = False) -> int:
     """Open work that travels with the listed items but does not claim this file.
 
     The count is the invitation to run `backlog_query`; naming the ids would
@@ -236,6 +240,7 @@ def _count_related(con, listed: list, matched: dict) -> int:
         if kind not in OPEN_STATUS:
             continue
         row = con.execute(
+            hook_reads.LIVE_STATUS_SQL if native else
             "SELECT status FROM entities"
             " WHERE kind=? AND id=? AND deleted=0 AND archived=0",
             (kind, eid),

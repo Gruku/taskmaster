@@ -90,7 +90,10 @@ def test_merge_gate_decides_from_live_native_rows(twins):
         verdicts.append(native)
 
     both("feature/late")          # no gate yet: BLOCK
-    twins.same("backlog_record_gate", task_id="test-epic-003", gate="review-gate", verdict="fail")
+    twins.same("backlog_update_task", task_id="test-epic-003", field="lane", value="express")
+    twins.same("backlog_record_gate", task_id="test-epic-003", gate="impl", status="done")
+    assert not twins.same("backlog_record_gate", task_id="test-epic-003", gate="review-gate",
+                          verdict="fail")[1].startswith("Error")
     both("feature/late")          # failing gate: BLOCK
     twins.same("backlog_record_gate", task_id="test-epic-003", gate="review-gate", verdict="pass")
     both("feature/late")          # passing gate outside git: ALLOW
@@ -120,7 +123,7 @@ def test_merge_recorder_stamps_the_live_native_task_on_the_native_ladder(twins, 
         with twins.at(root):
             hook.stamp("feature/late", root)
     legacy, native = committed(twins.legacy), committed(twins.native)
-    assert legacy[("task", "test-epic-003")][0]["merge_status"]["qa"]["sha"] == "f00dcafe"
+    assert legacy[("task", "test-epic-003")][0]["merge_status"]["qa"]["merge_commit"] == "f00dcafe"
     twins.assert_state_matches()
     twins.assert_files_match()
     assert native[("task", "test-epic-003")][0]["merge_gate_state"] == "qa"

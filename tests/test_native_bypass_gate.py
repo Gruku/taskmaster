@@ -316,6 +316,33 @@ def test_viewer_route_never_reaches_the_legacy_store_or_scans_the_projection(rig
     assert 200 <= status < 300, (method, path, status)
 
 
+def test_store_reading_hooks_never_reach_the_legacy_store_or_scan_the_projection(rigged, monkeypatch):
+    import importlib.util
+    hooks = Path(bs.__file__).resolve().parents[1] / "hooks"
+
+    def load(name):
+        spec = importlib.util.spec_from_file_location(f"gate_hook_{name}", hooks / f"{name}.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    root = Path.cwd()
+    database = root / ".taskmaster" / "local" / "store.db"
+    bs.backlog_project_init(name="Gate project")
+    bs.backlog_update_task(task_id="test-epic-001", field="branch", value="feature/gate")
+    resurface, decide, stamp = load("edit_resurface"), load("merge_gate_decide"), load("merge_recorder_stamp")
+    assert resurface.max_change_seq(database) > 0
+    resurface.format_line("a.py", resurface.resolve(database, "a.py"))
+    assert decide.decide("feature/gate", root) == "ALLOW"
+    monkeypatch.setenv("TASKMASTER_ROOT", str(root))
+    monkeypatch.setattr(stamp, "_git", lambda args, cwd: {"rev-parse --abbrev-ref HEAD": "main",
+                                                           "rev-parse HEAD": "cafe"}[" ".join(args)])
+    stamp.stamp("feature/gate", root)
+    assert rigged == [], f"a hook bypassed the native core: {rigged}"
+    from native_twins import committed
+    assert committed(root)[("task", "test-epic-001")][0]["merge_status"]["master"]["merge_commit"] == "cafe"
+
+
 def test_the_rig_catches_a_legacy_read_and_a_projection_scan(rigged):
     with pytest.raises(BypassViolation):
         bs._load()
