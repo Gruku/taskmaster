@@ -4738,7 +4738,7 @@ class Store:
                     )
         if tx._derived_keys:
             self._close_reverse_links(tx.connection)
-            self._rebuild_related(tx.connection)
+            self._rebuild_related(tx.connection, tx._derived_keys)
 
     @staticmethod
     def _close_reverse_links(connection: sqlite3.Connection) -> None:
@@ -4774,18 +4774,59 @@ class Store:
         return str(row[0]) if row else "task"
 
     @staticmethod
-    def _rebuild_related(connection: sqlite3.Connection) -> None:
-        connection.execute("DELETE FROM related")
+    def _rebuild_related(
+        connection: sqlite3.Connection,
+        touched: Iterable[tuple[str, str]] | None = None,
+    ) -> None:
+        """Re-derive `related`, re-pairing only the path rows of `touched` keys.
+
+        A path edge's weight is the number of matching row pairs between two
+        entities, so an edge changes only when one of its two entities' rows
+        did -- and every entity whose `entity_paths` rows changed is in
+        `touched`. Pairing the whole table instead is quadratic: on 3,857 rows
+        it was 7.4M comparisons and most of every write, under the writer lock.
+
+        With `touched`, each touched row is compared against every row, and a
+        pair of two touched rows is counted only from its lower index, so it
+        weighs once as in the full pairing. Past half the rows the full pairing
+        is the cheaper of the two, so it runs instead; `rebuild_derived`, which
+        touches everything, therefore always re-pairs from scratch. Handover
+        edges are rebuilt whole: they are cheap, and a row cannot be traced
+        back to the one handover that produced it.
+        """
         paths = connection.execute(
             "SELECT kind,id,path,match_kind FROM entity_paths "
             "WHERE source IN ('anchors','location') ORDER BY kind,id,path"
         ).fetchall()
         weights: dict[tuple[tuple[str, str], tuple[str, str]], int] = {}
-        for index, left in enumerate(paths):
+        keys = None if touched is None else {(str(k), str(i)) for k, i in touched}
+        if keys is not None:
+            left_rows = [
+                index for index, row in enumerate(paths)
+                if (row["kind"], row["id"]) in keys
+            ]
+            if 2 * len(left_rows) >= len(paths):
+                keys = None
+        if keys is None:
+            connection.execute("DELETE FROM related WHERE via='path'")
+            left_rows = range(len(paths))
+        else:
+            connection.executemany(
+                "DELETE FROM related WHERE via='path' AND a_kind=? AND a_id=?", keys
+            )
+            connection.executemany(
+                "DELETE FROM related WHERE via='path' AND b_kind=? AND b_id=?", keys
+            )
+        for index in left_rows:
+            left = paths[index]
             left_key = (left["kind"], left["id"])
-            for right in paths[index + 1 :]:
+            first = index + 1 if keys is None else 0
+            for other in range(first, len(paths)):
+                right = paths[other]
                 right_key = (right["kind"], right["id"])
                 if left_key == right_key:
+                    continue
+                if keys is not None and other < index and right_key in keys:
                     continue
                 matches = (
                     left["path"] == right["path"]
@@ -4807,6 +4848,7 @@ class Store:
                 "VALUES(?,?,?,?,?,?)",
                 (left[0], left[1], right[0], right[1], "path", weight),
             )
+        connection.execute("DELETE FROM related WHERE via='handover'")
         handovers = connection.execute(
             "SELECT handover_id,task_id FROM handover_tasks ORDER BY handover_id,task_id"
         ).fetchall()
