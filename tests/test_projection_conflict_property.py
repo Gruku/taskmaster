@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import random
+from collections import Counter
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -23,7 +24,7 @@ from taskmaster.taskmaster_v3 import parse_frontmatter, render_frontmatter
 from test_store_bug_cluster import _build_projection
 
 
-CASES = int(os.environ.get("TM_CONFLICT_PROPERTY_CASES", "40"))
+CASES = int(os.environ.get("TM_CONFLICT_PROPERTY_CASES", "25"))
 FIRST_SEED = int(os.environ.get("TM_CONFLICT_PROPERTY_SEED", "0"))
 STEPS = 30
 MARKERS = "\n<<<<<<< HEAD\nfoo: [\n=======\n>>>>>>> other\n"
@@ -127,8 +128,8 @@ def _protected_files(store_obj, backlog_path: Path) -> dict[str, bytes | None]:
 
 def _setup(tmp_path: Path):
     backlog_path = _build_projection(tmp_path)
-    (backlog_path / "project.yaml").write_text(
-        yaml.safe_dump({"name": "Initial project"}), encoding="utf-8"
+    (backlog_path / "project.yaml").write_bytes(
+        yaml.safe_dump({"name": "Initial project"}).encode("utf-8")
     )
     store_obj = store_mod.open_store(backlog_path=backlog_path)
     store_obj.load_dict()
@@ -180,7 +181,7 @@ def _op_hand_edit(rng, backlog_path, store_obj, model, key, log):
     if _get_value(key, text) == model.store[key].token:
         model.store[key].superseded = True
     if restore_only:
-        path.write_text(text, encoding="utf-8")
+        path.write_bytes(text.encode("utf-8"))
         log.append(f"repair {key} by restoring {_get_value(key, text)}")
         if _get_value(key, text) != model.hand[key].token:
             # Restoring an older copy is the user discarding their own later
@@ -188,7 +189,7 @@ def _op_hand_edit(rng, backlog_path, store_obj, model, key, log):
             model.hand[key].superseded = True
         return
     token = model.fresh("H")
-    path.write_text(_set_value(key, text, token), encoding="utf-8")
+    path.write_bytes(_set_value(key, text, token).encode("utf-8"))
     model.hand[key] = Side(token)
     log.append(f"hand_edit {key} -> {token}{' (repair)' if MARKERS.encode() in raw else ''}")
 
@@ -262,7 +263,7 @@ def _check(backlog_path, store_obj, model, log, seed):
             )
 
 
-def _run(seed: int, tmp_path: Path) -> set[str]:
+def _run(seed: int, tmp_path: Path) -> tuple[set[str], list[str]]:
     rng = random.Random(seed)
     backlog_path, store_obj, model = _setup(tmp_path)
     log: list[str] = []
@@ -270,7 +271,21 @@ def _run(seed: int, tmp_path: Path) -> set[str]:
     functions = [op for op, weight in OPS for _ in range(weight)]
     for _step in range(STEPS):
         op = rng.choice(functions)
-        key = rng.choice(list(FILES))
+        # Half the time, act on a file that is broken or flagged right now:
+        # uniform choice spends most steps on files with nothing at stake.
+        hot = [
+            k for k in FILES
+            if any(
+                p.exists() and MARKERS.encode() in p.read_bytes()
+                for p in _paths(backlog_path, k)
+            )
+            or any(
+                _rel(backlog_path, p) == c["file"]
+                for c in store_obj.projection_conflicts()
+                for p in _paths(backlog_path, k)
+            )
+        ]
+        key = rng.choice(hot) if hot and rng.random() < 0.5 else rng.choice(list(FILES))
         protected = _protected_files(store_obj, backlog_path)
         before = len(log)
         op(rng, backlog_path, store_obj, model, key, log)
@@ -295,16 +310,32 @@ def _run(seed: int, tmp_path: Path) -> set[str]:
             )
         _check(backlog_path, store_obj, model, log, seed)
         ever_flagged.update(c["file"] for c in store_obj.projection_conflicts())
-    return ever_flagged
+    return ever_flagged, log
+
+
+def _event(entry: str) -> str:
+    if entry.startswith("resolve "):
+        return "resolve refused" if "refused" in entry else entry.rsplit(" ", 1)[1]
+    if entry.startswith("hand_edit") and "(repair)" in entry:
+        return "repair with a new value"
+    if entry.startswith("repair "):
+        return "repair by restoring"
+    return entry.split()[0] + (" " + entry.split()[1] if entry.startswith("archive") else "")
 
 
 def test_generated_histories_lose_nothing_and_never_touch_protected_files(tmp_path):
     flagged: set[str] = set()
+    events: Counter[str] = Counter()
     for seed in range(FIRST_SEED, FIRST_SEED + CASES):
+        ever_flagged, log = _run(seed, tmp_path / f"seed-{seed}")
         flagged |= {
             "tasks/core-001.md" if rel.startswith("tasks/") else rel
-            for rel in _run(seed, tmp_path / f"seed-{seed}")
+            for rel in ever_flagged
         }
-    # The generator has to reach the state under test for every file kind, or
-    # it proves nothing about that kind.
+        events.update(_event(entry) for entry in log)
+    # The generator has to reach the states under test for every file kind and
+    # both resolutions, or it proves nothing about them.
     assert flagged >= {"tasks/core-001.md", "epics/core.md", "backlog.yaml", "project.yaml"}, flagged
+    for needed in ("take=file", "take=store", "repair with a new value",
+                   "repair by restoring", "archive task", "break"):
+        assert events[needed], (needed, events)

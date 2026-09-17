@@ -70,7 +70,7 @@ def _task_path(backlog_path: Path) -> Path:
 def _put(store_obj, kind, ident, doc, body=None):
     with store_obj.transaction(tool="test-write") as tx:
         tx.put(kind, ident, dict(doc), body=body)
-        return list(tx.warnings)
+    return list(tx.warnings)
 
 
 def _write_task(backlog_path: Path, doc, body="## Notes\n\nB") -> bytes:
@@ -428,6 +428,8 @@ def _flag_core_001(tmp_path):
     repaired = _write_task(backlog_path, dict(DOC, title="File title"))
     _scan(store_obj)
     assert _flagged(store_obj) == ["tasks/core-001.md"]
+    # A flag must not turn every later read into a rescan under the writer.
+    assert store_obj._projection_changed_on_disk() is False
     return backlog_path, store_obj, repaired
 
 
@@ -522,9 +524,12 @@ def test_the_notice_lookup_is_one_bounded_query_that_never_reads_history(tmp_pat
     finally:
         connection.set_trace_callback(None)
     assert [c["file"] for c in conflicts] == ["tasks/core-001.md"]
-    assert len(statements) == 1, statements
-    assert "changes" not in statements[0]
-    assert "projection_conflict" in statements[0]
+    # Opening the per-thread connection proves it is still compatible (the
+    # same few `meta` reads every store access makes); beyond that, one query.
+    data = [s for s in statements if "meta" not in s and s.strip() != "SELECT 1"]
+    assert len(data) == 1, statements
+    assert "projection_conflict" in data[0]
+    assert not any("changes" in s for s in statements), statements
 
 
 def test_the_notice_names_the_entity_the_file_and_how_to_resolve(tmp_path):
@@ -570,3 +575,61 @@ def test_every_tool_result_names_the_flag_until_it_is_resolved(tm_epic_phase):
     after = backlog_server.backlog_get_task("T-CF")
     assert "backlog_resolve_conflict" not in after
     assert "User notes." in after
+
+
+# ── a failed export with no bytes to merge against ───────────────────────────
+
+
+def _fail_export_to(monkeypatch, target: Path) -> None:
+    import os
+
+    real_replace = os.replace
+
+    def refuse(source, destination):
+        if Path(destination) == target:
+            raise PermissionError(13, "held open", str(destination))
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(os, "replace", refuse)
+
+
+def test_a_failed_export_with_no_base_is_flagged_not_merged(tmp_path, monkeypatch):
+    backlog_path, store_obj = _fresh(tmp_path)
+    with monkeypatch.context() as patch:
+        _fail_export_to(patch, _task_path(backlog_path))
+        _put(store_obj, "task", "core-001", dict(DOC, title="Store title"), "## Notes\n\nB")
+    _drop_bases(store_obj)
+    edited = _write_task(backlog_path, dict(DOC, title="Hand title"))
+    _scan(store_obj)
+
+    assert _entity(store_obj)[0]["title"] == "Store title"
+    _assert_flag_holds(store_obj, _task_path(backlog_path), "tasks/core-001.md", edited)
+
+
+def test_a_failed_backlog_export_with_no_base_is_flagged(tmp_path, monkeypatch):
+    backlog_path, store_obj = _fresh(tmp_path)
+    backlog = backlog_path / "backlog.yaml"
+    epic = _entity(store_obj, "epic", "core")[0]
+    with monkeypatch.context() as patch:
+        _fail_export_to(patch, backlog)
+        _put(store_obj, "epic", "core", dict(epic, status="done"))
+    _drop_bases(store_obj)
+    doc = yaml.safe_load(backlog.read_text(encoding="utf-8"))
+    doc["phases"][0]["name"] = "Renamed by hand"
+    edited = yaml.safe_dump(doc, sort_keys=False).encode("utf-8")
+    backlog.write_bytes(edited)
+    _scan(store_obj)
+
+    assert _entity(store_obj, "epic", "core")[0]["status"] == "done"
+    assert _entity(store_obj, "phase", "build")[0]["name"] == "Build"
+    assert "backlog.yaml" in _flagged(store_obj)
+    assert backlog.read_bytes() == edited
+
+
+def test_a_store_from_before_the_flag_table_gets_it_on_open(tmp_path):
+    backlog_path, store_obj = _fresh(tmp_path)
+    _sql(store_obj, "DROP TABLE projection_conflict")
+    store_mod.reset_for_tests()
+    reopened = store_mod.open_store(backlog_path=backlog_path)
+    assert reopened.projection_conflicts() == []
+    assert store_mod.read_only_status(backlog_path).flagged_files == ()

@@ -337,6 +337,14 @@ CREATE TABLE IF NOT EXISTS projection(
   quarantine_hash TEXT
 );
 CREATE TABLE IF NOT EXISTS projection_base(file TEXT PRIMARY KEY, content BLOB);
+CREATE TABLE IF NOT EXISTS projection_conflict(
+  file TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  id TEXT,
+  flagged_at TEXT NOT NULL,
+  file_hash TEXT NOT NULL,
+  file_content BLOB NOT NULL
+);
 CREATE TABLE IF NOT EXISTS sessions(
   session TEXT PRIMARY KEY,
   pid INTEGER,
@@ -400,6 +408,7 @@ CREATE INDEX IF NOT EXISTS ix_related_b ON related(b_kind, b_id);
 CREATE INDEX IF NOT EXISTS ix_handover_tasks_pair ON handover_tasks(handover_id, task_id);
 CREATE INDEX IF NOT EXISTS ix_entities_kind_status ON entities(kind, status);
 CREATE INDEX IF NOT EXISTS ix_changes_entity ON changes(kind, id, seq);
+CREATE INDEX IF NOT EXISTS ix_projection_entity ON projection(kind, id);
 """
 
 
@@ -453,6 +462,9 @@ class StoreStatus:
     # file on disk is quarantined. The database holds newer content than the
     # file and will keep holding it until the file is repaired or removed.
     stuck_exports: tuple[str, ...] = ()
+    # Files edited while the store owed them an export: both versions kept,
+    # exports paused until `backlog_resolve_conflict` picks one.
+    flagged_files: tuple[str, ...] = ()
     # In-memory, per reporting process: how many read-side projection scans in
     # a row this process had to skip because the store was busy. It cannot be
     # read out of the database, so a report built by a process that has never
@@ -769,7 +781,15 @@ SQLITE_HEADER = b"SQLite format 3\x00"
 # What a database has to carry before a reader may adopt it without taking the
 # writer mutex to build or upgrade it.
 _REQUIRED_TABLES = frozenset(
-    {"meta", "entities", "changes", "projection", "projection_base", "sessions"}
+    {
+        "meta",
+        "entities",
+        "changes",
+        "projection",
+        "projection_base",
+        "projection_conflict",
+        "sessions",
+    }
 )
 
 
@@ -1058,10 +1078,6 @@ class Store:
         self._network_projection_only = False
         self._bootstrap_quarantine: dict[str, str] = {}
         self._dominant_crlf: bool | None = None
-        # The last `changes.seq` whose merge conflicts this process has handed
-        # to a caller; None until the first look, which reaches back 24 hours.
-        self._merge_notice_seq: int | None = None
-        self._merge_notice_lock = threading.Lock()
         # Adoption rewrites the whole projection at once and has to prove it can
         # read the result back before it commits (see `_verify_round_trip`).
         # Ordinary writes touch a file or two and are re-read by the next scan,
@@ -3438,6 +3454,17 @@ class Store:
                     "ORDER BY file"
                 )
             )
+            try:
+                flagged = tuple(
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT file FROM projection_conflict ORDER BY file"
+                    )
+                )
+            except sqlite3.OperationalError:
+                # A database no 6.0.3 writer has opened yet has no flag table,
+                # and this read never creates one.
+                flagged = ()
             seq = int(
                 connection.execute(
                     "SELECT COALESCE(MAX(seq),0) FROM changes"
@@ -3509,6 +3536,7 @@ class Store:
             corrupt_files=self._corrupt_backup_names(),
             linear_pending=queued,
             stuck_exports=stuck,
+            flagged_files=flagged,
             read_scan_skips=self._read_scan_skips,
         )
 
@@ -3523,78 +3551,169 @@ class Store:
             )
         return self._status_from(self.connection, warning=warning)
 
-    def pending_merge_notices(self) -> tuple[list[str], int | None]:
-        """Merge conflicts no caller of this process has been shown yet.
+    def projection_conflicts(self) -> list[dict[str, Any]]:
+        """Files flagged because they and the store both changed, oldest first.
 
-        A conflict is settled inside whichever scan meets the repaired file --
-        often a read, whose warnings reach no tool result -- so `store.log` and
-        a 24-hour count were the only trace, and a user whose repair lost a
-        field never heard of it. The durable record is the merge row itself;
-        this reads the ones past the cursor and returns them with the seq to
-        pass to `acknowledge_merge_notices` once they have been delivered. The
-        first look in a process reaches back 24 hours, so a conflict settled by
-        a hook or another server still reaches the next tool result here.
+        Every tool result asks this, so it is one query against a table that
+        holds only unresolved flags -- empty on a healthy project -- and never
+        against the change history. The table is the state itself, not a
+        cursor over events: after a restart, in a second process and in the
+        process that flagged the file it reads the same rows, and a flag stays
+        listed until it is resolved.
         """
         if not self._bootstrapped:
-            return [], None
-        with self._merge_notice_lock:
-            cursor = self._merge_notice_seq
-        connection = self.connection
-        if cursor is None:
-            cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
-            rows = connection.execute(
-                "SELECT seq,kind,id,before FROM changes WHERE op='merge' AND ts>=? "
-                "AND before LIKE '%\"_conflicts\"%' ORDER BY seq",
-                (cutoff,),
-            ).fetchall()
-            latest = connection.execute("SELECT COALESCE(MAX(seq),0) FROM changes").fetchone()[0]
-        else:
-            rows = connection.execute(
-                "SELECT seq,kind,id,before FROM changes WHERE seq>? AND op='merge' "
-                "AND before LIKE '%\"_conflicts\"%' ORDER BY seq",
-                (cursor,),
-            ).fetchall()
-            latest = max([cursor, *(int(row["seq"]) for row in rows)])
-        notices = []
-        for row in rows:
-            before = _from_json(row["before"], {})
-            conflicts = before.get("_conflicts") if isinstance(before, dict) else None
-            if not isinstance(conflicts, dict) or not conflicts:
-                continue
-            located = connection.execute(
-                "SELECT file FROM projection WHERE kind=? AND id=? ORDER BY file LIMIT 1",
-                (row["kind"], row["id"]),
-            ).fetchone()
-            where = located["file"] if located else f"{row['kind']} {row['id']}"
-            names = ", ".join(
-                "body" if key == BODY_KEY else str(key) for key in conflicts
+            self._ensure_open()
+        if self._network_projection_only:
+            return []
+        return [
+            dict(row)
+            for row in self.connection.execute(
+                "SELECT file,kind,id,flagged_at FROM projection_conflict "
+                "ORDER BY flagged_at,file"
             )
-            if before.get("_no_base"):
-                notices.append(
-                    f"merge conflict in {where} ({row['kind']} {row['id']}, seq {row['seq']}): "
-                    f"no record survives of what the file held before it was quarantined, "
-                    f"so the file was kept exactly as written; the store's differing "
-                    f"values ({names}) were set aside and are kept in change seq {row['seq']}"
+        ]
+
+    def projection_conflict_detail(self, rel: str) -> dict[str, Any] | None:
+        """Both versions of a flagged file, for a person to compare.
+
+        `file_observed` is what the file held when it was last seen by a scan,
+        `file_on_disk` what it holds now (None when it is gone), and
+        `store_version` the exact text the store would write there -- None
+        when the store would write nothing at this path, because the entity is
+        archived, deleted or has no file of its own; `store_path` then says
+        where the store's version lives instead.
+        """
+        if not self._bootstrapped:
+            self._ensure_open()
+        connection = self.connection
+        row = connection.execute(
+            "SELECT file,kind,id,flagged_at,file_content FROM projection_conflict "
+            "WHERE file=?",
+            (rel,),
+        ).fetchone()
+        if row is None:
+            return None
+        path = self.backlog_path / rel
+        try:
+            on_disk: str | None = path.read_bytes().decode("utf-8", errors="replace")
+        except OSError:
+            on_disk = None
+        store_version, store_path = self._store_version_of(
+            connection, row["kind"], row["id"], rel
+        )
+        return {
+            "file": rel,
+            "kind": row["kind"],
+            "id": row["id"],
+            "flagged_at": row["flagged_at"],
+            "file_observed": bytes(row["file_content"]).decode("utf-8", errors="replace"),
+            "file_on_disk": on_disk,
+            "store_version": store_version,
+            "store_path": store_path,
+        }
+
+    def _store_version_of(
+        self, connection: sqlite3.Connection, kind: str, ident: str | None, rel: str
+    ) -> tuple[str | None, str | None]:
+        """`(text the store would write at rel, where the store's file lives)`."""
+        if kind == "backlog":
+            return self._render_backlog_bytes(connection).decode("utf-8"), rel
+        entity = connection.execute(
+            "SELECT doc,body,archived,deleted FROM entities WHERE kind=? AND id=?",
+            (kind, ident),
+        ).fetchone()
+        if entity is None or entity["deleted"]:
+            return None, None
+        target = self._entity_path(kind, str(ident), bool(entity["archived"]))
+        target_rel = None if target is None else target.relative_to(self.backlog_path).as_posix()
+        rendered = _render_entity_file(kind, _from_json(entity["doc"], {}), entity["body"])
+        if rendered is None:
+            return None, None
+        if target_rel != rel:
+            return None, target_rel
+        return rendered[0].decode("utf-8"), target_rel
+
+    def resolve_projection_conflict(
+        self, rel: str, take: str, *, tool: str = "backlog_resolve_conflict"
+    ) -> dict[str, Any]:
+        """End a flag by keeping one side, chosen by whoever calls this.
+
+        `take="file"` imports the file as it is on disk now, as an ordinary
+        hand edit: the store's values it replaces stay in that import's change
+        row. `take="store"` writes the store's version over the file, or moves
+        or removes it when the entity is archived or deleted; the file text it
+        replaces is kept in the resolution's change row. Raises ValueError for
+        a file that is not flagged, an unknown side, or a file that cannot be
+        taken because it is missing or does not parse -- all before anything
+        is written.
+        """
+        if take not in {"file", "store"}:
+            raise ValueError(f"take must be 'file' or 'store', not {take!r}")
+        with self.transaction(tool=tool) as tx:
+            connection = tx.connection
+            flagged = connection.execute(
+                "SELECT kind,id FROM projection_conflict WHERE file=?", (rel,)
+            ).fetchone()
+            if flagged is None:
+                raise ValueError(f"{rel} is not flagged; there is nothing to resolve")
+            row = connection.execute(
+                "SELECT file,kind,id FROM projection WHERE file=?", (rel,)
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"{rel} has no projection record to resolve against")
+            change_kind = flagged["kind"]
+            change_id = flagged["id"] or (
+                _BACKLOG_ID if change_kind == "backlog" else _PROJECT_ID
+            )
+            path = self.backlog_path / rel
+            if take == "file":
+                try:
+                    content, stat = _read_file_snapshot(path)
+                except OSError as exc:
+                    raise ValueError(f"{rel} cannot be taken: {exc}") from exc
+                try:
+                    rows = self._parse_projected_file(tx, row["kind"], row["id"], content)
+                except (UnicodeError, ValueError, yaml.YAMLError) as exc:
+                    raise ValueError(
+                        f"{rel} cannot be taken: it does not parse ({exc})"
+                    ) from exc
+                if rows is None:
+                    raise ValueError(f"{rel} cannot be taken: it names no entity")
+                store_version, _store_path = self._store_version_of(
+                    connection, row["kind"], row["id"], rel
                 )
+                connection.execute("DELETE FROM projection_conflict WHERE file=?", (rel,))
+                self._apply_projected_file(tx, row, rows, content, stat)
+                # The drain queued this row while it was still dirty; the file
+                # is now what the store holds, and rewriting it would only
+                # reformat the bytes the caller chose to keep.
+                if row["kind"] == "backlog":
+                    tx._export_backlog = False
+                else:
+                    tx._export_keys.discard(
+                        (row["kind"], row["id"] or _PROJECT_ID)
+                    )
+                before = {"file": None, "store": store_version}
             else:
-                notices.append(
-                    f"merge conflict in {where} ({row['kind']} {row['id']}, seq {row['seq']}): "
-                    f"{names} changed both in the file and in the store; the store's "
-                    f"value was kept and the file's is kept in change seq {row['seq']}"
+                try:
+                    replaced: str | None = path.read_bytes().decode("utf-8", errors="replace")
+                except OSError:
+                    replaced = None
+                connection.execute("DELETE FROM projection_conflict WHERE file=?", (rel,))
+                connection.execute(
+                    "UPDATE projection SET dirty=1,quarantined=0,quarantine_mtime=NULL,"
+                    "quarantine_size=NULL,quarantine_hash=NULL WHERE file=?",
+                    (rel,),
                 )
-        return notices, int(latest)
-
-    def acknowledge_merge_notices(self, seq: int | None) -> None:
-        if seq is None:
-            return
-        with self._merge_notice_lock:
-            if self._merge_notice_seq is None or seq > self._merge_notice_seq:
-                self._merge_notice_seq = seq
-
-    def take_merge_notices(self) -> list[str]:
-        notices, seq = self.pending_merge_notices()
-        self.acknowledge_merge_notices(seq)
-        return notices
+                self._queue_export_for_row(tx, row)
+                before = {"file": replaced, "store": None}
+            seq = tx._record_change(
+                change_kind, change_id, "resolve", ["projection"], before,
+                {"file": rel, "took": take},
+            )
+            tx.seq = seq
+            tx.log_entries.append(f"resolved flagged {rel}: kept the {take} version at seq {seq}")
+        return {"file": rel, "took": take, "seq": seq, "warnings": list(tx.warnings)}
 
     def read_only_status(self) -> StoreStatus:
         """`status()` without any of the writing that opening a store does.
@@ -4276,6 +4395,10 @@ class Store:
             "quarantine_mtime,quarantine_size,quarantine_hash FROM projection ORDER BY file"
         ).fetchall()
         known_rel = {row["file"] for row in rows}
+        conflicts = {
+            flagged[0]
+            for flagged in tx.connection.execute("SELECT file FROM projection_conflict")
+        }
         for row in rows:
             rel = row["file"]
             path = self.backlog_path / Path(rel)
@@ -4338,6 +4461,12 @@ class Store:
                         (stat.st_mtime, stat.st_size, rel),
                     )
                 continue
+            if rel in conflicts or (row["dirty"] and row["quarantined"]):
+                # The store holds an edit it never wrote and the file holds
+                # whatever was saved over it. No record says which of the two
+                # anyone meant to keep, so neither is applied to the other.
+                self._hold_divergent_file(tx, row, content, stat)
+                continue
             if row["dirty"]:
                 if row["kind"] == "backlog":
                     self._merge_dirty_backlog_edit(tx, row, content, stat)
@@ -4356,62 +4485,7 @@ class Store:
                     tx.connection, rel, _IDEAS_INDEX_KIND, None, content, stat
                 )
                 continue
-            if row["kind"] == "backlog":
-                self._import_backlog_file(tx, path, content, stat)
-                continue
-            if row["kind"] == "project":
-                try:
-                    doc = yaml_io.safe_load(content.decode("utf-8")) or {}
-                    if not isinstance(doc, dict):
-                        raise ValueError("project.yaml must be a mapping")
-                except (UnicodeError, ValueError, yaml.YAMLError) as exc:
-                    self._record_quarantine_base(tx, row)
-                    tx.connection.execute(
-                        "UPDATE projection SET quarantined=1,dirty=0 WHERE file=?", (rel,)
-                    )
-                    self._stamp_quarantine(tx, rel, exc, content, stat)
-                    continue
-                self._drop_quarantine_base(tx, row)
-                tx._import_row("project", row["id"] or _PROJECT_ID, doc, None)
-                self._record_projection_bytes(
-                    tx.connection, rel, "project", row["id"] or _PROJECT_ID, content, stat
-                )
-                continue
-            if not row["id"]:
-                continue
-            try:
-                doc, body = self._parse_entity_text(row["kind"], content.decode("utf-8"))
-                self._validate_projected_identity(row["kind"], row["id"], doc)
-            except (OSError, ValueError, yaml.YAMLError) as exc:
-                self._record_quarantine_base(tx, row)
-                tx.connection.execute(
-                    "UPDATE projection SET quarantined=1,dirty=0 WHERE file=?", (rel,)
-                )
-                self._stamp_quarantine(tx, rel, exc, content, stat)
-                continue
-            if row["kind"] in {"epic", "phase"}:
-                current = tx.connection.execute(
-                    "SELECT doc FROM entities WHERE kind=? AND id=?",
-                    (row["kind"], row["id"]),
-                ).fetchone()
-                if current:
-                    merged = _from_json(current["doc"], {})
-                    heavy_fields = (
-                        EPIC_HEAVY_FIELDS
-                        if row["kind"] == "epic"
-                        else PHASE_HEAVY_FIELDS
-                    )
-                    for field in heavy_fields:
-                        if field in doc:
-                            merged[field] = doc[field]
-                        else:
-                            merged.pop(field, None)
-                    doc = merged
-            self._drop_quarantine_base(tx, row)
-            tx._import_row(row["kind"], row["id"], doc, body)
-            self._record_projection_bytes(
-                tx.connection, rel, row["kind"], row["id"], content, stat
-            )
+            self._import_changed_file(tx, row, content, stat)
 
         # Files created by a hand edit or checkout after bootstrap have no
         # projection row yet. Discover and import them under the same writer
@@ -4483,6 +4557,216 @@ class Store:
                 (generation,),
             )
 
+    def _parse_projected_file(
+        self,
+        tx: "Transaction",
+        kind: str,
+        ident: str | None,
+        content: bytes,
+    ) -> dict[tuple[str, str], tuple[dict[str, Any], str | None]] | None:
+        """The rows importing these bytes would write, keyed by entity.
+
+        Raises when the bytes do not parse. None means the file is not one an
+        import reads (an entity file with no id). An epic or phase file owns
+        only its heavy fields and body, and `backlog.yaml` only the rest, so
+        each is laid over what the store already holds -- the same rows a plain
+        import writes, which is what lets "would importing this change
+        anything?" be answered without importing.
+        """
+        text = content.decode("utf-8")
+        if kind == "backlog":
+            raw = yaml_io.safe_load(text) or {}
+            _validate_backlog_document(raw)
+            rows = _flatten_backlog_dict(raw)
+            for key, (doc, body) in list(rows.items()):
+                if key[0] not in {"epic", "phase"}:
+                    continue
+                current = tx.connection.execute(
+                    "SELECT doc,body FROM entities WHERE kind=? AND id=?", key
+                ).fetchone()
+                if current:
+                    current_doc = _from_json(current["doc"], {})
+                    heavy_fields = (
+                        EPIC_HEAVY_FIELDS if key[0] == "epic" else PHASE_HEAVY_FIELDS
+                    )
+                    for field in heavy_fields:
+                        if field in current_doc:
+                            doc[field] = current_doc[field]
+                    rows[key] = (doc, current["body"])
+            return rows
+        if kind == "project":
+            doc = yaml_io.safe_load(text) or {}
+            if not isinstance(doc, dict):
+                raise ValueError("project.yaml must be a mapping")
+            return {("project", ident or _PROJECT_ID): (doc, None)}
+        if not ident:
+            return None
+        doc, body = self._parse_entity_text(kind, text)
+        self._validate_projected_identity(kind, ident, doc)
+        if kind in {"epic", "phase"}:
+            current = tx.connection.execute(
+                "SELECT doc FROM entities WHERE kind=? AND id=?", (kind, ident)
+            ).fetchone()
+            if current:
+                merged = _from_json(current["doc"], {})
+                heavy_fields = EPIC_HEAVY_FIELDS if kind == "epic" else PHASE_HEAVY_FIELDS
+                for field in heavy_fields:
+                    if field in doc:
+                        merged[field] = doc[field]
+                    else:
+                        merged.pop(field, None)
+                doc = merged
+        return {(kind, ident): (doc, body)}
+
+    def _apply_projected_file(
+        self,
+        tx: "Transaction",
+        row: sqlite3.Row,
+        rows: Mapping[tuple[str, str], tuple[dict[str, Any], str | None]],
+        content: bytes,
+        stat: os.stat_result,
+    ) -> None:
+        for (kind, ident), (doc, body) in rows.items():
+            tx._import_row(kind, ident, doc, body)
+        ident = row["id"]
+        if row["kind"] == "project":
+            ident = ident or _PROJECT_ID
+        self._record_projection_bytes(
+            tx.connection, row["file"], row["kind"], ident, content, stat
+        )
+
+    def _import_changed_file(
+        self,
+        tx: "Transaction",
+        row: sqlite3.Row,
+        content: bytes,
+        stat: os.stat_result,
+    ) -> None:
+        """A hand edit to a file the store owes nothing: the file is imported."""
+        try:
+            rows = self._parse_projected_file(tx, row["kind"], row["id"], content)
+        except (OSError, UnicodeError, ValueError, yaml.YAMLError) as exc:
+            tx.connection.execute(
+                "UPDATE projection SET quarantined=1,dirty=0 WHERE file=?", (row["file"],)
+            )
+            self._stamp_quarantine(tx, row["file"], exc, content, stat)
+            return
+        if rows is None:
+            return
+        self._apply_projected_file(tx, row, rows, content, stat)
+
+    def _import_is_noop(
+        self,
+        tx: "Transaction",
+        row: sqlite3.Row,
+        rows: Mapping[tuple[str, str], tuple[dict[str, Any], str | None]],
+    ) -> bool:
+        """True when importing the file would change nothing the store holds.
+
+        Then the file carries nothing the store lacks, and exporting the store
+        over it loses nothing but formatting. The entity also has to still
+        project to this path: a live file for an archived or deleted entity is
+        a difference even when every field agrees.
+        """
+        for (kind, ident), (doc, body) in rows.items():
+            current = tx.connection.execute(
+                "SELECT doc,body,archived,deleted FROM entities WHERE kind=? AND id=?",
+                (kind, ident),
+            ).fetchone()
+            if current is None or current["deleted"]:
+                return False
+            if _clean_doc(dict(doc)) != _from_json(current["doc"], {}):
+                return False
+            if body != current["body"]:
+                return False
+            if row["kind"] not in {"backlog", "project"}:
+                target = self._entity_path(kind, ident, bool(current["archived"]))
+                if (
+                    target is None
+                    or target.relative_to(self.backlog_path).as_posix() != row["file"]
+                ):
+                    return False
+        return True
+
+    @staticmethod
+    def _queue_export_for_row(tx: "Transaction", row: sqlite3.Row) -> None:
+        if row["kind"] == "backlog":
+            tx._export_backlog = True
+        elif row["kind"] == "project":
+            tx._export_keys.add(("project", row["id"] or _PROJECT_ID))
+        elif row["id"]:
+            tx._export_keys.add((row["kind"], row["id"]))
+
+    def _hold_divergent_file(
+        self,
+        tx: "Transaction",
+        row: sqlite3.Row,
+        content: bytes,
+        stat: os.stat_result,
+    ) -> None:
+        """Keep both versions of a file edited while the store owed it an export.
+
+        Two automatic merges were tried here and both lost data: a merge needs
+        the state both sides last agreed on, and neither a rendered entity nor
+        the change history reproduces what a file held. So nothing is merged.
+        The store keeps its entity, the file stays exactly as written, its
+        bytes are kept in `projection_conflict`, and while that row exists no
+        export may write or remove the file. Only an explicit resolution
+        (`Store.resolve_projection_conflict`) picks a side. A file that agrees
+        with the store after all is no conflict and simply stops being one.
+        """
+        rel = row["file"]
+        try:
+            rows = self._parse_projected_file(tx, row["kind"], row["id"], content)
+        except (OSError, UnicodeError, ValueError, yaml.YAMLError) as exc:
+            # Still broken, or broken again: the debt stays owed, and a flag
+            # keeps the last bytes that did parse.
+            tx.connection.execute(
+                "UPDATE projection SET quarantined=1 WHERE file=?", (rel,)
+            )
+            self._stamp_quarantine(tx, rel, exc, content, stat)
+            return
+        if rows is None:
+            return
+        flagged = tx.connection.execute(
+            "SELECT file_hash FROM projection_conflict WHERE file=?", (rel,)
+        ).fetchone()
+        digest = hashlib.sha1(content).hexdigest()
+        tx.connection.execute(
+            "UPDATE projection SET content_hash=?,mtime=?,size=?,dirty=1,quarantined=0,"
+            "quarantine_mtime=NULL,quarantine_size=NULL,quarantine_hash=NULL WHERE file=?",
+            (digest, stat.st_mtime, stat.st_size, rel),
+        )
+        if self._import_is_noop(tx, row, rows):
+            if flagged is not None:
+                tx.connection.execute(
+                    "DELETE FROM projection_conflict WHERE file=?", (rel,)
+                )
+            self._queue_export_for_row(tx, row)
+            tx.log_entries.append(f"{rel} agrees with the store; export resumed")
+            return
+        ident = row["id"]
+        if row["kind"] == "project":
+            ident = ident or _PROJECT_ID
+        if flagged is None:
+            tx.connection.execute(
+                "INSERT INTO projection_conflict(file,kind,id,flagged_at,file_hash,file_content) "
+                "VALUES(?,?,?,?,?,?)",
+                (rel, row["kind"], ident, _now(), digest, content),
+            )
+            tx.log_entries.append(
+                f"flagged {rel}: edited while the store held an unwritten change; "
+                f"neither version applied, exports paused"
+            )
+        elif flagged["file_hash"] != digest:
+            tx.connection.execute(
+                "UPDATE projection_conflict SET file_hash=?,file_content=? WHERE file=?",
+                (digest, content, rel),
+            )
+        tx.warnings.append(
+            projection_conflict_notice({"file": rel, "kind": row["kind"], "id": ident})
+        )
+
     def _merge_dirty_external_edit(
         self,
         tx: "Transaction",
@@ -4490,55 +4774,29 @@ class Store:
         content: bytes,
         stat: os.stat_result,
     ) -> None:
+        """Merge a hand edit into a row whose last export failed to land.
+
+        The base is the bytes that export failed to replace: exactly what the
+        file held when the store moved on, so the three-way merge stands on
+        something true. Without those bytes there is nothing to stand on, and
+        the file is held instead of guessed at.
+        """
         rel = projection_row["file"]
         kind = projection_row["kind"]
         ident = projection_row["id"]
         if not ident:
             return
-        base_row = tx.connection.execute(
-            "SELECT content FROM projection_base WHERE file=?", (rel,)
-        ).fetchone()
         entity = tx.connection.execute(
             "SELECT doc,body,rev FROM entities WHERE kind=? AND id=?", (kind, ident)
         ).fetchone()
         if entity is None:
             return
-        # No base is not "nothing to do": returning here left the store holding
-        # a committed edit it would never write and the repaired file holding
-        # content it would never import. Nor is it an empty base -- that made
-        # every field the two sides disagreed on a conflict local won, so a
-        # user's own repair was reverted and exported over their file. A row
-        # quarantined since 6.0.3 carries the base recorded at quarantine; a
-        # row quarantined earlier has it rebuilt from the change history.
-        base_source: bytes | None = (
-            bytes(base_row["content"])
-            if base_row is not None
-            else self._rebuild_quarantine_base(tx, projection_row, entity)
-        )
-        base_doc: dict[str, Any] = {}
-        base_body: str | None = None
-        if base_source is not None:
-            try:
-                if kind == "project":
-                    loaded = yaml_io.safe_load(base_source.decode("utf-8")) or {}
-                    base_doc = loaded if isinstance(loaded, dict) else {}
-                else:
-                    base_doc, base_body = self._parse_entity_text(
-                        kind, base_source.decode("utf-8")
-                    )
-            except (UnicodeError, ValueError, yaml.YAMLError):
-                # The bytes we were about to overwrite do not parse either.
-                # They are still not a reason to quarantine the file the caller
-                # just repaired, and not a base either: merging against nothing
-                # is what reverted repairs.
-                base_source = None
-                base_doc, base_body = {}, None
         try:
             if kind == "project":
                 their_doc = yaml_io.safe_load(content.decode("utf-8")) or {}
                 if not isinstance(their_doc, dict):
                     raise ValueError("project.yaml must be a mapping")
-                base_body = their_body = None
+                their_body = None
             else:
                 their_doc, their_body = self._parse_entity_text(
                     kind, content.decode("utf-8")
@@ -4550,61 +4808,47 @@ class Store:
             )
             self._stamp_quarantine(tx, rel, exc, content, stat)
             return
+        base_row = tx.connection.execute(
+            "SELECT content FROM projection_base WHERE file=?", (rel,)
+        ).fetchone()
+        if base_row is None:
+            self._hold_divergent_file(tx, projection_row, content, stat)
+            return
+        try:
+            base_text = bytes(base_row["content"]).decode("utf-8")
+            if kind == "project":
+                base_doc = yaml_io.safe_load(base_text) or {}
+                if not isinstance(base_doc, dict):
+                    raise ValueError("project.yaml must be a mapping")
+                base_body = None
+            else:
+                base_doc, base_body = self._parse_entity_text(kind, base_text)
+        except (UnicodeError, ValueError, yaml.YAMLError):
+            self._hold_divergent_file(tx, projection_row, content, stat)
+            return
         our_doc = _from_json(entity["doc"], {})
         our_body = entity["body"]
-        if base_source is None:
-            # Nothing says which side changed what, so nothing is merged. The
-            # hand-written file is what the user can see and just saved; it
-            # stays, and the store's whole version goes into the change record
-            # as the conflict, where the caller is pointed to it.
-            # An epic or phase file carries only its heavy fields; the rest
-            # live in `backlog.yaml` and are not the file's to replace.
-            our_view = our_doc
-            if kind in {"epic", "phase"}:
-                heavy_fields = EPIC_HEAVY_FIELDS if kind == "epic" else PHASE_HEAVY_FIELDS
-                our_view = {k: v for k, v in our_doc.items() if k in heavy_fields}
-            merged_doc = {k: v for k, v in our_doc.items() if k not in our_view}
-            merged_doc.update(their_doc)
+        merged_doc = _three_way_merge_fields(base_doc, our_doc, their_doc)
+        if our_body == their_body:
+            merged_body = our_body
+        elif our_body != base_body:
+            merged_body = our_body
+        elif their_body != base_body:
             merged_body = their_body
-            fields, before, after = _unbased_merge_details(
-                our_view, their_doc, our_body=our_body, their_body=their_body
-            )
         else:
-            merged_doc = _three_way_merge_fields(base_doc, our_doc, their_doc)
-            if our_body == their_body:
-                merged_body = our_body
-            elif our_body != base_body:
-                merged_body = our_body
-            elif their_body != base_body:
-                merged_body = their_body
-            else:
-                merged_body = our_body
-            fields, before, after = _merge_change_details(
-                base_doc,
-                our_doc,
-                their_doc,
-                merged_doc,
-                base_body=base_body,
-                our_body=our_body,
-                their_body=their_body,
-                merged_body=merged_body,
-            )
+            merged_body = our_body
+        fields, before, after = _merge_change_details(
+            base_doc,
+            our_doc,
+            their_doc,
+            merged_doc,
+            base_body=base_body,
+            our_body=our_body,
+            their_body=their_body,
+            merged_body=merged_body,
+        )
         if not fields:
-            # The repair happens to agree with what the store holds. The row is
-            # still quarantined, and nothing later in the scan clears it, so a
-            # file that is now fine would stay marked broken and its pending
-            # export stranded for good.
-            if projection_row["quarantined"]:
-                tx.connection.execute(
-                    "UPDATE projection SET quarantined=0,quarantine_mtime=NULL,"
-                    "quarantine_size=NULL,quarantine_hash=NULL WHERE file=?",
-                    (rel,),
-                )
-                tx._export_keys.add((kind, ident))
-                tx.log_entries.append(f"quarantine cleared for {rel}; export resumed")
             return
-        if projection_row["quarantined"]:
-            tx.log_entries.append(f"quarantine cleared for {rel}; export resumed")
         seq = tx._record_change(kind, ident, "merge", fields, before, after)
         tx.connection.execute(
             "UPDATE entities SET epic=?,status=?,archived=?,doc=?,body=?,rev=rev+1,updated_seq=? "
@@ -4626,10 +4870,9 @@ class Store:
             (hashlib.sha1(content).hexdigest(), stat.st_mtime, stat.st_size, rel),
         )
         # The merge consumed these bytes, so they are what the file and the
-        # store last agreed on. Should the export of the merged result fail,
-        # the next hand edit has to merge against them, not against the older
-        # base, which would turn every field fixed in this repair into a
-        # conflict the store wins.
+        # store last agreed on. Should the export of the merged result fail
+        # too, the next hand edit has to merge against them, not against the
+        # older base, which would turn every field settled here into a conflict.
         tx.connection.execute(
             "INSERT INTO projection_base(file,content) VALUES(?,?) "
             "ON CONFLICT(file) DO UPDATE SET content=excluded.content",
@@ -4640,110 +4883,6 @@ class Store:
         tx._derived_keys.add((kind, ident))
         tx._export_keys.add((kind, ident))
 
-    def _record_quarantine_base(self, tx: "Transaction", row: sqlite3.Row) -> None:
-        """Keep what the file and the store agreed on as the file goes bad.
-
-        A clean row's file matches its entity, so rendering the entity now is
-        that agreement. Once the file is quarantined, every write to the
-        entity is suppressed and piles up against it; without this base a
-        later repair cannot tell a field the user fixed from one the store
-        changed. An existing base -- the bytes an export failed to replace --
-        already is the agreement and is kept.
-        """
-        if row["quarantined"] or not row["id"]:
-            return
-        entity = tx.connection.execute(
-            "SELECT doc,body FROM entities WHERE kind=? AND id=? AND deleted=0",
-            (row["kind"], row["id"]),
-        ).fetchone()
-        if entity is None:
-            return
-        rendered = _render_entity_file(
-            row["kind"], _from_json(entity["doc"], {}), entity["body"]
-        )
-        if rendered is None:
-            return
-        tx.connection.execute(
-            "INSERT INTO projection_base(file,content) VALUES(?,?) "
-            "ON CONFLICT(file) DO NOTHING",
-            (row["file"], rendered[0]),
-        )
-
-    @staticmethod
-    def _drop_quarantine_base(tx: "Transaction", row: sqlite3.Row) -> None:
-        """A repaired file with no pending store edits is simply imported.
-
-        The base recorded at quarantine then describes nothing; left behind,
-        the next export failure would keep it (bases are never overwritten)
-        and merge a later hand edit against a state long gone.
-        """
-        if row["quarantined"] and not row["dirty"]:
-            tx.connection.execute(
-                "DELETE FROM projection_base WHERE file=?", (row["file"],)
-            )
-
-    def _rebuild_quarantine_base(
-        self,
-        tx: "Transaction",
-        projection_row: sqlite3.Row,
-        entity: sqlite3.Row,
-    ) -> bytes | None:
-        """The file's last agreed state for a row that never got a base.
-
-        Stores written before 6.0.3 hold dirty, quarantined rows with no base
-        row. The entity is walked back through every change the file never
-        received: those after `exported_seq`, the last export, or after the
-        entity's latest import for a file that was never exported. An import
-        does not move `exported_seq`, so a file hand-edited since its last
-        export walks back further than it needs to. Starting too early only re-reverses changes both sides
-        already hold, which merge as agreement; starting too late would let a
-        stale file silently revert store edits, so there is no guess at a later
-        point. Any change that cannot be reversed exactly means no base, never
-        an approximate one.
-        """
-        kind, ident = projection_row["kind"], projection_row["id"]
-        anchor = projection_row["exported_seq"]
-        if anchor is None:
-            latest_import = tx.connection.execute(
-                "SELECT MAX(seq) FROM changes WHERE kind=? AND id=? AND op='import'",
-                (kind, ident),
-            ).fetchone()[0]
-            if latest_import is None:
-                return None
-            anchor = latest_import
-        doc = _from_json(entity["doc"], {})
-        body = entity["body"]
-        for change in tx.connection.execute(
-            "SELECT op,fields,before FROM changes WHERE kind=? AND id=? AND seq>? "
-            "ORDER BY seq DESC",
-            (kind, ident, anchor),
-        ).fetchall():
-            op = change["op"]
-            if op == "export-fail":
-                continue
-            before = _from_json(change["before"], {})
-            if op in {"update", "merge", "import"}:
-                for field in _from_json(change["fields"], []):
-                    if str(field).startswith("conflict:"):
-                        continue
-                    if field == BODY_KEY:
-                        body = before.get(BODY_KEY)
-                    elif field in before:
-                        doc[field] = before[field]
-                    else:
-                        doc.pop(field, None)
-            elif op == "archive":
-                if before.get("archived"):
-                    doc["archived"] = True
-                else:
-                    doc.pop("archived", None)
-            elif op == "unarchive":
-                doc["archived"] = True
-            else:
-                return None
-        rendered = _render_entity_file(kind, doc, body)
-        return None if rendered is None else rendered[0]
-
     def _merge_dirty_backlog_edit(
         self,
         tx: "Transaction",
@@ -4751,21 +4890,28 @@ class Store:
         content: bytes,
         stat: os.stat_result,
     ) -> None:
-        base_row = tx.connection.execute(
-            "SELECT content FROM projection_base WHERE file='backlog.yaml'"
-        ).fetchone()
-        if base_row is None:
-            return
         try:
-            base = yaml_io.safe_load(bytes(base_row["content"]).decode("utf-8")) or {}
             theirs = yaml_io.safe_load(content.decode("utf-8")) or {}
-            _validate_backlog_document(base)
             _validate_backlog_document(theirs)
         except (UnicodeError, ValueError, yaml.YAMLError) as exc:
             tx.connection.execute(
                 "UPDATE projection SET quarantined=1 WHERE file='backlog.yaml'"
             )
             self._stamp_quarantine(tx, "backlog.yaml", exc, content, stat)
+            return
+        base_row = tx.connection.execute(
+            "SELECT content FROM projection_base WHERE file='backlog.yaml'"
+        ).fetchone()
+        if base_row is None:
+            # Returning here stranded the index for good: the store's edit never
+            # written, the repaired file never read, and nobody told.
+            self._hold_divergent_file(tx, projection_row, content, stat)
+            return
+        try:
+            base = yaml_io.safe_load(bytes(base_row["content"]).decode("utf-8")) or {}
+            _validate_backlog_document(base)
+        except (UnicodeError, ValueError, yaml.YAMLError):
+            self._hold_divergent_file(tx, projection_row, content, stat)
             return
 
         base_rows = _flatten_backlog_dict(base)
@@ -4849,38 +4995,6 @@ class Store:
         )
         tx.seq = seq
         tx._derived_keys.add((kind, ident))
-
-    def _import_backlog_file(
-        self, tx: "Transaction", path: Path, content: bytes, stat: os.stat_result
-    ) -> None:
-        try:
-            raw = yaml_io.safe_load(content.decode("utf-8")) or {}
-            _validate_backlog_document(raw)
-        except (UnicodeError, ValueError, yaml.YAMLError) as exc:
-            tx.connection.execute(
-                "UPDATE projection SET quarantined=1,dirty=0 WHERE file='backlog.yaml'"
-            )
-            self._stamp_quarantine(tx, "backlog.yaml", exc, content, stat)
-            return
-        rows = _flatten_backlog_dict(raw)
-        for key, (doc, body) in rows.items():
-            if key[0] in {"epic", "phase"}:
-                current = tx.connection.execute(
-                    "SELECT doc,body FROM entities WHERE kind=? AND id=?", key
-                ).fetchone()
-                if current:
-                    current_doc = _from_json(current["doc"], {})
-                    heavy_fields = (
-                        EPIC_HEAVY_FIELDS if key[0] == "epic" else PHASE_HEAVY_FIELDS
-                    )
-                    for field in heavy_fields:
-                        if field in current_doc:
-                            doc[field] = current_doc[field]
-                    body = current["body"]
-            tx._import_row(key[0], key[1], doc, body)
-        self._record_projection_bytes(
-            tx.connection, "backlog.yaml", "backlog", None, content, stat
-        )
 
     def _drain_dirty(self, tx: "Transaction") -> None:
         for row in tx.connection.execute(
@@ -5099,30 +5213,35 @@ class Store:
                         tuple(sorted((left, right))),
                     )
 
-    def _export_blocked_by_quarantine(self, tx: "Transaction", row: sqlite3.Row) -> bool:
-        """True when this entity's file is quarantined and already owes an export.
+    def _export_blocked(self, tx: "Transaction", kind: str, ident: str) -> bool:
+        """True when any file of this entity is quarantined or flagged.
 
-        `_replace_projection` refuses to write over a quarantined file: it marks
-        the row dirty, warns, and logs the suppression. Rendering the document
-        again on the next write can only reach that same conclusion against the
-        same bytes -- the file has not changed, or the scan would have lifted
-        the quarantine -- so it burns a full render and appends another
-        identical `store.log` line for as long as the file stays broken. The
-        first suppression still goes the long way round, because that is what
-        records the debt; every one after it stops here with the warning the
-        caller needs and nothing else.
+        Such a file holds something the store does not: a broken file may
+        carry edits that never parsed, a flagged one a repair nobody has
+        chosen against. Writing the entity -- or moving it to its archive
+        path, or deleting it -- would overwrite or remove that file, so nothing
+        is exported for the entity at all. The rows are marked dirty so the
+        debt is on record, and logged once when they first become so; every
+        later write stops at this lookup with the warning and renders nothing.
         """
-        target = self._entity_path(row["kind"], row["id"], bool(row["archived"]))
-        if target is None:
-            return False
-        rel = target.relative_to(self.backlog_path).as_posix()
-        existing = tx.connection.execute(
-            "SELECT dirty,quarantined FROM projection WHERE file=?", (rel,)
-        ).fetchone()
-        if not existing or not existing["quarantined"] or not existing["dirty"]:
-            return False
-        tx.warnings.append(f"export pending: {rel} is quarantined")
-        return True
+        blocked = tx.connection.execute(
+            "SELECT p.file,p.dirty,p.quarantined,c.file IS NOT NULL AS flagged "
+            "FROM projection p LEFT JOIN projection_conflict c ON c.file=p.file "
+            "WHERE p.kind=? AND p.id=? AND (p.quarantined=1 OR c.file IS NOT NULL) "
+            "ORDER BY p.file",
+            (kind, ident),
+        ).fetchall()
+        for row in blocked:
+            reason = "flagged" if row["flagged"] else "quarantined"
+            if not row["dirty"]:
+                tx.connection.execute(
+                    "UPDATE projection SET dirty=1 WHERE file=?", (row["file"],)
+                )
+                tx.log_entries.append(
+                    f"projection export suppressed for {reason} {row['file']}"
+                )
+            tx.warnings.append(f"export pending: {row['file']} is {reason}")
+        return bool(blocked)
 
     def _export_touched(self, tx: "Transaction") -> None:
         if any(kind in {"backlog", "epic", "phase"} for kind, _ in tx._export_keys):
@@ -5132,7 +5251,8 @@ class Store:
         # to answer "no" each time on the store the check exists to protect.
         blocked_rows = bool(
             tx.connection.execute(
-                "SELECT EXISTS(SELECT 1 FROM projection WHERE dirty=1 AND quarantined=1)"
+                "SELECT EXISTS(SELECT 1 FROM projection WHERE quarantined=1) "
+                "OR EXISTS(SELECT 1 FROM projection_conflict)"
             ).fetchone()[0]
         )
         for kind, ident in sorted(tx._export_keys):
@@ -5143,11 +5263,7 @@ class Store:
             ).fetchone()
             if not row:
                 continue
-            if (
-                blocked_rows
-                and not row["deleted"]
-                and self._export_blocked_by_quarantine(tx, row)
-            ):
+            if blocked_rows and self._export_blocked(tx, kind, ident):
                 continue
             self._export_entity_row(tx, row)
         if tx._export_ideas or any(kind == "idea" for kind, _ in tx._export_keys):
@@ -5516,7 +5632,9 @@ class Store:
             content, self.backlog_path / rel, moved_crlf
         )
         if expected is None:
-            self._verify_yaml_round_trip(kind, ident, rel, content, doc)
+            self._verify_yaml_round_trip(
+                kind, ident, rel, content, _from_json(row["doc"], {})
+            )
         else:
             self._verify_round_trip(kind, ident, rel, content, *expected)
         self._replace_projection(
@@ -5727,7 +5845,21 @@ class Store:
         return False
 
     def _export_backlog(self, tx: "Transaction", *, force: bool = False) -> None:
-        data = self._load_dict_from_connection(tx.connection)
+        data, content = self._render_backlog(tx.connection)
+        seq = int(tx.connection.execute("SELECT COALESCE(MAX(seq),0) FROM changes").fetchone()[0])
+        self._verify_backlog_round_trip(content, data)
+        self._replace_projection(
+            tx, "backlog.yaml", "backlog", None, content, seq, line_endings_matched=True
+        )
+
+    def _render_backlog_bytes(self, connection: sqlite3.Connection) -> bytes:
+        return self._render_backlog(connection)[1]
+
+    def _render_backlog(
+        self, connection: sqlite3.Connection
+    ) -> tuple[dict[str, Any], bytes]:
+        """The index `backlog.yaml` is exported from, and the bytes it exports as."""
+        data = self._load_dict_from_connection(connection)
         data.pop("context", None)
         data.pop("_orphan_tasks", None)
         slim_epics: list[dict[str, Any]] = []
@@ -5754,14 +5886,10 @@ class Store:
         meta["projection_schema"] = PROJECTION_SCHEMA
         data["meta"] = meta
         content = yaml.dump(data, default_flow_style=False, sort_keys=False, allow_unicode=True).encode("utf-8")
-        seq = int(tx.connection.execute("SELECT COALESCE(MAX(seq),0) FROM changes").fetchone()[0])
         content = self._match_project_line_endings(
             content, self.backlog_path / "backlog.yaml"
         )
-        self._verify_backlog_round_trip(content, data)
-        self._replace_projection(
-            tx, "backlog.yaml", "backlog", None, content, seq, line_endings_matched=True
-        )
+        return data, content
 
     def _entity_path(self, kind: str, ident: str, archived: bool) -> Path | None:
         if kind != "project":
@@ -5808,14 +5936,19 @@ class Store:
         line_endings_matched: bool = False,
     ) -> None:
         existing = tx.connection.execute(
-            "SELECT content_hash,quarantined FROM projection WHERE file=?", (rel,)
+            "SELECT p.content_hash,p.dirty,p.quarantined,c.file IS NOT NULL AS flagged "
+            "FROM projection p LEFT JOIN projection_conflict c ON c.file=p.file "
+            "WHERE p.file=?",
+            (rel,),
         ).fetchone()
-        if existing and existing["quarantined"]:
-            tx.connection.execute(
-                "UPDATE projection SET dirty=1 WHERE file=?", (rel,)
-            )
-            tx.warnings.append(f"export pending: {rel} is quarantined")
-            tx.log_entries.append(f"projection export suppressed for quarantined {rel}")
+        if existing and (existing["quarantined"] or existing["flagged"]):
+            reason = "flagged" if existing["flagged"] else "quarantined"
+            if not existing["dirty"]:
+                tx.connection.execute(
+                    "UPDATE projection SET dirty=1 WHERE file=?", (rel,)
+                )
+                tx.log_entries.append(f"projection export suppressed for {reason} {rel}")
+            tx.warnings.append(f"export pending: {rel} is {reason}")
             return
         # Everything is rendered with LF. Writing that over a CRLF working tree
         # (`core.autocrlf=true`, the Windows default) rewrites every line of
@@ -6688,47 +6821,24 @@ def _merge_change_details(
     return fields, before, after
 
 
-def _unbased_merge_details(
-    our_doc: Mapping[str, Any],
-    their_doc: Mapping[str, Any],
-    *,
-    our_body: str | None,
-    their_body: str | None,
-) -> tuple[list[str], dict[str, Any], dict[str, Any]]:
-    """Describe taking the file whole when no base says who changed what.
-
-    Every field the two versions disagree on is a conflict with an unknown
-    base, each keeping the store's value in full; `_no_base` marks the merge
-    record where the store's side, not the file's, was the one set aside.
-    """
-    fields, before, after = _top_level_diff(our_doc, their_doc)
-    if our_body != their_body:
-        fields.append(BODY_KEY)
-        before[BODY_KEY] = our_body
-        after[BODY_KEY] = their_body
-    missing = object()
-
-    def side(value: Any) -> dict[str, Any]:
-        return {"present": value is not missing, "value": None if value is missing else value}
-
-    conflicts: dict[str, Any] = {}
-    for key in sorted(set(our_doc) | set(their_doc)):
-        ours = our_doc.get(key, missing)
-        theirs = their_doc.get(key, missing)
-        if ours != theirs:
-            conflicts[key] = {"base": {"present": False, "value": None, "unknown": True},
-                              "ours": side(ours), "theirs": side(theirs)}
-    if our_body != their_body:
-        conflicts[BODY_KEY] = {
-            "base": {"present": False, "value": None, "unknown": True},
-            "ours": side(missing if our_body is None else our_body),
-            "theirs": side(missing if their_body is None else their_body),
-        }
-    fields.extend(f"conflict:{key}" for key in conflicts)
-    if conflicts:
-        before["_conflicts"] = conflicts
-        before["_no_base"] = True
-    return fields, before, after
+def projection_conflict_notice(conflict: Mapping[str, Any]) -> str:
+    """The line every tool result carries while a file stays flagged."""
+    rel = conflict["file"]
+    kind = conflict.get("kind")
+    if kind == "backlog":
+        what = "the epic and phase index"
+    elif kind == "project":
+        what = "the project manifest"
+    else:
+        what = f"{kind} {conflict.get('id')}"
+    return (
+        f"{rel} ({what}) was edited while the store held a change it had not "
+        f"written there yet, so neither version was applied to the other. Both "
+        f"are kept: the store has its version, the file is untouched, and "
+        f"exports to it are paused. Compare them with "
+        f'backlog_resolve_conflict(file="{rel}"), then keep one with '
+        f'take="file" or take="store".'
+    )
 
 
 _ID_SAFE_RE = re.compile(r"[^a-z0-9]+")

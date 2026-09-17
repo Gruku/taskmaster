@@ -212,9 +212,9 @@ def test_writes_to_a_quarantined_entity_render_once_not_once_per_write(
             store_obj._last_read_scan_clock = None
 
     # The target cannot accept any of these renders and has not changed between
-    # them, so rendering the document five times produces five identical
-    # suppressions and nothing else.
-    assert rendered.count(("task", "core-001")) == 1
+    # them, so rendering the document at all only produces suppressions. The
+    # quarantined row is found before anything is rendered.
+    assert rendered.count(("task", "core-001")) == 0
     suppressed = [
         line for line in log_path.read_text(encoding="utf-8").splitlines()
         if "export suppressed" in line
@@ -238,7 +238,7 @@ def test_a_stuck_export_is_named_by_store_status(tmp_path):
     assert "tasks/core-001.md" in _render_store_report(status).split("Stuck exports")[1]
 
 
-def test_a_repaired_file_lets_the_stranded_export_land(tmp_path):
+def test_a_repaired_file_is_no_longer_a_stuck_export_and_is_not_overwritten(tmp_path):
     backlog_path = _build_projection(tmp_path)
     store_obj = store_mod.open_store(backlog_path=backlog_path)
     store_obj.load_dict()
@@ -248,8 +248,9 @@ def test_a_repaired_file_lets_the_stranded_export_land(tmp_path):
     _retitle(store_obj, "core-001", "Survives the quarantine")
     assert store_mod.read_only_status(backlog_path).stuck_exports
 
-    # Repairing the file by hand clears the quarantine; the export the store
-    # has been holding has to land rather than be overwritten by the repair.
+    # Repairing the file by hand ends the quarantine. The store's title and the
+    # repair's title differ, and nothing says which one is meant, so neither is
+    # written over the other: the file is flagged instead (B-089).
     (backlog_path / "tasks" / "core-001.md").write_text(
         render_frontmatter(
             {
@@ -266,9 +267,32 @@ def test_a_repaired_file_lets_the_stranded_export_land(tmp_path):
     store_obj._last_read_scan_clock = None
     store_obj.load_dict()
 
-    assert store_mod.read_only_status(backlog_path).stuck_exports == ()
+    status = store_mod.read_only_status(backlog_path)
+    assert status.stuck_exports == ()
+    assert status.flagged_files == ("tasks/core-001.md",)
     on_disk = (backlog_path / "tasks" / "core-001.md").read_text(encoding="utf-8")
-    assert "Survives the quarantine" in on_disk
+    assert "Repaired by hand" in on_disk
+
+
+def test_a_repair_matching_the_store_lets_the_stranded_export_land(tmp_path):
+    backlog_path = _build_projection(tmp_path)
+    store_obj = store_mod.open_store(backlog_path=backlog_path)
+    store_obj.load_dict()
+    _quarantine_task_file(backlog_path, "core-001")
+    store_obj._last_read_scan_clock = None
+    store_obj.load_dict()
+    _retitle(store_obj, "core-001", "Survives the quarantine")
+
+    (backlog_path / "tasks" / "core-001.md").write_text(
+        "---\nid: core-001\ntitle: Survives the quarantine\nstatus: todo\n"
+        "epic: core\norder: 1.0\n---\n## Notes\n\nStore side.\n",
+        encoding="utf-8",
+    )
+    store_obj._last_read_scan_clock = None
+    store_obj.load_dict()
+
+    status = store_mod.read_only_status(backlog_path)
+    assert (status.stuck_exports, status.flagged_files, status.dirty_files) == ((), (), ())
 
 
 # ── B-084: writer-mutex fairness ─────────────────────────────────────────────
