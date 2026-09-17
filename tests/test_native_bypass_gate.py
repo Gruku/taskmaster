@@ -129,6 +129,18 @@ EXERCISES = {
     ("backlog_thread_update", None): lambda: bs.backlog_thread_update(name="test-epic", status="parked"),
     ("backlog_continuity_items", None): lambda: bs.backlog_continuity_items(),
     ("backlog_last_session", None): lambda: bs.backlog_last_session(),
+    ("backlog_link", "create"): lambda: bs.backlog_link(action="create", source="IDEA-001", target="ISS-001",
+                                                      type="relates_to"),
+    ("backlog_link", "remove"): lambda: bs.backlog_link(action="remove", source="ISS-001", target="IDEA-001"),
+    ("backlog_link", "query"): lambda: [bs.backlog_link(action="query"),
+                                        bs.backlog_link(action="query", source="ISS-001", type="relates_to", depth=2)],
+    ("backlog_link", "validate"): lambda: bs.backlog_link(action="validate"),
+    ("backlog_area_create", None): lambda: bs.backlog_area_create(area_id="gate-area", name="Gate area"),
+    ("backlog_area_list", None): lambda: bs.backlog_area_list(),
+    ("backlog_area_get", None): lambda: bs.backlog_area_get(area_id="gate-seed-area"),
+    ("backlog_area_update", None): lambda: bs.backlog_area_update(area_id="gate-seed-area", field="anchors",
+                                                                  value='["a/**"]'),
+    ("viewer_prefs_get", None): lambda: bs.viewer_prefs_get(),
     ("backlog_batch_preview", None): lambda: bs.backlog_batch_preview(
         operations=chr(10).join(["pick test-epic-002", "complete test-epic-001", "status test-epic-001 done"])),
 }
@@ -166,6 +178,7 @@ def rigged(tmp_path, monkeypatch):
         bs.backlog_issue_create(title="Seeded gate issue", severity="P2", evidence="x", related_tasks=["test-epic-001"])
         bs.backlog_idea_create(title="Seeded gate idea", body="about ISS-001")
         bs.backlog_decision_create(title="Seeded gate decision", options=["a", "b"])
+        bs.backlog_area_create(area_id="gate-seed-area", name="Seeded area")
     twins = make_twins(tmp_path, monkeypatch, seed)
     (twins.native / ".taskmaster" / "local" / "PROGRESS.md").write_text(
         "## Changelog\n\n### 2026-09-16 — Gate\n- x\n", encoding="utf-8")
@@ -310,16 +323,12 @@ def inventory_pairs() -> dict:
 # The reviewed list of normal-path tools/actions with no native route yet. Routing
 # a family removes its entries here; the N08 exit is an empty set.
 UNROUTED_NORMAL_PATH = {
-    ("backlog_area_create", None), ("backlog_area_get", None), ("backlog_area_list", None),
-    ("backlog_area_update", None), ("backlog_blast_radius", None), ("backlog_linear", "link"),
-    ("backlog_linear", "list"), ("backlog_linear", "show"), ("backlog_linear", "status"),
-    ("backlog_linear", "unlink"), ("backlog_link", "create"), ("backlog_link", "query"),
-    ("backlog_link", "remove"), ("backlog_link", "validate"),
+    ("backlog_blast_radius", None), ("backlog_linear", "link"), ("backlog_linear", "list"),
+    ("backlog_linear", "show"), ("backlog_linear", "status"), ("backlog_linear", "unlink"),
     ("backlog_project_error_trace_ladder", None), ("backlog_project_get", None),
     ("backlog_project_get_field", None), ("backlog_project_init", None),
     ("backlog_project_set", None), ("backlog_project_ship_order", None), ("backlog_query", None),
     ("backlog_search", None), ("backlog_status", None), ("backlog_store_status", None),
-    ("viewer_prefs_get", None),
 }
 
 

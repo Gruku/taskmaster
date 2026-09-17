@@ -13,22 +13,26 @@ from . import gate, runtime
 # action: ACTIONS[tool] names the actions its adapter serves.
 ADAPTERS: dict[str, Callable] = {}
 ACTIONS: dict[str, frozenset[str]] = {}
+# How each router words an action it does not know; routers disagree (text or JSON).
+UNKNOWN_ACTION: dict[str, Callable[[str], str]] = {}
 
 
-def adapter(tool: str, *, actions: "tuple[str, ...] | None" = None):
+def adapter(tool: str, *, actions: "tuple[str, ...] | None" = None, unknown=None):
     def register(fn):
         if tool in ADAPTERS:
             raise RuntimeError(f"duplicate native adapter for {tool}")
         ADAPTERS[tool] = fn
         if actions is not None:
             ACTIONS[tool] = frozenset(actions)
+        if unknown is not None:
+            UNKNOWN_ACTION[tool] = unknown
         return fn
     return register
 
 
 def _load_families() -> None:
     # Imported for their registrations; each module is one routed family.
-    from . import batch, epics_phases, handovers, notes, records, tasks  # noqa: F401
+    from . import batch, epics_phases, handovers, links_areas, notes, records, tasks  # noqa: F401
 
 
 def unrouted_message(tool: str, action: str | None = None) -> str:
@@ -47,7 +51,8 @@ def dispatch(tool: str, legacy: Callable, database, backlog_dir, session: str, a
         return unrouted_message(tool)
     if tool in ACTIONS and arguments.get("action") not in ACTIONS[tool]:
         if "action" in arguments and not _known_action(legacy, arguments["action"]):
-            return f"Error: unknown action {arguments['action']!r}"
+            unknown = UNKNOWN_ACTION.get(tool, lambda action: f"Error: unknown action {action!r}")
+            return unknown(arguments["action"])
         return unrouted_message(tool, arguments.get("action"))
     with runtime.open_call(database, backlog_dir, session) as call:
         return handler(call, **arguments)

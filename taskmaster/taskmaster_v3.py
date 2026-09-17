@@ -3523,7 +3523,7 @@ VIEWER_PREFS_DEFAULTS = {
 }
 
 
-def viewer_prefs_path(backlog_path: Path) -> Path:
+def viewer_prefs_path(backlog_path: Path, v4: "bool | None" = None) -> Path:
     """Where this backlog's viewer prefs live.
 
     Takes the backlog path the caller already resolved rather than re-deriving
@@ -3532,18 +3532,20 @@ def viewer_prefs_path(backlog_path: Path) -> Path:
     exactly the class of bug the single store root exists to end.
     """
     root = backlog_path.parent
-    if _is_v4_project(root):
+    # A store-backed caller already knows the schema and passes `v4`, so it never
+    # re-reads backlog.yaml just to place a machine-local file.
+    if _is_v4_project(root) if v4 is None else v4:
         return local_dir(backlog_path) / "viewer.json"
     return root / "viewer.json"
 
-def load_viewer_prefs(backlog_path: Path) -> dict:
+def load_viewer_prefs(backlog_path: Path, v4: "bool | None" = None) -> dict:
     """Load viewer prefs, creating the file with defaults on first call.
     Unknown top-level keys are preserved across reads (forward-compat).
     Missing keys are filled from VIEWER_PREFS_DEFAULTS (deep-merged).
     """
     import json
     from copy import deepcopy
-    p = viewer_prefs_path(backlog_path)
+    p = viewer_prefs_path(backlog_path, v4)
     if not p.exists():
         prefs = deepcopy(VIEWER_PREFS_DEFAULTS)
         atomic_write(p, json.dumps(prefs, indent=2))

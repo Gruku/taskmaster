@@ -1124,9 +1124,12 @@ def _link_create(transaction, arguments):
         _assert_no_cycle(transaction, source_id, target_id, link_type)
     doc = deepcopy(entity["fields"])
     del note   # accepted for signature parity; the tool never stored it either
+    # The tool reads both ends through `read_entity_anywhere`, which synthesizes
+    # `links` from legacy fields, and writes that document back.
+    domain_v3._fallback_links_if_absent(doc, source_kind)
     if domain_v3.add_link(doc, link_type, target_id):
         transaction.replace(source_kind, source_id, doc, entity["body"], before_entity=entity)
-    _write_inverse(transaction, target_kind, target_id, source=source_id, link_type=link_type)
+    _write_inverse(transaction, target_kind, target_id, source=source_id, link_type=link_type, fallback=True)
     return source_id
 
 
@@ -1154,19 +1157,26 @@ def _link_remove(transaction, arguments):
     if target_kind is None:
         raise ValueError(f"invalid target ID {target_id!r}")
     entity = _entity(transaction, source_kind, source_id)
+    doc = deepcopy(entity["fields"])
+    domain_v3._fallback_links_if_absent(doc, source_kind)
     requested = arguments.get("type", "")
     types = [requested] if requested else sorted(
-        {link["type"] for link in domain_v3.entity_links(entity["fields"]) if link["target"] == target_id})
+        {link["type"] for link in domain_v3.entity_links(doc) if link["target"] == target_id})
     if not types:
         return source_id
-    doc = deepcopy(entity["fields"])
-    removed = any(domain_v3.remove_link(doc, link_type, target_id) for link_type in types)
-    if removed:
-        transaction.replace(source_kind, source_id, doc, entity["body"], before_entity=entity)
+    # Every type is removed; `any()` over the removals stopped at the first one.
+    removed = False
+    for link_type in types:
+        removed = domain_v3.remove_link(doc, link_type, target_id) or removed
     for link_type in types:
         if _exists(transaction, target_kind, target_id):
             _write_inverse(transaction, target_kind, target_id, source=source_id,
-                           link_type=link_type, remove=True)
+                           link_type=link_type, remove=True, fallback=True)
+    if removed:
+        current = _entity(transaction, source_kind, source_id)
+        transaction.replace(source_kind, source_id, dict(current["fields"], links=doc.get("links"))
+                            if doc.get("links") else {k: v for k, v in current["fields"].items() if k != "links"},
+                            current["body"], before_entity=current)
     return source_id
 
 

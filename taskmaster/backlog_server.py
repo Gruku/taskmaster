@@ -5975,7 +5975,12 @@ def backlog_area_list(limit: int = DEFAULT_LIST_LIMIT) -> str:
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    areas = [dict(doc) for _aid, doc, _body in _dict_rows(_load(), "area")]
+    return _area_list_text(_load(), limit)
+
+
+def _area_list_text(data: dict, limit: int) -> str:
+    """`backlog_area_list` over any compatibility rows; shared with the native adapter."""
+    areas = [dict(doc) for _aid, doc, _body in _dict_rows(data, "area")]
     if not areas:
         return "No areas defined."
     areas, overflow = _cap_list(areas, limit)
@@ -5997,7 +6002,12 @@ def backlog_area_get(area_id: str) -> str:
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    row = _dict_row(_load(), "area", area_id)
+    return _area_get_text(_load(), area_id)
+
+
+def _area_get_text(data: dict, area_id: str) -> str:
+    """`backlog_area_get` over any compatibility rows; shared with the native adapter."""
+    row = _dict_row(data, "area", area_id)
     if row is None:
         return f"Area not found: {area_id}"
     fm, body = row[0], (row[1] or "").rstrip("\n")

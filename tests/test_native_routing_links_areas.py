@@ -10,7 +10,7 @@ import json
 import pytest
 
 from taskmaster import backlog_server as bs
-from native_twins import make_twins
+from native_twins import committed, make_twins, normalize
 
 
 def _seed():
@@ -35,24 +35,37 @@ def _check(twins):
 
 def test_link_create_and_remove_match(twins):
     for source, target, link_type in (
-            ("ISS-001", "IDEA-001", "relates_to"), ("ISS-001", "IDEA-001", "relates_to"),
             ("T-003", "T-002", "depends_on"), ("T-001", "T-003", "depends_on"), ("T-001", "T-002", "blocks"),
             ("T-002", "ISS-001", "fixes"), ("IDEA-001", "ISS-001", "fixes"), ("bogus", "T-001", "relates_to"),
             ("T-001", "bogus", "relates_to"), ("T-001", "T-002", "likes"), ("T-404", "T-001", "relates_to"),
-            ("T-001", "T-404", "relates_to"), ("IDEA-001", "T-002", "references")):
+            ("T-001", "T-404", "relates_to"), ("IDEA-001", "T-002", "references"), ("T-001", "T-002", "relates_to")):
         twins.same("backlog_link", action="create", source=source, target=target, type=link_type, note="n")
     _check(twins)
-    for source, target, link_type in (("T-002", "ISS-001", "fixes"), ("ISS-001", "IDEA-001", ""),
-                                      ("T-003", "T-002", ""), ("T-001", "T-003", "likes"), ("T-404", "T-001", ""),
+    for source, target, link_type in (("T-002", "ISS-001", "fixes"), ("T-003", "T-002", ""), ("T-001", "T-003", "likes"), ("T-404", "T-001", ""),
                                       ("bogus", "T-001", ""), ("T-001", "IDEA-001", ""),
-                                      ("T-001", "T-002", "depends_on")):
+                                      ("T-001", "T-002", "depends_on"), ("T-001", "T-002", "")):
         twins.same("backlog_link", action="remove", source=source, target=target, type=link_type)
     _check(twins)
 
 
+def test_a_link_between_two_non_task_entities_persists_natively_but_not_in_legacy(twins):
+    """Legacy defect found by N08, not reproduced: the legacy link engine writes a
+    non-task entity through the store without latching the transaction, so unless a
+    task was also written the whole commit rolls back while the tool reports
+    `ok: linked`. The native command commits both ends."""
+    legacy_answer, native_answer = twins.call("backlog_link", action="create", source="ISS-001",
+                                              target="IDEA-001", type="relates_to")
+    assert legacy_answer == "ok: linked ISS-001 -[relates_to]-> IDEA-001"
+    assert normalize(native_answer) == legacy_answer + " [seq #]"
+    legacy, native = committed(twins.legacy), committed(twins.native)
+    assert {"type": "relates_to", "target": "IDEA-001"} not in (legacy[("issue", "ISS-001")][0].get("links") or [])
+    assert {"type": "relates_to", "target": "IDEA-001"} in native[("issue", "ISS-001")][0]["links"]
+    assert {"type": "relates_to", "target": "ISS-001"} in native[("idea", "IDEA-001")][0]["links"]
+
+
 def test_link_query_and_validate_match(twins):
     twins.same("backlog_link", action="create", source="T-003", target="T-002", type="depends_on")
-    twins.same("backlog_link", action="create", source="ISS-001", target="IDEA-001", type="references")
+    twins.same("backlog_link", action="create", source="IDEA-001", target="T-002", type="references")
     for kwargs in ({}, {"source": "T-003"}, {"source": "T-003", "type": "depends_on", "depth": 3},
                    {"target": "T-002"}, {"type": "relates_to"}, {"source": "bogus"}, {"target": "bogus"},
                    {"source": "T-404"}):
@@ -69,8 +82,7 @@ def test_areas_match(twins):
     twins.same("backlog_area_create", area_id="Bad Id", name="x")
     twins.same("backlog_area_create", area_id="noname", name=" ")
     for field, value in (("name", "Store renamed"), ("description", "New"), ("anchors", '["a/**", "b"]'),
-                         ("anchors", "not json"), ("anchors", '{"a": 1}'), ("anchors", "[1, 2]"), ("status", "x"),
-                         ("name", " ")):
+                         ("anchors", "not json"), ("anchors", '{"a": 1}'), ("status", "x"), ("name", " ")):
         twins.same("backlog_area_update", area_id="store", field=field, value=value)
     twins.same("backlog_area_update", area_id="ghost", field="name", value="x")
     for kwargs in ({}, {"limit": 1}, {"limit": 0}):
@@ -78,6 +90,14 @@ def test_areas_match(twins):
     for area_id in ("viewer", "store", "ghost"):
         twins.same("backlog_area_get", area_id=area_id)
     _check(twins)
+
+
+def test_non_text_area_anchors_are_refused_natively(twins):
+    """Recorded N08 difference: the legacy tool stores `[1, 2]` as area anchors;
+    the native core admits only text anchors and refuses the edit."""
+    legacy, native = twins.call("backlog_area_update", area_id="viewer", field="anchors", value="[1, 2]")
+    assert legacy.startswith("Area updated") and native == "Error: anchors value must be a JSON array of strings"
+    assert committed(twins.native)[("area", "viewer")][0]["anchors"] == ["viewer/**"]
 
 
 def test_viewer_prefs_read_matches(twins):
