@@ -273,6 +273,49 @@ def test_routed_tool_never_reaches_the_legacy_store_or_scans_the_projection(rigg
     assert not [a for a in answers if str(a).startswith("Error")], f"{pair} exercise was refused: {answers}"
 
 
+VIEWER_ROUTES = [
+    ("GET", "/api/backlog", None), ("GET", "/api/task/test-epic-001", None),
+    ("GET", "/api/task/test-epic-001/related", None), ("GET", "/api/epic/test-epic", None),
+    ("GET", "/api/threads", None), ("GET", "/api/sessions", None), ("GET", "/api/bugs?include_archive=true", None),
+    ("GET", "/api/issues", None), ("GET", "/api/ideas", None), ("GET", "/api/continuity", None),
+    ("GET", "/api/decisions/DEC-001", None), ("GET", "/api/handover/2026-09-17-gate-handover", None),
+    ("GET", "/api/notes", None), ("GET", "/api/viewer/prefs", None),
+    ("POST", "/api/ideas", {"title": "Viewer idea"}), ("POST", "/api/notes", {"text": "Viewer note"}),
+    ("POST", "/api/notes/NOTE-001/update", {"text": "edited"}),
+    ("POST", "/api/handover/2026-09-17-gate-handover/status", {"status": "closed"}),
+    ("POST", "/api/tasks/validate", {"task_id": "test-epic-001", "patch": {"area": "gate-seed-area"}}),
+    ("POST", "/api/tasks", {"epic": "test-epic", "title": "Viewer task"}),
+    ("PATCH", "/api/tasks/test-epic-001", {"title": "Viewer title", "area": "gate-seed-area"}),
+    ("PUT", "/api/viewer/prefs", {"theme": "light"}),
+    ("POST", "/api/decisions/DEC-001/resolve", {"resolved_with": 1}),
+    ("POST", "/api/bugs", {"title": "Viewer bug"}), ("POST", "/api/bugs/B-001", {"title": "Viewer renamed"}),
+    ("POST", "/api/bugs/pattern-scan", {}), ("POST", "/api/tasks/test-epic-002/archive", {}),
+]
+
+
+@pytest.mark.parametrize("method,path,payload", VIEWER_ROUTES, ids=lambda value: str(value))
+def test_viewer_route_never_reaches_the_legacy_store_or_scans_the_projection(rigged, method, path, payload):
+    import threading
+    import urllib.error
+    import urllib.request
+    server, port = bs._make_server(host="127.0.0.1", port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        data = None if payload is None else json.dumps(payload).encode("utf-8")
+        request = urllib.request.Request(f"http://127.0.0.1:{port}{path}", data=data, method=method,
+                                         headers={"Content-Type": "application/json"})
+        try:
+            status = urllib.request.urlopen(request, timeout=30).status
+        except urllib.error.HTTPError as exc:
+            status = exc.code
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert rigged == [], f"{method} {path} bypassed the native core: {rigged}"
+    assert 200 <= status < 300, (method, path, status)
+
+
 def test_the_rig_catches_a_legacy_read_and_a_projection_scan(rigged):
     with pytest.raises(BypassViolation):
         bs._load()

@@ -14,7 +14,9 @@ import urllib.request
 import pytest
 
 from taskmaster import backlog_server as bs
-from native_twins import make_twins, normalize
+from datetime import timedelta
+
+from native_twins import CLOCK, make_twins, normalize
 
 
 def _seed():
@@ -52,6 +54,9 @@ def _serve(twins, root, method, path, payload=None, headers=None):
                 response = urllib.request.urlopen(request, timeout=30)
             except urllib.error.HTTPError as exc:
                 response = exc
+            except ConnectionError as exc:
+                # The handler raised: both authorities must fail the same way.
+                return "disconnected", type(exc).__name__, None
             raw = response.read().decode("utf-8")
             etag = response.headers.get("ETag")
             return response.status, raw, etag
@@ -60,11 +65,15 @@ def _serve(twins, root, method, path, payload=None, headers=None):
             server.server_close()
 
 
-_ROOTED = re.compile(r"[A-Za-z]:\\\\[^\"]*?\\\\(legacy|native)(?=\\\\)")
+
+
+_OBJECT = re.compile(r'"<[A-Za-z0-9_.]+ object at 0x[0-9A-Fa-f]+>"')
 
 
 def _body(raw, root):
     text = raw.replace(str(root).replace("\\", "\\\\"), "<root>").replace(str(root), "<root>")
+    # `/api/backlog` serializes its private row map as an object repr (N10 drops it).
+    text = _OBJECT.sub('"<object>"', text)
     try:
         return normalize(json.loads(text))
     except ValueError:
@@ -72,7 +81,11 @@ def _body(raw, root):
 
 
 def same(twins, method, path, payload=None, headers=None):
+    # Both requests read one instant, as `Twins.call` arranges for tool calls.
+    instant = CLOCK["at"] + timedelta(minutes=1)
+    CLOCK.update(at=instant, tick=False)
     legacy = _serve(twins, twins.legacy, method, path, payload, headers)
+    CLOCK.update(at=instant, tick=False)
     native = _serve(twins, twins.native, method, path, payload, headers)
     assert native[0] == legacy[0], (method, path, legacy, native)
     assert _body(native[1], twins.native) == _body(legacy[1], twins.legacy), (method, path, legacy[1], native[1])
@@ -83,6 +96,14 @@ def same(twins, method, path, payload=None, headers=None):
 def _check(twins):
     twins.assert_state_matches()
     twins.assert_files_match()
+
+
+def test_recent_events_crash_on_tool_created_tasks_on_both_authorities(twins):
+    """Legacy defect found by N08, reproduced rather than fixed: the route compares
+    each task's naive minute-precision `started` with the timezone-aware `since`,
+    raises, and the connection drops. The native route fails identically."""
+    legacy, native = same(twins, "GET", "/api/dashboard/recent-events?since=2020-01-01T00:00:00Z")
+    assert legacy[0] == native[0] == "disconnected"
 
 
 def test_board_and_detail_reads_match(twins):
@@ -139,14 +160,22 @@ def test_task_edits_match_including_preconditions(twins):
             ("PATCH", "/api/tasks/ghost-1", {"title": "x"}),
             ("POST", "/api/tasks/test-epic-003/archive", {})):
         same(twins, method, path, payload)
+    # Recorded difference 1 again: the native core stamps `archived` where the
+    # legacy archive flips only the row flag. Placement and every other field match.
+    from native_twins import committed
+    assert "archived" not in committed(twins.legacy)[("task", "test-epic-003")][0]
+    assert committed(twins.native)[("task", "test-epic-003")][0]["archived"]
+    archived = {("task", "test-epic-003"): {"archived"}}
     for etag, root in ((legacy_etag, twins.legacy), (native_etag, twins.native)):
         status, raw, _ = _serve(twins, root, "PATCH", "/api/tasks/other-001", {"title": "stale"},
                                 headers={"If-Match": etag})
         assert status == 409 and json.loads(raw)["error"] == "stale", (root, status, raw)
-    _check(twins)
+    twins.assert_state_matches(ignore=archived)
+    twins.assert_files_match(ignore={"tasks/archive/test-epic-003.md"})
     full = json.loads(_serve(twins, twins.legacy, "GET", "/api/task/test-epic-002")[1])
     full["title"] = "Put title"
     same(twins, "PUT", "/api/tasks/test-epic-002", full)
     same(twins, "PUT", "/api/viewer/prefs", {"theme": "light"})
     same(twins, "OPTIONS", "/api/backlog")
-    _check(twins)
+    twins.assert_state_matches(ignore=archived)
+    twins.assert_files_match(ignore={"tasks/archive/test-epic-003.md"})

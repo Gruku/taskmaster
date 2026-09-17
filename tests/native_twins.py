@@ -235,8 +235,14 @@ class Twins:
             f"{tool}: native answer diverged" + chr(10) + f"legacy: {legacy!r}" + chr(10) + f"native: {native!r}")
         return legacy, native
 
-    def assert_state_matches(self) -> None:
+    def assert_state_matches(self, ignore=None) -> None:
+        """`ignore` names `{(kind, id): {field, ...}}` a test has already asserted differ."""
         legacy, native = committed(self.legacy), committed(self.native)
+        for key, fields in (ignore or {}).items():
+            for side in (legacy, native):
+                if key in side:
+                    doc, body, archived = side[key]
+                    side[key] = ({k: v for k, v in doc.items() if k not in fields}, body, archived)
         assert sorted(native) == sorted(legacy), "entity sets diverged"
         for key in sorted(legacy):
             (l_doc, l_body, l_arch), (n_doc, n_body, n_arch) = normalize(legacy[key]), normalize(native[key])
@@ -249,10 +255,13 @@ class Twins:
                 f"{f}: legacy={l_doc.get(f, '<absent>')!r} native={n_doc.get(f, '<absent>')!r}" for f in fields)
             assert (n_body, n_arch) == (l_body, l_arch), f"{key} body/archive flag diverged"
 
-    def assert_files_match(self) -> None:
+    def assert_files_match(self, ignore=()) -> None:
+        """`ignore` names projection files a test has already asserted differ."""
         legacy, native = projected_files(self.legacy), projected_files(self.native)
         assert sorted(native) == sorted(legacy)
         for rel in legacy:
+            if rel in ignore:
+                continue
             assert native[rel] == legacy[rel], f"projection of {rel} diverged"
 
 

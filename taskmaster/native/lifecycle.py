@@ -25,6 +25,9 @@ ENTITY_OPERATIONS = {f"{kind}.create" for kind in BUILDERS} | {f"{kind}.update" 
 # Arguments `handover.create` takes beyond its document builder: they shape what
 # commits with the new handover, not the document the builder produces.
 HANDOVER_CREATE_EXTRAS = {"flag_for_review", "review_reason"}
+# `auto_link: false` on a create skips inline-mention linking, as the viewer's
+# create routes (which never ran it) require.
+CREATE_EXTRAS = {"auto_link"}
 # Kinds whose prose is scanned for inline mentions on create and on a body edit,
 # as the tools do (`auto_link_on_save`).
 AUTO_LINKED = {"issue", "idea", "handover"}
@@ -56,6 +59,8 @@ def validate(operation, arguments):
     kind, action = operation.split(".")
     if action == "create":
         parameters = dict(arguments)
+        if "auto_link" in parameters and type(parameters.pop("auto_link")) is not bool:
+            raise ValueError("auto_link must be boolean")
         if kind != "handover":
             parameters.pop("body", None)
         else:
@@ -132,7 +137,7 @@ def apply(transaction, operation, arguments):
     if action == "create":
         options = dict(arguments)
         body = options.pop("body", None) if kind != "handover" else None
-        extras = {name: options.pop(name) for name in HANDOVER_CREATE_EXTRAS if name in options}
+        extras = {name: options.pop(name) for name in HANDOVER_CREATE_EXTRAS | CREATE_EXTRAS if name in options}
         built = BUILDERS[kind](**options)
         if kind == "handover":
             doc, body = built
@@ -141,7 +146,7 @@ def apply(transaction, operation, arguments):
         ident = transaction.create(kind, doc, body)
         if kind == "handover":
             _handover_created(transaction, ident, doc, extras)
-        if kind in AUTO_LINKED:
+        if kind in AUTO_LINKED and extras.get("auto_link", True):
             _auto_link_entity(transaction, kind, ident)
         if kind == "handover":
             workflow.archive_handover_overflow(transaction)

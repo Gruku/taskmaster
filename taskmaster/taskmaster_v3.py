@@ -3580,9 +3580,9 @@ def load_viewer_prefs(backlog_path: Path, v4: "bool | None" = None) -> dict:
 
     return _merge(VIEWER_PREFS_DEFAULTS, raw)
 
-def save_viewer_prefs(backlog_path: Path, prefs: dict) -> None:
+def save_viewer_prefs(backlog_path: Path, prefs: dict, v4: "bool | None" = None) -> None:
     import json
-    p = viewer_prefs_path(backlog_path)
+    p = viewer_prefs_path(backlog_path) if v4 is None else viewer_prefs_path(backlog_path, v4)
     p.parent.mkdir(parents=True, exist_ok=True)
     atomic_write(p, json.dumps(prefs, indent=2))
 
@@ -3845,6 +3845,7 @@ def validate_task_write(
     backlog_path: Path | None = None,
     *,
     data: dict | None = None,
+    area_ids: "list[str] | None" = None,
 ) -> dict[str, str]:
     """Run cross-entity validation for a proposed task write.
 
@@ -3899,7 +3900,9 @@ def validate_task_write(
             errors["epic"] = f"unknown epic: {patch['epic']}"
 
     # Area must exist (areas live in files, not `data`).
-    if "area" in patch and patch["area"] and patch["area"] not in list_area_ids(bp):
+    # A store-backed caller passes the area ids it holds rather than globbing areas/.
+    known_areas = list_area_ids(bp) if area_ids is None else area_ids
+    if "area" in patch and patch["area"] and patch["area"] not in known_areas:
         errors["area"] = f"unknown area: {patch['area']}"
 
     # Phase must exist if set.

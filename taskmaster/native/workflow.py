@@ -27,6 +27,9 @@ OPERATIONS = TASK_OPERATIONS | {
     # One `backlog_batch_update` line each, applied with that tool's own line
     # semantics (`native.batch_lines`) inside the all-or-nothing native batch.
     "task.batch_line", "epic.batch_line",
+    # The viewer's edit-in-UI writes: whole-document patches with a store-wide
+    # If-Match precondition, applied with the viewer's own stamping rules.
+    "task.viewer_create", "task.viewer_update", "task.viewer_archive",
 }
 
 def _text(arguments, name, *, default=""):
@@ -273,6 +276,19 @@ def validate(operation, arguments):
             raise ValueError(f"task.batch_line op must be one of {', '.join(batch_lines.TASK_OPS)}")
         for name in ("field", "value", "status", "reason"):
             _text(arguments, name)
+    elif operation in ("task.viewer_create", "task.viewer_update", "task.viewer_archive"):
+        allowed = {"task.viewer_create": {"epic", "payload"}, "task.viewer_update": {"id", "patch", "if_match"},
+                   "task.viewer_archive": {"id", "if_match"}}[operation]
+        _keys(arguments, allowed, operation)
+        if operation == "task.viewer_create":
+            _identifier(arguments.get("epic"), "epic id")
+            if not isinstance(arguments.get("payload"), dict):
+                raise ValueError("payload must be an object")
+        else:
+            _identifier(arguments.get("id"), "task id")
+            _text(arguments, "if_match")
+            if operation == "task.viewer_update" and not isinstance(arguments.get("patch"), dict):
+                raise ValueError("patch must be an object")
     elif operation == "epic.batch_line":
         _keys(arguments, {"id", "field", "value"}, operation)
         _identifier(arguments.get("id"), "epic id")
@@ -1322,6 +1338,87 @@ def _epic_batch_line(transaction, arguments):
     return ident
 
 
+def _viewer_precondition(transaction, arguments):
+    """The store-wide `If-Match` the viewer sends, checked inside the writer lock."""
+    expected = (arguments.get("if_match") or "").strip('"')
+    if not expected:
+        return
+    identity = transaction.snapshot.identity
+    current = f"{identity['store_id']}:{int(identity['event_high_water'])}"
+    if expected != current:
+        raise Conflict(f"stale:{current}")
+
+
+def _viewer_task(transaction, ident):
+    task = _entity(transaction, "task", ident) if _exists(transaction, "task", ident) else None
+    if task is None or not _exists(transaction, "epic", str(task["fields"].get("epic") or "")):
+        raise KeyError(f"task {ident} not found")
+    return task
+
+
+def _task_viewer_create(transaction, arguments):
+    from taskmaster.taskmaster_v3 import _now_iso
+    epic_id, payload = arguments["epic"], arguments["payload"]
+    if not _exists(transaction, "epic", epic_id):
+        raise KeyError(f"epic {epic_id} not found")
+    stamp = _now_iso()
+    doc = {"title": payload.get("title", ""), "status": payload.get("status", "todo"),
+           "priority": payload.get("priority", "medium"), "created": stamp, "last_referenced": stamp}
+    doc.update({key: value for key, value in payload.items() if key not in ("epic", "id")})
+    doc["epic"] = epic_id
+    body = doc.pop("_body", None)
+    return transaction.create("task", doc, body or None)
+
+
+def _task_viewer_update(transaction, arguments):
+    from taskmaster.taskmaster_v3 import _now_iso
+    ident, patch = arguments["id"], dict(arguments["patch"])
+    _viewer_precondition(transaction, arguments)
+    entity = _viewer_task(transaction, ident)
+    task = deepcopy(entity["fields"])
+    if entity["body"]:
+        task["_body"] = entity["body"]
+    if patch.get("status") not in domain.VALID_STATUSES and "status" in patch:
+        raise ValueError(f"invalid status {patch['status']!r}")
+    refusal = domain.illegal_transition_message(task, patch.get("status"))
+    if refusal:
+        raise ValueError(refusal)
+    if patch.get("status") == "done" and task.get("status") != "done":
+        block = domain.completion_block_reason(task)
+        if block:
+            raise ValueError(block)
+    before_status, before_epic = task.get("status"), task.get("epic")
+    task.update(patch)
+    moved_to = patch.get("epic")
+    if moved_to and moved_to != before_epic and not _exists(transaction, "epic", moved_to):
+        raise ValueError(f"unknown epic: {moved_to}")
+    after_status = task.get("status")
+    if after_status != before_status:
+        if after_status == "in-progress" and not task.get("started"):
+            task["started"] = _now_iso()
+        if after_status == "done" and not task.get("completed"):
+            task["completed"] = _now_iso()
+    if after_status == "done":
+        task.pop("human_action", None)
+    task["last_referenced"] = _now_iso()
+    _apply_archive_flag(task, before=before_status, after=after_status)
+    body = task.pop("_body", None)
+    transaction.replace("task", ident, task, body if body else None, before_entity=entity)
+    return ident
+
+
+def _task_viewer_archive(transaction, arguments):
+    ident = arguments["id"]
+    _viewer_precondition(transaction, arguments)
+    entity = _viewer_task(transaction, ident)
+    task = deepcopy(entity["fields"])
+    before = task.get("status")
+    task["status"] = "archived"
+    _apply_archive_flag(task, before=before, after="archived")
+    transaction.replace("task", ident, task, entity["body"], before_entity=entity)
+    return ident
+
+
 _HANDLERS = {
     "task.create": _task_create, "task.update": _task_update, "task.pick": _task_pick,
     "task.complete": _task_complete, "task.archive": _task_archive, "task.gate": _task_gate,
@@ -1334,4 +1431,6 @@ _HANDLERS = {
     "area.create": _area_create, "area.update": _area_update, "thread.update": _thread_update,
     "project.set": _project_set, "linear.link": _linear_link, "linear.unlink": _linear_unlink,
     "task.batch_line": _task_batch_line, "epic.batch_line": _epic_batch_line,
+    "task.viewer_create": _task_viewer_create, "task.viewer_update": _task_viewer_update,
+    "task.viewer_archive": _task_viewer_archive,
 }

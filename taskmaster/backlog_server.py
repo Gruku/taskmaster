@@ -8977,7 +8977,12 @@ def _compute_recent_events(since_iso: str) -> list:
     except Exception as e:
         raise ValueError(f"invalid since: {e}")
 
-    backlog = _load()
+    return _recent_events_from(_load(), since)
+
+
+def _recent_events_from(backlog: dict, since) -> list:
+    """`_compute_recent_events` over any task tree; shared with the native viewer."""
+    from datetime import datetime
     if not isinstance(backlog.get("tasks"), list):
         backlog = dict(backlog)
         backlog["tasks"] = [
@@ -9271,6 +9276,13 @@ def _load_task_full_identified(task_id: str) -> tuple[dict | None, str]:
     # backlog.yaml, and a call nested inside an open transaction must see the
     # in-flight tree rather than the last exported file.
     backlog, etag = _load_snapshot()
+    return _task_full_from(backlog, etag, backlog_path, task_id)
+
+
+def _task_full_from(backlog: dict, etag: str, backlog_path: Path, task_id: str) -> tuple[dict | None, str]:
+    """`_load_task_full_identified` over any tree; shared with the native viewer."""
+    import re
+
     tasks = backlog.get("tasks")
     if not isinstance(tasks, list):
         tasks = [
@@ -9362,6 +9374,11 @@ def _load_epic_full_identified(epic_id: str) -> tuple[dict | None, str]:
     if not _backlog_path().exists():
         return None, ""
     data, etag = _load_snapshot()
+    return _epic_full_from(data, etag, epic_id)
+
+
+def _epic_full_from(data: dict, etag: str, epic_id: str) -> tuple[dict | None, str]:
+    """`_load_epic_full_identified` over any tree; shared with the native viewer."""
     epic = _find_epic(data, epic_id)
     if epic is None:
         return None, etag
@@ -9505,6 +9522,13 @@ class ViewerHandler(BaseHTTPRequestHandler):
             except Exception:
                 pass
 
+    def _native(self):
+        """This request's native database, or None on a legacy store (checked once)."""
+        if not hasattr(self, "_native_database"):
+            from taskmaster.native_routing import viewer as _native_viewer
+            self._native_database = _native_viewer.database()
+        return self._native_database
+
     def do_GET(self) -> None:
         import re
         from urllib.parse import unquote, urlparse
@@ -9564,7 +9588,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
             viewer_root = SCRIPT_DIR / "viewer"
             self._serve_file(viewer_root / "dev" / "edit-demo.html", "text/html")
         elif clean_path == "/api/viewer/prefs":
-            self._send_json(200, load_viewer_prefs(_backlog_path()))
+            self._send_json(200, self._prefs())
             return
         elif clean_path == "/backlog.yaml":
             self._serve_file(_backlog_path(), "text/yaml")
@@ -9572,14 +9596,14 @@ class ViewerHandler(BaseHTTPRequestHandler):
             rest = clean_path[len("/api/task/"):].rstrip("/")
             if rest.endswith("/related"):
                 task_id = rest[: -len("/related")]
-                related = _load_related_for_task(task_id)
+                related = self._related(task_id)
                 if related is None:
                     self._send_json(404, {"ok": False, "error": f"task {task_id} not found"})
                     return
                 self._send_json(200, related)
                 return
             if "/" not in rest and rest:
-                full, etag = _load_task_full_identified(rest)
+                full, etag = self._task_full(rest)
                 if full is None:
                     self._send_json(404, {"ok": False, "error": f"task {rest} not found"})
                     return
@@ -9589,7 +9613,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
         elif clean_path.startswith("/api/epic/"):
             eid = clean_path[len("/api/epic/"):].rstrip("/")
             if eid and "/" not in eid:
-                full, etag = _load_epic_full_identified(eid)
+                full, etag = self._epic_full(eid)
                 if full is None:
                     self._send_json(404, {"ok": False, "error": f"epic {eid} not found"})
                     return
@@ -9613,7 +9637,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 self._send_json(400, {"ok": False, "error": "missing 'since' query param"})
                 return
             try:
-                events = _compute_recent_events(since)
+                events = self._recent_events(since)
             except ValueError as e:
                 self._send_json(400, {"ok": False, "error": str(e)})
                 return
@@ -9621,7 +9645,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
             return
         elif clean_path == "/api/threads":
             from taskmaster.taskmaster_v3 import list_threads as _list_threads_http
-            self._send_json(200, _list_threads_http(_threads_data(_backlog_path())))
+            self._send_json(200, _list_threads_http(self._threads()))
             return
         elif clean_path == "/api/sessions":
             snapshot = self._snapshot()
@@ -9675,7 +9699,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 self._send_json(200, {"issues": []})
                 return
             data, etag = snapshot
-            prefs = load_viewer_prefs(_backlog_path())
+            prefs = self._prefs()
             aging_cfg = prefs.get("issues", {}).get("aging", {})
             issues = []
             for _iid, fm, body in _dict_rows(data, "issue"):
@@ -9773,10 +9797,49 @@ class ViewerHandler(BaseHTTPRequestHandler):
         read and the revision from another let a client cache an old list under
         a newer ETag and then pass its own `If-Match` while overwriting a peer.
         """
+        if self._native():
+            from taskmaster.native_routing import viewer as _native_viewer
+            return _native_viewer.snapshot(self._native())
         try:
             return _load_snapshot()
         except FileNotFoundError:
             return None
+
+    def _prefs(self) -> dict:
+        if self._native():
+            from taskmaster.native_routing import viewer as _native_viewer
+            return _native_viewer.prefs(self._native())
+        return load_viewer_prefs(_backlog_path())
+
+    def _task_full(self, task_id: str):
+        if self._native():
+            from taskmaster.native_routing import viewer as _native_viewer
+            return _native_viewer.task_full(self._native(), task_id)
+        return _load_task_full_identified(task_id)
+
+    def _epic_full(self, epic_id: str):
+        if self._native():
+            from taskmaster.native_routing import viewer as _native_viewer
+            return _native_viewer.epic_full(self._native(), epic_id)
+        return _load_epic_full_identified(epic_id)
+
+    def _related(self, task_id: str):
+        if self._native():
+            from taskmaster.native_routing import viewer as _native_viewer
+            return _native_viewer.related(self._native(), task_id)
+        return _load_related_for_task(task_id)
+
+    def _recent_events(self, since: str):
+        if self._native():
+            from taskmaster.native_routing import viewer as _native_viewer
+            return _native_viewer.recent_events(self._native(), since)
+        return _compute_recent_events(since)
+
+    def _threads(self) -> dict:
+        if self._native():
+            from taskmaster.native_routing import viewer as _native_viewer
+            return _native_viewer.threads(self._native())
+        return _threads_data(_backlog_path())
 
     def _serve_file(self, path: Path, content_type: str) -> None:
         try:
@@ -9847,7 +9910,14 @@ class ViewerHandler(BaseHTTPRequestHandler):
 
     def _serve_json(self) -> None:
         try:
-            data, etag = _load_snapshot()
+            if self._native():
+                from taskmaster.native_routing.reads import NativeRows
+                data, etag = self._snapshot()
+                # The legacy payload carries its lazy row map, which JSON renders
+                # as an object repr; the board does not read it (N10 removes it).
+                data["_rows"] = NativeRows(None)
+            else:
+                data, etag = _load_snapshot()
             data.setdefault("meta", {})["_version"] = VERSION
             if not isinstance(data.get("tasks"), list):
                 data["tasks"] = [
@@ -9876,6 +9946,10 @@ class ViewerHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         import json
         import re
+
+        if self._native():
+            from taskmaster.native_routing import viewer as _native_viewer
+            return _native_viewer.write(self, "POST", self._native())
 
         if self.path == "/api/ideas":
             length = int(self.headers.get("Content-Length") or 0)
@@ -10261,6 +10335,9 @@ class ViewerHandler(BaseHTTPRequestHandler):
 
     def do_PUT(self):
         import re
+        if self._native():
+            from taskmaster.native_routing import viewer as _native_viewer
+            return _native_viewer.write(self, "PUT", self._native())
         if self.path == "/api/viewer/prefs":
             length = int(self.headers.get("Content-Length") or 0)
             raw = self.rfile.read(length).decode("utf-8") if length else ""
@@ -10315,6 +10392,9 @@ class ViewerHandler(BaseHTTPRequestHandler):
     def do_PATCH(self):
         import json
         import re
+        if self._native():
+            from taskmaster.native_routing import viewer as _native_viewer
+            return _native_viewer.write(self, "PATCH", self._native())
         if m := re.fullmatch(r"/api/tasks/([A-Za-z0-9_\-]+)", self.path):
             task_id = m.group(1)
             length = int(self.headers.get("Content-Length") or 0)
@@ -10350,7 +10430,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
 
     def _send_stale(self, task_id: str, current_etag: str) -> None:
         """The unchanged 409 contract, with the revision the write lost to."""
-        current, _etag = _load_task_full_identified(task_id)
+        current, _etag = self._task_full(task_id)
         self._send_json(409, {
             "ok": False, "error": "stale",
             "current_etag": current_etag,
