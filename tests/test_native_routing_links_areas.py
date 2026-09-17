@@ -103,3 +103,20 @@ def test_non_text_area_anchors_are_refused_natively(twins):
 def test_viewer_prefs_read_matches(twins):
     legacy, native = twins.call("viewer_prefs_get")
     assert json.loads(native) == json.loads(legacy)
+
+
+def test_viewer_prefs_writes_match(twins):
+    for patch in ('{"theme": "dark", "issues": {"aging": {"warn_days": 3}}}', '{"issues": {"aging": {"stale_days": 9}}}',
+                  "not json", "[1]"):
+        twins.same("viewer_prefs_set", patch_json=patch)
+        legacy, native = twins.call("viewer_prefs_get")
+        assert json.loads(native) == json.loads(legacy)
+    assert json.loads(twins.call("viewer_prefs_get")[1])["issues"]["aging"] == {"warn_days": 3, "stale_days": 9}
+
+
+def test_open_viewer_opens_the_native_served_board(twins, monkeypatch):
+    opened = []
+    monkeypatch.setattr(bs.webbrowser, "open", opened.append)
+    monkeypatch.setattr(bs, "_start_viewer_server", lambda: 6899)
+    legacy, native = twins.same("backlog_open_viewer")
+    assert native == "Opened backlog viewer at http://127.0.0.1:6899/" and len(opened) == 2
