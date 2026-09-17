@@ -3545,7 +3545,7 @@ def load_viewer_prefs(backlog_path: Path, v4: "bool | None" = None) -> dict:
     """
     import json
     from copy import deepcopy
-    p = viewer_prefs_path(backlog_path, v4)
+    p = viewer_prefs_path(backlog_path) if v4 is None else viewer_prefs_path(backlog_path, v4)
     if not p.exists():
         prefs = deepcopy(VIEWER_PREFS_DEFAULTS)
         atomic_write(p, json.dumps(prefs, indent=2))
