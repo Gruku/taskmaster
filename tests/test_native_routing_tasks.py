@@ -87,12 +87,28 @@ def test_add_task_bundle_sub_repo_conflict_matches(twins):
     ("lane", "express"), ("lane", "warp"), ("component", "ui"), ("component", ""),
     ("design_change", "true"), ("design_change", "no"), ("bundle", "Bad Slug"), ("bundle", "solo"),
     ("area", "nowhere"), ("area", ""), ("human_action", "press the button"), ("branch", "feature/x"),
-    ("status", "in-progress"), ("status", "flying"), ("status", "in-review"), ("status", "archived"),
+    ("status", "in-progress"), ("status", "flying"), ("status", "in-review"),
     ("not_allowed", "x"), ("", ""),
 ])
 def test_update_task_single_field_matches(twins, field, value):
     twins.same("backlog_update_task", task_id="test-epic-001", field=field, value=value)
     _check(twins)
+
+
+def test_archiving_through_a_status_edit_also_stamps_the_archive_time_natively(twins):
+    """Recorded N08 difference: the legacy tool flips only the store row's archive
+    flag, while the native core derives that flag from the document, so a native
+    status edit to `archived` also stamps `archived: <now>` (as `backlog_archive_task`
+    always has). Answer, file placement and every other field still match."""
+    twins.same("backlog_update_task", task_id="test-epic-001", field="status", value="archived")
+    legacy, native = committed(twins.legacy), committed(twins.native)
+    key = ("task", "test-epic-001")
+    assert "archived" not in legacy[key][0] and native[key][0]["archived"]
+    assert legacy[key][2] is native[key][2] is True
+    strip = lambda doc: {k: v for k, v in doc.items() if k != "archived"}
+    assert normalize(strip(native[key][0])) == normalize(strip(legacy[key][0]))
+    assert (twins.native / ".taskmaster" / "tasks" / "archive" / "test-epic-001.md").exists()
+    assert (twins.legacy / ".taskmaster" / "tasks" / "archive" / "test-epic-001.md").exists()
 
 
 def test_update_task_keyword_style_and_its_refusals_match(twins):
@@ -207,29 +223,57 @@ def test_completion_with_a_session_changelog_is_refused_on_a_native_store(twins)
 # ── Reads ───────────────────────────────────────────────────────────────────
 
 
-def test_get_task_views_match(twins):
-    twins.same("backlog_update_task", task_id="test-epic-001", field="review_instructions", value="Check it")
-    twins.same("backlog_update_task", task_id="test-epic-001", field="docs", value="plan:docs/plan.md")
-    for kwargs in ({}, {"verbose": True}, {"expand_links": True}, {"verbose": True, "expand_links": True},
-                   {"sections": ["notes", "review_instructions"]}, {"sections": []}, {"sections": ["bogus"]}):
-        twins.same("backlog_get_task", task_id="test-epic-001", **kwargs)
-        twins.same("backlog_get_task", task_id="other-001", **kwargs)
-    twins.same("backlog_get_task", task_id="ghost-1")
+def _seed_rich():
+    """Mixed statuses, priorities, orders, locks and active epics, so every sort,
+    filter and label in the read tools has something to discriminate."""
+    _seed_tasks()
+    for epic in ("test-epic", "other"):
+        bs.backlog_update_epic(epic_id=epic, field="status", value="active")
+    bs.backlog_add_task(title="Fourth, critical", epic="test-epic", phase="dev", priority="critical")
+    bs.backlog_add_task(title="Fifth, low", epic="test-epic", phase="dev", priority="low",
+                        depends_on="test-epic-002")
+    bs.backlog_add_task(title="Sixth, later phase", epic="test-epic", phase="later", priority="high")
+    bs.backlog_update_task(task_id="test-epic-004", field="lane", value="express")
+    bs.backlog_pick_task(task_id="test-epic-004")
+    bs.backlog_record_gate(task_id="test-epic-004", gate="review-gate", verdict="pass")
+    bs.backlog_complete_task(task_id="test-epic-004")
+    bs.backlog_pick_task(task_id="test-epic-002")
+    bs.backlog_update_task(task_id="test-epic-001", field="status", value="blocked")
+    bs.backlog_update_task(task_id="test-epic-001", field="blockers", value="waiting on infra")
+    bs.backlog_update_task(task_id="test-epic-001", field="review_instructions", value="Check it")
+    bs.backlog_update_task(task_id="test-epic-001", field="docs", value="plan:docs/plan.md")
+    bs.backlog_update_task(task_id="test-epic-005", field="human_action", value="wait")
+    bs.backlog_add_task(title="Medium tie A", epic="test-epic", phase="dev")
+    bs.backlog_add_task(title="Medium tie B", epic="test-epic", phase="dev")
+    bs.backlog_handover_create(tldr="Open work on the second task", task_ids=["test-epic-002"])
+
+
+@pytest.fixture
+def rich(tmp_path, monkeypatch):
+    return make_twins(tmp_path, monkeypatch, _seed_rich)
+
+
+def test_get_task_views_match(rich):
+    for task_id in ("test-epic-001", "test-epic-002", "test-epic-005", "other-001"):
+        for kwargs in ({}, {"verbose": True}, {"expand_links": True}, {"verbose": True, "expand_links": True},
+                       {"sections": ["notes", "review_instructions"]}, {"sections": []}, {"sections": ["bogus"]}):
+            rich.same("backlog_get_task", task_id=task_id, **kwargs)
+    rich.same("backlog_get_task", task_id="ghost-1")
 
 
 @pytest.mark.parametrize("kwargs", [
     {}, {"verbose": True}, {"epic": "other"}, {"status": "todo"}, {"priority": "high"},
-    {"phase": "later"}, {"area": "x"}, {"limit": 1}, {"limit": 0}, {"status": "archived"},
+    {"phase": "later"}, {"area": "x"}, {"limit": 2}, {"limit": 0}, {"status": "done"},
     {"epic": "ghost"},
 ])
-def test_list_tasks_matches(twins, kwargs):
-    twins.same("backlog_update_task", task_id="test-epic-002", field="human_action", value="wait")
-    twins.same("backlog_list_tasks", **kwargs)
+def test_list_tasks_matches(rich, kwargs):
+    rich.same("backlog_list_tasks", **kwargs)
 
 
-def test_dependencies_and_next_available_match(twins):
-    twins.same("backlog_dependencies", task_id="other-001")
-    twins.same("backlog_dependencies", task_id="test-epic-001")
-    twins.same("backlog_dependencies", task_id="ghost-1")
-    twins.same("backlog_next_available")
-    twins.same("backlog_next_available", include_future_phases=True)
+def test_dependencies_and_next_available_match(rich):
+    for task_id in ("other-001", "test-epic-001", "test-epic-002", "test-epic-005", "ghost-1"):
+        rich.same("backlog_dependencies", task_id=task_id)
+    rich.same("backlog_next_available")
+    rich.same("backlog_next_available", include_future_phases=True)
+    rich.same("backlog_pick_task", task_id="test-epic-003")
+    rich.same("backlog_complete_task", task_id="test-epic-002", target_status="in-review", human_action="sign")

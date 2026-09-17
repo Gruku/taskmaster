@@ -158,7 +158,13 @@ class Twins:
 
     def assert_state_matches(self) -> None:
         legacy, native = committed(self.legacy), committed(self.native)
-        assert normalize(native) == normalize(legacy)
+        assert sorted(native) == sorted(legacy), "entity sets diverged"
+        for key in sorted(legacy):
+            (l_doc, l_body, l_arch), (n_doc, n_body, n_arch) = normalize(legacy[key]), normalize(native[key])
+            fields = sorted(f for f in set(l_doc) | set(n_doc) if l_doc.get(f, "<absent>") != n_doc.get(f, "<absent>"))
+            assert not fields, f"{key} fields diverged: " + "; ".join(
+                f"{f}: legacy={l_doc.get(f, '<absent>')!r} native={n_doc.get(f, '<absent>')!r}" for f in fields)
+            assert (n_body, n_arch) == (l_body, l_arch), f"{key} body/archive flag diverged"
 
     def assert_files_match(self) -> None:
         legacy, native = projected_files(self.legacy), projected_files(self.native)

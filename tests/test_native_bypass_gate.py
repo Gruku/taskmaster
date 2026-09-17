@@ -41,6 +41,31 @@ EXERCISES = {
     ("backlog_note", "get"): lambda: bs.backlog_note(action="get", note_id="NOTE-001"),
     ("backlog_note", "update"): lambda: bs.backlog_note(action="update", note_id="NOTE-001", text="edited"),
     ("backlog_note", "archive"): lambda: bs.backlog_note(action="archive", note_id="NOTE-001"),
+    ("backlog_add_task", None): lambda: bs.backlog_add_task(
+        title="gate task", epic="test-epic", phase="Development", depends_on="test-epic-001",
+        options={"docs": "plan:p.md", "anchors": "a.py"}),
+    ("backlog_update_task", None): lambda: (
+        bs.backlog_update_task(task_id="test-epic-001", field="notes", value="see test-epic-002"),
+        bs.backlog_update_task(task_id="test-epic-001", tldr="gate tldr", next_step="gate next")),
+    ("backlog_pick_task", None): lambda: bs.backlog_pick_task(task_id="test-epic-001"),
+    ("backlog_complete_task", None): lambda: (
+        bs.backlog_pick_task(task_id="test-epic-002"),
+        bs.backlog_complete_task(task_id="test-epic-002", target_status="in-review", human_action="sign")),
+    ("backlog_archive_task", None): lambda: bs.backlog_archive_task(task_id="test-epic-002", reason="wont-fix"),
+    ("backlog_record_gate", None): lambda: bs.backlog_record_gate(task_id="test-epic-001", gate="spec", status="done"),
+    ("backlog_skip_gate", None): lambda: bs.backlog_skip_gate(task_id="test-epic-001", gate="plan", reason="gate"),
+    ("backlog_clear_gate", None): lambda: bs.backlog_clear_gate(task_id="test-epic-001", gate="plan"),
+    ("backlog_record_merge", None): lambda: bs.backlog_record_merge(task_id="test-epic-001", rung="develop", sha="abc"),
+    ("backlog_set_spec_review", None): lambda: bs.backlog_set_spec_review(
+        task_id="test-epic-001", verdict="pass", spec_path="s.md"),
+    ("backlog_clear_spec_review", None): lambda: bs.backlog_clear_spec_review(task_id="test-epic-001"),
+    ("backlog_task_pipeline", None): lambda: bs.backlog_task_pipeline(task_id="test-epic-001"),
+    ("backlog_get_task", None): lambda: [bs.backlog_get_task(task_id="test-epic-001", **kwargs) for kwargs in (
+        {}, {"verbose": True}, {"expand_links": True}, {"verbose": True, "expand_links": True},
+        {"sections": ["notes"]})],
+    ("backlog_list_tasks", None): lambda: bs.backlog_list_tasks(verbose=True, limit=0),
+    ("backlog_dependencies", None): lambda: bs.backlog_dependencies(task_id="test-epic-002"),
+    ("backlog_next_available", None): lambda: bs.backlog_next_available(include_future_phases=True),
 }
 
 
@@ -68,6 +93,10 @@ def rigged(tmp_path, monkeypatch):
     """A native project whose legacy entry points and projection reads raise."""
     def seed():
         bs.backlog_note(action="create", text="seeded")
+        bs.backlog_add_task(title="Gate one", epic="test-epic", phase="dev", notes="seed")
+        bs.backlog_add_task(title="Gate two", epic="test-epic", phase="dev", depends_on="test-epic-001")
+        bs.backlog_update_task(task_id="test-epic-001", field="lane", value="standard")
+        bs.backlog_handover_create(tldr="Gate handover", task_ids=["test-epic-001"])
     twins = make_twins(tmp_path, monkeypatch, seed)
     project = twins.native
     backlog_dir = (project / ".taskmaster").resolve()
@@ -132,7 +161,9 @@ def test_every_routed_tool_has_a_gate_exercise():
 def test_routed_tool_never_reaches_the_legacy_store_or_scans_the_projection(rigged, pair):
     answer = EXERCISES[pair]()
     assert rigged == [], f"{pair} bypassed the native core: {rigged}"
-    assert "not yet routed" not in str(answer)
+    answers = list(answer) if isinstance(answer, (list, tuple)) else [answer]
+    # An exercise that is refused never reaches the path it exists to cover.
+    assert not [a for a in answers if str(a).startswith("Error")], f"{pair} exercise was refused: {answers}"
 
 
 def test_the_rig_catches_a_legacy_read_and_a_projection_scan(rigged):
@@ -208,35 +239,30 @@ def inventory_pairs() -> dict:
 # The reviewed list of normal-path tools/actions with no native route yet. Routing
 # a family removes its entries here; the N08 exit is an empty set.
 UNROUTED_NORMAL_PATH = {
-    ("backlog_add_epic", None), ("backlog_add_phase", None), ("backlog_add_task", None),
-    ("backlog_advance_phase", None), ("backlog_archive_epic", None), ("backlog_archive_task", None),
-    ("backlog_area_create", None), ("backlog_area_get", None), ("backlog_area_list", None),
-    ("backlog_area_update", None), ("backlog_batch_preview", None), ("backlog_batch_update", None),
-    ("backlog_blast_radius", None), ("backlog_bug_archive", None), ("backlog_bug_create", None),
-    ("backlog_bug_get", None), ("backlog_bug_list", None), ("backlog_bug_pattern_scan", None),
-    ("backlog_bug_promote", None), ("backlog_bug_update", None), ("backlog_clear_gate", None),
-    ("backlog_clear_spec_review", None), ("backlog_complete_task", None),
+    ("backlog_add_epic", None), ("backlog_add_phase", None), ("backlog_advance_phase", None),
+    ("backlog_archive_epic", None), ("backlog_area_create", None), ("backlog_area_get", None),
+    ("backlog_area_list", None), ("backlog_area_update", None), ("backlog_batch_preview", None),
+    ("backlog_batch_update", None), ("backlog_blast_radius", None), ("backlog_bug_archive", None),
+    ("backlog_bug_create", None), ("backlog_bug_get", None), ("backlog_bug_list", None),
+    ("backlog_bug_pattern_scan", None), ("backlog_bug_promote", None), ("backlog_bug_update", None),
     ("backlog_continuity_items", None), ("backlog_decision", "drop"), ("backlog_decision", "get"),
     ("backlog_decision", "list"), ("backlog_decision", "resolve"), ("backlog_decision", "update"),
-    ("backlog_decision_create", None), ("backlog_dependencies", None), ("backlog_epic_status", None),
-    ("backlog_get_task", None), ("backlog_handover_create", None), ("backlog_handover_get", None),
+    ("backlog_decision_create", None), ("backlog_epic_status", None),
+    ("backlog_handover_create", None), ("backlog_handover_get", None),
     ("backlog_handover_list", None), ("backlog_handover_supersede", None),
-    ("backlog_handover_update_status", None), ("backlog_idea_create", None), ("backlog_idea_get", None),
-    ("backlog_idea_list", None), ("backlog_idea_update", None), ("backlog_issue_create", None),
-    ("backlog_issue_get", None), ("backlog_issue_list", None), ("backlog_issue_update", None),
-    ("backlog_last_session", None), ("backlog_linear", "link"), ("backlog_linear", "list"),
-    ("backlog_linear", "show"), ("backlog_linear", "status"), ("backlog_linear", "unlink"),
-    ("backlog_link", "create"), ("backlog_link", "query"), ("backlog_link", "remove"),
-    ("backlog_link", "validate"), ("backlog_list_tasks", None), ("backlog_next_available", None),
-    ("backlog_phase_status", None), ("backlog_pick_task", None),
+    ("backlog_handover_update_status", None), ("backlog_idea_create", None),
+    ("backlog_idea_get", None), ("backlog_idea_list", None), ("backlog_idea_update", None),
+    ("backlog_issue_create", None), ("backlog_issue_get", None), ("backlog_issue_list", None),
+    ("backlog_issue_update", None), ("backlog_last_session", None), ("backlog_linear", "link"),
+    ("backlog_linear", "list"), ("backlog_linear", "show"), ("backlog_linear", "status"),
+    ("backlog_linear", "unlink"), ("backlog_link", "create"), ("backlog_link", "query"),
+    ("backlog_link", "remove"), ("backlog_link", "validate"), ("backlog_phase_status", None),
     ("backlog_project_error_trace_ladder", None), ("backlog_project_get", None),
-    ("backlog_project_get_field", None), ("backlog_project_init", None), ("backlog_project_set", None),
-    ("backlog_project_ship_order", None), ("backlog_query", None), ("backlog_record_gate", None),
-    ("backlog_record_merge", None), ("backlog_search", None), ("backlog_set_spec_review", None),
-    ("backlog_skip_gate", None), ("backlog_status", None), ("backlog_store_status", None),
-    ("backlog_task_pipeline", None), ("backlog_thread_list", None), ("backlog_thread_resume", None),
-    ("backlog_thread_update", None), ("backlog_update_epic", None), ("backlog_update_phase", None),
-    ("backlog_update_task", None), ("viewer_prefs_get", None),
+    ("backlog_project_get_field", None), ("backlog_project_init", None),
+    ("backlog_project_set", None), ("backlog_project_ship_order", None), ("backlog_query", None),
+    ("backlog_search", None), ("backlog_status", None), ("backlog_store_status", None),
+    ("backlog_thread_list", None), ("backlog_thread_resume", None), ("backlog_thread_update", None),
+    ("backlog_update_epic", None), ("backlog_update_phase", None), ("viewer_prefs_get", None),
 }
 
 
