@@ -117,3 +117,14 @@ def test_continuity_items_and_last_session_match(twins):
     for kwargs in ({}, {"view": "time"}, {"include_auto_stage": True}):
         legacy, native = twins.call("backlog_continuity_items", **kwargs)
         assert json.loads(native) == json.loads(legacy)
+
+
+def test_twins_start_without_a_session_bundle_leaked_by_an_earlier_test(tmp_path, monkeypatch):
+    """Found by the N08 full suite: `test_bundle_pick` leaves the process-global
+    session bundle set, which renamed every later auto-derived handover thread."""
+    monkeypatch.setattr(bs, "_session_bundle", {"slug": "leaked-bundle"})
+    twins = make_twins(tmp_path, monkeypatch, lambda: bs.backlog_handover_create(
+        tldr="Threaded", task_ids=[]))
+    assert bs._get_session_bundle() is None
+    legacy, native = twins.same("backlog_thread_list")
+    assert "threaded" in native and "leaked-bundle" not in native
