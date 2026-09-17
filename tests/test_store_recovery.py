@@ -326,38 +326,42 @@ def test_failed_quick_check_rebuild_preserves_dirty_commit_in_backup(
     assert dirty == 1
 
 
-def test_old_corrupt_backups_are_pruned_but_recent_family_remains_in_status(
-    tmp_path,
+@pytest.mark.parametrize("locked_open", [False, True])
+def test_renamed_aside_databases_are_never_deleted_by_an_open(
+    tmp_path, monkeypatch, locked_open
 ):
+    """A `store.db.corrupt-*` family can be the only copy of committed state.
+
+    6.0.2 renamed healthy stores aside (B-092); the progress entries, sessions
+    and Linear claims written before the rename live nowhere else. Opening a
+    store used to delete families whose mtime was over 7 days old -- and a
+    rename keeps the original mtime, so a family made today could already
+    qualify. No open may delete one, however old it looks.
+    """
     backlog_path, _ = _write_projection(tmp_path)
-    opened = store.open_store(backlog_path=backlog_path, session="prune-test")
+    opened = store.open_store(backlog_path=backlog_path, session="keep-test")
     database = opened.db_path
     store.reset_for_tests()
+    if locked_open:
+        _force_locked_open(monkeypatch)
 
-    old_names = {
-        f"store.db.corrupt-20260801T010203000000Z{suffix}"
+    names = {
+        f"store.db.corrupt-{stamp}{suffix}"
+        for stamp in ("20250101T010203000000Z", "20260903T010203000000Z")
         for suffix in ("", "-wal", "-shm")
     }
-    recent_names = {
-        f"store.db.corrupt-20260903T010203000000Z{suffix}"
-        for suffix in ("", "-wal", "-shm")
-    }
-    old_time = (datetime.now(timezone.utc) - timedelta(days=8)).timestamp()
-    recent_time = (datetime.now(timezone.utc) - timedelta(days=1)).timestamp()
-    for name, modified in [
-        *((name, old_time) for name in old_names),
-        *((name, recent_time) for name in recent_names),
-    ]:
+    ancient = (datetime.now(timezone.utc) - timedelta(days=400)).timestamp()
+    for name in names:
         path = database.parent / name
         path.write_bytes(name.encode("ascii"))
-        os.utime(path, (modified, modified))
+        os.utime(path, (ancient, ancient))
 
-    reopened = store.open_store(backlog_path=backlog_path, session="prune-reader")
+    reopened = store.open_store(backlog_path=backlog_path, session="keep-reader")
+    reopened.load_dict()
     present = {path.name for path in database.parent.glob("store.db.corrupt-*")}
 
-    assert old_names.isdisjoint(present)
-    assert recent_names <= present
-    assert recent_names <= set(reopened.status().corrupt_files)
+    assert names <= present
+    assert names <= set(reopened.status().corrupt_files)
 
 
 @pytest.mark.parametrize(

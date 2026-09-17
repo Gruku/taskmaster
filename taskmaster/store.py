@@ -599,6 +599,7 @@ def _after_fork_child() -> None:
     global _ROOT_RESOLUTION, _STORES, _ALL_CONNECTIONS, _CACHE, _OPEN_LOCK_FDS
     global _CONNECTION_IDENTITIES
     global _EXPLICIT_RESOLUTIONS
+    global _ARRIVAL_GATES, _ARRIVAL_GATES_LOCK
     for descriptor in tuple(_OPEN_LOCK_FDS):
         try:
             os.close(descriptor)
@@ -615,6 +616,11 @@ def _after_fork_child() -> None:
     _ALL_CONNECTIONS = []
     _CONNECTION_IDENTITIES = {}
     _CACHE = {}
+    # Replaced, not cleared: the thread that held the lock, a gate or a ticket
+    # did not survive the fork, so taking the inherited lock to clear it can
+    # hang forever and an inherited gate is never handed on.
+    _ARRIVAL_GATES = {}
+    _ARRIVAL_GATES_LOCK = threading.Lock()
 
 
 if hasattr(os, "register_at_fork"):
@@ -983,6 +989,25 @@ def load_dict(backlog_path: Path | None = None) -> dict[str, Any]:
     return open_store(backlog_path=backlog_path).load_dict()
 
 
+def opened_store(backlog_path: Path | None = None) -> "Store | None":
+    """The store this process already opened for a project, never opening one.
+
+    Only the resolutions an open already cached are consulted: resolving from
+    scratch probes git and the projection schema, which a caller asking "is
+    there anything open?" on every tool call must not pay for.
+    """
+    with _STATE_LOCK:
+        if not _STORES:
+            return None
+        if backlog_path is None:
+            resolved = _ROOT_RESOLUTION
+        else:
+            resolved = _EXPLICIT_RESOLUTIONS.get(_backlog_dir(backlog_path))
+        if resolved is None:
+            return None
+        return _STORES.get(db_path(resolved.backlog_path))
+
+
 def active_transaction(backlog_path: Path | None = None) -> "Transaction | None":
     """The `Transaction` behind the thread's open `transaction_dict`, if any.
 
@@ -1033,6 +1058,10 @@ class Store:
         self._network_projection_only = False
         self._bootstrap_quarantine: dict[str, str] = {}
         self._dominant_crlf: bool | None = None
+        # The last `changes.seq` whose merge conflicts this process has handed
+        # to a caller; None until the first look, which reaches back 24 hours.
+        self._merge_notice_seq: int | None = None
+        self._merge_notice_lock = threading.Lock()
         # Adoption rewrites the whole projection at once and has to prove it can
         # read the result back before it commits (see `_verify_round_trip`).
         # Ordinary writes touch a file or two and are re-read by the next scan,
@@ -1467,7 +1496,6 @@ class Store:
             return False
         try:
             connection = self.connection
-            self._prune_corrupt_backups()
             # The locked path proves the database is readable before it adopts
             # it, and a reader that skipped the proof would serve whatever a
             # corrupt page happened to hold. `quick_check(1)` stops at the first
@@ -1533,7 +1561,6 @@ class Store:
         try:
             with self._connection_creation_allowed():
                 connection = self.connection
-            self._prune_corrupt_backups()
             self._begin_immediate(connection)
             try:
                 self._prepare_schema(connection)
@@ -1984,15 +2011,6 @@ class Store:
             if candidate.exists():
                 candidate.replace(self.db_path.with_name(f"store.db.{label}-{stamp}{suffix}"))
 
-    def _prune_corrupt_backups(self) -> None:
-        cutoff = time.time() - 7 * 24 * 60 * 60
-        for candidate in self.db_path.parent.glob("store.db.corrupt-*"):
-            try:
-                if candidate.stat().st_mtime < cutoff:
-                    candidate.unlink()
-            except OSError:
-                pass
-
     def _register_session(
         self,
         connection: sqlite3.Connection,
@@ -2276,11 +2294,16 @@ class Store:
                 # failed commit would otherwise suppress the next dashboard
                 # export and leave PROGRESS.md showing work that never landed.
                 self._last_progress_clock = None
+            # Bookkeeping only. After a commit it must not turn a write that
+            # landed into a reported failure -- a migration fence published a
+            # moment later refuses it, and a caller told "failed" retries and
+            # duplicates the write. Before a commit it must not replace the
+            # exception that is already on its way out.
             try:
                 self._try_register_session(
                     connection, current_tool=None, session_id=activity_session
                 )
-            except sqlite3.Error:
+            except (sqlite3.Error, UnsupportedStoreError):
                 pass
         if not settled:
             self._checkpoint_passive(connection)
@@ -3500,6 +3523,79 @@ class Store:
             )
         return self._status_from(self.connection, warning=warning)
 
+    def pending_merge_notices(self) -> tuple[list[str], int | None]:
+        """Merge conflicts no caller of this process has been shown yet.
+
+        A conflict is settled inside whichever scan meets the repaired file --
+        often a read, whose warnings reach no tool result -- so `store.log` and
+        a 24-hour count were the only trace, and a user whose repair lost a
+        field never heard of it. The durable record is the merge row itself;
+        this reads the ones past the cursor and returns them with the seq to
+        pass to `acknowledge_merge_notices` once they have been delivered. The
+        first look in a process reaches back 24 hours, so a conflict settled by
+        a hook or another server still reaches the next tool result here.
+        """
+        if not self._bootstrapped:
+            return [], None
+        with self._merge_notice_lock:
+            cursor = self._merge_notice_seq
+        connection = self.connection
+        if cursor is None:
+            cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+            rows = connection.execute(
+                "SELECT seq,kind,id,before FROM changes WHERE op='merge' AND ts>=? "
+                "AND before LIKE '%\"_conflicts\"%' ORDER BY seq",
+                (cutoff,),
+            ).fetchall()
+            latest = connection.execute("SELECT COALESCE(MAX(seq),0) FROM changes").fetchone()[0]
+        else:
+            rows = connection.execute(
+                "SELECT seq,kind,id,before FROM changes WHERE seq>? AND op='merge' "
+                "AND before LIKE '%\"_conflicts\"%' ORDER BY seq",
+                (cursor,),
+            ).fetchall()
+            latest = max([cursor, *(int(row["seq"]) for row in rows)])
+        notices = []
+        for row in rows:
+            before = _from_json(row["before"], {})
+            conflicts = before.get("_conflicts") if isinstance(before, dict) else None
+            if not isinstance(conflicts, dict) or not conflicts:
+                continue
+            located = connection.execute(
+                "SELECT file FROM projection WHERE kind=? AND id=? ORDER BY file LIMIT 1",
+                (row["kind"], row["id"]),
+            ).fetchone()
+            where = located["file"] if located else f"{row['kind']} {row['id']}"
+            names = ", ".join(
+                "body" if key == BODY_KEY else str(key) for key in conflicts
+            )
+            if before.get("_no_base"):
+                notices.append(
+                    f"merge conflict in {where} ({row['kind']} {row['id']}, seq {row['seq']}): "
+                    f"no record survives of what the file held before it was quarantined, "
+                    f"so the file was kept exactly as written; the store's differing "
+                    f"values ({names}) were set aside and are kept in change seq {row['seq']}"
+                )
+            else:
+                notices.append(
+                    f"merge conflict in {where} ({row['kind']} {row['id']}, seq {row['seq']}): "
+                    f"{names} changed both in the file and in the store; the store's "
+                    f"value was kept and the file's is kept in change seq {row['seq']}"
+                )
+        return notices, int(latest)
+
+    def acknowledge_merge_notices(self, seq: int | None) -> None:
+        if seq is None:
+            return
+        with self._merge_notice_lock:
+            if self._merge_notice_seq is None or seq > self._merge_notice_seq:
+                self._merge_notice_seq = seq
+
+    def take_merge_notices(self) -> list[str]:
+        notices, seq = self.pending_merge_notices()
+        self.acknowledge_merge_notices(seq)
+        return notices
+
     def read_only_status(self) -> StoreStatus:
         """`status()` without any of the writing that opening a store does.
 
@@ -3664,9 +3760,10 @@ class Store:
                 connection.rollback()
             raise
         finally:
+            # Bookkeeping after the commit; see `transaction`.
             try:
                 self._try_register_session(connection, current_tool=None)
-            except sqlite3.Error:
+            except (sqlite3.Error, UnsupportedStoreError):
                 pass
 
     def derived_status(self) -> dict[str, Any]:
@@ -4175,7 +4272,7 @@ class Store:
         ).fetchone()
         force_hash = not generation_row or generation_row[0] != generation
         rows = tx.connection.execute(
-            "SELECT file,kind,id,content_hash,mtime,size,dirty,quarantined,"
+            "SELECT file,kind,id,content_hash,mtime,size,dirty,quarantined,exported_seq,"
             "quarantine_mtime,quarantine_size,quarantine_hash FROM projection ORDER BY file"
         ).fetchall()
         known_rel = {row["file"] for row in rows}
@@ -4268,11 +4365,13 @@ class Store:
                     if not isinstance(doc, dict):
                         raise ValueError("project.yaml must be a mapping")
                 except (UnicodeError, ValueError, yaml.YAMLError) as exc:
+                    self._record_quarantine_base(tx, row)
                     tx.connection.execute(
                         "UPDATE projection SET quarantined=1,dirty=0 WHERE file=?", (rel,)
                     )
                     self._stamp_quarantine(tx, rel, exc, content, stat)
                     continue
+                self._drop_quarantine_base(tx, row)
                 tx._import_row("project", row["id"] or _PROJECT_ID, doc, None)
                 self._record_projection_bytes(
                     tx.connection, rel, "project", row["id"] or _PROJECT_ID, content, stat
@@ -4284,6 +4383,7 @@ class Store:
                 doc, body = self._parse_entity_text(row["kind"], content.decode("utf-8"))
                 self._validate_projected_identity(row["kind"], row["id"], doc)
             except (OSError, ValueError, yaml.YAMLError) as exc:
+                self._record_quarantine_base(tx, row)
                 tx.connection.execute(
                     "UPDATE projection SET quarantined=1,dirty=0 WHERE file=?", (rel,)
                 )
@@ -4307,6 +4407,7 @@ class Store:
                         else:
                             merged.pop(field, None)
                     doc = merged
+            self._drop_quarantine_base(tx, row)
             tx._import_row(row["kind"], row["id"], doc, body)
             self._record_projection_bytes(
                 tx.connection, rel, row["kind"], row["id"], content, stat
@@ -4402,17 +4503,17 @@ class Store:
         ).fetchone()
         if entity is None:
             return
-        # No base is not "nothing to do". An export suppressed because the file
-        # was quarantined records the debt but writes no base row, so returning
-        # here left the store holding a committed edit it would never write and
-        # the repaired file holding content the store would never import: two
-        # divergent versions, silently, for the life of the project. An empty
-        # base makes every field the two sides disagree on a conflict, which
-        # `_three_way_merge_fields` settles the way it settles every other one
-        # -- local wins, the hand edit's own additions survive, and the whole
-        # thing is recorded as a merge.
+        # No base is not "nothing to do": returning here left the store holding
+        # a committed edit it would never write and the repaired file holding
+        # content it would never import. Nor is it an empty base -- that made
+        # every field the two sides disagreed on a conflict local won, so a
+        # user's own repair was reverted and exported over their file. A row
+        # quarantined since 6.0.3 carries the base recorded at quarantine; a
+        # row quarantined earlier has it rebuilt from the change history.
         base_source: bytes | None = (
-            bytes(base_row["content"]) if base_row is not None else None
+            bytes(base_row["content"])
+            if base_row is not None
+            else self._rebuild_quarantine_base(tx, projection_row, entity)
         )
         base_doc: dict[str, Any] = {}
         base_body: str | None = None
@@ -4428,7 +4529,9 @@ class Store:
             except (UnicodeError, ValueError, yaml.YAMLError):
                 # The bytes we were about to overwrite do not parse either.
                 # They are still not a reason to quarantine the file the caller
-                # just repaired; merge against nothing instead.
+                # just repaired, and not a base either: merging against nothing
+                # is what reverted repairs.
+                base_source = None
                 base_doc, base_body = {}, None
         try:
             if kind == "project":
@@ -4449,25 +4552,43 @@ class Store:
             return
         our_doc = _from_json(entity["doc"], {})
         our_body = entity["body"]
-        merged_doc = _three_way_merge_fields(base_doc, our_doc, their_doc)
-        if our_body == their_body:
-            merged_body = our_body
-        elif our_body != base_body:
-            merged_body = our_body
-        elif their_body != base_body:
+        if base_source is None:
+            # Nothing says which side changed what, so nothing is merged. The
+            # hand-written file is what the user can see and just saved; it
+            # stays, and the store's whole version goes into the change record
+            # as the conflict, where the caller is pointed to it.
+            # An epic or phase file carries only its heavy fields; the rest
+            # live in `backlog.yaml` and are not the file's to replace.
+            our_view = our_doc
+            if kind in {"epic", "phase"}:
+                heavy_fields = EPIC_HEAVY_FIELDS if kind == "epic" else PHASE_HEAVY_FIELDS
+                our_view = {k: v for k, v in our_doc.items() if k in heavy_fields}
+            merged_doc = {k: v for k, v in our_doc.items() if k not in our_view}
+            merged_doc.update(their_doc)
             merged_body = their_body
+            fields, before, after = _unbased_merge_details(
+                our_view, their_doc, our_body=our_body, their_body=their_body
+            )
         else:
-            merged_body = our_body
-        fields, before, after = _merge_change_details(
-            base_doc,
-            our_doc,
-            their_doc,
-            merged_doc,
-            base_body=base_body,
-            our_body=our_body,
-            their_body=their_body,
-            merged_body=merged_body,
-        )
+            merged_doc = _three_way_merge_fields(base_doc, our_doc, their_doc)
+            if our_body == their_body:
+                merged_body = our_body
+            elif our_body != base_body:
+                merged_body = our_body
+            elif their_body != base_body:
+                merged_body = their_body
+            else:
+                merged_body = our_body
+            fields, before, after = _merge_change_details(
+                base_doc,
+                our_doc,
+                their_doc,
+                merged_doc,
+                base_body=base_body,
+                our_body=our_body,
+                their_body=their_body,
+                merged_body=merged_body,
+            )
         if not fields:
             # The repair happens to agree with what the store holds. The row is
             # still quarantined, and nothing later in the scan clears it, so a
@@ -4504,10 +4625,124 @@ class Store:
             "WHERE file=?",
             (hashlib.sha1(content).hexdigest(), stat.st_mtime, stat.st_size, rel),
         )
+        # The merge consumed these bytes, so they are what the file and the
+        # store last agreed on. Should the export of the merged result fail,
+        # the next hand edit has to merge against them, not against the older
+        # base, which would turn every field fixed in this repair into a
+        # conflict the store wins.
+        tx.connection.execute(
+            "INSERT INTO projection_base(file,content) VALUES(?,?) "
+            "ON CONFLICT(file) DO UPDATE SET content=excluded.content",
+            (rel, content),
+        )
         tx.seq = seq
         tx.log_entries.append(f"merged external edit {rel} into {kind}:{ident} at seq {seq}")
         tx._derived_keys.add((kind, ident))
         tx._export_keys.add((kind, ident))
+
+    def _record_quarantine_base(self, tx: "Transaction", row: sqlite3.Row) -> None:
+        """Keep what the file and the store agreed on as the file goes bad.
+
+        A clean row's file matches its entity, so rendering the entity now is
+        that agreement. Once the file is quarantined, every write to the
+        entity is suppressed and piles up against it; without this base a
+        later repair cannot tell a field the user fixed from one the store
+        changed. An existing base -- the bytes an export failed to replace --
+        already is the agreement and is kept.
+        """
+        if row["quarantined"] or not row["id"]:
+            return
+        entity = tx.connection.execute(
+            "SELECT doc,body FROM entities WHERE kind=? AND id=? AND deleted=0",
+            (row["kind"], row["id"]),
+        ).fetchone()
+        if entity is None:
+            return
+        rendered = _render_entity_file(
+            row["kind"], _from_json(entity["doc"], {}), entity["body"]
+        )
+        if rendered is None:
+            return
+        tx.connection.execute(
+            "INSERT INTO projection_base(file,content) VALUES(?,?) "
+            "ON CONFLICT(file) DO NOTHING",
+            (row["file"], rendered[0]),
+        )
+
+    @staticmethod
+    def _drop_quarantine_base(tx: "Transaction", row: sqlite3.Row) -> None:
+        """A repaired file with no pending store edits is simply imported.
+
+        The base recorded at quarantine then describes nothing; left behind,
+        the next export failure would keep it (bases are never overwritten)
+        and merge a later hand edit against a state long gone.
+        """
+        if row["quarantined"] and not row["dirty"]:
+            tx.connection.execute(
+                "DELETE FROM projection_base WHERE file=?", (row["file"],)
+            )
+
+    def _rebuild_quarantine_base(
+        self,
+        tx: "Transaction",
+        projection_row: sqlite3.Row,
+        entity: sqlite3.Row,
+    ) -> bytes | None:
+        """The file's last agreed state for a row that never got a base.
+
+        Stores written before 6.0.3 hold dirty, quarantined rows with no base
+        row. The entity is walked back through every change the file never
+        received: those after `exported_seq`, the last export, or after the
+        entity's latest import for a file that was never exported. An import
+        does not move `exported_seq`, so a file hand-edited since its last
+        export walks back further than it needs to. Starting too early only re-reverses changes both sides
+        already hold, which merge as agreement; starting too late would let a
+        stale file silently revert store edits, so there is no guess at a later
+        point. Any change that cannot be reversed exactly means no base, never
+        an approximate one.
+        """
+        kind, ident = projection_row["kind"], projection_row["id"]
+        anchor = projection_row["exported_seq"]
+        if anchor is None:
+            latest_import = tx.connection.execute(
+                "SELECT MAX(seq) FROM changes WHERE kind=? AND id=? AND op='import'",
+                (kind, ident),
+            ).fetchone()[0]
+            if latest_import is None:
+                return None
+            anchor = latest_import
+        doc = _from_json(entity["doc"], {})
+        body = entity["body"]
+        for change in tx.connection.execute(
+            "SELECT op,fields,before FROM changes WHERE kind=? AND id=? AND seq>? "
+            "ORDER BY seq DESC",
+            (kind, ident, anchor),
+        ).fetchall():
+            op = change["op"]
+            if op == "export-fail":
+                continue
+            before = _from_json(change["before"], {})
+            if op in {"update", "merge", "import"}:
+                for field in _from_json(change["fields"], []):
+                    if str(field).startswith("conflict:"):
+                        continue
+                    if field == BODY_KEY:
+                        body = before.get(BODY_KEY)
+                    elif field in before:
+                        doc[field] = before[field]
+                    else:
+                        doc.pop(field, None)
+            elif op == "archive":
+                if before.get("archived"):
+                    doc["archived"] = True
+                else:
+                    doc.pop("archived", None)
+            elif op == "unarchive":
+                doc["archived"] = True
+            else:
+                return None
+        rendered = _render_entity_file(kind, doc, body)
+        return None if rendered is None else rendered[0]
 
     def _merge_dirty_backlog_edit(
         self,
@@ -5221,37 +5456,17 @@ class Store:
             tx.connection.execute("DELETE FROM projection_base WHERE file=?", (prior_rel,))
         if any(old_row["file"] == rel for old_row in old_rows):
             old_rel = rel
-        doc = _from_json(row["doc"], {})
-        body = row["body"] or ""
-        # `(expected_doc, expected_body)` for the round-trip check, or None for a
-        # whole-document YAML file, which has its own comparison.
-        expected: tuple[Mapping[str, Any], str | None] | None
-        if kind == "task":
-            fm, rendered_body = task_v4_to_file(doc | ({BODY_KEY: body} if body else {}))
-            content = render_frontmatter(fm, rendered_body).encode("utf-8")
-            expected = (doc, body)
-        elif kind in {"epic", "phase"}:
-            heavy_fields = EPIC_HEAVY_FIELDS if kind == "epic" else PHASE_HEAVY_FIELDS
-            _slim, heavy, rendered_body = _split_entity_for_v3(
-                doc | ({BODY_KEY: body} if body else {}), heavy_fields
-            )
-            if not any(field in heavy for field in heavy_fields) and not rendered_body:
-                if old_rel:
-                    if not self._remove_projection_file(
-                        tx, self.backlog_path / old_rel, kind, ident, old_rel
-                    ):
-                        return
-                    tx.connection.execute("DELETE FROM projection WHERE file=?", (old_rel,))
-                    tx.connection.execute("DELETE FROM projection_base WHERE file=?", (old_rel,))
-                return
-            content = render_frontmatter(heavy, rendered_body).encode("utf-8")
-            expected = (heavy, rendered_body)
-        elif kind == "project":
-            content = yaml.dump(doc, default_flow_style=False, sort_keys=False, allow_unicode=True).encode("utf-8")
-            expected = None
-        else:
-            content = render_frontmatter(doc, body).encode("utf-8")
-            expected = (doc, body)
+        rendered = _render_entity_file(kind, _from_json(row["doc"], {}), row["body"])
+        if rendered is None:
+            if old_rel:
+                if not self._remove_projection_file(
+                    tx, self.backlog_path / old_rel, kind, ident, old_rel
+                ):
+                    return
+                tx.connection.execute("DELETE FROM projection WHERE file=?", (old_rel,))
+                tx.connection.execute("DELETE FROM projection_base WHERE file=?", (old_rel,))
+            return
+        content, expected = rendered
         # Matched here, once, so the verification below reads exactly the bytes
         # that land and `_replace_projection` does not probe the file a second
         # time — two extra opens per file across a 2,300-file adoption.
@@ -6326,6 +6541,40 @@ def _split_body(doc: Mapping[str, Any]) -> tuple[dict[str, Any], str | None]:
     return _clean_doc(materialized), body
 
 
+def _render_entity_file(
+    kind: str, doc: Mapping[str, Any], body: str | None
+) -> tuple[bytes, tuple[Mapping[str, Any], str | None] | None] | None:
+    """The bytes an entity projects to, plus what they must read back as.
+
+    The second item is `(expected_doc, expected_body)` for the round-trip
+    check, or None for a whole-document YAML file, which has its own
+    comparison. None overall means the entity has no file of its own: an epic
+    or phase with nothing beyond what `backlog.yaml` already carries.
+    """
+    doc = dict(doc)
+    body = body or ""
+    if kind == "task":
+        fm, rendered_body = task_v4_to_file(doc | ({BODY_KEY: body} if body else {}))
+        return render_frontmatter(fm, rendered_body).encode("utf-8"), (doc, body)
+    if kind in {"epic", "phase"}:
+        heavy_fields = EPIC_HEAVY_FIELDS if kind == "epic" else PHASE_HEAVY_FIELDS
+        _slim, heavy, rendered_body = _split_entity_for_v3(
+            doc | ({BODY_KEY: body} if body else {}), heavy_fields
+        )
+        if not any(field in heavy for field in heavy_fields) and not rendered_body:
+            return None
+        return (
+            render_frontmatter(heavy, rendered_body).encode("utf-8"),
+            (heavy, rendered_body),
+        )
+    if kind == "project":
+        return (
+            yaml.dump(doc, default_flow_style=False, sort_keys=False, allow_unicode=True).encode("utf-8"),
+            None,
+        )
+    return render_frontmatter(doc, body).encode("utf-8"), (doc, body)
+
+
 def _top_level_diff(
     before_doc: Mapping[str, Any], after_doc: Mapping[str, Any]
 ) -> tuple[list[str], dict[str, Any], dict[str, Any]]:
@@ -6394,6 +6643,49 @@ def _merge_change_details(
             fields.append(marker)
     if conflicts:
         before["_conflicts"] = conflicts
+    return fields, before, after
+
+
+def _unbased_merge_details(
+    our_doc: Mapping[str, Any],
+    their_doc: Mapping[str, Any],
+    *,
+    our_body: str | None,
+    their_body: str | None,
+) -> tuple[list[str], dict[str, Any], dict[str, Any]]:
+    """Describe taking the file whole when no base says who changed what.
+
+    Every field the two versions disagree on is a conflict with an unknown
+    base, each keeping the store's value in full; `_no_base` marks the merge
+    record where the store's side, not the file's, was the one set aside.
+    """
+    fields, before, after = _top_level_diff(our_doc, their_doc)
+    if our_body != their_body:
+        fields.append(BODY_KEY)
+        before[BODY_KEY] = our_body
+        after[BODY_KEY] = their_body
+    missing = object()
+
+    def side(value: Any) -> dict[str, Any]:
+        return {"present": value is not missing, "value": None if value is missing else value}
+
+    conflicts: dict[str, Any] = {}
+    for key in sorted(set(our_doc) | set(their_doc)):
+        ours = our_doc.get(key, missing)
+        theirs = their_doc.get(key, missing)
+        if ours != theirs:
+            conflicts[key] = {"base": {"present": False, "value": None, "unknown": True},
+                              "ours": side(ours), "theirs": side(theirs)}
+    if our_body != their_body:
+        conflicts[BODY_KEY] = {
+            "base": {"present": False, "value": None, "unknown": True},
+            "ours": side(missing if our_body is None else our_body),
+            "theirs": side(missing if their_body is None else their_body),
+        }
+    fields.extend(f"conflict:{key}" for key in conflicts)
+    if conflicts:
+        before["_conflicts"] = conflicts
+        before["_no_base"] = True
     return fields, before, after
 
 
