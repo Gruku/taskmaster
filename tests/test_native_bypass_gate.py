@@ -72,7 +72,12 @@ EXERCISES = {
     ("backlog_task_pipeline", None): lambda: bs.backlog_task_pipeline(task_id="test-epic-001"),
     ("backlog_get_task", None): lambda: [bs.backlog_get_task(task_id="test-epic-001", **kwargs) for kwargs in (
         {}, {"verbose": True}, {"expand_links": True}, {"verbose": True, "expand_links": True},
-        {"sections": ["notes"]})],
+        {"sections": ["notes"]}, {"sections": ["notes"], "provenance": True})],
+    ("backlog_document", None): lambda: [bs.backlog_document(**kwargs) for kwargs in (
+        {"kind": "task", "entity_id": "test-epic-001", "sections": ["notes"]},
+        {"kind": "task", "entity_id": "test-epic-001", "sections": ["notes"], "provenance": True},
+        {"kind": "handover", "entity_id": "2026-09-17-gate-handover"},
+        {"kind": "issue", "entity_id": "ISS-001", "sections": ["repro"]})],
     ("backlog_list_tasks", None): lambda: bs.backlog_list_tasks(verbose=True, limit=0),
     ("backlog_dependencies", None): lambda: bs.backlog_dependencies(task_id="test-epic-002"),
     ("backlog_next_available", None): lambda: bs.backlog_next_available(include_future_phases=True),
@@ -355,6 +360,53 @@ def test_store_reading_hooks_never_reach_the_legacy_store_or_scan_the_projection
     assert rigged == [], f"a hook bypassed the native core: {rigged}"
     from native_twins import committed
     assert committed(root)[("task", "test-epic-001")][0]["merge_status"]["master"]["merge_commit"] == "cafe"
+
+
+def test_the_native_sections_path_reads_no_file_when_the_prose_is_stored(tmp_path, monkeypatch):
+    """S10's contract: a stored document section is served from the store, never from disk.
+
+    The projection guard above cannot see this — a task's `docs` paths point outside
+    `.taskmaster/` — so this test rigs the project's document tree directly.
+    """
+    from contextlib import closing
+    import sqlite3
+
+    def seed():
+        bs.backlog_add_task(title="Imported spec", epic="test-epic", phase="dev",
+                            options={"docs": "spec:docs/spec.md"})
+        tree = Path.cwd() / "docs"
+        tree.mkdir(exist_ok=True)
+        (tree / "spec.md").write_text("On-disk text that must not be read.\n", encoding="utf-8")
+
+    twins = make_twins(tmp_path, monkeypatch, seed)
+    database = twins.native / ".taskmaster" / "local" / "store.db"
+    with closing(sqlite3.connect(database, isolation_level=None)) as connection:
+        key = connection.execute("SELECT entity_key FROM entity_core WHERE kind='task' "
+                                 "AND public_id='test-epic-001'").fetchone()[0]
+        connection.execute("INSERT INTO external_documents VALUES(?,'spec','docs/spec.md',?,'storedhash',7)",
+                           (key, "Stored spec prose.\n"))
+    tree = (twins.native / "docs").resolve()
+    touched = []
+
+    def guard(real):
+        def wrapper(self, *args, **kwargs):
+            try:
+                Path(self).resolve().relative_to(tree)
+            except (TypeError, ValueError, OSError):
+                return real(self, *args, **kwargs)
+            touched.append(str(self))
+            raise BypassViolation(f"read {self}")
+        return wrapper
+
+    with twins.at(twins.native):
+        for name in ("read_text", "read_bytes", "open"):
+            monkeypatch.setattr(Path, name, guard(getattr(Path, name)))
+        answer = bs.backlog_get_task(task_id="test-epic-001", sections=["spec"], provenance=True)
+        document = bs.backlog_document(kind="task", entity_id="test-epic-001", sections=["spec"])
+    assert touched == [], f"the native sections path read the document tree: {touched}"
+    assert "Stored spec prose." in answer and "On-disk text" not in answer
+    assert "source: import" in answer
+    assert "Stored spec prose." in document
 
 
 def test_the_rig_catches_a_legacy_read_and_a_projection_scan(rigged):
