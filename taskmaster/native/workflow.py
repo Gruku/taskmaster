@@ -324,14 +324,35 @@ def _entity(transaction, kind, ident):
 
 
 def _bugs_found_in(connection, task_id):
-    """Open/fixed live bug ids whose `found_in` matches, case-insensitively."""
+    """Open/fixed live bug ids whose `found_in` matches, case-insensitively.
+
+    The comparison folds case in Python, not in SQL: `lower()` without ICU folds
+    ASCII only, and the planner already visits one row per live bug either way.
+    A legacy document can carry a list or mapping here, where `json_extract` of
+    the value yields NULL and an SQL match would drop the row silently — closing
+    a task that has an open bug filed against it. The refusal has to say which
+    bug and what shape, as `_bundle_slug` does for a malformed bundle.
+    """
     rows = connection.execute(
-        "SELECT c.public_id,json_extract(c.status_json,'$') FROM entity_extensions x "
+        "SELECT c.public_id,json_extract(c.status_json,'$'),x.value_json FROM entity_extensions x "
         "JOIN entity_core c ON c.entity_key=x.entity_key "
         "WHERE x.field='found_in' AND c.kind='bug' AND c.deleted=0 AND c.archived=0 "
-        "AND lower(json_extract(x.value_json,'$'))=lower(?) ORDER BY c.public_id", (task_id,)).fetchall()
-    return ([ident for ident, status in rows if status == "open"],
-            [ident for ident, status in rows if status == "fixed"])
+        "ORDER BY c.public_id").fetchall()
+    wanted, open_bugs, fixed_bugs = (task_id or "").casefold(), [], []
+    for ident, status, value_json in rows:
+        # An empty list or mapping reads as "unset" here, exactly as legacy's
+        # `(found_in or "")` does; anything else non-string cannot be compared.
+        found_in = json.loads(value_json) or ""
+        if not isinstance(found_in, str):
+            raise ValueError(f"bug `{ident}` has a malformed found_in of type "
+                             f"{type(found_in).__name__}; expected a task id")
+        if found_in.casefold() != wanted:
+            continue
+        if status == "open":
+            open_bugs.append(ident)
+        elif status == "fixed":
+            fixed_bugs.append(ident)
+    return open_bugs, fixed_bugs
 
 
 def _bundle_slug(task, ident):
