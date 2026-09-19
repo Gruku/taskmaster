@@ -250,15 +250,19 @@ def test_probe_turns_a_raising_producer_into_an_unknown():
 
 
 def test_the_constant_and_the_resolver_agree_on_the_blocker_kinds():
-    resolution = resolve(Facts(
+    """Every kind the constant names is reachable, and `Blocker` refuses any kind
+    it does not name — so the two cannot drift apart in either direction."""
+    every = Facts(
         task=task(lane="full", gates={}, depends_on=["ghost-001"],
                   human_action="add the key"),
         dependencies={},
         bugs=[{"id": "B-118", "status": "open", "severity": "P0"}],
         handovers=[{"id": "HAND-004", "next_action": "resume"}],
-        claim=Claim(holder="sess-7f2", live=None),
-        session="alpha"))
-    assert set(kinds(resolution)) == set(MANDATORY_BLOCKER_KINDS)
+        claim=Claim(holder="sess-7f2", live=True),
+        session="alpha")
+    reachable = set(kinds(resolve(every)))
+    reachable |= set(kinds(resolve(clear_facts(bugs=Unknown("producer_failed", "boom")))))
+    assert reachable == set(MANDATORY_BLOCKER_KINDS)
 
 
 def test_a_kind_outside_the_constant_cannot_be_constructed():
