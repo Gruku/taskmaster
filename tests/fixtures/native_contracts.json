@@ -1836,6 +1836,42 @@
       "returns": "str",
       "transactional": false
     },
+    "backlog_document": {
+      "category": "targeted-query",
+      "documentation": "Read one entity's prose — named sections, or the whole document body.\n\nThe kind-general companion to `backlog_get_task(sections=...)`: use it to read\na handover's decisions, an issue's repro steps or an epic's design without\npulling the entity's whole record. On a native store the text comes from the\nstore itself; a task `docs` file that has never been imported is read from\ndisk and `provenance=True` says so.\n\nArgs:\n    kind: Entity kind to read.\n    entity_id: The entity's ID (e.g. \"ue-plugin-003\", \"ISS-004\").\n    sections: Named sections to return (e.g. [\"decisions\", \"blockers\"]).\n        Omit for the whole document body. Canonical sections per kind:\n        task — notes, review_instructions, spec, plan, design, analysis,\n        roadmap; handover — decisions, notes, blockers, where_id_start;\n        issue — repro, investigation, notes; epic — notes, design, spec,\n        roadmap, analysis; phase — notes, design, roadmap. Other kinds have\n        no named sections.\n    provenance: Annotate each section with where its text came from.",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "kind",
+          "required": true,
+          "type": "Literal['task', 'epic', 'phase', 'handover', 'issue', 'bug', 'decision', 'idea', 'note']"
+        },
+        {
+          "mode": "positional",
+          "name": "entity_id",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "sections",
+          "required": false,
+          "type": "list[str] | None"
+        },
+        {
+          "default_expression": "False",
+          "default_value": false,
+          "mode": "positional",
+          "name": "provenance",
+          "required": false,
+          "type": "bool"
+        }
+      ],
+      "returns": "str",
+      "transactional": false
+    },
     "backlog_epic_status": {
       "category": "targeted-query",
       "documentation": "Show progress for an epic: status counts, per-component rollup, and the\ndesign-maturity lock. Derived on read from the epic's tasks — no stored rollup.\n\nArgs:\n    epic_id: The epic ID (e.g. \"asset-engine\").",
@@ -1852,7 +1888,7 @@
     },
     "backlog_get_task": {
       "category": "targeted-query",
-      "documentation": "Get details for a single task including epic context and related tasks.\n\nBy default returns a slim view (tldr, status, priority, key links) to\nminimise token cost. Use verbose=True for the full body (notes, review\ninstructions, docs, spec-review record, epic context). Use sections to\npull specific named body sections (e.g. [\"notes\", \"spec\"]). Use\nexpand_links=True to swap dependency/issue IDs for {id, tldr} pills —\nhonored in both slim and verbose modes (uniform across all _get tools).\n\nArgs:\n    task_id: The task ID (e.g., \"ue-plugin-003\")\n    verbose: If True, include full body fields (notes, review_instructions,\n        docs, spec-review, epic context, recently completed tasks).\n    sections: Named sections to include (e.g. [\"notes\", \"spec\"]).\n        Canonical sections for tasks: notes, review_instructions, spec,\n        plan, design, analysis, roadmap.\n    expand_links: If True, replace bare IDs in depends_on,\n        related_issues with {id, tldr} pills.",
+      "documentation": "Get details for a single task including epic context and related tasks.\n\nBy default returns a slim view (tldr, status, priority, key links) to\nminimise token cost. Use verbose=True for the full body (notes, review\ninstructions, docs, spec-review record, epic context). Use sections to\npull specific named body sections (e.g. [\"notes\", \"spec\"]). Use\nexpand_links=True to swap dependency/issue IDs for {id, tldr} pills —\nhonored in both slim and verbose modes (uniform across all _get tools).\n\nArgs:\n    task_id: The task ID (e.g., \"ue-plugin-003\")\n    verbose: If True, include full body fields (notes, review_instructions,\n        docs, spec-review, epic context, recently completed tasks).\n    sections: Named sections to include (e.g. [\"notes\", \"spec\"]).\n        Canonical sections for tasks: notes, review_instructions, spec,\n        plan, design, analysis, roadmap.\n    expand_links: If True, replace bare IDs in depends_on,\n        related_issues with {id, tldr} pills.\n    provenance: With sections, annotate each section with where its text came\n        from — an imported document (path, content_hash, imported_seq), an\n        inline field, or a file read off disk that was never imported.",
       "parameters": [
         {
           "mode": "positional",
@@ -1881,6 +1917,14 @@
           "default_value": false,
           "mode": "positional",
           "name": "expand_links",
+          "required": false,
+          "type": "bool"
+        },
+        {
+          "default_expression": "False",
+          "default_value": false,
+          "mode": "positional",
+          "name": "provenance",
           "required": false,
           "type": "bool"
         }

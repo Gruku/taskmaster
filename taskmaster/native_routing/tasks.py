@@ -680,10 +680,10 @@ def _links_block(snapshot, lines, task, *, expand_links, peers):
 
 
 @adapter("backlog_get_task")
-def get_task(call, *, task_id, verbose, sections, expand_links):
-    from taskmaster.taskmaster_v3 import BODY_KEY, expand_link_ids, resolve_sections, slim_entity
+def get_task(call, *, task_id, verbose, sections, expand_links, provenance):
+    from taskmaster.taskmaster_v3 import expand_link_ids, render_sections, slim_entity
+    from . import documents
     backlog = bs._backlog_path()
-    project_root = backlog.parent.parent if backlog.exists() else None
     with call.read() as snapshot:
         found = reads.find_task(snapshot, task_id)
         if not found:
@@ -694,14 +694,12 @@ def get_task(call, *, task_id, verbose, sections, expand_links):
                     "or name at least one section")
         if sections:
             try:
-                resolved = resolve_sections(task, kind="task", sections=sections, body=task.get(BODY_KEY, ""),
-                                            project_root=project_root)
+                content, facts = documents.sections_with_provenance(
+                    snapshot, "task", task["id"], sections, documents.project_root())
             except ValueError as exc:
                 return f"Error: {exc}"
-            lines = [f"## `{task['id']}` — {task['title']}\n"]
-            for section, content in resolved.items():
-                lines.append(f"### {section}\n{content}")
-            return "\n".join(lines)
+            return render_sections(f"## `{task['id']}` — {task['title']}", content,
+                                   facts if provenance else None)
         if not verbose:
             handovers = _open_handovers(snapshot, task_id) if backlog.exists() else []
             slim = slim_entity(task, kind="task", open_handovers=handovers or None)
