@@ -18,15 +18,19 @@ from . import derived, gate, reads, runtime
 
 
 def database():
-    """The project's native database for this request, or None for a legacy store."""
+    """The project's native database for this request, or None for a legacy store.
+
+    `NativeUnavailable` is deliberately not caught: None is the handler's sentinel
+    for a legacy store, so answering it for a native store this runtime cannot
+    serve sends every route into the legacy body, where admission refuses anyway —
+    past `handle_one_request`, as a bare 500 and a dropped connection, and for the
+    write verbs only after `_transaction()` has opened. The refusal is the answer.
+    """
     try:
         backlog_path = bs._backlog_path()
     except RuntimeError:
         return None
-    try:
-        return gate.native_database(backlog_path)
-    except gate.NativeUnavailable:
-        return None
+    return gate.native_database(backlog_path)
 
 
 def _open(database):

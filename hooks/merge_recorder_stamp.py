@@ -247,7 +247,16 @@ def stamp(src: str, cwd: Path) -> None:
         return
 
     # Resolve rung: named ladder rung, or "branch:<name>" for untracked targets.
-    ladder = native_ladder(db_file)
+    # The native ladder read opens its own connection, so a merge landing while
+    # the server holds the writer can time it out; `assert_native` can refuse the
+    # store outright. Neither may cost the stamp: `_resolved_merge_targets` is the
+    # same fallback the legacy path takes, down to the default ladder, and the
+    # reason is logged the way every other step in this function logs its own.
+    try:
+        ladder = native_ladder(db_file)
+    except Exception as exc:
+        _log(root, f"native merge ladder unreadable ({exc!r}); resolving the rung from the projection")
+        ladder = None
     if ladder is None:
         ladder = _bs._resolved_merge_targets()
     rung = _bs._rung_for_branch(current, ladder) or f"branch:{current}"

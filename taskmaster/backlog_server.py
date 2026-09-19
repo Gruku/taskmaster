@@ -33,6 +33,7 @@ from functools import wraps
 
 from taskmaster import store
 from taskmaster import yaml_io
+from taskmaster.admission import UnsupportedStoreError
 from taskmaster.blast_radius import (
     BlastRadiusConfig,
     load_config,
@@ -9539,7 +9540,13 @@ class ViewerHandler(BaseHTTPRequestHandler):
         _TX_STATE.export_warnings = []
         try:
             super().handle_one_request()
-        except store.LegacyLayoutError as exc:
+        except (store.LegacyLayoutError, UnsupportedStoreError) as exc:
+            # Both are store-state conflicts an operator resolves, not server
+            # faults and not transient load: a store the client may not open
+            # answers 409, like the refused layout, never 503 (nothing here
+            # becomes servable by retrying) and never a bare 500. The request
+            # body may be unread, so this connection does not carry another.
+            self.close_connection = True
             try:
                 self._send_json(409, {"ok": False, "error": str(exc)})
             except Exception:
@@ -9958,10 +9965,11 @@ class ViewerHandler(BaseHTTPRequestHandler):
                     key=lambda p: (p.get("order") if p.get("order") is not None else 999),
                 )
             self._send_json(200, data, etag=etag)
-        except store.LegacyLayoutError as exc:
-            # A layout the store refuses is a conflict the operator can fix, not
-            # a server fault: 500 sent the viewer into its generic error state
-            # and hid the one instruction that resolves it.
+        except (store.LegacyLayoutError, UnsupportedStoreError) as exc:
+            # A layout the store refuses, or a store no client may open, is a
+            # conflict the operator can fix, not a server fault: 500 sent the
+            # viewer into its generic error state and hid the one instruction
+            # that resolves it. The blanket handler below would swallow these.
             self._send_json(409, {"ok": False, "error": str(exc)})
         except Exception as e:
             self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(e))

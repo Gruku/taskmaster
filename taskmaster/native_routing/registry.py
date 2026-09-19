@@ -120,7 +120,9 @@ def route(tool: str, legacy: Callable, backlog_path, session: str, args, kwargs)
     try:
         database = gate.native_database(backlog_path)
     except gate.NativeUnavailable as exc:
-        return f"Error: {exc}"
+        # Same seam as an unrouted tool, so the same contract: the JSON routers
+        # parse whatever comes back, and a bare "Error: ..." crashes them.
+        return json.dumps({"error": str(exc)}) if tool in JSON_ERRORS else f"Error: {exc}"
     if database is None:
         return NotImplemented
     return dispatch(tool, legacy, database, database.parent.parent, session, args, kwargs)
