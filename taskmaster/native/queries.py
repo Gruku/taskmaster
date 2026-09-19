@@ -256,7 +256,7 @@ class Snapshot:
         sequence = int(self.identity["event_high_water"])
         envelope = {"store_id": self.identity["store_id"], "source_digest": self.identity["source_digest"],
                     "sequence": sequence, "scope": scope, "group_commits": group_commits}
-        floor = 0
+        floor = self.change_history_floor()
         try:
             if cursor:
                 after = cursors.parse(cursor, store_id=envelope["store_id"], scope=scope,
@@ -301,6 +301,26 @@ class Snapshot:
             commits[-1]["changes"].append(_change(event))
         return cursors.feed(items=commits, last_seq=max(g["final_seq"] for g in groups),
                             more=more, **envelope)
+
+    def change_history_floor(self):
+        """The oldest sequence a cursor may still resume from.
+
+        Read on every call, never cached: an operator raising the floor must take
+        effect on the next question, not on the next process. Nothing in the
+        shipped code writes it — no pruner exists (D4) — so it is the contract a
+        future pruner honours and the only way expiry is exercised today.
+
+        An unreadable value refuses the call. Defaulting to zero would let a
+        corrupt floor admit history the store can no longer vouch for, and a
+        replayed change is one an agent acts on twice.
+        """
+        row = self.connection.execute("SELECT value_json FROM sync_state WHERE key=?", (cursors.FLOOR_KEY,)).fetchone()
+        if row is None:
+            return 0
+        value = json.loads(row[0])
+        if type(value) is not int or value < 0:
+            raise ValueError(f"{cursors.FLOOR_KEY} is not a sequence number")
+        return value
 
     def _change_scope(self, scope, after):
         """The scope filters as SQL. `epic` is membership *at the time of the event*.
