@@ -222,19 +222,29 @@ def test_a_scope_filter_reports_only_the_kinds_and_ids_it_names(native):
         assert (commit["first_seq"], commit["final_seq"]) == (101, 102)
 
 
+def _move(connection, key, epic):
+    """The one path that reassigns a task's epic: the viewer's document patch."""
+    return _command(connection, "task.viewer_update",
+                    {"id": "same", "patch": {"epic": epic}, "if_match": ""}, key)
+
+
 def test_an_epic_scope_reports_the_epic_row_its_tasks_and_a_task_leaving_it(native):
     """Filtered removal is the dangerous case: scoping by current membership
     alone would silently never report the change that moved a task out."""
     with closing(sqlite3.connect(native, isolation_level=None)) as connection:
-        _patch(connection, "join", epic="same")
+        # The fixture task sits in an epic that does not exist; give it one so the
+        # viewer patch — the only operation that reassigns an epic — will run.
+        _command(connection, "epic.create", {"epic_id": "missing", "name": "Missing", "done_when": "never"}, "mk")
         start = _feed(connection, epic="same")["cursor"]
+        _move(connection, "join", "same")
         _command(connection, "epic.update", {"id": "same", "field": "name", "value": "Renamed"}, "epic")
-        _patch(connection, "leave", epic="missing")
+        _move(connection, "leave", "missing")
         _patch(connection, "elsewhere", next_step="not in the epic")
         answer = _feed(connection, cursor=start, epic="same")
-        assert [(c["kind"], c["id"]) for c in answer["commits"][0]["changes"]] == [("epic", "same")]
-        assert [c["fields"] for c in answer["commits"][1]["changes"]] == [["epic"]]
-        assert len(answer["commits"]) == 2
+        assert [[(c["kind"], c["id"]) for c in commit["changes"]] for commit in answer["commits"]] == [
+            [("task", "same")], [("epic", "same")], [("task", "same")]]
+        assert "epic" in answer["commits"][0]["changes"][0]["fields"]
+        assert "epic" in answer["commits"][2]["changes"][0]["fields"]
 
 
 def test_backfilled_history_without_a_commit_row_is_one_commit_each(native):
