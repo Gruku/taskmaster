@@ -4,7 +4,7 @@ from contextlib import contextmanager
 import hashlib
 import json
 
-from . import schema
+from . import cursors, schema
 from .db import verified_snapshot
 from .migrate import encode, rows
 
@@ -227,6 +227,102 @@ class Snapshot:
         values = rows(self.connection, " UNION ALL ".join(parts) + " ORDER BY kind,id,field,ordinal LIMIT ?", [kind, ident] * len(parts) + [limit + 1])
         return self._envelope(items=values[:limit], truncated=len(values) > limit)
 
+    # The change feed. `domain_events.seq` is `INTEGER PRIMARY KEY AUTOINCREMENT`
+    # allocated inside the command's own `BEGIN IMMEDIATE`, and SQLite admits one
+    # writer at a time, so seq order is commit order and a reader can never see
+    # seq N without every seq below it. That is what makes a bare sequence a
+    # sound cursor; the fence it carries lives in `native.cursors`.
+    _EVENT_COLUMNS = ("e.seq,e.ts,e.session,e.kind,e.id,e.op,e.fields,"
+                      "COALESCE(c.operation,e.tool) operation,"
+                      "COALESCE(c.first_seq,e.seq) first_seq,COALESCE(c.final_seq,e.seq) final_seq ")
+
+    def changes_since(self, cursor="", *, kinds=None, ids=None, epic="", limit=100,
+                      group_commits=True, since_seq=None):
+        """What moved after this cursor, as whole commits in sequence order.
+
+        Answers a resync instead of raising whenever the cursor can no longer be
+        honoured, so a routine condition costs the caller one more call rather
+        than an error branch in every skill. With neither a cursor nor
+        `since_seq` the answer is a cursor at the current sequence and nothing
+        else: "start watching from now".
+        """
+        self._check()
+        scope = cursors.scope(kinds, ids, epic, group_commits)
+        page_limit(limit)
+        if since_seq is not None and (type(since_seq) is not int or since_seq < 0):
+            raise ValueError("since_seq must be a sequence number of 0 or more")
+        if cursor and since_seq is not None:
+            raise ValueError("pass a cursor or since_seq, not both")
+        sequence = int(self.identity["event_high_water"])
+        envelope = {"store_id": self.identity["store_id"], "source_digest": self.identity["source_digest"],
+                    "sequence": sequence, "scope": scope, "group_commits": group_commits}
+        floor = 0
+        try:
+            if cursor:
+                after = cursors.parse(cursor, store_id=envelope["store_id"], scope=scope,
+                                      source_digest=envelope["source_digest"], floor=floor)
+            elif since_seq is not None:
+                # An explicit sequence takes its scope from this call, so it can
+                # never smuggle a wider scope in the way a fabricated cursor could.
+                after = min(since_seq, sequence)
+                if after < floor:
+                    raise cursors.HistoryExpired("change history before this sequence is no longer retained")
+            else:
+                return cursors.feed(items=[], last_seq=sequence, more=False, **envelope)
+        except cursors.CursorInvalid as exc:
+            return cursors.resync(exc, **envelope)
+        conditions, args = self._change_scope(scope, after)
+        source = "FROM domain_events e LEFT JOIN command_commits c USING(commit_key) WHERE " + " AND ".join(conditions)
+        if not group_commits:
+            events = rows(self.connection, "SELECT " + self._EVENT_COLUMNS + source + " ORDER BY e.seq LIMIT ?",
+                          args + [limit + 1])
+            more, events = len(events) > limit, events[:limit]
+            items = [{"seq": e["seq"], "ts": e["ts"], "session": e["session"],
+                      "operation": e["operation"], **_change(e)} for e in events]
+            return cursors.feed(items=items, last_seq=events[-1]["seq"] if events else after,
+                                more=more, **envelope)
+        # A commit is never split across pages: the page is chosen by commit
+        # extent, and the continuation advances to the last kept commit's
+        # `final_seq`, so an out-of-scope event inside it cannot re-report it.
+        groups = rows(self.connection, "SELECT DISTINCT COALESCE(c.first_seq,e.seq) first_seq,"
+                      "COALESCE(c.final_seq,e.seq) final_seq " + source + " ORDER BY first_seq LIMIT ?",
+                      args + [limit + 1])
+        more, groups = len(groups) > limit, groups[:limit]
+        if not groups:
+            return cursors.feed(items=[], last_seq=after, more=False, **envelope)
+        events = rows(self.connection, "SELECT " + self._EVENT_COLUMNS + source +
+                      " AND COALESCE(c.first_seq,e.seq)<=? ORDER BY e.seq", args + [groups[-1]["first_seq"]])
+        commits = []
+        for event in events:
+            if not commits or commits[-1]["first_seq"] != event["first_seq"]:
+                commits.append({"commit_seq": event["final_seq"], "first_seq": event["first_seq"],
+                                "final_seq": event["final_seq"], "operation": event["operation"],
+                                "ts": event["ts"], "session": event["session"], "changes": []})
+            commits[-1]["changes"].append(_change(event))
+        return cursors.feed(items=commits, last_seq=max(g["final_seq"] for g in groups),
+                            more=more, **envelope)
+
+    def _change_scope(self, scope, after):
+        """The scope filters as SQL. `epic` is membership *at the time of the event*.
+
+        Current membership alone would silently never report the one change a
+        watcher most needs — the one that moved a task out of the epic — so an
+        event whose own before/after names the epic is in scope too.
+        """
+        _label, kinds, ids, epic, _grouped = scope
+        conditions, args = ["e.seq>?"], [after]
+        for column, values in (("kind", kinds), ("id", ids)):
+            if values:
+                conditions.append(f"e.{column} IN ({','.join('?' for _ in values)})")
+                args.extend(values)
+        if epic:
+            conditions.append("((e.kind='epic' AND e.id=?) OR (e.kind='task' AND (e.id IN "
+                              "(SELECT c2.public_id FROM entity_core c2 JOIN task_operational t USING(entity_key) "
+                              "WHERE c2.kind='task' AND json_extract(t.epic_json,'$')=?) "
+                              "OR json_extract(e.before,'$.epic')=? OR json_extract(e.after,'$.epic')=?)))")
+            args.extend([epic] * 4)
+        return conditions, args
+
     def sql(self, statement, *, limit=500, timeout=None):
         """Explicit full compatibility snapshot, with materialization counters."""
         self._check()
@@ -237,3 +333,14 @@ class Snapshot:
         self._check()
         from .documents import retrieve
         return retrieve(self, kind, ident, sections=sections)
+
+
+def _change(event):
+    """One event as the feed reports it: what changed, never the authored values.
+
+    `before`/`after` are unbounded authored documents and would defeat the whole
+    point of a scoped query, so the feed names the fields and the caller reads
+    the current value if it wants one.
+    """
+    return {"seq": event["seq"], "kind": event["kind"], "id": event["id"], "op": event["op"],
+            "fields": json.loads(event["fields"]) if event["fields"] else []}
