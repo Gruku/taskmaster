@@ -322,3 +322,52 @@ def test_the_feed_refuses_an_unknown_kind_and_an_out_of_range_limit(native):
             _feed(connection, limit=0)
         with pytest.raises(ValueError, match="limit"):
             _feed(connection, limit=501)
+
+
+def _set_floor(connection, value):
+    connection.execute("INSERT INTO sync_state(key,value_json) VALUES('change_history_floor',?) "
+                       "ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json", (json.dumps(value),))
+
+
+def test_a_cursor_below_the_retention_floor_answers_history_expired(native):
+    """No pruner ships (D4) — pruning `domain_events` would break the migration
+    oracle that compares it row-for-row against the legacy `changes` table — so
+    expiry is expressed, and tested, by raising the floor."""
+    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+        cursor = _feed(connection)["cursor"]
+        _patch(connection, "one", next_step="one")
+        _set_floor(connection, 100)
+        assert _seqs(_feed(connection, cursor=cursor)) == [101]
+        _set_floor(connection, 101)
+        expired = _feed(connection, cursor=cursor)
+        assert expired["resync_required"] is True and expired["reason"] == "history_expired"
+        assert expired["commits"] == []
+        # The fresh cursor is above the floor, so recovery takes exactly one call.
+        assert _feed(connection, cursor=expired["cursor"])["resync_required"] is False
+
+
+def test_the_floor_is_read_on_every_call_not_cached_for_the_snapshot(native):
+    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+        cursor = _feed(connection)["cursor"]
+        assert _feed(connection, cursor=cursor)["resync_required"] is False
+        _set_floor(connection, 101)
+        assert _feed(connection, cursor=cursor)["reason"] == "history_expired"
+        _set_floor(connection, 0)
+        assert _feed(connection, cursor=cursor)["resync_required"] is False
+
+
+def test_an_explicit_since_seq_below_the_floor_expires_the_same_way(native):
+    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+        _set_floor(connection, 50)
+        assert _feed(connection, since_seq=50)["resync_required"] is False
+        expired = _feed(connection, since_seq=49)
+        assert expired["resync_required"] is True and expired["reason"] == "history_expired"
+
+
+def test_an_unreadable_floor_refuses_loudly_rather_than_admitting_expired_history(native):
+    """A floor that cannot be read cannot prove history is retained, and a feed
+    that silently assumed zero would replay work an agent already acted on."""
+    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+        _set_floor(connection, "not a sequence")
+        with pytest.raises(ValueError, match="change_history_floor"):
+            _feed(connection)
