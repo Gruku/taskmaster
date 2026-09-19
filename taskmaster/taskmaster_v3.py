@@ -3786,9 +3786,11 @@ def compute_issue_aging(issue: dict, aging_cfg: dict, now=None) -> dict:
         Stale: pct >= 60
 
     `percent` may exceed 100 for very stale issues; clamp at 200 for display.
-    """
-    from datetime import datetime, timezone
 
+    `now` defaults to the module's `datetime`, never a function-local import: a
+    private import shadows the clock the twin harness patches, and the viewer's
+    aging percent is then read from the real clock on one half of a comparison.
+    """
     if now is None:
         now = datetime.now(timezone.utc)
 
