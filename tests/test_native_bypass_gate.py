@@ -76,10 +76,15 @@ EXERCISES = {
     ("backlog_list_tasks", None): lambda: bs.backlog_list_tasks(verbose=True, limit=0),
     ("backlog_dependencies", None): lambda: bs.backlog_dependencies(task_id="test-epic-002"),
     ("backlog_next_available", None): lambda: bs.backlog_next_available(include_future_phases=True),
-    ("backlog_batch_update", None): lambda: bs.backlog_batch_update(operations=chr(10).join([
+    # Both forms: the partial line form and the atomic `commands` form, which is a
+    # separate path and must be just as free of the legacy store and a projection scan.
+    ("backlog_batch_update", None): lambda: (bs.backlog_batch_update(operations=chr(10).join([
         "update test-epic-001 depends_on test-epic-002", "update test-epic-001 phase Development",
         "status test-epic-002 in-progress", "complete test-epic-002", "pick test-epic-001",
         "archive test-epic-002 wont-fix", "update_epic test-epic name Renamed"])),
+        bs.backlog_batch_update(commands=[
+            {"operation": "task.patch", "arguments": {"id": "test-epic-001", "set": {"title": "Gated"}}},
+            {"operation": "note.create", "arguments": {"text": "gate batch note"}}], atomic=True)),
     ("backlog_add_epic", None): lambda: bs.backlog_add_epic(epic_id="gate-epic", name="Gate", done_when="x"),
     ("backlog_update_epic", None): lambda: [bs.backlog_update_epic(epic_id="test-epic", field=f, value=v) for f, v in (
         ("name", "Renamed"), ("docs", "plan:p.md"), ("components", '{"ui": {"title": "UI", "after": []}}'),

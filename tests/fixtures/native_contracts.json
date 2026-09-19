@@ -1046,13 +1046,39 @@
     },
     "backlog_batch_update": {
       "category": "composite-command",
-      "documentation": "Apply multiple task/epic updates in a single atomic operation. One load/save cycle.\n\nUse this instead of calling backlog_update_task repeatedly — it's faster and atomic.\n\nArgs:\n    operations: Newline-separated list of operations. Each line format:\n        \"update {task_id} {field} {value}\" — update a task field\n        \"status {task_id} {new_status}\" — shorthand for status changes\n        \"complete {task_id}\" — mark task done (shorthand for status done)\n        \"archive {task_id} [reason]\" — archive a task (default reason: done)\n        \"pick {task_id}\" — set task to in-progress with started timestamp\n        \"update_epic {epic_id} {field} {value}\" — update an epic field",
+      "documentation": "Apply multiple task/epic updates in one call. Two forms; pass exactly one.\n\nUse this instead of calling backlog_update_task repeatedly — it's faster and atomic.\n\nArgs:\n    operations: Newline-separated list of operations. Each line format:\n        \"update {task_id} {field} {value}\" — update a task field\n        \"status {task_id} {new_status}\" — shorthand for status changes\n        \"complete {task_id}\" — mark task done (shorthand for status done)\n        \"archive {task_id} [reason]\" — archive a task (default reason: done)\n        \"pick {task_id}\" — set task to in-progress with started timestamp\n        \"update_epic {epic_id} {field} {value}\" — update an epic field\n      This form is partial: a bad line reports its own error and every good\n      line still applies. Answered as text.\n    commands: Typed mutations — [{\"operation\": \"task.patch\", \"arguments\": {...}}]\n      — applied in ONE transaction, all of them or none. Each operation is\n      validated by name against the store's operation allowlist; there is no\n      passthrough. Native-authority stores only. Answered as JSON.\n    expected_revisions: [{\"kind\", \"id\", \"revision\"}] preconditions for the\n      `commands` form. A mismatch applies nothing and says so.\n    atomic: Only for the `commands` form, which is all-or-nothing; pass True to\n      say so explicitly. The line form's partial apply cannot be made atomic.",
       "parameters": [
         {
+          "default_expression": "''",
+          "default_value": "",
           "mode": "positional",
           "name": "operations",
-          "required": true,
+          "required": false,
           "type": "str"
+        },
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "commands",
+          "required": false,
+          "type": "list[dict] | None"
+        },
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "expected_revisions",
+          "required": false,
+          "type": "list[dict] | None"
+        },
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "atomic",
+          "required": false,
+          "type": "bool | None"
         }
       ],
       "returns": "str",

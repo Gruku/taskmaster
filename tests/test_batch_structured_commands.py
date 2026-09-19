@@ -183,13 +183,15 @@ def test_several_commands_commit_in_one_transaction_with_a_receipt(native_projec
         _patch("test-epic-002", "Second renamed")]))
 
     assert result["ok"] is True, result
-    assert result["applied"] == 2, result
+    assert result["applied"] is True and result["commands"] == 2, result
     receipt = result["receipt"]
     assert receipt["request_id"], receipt
     affected = {(entry["kind"], entry["id"]): entry["revision"] for entry in receipt["affected"]}
     assert set(affected) == {("task", "test-epic-001"), ("task", "test-epic-002")}, receipt
-    # One transaction: every entity carries the same commit sequence.
-    assert {entry["last_seq"] for entry in receipt["affected"]} == {receipt["commit_seq"]}, receipt
+    assert set(affected.values()) == {2}, "both revisions must advance in the one commit"
+    # One transaction, one receipt: each entity's own event sequence sits inside
+    # the commit, whose sequence is the last one it allocated.
+    assert receipt["commit_seq"] == max(entry["last_seq"] for entry in receipt["affected"]), receipt
     assert _title(native_project, "test-epic-001") == "First renamed"
     assert _title(native_project, "test-epic-002") == "Second renamed"
 
