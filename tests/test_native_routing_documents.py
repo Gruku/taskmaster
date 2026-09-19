@@ -110,3 +110,50 @@ def test_document_refusals_match(twins, kwargs):
 
 def test_document_whole_body_of_a_kind_without_canonical_sections(twins):
     twins.same("backlog_document", kind="bug", entity_id="B-001")
+
+
+# -- The narrow importer (S11, decision D7) -----------------------------------
+
+
+def test_import_moves_the_sections_answer_into_the_store(twins):
+    with twins.at(twins.native):
+        report = bs.backlog_document_import(kind="task", entity_id="test-epic-001")
+        assert "spec" in report and "docs/spec.md" in report
+        # A declared doc with no file is reported, not refused, and nothing is stored.
+        assert "docs/missing.md" in report
+        # From here the answer is the store's, so an edit on disk is not served.
+        (twins.native / "docs" / "spec.md").write_text("Edited on disk.\n", encoding="utf-8")
+        answer = bs.backlog_get_task(task_id="test-epic-001", sections=["spec"], provenance=True)
+        assert "The real spec text." in answer and "Edited on disk." not in answer
+        assert "source: import" in answer and "content_hash" in answer
+        document = bs.backlog_document(kind="task", entity_id="test-epic-001", sections=["spec"])
+        assert "The real spec text." in document
+
+
+def test_import_is_idempotent_and_reimports_an_edited_file_on_request(twins):
+    with twins.at(twins.native):
+        bs.backlog_document_import(kind="task", entity_id="test-epic-001", sections=["spec"])
+        assert "unchanged" in bs.backlog_document_import(kind="task", entity_id="test-epic-001",
+                                                         sections=["spec"])
+        (twins.native / "docs" / "spec.md").write_text("Second revision.\n", encoding="utf-8")
+        bs.backlog_document_import(kind="task", entity_id="test-epic-001", sections=["spec"])
+        assert "Second revision." in bs.backlog_document(kind="task", entity_id="test-epic-001",
+                                                          sections=["spec"])
+
+
+@pytest.mark.parametrize("kwargs,expected", [
+    ({"kind": "task", "entity_id": "ghost-1"}, "not found"),
+    ({"kind": "task", "entity_id": "test-epic-001", "sections": ["notes"]}, "section"),
+    ({"kind": "task", "entity_id": "test-epic-001", "sections": []}, "sections=[]"),
+    ({"kind": "handover", "entity_id": HANDOVER}, "task"),
+])
+def test_import_refusals(twins, kwargs, expected):
+    with twins.at(twins.native):
+        answer = bs.backlog_document_import(**kwargs)
+    assert answer.startswith("Error:") and expected in answer, answer
+
+
+def test_import_refuses_on_a_legacy_store(twins):
+    with twins.at(twins.legacy):
+        answer = bs.backlog_document_import(kind="task", entity_id="test-epic-001")
+    assert answer.startswith("Error:") and "native" in answer
