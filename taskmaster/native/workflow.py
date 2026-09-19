@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 import json
 
 from taskmaster import taskmaster_v3 as domain_v3
-from . import domain
+from . import batch_lines, domain
 from .contracts import Conflict, _identifier
 from .queries import MAX_PAGE
 
@@ -24,6 +24,12 @@ OPERATIONS = TASK_OPERATIONS | {
     "bug.promote", "link.create", "link.remove",
     "area.create", "area.update", "thread.update",
     "project.set", "linear.link", "linear.unlink",
+    # One `backlog_batch_update` line each, applied with that tool's own line
+    # semantics (`native.batch_lines`) inside the all-or-nothing native batch.
+    "task.batch_line", "epic.batch_line",
+    # The viewer's edit-in-UI writes: whole-document patches with a store-wide
+    # If-Match precondition, applied with the viewer's own stamping rules.
+    "task.viewer_create", "task.viewer_update", "task.viewer_archive",
 }
 
 def _text(arguments, name, *, default=""):
@@ -263,6 +269,31 @@ def validate(operation, arguments):
     elif operation == "linear.unlink":
         _keys(arguments, {"task_id"}, operation)
         _identifier(arguments.get("task_id"), "task id")
+    elif operation == "task.batch_line":
+        _keys(arguments, {"id", "op", "field", "value", "status", "reason"}, operation)
+        _identifier(arguments.get("id"), "task id")
+        if arguments.get("op") not in batch_lines.TASK_OPS:
+            raise ValueError(f"task.batch_line op must be one of {', '.join(batch_lines.TASK_OPS)}")
+        for name in ("field", "value", "status", "reason"):
+            _text(arguments, name)
+    elif operation in ("task.viewer_create", "task.viewer_update", "task.viewer_archive"):
+        allowed = {"task.viewer_create": {"epic", "payload"}, "task.viewer_update": {"id", "patch", "if_match"},
+                   "task.viewer_archive": {"id", "if_match"}}[operation]
+        _keys(arguments, allowed, operation)
+        if operation == "task.viewer_create":
+            _identifier(arguments.get("epic"), "epic id")
+            if not isinstance(arguments.get("payload"), dict):
+                raise ValueError("payload must be an object")
+        else:
+            _identifier(arguments.get("id"), "task id")
+            _text(arguments, "if_match")
+            if operation == "task.viewer_update" and not isinstance(arguments.get("patch"), dict):
+                raise ValueError("patch must be an object")
+    elif operation == "epic.batch_line":
+        _keys(arguments, {"id", "field", "value"}, operation)
+        _identifier(arguments.get("id"), "epic id")
+        _text(arguments, "field")
+        _text(arguments, "value")
     else:
         raise ValueError(f"unsupported operation: {operation}")
 
@@ -293,14 +324,35 @@ def _entity(transaction, kind, ident):
 
 
 def _bugs_found_in(connection, task_id):
-    """Open/fixed live bug ids whose `found_in` matches, case-insensitively."""
+    """Open/fixed live bug ids whose `found_in` matches, case-insensitively.
+
+    The comparison folds case in Python, not in SQL: `lower()` without ICU folds
+    ASCII only, and the planner already visits one row per live bug either way.
+    A legacy document can carry a list or mapping here, where `json_extract` of
+    the value yields NULL and an SQL match would drop the row silently — closing
+    a task that has an open bug filed against it. The refusal has to say which
+    bug and what shape, as `_bundle_slug` does for a malformed bundle.
+    """
     rows = connection.execute(
-        "SELECT c.public_id,json_extract(c.status_json,'$') FROM entity_extensions x "
+        "SELECT c.public_id,json_extract(c.status_json,'$'),x.value_json FROM entity_extensions x "
         "JOIN entity_core c ON c.entity_key=x.entity_key "
         "WHERE x.field='found_in' AND c.kind='bug' AND c.deleted=0 AND c.archived=0 "
-        "AND lower(json_extract(x.value_json,'$'))=lower(?) ORDER BY c.public_id", (task_id,)).fetchall()
-    return ([ident for ident, status in rows if status == "open"],
-            [ident for ident, status in rows if status == "fixed"])
+        "ORDER BY c.public_id").fetchall()
+    wanted, open_bugs, fixed_bugs = (task_id or "").casefold(), [], []
+    for ident, status, value_json in rows:
+        # An empty list or mapping reads as "unset" here, exactly as legacy's
+        # `(found_in or "")` does; anything else non-string cannot be compared.
+        found_in = json.loads(value_json) or ""
+        if not isinstance(found_in, str):
+            raise ValueError(f"bug `{ident}` has a malformed found_in of type "
+                             f"{type(found_in).__name__}; expected a task id")
+        if found_in.casefold() != wanted:
+            continue
+        if status == "open":
+            open_bugs.append(ident)
+        elif status == "fixed":
+            fixed_bugs.append(ident)
+    return open_bugs, fixed_bugs
 
 
 def _bundle_slug(task, ident):
@@ -428,6 +480,11 @@ def _auto_link(transaction, kind, ident, doc, body):
         return doc
     existing = {link["target"] for link in domain_v3.entity_links(doc)}
     doc = deepcopy(doc)
+    if kind != "task":
+        # The tools read every non-task entity through `read_entity_anywhere`,
+        # which synthesizes `links` from legacy fields, and write that document
+        # back: the synthesized links persist alongside the new reference.
+        domain_v3._fallback_links_if_absent(doc, kind)
     added = []
     for target in references:
         if target in existing:
@@ -438,14 +495,19 @@ def _auto_link(transaction, kind, ident, doc, body):
         domain_v3.add_link(doc, "references", target)
         added.append((target_kind, target))
     for target_kind, target in added:
-        _write_inverse(transaction, target_kind, target, source=ident, link_type="references")
+        # Targets outside the task tree are likewise read and written back with
+        # their synthesized links; a task source edits tree targets directly.
+        fallback = kind != "task" or target_kind not in ("task", "epic", "phase")
+        _write_inverse(transaction, target_kind, target, source=ident, link_type="references", fallback=fallback)
     return doc
 
 
-def _write_inverse(transaction, target_kind, target, *, source, link_type, remove=False):
+def _write_inverse(transaction, target_kind, target, *, source, link_type, remove=False, fallback=False):
     inverse = domain_v3.REVERSE_TYPE[link_type]
     entity = _entity(transaction, target_kind, target)
     doc = deepcopy(entity["fields"])
+    if fallback:
+        domain_v3._fallback_links_if_absent(doc, target_kind)
     changed = (domain_v3.remove_link(doc, inverse, source) if remove
                else domain_v3.add_link(doc, inverse, source))
     if changed:
@@ -463,9 +525,34 @@ def _smart_close_handovers(transaction, task_id):
     rows = [(ident, _entity(transaction, "handover", ident)["fields"], None) for ident in naming]
     plan = domain_v3.smart_auto_close_handovers(rows, triggering_task_id=task_id,
                                                 done_or_archived_ids=terminal)
-    for ident, updated, _body in plan["closed"] + plan["flagged"]:
+    flipped = plan["closed"] + plan["flagged"]
+    for ident, updated, _body in flipped:
         entity = _entity(transaction, "handover", ident)
         transaction.replace("handover", ident, updated, entity["body"], before_entity=entity)
+    if flipped:
+        archive_handover_overflow(transaction)
+
+
+def live_handover_rows(transaction):
+    """`(id, fields, None)` for every live handover, the rows the tools index."""
+    ids = [row[0] for row in transaction.connection.execute(
+        "SELECT public_id FROM entity_core WHERE kind='handover' AND deleted=0 AND archived=0")]
+    return [(ident, _entity(transaction, "handover", ident)["fields"], None) for ident in ids]
+
+
+def archive_handover_overflow(transaction):
+    """Archive every live handover past the index cap, newest kept, as the tools do.
+
+    The tools archive overflow whenever they resync the handover index — after
+    a handover is created, superseded or has its status set, and after a
+    terminal task closes a handover. The archive marker is `archived: True`,
+    exactly what the tool's `archive` leaves on the document.
+    """
+    ordered = domain_v3.sort_handover_rows(live_handover_rows(transaction))
+    for ident, _fields, _body in ordered[domain_v3.HANDOVER_INDEX_CAP:]:
+        entity = _entity(transaction, "handover", ident)
+        transaction.replace("handover", ident, dict(entity["fields"], archived=True), entity["body"],
+                            before_entity=entity)
 
 
 # ── Command application ─────────────────────────────────────────────────────
@@ -711,7 +798,10 @@ def _bundle_pick(transaction, ident, slug, *, session, force):
     if not bound:
         for member in members:
             entity = entities[member]
-            doc = domain.pick_task_doc(domain.touch(deepcopy(entity["fields"])), session=session)
+            # Only the picked task is referenced; the tool leaves every other
+            # member's `last_referenced` as it was.
+            fields = deepcopy(entity["fields"])
+            doc = domain.pick_task_doc(domain.touch(fields) if member == ident else fields, session=session)
             doc["branch"], doc["worktree"] = branch, worktree
             _write_task(transaction, member, doc, entity["body"], before_entity=entity, enqueue=False)
     return ident
@@ -1017,14 +1107,18 @@ def _phase_advance(transaction, arguments):
         task = domain.archive_task_doc(member["fields"], reason="done")
         task["archived"] = stamp
         _write_task(transaction, item["id"], task, member["body"], before_entity=member, enqueue=False)
+    # Ties on `order` go to the older phase, as the tool's stable sort over the
+    # phase list (creation order) resolves them — not to the lower id.
+    rank = {ident: n for n, ident in enumerate(_ordered(transaction.connection, "phase"))}
     planned = sorted((p for p in phases if p["fields"].get("status") == "planned"),
                      key=lambda p: (p["fields"].get("order") if isinstance(p["fields"].get("order"), int) else 999,
-                                    p["id"]))
+                                    rank.get(p["id"], 0)))
     if not planned:
         return active["id"]
     following = _entity(transaction, "phase", planned[0]["id"])
     doc = dict(following["fields"], status="active")
-    doc.setdefault("start_date", domain.today_stamp())
+    if not doc.get("start_date"):
+        doc["start_date"] = domain.today_stamp()
     transaction.replace("phase", planned[0]["id"], doc, following["body"], before_entity=following)
     return planned[0]["id"]
 
@@ -1067,9 +1161,12 @@ def _link_create(transaction, arguments):
         _assert_no_cycle(transaction, source_id, target_id, link_type)
     doc = deepcopy(entity["fields"])
     del note   # accepted for signature parity; the tool never stored it either
+    # The tool reads both ends through `read_entity_anywhere`, which synthesizes
+    # `links` from legacy fields, and writes that document back.
+    domain_v3._fallback_links_if_absent(doc, source_kind)
     if domain_v3.add_link(doc, link_type, target_id):
         transaction.replace(source_kind, source_id, doc, entity["body"], before_entity=entity)
-    _write_inverse(transaction, target_kind, target_id, source=source_id, link_type=link_type)
+    _write_inverse(transaction, target_kind, target_id, source=source_id, link_type=link_type, fallback=True)
     return source_id
 
 
@@ -1097,19 +1194,26 @@ def _link_remove(transaction, arguments):
     if target_kind is None:
         raise ValueError(f"invalid target ID {target_id!r}")
     entity = _entity(transaction, source_kind, source_id)
+    doc = deepcopy(entity["fields"])
+    domain_v3._fallback_links_if_absent(doc, source_kind)
     requested = arguments.get("type", "")
     types = [requested] if requested else sorted(
-        {link["type"] for link in domain_v3.entity_links(entity["fields"]) if link["target"] == target_id})
+        {link["type"] for link in domain_v3.entity_links(doc) if link["target"] == target_id})
     if not types:
         return source_id
-    doc = deepcopy(entity["fields"])
-    removed = any(domain_v3.remove_link(doc, link_type, target_id) for link_type in types)
-    if removed:
-        transaction.replace(source_kind, source_id, doc, entity["body"], before_entity=entity)
+    # Every type is removed; `any()` over the removals stopped at the first one.
+    removed = False
+    for link_type in types:
+        removed = domain_v3.remove_link(doc, link_type, target_id) or removed
     for link_type in types:
         if _exists(transaction, target_kind, target_id):
             _write_inverse(transaction, target_kind, target_id, source=source_id,
-                           link_type=link_type, remove=True)
+                           link_type=link_type, remove=True, fallback=True)
+    if removed:
+        current = _entity(transaction, source_kind, source_id)
+        transaction.replace(source_kind, source_id, dict(current["fields"], links=doc.get("links"))
+                            if doc.get("links") else {k: v for k, v in current["fields"].items() if k != "links"},
+                            current["body"], before_entity=current)
     return source_id
 
 
@@ -1139,12 +1243,21 @@ def _area_update(transaction, arguments):
     return ident
 
 
+BACKLOG_ID = "__backlog__"
+
+
 def _thread_update(transaction, arguments):
-    entity = _entity(transaction, "backlog", "backlog")
+    # The backlog row's public id is the store's `__backlog__`; N07 read `backlog`,
+    # which exists only in the migration fixture, so every real store refused.
+    entity = _entity(transaction, "backlog", BACKLOG_ID)
     doc = deepcopy(entity["fields"])
+    # The thread registry is derived from the live handovers, which native
+    # commands do not re-derive into this row; derive it here, as the tool's
+    # index sync would have, before applying the override.
+    domain_v3.sync_thread_registry(doc, live_handover_rows(transaction))
     domain_v3.update_thread_status(doc, None, name=arguments["name"], status=arguments["status"],
                                    reason=arguments.get("reason", ""))
-    transaction.replace("backlog", "backlog", doc, entity["body"], before_entity=entity)
+    transaction.replace("backlog", BACKLOG_ID, doc, entity["body"], before_entity=entity)
     return arguments["name"]
 
 
@@ -1192,6 +1305,141 @@ def _linear_unlink(transaction, arguments):
     return task_id
 
 
+def _ordered(connection, kind):
+    return [row[0] for row in connection.execute(
+        "SELECT public_id FROM entity_core WHERE kind=? AND deleted=0 ORDER BY entity_key", (kind,))]
+
+
+def _batch_lookups(transaction):
+    connection = transaction.connection
+
+    def task_exists(ident):
+        try:
+            task = transaction.snapshot.get("task", ident, fields=["epic"])
+        except KeyError:
+            return False
+        epic = task["fields"].get("epic")
+        return isinstance(epic, str) and _exists(transaction, "epic", epic)
+
+    def find_phase(value):
+        phases = [transaction.snapshot.get("phase", ident)["fields"] for ident in _ordered(connection, "phase")]
+        return domain.find_phase(phases, value)
+
+    def area_error(value):
+        known = sorted(_ordered(connection, "area"))
+        if value in known:
+            return None
+        return f"Error: unknown area `{value}`. Valid: {', '.join(known) or '(none defined)'}"
+
+    return batch_lines.Lookups(task_exists=task_exists, find_phase=find_phase, area_error=area_error,
+                               open_bugs=lambda ident: _bugs_found_in(connection, ident)[0])
+
+
+def _task_batch_line(transaction, arguments):
+    ident = arguments["id"]
+    lookups = _batch_lookups(transaction)
+    entity = _entity(transaction, "task", ident) if lookups.task_exists(ident) else None
+    outcome = batch_lines.apply_task_line(arguments, deepcopy(entity["fields"]) if entity else None,
+                                          lookups, now=domain.now_stamp())
+    if outcome.error:
+        raise ValueError(outcome.error)
+    transaction.replace("task", ident, outcome.doc, entity["body"], before_entity=entity)
+    return ident
+
+
+def _epic_batch_line(transaction, arguments):
+    ident, field, value = arguments["id"], arguments["field"], arguments["value"]
+    entity = _entity(transaction, "epic", ident) if _exists(transaction, "epic", ident) else None
+    outcome = batch_lines.apply_epic_line(ident, field, value, entity["fields"] if entity else None)
+    if outcome.error:
+        raise ValueError(outcome.error)
+    if outcome.cascade:
+        return _epic_archive(transaction, {"id": ident, "reason": "done"})
+    transaction.replace("epic", ident, outcome.doc, entity["body"], before_entity=entity)
+    return ident
+
+
+def _viewer_precondition(transaction, arguments):
+    """The store-wide `If-Match` the viewer sends, checked inside the writer lock."""
+    expected = (arguments.get("if_match") or "").strip('"')
+    if not expected:
+        return
+    identity = transaction.snapshot.identity
+    current = f"{identity['store_id']}:{int(identity['event_high_water'])}"
+    if expected != current:
+        raise Conflict(f"stale:{current}")
+
+
+def _viewer_task(transaction, ident):
+    task = _entity(transaction, "task", ident) if _exists(transaction, "task", ident) else None
+    if task is None or not _exists(transaction, "epic", str(task["fields"].get("epic") or "")):
+        raise KeyError(f"task {ident} not found")
+    return task
+
+
+def _task_viewer_create(transaction, arguments):
+    from taskmaster.taskmaster_v3 import _now_iso
+    epic_id, payload = arguments["epic"], arguments["payload"]
+    if not _exists(transaction, "epic", epic_id):
+        raise KeyError(f"epic {epic_id} not found")
+    stamp = _now_iso()
+    doc = {"title": payload.get("title", ""), "status": payload.get("status", "todo"),
+           "priority": payload.get("priority", "medium"), "created": stamp, "last_referenced": stamp}
+    doc.update({key: value for key, value in payload.items() if key not in ("epic", "id")})
+    doc["epic"] = epic_id
+    body = doc.pop("_body", None)
+    return transaction.create("task", doc, body or None)
+
+
+def _task_viewer_update(transaction, arguments):
+    from taskmaster.taskmaster_v3 import _now_iso
+    ident, patch = arguments["id"], dict(arguments["patch"])
+    _viewer_precondition(transaction, arguments)
+    entity = _viewer_task(transaction, ident)
+    task = deepcopy(entity["fields"])
+    if entity["body"]:
+        task["_body"] = entity["body"]
+    if patch.get("status") not in domain.VALID_STATUSES and "status" in patch:
+        raise ValueError(f"invalid status {patch['status']!r}")
+    refusal = domain.illegal_transition_message(task, patch.get("status"))
+    if refusal:
+        raise ValueError(refusal)
+    if patch.get("status") == "done" and task.get("status") != "done":
+        block = domain.completion_block_reason(task)
+        if block:
+            raise ValueError(block)
+    before_status, before_epic = task.get("status"), task.get("epic")
+    task.update(patch)
+    moved_to = patch.get("epic")
+    if moved_to and moved_to != before_epic and not _exists(transaction, "epic", moved_to):
+        raise ValueError(f"unknown epic: {moved_to}")
+    after_status = task.get("status")
+    if after_status != before_status:
+        if after_status == "in-progress" and not task.get("started"):
+            task["started"] = _now_iso()
+        if after_status == "done" and not task.get("completed"):
+            task["completed"] = _now_iso()
+    if after_status == "done":
+        task.pop("human_action", None)
+    task["last_referenced"] = _now_iso()
+    _apply_archive_flag(task, before=before_status, after=after_status)
+    body = task.pop("_body", None)
+    transaction.replace("task", ident, task, body if body else None, before_entity=entity)
+    return ident
+
+
+def _task_viewer_archive(transaction, arguments):
+    ident = arguments["id"]
+    _viewer_precondition(transaction, arguments)
+    entity = _viewer_task(transaction, ident)
+    task = deepcopy(entity["fields"])
+    before = task.get("status")
+    task["status"] = "archived"
+    _apply_archive_flag(task, before=before, after="archived")
+    transaction.replace("task", ident, task, entity["body"], before_entity=entity)
+    return ident
+
+
 _HANDLERS = {
     "task.create": _task_create, "task.update": _task_update, "task.pick": _task_pick,
     "task.complete": _task_complete, "task.archive": _task_archive, "task.gate": _task_gate,
@@ -1203,4 +1451,7 @@ _HANDLERS = {
     "bug.promote": _bug_promote, "link.create": _link_create, "link.remove": _link_remove,
     "area.create": _area_create, "area.update": _area_update, "thread.update": _thread_update,
     "project.set": _project_set, "linear.link": _linear_link, "linear.unlink": _linear_unlink,
+    "task.batch_line": _task_batch_line, "epic.batch_line": _epic_batch_line,
+    "task.viewer_create": _task_viewer_create, "task.viewer_update": _task_viewer_update,
+    "task.viewer_archive": _task_viewer_archive,
 }

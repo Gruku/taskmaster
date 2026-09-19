@@ -3,9 +3,10 @@
 
 # Database-native Taskmaster implementation plan
 
-**Status:** N00–N07 complete locally; the lifecycle port landed on
-`feat/native-n07-lifecycle`. This is an intermediate checkpoint.
-Client replacement and rollout remain outstanding. Merge the branch only
+**Status:** N00–N08 complete locally; client routing landed on
+`feat/native-n08-routing` (activation still test-only). This is an intermediate
+checkpoint. Next action: N09/N10/N11, which all depend only on N08; N11 must also
+lift the native changelog refusal recorded under N08. Rollout remains outstanding. Merge the branch only
 after N03–N17 are complete (user instruction, 2026-09-12); the default branch is
 named `master` in this repository.
 **Design:** [database-native design](../specs/2026-09-09-database-native-design.md).
@@ -259,6 +260,14 @@ keep completion on the legacy writer until N11, or route it and pass the
 paragraph only to the legacy queue, leaving the native argument unused. Do not
 let the adapter do both by default.
 
+> **N08 outcome (2026-09-17):** neither option is feasible. The legacy writer
+> refuses a native database, and the legacy changelog queue is a `meta` write that
+> invalidates the native manifest. On a native store a completion carrying
+> `session_title`/`done`/`auto_summary` is therefore refused with nothing changed;
+> N11 must queue the paragraph once its drain exports it. There is also no
+> native-to-legacy "fallback" to count: unrouted tools refuse. See the
+> [N08 report](../reports/2026-09-17-native-n08.md).
+
 **Do not forward a whole `backlog_batch_update` line-set into the native
 structured batch**: the tool applies the lines it can and reports per-line
 errors, while the native batch is all-or-nothing, so the adapter must
@@ -482,7 +491,7 @@ explicitly deferred scope when implementation actually occurs.
 | N05 | core complete locally | [Atomic owner, CAS, retry receipts, batches and immutable projection inputs](../reports/2026-09-12-native-core.md) |
 | N06 | core complete locally | [Selective graph/FTS maintenance and full-rebuild equivalence oracles](../reports/2026-09-12-native-core.md) |
 | N07 | complete locally; activation gated | `ce2e1b9`…`636b563` (13 commits); [26 further operations, shared rules layer, inventory coverage and nine recorded intentional differences](../reports/2026-09-16-native-n07.md). Two adversarial review passes found **eight** defects, all fixed: bundle pick resurrecting archived tasks, unvalidated `project.set` manifests, cascade Linear enqueues in `_epic_archive` and `_phase_advance`, lock-check ordering, a vacuous `global_graph_rebuilds` counter (deleted), handover membership declared as `tasks` instead of `task_ids` (staging schema 3, one-line frozen-contract change), and a raw `sqlite3.ProgrammingError` on a malformed `bundle`. Field shape/presence and transitive purity both verified clean by oracle. |
-| N08 | planned | — |
+| N08 | complete locally; activation gated | `b6637bd`…`a60cf81` (41 commits, including the review pass); [every normal-path tool/action, the viewer HTTP routes, the three store-reading hooks, `backlog_validate` and three host/external actions routed; bypass gate with normal-path fallback count 0; eleven maintenance/sync operations refuse on native stores with operator guidance](../reports/2026-09-17-native-n08.md). Changelog-carrying completions refuse until N11. One adversarial review pass found **four** defects, all fixed test-first: the viewer mistook an unservable native store for a legacy one and 500'd instead of refusing it, the merge recorder could lose a stamp with no log line, `NativeUnavailable` used prose where `backlog_link`/`backlog_linear` callers parse JSON, and the close gate silently completed a task with an open bug whose `found_in` was list-shaped. Four further categories verified clean (batch pre-validation, the eleven refusals, merge-gate fail-open, bypass-gate leaks). A non-hermetic parity oracle was also found and fixed: `compute_issue_aging` read real wall-clock past the test clock, making the viewer twin time-dependent. Full suite on frozen `a60cf81`: **2,940 passed / 1 skipped / 0 failed** of 2,941, 1,637 s. Copied-CodeMaestro parity: 76 tool calls and five mutations against a 3,662-entity copy and its native twin, answers, committed state, projected files, 3 resurface paths and 6 gate branches all identical, **0 failures**. |
 | N09 | planned | — |
 | N10 | planned | — |
 | N11 | planned | — |

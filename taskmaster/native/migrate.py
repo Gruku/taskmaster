@@ -219,11 +219,16 @@ def backfill(connection: sqlite3.Connection, *, checkpoint=lambda stage: None) -
                       authority="legacy", state="building", store_id=meta["creation_token"])
         checkpoint("schema")
         source = legacy_entities(connection)
-        keys = [_put_entity(connection, row) for row in source]
+        # Keys are allocated in legacy row order: epics and phases are exported in
+        # key order, as legacy exports them in rowid order (backlog.yaml order,
+        # then creation). Comparison and digest still use the id-ordered source.
+        rank = {identity: n for n, identity in enumerate(connection.execute("SELECT kind,id FROM entities ORDER BY rowid"))}
+        inserted = sorted(source, key=lambda row: rank[(row["kind"], row["id"])])
+        keys = [_put_entity(connection, row) for row in inserted]
         if connection.execute("SELECT COUNT(*) FROM entity_core").fetchone()[0] != len(source):
             raise ValueError("Legacy identities were physically removed; restore tombstones before refreshing staging")
         checkpoint("entities")
-        for key, row in zip(keys, source):
+        for key, row in zip(keys, inserted):
             _put_relations(connection, key, row["kind"], row["doc"])
         checkpoint("relations")
         connection.execute("INSERT INTO domain_events(seq,ts,session,tool,kind,id,op,fields,before,after) SELECT * FROM changes")

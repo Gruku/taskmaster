@@ -121,6 +121,12 @@ class Snapshot:
                         target[field].append(value)
                     else:
                         target[field] = value
+        # Field order is observable — frontmatter and several tool answers render
+        # a document in its dict order — and the legacy store hands every document
+        # out with sorted keys (its JSON is written with sort_keys). Nested values
+        # are already sorted by `encode`, so only the top level needs ordering.
+        for entity in result.values():
+            entity["fields"] = dict(sorted(entity["fields"].items()))
         return [result[key] for key in keys]
 
     def get(self, kind, ident, *, fields=None, include_body=False, include_deleted=False):

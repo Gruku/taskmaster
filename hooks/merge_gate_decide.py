@@ -38,7 +38,7 @@ from pathlib import Path
 # This script lives in hooks/; the taskmaster package is at the repo root one
 # level up. Subprocess invocation puts hooks/ on sys.path, not the root.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from taskmaster.admission import assert_compatible
+from taskmaster.native_routing import hook_reads
 
 BUSY_TIMEOUT_SECONDS = 2.0
 LOG_MAX_BYTES = 1024 * 1024
@@ -140,7 +140,7 @@ def _connect_ro(db_file: Path) -> sqlite3.Connection:
     try:
         con.execute("PRAGMA query_only=ON")
         con.execute("BEGIN")
-        assert_compatible(con)
+        hook_reads.admit(con)
     except BaseException:
         con.close()
         raise
@@ -172,8 +172,11 @@ def _policy_on(con: sqlite3.Connection) -> bool:
     ).fetchone()
     if not row:
         return False
-    manifest = json.loads(row[0])
-    conventions = manifest.get("conventions") or {}
+    return _policy_in(json.loads(row[0]))
+
+
+def _policy_in(manifest: dict | None) -> bool:
+    conventions = (manifest or {}).get("conventions") or {}
     policies = conventions.get("policies") or {}
     return bool(policies.get("review_gate_required_for_merge"))
 
@@ -181,9 +184,16 @@ def _policy_on(con: sqlite3.Connection) -> bool:
 def decide_from_store(db_file: Path, src: str, cwd: Path) -> str:
     con = _connect_ro(db_file)
     try:
-        if not _policy_on(con):
-            return "ALLOW"
-        task_id, task = _task_for_branch(con, src)
+        identity = hook_reads.admit(con) if hook_reads.is_native(con) else None
+        if identity is not None:
+            # A native store: live rows, never the frozen legacy tables.
+            if not _policy_in(hook_reads.project_fields(con, identity)):
+                return "ALLOW"
+            task_id, task = hook_reads.task_for_branch(con, identity, src)
+        else:
+            if not _policy_on(con):
+                return "ALLOW"
+            task_id, task = _task_for_branch(con, src)
     finally:
         con.close()
     if task is None:

@@ -2007,6 +2007,7 @@ def resolve_thread(
     backlog_data: dict[str, Any],
     backlog_path: Path,
     ref: str,
+    find_handover: "Callable[[str], dict[str, Any] | None] | None" = None,
 ) -> tuple[str, str]:
     """Resolve a resume token to (thread_name, newest_handover_id).
 
@@ -2021,15 +2022,19 @@ def resolve_thread(
         return name, threads[name]["handover_ids"][-1]
 
     fm: dict[str, Any] | None = None
-    p = handover_path(backlog_path, ref)
-    if p.exists():
-        fm, _ = read_task_file(p)
+    if find_handover is not None:
+        # A store-backed caller answers from rows, live or archived.
+        fm = find_handover(ref)
     else:
-        archive_root = handover_dir(backlog_path) / "_archive"
-        if archive_root.exists():
-            hits = list(archive_root.rglob(f"{ref}.md"))
-            if hits:
-                fm, _ = read_task_file(hits[0])
+        p = handover_path(backlog_path, ref)
+        if p.exists():
+            fm, _ = read_task_file(p)
+        else:
+            archive_root = handover_dir(backlog_path) / "_archive"
+            if archive_root.exists():
+                hits = list(archive_root.rglob(f"{ref}.md"))
+                if hits:
+                    fm, _ = read_task_file(hits[0])
     if fm is None:
         raise KeyError(ref)
     tname = fm.get("thread") or ""
@@ -3518,7 +3523,7 @@ VIEWER_PREFS_DEFAULTS = {
 }
 
 
-def viewer_prefs_path(backlog_path: Path) -> Path:
+def viewer_prefs_path(backlog_path: Path, v4: "bool | None" = None) -> Path:
     """Where this backlog's viewer prefs live.
 
     Takes the backlog path the caller already resolved rather than re-deriving
@@ -3527,18 +3532,20 @@ def viewer_prefs_path(backlog_path: Path) -> Path:
     exactly the class of bug the single store root exists to end.
     """
     root = backlog_path.parent
-    if _is_v4_project(root):
+    # A store-backed caller already knows the schema and passes `v4`, so it never
+    # re-reads backlog.yaml just to place a machine-local file.
+    if _is_v4_project(root) if v4 is None else v4:
         return local_dir(backlog_path) / "viewer.json"
     return root / "viewer.json"
 
-def load_viewer_prefs(backlog_path: Path) -> dict:
+def load_viewer_prefs(backlog_path: Path, v4: "bool | None" = None) -> dict:
     """Load viewer prefs, creating the file with defaults on first call.
     Unknown top-level keys are preserved across reads (forward-compat).
     Missing keys are filled from VIEWER_PREFS_DEFAULTS (deep-merged).
     """
     import json
     from copy import deepcopy
-    p = viewer_prefs_path(backlog_path)
+    p = viewer_prefs_path(backlog_path) if v4 is None else viewer_prefs_path(backlog_path, v4)
     if not p.exists():
         prefs = deepcopy(VIEWER_PREFS_DEFAULTS)
         atomic_write(p, json.dumps(prefs, indent=2))
@@ -3573,9 +3580,9 @@ def load_viewer_prefs(backlog_path: Path) -> dict:
 
     return _merge(VIEWER_PREFS_DEFAULTS, raw)
 
-def save_viewer_prefs(backlog_path: Path, prefs: dict) -> None:
+def save_viewer_prefs(backlog_path: Path, prefs: dict, v4: "bool | None" = None) -> None:
     import json
-    p = viewer_prefs_path(backlog_path)
+    p = viewer_prefs_path(backlog_path) if v4 is None else viewer_prefs_path(backlog_path, v4)
     p.parent.mkdir(parents=True, exist_ok=True)
     atomic_write(p, json.dumps(prefs, indent=2))
 
@@ -3779,9 +3786,11 @@ def compute_issue_aging(issue: dict, aging_cfg: dict, now=None) -> dict:
         Stale: pct >= 60
 
     `percent` may exceed 100 for very stale issues; clamp at 200 for display.
-    """
-    from datetime import datetime, timezone
 
+    `now` defaults to the module's `datetime`, never a function-local import: a
+    private import shadows the clock the twin harness patches, and the viewer's
+    aging percent is then read from the real clock on one half of a comparison.
+    """
     if now is None:
         now = datetime.now(timezone.utc)
 
@@ -3838,6 +3847,7 @@ def validate_task_write(
     backlog_path: Path | None = None,
     *,
     data: dict | None = None,
+    area_ids: "list[str] | None" = None,
 ) -> dict[str, str]:
     """Run cross-entity validation for a proposed task write.
 
@@ -3892,7 +3902,9 @@ def validate_task_write(
             errors["epic"] = f"unknown epic: {patch['epic']}"
 
     # Area must exist (areas live in files, not `data`).
-    if "area" in patch and patch["area"] and patch["area"] not in list_area_ids(bp):
+    # A store-backed caller passes the area ids it holds rather than globbing areas/.
+    known_areas = list_area_ids(bp) if area_ids is None else area_ids
+    if "area" in patch and patch["area"] and patch["area"] not in known_areas:
         errors["area"] = f"unknown area: {patch['area']}"
 
     # Phase must exist if set.

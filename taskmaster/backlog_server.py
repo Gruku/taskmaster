@@ -33,6 +33,7 @@ from functools import wraps
 
 from taskmaster import store
 from taskmaster import yaml_io
+from taskmaster.admission import UnsupportedStoreError
 from taskmaster.blast_radius import (
     BlastRadiusConfig,
     load_config,
@@ -59,6 +60,35 @@ def _guard_legacy_layout(fn):
     return wrapper
 
 
+def _route_native(fn):
+    """Serve this tool from the native core when the project's store is native.
+
+    The capability check runs before any legacy transaction or store open, on
+    every outermost call. A call nested inside a legacy transaction is by
+    definition on a legacy store and skips it. For a legacy store the check
+    answers `NotImplemented` and the tool runs exactly as it always has.
+    """
+
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if _active_tx() is None:
+            try:
+                backlog_path = _backlog_path()
+            except RuntimeError:
+                backlog_path = None
+            if backlog_path is not None:
+                from taskmaster.native_routing import registry as _native_registry
+
+                answer = _native_registry.route(
+                    fn.__name__, fn, backlog_path, SESSION_ID, args, kwargs
+                )
+                if answer is not NotImplemented:
+                    return answer
+        return fn(*args, **kwargs)
+
+    return wrapper
+
+
 class _GuardedToolRegistrar:
     """`FastMCP`, with the legacy-layout guard applied to every tool it registers.
 
@@ -73,7 +103,7 @@ class _GuardedToolRegistrar:
         decorator = self._inner.tool(*args, **kwargs)
 
         def register(fn):
-            return decorator(_guard_legacy_layout(fn))
+            return decorator(_guard_legacy_layout(_route_native(fn)))
 
         return register
 
@@ -110,6 +140,7 @@ from taskmaster.native.domain import (
     strictest_lane as _strictest_lane,
     validate_components as _validate_components,
     now_stamp as _now,
+    find_phase as _find_phase_in,
     today_stamp as _today,
     parse_date as _validate_date,
     ALLOWED_FIELDS,
@@ -282,12 +313,37 @@ def _get_open_handovers_for_task(bp: Path, task_id: str) -> list[str]:
     return result
 
 
+class _LegacyLinks:
+    """How a legacy read renders link pills: a tldr index and a linked peer.
+
+    Native reads pass their own bounded implementation of the same two lookups,
+    so the renderers below stay the one presentation both authorities share.
+    """
+
+    def __init__(self, data: "dict | None", backlog_path: Path):
+        self._data, self._backlog_path, self._index = data, backlog_path, None
+
+    def tldr_index(self):
+        if self._index is None:
+            data = self._data if self._data is not None else _load()
+            self._index = _build_tldr_index(
+                data,
+                project_root=self._backlog_path.parent.parent if self._backlog_path.exists() else None,
+            )
+        return self._index
+
+    def peer(self, target: str):
+        from taskmaster.taskmaster_v3 import read_entity_anywhere
+        return read_entity_anywhere(self._backlog_path, target) if self._backlog_path.exists() else None
+
+
 def _append_grouped_links_block(
     lines: list[str],
     entity: dict,
     backlog_path: Path,
     *,
     expand_links: bool = False,
+    links: "_LegacyLinks | None" = None,
 ) -> None:
     """Append a Plan C grouped `links:` block to `lines` for slim-view rendering.
 
@@ -295,10 +351,9 @@ def _append_grouped_links_block(
     target IDs for `{id} ({tldr})` pills by reading peer entities.
     Emits nothing when there are no typed links.
     """
-    from taskmaster.taskmaster_v3 import (
-        links_grouped_by_type, read_entity_anywhere,
-    )
+    from taskmaster.taskmaster_v3 import links_grouped_by_type
 
+    links = links or _LegacyLinks(None, backlog_path)
     grouped = links_grouped_by_type(entity)
     if not grouped:
         return
@@ -308,7 +363,7 @@ def _append_grouped_links_block(
         if expand_links:
             pills: list[str] = []
             for tgt in targets:
-                peer = read_entity_anywhere(backlog_path, tgt) if backlog_path.exists() else None
+                peer = links.peer(tgt)
                 tldr = (peer or {}).get("tldr", "") if peer else ""
                 pills.append(f"{tgt} ({tldr})" if tldr else tgt)
             lines.append(f"- {ltype}: [{', '.join(pills)}]")
@@ -325,7 +380,7 @@ _EXPAND_LINK_FIELDS: dict[str, tuple[str, ...]] = {
 }
 
 
-def _expand_fm_links(fm: dict, kind: str, backlog_path: Path) -> dict:
+def _expand_fm_links(fm: dict, kind: str, backlog_path: Path, links: "_LegacyLinks | None" = None) -> dict:
     """Return a copy of `fm` with the kind's link fields rewritten from bare IDs
     to readable `id (tldr)` strings. Keeps expand_links behavior identical
     between slim and verbose reads (tm-audit-007). Unknown IDs render bare.
@@ -333,10 +388,7 @@ def _expand_fm_links(fm: dict, kind: str, backlog_path: Path) -> dict:
     fields = _EXPAND_LINK_FIELDS.get(kind, ())
     if not fields or not any(fm.get(f) for f in fields):
         return fm
-    data = _load()
-    tldr_index = _build_tldr_index(
-        data, project_root=backlog_path.parent.parent if backlog_path.exists() else None
-    )
+    tldr_index = (links or _LegacyLinks(None, backlog_path)).tldr_index()
 
     def _one(i: str) -> str:
         tldr = tldr_index.get(i)
@@ -407,7 +459,12 @@ def _progress_path() -> Path:
         raw = yaml_io.safe_load(backlog.read_text(encoding="utf-8")) or {}
     except (OSError, yaml.YAMLError):
         return legacy_progress
-    if _detect_schema_version(raw) >= SCHEMA_V4:
+    return _progress_path_for(raw, backlog, legacy_progress)
+
+
+def _progress_path_for(backlog_doc: dict, backlog: Path, legacy_progress: Path) -> Path:
+    """Where PROGRESS.md lives for a backlog document; shared with the native adapter."""
+    if _detect_schema_version(backlog_doc) >= SCHEMA_V4:
         return backlog.parent / "local" / "PROGRESS.md"
     return legacy_progress
 
@@ -845,7 +902,11 @@ def _with_seq(result, frame: "_TxFrame"):
     success (spec §3.6).
     """
     seq = getattr(frame.tx, "seq", None) if frame.tx is not None else None
-    notices = list(frame.export_warnings)
+    return _stamp_result(result, seq, list(frame.export_warnings))
+
+
+def _stamp_result(result, seq: int | None, notices: list[str]):
+    """`_with_seq` for any writer: the legacy frame here, a native receipt in routing."""
     if seq is None and not notices:
         return result
     if isinstance(result, dict):
@@ -1406,23 +1467,7 @@ def _find_epic(data: dict, epic_id: str) -> dict | None:
 
 def _find_phase(data: dict, phase_id: str) -> dict | None:
     """Find a phase by ID (exact) or name (case-insensitive, whitespace-normalized)."""
-    phases = data.get("phases", [])
-    # Exact ID match first
-    for ph in phases:
-        if ph["id"] == phase_id:
-            return ph
-    # Fuzzy: case-insensitive name match
-    needle = phase_id.strip().lower().replace("-", " ").replace("_", " ")
-    for ph in phases:
-        name = ph.get("name", "").strip().lower().replace("-", " ").replace("_", " ")
-        if name == needle:
-            return ph
-    # Partial: needle is a substring of the name or vice versa
-    for ph in phases:
-        name = ph.get("name", "").strip().lower().replace("-", " ").replace("_", " ")
-        if needle in name or name in needle:
-            return ph
-    return None
+    return _find_phase_in(data.get("phases", []), phase_id)
 
 
 def _active_phase(data: dict) -> dict | None:
@@ -1964,6 +2009,11 @@ def backlog_status(verbose: bool = False) -> str:
     """
     data = _load()
     regenerate_context(data)  # ensure fresh stats without writing
+    return _status_text(data, verbose)
+
+
+def _status_text(data: dict, verbose: bool) -> str:
+    """`backlog_status` over any tree with a derived context; shared with the native adapter."""
     ctx = data["context"]
 
     lines = [f"**Schema:** v{_effective_schema_version(data)}\n"]
@@ -2670,10 +2720,16 @@ def _search_via_index(query: str, kinds: list[str] | None) -> str | None:
         return None
     # A filter of only unknown kinds searches everything, as it always has.
     selected = [k for k in kinds or () if k in _SEARCH_KINDS] or list(_SEARCH_KINDS)
-    con = None
+    try:
+        return _search_index_text(_store().connection, query, selected, match)
+    except (sqlite3.Error, OSError, ValueError, store.LegacyLayoutError):
+        return None
+
+
+def _search_index_text(con, query: str, selected: list, match: str, *, native: bool = False):
+    """The FTS answer over one connection, legacy tables or (`native`) the native core's."""
     owns_snapshot = False
     try:
-        con = _store().connection
         # The count and the rows are one answer and must come from one snapshot.
         # `_load()` has already released its own, so a commit landing between
         # the two queries produced "1 match" above an empty list.
@@ -2683,23 +2739,29 @@ def _search_via_index(query: str, kinds: list[str] | None) -> str | None:
         # `backlog` and `project` are whole-file documents, not work items: they
         # are indexed so `backlog_query` can reach them, and excluded here so a
         # common word cannot return the entire backlog as one result row.
-        where = ("WHERE entity_fts MATCH ? AND e.deleted=0 AND e.kind IN ("
-                 + ",".join("?" * len(selected)) + ")")
+        kinds_sql = ",".join("?" * len(selected))
         params: list[str] = [match, *selected]
-        source = ("FROM entity_fts JOIN entities e "
-                  f"ON e.kind = entity_fts.kind AND e.id = entity_fts.id {where}")
+        if not native:
+            source = ("FROM entity_fts JOIN entities e ON e.kind = entity_fts.kind AND e.id = entity_fts.id "
+                      f"WHERE entity_fts MATCH ? AND e.deleted=0 AND e.kind IN ({kinds_sql})")
+            columns = ("entity_fts.id, e.kind, e.status, entity_fts.title, "
+                       "json_extract(e.doc,'$.priority') AS priority, e.epic, bm25(entity_fts) AS rank ")
+        else:
+            source = ("FROM document_search JOIN document_search_keys k ON k.document_key = document_search.rowid "
+                      "JOIN entity_core c ON c.entity_key = k.entity_key "
+                      "LEFT JOIN task_operational t ON t.entity_key = c.entity_key "
+                      f"WHERE document_search MATCH ? AND c.deleted=0 AND c.kind IN ({kinds_sql})")
+            columns = ("c.public_id, c.kind, json_extract(c.status_json,'$'), document_search.title, "
+                       "json_extract(c.priority_json,'$') AS priority, json_extract(t.epic_json,'$'), "
+                       "bm25(document_search) AS rank ")
         total = con.execute(f"SELECT COUNT(*) {source}", params).fetchone()[0]
         if not total:
             # Not "No tasks": this path searches every kind, and `kinds` may
             # have excluded tasks entirely.
             return f"No matches for `{query}`"
         rows = con.execute(
-            "SELECT entity_fts.id, e.kind, e.status, entity_fts.title, "
-            "json_extract(e.doc,'$.priority') AS priority, e.epic, "
-            "bm25(entity_fts) AS rank "
+            f"SELECT {columns}"
             f"{source} ORDER BY rank LIMIT {int(_SEARCH_LIMIT)}", params).fetchall()
-    except (sqlite3.Error, OSError, ValueError, store.LegacyLayoutError):
-        return None
     finally:
         if owns_snapshot and con is not None and con.in_transaction:
             con.rollback()
@@ -2728,7 +2790,11 @@ def backlog_search(query: str, kinds: list[str] | None = None) -> str:
     indexed = _search_via_index(query, kinds)
     if indexed is not None:
         return indexed
+    return _search_fallback_text(data, query)
 
+
+def _search_fallback_text(data: dict, query: str) -> str:
+    """The substring scan over tasks `backlog_search` falls back to; shared with native."""
     # Fallback: the store is unreadable. Substring scan over tasks only, unchanged.
     q = query.lower()
     scored: list[tuple[int, str]] = []
@@ -2918,6 +2984,47 @@ def backlog_validate() -> str:
     docs paths that don't exist on disk, circular deps, and status inconsistencies."""
     data = _load()
 
+    # The file-backed inputs: tracker files, the Linear config, artifact tldrs.
+    bp = _backlog_path()
+    tracker_issues: list[str] = []
+    trackers: dict[str, dict] = {}
+    for trk_id in set(_list_tracker_ids(bp)):
+        try:
+            fm, _ = _read_tracker(bp, trk_id)
+        except OSError as e:
+            tracker_issues.append(f"tracker `{trk_id}`: cannot read file ({e})")
+            trackers[trk_id] = None
+            continue
+        except yaml.YAMLError as e:
+            tracker_issues.append(f"tracker `{trk_id}`: malformed YAML ({e})")
+            trackers[trk_id] = None
+            continue
+        trackers[trk_id] = fm
+
+    from taskmaster.taskmaster_v3 import read_task_file as _rtf
+    missing_tldr: list[str] = []
+    for subdir in ("issues", "handovers", "ideas"):
+        d = bp.parent / subdir
+        if not d.exists():
+            continue
+        for path in sorted(d.glob("*.md")):
+            try:
+                fm, _ = _rtf(path)
+            except Exception:
+                continue
+            if fm.get("id") and not fm.get("tldr"):
+                missing_tldr.append(fm["id"])
+    return _validate_text(data, trackers, tracker_issues, missing_tldr, bp)
+
+
+def _validate_text(data: dict, trackers: dict, tracker_issues: list[str], missing_tldr: list[str],
+                   bp: Path) -> str:
+    """`backlog_validate` over any tree; shared with the native adapter.
+
+    `trackers` maps each tracker id to its frontmatter (None when unreadable, already
+    reported in `tracker_issues`); `missing_tldr` lists issue/handover/idea ids with
+    no tldr, in report order.
+    """
     # Build task ID set and lookup
     all_task_ids: set[str] = set()
     all_tasks: list[tuple[dict, dict]] = []
@@ -3015,16 +3122,10 @@ def backlog_validate() -> str:
             issues.append(f"`{tid}`: phase `{task_ph}` does not exist")
 
     # 9. Tracker validation: each tracker file's frontmatter is well-formed.
-    bp = _backlog_path()
-    on_disk_tracker_ids: set[str] = set(_list_tracker_ids(bp))
-    for trk_id in on_disk_tracker_ids:
-        try:
-            fm, _ = _read_tracker(bp, trk_id)
-        except OSError as e:
-            issues.append(f"tracker `{trk_id}`: cannot read file ({e})")
-            continue
-        except yaml.YAMLError as e:
-            issues.append(f"tracker `{trk_id}`: malformed YAML ({e})")
+    on_disk_tracker_ids: set[str] = set(trackers)
+    issues.extend(tracker_issues)
+    for trk_id, fm in trackers.items():
+        if fm is None:
             continue
         try:
             _validate_tracker_fm(fm)
@@ -3077,23 +3178,11 @@ def backlog_validate() -> str:
                     f"  warning: task {task['id']} missing tldr — run scripts/backfill_tldr.py"
                 )
 
-    # Also scan artifact dirs for missing tldr
-    bp = _backlog_path()
-    tm_dir = bp.parent
-    from taskmaster.taskmaster_v3 import read_task_file as _rtf
-    for subdir in ("issues", "handovers", "ideas"):
-        d = tm_dir / subdir
-        if not d.exists():
-            continue
-        for path in sorted(d.glob("*.md")):
-            try:
-                fm, _ = _rtf(path)
-            except Exception:
-                continue
-            if fm.get("id") and not fm.get("tldr"):
-                warnings.append(
-                    f"  warning: {fm['id']} missing tldr — run scripts/backfill_tldr.py"
-                )
+    # Also the artifacts (issues, handovers, ideas) missing a tldr
+    for artifact_id in missing_tldr:
+        warnings.append(
+            f"  warning: {artifact_id} missing tldr — run scripts/backfill_tldr.py"
+        )
 
     output_parts: list[str] = []
     if issues:
@@ -3656,7 +3745,11 @@ def backlog_handover_list(
     if not bp.exists():
         return "No backlog found."
     _ensure_handover_status_backfilled()
-    data = _load()
+    return _handover_list_text(_load(), task_id, session_kind, since, status, limit, verbose)
+
+
+def _handover_list_text(data, task_id, session_kind, since, status, limit, verbose) -> str:
+    """`backlog_handover_list` over any backlog document; shared with the native adapter."""
     entries = list(data.get("handovers") or [])
 
     # Validate `since` before filtering so we fail fast on bad input.
@@ -3733,9 +3826,15 @@ def backlog_handover_get(
     if not bp.exists():
         return "No backlog found."
     _ensure_handover_status_backfilled()
+    data = _load()
+    return _handover_get_text(data, handover_id, verbose, sections, expand_links, bp, _LegacyLinks(data, bp))
+
+
+def _handover_get_text(data, handover_id, verbose, sections, expand_links, bp, links) -> str:
+    """`backlog_handover_get` over any compatibility rows; shared with the native adapter."""
     # The row map carries archived handovers too, so the old `_archive/` rglob
     # fallback is gone with the file read it backed up.
-    row = _dict_row(_load(), "handover", handover_id)
+    row = _dict_row(data, "handover", handover_id)
     if row is None:
         return f"Handover not found: {handover_id}"
     fm, body = row[0], row[1] or ""
@@ -3755,7 +3854,7 @@ def backlog_handover_get(
 
     # ── verbose mode ─────────────────────────────────────────────────────────
     if verbose:
-        vfm = _expand_fm_links(fm, "handover", bp) if expand_links else fm
+        vfm = _expand_fm_links(fm, "handover", bp, links) if expand_links else fm
         fm_lines = [f"  {k}: {v}" for k, v in vfm.items()]
         return "---\n" + "\n".join(fm_lines) + "\n---\n" + body
 
@@ -3763,8 +3862,7 @@ def backlog_handover_get(
     slim = _slim_entity(fm, kind="handover")
 
     if expand_links:
-        data = _load()
-        tldr_index = _build_tldr_index(data, project_root=bp.parent.parent if bp.exists() else None)
+        tldr_index = links.tldr_index()
         task_ids = slim.get("task_ids") or []
         if task_ids:
             slim["task_ids"] = _expand_link_ids(task_ids, tldr_index)
@@ -3773,7 +3871,7 @@ def backlog_handover_get(
     for k, v in slim.items():
         lines.append(f"**{k}:** {v}")
     # Plan C: emit grouped typed-links block.
-    _append_grouped_links_block(lines, fm, bp, expand_links=expand_links)
+    _append_grouped_links_block(lines, fm, bp, expand_links=expand_links, links=links)
     return "\n".join(lines)
 
 
@@ -3837,7 +3935,11 @@ def backlog_thread_list(include_closed: bool = False) -> str:
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    data = _threads_data(bp)
+    return _thread_list_text(_threads_data(bp), include_closed)
+
+
+def _thread_list_text(data: dict, include_closed: bool) -> str:
+    """`backlog_thread_list` over any backlog document; shared with the native adapter."""
     from taskmaster.taskmaster_v3 import list_threads as _list_threads
     rows = _list_threads(data)
     if not include_closed:
@@ -3867,10 +3969,14 @@ def backlog_thread_resume(ref: str) -> str:
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    data = _threads_data(bp)
+    return _thread_resume_text(_threads_data(bp), bp, ref)
+
+
+def _thread_resume_text(data: dict, bp: Path, ref: str, find_handover=None) -> str:
+    """`backlog_thread_resume` over any backlog document; shared with the native adapter."""
     from taskmaster.taskmaster_v3 import resolve_thread as _resolve_thread
     try:
-        tname, hid = _resolve_thread(data, bp, ref)
+        tname, hid = _resolve_thread(data, bp, ref, find_handover)
     except KeyError:
         return (f"No thread or handover matches {ref!r}. "
                 f"See `backlog_thread_list()` for open threads.")
@@ -4437,7 +4543,11 @@ def backlog_issue_list(
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    data = _load()
+    return _issue_list_text(_load(), severity, status, limit, verbose)
+
+
+def _issue_list_text(data: dict, severity: str, status: str, limit: int, verbose: bool) -> str:
+    """`backlog_issue_list` over any compatibility rows; shared with the native adapter."""
     rows = _dict_rows(data, "issue")
     docs = {ident: doc for ident, doc, _body in rows}
     bodies = {ident: (body or "") for ident, _doc, body in rows}
@@ -4495,7 +4605,13 @@ def backlog_issue_get(
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    row = _dict_row(_load(), "issue", issue_id)
+    data = _load()
+    return _issue_get_text(data, issue_id, verbose, sections, expand_links, bp, _LegacyLinks(data, bp))
+
+
+def _issue_get_text(data, issue_id, verbose, sections, expand_links, bp, links) -> str:
+    """`backlog_issue_get` over any compatibility rows; shared with the native adapter."""
+    row = _dict_row(data, "issue", issue_id)
     if row is None:
         return f"Issue not found: {issue_id}"
     fm, body = row[0], row[1] or ""
@@ -4515,7 +4631,7 @@ def backlog_issue_get(
 
     # ── verbose mode ─────────────────────────────────────────────────────────
     if verbose:
-        vfm = _expand_fm_links(fm, "issue", bp) if expand_links else fm
+        vfm = _expand_fm_links(fm, "issue", bp, links) if expand_links else fm
         fm_lines = [f"  {k}: {v}" for k, v in vfm.items()]
         return "---\n" + "\n".join(fm_lines) + "\n---\n" + body
 
@@ -4523,8 +4639,7 @@ def backlog_issue_get(
     slim = _slim_entity(fm, kind="issue")
 
     if expand_links:
-        data = _load()
-        tldr_index = _build_tldr_index(data, project_root=bp.parent.parent if bp.exists() else None)
+        tldr_index = links.tldr_index()
         related_tasks = slim.get("related_tasks") or []
         if related_tasks:
             slim["related_tasks"] = _expand_link_ids(related_tasks, tldr_index)
@@ -4537,7 +4652,7 @@ def backlog_issue_get(
     for k, v in slim.items():
         lines.append(f"**{k}:** {v}")
     # Plan C: emit grouped typed-links block.
-    _append_grouped_links_block(lines, fm, bp, expand_links=expand_links)
+    _append_grouped_links_block(lines, fm, bp, expand_links=expand_links, links=links)
     return "\n".join(lines)
 
 
@@ -4717,7 +4832,11 @@ def backlog_bug_list(
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    data = _load()
+    return _bug_list_text(_load(), status, found_in, limit, include_archive)
+
+
+def _bug_list_text(data: dict, status: str, found_in: str, limit: int, include_archive: bool) -> str:
+    """`backlog_bug_list` over any compatibility rows; shared with the native adapter."""
     # A list is a read: derive the index from the rows rather than re-syncing
     # (and thereby mutating) the caller's dict.
     entries = list(_derived_index("bug", _dict_rows(data, "bug")))
@@ -4766,7 +4885,12 @@ def backlog_bug_get(bug_id: str, verbose: bool = False) -> str:
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    row = _dict_row(_load(), "bug", bug_id)
+    return _bug_get_text(_load(), bug_id, verbose)
+
+
+def _bug_get_text(data: dict, bug_id: str, verbose: bool) -> str:
+    """`backlog_bug_get` over any compatibility rows; shared with the native adapter."""
+    row = _dict_row(data, "bug", bug_id)
     if row is None:
         return f"Bug not found: {bug_id}"
     fm, body = row[0], row[1] or ""
@@ -4899,9 +5023,15 @@ def backlog_bug_pattern_scan(mode: str = "all") -> str:
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
+    return _bug_pattern_text(_load(), mode)
+
+
+def _bug_pattern_text(data: dict, mode: str) -> str:
+    """`backlog_bug_pattern_scan` after its checks; shared with the native adapter."""
+    from taskmaster.taskmaster_v3 import scan_bug_patterns as _scan_bug_patterns
     include_archive = (mode == "all")
     open_only = (mode == "open_only")
-    rows = _dict_rows(_load(), "bug", include_archived=include_archive)
+    rows = _dict_rows(data, "bug", include_archived=include_archive)
     groups = _scan_bug_patterns(rows, open_only=open_only)
     if not groups:
         return "No bug patterns found (need >=2 matching signatures)."
@@ -5117,8 +5247,13 @@ def backlog_decision_list(
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
+    return _decision_list_text(_load(), status, task_id, limit)
+
+
+def _decision_list_text(data: dict, status: str, task_id: str, limit: int) -> str:
+    """`backlog_decision(list)` over any compatibility rows; shared with the native adapter."""
     rows: list[str] = []
-    for did, fm, _body in _dict_rows(_load(), "decision"):
+    for did, fm, _body in _dict_rows(data, "decision"):
         if status != "all" and fm.get("status") != status:
             continue
         if task_id and fm.get("task_id") != task_id:
@@ -5137,7 +5272,12 @@ def backlog_decision_list(
 
 def backlog_decision_get(decision_id: str) -> str:
     """Return full decision frontmatter + body as readable text."""
-    row = _dict_row(_load(), "decision", decision_id)
+    return _decision_get_text(_load(), decision_id)
+
+
+def _decision_get_text(data: dict, decision_id: str) -> str:
+    """`backlog_decision(get)` over any compatibility rows; shared with the native adapter."""
+    row = _dict_row(data, "decision", decision_id)
     if row is None:
         return f"Decision not found: {decision_id}"
     fm, body = row[0], row[1] or ""
@@ -5394,7 +5534,11 @@ def backlog_idea_list(
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    data = _load()
+    return _idea_list_text(_load(), idea_id, status, tag, archived, related_task, related_issue, limit, verbose)
+
+
+def _idea_list_text(data, idea_id, status, tag, archived, related_task, related_issue, limit, verbose) -> str:
+    """`backlog_idea_list` over any compatibility rows; shared with the native adapter."""
     if idea_id:
         out = _idea_records(data, idea_id=idea_id)
         if not out:
@@ -5502,14 +5646,20 @@ def backlog_idea_get(
         return "Error: sections=[] requested no sections; pass sections=None for the slim view or name at least one section"
     if sections:
         return "Error: ideas have no canonical body sections — use verbose=True to read the full body."
-    row = _dict_row(_load(), "idea", idea_id)
+    data = _load()
+    return _idea_get_text(data, idea_id, verbose, expand_links, bp, _LegacyLinks(data, bp))
+
+
+def _idea_get_text(data, idea_id, verbose, expand_links, bp, links) -> str:
+    """`backlog_idea_get` after its section checks; shared with the native adapter."""
+    row = _dict_row(data, "idea", idea_id)
     if row is None:
         return f"Idea not found: {idea_id}"
     fm, body = row[0], (row[1] or "").rstrip("\n")
 
     # ── verbose mode ─────────────────────────────────────────────────────────
     if verbose:
-        vfm = _expand_fm_links(fm, "idea", bp) if expand_links else fm
+        vfm = _expand_fm_links(fm, "idea", bp, links) if expand_links else fm
         fm_lines = [f"  {k}: {v}" for k, v in vfm.items()]
         return "---\n" + "\n".join(fm_lines) + "\n---\n" + body
 
@@ -5517,8 +5667,7 @@ def backlog_idea_get(
     slim = _slim_entity(fm, kind="idea")
 
     if expand_links:
-        data = _load()
-        tldr_index = _build_tldr_index(data, project_root=bp.parent.parent if bp.exists() else None)
+        tldr_index = links.tldr_index()
         for link_field in ("related_tasks", "related_issues"):
             ids = slim.get(link_field) or []
             if ids:
@@ -5528,7 +5677,7 @@ def backlog_idea_get(
     for k, v in slim.items():
         lines.append(f"**{k}:** {v}")
     # Plan C: emit grouped typed-links block.
-    _append_grouped_links_block(lines, fm, bp, expand_links=expand_links)
+    _append_grouped_links_block(lines, fm, bp, expand_links=expand_links, links=links)
     return "\n".join(lines)
 
 
@@ -5710,7 +5859,11 @@ def backlog_note_list(include_archived: bool = False, limit: int = DEFAULT_LIST_
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    notes = _note_records(_load(), include_archived=include_archived)
+    return _render_note_list(_note_records(_load(), include_archived=include_archived), limit)
+
+
+def _render_note_list(notes: list[dict], limit: int) -> str:
+    """The note list answer; shared with the native adapter."""
     if not notes:
         return "Desk is clear — no notes."
     notes, overflow = _cap_list(notes, limit)
@@ -5732,6 +5885,11 @@ def _note_records(data: dict, *, include_archived: bool = False) -> list[dict]:
     out: list[dict] = []
     for _nid, fm, body in _dict_rows(data, "note", include_archived=include_archived):
         out.append({**fm, "body": (body or "").rstrip("\n")})
+    return _order_note_records(out)
+
+
+def _order_note_records(out: list[dict]) -> list[dict]:
+    """Pinned first, then created desc with a numeric-id tiebreak; shared with native."""
 
     def _num(note: dict) -> int:
         match = re.search(r"(\d+)$", note.get("id", ""))
@@ -5756,7 +5914,12 @@ def backlog_note_get(note_id: str) -> str:
     row = _dict_row(_load(), "note", note_id)
     if row is None:
         return f"Note not found: {note_id}"
-    fm, body = row[0], (row[1] or "").rstrip("\n")
+    return _render_note_get(row[0], row[1])
+
+
+def _render_note_get(fm: dict, body: str | None) -> str:
+    """One note in full; shared with the native adapter."""
+    body = (body or "").rstrip("\n")
     fm_lines = [f"  {k}: {v}" for k, v in fm.items()]
     return "---\n" + "\n".join(fm_lines) + "\n---\n" + body
 
@@ -5857,7 +6020,12 @@ def backlog_area_list(limit: int = DEFAULT_LIST_LIMIT) -> str:
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    areas = [dict(doc) for _aid, doc, _body in _dict_rows(_load(), "area")]
+    return _area_list_text(_load(), limit)
+
+
+def _area_list_text(data: dict, limit: int) -> str:
+    """`backlog_area_list` over any compatibility rows; shared with the native adapter."""
+    areas = [dict(doc) for _aid, doc, _body in _dict_rows(data, "area")]
     if not areas:
         return "No areas defined."
     areas, overflow = _cap_list(areas, limit)
@@ -5879,7 +6047,12 @@ def backlog_area_get(area_id: str) -> str:
     bp = _backlog_path()
     if not bp.exists():
         return "No backlog found."
-    row = _dict_row(_load(), "area", area_id)
+    return _area_get_text(_load(), area_id)
+
+
+def _area_get_text(data: dict, area_id: str) -> str:
+    """`backlog_area_get` over any compatibility rows; shared with the native adapter."""
+    row = _dict_row(data, "area", area_id)
     if row is None:
         return f"Area not found: {area_id}"
     fm, body = row[0], (row[1] or "").rstrip("\n")
@@ -6789,8 +6962,13 @@ def _git_subprocess_kwargs() -> dict:
 def backlog_last_session() -> str:
     """Get the most recent session summary from the PROGRESS.md changelog.
     Returns the last changelog entry (everything between the first and second ### headings)."""
+    return _last_session_text(_progress_path())
+
+
+def _last_session_text(progress: Path) -> str:
+    """`backlog_last_session` for a resolved PROGRESS.md; shared with the native adapter."""
     try:
-        text = _progress_path().read_text(encoding="utf-8")
+        text = progress.read_text(encoding="utf-8")
     except FileNotFoundError:
         return "No PROGRESS.md found."
 
@@ -7858,8 +8036,11 @@ def backlog_phase_status(phase_id: str = "") -> str:
     Args:
         phase_id: Phase ID. If omitted, shows the active phase.
     """
-    data = _load()
+    return _phase_status_text(_load(), phase_id)
 
+
+def _phase_status_text(data: dict, phase_id: str = "") -> str:
+    """`backlog_phase_status` over any epics/phases tree; shared with the native adapter."""
     if phase_id:
         ph = _find_phase(data, phase_id)
         if not ph:
@@ -8025,7 +8206,11 @@ def backlog_epic_status(epic_id: str) -> str:
     Args:
         epic_id: The epic ID (e.g. "asset-engine").
     """
-    data = _load()
+    return _epic_status_text(_load(), epic_id)
+
+
+def _epic_status_text(data: dict, epic_id: str) -> str:
+    """`backlog_epic_status` over any epics/phases tree; shared with the native adapter."""
     epic = _find_epic(data, epic_id)
     if not epic:
         return f"Error: epic `{epic_id}` not found"
@@ -8656,8 +8841,11 @@ def backlog_blast_radius(task_id: str, mode: str = "predictive", depth_override:
     """
     if mode not in ("predictive", "evidence"):
         return f"Error: mode must be 'predictive' or 'evidence', got '{mode}'"
+    return _blast_radius_text(_load(), task_id, mode, depth_override, structured)
 
-    data = _load()
+
+def _blast_radius_text(data: dict, task_id: str, mode: str, depth_override: str, structured: bool) -> str:
+    """`backlog_blast_radius` over any task tree; shared with the native adapter."""
     result = _find_task(data, task_id)
     if not result:
         return f"Error: task `{task_id}` not found"
@@ -8813,7 +9001,12 @@ def _compute_recent_events(since_iso: str) -> list:
     except Exception as e:
         raise ValueError(f"invalid since: {e}")
 
-    backlog = _load()
+    return _recent_events_from(_load(), since)
+
+
+def _recent_events_from(backlog: dict, since) -> list:
+    """`_compute_recent_events` over any task tree; shared with the native viewer."""
+    from datetime import datetime
     if not isinstance(backlog.get("tasks"), list):
         backlog = dict(backlog)
         backlog["tasks"] = [
@@ -9107,6 +9300,13 @@ def _load_task_full_identified(task_id: str) -> tuple[dict | None, str]:
     # backlog.yaml, and a call nested inside an open transaction must see the
     # in-flight tree rather than the last exported file.
     backlog, etag = _load_snapshot()
+    return _task_full_from(backlog, etag, backlog_path, task_id)
+
+
+def _task_full_from(backlog: dict, etag: str, backlog_path: Path, task_id: str) -> tuple[dict | None, str]:
+    """`_load_task_full_identified` over any tree; shared with the native viewer."""
+    import re
+
     tasks = backlog.get("tasks")
     if not isinstance(tasks, list):
         tasks = [
@@ -9198,6 +9398,11 @@ def _load_epic_full_identified(epic_id: str) -> tuple[dict | None, str]:
     if not _backlog_path().exists():
         return None, ""
     data, etag = _load_snapshot()
+    return _epic_full_from(data, etag, epic_id)
+
+
+def _epic_full_from(data: dict, etag: str, epic_id: str) -> tuple[dict | None, str]:
+    """`_load_epic_full_identified` over any tree; shared with the native viewer."""
     epic = _find_epic(data, epic_id)
     if epic is None:
         return None, etag
@@ -9335,11 +9540,24 @@ class ViewerHandler(BaseHTTPRequestHandler):
         _TX_STATE.export_warnings = []
         try:
             super().handle_one_request()
-        except store.LegacyLayoutError as exc:
+        except (store.LegacyLayoutError, UnsupportedStoreError) as exc:
+            # Both are store-state conflicts an operator resolves, not server
+            # faults and not transient load: a store the client may not open
+            # answers 409, like the refused layout, never 503 (nothing here
+            # becomes servable by retrying) and never a bare 500. The request
+            # body may be unread, so this connection does not carry another.
+            self.close_connection = True
             try:
                 self._send_json(409, {"ok": False, "error": str(exc)})
             except Exception:
                 pass
+
+    def _native(self):
+        """This request's native database, or None on a legacy store (checked once)."""
+        if not hasattr(self, "_native_database"):
+            from taskmaster.native_routing import viewer as _native_viewer
+            self._native_database = _native_viewer.database()
+        return self._native_database
 
     def do_GET(self) -> None:
         import re
@@ -9400,7 +9618,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
             viewer_root = SCRIPT_DIR / "viewer"
             self._serve_file(viewer_root / "dev" / "edit-demo.html", "text/html")
         elif clean_path == "/api/viewer/prefs":
-            self._send_json(200, load_viewer_prefs(_backlog_path()))
+            self._send_json(200, self._prefs())
             return
         elif clean_path == "/backlog.yaml":
             self._serve_file(_backlog_path(), "text/yaml")
@@ -9408,14 +9626,14 @@ class ViewerHandler(BaseHTTPRequestHandler):
             rest = clean_path[len("/api/task/"):].rstrip("/")
             if rest.endswith("/related"):
                 task_id = rest[: -len("/related")]
-                related = _load_related_for_task(task_id)
+                related = self._related(task_id)
                 if related is None:
                     self._send_json(404, {"ok": False, "error": f"task {task_id} not found"})
                     return
                 self._send_json(200, related)
                 return
             if "/" not in rest and rest:
-                full, etag = _load_task_full_identified(rest)
+                full, etag = self._task_full(rest)
                 if full is None:
                     self._send_json(404, {"ok": False, "error": f"task {rest} not found"})
                     return
@@ -9425,7 +9643,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
         elif clean_path.startswith("/api/epic/"):
             eid = clean_path[len("/api/epic/"):].rstrip("/")
             if eid and "/" not in eid:
-                full, etag = _load_epic_full_identified(eid)
+                full, etag = self._epic_full(eid)
                 if full is None:
                     self._send_json(404, {"ok": False, "error": f"epic {eid} not found"})
                     return
@@ -9449,7 +9667,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 self._send_json(400, {"ok": False, "error": "missing 'since' query param"})
                 return
             try:
-                events = _compute_recent_events(since)
+                events = self._recent_events(since)
             except ValueError as e:
                 self._send_json(400, {"ok": False, "error": str(e)})
                 return
@@ -9457,7 +9675,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
             return
         elif clean_path == "/api/threads":
             from taskmaster.taskmaster_v3 import list_threads as _list_threads_http
-            self._send_json(200, _list_threads_http(_threads_data(_backlog_path())))
+            self._send_json(200, _list_threads_http(self._threads()))
             return
         elif clean_path == "/api/sessions":
             snapshot = self._snapshot()
@@ -9511,7 +9729,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 self._send_json(200, {"issues": []})
                 return
             data, etag = snapshot
-            prefs = load_viewer_prefs(_backlog_path())
+            prefs = self._prefs()
             aging_cfg = prefs.get("issues", {}).get("aging", {})
             issues = []
             for _iid, fm, body in _dict_rows(data, "issue"):
@@ -9609,10 +9827,49 @@ class ViewerHandler(BaseHTTPRequestHandler):
         read and the revision from another let a client cache an old list under
         a newer ETag and then pass its own `If-Match` while overwriting a peer.
         """
+        if self._native():
+            from taskmaster.native_routing import viewer as _native_viewer
+            return _native_viewer.snapshot(self._native())
         try:
             return _load_snapshot()
         except FileNotFoundError:
             return None
+
+    def _prefs(self) -> dict:
+        if self._native():
+            from taskmaster.native_routing import viewer as _native_viewer
+            return _native_viewer.prefs(self._native())
+        return load_viewer_prefs(_backlog_path())
+
+    def _task_full(self, task_id: str):
+        if self._native():
+            from taskmaster.native_routing import viewer as _native_viewer
+            return _native_viewer.task_full(self._native(), task_id)
+        return _load_task_full_identified(task_id)
+
+    def _epic_full(self, epic_id: str):
+        if self._native():
+            from taskmaster.native_routing import viewer as _native_viewer
+            return _native_viewer.epic_full(self._native(), epic_id)
+        return _load_epic_full_identified(epic_id)
+
+    def _related(self, task_id: str):
+        if self._native():
+            from taskmaster.native_routing import viewer as _native_viewer
+            return _native_viewer.related(self._native(), task_id)
+        return _load_related_for_task(task_id)
+
+    def _recent_events(self, since: str):
+        if self._native():
+            from taskmaster.native_routing import viewer as _native_viewer
+            return _native_viewer.recent_events(self._native(), since)
+        return _compute_recent_events(since)
+
+    def _threads(self) -> dict:
+        if self._native():
+            from taskmaster.native_routing import viewer as _native_viewer
+            return _native_viewer.threads(self._native())
+        return _threads_data(_backlog_path())
 
     def _serve_file(self, path: Path, content_type: str) -> None:
         try:
@@ -9683,7 +9940,14 @@ class ViewerHandler(BaseHTTPRequestHandler):
 
     def _serve_json(self) -> None:
         try:
-            data, etag = _load_snapshot()
+            if self._native():
+                from taskmaster.native_routing.reads import NativeRows
+                data, etag = self._snapshot()
+                # The legacy payload carries its lazy row map, which JSON renders
+                # as an object repr; the board does not read it (N10 removes it).
+                data["_rows"] = NativeRows(None)
+            else:
+                data, etag = _load_snapshot()
             data.setdefault("meta", {})["_version"] = VERSION
             if not isinstance(data.get("tasks"), list):
                 data["tasks"] = [
@@ -9701,10 +9965,11 @@ class ViewerHandler(BaseHTTPRequestHandler):
                     key=lambda p: (p.get("order") if p.get("order") is not None else 999),
                 )
             self._send_json(200, data, etag=etag)
-        except store.LegacyLayoutError as exc:
-            # A layout the store refuses is a conflict the operator can fix, not
-            # a server fault: 500 sent the viewer into its generic error state
-            # and hid the one instruction that resolves it.
+        except (store.LegacyLayoutError, UnsupportedStoreError) as exc:
+            # A layout the store refuses, or a store no client may open, is a
+            # conflict the operator can fix, not a server fault: 500 sent the
+            # viewer into its generic error state and hid the one instruction
+            # that resolves it. The blanket handler below would swallow these.
             self._send_json(409, {"ok": False, "error": str(exc)})
         except Exception as e:
             self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(e))
@@ -9712,6 +9977,10 @@ class ViewerHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         import json
         import re
+
+        if self._native():
+            from taskmaster.native_routing import viewer as _native_viewer
+            return _native_viewer.write(self, "POST", self._native())
 
         if self.path == "/api/ideas":
             length = int(self.headers.get("Content-Length") or 0)
@@ -10097,6 +10366,9 @@ class ViewerHandler(BaseHTTPRequestHandler):
 
     def do_PUT(self):
         import re
+        if self._native():
+            from taskmaster.native_routing import viewer as _native_viewer
+            return _native_viewer.write(self, "PUT", self._native())
         if self.path == "/api/viewer/prefs":
             length = int(self.headers.get("Content-Length") or 0)
             raw = self.rfile.read(length).decode("utf-8") if length else ""
@@ -10151,6 +10423,9 @@ class ViewerHandler(BaseHTTPRequestHandler):
     def do_PATCH(self):
         import json
         import re
+        if self._native():
+            from taskmaster.native_routing import viewer as _native_viewer
+            return _native_viewer.write(self, "PATCH", self._native())
         if m := re.fullmatch(r"/api/tasks/([A-Za-z0-9_\-]+)", self.path):
             task_id = m.group(1)
             length = int(self.headers.get("Content-Length") or 0)
@@ -10186,7 +10461,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
 
     def _send_stale(self, task_id: str, current_etag: str) -> None:
         """The unchanged 409 contract, with the revision the write lost to."""
-        current, _etag = _load_task_full_identified(task_id)
+        current, _etag = self._task_full(task_id)
         self._send_json(409, {
             "ok": False, "error": "stale",
             "current_etag": current_etag,
@@ -10446,6 +10721,14 @@ def backlog_project_get() -> dict | None:
     """
     m = load_project_manifest(_project_root_or_cwd())
     return manifest_to_dict(m) if m is not None else None
+
+
+def _manifest_from_raw(data: "dict | None"):
+    """`load_project_manifest` for an already-read document; shared with native reads."""
+    from taskmaster.project import ProjectManifest, _dict_to_dataclass
+    if data is None:
+        return None
+    return _dict_to_dataclass(ProjectManifest, data)
 
 
 @mcp.tool()
@@ -10910,10 +11193,16 @@ def backlog_linear_list() -> str:
     if not bp.exists():
         return json.dumps({"trackers": []})
 
+    return _linear_list_text(_load())
+
+
+def _linear_list_text(data: dict) -> str:
+    """`backlog_linear(list)` over any compatibility rows; shared with the native adapter."""
+    import json
     # `tracker` is a row-backed kind: reading `trackers/*.md` here made a
     # tracker whose export had not landed read as absent (decision 1).
     out = []
-    for tid, fm, _body in _dict_rows(_load(), "tracker"):
+    for tid, fm, _body in _dict_rows(data, "tracker"):
         if not tid.startswith("linear-"):
             continue
         out.append({
@@ -10943,7 +11232,13 @@ def backlog_linear_show(tracker_id: str) -> str:
     if not bp.exists():
         return json.dumps({"error": "No backlog found."})
 
-    row = _dict_row(_load(), "tracker", tracker_id)
+    return _linear_show_text(_load(), tracker_id)
+
+
+def _linear_show_text(data: dict, tracker_id: str) -> str:
+    """`backlog_linear(show)` over any compatibility rows; shared with the native adapter."""
+    import json
+    row = _dict_row(data, "tracker", tracker_id)
     if row is None:
         return json.dumps({"error": f"tracker {tracker_id!r} not found"})
 
@@ -10976,10 +11271,15 @@ def backlog_linear_status() -> str:
     # root with no usable store there are no rows to read, and the queue reads
     # answer empty rather than raising — the warning is the useful part.
     opened = _store_for(bp)
-    degraded = opened.projection_only_reason()
+    return _linear_status_text(opened.linear_rows(states=("pending", "claimed", "failed")),
+                               opened.linear_enqueue_failures(), opened.projection_only_reason())
+
+
+def _linear_status_text(rows: list, failed_enqueues: int, degraded) -> str:
+    """`backlog_linear(status)` over queue rows; shared with the native adapter."""
+    import json
     # A `claimed` row is one a drain has in flight: still owed, not settled,
     # so it counts as pending rather than vanishing from the depth.
-    rows = opened.linear_rows(states=("pending", "claimed", "failed"))
     pending = [row for row in rows if row["state"] in ("pending", "claimed")]
     parked = [row for row in rows if row["state"] == "failed"]
 
@@ -11005,7 +11305,7 @@ def backlog_linear_status() -> str:
         # Pushes that never became queue rows at all: the enqueue hook survives
         # its own failures so the local write still lands, so this count is the
         # only place a lost push shows up.
-        "failed_enqueues": opened.linear_enqueue_failures(),
+        "failed_enqueues": failed_enqueues,
         "warning": degraded,
     }, indent=2)
 

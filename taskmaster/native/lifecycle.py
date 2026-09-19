@@ -20,7 +20,17 @@ PATCH_FIELDS = {
     "idea": {"title", "body", "status", "promoted_to", "tags", "related_tasks", "related_issues", "archived"},
 }
 ENTITY_OPERATIONS = {f"{kind}.create" for kind in BUILDERS} | {f"{kind}.update" for kind in PATCHERS} | {
-    "note.update", "note.archive", "bug.archive", "decision.resolve", "decision.drop", "handover.status", "handover.supersede"}
+    "note.update", "note.archive", "bug.archive", "decision.resolve", "decision.drop", "decision.update",
+    "handover.status", "handover.supersede"}
+# Arguments `handover.create` takes beyond its document builder: they shape what
+# commits with the new handover, not the document the builder produces.
+HANDOVER_CREATE_EXTRAS = {"flag_for_review", "review_reason"}
+# `auto_link: false` on a create skips inline-mention linking, as the viewer's
+# create routes (which never ran it) require.
+CREATE_EXTRAS = {"auto_link"}
+# Kinds whose prose is scanned for inline mentions on create and on a body edit,
+# as the tools do (`auto_link_on_save`).
+AUTO_LINKED = {"issue", "idea", "handover"}
 OPERATIONS = ENTITY_OPERATIONS | workflow.OPERATIONS
 
 
@@ -49,8 +59,15 @@ def validate(operation, arguments):
     kind, action = operation.split(".")
     if action == "create":
         parameters = dict(arguments)
+        if "auto_link" in parameters and type(parameters.pop("auto_link")) is not bool:
+            raise ValueError("auto_link must be boolean")
         if kind != "handover":
             parameters.pop("body", None)
+        else:
+            if "flag_for_review" in parameters and type(parameters.pop("flag_for_review")) is not bool:
+                raise ValueError("flag_for_review must be boolean")
+            if not _accepts(parameters.pop("review_reason", ""), str):
+                raise ValueError("review_reason must be text")
         if parameters.get(f"{kind}_id") is not None:
             raise ValueError("explicit allocation is not part of this lifecycle slice")
         try:
@@ -77,6 +94,17 @@ def validate(operation, arguments):
                 annotation = list[str] | None if field in lists else bool if field == "archived" else str | None
                 if not _accepts(value, annotation):
                     raise ValueError(f"invalid type for {field}")
+        elif operation == "decision.update":
+            if set(arguments) - {"id", "patch", "body"} or not isinstance(arguments.get("patch"), dict):
+                raise ValueError("decision.update requires id and patch")
+            if set(arguments["patch"]) - {"title", "options", "recommendation"}:
+                raise ValueError("unsupported decision patch field")
+            patch = arguments["patch"]
+            for name, annotation in (("title", str), ("options", list[str]), ("recommendation", int | None)):
+                if name in patch and not _accepts(patch[name], annotation):
+                    raise ValueError(f"invalid type for {name}")
+            if "body" in arguments and not isinstance(arguments["body"], str):
+                raise ValueError("body must be text")
         elif operation == "note.update":
             if set(arguments) - {"id", "text", "pinned"}:
                 raise ValueError("unknown note update argument")
@@ -109,14 +137,19 @@ def apply(transaction, operation, arguments):
     if action == "create":
         options = dict(arguments)
         body = options.pop("body", None) if kind != "handover" else None
+        extras = {name: options.pop(name) for name in HANDOVER_CREATE_EXTRAS | CREATE_EXTRAS if name in options}
         built = BUILDERS[kind](**options)
         if kind == "handover":
             doc, body = built
         else:
             doc = built
         ident = transaction.create(kind, doc, body)
-        if kind == "handover" and doc.get("supersedes"):
-            apply(transaction, "handover.supersede", {"id": doc["supersedes"], "new_id": ident})
+        if kind == "handover":
+            _handover_created(transaction, ident, doc, extras)
+        if kind in AUTO_LINKED and extras.get("auto_link", True):
+            _auto_link_entity(transaction, kind, ident)
+        if kind == "handover":
+            workflow.archive_handover_overflow(transaction)
         return
     ident = arguments["id"]
     entity = transaction.snapshot.get(kind, ident, include_body=True)
@@ -126,10 +159,21 @@ def apply(transaction, operation, arguments):
         if all((k == "text" and v.strip() == (body or "")) or (k == "pinned" and v == doc.get("pinned", False)) for k, v in options.items()):
             return
         doc, body = domain.apply_note_updates(doc, body or "", **options)
+    elif action == "update" and kind == "decision":
+        doc = domain.apply_decision_patch(doc, arguments["patch"])
+        body = arguments.get("body") or body
     elif action == "update":
         patch = dict(arguments["patch"])
+        linked_body = patch.get("body")
         body = patch.pop("body", body)
         doc = PATCHERS[kind](doc, **patch)
+        if kind == "idea" and patch.get("archived") is False:
+            # Unarchiving drops the marker, as the tool's `unarchive` does.
+            doc.pop("archived", None)
+        transaction.replace(kind, ident, doc, body, before_entity=entity)
+        if kind in AUTO_LINKED and linked_body:
+            _auto_link_entity(transaction, kind, ident)
+        return
     elif operation == "note.archive":
         if entity["archived"]:
             return
@@ -149,3 +193,42 @@ def apply(transaction, operation, arguments):
             raise ValueError("handover cannot supersede itself")
         doc, body = domain.supersede_handover_doc(doc, body or "", new_id=arguments["new_id"])
     transaction.replace(kind, ident, doc, body, before_entity=entity)
+    if kind == "handover":
+        workflow.archive_handover_overflow(transaction)
+
+
+def _handover_created(transaction, ident, doc, extras):
+    """What commits with a new handover: its supersession, review flag and decision back-references.
+
+    A superseded handover that does not exist is skipped, as the tool skips it
+    with a warning, rather than refusing the new handover.
+    """
+    old = doc.get("supersedes")
+    if old and old != ident:
+        try:
+            transaction.snapshot.get("handover", old, fields=[])
+        except KeyError:
+            old = None
+        if old:
+            apply(transaction, "handover.supersede", {"id": old, "new_id": ident})
+    if extras.get("flag_for_review"):
+        entity = transaction.snapshot.get("handover", ident, include_body=True)
+        flagged = domain.flag_handover_doc_for_review(entity["fields"], review_reason=extras.get("review_reason") or "")
+        transaction.replace("handover", ident, flagged, entity["body"], before_entity=entity)
+    for decision_id in doc.get("open_decisions") or []:
+        try:
+            decision = transaction.snapshot.get("decision", decision_id, include_body=True)
+        except KeyError:
+            continue
+        linked = domain.link_decision_doc_to_handover(decision["fields"], ident)
+        if linked is not None:
+            transaction.replace("decision", decision_id, linked, decision["body"], before_entity=decision)
+
+
+def _auto_link_entity(transaction, kind, ident):
+    entity = transaction.snapshot.get(kind, ident, include_body=True)
+    linked = workflow._auto_link(transaction, kind, ident, entity["fields"], entity["body"])
+    if linked is not entity["fields"]:
+        entity = transaction.snapshot.get(kind, ident, include_body=True)
+        merged = dict(entity["fields"], links=linked.get("links"))
+        transaction.replace(kind, ident, merged, entity["body"], before_entity=entity)

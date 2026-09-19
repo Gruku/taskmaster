@@ -112,6 +112,12 @@ def task_id_for_branch(db_file: Path, src: str) -> str | None:
     try:
         con.execute(f"PRAGMA busy_timeout={int(BUSY_TIMEOUT_SECONDS * 1000)}")
         con.execute("PRAGMA query_only=ON")
+        from taskmaster.native_routing import hook_reads
+        if hook_reads.is_native(con):
+            # A native store: live rows, never the frozen legacy tables.
+            con.execute("BEGIN")
+            identity = hook_reads.admit(con)
+            return hook_reads.task_for_branch(con, identity, src)[0]
         try:
             rows = con.execute(_TASK_BY_BRANCH_SQL, (src,)).fetchall()
         except sqlite3.OperationalError:
@@ -129,6 +135,28 @@ def task_id_for_branch(db_file: Path, src: str) -> str | None:
     for ident, _doc in rows:
         return ident
     return None
+
+
+def native_ladder(db_file: Path) -> list[dict] | None:
+    """A native store's merge ladder from its project row, or None on a legacy store.
+
+    `backlog_server._resolved_merge_targets` reads project.yaml, a projection a
+    native store only exports; the ladder must come from the committed row.
+    """
+    uri = Path(db_file).resolve().as_uri() + "?mode=rw"
+    con = sqlite3.connect(uri, uri=True, timeout=BUSY_TIMEOUT_SECONDS)
+    try:
+        con.execute(f"PRAGMA busy_timeout={int(BUSY_TIMEOUT_SECONDS * 1000)}")
+        con.execute("PRAGMA query_only=ON")
+        from taskmaster.native_routing import hook_reads
+        if not hook_reads.is_native(con):
+            return None
+        con.execute("BEGIN")
+        from taskmaster.native.queries import Snapshot
+        from taskmaster.native_routing.tasks import _merge_targets
+        return _merge_targets(Snapshot(con, hook_reads.admit(con)))
+    finally:
+        con.close()
 
 
 def pin_root(cwd: Path) -> None:
@@ -219,7 +247,18 @@ def stamp(src: str, cwd: Path) -> None:
         return
 
     # Resolve rung: named ladder rung, or "branch:<name>" for untracked targets.
-    ladder = _bs._resolved_merge_targets()
+    # The native ladder read opens its own connection, so a merge landing while
+    # the server holds the writer can time it out; `assert_native` can refuse the
+    # store outright. Neither may cost the stamp: `_resolved_merge_targets` is the
+    # same fallback the legacy path takes, down to the default ladder, and the
+    # reason is logged the way every other step in this function logs its own.
+    try:
+        ladder = native_ladder(db_file)
+    except Exception as exc:
+        _log(root, f"native merge ladder unreadable ({exc!r}); resolving the rung from the projection")
+        ladder = None
+    if ladder is None:
+        ladder = _bs._resolved_merge_targets()
     rung = _bs._rung_for_branch(current, ladder) or f"branch:{current}"
 
     # Delegate to the canonical recorder (v3-correct heavy write + state recompute).

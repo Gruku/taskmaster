@@ -182,7 +182,9 @@ class Transaction:
             raise ValueError("document body must be text or null")
         doc = deepcopy(doc)
         ident = _reserve_id(self.connection, kind, doc, requested_id)
-        if kind not in ("backlog", "project"):
+        # The store stamps the id on every document it creates, the project
+        # manifest included (a later replace may drop it, as the tool's put does).
+        if kind != "backlog":
             doc["id"] = ident
         key = _put_entity(self.connection, {"kind": kind, "id": ident, "doc": doc, "body": body,
                                           "rev": 1, "updated_seq": self.seq, "archived": int(bool(doc.get("archived"))),

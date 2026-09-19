@@ -14,6 +14,7 @@ import pytest
 
 from taskmaster.native.commands import execute, Conflict
 from taskmaster.native.queries import Repository
+from taskmaster.native.workflow import _bugs_found_in
 from test_native_commands import native, envelope  # noqa: F401
 from test_native_migration import legacy  # noqa: F401
 
@@ -258,6 +259,31 @@ def test_an_open_bug_naming_the_task_blocks_completion_case_insensitively(worksp
         run(connection, "task.pick", {"id": "demo-001", "session": "alpha"}, "claim")
         with pytest.raises(ValueError, match="open bug"):
             run(connection, "task.complete", {"id": "demo-001"}, "blocked")
+
+
+def _hand_edit_found_in(connection, bug_id, value_json):
+    """Write a `found_in` no tool can produce, as a hand-edited or imported row would."""
+    connection.execute(
+        "UPDATE entity_extensions SET value_json=? WHERE field='found_in' AND entity_key="
+        "(SELECT entity_key FROM entity_core WHERE kind='bug' AND public_id=?)", (value_json, bug_id))
+
+
+def test_a_bug_whose_found_in_is_not_a_string_refuses_rather_than_missing_the_gate(workspace):
+    with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
+        bug = created(connection, "bug.create", {"title": "Crash", "found_in": "demo-001"}, "bug")
+        _hand_edit_found_in(connection, bug, json.dumps(["demo-001"]))
+        run(connection, "task.pick", {"id": "demo-001", "session": "alpha"}, "claim")
+        express(connection, "demo-001", "complete")
+        with pytest.raises(ValueError, match=f"bug `{bug}` has a malformed found_in"):
+            run(connection, "task.complete", {"id": "demo-001"}, "blocked")
+        assert fields(connection, "task", "demo-001")["status"] == "in-progress"
+
+
+def test_the_close_gate_folds_case_beyond_ascii(workspace):
+    with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
+        bug = created(connection, "bug.create", {"title": "Crash", "found_in": "demo-001"}, "bug")
+        _hand_edit_found_in(connection, bug, json.dumps("ÉDEMO-001"))
+        assert _bugs_found_in(connection, "édemo-001") == ([bug], [])
 
 
 def test_completion_archives_the_bugs_the_task_fixed_in_the_same_commit(workspace):
@@ -532,9 +558,12 @@ def test_area_updates_validate_through_the_pure_area_rules(workspace):
 
 
 def test_thread_status_overrides_land_on_the_backlog_entity(workspace):
+    """The row is the store's `__backlog__`, and the thread must exist among the
+    live handovers — the registry is derived from them, not trusted as stored."""
     with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
+        run(connection, "handover.create", {"tldr": "Threaded", "thread": "t"}, "threaded")
         run(connection, "thread.update", {"name": "t", "status": "parked", "reason": "waiting"}, "park")
-        stored = fields(connection, "backlog", "backlog")
+        stored = fields(connection, "backlog", "__backlog__")
         assert stored["threads"]["t"]["status"] == "parked"
         assert stored["thread_meta"]["t"]["reason"] == "waiting"
         with pytest.raises(KeyError):

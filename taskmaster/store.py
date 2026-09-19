@@ -803,6 +803,24 @@ def _resolve_for(backlog_path: Path | None, root: Path | None) -> RootResolution
     and can move a damaged file aside, none of which a diagnostic may do.
     `_STATE_LOCK` is re-entrant, so `open_store` may already hold it.
     """
+    with _STATE_LOCK:
+        resolved = resolve_location(backlog_path, root)
+        forward = _projection_schema(resolved.backlog_path)
+        if forward is not None and forward > PROJECTION_SCHEMA:
+            raise RuntimeError(
+                f"projection schema {forward} is newer than supported schema "
+                f"{PROJECTION_SCHEMA}; upgrade Taskmaster"
+            )
+        return resolved
+
+
+def resolve_location(backlog_path: Path | None, root: Path | None = None) -> RootResolution:
+    """`_resolve_for` without the projection-schema fence, which parses backlog.yaml.
+
+    The native routing gate asks this on every tool call to find the database
+    it must classify; a native store never admits through the legacy
+    projection fence, so it must not pay for, or depend on, that file read.
+    """
     global _ROOT_RESOLUTION
     with _STATE_LOCK:
         if backlog_path is not None:
@@ -843,13 +861,6 @@ def _resolve_for(backlog_path: Path | None, root: Path | None) -> RootResolution
             _ROOT_RESOLUTION = resolved
         if _ROOT_RESOLUTION is None:
             _ROOT_RESOLUTION = resolved
-
-        forward = _projection_schema(resolved.backlog_path)
-        if forward is not None and forward > PROJECTION_SCHEMA:
-            raise RuntimeError(
-                f"projection schema {forward} is newer than supported schema "
-                f"{PROJECTION_SCHEMA}; upgrade Taskmaster"
-            )
         return resolved
 
 
@@ -1018,6 +1029,68 @@ def transaction_dict(
 
 def status(backlog_path: Path | None = None) -> StoreStatus:
     return open_store(backlog_path=backlog_path).status()
+
+
+def detect_dominant_crlf(backlog_path: Path) -> bool:
+    """Whether a backlog directory's git-facing files are mostly CRLF.
+
+    Bounded sampling (see `_LINE_ENDING_SAMPLE_PER_DIR`), shared by the legacy
+    exporter and the native compatibility drain so a new file matches its
+    neighbours whichever writer creates it.
+    """
+    crlf = lf = 0.0
+    for name in ("backlog.yaml", "project.yaml"):
+        probe = _probe_crlf(backlog_path / name)
+        if probe is True:
+            crlf += 1
+        elif probe is False:
+            lf += 1
+    for folder in _LINE_ENDING_SAMPLE_DIRS:
+        directory = backlog_path / folder
+        try:
+            # Listed eagerly, inside the guard: `Path.iterdir` is lazy on
+            # 3.11, so a project with no `bugs/` raised FileNotFoundError
+            # out of the loop below and took the write that asked with it.
+            # `os.listdir` also avoids a stat per name on a 2,300-file tree.
+            names = [
+                name for name in os.listdir(directory) if name.endswith(".md")
+            ]
+        except OSError:
+            continue
+        if not names:
+            continue
+        sampled_crlf = sampled_lf = 0
+        for name in names[:_LINE_ENDING_SAMPLE_PER_DIR]:
+            probe = _probe_crlf(directory / name)
+            if probe is True:
+                sampled_crlf += 1
+            elif probe is False:
+                sampled_lf += 1
+        sampled = sampled_crlf + sampled_lf
+        if not sampled:
+            continue
+        # A directory votes with how many files it holds, not with how many
+        # of them were sampled: 20 read out of 2,300 tasks otherwise lost to
+        # 40 read out of two small directories.
+        weight = len(names) / sampled
+        crlf += sampled_crlf * weight
+        lf += sampled_lf * weight
+    return crlf > lf
+
+
+def count_linear_enqueue_failures(local_dir: Path) -> int:
+    """Enqueue failures `store.log` in a store's local directory still records."""
+    path = local_dir / "store.log"
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return 0
+    return sum(1 for line in text.splitlines() if _LINEAR_ENQUEUE_FAILURE_MARKER in line)
+
+
+def linear_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    """One `linear_queue` row as the status and drain code read it."""
+    return Store._linear_row(row)
 
 
 class Store:
@@ -4976,15 +5049,7 @@ class Store:
         is "recent", not "ever" -- a count that under-reports an ancient failure
         is still the difference between an operator seeing the loss and not.
         """
-        path = self.db_path.parent / "store.log"
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            return 0
-        return sum(
-            1 for line in text.splitlines()
-            if _LINEAR_ENQUEUE_FAILURE_MARKER in line
-        )
+        return count_linear_enqueue_failures(self.db_path.parent)
 
     def _match_project_line_endings(
         self, content: bytes, path: Path, prior_crlf: bool | None = None
@@ -5013,44 +5078,7 @@ class Store:
         return self._dominant_crlf
 
     def _detect_dominant_line_ending(self) -> bool:
-        crlf = lf = 0.0
-        for name in ("backlog.yaml", "project.yaml"):
-            probe = _probe_crlf(self.backlog_path / name)
-            if probe is True:
-                crlf += 1
-            elif probe is False:
-                lf += 1
-        for folder in _LINE_ENDING_SAMPLE_DIRS:
-            directory = self.backlog_path / folder
-            try:
-                # Listed eagerly, inside the guard: `Path.iterdir` is lazy on
-                # 3.11, so a project with no `bugs/` raised FileNotFoundError
-                # out of the loop below and took the write that asked with it.
-                # `os.listdir` also avoids a stat per name on a 2,300-file tree.
-                names = [
-                    name for name in os.listdir(directory) if name.endswith(".md")
-                ]
-            except OSError:
-                continue
-            if not names:
-                continue
-            sampled_crlf = sampled_lf = 0
-            for name in names[:_LINE_ENDING_SAMPLE_PER_DIR]:
-                probe = _probe_crlf(directory / name)
-                if probe is True:
-                    sampled_crlf += 1
-                elif probe is False:
-                    sampled_lf += 1
-            sampled = sampled_crlf + sampled_lf
-            if not sampled:
-                continue
-            # A directory votes with how many files it holds, not with how many
-            # of them were sampled: 20 read out of 2,300 tasks otherwise lost to
-            # 40 read out of two small directories.
-            weight = len(names) / sampled
-            crlf += sampled_crlf * weight
-            lf += sampled_lf * weight
-        return crlf > lf
+        return detect_dominant_crlf(self.backlog_path)
 
     def _stamp_quarantine(
         self,
@@ -5223,35 +5251,16 @@ class Store:
             old_rel = rel
         doc = _from_json(row["doc"], {})
         body = row["body"] or ""
-        # `(expected_doc, expected_body)` for the round-trip check, or None for a
-        # whole-document YAML file, which has its own comparison.
-        expected: tuple[Mapping[str, Any], str | None] | None
-        if kind == "task":
-            fm, rendered_body = task_v4_to_file(doc | ({BODY_KEY: body} if body else {}))
-            content = render_frontmatter(fm, rendered_body).encode("utf-8")
-            expected = (doc, body)
-        elif kind in {"epic", "phase"}:
-            heavy_fields = EPIC_HEAVY_FIELDS if kind == "epic" else PHASE_HEAVY_FIELDS
-            _slim, heavy, rendered_body = _split_entity_for_v3(
-                doc | ({BODY_KEY: body} if body else {}), heavy_fields
-            )
-            if not any(field in heavy for field in heavy_fields) and not rendered_body:
-                if old_rel:
-                    if not self._remove_projection_file(
-                        tx, self.backlog_path / old_rel, kind, ident, old_rel
-                    ):
-                        return
-                    tx.connection.execute("DELETE FROM projection WHERE file=?", (old_rel,))
-                    tx.connection.execute("DELETE FROM projection_base WHERE file=?", (old_rel,))
-                return
-            content = render_frontmatter(heavy, rendered_body).encode("utf-8")
-            expected = (heavy, rendered_body)
-        elif kind == "project":
-            content = yaml.dump(doc, default_flow_style=False, sort_keys=False, allow_unicode=True).encode("utf-8")
-            expected = None
-        else:
-            content = render_frontmatter(doc, body).encode("utf-8")
-            expected = (doc, body)
+        content, expected = render_entity_file(kind, doc, body)
+        if content is None:
+            if old_rel:
+                if not self._remove_projection_file(
+                    tx, self.backlog_path / old_rel, kind, ident, old_rel
+                ):
+                    return
+                tx.connection.execute("DELETE FROM projection WHERE file=?", (old_rel,))
+                tx.connection.execute("DELETE FROM projection_base WHERE file=?", (old_rel,))
+            return
         # Matched here, once, so the verification below reads exactly the bytes
         # that land and `_replace_projection` does not probe the file a second
         # time — two extra opens per file across a 2,300-file adoption.
@@ -5470,33 +5479,7 @@ class Store:
         return False
 
     def _export_backlog(self, tx: "Transaction", *, force: bool = False) -> None:
-        data = self._load_dict_from_connection(tx.connection)
-        data.pop("context", None)
-        data.pop("_orphan_tasks", None)
-        slim_epics: list[dict[str, Any]] = []
-        for epic in data.get("epics", []):
-            persistable = {k: v for k, v in epic.items() if k != "tasks"}
-            slim, heavy, body = _split_entity_for_v3(persistable, EPIC_HEAVY_FIELDS)
-            slim_epics.append(
-                slim
-                if (any(field in heavy for field in EPIC_HEAVY_FIELDS) or body)
-                else _clean_doc(persistable)
-            )
-        data["epics"] = slim_epics
-        slim_phases: list[dict[str, Any]] = []
-        for phase in data.get("phases", []):
-            slim, heavy, body = _split_entity_for_v3(phase, PHASE_HEAVY_FIELDS)
-            slim_phases.append(
-                slim
-                if (any(field in heavy for field in PHASE_HEAVY_FIELDS) or body)
-                else _clean_doc(phase)
-            )
-        data["phases"] = slim_phases
-        meta = dict(data.get("meta") or {})
-        meta.pop("updated", None)
-        meta["projection_schema"] = PROJECTION_SCHEMA
-        data["meta"] = meta
-        content = yaml.dump(data, default_flow_style=False, sort_keys=False, allow_unicode=True).encode("utf-8")
+        content, data = render_backlog_file(self._load_dict_from_connection(tx.connection))
         seq = int(tx.connection.execute("SELECT COALESCE(MAX(seq),0) FROM changes").fetchone()[0])
         content = self._match_project_line_endings(
             content, self.backlog_path / "backlog.yaml"
@@ -5678,6 +5661,71 @@ class Store:
             connection.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchall()
         except sqlite3.Error:
             pass
+
+
+
+def render_backlog_file(data: dict[str, Any]) -> tuple[bytes, dict[str, Any]]:
+    """LF-rendered backlog.yaml bytes, plus the document they encode.
+
+    `data` is a backlog document carrying `epics` and `phases` lists in export
+    order (each with its body under BODY_KEY). Consumed in place. Shared by the
+    legacy exporter and the native compatibility drain.
+    """
+    data.pop("context", None)
+    data.pop("_orphan_tasks", None)
+    slim_epics: list[dict[str, Any]] = []
+    for epic in data.get("epics", []):
+        persistable = {k: v for k, v in epic.items() if k != "tasks"}
+        slim, heavy, body = _split_entity_for_v3(persistable, EPIC_HEAVY_FIELDS)
+        slim_epics.append(
+            slim
+            if (any(field in heavy for field in EPIC_HEAVY_FIELDS) or body)
+            else _clean_doc(persistable)
+        )
+    data["epics"] = slim_epics
+    slim_phases: list[dict[str, Any]] = []
+    for phase in data.get("phases", []):
+        slim, heavy, body = _split_entity_for_v3(phase, PHASE_HEAVY_FIELDS)
+        slim_phases.append(
+            slim
+            if (any(field in heavy for field in PHASE_HEAVY_FIELDS) or body)
+            else _clean_doc(phase)
+        )
+    data["phases"] = slim_phases
+    meta = dict(data.get("meta") or {})
+    meta.pop("updated", None)
+    meta["projection_schema"] = PROJECTION_SCHEMA
+    data["meta"] = meta
+    content = yaml.dump(data, default_flow_style=False, sort_keys=False, allow_unicode=True).encode("utf-8")
+    return content, data
+
+
+def render_entity_file(
+    kind: str, doc: Mapping[str, Any], body: str | None
+) -> tuple[bytes | None, "tuple[Mapping[str, Any], str | None] | None"]:
+    """The LF-rendered projection bytes for one entity, and its round-trip oracle.
+
+    Content None means the entity owns no file (an epic or phase with no heavy
+    field and no body), so any file it had must go. The oracle is
+    `(expected_doc, expected_body)`, or None for a whole-document YAML file,
+    which has its own comparison. Shared by the legacy exporter and the native
+    compatibility drain so the two can never render one entity differently.
+    """
+    body = body or ""
+    if kind == "task":
+        fm, rendered_body = task_v4_to_file(dict(doc) | ({BODY_KEY: body} if body else {}))
+        return render_frontmatter(fm, rendered_body).encode("utf-8"), (doc, body)
+    if kind in {"epic", "phase"}:
+        heavy_fields = EPIC_HEAVY_FIELDS if kind == "epic" else PHASE_HEAVY_FIELDS
+        _slim, heavy, rendered_body = _split_entity_for_v3(
+            dict(doc) | ({BODY_KEY: body} if body else {}), heavy_fields
+        )
+        if not any(field in heavy for field in heavy_fields) and not rendered_body:
+            return None, None
+        return render_frontmatter(heavy, rendered_body).encode("utf-8"), (heavy, rendered_body)
+    if kind == "project":
+        return yaml.dump(dict(doc), default_flow_style=False, sort_keys=False, allow_unicode=True).encode("utf-8"), None
+    return render_frontmatter(dict(doc), body).encode("utf-8"), (doc, body)
 
 
 class Transaction:
