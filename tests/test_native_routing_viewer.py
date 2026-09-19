@@ -5,8 +5,10 @@ preconditions — and commit and project the same state.
 """
 from __future__ import annotations
 
+from contextlib import closing
 import json
 import re
+import sqlite3
 import threading
 import urllib.error
 import urllib.request
@@ -16,7 +18,7 @@ import pytest
 from taskmaster import backlog_server as bs
 from datetime import timedelta
 
-from native_twins import CLOCK, make_twins, normalize
+from native_twins import CLOCK, committed, make_twins, normalize
 
 
 def _seed():
@@ -179,3 +181,31 @@ def test_task_edits_match_including_preconditions(twins):
     same(twins, "OPTIONS", "/api/backlog")
     twins.assert_state_matches(ignore=archived)
     twins.assert_files_match(ignore={"tasks/archive/test-epic-003.md"})
+
+
+def _interrupted_cutover(root):
+    """A native store no client may serve: the manifest says native, not `ready`."""
+    with closing(sqlite3.connect(root / ".taskmaster" / "local" / "store.db", isolation_level=None)) as connection:
+        connection.execute("UPDATE native_manifest SET value='cutover' WHERE key='state'")
+
+
+def test_unservable_native_store_refuses_every_verb_with_a_json_body(twins):
+    """An unservable native store is not a legacy store. Treating it as one sent every
+    route into the legacy body, where admission raised past `handle_one_request` as a
+    bare 500 and a dropped connection — and the write verbs got there through
+    `_transaction()`. The refusal must reach the client as the store-refusal JSON body."""
+    _interrupted_cutover(twins.native)
+    before = committed(twins.native)
+    for method, path, payload in (("GET", "/api/backlog", None),
+                                  ("GET", "/api/task/test-epic-001", None),
+                                  ("GET", "/api/task/test-epic-001/related", None),
+                                  ("GET", "/api/threads", None),
+                                  ("POST", "/api/notes", {"text": "must not land"}),
+                                  ("POST", "/api/tasks", {"epic": "test-epic", "title": "must not land"}),
+                                  ("PUT", "/api/viewer/prefs", {"theme": "light"}),
+                                  ("PATCH", "/api/tasks/test-epic-001", {"title": "must not land"})):
+        status, raw, _etag = _serve(twins, twins.native, method, path, payload)
+        assert status == 409, (method, path, status, raw)
+        body = json.loads(raw)
+        assert body["ok"] is False and "not ready" in body["error"], (method, path, raw)
+    assert committed(twins.native) == before

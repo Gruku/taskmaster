@@ -66,3 +66,16 @@ def test_refusal_says_why_and_what_to_do_and_changes_nothing(twins, pair):
     assert "not yet routed" not in text, text
     assert committed(twins.native) == before
     assert is_native(twins.native) and _state(twins.native) == "ready"
+
+
+def test_unservable_native_store_refuses_in_each_router_error_shape(twins):
+    """A store this runtime cannot serve refuses through the same seam as an unrouted
+    tool, so it owes the caller the same shape: the JSON routers parse their answer."""
+    with closing(sqlite3.connect(twins.native / ".taskmaster" / "local" / "store.db",
+                                 isolation_level=None)) as connection:
+        connection.execute("UPDATE native_manifest SET value='cutover' WHERE key='state'")
+    with twins.at(twins.native):
+        assert "not ready" in json.loads(bs.backlog_link(action="validate"))["error"]
+        assert "not ready" in json.loads(bs.backlog_linear(action="status"))["error"]
+        text = bs.backlog_status()
+    assert text.startswith("Error: ") and "not ready" in text, text

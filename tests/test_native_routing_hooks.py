@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import sqlite3
 
 import pytest
 import yaml
@@ -127,3 +128,33 @@ def test_merge_recorder_stamps_the_live_native_task_on_the_native_ladder(twins, 
     twins.assert_state_matches()
     twins.assert_files_match()
     assert native[("task", "test-epic-003")][0]["merge_gate_state"] == "qa"
+
+
+def test_merge_recorder_stamps_when_the_native_ladder_read_fails(twins, monkeypatch):
+    """A merge landing while the server holds the writer is ordinary, so a busy-timeout
+    on the ladder read must cost the rung label, not the whole stamp. The legacy ladder
+    read falls back to the default targets; the native one must keep that posture."""
+    hook = _module("merge_recorder_stamp")
+    from taskmaster.native_routing import tasks as native_tasks
+
+    real = native_tasks._merge_targets
+    calls = []
+
+    def locked(snapshot):
+        # Only the hook's own ladder read times out; the recorder's read behind it
+        # succeeds, as it would when the writer is released a moment later.
+        calls.append(snapshot)
+        if len(calls) == 1:
+            raise sqlite3.OperationalError("database is locked")
+        return real(snapshot)
+
+    monkeypatch.setattr(native_tasks, "_merge_targets", locked)
+    answers = {"rev-parse --abbrev-ref HEAD": "qa-line", "rev-parse HEAD": "f00dcafe"}
+    monkeypatch.setattr(hook, "_git", lambda args, cwd: answers[" ".join(args)])
+    monkeypatch.setenv("TASKMASTER_ROOT", str(twins.native))
+    with twins.at(twins.native):
+        hook.stamp("feature/late", twins.native)
+    stamped = committed(twins.native)[("task", "test-epic-003")][0]["merge_status"]
+    assert stamped["qa"]["merge_commit"] == "f00dcafe", stamped
+    log = (twins.native / ".taskmaster" / "local" / "hook.log").read_text(encoding="utf-8")
+    assert "merge_recorder_stamp" in log and "database is locked" in log, log
