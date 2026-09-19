@@ -48,24 +48,33 @@ def test_a_multibyte_item_is_dropped_on_its_byte_cost_not_its_length():
 # ── The boundary ────────────────────────────────────────────────────────────
 
 
+def exact_fit(selections):
+    """The smallest limit that still holds every row — found by iterating, since
+    the limit is printed in the answer and its own digits count toward the size."""
+    limit = render(selections=selections, limit_bytes=10 ** 9).budget["used_bytes"]
+    for _ in range(10):
+        answer = render(selections=selections, limit_bytes=limit)
+        if answer.budget["used_bytes"] == limit:
+            return limit, answer
+        limit = answer.budget["used_bytes"]
+    raise AssertionError("no self-consistent limit found")
+
+
 def test_an_item_that_lands_exactly_on_the_limit_is_kept():
     items = [{"id": "H-1"}, {"id": "H-2"}]
-    full = render(selections=[Selection("handovers", items, 2)])
-    exact = render(selections=[Selection("handovers", items, 2)],
-                   limit_bytes=full.budget["used_bytes"])
-    assert exact.budget["used_bytes"] == full.budget["used_bytes"]
+    limit, exact = exact_fit([Selection("handovers", items, 2)])
     assert payload(exact)["selected"]["handovers"] == items
+    assert exact.budget["used_bytes"] == limit == len(exact.text.encode("utf-8"))
     assert exact.budget["omitted_total"] == 0 and exact.budget["over_budget"] is False
 
 
 def test_one_byte_under_the_limit_drops_the_last_item():
     items = [{"id": "H-1"}, {"id": "H-2"}]
-    full = render(selections=[Selection("handovers", items, 2)])
-    tight = render(selections=[Selection("handovers", items, 2)],
-                   limit_bytes=full.budget["used_bytes"] - 1)
+    limit, _exact = exact_fit([Selection("handovers", items, 2)])
+    tight = render(selections=[Selection("handovers", items, 2)], limit_bytes=limit - 1)
     assert payload(tight)["selected"]["handovers"] == [{"id": "H-1"}]
     assert tight.budget["omitted"] == {"handovers": 1} and tight.budget["omitted_total"] == 1
-    assert len(tight.text.encode("utf-8")) == tight.budget["used_bytes"] <= full.budget["used_bytes"] - 1
+    assert len(tight.text.encode("utf-8")) == tight.budget["used_bytes"] <= limit - 1
 
 
 # ── Mandatory context is never trimmed ──────────────────────────────────────
@@ -144,10 +153,11 @@ def test_selections_fill_in_order_and_stop_at_the_first_item_that_does_not_fit()
     tight = render(selections=[Selection("a", first, 3), Selection("b", second, 3)],
                    limit_bytes=full.budget["used_bytes"] - 20)
     body = payload(tight)
-    assert body["selected"]["a"] == first[:len(body["selected"].get("a", []))]
-    assert body["selected"].get("b", []) == second[:len(body["selected"].get("b", []))]
-    assert tight.budget["omitted_total"] == (
-        3 - len(body["selected"].get("a", []))) + (3 - len(body["selected"].get("b", [])))
+    kept = body["selected"].get("b", [])
+    assert body["selected"]["a"] == first, "the earlier selection fills first"
+    assert 0 <= len(kept) < 3 and kept == second[:len(kept)], "and the later one loses its tail"
+    assert tight.budget["omitted"] == {"a": 0, "b": 3 - len(kept)}
+    assert tight.budget["omitted_total"] == 3 - len(kept)
 
 
 @pytest.mark.parametrize("limit", [0, 60, 120, 300, 8000])
