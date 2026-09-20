@@ -8577,8 +8577,10 @@ def backlog_advance_phase(force: bool = False) -> str:
 
 @mcp.tool()
 @_transactional("backlog_batch_update")
-def backlog_batch_update(operations: str) -> str:
-    """Apply multiple task/epic updates in a single atomic operation. One load/save cycle.
+def backlog_batch_update(operations: str = "", commands: list[dict] | None = None,
+                         expected_revisions: list[dict] | None = None,
+                         atomic: bool | None = None) -> str:
+    """Apply multiple task/epic updates in one call. Two forms; pass exactly one.
 
     Use this instead of calling backlog_update_task repeatedly — it's faster and atomic.
 
@@ -8590,7 +8592,26 @@ def backlog_batch_update(operations: str) -> str:
             "archive {task_id} [reason]" — archive a task (default reason: done)
             "pick {task_id}" — set task to in-progress with started timestamp
             "update_epic {epic_id} {field} {value}" — update an epic field
+          This form is partial: a bad line reports its own error and every good
+          line still applies. Answered as text.
+        commands: Typed mutations — [{"operation": "task.patch", "arguments": {...}}]
+          — applied in ONE transaction, all of them or none. Each operation is
+          validated by name against the store's operation allowlist; there is no
+          passthrough. Native-authority stores only. Answered as JSON.
+        expected_revisions: [{"kind", "id", "revision"}] preconditions for the
+          `commands` form. A mismatch applies nothing and says so.
+        atomic: Only for the `commands` form, which is all-or-nothing; pass True to
+          say so explicitly. The line form's partial apply cannot be made atomic.
     """
+    from taskmaster.native import batch_commands  # noqa: PLC0415
+
+    # Decided before any store is read, so a malformed call cannot half-apply and
+    # the two opposite contracts never meet in one code path.
+    form_refusal = batch_commands.check(operations, commands, expected_revisions, atomic)
+    if form_refusal is not None:
+        return form_refusal
+    if commands is not None:
+        return batch_commands.legacy_refusal()
     data = _load()
     results: list[str] = []
     errors: list[str] = []

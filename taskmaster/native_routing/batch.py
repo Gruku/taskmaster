@@ -9,14 +9,19 @@ against a local overlay so a line sees the lines before it. Only the accepted li
 go to the native structured batch, as one transaction. If the core still refuses
 (a peer changed state in between), nothing commits and the answer says so; a refusal
 can therefore never discard the good lines silently.
+
+The tool's `commands=` form is the opposite contract — typed mutations, one
+transaction, revision preconditions, all of it or none — so it gets its own path
+here (`_structured`) and shares nothing with the line path but the argument check
+in `native.batch_commands`.
 """
 from __future__ import annotations
 
 from copy import deepcopy
 
 from taskmaster import backlog_server as bs
-from taskmaster.native import batch_lines, domain
-from taskmaster.native.contracts import MAX_BATCH_COMMANDS
+from taskmaster.native import batch_commands, batch_lines, domain
+from taskmaster.native.contracts import MAX_BATCH_COMMANDS, Conflict
 from taskmaster.native.workflow import _bugs_found_in
 
 from . import reads
@@ -102,8 +107,34 @@ def _render(report, committed):
             + f" ({cascaded} tasks cascaded)")
 
 
+def _structured(call, commands, expected_revisions):
+    """The `commands=` form: one native batch, all of it or none of it.
+
+    Separate from the line path on purpose. Nothing here pre-validates against an
+    overlay and nothing here reports per-item outcomes: a refusal or a failed
+    precondition applied nothing, and the answer says exactly that rather than
+    summarizing a partial apply the caller never asked for.
+    """
+    try:
+        receipt = call.execute("batch", {"commands": commands}, expected=expected_revisions or [])
+    except Conflict as exc:
+        return batch_commands.refused("precondition_failed", error_text(exc)[len("Error: "):])
+    except (ValueError, KeyError) as exc:
+        return batch_commands.refused("refused", error_text(exc)[len("Error: "):])
+    return call.finish(batch_commands.receipt_answer(receipt, len(commands)))
+
+
 @adapter("backlog_batch_update")
-def batch_update(call, *, operations):
+def batch_update(call, *, operations, commands=None, expected_revisions=None, atomic=None):
+    form_refusal = batch_commands.check(operations, commands, expected_revisions, atomic)
+    if form_refusal is not None:
+        return form_refusal
+    if commands is not None:
+        return _structured(call, commands, expected_revisions)
+    return _lines(call, operations)
+
+
+def _lines(call, operations):
     errors, reports, commands = [], [], []
     now = domain.now_stamp()
     with call.read() as snapshot:
