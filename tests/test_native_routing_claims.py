@@ -171,9 +171,12 @@ def test_two_sessions_racing_for_one_task_have_exactly_one_winner(twins):
     """
     from taskmaster.native.commands import execute, Conflict
     database = twins.native / ".taskmaster" / "local" / "store.db"
+    with closing(sqlite3.connect(database, isolation_level=None)) as connection:
+        store_id = connection.execute(
+            "SELECT value FROM native_manifest WHERE key='store_id'").fetchone()[0]
 
     def claim(index):
-        envelope = {"protocol": 2, "store_id": "race", "caller_scope": f"sess-{index}",
+        envelope = {"protocol": 2, "store_id": store_id, "caller_scope": f"sess-{index}",
                     "request_id": f"race-{index}", "operation": "task.pick",
                     "arguments": {"id": "test-epic-001", "session": f"sess-{index}"},
                     "expected_revisions": []}

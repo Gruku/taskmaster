@@ -33,6 +33,9 @@ from functools import wraps
 
 from taskmaster import store
 from taskmaster import yaml_io
+# The claim contract (holder, TTL, liveness, refusal wording) lives in one
+# module so the legacy tool and the native adapter cannot drift on it.
+from taskmaster.native import claims as _claims
 from taskmaster.admission import UnsupportedStoreError
 from taskmaster.blast_radius import (
     BlastRadiusConfig,
@@ -6570,14 +6573,24 @@ def _build_worktree_instruction(
 
 @mcp.tool()
 @_transactional("backlog_pick_task")
-def backlog_pick_task(task_id: str, force: bool = False) -> str:
+def backlog_pick_task(task_id: str, force: bool = False, ttl_seconds: int = 0) -> str:
     """Start working on a task — sets it to in-progress. Idempotent if already in-progress.
+
+    Picking takes a claim: the task is locked to this session until it completes,
+    the claim is released, or the claim expires. Keep a long task claimed with
+    `backlog_claim(action="renew")`, and give it back with `action="release"`.
 
     Args:
         task_id: The task ID to pick (e.g., "ue-plugin-003")
         force: Force-claim the task even if locked by another session. Use when a previous
                session ended without releasing the lock.
+        ttl_seconds: How long this claim stands without a renew. 0 uses the default
+               (4 hours). A claim also expires as soon as its holder is known to be gone.
     """
+    try:
+        ttl = _claims.ttl_seconds(ttl_seconds)
+    except ValueError as exc:
+        return f"Error: {exc}"
     data = _load()
     result = _tx_task(data, task_id)
     if not result:
@@ -6616,7 +6629,7 @@ def backlog_pick_task(task_id: str, force: bool = False) -> str:
             for m in members:
                 m["status"] = "in-progress"
                 m["started"] = m.get("started") or _now()
-                m["locked_by"] = SESSION_ID
+                _claims.held(m, ttl, session=SESSION_ID)
                 m["branch"] = branch
                 m["worktree"] = worktree
                 member_found = _find_task(data, m["id"])
@@ -6649,18 +6662,15 @@ def backlog_pick_task(task_id: str, force: bool = False) -> str:
     if status == "in-progress":
         if locked_by and locked_by != SESSION_ID:
             if not force:
-                return (
-                    f"Error: task `{task_id}` is locked by another session (`{locked_by}`). "
-                    f"It is already in-progress elsewhere. Pick a different task, or use "
-                    f"`backlog_pick_task({task_id}, force=true)` to reclaim it for this session."
-                )
+                return _claims.lock_refusal(task_id, _claims.read(
+                    task, task_id=task_id, session=SESSION_ID, connection=_store().connection))
             # Force-claim: transfer lock to this session
-            task["locked_by"] = SESSION_ID
+            _claims.held(task, ttl, session=SESSION_ID)
             _tx_put_task(task, epic)
             _mutate_and_save(data)
         # Idempotent: update session state and lock, return details without mutation
         if not locked_by:
-            task["locked_by"] = SESSION_ID
+            _claims.held(task, ttl, session=SESSION_ID)
             _tx_put_task(task, epic)
             _mutate_and_save(data)
         _set_session_task(task, epic)
@@ -6705,7 +6715,7 @@ def backlog_pick_task(task_id: str, force: bool = False) -> str:
 
     task["status"] = "in-progress"
     task["started"] = task.get("started") or _now()
-    task["locked_by"] = SESSION_ID
+    _claims.held(task, ttl, session=SESSION_ID)
 
     _tx_put_task(task, epic)
     _mutate_and_save(data)
@@ -6729,6 +6739,85 @@ def backlog_pick_task(task_id: str, force: bool = False) -> str:
     _render_after_commit(_render)
     # Open handovers stay open automatically under the new model — no resumed transition needed.
     return f"Picked `{task_id}` — {task['title']} (locked to this session)" + dep_warning + "\n\n" + context_text + worktree_instruction
+
+
+@mcp.tool()
+@_transactional("backlog_claim")
+def backlog_claim(
+    action: Literal["renew", "release", "status"],
+    task_id: str = "",
+    ttl_seconds: int = 0,
+) -> str:
+    """Keep, give back or inspect the claim a pick took on a task, as JSON.
+
+    A claim is what stops two sessions working the same task. `backlog_pick_task`
+    takes one; this keeps it alive across a long session, hands it back when the
+    work pauses, and says who holds what.
+
+    A claim expires when its holder's process is known to be gone, or when its TTL
+    passes. A holder that cannot be judged — another machine, or a session this
+    store has never heard from — keeps its claim: the cost of guessing wrong is two
+    agents editing one task, so an unproven claim is never broken. `release` frees
+    an expired claim without stealing; `backlog_pick_task(force=True)` is still the
+    override for one that stands.
+
+    Args:
+        action: renew (extend to now + ttl), release (hand it back), status.
+        task_id: The task to act on. Omit with `status` to list this session's claims.
+        ttl_seconds: How long a renewed claim stands. 0 uses the default (4 hours).
+    """
+    try:
+        ttl = _claims.ttl_seconds(ttl_seconds)
+    except ValueError as exc:
+        return json.dumps(_claims.refusal("invalid_ttl", str(exc)))
+    if action != "status" and not task_id:
+        return json.dumps(_claims.refusal("task_required", f"`{action}` needs a task_id"))
+    data = _load()
+    connection = _store().connection
+
+    def state_of(task):
+        return _claims.read(task, task_id=str(task.get("id") or ""), session=SESSION_ID,
+                            connection=connection)
+
+    if not task_id:
+        held = [state_of(task) for epic in data.get("epics", []) for task in epic.get("tasks", [])
+                if task.get(_claims.HOLDER_FIELD) == SESSION_ID]
+        return json.dumps({"ok": True, "session": SESSION_ID,
+                           "claims": [state.as_dict() for state in sorted(held, key=lambda s: s.task_id)]})
+    found = _tx_task(data, task_id)
+    if not found:
+        return json.dumps(_claims.refusal("not_found", f"task `{task_id}` not found"))
+    task, epic = found
+    slug = task.get("bundle") if isinstance(task.get("bundle"), str) else ""
+    # A bundle is picked as a unit, so it is renewed and released as a unit.
+    members = _find_tasks_by_bundle(data, slug) if slug else []
+    targets = members or [task]
+    states = [state_of(target) for target in targets]
+    state = next((s for s in states if s.task_id == task_id), states[0])
+    member_ids = sorted(s.task_id for s in states) if members else []
+    if action == "status":
+        return json.dumps(_claims.ok(state, members=member_ids))
+    blocker = _claims.blocked_by(states, release=action == "release")
+    if blocker is not None:
+        return json.dumps(_claims.conflict(blocker))
+    if not any(s.holder for s in states):
+        if action == "renew":
+            return json.dumps(_claims.refusal(
+                "not_claimed", f"task `{task_id}` is not claimed; `backlog_pick_task` takes a claim",
+                task_id=task_id))
+        return json.dumps(_claims.ok(_claims.ClaimState(task_id, "", "", None, False, False),
+                                     members=member_ids))
+    for target, target_state in zip(targets, states):
+        if action == "release" and not target_state.holder:
+            continue
+        _claims.released(target) if action == "release" else _claims.held(target, ttl, session=SESSION_ID)
+        # Each member's own epic, as the bundle pick does: a member written with
+        # the wrong epic (or none) would move on the board.
+        owner = _find_task(data, str(target.get("id") or ""))
+        _tx_put_task(target, owner[1] if owner else epic)
+    _mutate_and_save(data)
+    return json.dumps(_claims.ok(state_of(task), renewed_from=state.expires_at if action == "renew" else "",
+                                 members=member_ids))
 
 
 def _append_changelog(

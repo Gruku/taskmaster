@@ -784,6 +784,15 @@ def _validate_safe_identifier(ident: str) -> None:
         raise ValueError(f"unsafe entity id {ident!r}: expected one safe filename component")
 
 
+def _local_host() -> str:
+    """This machine, spelled exactly as `sessions.host` records it.
+
+    Named so a reader of a `sessions` row does not have to guess which spelling
+    the writer used; `native.claims` judges claim liveness through it.
+    """
+    return socket.gethostname()
+
+
 def _local_pid_alive(pid: int | None) -> bool:
     if not pid:
         return False

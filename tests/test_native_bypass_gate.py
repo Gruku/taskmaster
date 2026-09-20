@@ -57,7 +57,16 @@ EXERCISES = {
     ("backlog_update_task", None): lambda: (
         bs.backlog_update_task(task_id="test-epic-001", field="notes", value="see test-epic-002"),
         bs.backlog_update_task(task_id="test-epic-001", tldr="gate tldr", next_step="gate next")),
-    ("backlog_pick_task", None): lambda: bs.backlog_pick_task(task_id="test-epic-001"),
+    ("backlog_pick_task", None): lambda: [bs.backlog_pick_task(task_id="test-epic-001"),
+                                          bs.backlog_pick_task(task_id="test-epic-001", ttl_seconds=3600)],
+    # Every branch of the claim tool: this session's claims, one task's claim,
+    # a renew, a release, and the idempotent second release.
+    ("backlog_claim", None): lambda: [bs.backlog_claim(action="status"),
+                                      bs.backlog_claim(action="status", task_id="test-epic-001"),
+                                      bs.backlog_pick_task(task_id="test-epic-001"),
+                                      bs.backlog_claim(action="renew", task_id="test-epic-001", ttl_seconds=120),
+                                      bs.backlog_claim(action="release", task_id="test-epic-001"),
+                                      bs.backlog_claim(action="release", task_id="test-epic-001")],
     ("backlog_complete_task", None): lambda: (
         bs.backlog_pick_task(task_id="test-epic-002"),
         bs.backlog_complete_task(task_id="test-epic-002", target_status="in-review", human_action="sign")),

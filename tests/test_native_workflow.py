@@ -765,6 +765,7 @@ NATIVE_MAPPING = {
     "backlog_project_init": ["project.set"],
     "backlog_project_set": ["project.set"],
     "backlog_linear": ["linear.link", "linear.unlink"],
+    "backlog_claim": ["task.claim_renew", "task.claim_release"],
 }
 DEFERRED = {
     # Maintenance and migration tools own the whole store, not one entity; they
