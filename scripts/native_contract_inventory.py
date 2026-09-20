@@ -31,6 +31,9 @@ SPECIAL = {
     "backlog_linear_probe": "external-query", "backlog_linear_bootstrap_apply": "synchronization",
     "backlog_linear_retry": "synchronization",
     "backlog_link_reconcile": "maintenance",
+    # An explicit import: it commits through the native core, and its legacy body
+    # only refuses, so it opens no legacy transaction to be detected by one.
+    "backlog_document_import": "simple-command",
 }
 
 # Logical owners consumed by N03 DDL/backfill. Unlisted authored keys have an

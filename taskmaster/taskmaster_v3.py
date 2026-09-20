@@ -66,6 +66,11 @@ CANONICAL_SECTIONS: dict[str, tuple[str, ...]] = {
     "phase": ("notes", "design", "roadmap"),
 }
 
+# Kinds whose prose `backlog_document` retrieves. Kinds absent from
+# CANONICAL_SECTIONS have no named sections, so only their whole body is retrievable.
+DOCUMENT_KINDS: tuple[str, ...] = ("task", "epic", "phase", "handover", "issue", "bug",
+                                   "decision", "idea", "note")
+
 TASK_INLINE_SECTIONS: frozenset[str] = frozenset({"notes", "review_instructions"})
 TASK_DOC_SECTIONS: frozenset[str] = frozenset({"spec", "plan", "design", "analysis", "roadmap"})
 
@@ -194,6 +199,66 @@ def _split_body_by_heading(body: str) -> dict[str, str]:
     return out
 
 
+def assert_canonical_sections(kind: str, sections: list[str]) -> None:
+    """Refuse a section name this kind does not define, in the wording every tool uses."""
+    canon = CANONICAL_SECTIONS.get(kind, ())
+    for s in sections:
+        if s not in canon:
+            raise ValueError(f"{s!r} is not a canonical section for kind={kind!r}")
+
+
+def read_doc_section(
+    doc_path: str,
+    project_root: Path | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """One doc-backed section read from disk, with the provenance that says so.
+
+    This is the declared fallback for a section the store has not imported. It is
+    the only place a section's content comes off the filesystem, so a caller that
+    never reaches it never touches a file.
+    """
+    resolved = (project_root / doc_path) if project_root else Path(doc_path)
+    if resolved.exists():
+        return resolved.read_text(encoding="utf-8"), {"source": "filesystem", "path": doc_path, "imported": False}
+    return f"(unresolved: {doc_path})", {"source": "missing", "path": doc_path, "imported": False}
+
+
+def resolve_sections_with_provenance(
+    entity: dict[str, Any],
+    *,
+    kind: str,
+    sections: list[str],
+    body: str,
+    project_root: Path | None = None,
+) -> dict[str, tuple[str, dict[str, Any]]]:
+    """`section → (content, provenance)` for requested sections, off the filesystem.
+
+    The legacy store has no imported prose, so a task's doc-backed section always
+    resolves through `read_doc_section`; the native path substitutes stored prose
+    before falling back here.
+    """
+    assert_canonical_sections(kind, sections)
+    out: dict[str, tuple[str, dict[str, Any]]] = {}
+
+    if kind == "task":
+        for s in sections:
+            if s in TASK_INLINE_SECTIONS:
+                v = entity.get(s)
+                if v:
+                    out[s] = (v if isinstance(v, str) else str(v), {"source": "inline"})
+            elif s in TASK_DOC_SECTIONS:
+                doc_path = (entity.get("docs") or {}).get(s)
+                if doc_path:
+                    out[s] = read_doc_section(doc_path, project_root)
+        return out
+
+    body_sections = _split_body_by_heading(body)
+    for s in sections:
+        if s in body_sections:
+            out[s] = (body_sections[s], {"source": "body"})
+    return out
+
+
 def resolve_sections(
     entity: dict[str, Any],
     *,
@@ -203,35 +268,48 @@ def resolve_sections(
     project_root: Path | None = None,
 ) -> dict[str, str]:
     """Return a dict mapping section name → content for requested sections."""
-    canon = CANONICAL_SECTIONS.get(kind, ())
-    for s in sections:
-        if s not in canon:
-            raise ValueError(f"{s!r} is not a canonical section for kind={kind!r}")
+    resolved = resolve_sections_with_provenance(
+        entity, kind=kind, sections=sections, body=body, project_root=project_root)
+    return {s: content for s, (content, _) in resolved.items()}
 
-    out: dict[str, str] = {}
 
-    if kind == "task":
-        for s in sections:
-            if s in TASK_INLINE_SECTIONS:
-                v = entity.get(s)
-                if v:
-                    out[s] = v if isinstance(v, str) else str(v)
-            elif s in TASK_DOC_SECTIONS:
-                doc_path = (entity.get("docs") or {}).get(s)
-                if not doc_path:
-                    continue
-                resolved = (project_root / doc_path) if project_root else Path(doc_path)
-                if resolved.exists():
-                    out[s] = resolved.read_text(encoding="utf-8")
-                else:
-                    out[s] = f"(unresolved: {doc_path})"
-        return out
+def document_header(kind: str, ident: str, title: str = "") -> str:
+    """The one header both stores put above a retrieved document."""
+    return f"## {kind} `{ident}`" + (f" — {title}" if title else "")
 
-    body_sections = _split_body_by_heading(body)
-    for s in sections:
-        if s in body_sections:
-            out[s] = body_sections[s]
-    return out
+
+def render_document_body(header: str, body: str) -> str:
+    """The whole-document answer: no sections were selected, so this is the prose."""
+    return f"{header}\n\n{body}" if (body or "").strip() else f"{header}\n\n(no body)"
+
+
+def section_provenance_line(entry: dict[str, Any]) -> str:
+    """One italic line naming where a section's text actually came from."""
+    parts = [f"source: {entry.get('source', 'unknown')}"]
+    if entry.get("path"):
+        parts.append(f"path: `{entry['path']}`")
+    if entry.get("content_hash"):
+        parts.append(f"content_hash: `{entry['content_hash']}`")
+    if entry.get("imported_seq") is not None:
+        parts.append(f"imported_seq: {entry['imported_seq']}")
+    if entry.get("imported") is False:
+        parts.append("imported: false")
+    return "*" + " · ".join(parts) + "*"
+
+
+def render_sections(
+    header: str,
+    sections: dict[str, str],
+    provenance: dict[str, dict[str, Any]] | None = None,
+) -> str:
+    """The sections answer both stores render. Without `provenance` it is unchanged."""
+    lines = [header + "\n"]
+    for section, content in sections.items():
+        if provenance is None:
+            lines.append(f"### {section}\n{content}")
+        else:
+            lines.append(f"### {section}\n{section_provenance_line(provenance.get(section, {}))}\n{content}")
+    return "\n".join(lines)
 
 
 def expand_link_ids(

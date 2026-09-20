@@ -9,7 +9,7 @@ from functools import lru_cache
 from types import UnionType
 from typing import Any, Union, get_args, get_origin, get_type_hints
 from taskmaster import taskmaster_v3 as domain
-from . import workflow
+from . import documents, workflow
 
 BUILDERS = {"decision": domain.build_decision_doc, "bug": domain.build_bug_doc,
             "issue": domain.build_issue_doc, "idea": domain.build_idea_doc, "handover": domain.build_handover_doc}
@@ -31,7 +31,7 @@ CREATE_EXTRAS = {"auto_link"}
 # Kinds whose prose is scanned for inline mentions on create and on a body edit,
 # as the tools do (`auto_link_on_save`).
 AUTO_LINKED = {"issue", "idea", "handover"}
-OPERATIONS = ENTITY_OPERATIONS | workflow.OPERATIONS
+OPERATIONS = ENTITY_OPERATIONS | workflow.OPERATIONS | documents.OPERATIONS
 
 
 def _accepts(value, annotation):
@@ -56,6 +56,8 @@ def validate(operation, arguments):
     from .contracts import _identifier
     if operation in workflow.OPERATIONS:
         return workflow.validate(operation, arguments)
+    if operation in documents.OPERATIONS:
+        return documents.validate(operation, arguments)
     kind, action = operation.split(".")
     if action == "create":
         parameters = dict(arguments)
@@ -133,6 +135,8 @@ def validate(operation, arguments):
 def apply(transaction, operation, arguments):
     if operation in workflow.OPERATIONS:
         return workflow.apply(transaction, operation, arguments)
+    if operation in documents.OPERATIONS:
+        return documents.apply(transaction, operation, arguments)
     kind, action = operation.split(".")
     if action == "create":
         options = dict(arguments)

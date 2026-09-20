@@ -33,7 +33,8 @@ def adapter(tool: str, *, actions: "tuple[str, ...] | None" = None, unknown=None
 
 def _load_families() -> None:
     # Imported for their registrations; each module is one routed family.
-    from . import batch, changes, epics_phases, handovers, links_areas, notes, overview, records, tasks  # noqa: F401
+    from . import (batch, changes, documents, epics_phases, handovers, links_areas,  # noqa: F401
+                   notes, overview, records, tasks)
 
 
 _NATIVE = "this project's store is a native authority"

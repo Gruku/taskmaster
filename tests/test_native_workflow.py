@@ -753,6 +753,7 @@ NATIVE_MAPPING = {
     "backlog_idea_update": ["idea.update"],
     "backlog_decision_create": ["decision.create"],
     "backlog_decision": ["decision.create", "decision.resolve", "decision.drop"],
+    "backlog_document_import": ["document.import"],
     "backlog_note": ["note.create", "note.update", "note.archive"],
     "backlog_link": ["link.create", "link.remove"],
     "backlog_handover_create": ["handover.create"],

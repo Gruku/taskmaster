@@ -230,11 +230,16 @@ from taskmaster.taskmaster_v3 import (
     get_session_detail,
     slim_entity as _slim_entity,
     resolve_sections as _resolve_sections,
+    resolve_sections_with_provenance as _resolve_sections_with_provenance,
+    render_sections as _render_sections,
+    document_header as _document_header,
+    render_document_body as _render_document_body,
     expand_link_ids as _expand_link_ids,
     build_tldr_index as _build_tldr_index,
     BODY_KEY as _BODY_KEY,
     render_frontmatter as _render_frontmatter,
     CANONICAL_SECTIONS as _CANONICAL_SECTIONS,
+    DOCUMENT_KINDS as _DOCUMENT_KINDS,
     rung_for_branch as _rung_for_branch,
     compute_merge_gate_state as _compute_merge_gate_state,
 )
@@ -2293,6 +2298,7 @@ def backlog_get_task(
     verbose: bool = False,
     sections: list[str] | None = None,
     expand_links: bool = False,
+    provenance: bool = False,
 ) -> str:
     """Get details for a single task including epic context and related tasks.
 
@@ -2312,6 +2318,9 @@ def backlog_get_task(
             plan, design, analysis, roadmap.
         expand_links: If True, replace bare IDs in depends_on,
             related_issues with {id, tldr} pills.
+        provenance: With sections, annotate each section with where its text came
+            from — an imported document (path, content_hash, imported_seq), an
+            inline field, or a file read off disk that was never imported.
     """
     data = _load()
     result = _find_task(data, task_id)
@@ -2327,7 +2336,7 @@ def backlog_get_task(
         return "Error: sections=[] requested no sections; pass sections=None for the slim view or name at least one section"
     if sections:
         try:
-            sec_data = _resolve_sections(
+            sec_data = _resolve_sections_with_provenance(
                 task,
                 kind="task",
                 sections=sections,
@@ -2336,10 +2345,10 @@ def backlog_get_task(
             )
         except ValueError as exc:
             return f"Error: {exc}"
-        lines = [f"## `{task['id']}` — {task['title']}\n"]
-        for sec, content in sec_data.items():
-            lines.append(f"### {sec}\n{content}")
-        return "\n".join(lines)
+        return _render_sections(
+            f"## `{task['id']}` — {task['title']}",
+            {sec: content for sec, (content, _) in sec_data.items()},
+            {sec: facts for sec, (_, facts) in sec_data.items()} if provenance else None)
 
     # ── slim mode (default) ──────────────────────────────────────────────────
     if not verbose:
@@ -2461,6 +2470,97 @@ def backlog_get_task(
             lines.append(f"- `{t['id']}` — {t['title']} ({t.get('priority', 'medium')})")
 
     return "\n".join(lines)
+
+
+def _legacy_document_row(data: dict, kind: str, entity_id: str):
+    """`(document, body)` for any retrievable kind on the legacy store, or None."""
+    if kind == "task":
+        found = _find_task(data, entity_id)
+        doc = found[0] if found else None
+    elif kind == "epic":
+        doc = _find_epic(data, entity_id)
+    elif kind == "phase":
+        doc = _find_phase(data, entity_id)
+    else:
+        row = _dict_row(data, kind, entity_id)
+        return (row[0], row[1] or "") if row else None
+    return None if doc is None else (doc, doc.get(_BODY_KEY, "") or "")
+
+
+@mcp.tool()
+def backlog_document(
+    kind: Literal["task", "epic", "phase", "handover", "issue", "bug", "decision", "idea", "note"],
+    entity_id: str,
+    sections: list[str] | None = None,
+    provenance: bool = False,
+) -> str:
+    """Read one entity's prose — named sections, or the whole document body.
+
+    The kind-general companion to `backlog_get_task(sections=...)`: use it to read
+    a handover's decisions, an issue's repro steps or an epic's design without
+    pulling the entity's whole record. On a native store the text comes from the
+    store itself; a task `docs` file that has never been imported is read from
+    disk and `provenance=True` says so.
+
+    Args:
+        kind: Entity kind to read.
+        entity_id: The entity's ID (e.g. "ue-plugin-003", "ISS-004").
+        sections: Named sections to return (e.g. ["decisions", "blockers"]).
+            Omit for the whole document body. Canonical sections per kind:
+            task — notes, review_instructions, spec, plan, design, analysis,
+            roadmap; handover — decisions, notes, blockers, where_id_start;
+            issue — repro, investigation, notes; epic — notes, design, spec,
+            roadmap, analysis; phase — notes, design, roadmap. Other kinds have
+            no named sections.
+        provenance: Annotate each section with where its text came from.
+    """
+    if kind not in _DOCUMENT_KINDS:
+        return f"Error: kind must be one of {', '.join(_DOCUMENT_KINDS)}"
+    if sections is not None and not sections:
+        return ("Error: sections=[] requested no sections; pass sections=None for the whole document "
+                "or name at least one section")
+    bp = _backlog_path()
+    if not bp.exists():
+        return "No backlog found."
+    row = _legacy_document_row(_load(), kind, entity_id)
+    if row is None:
+        return f"Error: {kind} `{entity_id}` not found"
+    doc, body = row
+    header = _document_header(kind, entity_id, doc.get("title") or "")
+    if sections is None:
+        return _render_document_body(header, body)
+    try:
+        resolved = _resolve_sections_with_provenance(
+            doc, kind=kind, sections=sections, body=body,
+            project_root=bp.parent.parent)
+    except ValueError as exc:
+        return f"Error: {exc}"
+    return _render_sections(header, {s: content for s, (content, _) in resolved.items()},
+                            {s: facts for s, (_, facts) in resolved.items()} if provenance else None)
+
+
+@mcp.tool()
+def backlog_document_import(
+    kind: Literal["task"],
+    entity_id: str,
+    sections: list[str] | None = None,
+) -> str:
+    """Import a task's external documents into the store, so reads stop touching files.
+
+    Explicit and caller-initiated: nothing watches the files and nothing imports on
+    read. Each named section's file is read once, stored with its content hash, and
+    served from the store from then on — including after the file changes on disk, so
+    re-run this when a document is edited. Re-importing unchanged prose does nothing.
+
+    Args:
+        kind: Only "task" — task `docs` paths are the external documents the store serves.
+        entity_id: The task ID whose documents to import.
+        sections: Document sections to import (spec, plan, design, analysis, roadmap).
+            Omit to import every document the task declares.
+    """
+    return ("Error: importing documents requires a native-authority store, which this project "
+            "does not have. On a legacy store `backlog_get_task(sections=...)` and "
+            "`backlog_document` already read the files directly. Nothing was changed.")
 
 
 # A leftover `local/index.db` from a 5.2.x install, plus the log that shipped
