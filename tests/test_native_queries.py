@@ -443,7 +443,16 @@ def test_context_returns_mandatory_complete_and_flags_over_budget_rather_than_tr
 def test_context_reports_clear_only_when_every_mandatory_producer_answered(native):
     with closing(sqlite3.connect(native, isolation_level=None)) as connection:
         _command(connection, "task.create", {"task_id": "clean", "title": "Clean", "epic": "same",
-                                             "priority": "medium"}, "mk")
+                                             "phase": "P-1", "priority": "medium"}, "mk")
+        # A created task lands on the standard lane, whose review gates are the
+        # mandatory context a fresh task starts out missing.
+        fresh = _context(connection, focus="clean")["mandatory"]
+        assert fresh["clear"] is False
+        assert [(b["kind"], b["id"]) for b in fresh["blockers"]] == [
+            ("gate", "design-review"), ("gate", "review-gate")]
+        for gate in ("design-review", "review-gate"):
+            _command(connection, "task.gate", {"id": "clean", "gate": gate, "verdict": "pass"},
+                     f"g-{gate}")
         assert _context(connection, focus="clean")["mandatory"]["clear"] is True
         absent = _context(connection, focus="no-such-task")
         assert absent["mandatory"]["clear"] is False
