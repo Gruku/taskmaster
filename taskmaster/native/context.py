@@ -192,6 +192,11 @@ def assemble(*, store_id, sequence, scope, focus, resolution, selections, offset
     longer. The second pass re-renders the rows the first chose with the real
     cursor in place, and its `used_bytes` is therefore the bytes actually returned
     rather than an estimate of them.
+
+    `over_budget` is decided by the second pass and means exactly one thing: the
+    mandatory half alone does not fit. A page that fits but selected nothing —
+    because the room left after the blockers could not hold even one row — is not
+    over budget; its omission counts say so instead.
     """
     envelope = {"store_id": store_id, "sequence": int(sequence), "scope": scope,
                 "focus": focus or None, "provenance": provenance}
@@ -200,6 +205,15 @@ def assemble(*, store_id, sequence, scope, focus, resolution, selections, offset
     first = budget.budget(envelope={**envelope, "cursor": widest}, mandatory=mandatory,
                           selections=selections, limit_bytes=budget_bytes)
     taken = {name: len(rows) for name, rows in first.selected.items()}
+    if not any(taken.values()):
+        # Reserving room for a continuation cost this page every row it had. If
+        # the whole selection fits once that reserve is released, no continuation
+        # was ever needed and the reserve was the only thing in the way.
+        whole = budget.budget(envelope={**envelope, "cursor": ""}, mandatory=mandatory,
+                              selections=selections, limit_bytes=budget_bytes)
+        held = {name: len(rows) for name, rows in whole.selected.items()}
+        if all(offsets.get(s.name, 0) + held.get(s.name, 0) >= s.total for s in selections):
+            return whole.text
     remaining = {s.name: offsets.get(s.name, 0) + taken.get(s.name, 0) for s in selections
                  if offsets.get(s.name, 0) + taken.get(s.name, 0) < s.total}
     # A page that delivered nothing cannot be continued: its cursor would name the

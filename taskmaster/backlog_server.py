@@ -5621,6 +5621,272 @@ def backlog_changes_since(
         connection.rollback()
 
 
+def _legacy_context_identity(connection) -> tuple[str, int]:
+    """The legacy store's context fence: the same `creation_token` a native store
+    reports, so only the digest keeps a cursor from crossing between the twins."""
+    token = connection.execute("SELECT value FROM meta WHERE key='creation_token'").fetchone()
+    sequence = connection.execute("SELECT COALESCE(MAX(seq),0) FROM changes").fetchone()[0]
+    return (token[0] if token else ""), int(sequence)
+
+
+def _legacy_bugs_found_in(data: dict, task_id: str) -> list[dict]:
+    """The legacy twin of `native.workflow._bugs_found_in`.
+
+    Same case folding and the same refusal: a `found_in` shape that cannot be
+    compared raises rather than dropping the row, because a dropped row here is
+    an open defect reported as no defect at all.
+    """
+    wanted, found = (task_id or "").casefold(), []
+    for ident, doc, _body in _dict_rows(data, "bug"):
+        value = doc.get("found_in") or ""
+        if not isinstance(value, str):
+            raise ValueError(f"bug `{ident}` has a malformed found_in of type "
+                             f"{type(value).__name__}; expected a task id")
+        if value.casefold() != wanted or doc.get("status") != "open":
+            continue
+        found.append({"id": doc.get("id") or ident, "status": "open",
+                      "severity": doc.get("severity")})
+    return sorted(found, key=lambda row: str(row["id"]))
+
+
+def _legacy_open_handovers(data: dict, task_id: str, *, blocking_only: bool = False) -> list[dict]:
+    """Open handovers, optionally only those naming one task and asking for an action.
+
+    Narrowing to `next_action` before any paging matters: a task with many silent
+    handovers and one that asks for something must not have the asking one paged
+    out of its own blocker list.
+    """
+    found = []
+    for ident, doc, _body in _dict_rows(data, "handover"):
+        if doc.get("status") != "open":
+            continue
+        if task_id and task_id not in (doc.get("task_ids") or []):
+            continue
+        action = doc.get("next_action")
+        if blocking_only and not (action or "").strip():
+            continue
+        found.append({"id": doc.get("id") or ident, "next_action": action,
+                      "date": doc.get("date")})
+    return sorted(found, key=lambda row: str(row["id"]))
+
+
+def _legacy_all_tasks(data: dict) -> list[tuple[dict, str]]:
+    """Every task with the epic that holds it.
+
+    A v3 task lives inside its epic rather than in `_rows`, and its document does
+    not have to carry an `epic` key, so the containing epic is carried alongside —
+    the native document always has one and a comparison would diverge on absence.
+    """
+    return sorted(((task, str(epic.get("id", ""))) for epic in data.get("epics", [])
+                   for task in epic.get("tasks", [])),
+                  key=lambda pair: str(pair[0].get("id", "")))
+
+
+def _legacy_context_focus(data: dict, focus: str, scope: str, session: str) -> str:
+    """The task this question is about: the one asked for, or the one this session
+    holds. A project-scoped question never borrows a session's focus."""
+    if focus:
+        return focus
+    if scope == "project" or not session:
+        return ""
+    for task, _epic in _legacy_all_tasks(data):
+        if task.get("locked_by") == session and task.get("status") in ("in-progress", "in-review"):
+            return str(task.get("id", ""))
+    return ""
+
+
+def _legacy_context_facts(data: dict, connection, focus: str, session: str):
+    """Every mandatory producer over the legacy store, each wrapped so a refusal
+    becomes a blocker rather than an absence of one."""
+    from taskmaster.native import blockers, context as context_shape
+    if not focus:
+        return None, "", "", None
+    found = _find_task(data, focus)
+    if found is None:
+        return None, "", "", blockers.Facts(task=blockers.Unknown("not_found", focus),
+                                            dependencies={}, bugs=[], handovers=[], claim=None,
+                                            session=session)
+    doc, epic = found[0], str(found[1].get("id", ""))
+    body = doc.get(_BODY_KEY) or ""
+
+    def claim():
+        holder = doc.get("locked_by")
+        if holder in (None, "", False):
+            return None
+        if not isinstance(holder, str):
+            raise ValueError(f"locked_by is a {type(holder).__name__}, not a session name")
+        return blockers.Claim(holder=holder,
+                              live=context_shape.session_live(connection, holder))
+
+    statuses = {str(task.get("id", "")): task.get("status") or "unknown"
+                for task, _epic in _legacy_all_tasks(data)}
+    declared = blockers.declared_dependencies(doc)
+    wanted = {} if isinstance(declared, blockers.Unknown) else {
+        ident: statuses[ident] for ident in set(declared) if ident in statuses}
+    return doc, body, epic, blockers.Facts(
+        task=doc, dependencies=wanted,
+        bugs=blockers.probe(lambda: _legacy_bugs_found_in(data, focus)),
+        handovers=blockers.probe(lambda: _legacy_open_handovers(data, focus, blocking_only=True)),
+        claim=blockers.probe(claim), session=session)
+
+
+def _legacy_recent(data: dict, connection) -> list[dict]:
+    """The most recently touched entities, newest first, capped like the native feed."""
+    from taskmaster.native import context as context_shape
+    found = []
+    for kind, ident, seq in connection.execute(
+            "SELECT kind,id,updated_seq FROM entities WHERE deleted=0 "
+            "ORDER BY updated_seq DESC,id DESC LIMIT ?", (context_shape.RECENT,)):
+        row = _dict_row(data, kind, ident)
+        doc = row[0] if row else {}
+        found.append({"kind": kind, "id": ident, "title": doc.get("title"),
+                      "status": doc.get("status"), "last_seq": seq})
+    return found
+
+
+def _legacy_context_section(data, connection, name, focus, doc, body, epic, facts, offset, limit):
+    """One selected section over the legacy store, as `(items, total, provenance)`.
+
+    The legacy path loads the whole backlog to answer anything — that is what N09
+    replaces, not what it fixes — so every count here is an exact `len()` over the
+    same predicate the page was cut from, which is the contract the native
+    `COUNT(*)` keeps by other means.
+    """
+    from taskmaster.native import blockers, context as context_shape
+
+    def page(items):
+        return list(items)[offset:offset + limit], len(items), {}
+
+    if name in context_shape.FOCUS_SECTIONS and doc is None:
+        return [], 0, {}
+    if name in context_shape.DOCUMENT_SECTIONS:
+        # D7 leaves the legacy store reading the file on disk; only a native store
+        # can have an imported copy, so provenance says where this text came from.
+        path = (doc.get("docs") or {}).get(name)
+        text, extra = None, {"source": "filesystem", "imported": False, "path": path}
+        if path:
+            try:
+                text = (ROOT / path).read_text(encoding="utf-8")
+            except OSError:
+                extra["unresolved"] = ["unreadable"]
+        items = [{"section": name, "text": text}] if text is not None else []
+        return items[offset:offset + limit], int(bool(path)), extra
+    if name == "body":
+        return page([{"text": body}] if body else [])
+    if name == "links":
+        declared = doc.get("links") or []
+        return page(declared if isinstance(declared, list) else [declared])
+    if name == "dependencies":
+        declared = blockers.declared_dependencies(doc)
+        if isinstance(declared, blockers.Unknown):
+            return [], 0, {"unreadable": declared.reason}
+        statuses = facts.dependencies if isinstance(facts.dependencies, dict) else {}
+        titles = {str(task.get("id", "")): task.get("title")
+                  for task, _epic in _legacy_all_tasks(data)}
+        idents = sorted(set(declared))
+        return ([{"id": i, "status": statuses.get(i, "missing"), "title": titles.get(i)}
+                 for i in idents][offset:offset + limit], len(idents), {})
+    if name == "bugs":
+        if focus:
+            return page(facts.bugs if isinstance(facts.bugs, list) else [])
+        return page([{"id": doc_.get("id") or ident, "status": "open",
+                      "severity": doc_.get("severity")}
+                     for ident, doc_, _b in _dict_rows(data, "bug") if doc_.get("status") == "open"])
+    if name == "handovers":
+        return page(_legacy_open_handovers(data, focus))
+    if name == "issues":
+        return page([{"id": doc_.get("id") or ident, "title": doc_.get("title"),
+                      "severity": doc_.get("severity")}
+                     for ident, doc_, _b in _dict_rows(data, "issue")
+                     if doc_.get("status") == "open"])
+    if name == "notes":
+        return page([{"id": doc_.get("id") or ident, "text": text}
+                     for ident, doc_, text in _dict_rows(data, "note") if doc_.get("pinned")])
+    if name == "siblings":
+        if not epic:
+            return [], 0, {"reason": "task has no epic"}
+        return page([{"id": str(task.get("id", "")), "title": task.get("title"),
+                      "status": task.get("status")}
+                     for task, holder in _legacy_all_tasks(data)
+                     if holder == epic and str(task.get("id", "")) != focus])
+    return page(_legacy_recent(data, connection))
+
+
+@mcp.tool()
+def backlog_context(
+    focus: str = "",
+    scope: Literal["task", "session", "project"] = "session",
+    budget_bytes: int = 8000,
+    include: list[str] | None = None,
+    cursor: str = "",
+) -> str:
+    """What you need to know before working on a task, as JSON, bounded by bytes.
+
+    One call in place of status + next_available + get_task + dependencies +
+    handover_list. `mandatory` is what blocks the task — unsatisfied review gates,
+    unmet or unresolvable dependencies, open bugs filed against it, open handovers
+    asking for an action, a human action it waits on, and a live peer's claim. It
+    is never trimmed to fit: when the budget cannot hold it, `over_budget` is true,
+    `selected` is empty and the blockers still come back whole, so raise the
+    budget rather than trusting a short answer.
+
+    `clear` is a safety claim and is true only when nothing blocks *and* every
+    producer answered. A producer that could not answer — an unreadable row, a
+    dependency id that resolves to nothing, no task in focus at all — appears as a
+    blocker of kind `unknown`. Treat `clear: false` as "do not proceed", never as
+    "probably fine".
+
+    `selected` is the convenience half: bounded, ordered, and reported with an
+    exact count of what was left out. When rows remain, `cursor` continues the
+    same question; a cursor is refused once the store or the question moves on.
+
+    Args:
+        focus: Task id. Empty takes the task this session picked, unless scope is project.
+        scope: task, session or project — what the question is about.
+        budget_bytes: UTF-8 bytes the whole answer may use. Only selection is trimmed.
+        include: Sections to select: spec, plan, body, links, handovers, bugs,
+            issues, notes, dependencies, siblings, recent. Empty uses the scope's default.
+        cursor: A cursor from an earlier call, to continue its selection.
+    """
+    from taskmaster.native import blockers, context as context_shape, cursors
+    from taskmaster.native.budget import Selection
+    try:
+        context_shape.check_scope(scope)
+        sections = context_shape.check_include(include, scope)
+        context_shape.check_budget(budget_bytes)
+    except ValueError as exc:
+        return context_shape.refusal(exc)
+    st = _store()
+    # The rows are the answer here, so a hand-edited file must be adopted before
+    # it can be reported, exactly as every other read tool adopts it.
+    st.scan_for_read()
+    connection = st.connection
+    data = _load()
+    store_id, sequence = _legacy_context_identity(connection)
+    focus = _legacy_context_focus(data, focus, scope, SESSION_ID)
+    ident = context_shape.identity(store_id=store_id, source_digest=cursors.LEGACY_DIGEST,
+                                   sequence=sequence, scope=scope, focus=focus, include=sections)
+    try:
+        offsets = context_shape.parse(cursor, ident)
+        doc, body, epic, facts = _legacy_context_facts(data, connection, focus, SESSION_ID)
+        resolution = (blockers.resolve(facts) if facts is not None
+                      else blockers.Resolution(clear=False, blockers=(context_shape.no_focus(),)))
+        selections, provenance = [], {}
+        for name in sections:
+            offset = offsets.get(name, 0)
+            items, total, extra = _legacy_context_section(
+                data, connection, name, focus, doc, body, epic, facts, offset, context_shape.PAGE)
+            selections.append(Selection(name, items, total))
+            provenance[name] = {"query": context_shape.source(name, focus),
+                                "truncated": offset + len(items) < total, **extra}
+        return context_shape.assemble(
+            store_id=store_id, sequence=sequence, scope=scope, focus=focus,
+            resolution=resolution, selections=selections, offsets=offsets, ident=ident,
+            budget_bytes=budget_bytes, provenance=provenance)
+    except ValueError as exc:
+        return context_shape.refusal(exc)
+
+
 @mcp.tool()
 @_transactional("backlog_idea_create")
 def backlog_idea_create(
