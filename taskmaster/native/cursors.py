@@ -31,6 +31,10 @@ MAX_ID = 256
 # would break the migration oracle that compares it row-for-row against the
 # legacy `changes` table, so expiry is expressed by raising this floor.
 FLOOR_KEY = "change_history_floor"
+MAX_LIMIT = 500
+# A legacy store has no `source_digest`; it stands in for one so a cursor issued
+# against a project cannot be resumed against its native copy, or the reverse.
+LEGACY_DIGEST = "legacy"
 
 REASONS = ("cursor_unreadable", "store_rebuilt", "scope_changed", "history_expired")
 
@@ -92,6 +96,45 @@ def scope(kinds, ids, epic, group_commits):
         raise ValueError("epic must be an epic id")
     return ["changes", _filter("kinds", kinds, schema.KINDS), _filter("ids", ids, None),
             epic, bool(group_commits)]
+
+
+def page(limit):
+    if type(limit) is not int or not 1 <= limit <= MAX_LIMIT:
+        raise ValueError(f"limit must be an integer from 1 to {MAX_LIMIT}")
+    return limit
+
+
+def change(event):
+    """One event as the feed reports it: what changed, never the authored values.
+
+    `before`/`after` are unbounded authored documents and would defeat the whole
+    point of a scoped query, so the feed names the fields and the caller reads the
+    current value with `backlog_get_task` if it wants one.
+    """
+    return {"seq": event["seq"], "kind": event["kind"], "id": event["id"], "op": event["op"],
+            "fields": json.loads(event["fields"]) if event["fields"] else []}
+
+
+def commit(event, changes):
+    """A commit as the feed reports it. `commit_seq` is the sequence a receipt
+    carries for the same write, so a caller can match one against the other."""
+    return {"commit_seq": event["final_seq"], "first_seq": event["first_seq"],
+            "final_seq": event["final_seq"], "operation": event["operation"],
+            "ts": event["ts"], "session": event["session"], "changes": changes}
+
+
+def flat(event):
+    return {"seq": event["seq"], "ts": event["ts"], "session": event["session"],
+            "operation": event["operation"], **change(event)}
+
+
+def present(answer):
+    return json.dumps(answer, ensure_ascii=False)
+
+
+def refusal(exc):
+    """A refused change query, in the JSON shape this tool's answers always take."""
+    return json.dumps({"error": str(exc)}, ensure_ascii=False)
 
 
 def fingerprint(value):

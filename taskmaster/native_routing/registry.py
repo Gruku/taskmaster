@@ -33,7 +33,7 @@ def adapter(tool: str, *, actions: "tuple[str, ...] | None" = None, unknown=None
 
 def _load_families() -> None:
     # Imported for their registrations; each module is one routed family.
-    from . import batch, epics_phases, handovers, links_areas, notes, overview, records, tasks  # noqa: F401
+    from . import batch, changes, epics_phases, handovers, links_areas, notes, overview, records, tasks  # noqa: F401
 
 
 _NATIVE = "this project's store is a native authority"
@@ -82,7 +82,7 @@ GUIDANCE: dict[tuple[str, "str | None"], str] = {
         "shipped yet. Queued changes are kept; `backlog_linear(action=\"status\")` lists them."),
 }
 # Routers that answer errors as JSON rather than text.
-JSON_ERRORS = frozenset({"backlog_link", "backlog_linear"})
+JSON_ERRORS = frozenset({"backlog_changes_since", "backlog_link", "backlog_linear"})
 
 
 def unrouted_message(tool: str, action: str | None = None) -> str:

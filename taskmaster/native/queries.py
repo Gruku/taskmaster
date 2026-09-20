@@ -248,7 +248,7 @@ class Snapshot:
         """
         self._check()
         scope = cursors.scope(kinds, ids, epic, group_commits)
-        page_limit(limit)
+        cursors.page(limit)
         if since_seq is not None and (type(since_seq) is not int or since_seq < 0):
             raise ValueError("since_seq must be a sequence number of 0 or more")
         if cursor and since_seq is not None:
@@ -277,8 +277,7 @@ class Snapshot:
             events = rows(self.connection, "SELECT " + self._EVENT_COLUMNS + source + " ORDER BY e.seq LIMIT ?",
                           args + [limit + 1])
             more, events = len(events) > limit, events[:limit]
-            items = [{"seq": e["seq"], "ts": e["ts"], "session": e["session"],
-                      "operation": e["operation"], **_change(e)} for e in events]
+            items = [cursors.flat(e) for e in events]
             return cursors.feed(items=items, last_seq=events[-1]["seq"] if events else after,
                                 more=more, **envelope)
         # A commit is never split across pages: the page is chosen by commit
@@ -295,10 +294,8 @@ class Snapshot:
         commits = []
         for event in events:
             if not commits or commits[-1]["first_seq"] != event["first_seq"]:
-                commits.append({"commit_seq": event["final_seq"], "first_seq": event["first_seq"],
-                                "final_seq": event["final_seq"], "operation": event["operation"],
-                                "ts": event["ts"], "session": event["session"], "changes": []})
-            commits[-1]["changes"].append(_change(event))
+                commits.append(cursors.commit(event, []))
+            commits[-1]["changes"].append(cursors.change(event))
         return cursors.feed(items=commits, last_seq=max(g["final_seq"] for g in groups),
                             more=more, **envelope)
 
@@ -353,14 +350,3 @@ class Snapshot:
         self._check()
         from .documents import retrieve
         return retrieve(self, kind, ident, sections=sections)
-
-
-def _change(event):
-    """One event as the feed reports it: what changed, never the authored values.
-
-    `before`/`after` are unbounded authored documents and would defeat the whole
-    point of a scoped query, so the feed names the fields and the caller reads
-    the current value if it wants one.
-    """
-    return {"seq": event["seq"], "kind": event["kind"], "id": event["id"], "op": event["op"],
-            "fields": json.loads(event["fields"]) if event["fields"] else []}
