@@ -35,6 +35,11 @@ class BypassViolation(BaseException):
 
 # ── Dynamic gate ────────────────────────────────────────────────────────────
 
+def _context_sections():
+    from taskmaster.native import context as context_shape
+    return context_shape.SECTIONS
+
+
 def _opened_viewer():
     # A host action: start (a stub of) the server and open the board, never a browser.
     real = bs.webbrowser.open, bs._start_viewer_server
@@ -155,6 +160,19 @@ EXERCISES = {
                                               bs.backlog_thread_resume(ref="2026-09-17-gate-handover")],
     ("backlog_thread_update", None): lambda: bs.backlog_thread_update(name="test-epic", status="parked"),
     ("backlog_continuity_items", None): lambda: bs.backlog_continuity_items(),
+    # Every branch of the context answer: each scope, a section from every source,
+    # a budget too small for the blockers, a continued page, and a bad cursor.
+    ("backlog_context", None): lambda: [
+        bs.backlog_context(focus="test-epic-001", scope="task"),
+        bs.backlog_context(scope="session"),
+        bs.backlog_context(scope="project", include=list(_context_sections())),
+        bs.backlog_context(focus="test-epic-001", include=["spec", "plan", "body", "siblings"]),
+        bs.backlog_context(focus="test-epic-001", budget_bytes=32),
+        bs.backlog_context(scope="project", include=["recent"], budget_bytes=600,
+                           cursor=json.loads(bs.backlog_context(
+                               scope="project", include=["recent"], budget_bytes=600))["cursor"] or ""),
+        bs.backlog_context(cursor="not-a-cursor"),
+    ],
     # Every branch of the change feed: a first call, a resumed cursor, the flat
     # shape, explicit history, and a cursor the store can no longer honour.
     ("backlog_changes_since", None): lambda: [

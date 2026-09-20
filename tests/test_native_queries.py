@@ -371,3 +371,203 @@ def test_an_unreadable_floor_refuses_loudly_rather_than_admitting_expired_histor
         _set_floor(connection, "not a sequence")
         with pytest.raises(ValueError, match="change_history_floor"):
             _feed(connection)
+
+
+# ── Bounded agent context ───────────────────────────────────────────────────
+# `context` is the one call that answers "what do I need to know to work on X".
+# What is pinned here is the promise it makes: mandatory blockers complete and
+# never trimmed, selected context bounded by real bytes, omission counts that
+# are exact, and a continuation that resumes where the page stopped.
+
+def _context(connection, **kwargs):
+    with Repository(connection).snapshot() as query:
+        return json.loads(query.context(**kwargs))
+
+
+def _lock(connection, key, holder):
+    return _command(connection, "task.update", {"id": "same", "field": "locked_by", "value": holder}, key)
+
+
+def _session_row(connection, name, last_seen):
+    connection.execute("INSERT INTO sessions(session,pid,host,started,last_seen,cwd,current_tool) "
+                       "VALUES(?,?,?,?,?,?,?) ON CONFLICT(session) DO UPDATE SET last_seen=excluded.last_seen",
+                       (name, 999999, "nowhere", last_seen, last_seen, "/tmp", None))
+
+
+def _now(offset_seconds=0):
+    from datetime import datetime, timedelta, timezone
+    return (datetime.now(timezone.utc) + timedelta(seconds=offset_seconds)).isoformat()
+
+
+def test_context_answers_mandatory_blockers_selected_context_and_a_budget(native):
+    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+        answer = _context(connection, focus="same", scope="task",
+                          include=["dependencies", "links"], budget_bytes=8000)
+        assert set(answer) == {"store_id", "sequence", "scope", "focus", "mandatory",
+                               "selected", "budget", "provenance", "cursor"}
+        assert answer["focus"] == "same" and answer["scope"] == "task"
+        assert answer["sequence"] == 100
+        # The fixture task depends on itself (todo) and on an id that resolves to
+        # nothing; both block, and the unresolvable one says so.
+        blockers = {(b["kind"], b["id"], b["state"]) for b in answer["mandatory"]["blockers"]}
+        assert ("dependency", "same", "todo") in blockers
+        assert ("dependency", "missing", "missing") in blockers
+        assert answer["mandatory"]["clear"] is False
+        assert [row["id"] for row in answer["selected"]["dependencies"]] == ["missing", "same"]
+        assert answer["selected"]["links"]
+        assert answer["budget"]["applies_to"] == "selected"
+        assert answer["budget"]["omitted"] == {"dependencies": 0, "links": 0}
+
+
+def test_context_used_bytes_is_the_bytes_of_the_answer_actually_returned(native):
+    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+        with Repository(connection).snapshot() as query:
+            text = query.context(focus="same", include=["dependencies", "links", "body", "notes"])
+        assert json.loads(text)["budget"]["used_bytes"] == len(text.encode("utf-8"))
+
+
+def test_context_returns_mandatory_complete_and_flags_over_budget_rather_than_trimming(native):
+    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+        whole = _context(connection, focus="same", include=["dependencies"])
+        squeezed = _context(connection, focus="same", include=["dependencies"], budget_bytes=64)
+        assert squeezed["budget"]["over_budget"] is True
+        assert squeezed["selected"] == {}
+        assert squeezed["mandatory"] == whole["mandatory"]
+        assert squeezed["budget"]["omitted"]["dependencies"] == 2
+        assert squeezed["budget"]["omitted_total"] == 2
+        # Nothing was delivered, so there is nothing to continue from: a cursor
+        # here would loop forever on the same page.
+        assert squeezed["cursor"] == ""
+
+
+def test_context_reports_clear_only_when_every_mandatory_producer_answered(native):
+    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+        _command(connection, "task.create", {"task_id": "clean", "title": "Clean", "epic": "same",
+                                             "phase": "P-1", "priority": "medium"}, "mk")
+        # A created task lands on the standard lane, whose review gates are the
+        # mandatory context a fresh task starts out missing.
+        fresh = _context(connection, focus="clean")["mandatory"]
+        assert fresh["clear"] is False
+        assert [(b["kind"], b["id"]) for b in fresh["blockers"]] == [
+            ("gate", "design-review"), ("gate", "review-gate")]
+        for gate in ("design-review", "review-gate"):
+            _command(connection, "task.gate", {"id": "clean", "gate": gate, "verdict": "pass"},
+                     f"g-{gate}")
+        assert _context(connection, focus="clean")["mandatory"]["clear"] is True
+        absent = _context(connection, focus="no-such-task")
+        assert absent["mandatory"]["clear"] is False
+        unknowns = [b for b in absent["mandatory"]["blockers"] if b["kind"] == "unknown"]
+        assert unknowns and unknowns[0]["id"] == "task"
+
+
+def test_context_without_a_focus_task_is_never_reported_as_clear(native):
+    """No focus means no producer answered. Saying `clear` there would tell an
+    agent it may proceed on a question nobody asked."""
+    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+        answer = _context(connection, scope="project", include=["notes"])
+        assert answer["focus"] is None
+        assert answer["mandatory"]["clear"] is False
+        assert [(b["kind"], b["id"], b["reason"]) for b in answer["mandatory"]["blockers"]] == [
+            ("unknown", "focus", "no_focus_task")]
+        assert answer["selected"]["notes"]
+
+
+def test_context_takes_its_session_focus_from_the_task_that_session_holds(native):
+    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+        _command(connection, "task.update", {"id": "same", "field": "status", "value": "in-progress"}, "st")
+        _lock(connection, "lock", "alpha")
+        assert _context(connection, scope="session", session="alpha")["focus"] == "same"
+        # Another session holds it, so that session has no focus of its own.
+        assert _context(connection, scope="session", session="beta")["focus"] is None
+
+
+def test_a_live_peer_claim_blocks_and_a_holder_with_no_session_does_not(native):
+    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+        _lock(connection, "lock", "peer")
+        stale = _context(connection, focus="same", session="alpha")["mandatory"]["blockers"]
+        assert not [b for b in stale if b["kind"] == "claim"]
+        _session_row(connection, "peer", _now())
+        held = _context(connection, focus="same", session="alpha")["mandatory"]["blockers"]
+        assert [(b["kind"], b["id"], b["by"]) for b in held if b["kind"] == "claim"] == [
+            ("claim", "same", "peer")]
+        # The holder is me, so it is not a blocker.
+        assert not [b for b in _context(connection, focus="same", session="peer")["mandatory"]["blockers"]
+                    if b["kind"] == "claim"]
+
+
+def test_omitted_counts_are_exact_and_the_cursor_resumes_where_the_page_stopped(native):
+    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+        for n in range(6):
+            _command(connection, "note.create", {"text": f"Note number {n}", "author": "claude",
+                                                 "pinned": True}, f"note{n}")
+        whole = _context(connection, scope="project", include=["notes"])
+        every = [row["id"] for row in whole["selected"]["notes"]]
+        assert len(every) == 7 and whole["cursor"] == "" and whole["budget"]["omitted"]["notes"] == 0
+        limit = whole["budget"]["used_bytes"] - 40
+        first = _context(connection, scope="project", include=["notes"], budget_bytes=limit)
+        page = [row["id"] for row in first["selected"]["notes"]]
+        assert 0 < len(page) < 7
+        assert first["budget"]["omitted"]["notes"] == 7 - len(page)
+        assert first["cursor"]
+        seen, cursor = list(page), first["cursor"]
+        while cursor:
+            nxt = _context(connection, scope="project", include=["notes"],
+                           budget_bytes=limit, cursor=cursor)
+            seen += [row["id"] for row in nxt["selected"].get("notes", [])]
+            cursor = nxt["cursor"]
+        assert seen == every
+
+
+def test_a_context_cursor_is_refused_when_the_question_or_the_store_moved_on(native):
+    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+        for n in range(6):
+            _command(connection, "note.create", {"text": f"Note number {n}", "author": "claude",
+                                                 "pinned": True}, f"note{n}")
+        whole = _context(connection, scope="project", include=["notes"])
+        limit = whole["budget"]["used_bytes"] - 40
+        cursor = _context(connection, scope="project", include=["notes"], budget_bytes=limit)["cursor"]
+        with Repository(connection).snapshot() as query:
+            with pytest.raises(CursorInvalid):
+                query.context(scope="project", include=["notes", "issues"],
+                              budget_bytes=limit, cursor=cursor)
+            with pytest.raises(CursorInvalid):
+                query.context(scope="project", include=["notes"], budget_bytes=limit,
+                              cursor="not-a-cursor-this-store-issued")
+        # A write moves the snapshot on, and a half-finished page cannot span it.
+        _command(connection, "note.create", {"text": "After the page", "author": "claude",
+                                             "pinned": True}, "later")
+        with Repository(connection).snapshot() as query:
+            with pytest.raises(CursorInvalid):
+                query.context(scope="project", include=["notes"], budget_bytes=limit, cursor=cursor)
+
+
+def test_context_validates_its_scope_include_vocabulary_and_budget(native):
+    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+        with Repository(connection).snapshot() as query:
+            with pytest.raises(ValueError, match="scope"):
+                query.context(scope="everything")
+            with pytest.raises(ValueError, match="include"):
+                query.context(focus="same", include=["spec", "nonsense"])
+            with pytest.raises(ValueError, match="include"):
+                query.context(focus="same", include="dependencies")
+            with pytest.raises(ValueError, match="budget_bytes"):
+                query.context(focus="same", budget_bytes=0)
+
+
+def test_provenance_names_where_each_selected_section_came_from(native):
+    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+        answer = _context(connection, focus="same", include=["dependencies", "handovers", "spec"])
+        assert answer["provenance"]["dependencies"]["query"] == "dependencies.depends_on"
+        assert answer["provenance"]["handovers"]["query"] == "memberships.task_ids"
+        assert answer["provenance"]["dependencies"]["truncated"] is False
+        # `spec` is a document section: the fixture task declares no path for it,
+        # so provenance says it was never imported rather than leaving it absent.
+        assert answer["provenance"]["spec"]["imported"] is False
+
+
+def test_a_focus_only_section_is_empty_rather_than_wrong_when_there_is_no_focus(native):
+    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+        answer = _context(connection, scope="project", include=["dependencies", "siblings", "notes"])
+        assert answer["selected"].get("dependencies") is None
+        assert answer["budget"]["omitted"]["dependencies"] == 0
+        assert answer["provenance"]["dependencies"]["query"] == "no_focus"

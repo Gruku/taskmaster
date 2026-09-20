@@ -1560,6 +1560,54 @@
       "returns": "str",
       "transactional": true
     },
+    "backlog_context": {
+      "category": "targeted-query",
+      "documentation": "What you need to know before working on a task, as JSON, bounded by bytes.\n\nOne call in place of status + next_available + get_task + dependencies +\nhandover_list. `mandatory` is what blocks the task — unsatisfied review gates,\nunmet or unresolvable dependencies, open bugs filed against it, open handovers\nasking for an action, a human action it waits on, and a live peer's claim. It\nis never trimmed to fit: when the budget cannot hold it, `over_budget` is true,\n`selected` is empty and the blockers still come back whole, so raise the\nbudget rather than trusting a short answer.\n\n`clear` is a safety claim and is true only when nothing blocks *and* every\nproducer answered. A producer that could not answer — an unreadable row, a\ndependency id that resolves to nothing, no task in focus at all — appears as a\nblocker of kind `unknown`. Treat `clear: false` as \"do not proceed\", never as\n\"probably fine\".\n\n`selected` is the convenience half: bounded, ordered, and reported with an\nexact count of what was left out. When rows remain, `cursor` continues the\nsame question; a cursor is refused once the store or the question moves on.\n\nArgs:\n    focus: Task id. Empty takes the task this session picked, unless scope is project.\n    scope: task, session or project — what the question is about.\n    budget_bytes: UTF-8 bytes the whole answer may use. Only selection is trimmed.\n    include: Sections to select: spec, plan, body, links, handovers, bugs,\n        issues, notes, dependencies, siblings, recent. Empty uses the scope's default.\n    cursor: A cursor from an earlier call, to continue its selection.",
+      "parameters": [
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "focus",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "'session'",
+          "default_value": "session",
+          "mode": "positional",
+          "name": "scope",
+          "required": false,
+          "type": "Literal['task', 'session', 'project']"
+        },
+        {
+          "default_expression": "8000",
+          "default_value": 8000,
+          "mode": "positional",
+          "name": "budget_bytes",
+          "required": false,
+          "type": "int"
+        },
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "include",
+          "required": false,
+          "type": "list[str] | None"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "cursor",
+          "required": false,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": false
+    },
     "backlog_continuity_items": {
       "category": "targeted-query",
       "documentation": "Return all continuity items as JSON: {\"items\": [...], \"view\": \"...\"}.\n\n`view` is informational only — the server returns the full set; the client\ndecides grouping (Action / Time / Entity).\n\nArgs:\n    view: \"action\" | \"time\" | \"entity\" (echoed in the response).\n    include_auto_stage: When True, include auto-stage handovers (debug).",

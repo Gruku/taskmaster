@@ -4,16 +4,18 @@ from contextlib import contextmanager
 import hashlib
 import json
 
-from . import cursors, schema
+from . import blockers, context as context_shape, cursors, schema
+from .budget import Selection
 from .db import verified_snapshot
 from .migrate import encode, rows
 
 DEFAULT_FIELDS = ("id", "title", "status", "priority", "epic", "phase")
 MAX_PAGE = 500
 
-
-class CursorInvalid(ValueError):
-    """Start a new snapshot; this continuation no longer describes this scope."""
+# One continuation refusal for both paged reads. An entity page and a context page
+# make the same promise — this cursor describes this question against this
+# snapshot — so a caller that handles one handles the other.
+CursorInvalid = context_shape.CursorInvalid
 
 
 def page_limit(limit):
@@ -350,3 +352,242 @@ class Snapshot:
         self._check()
         from .documents import retrieve
         return retrieve(self, kind, ident, sections=sections)
+
+    # ── Bounded agent context ───────────────────────────────────────────────
+    # One call that answers "what do I need to know to work on X". The blocker
+    # set and the byte budget are `native.blockers` and `native.budget`; what
+    # lives here is only the store access that feeds them, so the legacy path
+    # can feed the same two with its own rows and answer the same shape.
+
+    def _page(self, base, args, offset, limit):
+        """One bounded page of a section, and the exact count behind it.
+
+        The count is a `COUNT(*)` over the page's own predicate in this snapshot,
+        never the length of the page: a section read with a limit would otherwise
+        report "nothing omitted" precisely when it omitted the most.
+        """
+        total = self.connection.execute(f"SELECT COUNT(*) FROM ({base})", args).fetchone()[0]
+        return rows(self.connection, base + " LIMIT ? OFFSET ?", list(args) + [limit, offset]), int(total)
+
+    _OPEN_HANDOVERS = (
+        "SELECT c.public_id id, json_extract(x.value_json,'$') next_action, "
+        "json_extract(h.date_json,'$') date FROM entity_core c {join}"
+        "LEFT JOIN entity_extensions x ON x.entity_key=c.entity_key AND x.field='next_action' "
+        "LEFT JOIN handover_operational h ON h.entity_key=c.entity_key "
+        "WHERE {where} GROUP BY c.public_id ORDER BY c.public_id")
+
+    def open_handovers(self, task_id="", *, blocking_only=False, offset=0, limit=None):
+        """Open handovers, optionally only those naming one task.
+
+        `blocking_only` narrows to the ones carrying a `next_action`, which is what
+        makes a handover mandatory context. Narrowing in SQL rather than after a
+        page is the point: a task with fifty silent handovers and one that asks for
+        an action must not have the asking one paged out of its own blocker list.
+        """
+        where = ["c.kind='handover'", "c.deleted=0", "c.archived=0",
+                 "json_extract(c.status_json,'$')='open'"]
+        join, args = "", []
+        if task_id:
+            join = "JOIN memberships m ON m.entity_key=c.entity_key AND m.field='task_ids' "
+            where.append("json_extract(m.value_json,'$')=?")
+            args.append(task_id)
+        if blocking_only:
+            where.append("COALESCE(TRIM(json_extract(x.value_json,'$')),'')<>''")
+        base = self._OPEN_HANDOVERS.format(join=join, where=" AND ".join(where))
+        return self._page(base, args, offset, context_shape.PAGE if limit is None else limit)
+
+    def _focus_task(self, focus, scope, session):
+        """The task this question is about: the one asked for, or the one this
+        session holds. A project-scoped question never borrows a session's focus."""
+        if focus:
+            return focus
+        if scope == "project" or not session:
+            return ""
+        row = self.connection.execute(
+            "SELECT c.public_id FROM entity_core c JOIN task_operational t USING(entity_key) "
+            "WHERE c.kind='task' AND c.deleted=0 AND c.archived=0 "
+            "AND json_extract(t.locked_by_json,'$')=? "
+            "AND json_extract(c.status_json,'$') IN ('in-progress','in-review') "
+            "ORDER BY c.public_id LIMIT 1", (session,)).fetchone()
+        return row[0] if row else ""
+
+    def _dependency_statuses(self, declared):
+        if isinstance(declared, blockers.Unknown):
+            return {}
+        idents = sorted(set(declared))
+        if not idents:
+            return {}
+        placeholders = ",".join("?" for _ in idents)
+        found = self.connection.execute(
+            "SELECT public_id,json_extract(status_json,'$') FROM entity_core "
+            f"WHERE kind='task' AND deleted=0 AND public_id IN ({placeholders})", idents)
+        return {ident: status or "unknown" for ident, status in found}
+
+    def _bug_rows(self, focus):
+        """Open bugs filed against this task, with the severity the resolver reads.
+
+        `_bugs_found_in` is the one comparison — it refuses a `found_in` shape it
+        cannot compare rather than dropping the row — so this goes through it and
+        only then reads severities for the ids it named.
+        """
+        from .workflow import _bugs_found_in
+        open_ids, _fixed = _bugs_found_in(self.connection, focus)
+        if not open_ids:
+            return []
+        placeholders = ",".join("?" for _ in open_ids)
+        return rows(self.connection,
+                    "SELECT c.public_id id,'open' status,json_extract(b.severity_json,'$') severity "
+                    "FROM entity_core c LEFT JOIN bug_operational b USING(entity_key) "
+                    f"WHERE c.kind='bug' AND c.public_id IN ({placeholders}) ORDER BY c.public_id",
+                    open_ids)
+
+    def _claim(self, task, session):
+        holder = task.get("locked_by")
+        if holder in (None, "", False):
+            return None
+        if not isinstance(holder, str):
+            raise ValueError(f"locked_by is a {type(holder).__name__}, not a session name")
+        return blockers.Claim(holder=holder, live=context_shape.session_live(self.connection, holder))
+
+    def _context_facts(self, focus, session):
+        """Every mandatory producer, each wrapped so a refusal becomes a blocker."""
+        if not focus:
+            return None, None
+        try:
+            entity = self.get("task", focus, include_body=True)
+        except KeyError:
+            return None, blockers.Facts(task=blockers.Unknown("not_found", focus), dependencies={},
+                                        bugs=[], handovers=[], claim=None, session=session)
+        task = entity["fields"]
+        declared = blockers.declared_dependencies(task)
+        return entity, blockers.Facts(
+            task=task,
+            dependencies=blockers.probe(lambda: self._dependency_statuses(declared)),
+            bugs=blockers.probe(lambda: self._bug_rows(focus)),
+            handovers=blockers.probe(lambda: self.open_handovers(focus, blocking_only=True)[0]),
+            claim=blockers.probe(lambda: self._claim(task, session)),
+            session=session)
+
+    def _context_section(self, name, focus, entity, facts, offset):
+        """One selected section as `(items, total, provenance)`.
+
+        A section that describes a task is empty when there is no task, rather
+        than silently widened to the project: answering a different question is
+        worse than answering none.
+        """
+        if name in context_shape.FOCUS_SECTIONS and entity is None:
+            return [], 0, {}
+        limit, fields = context_shape.PAGE, (entity or {}).get("fields", {})
+        if name in context_shape.DOCUMENT_SECTIONS:
+            document = self.document("task", focus, sections=[name])
+            provenance = document["provenance"].get(name, {})
+            text = document["sections"].get(name)
+            declared = bool((fields.get("docs") or {}).get(name)) or text is not None
+            items = [{"section": name, "text": text}] if text is not None else []
+            return items[offset:offset + limit], int(declared), {
+                "imported": bool(provenance), **provenance,
+                "unresolved": [u["reason"] for u in document["unresolved"] if u["section"] == name]}
+        if name == "body":
+            body = (entity or {}).get("body") or ""
+            return ([{"text": body}] if body else [])[offset:offset + limit], int(bool(body)), {}
+        if name == "links":
+            declared = fields.get("links") or []
+            declared = declared if isinstance(declared, list) else [declared]
+            return declared[offset:offset + limit], len(declared), {}
+        if name == "dependencies":
+            declared = blockers.declared_dependencies(fields)
+            if isinstance(declared, blockers.Unknown):
+                return [], 0, {"unreadable": declared.reason}
+            idents = sorted(set(declared))
+            statuses = facts.dependencies if isinstance(facts.dependencies, dict) else {}
+            page = idents[offset:offset + limit]
+            titles = self._titles("task", page)
+            return ([{"id": i, "status": statuses.get(i, "missing"), "title": titles.get(i)}
+                     for i in page], len(idents), {})
+        if name == "bugs":
+            if focus:
+                found = facts.bugs if isinstance(facts.bugs, list) else []
+                return found[offset:offset + limit], len(found), {}
+            base = ("SELECT c.public_id id,'open' status,json_extract(b.severity_json,'$') severity "
+                    "FROM entity_core c LEFT JOIN bug_operational b USING(entity_key) "
+                    "WHERE c.kind='bug' AND c.deleted=0 AND c.archived=0 "
+                    "AND json_extract(c.status_json,'$')='open' ORDER BY c.public_id")
+            return (*self._page(base, [], offset, limit), {})
+        if name == "handovers":
+            page, total = self.open_handovers(focus, offset=offset, limit=limit)
+            return page, total, {}
+        if name == "issues":
+            base = ("SELECT c.public_id id,json_extract(c.title_json,'$') title,"
+                    "json_extract(i.severity_json,'$') severity FROM entity_core c "
+                    "LEFT JOIN issue_operational i USING(entity_key) WHERE c.kind='issue' "
+                    "AND c.deleted=0 AND c.archived=0 AND json_extract(c.status_json,'$')='open' "
+                    "ORDER BY c.public_id")
+            return (*self._page(base, [], offset, limit), {})
+        if name == "notes":
+            base = ("SELECT c.public_id id,d.body text FROM entity_core c "
+                    "JOIN note_operational n USING(entity_key) "
+                    "LEFT JOIN entity_documents d ON d.entity_key=c.entity_key "
+                    "WHERE c.kind='note' AND c.deleted=0 AND c.archived=0 "
+                    "AND json_extract(n.pinned_json,'$')=1 ORDER BY c.public_id")
+            return (*self._page(base, [], offset, limit), {})
+        if name == "siblings":
+            epic = fields.get("epic")
+            if not isinstance(epic, str) or not epic:
+                return [], 0, {"reason": "task has no epic"}
+            base = ("SELECT c.public_id id,json_extract(c.title_json,'$') title,"
+                    "json_extract(c.status_json,'$') status FROM entity_core c "
+                    "JOIN task_operational t USING(entity_key) WHERE c.kind='task' "
+                    "AND c.deleted=0 AND c.archived=0 AND json_extract(t.epic_json,'$')=? "
+                    "AND c.public_id<>? ORDER BY c.public_id")
+            return (*self._page(base, [epic, focus], offset, limit), {})
+        # `recent`: a top-N question, so the cap is the total. "15 of the 20 most
+        # recent were omitted" is actionable; "of 3,412 entities" is not.
+        base = ("SELECT kind,id,title,status,last_seq FROM ("
+                "SELECT c.kind kind,c.public_id id,json_extract(c.title_json,'$') title,"
+                "json_extract(c.status_json,'$') status,c.last_seq last_seq FROM entity_core c "
+                "WHERE c.deleted=0 ORDER BY c.last_seq DESC,c.entity_key DESC LIMIT "
+                f"{context_shape.RECENT})")
+        return (*self._page(base, [], offset, limit), {})
+
+    def _titles(self, kind, idents):
+        if not idents:
+            return {}
+        placeholders = ",".join("?" for _ in idents)
+        return {i: t for i, t in self.connection.execute(
+            "SELECT public_id,json_extract(title_json,'$') FROM entity_core "
+            f"WHERE kind=? AND public_id IN ({placeholders})", [kind] + list(idents))}
+
+    def context(self, focus="", *, scope="session", budget_bytes=8000, include=None,
+                cursor="", session=""):
+        """What an agent needs to know to work on `focus`, bounded by bytes.
+
+        Mandatory context — what blocks this task — is always complete; only the
+        selected sections are budgeted, and what they left out is an exact count
+        (D1). With no task in focus nothing was checked, so the answer says so as
+        an `unknown` blocker rather than reporting `clear`.
+        """
+        self._check()
+        context_shape.check_scope(scope)
+        sections = context_shape.check_include(include, scope)
+        context_shape.check_budget(budget_bytes)
+        focus = self._focus_task(focus, scope, session)
+        sequence = int(self.identity["event_high_water"])
+        ident = context_shape.identity(store_id=self.identity["store_id"],
+                                       source_digest=self.identity["source_digest"],
+                                       sequence=sequence, scope=scope, focus=focus,
+                                       include=sections)
+        offsets = context_shape.parse(cursor, ident)
+        entity, facts = self._context_facts(focus, session)
+        resolution = (blockers.resolve(facts) if facts is not None
+                      else blockers.Resolution(clear=False, blockers=(context_shape.no_focus(),)))
+        selections, provenance = [], {}
+        for name in sections:
+            offset = offsets.get(name, 0)
+            items, total, extra = self._context_section(name, focus, entity, facts, offset)
+            selections.append(Selection(name, items, total))
+            provenance[name] = {"query": context_shape.source(name, focus),
+                                "truncated": offset + len(items) < total, **extra}
+        return context_shape.assemble(
+            store_id=self.identity["store_id"], sequence=sequence, scope=scope, focus=focus,
+            resolution=resolution, selections=selections, offsets=offsets, ident=ident,
+            budget_bytes=budget_bytes, provenance=provenance)
