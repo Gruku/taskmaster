@@ -159,3 +159,60 @@ def test_the_two_stores_agree_about_what_blocks_a_task(twins):
         assert native == legacy, f"{focus}: mandatory context diverged"
     assert any(b["kind"] == "bug" for b in answer(twins.legacy, twins,
                                                   focus=NEXT)["mandatory"]["blockers"])
+
+
+@pytest.mark.parametrize("scope", ["task", "project"])
+@pytest.mark.parametrize("side", ["legacy", "native"])
+def test_every_section_answers_on_both_stores_with_an_exact_byte_count(twins, side, scope):
+    """Each section is a separate read on each store, so each one is a separate
+    chance for a count, a page or an encoding to be wrong. Ask for all of them."""
+    from taskmaster.native import context as context_shape
+    root = getattr(twins, side)
+    with twins.at(root):
+        bs.backlog_issue_create(title="An open issue", severity="P2",
+                                evidence="It happened twice")
+        bs.backlog_bug_create(title="A project defect", severity="P2")
+        text = bs.backlog_context(focus=NEXT if scope == "task" else "", scope=scope,
+                                  include=list(context_shape.SECTIONS), budget_bytes=200000)
+    answered = json.loads(text)
+    assert set(answered) == KEYS
+    assert answered["budget"]["used_bytes"] == len(text.encode("utf-8"))
+    assert set(answered["budget"]["omitted"]) == set(context_shape.SECTIONS)
+    assert set(answered["provenance"]) == set(context_shape.SECTIONS)
+    assert answered["cursor"] == ""
+    if scope == "task":
+        assert [row["id"] for row in answered["selected"]["dependencies"]] == [BLOCKED]
+        assert [row["id"] for row in answered["selected"]["siblings"]] == [BLOCKED]
+        # `found_in` names no task, so the project bug is not this task's blocker.
+        assert answered["selected"].get("bugs") is None
+    else:
+        assert answered["provenance"]["dependencies"]["query"] == "no_focus"
+        assert answered["budget"]["omitted"]["siblings"] == 0
+        assert [row["id"] for row in answered["selected"]["bugs"]] == ["B-001"]
+        assert [row["id"] for row in answered["selected"]["issues"]] == ["ISS-001"]
+        assert answered["selected"]["recent"]
+
+
+@pytest.mark.parametrize("side", ["legacy", "native"])
+def test_a_document_section_says_where_its_text_came_from_or_that_it_has_none(twins, side):
+    """D7 leaves the legacy store reading the file and the native store reading an
+    import, so `spec` has to say which — an absent section and an unimported one
+    are different facts and only one of them means the text does not exist."""
+    root = getattr(twins, side)
+    with twins.at(root):
+        (root / "docs").mkdir(exist_ok=True)
+        (root / "docs" / "spec.md").write_text("The specification prose", encoding="utf-8")
+        bs.backlog_update_task(task_id=NEXT, field="docs", value="spec:docs/spec.md")
+        answered = json.loads(bs.backlog_context(focus=NEXT, include=["spec", "plan"]))
+    assert answered["budget"]["omitted"]["plan"] == 0  # never declared, so nothing is missing
+    spec = answered["provenance"]["spec"]
+    if side == "legacy":
+        assert spec == {"query": "external_documents", "truncated": False, "source": "filesystem",
+                        "imported": False, "path": "docs/spec.md"}
+        assert answered["selected"]["spec"] == [{"section": "spec",
+                                                 "text": "The specification prose"}]
+    else:
+        # Nothing has imported it, so the native store has the path and not the text.
+        assert spec["imported"] is False and spec["unresolved"] == ["not_imported"]
+        assert answered["selected"].get("spec") is None
+        assert answered["budget"]["omitted"]["spec"] == 1
