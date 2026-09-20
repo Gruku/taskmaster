@@ -137,6 +137,24 @@ def test_a_proven_dead_holder_is_released_by_a_peer_and_named_in_picks_refusal(t
     twins.assert_state_matches()
 
 
+def test_a_dead_holder_is_reclaimable_through_the_tools_with_no_sessions_row(twins):
+    """End to end, in the shape production actually produces: the holder is a
+    `SESSION_ID`, nothing ever wrote it into `sessions`, and its process is gone.
+    Before the holder id was read directly this case was unjudgeable, so the
+    dead-process fast path could not fire on any real project."""
+    holder = f"{socket.gethostname()}-{DEAD_PID}-abcdef12"
+    twins.same("backlog_update_task", task_id="test-epic-001", field="status", value="in-progress")
+    twins.same("backlog_update_task", task_id="test-epic-001", field="locked_by", value=holder)
+    for text in twins.same("backlog_claim", action="status", task_id="test-epic-001"):
+        assert answer(text)["expired"] is True and answer(text)["live"] is False
+    for text in twins.same("backlog_claim", action="release", task_id="test-epic-001"):
+        assert answer(text)["ok"] is True and answer(text)["state"] == "released"
+    twins.same("backlog_pick_task", task_id="test-epic-001")
+    for text in twins.same("backlog_claim", action="status", task_id="test-epic-001"):
+        assert answer(text)["holder"] == bs.SESSION_ID
+    twins.assert_state_matches()
+
+
 def test_a_holder_that_cannot_be_judged_is_never_released_by_a_peer(twins):
     """No `sessions` row: unknown liveness, and unknown does not release."""
     twins.same("backlog_update_task", task_id="test-epic-001", field="status", value="in-progress")

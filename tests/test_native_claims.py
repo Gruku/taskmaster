@@ -83,6 +83,37 @@ def test_a_holder_with_a_dead_local_pid_is_proven_expired_before_its_ttl_burns_d
     assert claims.parse_stamp(state.expires_at) > claims.now_utc()
 
 
+def test_a_dead_local_process_is_proven_dead_from_the_holder_id_with_no_sessions_row(workspace):
+    """The production shape: `locked_by` carries `backlog_server.SESSION_ID`,
+    which never appears in `sessions` (that table is keyed by the store's own,
+    separately generated id). If liveness needed a row, the fast path would
+    never fire on a real project — so the holder id itself is read."""
+    holder = f"{socket.gethostname()}-{DEAD_PID}-abcdef12"
+    with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
+        run(connection, "task.update", {"id": "demo-001", "field": "locked_by", "value": holder}, "lock")
+        assert claims.session_row(connection, holder) is None
+        state = state_of(connection, "demo-001")
+    assert state.live is False and state.expired is True
+
+
+def test_a_live_local_process_is_proven_live_from_the_holder_id_alone(workspace):
+    holder = f"{socket.gethostname()}-{os.getpid()}-abcdef12"
+    with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
+        run(connection, "task.update", {"id": "demo-001", "field": "locked_by", "value": holder}, "lock")
+        state = state_of(connection, "demo-001")
+    assert state.live is True and state.expired is False and state.blocking is True
+
+
+def test_a_holder_id_naming_another_machine_cannot_be_judged_from_the_id(workspace):
+    """A pid is only meaningful on the machine that issued it — asking this host
+    about a remote pid would be a coin flip dressed as proof."""
+    with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
+        run(connection, "task.update", {"id": "demo-001", "field": "locked_by",
+                                        "value": f"some-other-box-{os.getpid()}-abcdef12"}, "lock")
+        state = state_of(connection, "demo-001")
+    assert state.live is None and state.expired is False
+
+
 def test_a_holder_that_cannot_be_judged_keeps_its_claim(workspace):
     """No `sessions` row at all: the answer is unknown, and unknown does not steal."""
     with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:

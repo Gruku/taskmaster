@@ -30,6 +30,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import re
 
 from . import blockers
 
@@ -116,7 +117,30 @@ def session_row(connection, session: str):
         ("session", "pid", "host", "started", "last_seen", "cwd", "current_tool"), row))
 
 
-def liveness(row, *, now=None, hostname=None, pid_alive=None):
+# Every session id this project mints is `{hostname}-{pid}-{nonce}`:
+# `backlog_server.SESSION_ID` (what `locked_by` records) and
+# `store.Store.session` (what keys the `sessions` table) are built by the same
+# expression in two places.
+SESSION_SHAPE = re.compile(r"(?P<host>.+)-(?P<pid>\d+)-(?P<nonce>[0-9a-f]{8})(?::t\d+)?$")
+
+
+def identity(holder: str):
+    """The `(host, pid)` a session id names, or None for one not in that shape.
+
+    Reading the holder string is what makes the dead-process fast path fire at
+    all, and it is not an optimisation. `locked_by` carries
+    `backlog_server.SESSION_ID`; the `sessions` table is keyed by
+    `store.Store.session`; both are `{host}-{pid}-{uuid4[:8]}` **generated
+    independently**, so they never match and a lookup by holder finds nothing on
+    a real project. §1.3 of the scope document missed this — it treats the two
+    identities as one. The id itself is the reliable carrier of the machine and
+    the process, so that is what is read.
+    """
+    match = SESSION_SHAPE.fullmatch(holder or "")
+    return (match.group("host"), int(match.group("pid"))) if match else None
+
+
+def liveness(holder: str, row, *, now=None, hostname=None, pid_alive=None):
     """True (proven live), False (proven dead), or None (cannot be judged).
 
     `store_status` reports the same signal as a two-valued one, where anything
@@ -125,25 +149,34 @@ def liveness(row, *, now=None, hostname=None, pid_alive=None):
     may only be broken on proof. So the unconfirmable case is its own answer,
     and it keeps the claim.
 
-    The one difference from `store_status`'s rule is deliberate: it gates the pid
-    check on `current_tool`, because a session holding no tool is idle. A live
-    process is a live holder whether or not it is mid-call, so that gate is not
-    applied here.
+    Two differences from `store_status`'s rule, both deliberate. It gates the pid
+    check on `current_tool`, because a session holding no tool is idle — a live
+    process is a live holder whether or not it is mid-call. And it only ever
+    looks at a `sessions` row, which for a claim holder is usually absent (see
+    `identity`); the holder id is consulted first so a local process that is
+    gone is provable without one.
+
+    A recycled pid reads as live. That is inherent to asking the OS about a pid
+    and is already true of the shipped rule; the failure direction is a claim
+    that stands too long, which is the safe one.
     """
-    if row is None:
-        return None
     now = now or now_utc()
     cutoff = (now - timedelta(seconds=HEARTBEAT_WINDOW_SECONDS)).isoformat()
-    if (row.get("last_seen") or "") >= cutoff:
+    if row is not None and (row.get("last_seen") or "") >= cutoff:
         return True
-    if row.get("host") == (hostname or _local("_local_host")()) and row.get("pid"):
-        return bool((pid_alive or _local("_local_pid_alive"))(row["pid"]))
-    # Another machine, or a row with no pid: nothing here proves anything.
+    host = hostname or _local("_local_host")()
+    alive = pid_alive or _local("_local_pid_alive")
+    named = identity(holder)
+    if named is not None and named[0] == host:
+        return bool(alive(named[1]))
+    if row is not None and row.get("host") == host and row.get("pid"):
+        return bool(alive(row["pid"]))
+    # Another machine, and no recent heartbeat: nothing here proves anything.
     return None
 
 
 def holder_liveness(connection, holder: str, *, now=None):
-    return liveness(session_row(connection, holder), now=now)
+    return liveness(holder, session_row(connection, holder), now=now)
 
 
 # ── Claim state ─────────────────────────────────────────────────────────────
