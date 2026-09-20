@@ -4,6 +4,8 @@
 """`backlog_document` and the task sections view, over the native retriever."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from taskmaster import backlog_server as bs
 from taskmaster.native import documents as core
 from .registry import adapter
@@ -63,3 +65,45 @@ def document(call, *, kind, entity_id, sections, provenance):
         except ValueError as exc:
             return error_text(exc)
         return render_sections(header, content, facts if provenance else None)
+
+
+@adapter("backlog_document_import")
+def document_import(call, *, kind, entity_id, sections):
+    from taskmaster.native.contracts import Conflict
+    from taskmaster.taskmaster_v3 import TASK_DOC_SECTIONS
+
+    if kind != "task":
+        return "Error: only task documents can be imported"
+    if sections is not None and not sections:
+        return ("Error: sections=[] requested no sections; pass sections=None to import every "
+                "document the task declares")
+    with call.read() as snapshot:
+        try:
+            declared = snapshot.get("task", entity_id, fields=["docs"])["fields"].get("docs") or {}
+        except KeyError:
+            return f"Error: task `{entity_id}` not found"
+    wanted = sections if sections is not None else [s for s in sorted(TASK_DOC_SECTIONS) if s in declared]
+    unknown = [s for s in wanted if s not in TASK_DOC_SECTIONS]
+    if unknown:
+        return (f"Error: section must be one of {', '.join(sorted(TASK_DOC_SECTIONS))}; "
+                f"got {', '.join(unknown)}")
+    if not wanted:
+        return f"Error: task `{entity_id}` declares no document sections to import"
+    root = project_root()
+    lines = [f"## import `{entity_id}`\n"]
+    for section in wanted:
+        path = declared.get(section)
+        if not path:
+            lines.append(f"- {section}: the task declares no path — nothing imported")
+            continue
+        resolved = (root / path) if root else Path(path)
+        if not resolved.exists():
+            lines.append(f"- {section}: no file at {path} — nothing imported")
+            continue
+        try:
+            receipt = call.execute("document.import", {"kind": "task", "id": entity_id, "section": section,
+                                                       "path": path, "body": resolved.read_text(encoding="utf-8")})
+        except (ValueError, KeyError, Conflict) as exc:
+            return error_text(exc)
+        lines.append(f"- {section}: {'imported' if receipt['affected'] else 'unchanged'} from {path}")
+    return call.finish("\n".join(lines))

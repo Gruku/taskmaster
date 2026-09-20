@@ -1872,6 +1872,34 @@
       "returns": "str",
       "transactional": false
     },
+    "backlog_document_import": {
+      "category": "simple-command",
+      "documentation": "Import a task's external documents into the store, so reads stop touching files.\n\nExplicit and caller-initiated: nothing watches the files and nothing imports on\nread. Each named section's file is read once, stored with its content hash, and\nserved from the store from then on — including after the file changes on disk, so\nre-run this when a document is edited. Re-importing unchanged prose does nothing.\n\nArgs:\n    kind: Only \"task\" — task `docs` paths are the external documents the store serves.\n    entity_id: The task ID whose documents to import.\n    sections: Document sections to import (spec, plan, design, analysis, roadmap).\n        Omit to import every document the task declares.",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "kind",
+          "required": true,
+          "type": "Literal['task']"
+        },
+        {
+          "mode": "positional",
+          "name": "entity_id",
+          "required": true,
+          "type": "str"
+        },
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "sections",
+          "required": false,
+          "type": "list[str] | None"
+        }
+      ],
+      "returns": "str",
+      "transactional": false
+    },
     "backlog_epic_status": {
       "category": "targeted-query",
       "documentation": "Show progress for an epic: status counts, per-component rollup, and the\ndesign-maturity lock. Derived on read from the epic's tasks — no stored rollup.\n\nArgs:\n    epic_id: The epic ID (e.g. \"asset-engine\").",

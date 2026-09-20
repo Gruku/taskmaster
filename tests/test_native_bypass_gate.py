@@ -78,6 +78,13 @@ EXERCISES = {
         {"kind": "task", "entity_id": "test-epic-001", "sections": ["notes"], "provenance": True},
         {"kind": "handover", "entity_id": "2026-09-17-gate-handover"},
         {"kind": "issue", "entity_id": "ISS-001", "sections": ["repro"]})],
+    # The importer reads exactly one project file, outside `.taskmaster/`, by explicit
+    # request. The gate's business is the projection, and this touches none of it.
+    ("backlog_document_import", None): lambda: (
+        bs.backlog_update_task(task_id="test-epic-001", field="docs", value="plan:docs/gate-plan.md"),
+        (Path.cwd() / "docs").mkdir(exist_ok=True),
+        (Path.cwd() / "docs" / "gate-plan.md").write_text("Gate plan prose.\n", encoding="utf-8"),
+        bs.backlog_document_import(kind="task", entity_id="test-epic-001", sections=["plan"]))[-1],
     ("backlog_list_tasks", None): lambda: bs.backlog_list_tasks(verbose=True, limit=0),
     ("backlog_dependencies", None): lambda: bs.backlog_dependencies(task_id="test-epic-002"),
     ("backlog_next_available", None): lambda: bs.backlog_next_available(include_future_phases=True),

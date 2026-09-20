@@ -2539,6 +2539,30 @@ def backlog_document(
                             {s: facts for s, (_, facts) in resolved.items()} if provenance else None)
 
 
+@mcp.tool()
+def backlog_document_import(
+    kind: Literal["task"],
+    entity_id: str,
+    sections: list[str] | None = None,
+) -> str:
+    """Import a task's external documents into the store, so reads stop touching files.
+
+    Explicit and caller-initiated: nothing watches the files and nothing imports on
+    read. Each named section's file is read once, stored with its content hash, and
+    served from the store from then on — including after the file changes on disk, so
+    re-run this when a document is edited. Re-importing unchanged prose does nothing.
+
+    Args:
+        kind: Only "task" — task `docs` paths are the external documents the store serves.
+        entity_id: The task ID whose documents to import.
+        sections: Document sections to import (spec, plan, design, analysis, roadmap).
+            Omit to import every document the task declares.
+    """
+    return ("Error: importing documents requires a native-authority store, which this project "
+            "does not have. On a legacy store `backlog_get_task(sections=...)` and "
+            "`backlog_document` already read the files directly. Nothing was changed.")
+
+
 # A leftover `local/index.db` from a 5.2.x install, plus the log that shipped
 # with it. They are read by nothing now; a rebuild is the one moment we are
 # already touching derived state, so it is where they get swept up.

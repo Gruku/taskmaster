@@ -215,6 +215,36 @@ class Transaction:
         self._changed(key, kind, ident, before, after, body, "update", before_body=entity["body"],
                       prior_file=projection_path(kind, ident, entity["archived"]))
 
+    def import_document(self, kind, ident, section, path, body):
+        """Store an external document's prose so a read never needs its file.
+
+        This is not an authored-field change: `entity_core` keeps its revision, and
+        the import is recorded as its own domain event so the change feed sees it
+        and `imported_seq` is a real sequence. Re-importing identical prose writes
+        nothing and appends no event, which is what makes the caller's retry cheap.
+        """
+        import hashlib
+        key, revision = self.connection.execute(
+            "SELECT entity_key,revision FROM entity_core WHERE kind=? AND public_id=? AND deleted=0",
+            (kind, ident)).fetchone()
+        content_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
+        row = self.connection.execute(
+            "SELECT path,content_hash,imported_seq FROM external_documents WHERE entity_key=? AND section=?",
+            (key, section)).fetchone()
+        if row is not None and (row[0], row[1]) == (path, content_hash):
+            return row[2]
+        before = {} if row is None else {"section": section, "path": row[0], "content_hash": row[1]}
+        after = {"section": section, "path": path, "content_hash": content_hash}
+        self.group, self.seq = events.append(self.connection, self.request, self.group, kind, ident,
+                                             "document.import", before, after)
+        self.connection.execute(
+            "INSERT INTO external_documents VALUES(?,?,?,?,?,?) ON CONFLICT(entity_key,section) DO UPDATE SET "
+            "path=excluded.path,body=excluded.body,content_hash=excluded.content_hash,"
+            "imported_seq=excluded.imported_seq", (key, section, path, body, content_hash, self.seq))
+        self.affected[(kind, ident)] = {"kind": kind, "id": ident, "revision": revision,
+                                        "last_seq": self.seq, "fields": {}}
+        return self.seq
+
     def apply(self, operation, arguments):
         if operation == "batch":
             for item in arguments["commands"]:
