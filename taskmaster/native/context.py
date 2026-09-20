@@ -170,7 +170,12 @@ def no_focus() -> blockers.Blocker:
 
 
 def source(name, focus):
-    """Where a section's rows come from, as the answer reports it."""
+    """Which question a section answered, as its provenance reports it.
+
+    Spelled as the native store's own predicate, because that is the precise
+    statement of the question; the legacy store answers the same question over its
+    loaded documents. It names the predicate, never the storage the rows came from.
+    """
     if name in FOCUS_SECTIONS and not focus:
         return "no_focus"
     return {"spec": "external_documents", "plan": "external_documents",
