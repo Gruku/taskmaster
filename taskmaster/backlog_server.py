@@ -5412,6 +5412,115 @@ def backlog_continuity_items(
     return json.dumps({"items": items, "view": view}, default=str)
 
 
+def _legacy_change_identity(connection) -> tuple[str, int]:
+    """The legacy store's cursor fence and its change high-water mark.
+
+    `creation_token` is the same identity a native store reports, so a legacy
+    project and its native copy agree on `store_id` — the digest is what keeps a
+    cursor from crossing between them.
+    """
+    token = connection.execute("SELECT value FROM meta WHERE key='creation_token'").fetchone()
+    sequence = connection.execute("SELECT COALESCE(MAX(seq),0) FROM changes").fetchone()[0]
+    return (token[0] if token else ""), int(sequence)
+
+
+def _legacy_change_rows(connection, scope, after: int, limit: int) -> list[dict]:
+    """The legacy `changes` table under the same scope the native feed applies."""
+    _label, kinds, ids, epic, _grouped = scope
+    conditions, args = ["seq>?"], [after]
+    for column, values in (("kind", kinds), ("id", ids)):
+        if values:
+            conditions.append(f"{column} IN ({','.join('?' for _ in values)})")
+            args.extend(values)
+    if epic:
+        # Membership at the time of the event, not only current membership: the
+        # change a watcher most needs is the one that moved a task out.
+        conditions.append("((kind='epic' AND id=?) OR (kind='task' AND (id IN "
+                          "(SELECT id FROM entities WHERE kind='task' AND epic=?) "
+                          "OR json_extract(before,'$.epic')=? OR json_extract(after,'$.epic')=?)))")
+        args.extend([epic] * 4)
+    return [dict(row) for row in connection.execute(
+        "SELECT seq,ts,session,tool operation,kind,id,op,fields,seq first_seq,seq final_seq "
+        "FROM changes WHERE " + " AND ".join(conditions) + " ORDER BY seq LIMIT ?", args + [limit + 1])]
+
+
+@mcp.tool()
+def backlog_changes_since(
+    cursor: str = "",
+    kinds: list[str] | None = None,
+    ids: list[str] | None = None,
+    epic: str = "",
+    limit: int = 100,
+    group_commits: bool = True,
+    since_seq: int | None = None,
+) -> str:
+    """What changed in the backlog since a cursor, as JSON. Resume, don't re-read.
+
+    Call it with no arguments to get a cursor and nothing else ("start watching
+    from now"), then pass that cursor back to learn what moved. A cursor survives
+    every write; it stops being usable only if the store was rebuilt, the scope of
+    the question changed, or the history it points at was retired. In that case the
+    answer is not an error: `resync_required` is true, `reason` says which, and a
+    fresh cursor comes back, so recovery costs one call. Do not treat a resync as
+    a quiet period — re-read what you care about.
+
+    Authored values are never returned. Each change names the fields that moved;
+    read the current value with `backlog_get_task` or `backlog_get_*` if you need
+    it. On a legacy store each change is reported as its own commit, because the
+    legacy change log has no commit rows to group by.
+
+    Args:
+        cursor: A cursor from an earlier call. Empty starts from now.
+        kinds: Entity kinds to report (task, bug, issue, ...). Empty means all.
+        ids: Entity ids to report. Empty means all.
+        epic: Report only this epic and its tasks, including a task leaving it.
+        limit: Commits (or changes, when ungrouped) per answer, 1-500.
+        group_commits: Group each transaction's changes into one commit entry.
+        since_seq: Start from this sequence instead of a cursor. 0 is all history.
+    """
+    from taskmaster.native import cursors
+    try:
+        scope = cursors.scope(kinds, ids, epic, group_commits)
+        cursors.page(limit)
+        if since_seq is not None and (type(since_seq) is not int or since_seq < 0):
+            raise ValueError("since_seq must be a sequence number of 0 or more")
+        if cursor and since_seq is not None:
+            raise ValueError("pass a cursor or since_seq, not both")
+    except ValueError as exc:
+        return cursors.refusal(exc)
+    st = _store()
+    # The tables are the answer here, so a hand-edited file must be adopted before
+    # it can be reported as a change, exactly as every other read tool adopts it.
+    st.scan_for_read()
+    connection = st.connection
+    if connection.in_transaction:
+        return cursors.refusal(ValueError("backlog_changes_since cannot run inside another store transaction"))
+    connection.execute("BEGIN")
+    try:
+        store_id, sequence = _legacy_change_identity(connection)
+        envelope = {"store_id": store_id, "source_digest": cursors.LEGACY_DIGEST,
+                    "sequence": sequence, "scope": scope, "group_commits": group_commits}
+        # Nothing prunes the legacy change log and a legacy store has no
+        # `sync_state` to hold a floor, so its retention floor is zero.
+        try:
+            if cursor:
+                after = cursors.parse(cursor, store_id=store_id, source_digest=cursors.LEGACY_DIGEST, scope=scope)
+            elif since_seq is not None:
+                after = min(since_seq, sequence)
+            else:
+                return cursors.present(cursors.feed(items=[], last_seq=sequence, more=False, **envelope))
+        except cursors.CursorInvalid as exc:
+            return cursors.present(cursors.resync(exc, **envelope))
+        rows = _legacy_change_rows(connection, scope, after, limit)
+        more, rows = len(rows) > limit, rows[:limit]
+        items = [cursors.commit(row, [cursors.change(row)]) for row in rows] if group_commits else \
+            [cursors.flat(row) for row in rows]
+        return cursors.present(cursors.feed(items=items, last_seq=rows[-1]["seq"] if rows else after,
+                                            more=more, **envelope))
+    finally:
+        connection.rollback()
+
+
 @mcp.tool()
 @_transactional("backlog_idea_create")
 def backlog_idea_create(

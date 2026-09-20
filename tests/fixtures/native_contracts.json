@@ -1342,6 +1342,70 @@
       "returns": "str",
       "transactional": false
     },
+    "backlog_changes_since": {
+      "category": "targeted-query",
+      "documentation": "What changed in the backlog since a cursor, as JSON. Resume, don't re-read.\n\nCall it with no arguments to get a cursor and nothing else (\"start watching\nfrom now\"), then pass that cursor back to learn what moved. A cursor survives\nevery write; it stops being usable only if the store was rebuilt, the scope of\nthe question changed, or the history it points at was retired. In that case the\nanswer is not an error: `resync_required` is true, `reason` says which, and a\nfresh cursor comes back, so recovery costs one call. Do not treat a resync as\na quiet period — re-read what you care about.\n\nAuthored values are never returned. Each change names the fields that moved;\nread the current value with `backlog_get_task` or `backlog_get_*` if you need\nit. On a legacy store each change is reported as its own commit, because the\nlegacy change log has no commit rows to group by.\n\nArgs:\n    cursor: A cursor from an earlier call. Empty starts from now.\n    kinds: Entity kinds to report (task, bug, issue, ...). Empty means all.\n    ids: Entity ids to report. Empty means all.\n    epic: Report only this epic and its tasks, including a task leaving it.\n    limit: Commits (or changes, when ungrouped) per answer, 1-500.\n    group_commits: Group each transaction's changes into one commit entry.\n    since_seq: Start from this sequence instead of a cursor. 0 is all history.",
+      "parameters": [
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "cursor",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "kinds",
+          "required": false,
+          "type": "list[str] | None"
+        },
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "ids",
+          "required": false,
+          "type": "list[str] | None"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "epic",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "100",
+          "default_value": 100,
+          "mode": "positional",
+          "name": "limit",
+          "required": false,
+          "type": "int"
+        },
+        {
+          "default_expression": "True",
+          "default_value": true,
+          "mode": "positional",
+          "name": "group_commits",
+          "required": false,
+          "type": "bool"
+        },
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "since_seq",
+          "required": false,
+          "type": "int | None"
+        }
+      ],
+      "returns": "str",
+      "transactional": false
+    },
     "backlog_clear_gate": {
       "category": "simple-command",
       "documentation": "Remove a single gate record from a task and recompute gate_state.\n\nArgs:\n    task_id: Task id.\n    gate: The gate to clear (see backlog_record_gate for valid names).",

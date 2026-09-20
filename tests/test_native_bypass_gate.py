@@ -138,6 +138,15 @@ EXERCISES = {
                                               bs.backlog_thread_resume(ref="2026-09-17-gate-handover")],
     ("backlog_thread_update", None): lambda: bs.backlog_thread_update(name="test-epic", status="parked"),
     ("backlog_continuity_items", None): lambda: bs.backlog_continuity_items(),
+    # Every branch of the change feed: a first call, a resumed cursor, the flat
+    # shape, explicit history, and a cursor the store can no longer honour.
+    ("backlog_changes_since", None): lambda: [
+        bs.backlog_changes_since(),
+        bs.backlog_changes_since(cursor=json.loads(bs.backlog_changes_since())["cursor"]),
+        bs.backlog_changes_since(since_seq=0, limit=500, group_commits=False),
+        bs.backlog_changes_since(since_seq=0, kinds=["task"], epic="test-epic"),
+        bs.backlog_changes_since(cursor="not-a-cursor"),
+    ],
     ("backlog_last_session", None): lambda: bs.backlog_last_session(),
     ("backlog_link", "create"): lambda: bs.backlog_link(action="create", source="IDEA-001", target="ISS-001",
                                                       type="relates_to"),
