@@ -114,11 +114,24 @@ def _flagged(connection, rel: str) -> bool:
         return False
 
 
+def _held_files(connection, kind: str, ident: str) -> list[tuple[str, str]]:
+    """`(file, reason)` for every quarantined or flagged file of one entity."""
+    held = {file: "quarantined" for (file,) in connection.execute(
+        "SELECT file FROM projection WHERE kind=? AND id=? AND quarantined=1", (kind, ident))}
+    try:
+        held.update((file, "flagged") for (file,) in connection.execute(
+            "SELECT file FROM projection_conflict WHERE kind=? AND id=?", (kind, ident)))
+    except sqlite3.OperationalError:
+        pass
+    return sorted(held.items())
+
+
 class _Drain:
     def __init__(self, connection: sqlite3.Connection, backlog_dir: Path, session: str):
         self.connection, self.backlog_dir, self.session = connection, backlog_dir, session
         self.warnings: list[str] = []
         self.moved_crlf: dict[tuple[str, str], bool] = {}
+        self.held: dict[tuple[str, str], bool] = {}
 
     def _blocked(self, rel: str) -> bool:
         row = self.connection.execute("SELECT quarantined FROM projection WHERE file=?", (rel,)).fetchone()
@@ -175,9 +188,25 @@ class _Drain:
         _record(self.connection, rel, kind, ident, content, stat, exported_seq)
         return True
 
+    def _entity_held(self, kind: str, ident: str) -> bool:
+        """Whether any file of this entity is quarantined or flagged.
+
+        Held per entity, as the legacy `_export_blocked` does: a move writes the
+        new path and removes the old, so holding only the blocked file would
+        leave one id in two places. Answered once per entity per drain.
+        """
+        key = (kind, ident)
+        if key not in self.held:
+            held = _held_files(self.connection, kind, ident)
+            for file, reason in held:
+                self.connection.execute("UPDATE projection SET dirty=1 WHERE file=?", (file,))
+                self.warnings.append(f"export pending: {file} is {reason}")
+            self.held[key] = bool(held)
+        return self.held[key]
+
     def job(self, rel: str, effect: str, entity: dict) -> bool:
         kind, ident = entity["kind"], entity["id"]
-        if self._blocked(rel):
+        if self._entity_held(kind, ident) or self._blocked(rel):
             return False
         if effect == "delete":
             return self._remove(rel, kind, ident)

@@ -40,4 +40,4 @@ def test_bounded_metadata_query_work_does_not_scale_with_unrelated_entities(lega
         assert large < small * 1.5
         # The count includes parsing the schema; 6.0.3's projection_conflict table
         # and index took the flat cost from 980 to 1000 steps.
-        assert large < 1100
+        assert large < 1020
