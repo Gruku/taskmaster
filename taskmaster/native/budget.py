@@ -17,10 +17,14 @@ class Selection:
     `total` is the store's count for the same predicate in the same snapshot.
     It can exceed `len(items)` because the read was itself limited — which is
     exactly why the omission count cannot be derived from the page.
+
+    `offset` is where `items` starts within that total. Rows before it were
+    delivered by an earlier page, so they are not omitted from this one.
     """
     name: str
     items: Sequence[Any]
     total: int
+    offset: int = 0
 
 
 @dataclass(frozen=True)
@@ -82,12 +86,12 @@ def budget(*, envelope: Mapping[str, Any], mandatory: Any,
     only shape a continuation cursor can resume from honestly.
     """
     for selection in selections:
-        if selection.total < len(selection.items):
+        if selection.total < selection.offset + len(selection.items):
             raise ValueError(f"selection `{selection.name}` total {selection.total} is below "
-                             f"the {len(selection.items)} rows handed in")
+                             f"the {len(selection.items)} rows handed in at offset {selection.offset}")
 
     mandatory_bytes = _size(mandatory)
-    omitted = {selection.name: selection.total for selection in selections}
+    omitted = {selection.name: selection.total - selection.offset for selection in selections}
     selected: dict = {selection.name: [] for selection in selections}
 
     # The floor: mandatory complete, nothing selected. Over budget is decided
@@ -107,7 +111,8 @@ def budget(*, envelope: Mapping[str, Any], mandatory: Any,
             trial = {name: list(rows) for name, rows in selected.items()}
             trial[selection.name].append(item)
             trial_omitted = dict(omitted)
-            trial_omitted[selection.name] = selection.total - len(trial[selection.name])
+            trial_omitted[selection.name] = (selection.total - selection.offset
+                                             - len(trial[selection.name]))
             candidate, candidate_block = _stabilise(
                 envelope, mandatory, trial, limit_bytes=limit_bytes,
                 mandatory_bytes=mandatory_bytes, omitted=trial_omitted, over_budget=False)

@@ -56,9 +56,10 @@ def _guard_legacy_layout(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
         try:
-            return fn(*args, **kwargs)
+            result = fn(*args, **kwargs)
         except store.LegacyLayoutError as exc:
             return f"Error: {exc}"
+        return _attach_conflict_notices(result)
 
     return wrapper
 
@@ -90,6 +91,43 @@ def _route_native(fn):
         return fn(*args, **kwargs)
 
     return wrapper
+
+
+def _attach_conflict_notices(result):
+    """Name every flagged file in the result, on every call, until it is resolved.
+
+    A file edited while the store owed it an export is flagged by whichever
+    scan meets it first -- usually inside a read -- and nothing is merged, so
+    the only way anyone learns both versions exist is to be told. Every tool
+    passes through here. The flags are read from their own table in one query,
+    so there is no cursor to lose across restarts or processes and no history
+    scan per call. Advisory: a failure to look never costs the caller the
+    result they asked for.
+    """
+    if store.active_transaction() is not None:
+        # A nested tool call: the outermost one owns the response.
+        return result
+    try:
+        instance = store.opened_store(_backlog_path())
+        if instance is None:
+            return result
+        conflicts = instance.projection_conflicts()
+    except Exception:  # noqa: BLE001 -- advisory, see docstring
+        return result
+    if not conflicts:
+        return result
+    notices = [store.projection_conflict_notice(conflict) for conflict in conflicts]
+    if isinstance(result, dict):
+        result.setdefault("projection_conflicts", notices)
+    elif isinstance(result, str):
+        payload = _as_json_result(result)
+        if isinstance(payload, dict):
+            payload.setdefault("projection_conflicts", notices)
+            result = json.dumps(payload)
+        elif payload is None:
+            result = result + "\n\n" + "\n".join(f"Warning: {notice}" for notice in notices)
+        # A JSON array has nowhere to carry them; the next other result will.
+    return result
 
 
 class _GuardedToolRegistrar:
@@ -2633,6 +2671,7 @@ def _render_store_report(status: "store.StoreStatus") -> str:
         listing("Dirty", status.dirty_files),
         listing("Quarantined", status.quarantined_files),
         listing("Stuck exports", status.stuck_exports),
+        listing("Flagged (both changed; see backlog_resolve_conflict)", status.flagged_files),
         listing("Corrupt", status.corrupt_files),
         f"Merge conflicts (24 h): {status.merge_conflicts_24h}",
         f"Linear queue: {status.linear_pending} pending",
@@ -2683,6 +2722,94 @@ def backlog_store_status() -> str:
     # No `_configure_store_derivers()`: nothing here exports or regenerates, so
     # the read does not need the derivation hooks and does not install them.
     return _render_store_report(store.read_only_status(bp))
+
+
+@mcp.tool()
+def backlog_resolve_conflict(file: str = "", take: str = "") -> str:
+    """List, compare or resolve files flagged because they and the store both changed.
+
+    A projection file (a task, epic or phase file, `backlog.yaml`,
+    `project.yaml`, ...) edited or repaired while the store held a change it
+    had not yet written there is flagged: nothing is merged, the store keeps
+    its version, the file is left exactly as written, and exports to it pause.
+    Every tool result names flagged files until they are resolved.
+
+    - no `file`: list flagged files.
+    - `file` only: show both versions -- the file as last seen and as on disk
+      now, and the exact text the store would write.
+    - `file` and `take="file"`: import the file as it is on disk now; the
+      store's replaced values stay in the change log.
+    - `file` and `take="store"`: write the store's version over the file (or
+      move/remove it if the entity is archived or deleted); the replaced file
+      text is kept in the resolution's change row.
+
+    A resolution always takes one whole file. For `backlog.yaml` that means
+    every epic and phase entry in it at once: there is no per-entity choice, so
+    compare the two versions first and edit the side you keep if it needs
+    pieces of the other.
+
+    Whoever resolves decides; the store never picks a side on its own.
+    """
+    _configure_store_derivers()
+    st = _store()
+    if not file:
+        conflicts = st.projection_conflicts()
+        if not conflicts:
+            return "No flagged files."
+        return "\n".join(
+            [f"{len(conflicts)} flagged file(s):"]
+            + [
+                f"- {c['file']} ({c['kind']} {c['id']}, flagged {c['flagged_at']})"
+                for c in conflicts
+            ]
+        )
+    if not take:
+        detail = st.projection_conflict_detail(file)
+        if detail is None:
+            return f"Error: {file} is not flagged."
+
+        def block(label: str, text: str | None, absent: str) -> str:
+            if text is None:
+                return f"### {label}\n\n({absent})"
+            return f"### {label}\n\n````\n{text.rstrip(chr(10))}\n````"
+
+        parts = [
+            f"## {file} ({detail['kind']} {detail['id']}), flagged {detail['flagged_at']}",
+            block("File on disk now", detail["file_on_disk"], "the file is missing"),
+        ]
+        if detail["file_observed"] != detail["file_on_disk"]:
+            parts.append(block("File as last seen by the store", detail["file_observed"], ""))
+        absent = (
+            f"the store writes this entity to {detail['store_path']} instead"
+            if detail["store_path"]
+            else "the store would write no file here: the entity is deleted or has no file of its own"
+        )
+        parts.append(block("Store version (what take=\"store\" writes)", detail["store_version"], absent))
+        whole = (
+            " Either choice applies to the whole of backlog.yaml, every epic and "
+            "phase entry in it, not to one entity."
+            if file == "backlog.yaml"
+            else ""
+        )
+        parts.append(
+            f'Keep one with backlog_resolve_conflict(file="{file}", take="file") '
+            f'or take="store".{whole}'
+        )
+        return "\n\n".join(parts)
+    try:
+        outcome = st.resolve_projection_conflict(file, take)
+    except ValueError as exc:
+        return f"Error: {exc}"
+    message = f"Resolved {file}: kept the {take} version."
+    if file == "backlog.yaml":
+        message += (
+            " This took the whole file: every epic and phase entry in "
+            "backlog.yaml now comes from the " + take + " version."
+        )
+    pending = [w for w in outcome["warnings"] if "export pending" in w]
+    if pending:
+        message += " (" + "; ".join(pending) + ")"
+    return _append_seq(message, outcome["seq"])
 
 
 def _render_query_table(description, rows: list, limit: int) -> str:
@@ -5529,6 +5656,8 @@ def _legacy_change_identity(connection) -> tuple[str, int]:
 
 def _legacy_change_rows(connection, scope, after: int, limit: int) -> list[dict]:
     """The legacy `changes` table under the same scope the native feed applies."""
+    from taskmaster.native import cursors
+
     _label, kinds, ids, epic, _grouped = scope
     conditions, args = ["seq>?"], [after]
     for column, values in (("kind", kinds), ("id", ids)):
@@ -5536,15 +5665,14 @@ def _legacy_change_rows(connection, scope, after: int, limit: int) -> list[dict]
             conditions.append(f"{column} IN ({','.join('?' for _ in values)})")
             args.extend(values)
     if epic:
-        # Membership at the time of the event, not only current membership: the
-        # change a watcher most needs is the one that moved a task out.
-        conditions.append("((kind='epic' AND id=?) OR (kind='task' AND (id IN "
-                          "(SELECT id FROM entities WHERE kind='task' AND epic=?) "
-                          "OR json_extract(before,'$.epic')=? OR json_extract(after,'$.epic')=?)))")
+        # Membership at the time of the event, derived from the log's own history
+        # of epic moves — the same predicate the native feed applies.
+        conditions.append(cursors.epic_condition(
+            "changes", "e", "SELECT epic FROM entities WHERE kind='task' AND id=e.id"))
         args.extend([epic] * 4)
     return [dict(row) for row in connection.execute(
         "SELECT seq,ts,session,tool operation,kind,id,op,fields,seq first_seq,seq final_seq "
-        "FROM changes WHERE " + " AND ".join(conditions) + " ORDER BY seq LIMIT ?", args + [limit + 1])]
+        "FROM changes e WHERE " + " AND ".join(conditions) + " ORDER BY seq LIMIT ?", args + [limit + 1])]
 
 
 @mcp.tool()
@@ -5561,8 +5689,9 @@ def backlog_changes_since(
 
     Call it with no arguments to get a cursor and nothing else ("start watching
     from now"), then pass that cursor back to learn what moved. A cursor survives
-    every write; it stops being usable only if the store was rebuilt, the scope of
-    the question changed, or the history it points at was retired. In that case the
+    every write; it stops being usable only if the store was rebuilt or restored
+    to an earlier state, the scope of the question changed, or the history it
+    points at was retired. In that case the
     answer is not an error: `resync_required` is true, `reason` says which, and a
     fresh cursor comes back, so recovery costs one call. Do not treat a resync as
     a quiet period — re-read what you care about.
@@ -5607,7 +5736,8 @@ def backlog_changes_since(
         # `sync_state` to hold a floor, so its retention floor is zero.
         try:
             if cursor:
-                after = cursors.parse(cursor, store_id=store_id, source_digest=cursors.LEGACY_DIGEST, scope=scope)
+                after = cursors.parse(cursor, store_id=store_id, source_digest=cursors.LEGACY_DIGEST,
+                                      scope=scope, sequence=sequence)
             elif since_seq is not None:
                 after = min(since_seq, sequence)
             else:
@@ -5880,8 +6010,7 @@ def backlog_context(
             items, total, extra = _legacy_context_section(
                 data, connection, name, focus, doc, body, epic, facts, offset, context_shape.PAGE)
             selections.append(Selection(name, items, total))
-            provenance[name] = {"query": context_shape.source(name, focus),
-                                "truncated": offset + len(items) < total, **extra}
+            provenance[name] = {"query": context_shape.source(name, focus), **extra}
         return context_shape.assemble(
             store_id=store_id, sequence=sequence, scope=scope, focus=focus,
             resolution=resolution, selections=selections, offsets=offsets, ident=ident,
@@ -7075,6 +7204,10 @@ def backlog_claim(
                                      members=member_ids))
     for target, target_state in zip(targets, states):
         if action == "release" and not target_state.holder:
+            continue
+        if action == "renew" and not target_state.mine:
+            # Renew extends claims and never takes one: a member whose holder was
+            # dropped would otherwise be claimed without a pick (§2.5).
             continue
         _claims.released(target) if action == "release" else _claims.held(target, ttl, session=SESSION_ID)
         # Each member's own epic, as the bundle pick does: a member written with

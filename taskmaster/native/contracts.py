@@ -74,7 +74,7 @@ def validate(envelope):
     # Copy through canonical JSON so a caller cannot mutate an admitted request.
     encoded = encode(envelope).encode("utf-8")
     if len(encoded) > MAX_BYTES:
-        raise ValueError("command exceeds encoded byte limit")
+        raise ValueError(f"command exceeds the encoded byte limit of {MAX_BYTES} bytes (1 MiB)")
     request = json.loads(encoded)
     if type(request.get("protocol")) is not int or request["protocol"] != 2:
         raise ValueError("unsupported command protocol")

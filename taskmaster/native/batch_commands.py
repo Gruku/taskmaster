@@ -17,15 +17,35 @@ import json
 
 from .contracts import MAX_BATCH_COMMANDS, validate_operation
 
-# Operations that exist to serve exactly one caller with that caller's own rules:
-# the batch lines adapter (whose whole contract is partial apply) and the viewer's
-# edit-in-UI writes (whose precondition is a store-wide If-Match). Exposing either
-# through `commands=` would be a second front door into a contract this form
-# cannot honour, so they are refused by name rather than validated.
-INTERNAL_OPERATIONS = frozenset({
-    "task.batch_line", "epic.batch_line",
-    "task.viewer_create", "task.viewer_update", "task.viewer_archive",
-})
+# Operations that exist to serve exactly one caller with that caller's own rules,
+# refused by name rather than validated, with where to go instead. The batch lines
+# adapter's contract is partial apply and the viewer's writes carry a store-wide
+# If-Match. The claim operations take `session` as an argument, and only a tool
+# that supplies this server's own session may pass one: through `commands=` any
+# caller could release, renew or force-take another session's claim. The import
+# stores a body the importer read from a declared file, and provenance vouches for
+# exactly that; through `commands=` the body would be whatever the caller typed.
+INTERNAL_OPERATIONS = {
+    "task.batch_line": "Use `operations` lines for batch lines.",
+    "epic.batch_line": "Use `operations` lines for batch lines.",
+    "task.viewer_create": "Use the viewer for a viewer edit.",
+    "task.viewer_update": "Use the viewer for a viewer edit.",
+    "task.viewer_archive": "Use the viewer for a viewer edit.",
+    "task.pick": "A claim is taken for this session by `backlog_pick_task`.",
+    "task.claim_renew": "A claim is renewed for this session by `backlog_claim(action=\"renew\")`.",
+    "task.claim_release": "A claim is released for this session by `backlog_claim(action=\"release\")`.",
+    "document.import": "Documents are imported from their declared files by `backlog_document_import`.",
+}
+# Arguments a tool supplies from the call itself, never from its caller: who wrote
+# a note, and the merge ladder a task's merge gate is judged against. The native
+# adapter fills them exactly as the owning tool does.
+RESERVED_ARGUMENTS = {
+    "note.create": {"author": "a note is authored as `backlog_note` authors it"},
+    "task.merge": {"merge_targets": "the ladder is the project manifest's, as `backlog_record_merge` "
+                                    "resolves it"},
+}
+# `task.update` can name any holder; the claim contract is the only writer of one.
+_HOLDER_FIELD = "locked_by"
 
 _PARTIAL = ("the `operations` line form applies what it can and reports an error per bad line")
 _ATOMIC = ("the `commands` form commits in one transaction, all of it or none of it")
@@ -81,12 +101,26 @@ def check(operations: str, commands, expected_revisions, atomic) -> str | None:
         if operation in INTERNAL_OPERATIONS:
             return refused("internal_operation",
                            f"`{operation}` serves one caller with rules this form cannot honour; it is not "
-                           "callable here. Use `operations` lines for batch lines, or the viewer for a "
-                           "viewer edit.")
+                           f"callable here. {INTERNAL_OPERATIONS[operation]}")
+        arguments = item.get("arguments", {})
         try:
-            validate_operation(operation, item.get("arguments", {}), in_batch=True)
+            validate_operation(operation, arguments, in_batch=True)
         except (ValueError, KeyError, TypeError) as exc:
             return refused("invalid_command", f"`{operation}`: {_message(exc)}")
+        reserved = _reserved(operation, arguments)
+        if reserved is not None:
+            return refused("reserved_argument", f"`{operation}`: {reserved}")
+    return None
+
+
+def _reserved(operation, arguments) -> str | None:
+    """Why this command names something only the call itself may supply, or `None`."""
+    for name, owner in RESERVED_ARGUMENTS.get(operation, {}).items():
+        if name in arguments:
+            return f"`{name}` is not an argument here: {owner}."
+    if operation == "task.update" and arguments.get("field") == _HOLDER_FIELD:
+        return (f"`{_HOLDER_FIELD}` names a claim holder, which only the claim tools write for this "
+                "session: `backlog_pick_task` and `backlog_claim`.")
     return None
 
 

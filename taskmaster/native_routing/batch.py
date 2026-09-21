@@ -115,6 +115,15 @@ def _structured(call, commands, expected_revisions):
     precondition applied nothing, and the answer says exactly that rather than
     summarizing a partial apply the caller never asked for.
     """
+    if any(item["operation"] == "task.merge" for item in commands):
+        # `merge_targets` is reserved to the call: the ladder is the manifest's,
+        # resolved here exactly as `backlog_record_merge` resolves it.
+        from .tasks import _merge_targets
+        with call.read() as snapshot:
+            targets = _merge_targets(snapshot)
+        commands = [{"operation": item["operation"],
+                     "arguments": {**item.get("arguments", {}), "merge_targets": targets}}
+                    if item["operation"] == "task.merge" else item for item in commands]
     try:
         receipt = call.execute("batch", {"commands": commands}, expected=expected_revisions or [])
     except Conflict as exc:

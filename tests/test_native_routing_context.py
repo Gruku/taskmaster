@@ -265,3 +265,28 @@ def test_both_stores_agree_on_claim_blockers(claimed):
     for focus in ("test-epic-001", "test-epic-002"):
         assert answer(claimed.legacy, claimed, focus=focus)["mandatory"] == \
             answer(claimed.native, claimed, focus=focus)["mandatory"]
+
+
+@bs._transactional("test_raw_edit")
+def _hand_edit_task(task_id, **fields):
+    """A hand edit of the YAML: a shape the tools would never write."""
+    data = bs._load()
+    bs._find_task(data, task_id)[0].update(fields)
+    bs._mutate_and_save(data)
+    return "ok"
+
+
+@pytest.fixture
+def hand_edited(tmp_path, monkeypatch):
+    def seed():
+        bs.backlog_add_task(title="Hand edited", epic="test-epic", phase="dev")
+        _hand_edit_task("test-epic-001", human_action=True)
+    return make_twins(tmp_path, monkeypatch, seed)
+
+
+@pytest.mark.parametrize("side", ["legacy", "native"])
+def test_a_human_action_of_the_wrong_shape_answers_unknown_instead_of_failing_the_tool(hand_edited, side):
+    answered = answer(getattr(hand_edited, side), hand_edited, focus="test-epic-001", include=[])
+    assert answered["mandatory"]["clear"] is False
+    assert ("unknown", "human_action") in {(b["kind"], b["id"])
+                                           for b in answered["mandatory"]["blockers"]}

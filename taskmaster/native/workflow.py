@@ -866,6 +866,10 @@ def _claim_change(transaction, arguments, *, release):
     for target in targets:
         if release and not states[target].holder:
             continue  # Idempotent: a released claim releases again with no commit.
+        if not release and not states[target].mine:
+            # Renew extends claims and never takes one: a member whose holder was
+            # dropped would otherwise be claimed without a pick (§2.5).
+            continue
         record = entities[target]
         doc = deepcopy(record["fields"])
         claims.released(doc) if release else claims.held(doc, ttl, session=session)

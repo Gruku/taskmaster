@@ -81,6 +81,10 @@ GUIDANCE: dict[tuple[str, "str | None"], str] = {
     ("backlog_linear", "retry"): (
         f"{_NATIVE}, and pushing queued changes to Linear needs native synchronization, which has not "
         "shipped yet. Queued changes are kept; `backlog_linear(action=\"status\")` lists them."),
+    ("backlog_resolve_conflict", None): (
+        f"{_NATIVE}, which never reads projection files back, so it flags nothing. A file the legacy "
+        "store flagged before activation stays as written, with its exports paused, and resolving it "
+        "has only a legacy implementation. `backlog_store_status` lists such files under Flagged."),
 }
 # Routers that answer errors as JSON rather than text.
 JSON_ERRORS = frozenset({"backlog_changes_since", "backlog_claim", "backlog_context", "backlog_link",
