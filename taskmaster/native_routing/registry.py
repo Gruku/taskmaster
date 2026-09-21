@@ -33,8 +33,8 @@ def adapter(tool: str, *, actions: "tuple[str, ...] | None" = None, unknown=None
 
 def _load_families() -> None:
     # Imported for their registrations; each module is one routed family.
-    from . import (batch, changes, claims, context, documents, epics_phases, handovers,  # noqa: F401
-                   links_areas, notes, overview, records, tasks)
+    from . import (batch, changes, claims, conflicts, context, documents, epics_phases,  # noqa: F401
+                   handovers, links_areas, notes, overview, records, tasks)
 
 
 _NATIVE = "this project's store is a native authority"
@@ -63,12 +63,15 @@ GUIDANCE: dict[tuple[str, "str | None"], str] = {
         f"{_NATIVE}, which keeps no separate derived index to report or rebuild: its search and graph "
         "tables are maintained inside every command. Use `backlog_store_status` for store health."),
     ("backlog_handover_resync", None): (
-        f"{_NATIVE}: handovers are database rows, edited handover files are never read back, and the "
-        "next write to a handover re-exports its file over any hand edit. The handover index and its cap are maintained on every "
-        "write. Make changes with `backlog_handover_update_status` or `backlog_handover_supersede`."),
+        f"{_NATIVE}: handovers are database rows and edited handover files are never read back. The "
+        "next write to a hand-edited handover keeps the file as it is and flags it rather than exporting "
+        "over it; `backlog_resolve_conflict` compares the two and keeps the store's version. The handover "
+        "index and its cap are maintained on every write. Make changes with "
+        "`backlog_handover_update_status` or `backlog_handover_supersede`."),
     ("backlog_issue_resync", None): (
         f"{_NATIVE}: issues are database rows and the issue index is derived from them on every read, "
-        "so there is nothing to resync, and edited issue files are never read back. Make changes with "
+        "so there is nothing to resync. Edited issue files are never read back: the next write to one "
+        "keeps it and flags it, and `backlog_resolve_conflict` compares the two. Make changes with "
         "`backlog_issue_update`."),
     ("backlog_link", "reconcile"): (
         f"{_NATIVE}, where every link write records its inverse in the same transaction. Run "
@@ -81,10 +84,6 @@ GUIDANCE: dict[tuple[str, "str | None"], str] = {
     ("backlog_linear", "retry"): (
         f"{_NATIVE}, and pushing queued changes to Linear needs native synchronization, which has not "
         "shipped yet. Queued changes are kept; `backlog_linear(action=\"status\")` lists them."),
-    ("backlog_resolve_conflict", None): (
-        f"{_NATIVE}, which never reads projection files back, so it flags nothing. A file the legacy "
-        "store flagged before activation stays as written, with its exports paused, and resolving it "
-        "has only a legacy implementation. `backlog_store_status` lists such files under Flagged."),
 }
 # Routers that answer errors as JSON rather than text.
 JSON_ERRORS = frozenset({"backlog_changes_since", "backlog_claim", "backlog_context", "backlog_link",

@@ -9,7 +9,7 @@ from functools import lru_cache
 from types import UnionType
 from typing import Any, Union, get_args, get_origin, get_type_hints
 from taskmaster import taskmaster_v3 as domain
-from . import documents, workflow
+from . import documents, projection, workflow
 
 BUILDERS = {"decision": domain.build_decision_doc, "bug": domain.build_bug_doc,
             "issue": domain.build_issue_doc, "idea": domain.build_idea_doc, "handover": domain.build_handover_doc}
@@ -31,7 +31,8 @@ CREATE_EXTRAS = {"auto_link"}
 # Kinds whose prose is scanned for inline mentions on create and on a body edit,
 # as the tools do (`auto_link_on_save`).
 AUTO_LINKED = {"issue", "idea", "handover"}
-OPERATIONS = ENTITY_OPERATIONS | workflow.OPERATIONS | documents.OPERATIONS
+# `projection.resolve` keeps the store's version of a flagged projection file (N11 S10).
+OPERATIONS = ENTITY_OPERATIONS | workflow.OPERATIONS | documents.OPERATIONS | {projection.RESOLVE}
 
 
 def _accepts(value, annotation):
@@ -58,6 +59,8 @@ def validate(operation, arguments):
         return workflow.validate(operation, arguments)
     if operation in documents.OPERATIONS:
         return documents.validate(operation, arguments)
+    if operation == projection.RESOLVE:
+        return projection.validate_resolve(arguments)
     kind, action = operation.split(".")
     if action == "create":
         parameters = dict(arguments)
@@ -137,6 +140,8 @@ def apply(transaction, operation, arguments):
         return workflow.apply(transaction, operation, arguments)
     if operation in documents.OPERATIONS:
         return documents.apply(transaction, operation, arguments)
+    if operation == projection.RESOLVE:
+        return projection.apply_resolve(transaction, arguments)
     kind, action = operation.split(".")
     if action == "create":
         options = dict(arguments)

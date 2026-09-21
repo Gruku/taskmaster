@@ -83,6 +83,16 @@ def _put(connection, key, value) -> None:
                        "value_json=excluded.value_json", (key, json.dumps(value, sort_keys=True)))
 
 
+def safe_relative(rel: str) -> PurePosixPath:
+    """A projection path relative to the backlog directory, never outside it."""
+    if not isinstance(rel, str) or not rel or ":" in rel or "\\" in rel:
+        raise ValueError(f"unsafe projection path {rel!r}")
+    path = PurePosixPath(rel)
+    if path.is_absolute() or ".." in path.parts or not path.parts:
+        raise ValueError(f"unsafe projection path {rel!r}")
+    return path
+
+
 def lease(connection) -> dict:
     """The exporter lease as stored: `{owner, generation, until}` (empty before any export)."""
     return _get(connection, EXPORTER_KEY, {})
@@ -171,7 +181,7 @@ def _through(connection) -> int:
     return int(connection.execute("SELECT COALESCE(MAX(seq),0) FROM domain_events").fetchone()[0])
 
 
-def _update_through(connection) -> None:
+def update_through(connection) -> None:
     _put(connection, THROUGH_KEY, _through(connection))
 
 
@@ -345,10 +355,7 @@ class Exporter:
         return self._publish_file(rel, kind, None, content, exported_seq, tag=f"d{exported_seq}")
 
     def _path(self, rel: str) -> Path:
-        path = PurePosixPath(rel)
-        if path.is_absolute() or ".." in path.parts or not path.parts:
-            raise ValueError(f"unsafe projection path {rel!r}")
-        return self.backlog_dir / path
+        return self.backlog_dir / safe_relative(rel)
 
     def _classify(self, rel: str, path: Path, content: bytes | None) -> tuple[str, bytes | None]:
         """§2.4: what the bytes on disk say about publishing over them.
@@ -454,7 +461,7 @@ class Exporter:
             if job is not None:
                 self.connection.execute("UPDATE projection_jobs SET state='conflict',lease_owner=NULL,lease_until=NULL "
                                         "WHERE job_key=?", (job.key,))
-            _update_through(self.connection)
+            update_through(self.connection)
             self.connection.commit()
         except BaseException:
             self.connection.rollback()
@@ -502,7 +509,7 @@ class Exporter:
             if job is not None:
                 self.connection.execute("UPDATE projection_jobs SET state='exported',lease_owner=NULL,lease_until=NULL "
                                         "WHERE job_key=?", (job.key,))
-            _update_through(self.connection)
+            update_through(self.connection)
             self.connection.commit()
         except BaseException:
             self.connection.rollback()
@@ -581,3 +588,86 @@ class Exporter:
             self.connection.rollback()
             raise
 
+
+
+# ── Resolution (S10) ────────────────────────────────────────────────────────
+
+RESOLVE = "projection.resolve"
+_RESOLVE_ARGUMENTS = {"file", "take", "replaced", "replaced_hash"}
+
+
+def validate_resolve(arguments: dict) -> None:
+    if set(arguments) - _RESOLVE_ARGUMENTS or "file" not in arguments:
+        raise ValueError("projection.resolve takes file, take, replaced and replaced_hash")
+    safe_relative(arguments["file"])
+    if arguments.get("take") != "store":
+        raise ValueError('projection.resolve only keeps the store version; take="file" needs the importer (N13)')
+    if arguments.get("replaced") is not None and not isinstance(arguments["replaced"], str):
+        raise ValueError("replaced must be text or null")
+    digest = arguments.get("replaced_hash")
+    if digest is not None and (not isinstance(digest, str) or len(digest) != 40
+                               or any(c not in "0123456789abcdef" for c in digest)):
+        raise ValueError("replaced_hash must be a sha1 hex digest or null")
+
+
+def apply_resolve(transaction, arguments: dict) -> None:
+    """Keep the store's version of a flagged file (take="store").
+
+    The flag goes. The bytes the resolver saw on disk, and chose to discard,
+    become the file's base, so the next export replaces exactly them and a newer
+    hand edit is flagged again. The entity's latest revision is queued for export
+    (a derived file is marked stale), and the replaced text is kept in the
+    resolution's domain event, as the legacy store keeps it in its change row.
+    """
+    from . import events
+    from .commands import projection_path
+    from .migrate import encode
+    connection, rel = transaction.connection, arguments["file"]
+    row = connection.execute("SELECT kind,id FROM projection_conflict WHERE file=?", (rel,)).fetchone() \
+        if _has_conflict_table(connection) else None
+    if row is None:
+        raise ValueError(f"{rel} is not flagged; there is nothing to resolve")
+    kind, ident = row
+    connection.execute("DELETE FROM projection_conflict WHERE file=?", (rel,))
+    if arguments.get("replaced_hash") is not None:
+        connection.execute(
+            "INSERT INTO projection(file,kind,id,content_hash,mtime,size,dirty,quarantined,exported_seq) "
+            "VALUES(?,?,?,?,NULL,NULL,1,0,NULL) ON CONFLICT(file) DO UPDATE SET content_hash=excluded.content_hash,"
+            "dirty=1,quarantined=0,quarantine_mtime=NULL,quarantine_size=NULL,quarantine_hash=NULL,exported_seq=NULL",
+            (rel, kind, ident, arguments["replaced_hash"]))
+    else:
+        connection.execute("UPDATE projection SET dirty=1,quarantined=0,exported_seq=NULL WHERE file=?", (rel,))
+    event_id = ident or ("__backlog__" if kind == "backlog" else rel)
+    transaction.group, transaction.seq = events.append(
+        connection, transaction.request, transaction.group, kind, event_id, "resolve",
+        {"file": arguments.get("replaced"), "store": None}, {"file": rel, "took": "store"})
+    core = None
+    if ident is not None:
+        core = connection.execute("SELECT entity_key,revision,last_seq,archived,deleted FROM entity_core "
+                                  "WHERE kind=? AND public_id=?", (kind, ident)).fetchone()
+    if core is None:
+        # A derived file (backlog.yaml, ideas/IDEAS.md) has no job: the stale
+        # record above makes the next drain render it from the store.
+        connection.execute("UPDATE projection_jobs SET state='superseded' WHERE state='conflict' AND file=?", (rel,))
+        transaction.affected[(kind, event_id)] = {"kind": kind, "id": event_id, "revision": 0,
+                                                  "last_seq": transaction.seq, "fields": {}}
+        update_through(connection)
+        return
+    key, revision, last_seq, archived, deleted = core
+    # A conflicted job of this entity rejoins the queue; the fresh jobs below are
+    # newer, so the next claim coalesces it away.
+    connection.execute("UPDATE projection_jobs SET state='pending',lease_owner=NULL,lease_until=NULL "
+                       "WHERE state='conflict' AND (entity_key=? OR file=?)", (key, rel))
+    entity = transaction.snapshot.get(kind, ident, include_body=True, include_deleted=True)
+    payload = encode({"kind": kind, "id": ident, "revision": revision, "last_seq": last_seq,
+                      "archived": bool(archived), "deleted": bool(deleted),
+                      "fields": entity["fields"], "body": entity["body"]})
+    target = None if deleted else projection_path(kind, ident, bool(archived))
+    effects = ([(target, "write")] if target else []) + ([(rel, "delete")] if rel != target else [])
+    for file, effect in effects:
+        connection.execute("INSERT INTO projection_jobs(entity_key,revision,commit_seq,file,effect,input_json,"
+                           "expected_hash) VALUES(?,?,?,?,?,?,NULL)",
+                           (key, revision, transaction.seq, file, effect, payload))
+    transaction.affected[(kind, ident)] = {"kind": kind, "id": ident, "revision": revision,
+                                           "last_seq": transaction.seq, "fields": {}}
+    update_through(connection)

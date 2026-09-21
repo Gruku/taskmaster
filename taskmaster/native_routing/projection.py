@@ -109,22 +109,11 @@ class _Render:
             try:
                 seq = self._stale(BACKLOG_FILE, ("backlog", "epic", "phase") + derived.KINDS)
                 if seq is not None and not self._held(BACKLOG_FILE, warnings):
-                    backlog = self._entities(snapshot, "backlog", "entity_key")
-                    data = derived.apply(snapshot, dict(backlog[0]["fields"]) if backlog else {})
-                    for kind, key in (("epic", "epics"), ("phase", "phases")):
-                        data[key] = []
-                        for entity in self._entities(snapshot, kind, "entity_key"):
-                            document = dict(entity["fields"])
-                            if entity.get("body"):
-                                document[BODY_KEY] = entity["body"]
-                            data[key].append(document)
-                    content, _document = store.render_backlog_file(data)
-                    out.append((BACKLOG_FILE, "backlog", self._matched(BACKLOG_FILE, content), seq))
+                    out.append((BACKLOG_FILE, "backlog", self._matched(BACKLOG_FILE, self.backlog(snapshot)), seq))
                 seq = self._stale(store._IDEAS_INDEX_REL, ("idea",))
                 if seq is not None and not self._held(store._IDEAS_INDEX_REL, warnings):
-                    entries = [entity["fields"] for entity in self._entities(snapshot, "idea", "public_id")]
-                    if entries or (self.backlog_dir / store._IDEAS_INDEX_REL).exists():
-                        content = render_ideas_index(entries).encode("utf-8")
+                    content = self.ideas(snapshot)
+                    if content is not None:
                         out.append((store._IDEAS_INDEX_REL, store._IDEAS_INDEX_KIND,
                                     self._matched(store._IDEAS_INDEX_REL, content), seq))
             finally:
@@ -132,6 +121,25 @@ class _Render:
         finally:
             self.connection.rollback()
         return out
+
+    def backlog(self, snapshot: Snapshot) -> bytes:
+        backlog = self._entities(snapshot, "backlog", "entity_key")
+        data = derived.apply(snapshot, dict(backlog[0]["fields"]) if backlog else {})
+        for kind, key in (("epic", "epics"), ("phase", "phases")):
+            data[key] = []
+            for entity in self._entities(snapshot, kind, "entity_key"):
+                document = dict(entity["fields"])
+                if entity.get("body"):
+                    document[BODY_KEY] = entity["body"]
+                data[key].append(document)
+        content, _document = store.render_backlog_file(data)
+        return content
+
+    def ideas(self, snapshot: Snapshot) -> bytes | None:
+        entries = [entity["fields"] for entity in self._entities(snapshot, "idea", "public_id")]
+        if entries or (self.backlog_dir / store._IDEAS_INDEX_REL).exists():
+            return render_ideas_index(entries).encode("utf-8")
+        return None
 
     def _held(self, rel: str, warnings: list[str]) -> bool:
         reason = outbox.held_file(self.connection, rel)
@@ -191,3 +199,45 @@ def drain(connection: sqlite3.Connection, backlog_dir: Path, *, session: str, th
         raise
     warnings = list(dict.fromkeys(exporter.warnings))
     return warnings + progress.export(connection, backlog_dir, session)
+
+
+# ── Conflict resolution reads (S10) ─────────────────────────────────────────
+# Resolving a flag compares and records the bytes on disk. Reading a projection
+# file is this module's privilege alone (the N08 bypass gate), so the resolver
+# asks here rather than opening the file itself.
+
+
+def read_file(backlog_dir: Path, rel: str) -> bytes | None:
+    """The bytes of one projection file now, or None when it is missing."""
+    try:
+        return (backlog_dir / outbox.safe_relative(rel)).read_bytes()
+    except FileNotFoundError:
+        return None
+
+
+def store_version(connection: sqlite3.Connection, backlog_dir: Path, kind: str, ident: str | None,
+                  rel: str) -> tuple[str | None, str | None]:
+    """`(text the store would write at rel, where the store's file lives)`, as the
+    legacy `_store_version_of` answers it. Requires an open read transaction."""
+    from taskmaster.native.commands import projection_path
+    render = _Render(connection, backlog_dir)
+    snapshot = Snapshot(connection, native_db.manifest(connection, authorities=("native",)))
+    try:
+        if kind == "backlog" or rel == BACKLOG_FILE:
+            return render.backlog(snapshot).decode("utf-8"), rel
+        if kind == store._IDEAS_INDEX_KIND:
+            content = render.ideas(snapshot)
+            return (None, None) if content is None else (content.decode("utf-8"), rel)
+        try:
+            entity = snapshot.get(kind, ident, include_body=True)
+        except (KeyError, ValueError):
+            return None, None
+        target = projection_path(kind, ident, entity["archived"])
+        content, _oracle = store.render_entity_file(kind, entity["fields"], entity.get("body"))
+        if content is None or target is None:
+            return None, None
+        if target != rel:
+            return None, target
+        return content.decode("utf-8"), target
+    finally:
+        snapshot.active = False
