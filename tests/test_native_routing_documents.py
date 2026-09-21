@@ -217,3 +217,31 @@ def test_import_of_a_directory_is_a_clean_error_not_a_crash(twins):
         answer = bs.backlog_document_import(kind="task", entity_id="test-epic-001", sections=["design"])
 
         assert answer.startswith("Error:") and "adir" in answer and "not a file" in answer, answer
+
+
+# -- A partial import reports what committed (review B, item 5) ----------------
+
+
+def test_a_failed_section_does_not_hide_the_sections_that_committed(twins):
+    """Each section commits on its own, so one bad file must neither hide the
+    sections already stored nor stop the ones after it."""
+    from taskmaster.native.contracts import MAX_BYTES
+
+    with twins.at(twins.native):
+        docs = twins.native / "docs"
+        (docs / "bad.md").write_bytes(b"\xff\xfe\x00not text")
+        (docs / "big.md").write_text("x" * (MAX_BYTES + 1), encoding="utf-8")
+        _declare("test-epic-001", "analysis", "docs/bad.md")
+        _declare("test-epic-001", "design", "docs/big.md")
+
+        answer = bs.backlog_document_import(kind="task", entity_id="test-epic-001")
+
+        assert answer.startswith("Error:"), answer
+        lines = answer.splitlines()
+        assert any(l.startswith("- spec:") and "imported" in l and "docs/spec.md" in l for l in lines), answer
+        assert any(l.startswith("- analysis:") and "UTF-8" in l for l in lines), answer
+        design = [l for l in lines if l.startswith("- design:")]
+        assert design and "1 MiB" in design[0] and str(MAX_BYTES) in design[0], answer
+        assert any(l.startswith("- plan:") and "docs/missing.md" in l for l in lines), answer
+        assert "source: import" in _stored("test-epic-001", "spec")
+        assert "source: import" not in _stored("test-epic-001", "design")
