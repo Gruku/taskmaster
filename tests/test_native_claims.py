@@ -274,6 +274,21 @@ def test_a_bundle_member_held_by_a_peer_refuses_the_whole_renew(bundled):
         assert fields(connection, "demo-001")[claims.EXPIRES_FIELD] == before
 
 
+def test_a_bundle_renew_leaves_a_member_this_session_does_not_hold_unclaimed(bundled):
+    """Renew extends claims; it never takes one. A member whose holder was
+    dropped would otherwise be claimed without a pick (§2.5)."""
+    with closing(sqlite3.connect(bundled, isolation_level=None)) as connection:
+        run(connection, "task.pick", {"id": "demo-001", "session": ALPHA}, "pick")
+        run(connection, "task.update", {"id": "demo-002", "field": "status", "value": "todo"}, "pause")
+        assert "locked_by" not in fields(connection, "demo-002")
+        receipt = run(connection, "task.claim_renew", {"id": "demo-001", "session": ALPHA}, "renew")
+        assert "demo-002" not in {a["id"] for a in receipt["affected"]}
+        member = fields(connection, "demo-002")
+        state = state_of(connection, "demo-002")
+    # The pause left its expiry behind, and that is inert: no holder, no claim.
+    assert "locked_by" not in member and state.holder == "" and not state.blocking
+
+
 def test_a_bundle_releases_every_member_in_one_commit(bundled):
     with closing(sqlite3.connect(bundled, isolation_level=None)) as connection:
         run(connection, "task.pick", {"id": "demo-001", "session": ALPHA}, "pick")

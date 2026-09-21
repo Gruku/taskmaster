@@ -584,8 +584,7 @@ class Snapshot:
             offset = offsets.get(name, 0)
             items, total, extra = self._context_section(name, focus, entity, facts, offset)
             selections.append(Selection(name, items, total))
-            provenance[name] = {"query": context_shape.source(name, focus),
-                                "truncated": offset + len(items) < total, **extra}
+            provenance[name] = {"query": context_shape.source(name, focus), **extra}
         return context_shape.assemble(
             store_id=self.identity["store_id"], sequence=sequence, scope=scope, focus=focus,
             resolution=resolution, selections=selections, offsets=offsets, ident=ident,

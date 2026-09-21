@@ -173,6 +173,22 @@ def test_a_human_action_on_the_task_blocks():
     assert resolution.as_dict()["human_action"] == "add OPENAI_API_KEY to .env"
 
 
+@pytest.mark.parametrize("value", [True, 7, ["sign it"], {"who": "ops"}])
+def test_a_human_action_of_the_wrong_shape_is_unknown_rather_than_a_crash(value):
+    """A hand-edited `human_action: true` is a field this producer cannot read.
+    Like every other malformed field it degrades to an `unknown` blocker — it
+    must neither raise out of the resolver nor read as "no action"."""
+    resolution = resolve(clear_facts(task=task(human_action=value)))
+    assert resolution.clear is False
+    assert [(b.kind, b.id, b.reason) for b in resolution.blockers] ==         [("unknown", "human_action", "malformed_human_action")]
+    assert resolution.as_dict()["human_action"] == ""
+
+
+@pytest.mark.parametrize("value", [None, "", "   ", False, 0])
+def test_an_empty_human_action_of_any_shape_is_no_action(value):
+    assert resolve(clear_facts(task=task(human_action=value))).clear is True
+
+
 def test_a_live_peers_claim_blocks_and_this_sessions_claim_does_not():
     peer = resolve(clear_facts(claim=Claim(holder="sess-7f2", live=True)))
     assert [(b.id, b.state, b.as_dict()["by"], b.as_dict()["live"])

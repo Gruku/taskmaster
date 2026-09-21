@@ -6007,8 +6007,7 @@ def backlog_context(
             items, total, extra = _legacy_context_section(
                 data, connection, name, focus, doc, body, epic, facts, offset, context_shape.PAGE)
             selections.append(Selection(name, items, total))
-            provenance[name] = {"query": context_shape.source(name, focus),
-                                "truncated": offset + len(items) < total, **extra}
+            provenance[name] = {"query": context_shape.source(name, focus), **extra}
         return context_shape.assemble(
             store_id=store_id, sequence=sequence, scope=scope, focus=focus,
             resolution=resolution, selections=selections, offsets=offsets, ident=ident,
@@ -7202,6 +7201,10 @@ def backlog_claim(
                                      members=member_ids))
     for target, target_state in zip(targets, states):
         if action == "release" and not target_state.holder:
+            continue
+        if action == "renew" and not target_state.mine:
+            # Renew extends claims and never takes one: a member whose holder was
+            # dropped would otherwise be claimed without a pick (§2.5).
             continue
         _claims.released(target) if action == "release" else _claims.held(target, ttl, session=SESSION_ID)
         # Each member's own epic, as the bundle pick does: a member written with

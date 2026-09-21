@@ -171,43 +171,64 @@ def assemble(*, store_id, sequence, scope, focus, resolution, selections, offset
              ident, budget_bytes, provenance):
     """One context answer, as the exact text the caller receives.
 
+    `selections` are the rows each section read starting at its own offset in
+    `offsets`; `provenance` is each section's, without `truncated`, which only
+    this function can know — it depends on what the budget took, not on what was
+    read.
+
     Two passes, because the continuation lives inside the answer whose bytes it is
     counted against. The first pass budgets against the *widest* cursor this page
-    could possibly issue — every section resumed at its own total — so the real
-    cursor, which names a subset of those sections at smaller offsets, is never
-    longer. The second pass re-renders the rows the first chose with the real
-    cursor in place, and its `used_bytes` is therefore the bytes actually returned
-    rather than an estimate of them.
+    could possibly issue — every section resumed at its own total — and the
+    longest `truncated` spelling, so the real answer is never longer. The second
+    pass re-renders the rows the first chose with the real cursor in place, and
+    its `used_bytes` is therefore the bytes actually returned rather than an
+    estimate of them.
+
+    The cursor records *every* section that has rows, finished ones at their
+    total. A section left out of it reads as offset 0 on the next page and is
+    delivered again — and when that re-delivery fills the page, the page hands
+    back the very cursor it was given and a caller following it never stops.
 
     `over_budget` is decided by the second pass and means exactly one thing: the
     mandatory half alone does not fit. A page that fits but selected nothing —
     because the room left after the blockers could not hold even one row — is not
     over budget; its omission counts say so instead.
     """
-    envelope = {"store_id": store_id, "sequence": int(sequence), "scope": scope,
-                "focus": focus or None, "provenance": provenance}
+    selections = [budget.Selection(s.name, s.items, s.total, offsets.get(s.name, 0))
+                  for s in selections]
+
+    def envelope(cursor, taken):
+        # `taken=None` sizes the widest answer: every section spelled `false`,
+        # the longer of the two literals.
+        marked = {}
+        for selection in selections:
+            done = taken is None or selection.offset + taken.get(selection.name, 0) >= selection.total
+            marked[selection.name] = {**provenance[selection.name], "truncated": not done}
+        return {"store_id": store_id, "sequence": int(sequence), "scope": scope,
+                "focus": focus or None, "provenance": marked, "cursor": cursor}
+
     mandatory = resolution.as_dict()
     widest = issue(ident, {s.name: s.total for s in selections if s.total})
-    first = budget.budget(envelope={**envelope, "cursor": widest}, mandatory=mandatory,
+    first = budget.budget(envelope=envelope(widest, None), mandatory=mandatory,
                           selections=selections, limit_bytes=budget_bytes)
     taken = {name: len(rows) for name, rows in first.selected.items()}
     if not any(taken.values()):
         # Reserving room for a continuation cost this page every row it had. If
         # the whole selection fits once that reserve is released, no continuation
         # was ever needed and the reserve was the only thing in the way.
-        whole = budget.budget(envelope={**envelope, "cursor": ""}, mandatory=mandatory,
+        whole = budget.budget(envelope=envelope("", None), mandatory=mandatory,
                               selections=selections, limit_bytes=budget_bytes)
         held = {name: len(rows) for name, rows in whole.selected.items()}
-        if all(offsets.get(s.name, 0) + held.get(s.name, 0) >= s.total for s in selections):
+        if all(s.offset + held.get(s.name, 0) >= s.total for s in selections):
             return whole.text
-    remaining = {s.name: offsets.get(s.name, 0) + taken.get(s.name, 0) for s in selections
-                 if offsets.get(s.name, 0) + taken.get(s.name, 0) < s.total}
+    reached = {s.name: s.offset + taken.get(s.name, 0) for s in selections if s.total}
+    unfinished = any(reached[s.name] < s.total for s in selections if s.total)
     # A page that delivered nothing cannot be continued: its cursor would name the
     # same offsets again and the caller would loop on one answer forever.
-    cursor = issue(ident, remaining) if any(taken.values()) else ""
-    chosen = [budget.Selection(s.name, list(s.items)[:taken.get(s.name, 0)], s.total)
+    cursor = issue(ident, reached) if unfinished and any(taken.values()) else ""
+    chosen = [budget.Selection(s.name, list(s.items)[:taken.get(s.name, 0)], s.total, s.offset)
               for s in selections]
-    return budget.budget(envelope={**envelope, "cursor": cursor}, mandatory=mandatory,
+    return budget.budget(envelope=envelope(cursor, taken), mandatory=mandatory,
                          selections=chosen, limit_bytes=budget_bytes).text
 
 
