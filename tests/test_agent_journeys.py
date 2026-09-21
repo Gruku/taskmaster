@@ -206,21 +206,36 @@ def test_both_stores_give_the_same_required_context(base, tmp_path, monkeypatch)
         assert legacy.new.contexts()[0]["mandatory"] == native.new.contexts()[0]["mandatory"]
 
 
-# Measured, not wished for, after the envelope was cut to facts only (sequence,
-# focus, blockers, rows, byte count). What remains is required context:
-# - close: the context answer (review gate pending on lane express, the P3 bug:
-#   240 B) replaces `backlog_task_pipeline` + `backlog_bug_list` (227 B of terse
-#   markdown naming the same two facts).
-# - orient: the context rows carry each open handover's resumable id (a dated
-#   slug) and per-row keys (524 B), where the thread board shows short thread
-#   names and the desk list one line per note (422 B).
-CLOSE_BYTES = "context 240 B vs pipeline + bug_list 227 B: the same two facts, as JSON"
-ORIENT_BYTES = "context 524 B vs thread_list + note list 422 B: handover ids and row keys"
+# The N09 exit, as the user read it on 2026-09-21: a journey meets it when it
+# uses fewer calls and its bytes are not materially worse. "Materially" is
+# fixed here at 10% above the old path.
+BOUNDED_OVERHEAD = 1.10
 
 
 @pytest.mark.parametrize("side", SIDES)
-@pytest.mark.parametrize("journey", _journeys(orient=ORIENT_BYTES, close=CLOSE_BYTES))
+@pytest.mark.parametrize("journey", [JOURNEYS["pick"], JOURNEYS["resume"]], ids=["pick", "resume"])
 def test_the_new_path_needs_fewer_calls_and_fewer_bytes(base, tmp_path, monkeypatch, side, journey):
     measured = _measure(base, tmp_path, monkeypatch, side, journey)
     assert measured.new.count < measured.old.count, measured.row()
     assert measured.new.bytes < measured.old.bytes, measured.row()
+
+
+@pytest.mark.parametrize("side", SIDES)
+@pytest.mark.parametrize("journey", [JOURNEYS["orient"], JOURNEYS["close"]], ids=["orient", "close"])
+def test_the_new_path_needs_fewer_calls_and_no_material_byte_overhead(base, tmp_path, monkeypatch,
+                                                                     side, journey):
+    """Fewer calls, and bytes at most 10% above the old path.
+
+    Measured after the answer was cut to facts only: what remains over the old
+    path is required context, not envelope.
+    - close (860 -> 873 B, +1.5%): the context answer (the review gate pending
+      on lane express, and the P3 bug: 240 B) replaces `backlog_task_pipeline`
+      plus `backlog_bug_list`, 227 B of markdown naming the same two facts.
+    - orient (2,341 -> 2,443 B, +4.4%): the context rows carry each open
+      handover's resumable id, a dated slug, and per-row keys (524 B), where
+      the thread board shows short thread names and the desk list one line per
+      note (422 B).
+    """
+    measured = _measure(base, tmp_path, monkeypatch, side, journey)
+    assert measured.new.count < measured.old.count, measured.row()
+    assert measured.new.bytes <= measured.old.bytes * BOUNDED_OVERHEAD, measured.row()
