@@ -162,3 +162,146 @@ def test_an_expired_claim_is_recovered_with_its_identity_and_order(twins):
         assert (again.key, again.commit_seq) == (job.key, seq)
         assert _publish_all(successor, [again]) == ["exported"]
         assert (root / ".taskmaster" / job.file).read_bytes() == render(job)
+
+
+# ── S3: expected-base verification (§2.4) ──────────────────────────────────
+
+
+def _run(connection, root, clock, owner="A"):
+    exporter = _exporter(connection, root, owner, clock)
+    jobs = exporter.claim()
+    outcomes = {job.file: outcome for job, outcome in zip(jobs, _publish_all(exporter, jobs))}
+    exporter.finish()
+    return outcomes, exporter
+
+
+def _flag_row(connection, rel):
+    row = connection.execute("SELECT kind,id,file_hash,file_content FROM projection_conflict WHERE file=?",
+                             (rel,)).fetchone()
+    return None if row is None else (row[0], row[1], row[2], bytes(row[3]))
+
+
+def test_verify_publishes_when_the_disk_matches_the_record(twins):
+    with native_connection(twins.native) as connection:
+        _patch(connection, "test-epic-001", title="Matches")
+        outcomes, _ = _run(connection, twins.native, Clock())
+        assert outcomes == {"tasks/test-epic-001.md": "exported"}
+        assert _flag_row(connection, "tasks/test-epic-001.md") is None
+
+
+def test_verify_repairs_a_missing_file_that_has_a_record(twins):
+    path = twins.native / ".taskmaster" / "tasks" / "test-epic-001.md"
+    path.unlink()
+    with native_connection(twins.native) as connection:
+        _patch(connection, "test-epic-001", title="Repaired")
+        outcomes, _ = _run(connection, twins.native, Clock())
+    assert outcomes == {"tasks/test-epic-001.md": "exported"}
+    assert b"Repaired" in path.read_bytes()
+
+
+def test_verify_publishes_a_new_file_with_no_record(twins):
+    with native_connection(twins.native) as connection:
+        commit_only(connection, "task.create", {"title": "Brand new", "epic": "test-epic", "phase": "dev"})
+        outcomes, _ = _run(connection, twins.native, Clock())
+    assert outcomes == {"tasks/test-epic-003.md": "exported"}
+
+
+def test_verify_flags_a_file_that_appeared_where_nothing_was_written(twins):
+    path = twins.native / ".taskmaster" / "tasks" / "test-epic-003.md"
+    stranger = b"---\ntitle: someone else's file\n---\n"
+    path.write_bytes(stranger)
+    with native_connection(twins.native) as connection:
+        commit_only(connection, "task.create", {"title": "Brand new", "epic": "test-epic", "phase": "dev"})
+        outcomes, exporter = _run(connection, twins.native, Clock())
+        assert outcomes == {"tasks/test-epic-003.md": "flagged"}
+        assert _flag_row(connection, "tasks/test-epic-003.md")[3] == stranger
+        assert _states(connection, "tasks/test-epic-003.md") == ["conflict"]
+    assert path.read_bytes() == stranger
+    assert "export pending: tasks/test-epic-003.md is flagged" in exporter.warnings
+
+
+def test_verify_recognizes_its_own_bytes_after_a_crash_between_replace_and_ack(twins):
+    rel = "tasks/test-epic-001.md"
+    clock = Clock()
+    with native_connection(twins.native) as connection:
+        _patch(connection, "test-epic-001", title="Own bytes")
+
+        def crash(stage, file):
+            if stage == "replaced":
+                raise KeyboardInterrupt("exporter died after the replace")
+
+        dying = _exporter(connection, twins.native, "A", clock, checkpoint=crash)
+        (job,) = dying.claim()
+        dying.intend([(job, render(job))])
+        with pytest.raises(KeyboardInterrupt):
+            dying.publish(job, render(job))
+        clock.at += outbox.LEASE_SECONDS + 1
+        outcomes, _ = _run(connection, twins.native, clock, owner="B")
+        assert outcomes == {rel: "exported"}
+        assert _flag_row(connection, rel) is None
+
+
+def test_verify_flags_an_external_edit_and_keeps_both_byte_for_byte(twins):
+    rel = "tasks/test-epic-001.md"
+    path = twins.native / ".taskmaster" / rel
+    edited = path.read_bytes().replace(b"\n", b"\r\n") + b"\r\nHand edit \xe2\x80\x94 kept.\r\n"
+    path.write_bytes(edited)
+    with native_connection(twins.native) as connection:
+        _patch(connection, "test-epic-001", title="Store side")
+        outcomes, _ = _run(connection, twins.native, Clock())
+        assert outcomes == {rel: "flagged"}
+        kind, ident, digest, content = _flag_row(connection, rel)
+        assert (kind, ident, content, digest) == ("task", "test-epic-001", edited, hashlib.sha1(edited).hexdigest())
+        assert connection.execute("SELECT dirty FROM projection WHERE file=?", (rel,)).fetchone()[0] == 1
+    assert path.read_bytes() == edited
+
+
+def test_verify_never_consults_the_jobs_expected_hash(twins):
+    rel = "tasks/test-epic-001.md"
+    path = twins.native / ".taskmaster" / rel
+    with native_connection(twins.native) as connection:
+        _patch(connection, "test-epic-001", title="Garbage expected hash")
+        connection.execute("UPDATE projection_jobs SET expected_hash='not-a-hash' WHERE state='pending'")
+        outcomes, _ = _run(connection, twins.native, Clock())
+        assert outcomes == {rel: "exported"}
+        edited = path.read_bytes() + b"edit\n"
+        path.write_bytes(edited)
+        _patch(connection, "test-epic-001", title="Expected hash names the edit")
+        connection.execute("UPDATE projection_jobs SET expected_hash=? WHERE state='pending'",
+                           (hashlib.sha1(edited).hexdigest(),))
+        outcomes, _ = _run(connection, twins.native, Clock())
+        assert outcomes == {rel: "flagged"}
+
+
+def test_a_file_that_already_holds_the_render_is_acked_without_a_rewrite(twins, monkeypatch):
+    import os
+    rel = "tasks/test-epic-001.md"
+    with native_connection(twins.native) as connection:
+        _patch(connection, "test-epic-001", title="Agreed")
+        exporter = _exporter(connection, twins.native, "A", Clock())
+        (job,) = exporter.claim()
+        (twins.native / ".taskmaster" / rel).write_bytes(render(job))
+        replaced = []
+        real = os.replace
+        monkeypatch.setattr(os, "replace", lambda a, b: (replaced.append(b), real(a, b)))
+        exporter.intend([(job, render(job))])
+        assert exporter.publish(job, render(job)) == "exported"
+        assert replaced == []
+        assert _flag_row(connection, rel) is None
+
+
+@pytest.mark.parametrize("rel,kind", [("backlog.yaml", "backlog"), ("ideas/IDEAS.md", "ideas-index")])
+def test_verify_covers_the_derived_files(twins, rel, kind):
+    path = twins.native / ".taskmaster" / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with native_connection(twins.native) as connection:
+        exporter = _exporter(connection, twins.native, "A", Clock())
+        exporter.claim()
+        exporter.intend([(rel, b"first render\n")])
+        assert exporter.publish_derived(rel, kind, b"first render\n", 7) == "exported"
+        path.write_bytes(b"hand edit of a derived file\n")
+        exporter.intend([(rel, b"second render\n")])
+        assert exporter.publish_derived(rel, kind, b"second render\n", 8) == "flagged"
+        assert _flag_row(connection, rel) == (kind, None, hashlib.sha1(b"hand edit of a derived file\n").hexdigest(),
+                                              b"hand edit of a derived file\n")
+    assert path.read_bytes() == b"hand edit of a derived file\n"
