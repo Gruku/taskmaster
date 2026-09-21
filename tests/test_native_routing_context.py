@@ -290,3 +290,34 @@ def test_a_human_action_of_the_wrong_shape_answers_unknown_instead_of_failing_th
     assert answered["mandatory"]["clear"] is False
     assert ("unknown", "human_action") in {(b["kind"], b["id"])
                                            for b in answered["mandatory"]["blockers"]}
+
+
+def test_the_legacy_recent_section_reads_the_same_snapshot_as_the_rest_of_the_answer(twins, monkeypatch):
+    """A peer's commit landing after the backlog was loaded must not reach one
+    section of the answer and not the others: `recent` named an entity no other
+    section knew, with no title, under a `sequence` the rest was not read at."""
+    from contextlib import closing
+    import sqlite3
+
+    with twins.at(twins.legacy):
+        before = json.loads(bs.backlog_context(scope="project", include=["recent"]))
+        loaded = bs._load
+
+        def load_then_a_peer_commits():
+            data = loaded()
+            with closing(sqlite3.connect(bs.ROOT / ".taskmaster" / "local" / "store.db",
+                                         isolation_level=None)) as peer:
+                seq = peer.execute("SELECT COALESCE(MAX(seq),0)+1 FROM changes").fetchone()[0]
+                peer.execute("INSERT INTO changes(seq,ts,session,tool,kind,id,op) "
+                             "VALUES(?,'2026-09-21T00:00:00Z','peer','peer','bug','B-999','create')",
+                             (seq,))
+                peer.execute("INSERT INTO entities(kind,id,status,doc,rev,updated_seq) "
+                             "VALUES('bug','B-999','open',?,1,?)",
+                             (json.dumps({"id": "B-999", "title": "After the snapshot",
+                                          "status": "open"}), seq))
+            return data
+
+        monkeypatch.setattr(bs, "_load", load_then_a_peer_commits)
+        during = json.loads(bs.backlog_context(scope="project", include=["recent"]))
+    assert during["sequence"] == before["sequence"]
+    assert during["selected"]["recent"] == before["selected"]["recent"]

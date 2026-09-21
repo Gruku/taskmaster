@@ -83,7 +83,7 @@ def case(request, tmp_path, monkeypatch):
         bs.backlog_add_task(title="Up", epic="test-epic", phase="dev")
         bs.backlog_add_task(title="Down", epic="test-epic", phase="dev")
         edit()
-    return make_twins(tmp_path, monkeypatch, seed), blocked
+    return make_twins(tmp_path, monkeypatch, seed), blocked, request.param
 
 
 def _resolver(root, twins, focus):
@@ -103,7 +103,7 @@ def _call(root, twins, tool, **kwargs):
 
 @pytest.mark.parametrize("side", ["legacy", "native"])
 def test_every_availability_reader_agrees_with_the_resolver_about_dependencies(case, side):
-    twins, blocked = case
+    twins, blocked, _name = case
     root = getattr(twins, side)
     judged = _dependency_blockers(_resolver(root, twins, DOWN))
     assert bool(judged) is blocked, judged
@@ -121,14 +121,20 @@ def test_every_availability_reader_agrees_with_the_resolver_about_dependencies(c
     dependencies = _call(root, twins, "backlog_dependencies", task_id=DOWN)
     assert ("All dependencies met: **No**" in dependencies) is blocked, dependencies
 
-    picked = _call(root, twins, "backlog_pick_task", task_id=DOWN)
-    assert picked.startswith(f"Picked `{DOWN}`"), picked
-    assert ("Unmet dependencies" in picked) is blocked, picked
+
+# A pick is a write, so it runs on both stores at once and their states are
+# compared; a write also derives link edges from `depends_on`, which must not
+# raise on a shape the resolver reports as unreadable.
+def test_a_pick_warns_about_exactly_what_the_resolver_reports(case):
+    twins, blocked, _name = case
+    for picked in twins.same("backlog_pick_task", task_id=DOWN):
+        assert picked.startswith(f"Picked `{DOWN}`"), picked
+        assert ("Unmet dependencies" in picked) is blocked, picked
 
 
 @pytest.mark.parametrize("side", ["legacy", "native"])
 def test_the_ids_a_reader_says_it_waits_on_are_the_resolvers_dependency_blockers(case, side):
-    twins, blocked = case
+    twins, blocked, _name = case
     if not blocked:
         return
     root = getattr(twins, side)
@@ -146,9 +152,9 @@ def test_the_ids_a_reader_says_it_waits_on_are_the_resolvers_dependency_blockers
 
 
 def test_both_stores_give_every_availability_reader_the_same_answer(case):
-    twins, _blocked = case
-    for tool, kwargs in (("backlog_next_available", {}), ("backlog_dependencies", {"task_id": DOWN}),
-                         ("backlog_pick_task", {"task_id": DOWN})):
+    twins, _blocked, _name = case
+    for tool, kwargs in (("backlog_next_available", {}), ("backlog_status", {}),
+                         ("backlog_dependencies", {"task_id": DOWN})):
         twins.same(tool, **kwargs)
 
 
@@ -174,6 +180,7 @@ def claimed(tmp_path, monkeypatch):
         bs.backlog_add_task(title="In review, held by a live peer", epic="test-epic", phase="dev")
         bs.backlog_add_task(title="Todo, held by a dead peer", epic="test-epic", phase="dev")
         bs.backlog_update_task(task_id="test-epic-002", field="status", value="in-progress")
+        bs.backlog_update_task(task_id="test-epic-002", field="human_action", value="Approve it")
         bs.backlog_update_task(task_id="test-epic-002", field="status", value="in-review")
         for ident, pid in (("test-epic-001", os.getpid()), ("test-epic-002", os.getpid()),
                            ("test-epic-003", _dead_pid())):
@@ -183,6 +190,8 @@ def claimed(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("ident", ["test-epic-001", "test-epic-002"])
 def test_a_pick_refuses_a_task_the_resolver_reports_a_live_peer_holding(claimed, ident):
+    for text in claimed.same("backlog_get_task", task_id=ident):
+        assert "in-progress" not in text, text
     for side in ("legacy", "native"):
         blockers = _resolver(getattr(claimed, side), claimed, ident)
         assert ("claim", ident) in {(b["kind"], b["id"]) for b in blockers}
