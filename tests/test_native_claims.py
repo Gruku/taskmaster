@@ -279,7 +279,9 @@ def test_a_bundle_renew_leaves_a_member_this_session_does_not_hold_unclaimed(bun
     dropped would otherwise be claimed without a pick (§2.5)."""
     with closing(sqlite3.connect(bundled, isolation_level=None)) as connection:
         run(connection, "task.pick", {"id": "demo-001", "session": ALPHA}, "pick")
-        run(connection, "task.update", {"id": "demo-002", "field": "status", "value": "todo"}, "pause")
+        # The holder pauses its own member, which releases it.
+        execute(connection, dict(envelope("task.update", {"id": "demo-002", "field": "status", "value": "todo"},
+                                          key="pause"), caller_scope=ALPHA))
         assert "locked_by" not in fields(connection, "demo-002")
         receipt = run(connection, "task.claim_renew", {"id": "demo-001", "session": ALPHA}, "renew")
         assert "demo-002" not in {a["id"] for a in receipt["affected"]}

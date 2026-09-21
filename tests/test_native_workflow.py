@@ -295,7 +295,9 @@ def test_completion_archives_the_bugs_the_task_fixed_in_the_same_commit(workspac
     with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
         bug = created(connection, "bug.create", {"title": "Crash", "found_in": "demo-001"}, "bug")
         run(connection, "bug.update", {"id": bug, "patch": {"status": "fixed", "fix_commit": "abc123"}}, "fix")
-        run(connection, "task.pick", {"id": "demo-001", "session": "alpha"}, "claim")
+        # The completing session is the holder: its own status change releases
+        # the claim, where a live peer's claim would survive it.
+        run(connection, "task.pick", {"id": "demo-001", "session": "tests"}, "claim")
         express(connection, "demo-001", "complete")
         receipt = run(connection, "task.complete", {"id": "demo-001", "patchnote": "Loader fixed"}, "done")
         assert {row["id"] for row in receipt["affected"]} == {"demo-001", bug}
@@ -367,11 +369,19 @@ def test_the_transition_table_is_the_same_one_the_tools_apply(workspace):
         assert fields(connection, "task", "demo-001")["started"]
 
 
-def test_leaving_in_progress_releases_the_claim(workspace):
+def test_leaving_in_progress_releases_the_holders_own_claim(workspace):
+    with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
+        run(connection, "task.pick", {"id": "demo-001", "session": "tests"}, "claim")
+        run(connection, "task.update", {"id": "demo-001", "field": "status", "value": "blocked"}, "block")
+        assert "locked_by" not in fields(connection, "task", "demo-001")
+
+
+def test_leaving_in_progress_keeps_a_peers_unexpired_claim(workspace):
+    """A status change by one session does not free another's work (N09 §4f)."""
     with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
         run(connection, "task.pick", {"id": "demo-001", "session": "alpha"}, "claim")
         run(connection, "task.update", {"id": "demo-001", "field": "status", "value": "blocked"}, "block")
-        assert "locked_by" not in fields(connection, "task", "demo-001")
+        assert fields(connection, "task", "demo-001")["locked_by"] == "alpha"
 
 
 # ── Epic and phase transitions ──────────────────────────────────────────────

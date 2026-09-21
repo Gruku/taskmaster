@@ -206,6 +206,8 @@ def update_task(call, *, task_id, field, value, tldr, next_step):
         refusal = _update_refusal(snapshot, task, epic, task_id, field, value)
         if refusal:
             return refusal
+        if field == "locked_by":
+            return f"Error: {claims.HOLDER_WRITE_REFUSAL}"
         if field == "phase" and value != "" and value.lower() != "none":
             value = reads.find_phase(snapshot, value)["id"]
     refusal = _run(call, "task.update", {"id": task_id, "field": field, "value": value})

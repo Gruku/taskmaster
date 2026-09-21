@@ -256,6 +256,32 @@ def foreign_holder(task, session: str) -> str:
     return holder if holder and holder != session else ""
 
 
+# Only the claim tools write the holder (decided with the user, N09 §4e/§4f):
+# a bare field write or a batch line could name any holder or erase a peer's.
+HOLDER_WRITE_REFUSAL = ("`locked_by` is written only by the claim tools: `backlog_pick_task` takes "
+                        "a claim, `backlog_claim` renews or releases it.")
+
+
+def survives_status_change(doc, *, session: str, connection, now=None) -> bool:
+    """Whether a status change by `session` leaves the task's claim in place.
+
+    A status change releases this session's own claim, and a peer's that is
+    proven expired, as it always has. A peer's claim that is not proven expired
+    stays: a status write by one session must not free another's work.
+    """
+    if not foreign_holder(doc, session):
+        return False
+    return not read(doc, task_id=str(doc.get("id", "")), session=session,
+                    connection=connection, now=now).expired
+
+
+def after_status_change(doc, *, session: str, connection, now=None) -> dict:
+    """Drop the holder a status change releases (`survives_status_change`)."""
+    if not survives_status_change(doc, session=session, connection=connection, now=now):
+        doc.pop(HOLDER_FIELD, None)
+    return doc
+
+
 def held(doc, ttl: int, *, session: str, now=None) -> dict:
     """Stamp a claim onto a task document: this session, expiring in `ttl`."""
     doc[HOLDER_FIELD] = session

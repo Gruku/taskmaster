@@ -20,7 +20,7 @@ from __future__ import annotations
 from copy import deepcopy
 
 from taskmaster import backlog_server as bs
-from taskmaster.native import batch_commands, batch_lines, domain
+from taskmaster.native import batch_commands, batch_lines, claims, domain
 from taskmaster.native.contracts import MAX_BATCH_COMMANDS, Conflict
 from taskmaster.native.workflow import _bugs_found_in
 
@@ -56,14 +56,20 @@ class _Overlay:
             task_exists=lambda ident: self.task(ident) is not None,
             find_phase=lambda value: domain.find_phase(reads.phases(self.snapshot), value),
             area_error=lambda value: reads.validate_area_ref(self.snapshot, value),
-            open_bugs=lambda ident: _bugs_found_in(self.snapshot.connection, ident)[0])
+            open_bugs=lambda ident: _bugs_found_in(self.snapshot.connection, ident)[0],
+            keeps_claim=self._keeps_claim)
+
+    def _keeps_claim(self, doc):
+        return claims.survives_status_change(doc, session=bs.SESSION_ID,
+                                             connection=self.snapshot.connection)
 
     def cascade(self, epic_id, now):
         count = 0
         for member in reads.epic_tasks(self.snapshot, epic_id):
             task = self.task(member["id"])
             if task is not None and task.get("status") != "archived":
-                self.tasks[member["id"]] = domain.archive_task_doc(task, reason="done")
+                self.tasks[member["id"]] = domain.archive_task_doc(
+                    task, reason="done", keep_holder=self._keeps_claim(task))
                 self.tasks[member["id"]]["archived"] = now
                 count += 1
         epic = domain.archive_epic_doc(self.epics[epic_id], reason="done")

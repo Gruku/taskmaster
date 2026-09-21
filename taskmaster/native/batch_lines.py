@@ -8,7 +8,7 @@ from dataclasses import dataclass, field as dataclass_field
 from typing import Callable
 
 from taskmaster.taskmaster_v3 import VALID_LANES, compute_gate_state
-from . import domain
+from . import claims, domain
 
 TASK_OPS = ("update", "status", "complete", "archive", "pick")
 
@@ -20,6 +20,10 @@ class Lookups:
     find_phase: Callable[[str], "dict | None"]
     area_error: Callable[[str], "str | None"]
     open_bugs: Callable[[str], list]
+    # Whether a status change leaves the task's claim in place: a live peer's
+    # claim survives it (`claims.survives_status_change`), which needs the
+    # store and the caller's session, so the caller supplies the answer.
+    keeps_claim: Callable[[dict], bool] = lambda doc: False
 
 
 @dataclass
@@ -83,6 +87,11 @@ def _archive_transition(doc, before, after, now):
         doc.pop("archive_reason", None)
 
 
+def _release_claim(doc, lookups: Lookups) -> None:
+    if not lookups.keeps_claim(doc):
+        doc.pop("locked_by", None)
+
+
 def apply_task_line(arguments, task, lookups: Lookups, *, now) -> Outcome:
     """One task line against the task's current document (None when not found)."""
     op, ident = arguments["op"], arguments["id"]
@@ -113,7 +122,7 @@ def apply_task_line(arguments, task, lookups: Lookups, *, now) -> Outcome:
         doc["started"] = doc.get("started") or now
         if not doc.get("completed"):
             doc["completed"] = now
-        doc.pop("locked_by", None)
+        _release_claim(doc, lookups)
         doc.pop("human_action", None)
         return Outcome(doc=doc, report=("status", "done", ""))
     if op == "archive":
@@ -121,7 +130,7 @@ def apply_task_line(arguments, task, lookups: Lookups, *, now) -> Outcome:
         already = doc.get("status") == "archived"
         doc["status"] = "archived"
         doc["archive_reason"] = reason
-        doc.pop("locked_by", None)
+        _release_claim(doc, lookups)
         if not already:
             doc["archived"] = now
         return Outcome(doc=doc, report=("status", "archived", "archive_reason"), extra={"reason": reason})
@@ -165,7 +174,7 @@ def _status(doc, ident, new_status, lookups, now):
         doc.pop("human_action", None)
     _archive_transition(doc, prior, new_status, now)
     if new_status != "in-progress":
-        doc.pop("locked_by", None)
+        _release_claim(doc, lookups)
     return Outcome(doc=doc, report=("status", new_status, ""))
 
 
@@ -188,7 +197,7 @@ def _update(doc, ident, field, value, lookups, now):
             doc["completed"] = now
         _archive_transition(doc, prior, value, now)
         if value != "in-progress":
-            doc.pop("locked_by", None)
+            _release_claim(doc, lookups)
     elif field == "priority":
         value = domain.normalize_priority(value)
         if value not in domain.VALID_PRIORITIES:
@@ -215,10 +224,7 @@ def _update(doc, ident, field, value, lookups, now):
         except ValueError:
             return Outcome(f"`{ident}`: stage must be integer")
     elif field == "locked_by":
-        if value == "" or value.lower() == "none":
-            doc.pop("locked_by", None)
-        else:
-            doc["locked_by"] = value
+        return Outcome(f"`{ident}`: {claims.HOLDER_WRITE_REFUSAL}")
     elif field == "phase":
         if value == "" or value.lower() == "none":
             doc.pop("phase", None)

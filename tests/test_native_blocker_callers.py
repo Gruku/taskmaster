@@ -10,33 +10,22 @@ claim refusal, and `backlog_dependencies` — must agree with it.
 """
 from __future__ import annotations
 
-from contextlib import closing
 import json
 import os
 import re
-import sqlite3
 
 import pytest
 
 from taskmaster import backlog_server as bs
 from taskmaster import store
-from native_twins import make_twins
+from native_twins import hand_edit_task, make_twins
 
 UP, DOWN = "test-epic-001", "test-epic-002"
 
 
-def _patch(ident, change):
-    """Hand-edit one legacy task row, the way a hand-edited or half-migrated
-    backlog arrives. Done before the twins are copied, so both stores carry it."""
-    store.reset_for_tests()
-    with closing(sqlite3.connect(bs.ROOT / ".taskmaster" / "local" / "store.db",
-                                 isolation_level=None)) as connection:
-        doc = json.loads(connection.execute(
-            "SELECT doc FROM entities WHERE kind='task' AND id=?", (ident,)).fetchone()[0])
-        change(doc)
-        connection.execute("UPDATE entities SET doc=? WHERE kind='task' AND id=?",
-                           (json.dumps(doc), ident))
-    store.reset_for_tests()
+# Hand-edit one legacy task row, the way a hand-edited or half-migrated backlog
+# arrives. Done before the twins are copied, so both stores carry it.
+_patch = hand_edit_task
 
 
 def _depends(value):
@@ -171,9 +160,8 @@ def _dead_pid():
 
 @pytest.fixture
 def claimed(tmp_path, monkeypatch):
-    """A peer's claim on a task that is not in progress: `backlog_update_task`
-    documents `locked_by` as the way to claim, so a claim does not need an
-    in-progress status to exist."""
+    """A peer's claim on a task that is not in progress — what a migrated or
+    hand-edited row brings, since no tool writes `locked_by` but the claim tools."""
     def seed():
         bs.backlog_update_epic(epic_id="test-epic", field="status", value="active")
         bs.backlog_add_task(title="Todo, held by a live peer", epic="test-epic", phase="dev")
@@ -184,7 +172,7 @@ def claimed(tmp_path, monkeypatch):
         bs.backlog_update_task(task_id="test-epic-002", field="status", value="in-review")
         for ident, pid in (("test-epic-001", os.getpid()), ("test-epic-002", os.getpid()),
                            ("test-epic-003", _dead_pid())):
-            bs.backlog_update_task(task_id=ident, field="locked_by", value=_peer(pid))
+            _patch(ident, lambda doc, pid=pid: doc.__setitem__("locked_by", _peer(pid)))
     return make_twins(tmp_path, monkeypatch, seed)
 
 
@@ -234,7 +222,7 @@ def test_a_task_this_session_has_claimed_is_still_ready_for_this_session(tmp_pat
     def seed():
         bs.backlog_update_epic(epic_id="test-epic", field="status", value="active")
         bs.backlog_add_task(title="Mine", epic="test-epic", phase="dev")
-        bs.backlog_update_task(task_id="test-epic-001", field="locked_by", value=bs.SESSION_ID)
+        _patch("test-epic-001", lambda doc: doc.__setitem__("locked_by", bs.SESSION_ID))
     twins = make_twins(tmp_path, monkeypatch, seed)
     for text in twins.same("backlog_next_available"):
         assert "`test-epic-001` — Mine (" in text and "claimed by another session" not in text

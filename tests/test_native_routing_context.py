@@ -10,7 +10,7 @@ import json
 import pytest
 
 from taskmaster import backlog_server as bs
-from native_twins import make_twins
+from native_twins import hand_set_holder, make_twins
 
 BLOCKED, NEXT = "test-epic-001", "test-epic-002"
 
@@ -239,8 +239,8 @@ def claimed(tmp_path, monkeypatch):
     def seed():
         bs.backlog_add_task(title="Held by a live peer", epic="test-epic", phase="dev")
         bs.backlog_add_task(title="Held by a dead peer", epic="test-epic", phase="dev")
-        bs.backlog_update_task(task_id="test-epic-001", field="locked_by", value=_peer(os.getpid()))
-        bs.backlog_update_task(task_id="test-epic-002", field="locked_by", value=_peer(_dead_pid()))
+        hand_set_holder("test-epic-001", _peer(os.getpid()))
+        hand_set_holder("test-epic-002", _peer(_dead_pid()))
     return make_twins(tmp_path, monkeypatch, seed)
 
 

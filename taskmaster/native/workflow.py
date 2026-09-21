@@ -645,7 +645,7 @@ def _task_update(transaction, arguments):
             task["completed"] = domain.now_stamp()
         _apply_archive_flag(task, before=current, after=value)
         if value != "in-progress":
-            task.pop("locked_by", None)
+            claims.after_status_change(task, **_caller(transaction))
     elif field == "priority":
         value = domain.normalize_priority(value)
         if value not in domain.VALID_PRIORITIES:
@@ -666,6 +666,8 @@ def _task_update(transaction, arguments):
         except ValueError:
             raise ValueError(f"stage must be an integer, got `{value}`") from None
     elif field == "locked_by":
+        # The tools refuse this field (`claims.HOLDER_WRITE_REFUSAL`) and
+        # `commands=` reserves it; the core keeps the write for its own callers.
         if value == "" or value.lower() == "none":
             task.pop("locked_by", None)
         else:
@@ -764,6 +766,12 @@ def _apply_archive_flag(doc, *, before, after):
     elif before == "archived":
         doc.pop("archived", None)
         doc.pop("archive_reason", None)
+
+
+def _caller(transaction) -> dict:
+    """The session a command runs for and the connection that judges claims —
+    what `claims.survives_status_change` needs to tell a peer's claim from ours."""
+    return {"session": transaction.request.get("caller_scope", ""), "connection": transaction.connection}
 
 
 def _claim_state(transaction, task, ident, session):
@@ -908,7 +916,8 @@ def _task_complete(transaction, arguments):
             raise ValueError(block)
     task = domain.complete_task_doc(task, target_status=target_status, human_action=human_action,
                                     patchnote=arguments.get("patchnote", ""),
-                                    release=arguments.get("release", ""))
+                                    release=arguments.get("release", ""),
+                                    keep_holder=claims.survives_status_change(task, **_caller(transaction)))
     _write_task(transaction, ident, task, entity["body"], before_entity=entity)
     if arguments.get("changelog", ""):
         _queue_progress_log(transaction.connection, arguments["changelog"])
@@ -936,7 +945,8 @@ def _task_archive(transaction, arguments):
     if status == "todo" and reason == "done":
         raise ValueError("cannot archive a `todo` task with reason `done`. "
                          "Use one of: deprecated, duplicate, wont-fix, superseded")
-    task = domain.archive_task_doc(task, reason=reason)
+    task = domain.archive_task_doc(task, reason=reason,
+                                   keep_holder=claims.survives_status_change(task, **_caller(transaction)))
     _write_task(transaction, ident, task, entity["body"], before_entity=entity)
     _smart_close_handovers(transaction, ident)
     return ident
@@ -1082,7 +1092,8 @@ def _epic_archive(transaction, arguments):
         if item["fields"].get("status") == "archived":
             continue
         member = _entity(transaction, "task", item["id"])
-        task = domain.archive_task_doc(member["fields"], reason=reason)
+        task = domain.archive_task_doc(member["fields"], reason=reason, keep_holder=claims.survives_status_change(
+            member["fields"], **_caller(transaction)))
         task["archived"] = stamp
         # The cascade is a local consequence of archiving the epic, so it queues
         # nothing: the tool's cascade never enqueues, and a large epic would
@@ -1409,7 +1420,9 @@ def _batch_lookups(transaction):
         return f"Error: unknown area `{value}`. Valid: {', '.join(known) or '(none defined)'}"
 
     return batch_lines.Lookups(task_exists=task_exists, find_phase=find_phase, area_error=area_error,
-                               open_bugs=lambda ident: _bugs_found_in(connection, ident)[0])
+                               open_bugs=lambda ident: _bugs_found_in(connection, ident)[0],
+                               keeps_claim=lambda doc: claims.survives_status_change(
+                                   doc, **_caller(transaction)))
 
 
 def _task_batch_line(transaction, arguments):

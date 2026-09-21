@@ -1182,6 +1182,12 @@ def _dependency_statuses(data: dict, task: dict) -> dict[str, str]:
     return statuses
 
 
+def _release_claim_on_status_change(task: dict) -> None:
+    """A status change releases this session's claim, or a peer's proven expired
+    one — never a live peer's (`claims.survives_status_change`)."""
+    _claims.after_status_change(task, session=SESSION_ID, connection=_store().connection)
+
+
 # ── Hot-path task rows ───────────────────────────────────
 # The nine task-mutating tools read and write the `("task", id)` row rather
 # than relying on the compatibility dict's end-of-transaction diff, so the
@@ -7502,7 +7508,7 @@ def backlog_complete_task(
         task.pop("human_action", None)
     else:  # in-review — allowlist above guarantees it
         task["human_action"] = human_action
-    task.pop("locked_by", None)
+    _release_claim_on_status_change(task)
 
     if patchnote:
         task["patchnote"] = patchnote
@@ -7682,7 +7688,7 @@ def backlog_archive_task(task_id: str, reason: str = "done") -> str:
     task["status"] = "archived"
     task["archive_reason"] = reason
     task["archived"] = _now()
-    task.pop("locked_by", None)
+    _release_claim_on_status_change(task)
     _archive_entity("task", task_id, task)
     _mutate_and_save(data)
     _enqueue_linear_push_if_synced(task_id, task=task)
@@ -7806,7 +7812,7 @@ def backlog_update_task(
             - stage: integer
             - estimate: size string (e.g., "S", "M", "L")
             - sub_repo: sub-repo directory name for monorepo projects
-            - locked_by: session ID to claim the lock, or "" to clear it
+            - locked_by: refused — only backlog_pick_task and backlog_claim write a claim
             - phase: phase ID to assign, or "" to clear
             - anchors: comma-separated glob patterns/URLs, or "" to clear
             - patchnote: 1-2 sentence user-facing release-note line, or "" to clear
@@ -7897,7 +7903,7 @@ def backlog_update_task(
         _apply_archive_transition("task", task_id, task, before=cur, after=value)
         # Clear lock when leaving in-progress
         if value not in ("in-progress",):
-            task.pop("locked_by", None)
+            _release_claim_on_status_change(task)
     elif field == "priority":
         value = _normalize_priority(value)
         if value not in VALID_PRIORITIES:
@@ -7929,10 +7935,7 @@ def backlog_update_task(
         except ValueError:
             return f"Error: stage must be an integer, got `{value}`"
     elif field == "locked_by":
-        if value == "" or value.lower() == "none":
-            task.pop("locked_by", None)
-        else:
-            task["locked_by"] = value
+        return f"Error: {_claims.HOLDER_WRITE_REFUSAL}"
     elif field == "phase":
         if value == "" or value.lower() == "none":
             task.pop("phase", None)
@@ -8506,7 +8509,7 @@ def _archive_epic_cascade(epic: dict, epic_id: str, reason: str) -> int:
             task["status"] = "archived"
             task["archive_reason"] = reason
             task["archived"] = now
-            task.pop("locked_by", None)
+            _release_claim_on_status_change(task)
             _archive_entity("task", task["id"], task)
             # The archive flag alone is not the cascade: without writing the
             # document, a later operation in the same batch refreshes this
@@ -9219,7 +9222,7 @@ def backlog_batch_update(operations: str = "", commands: list[dict] | None = Non
                     "task", task_id, task, before=prior_status, after=value
                 )
                 if value not in ("in-progress",):
-                    task.pop("locked_by", None)
+                    _release_claim_on_status_change(task)
             elif field == "priority":
                 value = _normalize_priority(value)
                 if value not in VALID_PRIORITIES:
@@ -9251,10 +9254,8 @@ def backlog_batch_update(operations: str = "", commands: list[dict] | None = Non
                     errors.append(f"`{task_id}`: stage must be integer")
                     continue
             elif field == "locked_by":
-                if value == "" or value.lower() == "none":
-                    task.pop("locked_by", None)
-                else:
-                    task["locked_by"] = value
+                errors.append(f"`{task_id}`: {_claims.HOLDER_WRITE_REFUSAL}")
+                continue
             elif field == "phase":
                 if value == "" or value.lower() == "none":
                     task.pop("phase", None)
@@ -9346,7 +9347,7 @@ def backlog_batch_update(operations: str = "", commands: list[dict] | None = Non
                 "task", task_id, task, before=prior_status, after=new_status
             )
             if new_status not in ("in-progress",):
-                task.pop("locked_by", None)
+                _release_claim_on_status_change(task)
             _tx_put_task(task, epic)
             results.append(f"`{task_id}` → {new_status}")
             line_renderers.append(_status_line(task_id, new_status))
@@ -9381,7 +9382,7 @@ def backlog_batch_update(operations: str = "", commands: list[dict] | None = Non
             task["started"] = task.get("started") or _now()
             if not task.get("completed"):
                 task["completed"] = _now()
-            task.pop("locked_by", None)
+            _release_claim_on_status_change(task)
             task.pop("human_action", None)
             _tx_put_task(task, epic)
             results.append(f"`{task_id}` → done")
@@ -9399,7 +9400,7 @@ def backlog_batch_update(operations: str = "", commands: list[dict] | None = Non
             already_archived = task.get("status") == "archived"
             task["status"] = "archived"
             task["archive_reason"] = reason
-            task.pop("locked_by", None)
+            _release_claim_on_status_change(task)
             if not already_archived:
                 task["archived"] = _now()
             # Archive first, then write: the explicit archive is what records
