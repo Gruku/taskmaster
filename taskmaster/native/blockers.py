@@ -176,16 +176,38 @@ def dependency_blockers(task: Mapping[str, Any], statuses: Mapping[str, str]) ->
     found = []
     for ident in sorted(set(declared)):
         if ident not in statuses:
-            # The three shipped sites disagree: `pick_task`, `next_available`
-            # and `_derive_context` read a missing id as `todo`, while
-            # `backlog_dependencies` renders `NOT FOUND`. One answer: it blocks,
-            # and it says the id could not be resolved.
+            # A missing id blocks, and says it could not be resolved. Every
+            # availability reader answers through `unmet_dependencies`, so this
+            # is the one place that decides it.
             found.append(Blocker(kind="dependency", id=ident, state="missing",
                                  source="depends_on", extra={"unresolved": True}))
         elif statuses[ident] != "done":
             found.append(Blocker(kind="dependency", id=ident, state=statuses[ident],
                                  source="depends_on"))
     return found
+
+
+# How an availability reader names a `depends_on` it cannot read. It is one
+# entry rather than ids guessed out of the shape, because the resolver reports
+# one `unknown` blocker for it.
+UNREADABLE_DEPENDENCIES = "depends_on (unreadable)"
+
+
+def unmet_dependencies(task: Mapping[str, Any], statuses: Mapping[str, str]) -> list:
+    """What a task waits on, as `next_available`, `pick_task`, `_derive_context`
+    and `backlog_dependencies` name it: exactly the dependency blockers `resolve`
+    reports, in the order the task declares them. Empty means not blocked by a
+    dependency.
+
+    `statuses` maps each existing task id to its status; an id it does not hold
+    is unresolved and blocks. Readers must not default a missing id to a status
+    of their own, or they are back to deciding blocking themselves.
+    """
+    found = dependency_blockers(task, statuses)
+    if any(blocker.kind == UNKNOWN_KIND for blocker in found):
+        return [UNREADABLE_DEPENDENCIES]
+    blocked = {blocker.id for blocker in found}
+    return [ident for ident in declared_dependencies(task) if ident in blocked]
 
 
 def _bug_blockers(bugs: Sequence[Mapping[str, Any]]) -> list:

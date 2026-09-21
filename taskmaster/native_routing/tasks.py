@@ -15,7 +15,7 @@ from __future__ import annotations
 from copy import deepcopy
 
 from taskmaster import backlog_server as bs
-from taskmaster.native import claims, domain
+from taskmaster.native import blockers, claims, domain
 from taskmaster.native.workflow import _bugs_found_in
 from taskmaster.taskmaster_v3 import (
     VALID_GATE_VERDICTS,
@@ -293,6 +293,23 @@ def _update_refusal(snapshot, task, epic, task_id, field, value):
     return None
 
 
+def _dependency_statuses(snapshot, task) -> dict:
+    """`bs._dependency_statuses`: the declared ids that resolve, with their status.
+
+    An id left out is one the resolver reports as unresolved, so this never
+    supplies a status of its own for it.
+    """
+    declared = blockers.declared_dependencies(task)
+    if isinstance(declared, blockers.Unknown):
+        return {}
+    statuses = {}
+    for ident in declared:
+        found = reads.find_task(snapshot, ident)
+        if found:
+            statuses[ident] = found[0].get("status", "todo")
+    return statuses
+
+
 # ── Claims ──────────────────────────────────────────────────────────────────
 
 
@@ -312,12 +329,7 @@ def pick_task(call, *, task_id, force, ttl_seconds):
         status = task.get("status", "todo")
         slug = task.get("bundle")
         members = reads.bundle_members(snapshot, slug) if slug else []
-        unmet = []
-        dependencies = task.get("depends_on", [])
-        for dependency in [dependencies] if isinstance(dependencies, str) else dependencies:
-            found_dependency = reads.find_task(snapshot, dependency)
-            if (found_dependency[0].get("status", "todo") if found_dependency else "todo") != "done":
-                unmet.append(dependency)
+        unmet = blockers.unmet_dependencies(task, _dependency_statuses(snapshot, task))
     if slug:
         return _bundle_pick(call, task, epic, slug, members, session=session, force=force, ttl=ttl)
     locked_by = task.get("locked_by")
@@ -340,6 +352,10 @@ def pick_task(call, *, task_id, force, ttl_seconds):
         return call.finish(f"Already in progress: `{task_id}` — {title}\n\n" + context_text + instruction)
     if status not in ("todo", "in-review"):
         return f"Error: task `{task_id}` is `{status}`, expected one of: todo, in-progress, in-review"
+    if claims.foreign_holder(task, session) and not force:
+        with call.read() as snapshot:
+            state = claims.read(task, task_id=task_id, session=session, connection=snapshot.connection)
+        return claims.lock_refusal(task_id, state, status)
     warning = ""
     if unmet:
         warning = (f"\n\n⚠️ **Unmet dependencies:** {', '.join(f'`{d}`' for d in unmet)} not yet done. "
@@ -367,7 +383,7 @@ def _bundle_pick(call, task, epic, slug, members, *, session, force, ttl):
     worktree = f"{sub_repo}/.worktrees/{slug}" if sub_repo else f".worktrees/{slug}"
     lane = domain.strictest_lane([m.get("lane") for m in members])
     for member in members:
-        if member.get("locked_by") and member["locked_by"] != session and not force:
+        if claims.foreign_holder(member, session) and not force:
             return (f"Error: `{member['id']}` is a member of bundle `{slug}` "
                     f"locked by another session ({member['locked_by']}). Use force=True to steal.")
     bound = all(m.get("status") == "in-progress" and m.get("locked_by") == session for m in members)
@@ -652,21 +668,6 @@ def _tldr_index(snapshot, ids) -> dict:
     return index
 
 
-def _open_handovers(snapshot, task_id) -> list[str]:
-    rows = snapshot.connection.execute(
-        "SELECT c.public_id FROM memberships m JOIN entity_core c ON c.entity_key=m.entity_key "
-        "WHERE m.field='task_ids' AND c.kind='handover' AND c.deleted=0 AND c.archived=0 "
-        "AND json_extract(m.value_json,'$')=? GROUP BY c.public_id ORDER BY c.public_id", (task_id,)).fetchall()
-    result = []
-    for (ident,) in rows:
-        fields = snapshot.get("handover", ident)["fields"]
-        if fields.get("archived"):
-            continue
-        if fields.get("status") == "open" and task_id in (fields.get("task_ids") or []):
-            result.append(fields.get("id") or ident)
-    return result
-
-
 def _links_block(snapshot, lines, task, *, expand_links, peers):
     grouped = links_grouped_by_type(task)
     if not grouped:
@@ -708,7 +709,10 @@ def get_task(call, *, task_id, verbose, sections, expand_links, provenance):
             return render_sections(f"## `{task['id']}` — {task['title']}", content,
                                    facts if provenance else None)
         if not verbose:
-            handovers = _open_handovers(snapshot, task_id) if backlog.exists() else []
+            # `Snapshot.open_handovers` is the one reader of that question; the
+            # slim view names every one, so it asks for the whole list, not a page.
+            handovers = ([row["id"] for row in snapshot.open_handovers(task_id, limit=-1)[0]]
+                         if backlog.exists() else [])
             slim = slim_entity(task, kind="task", open_handovers=handovers or None)
             if expand_links:
                 for link_field in ("depends_on", "related_issues"):
@@ -858,31 +862,32 @@ def dependencies(call, *, task_id):
             return f"Error: task `{task_id}` not found"
         task, _epic = found
         lines = [f"## Dependencies for `{task_id}` — {task['title']}\n"]
-        depends_on = task.get("depends_on", [])
-        if isinstance(depends_on, str):
-            depends_on = [depends_on]
-        if depends_on:
+        depends_on = blockers.declared_dependencies(task)
+        if isinstance(depends_on, blockers.Unknown):
             lines.append("**Depends on (upstream):**")
-            all_met = True
+            lines.append(bs._unreadable_dependencies_line(depends_on))
+            lines.append("\nAll dependencies met: **No**")
+        elif depends_on:
+            lines.append("**Depends on (upstream):**")
+            statuses = {}
             for dependency in depends_on:
                 found_dependency = reads.find_task(snapshot, dependency)
                 if found_dependency:
                     dep_status = found_dependency[0].get("status", "todo")
-                    if dep_status != "done":
-                        all_met = False
+                    statuses[dependency] = dep_status
                     check = "done" if dep_status == "done" else "pending"
                     lines.append(f"- [{check}] `{dependency}` — {found_dependency[0]['title']} ({dep_status})")
                 else:
-                    all_met = False
                     lines.append(f"- [missing] `{dependency}` — NOT FOUND")
+            all_met = not blockers.unmet_dependencies(task, statuses)
             lines.append(f"\nAll dependencies met: **{'Yes' if all_met else 'No'}**")
         else:
             lines.append("**Depends on:** none")
         downstream = []
         for ep in reads.epics(snapshot):
             for t in reads.epic_tasks(snapshot, ep["id"]):
-                deps = t.get("depends_on", [])
-                if task_id in ([deps] if isinstance(deps, str) else deps):
+                deps = blockers.declared_dependencies(t)
+                if not isinstance(deps, blockers.Unknown) and task_id in deps:
                     downstream.append(t)
     if downstream:
         lines.append("\n**Unblocks (downstream):**")
@@ -899,7 +904,7 @@ def next_available(call, *, include_future_phases):
         active = next((p for p in reads.phases(snapshot) if p.get("status") == "active"), None)
         epics = [(ep, reads.epic_tasks(snapshot, ep["id"])) for ep in reads.epics(snapshot)]
     statuses = {t["id"]: t.get("status", "todo") for _ep, tasks in epics for t in tasks}
-    available, blocked = [], []
+    available, blocked, claimed = [], [], []
     for ep, tasks in epics:
         if ep.get("status") != "active":
             continue
@@ -908,9 +913,14 @@ def next_available(call, *, include_future_phases):
                 continue
             if active and not include_future_phases and t.get("phase") != active["id"]:
                 continue
-            deps = t.get("depends_on", [])
-            unmet = [d for d in ([deps] if isinstance(deps, str) else deps) if statuses.get(d, "todo") != "done"]
-            (blocked.append((t, ep, unmet)) if unmet else available.append((t, ep)))
+            unmet = blockers.unmet_dependencies(t, statuses)
+            holder = claims.foreign_holder(t, bs.SESSION_ID)
+            if unmet:
+                blocked.append((t, ep, unmet))
+            elif holder:
+                claimed.append((t, holder))
+            else:
+                available.append((t, ep))
     order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
     available.sort(key=lambda x: (order.get(x[0].get("priority", "medium"), 9), str(x[0].get("created", ""))))
     lines = ["## Available Tasks\n"]
@@ -929,6 +939,7 @@ def next_available(call, *, include_future_phases):
         lines.append(f"\n**{len(blocked)} tasks blocked by dependencies:**")
         for t, _ep, unmet in blocked[:5]:
             lines.append(f"- `{t['id']}` — {t['title']} (waiting on {', '.join(f'`{d}`' for d in unmet)})")
+    lines.extend(bs._claimed_lines(claimed))
     if active:
         unassigned = [t for ep, tasks in epics if ep.get("status") == "active"
                       for t in tasks if t.get("status") == "todo" and not t.get("phase")]

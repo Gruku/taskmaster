@@ -238,6 +238,24 @@ def read(task, *, task_id: str, session: str, connection, now=None) -> ClaimStat
     return ClaimState(task_id, holder, expires_at, live, bool(expired), holder == session)
 
 
+def foreign_holder(task, session: str) -> str:
+    """The holder a pick may not take over without `force`, or "".
+
+    Any `locked_by` that is not this session, whatever the task's status and
+    whether or not the claim has expired. Status does not matter because the
+    holder is `locked_by` (this module's contract) — `backlog_update_task`
+    documents setting it as how to claim — and `backlog_context` reports it as
+    held on any status. Expiry does not matter because a pick hands out
+    worktree instructions: an expired claim is released first, never taken
+    silently (see `lock_refusal`). One predicate, so the single pick, the bundle
+    pick and `next_available` cannot drift apart on it.
+    """
+    holder = task.get(HOLDER_FIELD) or ""
+    if not isinstance(holder, str):
+        holder = str(holder)
+    return holder if holder and holder != session else ""
+
+
 def held(doc, ttl: int, *, session: str, now=None) -> dict:
     """Stamp a claim onto a task document: this session, expiring in `ttl`."""
     doc[HOLDER_FIELD] = session
@@ -276,7 +294,7 @@ def blocked_by(states, *, release):
     return None
 
 
-def lock_refusal(task_id: str, state) -> str:
+def lock_refusal(task_id: str, state, status: str = "in-progress") -> str:
     """`backlog_pick_task`'s refusal, plus the expiry fact when there is one.
 
     The refusal stays a refusal even for a dead holder: a pick hands out
@@ -284,8 +302,10 @@ def lock_refusal(task_id: str, state) -> str:
     whole contract exists to prevent. What expiry buys is an *informed* choice —
     the text now says the claim is free to take and how to take it.
     """
+    where = ("It is already in-progress elsewhere." if status == "in-progress"
+             else f"It is `{status}` and claimed by that session.")
     text = (f"Error: task `{task_id}` is locked by another session (`{state.holder}`). "
-            f"It is already in-progress elsewhere. Pick a different task, or use "
+            f"{where} Pick a different task, or use "
             f"`backlog_pick_task({task_id}, force=true)` to reclaim it for this session.")
     if not state.expired:
         return text

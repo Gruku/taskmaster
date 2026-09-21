@@ -35,6 +35,7 @@ from taskmaster import store
 from taskmaster import yaml_io
 # The claim contract (holder, TTL, liveness, refusal wording) lives in one
 # module so the legacy tool and the native adapter cannot drift on it.
+from taskmaster.native import blockers as _blockers
 from taskmaster.native import claims as _claims
 from taskmaster.admission import UnsupportedStoreError
 from taskmaster.blast_radius import (
@@ -1164,6 +1165,23 @@ def _find_task(data: dict, task_id: str) -> tuple[dict, dict] | None:
     return None
 
 
+def _dependency_statuses(data: dict, task: dict) -> dict[str, str]:
+    """Statuses of the tasks `task` declares, for `blockers.unmet_dependencies`.
+
+    An id that resolves to nothing is left out, which is what makes the resolver
+    report it as unresolved rather than as some status a caller made up.
+    """
+    declared = _blockers.declared_dependencies(task)
+    if isinstance(declared, _blockers.Unknown):
+        return {}
+    statuses = {}
+    for ident in declared:
+        found = _find_task(data, ident)
+        if found:
+            statuses[ident] = found[0].get("status", "todo")
+    return statuses
+
+
 # ── Hot-path task rows ───────────────────────────────────
 # The nine task-mutating tools read and write the `("task", id)` row rather
 # than relying on the compatibility dict's end-of-transaction diff, so the
@@ -1695,10 +1713,9 @@ def _derive_context(data: dict) -> None:
             continue
         if active_ph and t.get("phase") != active_ph["id"]:
             continue
-        deps = t.get("depends_on", [])
-        if isinstance(deps, str):
-            deps = [deps]
-        if any(task_statuses.get(d, "todo") != "done" for d in deps):
+        # The resolver's answer, not a fourth reading of `depends_on`: an
+        # unguarded one here raised on every load for one malformed row.
+        if _blockers.unmet_dependencies(t, task_statuses) or _claims.foreign_holder(t, SESSION_ID):
             continue
         todo_tasks.append((t, epic))
     priority_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
@@ -3068,6 +3085,12 @@ def _search_fallback_text(data: dict, query: str) -> str:
     return f"**{len(scored)} match{'es' if len(scored) != 1 else ''}** for `{query}`:\n" + "\n".join(f"- {r}" for r in results)
 
 
+def _unreadable_dependencies_line(unknown) -> str:
+    """`backlog_dependencies`' line for a `depends_on` the resolver cannot read."""
+    why = f"{unknown.reason} ({unknown.detail})" if unknown.detail else unknown.reason
+    return f"- [unreadable] `depends_on` — {why}"
+
+
 @mcp.tool()
 def backlog_dependencies(task_id: str) -> str:
     """Show the full dependency chain for a task — what it depends on (upstream) and what it unblocks (downstream).
@@ -3084,25 +3107,25 @@ def backlog_dependencies(task_id: str) -> str:
     lines = [f"## Dependencies for `{task_id}` — {task['title']}\n"]
 
     # Upstream: what this task depends on
-    depends_on = task.get("depends_on", [])
-    if isinstance(depends_on, str):
-        depends_on = [depends_on]
-
-    if depends_on:
+    depends_on = _blockers.declared_dependencies(task)
+    if isinstance(depends_on, _blockers.Unknown):
         lines.append("**Depends on (upstream):**")
-        all_met = True
+        lines.append(_unreadable_dependencies_line(depends_on))
+        lines.append("\nAll dependencies met: **No**")
+    elif depends_on:
+        lines.append("**Depends on (upstream):**")
+        statuses: dict[str, str] = {}
         for dep_id in depends_on:
             dep_result = _find_task(data, dep_id)
             if dep_result:
                 dep_task, dep_epic = dep_result
                 status = dep_task.get("status", "todo")
+                statuses[dep_id] = status
                 check = "done" if status == "done" else "pending"
-                if status != "done":
-                    all_met = False
                 lines.append(f"- [{check}] `{dep_id}` — {dep_task['title']} ({status})")
             else:
-                all_met = False
                 lines.append(f"- [missing] `{dep_id}` — NOT FOUND")
+        all_met = not _blockers.unmet_dependencies(task, statuses)
         lines.append(f"\nAll dependencies met: **{'Yes' if all_met else 'No'}**")
     else:
         lines.append("**Depends on:** none")
@@ -3115,10 +3138,8 @@ def backlog_dependencies(task_id: str) -> str:
 
     downstream = []
     for t, ep in all_tasks:
-        deps = t.get("depends_on", [])
-        if isinstance(deps, str):
-            deps = [deps]
-        if task_id in deps:
+        deps = _blockers.declared_dependencies(t)
+        if not isinstance(deps, _blockers.Unknown) and task_id in deps:
             downstream.append((t, ep))
 
     if downstream:
@@ -3129,6 +3150,21 @@ def backlog_dependencies(task_id: str) -> str:
         lines.append("\n**Unblocks:** nothing")
 
     return "\n".join(lines)
+
+
+def _claimed_lines(claimed: list) -> list[str]:
+    """`next_available`'s section for todo tasks a peer has claimed.
+
+    They used to be listed as ready while a pick refused them — the resolver
+    reports the claim as held, so they are named here with their holder rather
+    than silently dropped from the ready list.
+    """
+    if not claimed:
+        return []
+    lines = [f"\n**{len(claimed)} tasks claimed by another session:**"]
+    for task, holder in claimed[:5]:
+        lines.append(f"- `{task['id']}` — {task['title']} (claimed by `{holder}`)")
+    return lines
 
 
 @mcp.tool()
@@ -3147,6 +3183,7 @@ def backlog_next_available(include_future_phases: bool = False) -> str:
 
     available: list[tuple[dict, dict]] = []
     blocked_by_deps: list[tuple[dict, dict, list[str]]] = []
+    claimed: list[tuple[dict, str]] = []
 
     for epic in data["epics"]:
         if epic.get("status") != "active":
@@ -3158,14 +3195,12 @@ def backlog_next_available(include_future_phases: bool = False) -> str:
             if active_ph and not include_future_phases and task.get("phase") != active_ph["id"]:
                 continue
 
-            # Check dependencies
-            deps = task.get("depends_on", [])
-            if isinstance(deps, str):
-                deps = [deps]
-
-            unmet = [d for d in deps if task_status.get(d, "todo") != "done"]
+            unmet = _blockers.unmet_dependencies(task, task_status)
+            holder = _claims.foreign_holder(task, SESSION_ID)
             if unmet:
                 blocked_by_deps.append((task, epic, unmet))
+            elif holder:
+                claimed.append((task, holder))
             else:
                 available.append((task, epic))
 
@@ -3192,6 +3227,7 @@ def backlog_next_available(include_future_phases: bool = False) -> str:
         for task, epic, unmet in blocked_by_deps[:5]:
             unmet_str = ", ".join(f"`{d}`" for d in unmet)
             lines.append(f"- `{task['id']}` — {task['title']} (waiting on {unmet_str})")
+    lines.extend(_claimed_lines(claimed))
 
     # Show unassigned tasks hint
     if active_ph:
@@ -5981,8 +6017,7 @@ def backlog_context(
             issues, notes, dependencies, siblings, recent. Empty uses the scope's default.
         cursor: A cursor from an earlier call, to continue its selection.
     """
-    from taskmaster.native import blockers, context as context_shape, cursors
-    from taskmaster.native.budget import Selection
+    from taskmaster.native import context as context_shape
     try:
         context_shape.check_scope(scope)
         sections = context_shape.check_include(include, scope)
@@ -5994,6 +6029,24 @@ def backlog_context(
     # it can be reported, exactly as every other read tool adopts it.
     st.scan_for_read()
     connection = st.connection
+    if connection.in_transaction:
+        return context_shape.refusal(ValueError(
+            "backlog_context cannot run inside another store transaction"))
+    # One read snapshot for the whole answer: the backlog, the identity it is
+    # fenced on, the `recent` query and the claim reads. Loaded and queried
+    # separately, a peer's commit in between reached one section and not the rest.
+    connection.execute("BEGIN")
+    try:
+        return _legacy_context_answer(connection, focus, scope, sections, budget_bytes, cursor)
+    finally:
+        if connection.in_transaction:
+            connection.rollback()
+
+
+def _legacy_context_answer(connection, focus, scope, sections, budget_bytes, cursor) -> str:
+    """`backlog_context` over a legacy store, inside the caller's read snapshot."""
+    from taskmaster.native import blockers, context as context_shape, cursors
+    from taskmaster.native.budget import Selection
     data = _load()
     store_id, sequence = _legacy_context_identity(connection)
     focus = _legacy_context_focus(data, focus, scope, SESSION_ID)
@@ -7009,7 +7062,7 @@ def backlog_pick_task(task_id: str, force: bool = False, ttl_seconds: int = 0) -
         lane = _strictest_lane([m.get("lane") for m in members])
         # Check for foreign-session locks on any member
         for m in members:
-            if m.get("locked_by") and m["locked_by"] != SESSION_ID and not force:
+            if _claims.foreign_holder(m, SESSION_ID) and not force:
                 return (
                     f"Error: `{m['id']}` is a member of bundle `{slug}` "
                     f"locked by another session ({m['locked_by']}). Use force=True to steal."
@@ -7088,18 +7141,16 @@ def backlog_pick_task(task_id: str, force: bool = False, ttl_seconds: int = 0) -
         # blocked/done tasks cannot be picked — use backlog_update_task to change status first
         return f"Error: task `{task_id}` is `{status}`, expected one of: todo, in-progress, in-review"
 
+    # A peer's claim is not taken silently on a todo or in-review task either:
+    # `backlog_context` reports it as held on any status.
+    if _claims.foreign_holder(task, SESSION_ID) and not force:
+        return _claims.lock_refusal(task_id, _claims.read(
+            task, task_id=task_id, session=SESSION_ID, connection=_store().connection), status)
+
     # Surface unmet dependencies (B-050). Pick is an explicit override, so we warn
     # rather than block — but we no longer disagree silently with next_available,
     # which classifies a task with unmet deps as "blocked by dependencies".
-    deps = task.get("depends_on", [])
-    if isinstance(deps, str):
-        deps = [deps]
-    unmet_deps: list[str] = []
-    for dep_id in deps:
-        dep_result = _find_task(data, dep_id)
-        dep_status = dep_result[0].get("status", "todo") if dep_result else "todo"
-        if dep_status != "done":
-            unmet_deps.append(dep_id)
+    unmet_deps = _blockers.unmet_dependencies(task, _dependency_statuses(data, task))
     dep_warning = ""
     if unmet_deps:
         unmet_str = ", ".join(f"`{d}`" for d in unmet_deps)

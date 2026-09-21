@@ -781,19 +781,18 @@ def _task_pick(transaction, arguments):
     status = task.get("status", "todo")
     if status not in domain.PICKABLE_FROM:
         raise ValueError(f"task `{ident}` is `{status}`, expected one of: {', '.join(domain.PICKABLE_FROM)}")
-    if status == "in-progress":
-        # The lock is only contested for a row already in progress. A todo or
-        # in-review row carrying a leftover `locked_by` — what a migrated row
-        # brings — is claimed, not refused, exactly as the tool does.
-        #
-        # An expired claim is still refused without `force`. Expiry makes the
-        # refusal *informed* — the adapter says the holder is gone — and opens
-        # the release-then-pick path; it does not make a pick a silent steal,
-        # because a pick carries worktree instructions a second agent would act on.
-        locked_by = task.get("locked_by")
-        if locked_by and locked_by != session and not force:
-            raise Conflict(f"task `{ident}` is locked by another session (`{locked_by}`)")
-    else:
+    # A peer's lock is contested on every pickable status, not only in-progress:
+    # the holder is `locked_by` (`claims.foreign_holder`), and `backlog_context`
+    # reports it as held on a todo row too.
+    #
+    # An expired claim is still refused without `force`. Expiry makes the
+    # refusal *informed* — the adapter says the holder is gone — and opens
+    # the release-then-pick path; it does not make a pick a silent steal,
+    # because a pick carries worktree instructions a second agent would act on.
+    locked_by = claims.foreign_holder(task, session)
+    if locked_by and not force:
+        raise Conflict(f"task `{ident}` is locked by another session (`{locked_by}`)")
+    if status != "in-progress":
         task = domain.pick_task_doc(task, session=session)
     claims.held(task, ttl, session=session)
     _write_task(transaction, ident, task, entity["body"], before_entity=entity, enqueue=False)
@@ -808,8 +807,8 @@ def _bundle_pick(transaction, ident, slug, *, session, force, ttl):
         raise ValueError(f"bundle `{slug}` spans multiple sub_repos {repos}; cannot pick")
     sub_repo = next(iter(repos), "")
     for member in members:
-        holder = entities[member]["fields"].get("locked_by")
-        if holder and holder != session and not force:
+        holder = claims.foreign_holder(entities[member]["fields"], session)
+        if holder and not force:
             raise Conflict(f"`{member}` is a member of bundle `{slug}` locked by another session ({holder})")
     branch = f"feature/{slug}"
     worktree = f"{sub_repo}/.worktrees/{slug}" if sub_repo else f".worktrees/{slug}"

@@ -876,9 +876,18 @@ def legacy_links_to_typed(entity: dict, kind: str) -> list[dict]:
         raw = entity.get(field)
         if raw is None or raw == [] or raw == "":
             continue
-        targets = raw if is_list else [raw]
+        # A bare string in a list field is one target, as every dependency
+        # reader reads it. A shape no tool writes derives no edge rather than
+        # raising — every write to the entity runs this — or guessing ids out of
+        # it: `native.blockers` reports that shape as unreadable instead.
+        if not is_list or isinstance(raw, str):
+            targets = [raw]
+        elif isinstance(raw, (list, tuple)):
+            targets = raw
+        else:
+            continue
         for tgt in targets:
-            if not tgt:
+            if not tgt or not isinstance(tgt, str):
                 continue
             key = (link_type, tgt)
             if key in seen:
