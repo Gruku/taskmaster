@@ -43,16 +43,16 @@ def test_cursor_scope_and_generation_invalidation(legacy):
         backfill(connection)
         with Repository(connection).snapshot() as query:
             first = query.list(limit=3, include_archived=True, include_deleted=True)
-            assert len(first["items"]) == 3 and first["cursor"]
-            second = query.list(limit=3, include_archived=True, include_deleted=True, cursor=first["cursor"])
+            assert len(first["items"]) == 3 and first.get("cursor", "")
+            second = query.list(limit=3, include_archived=True, include_deleted=True, cursor=first.get("cursor", ""))
             assert not ({(i["kind"], i["id"]) for i in first["items"]} & {(i["kind"], i["id"]) for i in second["items"]})
             with pytest.raises(CursorInvalid):
-                query.list("task", cursor=first["cursor"])
+                query.list("task", cursor=first.get("cursor", ""))
         connection.execute("UPDATE entities SET doc=json_set(doc,'$.custom','changed') WHERE kind='task'")
         backfill(connection)
         with Repository(connection).snapshot() as query:
             with pytest.raises(CursorInvalid):
-                query.list(limit=3, include_archived=True, include_deleted=True, cursor=first["cursor"])
+                query.list(limit=3, include_archived=True, include_deleted=True, cursor=first.get("cursor", ""))
 
 
 def test_search_matches_legacy_ranking_and_limits(legacy):
@@ -171,9 +171,9 @@ def test_a_call_without_a_cursor_starts_from_now_and_answers_a_cursor_only(store
         answer = _feed(connection)
         assert answer["commits"] == [] and answer["more"] is False
         assert answer["resync_required"] is False and answer["reason"] is None
-        assert answer["sequence"] == 100 and answer["cursor"]
+        assert answer["sequence"] == 100 and answer.get("cursor", "")
         _patch(connection, "one", next_step="one")
-        assert _seqs(_feed(connection, cursor=answer["cursor"])) == [101]
+        assert _seqs(_feed(connection, cursor=answer.get("cursor", ""))) == [101]
 
 
 def test_commits_are_reported_in_sequence_order_and_then_the_tail_is_empty(store_db):
@@ -185,7 +185,7 @@ def test_commits_are_reported_in_sequence_order_and_then_the_tail_is_empty(store
         assert [commit["commit_seq"] for commit in answer["commits"]] == [101, 102, 103]
         assert [commit["operation"] for commit in answer["commits"]] == ["task.patch"] * 3
         assert answer["more"] is False
-        tail = _feed(connection, cursor=answer["cursor"])
+        tail = _feed(connection, cursor=answer.get("cursor", ""))
         assert tail["commits"] == [] and tail["more"] is False and tail["resync_required"] is False
 
 
@@ -221,7 +221,7 @@ def test_a_limit_pages_whole_commits_and_the_continuation_loses_nothing(store_db
         first = _feed(connection, cursor=start, limit=1)
         assert len(first["commits"]) == 1 and first["more"] is True
         assert _seqs(first) == [101, 102]
-        second = _feed(connection, cursor=first["cursor"], limit=1)
+        second = _feed(connection, cursor=first.get("cursor", ""), limit=1)
         assert _seqs(second) == [103] and second["more"] is False
 
 
@@ -302,7 +302,7 @@ def test_a_cursor_from_a_rebuilt_store_or_a_changed_scope_answers_resync_not_an_
         rebuilt = _feed(connection, cursor=cursor)
         assert rebuilt["resync_required"] is True and rebuilt["reason"] == "store_rebuilt"
         # The fresh cursor starts from now, so nothing already acted on replays.
-        assert _feed(connection, cursor=rebuilt["cursor"])["commits"] == []
+        assert _feed(connection, cursor=rebuilt.get("cursor", ""))["commits"] == []
 
 
 def test_a_write_never_invalidates_a_change_cursor(store_db):
@@ -324,7 +324,7 @@ def test_no_change_is_lost_or_duplicated_across_a_cursor_chain(store_db):
                 _batch(connection, f"b{n}", f"t{n}", f"note {n}")
             while True:
                 answer = _feed(connection, cursor=cursor, limit=1)
-                cursor, seen = answer["cursor"], seen + _seqs(answer)
+                cursor, seen = answer.get("cursor", ""), seen + _seqs(answer)
                 assert answer["resync_required"] is False
                 if not answer["more"]:
                     break
@@ -361,7 +361,7 @@ def test_a_cursor_below_the_retention_floor_answers_history_expired(store_db):
         assert expired["resync_required"] is True and expired["reason"] == "history_expired"
         assert expired["commits"] == []
         # The fresh cursor is above the floor, so recovery takes exactly one call.
-        assert _feed(connection, cursor=expired["cursor"])["resync_required"] is False
+        assert _feed(connection, cursor=expired.get("cursor", ""))["resync_required"] is False
 
 
 def test_the_floor_is_read_on_every_call_not_cached_for_the_snapshot(store_db):
@@ -398,10 +398,10 @@ def test_a_floor_above_the_high_water_mark_never_loops_on_resync(store_db):
         before = _feed(connection)
         _set_floor(connection, before["sequence"] + 5)
         started = _feed(connection)
-        assert _feed(connection, cursor=started["cursor"])["resync_required"] is False
-        expired = _feed(connection, cursor=before["cursor"])
+        assert _feed(connection, cursor=started.get("cursor", ""))["resync_required"] is False
+        expired = _feed(connection, cursor=before.get("cursor", ""))
         assert expired["resync_required"] is True and expired["reason"] == "history_expired"
-        assert _feed(connection, cursor=expired["cursor"])["resync_required"] is False
+        assert _feed(connection, cursor=expired.get("cursor", ""))["resync_required"] is False
 
 
 def test_a_cursor_from_before_a_restore_answers_history_rewound(store_db, tmp_path):
@@ -421,7 +421,7 @@ def test_a_cursor_from_before_a_restore_answers_history_rewound(store_db, tmp_pa
         rewound = _feed(connection, cursor=cursor)
         assert rewound["resync_required"] is True and rewound["reason"] == "history_rewound", rewound
         _patch(connection, "after-restore", next_step="kept")
-        assert _seqs(_feed(connection, cursor=rewound["cursor"])) == [101]
+        assert _seqs(_feed(connection, cursor=rewound.get("cursor", ""))) == [101]
 
 
 # ── Bounded agent context ───────────────────────────────────────────────────
@@ -454,9 +454,8 @@ def test_context_answers_mandatory_blockers_selected_context_and_a_budget(store_
     with closing(sqlite3.connect(store_db, isolation_level=None)) as connection:
         answer = _context(connection, focus="same", scope="task",
                           include=["dependencies", "links"], budget_bytes=8000)
-        assert set(answer) == {"store_id", "sequence", "scope", "focus", "mandatory",
-                               "selected", "budget", "provenance", "cursor"}
-        assert answer["focus"] == "same" and answer["scope"] == "task"
+        assert set(answer) == {"sequence", "focus", "mandatory", "selected", "budget"}
+        assert answer["focus"] == "same"
         assert answer["sequence"] == 100
         # The fixture task depends on itself (todo) and on an id that resolves to
         # nothing; both block, and the unresolvable one says so.
@@ -466,8 +465,7 @@ def test_context_answers_mandatory_blockers_selected_context_and_a_budget(store_
         assert answer["mandatory"]["clear"] is False
         assert [row["id"] for row in answer["selected"]["dependencies"]] == ["missing", "same"]
         assert answer["selected"]["links"]
-        assert answer["budget"]["applies_to"] == "selected"
-        assert answer["budget"]["omitted"] == {"dependencies": 0, "links": 0}
+        assert answer["budget"] == {"used_bytes": answer["budget"]["used_bytes"]}
 
 
 def test_context_used_bytes_is_the_bytes_of_the_answer_actually_returned(store_db):
@@ -484,11 +482,11 @@ def test_context_returns_mandatory_complete_and_flags_over_budget_rather_than_tr
         assert squeezed["budget"]["over_budget"] is True
         assert squeezed["selected"] == {}
         assert squeezed["mandatory"] == whole["mandatory"]
-        assert squeezed["budget"]["omitted"]["dependencies"] == 2
-        assert squeezed["budget"]["omitted_total"] == 2
+        assert squeezed["budget"].get("omitted", {}).get("dependencies", 0) == 2
+        assert squeezed["budget"].get("omitted_total", 0) == 2
         # Nothing was delivered, so there is nothing to continue from: a cursor
         # here would loop forever on the same page.
-        assert squeezed["cursor"] == ""
+        assert squeezed.get("cursor", "") == ""
 
 
 def test_context_reports_clear_only_when_every_mandatory_producer_answered(store_db):
@@ -516,7 +514,7 @@ def test_context_without_a_focus_task_is_never_reported_as_clear(store_db):
     agent it may proceed on a question nobody asked."""
     with closing(sqlite3.connect(store_db, isolation_level=None)) as connection:
         answer = _context(connection, scope="project", include=["notes"])
-        assert answer["focus"] is None
+        assert answer.get("focus") is None
         assert answer["mandatory"]["clear"] is False
         assert [(b["kind"], b["id"], b["reason"]) for b in answer["mandatory"]["blockers"]] == [
             ("unknown", "focus", "no_focus_task")]
@@ -529,7 +527,7 @@ def test_context_takes_its_session_focus_from_the_task_that_session_holds(store_
         _lock(connection, "lock", "alpha")
         assert _context(connection, scope="session", session="alpha")["focus"] == "same"
         # Another session holds it, so that session has no focus of its own.
-        assert _context(connection, scope="session", session="beta")["focus"] is None
+        assert _context(connection, scope="session", session="beta").get("focus") is None
 
 
 def test_a_peer_claim_blocks_whether_or_not_its_holder_can_be_judged(store_db):
@@ -556,19 +554,19 @@ def test_omitted_counts_are_exact_and_the_cursor_resumes_where_the_page_stopped(
                                                  "pinned": True}, f"note{n}")
         whole = _context(connection, scope="project", include=["notes"])
         every = [row["id"] for row in whole["selected"]["notes"]]
-        assert len(every) == 7 and whole["cursor"] == "" and whole["budget"]["omitted"]["notes"] == 0
+        assert len(every) == 7 and whole.get("cursor", "") == "" and whole["budget"].get("omitted", {}).get("notes", 0) == 0
         limit = whole["budget"]["used_bytes"] - 40
         first = _context(connection, scope="project", include=["notes"], budget_bytes=limit)
         page = [row["id"] for row in first["selected"]["notes"]]
         assert 0 < len(page) < 7
-        assert first["budget"]["omitted"]["notes"] == 7 - len(page)
-        assert first["cursor"]
-        seen, cursor = list(page), first["cursor"]
+        assert first["budget"].get("omitted", {}).get("notes", 0) == 7 - len(page)
+        assert first.get("cursor", "")
+        seen, cursor = list(page), first.get("cursor", "")
         while cursor:
             nxt = _context(connection, scope="project", include=["notes"],
                            budget_bytes=limit, cursor=cursor)
             seen += [row["id"] for row in nxt["selected"].get("notes", [])]
-            cursor = nxt["cursor"]
+            cursor = nxt.get("cursor", "")
         assert seen == every
 
 
@@ -611,9 +609,10 @@ def test_context_validates_its_scope_include_vocabulary_and_budget(store_db):
 def test_provenance_names_where_each_selected_section_came_from(store_db):
     with closing(sqlite3.connect(store_db, isolation_level=None)) as connection:
         answer = _context(connection, focus="same", include=["dependencies", "handovers", "spec"])
-        assert answer["provenance"]["dependencies"]["query"] == "dependencies.depends_on"
-        assert answer["provenance"]["handovers"]["query"] == "memberships.task_ids"
-        assert answer["provenance"]["dependencies"]["truncated"] is False
+        # A section's predicate is fixed per section name (the tool's docstring), so a
+        # section delivered whole carries no provenance entry at all.
+        assert "dependencies" not in answer["provenance"] and "handovers" not in answer["provenance"]
+        assert answer.get("provenance", {}).get("dependencies", {}).get("truncated", False) is False
         # `spec` is a document section: the fixture task declares no path for it,
         # so provenance says it was never imported rather than leaving it absent.
         assert answer["provenance"]["spec"]["imported"] is False
@@ -623,5 +622,5 @@ def test_a_focus_only_section_is_empty_rather_than_wrong_when_there_is_no_focus(
     with closing(sqlite3.connect(store_db, isolation_level=None)) as connection:
         answer = _context(connection, scope="project", include=["dependencies", "siblings", "notes"])
         assert answer["selected"].get("dependencies") is None
-        assert answer["budget"]["omitted"]["dependencies"] == 0
+        assert answer["budget"].get("omitted", {}).get("dependencies", 0) == 0
         assert answer["provenance"]["dependencies"]["query"] == "no_focus"

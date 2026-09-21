@@ -146,8 +146,8 @@ def test_every_open_bug_found_in_the_task_blocks_whatever_its_severity():
         {"id": "B-120", "status": "open", "severity": "P2"}]))
     bugs = by_kind(resolution, "bug")
     assert [b.id for b in bugs] == ["B-118", "B-119", "B-120"]
-    assert bugs[1].as_dict() == {"kind": "bug", "id": "B-119", "state": "open",
-                                 "source": "found_in", "severity": "P3"}
+    assert (bugs[1].state, bugs[1].source) == ("open", "found_in")
+    assert bugs[1].as_dict() == {"kind": "bug", "id": "B-119", "severity": "P3"}
     assert resolution.clear is False
 
 
@@ -184,7 +184,7 @@ def test_a_human_action_of_the_wrong_shape_is_unknown_rather_than_a_crash(value)
     resolution = resolve(clear_facts(task=task(human_action=value)))
     assert resolution.clear is False
     assert [(b.kind, b.id, b.reason) for b in resolution.blockers] ==         [("unknown", "human_action", "malformed_human_action")]
-    assert resolution.as_dict()["human_action"] == ""
+    assert "human_action" not in resolution.as_dict()
 
 
 @pytest.mark.parametrize("value", [None, "", "   ", False, 0])

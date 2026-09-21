@@ -513,7 +513,7 @@ class Snapshot:
             return (*self._page(base, [], offset, limit), {})
         if name == "handovers":
             page, total = self.open_handovers(focus, offset=offset, limit=limit)
-            return page, total, {}
+            return [context_shape.handover_row(row) for row in page], total, {}
         if name == "issues":
             base = ("SELECT c.public_id id,json_extract(c.title_json,'$') title,"
                     "json_extract(i.severity_json,'$') severity FROM entity_core c "
@@ -522,12 +522,19 @@ class Snapshot:
                     "ORDER BY c.public_id")
             return (*self._page(base, [], offset, limit), {})
         if name == "notes":
-            base = ("SELECT c.public_id id,d.body text FROM entity_core c "
+            # The whole desk, in `backlog_note list` order: pinned first, then
+            # created newest first with the numeric id as the tiebreak.
+            base = ("SELECT c.public_id id,COALESCE(d.body,'') text,"
+                    "CASE WHEN json_extract(n.pinned_json,'$') THEN 1 ELSE 0 END pinned FROM entity_core c "
                     "JOIN note_operational n USING(entity_key) "
                     "LEFT JOIN entity_documents d ON d.entity_key=c.entity_key "
+                    "LEFT JOIN entity_extensions x ON x.entity_key=c.entity_key AND x.field='created' "
                     "WHERE c.kind='note' AND c.deleted=0 AND c.archived=0 "
-                    "AND json_extract(n.pinned_json,'$')=1 ORDER BY c.public_id")
-            return (*self._page(base, [], offset, limit), {})
+                    "ORDER BY pinned DESC, COALESCE(json_extract(x.value_json,'$'),'') DESC, "
+                    "CAST(substr(c.public_id, instr(c.public_id,'-')+1) AS INTEGER) DESC")
+            found, total = self._page(base, [], offset, limit)
+            return ([{"id": row["id"], "text": row["text"].rstrip(chr(10)),
+                      **({"pinned": True} if row["pinned"] else {})} for row in found], total, {})
         if name == "siblings":
             epic = fields.get("epic")
             if not isinstance(epic, str) or not epic:

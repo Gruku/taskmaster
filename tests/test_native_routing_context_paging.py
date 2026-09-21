@@ -50,19 +50,19 @@ def _chain(include, budget, totals):
     for _ in range(sum(totals.values()) + 2):
         page = _ask(include, budget, cursor)
         assert "error" not in page, page
-        assert page["cursor"] == "" or page["cursor"] != cursor, \
+        assert page.get("cursor", "") == "" or page.get("cursor", "") != cursor, \
             f"budget {budget}: a page handed back the cursor it was given"
         for name, rows in page["selected"].items():
             delivered[name] += [row["id"] for row in rows]
         for name in include:
             # Exact for this page's position: rows neither delivered earlier nor on
             # this page. Rows an earlier page delivered are not "omitted".
-            assert page["budget"]["omitted"][name] == totals[name] - len(delivered[name]), \
+            assert page["budget"].get("omitted", {}).get(name, 0) == totals[name] - len(delivered[name]), \
                 f"budget {budget}: {name} omitted count ignores the page's offset"
-            assert page["provenance"][name]["truncated"] == (len(delivered[name]) < totals[name]), \
+            assert page.get("provenance", {}).get(name, {}).get("truncated", False) == (len(delivered[name]) < totals[name]), \
                 f"budget {budget}: {name} truncated disagrees with what was delivered"
         pages.append(page)
-        cursor = page["cursor"]
+        cursor = page.get("cursor", "")
         if not cursor:
             return delivered, pages
     pytest.fail(f"budget {budget}: cursor chain did not terminate")
@@ -78,7 +78,7 @@ def test_following_cursors_delivers_every_row_once_and_terminates(twins, side):
             everything = {name: [row["id"] for row in whole["selected"].get(name, [])]
                           for name in include}
             totals = {name: len(ids) for name, ids in everything.items()}
-            assert whole["cursor"] == "" and totals["notes"] == 3 and totals["siblings"] == 7
+            assert whole.get("cursor", "") == "" and totals["notes"] == 3 and totals["siblings"] == 7
             for budget in BUDGETS:
                 delivered, pages = _chain(include, budget, totals)
                 for name in include:
@@ -90,12 +90,12 @@ def test_following_cursors_delivers_every_row_once_and_terminates(twins, side):
                 if last["selected"]:
                     # The chain stopped because it was done, not because it stalled.
                     assert delivered == everything, f"budget {budget}: rows never delivered"
-                    assert last["budget"]["omitted_total"] == 0
+                    assert last["budget"].get("omitted_total", 0) == 0
                     complete_chains += 1
                 else:
                     # A page that delivered nothing ends the chain and says, exactly,
                     # what the caller still does not have.
-                    assert last["budget"]["omitted_total"] == \
+                    assert last["budget"].get("omitted_total", 0) == \
                         sum(totals.values()) - sum(map(len, delivered.values()))
     # The range must actually exercise multi-page chains that finish.
     assert complete_chains > len(INCLUDES) * 10

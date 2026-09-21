@@ -31,8 +31,9 @@ def answer(root, twins_, **kwargs):
         return json.loads(bs.backlog_context(**kwargs))
 
 
-KEYS = {"store_id", "sequence", "scope", "focus", "mandatory", "selected",
-        "budget", "provenance", "cursor"}
+# The compact answer: `store_id` and the echoed `scope` are gone, and `cursor`,
+# `provenance` and `focus` appear only when they carry something.
+KEYS = {"sequence", "focus", "mandatory", "selected", "budget", "provenance", "cursor"}
 
 
 @pytest.mark.parametrize("side", ["legacy", "native"])
@@ -40,13 +41,12 @@ def test_context_answers_one_shape_with_mandatory_blockers_and_a_byte_budget(twi
     root = getattr(twins, side)
     answered = answer(root, twins, focus=NEXT, scope="task",
                       include=["dependencies", "notes"])
-    assert set(answered) == KEYS
-    assert answered["focus"] == NEXT and answered["scope"] == "task"
+    assert set(answered) <= KEYS and {"sequence", "mandatory", "selected", "budget"} <= set(answered)
+    assert answered["focus"] == NEXT
     assert ("dependency", BLOCKED) in {(b["kind"], b["id"])
                                              for b in answered["mandatory"]["blockers"]}
     assert answered["mandatory"]["clear"] is False
     assert [row["id"] for row in answered["selected"]["dependencies"]] == [BLOCKED]
-    assert answered["budget"]["applies_to"] == "selected"
 
 
 @pytest.mark.parametrize("side", ["legacy", "native"])
@@ -66,9 +66,9 @@ def test_a_budget_too_small_for_the_blockers_returns_them_anyway_and_says_so(twi
     squeezed = answer(root, twins, focus=NEXT, include=["dependencies", "notes"],
                       budget_bytes=32)
     assert squeezed["budget"]["over_budget"] is True
-    assert squeezed["selected"] == {} and squeezed["cursor"] == ""
+    assert squeezed["selected"] == {} and squeezed.get("cursor", "") == ""
     assert squeezed["mandatory"] == whole["mandatory"]
-    assert squeezed["budget"]["omitted_total"] == sum(whole["budget"]["omitted"].values()) + \
+    assert squeezed["budget"].get("omitted_total", 0) == sum(whole["budget"].get("omitted", {}).values()) + \
         len(whole["selected"].get("dependencies", [])) + len(whole["selected"].get("notes", []))
 
 
@@ -85,7 +85,7 @@ def test_a_task_that_does_not_exist_blocks_rather_than_reading_as_clear(twins, s
 def test_a_question_with_no_task_in_focus_is_never_reported_as_clear(twins, side):
     root = getattr(twins, side)
     wide = answer(root, twins, scope="project", include=["notes"])
-    assert wide["focus"] is None and wide["mandatory"]["clear"] is False
+    assert wide.get("focus") is None and wide["mandatory"]["clear"] is False
     assert [b["reason"] for b in wide["mandatory"]["blockers"]] == ["no_focus_task"]
     assert wide["selected"]["notes"]
 
@@ -116,17 +116,17 @@ def test_a_cursor_pages_the_selection_and_loses_no_row(twins, side):
             bs.backlog_note(action="create", text=f"Orientation note {n}", pinned=True)
     whole = answer(root, twins, scope="project", include=["notes"])
     every = [row["id"] for row in whole["selected"]["notes"]]
-    assert len(every) == 7 and whole["cursor"] == ""
+    assert len(every) == 7 and whole.get("cursor", "") == ""
     limit = whole["budget"]["used_bytes"] - 120
     page = answer(root, twins, scope="project", include=["notes"], budget_bytes=limit)
-    seen, cursor = [row["id"] for row in page["selected"]["notes"]], page["cursor"]
+    seen, cursor = [row["id"] for row in page["selected"]["notes"]], page.get("cursor", "")
     assert 0 < len(seen) < 7 and cursor
-    assert page["budget"]["omitted"]["notes"] == 7 - len(seen)
+    assert page["budget"].get("omitted", {}).get("notes", 0) == 7 - len(seen)
     while cursor:
         nxt = answer(root, twins, scope="project", include=["notes"],
                      budget_bytes=limit, cursor=cursor)
         seen += [row["id"] for row in nxt["selected"].get("notes", [])]
-        cursor = nxt["cursor"]
+        cursor = nxt.get("cursor", "")
     assert seen == every
 
 
@@ -175,11 +175,11 @@ def test_every_section_answers_on_both_stores_with_an_exact_byte_count(twins, si
         text = bs.backlog_context(focus=NEXT if scope == "task" else "", scope=scope,
                                   include=list(context_shape.SECTIONS), budget_bytes=200000)
     answered = json.loads(text)
-    assert set(answered) == KEYS
+    assert set(answered) <= KEYS
     assert answered["budget"]["used_bytes"] == len(text.encode("utf-8"))
-    assert set(answered["budget"]["omitted"]) == set(context_shape.SECTIONS)
-    assert set(answered["provenance"]) == set(context_shape.SECTIONS)
-    assert answered["cursor"] == ""
+    assert "omitted" not in answered["budget"]   # every section delivered whole
+    assert set(answered.get("provenance", {})) <= set(context_shape.SECTIONS)
+    assert answered.get("cursor", "") == ""
     if scope == "task":
         assert [row["id"] for row in answered["selected"]["dependencies"]] == [BLOCKED]
         assert [row["id"] for row in answered["selected"]["siblings"]] == [BLOCKED]
@@ -187,7 +187,7 @@ def test_every_section_answers_on_both_stores_with_an_exact_byte_count(twins, si
         assert answered["selected"].get("bugs") is None
     else:
         assert answered["provenance"]["dependencies"]["query"] == "no_focus"
-        assert answered["budget"]["omitted"]["siblings"] == 0
+        assert answered["budget"].get("omitted", {}).get("siblings", 0) == 0
         assert [row["id"] for row in answered["selected"]["bugs"]] == ["B-001"]
         assert [row["id"] for row in answered["selected"]["issues"]] == ["ISS-001"]
         assert answered["selected"]["recent"]
@@ -204,18 +204,17 @@ def test_a_document_section_says_where_its_text_came_from_or_that_it_has_none(tw
         (root / "docs" / "spec.md").write_text("The specification prose", encoding="utf-8")
         bs.backlog_update_task(task_id=NEXT, field="docs", value="spec:docs/spec.md")
         answered = json.loads(bs.backlog_context(focus=NEXT, include=["spec", "plan"]))
-    assert answered["budget"]["omitted"]["plan"] == 0  # never declared, so nothing is missing
+    assert answered["budget"].get("omitted", {}).get("plan", 0) == 0  # never declared, so nothing is missing
     spec = answered["provenance"]["spec"]
     if side == "legacy":
-        assert spec == {"query": "external_documents", "truncated": False, "source": "filesystem",
-                        "imported": False, "path": "docs/spec.md"}
+        assert spec == {"source": "filesystem", "imported": False, "path": "docs/spec.md"}
         assert answered["selected"]["spec"] == [{"section": "spec",
                                                  "text": "The specification prose"}]
     else:
         # Nothing has imported it, so the native store has the path and not the text.
         assert spec["imported"] is False and spec["unresolved"] == ["not_imported"]
         assert answered["selected"].get("spec") is None
-        assert answered["budget"]["omitted"]["spec"] == 1
+        assert answered["budget"].get("omitted", {}).get("spec", 0) == 1
 
 
 def _peer(pid):

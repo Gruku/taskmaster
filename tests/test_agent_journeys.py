@@ -166,14 +166,10 @@ def _journeys(**failing):
             for journey in aj.JOURNEYS]
 
 
-# Measured, not wished for: the project-scoped context selects pinned notes only
-# (`note_operational.pinned`), so an unpinned desk note the old `backlog_note`
-# list shows is not in the new orientation at all.
-ORIENT_DROPS_NOTES = "project context selects pinned notes only; an unpinned desk note is lost"
 
 
 @pytest.mark.parametrize("side", SIDES)
-@pytest.mark.parametrize("journey", _journeys(orient=ORIENT_DROPS_NOTES))
+@pytest.mark.parametrize("journey", _journeys())
 def test_the_new_path_yields_every_required_fact(base, tmp_path, monkeypatch, side, journey):
     measured = _measure(base, tmp_path, monkeypatch, side, journey)
     if journey.name == "orient":
@@ -210,14 +206,20 @@ def test_both_stores_give_the_same_required_context(base, tmp_path, monkeypatch)
         assert legacy.new.contexts()[0]["mandatory"] == native.new.contexts()[0]["mandatory"]
 
 
-# Measured, not wished for: a context answer carries a fixed JSON envelope (store
-# id, provenance, budget block) of several hundred bytes. Where it replaces short
-# markdown answers rather than `backlog_status`, one call fewer still costs more.
-MORE_BYTES = "fewer calls, but the context envelope outweighs the short answers it replaces"
+# Measured, not wished for, after the envelope was cut to facts only (sequence,
+# focus, blockers, rows, byte count). What remains is required context:
+# - close: the context answer (review gate pending on lane express, the P3 bug:
+#   240 B) replaces `backlog_task_pipeline` + `backlog_bug_list` (227 B of terse
+#   markdown naming the same two facts).
+# - orient: the context rows carry each open handover's resumable id (a dated
+#   slug) and per-row keys (524 B), where the thread board shows short thread
+#   names and the desk list one line per note (422 B).
+CLOSE_BYTES = "context 240 B vs pipeline + bug_list 227 B: the same two facts, as JSON"
+ORIENT_BYTES = "context 524 B vs thread_list + note list 422 B: handover ids and row keys"
 
 
 @pytest.mark.parametrize("side", SIDES)
-@pytest.mark.parametrize("journey", _journeys(orient=MORE_BYTES, close=MORE_BYTES))
+@pytest.mark.parametrize("journey", _journeys(orient=ORIENT_BYTES, close=CLOSE_BYTES))
 def test_the_new_path_needs_fewer_calls_and_fewer_bytes(base, tmp_path, monkeypatch, side, journey):
     measured = _measure(base, tmp_path, monkeypatch, side, journey)
     assert measured.new.count < measured.old.count, measured.row()

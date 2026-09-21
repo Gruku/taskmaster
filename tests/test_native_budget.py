@@ -40,9 +40,11 @@ def test_the_count_is_utf8_bytes_not_characters():
 def test_a_multibyte_item_is_dropped_on_its_byte_cost_not_its_length():
     items = [{"note": "é" * 40}, {"note": "é" * 40}]
     base = render(selections=[Selection("notes", [], 0)]).budget["used_bytes"]
-    answer = render(selections=[Selection("notes", items, 2)], limit_bytes=base + 100)
+    # One row plus the omission entry that names the second fits in 150 bytes;
+    # both rows (no entry) would need about 185.
+    answer = render(selections=[Selection("notes", items, 2)], limit_bytes=base + 150)
     assert answer.budget["omitted"] == {"notes": 1}
-    assert len(answer.text.encode("utf-8")) == answer.budget["used_bytes"] <= base + 100
+    assert len(answer.text.encode("utf-8")) == answer.budget["used_bytes"] <= base + 150
 
 
 # ── The boundary ────────────────────────────────────────────────────────────
@@ -60,6 +62,16 @@ def exact_fit(selections):
     raise AssertionError("no self-consistent limit found")
 
 
+def test_rows_smaller_than_their_omission_entry_cannot_be_trimmed_and_say_so():
+    """Leaving a row out adds an omission entry. When every row is smaller than
+    that entry, no trimmed answer is shorter than the whole one, so a limit just
+    under the whole answer fits nothing: over budget, blockers still complete."""
+    items = [{"id": "H-1"}, {"id": "H-2"}]
+    limit, _exact = exact_fit([Selection("handovers", items, 2)])
+    tight = render(selections=[Selection("handovers", items, 2)], limit_bytes=limit - 1)
+    assert payload(tight)["selected"] == {} and tight.budget["over_budget"] is True
+
+
 def test_an_item_that_lands_exactly_on_the_limit_is_kept():
     items = [{"id": "H-1"}, {"id": "H-2"}]
     limit, exact = exact_fit([Selection("handovers", items, 2)])
@@ -69,10 +81,11 @@ def test_an_item_that_lands_exactly_on_the_limit_is_kept():
 
 
 def test_one_byte_under_the_limit_drops_the_last_item():
-    items = [{"id": "H-1"}, {"id": "H-2"}]
+    # Rows larger than the omission entry that replaces them, as real rows are.
+    items = [{"id": "H-1", "next_action": "x" * 60}, {"id": "H-2", "next_action": "y" * 60}]
     limit, _exact = exact_fit([Selection("handovers", items, 2)])
     tight = render(selections=[Selection("handovers", items, 2)], limit_bytes=limit - 1)
-    assert payload(tight)["selected"]["handovers"] == [{"id": "H-1"}]
+    assert payload(tight)["selected"]["handovers"] == items[:1]
     assert tight.budget["omitted"] == {"handovers": 1} and tight.budget["omitted_total"] == 1
     assert len(tight.text.encode("utf-8")) == tight.budget["used_bytes"] <= limit - 1
 
@@ -150,8 +163,10 @@ def test_selections_fill_in_order_and_stop_at_the_first_item_that_does_not_fit()
     first = [{"id": f"A-{n}"} for n in range(3)]
     second = [{"id": f"B-{n}"} for n in range(3)]
     full = render(selections=[Selection("a", first, 3), Selection("b", second, 3)])
+    # One byte short of everything. Leaving a row out adds its section's omission
+    # entry, so the longest prefix that fits here is all of `a` and none of `b`.
     tight = render(selections=[Selection("a", first, 3), Selection("b", second, 3)],
-                   limit_bytes=full.budget["used_bytes"] - 20)
+                   limit_bytes=full.budget["used_bytes"] - 1)
     body = payload(tight)
     kept = body["selected"].get("b", [])
     assert body["selected"]["a"] == first, "the earlier selection fills first"
@@ -170,9 +185,9 @@ def test_over_budget_holds_exactly_when_the_answer_exceeds_its_limit(limit):
     assert len(answer.text.encode("utf-8")) == answer.budget["used_bytes"]
 
 
-def test_the_budget_block_says_it_governs_the_selection_only():
+def test_the_wire_budget_block_leaves_out_the_limit_the_caller_already_knows():
     answer = render()
-    assert payload(answer)["budget"]["applies_to"] == "selected"
+    assert payload(answer)["budget"] == {"used_bytes": answer.budget["used_bytes"]}
 
 
 def test_the_envelope_and_the_mandatory_block_are_passed_through_verbatim():

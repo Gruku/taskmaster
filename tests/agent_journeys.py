@@ -103,15 +103,9 @@ def named_facts(context: dict) -> set[tuple[str, str]]:
 
 
 def close_bugs(context: dict) -> set[tuple[str, str]]:
-    """Open bugs filed against the focus, whatever their severity.
-
-    `backlog_complete_task` refuses on *any* open `found_in` bug, while the
-    mandatory set holds only P0/P1 and unstated severities (scope D8). What a
-    close needs is therefore wider than `mandatory`, and the selected `bugs`
-    section is where the rest is found.
-    """
-    return {("bug", str(row["id"])) for row in context.get("selected", {}).get("bugs", [])
-            if row.get("status") == "open"}
+    """Open bugs filed against the focus: exactly the bugs the close refuses on,
+    which `mandatory` has named since context was made to match the close gate."""
+    return {(kind, ident) for kind, ident in blocker_set(context) if kind == "bug"}
 
 
 def old_coverage(required: set[tuple[str, str]], text: str) -> set[tuple[str, str]]:
@@ -203,8 +197,8 @@ def _close_old(t: Trace, ids: dict) -> None:
 
 def _close_new(t: Trace, ids: dict) -> None:
     t.run("backlog_get_task", task_id=ids["close"])
-    # `bugs` is selected because the close refuses on an open bug of any severity.
-    t.run("backlog_context", focus=ids["close"], scope="task", include=["bugs"])
+    # The blockers alone: they name every gate and every bug the close refuses on.
+    t.run("backlog_context", focus=ids["close"], scope="task", include=[])
     _close_writes(t, ids)
 
 
@@ -266,8 +260,7 @@ def measure(journey: Journey, ids: dict, fresh: Callable[[str], object]) -> Meas
         traces[path], ran[path] = trace, run_ids
     old, new = traces["old"], traces["new"]
     contexts = new.contexts()
-    required = (blocker_set(contexts[0]) | (close_bugs(contexts[0]) if journey.name == "close" else set())
-                if contexts and journey.focus else set())
+    required = blocker_set(contexts[0]) if contexts and journey.focus else set()
     named = set().union(*(named_facts(c) for c in contexts)) if contexts else set()
     return Measured(journey.name, old, new, required, old_coverage(required, old.text()), named,
                     ran["new"])

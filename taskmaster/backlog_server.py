@@ -5990,15 +5990,18 @@ def _legacy_context_section(data, connection, name, focus, doc, body, epic, fact
                       "severity": doc_.get("severity")}
                      for ident, doc_, _b in _dict_rows(data, "bug") if doc_.get("status") == "open"])
     if name == "handovers":
-        return page(_legacy_open_handovers(data, focus))
+        return page([context_shape.handover_row(row) for row in _legacy_open_handovers(data, focus)])
     if name == "issues":
         return page([{"id": doc_.get("id") or ident, "title": doc_.get("title"),
                       "severity": doc_.get("severity")}
                      for ident, doc_, _b in _dict_rows(data, "issue")
                      if doc_.get("status") == "open"])
     if name == "notes":
-        return page([{"id": doc_.get("id") or ident, "text": text}
-                     for ident, doc_, text in _dict_rows(data, "note") if doc_.get("pinned")])
+        # The whole desk, in `backlog_note list` order (pinned first, newest first):
+        # orientation shows every live note, not only the pinned ones.
+        return page([{"id": note.get("id"), "text": note.get("body") or "",
+                      **({"pinned": True} if note.get("pinned") else {})}
+                     for note in _note_records(data)])
     if name == "siblings":
         if not epic:
             return [], 0, {"reason": "task has no epic"}
