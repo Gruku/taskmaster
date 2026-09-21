@@ -22,7 +22,9 @@ from .contracts import MAX_BATCH_COMMANDS, validate_operation
 # adapter's contract is partial apply and the viewer's writes carry a store-wide
 # If-Match. The claim operations take `session` as an argument, and only a tool
 # that supplies this server's own session may pass one: through `commands=` any
-# caller could release, renew or force-take another session's claim.
+# caller could release, renew or force-take another session's claim. The import
+# stores a body the importer read from a declared file, and provenance vouches for
+# exactly that; through `commands=` the body would be whatever the caller typed.
 INTERNAL_OPERATIONS = {
     "task.batch_line": "Use `operations` lines for batch lines.",
     "epic.batch_line": "Use `operations` lines for batch lines.",
@@ -32,6 +34,7 @@ INTERNAL_OPERATIONS = {
     "task.pick": "A claim is taken for this session by `backlog_pick_task`.",
     "task.claim_renew": "A claim is renewed for this session by `backlog_claim(action=\"renew\")`.",
     "task.claim_release": "A claim is released for this session by `backlog_claim(action=\"release\")`.",
+    "document.import": "Documents are imported from their declared files by `backlog_document_import`.",
 }
 # Arguments a tool supplies from the call itself, never from its caller: who wrote
 # a note, and the merge ladder a task's merge gate is judged against. The native
