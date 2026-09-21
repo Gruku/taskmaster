@@ -6040,6 +6040,12 @@ def backlog_context(
     exact count of what was left out. When rows remain, `cursor` continues the
     same question; a cursor is refused once the store or the question moves on.
 
+    Only facts are spelled out. An absent `cursor` means nothing remains; an
+    absent `provenance` entry means the section was delivered whole from its
+    fixed source; an absent `omitted` means nothing was left out; `over_budget`
+    appears only when no answer fits the budget, blockers included. A blocker
+    leaves out a state or source its kind fixes (bugs and handovers are open).
+
     Args:
         focus: Task id. Empty takes the task this session picked, unless scope is project.
         scope: task, session or project — what the question is about.
