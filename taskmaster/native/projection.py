@@ -107,27 +107,63 @@ def export_record(connection, rel: str) -> dict | None:
     return {"job_key": row[0], "effect": row[1], "commit_seq": row[2], "tombstone": not present}
 
 
-def _held_entity_sql() -> str:
-    """Held-entity predicate over `projection_jobs j` (see `held`)."""
-    return ("EXISTS(SELECT 1 FROM entity_core e WHERE e.entity_key=j.entity_key AND ("
-            "EXISTS(SELECT 1 FROM projection p WHERE p.kind=e.kind AND p.id=e.public_id AND p.quarantined=1)"
-            " OR EXISTS(SELECT 1 FROM projection_conflict c WHERE c.kind=e.kind AND c.id=e.public_id)))"
-            " OR EXISTS(SELECT 1 FROM projection p WHERE p.file=j.file AND p.quarantined=1)"
-            " OR EXISTS(SELECT 1 FROM projection_conflict c WHERE c.file=j.file)")
-
-
 def _has_conflict_table(connection) -> bool:
     return connection.execute(
         "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='projection_conflict'").fetchone() is not None
 
 
+def held(connection, kind: str, ident: str | None) -> list[tuple[str, str]]:
+    """`(file, reason)` for every quarantined or flagged file of one entity.
+
+    The one answer to "may this entity's files be written?" that claims, store
+    status and conflict resolution all use (N09 §4d: two readers of one safety
+    question drifted apart). The hold is per entity, as the legacy
+    `_export_blocked` is: a move writes one path and removes another, so holding
+    only the flagged file would leave the id in two places.
+    """
+    found = {file: "quarantined" for (file,) in connection.execute(
+        "SELECT file FROM projection WHERE kind=? AND id IS ? AND quarantined=1", (kind, ident))}
+    if _has_conflict_table(connection):
+        found.update((file, "flagged") for (file,) in connection.execute(
+            "SELECT file FROM projection_conflict WHERE kind=? AND id IS ?", (kind, ident)))
+    return sorted(found.items())
+
+
+def held_file(connection, rel: str) -> str | None:
+    """Why one file may not be written (`quarantined`, `flagged`), or None."""
+    row = connection.execute("SELECT quarantined FROM projection WHERE file=?", (rel,)).fetchone()
+    if row and row[0]:
+        return "quarantined"
+    if _has_conflict_table(connection) and connection.execute(
+            "SELECT 1 FROM projection_conflict WHERE file=?", (rel,)).fetchone():
+        return "flagged"
+    return None
+
+
+def flagged_files(connection) -> tuple[str, ...]:
+    """Every flagged file, legacy (B-089, before activation) or native (N11)."""
+    if not _has_conflict_table(connection):
+        return ()
+    return tuple(r[0] for r in connection.execute("SELECT file FROM projection_conflict ORDER BY file"))
+
+
+def _held_sql(connection) -> str:
+    """`held` as a predicate over `projection_jobs j`: the job's entity or its file is held."""
+    entity = ("EXISTS(SELECT 1 FROM entity_core e JOIN projection p ON p.kind=e.kind AND p.id=e.public_id "
+              "WHERE e.entity_key=j.entity_key AND p.quarantined=1)"
+              " OR EXISTS(SELECT 1 FROM projection p WHERE p.file=j.file AND p.quarantined=1)")
+    if _has_conflict_table(connection):
+        entity += (" OR EXISTS(SELECT 1 FROM entity_core e JOIN projection_conflict c ON c.kind=e.kind "
+                   "AND c.id=e.public_id WHERE e.entity_key=j.entity_key)"
+                   " OR EXISTS(SELECT 1 FROM projection_conflict c WHERE c.file=j.file)")
+    return f"({entity})"
+
+
 def _through(connection) -> int:
     """Recompute the watermark: everything below the oldest unexported, unheld job."""
-    held = f" AND NOT ({_held_entity_sql()})" if _has_conflict_table(connection) else (
-        " AND NOT EXISTS(SELECT 1 FROM entity_core e JOIN projection p ON p.kind=e.kind AND p.id=e.public_id "
-        "WHERE e.entity_key=j.entity_key AND p.quarantined=1)")
     oldest = connection.execute(
-        f"SELECT MIN(j.commit_seq) FROM projection_jobs j WHERE j.state IN ('pending','claimed'){held}").fetchone()[0]
+        "SELECT MIN(j.commit_seq) FROM projection_jobs j WHERE j.state IN ('pending','claimed') "
+        f"AND NOT {_held_sql(connection)}").fetchone()[0]
     if oldest is not None:
         return int(oldest) - 1
     return int(connection.execute("SELECT COALESCE(MAX(seq),0) FROM domain_events").fetchone()[0])
@@ -210,19 +246,43 @@ class Exporter:
 
     def _claim_latest(self, until: float) -> list[Job]:
         pending = self.connection.execute(
-            "SELECT job_key,entity_key,commit_seq,file,effect,input_json FROM projection_jobs "
-            "WHERE state='pending' ORDER BY commit_seq,job_key").fetchall()
+            f"SELECT j.job_key,j.entity_key,j.commit_seq,j.file,j.effect,j.input_json,{self._held_column()} "
+            "FROM projection_jobs j WHERE j.state='pending' ORDER BY j.commit_seq,j.job_key").fetchall()
         latest: dict[str, tuple] = {}
         for row in pending:
             latest[row[3]] = row
         superseded = [(row[0],) for row in pending if latest[row[3]][0] != row[0]]
         self.connection.executemany("UPDATE projection_jobs SET state='superseded' WHERE job_key=?", superseded)
-        jobs = [Job(key, entity_key, seq, rel, effect, json.loads(payload))
-                for key, entity_key, seq, rel, effect, payload in latest.values()]
+        jobs, holds = [], set()
+        for key, entity_key, seq, rel, effect, payload, is_held in latest.values():
+            job = Job(key, entity_key, seq, rel, effect, json.loads(payload))
+            if is_held:
+                # Stays `pending`, unleased, until the hold is resolved; its
+                # newer siblings keep coalescing into it meanwhile.
+                holds.add((job.kind, job.id, rel))
+            else:
+                jobs.append(job)
+        self._report_holds(holds)
         self.connection.executemany(
             "UPDATE projection_jobs SET state='claimed',lease_owner=?,lease_until=? WHERE job_key=?",
             [(self._lease_owner, until, job.key) for job in jobs])
         return self._ordered(jobs)
+
+    def _held_column(self) -> str:
+        return f"{_held_sql(self.connection)} AS held"
+
+    def _report_holds(self, holds) -> None:
+        """Warn once per held file, as the legacy exporter does, and keep it dirty."""
+        files = set()
+        for kind, ident, rel in sorted(holds):
+            reasons = held(self.connection, kind, ident)
+            if not reasons:
+                reason = held_file(self.connection, rel)
+                reasons = [(rel, reason)] if reason else []
+            files.update(reasons)
+        for rel, reason in sorted(files):
+            self.connection.execute("UPDATE projection SET dirty=1 WHERE file=?", (rel,))
+            self.warnings.append(f"export pending: {rel} is {reason}")
 
     @staticmethod
     def _ordered(jobs: list[Job]) -> list[Job]:
