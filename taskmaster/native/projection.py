@@ -424,6 +424,10 @@ class Exporter:
         if not self._owns():
             temp.unlink(missing_ok=True)
             return "lost"
+        # The residual window of §2.3(4): no lock spans a rename, so an exporter
+        # paused here past its lease can still replace after a successor published.
+        # Own-bytes recognition and the re-queue on its refused ack repair that.
+        self.checkpoint("before_replace", rel)
         deadline = None
         while True:
             try:
