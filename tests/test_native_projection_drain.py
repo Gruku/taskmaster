@@ -114,10 +114,13 @@ def test_the_wait_ends_when_another_exporter_exports_through_the_callers_commit(
 
 def test_the_drain_calls_the_progress_seam_once(twins, monkeypatch):
     calls = []
-    monkeypatch.setattr(progress, "export", lambda connection, backlog_dir, session: calls.append(session) or [])
+    monkeypatch.setattr(progress, "export", lambda connection, backlog_dir, session, *, through=None, wait=True:
+                        calls.append((session, through, wait)) or [])
     with twins.at(twins.native):
         bs.backlog_update_task(task_id="test-epic-001", field="notes", value="seam")
     assert len(calls) == 1
+    # The caller's commit reaches the seam, so it waits only for its own paragraphs.
+    assert calls[0][1] is not None and calls[0][2] is True
 
 
 def test_a_job_that_renders_the_same_bytes_performs_no_replace(twins, monkeypatch):

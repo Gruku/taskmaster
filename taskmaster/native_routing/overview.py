@@ -148,12 +148,13 @@ _OWNER_PROCESS = re.compile(r".*:(\d+)@([^:@]+)")
 
 
 def _exporter_lease(lease: dict, now: float | None = None) -> str:
-    """Who holds the projection exporter lease, and whether that process still runs.
+    """Who holds the projection exporter lease, and whether its process still runs.
 
     A holder that died keeps the lease until it expires, and every caller that
     needs an export waits behind it (bounded) until then (scope §5.4). The drain
-    names its process in the owner (`…:<pid>@<host>`), so a live lease whose
-    holder is gone is told apart from one whose holder is working.
+    names its process in the owner (`…:<pid>@<host>`). The line reports what a pid
+    check can tell and no more: a reused pid, or one hostname shared by two
+    machines, reads as running. The lease's own expiry is what recovery trusts.
     """
     import time
     now = time.time() if now is None else now
@@ -163,13 +164,14 @@ def _exporter_lease(lease: dict, now: float | None = None) -> str:
         return "free" + (f" (last holder {owner}, generation {generation})" if owner else "")
     match = _OWNER_PROCESS.fullmatch(owner)
     if match is None:
-        holder = "holder unknown"
+        holder = "holder process unknown"
     elif match.group(2) != socket.gethostname():
-        holder = f"holder on host {match.group(2)}, not checkable from here"
+        holder = f"pid {match.group(1)} on host {match.group(2)}, not checkable from here"
     elif store._local_pid_alive(int(match.group(1))):
-        holder = "holder alive"
+        holder = f"pid {match.group(1)} running on this host"
     else:
-        holder = "holder not running; its claimed exports are recovered once the lease expires"
+        holder = (f"pid {match.group(1)} not running on this host; its claimed exports are recovered "
+                  "once the lease expires")
     return f"held by {owner}, generation {generation}, expires in {until - now:.0f}s, {holder}"
 
 

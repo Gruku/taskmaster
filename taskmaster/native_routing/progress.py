@@ -247,14 +247,18 @@ class _Writer:
             raise
 
 
-def export(connection: sqlite3.Connection, backlog_dir: Path, session: str) -> list[str]:
+def export(connection: sqlite3.Connection, backlog_dir: Path, session: str, *, through: int | None = None,
+           wait: bool = True) -> list[str]:
     """Render PROGRESS.md if its changelog or dashboard is due; return `export pending` notices.
 
     Called by `native_routing.projection.drain` after the projection jobs, with no
-    transaction open. The caller's command has committed, so a failure never raises:
-    the paragraphs stay pending rows and the caller is told. While another process
-    holds the writer lease, a caller owed a paragraph waits (bounded) for it, then
-    renders itself or reports the paragraph pending.
+    transaction open. `through` is the caller's commit: the caller owes only the
+    paragraphs that commit queued (every pending paragraph when it is None). The
+    command has committed, so a failure never raises: the paragraphs stay pending
+    rows, the failure goes to `store.log` as legacy logs it, and a caller whose own
+    paragraph is still pending is told. While another process holds the writer
+    lease, only a caller owed a paragraph waits (bounded, and only when `wait`);
+    one that owes only a dashboard refresh returns at once and reports nothing.
     """
     if connection.in_transaction:
         raise RuntimeError("the PROGRESS export requires its own transactions")
@@ -262,27 +266,50 @@ def export(connection: sqlite3.Connection, backlog_dir: Path, session: str) -> l
     deadline = writer.clock() + WAIT_SECONDS
     try:
         while (outcome := writer._take()) != "taken":
-            if outcome == "skip" or not _owed(connection):
+            if outcome == "skip" or not wait or not _owes(connection, through):
                 return []
             if writer.clock() >= deadline:
                 return [NOTICE]
             writer.sleep(_POLL_SECONDS)
-    except Exception:  # noqa: BLE001 - the command committed; report, never raise
-        return [NOTICE] if _safe_owed(connection) else []
+    except Exception as exc:  # noqa: BLE001 - the command committed; report, never raise
+        return _failed(writer, connection, through, exc)
     try:
         return writer.render()
-    except _Lost:
-        return [NOTICE] if _safe_owed(connection) else []
-    except Exception:  # noqa: BLE001 - see docstring
+    except _Lost as exc:
+        return _failed(writer, connection, through, exc)
+    except Exception as exc:  # noqa: BLE001 - see docstring
         writer.release()
-        return [NOTICE] if _safe_owed(connection) else []
+        return _failed(writer, connection, through, exc)
     except BaseException:
         writer.release()
         raise
 
 
-def _safe_owed(connection) -> bool:
-    try:
+def _owes(connection, through: int | None) -> bool:
+    """Whether the caller's own paragraphs (its commit's rows) still wait for the file."""
+    if through is None:
         return _owed(connection)
+    return connection.execute("SELECT 1 FROM sync_state WHERE key>=? AND key<? LIMIT 1",
+                              progress_key_range(progress_pending_key(through, 0)[:-4])).fetchone() is not None
+
+
+def _failed(writer: "_Writer", connection, through: int | None, exc: BaseException) -> list[str]:
+    _log(writer.target.parent, f"progress export failed: {exc!r}")
+    try:
+        owes = _owes(connection, through)
     except sqlite3.Error:
-        return True
+        owes = True
+    return [NOTICE] if owes else []
+
+
+def _log(directory: Path, message: str) -> None:
+    """Append one line to `store.log` beside the database, as the legacy `Store._log` does."""
+    from taskmaster import store
+    path = directory / "store.log"
+    try:
+        if path.exists() and path.stat().st_size > 1024 * 1024:
+            path.write_bytes(path.read_bytes()[-512 * 1024:])
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(f"{store._now()} {message}\n")
+    except OSError:
+        pass

@@ -11,7 +11,7 @@ import uuid
 
 from taskmaster.native import commands
 from taskmaster.native.queries import Repository
-from . import projection
+from . import progress, projection
 
 
 class NativeCall:
@@ -50,7 +50,12 @@ class NativeCall:
         return receipt
 
     def drain(self, through: int | None = None) -> None:
-        for notice in projection.drain(self.connection, self.backlog_dir, session=self.session, through=through):
+        # A caller waits behind another PROGRESS writer for its own paragraphs at
+        # most once per call: once that export is reported pending, later commands
+        # in the same call do not wait again.
+        waited = progress.NOTICE in self.notices
+        for notice in projection.drain(self.connection, self.backlog_dir, session=self.session, through=through,
+                                       progress_wait=not waited):
             if notice not in self.notices:
                 self.notices.append(notice)
 
