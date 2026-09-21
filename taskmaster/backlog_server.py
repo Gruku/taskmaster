@@ -115,9 +115,19 @@ def _attach_conflict_notices(result):
         conflicts = instance.projection_conflicts()
     except Exception:  # noqa: BLE001 -- advisory, see docstring
         return result
+    return _with_conflict_notices(result, conflicts)
+
+
+def _with_conflict_notices(result, conflicts, notice=None):
+    """`result` naming every flagged file in `conflicts` (`{file, kind, id}` rows).
+
+    Shared by the legacy wrapper above and the native dispatcher, which reads the
+    flags from its own store (a native process never has a legacy store open) and
+    words the notice for what its resolver can do.
+    """
     if not conflicts:
         return result
-    notices = [store.projection_conflict_notice(conflict) for conflict in conflicts]
+    notices = [(notice or store.projection_conflict_notice)(conflict) for conflict in conflicts]
     if isinstance(result, dict):
         result.setdefault("projection_conflicts", notices)
     elif isinstance(result, str):
@@ -2699,6 +2709,7 @@ def _render_store_report(status: "store.StoreStatus") -> str:
         listing("Quarantined", status.quarantined_files),
         listing("Stuck exports", status.stuck_exports),
         listing("Flagged (both changed; see backlog_resolve_conflict)", status.flagged_files),
+        *([f"Exporter lease: {status.exporter_lease}"] if status.exporter_lease is not None else []),
         listing("Corrupt", status.corrupt_files),
         f"Merge conflicts (24 h): {status.merge_conflicts_24h}",
         f"Linear queue: {status.linear_pending} pending",
@@ -7298,7 +7309,11 @@ def backlog_claim(
                                  members=member_ids))
 
 
-def _append_changelog(
+CHANGELOG_LOGGED = "\n\n**Session logged** to PROGRESS.md changelog."
+CHANGELOG_AUTO_LOGGED = "\nSession auto-logged to PROGRESS.md."
+
+
+def _changelog_entry(
     session_title: str,
     done: str,
     decisions: str,
@@ -7307,23 +7322,13 @@ def _append_changelog(
     auto: bool = False,
     auto_stats: str = "",
 ) -> str:
-    """Queue a changelog entry for PROGRESS.md, to be written by the store.
-
-    The paragraph is handed to the open transaction rather than written here:
-    PROGRESS.md gets exactly one writer, the store's export path, so a session
-    summary and the task transition that produced it land in the same commit
-    and can never half-apply.
-
-    Returns a confirmation message for the tool response.
-    """
+    """The PROGRESS.md changelog paragraph for one session summary. Pure: the legacy
+    tool queues it on its transaction, the native adapter hands it to `task.complete`."""
     title = session_title or "Work session"
 
     if auto:
         heading = f"### {_today()} — auto"
-        entry = f"{heading}\n{auto_stats}\nTasks touched: {tasks_touched}\n"
-        if not _queue_changelog_entry(entry):
-            return "\nNot logged: no open transaction to commit the changelog with."
-        return f"\nSession auto-logged to PROGRESS.md."
+        return f"{heading}\n{auto_stats}\nTasks touched: {tasks_touched}\n"
 
     heading = f"### {_today()} — {title}"
 
@@ -7368,10 +7373,34 @@ def _append_changelog(
     lines.append("---")
     lines.append("")
 
-    entry = "\n".join(lines)
+    return "\n".join(lines)
+
+
+def _append_changelog(
+    session_title: str,
+    done: str,
+    decisions: str,
+    issues: str,
+    tasks_touched: str,
+    auto: bool = False,
+    auto_stats: str = "",
+) -> str:
+    """Queue a changelog entry for PROGRESS.md, to be written by the store.
+
+    The paragraph is handed to the open transaction rather than written here:
+    PROGRESS.md gets exactly one writer, the store's export path, so a session
+    summary and the task transition that produced it land in the same commit
+    and can never half-apply.
+
+    Returns a confirmation message for the tool response.
+    """
+    entry = _changelog_entry(session_title, done, decisions, issues, tasks_touched, auto=auto,
+                             auto_stats=auto_stats)
     if not _queue_changelog_entry(entry):
+        if auto:
+            return "\nNot logged: no open transaction to commit the changelog with."
         return "\n\nNot logged: no open transaction to commit the changelog with."
-    return f"\n\n**Session logged** to PROGRESS.md changelog."
+    return CHANGELOG_AUTO_LOGGED if auto else CHANGELOG_LOGGED
 
 
 def _queue_changelog_entry(entry: str) -> bool:

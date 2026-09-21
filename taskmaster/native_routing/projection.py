@@ -23,7 +23,9 @@ They are rendered from the current database and verified like entity files.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
+import socket
 import sqlite3
 import threading
 import time
@@ -191,6 +193,10 @@ def _pending_notices(connection, files: list[str] | None = None) -> list[str]:
         "export pending: projection files — retried on next call"]
 
 
+def _owner(session: str) -> str:
+    return f"{session}:{uuid.uuid4().hex[:12]}:{os.getpid()}@{socket.gethostname()}"
+
+
 def drain(connection: sqlite3.Connection, backlog_dir: Path, *, session: str, through: int | None = None) -> list[str]:
     """Export every pending projection job, then refresh stale derived files.
 
@@ -204,7 +210,9 @@ def drain(connection: sqlite3.Connection, backlog_dir: Path, *, session: str, th
     if connection.in_transaction:
         raise RuntimeError("projection drain requires its own transaction")
     clock, sleep = HOOKS["clock"], HOOKS["sleep"]
-    exporter = outbox.Exporter(connection, backlog_dir, owner=f"{session}:{uuid.uuid4().hex[:12]}",
+    # The owner names its process (`:<pid>@<host>`), so `backlog_store_status` can say
+    # whether a live lease's holder is still running (scope §5.4).
+    exporter = outbox.Exporter(connection, backlog_dir, owner=_owner(session),
                                session=session, clock=clock, checkpoint=HOOKS["checkpoint"])
     deadline = clock() + WAIT_SECONDS
     while (jobs := exporter.claim()) is None:

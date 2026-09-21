@@ -32,14 +32,6 @@ from . import reads
 from .registry import adapter
 from .runtime import error_text
 
-CHANGELOG_REFUSAL = (
-    "Error: this store is a native authority, and a session changelog cannot be recorded "
-    "on it yet: PROGRESS.md paragraphs from native completions are only exported once the "
-    "N11 projection drain lands. Nothing was changed. Complete the task without "
-    "session_title/done/auto_summary and log the session summary separately."
-)
-
-
 def _run(call, operation, arguments):
     """Execute, turning a core refusal into the tools' `Error: …` sentence."""
     try:
@@ -411,8 +403,6 @@ def complete_task(call, *, task_id, session_title, done, decisions, issues, task
                   human_action, auto_summary, patchnote, release):
     if target_status not in ("done", "in-review"):
         return f"Error: target_status must be 'done' or 'in-review', got '{target_status}'"
-    if auto_summary or session_title or done:
-        return CHANGELOG_REFUSAL
     with call.read() as snapshot:
         found = reads.find_task(snapshot, task_id)
         if not found:
@@ -436,9 +426,19 @@ def complete_task(call, *, task_id, session_title, done, decisions, issues, task
             block = domain.completion_block_reason(task)
             if block:
                 return block
+    # The session paragraph commits with the transition, as a row the drain moves
+    # into PROGRESS.md exactly once (N11 S7-S9); the legacy tool queues the same text.
+    changelog, changelog_msg = "", ""
+    if auto_summary:
+        changelog = bs._changelog_entry(session_title, done, decisions, issues, tasks_touched, auto=True,
+                                        auto_stats=done)
+        changelog_msg = bs.CHANGELOG_AUTO_LOGGED
+    elif session_title or done:
+        changelog = bs._changelog_entry(session_title, done, decisions, issues, tasks_touched)
+        changelog_msg = bs.CHANGELOG_LOGGED
     refusal = _run(call, "task.complete", {"id": task_id, "target_status": target_status,
                                             "human_action": human_action, "patchnote": patchnote,
-                                            "release": release})
+                                            "release": release, "changelog": changelog})
     if refusal:
         return refusal
     if target_status == "done":
@@ -458,8 +458,8 @@ def complete_task(call, *, task_id, session_title, done, decisions, issues, task
     label = "Completed" if target_status == "done" else "Moved to in-review"
     document = _committed(call).get(("task", task_id)) or {}
     if document.get("status") != target_status:
-        return call.finish(f"{label} `{task_id}` — {bs.NOT_PERSISTED}" + suggestion)
-    return call.finish(f"{label} `{task_id}` — {document.get('title', '')}" + suggestion)
+        return call.finish(f"{label} `{task_id}` — {bs.NOT_PERSISTED}" + changelog_msg + suggestion)
+    return call.finish(f"{label} `{task_id}` — {document.get('title', '')}" + changelog_msg + suggestion)
 
 
 @adapter("backlog_archive_task")

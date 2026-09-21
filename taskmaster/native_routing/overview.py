@@ -9,6 +9,7 @@ from dataclasses import asdict
 import json
 import os
 from pathlib import Path
+import re
 import socket
 import sqlite3
 
@@ -130,6 +131,7 @@ def _native_status(call) -> store.StoreStatus:
                 live.append(session)
         queued = int(connection.execute(
             "SELECT COUNT(*) FROM linear_queue WHERE state IN ('pending','claimed')").fetchone()[0])
+        exporter = _exporter_lease(outbox.lease(connection))
     wal = Path(f"{database}-wal")
     backups = tuple(sorted(name for name in os.listdir(database.parent) if name.startswith("store.db.corrupt-")))
     return store.StoreStatus(
@@ -139,7 +141,36 @@ def _native_status(call) -> store.StoreStatus:
         wal_size=wal.stat().st_size if wal.exists() else 0, recent_changes=recent, live_sessions=tuple(live),
         merge_conflicts_24h=0, warning=store._network_filesystem_reason(resolution.root) or resolution.filesystem_warning,
         corrupt_files=backups, linear_pending=queued, stuck_exports=stuck, flagged_files=flagged,
-        read_scan_skips=0)
+        read_scan_skips=0, exporter_lease=exporter)
+
+
+_OWNER_PROCESS = re.compile(r".*:(\d+)@([^:@]+)")
+
+
+def _exporter_lease(lease: dict, now: float | None = None) -> str:
+    """Who holds the projection exporter lease, and whether that process still runs.
+
+    A holder that died keeps the lease until it expires, and every caller that
+    needs an export waits behind it (bounded) until then (scope §5.4). The drain
+    names its process in the owner (`…:<pid>@<host>`), so a live lease whose
+    holder is gone is told apart from one whose holder is working.
+    """
+    import time
+    now = time.time() if now is None else now
+    owner, generation = lease.get("owner"), lease.get("generation")
+    until = float(lease.get("until") or 0)
+    if not owner or until <= now:
+        return "free" + (f" (last holder {owner}, generation {generation})" if owner else "")
+    match = _OWNER_PROCESS.fullmatch(owner)
+    if match is None:
+        holder = "holder unknown"
+    elif match.group(2) != socket.gethostname():
+        holder = f"holder on host {match.group(2)}, not checkable from here"
+    elif store._local_pid_alive(int(match.group(1))):
+        holder = "holder alive"
+    else:
+        holder = "holder not running; its claimed exports are recovered once the lease expires"
+    return f"held by {owner}, generation {generation}, expires in {until - now:.0f}s, {holder}"
 
 
 @adapter("backlog_store_status")

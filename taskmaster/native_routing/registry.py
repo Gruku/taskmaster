@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import threading
 from typing import Callable
 
 from . import gate, runtime
@@ -112,7 +113,36 @@ def dispatch(tool: str, legacy: Callable, database, backlog_dir, session: str, a
             return unknown(arguments["action"])
         return unrouted_message(tool, arguments.get("action"))
     with runtime.open_call(database, backlog_dir, session) as call:
-        return handler(call, **arguments)
+        outermost = not getattr(_DEPTH, "calls", 0)
+        _DEPTH.calls = getattr(_DEPTH, "calls", 0) + 1
+        try:
+            result = handler(call, **arguments)
+        finally:
+            _DEPTH.calls -= 1
+        return _with_flag_notices(call, result) if outermost else result
+
+
+# Nesting depth of native dispatches on this thread: only the outermost call names
+# the flagged files, as the legacy wrapper leaves a nested tool's result alone.
+_DEPTH = threading.local()
+
+
+def _with_flag_notices(call, result):
+    """Name every flagged file on every native result, until it is resolved, as the
+    legacy `_attach_conflict_notices` does for a legacy store. Advisory: a failure
+    to look never costs the caller the result."""
+    from taskmaster import backlog_server as bs
+    from taskmaster.native import projection as outbox
+    try:
+        connection = call.connection
+        if connection.in_transaction or not outbox.flagged_files(connection):
+            return result
+        conflicts = [dict(zip(("file", "kind", "id"), row)) for row in connection.execute(
+            "SELECT file,kind,id FROM projection_conflict ORDER BY flagged_at,file")]
+    except Exception:  # noqa: BLE001 -- advisory, see docstring
+        return result
+    from .conflicts import flag_notice
+    return bs._with_conflict_notices(result, conflicts, flag_notice)
 
 
 def _known_action(legacy, action) -> bool:

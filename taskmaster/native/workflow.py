@@ -449,20 +449,32 @@ def _enqueue_linear(transaction, task_id, task):
 # The changelog paragraph is text that exists nowhere else, so it commits with
 # the transition that produced it rather than waiting on a best-effort file write.
 # It lands in native `sync_state`, not the legacy `meta` row: `meta` is the legacy
-# authority whose every write invalidates a staging snapshot. The N11 exporter
-# drains this key; until then the legacy row stays the exporter's own source.
-PROGRESS_LOG_KEY = "pending_progress_log"
+# authority whose every write invalidates a staging snapshot. One key per paragraph
+# (N11 D4), `progress.pending.<commit_seq:012d>.<n:04d>`: lexical order is commit
+# order, and an append is one insert that never reads or rewrites the queue, where
+# the pre-N11 single list (`PROGRESS_LEGACY_KEY`) cost O(pending) per completion.
+# `native_routing.progress` drains the rows into PROGRESS.md.
+PROGRESS_PENDING_PREFIX = "progress.pending."
+PROGRESS_LEGACY_KEY = "pending_progress_log"
 
 
-def _queue_progress_log(connection, entry):
-    row = connection.execute("SELECT value_json FROM sync_state WHERE key=?", (PROGRESS_LOG_KEY,)).fetchone()
-    pending = json.loads(row[0]) if row else []
-    if not isinstance(pending, list):
-        pending = []
-    pending.append({"ts": datetime.now(timezone.utc).isoformat(), "text": entry})
-    connection.execute("INSERT INTO sync_state(key,value_json) VALUES(?,?) "
-                       "ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
-                       (PROGRESS_LOG_KEY, json.dumps(pending)))
+def progress_pending_key(seq, n):
+    return f"{PROGRESS_PENDING_PREFIX}{int(seq):012d}.{int(n):04d}"
+
+
+def progress_key_range(prefix):
+    """`(low, high)` bounds of every key starting with `prefix`, which ends in '.'."""
+    return prefix, prefix[:-1] + "/"
+
+
+def _queue_progress_log(transaction, entry):
+    prefix = progress_pending_key(transaction.seq, 0)[:-4]
+    taken = transaction.connection.execute("SELECT COUNT(*) FROM sync_state WHERE key>=? AND key<?",
+                                           progress_key_range(prefix)).fetchone()[0]
+    transaction.connection.execute(
+        "INSERT INTO sync_state(key,value_json) VALUES(?,?)",
+        (progress_pending_key(transaction.seq, taken),
+         json.dumps({"ts": datetime.now(timezone.utc).isoformat(), "text": entry})))
 
 
 def _write_task(transaction, ident, doc, body, *, before_entity, enqueue=True):
@@ -920,7 +932,7 @@ def _task_complete(transaction, arguments):
                                         dict(task, status=target_status), **_caller(transaction)))
     _write_task(transaction, ident, task, entity["body"], before_entity=entity)
     if arguments.get("changelog", ""):
-        _queue_progress_log(transaction.connection, arguments["changelog"])
+        _queue_progress_log(transaction, arguments["changelog"])
     if target_status == "done":
         _smart_close_handovers(transaction, ident)
         for bug_id in fixed_bugs:

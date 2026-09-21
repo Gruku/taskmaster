@@ -470,8 +470,11 @@ def test_a_native_flag_is_named_on_every_result(twins):
     path.write_bytes(path.read_bytes() + b"\nHand edit.\n")
     with twins.at(root):
         bs.backlog_update_task(task_id="test-epic-002", field="notes", value="store side")
-        notice = store.projection_conflict_notice({"file": "tasks/test-epic-002.md", "kind": "task",
-                                                   "id": "test-epic-002"})
+        from taskmaster.native_routing.conflicts import flag_notice
+        notice = flag_notice({"file": "tasks/test-epic-002.md", "kind": "task", "id": "test-epic-002"})
+        assert notice.startswith(store.projection_conflict_notice(
+            {"file": "tasks/test-epic-002.md", "kind": "task", "id": "test-epic-002"})[:120])
+        assert 'take="file"' not in notice and 'take="store"' in notice
         answer = bs.backlog_get_task(task_id="test-epic-001")
         assert notice in answer, answer
         assert answer.count(notice) == 1

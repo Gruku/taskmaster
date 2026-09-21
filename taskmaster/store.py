@@ -465,6 +465,10 @@ class StoreStatus:
     # Files edited while the store owed them an export: both versions kept,
     # exports paused until `backlog_resolve_conflict` picks one.
     flagged_files: tuple[str, ...] = ()
+    # Native stores only (N11 §5.4): who holds the projection exporter lease and
+    # whether that process is still running. None on a legacy store, which has no
+    # exporter lease, and then the report has no line for it.
+    exporter_lease: str | None = None
     # In-memory, per reporting process: how many read-side projection scans in
     # a row this process had to skip because the store was busy. It cannot be
     # read out of the database, so a report built by a process that has never
