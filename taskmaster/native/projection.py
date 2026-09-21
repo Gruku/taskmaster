@@ -38,6 +38,8 @@ THROUGH_KEY = "exported_through"
 # Per file, the last few hashes an exporter was about to publish there (see `intend`).
 OWN_PREFIX = "projection.own."
 OWN_RING = 8
+# Per file, the names a publication may set the file aside under (see `_publish_file`).
+ASIDE_PREFIX = "projection.aside."
 # The legacy store's B-089 flag table. A store no 6.0.3 writer opened lacks it; the
 # first native flag creates it with the legacy definition, the only DDL here.
 _CONFLICT_DDL = ("CREATE TABLE IF NOT EXISTS projection_conflict(file TEXT PRIMARY KEY, kind TEXT NOT NULL, "
@@ -60,6 +62,8 @@ class Job:
     id: str = field(init=False)
     # The file this entity is moving away from, when the same claim removes it.
     moved_from: str | None = None
+    # For a move's removal: the job that writes the entity's new path.
+    moved_to: int | None = None
 
     def __post_init__(self):
         self.kind, self.id = self.entity["kind"], self.entity["id"]
@@ -67,6 +71,60 @@ class Job:
 
 def _digest(content: bytes) -> str:
     return hashlib.sha1(content).hexdigest()
+
+
+CR, LF = b"\r", b"\n"
+
+
+def _lf(data: bytes) -> bytes:
+    return data.replace(CR + LF, LF)
+
+
+def _crlf(data: bytes) -> bytes:
+    return _lf(data).replace(LF, CR + LF)
+
+
+def _move(source: Path, target: Path) -> bool:
+    """Rename `source` over `target` (a name only this exporter uses); False if `source` is gone."""
+    try:
+        os.replace(source, target)
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def _install(source: Path, target: Path) -> bool:
+    """Rename `source` to `target` only if nothing is at `target`; False if something is.
+
+    Never overwrites: on Windows a rename refuses an existing target, and on
+    POSIX a hard link does, after which the source name is dropped.
+    """
+    try:
+        if os.name == "nt":
+            os.rename(source, target)
+        else:
+            os.link(source, target)
+            os.unlink(source)
+    except FileExistsError:
+        return False
+    return True
+
+
+def _retry(step: Callable[[], bool]) -> bool:
+    """Run one rename step, retrying the sharing violations an indexer or antivirus causes."""
+    deadline = None
+    while True:
+        try:
+            return step()
+        except FileExistsError:
+            raise
+        except OSError as exc:
+            if exc.errno not in _RETRYABLE_REPLACE_ERRNOS:
+                raise
+            deadline = deadline or time.monotonic() + 2.0
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(random.uniform(0.02, 0.08))
 
 
 def ensure_conflict_table(connection) -> None:
@@ -201,6 +259,7 @@ class Exporter:
         self.generation: int | None = None
         self.warnings: list[str] = []
         self.acked: set[str] = set()
+        self.outcomes: dict[int, str] = {}
 
     # ── Transactions ────────────────────────────────────────────────────────
 
@@ -241,7 +300,8 @@ class Exporter:
             if current.get("owner") not in (None, self.owner) and float(current.get("until", 0)) > now:
                 self.connection.rollback()
                 return None
-            if current.get("owner") != self.owner or current.get("generation") != self.generation:
+            taken = current.get("owner") != self.owner or current.get("generation") != self.generation
+            if taken:
                 self.generation = int(current.get("generation", 0)) + 1
                 # Whatever an earlier generation claimed and did not ack goes back,
                 # keeping its job_key and commit_seq, so ordering is unchanged.
@@ -252,10 +312,12 @@ class Exporter:
             jobs = self._claim_latest(until)
             self.checkpoint("claim", "")
             self.connection.commit()
-            return jobs
         except BaseException:
             self.connection.rollback()
             raise
+        if taken:
+            self._recover_asides()
+        return jobs
 
     def _claim_latest(self, until: float) -> list[Job]:
         pending = self.connection.execute(
@@ -305,10 +367,12 @@ class Exporter:
         first means a crash between the two leaves the id in two places, which is
         visible and heals on recovery, rather than in none.
         """
-        removals = {job.entity_key: job.file for job in jobs if job.effect == "delete"}
+        removals = {job.entity_key: job for job in jobs if job.effect == "delete"}
         for job in jobs:
-            if job.effect != "delete":
-                job.moved_from = removals.get(job.entity_key)
+            removal = removals.get(job.entity_key)
+            if job.effect != "delete" and removal is not None:
+                job.moved_from, removal.moved_to = removal.file, job.key
+
         return sorted(jobs, key=lambda job: (job.effect == "delete", job.commit_seq, job.key))
 
     # ── Publication ─────────────────────────────────────────────────────────
@@ -333,6 +397,15 @@ class Exporter:
                 key = OWN_PREFIX + rel
                 ring = [h for h in _get(self.connection, key, []) if h != _digest(content)]
                 _put(self.connection, key, (ring + [_digest(content)])[-OWN_RING:])
+            for target, _content in rendered:
+                rel = target if isinstance(target, str) else target.file
+                # Durable before any rename: the name this generation may set the
+                # file aside under, so recovery can always put it back, and the
+                # temp it may leave, so recovery can drop it.
+                base = PurePosixPath(rel).name
+                own = [f"{base}.aside.g{self.generation}", f"{base}.tmp.{self._tag(target)}"]
+                names = [n for n in _get(self.connection, ASIDE_PREFIX + rel, []) if n not in own]
+                _put(self.connection, ASIDE_PREFIX + rel, names + own)
             self.connection.commit()
         except BaseException:
             self.connection.rollback()
@@ -348,11 +421,39 @@ class Exporter:
         """
         if job.effect == "delete":
             content = None
-        return self._publish_file(job.file, job.kind, job.id, content, int(job.entity["last_seq"]), job=job)
+            if job.moved_to is not None and self.outcomes.get(job.moved_to) != "exported":
+                # Never remove a move's old path before its new path is exported:
+                # that would leave the entity with no file. The removal waits.
+                outcome = self._defer(job)
+                self.outcomes[job.key] = outcome
+                return outcome
+        outcome = self._publish_file(job.file, job.kind, job.id, content, int(job.entity["last_seq"]), job=job)
+        self.outcomes[job.key] = outcome
+        return outcome
+
+    def _defer(self, job: Job) -> str:
+        self._begin()
+        try:
+            try:
+                self._fenced()
+            except LeaseLost:
+                self.connection.rollback()
+                return "lost"
+            self.connection.execute("UPDATE projection_jobs SET state='pending',lease_owner=NULL,lease_until=NULL "
+                                    "WHERE job_key=? AND state='claimed'", (job.key,))
+            self.connection.commit()
+        except BaseException:
+            self.connection.rollback()
+            raise
+        return "deferred"
 
     def publish_derived(self, rel: str, kind: str, content: bytes | None, exported_seq: int) -> str:
         """Publish a whole derived file (`backlog.yaml`, `ideas/IDEAS.md`), which has no job."""
-        return self._publish_file(rel, kind, None, content, exported_seq, tag=f"d{exported_seq}")
+        return self._publish_file(rel, kind, None, content, exported_seq, tag=self._tag(rel))
+
+    def _tag(self, target: Job | str) -> str:
+        """The temp-name tag of one publication: per job, or per generation for a derived file."""
+        return f"d{self.generation}" if isinstance(target, str) else f"j{target.key}"
 
     def _path(self, rel: str) -> Path:
         return self.backlog_dir / safe_relative(rel)
@@ -360,52 +461,105 @@ class Exporter:
     def _classify(self, rel: str, path: Path, content: bytes | None) -> tuple[str, bytes | None]:
         """§2.4: what the bytes on disk say about publishing over them.
 
-        `agrees` (the file already holds exactly this content), `publish`, or
-        `flag`. The base is the projection record, what the exporter last wrote
-        there, never the job's `expected_hash`, which records what the committing
-        transaction saw and is stale by design once jobs coalesce.
+        `agrees` (the file already holds this content), `publish`, or `flag`.
         """
         try:
             data = path.read_bytes()
         except FileNotFoundError:
             return "publish", None       # a new file, or a missing one repaired
-        disk = _digest(data)
-        if content is not None and disk == _digest(content):
-            return "agrees", data
+        return self._judge(rel, data, content), data
+
+    def _judge(self, rel: str, data: bytes, content: bytes | None) -> str:
+        """Whether `data`, found at `rel`, may be replaced by `content`.
+
+        The base is the projection record, what the exporter last wrote there,
+        never the job's `expected_hash`, which records what the committing
+        transaction saw and is stale by design once jobs coalesce. Line endings
+        alone never make a conflict, as they do not for the legacy exporter: a
+        file whose only change is CRLF against LF matches its record.
+        """
+        variants = {_digest(data), _digest(_lf(data)), _digest(_crlf(data))}
+        if content is not None and _lf(data) == _lf(content):
+            return "agrees"
         record = self.connection.execute("SELECT content_hash FROM projection WHERE file=?", (rel,)).fetchone()
-        if record is not None and record[0] == disk:
-            return "publish", data
-        if disk in _get(self.connection, OWN_PREFIX + rel, []):
-            return "publish", data       # bytes an exporter wrote here and never acked
-        return "flag", data
+        if record is not None and record[0] in variants:
+            return "publish"
+        if variants & set(_get(self.connection, OWN_PREFIX + rel, [])):
+            return "publish"             # bytes an exporter wrote here and never acked
+        return "flag"
 
     def _publish_file(self, rel, kind, ident, content, exported_seq, *, job=None, tag=None) -> str:
+        """Verify, then publish without ever overwriting bytes that were not verified.
+
+        The file is first renamed aside to a name this exporter generation owns,
+        and the aside bytes are checked: that closes the window between the check
+        and the install, because an edit made before the rename is in the aside
+        file and one made after it lands on the (now vacant) path, where the
+        install refuses to overwrite it. On a mismatch the aside file goes back
+        and the file is flagged. A crash with the file aside is undone by lease
+        recovery (`_recover_asides`), which knows the aside name from `intend`.
+        """
         path = self._path(rel)
+        tag = tag or f"j{job.key}"
         self.checkpoint("before_write", rel)
         if not self._owns():
             return "lost"
-        digest = None if content is None else _digest(content)
+        temp = aside = None
         try:
             verdict, data = self._classify(rel, path, content)
             if verdict == "flag":
                 return self._flag(rel, kind, ident, data, job)
             if verdict == "agrees":
-                stat = path.stat()
-            elif content is None:
-                stat = None
-                if data is not None:
-                    path.unlink()
+                return self._ack(rel, kind, ident, _digest(data), path.stat(), exported_seq, job)
+            if content is not None:
+                temp = self._write_temp(path, content, tag, rel)
+            if data is not None:
+                aside = path.with_name(f"{path.name}.aside.g{self.generation}")
+                if not _retry(lambda: _move(path, aside)):
+                    aside = None         # the file vanished meanwhile: nothing to set aside
+                self.checkpoint("aside", rel)
+                if aside is not None:
+                    seen = aside.read_bytes()
+                    if self._judge(rel, seen, content) == "flag":
+                        return self._put_back(rel, kind, ident, path, aside, temp, seen, job)
+            if not self._owns():
+                self._undo(path, aside, temp)
+                return "lost"
+            # §2.3(4): an exporter paused here past its lease finds its successor's
+            # file (recovery put the aside file back first) and the install refuses.
+            # Paused after the install instead, its bytes are own bytes, and the
+            # re-queue on its refused ack makes the next exporter repair them.
+            self.checkpoint("before_replace", rel)
+            if temp is not None:
+                if not _retry(lambda: _install(temp, path)):
+                    # Something was written at the vacated path: it is not ours.
+                    newcomer = path.read_bytes()
+                    temp.unlink(missing_ok=True)
+                    if aside is not None:
+                        aside.unlink(missing_ok=True)   # verified bytes: the store's own
+                    return self._flag(rel, kind, ident, newcomer, job)
+                temp = None
+                self.checkpoint("replaced", rel)
+            if aside is not None:
+                if content is None and path.exists():
+                    # A removal found something new at the path it vacated: that
+                    # file is not ours. It stays and is flagged; the aside bytes
+                    # were verified as the store's own and are dropped.
+                    aside.unlink(missing_ok=True)
+                    return self._flag(rel, kind, ident, path.read_bytes(), job)
+                aside.unlink()
+                aside = None
+                if content is None:
                     self.checkpoint("removed", rel)
-            else:
-                stat = self._replace(path, content, tag or f"j{job.key}", rel, kind, ident, job)
-                if isinstance(stat, str):
-                    return stat
+            stat = path.stat() if content is not None else None
         except OSError:
+            self._undo(path, aside, temp)
             self._failed(rel, job)
             return "failed"
-        return self._ack(rel, kind, ident, digest, stat, exported_seq, job)
+        return self._ack(rel, kind, ident, None if content is None else _digest(content), stat,
+                         exported_seq, job)
 
-    def _replace(self, path: Path, content: bytes, tag: str, rel: str, kind, ident, job):
+    def _write_temp(self, path: Path, content: bytes, tag: str, rel: str) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
         # This job's own temp name: a stray from a crashed attempt at the same job
         # is overwritten here, and nobody else's temp is ever touched.
@@ -415,35 +569,62 @@ class Exporter:
             handle.flush()
             os.fsync(handle.fileno())
         self.checkpoint("temp_written", rel)
-        # Verified again at the last moment: an edit that landed while this job
-        # rendered and wrote its temp is kept, not replaced.
-        verdict, data = self._classify(rel, path, content)
-        if verdict == "flag":
+        return temp
+
+    def _undo(self, path: Path, aside: Path | None, temp: Path | None) -> None:
+        """Put a set-aside file back and drop this attempt's temp, keeping both if the path was retaken."""
+        if temp is not None:
             temp.unlink(missing_ok=True)
-            return self._flag(rel, kind, ident, data, job)
-        if not self._owns():
+        if aside is not None and aside.exists():
+            _retry(lambda: _install(aside, path))   # never over a newer file; the aside then stays
+
+    def _put_back(self, rel, kind, ident, path, aside, temp, seen: bytes, job) -> str:
+        """The aside bytes were edited: restore them untouched and flag."""
+        if temp is not None:
             temp.unlink(missing_ok=True)
-            return "lost"
-        # The residual window of §2.3(4): no lock spans a rename, so an exporter
-        # paused here past its lease can still replace after a successor published.
-        # Own-bytes recognition and the re-queue on its refused ack repair that.
-        self.checkpoint("before_replace", rel)
-        deadline = None
-        while True:
+        if not _retry(lambda: _install(aside, path)):
+            # A second writer took the path too. Both stay on disk; the flag keeps
+            # the edited aside bytes, and the aside file is left for the person.
+            return self._flag(rel, kind, ident, seen, job)
+        return self._flag(rel, kind, ident, seen, job)
+
+    def _recover_asides(self) -> None:
+        """Undo every set-aside file an earlier exporter generation left behind.
+
+        Called right after a claim that took the lease, so no live exporter can
+        be using them. A file whose path is empty goes back (the next export then
+        verifies it like any other file). When the path was refilled, verified
+        aside bytes are the store's own and are dropped; anything else stays on
+        disk and is flagged, so an edit caught aside is never lost.
+        """
+        rows = self.connection.execute("SELECT key,value_json FROM sync_state WHERE key>=? AND key<?",
+                                       (ASIDE_PREFIX, ASIDE_PREFIX[:-1] + "/")).fetchall()
+        for key, value in rows:
+            rel = key[len(ASIDE_PREFIX):]
+            path = self._path(rel)
+            for name in json.loads(value):
+                aside = path.with_name(name)
+                if not aside.exists():
+                    continue
+                if ".tmp." in name:
+                    aside.unlink(missing_ok=True)   # a render of committed state, never an only copy
+                    continue
+                if _retry(lambda: _install(aside, path)):
+                    continue
+                seen = aside.read_bytes()
+                if self._judge(rel, seen, None) != "flag":
+                    aside.unlink(missing_ok=True)
+                else:
+                    kind, ident = (self.connection.execute(
+                        "SELECT kind,id FROM projection WHERE file=?", (rel,)).fetchone() or ("unknown", None))
+                    self._flag(rel, kind, ident, seen, None)
+            self._begin()
             try:
-                os.replace(temp, path)
-                break
-            except OSError as exc:
-                if exc.errno not in _RETRYABLE_REPLACE_ERRNOS:
-                    temp.unlink(missing_ok=True)
-                    raise
-                deadline = deadline or time.monotonic() + 2.0
-                if time.monotonic() >= deadline:
-                    temp.unlink(missing_ok=True)
-                    raise
-                time.sleep(random.uniform(0.02, 0.08))
-        self.checkpoint("replaced", rel)
-        return path.stat()
+                self.connection.execute("DELETE FROM sync_state WHERE key=?", (key,))
+                self.connection.commit()
+            except BaseException:
+                self.connection.rollback()
+                raise
 
     def _flag(self, rel, kind, ident, data: bytes, job: Job | None) -> str:
         """Flag-and-keep-both (D2, the B-089 shape): the file stays exactly as found,
@@ -462,6 +643,7 @@ class Exporter:
                 "ON CONFLICT(file) DO UPDATE SET file_hash=excluded.file_hash,file_content=excluded.file_content",
                 (rel, kind, ident, datetime.now(timezone.utc).isoformat(), _digest(data), data))
             self.connection.execute("UPDATE projection SET dirty=1 WHERE file=?", (rel,))
+            self.connection.execute("DELETE FROM sync_state WHERE key=?", (ASIDE_PREFIX + rel,))
             if job is not None:
                 self.connection.execute("UPDATE projection_jobs SET state='conflict',lease_owner=NULL,lease_until=NULL "
                                         "WHERE job_key=?", (job.key,))
@@ -479,6 +661,7 @@ class Exporter:
         try:
             self._fenced()
             self.connection.execute("UPDATE projection SET dirty=1,quarantined=0 WHERE file=?", (rel,))
+            self.connection.execute("DELETE FROM sync_state WHERE key=?", (ASIDE_PREFIX + rel,))
             if job is not None:
                 self.connection.execute("UPDATE projection_jobs SET state='pending',lease_owner=NULL,lease_until=NULL "
                                         "WHERE job_key=? AND state='claimed'", (job.key,))
@@ -509,6 +692,7 @@ class Exporter:
                     "exported_seq=excluded.exported_seq",
                     (rel, kind, ident, digest, stat.st_mtime, stat.st_size, exported_seq))
             self.connection.execute("DELETE FROM projection_base WHERE file=?", (rel,))
+            self.connection.execute("DELETE FROM sync_state WHERE key=?", (ASIDE_PREFIX + rel,))
             self.checkpoint("ack_manifest", rel)
             if job is not None:
                 self.connection.execute("UPDATE projection_jobs SET state='exported',lease_owner=NULL,lease_until=NULL "
@@ -597,42 +781,70 @@ class Exporter:
 # ── Resolution (S10) ────────────────────────────────────────────────────────
 
 RESOLVE = "projection.resolve"
-_RESOLVE_ARGUMENTS = {"file", "take", "replaced", "replaced_hash"}
+_RESOLVE_ARGUMENTS = {"file", "take", "replaced_base64", "replaced_hash"}
+
+
+def resolvable(connection, rel: str) -> tuple[str, str | None, bytes | None] | None:
+    """`(kind, id, flagged bytes)` when `rel` may be resolved, else None.
+
+    A B-089 flag (legacy or native) carries the bytes it captured. A quarantine
+    inherited from the legacy store is resolvable too: native never creates one,
+    and without this nothing native could ever clear it. It has no captured bytes.
+    """
+    if _has_conflict_table(connection):
+        row = connection.execute("SELECT kind,id,file_content FROM projection_conflict WHERE file=?",
+                                 (rel,)).fetchone()
+        if row is not None:
+            return row[0], row[1], bytes(row[2])
+    row = connection.execute("SELECT kind,id FROM projection WHERE file=? AND quarantined=1", (rel,)).fetchone()
+    return None if row is None else (row[0], row[1], None)
 
 
 def validate_resolve(arguments: dict) -> None:
+    import base64
+    import binascii
     if set(arguments) - _RESOLVE_ARGUMENTS or "file" not in arguments:
-        raise ValueError("projection.resolve takes file, take, replaced and replaced_hash")
+        raise ValueError("projection.resolve takes file, take, replaced_base64 and replaced_hash")
     safe_relative(arguments["file"])
     if arguments.get("take") != "store":
         raise ValueError('projection.resolve only keeps the store version; take="file" needs the importer (N13)')
-    if arguments.get("replaced") is not None and not isinstance(arguments["replaced"], str):
-        raise ValueError("replaced must be text or null")
-    digest = arguments.get("replaced_hash")
-    if digest is not None and (not isinstance(digest, str) or len(digest) != 40
-                               or any(c not in "0123456789abcdef" for c in digest)):
-        raise ValueError("replaced_hash must be a sha1 hex digest or null")
+    encoded, digest = arguments.get("replaced_base64"), arguments.get("replaced_hash")
+    if (encoded is None) != (digest is None):
+        raise ValueError("replaced_base64 and replaced_hash come together")
+    if encoded is not None:
+        if not isinstance(encoded, str) or not isinstance(digest, str):
+            raise ValueError("replaced_base64 and replaced_hash must be text")
+        try:
+            raw = base64.b64decode(encoded, validate=True)
+        except (binascii.Error, ValueError):
+            raise ValueError("replaced_base64 is not base64") from None
+        if _digest(raw) != digest:
+            raise ValueError("replaced_hash does not match replaced_base64")
 
 
 def apply_resolve(transaction, arguments: dict) -> None:
-    """Keep the store's version of a flagged file (take="store").
+    """Keep the store's version of a flagged or inherited-quarantined file (take="store").
 
-    The flag goes. The bytes the resolver saw on disk, and chose to discard,
-    become the file's base, so the next export replaces exactly them and a newer
-    hand edit is flagged again. The entity's latest revision is queued for export
-    (a derived file is marked stale), and the replaced text is kept in the
-    resolution's domain event, as the legacy store keeps it in its change row.
+    The flag (or quarantine) goes. The bytes the resolver saw on disk, and chose
+    to discard, become the file's base, so the next export replaces exactly them
+    and a newer hand edit is flagged again. The entity's latest revision is queued
+    for export (a derived file is marked stale). The resolution's domain event
+    keeps the replaced bytes exactly (`file_base64`) and the bytes captured when
+    the file was flagged (`flagged_base64`); `file` is their text for reading.
+    When the file is gone by the time of the resolution, the flagged bytes are
+    what it replaces.
     """
+    import base64
     from . import events
     from .commands import projection_path
     from .migrate import encode
     connection, rel = transaction.connection, arguments["file"]
-    row = connection.execute("SELECT kind,id FROM projection_conflict WHERE file=?", (rel,)).fetchone() \
-        if _has_conflict_table(connection) else None
-    if row is None:
+    found = resolvable(connection, rel)
+    if found is None:
         raise ValueError(f"{rel} is not flagged; there is nothing to resolve")
-    kind, ident = row
-    connection.execute("DELETE FROM projection_conflict WHERE file=?", (rel,))
+    kind, ident, flagged = found
+    if _has_conflict_table(connection):
+        connection.execute("DELETE FROM projection_conflict WHERE file=?", (rel,))
     if arguments.get("replaced_hash") is not None:
         connection.execute(
             "INSERT INTO projection(file,kind,id,content_hash,mtime,size,dirty,quarantined,exported_seq) "
@@ -640,11 +852,18 @@ def apply_resolve(transaction, arguments: dict) -> None:
             "dirty=1,quarantined=0,quarantine_mtime=NULL,quarantine_size=NULL,quarantine_hash=NULL,exported_seq=NULL",
             (rel, kind, ident, arguments["replaced_hash"]))
     else:
-        connection.execute("UPDATE projection SET dirty=1,quarantined=0,exported_seq=NULL WHERE file=?", (rel,))
+        connection.execute("UPDATE projection SET dirty=1,quarantined=0,quarantine_mtime=NULL,quarantine_size=NULL,"
+                           "quarantine_hash=NULL,exported_seq=NULL WHERE file=?", (rel,))
+    replaced = arguments.get("replaced_base64")
+    raw = base64.b64decode(replaced) if replaced is not None else flagged
+    before = {"file": None if raw is None else raw.decode("utf-8", errors="replace"),
+              "file_base64": None if raw is None else base64.b64encode(raw).decode("ascii"),
+              "flagged_base64": None if flagged is None else base64.b64encode(flagged).decode("ascii"),
+              "file_missing": replaced is None, "store": None}
     event_id = ident or ("__backlog__" if kind == "backlog" else rel)
     transaction.group, transaction.seq = events.append(
         connection, transaction.request, transaction.group, kind, event_id, "resolve",
-        {"file": arguments.get("replaced"), "store": None}, {"file": rel, "took": "store"})
+        before, {"file": rel, "took": "store"})
     core = None
     if ident is not None:
         core = connection.execute("SELECT entity_key,revision,last_seq,archived,deleted FROM entity_core "

@@ -338,9 +338,12 @@ def test_a_newer_db_edit_while_an_old_job_renders_publishes_after_it(twins, monk
     assert_lossless(root)
 
 
-def test_a_paused_exporter_past_its_lease_leaves_a_transient_stale_file_that_is_repaired(twins, monkeypatch):
-    """§2.3(4): the old exporter passed its fence, paused, lost its lease, and replaced
-    anyway after a successor published the newer revision."""
+def test_a_paused_exporter_past_its_lease_cannot_install_over_its_successor(twins, monkeypatch):
+    """§2.3(4): the old exporter passed its fence and set the file aside, paused, lost
+    its lease, and a successor published the newer revision. Before the review fix
+    (P1) it then replaced anyway, leaving a transient stale file; now the successor's
+    recovery puts the aside file back, and the install never overwrites a file, so
+    the stale bytes never land."""
     root = twins.native
     stale_clock = {"at": time.time()}
     monkeypatch.setitem(projection.HOOKS, "clock", lambda: stale_clock["at"])
@@ -361,9 +364,9 @@ def test_a_paused_exporter_past_its_lease_leaves_a_transient_stale_file_that_is_
     with twins.at(root):
         answer = bs.backlog_update_task(task_id="test-epic-001", field="notes", value="stale revision")
     assert b"Successor revision" in successor["bytes"]
-    stale = (_dir(root) / LIVE).read_bytes()
-    assert b"Successor revision" not in stale, "the stale exporter replaced after its lease was gone"
+    assert (_dir(root) / LIVE).read_bytes() == successor["bytes"], "the stale exporter installed over its successor"
     assert "export pending" in answer, answer
+    assert [p.name for p in (_dir(root) / "tasks").iterdir() if ".aside." in p.name or ".tmp.j" in p.name] == []
     monkeypatch.setitem(projection.HOOKS, "clock", lambda: time.time() + 10 * outbox.LEASE_SECONDS)
     _recover(root, monkeypatch)
     assert (_dir(root) / LIVE).read_bytes() == successor["bytes"]

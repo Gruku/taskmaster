@@ -148,9 +148,42 @@ class _Render:
         return reason is not None
 
 
-def _pending_notices(connection) -> list[str]:
-    files = [r[0] for r in connection.execute(
-        "SELECT DISTINCT file FROM projection_jobs WHERE state IN ('pending','claimed') ORDER BY file")]
+_DERIVED_INPUTS = ((BACKLOG_FILE, ("backlog", "epic", "phase") + derived.KINDS),
+                   (store._IDEAS_INDEX_REL, ("idea",)))
+
+
+def _behind(connection, through: int) -> list[str]:
+    """The files a commit at or before `through` still owes, judged file by file.
+
+    A job file is behind while an unheld job at or before `through` is pending or
+    claimed. A derived file is behind while its `exported_seq` is older than the
+    newest input row committed at or before `through`. Held files are reported by
+    their own notice, not here. The stored `exported_through` watermark is not
+    trusted for this: it covers jobs only, never `backlog.yaml` or `IDEAS.md`.
+    """
+    connection.execute("BEGIN")
+    try:
+        files = [r[0] for r in connection.execute(
+            "SELECT DISTINCT j.file FROM projection_jobs j WHERE j.state IN ('pending','claimed') "
+            f"AND j.commit_seq<=? AND NOT {outbox._held_sql(connection)} ORDER BY j.file", (through,))]
+        for rel, kinds in _DERIVED_INPUTS:
+            placeholders = ",".join("?" for _ in kinds)
+            high = connection.execute(
+                f"SELECT COALESCE(MAX(last_seq),0) FROM entity_core WHERE kind IN ({placeholders}) AND last_seq<=?",
+                (*kinds, through)).fetchone()[0]
+            row = connection.execute("SELECT exported_seq FROM projection WHERE file=?", (rel,)).fetchone()
+            exported = None if row is None else row[0]
+            if high and (exported is None or int(exported) < int(high)) and outbox.held_file(connection, rel) is None:
+                files.append(rel)
+        return files
+    finally:
+        connection.rollback()
+
+
+def _pending_notices(connection, files: list[str] | None = None) -> list[str]:
+    if files is None:
+        files = [r[0] for r in connection.execute(
+            "SELECT DISTINCT file FROM projection_jobs WHERE state IN ('pending','claimed') ORDER BY file")]
     return [f"export pending: {rel} — retried on next call" for rel in files] or [
         "export pending: projection files — retried on next call"]
 
@@ -158,10 +191,12 @@ def _pending_notices(connection) -> list[str]:
 def drain(connection: sqlite3.Connection, backlog_dir: Path, *, session: str, through: int | None = None) -> list[str]:
     """Export every pending projection job, then refresh stale derived files.
 
-    Returns the `export pending: …` notices a caller must surface. Requires a
-    connection with no open transaction. `through` is the caller's commit: while
-    another exporter holds the lease the caller waits until the watermark passes
-    it, at most `WAIT_SECONDS`.
+    Returns the `export pending: …` notices a caller must surface; it never
+    raises for an export that could not finish, because the caller's command has
+    already committed. Requires a connection with no open transaction. `through`
+    is the caller's commit: while another exporter holds the lease the caller
+    waits, at most `WAIT_SECONDS`, until every file that commit touched is
+    exported (`_behind`), and otherwise reports those files pending.
     """
     if connection.in_transaction:
         raise RuntimeError("projection drain requires its own transaction")
@@ -170,22 +205,32 @@ def drain(connection: sqlite3.Connection, backlog_dir: Path, *, session: str, th
                                session=session, clock=clock, checkpoint=HOOKS["checkpoint"])
     deadline = clock() + WAIT_SECONDS
     while (jobs := exporter.claim()) is None:
-        if through is not None and outbox.exported_through(connection) >= through:
-            return exporter.warnings + progress.export(connection, backlog_dir, session)
-        if clock() >= deadline:
+        if through is not None:
+            behind = _behind(connection, through)
+            if not behind:
+                return exporter.warnings + progress.export(connection, backlog_dir, session)
+            if clock() >= deadline:
+                return _pending_notices(connection, behind)
+        elif clock() >= deadline:
             return _pending_notices(connection)
         sleep(_POLL_SECONDS)
     try:
         render = _Render(connection, backlog_dir)
         rendered = [(job, render.job(job)) for job in jobs]
         files = render.derived(exporter.warnings)
-        if rendered or files:
-            exporter.intend(rendered + [(rel, content) for rel, _kind, content, _seq in files])
         lost = False
-        for job, content in rendered:
-            if exporter.publish(job, content) == "lost":
+        if rendered or files:
+            try:
+                exporter.intend(rendered + [(rel, content) for rel, _kind, content, _seq in files])
+            except outbox.LeaseLost:
+                # Another exporter took over while this one rendered: it owns the
+                # jobs now. Nothing was touched; the caller is told, not raised at.
                 lost = True
-                break
+        if not lost:
+            for job, content in rendered:
+                if exporter.publish(job, content) == "lost":
+                    lost = True
+                    break
         if not lost:
             for rel, kind, content, seq in files:
                 if exporter.publish_derived(rel, kind, content, seq) == "lost":

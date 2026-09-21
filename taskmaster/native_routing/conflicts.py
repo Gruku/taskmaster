@@ -4,6 +4,7 @@
 """`backlog_resolve_conflict` on native stores (N11 S10, decision D3)."""
 from __future__ import annotations
 
+import base64
 import hashlib
 
 from taskmaster.native import projection as outbox
@@ -19,13 +20,22 @@ _TAKE_FILE_REFUSAL = (
     "a normal edit (for example `backlog_update_task`), then resolve with take=\"store\". Nothing was changed.")
 
 
+_QUARANTINED = "before activation (quarantined by the legacy store)"
+
+
 def _conflicts(call) -> list[dict]:
+    """Flagged files, oldest first, then quarantines inherited from the legacy store."""
     with call.read() as snapshot:
         connection = snapshot.connection
-        if not outbox.flagged_files(connection):
-            return []
-        return [dict(zip(("file", "kind", "id", "flagged_at"), row)) for row in connection.execute(
-            "SELECT file,kind,id,flagged_at FROM projection_conflict ORDER BY flagged_at,file")]
+        flagged = [] if not outbox.flagged_files(connection) else [
+            dict(zip(("file", "kind", "id", "flagged_at"), row)) for row in connection.execute(
+                "SELECT file,kind,id,flagged_at FROM projection_conflict ORDER BY flagged_at,file")]
+        seen = {c["file"] for c in flagged}
+        quarantined = [{"file": file, "kind": kind, "id": ident, "flagged_at": _QUARANTINED}
+                       for file, kind, ident in connection.execute(
+                           "SELECT file,kind,id FROM projection WHERE quarantined=1 ORDER BY file")
+                       if file not in seen]
+    return flagged + quarantined
 
 
 def _block(label: str, text: str | None, absent: str) -> str:
@@ -35,20 +45,20 @@ def _block(label: str, text: str | None, absent: str) -> str:
 
 
 def _detail(call, file: str) -> str:
+    listed = {c["file"]: c for c in _conflicts(call)}
+    if file not in listed:
+        return f"Error: {file} is not flagged."
     with call.read() as snapshot:
         connection = snapshot.connection
-        row = connection.execute("SELECT kind,id,flagged_at,file_content FROM projection_conflict WHERE file=?",
-                                 (file,)).fetchone() if outbox.flagged_files(connection) else None
-        if row is None:
-            return f"Error: {file} is not flagged."
-        kind, ident, flagged_at, observed = row
+        kind, ident, observed = outbox.resolvable(connection, file)
         store_text, store_path = projection.store_version(connection, call.backlog_dir, kind, ident, file)
+    flagged_at = listed[file]["flagged_at"]
     on_disk = projection.read_file(call.backlog_dir, file)
     on_disk_text = None if on_disk is None else on_disk.decode("utf-8", errors="replace")
-    observed_text = bytes(observed).decode("utf-8", errors="replace")
+    observed_text = None if observed is None else observed.decode("utf-8", errors="replace")
     parts = [f"## {file} ({kind} {ident}), flagged {flagged_at}",
              _block("File on disk now", on_disk_text, "the file is missing")]
-    if observed_text != on_disk_text:
+    if observed_text is not None and observed_text != on_disk_text:
         parts.append(_block("File as last seen by the store", observed_text, ""))
     absent = (f"the store writes this entity to {store_path} instead" if store_path
               else "the store would write no file here: the entity is deleted or has no file of its own")
@@ -77,9 +87,10 @@ def resolve_conflict(call, *, file, take):
         return "Error: " + _TAKE_FILE_REFUSAL.format(file=file)
     replaced = projection.read_file(call.backlog_dir, file)
     try:
+        # The exact bytes go into the resolution, never a lossy decoding of them.
         call.execute(outbox.RESOLVE, {
             "file": file, "take": "store",
-            "replaced": None if replaced is None else replaced.decode("utf-8", errors="replace"),
+            "replaced_base64": None if replaced is None else base64.b64encode(replaced).decode("ascii"),
             "replaced_hash": None if replaced is None else hashlib.sha1(replaced).hexdigest()})
     except (ValueError, KeyError) as exc:
         return error_text(exc)
