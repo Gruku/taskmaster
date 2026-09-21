@@ -76,7 +76,8 @@ def _seed(ids: dict) -> None:
     bs.backlog_handover_create(tldr="Mapped the gamma call sites", task_ids=[RESUME], thread="gamma")
     bs.backlog_handover_create(tldr="Omega plan drafted", next_action="review the omega plan",
                                task_ids=["omega-002"], thread="omega")
-    bs.backlog_issue_create(title="Nightly build is slow", severity="P2", evidence="Seen for a week.")
+    ids["issue"] = aj.created_id(bs.backlog_issue_create(title="Nightly build is slow", severity="P2",
+                                                         evidence="Seen for a week."))
     bs.backlog_note(action="create", text="Ask about the release date")
     bs.backlog_note(action="create", text="Parser owners are away Friday", pinned=True)
 
@@ -186,6 +187,8 @@ def test_the_new_path_yields_every_required_fact(base, tmp_path, monkeypatch, si
     assert measured.new.contexts()[0]["mandatory"]["clear"] is False
     # "Same required context": whatever the old path named, the new path names too.
     assert measured.covered_old <= measured.named_new
+    if journey.name in ("pick", "resume"):   # the old path's issue list (step 5b)
+        assert ("issue", measured.ids["issue"]) in measured.named_new
 
 
 @pytest.mark.parametrize("side", SIDES)

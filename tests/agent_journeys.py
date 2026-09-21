@@ -27,6 +27,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 import json
 import re
+import time
 from typing import Callable
 
 from taskmaster import backlog_server as bs
@@ -48,9 +49,12 @@ def as_session(session: str):
 class Trace:
     calls: list = field(default_factory=list)   # (tool, bytes)
     answers: list = field(default_factory=list)  # (tool, text)
+    seconds: list = field(default_factory=list)  # wall time per call; reported, never asserted
 
     def run(self, tool: str, **kwargs) -> str:
+        started = time.perf_counter()
         answer = getattr(bs, tool)(**kwargs)
+        self.seconds.append(time.perf_counter() - started)
         self.calls.append((tool, len(answer.encode("utf-8"))))
         self.answers.append((tool, answer))
         return answer
@@ -81,7 +85,8 @@ class Journey:
     gap: Callable[[dict], None] = lambda ids: None
 
 
-SECTION_KINDS = {"bugs": "bug", "handovers": "handover", "dependencies": "dependency"}
+SECTION_KINDS = {"bugs": "bug", "handovers": "handover", "dependencies": "dependency",
+                 "issues": "issue"}
 
 
 def blocker_set(context: dict) -> set[tuple[str, str]]:
@@ -142,7 +147,8 @@ def _pick_old(t: Trace, ids: dict) -> None:
 def _pick_new(t: Trace, ids: dict) -> None:
     t.run("backlog_next_available")
     t.run("backlog_claim", action="status")          # the parallel-task check
-    t.run("backlog_context", focus=ids["pick"], scope="task", include=["handovers"])
+    # handovers and issues stand in for steps 5a and 5b; the blockers are mandatory.
+    t.run("backlog_context", focus=ids["pick"], scope="task", include=["handovers", "issues"])
     t.run("backlog_pick_task", task_id=ids["pick"])
 
 
@@ -179,7 +185,7 @@ def _resume_old(t: Trace, ids: dict) -> None:
 
 def _resume_new(t: Trace, ids: dict) -> None:
     t.run("backlog_changes_since", cursor=ids["_cursor"], epic=ids["resume_epic"])
-    t.run("backlog_context", scope="session", include=["handovers"])
+    t.run("backlog_context", scope="session", include=["handovers", "issues"])
     t.run("backlog_claim", action="renew", task_id=ids["resume"])
 
 
