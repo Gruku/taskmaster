@@ -349,6 +349,57 @@ def test_a_crash_inside_the_move_rolls_it_back_as_a_unit(twins, fake_time, monke
     assert _progress_path(root).read_bytes() == crashed and _applied(root) == [PARAGRAPH]
 
 
+def _temps(root) -> list[str]:
+    return sorted(p.name for p in _progress_path(root).parent.glob("PROGRESS.md.tmp.*"))
+
+
+@pytest.mark.parametrize("stage", ("progress_seeded", "progress_temp_written", "progress_applying"))
+def test_a_killed_process_at_every_checkpoint_loses_nothing_and_leaves_no_temp(twins, fake_time, stage):
+    """A real `os._exit` (no handler runs, no temp unlinked, no rollback issued) at
+    each remaining PROGRESS checkpoint: the next call writes the paragraph exactly
+    once, moves it, and leaves no `PROGRESS.md.tmp.*` behind."""
+    root = twins.native
+    arguments = {"id": "test-epic-001", "changelog": PARAGRAPH}
+    done = subprocess.run([sys.executable, "-c", CHILD, str(root), stage, "task.complete",
+                           json.dumps(arguments)], capture_output=True, text=True, timeout=120)
+    assert done.returncode == 17, (done.returncode, done.stderr[-2000:])
+    if stage == "progress_temp_written":
+        assert _temps(root) == ["PROGRESS.md.tmp.child"]  # the stray this kill leaves
+    assert [entry["text"] for _key, entry in _pending(root)] == [PARAGRAPH]
+    import time
+    fake_time.at = time.time() + progress.LEASE_SECONDS + 1  # past any lease the child left
+    with native_connection(root) as connection:
+        assert progress.export(connection, root / ".taskmaster", "recovery") == []
+    assert _region(_progress(root)).count("- survived") == 1
+    assert _pending(root) == [] and _applied(root) == [PARAGRAPH]
+    assert _temps(root) == []
+
+
+def test_recovery_removes_only_the_exporters_own_recorded_temps(twins, fake_time):
+    """Recovery drops a temp only when it is recorded as the exporter's and named by
+    its pattern, in PROGRESS.md's own directory; every other file stays untouched."""
+    root = twins.native
+    local = _progress_path(root).parent
+    keep = {"PROGRESS.md.bak": b"user backup", "PROGRESS.md.tmp-notes": b"notes",
+            "other.md.tmp.dead": b"not ours", "PROGRESS.md.tmp.unrecorded": b"not on record"}
+    for name, data in keep.items():
+        (local / name).write_bytes(data)
+    (local / "PROGRESS.md.tmp.dead").write_bytes(b"stray render")
+    outside = root / ".taskmaster" / "PROGRESS.md.tmp.dead"
+    outside.write_bytes(b"outside")
+    _put(root, "progress.temps", ["PROGRESS.md.tmp.dead", "PROGRESS.md.bak", "PROGRESS.md.tmp-notes",
+                                  "other.md.tmp.dead", "../PROGRESS.md.tmp.dead", "PROGRESS.md",
+                                  "PROGRESS.md.tmp.x/../../PROGRESS.md.tmp.dead", "store.db"])
+    before = _progress(root)
+    with twins.at(root):
+        bs.backlog_complete_task(task_id="test-epic-001", session_title="Cleans", done="- cleaned")
+    assert not (local / "PROGRESS.md.tmp.dead").exists()
+    assert {name: (local / name).read_bytes() for name in keep} == keep
+    assert outside.read_bytes() == b"outside"
+    assert (local / "store.db").exists() and _progress(root) != before
+    assert "- cleaned" in _region(_progress(root))
+
+
 def test_text_outside_the_markers_is_preserved(twins, fake_time):
     root = twins.native
     _progress_path(root).write_text(

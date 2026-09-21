@@ -17,6 +17,10 @@ State, all in `sync_state` (no DDL):
   a write to it would mark the native store stale.
 - `progress.writer`: `{owner, generation, until, rendered_at}`, the lease that
   makes one process at a time render and move, and the cross-process 5 s throttle.
+- `progress.temps`: the temp names (`PROGRESS.md.tmp.<session>`) a lease holder
+  recorded before writing one. A process killed between the temp write and the
+  replace leaves its temp; the next lease holder drops every recorded name that
+  still matches that pattern, and nothing else.
 
 The region is regenerated whole from `applied[-room:] + pending` on every render,
 so a crash between the file write and the move re-renders the identical file.
@@ -49,6 +53,7 @@ CAP = 200
 APPLIED_KEY = "progress.applied"
 SEEDED_KEY = "progress.seeded"
 WRITER_KEY = "progress.writer"
+TEMPS_KEY = "progress.temps"
 _META_APPLIED, _META_PENDING = "progress_log", "pending_progress_log"
 REL = "local/PROGRESS.md"
 NOTICE = f"export pending: {REL} — retried on next call"
@@ -144,6 +149,7 @@ class _Writer:
         self.checkpoint = HOOKS["checkpoint"] or (lambda stage: None)
         database = Path(connection.execute("PRAGMA database_list").fetchone()[2])
         self.target = database.parent / "PROGRESS.md"
+        self.temp = self.target.with_name(f"{self.target.name}.tmp.{session}")
 
     def _due(self, writer: dict, now: float) -> bool:
         rendered = writer.get("rendered_at")
@@ -165,6 +171,9 @@ class _Writer:
             self.generation = int(writer.get("generation", 0)) + 1
             _put(self.connection, WRITER_KEY, dict(writer, owner=self.owner, generation=self.generation,
                                                    until=now + LEASE_SECONDS))
+            # Durable before the temp exists, so a kill after its write is recoverable.
+            temps = [name for name in _get(self.connection, TEMPS_KEY, []) if name != self.temp.name]
+            _put(self.connection, TEMPS_KEY, temps + [self.temp.name])
             seed(self.connection)
             self.checkpoint("progress_seeded")
             self.connection.commit()
@@ -172,6 +181,28 @@ class _Writer:
             self.connection.rollback()
             raise
         return "taken"
+
+    def _own_temp(self, name) -> Path | None:
+        """The path of a recorded name only if it is this exporter's temp pattern, in
+        PROGRESS.md's own directory; anything else is never touched."""
+        prefix = f"{self.target.name}.tmp."
+        if not isinstance(name, str) or not name.startswith(prefix) or len(name) == len(prefix):
+            return None
+        if "/" in name or "\\" in name or name in (".", "..") or Path(name).name != name:
+            return None
+        return self.target.with_name(name)
+
+    def _drop_strays(self) -> None:
+        """Holding the lease: remove temps an earlier writer recorded and left (it was
+        killed before its replace). A temp is a render of committed state, never data."""
+        for name in _get(self.connection, TEMPS_KEY, []):
+            path = self._own_temp(name)
+            if path is None or path == self.temp:
+                continue
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass    # still on record: the next lease holder tries again
 
     def _owns(self, writer: dict) -> bool:
         return writer.get("owner") == self.owner and writer.get("generation") == self.generation
@@ -204,7 +235,8 @@ class _Writer:
         entries = (applied[-room:] if room else []) + pending
         existing = self.target.read_text(encoding="utf-8") if self.target.exists() else ""
         rendered = bs._render_progress_dashboard(data, existing, entries)
-        temp = self.target.with_name(f"{self.target.name}.tmp.{self.session}")
+        temp = self.temp
+        self._drop_strays()
         try:
             self.target.parent.mkdir(parents=True, exist_ok=True)
             with temp.open("w", encoding="utf-8", newline="\n") as handle:
@@ -238,6 +270,11 @@ class _Writer:
                 applied = _entries(_get(self.connection, APPLIED_KEY, []))
                 room = max(CAP - len(moved), 0)
                 _put(self.connection, APPLIED_KEY, (applied[-room:] if room else []) + moved)
+            recorded = _get(self.connection, TEMPS_KEY, [])
+            left = [name for name in recorded
+                    if (path := self._own_temp(name)) is not None and path.exists()]
+            if left != recorded:
+                _put(self.connection, TEMPS_KEY, left)
             now = self.clock()
             _put(self.connection, WRITER_KEY, dict(writer, until=now, rendered_at=now))
             self.checkpoint("progress_applying")
