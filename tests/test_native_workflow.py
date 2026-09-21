@@ -309,18 +309,21 @@ def test_completion_archives_the_bugs_the_task_fixed_in_the_same_commit(workspac
 
 
 def test_the_session_changelog_paragraph_commits_with_the_transition(workspace):
+    def pending(connection):
+        return [json.loads(value)["text"] for (value,) in connection.execute(
+            "SELECT value_json FROM sync_state WHERE key LIKE 'progress.pending.%' ORDER BY key")]
+
     with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
         run(connection, "task.pick", {"id": "demo-001", "session": "alpha"}, "claim")
         express(connection, "demo-001", "log")
         run(connection, "task.complete", {"id": "demo-001", "changelog": "### Session\n- shipped"}, "done")
-        pending = json.loads(connection.execute(
-            "SELECT value_json FROM sync_state WHERE key='pending_progress_log'").fetchone()[0])
-        assert [entry["text"] for entry in pending] == ["### Session\n- shipped"]
+        # One row per paragraph (N11 D4), never the pre-N11 whole-list key.
+        assert pending(connection) == ["### Session\n- shipped"]
+        assert connection.execute(
+            "SELECT 1 FROM sync_state WHERE key='pending_progress_log'").fetchone() is None
         with pytest.raises(ValueError):
             run(connection, "task.complete", {"id": "demo-002", "changelog": "lost"}, "rejected")
-        pending = json.loads(connection.execute(
-            "SELECT value_json FROM sync_state WHERE key='pending_progress_log'").fetchone()[0])
-        assert len(pending) == 1
+        assert len(pending(connection)) == 1
 
 
 def test_in_review_requires_a_human_action(workspace):
