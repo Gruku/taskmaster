@@ -343,3 +343,22 @@ def test_a_merge_command_is_judged_against_the_projects_own_ladder(native_projec
     by_command = documents[("task", "test-epic-002")][0]
     assert by_tool.get("merge_gate_state"), by_tool
     assert by_command.get("merge_gate_state") == by_tool.get("merge_gate_state"), (by_command, by_tool)
+
+
+def test_an_imported_document_cannot_be_typed_in_through_commands(native_project):
+    """Provenance says a stored body came from its declared file. Only the
+    importer, which reads that file, may supply the body (review B, item 2)."""
+    bs.backlog_add_task(title="Child", epic="test-epic", phase="dev", tldr="c",
+                        options={"docs": "spec:docs/spec.md"})
+    (native_project / "docs").mkdir(exist_ok=True)
+    (native_project / "docs" / "spec.md").write_text("The real file.\n", encoding="utf-8")
+
+    result = _answer(bs.backlog_batch_update(commands=[{"operation": "document.import", "arguments": {
+        "kind": "task", "id": "test-epic-001", "section": "spec", "path": "docs/spec.md",
+        "body": "Fabricated, never read from any file"}}]))
+
+    assert result["ok"] is False and result["error"] == "internal_operation", result
+    assert "backlog_document_import" in result["detail"], result
+    answer = bs.backlog_get_task(task_id="test-epic-001", sections=["spec"], provenance=True)
+    assert "Fabricated" not in answer and "source: import" not in answer, answer
+    assert "The real file." in answer, answer
