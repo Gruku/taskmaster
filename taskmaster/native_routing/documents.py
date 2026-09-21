@@ -97,7 +97,7 @@ def _project_file(root: Path, path: str) -> str | None:
 
 @adapter("backlog_document_import")
 def document_import(call, *, kind, entity_id, sections):
-    from taskmaster.native.contracts import Conflict
+    from taskmaster.native.contracts import MAX_BYTES, Conflict
     from taskmaster.taskmaster_v3 import TASK_DOC_SECTIONS
 
     if kind != "task":
@@ -118,7 +118,10 @@ def document_import(call, *, kind, entity_id, sections):
     if not wanted:
         return f"Error: task `{entity_id}` declares no document sections to import"
     root = project_root() or call.backlog_dir.parent
-    lines =[f"## import `{entity_id}`\n"]
+    # Each section is its own commit, so one bad file neither undoes nor hides the
+    # sections stored before it, and does not stop the ones after it: the answer
+    # lists every section's outcome and leads with `Error:` if any failed.
+    lines, failed = [], 0
     for section in wanted:
         path = declared.get(section)
         if not path:
@@ -129,11 +132,20 @@ def document_import(call, *, kind, entity_id, sections):
             if body is None:
                 lines.append(f"- {section}: no file at {path} — nothing imported")
                 continue
+            size = len(body.encode("utf-8"))
+            if size > MAX_BYTES:
+                raise _Unreadable(f"{path} is {size} bytes, over the {MAX_BYTES}-byte (1 MiB) limit on one "
+                                  "imported document")
             receipt = call.execute("document.import", {"kind": "task", "id": entity_id, "section": section,
                                                        "path": path, "body": body})
-        except _Unreadable as exc:
-            return f"Error: {section}: {exc} — nothing imported"
         except (ValueError, KeyError, Conflict) as exc:
-            return error_text(exc)
+            failed += 1
+            reason = str(exc) if isinstance(exc, _Unreadable) else error_text(exc)[len("Error: "):]
+            lines.append(f"- {section}: FAILED — {reason} — nothing imported")
+            continue
         lines.append(f"- {section}: {'imported' if receipt['affected'] else 'unchanged'} from {path}")
-    return call.finish("\n".join(lines))
+    header = f"## import `{entity_id}`\n"
+    if failed:
+        header = (f"Error: {failed} of {len(wanted)} sections failed to import; every section listed as "
+                  f"imported or unchanged is stored.\n\n{header}")
+    return call.finish("\n".join([header, *lines]))
