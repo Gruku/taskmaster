@@ -28,6 +28,8 @@ import sqlite3
 import time
 from typing import Callable, Iterable
 
+from .db import assert_native
+
 LEASE_SECONDS = 30.0
 # Sharing violations an indexer or antivirus causes on Windows; the replace is retried.
 _RETRYABLE_REPLACE_ERRNOS = {5, 13, 32, errno.EACCES, errno.EPERM}
@@ -223,6 +225,7 @@ class Exporter:
         """
         self._begin()
         try:
+            assert_native(self.connection)
             now = self.clock()
             current = lease(self.connection)
             if current.get("owner") not in (None, self.owner) and float(current.get("until", 0)) > now:

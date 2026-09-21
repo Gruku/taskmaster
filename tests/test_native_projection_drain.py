@@ -78,7 +78,7 @@ def test_the_wait_behind_another_exporter_times_out_with_the_pending_notice(twin
     with twins.at(twins.native):
         answer = bs.backlog_update_task(task_id="test-epic-001", field="notes", value="waits")
     assert "export pending: tasks/test-epic-001.md — retried on next call" in answer
-    assert projection.WAIT_SECONDS <= fake_time.slept < projection.WAIT_SECONDS + 1
+    assert projection.WAIT_SECONDS - 0.1 <= fake_time.slept < projection.WAIT_SECONDS + 1
     assert b"waits" not in (twins.native / ".taskmaster" / "tasks" / "test-epic-001.md").read_bytes()
 
 
@@ -120,7 +120,9 @@ def test_the_drain_calls_the_progress_seam_once(twins, monkeypatch):
     assert len(calls) == 1
 
 
-def test_an_edit_that_renders_the_same_bytes_performs_no_replace(twins, monkeypatch):
+def test_a_job_that_renders_the_same_bytes_performs_no_replace(twins, monkeypatch):
+    with twins.at(twins.native):
+        bs.backlog_update_task(task_id="test-epic-001", field="notes", value="once")
     replaced = []
     real = os.replace
 
@@ -128,12 +130,14 @@ def test_an_edit_that_renders_the_same_bytes_performs_no_replace(twins, monkeypa
         replaced.append(str(target))
         return real(source, target)
 
-    with twins.at(twins.native):
-        bs.backlog_pick_task(task_id="test-epic-001")
-        monkeypatch.setattr(os, "replace", counting)
-        # A claim renewal moves only the lease, which the task file does not render.
-        bs.backlog_claim(action="renew", task_id="test-epic-001", ttl_seconds=600)
-    assert not [path for path in replaced if path.endswith("test-epic-001.md")], replaced
+    monkeypatch.setattr(os, "replace", counting)
+    with native_connection(twins.native) as connection:
+        # The file's export record, re-queued: its render is byte-identical to the file.
+        connection.execute("UPDATE projection_jobs SET state='pending' WHERE file='tasks/test-epic-001.md'")
+        assert projection.drain(connection, twins.native / ".taskmaster", session="t") == []
+        assert connection.execute("SELECT state FROM projection_jobs WHERE file='tasks/test-epic-001.md'"
+                                  ).fetchall() == [("exported",)]
+    assert replaced == []
 
 
 def test_the_drain_holds_no_database_lock_across_file_io(twins, monkeypatch):

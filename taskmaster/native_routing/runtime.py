@@ -43,14 +43,14 @@ class NativeCall:
                     "request_id": uuid.uuid4().hex, "operation": operation,
                     "arguments": arguments, "expected_revisions": list(expected or [])}
         receipt = commands.execute(self.connection, envelope)
-        self.drain()
+        self.drain(through=receipt["commit_seq"])
         self.receipts.append(receipt)
         if receipt["affected"]:
             self.seq = receipt["commit_seq"]
         return receipt
 
-    def drain(self) -> None:
-        for notice in projection.drain(self.connection, self.backlog_dir, session=self.session):
+    def drain(self, through: int | None = None) -> None:
+        for notice in projection.drain(self.connection, self.backlog_dir, session=self.session, through=through):
             if notice not in self.notices:
                 self.notices.append(notice)
 
