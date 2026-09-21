@@ -6,7 +6,9 @@ native store necessarily reports different facts about itself.
 """
 from __future__ import annotations
 
+from contextlib import closing
 import json
+import sqlite3
 
 import pytest
 import yaml
@@ -192,3 +194,61 @@ def test_validate_matches(tmp_path, monkeypatch):
                options={"docs": "plan:docs/missing.md;spec:has a space"})
     legacy, native = twins.same("backlog_validate")
     assert "docs.plan path not found" in native
+
+
+def _flag(root, rel, kind, ident):
+    """Hand-edit `rel` and flag it the way the legacy store does (B-089): both changed."""
+    path = root / ".taskmaster" / rel
+    hand_edit = path.read_bytes() + b"\nHand edit nobody has chosen against.\n"
+    path.write_bytes(hand_edit)
+    with closing(sqlite3.connect(root / ".taskmaster" / "local" / "store.db")) as connection:
+        connection.execute(
+            "INSERT INTO projection_conflict(file,kind,id,flagged_at,file_hash,file_content) "
+            "VALUES(?,?,?,'2026-09-21T00:00:00Z','x',?)", (rel, kind, ident, hand_edit))
+        connection.commit()
+    return path, hand_edit
+
+
+def _task_files(root, ident):
+    return sorted(p.relative_to(root / ".taskmaster").as_posix()
+                  for p in (root / ".taskmaster").rglob(f"{ident}.md"))
+
+
+def test_a_file_flagged_before_activation_is_kept_and_reported(twins):
+    """B-089 on the native path: a file the legacy store flagged (both it and the
+    store changed) must not be overwritten by a native write, and store status must
+    name it, until someone chooses a side."""
+    rel = "tasks/test-epic-001.md"
+    path, hand_edit = _flag(twins.native, rel, "task", "test-epic-001")
+    with twins.at(twins.native):
+        answer = bs.backlog_update_task(task_id="test-epic-001", field="notes", value="store side")
+        report = bs.backlog_store_status()
+    assert path.read_bytes() == hand_edit, answer
+    assert f"export pending: {rel} is flagged" in answer
+    flagged = report.split("Flagged", 1)[1].split("\n", 2)
+    assert rel in "".join(flagged[:2]), report
+
+
+def test_a_flagged_entity_is_not_moved_to_its_archive_path(twins):
+    """The hold is per entity, as in the legacy `_export_blocked`: archiving must not
+    write the archive copy beside the flagged file, leaving one id in two places."""
+    rel = "tasks/test-epic-001.md"
+    path, hand_edit = _flag(twins.native, rel, "task", "test-epic-001")
+    with twins.at(twins.native):
+        answer = bs.backlog_archive_task(task_id="test-epic-001", reason="wont-fix")
+    assert path.read_bytes() == hand_edit, answer
+    assert _task_files(twins.native, "test-epic-001") == [rel], answer
+    assert f"export pending: {rel} is flagged" in answer
+
+
+def test_a_flagged_entity_file_is_not_removed(twins):
+    """An epic whose own file would go (its heavy fields cleared) keeps a flagged file."""
+    with twins.at(twins.native):
+        bs.backlog_update_epic(epic_id="test-epic", field="description", value="Store prose")
+    (rel,) = _task_files(twins.native, "test-epic")
+    path, hand_edit = _flag(twins.native, rel, "epic", "test-epic")
+    with twins.at(twins.native):
+        answer = bs.backlog_update_epic(epic_id="test-epic", field="description", value="")
+    assert path.read_bytes() == hand_edit, answer
+    assert _task_files(twins.native, "test-epic") == [rel], answer
+    assert f"export pending: {rel} is flagged" in answer

@@ -775,6 +775,9 @@ DEFERRED = {
     "backlog_index_status": "N15", "backlog_validate": "N15",
     # Resync and Linear delivery are synchronization, owned by N11-N13.
     "backlog_handover_resync": "N13", "backlog_issue_resync": "N13",
+    # Resolving a file flagged because it and the store both changed (6.0.3,
+    # B-089) is projection reconciliation, owned by the N11 outbox.
+    "backlog_resolve_conflict": "N11",
     # Host actions never touch entity state.
     "backlog_open_viewer": "host", "viewer_prefs_set": "host",
 }

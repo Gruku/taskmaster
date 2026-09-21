@@ -117,7 +117,7 @@ def diagnose(root: Path, output: Path, skip_related: bool = False):
     if skip_related:
         # Counterfactual only: never a production optimization. Equivalence is
         # checked below for this exact synthetic no-links workload.
-        store.Store._rebuild_related = staticmethod(lambda connection: None)
+        store.Store._rebuild_related = staticmethod(lambda connection, touched=None: None)
 
     def record(name, seconds):
         spans.setdefault(name, []).append(seconds)

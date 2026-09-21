@@ -3743,6 +3743,30 @@
       "returns": "str",
       "transactional": true
     },
+    "backlog_resolve_conflict": {
+      "category": "maintenance",
+      "documentation": "List, compare or resolve files flagged because they and the store both changed.\n\nA projection file (a task, epic or phase file, `backlog.yaml`,\n`project.yaml`, ...) edited or repaired while the store held a change it\nhad not yet written there is flagged: nothing is merged, the store keeps\nits version, the file is left exactly as written, and exports to it pause.\nEvery tool result names flagged files until they are resolved.\n\n- no `file`: list flagged files.\n- `file` only: show both versions -- the file as last seen and as on disk\n  now, and the exact text the store would write.\n- `file` and `take=\"file\"`: import the file as it is on disk now; the\n  store's replaced values stay in the change log.\n- `file` and `take=\"store\"`: write the store's version over the file (or\n  move/remove it if the entity is archived or deleted); the replaced file\n  text is kept in the resolution's change row.\n\nA resolution always takes one whole file. For `backlog.yaml` that means\nevery epic and phase entry in it at once: there is no per-entity choice, so\ncompare the two versions first and edit the side you keep if it needs\npieces of the other.\n\nWhoever resolves decides; the store never picks a side on its own.",
+      "parameters": [
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "file",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "take",
+          "required": false,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": false
+    },
     "backlog_search": {
       "category": "targeted-query",
       "documentation": "Full-text search across every backlog entity — tasks, epics, bugs, issues, handovers,\ndecisions and ideas — ranked by relevance (bm25) over the store's FTS index.\n\nArgs:\n    query: Search text (case-insensitive). Matched against titles and bodies (notes,\n        descriptions, evidence, handover prose). Multiple words are ANDed together.\n    kinds: Optional filter, e.g. [\"bug\", \"issue\"]. Unknown kinds are ignored; omit for all.\n        Valid kinds: task, epic, bug, issue, handover, decision, idea.",

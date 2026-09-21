@@ -213,7 +213,8 @@ All tools are prefixed with `backlog_`. These are the low-level building blocks 
 | `backlog_get_task(task_id)` | Full task detail with epic context, deps, docs, related tasks |
 | `backlog_search(query, kinds?)` | FTS5-ranked search across all entity kinds (tasks, bugs, issues, decisions, handovers, ideas); `kinds` filters the set; falls back to substring search when the store's FTS is unavailable |
 | `backlog_query(sql, limit?)` | Guarded read-only SELECT/WITH query directly over the store (`.taskmaster/local/store.db`) |
-| `backlog_store_status` | Store health: root and how it was resolved, schema version, db/WAL size, dirty and quarantined projection files, live sessions, recent changes, pending Linear pushes. Never creates or repairs a store |
+| `backlog_store_status` | Store health: root and how it was resolved, schema version, db/WAL size, dirty, quarantined and flagged projection files, live sessions, recent changes, pending Linear pushes. Never creates or repairs a store |
+| `backlog_resolve_conflict(file?, take?)` | Files flagged because they were edited while the store held an unwritten change to them: nothing is merged and exports to them pause. No `file` lists them; `file` alone shows the file and the store's version; `take="file"` imports the file, `take="store"` writes the store's version over it |
 | `backlog_index_status(rebuild?)` | Derived-table row counts and the active YAML loader; `rebuild` recomputes the derived tables and unlinks a legacy `local/index.db` |
 | `backlog_dependencies(task_id)` | Upstream (depends-on) and downstream (unblocks) graph |
 | `backlog_next_available` | Ready-to-work tasks: todo in active epics, deps satisfied, phase-filtered |
