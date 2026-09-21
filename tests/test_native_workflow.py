@@ -142,14 +142,19 @@ def test_a_malformed_bundle_is_refused_by_name_not_by_the_driver(workspace):
             run(connection, "task.pick", {"id": "demo-001", "session": "alpha"}, "claim")
 
 
-def test_a_stale_lock_on_a_todo_row_does_not_refuse_the_pick(workspace):
-    """The tool tests the lock only for a row that is already in-progress, so a
-    `todo` row carrying a leftover `locked_by` is picked, not refused. Migrated
-    rows are where that inconsistency arrives."""
+def test_a_peers_lock_on_a_todo_row_refuses_the_pick_unless_forced(workspace):
+    """The holder is `locked_by`, whatever the row's status (`native.claims`):
+    `backlog_context` reports a peer's lock on a `todo` row as held, so a pick
+    must not take it silently. N07 picked such a row for parity with a tool that
+    only looked at the lock inside its in-progress branch; that was a silent
+    steal of a claim the resolver reports. The status check still comes first."""
     with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
         run(connection, "task.update", {"id": "demo-001", "field": "locked_by", "value": "ghost"}, "stale")
         assert fields(connection, "task", "demo-001")["status"] == "todo"
-        run(connection, "task.pick", {"id": "demo-001", "session": "alpha"}, "claim")
+        with pytest.raises(Conflict, match="locked by another session"):
+            run(connection, "task.pick", {"id": "demo-001", "session": "alpha"}, "claim")
+        assert fields(connection, "task", "demo-001")["locked_by"] == "ghost"
+        run(connection, "task.pick", {"id": "demo-001", "session": "alpha", "force": True}, "steal")
         stored = fields(connection, "task", "demo-001")
         assert stored["locked_by"] == "alpha" and stored["status"] == "in-progress"
 
