@@ -157,3 +157,59 @@ def test_import_refuses_on_a_legacy_store(twins):
     with twins.at(twins.legacy):
         answer = bs.backlog_document_import(kind="task", entity_id="test-epic-001")
     assert answer.startswith("Error:") and "native" in answer
+
+
+# -- The importer reads only the project's own files (review B, item 4) --------
+
+
+def _declare(task_id, section, path):
+    answer = bs.backlog_update_task(task_id=task_id, field="docs", value=f"{section}:{path}")
+    assert "Error" not in answer, answer
+
+
+def _stored(task_id, section):
+    return bs.backlog_document(kind="task", entity_id=task_id, sections=[section], provenance=True)
+
+
+@pytest.mark.parametrize("where", ["absolute", "parent"])
+def test_import_refuses_a_path_outside_the_project(twins, tmp_path, where):
+    secret = tmp_path / "outside-secret.txt"
+    secret.write_text("TOP SECRET OUTSIDE PROJECT\n", encoding="utf-8")
+    with twins.at(twins.native):
+        path = str(secret) if where == "absolute" else f"../{secret.name}"
+        assert (twins.native / path).resolve() == secret.resolve()
+        _declare("test-epic-001", "design", path)
+
+        answer = bs.backlog_document_import(kind="task", entity_id="test-epic-001", sections=["design"])
+
+        assert answer.startswith("Error:") and "outside the project" in answer, answer
+        assert "TOP SECRET" not in answer
+        stored = _stored("test-epic-001", "design")
+        assert "source: import" not in stored, stored
+
+
+def test_import_refuses_a_link_that_leads_outside_the_project(twins, tmp_path):
+    secret = tmp_path / "linked-secret.txt"
+    secret.write_text("TOP SECRET BEHIND A LINK\n", encoding="utf-8")
+    with twins.at(twins.native):
+        link = twins.native / "docs" / "link.md"
+        try:
+            link.symlink_to(secret)
+        except OSError:
+            pytest.skip("this platform will not create a symlink without privileges")
+        _declare("test-epic-001", "design", "docs/link.md")
+
+        answer = bs.backlog_document_import(kind="task", entity_id="test-epic-001", sections=["design"])
+
+        assert answer.startswith("Error:") and "outside the project" in answer, answer
+        assert "source: import" not in _stored("test-epic-001", "design")
+
+
+def test_import_of_a_directory_is_a_clean_error_not_a_crash(twins):
+    with twins.at(twins.native):
+        (twins.native / "adir").mkdir()
+        _declare("test-epic-001", "design", "adir")
+
+        answer = bs.backlog_document_import(kind="task", entity_id="test-epic-001", sections=["design"])
+
+        assert answer.startswith("Error:") and "adir" in answer and "not a file" in answer, answer
