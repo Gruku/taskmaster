@@ -17,6 +17,7 @@ job an earlier generation left `claimed`, because nobody else can hold them.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 import errno
 import hashlib
 import json
@@ -32,6 +33,13 @@ LEASE_SECONDS = 30.0
 _RETRYABLE_REPLACE_ERRNOS = {5, 13, 32, errno.EACCES, errno.EPERM}
 EXPORTER_KEY = "projection_exporter"
 THROUGH_KEY = "exported_through"
+# Per file, the last few hashes an exporter was about to publish there (see `intend`).
+OWN_PREFIX = "projection.own."
+OWN_RING = 8
+# The legacy store's B-089 flag table. A store no 6.0.3 writer opened lacks it; the
+# first native flag creates it with the legacy definition, the only DDL here.
+_CONFLICT_DDL = ("CREATE TABLE IF NOT EXISTS projection_conflict(file TEXT PRIMARY KEY, kind TEXT NOT NULL, "
+                 "id TEXT, flagged_at TEXT NOT NULL, file_hash TEXT NOT NULL, file_content BLOB NOT NULL)")
 
 
 class LeaseLost(RuntimeError):
@@ -53,6 +61,14 @@ class Job:
 
     def __post_init__(self):
         self.kind, self.id = self.entity["kind"], self.entity["id"]
+
+
+def _digest(content: bytes) -> str:
+    return hashlib.sha1(content).hexdigest()
+
+
+def ensure_conflict_table(connection) -> None:
+    connection.execute(_CONFLICT_DDL)
 
 
 def _get(connection, key, default=None):
@@ -208,11 +224,26 @@ class Exporter:
 
     # ── Publication ─────────────────────────────────────────────────────────
 
-    def intend(self, rendered: Iterable[tuple[Job, bytes | None]]) -> None:
-        """Fence check before any file is touched (the publish-intent transaction)."""
+    def intend(self, rendered: Iterable[tuple[Job | str, bytes | None]]) -> None:
+        """Record, fenced and before any file is touched, the bytes about to be published.
+
+        Each file keeps a short ring of the hashes exporters were about to write
+        there (`projection.own.<file>`). Verification treats bytes in that ring as
+        the exporter's own: a crash after a replace, or a paused exporter that
+        replaced after losing its lease, leaves them on disk, and they are safe to
+        overwrite. Re-rendering retained jobs cannot answer this, because retention
+        deletes exactly the superseded job whose bytes a paused exporter publishes.
+        """
         self._begin()
         try:
             self._fenced()
+            for target, content in rendered:
+                if content is None:
+                    continue
+                rel = target if isinstance(target, str) else target.file
+                key = OWN_PREFIX + rel
+                ring = [h for h in _get(self.connection, key, []) if h != _digest(content)]
+                _put(self.connection, key, (ring + [_digest(content)])[-OWN_RING:])
             self.connection.commit()
         except BaseException:
             self.connection.rollback()
@@ -221,12 +252,18 @@ class Exporter:
     def publish(self, job: Job, content: bytes | None) -> str:
         """Publish one claimed job's bytes (None removes its file), then ack it.
 
-        Returns `exported`, `failed` (left for the next drain, with a warning) or
-        `lost` (this exporter no longer owns the lease; nothing was recorded).
+        Returns `exported`; `flagged` (the file changed since it was last written:
+        both versions are kept and the entity's exports pause); `failed` (the
+        filesystem refused, retried by the next drain, with a warning); or `lost`
+        (this exporter no longer owns the lease and recorded nothing).
         """
         if job.effect == "delete":
             content = None
         return self._publish_file(job.file, job.kind, job.id, content, int(job.entity["last_seq"]), job=job)
+
+    def publish_derived(self, rel: str, kind: str, content: bytes | None, exported_seq: int) -> str:
+        """Publish a whole derived file (`backlog.yaml`, `ideas/IDEAS.md`), which has no job."""
+        return self._publish_file(rel, kind, None, content, exported_seq, tag=f"d{exported_seq}")
 
     def _path(self, rel: str) -> Path:
         path = PurePosixPath(rel)
@@ -234,37 +271,73 @@ class Exporter:
             raise ValueError(f"unsafe projection path {rel!r}")
         return self.backlog_dir / path
 
+    def _classify(self, rel: str, path: Path, content: bytes | None) -> tuple[str, bytes | None]:
+        """§2.4: what the bytes on disk say about publishing over them.
+
+        `agrees` (the file already holds exactly this content), `publish`, or
+        `flag`. The base is the projection record, what the exporter last wrote
+        there, never the job's `expected_hash`, which records what the committing
+        transaction saw and is stale by design once jobs coalesce.
+        """
+        try:
+            data = path.read_bytes()
+        except FileNotFoundError:
+            return "publish", None       # a new file, or a missing one repaired
+        disk = _digest(data)
+        if content is not None and disk == _digest(content):
+            return "agrees", data
+        record = self.connection.execute("SELECT content_hash FROM projection WHERE file=?", (rel,)).fetchone()
+        if record is not None and record[0] == disk:
+            return "publish", data
+        if disk in _get(self.connection, OWN_PREFIX + rel, []):
+            return "publish", data       # bytes an exporter wrote here and never acked
+        return "flag", data
+
     def _publish_file(self, rel, kind, ident, content, exported_seq, *, job=None, tag=None) -> str:
         path = self._path(rel)
         self.checkpoint("before_write", rel)
         if not self._owns():
             return "lost"
-        stat = None
-        digest = None
+        digest = None if content is None else _digest(content)
         try:
-            if content is None:
-                if path.exists():
+            verdict, data = self._classify(rel, path, content)
+            if verdict == "flag":
+                return self._flag(rel, kind, ident, data, job)
+            if verdict == "agrees":
+                stat = path.stat()
+            elif content is None:
+                stat = None
+                if data is not None:
                     path.unlink()
+                    self.checkpoint("removed", rel)
             else:
-                digest = hashlib.sha1(content).hexdigest()
-                record = self.connection.execute("SELECT content_hash FROM projection WHERE file=?", (rel,)).fetchone()
-                if record and record[0] == digest and path.exists():
-                    stat = path.stat()
-                else:
-                    stat = self._replace(path, content, tag or f"j{job.key}", rel)
+                stat = self._replace(path, content, tag or f"j{job.key}", rel, kind, ident, job)
+                if isinstance(stat, str):
+                    return stat
         except OSError:
             self._failed(rel, job)
             return "failed"
         return self._ack(rel, kind, ident, digest, stat, exported_seq, job)
 
-    def _replace(self, path: Path, content: bytes, tag: str, rel: str):
+    def _replace(self, path: Path, content: bytes, tag: str, rel: str, kind, ident, job):
         path.parent.mkdir(parents=True, exist_ok=True)
+        # This job's own temp name: a stray from a crashed attempt at the same job
+        # is overwritten here, and nobody else's temp is ever touched.
         temp = path.with_name(f"{path.name}.tmp.{tag}")
         with temp.open("wb") as handle:
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
         self.checkpoint("temp_written", rel)
+        # Verified again at the last moment: an edit that landed while this job
+        # rendered and wrote its temp is kept, not replaced.
+        verdict, data = self._classify(rel, path, content)
+        if verdict == "flag":
+            temp.unlink(missing_ok=True)
+            return self._flag(rel, kind, ident, data, job)
+        if not self._owns():
+            temp.unlink(missing_ok=True)
+            return "lost"
         deadline = None
         while True:
             try:
@@ -281,6 +354,34 @@ class Exporter:
                 time.sleep(random.uniform(0.02, 0.08))
         self.checkpoint("replaced", rel)
         return path.stat()
+
+    def _flag(self, rel, kind, ident, data: bytes, job: Job | None) -> str:
+        """Flag-and-keep-both (D2, the B-089 shape): the file stays exactly as found,
+        its bytes are kept in `projection_conflict`, the store keeps its version and
+        every export of the entity waits for `backlog_resolve_conflict`."""
+        self._begin()
+        try:
+            try:
+                self._fenced()
+            except LeaseLost:
+                self.connection.rollback()
+                return "lost"
+            ensure_conflict_table(self.connection)
+            self.connection.execute(
+                "INSERT INTO projection_conflict(file,kind,id,flagged_at,file_hash,file_content) VALUES(?,?,?,?,?,?) "
+                "ON CONFLICT(file) DO UPDATE SET file_hash=excluded.file_hash,file_content=excluded.file_content",
+                (rel, kind, ident, datetime.now(timezone.utc).isoformat(), _digest(data), data))
+            self.connection.execute("UPDATE projection SET dirty=1 WHERE file=?", (rel,))
+            if job is not None:
+                self.connection.execute("UPDATE projection_jobs SET state='conflict',lease_owner=NULL,lease_until=NULL "
+                                        "WHERE job_key=?", (job.key,))
+            _update_through(self.connection)
+            self.connection.commit()
+        except BaseException:
+            self.connection.rollback()
+            raise
+        self.warnings.append(f"export pending: {rel} is flagged")
+        return "flagged"
 
     def _failed(self, rel: str, job: Job | None) -> None:
         """A write or removal the filesystem refused: retried by the next drain."""
@@ -306,6 +407,7 @@ class Exporter:
                 self._fenced()
             except LeaseLost:
                 self.connection.rollback()
+                self._requeue_after_lost_ack(rel, job)
                 return "lost"
             if digest is None:
                 self.connection.execute("DELETE FROM projection WHERE file=?", (rel,))
@@ -329,6 +431,35 @@ class Exporter:
         self.acked.add(rel)
         self.checkpoint("acked", rel)
         return "exported"
+
+    def _requeue_after_lost_ack(self, rel: str, job: Job | None) -> None:
+        """§2.3(4): this exporter may have replaced the file after a successor
+        published it, leaving older bytes on disk that no job will rewrite.
+
+        It records nothing as its own, but it re-queues the file: the latest
+        exported job goes back to `pending` (a derived file is marked stale), so the
+        next exporter verifies the file, recognizes the stale bytes as an
+        exporter's own and repairs it. A file that still has a pending, claimed or
+        conflicted job needs nothing: that job will verify it.
+        """
+        try:
+            self._begin()
+        except sqlite3.Error:
+            return
+        try:
+            if job is None:
+                self.connection.execute("UPDATE projection SET exported_seq=NULL WHERE file=?", (rel,))
+            else:
+                self.connection.execute(
+                    "UPDATE projection_jobs SET state='pending',lease_owner=NULL,lease_until=NULL WHERE job_key=("
+                    "SELECT job_key FROM projection_jobs WHERE file=? AND state='exported' "
+                    "ORDER BY commit_seq DESC,job_key DESC LIMIT 1) AND NOT EXISTS("
+                    "SELECT 1 FROM projection_jobs WHERE file=? AND state IN ('pending','claimed','conflict'))",
+                    (rel, rel))
+            self.connection.commit()
+        except BaseException:
+            self.connection.rollback()
+            raise
 
     # ── Finish ──────────────────────────────────────────────────────────────
 
