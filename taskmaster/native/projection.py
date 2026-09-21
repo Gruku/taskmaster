@@ -110,6 +110,9 @@ def _install(source: Path, target: Path) -> bool:
     return True
 
 
+_RETRY_SECONDS = 2.0
+
+
 def _retry(step: Callable[[], bool]) -> bool:
     """Run one rename step, retrying the sharing violations an indexer or antivirus causes."""
     deadline = None
@@ -121,10 +124,27 @@ def _retry(step: Callable[[], bool]) -> bool:
         except OSError as exc:
             if exc.errno not in _RETRYABLE_REPLACE_ERRNOS:
                 raise
-            deadline = deadline or time.monotonic() + 2.0
+            deadline = deadline or time.monotonic() + _RETRY_SECONDS
             if time.monotonic() >= deadline:
                 raise
             time.sleep(random.uniform(0.02, 0.08))
+
+
+def _drop(path: Path) -> bool:
+    """Remove one file, retrying sharing violations; True once it is gone."""
+    def step() -> bool:
+        path.unlink(missing_ok=True)
+        return True
+    return _retry(step)
+
+
+def _quietly(step: Callable[[], object]) -> bool:
+    """Run a best-effort undo step: True if it ran, False if the filesystem refused."""
+    try:
+        step()
+    except OSError:
+        return False
+    return True
 
 
 def ensure_conflict_table(connection) -> None:
@@ -260,6 +280,8 @@ class Exporter:
         self.warnings: list[str] = []
         self.acked: set[str] = set()
         self.outcomes: dict[int, str] = {}
+        # Per file, the hash of aside bytes this attempt verified (see `_remember`).
+        self._verified: dict[str, str] = {}
 
     # ── Transactions ────────────────────────────────────────────────────────
 
@@ -403,7 +425,7 @@ class Exporter:
                 # file aside under, so recovery can always put it back, and the
                 # temp it may leave, so recovery can drop it.
                 base = PurePosixPath(rel).name
-                own = [f"{base}.aside.g{self.generation}", f"{base}.tmp.{self._tag(target)}"]
+                own = [self._aside_name(rel), f"{base}.tmp.{self._tag(target)}"]
                 names = [n for n in _get(self.connection, ASIDE_PREFIX + rel, []) if n not in own]
                 _put(self.connection, ASIDE_PREFIX + rel, names + own)
             self.connection.commit()
@@ -427,7 +449,8 @@ class Exporter:
                 outcome = self._defer(job)
                 self.outcomes[job.key] = outcome
                 return outcome
-        outcome = self._publish_file(job.file, job.kind, job.id, content, int(job.entity["last_seq"]), job=job)
+        outcome = self._publish_file(job.file, job.kind, job.id, content, int(job.entity["last_seq"]), job=job,
+                                     tag=self._tag(job))
         self.outcomes[job.key] = outcome
         return outcome
 
@@ -452,8 +475,40 @@ class Exporter:
         return self._publish_file(rel, kind, None, content, exported_seq, tag=self._tag(rel))
 
     def _tag(self, target: Job | str) -> str:
-        """The temp-name tag of one publication: per job, or per generation for a derived file."""
-        return f"d{self.generation}" if isinstance(target, str) else f"j{target.key}"
+        """The temp-name tag of one publication, unique to this exporter generation.
+
+        A stale exporter and its successor may publish the same job; they must
+        never share a temp name, or one could install or delete the other's.
+        """
+        return f"d.g{self.generation}" if isinstance(target, str) else f"j{target.key}.g{self.generation}"
+
+    def _aside_name(self, rel: str) -> str:
+        return f"{PurePosixPath(rel).name}.aside.g{self.generation}"
+
+    def _still_on_disk(self, rel: str) -> list[str]:
+        """The recorded aside and temp names of `rel` whose files still exist.
+
+        A name is forgotten only once its file is gone, so recovery can always
+        find an aside file some step could not restore or remove.
+        """
+        path = self._path(rel)
+        return [name for name in _get(self.connection, ASIDE_PREFIX + rel, []) if path.with_name(name).exists()]
+
+    def _remember(self, rel: str, names: list[str]) -> None:
+        """Inside a write transaction: keep exactly `names` on record for `rel`.
+
+        An aside file left behind after its bytes were verified is the store's
+        own: its hash joins the file's own-bytes ring, so recovery drops it
+        rather than flagging it once the record has moved on.
+        """
+        if names:
+            _put(self.connection, ASIDE_PREFIX + rel, names)
+            if rel in self._verified:
+                key = OWN_PREFIX + rel
+                ring = [h for h in _get(self.connection, key, []) if h != self._verified[rel]]
+                _put(self.connection, key, (ring + [self._verified[rel]])[-OWN_RING:])
+        else:
+            self.connection.execute("DELETE FROM sync_state WHERE key=?", (ASIDE_PREFIX + rel,))
 
     def _path(self, rel: str) -> Path:
         return self.backlog_dir / safe_relative(rel)
@@ -500,7 +555,7 @@ class Exporter:
         recovery (`_recover_asides`), which knows the aside name from `intend`.
         """
         path = self._path(rel)
-        tag = tag or f"j{job.key}"
+        tag = tag or self._tag(job if job is not None else rel)
         self.checkpoint("before_write", rel)
         if not self._owns():
             return "lost"
@@ -514,7 +569,7 @@ class Exporter:
             if content is not None:
                 temp = self._write_temp(path, content, tag, rel)
             if data is not None:
-                aside = path.with_name(f"{path.name}.aside.g{self.generation}")
+                aside = path.with_name(self._aside_name(rel))
                 if not _retry(lambda: _move(path, aside)):
                     aside = None         # the file vanished meanwhile: nothing to set aside
                 self.checkpoint("aside", rel)
@@ -522,6 +577,7 @@ class Exporter:
                     seen = aside.read_bytes()
                     if self._judge(rel, seen, content) == "flag":
                         return self._put_back(rel, kind, ident, path, aside, temp, seen, job)
+                    self._verified[rel] = _digest(seen)
             if not self._owns():
                 self._undo(path, aside, temp)
                 return "lost"
@@ -534,9 +590,9 @@ class Exporter:
                 if not _retry(lambda: _install(temp, path)):
                     # Something was written at the vacated path: it is not ours.
                     newcomer = path.read_bytes()
-                    temp.unlink(missing_ok=True)
+                    _quietly(lambda: _drop(temp))
                     if aside is not None:
-                        aside.unlink(missing_ok=True)   # verified bytes: the store's own
+                        _quietly(lambda: _drop(aside))  # verified bytes: the store's own
                     return self._flag(rel, kind, ident, newcomer, job)
                 temp = None
                 self.checkpoint("replaced", rel)
@@ -545,12 +601,17 @@ class Exporter:
                     # A removal found something new at the path it vacated: that
                     # file is not ours. It stays and is flagged; the aside bytes
                     # were verified as the store's own and are dropped.
-                    aside.unlink(missing_ok=True)
+                    _quietly(lambda: _drop(aside))
                     return self._flag(rel, kind, ident, path.read_bytes(), job)
-                aside.unlink()
-                aside = None
                 if content is None:
+                    _drop(aside)         # a removal is done only once the aside is gone
+                    aside = None
                     self.checkpoint("removed", rel)
+                else:
+                    # The new bytes are installed: the old ones are verified store
+                    # bytes. If they cannot go now, they stay on record for recovery.
+                    _quietly(lambda: _drop(aside))
+                    aside = None
             stat = path.stat() if content is not None else None
         except OSError:
             self._undo(path, aside, temp)
@@ -572,20 +633,26 @@ class Exporter:
         return temp
 
     def _undo(self, path: Path, aside: Path | None, temp: Path | None) -> None:
-        """Put a set-aside file back and drop this attempt's temp, keeping both if the path was retaken."""
+        """Best effort, never raising: put a set-aside file back first, then drop the temp.
+
+        The aside file is the one that matters (it may be the only copy of the
+        bytes at the path); the temp is a render of committed state. Whatever
+        cannot be undone stays on record (`_still_on_disk`) for lease recovery.
+        """
+        if aside is not None:
+            _quietly(lambda: aside.exists() and _retry(lambda: _install(aside, path)))
         if temp is not None:
-            temp.unlink(missing_ok=True)
-        if aside is not None and aside.exists():
-            _retry(lambda: _install(aside, path))   # never over a newer file; the aside then stays
+            _quietly(lambda: _drop(temp))
 
     def _put_back(self, rel, kind, ident, path, aside, temp, seen: bytes, job) -> str:
-        """The aside bytes were edited: restore them untouched and flag."""
+        """The aside bytes were edited: restore them untouched and flag.
+
+        If a second writer took the path too, or the restore is refused, both stay
+        on disk: the flag keeps the edited bytes and the aside name stays on record.
+        """
+        _quietly(lambda: _retry(lambda: _install(aside, path)))
         if temp is not None:
-            temp.unlink(missing_ok=True)
-        if not _retry(lambda: _install(aside, path)):
-            # A second writer took the path too. Both stay on disk; the flag keeps
-            # the edited aside bytes, and the aside file is left for the person.
-            return self._flag(rel, kind, ident, seen, job)
+            _quietly(lambda: _drop(temp))
         return self._flag(rel, kind, ident, seen, job)
 
     def _recover_asides(self) -> None:
@@ -602,34 +669,40 @@ class Exporter:
         for key, value in rows:
             rel = key[len(ASIDE_PREFIX):]
             path = self._path(rel)
+            keep = []
             for name in json.loads(value):
                 aside = path.with_name(name)
-                if not aside.exists():
-                    continue
-                if ".tmp." in name:
-                    aside.unlink(missing_ok=True)   # a render of committed state, never an only copy
-                    continue
-                if _retry(lambda: _install(aside, path)):
-                    continue
-                seen = aside.read_bytes()
-                if self._judge(rel, seen, None) != "flag":
-                    aside.unlink(missing_ok=True)
-                else:
+                try:
+                    if not aside.exists():
+                        continue
+                    if ".tmp." in name:
+                        _drop(aside)     # a render of committed state, never an only copy
+                        continue
+                    if _retry(lambda: _install(aside, path)):
+                        continue
+                    seen = aside.read_bytes()
+                    if self._judge(rel, seen, None) != "flag":
+                        _drop(aside)
+                        continue
                     kind, ident = (self.connection.execute(
                         "SELECT kind,id FROM projection WHERE file=?", (rel,)).fetchone() or ("unknown", None))
-                    self._flag(rel, kind, ident, seen, None)
+                    self._flag(rel, kind, ident, seen, None, keep=[name])
+                    keep.append(name)    # left on disk for the person, and on record
+                except OSError:
+                    keep.append(name)    # the filesystem refused: the next recovery tries again
             self._begin()
             try:
-                self.connection.execute("DELETE FROM sync_state WHERE key=?", (key,))
+                self._remember(rel, keep)
                 self.connection.commit()
             except BaseException:
                 self.connection.rollback()
                 raise
 
-    def _flag(self, rel, kind, ident, data: bytes, job: Job | None) -> str:
+    def _flag(self, rel, kind, ident, data: bytes, job: Job | None, *, keep: list[str] | None = None) -> str:
         """Flag-and-keep-both (D2, the B-089 shape): the file stays exactly as found,
         its bytes are kept in `projection_conflict`, the store keeps its version and
         every export of the entity waits for `backlog_resolve_conflict`."""
+        keep = self._still_on_disk(rel) if keep is None else keep
         self._begin()
         try:
             try:
@@ -643,7 +716,7 @@ class Exporter:
                 "ON CONFLICT(file) DO UPDATE SET file_hash=excluded.file_hash,file_content=excluded.file_content",
                 (rel, kind, ident, datetime.now(timezone.utc).isoformat(), _digest(data), data))
             self.connection.execute("UPDATE projection SET dirty=1 WHERE file=?", (rel,))
-            self.connection.execute("DELETE FROM sync_state WHERE key=?", (ASIDE_PREFIX + rel,))
+            self._remember(rel, keep)
             if job is not None:
                 self.connection.execute("UPDATE projection_jobs SET state='conflict',lease_owner=NULL,lease_until=NULL "
                                         "WHERE job_key=?", (job.key,))
@@ -657,11 +730,12 @@ class Exporter:
 
     def _failed(self, rel: str, job: Job | None) -> None:
         """A write or removal the filesystem refused: retried by the next drain."""
+        keep = self._still_on_disk(rel)
         self._begin()
         try:
             self._fenced()
             self.connection.execute("UPDATE projection SET dirty=1,quarantined=0 WHERE file=?", (rel,))
-            self.connection.execute("DELETE FROM sync_state WHERE key=?", (ASIDE_PREFIX + rel,))
+            self._remember(rel, keep)
             if job is not None:
                 self.connection.execute("UPDATE projection_jobs SET state='pending',lease_owner=NULL,lease_until=NULL "
                                         "WHERE job_key=? AND state='claimed'", (job.key,))
@@ -674,6 +748,7 @@ class Exporter:
         self.warnings.append(f"export pending: {rel} — retried on next call")
 
     def _ack(self, rel, kind, ident, digest, stat, exported_seq, job) -> str:
+        keep = self._still_on_disk(rel)
         self._begin()
         try:
             try:
@@ -692,7 +767,7 @@ class Exporter:
                     "exported_seq=excluded.exported_seq",
                     (rel, kind, ident, digest, stat.st_mtime, stat.st_size, exported_seq))
             self.connection.execute("DELETE FROM projection_base WHERE file=?", (rel,))
-            self.connection.execute("DELETE FROM sync_state WHERE key=?", (ASIDE_PREFIX + rel,))
+            self._remember(rel, keep)
             self.checkpoint("ack_manifest", rel)
             if job is not None:
                 self.connection.execute("UPDATE projection_jobs SET state='exported',lease_owner=NULL,lease_until=NULL "

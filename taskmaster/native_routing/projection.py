@@ -156,8 +156,10 @@ def _behind(connection, through: int) -> list[str]:
     """The files a commit at or before `through` still owes, judged file by file.
 
     A job file is behind while an unheld job at or before `through` is pending or
-    claimed. A derived file is behind while its `exported_seq` is older than the
-    newest input row committed at or before `through`. Held files are reported by
+    claimed. A derived file is behind while its own `exported_seq` is older than
+    `through` and it is stale (older than its newest input row). Its inputs'
+    `last_seq` alone cannot say: a later commit to the same row moves it past
+    `through` and would hide the caller's change. Held files are reported by
     their own notice, not here. The stored `exported_through` watermark is not
     trusted for this: it covers jobs only, never `backlog.yaml` or `IDEAS.md`.
     """
@@ -168,12 +170,13 @@ def _behind(connection, through: int) -> list[str]:
             f"AND j.commit_seq<=? AND NOT {outbox._held_sql(connection)} ORDER BY j.file", (through,))]
         for rel, kinds in _DERIVED_INPUTS:
             placeholders = ",".join("?" for _ in kinds)
-            high = connection.execute(
-                f"SELECT COALESCE(MAX(last_seq),0) FROM entity_core WHERE kind IN ({placeholders}) AND last_seq<=?",
-                (*kinds, through)).fetchone()[0]
+            newest = connection.execute(
+                f"SELECT COALESCE(MAX(last_seq),0) FROM entity_core WHERE kind IN ({placeholders})",
+                kinds).fetchone()[0]
             row = connection.execute("SELECT exported_seq FROM projection WHERE file=?", (rel,)).fetchone()
-            exported = None if row is None else row[0]
-            if high and (exported is None or int(exported) < int(high)) and outbox.held_file(connection, rel) is None:
+            exported = None if row is None or row[0] is None else int(row[0])
+            stale = newest and (exported is None or exported < int(newest))
+            if stale and (exported is None or exported < through) and outbox.held_file(connection, rel) is None:
                 files.append(rel)
         return files
     finally:
@@ -226,16 +229,21 @@ def drain(connection: sqlite3.Connection, backlog_dir: Path, *, session: str, th
                 # Another exporter took over while this one rendered: it owns the
                 # jobs now. Nothing was touched; the caller is told, not raised at.
                 lost = True
-        if not lost:
-            for job, content in rendered:
-                if exporter.publish(job, content) == "lost":
-                    lost = True
-                    break
-        if not lost:
-            for rel, kind, content, seq in files:
-                if exporter.publish_derived(rel, kind, content, seq) == "lost":
-                    lost = True
-                    break
+        try:
+            if not lost:
+                for job, content in rendered:
+                    if exporter.publish(job, content) == "lost":
+                        lost = True
+                        break
+            if not lost:
+                for rel, kind, content, seq in files:
+                    if exporter.publish_derived(rel, kind, content, seq) == "lost":
+                        lost = True
+                        break
+        except OSError:
+            # The command has committed; a filesystem refusal the protocol could
+            # not turn into a notice itself still must not reach the caller.
+            lost = True
         if lost:
             exporter.warnings.extend(_pending_notices(connection))
         exporter.finish()
