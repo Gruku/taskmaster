@@ -41,9 +41,21 @@ import re
 from . import blockers
 
 HOLDER_FIELD = "locked_by"
+# A claim protects work in flight. On a task in one of these statuses it has
+# nothing left to protect, so it reads as expired: any status change to one
+# releases it, and `backlog_claim(action="release")` always clears it.
+TERMINAL_STATUSES = ("done", "archived")
 EXPIRES_FIELD = "claim_expires"
 # Who `claim_expires` was stamped for. Written and cleared with it, never alone.
 EXPIRES_FOR_FIELD = "claim_expires_for"
+# Every field that makes up a claim. Only the claim tools write any of them: a
+# forged expiry releases a live claim as surely as an erased holder does.
+CLAIM_FIELDS = (HOLDER_FIELD, EXPIRES_FIELD, EXPIRES_FOR_FIELD)
+
+
+def without_claim_fields(payload: dict) -> dict:
+    """A write payload with every claim field dropped (viewer writes)."""
+    return {key: value for key, value in payload.items() if key not in CLAIM_FIELDS}
 
 # Four hours (D6 ii): the unit of work here is a task carried across a long
 # session, not a job in a queue. A short TTL would expire claims mid-review-gate
@@ -234,8 +246,78 @@ def read(task, *, task_id: str, session: str, connection, now=None) -> ClaimStat
     expires_at = raw if isinstance(raw, str) and stamped_for_holder else ""
     live = holder_liveness(connection, holder, now=now)
     deadline = parse_stamp(expires_at)
-    expired = live is False or (deadline is not None and now >= deadline)
+    expired = (task.get("status") in TERMINAL_STATUSES or live is False
+               or (deadline is not None and now >= deadline))
     return ClaimState(task_id, holder, expires_at, live, bool(expired), holder == session)
+
+
+def foreign_holder(task, session: str) -> str:
+    """The holder a pick may not take over without `force`, or "".
+
+    Any `locked_by` that is not this session, whatever the task's status and
+    whether or not the claim has expired. Status does not matter because the
+    holder is `locked_by` (this module's contract) — `backlog_update_task`
+    documents setting it as how to claim — and `backlog_context` reports it as
+    held on any status. Expiry does not matter because a pick hands out
+    worktree instructions: an expired claim is released first, never taken
+    silently (see `lock_refusal`). One predicate, so the single pick, the bundle
+    pick and `next_available` cannot drift apart on it.
+    """
+    holder = task.get(HOLDER_FIELD) or ""
+    if not isinstance(holder, str):
+        holder = str(holder)
+    return holder if holder and holder != session else ""
+
+
+# Only the claim tools write the holder (decided with the user, N09 §4e/§4f):
+# a bare field write or a batch line could name any holder or erase a peer's.
+HOLDER_WRITE_REFUSAL = ("`locked_by` is written only by the claim tools: `backlog_pick_task` takes "
+                        "a claim, `backlog_claim` renews or releases it.")
+
+
+def survives_status_change(doc, *, session: str, connection, now=None) -> bool:
+    """Whether a status change by `session` leaves the task's claim in place.
+
+    `doc` carries the status being moved to. A move to a terminal status
+    releases any claim, whoever makes it (`TERMINAL_STATUSES`). Otherwise a
+    status change releases this session's own claim, and a peer's that is proven
+    expired, as it always has; a peer's claim that is not proven expired stays: a
+    status write by one session must not free another's work in flight.
+    """
+    if not foreign_holder(doc, session):
+        return False
+    return not read(doc, task_id=str(doc.get("id", "")), session=session,
+                    connection=connection, now=now).expired
+
+
+def batch_pick_refusal(task_id: str, holder: str) -> str:
+    """A batch `pick` line's refusal of a peer's claim — the same rule and advice
+    as `backlog_pick_task`, which a batch line cannot `force`."""
+    return (f"locked by another session (`{holder}`). Pick a different task, or use "
+            f"`backlog_pick_task({task_id}, force=true)` to reclaim it for this session.")
+
+
+def keeps_claim_through(doc, before, *, session: str, connection, now=None) -> bool:
+    """Whether a status change from `before` to `doc`'s status leaves the claim.
+
+    Leaving a terminal status never does: a claim stranded on a `done` or
+    `archived` row (data from before the terminal rule) must not come back to
+    life when the task is reopened. Moving into `in-progress` always did and
+    still does. Anything else is `survives_status_change`. `before=None` means
+    the caller moves from a status that cannot be terminal.
+    """
+    if before in TERMINAL_STATUSES:
+        return False
+    if doc.get("status") == "in-progress":
+        return True
+    return survives_status_change(doc, session=session, connection=connection, now=now)
+
+
+def after_status_change(doc, *, session: str, connection, before=None, now=None) -> dict:
+    """Drop the holder a status change releases (`keeps_claim_through`)."""
+    if not keeps_claim_through(doc, before, session=session, connection=connection, now=now):
+        doc.pop(HOLDER_FIELD, None)
+    return doc
 
 
 def held(doc, ttl: int, *, session: str, now=None) -> dict:
@@ -276,7 +358,7 @@ def blocked_by(states, *, release):
     return None
 
 
-def lock_refusal(task_id: str, state) -> str:
+def lock_refusal(task_id: str, state, status: str = "in-progress") -> str:
     """`backlog_pick_task`'s refusal, plus the expiry fact when there is one.
 
     The refusal stays a refusal even for a dead holder: a pick hands out
@@ -284,8 +366,10 @@ def lock_refusal(task_id: str, state) -> str:
     whole contract exists to prevent. What expiry buys is an *informed* choice —
     the text now says the claim is free to take and how to take it.
     """
+    where = ("It is already in-progress elsewhere." if status == "in-progress"
+             else f"It is `{status}` and claimed by that session.")
     text = (f"Error: task `{task_id}` is locked by another session (`{state.holder}`). "
-            f"It is already in-progress elsewhere. Pick a different task, or use "
+            f"{where} Pick a different task, or use "
             f"`backlog_pick_task({task_id}, force=true)` to reclaim it for this session.")
     if not state.expired:
         return text

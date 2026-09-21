@@ -863,6 +863,32 @@ _LEGACY_LINK_RULES: dict[str, tuple[tuple[str, str, bool], ...]] = {
 }
 
 
+def dependency_ids(value):
+    """The one reading of a `depends_on` value: its task ids, or None when the
+    shape cannot be read.
+
+    Empty (None, "", []) is no dependencies; a bare string is one id, as every
+    tool has always read it. Anything else — a number, a mapping, a list holding
+    a non-string — is unreadable, and a reader reports it rather than raising or
+    guessing ids out of it (`native.blockers` turns it into an `unknown`
+    blocker). Every reader of `depends_on` goes through here.
+    """
+    if not value:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if not isinstance(value, (list, tuple)) or any(not isinstance(item, str) for item in value):
+        return None
+    return list(value)
+
+
+def dependency_shape(value) -> str:
+    """Why `dependency_ids(value)` is None, for a reader's message."""
+    if isinstance(value, (list, tuple)):
+        return "non-string dependency id"
+    return type(value).__name__
+
+
 def legacy_links_to_typed(entity: dict, kind: str) -> list[dict]:
     """Translate legacy linkage fields on `entity` into a typed `links` array.
 
@@ -876,9 +902,18 @@ def legacy_links_to_typed(entity: dict, kind: str) -> list[dict]:
         raw = entity.get(field)
         if raw is None or raw == [] or raw == "":
             continue
-        targets = raw if is_list else [raw]
+        # A bare string in a list field is one target, as every dependency
+        # reader reads it. A shape no tool writes derives no edge rather than
+        # raising — every write to the entity runs this — or guessing ids out of
+        # it: `native.blockers` reports that shape as unreadable instead.
+        if not is_list or isinstance(raw, str):
+            targets = [raw]
+        elif isinstance(raw, (list, tuple)):
+            targets = raw
+        else:
+            continue
         for tgt in targets:
-            if not tgt:
+            if not tgt or not isinstance(tgt, str):
                 continue
             key = (link_type, tgt)
             if key in seen:
@@ -4004,7 +4039,10 @@ def validate_task_write(
 
     # Deps: each must exist; no self-dep; no cycle.
     if "depends_on" in patch:
-        deps = patch["depends_on"] or []
+        deps = dependency_ids(patch["depends_on"])
+        if deps is None:
+            errors["depends_on"] = "depends_on must be a task id or a list of task ids"
+            deps = []
         for d in deps:
             if d == task_id:
                 errors["depends_on"] = "cannot depend on itself"
@@ -4014,7 +4052,8 @@ def validate_task_write(
                 break
         if "depends_on" not in errors:
             # Cycle detection: BFS from each dep — if any path reaches task_id, cycle.
-            adj = {t.get("id"): list(t.get("depends_on") or []) for t in all_tasks if t.get("id")}
+            # A row whose `depends_on` cannot be read has no edges to follow.
+            adj = {t.get("id"): dependency_ids(t.get("depends_on")) or [] for t in all_tasks if t.get("id")}
             adj[task_id] = list(deps)  # simulate the proposed state
             if _has_cycle_to(adj, task_id):
                 errors["depends_on"] = "introduces a dependency cycle"

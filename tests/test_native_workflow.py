@@ -142,14 +142,19 @@ def test_a_malformed_bundle_is_refused_by_name_not_by_the_driver(workspace):
             run(connection, "task.pick", {"id": "demo-001", "session": "alpha"}, "claim")
 
 
-def test_a_stale_lock_on_a_todo_row_does_not_refuse_the_pick(workspace):
-    """The tool tests the lock only for a row that is already in-progress, so a
-    `todo` row carrying a leftover `locked_by` is picked, not refused. Migrated
-    rows are where that inconsistency arrives."""
+def test_a_peers_lock_on_a_todo_row_refuses_the_pick_unless_forced(workspace):
+    """The holder is `locked_by`, whatever the row's status (`native.claims`):
+    `backlog_context` reports a peer's lock on a `todo` row as held, so a pick
+    must not take it silently. N07 picked such a row for parity with a tool that
+    only looked at the lock inside its in-progress branch; that was a silent
+    steal of a claim the resolver reports. The status check still comes first."""
     with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
         run(connection, "task.update", {"id": "demo-001", "field": "locked_by", "value": "ghost"}, "stale")
         assert fields(connection, "task", "demo-001")["status"] == "todo"
-        run(connection, "task.pick", {"id": "demo-001", "session": "alpha"}, "claim")
+        with pytest.raises(Conflict, match="locked by another session"):
+            run(connection, "task.pick", {"id": "demo-001", "session": "alpha"}, "claim")
+        assert fields(connection, "task", "demo-001")["locked_by"] == "ghost"
+        run(connection, "task.pick", {"id": "demo-001", "session": "alpha", "force": True}, "steal")
         stored = fields(connection, "task", "demo-001")
         assert stored["locked_by"] == "alpha" and stored["status"] == "in-progress"
 
@@ -290,7 +295,9 @@ def test_completion_archives_the_bugs_the_task_fixed_in_the_same_commit(workspac
     with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
         bug = created(connection, "bug.create", {"title": "Crash", "found_in": "demo-001"}, "bug")
         run(connection, "bug.update", {"id": bug, "patch": {"status": "fixed", "fix_commit": "abc123"}}, "fix")
-        run(connection, "task.pick", {"id": "demo-001", "session": "alpha"}, "claim")
+        # The completing session is the holder: its own status change releases
+        # the claim, where a live peer's claim would survive it.
+        run(connection, "task.pick", {"id": "demo-001", "session": "tests"}, "claim")
         express(connection, "demo-001", "complete")
         receipt = run(connection, "task.complete", {"id": "demo-001", "patchnote": "Loader fixed"}, "done")
         assert {row["id"] for row in receipt["affected"]} == {"demo-001", bug}
@@ -362,11 +369,19 @@ def test_the_transition_table_is_the_same_one_the_tools_apply(workspace):
         assert fields(connection, "task", "demo-001")["started"]
 
 
-def test_leaving_in_progress_releases_the_claim(workspace):
+def test_leaving_in_progress_releases_the_holders_own_claim(workspace):
+    with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
+        run(connection, "task.pick", {"id": "demo-001", "session": "tests"}, "claim")
+        run(connection, "task.update", {"id": "demo-001", "field": "status", "value": "blocked"}, "block")
+        assert "locked_by" not in fields(connection, "task", "demo-001")
+
+
+def test_leaving_in_progress_keeps_a_peers_unexpired_claim(workspace):
+    """A status change by one session does not free another's work (N09 §4f)."""
     with closing(sqlite3.connect(workspace, isolation_level=None)) as connection:
         run(connection, "task.pick", {"id": "demo-001", "session": "alpha"}, "claim")
         run(connection, "task.update", {"id": "demo-001", "field": "status", "value": "blocked"}, "block")
-        assert "locked_by" not in fields(connection, "task", "demo-001")
+        assert fields(connection, "task", "demo-001")["locked_by"] == "alpha"
 
 
 # ── Epic and phase transitions ──────────────────────────────────────────────

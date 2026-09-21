@@ -20,11 +20,12 @@ from __future__ import annotations
 from copy import deepcopy
 
 from taskmaster import backlog_server as bs
-from taskmaster.native import batch_commands, batch_lines, domain
+from taskmaster.native import batch_commands, batch_lines, blockers, claims, domain
 from taskmaster.native.contracts import MAX_BATCH_COMMANDS, Conflict
 from taskmaster.native.workflow import _bugs_found_in
 
 from . import reads
+from .tasks import _dependency_statuses as dependency_statuses
 from .registry import adapter
 from .runtime import error_text
 
@@ -56,7 +57,12 @@ class _Overlay:
             task_exists=lambda ident: self.task(ident) is not None,
             find_phase=lambda value: domain.find_phase(reads.phases(self.snapshot), value),
             area_error=lambda value: reads.validate_area_ref(self.snapshot, value),
-            open_bugs=lambda ident: _bugs_found_in(self.snapshot.connection, ident)[0])
+            open_bugs=lambda ident: _bugs_found_in(self.snapshot.connection, ident)[0],
+            keeps_claim=self._keeps_claim, session=bs.SESSION_ID)
+
+    def _keeps_claim(self, doc, before):
+        return claims.keeps_claim_through(doc, before, session=bs.SESSION_ID,
+                                          connection=self.snapshot.connection)
 
     def cascade(self, epic_id, now):
         count = 0
@@ -228,14 +234,14 @@ def batch_preview(call, *, operations):
                 else:
                     previews.append(f"- `{task_id}`: Cannot archive — currently `{current}`")
             elif op == "pick":
-                if current in ("todo", "in-review"):
+                holder = claims.foreign_holder(task, bs.SESSION_ID)
+                if holder and current in ("todo", "in-progress", "in-review"):
+                    # The refusal the batch line gives, before it is applied.
+                    previews.append(f"- `{task_id}`: {claims.batch_pick_refusal(task_id, holder)}")
+                elif current in ("todo", "in-review"):
                     previews.append(f"- `{task_id}` ({current} → in-progress): {task['title']}")
-                    deps = task.get("depends_on", [])
-                    unmet = []
-                    for dependency in [deps] if isinstance(deps, str) else deps:
-                        found_dependency = reads.find_task(snapshot, dependency)
-                        if found_dependency and found_dependency[0].get("status") != "done":
-                            unmet.append(dependency)
+                    # The resolver's answer, as `backlog_pick_task` warns it.
+                    unmet = blockers.unmet_dependencies(task, dependency_statuses(snapshot, task))
                     if unmet:
                         previews.append(f"  ⚠ Unmet dependencies: {', '.join(f'`{d}`' for d in unmet)}")
                 elif current == "in-progress":
