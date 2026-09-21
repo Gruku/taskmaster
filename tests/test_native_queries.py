@@ -373,6 +373,39 @@ def test_an_unreadable_floor_refuses_loudly_rather_than_admitting_expired_histor
             _feed(connection)
 
 
+def test_a_floor_above_the_high_water_mark_never_loops_on_resync(native):
+    """Review B, item 6: with the floor past every event, a cursor issued at the
+    current sequence was itself expired, so each call answered another resync."""
+    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+        before = _feed(connection)
+        _set_floor(connection, before["sequence"] + 5)
+        started = _feed(connection)
+        assert _feed(connection, cursor=started["cursor"])["resync_required"] is False
+        expired = _feed(connection, cursor=before["cursor"])
+        assert expired["resync_required"] is True and expired["reason"] == "history_expired"
+        assert _feed(connection, cursor=expired["cursor"])["resync_required"] is False
+
+
+def test_a_cursor_from_before_a_restore_answers_history_rewound(native, tmp_path):
+    """A store restored from a backup keeps its identity, so the rebuild fence
+    passes; only the sequence shows the history went backwards. The next write
+    reuses a sequence the cursor already covers, and resuming would skip it."""
+    backup = tmp_path / "backup.db"
+    with closing(sqlite3.connect(native, isolation_level=None)) as connection, \
+            closing(sqlite3.connect(backup)) as copy:
+        connection.backup(copy)
+    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+        _patch(connection, "before-restore", next_step="lost")
+        cursor = _feed(connection)["cursor"]
+    with closing(sqlite3.connect(backup)) as copy, closing(sqlite3.connect(native)) as live:
+        copy.backup(live)
+    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+        rewound = _feed(connection, cursor=cursor)
+        assert rewound["resync_required"] is True and rewound["reason"] == "history_rewound", rewound
+        _patch(connection, "after-restore", next_step="kept")
+        assert _seqs(_feed(connection, cursor=rewound["cursor"])) == [101]
+
+
 # ── Bounded agent context ───────────────────────────────────────────────────
 # `context` is the one call that answers "what do I need to know to work on X".
 # What is pinned here is the promise it makes: mandatory blockers complete and

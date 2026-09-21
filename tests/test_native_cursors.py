@@ -24,7 +24,8 @@ def issue(last_seq=41, **over):
 
 
 def parse(token, **over):
-    args = {**STORE, "scope": scope(), **over}
+    # A store whose history reaches well past every cursor these tests issue.
+    args = {**STORE, "scope": scope(), "sequence": 1000, **over}
     return cursors.parse(token, **args)
 
 
@@ -103,8 +104,10 @@ def test_a_cursor_of_another_version_or_shape_is_unreadable():
 
 
 def test_every_refusal_reason_is_one_of_the_declared_set():
-    assert set(cursors.REASONS) == {"cursor_unreadable", "store_rebuilt", "scope_changed", "history_expired"}
-    for cls in (cursors.CursorUnreadable, cursors.StoreRebuilt, cursors.ScopeChanged, cursors.HistoryExpired):
+    assert set(cursors.REASONS) == {"cursor_unreadable", "store_rebuilt", "history_rewound", "scope_changed",
+                                    "history_expired"}
+    for cls in (cursors.CursorUnreadable, cursors.StoreRebuilt, cursors.HistoryRewound, cursors.ScopeChanged,
+                cursors.HistoryExpired):
         assert issubclass(cls, cursors.CursorInvalid) and cls.reason in cursors.REASONS
 
 
@@ -155,3 +158,36 @@ def test_a_resync_answer_reports_the_reason_and_a_cursor_at_the_current_sequence
     assert answer["resync_required"] is True and answer["reason"] == "history_expired"
     assert answer["commits"] == [] and answer["more"] is False
     assert parse(answer["cursor"]) == 100
+
+
+# ── A cursor the store's history cannot reach (review B, item 6) ────────────
+
+
+def test_a_cursor_ahead_of_the_stores_history_reports_history_rewound():
+    """A store restored from a backup keeps its identity but loses the tail of
+    its history. A cursor issued before the restore then points past the end,
+    and resuming it would silently skip every event written into the gap."""
+    token = issue(41)
+    assert parse(token, sequence=41) == 41
+    with pytest.raises(cursors.HistoryRewound):
+        parse(token, sequence=40)
+
+
+def test_a_rewound_history_is_reported_after_a_rebuilt_store_and_before_scope_or_floor():
+    token = issue(41)
+    with pytest.raises(cursors.StoreRebuilt):
+        parse(token, store_id="store-b", sequence=40)
+    with pytest.raises(cursors.HistoryRewound):
+        parse(token, sequence=40, scope=scope(kinds=["task"]), floor=99)
+
+
+def test_a_resync_cursor_is_usable_even_when_the_floor_is_above_the_high_water_mark():
+    """Issued at the current sequence below the floor, the recovery cursor would
+    itself be expired, and every call would answer another resync."""
+    answer = cursors.resync(cursors.HistoryExpired("gone"), store_id="store-a", source_digest="digest-a",
+                            sequence=10, floor=15, scope=scope(), group_commits=True)
+    assert parse(answer["cursor"], sequence=10, floor=15) == 15
+
+
+def test_a_start_from_now_cursor_is_usable_even_when_the_floor_is_above_the_high_water_mark():
+    assert cursors.resume_point(10, 15) == 15 and cursors.resume_point(20, 15) == 20

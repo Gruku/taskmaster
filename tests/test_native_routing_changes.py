@@ -170,3 +170,34 @@ def test_an_epic_scope_keeps_what_happened_inside_it_and_nothing_from_outside(ep
                 ("other-epic-001", False, False, True)]   # made inside, after joining
     assert streams["legacy"] == expected, streams
     assert streams["native"] == expected, streams
+
+
+# ── A restored store never skips what it lost (review B, item 6) ────────────
+
+
+@pytest.mark.parametrize("side", ["legacy", "native"])
+def test_a_cursor_from_before_a_restore_answers_history_rewound_on_both_stores(twins, side, tmp_path):
+    import sqlite3
+    from contextlib import closing
+    from taskmaster import store
+
+    root = getattr(twins, side)
+    database = root / ".taskmaster" / "local" / "store.db"
+    backup = tmp_path / f"{side}-backup.db"
+    store.reset_for_tests()
+    with closing(sqlite3.connect(database)) as live, closing(sqlite3.connect(backup)) as copy:
+        live.backup(copy)
+    with twins.at(root):
+        bs.backlog_note(action="create", text="Written, then lost to the restore", pinned=False)
+        bs.backlog_note(action="update", note_id="NOTE-002", text="Edited, then lost too")
+    cursor = answer(root, twins)["cursor"]
+    store.reset_for_tests()
+    with closing(sqlite3.connect(backup)) as copy, closing(sqlite3.connect(database)) as live:
+        copy.backup(live)
+    store.reset_for_tests()
+
+    # A legacy read adopts the note file the restore left on disk as one fresh
+    # import, so its history regains one of the two lost sequences, not both.
+    rewound = answer(root, twins, cursor=cursor)
+
+    assert rewound["resync_required"] is True and rewound["reason"] == "history_rewound", rewound
