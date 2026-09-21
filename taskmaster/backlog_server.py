@@ -5880,8 +5880,7 @@ def backlog_context(
             items, total, extra = _legacy_context_section(
                 data, connection, name, focus, doc, body, epic, facts, offset, context_shape.PAGE)
             selections.append(Selection(name, items, total))
-            provenance[name] = {"query": context_shape.source(name, focus),
-                                "truncated": offset + len(items) < total, **extra}
+            provenance[name] = {"query": context_shape.source(name, focus), **extra}
         return context_shape.assemble(
             store_id=store_id, sequence=sequence, scope=scope, focus=focus,
             resolution=resolution, selections=selections, offsets=offsets, ident=ident,
