@@ -15,7 +15,7 @@ from __future__ import annotations
 from copy import deepcopy
 
 from taskmaster import backlog_server as bs
-from taskmaster.native import domain
+from taskmaster.native import claims, domain
 from taskmaster.native.workflow import _bugs_found_in
 from taskmaster.taskmaster_v3 import (
     VALID_GATE_VERDICTS,
@@ -297,8 +297,12 @@ def _update_refusal(snapshot, task, epic, task_id, field, value):
 
 
 @adapter("backlog_pick_task")
-def pick_task(call, *, task_id, force):
+def pick_task(call, *, task_id, force, ttl_seconds):
     session = bs.SESSION_ID
+    try:
+        ttl = claims.ttl_seconds(ttl_seconds)
+    except ValueError as exc:
+        return error_text(exc)
     with call.read() as snapshot:
         found = reads.find_task(snapshot, task_id)
         if not found:
@@ -315,20 +319,21 @@ def pick_task(call, *, task_id, force):
             if (found_dependency[0].get("status", "todo") if found_dependency else "todo") != "done":
                 unmet.append(dependency)
     if slug:
-        return _bundle_pick(call, task, epic, slug, members, session=session, force=force)
+        return _bundle_pick(call, task, epic, slug, members, session=session, force=force, ttl=ttl)
     locked_by = task.get("locked_by")
     context_text = bs._task_context({}, task, epic)
     instruction = bs._build_worktree_instruction(task_id, task.get("sub_repo", ""), task.get("branch", ""),
                                                  task.get("worktree", ""))
     if status == "in-progress":
         if locked_by and locked_by != session and not force:
-            return (f"Error: task `{task_id}` is locked by another session (`{locked_by}`). "
-                    f"It is already in-progress elsewhere. Pick a different task, or use "
-                    f"`backlog_pick_task({task_id}, force=true)` to reclaim it for this session.")
+            with call.read() as snapshot:
+                state = claims.read(task, task_id=task_id, session=session, connection=snapshot.connection)
+            return claims.lock_refusal(task_id, state)
         bs._set_session_task(task, epic)
         if locked_by == session:
             return call.finish(f"Already in progress: `{task_id}` — {task['title']}\n\n" + context_text + instruction)
-        refusal = _run(call, "task.pick", {"id": task_id, "session": session, "force": bool(force)})
+        refusal = _run(call, "task.pick", {"id": task_id, "session": session,
+                                          "force": bool(force), "ttl_seconds": ttl})
         if refusal:
             return refusal
         title = bs._committed_task_field(_committed(call), task_id, "title") or bs.NOT_PERSISTED
@@ -339,7 +344,8 @@ def pick_task(call, *, task_id, force):
     if unmet:
         warning = (f"\n\n⚠️ **Unmet dependencies:** {', '.join(f'`{d}`' for d in unmet)} not yet done. "
                    f"Picking anyway (explicit override) — `backlog_next_available` treats this task as blocked.")
-    refusal = _run(call, "task.pick", {"id": task_id, "session": session, "force": bool(force)})
+    refusal = _run(call, "task.pick", {"id": task_id, "session": session,
+                                      "force": bool(force), "ttl_seconds": ttl})
     if refusal:
         return refusal
     task["status"] = "in-progress"
@@ -352,7 +358,7 @@ def pick_task(call, *, task_id, force):
     return call.finish(head + warning + "\n\n" + context_text + instruction)
 
 
-def _bundle_pick(call, task, epic, slug, members, *, session, force):
+def _bundle_pick(call, task, epic, slug, members, *, session, force, ttl):
     sub_repos = {(m.get("sub_repo") or "") for m in members}
     if len(sub_repos) > 1:
         return f"Error: bundle `{slug}` spans multiple sub_repos {sub_repos}; cannot pick."
@@ -366,7 +372,8 @@ def _bundle_pick(call, task, epic, slug, members, *, session, force):
                     f"locked by another session ({member['locked_by']}). Use force=True to steal.")
     bound = all(m.get("status") == "in-progress" and m.get("locked_by") == session for m in members)
     if not bound:
-        refusal = _run(call, "task.pick", {"id": task["id"], "session": session, "force": bool(force)})
+        refusal = _run(call, "task.pick", {"id": task["id"], "session": session,
+                                           "force": bool(force), "ttl_seconds": ttl})
         if refusal:
             return refusal
     bs._set_session_task(task, epic)

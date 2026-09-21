@@ -32,10 +32,20 @@ class Unknown:
 
 @dataclass(frozen=True)
 class Claim:
-    """Who holds a task, and whether that holder is live. `live=None` means
-    liveness could not be decided — which blocks, rather than releasing."""
+    """Who holds a task, whether that holder is live, and whether the claim has
+    expired. `live=None` means liveness could not be decided.
+
+    `expired` is what actually decides blocking, and it is a separate answer
+    because the two questions are separate: a claim whose holder cannot be
+    judged is still determinately *held and unexpired* (`native.claims` waits
+    out the stored TTL instead of guessing), and reporting that as an
+    unanswered producer would misattribute a known fact. A producer that only
+    has liveness leaves `expired` as `None` and keeps the older reading, where
+    an unjudgeable holder is an `unknown` blocker.
+    """
     holder: str
     live: "bool | None"
+    expired: "bool | None" = None
 
 
 @dataclass(frozen=True)
@@ -207,12 +217,16 @@ def _claim_blockers(claim: "Claim | None", session: str, task_id: str) -> list:
         return []
     if claim.holder == session:
         return []
-    if claim.live is None:
-        return [_unknown("claim", "claim_liveness_unknown", claim.holder)]
-    if not claim.live:
+    if claim.expired is None:
+        # Liveness alone decided it: an unjudgeable holder is an open question.
+        if claim.live is None:
+            return [_unknown("claim", "claim_liveness_unknown", claim.holder)]
+        if not claim.live:
+            return []
+    elif claim.expired:
         return []
     return [Blocker(kind="claim", id=task_id, state="held", source="locked_by",
-                    extra={"by": claim.holder, "live": True})]
+                    extra={"by": claim.holder, "live": claim.live})]
 
 
 def resolve(facts: Facts) -> Resolution:

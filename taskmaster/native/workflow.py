@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 import json
 
 from taskmaster import taskmaster_v3 as domain_v3
-from . import batch_lines, domain
+from . import batch_lines, claims, domain
 from .contracts import Conflict, _identifier
 from .queries import MAX_PAGE
 
@@ -17,6 +17,10 @@ TASK_OPERATIONS = {
     "task.create", "task.update", "task.pick", "task.complete", "task.archive",
     "task.gate", "task.gate_skip", "task.gate_clear", "task.merge",
     "task.spec_review", "task.spec_review_clear",
+    # Claims: `task.pick` takes one, these two keep and give it back. There is
+    # no `task.claim_take` — a claim without a pick is not a state this system
+    # has, and a second front door to one transition is how they diverge.
+    "task.claim_renew", "task.claim_release",
 }
 OPERATIONS = TASK_OPERATIONS | {
     "epic.create", "epic.update", "epic.archive",
@@ -98,12 +102,18 @@ def validate(operation, arguments):
             raise ValueError(f"field `{arguments.get('field')}` not allowed. "
                              f"Allowed: {', '.join(sorted(domain.ALLOWED_FIELDS))}")
         _text(arguments, "value")
-    elif operation == "task.pick":
-        _keys(arguments, {"id", "session", "force"}, operation)
+    elif operation in ("task.pick", "task.claim_renew", "task.claim_release"):
+        allowed = {"id", "session", "ttl_seconds"} | ({"force"} if operation == "task.pick" else set())
+        if operation == "task.claim_release":
+            allowed.discard("ttl_seconds")
+        _keys(arguments, allowed, operation)
         _identifier(arguments.get("id"), "task id")
         if not _text(arguments, "session").strip():
             raise ValueError("session is required to claim a task")
-        _flag(arguments, "force")
+        if operation == "task.pick":
+            _flag(arguments, "force")
+        if "ttl_seconds" in arguments:
+            claims.ttl_seconds(arguments["ttl_seconds"])
     elif operation == "task.complete":
         _keys(arguments, {"id", "target_status", "human_action", "patchnote", "release", "changelog"}, operation)
         _identifier(arguments.get("id"), "task id")
@@ -756,13 +766,18 @@ def _apply_archive_flag(doc, *, before, after):
         doc.pop("archive_reason", None)
 
 
+def _claim_state(transaction, task, ident, session):
+    return claims.read(task, task_id=ident, session=session, connection=transaction.connection)
+
+
 def _task_pick(transaction, arguments):
     ident, session, force = arguments["id"], arguments["session"], arguments.get("force", False)
+    ttl = claims.ttl_seconds(arguments.get("ttl_seconds", 0))
     entity = _entity(transaction, "task", ident)
     task = domain.touch(deepcopy(entity["fields"]))
     slug = _bundle_slug(task, ident)
     if slug:
-        return _bundle_pick(transaction, ident, slug, session=session, force=force)
+        return _bundle_pick(transaction, ident, slug, session=session, force=force, ttl=ttl)
     status = task.get("status", "todo")
     if status not in domain.PICKABLE_FROM:
         raise ValueError(f"task `{ident}` is `{status}`, expected one of: {', '.join(domain.PICKABLE_FROM)}")
@@ -770,17 +785,22 @@ def _task_pick(transaction, arguments):
         # The lock is only contested for a row already in progress. A todo or
         # in-review row carrying a leftover `locked_by` — what a migrated row
         # brings — is claimed, not refused, exactly as the tool does.
+        #
+        # An expired claim is still refused without `force`. Expiry makes the
+        # refusal *informed* — the adapter says the holder is gone — and opens
+        # the release-then-pick path; it does not make a pick a silent steal,
+        # because a pick carries worktree instructions a second agent would act on.
         locked_by = task.get("locked_by")
         if locked_by and locked_by != session and not force:
             raise Conflict(f"task `{ident}` is locked by another session (`{locked_by}`)")
-        task["locked_by"] = session
     else:
         task = domain.pick_task_doc(task, session=session)
+    claims.held(task, ttl, session=session)
     _write_task(transaction, ident, task, entity["body"], before_entity=entity, enqueue=False)
     return ident
 
 
-def _bundle_pick(transaction, ident, slug, *, session, force):
+def _bundle_pick(transaction, ident, slug, *, session, force, ttl):
     members = _bundle_members(transaction.connection, slug)
     entities = {member: _entity(transaction, "task", member) for member in members}
     repos = {(entities[m]["fields"].get("sub_repo") or "") for m in members}
@@ -803,8 +823,62 @@ def _bundle_pick(transaction, ident, slug, *, session, force):
             fields = deepcopy(entity["fields"])
             doc = domain.pick_task_doc(domain.touch(fields) if member == ident else fields, session=session)
             doc["branch"], doc["worktree"] = branch, worktree
+            claims.held(doc, ttl, session=session)
             _write_task(transaction, member, doc, entity["body"], before_entity=entity, enqueue=False)
     return ident
+
+
+def _claim_targets(transaction, ident, task):
+    """The tasks one claim operation moves: a bundle's live members, or the task.
+
+    A bundle is picked as a unit, so it is renewed and released as a unit —
+    anything else leaves half a worktree claimed by a session that thinks it let
+    go, which is the state claims exist to prevent.
+    """
+    slug = _bundle_slug(task, ident)
+    members = _bundle_members(transaction.connection, slug) if slug else []
+    return members or [ident]
+
+
+def _claim_change(transaction, arguments, *, release):
+    """Renew or release a claim across every task it covers, in one transaction.
+
+    The holder is re-read inside the command's own `BEGIN IMMEDIATE`, so the
+    check that refuses a peer's claim and the write that moves it cannot be
+    separated by another writer.
+    """
+    ident, session = arguments["id"], arguments["session"]
+    ttl = None if release else claims.ttl_seconds(arguments.get("ttl_seconds", 0))
+    entity = _entity(transaction, "task", ident)
+    targets = _claim_targets(transaction, ident, entity["fields"])
+    entities = {target: (entity if target == ident else _entity(transaction, "task", target))
+                for target in targets}
+    states = {target: _claim_state(transaction, entities[target]["fields"], target, session)
+              for target in targets}
+    blocker = claims.blocked_by([states[target] for target in targets], release=release)
+    if blocker is not None:
+        raise Conflict(f"`{blocker.task_id}` is claimed by another session (`{blocker.holder}`)"
+                       + ("; that claim has expired — release it, or pick it with force"
+                          if blocker.expired else
+                          f", live until {blocker.expires_at}" if blocker.expires_at else ""))
+    if not release and not any(states[target].holder for target in targets):
+        raise ValueError(f"task `{ident}` is not claimed; `backlog_pick_task` takes a claim")
+    for target in targets:
+        if release and not states[target].holder:
+            continue  # Idempotent: a released claim releases again with no commit.
+        record = entities[target]
+        doc = deepcopy(record["fields"])
+        claims.released(doc) if release else claims.held(doc, ttl, session=session)
+        _write_task(transaction, target, doc, record["body"], before_entity=record, enqueue=False)
+    return ident
+
+
+def _task_claim_renew(transaction, arguments):
+    return _claim_change(transaction, arguments, release=False)
+
+
+def _task_claim_release(transaction, arguments):
+    return _claim_change(transaction, arguments, release=True)
 
 
 def _task_complete(transaction, arguments):
@@ -1446,6 +1520,7 @@ _HANDLERS = {
     "task.gate_skip": _task_gate_skip, "task.gate_clear": _task_gate_clear,
     "task.merge": _task_merge, "task.spec_review": _task_spec_review,
     "task.spec_review_clear": _task_spec_review_clear,
+    "task.claim_renew": _task_claim_renew, "task.claim_release": _task_claim_release,
     "epic.create": _epic_create, "epic.update": _epic_update, "epic.archive": _epic_archive,
     "phase.create": _phase_create, "phase.update": _phase_update, "phase.advance": _phase_advance,
     "bug.promote": _bug_promote, "link.create": _link_create, "link.remove": _link_remove,

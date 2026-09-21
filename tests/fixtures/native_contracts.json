@@ -1432,6 +1432,36 @@
       "returns": "str",
       "transactional": false
     },
+    "backlog_claim": {
+      "category": "simple-command",
+      "documentation": "Keep, give back or inspect the claim a pick took on a task, as JSON.\n\nA claim is what stops two sessions working the same task. `backlog_pick_task`\ntakes one; this keeps it alive across a long session, hands it back when the\nwork pauses, and says who holds what.\n\nA claim expires when its holder's process is known to be gone, or when its TTL\npasses. A holder that cannot be judged — another machine, or a session this\nstore has never heard from — keeps its claim: the cost of guessing wrong is two\nagents editing one task, so an unproven claim is never broken. `release` frees\nan expired claim without stealing; `backlog_pick_task(force=True)` is still the\noverride for one that stands.\n\nArgs:\n    action: renew (extend to now + ttl), release (hand it back), status.\n    task_id: The task to act on. Omit with `status` to list this session's claims.\n    ttl_seconds: How long a renewed claim stands. 0 uses the default (4 hours).",
+      "parameters": [
+        {
+          "mode": "positional",
+          "name": "action",
+          "required": true,
+          "type": "Literal['renew', 'release', 'status']"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "task_id",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "0",
+          "default_value": 0,
+          "mode": "positional",
+          "name": "ttl_seconds",
+          "required": false,
+          "type": "int"
+        }
+      ],
+      "returns": "str",
+      "transactional": true
+    },
     "backlog_clear_gate": {
       "category": "simple-command",
       "documentation": "Remove a single gate record from a task and recompute gate_state.\n\nArgs:\n    task_id: Task id.\n    gate: The gate to clear (see backlog_record_gate for valid names).",
@@ -3482,7 +3512,7 @@
     },
     "backlog_pick_task": {
       "category": "composite-command",
-      "documentation": "Start working on a task — sets it to in-progress. Idempotent if already in-progress.\n\nArgs:\n    task_id: The task ID to pick (e.g., \"ue-plugin-003\")\n    force: Force-claim the task even if locked by another session. Use when a previous\n           session ended without releasing the lock.",
+      "documentation": "Start working on a task — sets it to in-progress. Idempotent if already in-progress.\n\nPicking takes a claim: the task is locked to this session until it completes,\nthe claim is released, or the claim expires. Keep a long task claimed with\n`backlog_claim(action=\"renew\")`, and give it back with `action=\"release\"`.\n\nArgs:\n    task_id: The task ID to pick (e.g., \"ue-plugin-003\")\n    force: Force-claim the task even if locked by another session. Use when a previous\n           session ended without releasing the lock.\n    ttl_seconds: How long this claim stands without a renew. 0 uses the default\n           (4 hours). A claim also expires as soon as its holder is known to be gone.",
       "parameters": [
         {
           "mode": "positional",
@@ -3497,6 +3527,14 @@
           "name": "force",
           "required": false,
           "type": "bool"
+        },
+        {
+          "default_expression": "0",
+          "default_value": 0,
+          "mode": "positional",
+          "name": "ttl_seconds",
+          "required": false,
+          "type": "int"
         }
       ],
       "returns": "str",

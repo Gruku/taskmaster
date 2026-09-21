@@ -35,6 +35,7 @@ PREFIXES = {"bug": "B-", "issue": "ISS-", "decision": "DEC-", "idea": "IDEA-", "
 _REAL_DATETIME, _REAL_DATE = _datetime.datetime, _datetime.date
 CLOCK = {"at": _REAL_DATETIME(2026, 9, 17, 12, 0, 0, tzinfo=_datetime.timezone.utc), "tick": True}
 CLOCK_MODULES = ("taskmaster.taskmaster_v3", "taskmaster.native.domain", "taskmaster.native.events",
+                 "taskmaster.native.claims",
                  "taskmaster.native.workflow", "taskmaster.backlog_server", "taskmaster.store",
                  "taskmaster.native_routing.epics_phases")
 
