@@ -98,6 +98,41 @@ def scope(kinds, ids, epic, group_commits):
             epic, bool(group_commits)]
 
 
+def epic_condition(table, alias, current_epic):
+    """SQL for "this event belongs to the epic", as membership *at the time of the event*.
+
+    Both stores keep the same event rows — `kind`, `id`, `seq` and `before`/`after`
+    holding only the fields that changed — so one predicate serves both, with
+    `current_epic` the store's own subquery for a task's epic today (correlated
+    on `{alias}.id`). It takes four parameters, each the epic id.
+
+    An event whose own `before`/`after` names the epic is in: that is a task
+    being created in it, joining it or leaving it. Any other task event is in
+    when the epic the task was in at that moment is this one, and the event
+    stream is its own record of that: the `after` of the task's latest earlier
+    event that set an epic. A task with no such earlier event (its history
+    predates the log) takes the `before` of its next move, and failing that,
+    the epic it is in now. Only the viewer's write reassigns an epic, and it
+    always records the field, so the stream sees every move it holds.
+
+    Derived at read time rather than recorded at write time on purpose: the
+    legacy `changes` rows are compared row-for-row with `domain_events` by the
+    migration oracle, and every row already written would need a backfill that
+    changes what it says. A JSON `null` epic reads as "" so it ends the search
+    instead of falling through to a later answer.
+    """
+    event = f"{alias}."
+    earlier = (f"SELECT COALESCE(json_extract(h.after,'$.epic'),'') FROM {table} h "
+               f"WHERE h.kind='task' AND h.id={event}id AND h.seq<{event}seq "
+               "AND json_type(h.after,'$.epic') IS NOT NULL ORDER BY h.seq DESC LIMIT 1")
+    later = (f"SELECT COALESCE(json_extract(h.before,'$.epic'),'') FROM {table} h "
+             f"WHERE h.kind='task' AND h.id={event}id AND h.seq>{event}seq "
+             "AND json_type(h.before,'$.epic') IS NOT NULL ORDER BY h.seq LIMIT 1")
+    return (f"(({event}kind='epic' AND {event}id=?) OR ({event}kind='task' AND ("
+            f"json_extract({event}before,'$.epic')=? OR json_extract({event}after,'$.epic')=? "
+            f"OR COALESCE(({earlier}),({later}),({current_epic}))=?)))")
+
+
 def page(limit):
     if type(limit) is not int or not 1 <= limit <= MAX_LIMIT:
         raise ValueError(f"limit must be an integer from 1 to {MAX_LIMIT}")

@@ -5529,6 +5529,8 @@ def _legacy_change_identity(connection) -> tuple[str, int]:
 
 def _legacy_change_rows(connection, scope, after: int, limit: int) -> list[dict]:
     """The legacy `changes` table under the same scope the native feed applies."""
+    from taskmaster.native import cursors
+
     _label, kinds, ids, epic, _grouped = scope
     conditions, args = ["seq>?"], [after]
     for column, values in (("kind", kinds), ("id", ids)):
@@ -5536,15 +5538,14 @@ def _legacy_change_rows(connection, scope, after: int, limit: int) -> list[dict]
             conditions.append(f"{column} IN ({','.join('?' for _ in values)})")
             args.extend(values)
     if epic:
-        # Membership at the time of the event, not only current membership: the
-        # change a watcher most needs is the one that moved a task out.
-        conditions.append("((kind='epic' AND id=?) OR (kind='task' AND (id IN "
-                          "(SELECT id FROM entities WHERE kind='task' AND epic=?) "
-                          "OR json_extract(before,'$.epic')=? OR json_extract(after,'$.epic')=?)))")
+        # Membership at the time of the event, derived from the log's own history
+        # of epic moves — the same predicate the native feed applies.
+        conditions.append(cursors.epic_condition(
+            "changes", "e", "SELECT epic FROM entities WHERE kind='task' AND id=e.id"))
         args.extend([epic] * 4)
     return [dict(row) for row in connection.execute(
         "SELECT seq,ts,session,tool operation,kind,id,op,fields,seq first_seq,seq final_seq "
-        "FROM changes WHERE " + " AND ".join(conditions) + " ORDER BY seq LIMIT ?", args + [limit + 1])]
+        "FROM changes e WHERE " + " AND ".join(conditions) + " ORDER BY seq LIMIT ?", args + [limit + 1])]
 
 
 @mcp.tool()

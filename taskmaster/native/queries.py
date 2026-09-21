@@ -322,11 +322,9 @@ class Snapshot:
         return value
 
     def _change_scope(self, scope, after):
-        """The scope filters as SQL. `epic` is membership *at the time of the event*.
-
-        Current membership alone would silently never report the one change a
-        watcher most needs — the one that moved a task out of the epic — so an
-        event whose own before/after names the epic is in scope too.
+        """The scope filters as SQL. `epic` is membership *at the time of the event*
+        (`cursors.epic_condition`), so a change made while a task was in the epic
+        stays reported after it leaves, and the move that took it out is reported.
         """
         _label, kinds, ids, epic, _grouped = scope
         conditions, args = ["e.seq>?"], [after]
@@ -335,10 +333,9 @@ class Snapshot:
                 conditions.append(f"e.{column} IN ({','.join('?' for _ in values)})")
                 args.extend(values)
         if epic:
-            conditions.append("((e.kind='epic' AND e.id=?) OR (e.kind='task' AND (e.id IN "
-                              "(SELECT c2.public_id FROM entity_core c2 JOIN task_operational t USING(entity_key) "
-                              "WHERE c2.kind='task' AND json_extract(t.epic_json,'$')=?) "
-                              "OR json_extract(e.before,'$.epic')=? OR json_extract(e.after,'$.epic')=?)))")
+            conditions.append(cursors.epic_condition(
+                "domain_events", "e", "SELECT json_extract(t.epic_json,'$') FROM entity_core c2 "
+                "JOIN task_operational t USING(entity_key) WHERE c2.kind='task' AND c2.public_id=e.id"))
             args.extend([epic] * 4)
         return conditions, args
 
