@@ -305,3 +305,154 @@ def test_verify_covers_the_derived_files(twins, rel, kind):
         assert _flag_row(connection, rel) == (kind, None, hashlib.sha1(b"hand edit of a derived file\n").hexdigest(),
                                               b"hand edit of a derived file\n")
     assert path.read_bytes() == b"hand edit of a derived file\n"
+
+
+# ── S4: moves, tombstones and retention (§2.6) ─────────────────────────────
+
+LIVE, ARCHIVED = "tasks/test-epic-001.md", "tasks/archive/test-epic-001.md"
+
+
+def _archive(connection, archived=True):
+    """Move the task between its live and archive paths in one committed transaction.
+
+    No public operation unarchives a task, so this drives the command transaction
+    owner directly, exactly as a command's `replace` would.
+    """
+    from taskmaster.native.commands import Transaction
+    from taskmaster.native.db import assert_native
+    from taskmaster.native.migrate import _put_manifest
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        identity = assert_native(connection)
+        transaction = Transaction(connection, {"operation": "test.move", "caller_scope": "tests"}, identity)
+        entity = transaction.snapshot.get("task", "test-epic-001", include_body=True)
+        after = dict(entity["fields"])
+        if archived:
+            after["archived"] = True
+        else:
+            after.pop("archived", None)
+        transaction.replace("task", "test-epic-001", after, entity["body"], before_entity=entity)
+        transaction.snapshot.active = False
+        _put_manifest(connection, event_high_water=transaction.seq)
+        connection.commit()
+    except BaseException:
+        connection.rollback()
+        raise
+
+
+def _exists(root, rel):
+    return (root / ".taskmaster" / rel).exists()
+
+
+def test_a_move_writes_the_new_path_before_removing_the_old(twins):
+    order = []
+    with native_connection(twins.native) as connection:
+        _archive(connection)
+        exporter = _exporter(connection, twins.native, "A", Clock(),
+                             checkpoint=lambda stage, rel: order.append((stage, rel)) if rel else None)
+        jobs = exporter.claim()
+        assert [(job.file, job.effect) for job in jobs] == [(ARCHIVED, "write"), (LIVE, "delete")]
+        assert jobs[0].moved_from == LIVE
+        _publish_all(exporter, jobs)
+        exporter.finish()
+        record = outbox.export_record(connection, LIVE)
+    acked = [rel for stage, rel in order if stage == "acked"]
+    assert acked == [ARCHIVED, LIVE]
+    assert not _exists(twins.native, LIVE) and _exists(twins.native, ARCHIVED)
+    assert record["effect"] == "delete" and record["tombstone"]
+
+
+def test_archive_unarchive_and_rearchive_coalesce_to_the_last_move(twins):
+    with native_connection(twins.native) as connection:
+        _archive(connection)
+        _archive(connection, archived=False)
+        _archive(connection)
+        outcomes, _ = _run(connection, twins.native, Clock())
+    assert outcomes == {ARCHIVED: "exported", LIVE: "exported"}
+    assert not _exists(twins.native, LIVE) and _exists(twins.native, ARCHIVED)
+
+
+def test_a_crash_between_the_new_write_and_the_old_removal_heals_on_the_next_drain(twins):
+    clock = Clock()
+    with native_connection(twins.native) as connection:
+        _archive(connection)
+
+        def crash(stage, rel):
+            if stage == "acked" and rel == ARCHIVED:
+                raise KeyboardInterrupt("died between the two halves of a move")
+
+        exporter = _exporter(connection, twins.native, "A", clock, checkpoint=crash)
+        jobs = exporter.claim()
+        with pytest.raises(KeyboardInterrupt):
+            _publish_all(exporter, jobs)
+        assert _exists(twins.native, LIVE) and _exists(twins.native, ARCHIVED), "two copies, never none"
+        clock.at += outbox.LEASE_SECONDS + 1
+        outcomes, _ = _run(connection, twins.native, clock, owner="B")
+    assert outcomes == {LIVE: "exported"}
+    assert not _exists(twins.native, LIVE) and _exists(twins.native, ARCHIVED)
+
+
+def test_a_tombstone_removes_what_a_recovered_stale_job_recreated(twins):
+    clock = Clock()
+    with native_connection(twins.native) as connection:
+        _patch(connection, "test-epic-001", title="Stale revision")
+        stale = _exporter(connection, twins.native, "A", clock)
+        (old,) = stale.claim()
+        stale.intend([(old, render(old))])
+        clock.at += outbox.LEASE_SECONDS + 1
+        _archive(connection)
+        outcomes, _ = _run(connection, twins.native, clock, owner="B")
+        assert outcomes == {ARCHIVED: "exported", LIVE: "exported"}
+        # The paused exporter passed its lease check before B took over and now
+        # replaces anyway (§2.3(4)): the id is back at its old path, stale.
+        stale._owns = lambda: True
+        assert stale.publish(old, render(old)) == "lost"
+        assert _exists(twins.native, LIVE)
+        outcomes, _ = _run(connection, twins.native, clock, owner="C")
+        assert outcomes == {LIVE: "exported"}
+        assert _flag_row(connection, LIVE) is None
+    assert not _exists(twins.native, LIVE)
+
+
+def test_a_file_that_appears_over_a_tombstone_is_flagged(twins):
+    with native_connection(twins.native) as connection:
+        _archive(connection)
+        _run(connection, twins.native, Clock())
+        stranger = b"someone recreated this by hand\n"
+        (twins.native / ".taskmaster" / LIVE).write_bytes(stranger)
+        _archive(connection, archived=False)
+        outcomes, _ = _run(connection, twins.native, Clock(2_000_000.0))
+        assert outcomes[LIVE] == "flagged"
+        assert _flag_row(connection, LIVE)[3] == stranger
+
+
+def test_retention_keeps_one_export_record_per_file(twins):
+    with native_connection(twins.native) as connection:
+        clock = Clock()
+        for batch in range(100):
+            for n in range(10):
+                _patch(connection, "test-epic-001", title=f"Edit {batch}-{n}")
+            clock.at += 1
+            _run(connection, twins.native, clock)
+        rows = connection.execute("SELECT state FROM projection_jobs WHERE file=?", (LIVE,)).fetchall()
+    assert rows == [("exported",)]
+
+
+def test_retention_runs_after_the_ack_and_the_next_ack_catches_up(twins):
+    with native_connection(twins.native) as connection:
+        for n in range(3):
+            _patch(connection, "test-epic-001", title=f"Edit {n}")
+
+        def crash(stage, rel):
+            if stage == "retention":
+                raise KeyboardInterrupt("died before retention")
+
+        exporter = _exporter(connection, twins.native, "A", Clock(), checkpoint=crash)
+        jobs = exporter.claim()
+        _publish_all(exporter, jobs)
+        with pytest.raises(KeyboardInterrupt):
+            exporter.finish()
+        assert _states(connection, LIVE) == ["superseded", "superseded", "exported"]
+        _patch(connection, "test-epic-001", title="Next")
+        _run(connection, twins.native, Clock(2_000_000.0))
+        assert _states(connection, LIVE) == ["exported"]
