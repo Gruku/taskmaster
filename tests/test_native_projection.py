@@ -456,3 +456,80 @@ def test_retention_runs_after_the_ack_and_the_next_ack_catches_up(twins):
         _patch(connection, "test-epic-001", title="Next")
         _run(connection, twins.native, Clock(2_000_000.0))
         assert _states(connection, LIVE) == ["exported"]
+
+
+# ── S5: one hold for claim, status and resolve (§2.5) ──────────────────────
+
+
+def _hand_edit(root, rel=LIVE):
+    path = root / ".taskmaster" / rel
+    edited = path.read_bytes() + b"\nHand edit.\n"
+    path.write_bytes(edited)
+    return edited
+
+
+def test_held_names_flagged_and_quarantined_files(twins):
+    with native_connection(twins.native) as connection:
+        assert outbox.held(connection, "task", "test-epic-001") == []
+        _hand_edit(twins.native)
+        _patch(connection, "test-epic-001", title="Flag me")
+        _run(connection, twins.native, Clock())
+        assert outbox.held(connection, "task", "test-epic-001") == [(LIVE, "flagged")]
+        connection.execute("UPDATE projection SET quarantined=1 WHERE file='tasks/test-epic-002.md'")
+        assert outbox.held(connection, "task", "test-epic-002") == [("tasks/test-epic-002.md", "quarantined")]
+        assert outbox.flagged_files(connection) == (LIVE,)
+
+
+def test_a_held_entity_is_not_claimed_across_claims_and_recovery(twins):
+    clock = Clock()
+    with native_connection(twins.native) as connection:
+        edited = _hand_edit(twins.native)
+        _patch(connection, "test-epic-001", title="Flag me")
+        _run(connection, twins.native, clock)
+        for n in range(2):
+            _patch(connection, "test-epic-001", title=f"While held {n}")
+        exporter = _exporter(connection, twins.native, "A", clock)
+        assert exporter.claim() == []
+        assert f"export pending: {LIVE} is flagged" in exporter.warnings
+        assert _states(connection, LIVE)[-3:] == ["conflict", "superseded", "pending"]
+        clock.at += outbox.LEASE_SECONDS + 1
+        assert _exporter(connection, twins.native, "B", clock).claim() == []
+        assert _states(connection, LIVE)[-1] == "pending"
+        assert connection.execute("SELECT lease_owner FROM projection_jobs WHERE state='pending'").fetchall() == [(None,)]
+    assert (twins.native / ".taskmaster" / LIVE).read_bytes() == edited
+
+
+def test_a_held_entity_moves_neither_path(twins):
+    with native_connection(twins.native) as connection:
+        edited = _hand_edit(twins.native)
+        _patch(connection, "test-epic-001", title="Flag me")
+        _run(connection, twins.native, Clock())
+        _archive(connection)
+        outcomes, _ = _run(connection, twins.native, Clock(2_000_000.0))
+    assert outcomes == {}
+    assert (twins.native / ".taskmaster" / LIVE).read_bytes() == edited
+    assert not _exists(twins.native, ARCHIVED)
+
+
+def test_a_held_job_does_not_hold_back_exported_through(twins):
+    with native_connection(twins.native) as connection:
+        _hand_edit(twins.native)
+        _patch(connection, "test-epic-001", title="Flag me")
+        _run(connection, twins.native, Clock())
+        _patch(connection, "test-epic-001", title="Held")
+        seq = _patch(connection, "test-epic-002", title="Free")["commit_seq"]
+        _run(connection, twins.native, Clock(2_000_000.0))
+        assert outbox.exported_through(connection) >= seq
+
+
+def test_store_status_lists_a_native_flag_and_its_stuck_job(twins):
+    with native_connection(twins.native) as connection:
+        _hand_edit(twins.native)
+        _patch(connection, "test-epic-001", title="Flag me")
+        _run(connection, twins.native, Clock())
+    with twins.at(twins.native):
+        report = bs.backlog_store_status()
+    flagged = report.split("Flagged", 1)[1].split("\n", 2)
+    assert LIVE in "".join(flagged[:2]), report
+    stuck = report.split("Stuck", 1)[1].split("\n", 2) if "Stuck" in report else [""]
+    assert LIVE in "".join(stuck[:2]), report
