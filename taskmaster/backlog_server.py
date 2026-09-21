@@ -5718,8 +5718,8 @@ def _legacy_context_facts(data: dict, connection, focus: str, session: str):
             return None
         if not isinstance(holder, str):
             raise ValueError(f"locked_by is a {type(holder).__name__}, not a session name")
-        return blockers.Claim(holder=holder,
-                              live=context_shape.session_live(connection, holder))
+        return _claims.read(doc, task_id=focus, session=session,
+                            connection=connection).as_blocker()
 
     statuses = {str(task.get("id", "")): task.get("status") or "unknown"
                 for task, _epic in _legacy_all_tasks(data)}

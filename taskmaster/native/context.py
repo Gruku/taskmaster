@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import base64
 import binascii
-from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 
@@ -50,9 +49,6 @@ PAGE = 50
 # entities" is not.
 RECENT = 20
 MIN_BUDGET, MAX_BUDGET = 1, 1 << 20
-# A holder is live by the same rule `backlog_store_status` already applies, so the
-# viewer and the context answer cannot disagree about who holds a task.
-LIVE_SECONDS = 60
 
 
 class CursorInvalid(ValueError):
@@ -140,21 +136,6 @@ def parse(cursor, ident):
         raise CursorInvalid("this context question, or the store, moved on since the "
                             "cursor was issued; ask again without it") from None
     return offsets
-
-
-def session_live(connection, holder):
-    """Whether `holder` is a session still working, by `store_status`'s own rule.
-
-    A holder with no session row is **not** live: every session registers, so an
-    absent row is evidence of absence rather than an absence of evidence. Only an
-    unreadable `sessions` table is unknown — and that raises, so the caller's
-    `probe` turns it into a blocker instead of into a clear answer.
-    """
-    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=LIVE_SECONDS)).isoformat()
-    row = connection.execute("SELECT last_seen FROM sessions WHERE session=?", (holder,)).fetchone()
-    if row is None:
-        return False
-    return (row[0] or "") >= cutoff
 
 
 def no_focus() -> blockers.Blocker:

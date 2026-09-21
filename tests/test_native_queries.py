@@ -481,11 +481,14 @@ def test_context_takes_its_session_focus_from_the_task_that_session_holds(native
         assert _context(connection, scope="session", session="beta")["focus"] is None
 
 
-def test_a_live_peer_claim_blocks_and_a_holder_with_no_session_does_not(native):
+def test_a_peer_claim_blocks_whether_or_not_its_holder_can_be_judged(native):
     with closing(sqlite3.connect(native, isolation_level=None)) as connection:
         _lock(connection, "lock", "peer")
-        stale = _context(connection, focus="same", session="alpha")["mandatory"]["blockers"]
-        assert not [b for b in stale if b["kind"] == "claim"]
+        # No sessions row and not a session id: unjudgeable, and an unjudgeable
+        # holder keeps its claim until the TTL says otherwise (`native.claims`).
+        unjudged = _context(connection, focus="same", session="alpha")["mandatory"]["blockers"]
+        assert [(b["kind"], b["id"], b["live"]) for b in unjudged if b["kind"] == "claim"] == [
+            ("claim", "same", None)]
         _session_row(connection, "peer", _now())
         held = _context(connection, focus="same", session="alpha")["mandatory"]["blockers"]
         assert [(b["kind"], b["id"], b["by"]) for b in held if b["kind"] == "claim"] == [

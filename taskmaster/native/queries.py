@@ -4,7 +4,7 @@ from contextlib import contextmanager
 import hashlib
 import json
 
-from . import blockers, context as context_shape, cursors, schema
+from . import blockers, claims, context as context_shape, cursors, schema
 from .budget import Selection
 from .db import verified_snapshot
 from .migrate import encode, rows
@@ -441,13 +441,12 @@ class Snapshot:
                     f"WHERE c.kind='bug' AND c.public_id IN ({placeholders}) ORDER BY c.public_id",
                     open_ids)
 
-    def _claim(self, task, session):
+    def _claim(self, task, focus, session):
         holder = task.get("locked_by")
-        if holder in (None, "", False):
-            return None
-        if not isinstance(holder, str):
+        if holder not in (None, "", False) and not isinstance(holder, str):
             raise ValueError(f"locked_by is a {type(holder).__name__}, not a session name")
-        return blockers.Claim(holder=holder, live=context_shape.session_live(self.connection, holder))
+        return claims.read(task, task_id=focus, session=session,
+                           connection=self.connection).as_blocker()
 
     def _context_facts(self, focus, session):
         """Every mandatory producer, each wrapped so a refusal becomes a blocker."""
@@ -465,7 +464,7 @@ class Snapshot:
             dependencies=blockers.probe(lambda: self._dependency_statuses(declared)),
             bugs=blockers.probe(lambda: self._bug_rows(focus)),
             handovers=blockers.probe(lambda: self.open_handovers(focus, blocking_only=True)[0]),
-            claim=blockers.probe(lambda: self._claim(task, session)),
+            claim=blockers.probe(lambda: self._claim(task, focus, session)),
             session=session)
 
     def _context_section(self, name, focus, entity, facts, offset):
