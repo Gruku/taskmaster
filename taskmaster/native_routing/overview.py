@@ -17,8 +17,9 @@ from taskmaster import query_guard
 from taskmaster import store
 from taskmaster import taskmaster_v3 as v3
 from taskmaster.native import compatibility
+from taskmaster.native import projection as outbox
 
-from . import projection, reads
+from . import reads
 from .registry import adapter
 from .runtime import error_text
 
@@ -108,11 +109,12 @@ def _native_status(call) -> store.StoreStatus:
         dirty = tuple(r[0] for r in connection.execute("SELECT file FROM projection WHERE dirty=1 ORDER BY file"))
         quarantined = tuple(r[0] for r in connection.execute(
             "SELECT file FROM projection WHERE quarantined=1 ORDER BY file"))
-        # An export the drain still owes — quarantined, or a write that failed — is stuck.
+        # An export the drain still owes — quarantined, flagged, or a write that
+        # failed or has not run yet — is stuck.
         stuck = tuple(sorted({r[0] for r in connection.execute(
             "SELECT file FROM projection WHERE dirty=1 AND quarantined=1 UNION "
-            "SELECT file FROM projection_jobs WHERE state='pending'")}))
-        flagged = projection.flagged_files(connection)
+            "SELECT file FROM projection_jobs WHERE state IN ('pending','claimed','conflict')")}))
+        flagged = outbox.flagged_files(connection)
         seq = int(connection.execute("SELECT COALESCE(MAX(seq),0) FROM domain_events").fetchone()[0])
         recent = tuple({**dict(zip(("seq", "ts", "session", "tool", "kind", "id", "op"), row))}
                        for row in connection.execute(

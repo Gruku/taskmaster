@@ -269,6 +269,31 @@ class Twins:
             assert native[rel] == legacy[rel], f"projection of {rel} diverged"
 
 
+def native_database(root: Path) -> Path:
+    return root / ".taskmaster" / "local" / "store.db"
+
+
+@contextmanager
+def native_connection(root: Path):
+    """An autocommit connection to a native project's store, as the runtime opens one."""
+    with closing(sqlite3.connect(native_database(root), isolation_level=None, timeout=30,
+                                 check_same_thread=False)) as connection:
+        connection.execute("PRAGMA busy_timeout=30000")
+        yield connection
+
+
+_REQUESTS = iter(range(1, 1 << 30))
+
+
+def commit_only(connection, operation: str, arguments: dict) -> dict:
+    """Run one native command and commit it, without the export drain a tool call adds."""
+    from taskmaster.native import commands
+    store_id = connection.execute("SELECT value FROM native_manifest WHERE key='store_id'").fetchone()[0]
+    return commands.execute(connection, {
+        "protocol": 2, "store_id": store_id, "caller_scope": "tests", "request_id": f"t-{next(_REQUESTS)}",
+        "operation": operation, "arguments": arguments, "expected_revisions": []})
+
+
 def hand_edit_task(ident: str, change) -> None:
     """Hand-edit one task row of the legacy project the server points at, the way
     a hand-edited or migrated backlog arrives — e.g. a `locked_by` no tool may
