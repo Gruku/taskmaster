@@ -20,11 +20,12 @@ from __future__ import annotations
 from copy import deepcopy
 
 from taskmaster import backlog_server as bs
-from taskmaster.native import batch_commands, batch_lines, claims, domain
+from taskmaster.native import batch_commands, batch_lines, blockers, claims, domain
 from taskmaster.native.contracts import MAX_BATCH_COMMANDS, Conflict
 from taskmaster.native.workflow import _bugs_found_in
 
 from . import reads
+from .tasks import _dependency_statuses as dependency_statuses
 from .registry import adapter
 from .runtime import error_text
 
@@ -57,7 +58,7 @@ class _Overlay:
             find_phase=lambda value: domain.find_phase(reads.phases(self.snapshot), value),
             area_error=lambda value: reads.validate_area_ref(self.snapshot, value),
             open_bugs=lambda ident: _bugs_found_in(self.snapshot.connection, ident)[0],
-            keeps_claim=self._keeps_claim)
+            keeps_claim=self._keeps_claim, session=bs.SESSION_ID)
 
     def _keeps_claim(self, doc):
         return claims.survives_status_change(doc, session=bs.SESSION_ID,
@@ -68,8 +69,7 @@ class _Overlay:
         for member in reads.epic_tasks(self.snapshot, epic_id):
             task = self.task(member["id"])
             if task is not None and task.get("status") != "archived":
-                self.tasks[member["id"]] = domain.archive_task_doc(
-                    task, reason="done", keep_holder=self._keeps_claim(task))
+                self.tasks[member["id"]] = domain.archive_task_doc(task, reason="done")
                 self.tasks[member["id"]]["archived"] = now
                 count += 1
         epic = domain.archive_epic_doc(self.epics[epic_id], reason="done")
@@ -236,12 +236,8 @@ def batch_preview(call, *, operations):
             elif op == "pick":
                 if current in ("todo", "in-review"):
                     previews.append(f"- `{task_id}` ({current} → in-progress): {task['title']}")
-                    deps = task.get("depends_on", [])
-                    unmet = []
-                    for dependency in [deps] if isinstance(deps, str) else deps:
-                        found_dependency = reads.find_task(snapshot, dependency)
-                        if found_dependency and found_dependency[0].get("status") != "done":
-                            unmet.append(dependency)
+                    # The resolver's answer, as `backlog_pick_task` warns it.
+                    unmet = blockers.unmet_dependencies(task, dependency_statuses(snapshot, task))
                     if unmet:
                         previews.append(f"  ⚠ Unmet dependencies: {', '.join(f'`{d}`' for d in unmet)}")
                 elif current == "in-progress":

@@ -41,6 +41,10 @@ import re
 from . import blockers
 
 HOLDER_FIELD = "locked_by"
+# A claim protects work in flight. On a task in one of these statuses it has
+# nothing left to protect, so it reads as expired: any status change to one
+# releases it, and `backlog_claim(action="release")` always clears it.
+TERMINAL_STATUSES = ("done", "archived")
 EXPIRES_FIELD = "claim_expires"
 # Who `claim_expires` was stamped for. Written and cleared with it, never alone.
 EXPIRES_FOR_FIELD = "claim_expires_for"
@@ -234,7 +238,8 @@ def read(task, *, task_id: str, session: str, connection, now=None) -> ClaimStat
     expires_at = raw if isinstance(raw, str) and stamped_for_holder else ""
     live = holder_liveness(connection, holder, now=now)
     deadline = parse_stamp(expires_at)
-    expired = live is False or (deadline is not None and now >= deadline)
+    expired = (task.get("status") in TERMINAL_STATUSES or live is False
+               or (deadline is not None and now >= deadline))
     return ClaimState(task_id, holder, expires_at, live, bool(expired), holder == session)
 
 
@@ -265,14 +270,23 @@ HOLDER_WRITE_REFUSAL = ("`locked_by` is written only by the claim tools: `backlo
 def survives_status_change(doc, *, session: str, connection, now=None) -> bool:
     """Whether a status change by `session` leaves the task's claim in place.
 
-    A status change releases this session's own claim, and a peer's that is
-    proven expired, as it always has. A peer's claim that is not proven expired
-    stays: a status write by one session must not free another's work.
+    `doc` carries the status being moved to. A move to a terminal status
+    releases any claim, whoever makes it (`TERMINAL_STATUSES`). Otherwise a
+    status change releases this session's own claim, and a peer's that is proven
+    expired, as it always has; a peer's claim that is not proven expired stays: a
+    status write by one session must not free another's work in flight.
     """
     if not foreign_holder(doc, session):
         return False
     return not read(doc, task_id=str(doc.get("id", "")), session=session,
                     connection=connection, now=now).expired
+
+
+def batch_pick_refusal(task_id: str, holder: str) -> str:
+    """A batch `pick` line's refusal of a peer's claim — the same rule and advice
+    as `backlog_pick_task`, which a batch line cannot `force`."""
+    return (f"locked by another session (`{holder}`). Pick a different task, or use "
+            f"`backlog_pick_task({task_id}, force=true)` to reclaim it for this session.")
 
 
 def after_status_change(doc, *, session: str, connection, now=None) -> dict:

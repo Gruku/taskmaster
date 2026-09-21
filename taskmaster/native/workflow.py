@@ -917,7 +917,8 @@ def _task_complete(transaction, arguments):
     task = domain.complete_task_doc(task, target_status=target_status, human_action=human_action,
                                     patchnote=arguments.get("patchnote", ""),
                                     release=arguments.get("release", ""),
-                                    keep_holder=claims.survives_status_change(task, **_caller(transaction)))
+                                    keep_holder=claims.survives_status_change(
+                                        dict(task, status=target_status), **_caller(transaction)))
     _write_task(transaction, ident, task, entity["body"], before_entity=entity)
     if arguments.get("changelog", ""):
         _queue_progress_log(transaction.connection, arguments["changelog"])
@@ -945,8 +946,7 @@ def _task_archive(transaction, arguments):
     if status == "todo" and reason == "done":
         raise ValueError("cannot archive a `todo` task with reason `done`. "
                          "Use one of: deprecated, duplicate, wont-fix, superseded")
-    task = domain.archive_task_doc(task, reason=reason,
-                                   keep_holder=claims.survives_status_change(task, **_caller(transaction)))
+    task = domain.archive_task_doc(task, reason=reason)
     _write_task(transaction, ident, task, entity["body"], before_entity=entity)
     _smart_close_handovers(transaction, ident)
     return ident
@@ -1092,8 +1092,7 @@ def _epic_archive(transaction, arguments):
         if item["fields"].get("status") == "archived":
             continue
         member = _entity(transaction, "task", item["id"])
-        task = domain.archive_task_doc(member["fields"], reason=reason, keep_holder=claims.survives_status_change(
-            member["fields"], **_caller(transaction)))
+        task = domain.archive_task_doc(member["fields"], reason=reason)
         task["archived"] = stamp
         # The cascade is a local consequence of archiving the epic, so it queues
         # nothing: the tool's cascade never enqueues, and a large epic would
@@ -1422,7 +1421,8 @@ def _batch_lookups(transaction):
     return batch_lines.Lookups(task_exists=task_exists, find_phase=find_phase, area_error=area_error,
                                open_bugs=lambda ident: _bugs_found_in(connection, ident)[0],
                                keeps_claim=lambda doc: claims.survives_status_change(
-                                   doc, **_caller(transaction)))
+                                   doc, **_caller(transaction)),
+                               session=_caller(transaction)["session"])
 
 
 def _task_batch_line(transaction, arguments):
@@ -1475,7 +1475,8 @@ def _task_viewer_create(transaction, arguments):
     stamp = _now_iso()
     doc = {"title": payload.get("title", ""), "status": payload.get("status", "todo"),
            "priority": payload.get("priority", "medium"), "created": stamp, "last_referenced": stamp}
-    doc.update({key: value for key, value in payload.items() if key not in ("epic", "id")})
+    # Only the claim tools write `locked_by`; a viewer payload's is dropped.
+    doc.update({key: value for key, value in payload.items() if key not in ("epic", "id", claims.HOLDER_FIELD)})
     doc["epic"] = epic_id
     body = doc.pop("_body", None)
     return transaction.create("task", doc, body or None)
@@ -1483,7 +1484,10 @@ def _task_viewer_create(transaction, arguments):
 
 def _task_viewer_update(transaction, arguments):
     from taskmaster.taskmaster_v3 import _now_iso
-    ident, patch = arguments["id"], dict(arguments["patch"])
+    ident = arguments["id"]
+    # Only the claim tools write `locked_by`; a viewer patch's is dropped (a PUT
+    # carries the holder it read back).
+    patch = {key: value for key, value in arguments["patch"].items() if key != claims.HOLDER_FIELD}
     _viewer_precondition(transaction, arguments)
     entity = _viewer_task(transaction, ident)
     task = deepcopy(entity["fields"])
@@ -1511,6 +1515,8 @@ def _task_viewer_update(transaction, arguments):
             task["completed"] = _now_iso()
     if after_status == "done":
         task.pop("human_action", None)
+    if after_status != before_status and after_status != "in-progress":
+        claims.after_status_change(task, **_caller(transaction))
     task["last_referenced"] = _now_iso()
     _apply_archive_flag(task, before=before_status, after=after_status)
     body = task.pop("_body", None)
@@ -1525,6 +1531,7 @@ def _task_viewer_archive(transaction, arguments):
     task = deepcopy(entity["fields"])
     before = task.get("status")
     task["status"] = "archived"
+    claims.after_status_change(task, **_caller(transaction))
     _apply_archive_flag(task, before=before, after="archived")
     transaction.replace("task", ident, task, entity["body"], before_entity=entity)
     return ident

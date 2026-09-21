@@ -493,6 +493,8 @@ def _resolve_paths() -> tuple[Path, Path]:
 
 
 from taskmaster.taskmaster_v3 import warn_legacy_layout as _warn_legacy_layout
+from taskmaster.taskmaster_v3 import dependency_ids as _dependency_ids
+from taskmaster.taskmaster_v3 import dependency_shape as _dependency_shape
 
 
 # Module-level accessors (resolved fresh each call via _load/_save)
@@ -2463,9 +2465,10 @@ def backlog_get_task(
             lines.append(f"**{label}:** {val}")
 
     # Show dependencies
-    depends_on = task.get("depends_on", [])
-    if isinstance(depends_on, str):
-        depends_on = [depends_on]
+    depends_on = _dependency_ids(task.get("depends_on"))
+    if depends_on is None:
+        lines.append(_unreadable_depends_on_heading(task.get("depends_on")))
+        depends_on = []
     if depends_on:
         if expand_links:
             tldr_index = _build_tldr_index(data, project_root=bp.parent.parent if bp.exists() else None)
@@ -3091,6 +3094,22 @@ def _search_fallback_text(data: dict, query: str) -> str:
     return f"**{len(scored)} match{'es' if len(scored) != 1 else ''}** for `{query}`:\n" + "\n".join(f"- {r}" for r in results)
 
 
+def _unreadable_depends_on_heading(value) -> str:
+    """`backlog_get_task`'s line for a `depends_on` that cannot be read."""
+    return f"\n**Depends on:** unreadable ({_dependency_shape(value)})"
+
+
+def _related_dependencies(tasks: list, me: dict, task_id: str) -> tuple[list, list]:
+    """The viewer related panel's `dependencies` and `unblocks`, read through the
+    one `depends_on` normaliser: a bare string is one id, not a substring test,
+    and an unreadable value names nothing rather than raising."""
+    def row(t):
+        return {"id": t["id"], "title": t.get("title", ""), "status": t.get("status", "")}
+    mine = _dependency_ids(me.get("depends_on")) or []
+    return ([row(t) for t in tasks if t.get("id") in mine],
+            [row(t) for t in tasks if task_id in (_dependency_ids(t.get("depends_on")) or [])])
+
+
 def _unreadable_dependencies_line(unknown) -> str:
     """`backlog_dependencies`' line for a `depends_on` the resolver cannot read."""
     why = f"{unknown.reason} ({unknown.detail})" if unknown.detail else unknown.reason
@@ -3167,7 +3186,8 @@ def _claimed_lines(claimed: list) -> list[str]:
     """
     if not claimed:
         return []
-    lines = [f"\n**{len(claimed)} tasks claimed by another session:**"]
+    noun = "task" if len(claimed) == 1 else "tasks"
+    lines = [f"\n**{len(claimed)} {noun} claimed by another session:**"]
     for task, holder in claimed[:5]:
         lines.append(f"- `{task['id']}` — {task['title']} (claimed by `{holder}`)")
     return lines
@@ -3324,10 +3344,13 @@ def _validate_text(data: dict, trackers: dict, tracker_issues: list[str], missin
         if task.get("status") == "in-progress" and not task.get("started"):
             issues.append(f"`{tid}`: status=in-progress but no `started` date")
 
-        # 3. Dangling dependency references
-        deps = task.get("depends_on", [])
-        if isinstance(deps, str):
-            deps = [deps]
+        # 3. Dangling dependency references — and a value that cannot be read
+        # at all, which every availability reader reports as blocking.
+        deps = _dependency_ids(task.get("depends_on"))
+        if deps is None:
+            issues.append(f"`{tid}`: depends_on is unreadable "
+                          f"({_dependency_shape(task.get('depends_on'))}); expected a list of task ids")
+            deps = []
         for dep_id in deps:
             if dep_id not in all_task_ids:
                 issues.append(f"`{tid}`: depends_on `{dep_id}` which does not exist")
@@ -3356,9 +3379,7 @@ def _validate_text(data: dict, trackers: dict, tracker_issues: list[str], missin
     # 6. Circular dependency detection (DFS)
     dep_graph: dict[str, list[str]] = {}
     for task, _ in all_tasks:
-        deps = task.get("depends_on", [])
-        if isinstance(deps, str):
-            deps = [deps]
+        deps = _dependency_ids(task.get("depends_on")) or []
         dep_graph[task["id"]] = [d for d in deps if d in all_task_ids]
 
     visited: set[str] = set()
@@ -9073,6 +9094,9 @@ def backlog_advance_phase(force: bool = False) -> str:
                 t["status"] = "archived"
                 t["archive_reason"] = "done"
                 t["archived"] = _now()
+                # Archived is terminal: the claim is released, as the native
+                # phase advance releases it.
+                t.pop("locked_by", None)
                 _archive_entity("task", t["id"], t)
                 archived_count += 1
 
@@ -9426,6 +9450,10 @@ def backlog_batch_update(operations: str = "", commands: list[dict] | None = Non
                     "todo, in-progress, in-review"
                 )
                 continue
+            holder = _claims.foreign_holder(task, SESSION_ID)
+            if holder:
+                errors.append(f"`{task_id}`: {_claims.batch_pick_refusal(task_id, holder)}")
+                continue
             task["status"] = "in-progress"
             if not task.get("started"):
                 task["started"] = _now()
@@ -9558,10 +9586,8 @@ def backlog_batch_preview(operations: str) -> str:
             if current_status in ("todo", "in-review"):
                 previews.append(f"- `{task_id}` ({current_status} → in-progress): {task['title']}")
                 # Check dependencies
-                deps = task.get("depends_on", [])
-                if isinstance(deps, str):
-                    deps = [deps]
-                unmet = [d for d in deps if _find_task(data, d) and _find_task(data, d)[0].get("status") != "done"]
+                # The resolver's answer, as `backlog_pick_task` warns it.
+                unmet = _blockers.unmet_dependencies(task, _dependency_statuses(data, task))
                 if unmet:
                     previews.append(f"  ⚠ Unmet dependencies: {', '.join(f'`{d}`' for d in unmet)}")
             elif current_status == "in-progress":
@@ -9927,6 +9953,13 @@ def _viewer_etag() -> str:
     return f"{token}:{max_seq}"
 
 
+def _viewer_patch_without_holder(patch: dict) -> dict:
+    """A viewer write never sets or erases `locked_by`: only the claim tools do.
+    Dropped rather than refused, because a PUT sends the whole task back —
+    holder included — and must not fail for carrying the value it just read."""
+    return {key: value for key, value in patch.items() if key != _claims.HOLDER_FIELD}
+
+
 def _viewer_update_task(
     task_id: str, patch: dict, *, method: str = "PATCH", if_match: str | None = None
 ) -> dict:
@@ -9939,6 +9972,7 @@ def _viewer_update_task(
     from taskmaster.taskmaster_v3 import _now_iso  # noqa: PLC0415
     from taskmaster.taskmaster_v3 import validate_task_write  # noqa: PLC0415
 
+    patch = _viewer_patch_without_holder(patch)
     with _transaction(tool=f"viewer:{method} /api/tasks") as data:
         _check_if_match(if_match)
         found = _find_task(data, task_id)
@@ -9983,6 +10017,8 @@ def _viewer_update_task(
                 task["completed"] = _now_iso()
         if after_status == "done":
             task.pop("human_action", None)
+        if after_status != before_status and after_status != "in-progress":
+            _release_claim_on_status_change(task)
         task["last_referenced"] = _now_iso()
         _apply_archive_transition(
             "task", task_id, task, before=before_status, after=after_status
@@ -9997,6 +10033,7 @@ def _viewer_create_task(payload: dict) -> str:
     from taskmaster.taskmaster_v3 import _now_iso  # noqa: PLC0415
     from taskmaster.taskmaster_v3 import validate_task_write  # noqa: PLC0415
 
+    payload = _viewer_patch_without_holder(payload)
     epic_id = payload.get("epic")
     if not epic_id:
         raise ValueError("epic is required")
@@ -10040,6 +10077,7 @@ def _viewer_archive_task(task_id: str, *, if_match: str | None = None) -> None:
         task, _epic = found
         before = task.get("status")
         task["status"] = "archived"
+        _release_claim_on_status_change(task)
         _apply_archive_transition(
             "task", task_id, task, before=before, after="archived"
         )
@@ -10277,15 +10315,7 @@ def _load_related_for_task(task_id: str) -> dict | None:
                     "_path": str(f),
                 })
 
-    dep_ids = list(me.get("depends_on") or [])
-    dependencies = [
-        {"id": t["id"], "title": t.get("title", ""), "status": t.get("status", "")}
-        for t in tasks if t.get("id") in dep_ids
-    ]
-    unblocks = [
-        {"id": t["id"], "title": t.get("title", ""), "status": t.get("status", "")}
-        for t in tasks if task_id in (t.get("depends_on") or [])
-    ]
+    dependencies, unblocks = _related_dependencies(tasks, me, task_id)
 
     return {
         "task_id": task_id,

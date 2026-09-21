@@ -244,6 +244,8 @@ def pick_task_doc(task, *, session, now=None):
 
 def complete_task_doc(task, *, target_status, human_action="", patchnote="", release="", now=None,
                       keep_holder=False):
+    """`keep_holder`: to `in-review` a live peer's claim survives
+    (`claims.survives_status_change`); to `done` no claim does."""
     doc = dict(task)
     doc["status"] = target_status
     if target_status == "done":
@@ -251,7 +253,7 @@ def complete_task_doc(task, *, target_status, human_action="", patchnote="", rel
         doc.pop("human_action", None)
     else:
         doc["human_action"] = human_action
-    if not keep_holder:
+    if not keep_holder or target_status == "done":
         doc.pop("locked_by", None)
     if patchnote:
         doc["patchnote"] = patchnote
@@ -260,15 +262,13 @@ def complete_task_doc(task, *, target_status, human_action="", patchnote="", rel
     return doc
 
 
-def archive_task_doc(task, *, reason, now=None, keep_holder=False):
-    """`keep_holder`: a live peer's claim survives the status change
-    (`claims.survives_status_change`), which only the caller can judge."""
+def archive_task_doc(task, *, reason, now=None):
+    """Archived is terminal, so the claim is released whoever archives it."""
     doc = dict(task)
     doc["status"] = "archived"
     doc["archive_reason"] = reason
     doc["archived"] = now_stamp(now)
-    if not keep_holder:
-        doc.pop("locked_by", None)
+    doc.pop("locked_by", None)
     return doc
 
 

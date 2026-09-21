@@ -24,6 +24,8 @@ class Lookups:
     # claim survives it (`claims.survives_status_change`), which needs the
     # store and the caller's session, so the caller supplies the answer.
     keeps_claim: Callable[[dict], bool] = lambda doc: False
+    # The session the batch runs for: a `pick` line refuses any other holder.
+    session: str = ""
 
 
 @dataclass
@@ -137,6 +139,9 @@ def apply_task_line(arguments, task, lookups: Lookups, *, now) -> Outcome:
     prior = doc.get("status", "todo")
     if prior not in ("todo", "in-progress", "in-review"):
         return Outcome(f"`{ident}`: is `{prior}`, expected one of: todo, in-progress, in-review")
+    holder = claims.foreign_holder(doc, lookups.session)
+    if holder:
+        return Outcome(f"`{ident}`: {claims.batch_pick_refusal(ident, holder)}")
     doc["status"] = "in-progress"
     if not doc.get("started"):
         doc["started"] = now

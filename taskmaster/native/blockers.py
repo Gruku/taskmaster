@@ -159,14 +159,11 @@ def declared_dependencies(task: Mapping[str, Any]):
     """The task's declared dependency ids, or an `Unknown` for a shape that
     cannot be read. A bare string means one dependency, as every shipped site
     already treats it."""
-    declared = task.get("depends_on") or []
-    if isinstance(declared, str):
-        declared = [declared]
-    if not isinstance(declared, (list, tuple)):
-        return Unknown("malformed_depends_on", type(declared).__name__)
-    if any(not isinstance(item, str) for item in declared):
-        return Unknown("malformed_depends_on", "non-string dependency id")
-    return list(declared)
+    value = task.get("depends_on")
+    declared = domain_v3.dependency_ids(value)
+    if declared is None:
+        return Unknown("malformed_depends_on", domain_v3.dependency_shape(value))
+    return declared
 
 
 def dependency_blockers(task: Mapping[str, Any], statuses: Mapping[str, str]) -> list:

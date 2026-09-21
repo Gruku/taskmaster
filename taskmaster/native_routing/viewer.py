@@ -119,10 +119,7 @@ def related(database, task_id):
             continue
         issues.append({"id": fm.get("id") or ident, "severity": fm.get("severity"), "status": fm.get("status"),
                        "title": fm.get("title") or "", "_path": str(v3.issue_path(backlog_path, ident))})
-    dependencies = [{"id": t["id"], "title": t.get("title", ""), "status": t.get("status", "")}
-                    for t in tasks if t.get("id") in list(me.get("depends_on") or [])]
-    unblocks = [{"id": t["id"], "title": t.get("title", ""), "status": t.get("status", "")}
-                for t in tasks if task_id in (t.get("depends_on") or [])]
+    dependencies, unblocks = bs._related_dependencies(tasks, me, task_id)
     return {"task_id": task_id, "handovers": handovers, "issues": issues, "dependencies": dependencies,
             "unblocks": unblocks}
 

@@ -21,6 +21,7 @@ from taskmaster.taskmaster_v3 import (
     VALID_GATE_VERDICTS,
     VALID_GATES,
     VERDICT_GATES,
+    dependency_ids,
     entity_kind_of,
     links_grouped_by_type,
     outstanding_required_gates,
@@ -749,9 +750,10 @@ def _verbose_task(snapshot, task, epic, task_id, *, expand_links):
     for label, value in fields:
         if value is not None and str(value) not in ("—", "None", ""):
             lines.append(f"**{label}:** {value}")
-    depends_on = task.get("depends_on", [])
-    if isinstance(depends_on, str):
-        depends_on = [depends_on]
+    depends_on = dependency_ids(task.get("depends_on"))
+    if depends_on is None:
+        lines.append(bs._unreadable_depends_on_heading(task.get("depends_on")))
+        depends_on = []
     if depends_on:
         lines.append("\n**Depends on:**")
         if expand_links:
