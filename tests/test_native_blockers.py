@@ -10,7 +10,6 @@ import sqlite3
 import pytest
 
 from taskmaster.native.blockers import (
-    BLOCKING_BUG_SEVERITIES,
     MANDATORY_BLOCKER_KINDS,
     Claim,
     Facts,
@@ -137,15 +136,19 @@ def test_a_string_depends_on_is_read_as_one_dependency():
     assert [(b.id, b.state) for b in by_kind(resolution, "dependency")] == [("demo-002", "todo")]
 
 
-def test_an_open_high_severity_bug_found_in_the_task_blocks():
+def test_every_open_bug_found_in_the_task_blocks_whatever_its_severity():
+    """The close gate refuses on any open `found_in` bug, P2/P3 included, so a
+    context that called such a task clear would be refused at close (user
+    decision, 2026-09-21: context matches the close gate)."""
     resolution = resolve(clear_facts(bugs=[
         {"id": "B-118", "status": "open", "severity": "P1"},
-        {"id": "B-119", "status": "open", "severity": "P3"}]))
+        {"id": "B-119", "status": "open", "severity": "P3"},
+        {"id": "B-120", "status": "open", "severity": "P2"}]))
     bugs = by_kind(resolution, "bug")
-    assert [b.id for b in bugs] == ["B-118"]
-    assert bugs[0].as_dict() == {"kind": "bug", "id": "B-118", "state": "open",
-                                 "source": "found_in", "severity": "P1"}
-    assert "P1" in BLOCKING_BUG_SEVERITIES and "P3" not in BLOCKING_BUG_SEVERITIES
+    assert [b.id for b in bugs] == ["B-118", "B-119", "B-120"]
+    assert bugs[1].as_dict() == {"kind": "bug", "id": "B-119", "state": "open",
+                                 "source": "found_in", "severity": "P3"}
+    assert resolution.clear is False
 
 
 def test_an_open_bug_with_no_severity_blocks_because_it_cannot_be_ruled_out():
