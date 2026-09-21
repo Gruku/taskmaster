@@ -15,11 +15,15 @@ MANDATORY_BLOCKER_KINDS = (
     "gate", "dependency", "bug", "handover", "human_action", "claim", "unknown",
 )
 UNKNOWN_KIND = "unknown"
+FIXED_STATE = {"bug": "open", "handover": "open", UNKNOWN_KIND: "unknown"}
+FIXED_SOURCE = {"dependency": "depends_on", "bug": "found_in", "handover": "next_action",
+                UNKNOWN_KIND: "resolver"}
 
-# A bug's severity is optional (`taskmaster_v3.BUG_SEVERITIES`), so an unstated
-# severity cannot be ruled out of this set and blocks too — matching
-# `task.complete`, which already refuses on any open bug named via `found_in`.
-BLOCKING_BUG_SEVERITIES = ("P0", "P1")
+# Every open bug whose `found_in` names the task blocks, whatever its severity.
+# `backlog_complete_task` refuses on each of them (`_open_bugs_for_task`, native
+# `workflow._bugs_found_in`), and a task context calls clear must never then be
+# refused at close. The callers feed exactly the rows that close-gate predicate
+# returns, so this producer adds no filter of its own.
 
 
 @dataclass(frozen=True)
@@ -72,8 +76,14 @@ class Blocker:
         return str(self.extra.get("detail", ""))
 
     def as_dict(self) -> dict:
-        answer = {"kind": self.kind, "id": self.id, "state": self.state}
-        if self.source:
+        # A field the kind already fixes is left out: every bug and handover
+        # blocker is open, every unknown is unknown, and a dependency, bug,
+        # handover or unknown blocker has only the one source. A gate's state and
+        # lane, a dependency's state and a claim's state vary, so those stay.
+        answer = {"kind": self.kind, "id": self.id}
+        if self.state != FIXED_STATE.get(self.kind):
+            answer["state"] = self.state
+        if self.source and self.source != FIXED_SOURCE.get(self.kind):
             answer["source"] = self.source
         answer.update(self.extra)
         return answer
@@ -102,10 +112,17 @@ class Resolution:
     human_action: str = ""
 
     def as_dict(self) -> dict:
-        return {"clear": self.clear,
-                "blockers": [blocker.as_dict() for blocker in self.blockers],
-                "gate_state": self.gate_state,
-                "human_action": self.human_action}
+        # An empty gate state or human action is left out rather than spelled
+        # "": the blockers already say everything that blocks.
+        answer = {"clear": self.clear, "blockers": [blocker.as_dict() for blocker in self.blockers]}
+        # Left out too when a gate blocker already says it ("review-gate" pending
+        # is `review-gate:pending`); kept when it says something no blocker does.
+        if self.gate_state and not any(
+                f"{b.id}:{b.state}" == self.gate_state for b in self.blockers if b.kind == "gate"):
+            answer["gate_state"] = self.gate_state
+        if self.human_action:
+            answer["human_action"] = self.human_action
+        return answer
 
 
 def probe(producer):
@@ -213,10 +230,8 @@ def _bug_blockers(bugs: Sequence[Mapping[str, Any]]) -> list:
         if bug.get("status") != "open":
             continue
         severity = bug.get("severity")
-        if severity in BLOCKING_BUG_SEVERITIES or severity in (None, ""):
-            found.append(Blocker(kind="bug", id=str(bug.get("id", "")), state="open",
-                                 source="found_in",
-                                 extra={"severity": severity if severity else None}))
+        found.append(Blocker(kind="bug", id=str(bug.get("id", "")), state="open",
+                             source="found_in", extra={"severity": severity if severity else None}))
     return found
 
 

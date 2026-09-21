@@ -269,6 +269,19 @@ class Twins:
             assert native[rel] == legacy[rel], f"projection of {rel} diverged"
 
 
+def hand_edit_entity(kind: str, ident: str, change) -> None:
+    """`hand_edit_task` for any kind: one row of the legacy store, edited raw."""
+    store.reset_for_tests()
+    with closing(sqlite3.connect(bs.ROOT / ".taskmaster" / "local" / "store.db",
+                                 isolation_level=None)) as connection:
+        doc = json.loads(connection.execute(
+            "SELECT doc FROM entities WHERE kind=? AND id=?", (kind, ident)).fetchone()[0])
+        change(doc)
+        connection.execute("UPDATE entities SET doc=? WHERE kind=? AND id=?",
+                           (json.dumps(doc), kind, ident))
+    store.reset_for_tests()
+
+
 def native_database(root: Path) -> Path:
     return root / ".taskmaster" / "local" / "store.db"
 

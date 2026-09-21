@@ -145,9 +145,22 @@ def no_focus() -> blockers.Blocker:
     mandatory producer ran at all.
     """
     return blockers.Blocker(kind=blockers.UNKNOWN_KIND, id="focus", state="unknown",
-                            source="resolver",
-                            extra={"reason": "no_focus_task",
-                                   "detail": "no task is in focus, so nothing was checked"})
+                            source="resolver", extra={"reason": "no_focus_task"})
+
+
+def handover_row(row):
+    """A handover as a selected row: its id, and its next action when it has one.
+
+    A handover id is its date slug, so a `date` equal to the id's prefix repeats
+    the id; an empty next action says nothing. Both are left out.
+    """
+    shaped = {"id": row["id"]}
+    if (row.get("next_action") or "").strip():
+        shaped["next_action"] = row["next_action"]
+    date = row.get("date")
+    if date and not str(row["id"]).startswith(str(date)[:10]):
+        shaped["date"] = date
+    return shaped
 
 
 def source(name, focus):
@@ -198,14 +211,29 @@ def assemble(*, store_id, sequence, scope, focus, resolution, selections, offset
                   for s in selections]
 
     def envelope(cursor, taken):
-        # `taken=None` sizes the widest answer: every section spelled `false`,
-        # the longer of the two literals.
+        # `taken=None` sizes the widest answer: every section marked truncated.
+        # Only what the caller cannot know is spelled out: a section's predicate
+        # is fixed by its name (`source`), so a section delivered whole with no
+        # other fact to report has no provenance entry; the store id, the echoed
+        # scope and an empty cursor are left out (the journey harness measured
+        # this boilerplate outweighing the answers the tool replaces).
         marked = {}
         for selection in selections:
-            done = taken is None or selection.offset + taken.get(selection.name, 0) >= selection.total
-            marked[selection.name] = {**provenance[selection.name], "truncated": not done}
-        return {"store_id": store_id, "sequence": int(sequence), "scope": scope,
-                "focus": focus or None, "provenance": marked, "cursor": cursor}
+            done = taken is not None and selection.offset + taken.get(selection.name, 0) >= selection.total
+            entry = {key: value for key, value in provenance[selection.name].items()
+                     if key != "query" or value == "no_focus"}
+            if not done:
+                entry["truncated"] = True
+            if entry:
+                marked[selection.name] = entry
+        answer = {"sequence": int(sequence)}
+        if focus:
+            answer["focus"] = focus
+        if marked:
+            answer["provenance"] = marked
+        if cursor:
+            answer["cursor"] = cursor
+        return answer
 
     mandatory = resolution.as_dict()
     widest = issue(ident, {s.name: s.total for s in selections if s.total})

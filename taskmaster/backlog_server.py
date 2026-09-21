@@ -6001,15 +6001,18 @@ def _legacy_context_section(data, connection, name, focus, doc, body, epic, fact
                       "severity": doc_.get("severity")}
                      for ident, doc_, _b in _dict_rows(data, "bug") if doc_.get("status") == "open"])
     if name == "handovers":
-        return page(_legacy_open_handovers(data, focus))
+        return page([context_shape.handover_row(row) for row in _legacy_open_handovers(data, focus)])
     if name == "issues":
         return page([{"id": doc_.get("id") or ident, "title": doc_.get("title"),
                       "severity": doc_.get("severity")}
                      for ident, doc_, _b in _dict_rows(data, "issue")
                      if doc_.get("status") == "open"])
     if name == "notes":
-        return page([{"id": doc_.get("id") or ident, "text": text}
-                     for ident, doc_, text in _dict_rows(data, "note") if doc_.get("pinned")])
+        # The whole desk, in `backlog_note list` order (pinned first, newest first):
+        # orientation shows every live note, not only the pinned ones.
+        return page([{"id": note.get("id"), "text": note.get("body") or "",
+                      **({"pinned": True} if note.get("pinned") else {})}
+                     for note in _note_records(data)])
     if name == "siblings":
         if not epic:
             return [], 0, {"reason": "task has no epic"}
@@ -6047,6 +6050,12 @@ def backlog_context(
     `selected` is the convenience half: bounded, ordered, and reported with an
     exact count of what was left out. When rows remain, `cursor` continues the
     same question; a cursor is refused once the store or the question moves on.
+
+    Only facts are spelled out. An absent `cursor` means nothing remains; an
+    absent `provenance` entry means the section was delivered whole from its
+    fixed source; an absent `omitted` means nothing was left out; `over_budget`
+    appears only when no answer fits the budget, blockers included. A blocker
+    leaves out a state or source its kind fixes (bugs and handovers are open).
 
     Args:
         focus: Task id. Empty takes the task this session picked, unless scope is project.

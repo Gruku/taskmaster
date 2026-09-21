@@ -45,13 +45,39 @@ def _size(payload: Mapping[str, Any]) -> int:
 def _assemble(envelope, mandatory, selected, budget_block) -> dict:
     return {**dict(envelope), "mandatory": mandatory,
             "selected": {name: rows for name, rows in selected.items() if rows},
-            "budget": budget_block}
+            "budget": wire_block(budget_block)}
+
+
+def _omission_bytes(block: Mapping[str, Any]) -> int:
+    """An upper bound on the bytes the omission entries add to the wire block."""
+    wire = wire_block(block)
+    if "omitted" not in wire:
+        return 0
+    return len(_encode({"omitted": wire["omitted"], "omitted_total": wire["omitted_total"]})) + 2
+
+
+def wire_block(block: Mapping[str, Any]) -> dict:
+    """The budget block as the caller receives it: the facts, not the defaults.
+
+    `used_bytes` always. `over_budget` and `mandatory_bytes` only when the
+    blockers alone overflowed — the one case a caller must act on. `omitted` names
+    only the sections that left rows out, with their total; an absent section or
+    an absent total means nothing was left out. The limit is the caller's own
+    argument and is not echoed back. `Answer.budget` keeps the full accounting.
+    """
+    wire = {"used_bytes": block["used_bytes"]}
+    if block["over_budget"]:
+        wire.update(over_budget=True, mandatory_bytes=block["mandatory_bytes"])
+    omitted = {name: count for name, count in block["omitted"].items() if count}
+    if omitted:
+        wire.update(omitted=omitted, omitted_total=sum(omitted.values()))
+    return wire
 
 
 def _budget_block(*, limit_bytes, used_bytes, mandatory_bytes, over_budget, omitted) -> dict:
     return {"applies_to": "selected", "limit_bytes": limit_bytes, "used_bytes": used_bytes,
             "mandatory_bytes": mandatory_bytes, "over_budget": over_budget,
-            "omitted": omitted, "omitted_total": sum(omitted.values())}
+            "omitted": dict(omitted), "omitted_total": sum(omitted.values())}
 
 
 def _stabilise(envelope, mandatory, selected, *, limit_bytes, mandatory_bytes, omitted,
@@ -94,34 +120,44 @@ def budget(*, envelope: Mapping[str, Any], mandatory: Any,
     omitted = {selection.name: selection.total - selection.offset for selection in selections}
     selected: dict = {selection.name: [] for selection in selections}
 
-    # The floor: mandatory complete, nothing selected. Over budget is decided
-    # here and nowhere else — it means the caller must raise the limit, not that
-    # some selected row was dropped.
-    text, block = _stabilise(envelope, mandatory, selected, limit_bytes=limit_bytes,
-                             mandatory_bytes=mandatory_bytes, omitted=omitted, over_budget=False)
-    if block["used_bytes"] > limit_bytes:
+    def render(rows, left):
+        return _stabilise(envelope, mandatory, rows, limit_bytes=limit_bytes,
+                          mandatory_bytes=mandatory_bytes, omitted=left, over_budget=False)
+
+    # The longest prefix that fits, not the first prefix that does not: the wire
+    # budget block names only sections with rows left out, so delivering one more
+    # row can *shrink* the answer (a section's omission entry disappears once it
+    # is complete), and the empty selection is not the smallest answer. Rows only
+    # ever add bytes, so the scan stops once a prefix would overflow even with its
+    # whole omission entry taken away.
+    best = None
+    text, block = render(selected, omitted)
+    if block["used_bytes"] <= limit_bytes:
+        best = ({name: [] for name in selected}, dict(omitted), text, block)
+    trial, trial_omitted = {name: [] for name in selected}, dict(omitted)
+    done = False
+    for selection in selections:
+        for item in selection.items:
+            trial[selection.name].append(item)
+            trial_omitted[selection.name] = (selection.total - selection.offset
+                                             - len(trial[selection.name]))
+            candidate, candidate_block = render(trial, trial_omitted)
+            if candidate_block["used_bytes"] <= limit_bytes:
+                best = ({name: list(rows) for name, rows in trial.items()}, dict(trial_omitted),
+                        candidate, candidate_block)
+            elif candidate_block["used_bytes"] - _omission_bytes(candidate_block) > limit_bytes:
+                done = True
+                break
+        if done:
+            break
+
+    # Over budget means exactly one thing: no answer fits, not even the one that
+    # carries the blockers alone. It is never "some selected row was dropped".
+    if best is None:
         text, block = _stabilise(envelope, mandatory, selected, limit_bytes=limit_bytes,
                                  mandatory_bytes=mandatory_bytes, omitted=omitted,
                                  over_budget=True)
         return Answer(text=text, budget=block, selected={})
-
-    for selection in selections:
-        stop = False
-        for item in selection.items:
-            trial = {name: list(rows) for name, rows in selected.items()}
-            trial[selection.name].append(item)
-            trial_omitted = dict(omitted)
-            trial_omitted[selection.name] = (selection.total - selection.offset
-                                             - len(trial[selection.name]))
-            candidate, candidate_block = _stabilise(
-                envelope, mandatory, trial, limit_bytes=limit_bytes,
-                mandatory_bytes=mandatory_bytes, omitted=trial_omitted, over_budget=False)
-            if candidate_block["used_bytes"] > limit_bytes:
-                stop = True
-                break
-            selected, omitted, text, block = trial, trial_omitted, candidate, candidate_block
-        if stop:
-            break
-
+    selected, omitted, text, block = best
     return Answer(text=text, budget=block,
                   selected={name: rows for name, rows in selected.items() if rows})

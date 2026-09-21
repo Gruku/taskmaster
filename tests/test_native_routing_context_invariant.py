@@ -15,16 +15,18 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import datetime as _datetime
+from contextlib import closing
 import json
 import os
 import random
+import sqlite3
 
 import pytest
 
 from taskmaster import backlog_server as bs
 from taskmaster import store
 import native_twins
-from native_twins import hand_set_holder, make_twins
+from native_twins import hand_edit_entity, hand_set_holder, make_twins
 
 SEEDS = (11, 23, 37, 41, 59)
 TASKS = 30
@@ -39,7 +41,8 @@ VERDICT_GATES = {   # a lane's blocking gates are its review/verdict gates
     "standard": ("design-review", "review-gate"),
     "express": ("review-gate",),
 }
-BLOCKING_SEVERITIES = ("P0", "P1", None, "")   # an unstated severity cannot be ruled out
+# Every open bug blocks, whatever its severity: the close refuses on any of them,
+# and nothing context calls clear may be refused at close (user decision, §4f).
 # The producer an answered blocker belongs to. An `unknown` blocker names its
 # producer as its id, so it maps through that id instead.
 PRODUCER = {"gate": "gates", "dependency": "dependencies", "bug": "bugs",
@@ -94,8 +97,7 @@ def oracle(task_id, docs, bugs, handovers, claim_truth, session):
         found_in = bug.get("found_in") or ""
         if not isinstance(found_in, str):
             reasons.append(("bugs", f"bug {bug['id']} found_in cannot be compared"))
-        elif (found_in.casefold() == task_id.casefold() and bug.get("status") == "open"
-              and bug.get("severity") in BLOCKING_SEVERITIES):
+        elif found_in.casefold() == task_id.casefold() and bug.get("status") == "open":
             reasons.append(("bugs", f"open bug {bug['id']}"))
 
     for handover in handovers:
@@ -211,6 +213,10 @@ def _plan(rng):
         bugs.append({"found_in": rng.choice([target, target.upper(), "", "ghost-999"]),
                      "status": rng.choice(["open", "open", "fixed", "shelved"]),
                      "severity": rng.choice(["P0", "P1", "P2", "P3", None])})
+    # Always present, so the population cannot miss the case the close gate is
+    # strictest about: an open low-severity bug, once in another case.
+    bugs.append({"found_in": ids[-1], "status": "open", "severity": "P3"})
+    bugs.append({"found_in": ids[-2].upper(), "status": "open", "severity": "P2"})
     if rng.random() < 0.2:
         # One bug no comparison can read poisons every task's bug producer.
         bugs.append({"found_in": rng.choice([["x"], 5]), "status": "open", "severity": "P2"})
@@ -281,16 +287,29 @@ def _seed(plan, bugs, handovers, holders):
                 task["status"] = entry["status"]
             if entry["claim"] == "bare_malformed":
                 task["locked_by"] = 17
-        for (ident, (doc, _body)), bug in zip(sorted(data["_rows"]["bug"].items()), bugs):
+    assert _raw_edit(shapes).startswith("ok")
+    # Bug and handover shapes go straight into their store rows. Edited through
+    # the loaded backlog they never persisted, and every bug read back with no
+    # `found_in` and every handover as open: both producers went unexercised.
+    for ident, bug in zip(_store_ids("bug"), bugs):
+        def shape_bug(doc, bug=bug):
             doc.update(found_in=bug["found_in"], status=bug["status"])
             if bug["severity"] is None:
                 doc.pop("severity", None)
             else:
                 doc["severity"] = bug["severity"]
-        for (ident, (doc, _body)), handover in zip(sorted(data["_rows"]["handover"].items()), handovers):
-            doc["status"] = handover["status"]
-    assert _raw_edit(shapes).startswith("ok")
+        hand_edit_entity("bug", ident, shape_bug)
+    for ident, handover in zip(_store_ids("handover"), handovers):
+        hand_edit_entity("handover", ident,
+                         lambda doc, handover=handover: doc.__setitem__("status", handover["status"]))
     return truth
+
+
+def _store_ids(kind):
+    store.reset_for_tests()
+    with closing(sqlite3.connect(bs.ROOT / ".taskmaster" / "local" / "store.db")) as connection:
+        return [row[0] for row in connection.execute(
+            "SELECT id FROM entities WHERE kind=? AND deleted=0 ORDER BY id", (kind,))]
 
 
 def _documents():
@@ -299,6 +318,41 @@ def _documents():
     bugs = [dict(doc, id=ident) for ident, doc, _b in bs._dict_rows(data, "bug")]
     handovers = [dict(doc, id=ident) for ident, doc, _b in bs._dict_rows(data, "handover")]
     return docs, bugs, handovers
+
+
+def _close_gate_refusals(twins, ident):
+    """The open bugs each store's close gate would refuse `ident` on, read through
+    the very predicate `backlog_complete_task` calls, or the error it raises."""
+    from taskmaster.native.workflow import _bugs_found_in
+    found = {}
+    with twins.at(twins.legacy):
+        try:
+            found["legacy"] = sorted(bs._open_bugs_for_task(bs._backlog_path(), ident)[0])
+        except (AttributeError, ValueError) as exc:
+            found["legacy"] = exc
+    database = twins.native / ".taskmaster" / "local" / "store.db"
+    with closing(sqlite3.connect(database)) as connection:
+        try:
+            found["native"] = sorted(_bugs_found_in(connection, ident)[0])
+        except ValueError as exc:
+            found["native"] = exc
+    return found
+
+
+def _assert_close_gate_agrees(twins, ident, answers, where):
+    """Context clear on bugs => the close does not refuse on bugs, and the bugs it
+    names are exactly the ones the close would refuse on. A close gate that cannot
+    compare a `found_in` must meet an `unknown` bug producer, never a clear one."""
+    for side, refused in _close_gate_refusals(twins, ident).items():
+        blockers = answers[side]["mandatory"]["blockers"]
+        named = sorted(b["id"] for b in blockers if b["kind"] == "bug")
+        unknown = any(b["kind"] == "unknown" and b["id"] == "bugs" for b in blockers)
+        if isinstance(refused, Exception):
+            assert unknown, f"{where}: {side} close gate raised {refused!r} but context {blockers}"
+            continue
+        assert named == refused, f"{where}: {side} context names bugs {named}, close refuses on {refused}"
+        if answers[side]["mandatory"]["clear"]:
+            assert not refused, f"{where}: {side} context clear, close refuses on {refused}"
 
 
 @pytest.mark.parametrize("seed", SEEDS)
@@ -327,6 +381,7 @@ def test_clear_never_hides_a_blocker_the_oracle_finds(tmp_path, monkeypatch, see
         assert "error" not in legacy and "error" not in native, f"{where}: {legacy} / {native}"
         assert native["mandatory"] == legacy["mandatory"], f"{where}: the stores disagree"
         reasons = oracle(ident, docs, bug_docs, handover_docs, truth, bs.SESSION_ID)
+        _assert_close_gate_agrees(twins, ident, answers, where)
         mandatory = legacy["mandatory"]
         if mandatory["clear"]:
             assert not reasons, f"{where}: reported clear, but {reasons}; doc {docs[ident]!r}"
