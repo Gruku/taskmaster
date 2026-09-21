@@ -216,3 +216,52 @@ def test_a_document_section_says_where_its_text_came_from_or_that_it_has_none(tw
         assert spec["imported"] is False and spec["unresolved"] == ["not_imported"]
         assert answered["selected"].get("spec") is None
         assert answered["budget"]["omitted"]["spec"] == 1
+
+
+def _peer(pid):
+    """A session id another agent on this machine would record in `locked_by`."""
+    from taskmaster import store
+    return f"{store._local_host()}-{pid}-0badc0de"
+
+
+def _dead_pid():
+    from taskmaster import store
+    return next(pid for pid in range(4_000_000, 4_100_000) if not store._local_pid_alive(pid))
+
+
+@pytest.fixture
+def claimed(tmp_path, monkeypatch):
+    """One task held by a live peer on this host, one by a peer whose process is
+    gone. Neither holder has a `sessions` row — on a real project none does,
+    because `locked_by` and the `sessions` key are minted independently."""
+    import os
+
+    def seed():
+        bs.backlog_add_task(title="Held by a live peer", epic="test-epic", phase="dev")
+        bs.backlog_add_task(title="Held by a dead peer", epic="test-epic", phase="dev")
+        bs.backlog_update_task(task_id="test-epic-001", field="locked_by", value=_peer(os.getpid()))
+        bs.backlog_update_task(task_id="test-epic-002", field="locked_by", value=_peer(_dead_pid()))
+    return make_twins(tmp_path, monkeypatch, seed)
+
+
+@pytest.mark.parametrize("side", ["legacy", "native"])
+def test_a_task_a_live_peer_holds_is_blocked_by_its_claim(claimed, side):
+    """The integration defect: context judged a holder by looking it up in
+    `sessions`, which never holds a `locked_by` id, so a live peer's claim read
+    as dead and the task read as clear."""
+    answered = answer(getattr(claimed, side), claimed, focus="test-epic-001")
+    assert ("claim", "test-epic-001") in {(b["kind"], b["id"])
+                                          for b in answered["mandatory"]["blockers"]}
+    assert answered["mandatory"]["clear"] is False
+
+
+@pytest.mark.parametrize("side", ["legacy", "native"])
+def test_a_claim_whose_holder_process_is_gone_does_not_block(claimed, side):
+    answered = answer(getattr(claimed, side), claimed, focus="test-epic-002")
+    assert "claim" not in {b["kind"] for b in answered["mandatory"]["blockers"]}
+
+
+def test_both_stores_agree_on_claim_blockers(claimed):
+    for focus in ("test-epic-001", "test-epic-002"):
+        assert answer(claimed.legacy, claimed, focus=focus)["mandatory"] == \
+            answer(claimed.native, claimed, focus=focus)["mandatory"]
