@@ -178,7 +178,7 @@ def test_a_rewound_history_is_reported_after_a_rebuilt_store_and_before_scope_or
     with pytest.raises(cursors.StoreRebuilt):
         parse(token, store_id="store-b", sequence=40)
     with pytest.raises(cursors.HistoryRewound):
-        parse(token, sequence=40, scope=scope(kinds=["task"]), floor=99)
+        parse(token, sequence=40, scope=scope(kinds=["task"]), floor=30)
 
 
 def test_a_resync_cursor_is_usable_even_when_the_floor_is_above_the_high_water_mark():

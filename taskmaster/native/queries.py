@@ -262,7 +262,8 @@ class Snapshot:
         try:
             if cursor:
                 after = cursors.parse(cursor, store_id=envelope["store_id"], scope=scope,
-                                      source_digest=envelope["source_digest"], floor=floor)
+                                      source_digest=envelope["source_digest"], sequence=sequence,
+                                      floor=floor)
             elif since_seq is not None:
                 # An explicit sequence takes its scope from this call, so it can
                 # never smuggle a wider scope in the way a fabricated cursor could.
@@ -270,9 +271,10 @@ class Snapshot:
                 if after < floor:
                     raise cursors.HistoryExpired("change history before this sequence is no longer retained")
             else:
-                return cursors.feed(items=[], last_seq=sequence, more=False, **envelope)
+                return cursors.feed(items=[], last_seq=cursors.resume_point(sequence, floor), more=False,
+                                    **envelope)
         except cursors.CursorInvalid as exc:
-            return cursors.resync(exc, **envelope)
+            return cursors.resync(exc, floor=floor, **envelope)
         conditions, args = self._change_scope(scope, after)
         source = "FROM domain_events e LEFT JOIN command_commits c USING(commit_key) WHERE " + " AND ".join(conditions)
         if not group_commits:

@@ -5562,8 +5562,9 @@ def backlog_changes_since(
 
     Call it with no arguments to get a cursor and nothing else ("start watching
     from now"), then pass that cursor back to learn what moved. A cursor survives
-    every write; it stops being usable only if the store was rebuilt, the scope of
-    the question changed, or the history it points at was retired. In that case the
+    every write; it stops being usable only if the store was rebuilt or restored
+    to an earlier state, the scope of the question changed, or the history it
+    points at was retired. In that case the
     answer is not an error: `resync_required` is true, `reason` says which, and a
     fresh cursor comes back, so recovery costs one call. Do not treat a resync as
     a quiet period — re-read what you care about.
@@ -5608,7 +5609,8 @@ def backlog_changes_since(
         # `sync_state` to hold a floor, so its retention floor is zero.
         try:
             if cursor:
-                after = cursors.parse(cursor, store_id=store_id, source_digest=cursors.LEGACY_DIGEST, scope=scope)
+                after = cursors.parse(cursor, store_id=store_id, source_digest=cursors.LEGACY_DIGEST,
+                                      scope=scope, sequence=sequence)
             elif since_seq is not None:
                 after = min(since_seq, sequence)
             else:

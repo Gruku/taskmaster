@@ -36,7 +36,8 @@ MAX_LIMIT = 500
 # against a project cannot be resumed against its native copy, or the reverse.
 LEGACY_DIGEST = "legacy"
 
-REASONS = ("cursor_unreadable", "store_rebuilt", "scope_changed", "history_expired")
+# In precedence order: the most fundamental reason a cursor fails is the one named.
+REASONS = ("cursor_unreadable", "store_rebuilt", "history_rewound", "scope_changed", "history_expired")
 
 
 class CursorInvalid(ValueError):
@@ -56,6 +57,18 @@ class CursorUnreadable(CursorInvalid):
 
 class StoreRebuilt(CursorInvalid):
     reason = "store_rebuilt"
+
+
+class HistoryRewound(CursorInvalid):
+    """The cursor points past the end of the store's history.
+
+    A store restored from a backup keeps its identity, so the rebuild fence
+    passes; only the sequence shows the history went backwards. Resuming would
+    skip every event written into the gap, because the next write reuses a
+    sequence the cursor already claims to have seen.
+    """
+
+    reason = "history_rewound"
 
 
 class ScopeChanged(CursorInvalid):
@@ -182,16 +195,27 @@ def issue(*, store_id, source_digest, scope, last_seq):
     return base64.urlsafe_b64encode(encode(payload).encode()).decode()
 
 
-def parse(cursor, *, store_id, source_digest, scope, floor=0):
+def resume_point(sequence, floor=0):
+    """Where a cursor that starts from now resumes: the current sequence, or the
+    floor when an operator has set it above every event. A cursor below the floor
+    is expired the moment it is issued, and recovering with one would answer
+    another resync on every call."""
+    return max(int(sequence), int(floor))
+
+
+def parse(cursor, *, store_id, source_digest, scope, sequence, floor=0):
     """The sequence this continuation resumes after, or a typed refusal.
 
-    Precedence is fixed and tested: a rebuilt store is reported before a changed
-    scope, and both before an expired floor, so the answer names the most
-    fundamental reason rather than the first one checked.
+    `sequence` is the store's current high-water mark. Precedence is fixed and
+    tested, in `REASONS` order, so the answer names the most fundamental reason
+    rather than the first one checked.
     """
     payload = _decode(cursor)
     if payload["store"] != [str(store_id), str(source_digest)]:
         raise StoreRebuilt("this cursor was issued against a different store")
+    if payload["seq"] > resume_point(sequence, floor):
+        raise HistoryRewound("this cursor is past the end of the store's history; "
+                             "the store was restored or rolled back")
     if payload["scope"] != fingerprint(scope):
         raise ScopeChanged("this change query's scope differs from the cursor's")
     if payload["seq"] < int(floor):
@@ -226,13 +250,15 @@ def feed(*, store_id, source_digest, sequence, scope, items, last_seq, more, gro
             "more": bool(more), "resync_required": False, "reason": None}
 
 
-def resync(exc, *, store_id, source_digest, sequence, scope, group_commits):
+def resync(exc, *, store_id, source_digest, sequence, scope, group_commits, floor=0):
     """The recovery answer: no changes, the typed reason, and a cursor at now.
 
     A cursor at the current sequence rather than at the start of history is the
     point — an agent that lost its place must not re-act on work it already did.
+    "Now" is `resume_point`, so the recovery cursor is never itself expired.
     """
     return {"store_id": store_id, "sequence": int(sequence),
             ("commits" if group_commits else "changes"): [],
-            "cursor": issue(store_id=store_id, source_digest=source_digest, scope=scope, last_seq=sequence),
+            "cursor": issue(store_id=store_id, source_digest=source_digest, scope=scope,
+                            last_seq=resume_point(sequence, floor)),
             "more": False, "resync_required": True, "reason": exc.reason}
