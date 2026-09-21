@@ -7075,6 +7075,10 @@ def backlog_claim(
     for target, target_state in zip(targets, states):
         if action == "release" and not target_state.holder:
             continue
+        if action == "renew" and not target_state.mine:
+            # Renew extends claims and never takes one: a member whose holder was
+            # dropped would otherwise be claimed without a pick (§2.5).
+            continue
         _claims.released(target) if action == "release" else _claims.held(target, ttl, session=SESSION_ID)
         # Each member's own epic, as the bundle pick does: a member written with
         # the wrong epic (or none) would move on the board.

@@ -284,7 +284,9 @@ def test_a_bundle_renew_leaves_a_member_this_session_does_not_hold_unclaimed(bun
         receipt = run(connection, "task.claim_renew", {"id": "demo-001", "session": ALPHA}, "renew")
         assert "demo-002" not in {a["id"] for a in receipt["affected"]}
         member = fields(connection, "demo-002")
-    assert "locked_by" not in member and claims.EXPIRES_FIELD not in member
+        state = state_of(connection, "demo-002")
+    # The pause left its expiry behind, and that is inert: no holder, no claim.
+    assert "locked_by" not in member and state.holder == "" and not state.blocking
 
 
 def test_a_bundle_releases_every_member_in_one_commit(bundled):
