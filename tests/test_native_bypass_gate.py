@@ -50,6 +50,12 @@ def _opened_viewer():
         bs.webbrowser.open, bs._start_viewer_server = real
 
 
+def _hand_edit(rel):
+    # Appending writes the file without reading it: the rig forbids projection reads.
+    with (Path.cwd() / rel).open("a", encoding="utf-8") as handle:
+        handle.write("\nGate hand edit.\n")
+
+
 EXERCISES = {
     ("backlog_note", "create"): lambda: bs.backlog_note(action="create", text="gate note"),
     ("backlog_note", "list"): lambda: bs.backlog_note(action="list", include_archived=True),
@@ -203,6 +209,13 @@ EXERCISES = {
     ("backlog_area_get", None): lambda: bs.backlog_area_get(area_id="gate-seed-area"),
     ("backlog_area_update", None): lambda: bs.backlog_area_update(area_id="gate-seed-area", field="anchors",
                                                                   value='["a/**"]'),
+    # A native flag (the drain meets a hand edit), then every branch of resolving it.
+    ("backlog_resolve_conflict", None): lambda: (
+        _hand_edit(".taskmaster/tasks/test-epic-001.md"),
+        bs.backlog_update_task(task_id="test-epic-001", field="notes", value="gate flag"),
+        bs.backlog_resolve_conflict(),
+        bs.backlog_resolve_conflict(file="tasks/test-epic-001.md"),
+        bs.backlog_resolve_conflict(file="tasks/test-epic-001.md", take="store"))[1:],
     ("viewer_prefs_get", None): lambda: bs.viewer_prefs_get(),
     ("viewer_prefs_set", None): lambda: bs.viewer_prefs_set(patch_json='{"theme": "dark"}'),
     ("backlog_open_viewer", None): lambda: _opened_viewer(),
