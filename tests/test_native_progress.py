@@ -420,6 +420,53 @@ def test_a_live_writer_makes_a_caller_wait_then_report_its_paragraph_pending(twi
     assert progress.NOTICE not in answer and "- queued" in _region(_progress(root))
 
 
+def test_a_caller_that_queued_no_paragraph_never_waits_behind_a_dead_writer(twins, fake_time):
+    """Review 1: someone else's pending paragraph must not make every command wait
+    out a dead writer's lease. A caller that owes only a dashboard refresh returns
+    at once and reports nothing."""
+    root = twins.native
+    _put(root, "progress.seeded", {"seq": 0})
+    _put(root, f"progress.pending.{1:012d}.0000", {"ts": "", "text": "someone else's"})
+    _put(root, "progress.writer", {"owner": "dead", "generation": 2, "until": fake_time.at + 30})
+    started = fake_time.at
+    with twins.at(root):
+        answer = _touch(root)
+    assert progress.NOTICE not in answer, answer
+    assert fake_time.at - started < 1.0
+    assert len(_pending(root)) == 1
+
+
+def test_a_multi_command_call_waits_for_its_paragraphs_at_most_once(twins, fake_time):
+    root = twins.native
+    _put(root, "progress.writer", {"owner": "dead", "generation": 2, "until": fake_time.at + 30})
+    started = fake_time.at
+    with runtime.open_call(native_database(root), root / ".taskmaster", bs.SESSION_ID) as call:
+        call.execute("task.pick", {"id": "test-epic-002", "session": bs.SESSION_ID})
+        assert fake_time.at - started < 1.0, "a command that queued nothing waited"
+        call.execute("task.complete", {"id": "test-epic-001", "changelog": "### one"})
+        waited = fake_time.at - started
+        assert progress.WAIT_SECONDS <= waited < progress.WAIT_SECONDS + 1
+        call.execute("task.complete", {"id": "test-epic-002", "changelog": "### two"})
+        assert fake_time.at - started < waited + 1, "the call waited a second time"
+        assert progress.NOTICE in call.notices
+    assert [entry["text"] for _key, entry in _pending(root)] == ["### one", "### two"]
+
+
+def test_a_failed_export_is_logged_like_legacy(twins, fake_time):
+    """Review 2: an unreadable PROGRESS.md (not UTF-8) keeps the rows, leaves the
+    user's bytes alone, warns, and says why in store.log as legacy does."""
+    root = twins.native
+    raw = b"## Changelog\n\xff\xfe caf\xe9\n"
+    _progress_path(root).write_bytes(raw)
+    with twins.at(root):
+        answer = bs.backlog_complete_task(task_id="test-epic-001", session_title="Unreadable", done="- kept")
+    assert progress.NOTICE in answer, answer
+    assert _progress_path(root).read_bytes() == raw
+    assert len(_pending(root)) == 1
+    log = (root / ".taskmaster" / "local" / "store.log").read_text(encoding="utf-8")
+    assert "progress export failed: UnicodeDecodeError(" in log, log
+
+
 # ── S9: the lifted refusal, compared with legacy ────────────────────────────
 
 
@@ -505,7 +552,9 @@ def test_store_status_says_whether_the_exporter_lease_holder_is_alive(twins):
                                      "until": time.time() + 25})
     with twins.at(root):
         line = _status_line(root)
-    assert "generation 3" in line and "holder alive" in line, line
+    # Honest about what a pid check can tell: a reused pid, or one hostname on two
+    # machines, cannot be told apart from the holder itself.
+    assert "generation 3" in line and f"pid {os.getpid()} running on this host" in line, line
     finished = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"], capture_output=True,
                               text=True, timeout=60)
     dead = int(finished.stdout.strip())
@@ -513,10 +562,10 @@ def test_store_status_says_whether_the_exporter_lease_holder_is_alive(twins):
                                      "until": time.time() + 25})
     with twins.at(root):
         line = _status_line(root)
-    assert "holder not running" in line and "generation 4" in line, line
+    assert f"pid {dead} not running on this host" in line and "generation 4" in line, line
     _put(root, outbox.EXPORTER_KEY, {"owner": "elsewhere", "generation": 5, "until": time.time() + 25})
     with twins.at(root):
-        assert "holder unknown" in _status_line(root)
+        assert "holder process unknown" in _status_line(root)
     _put(root, outbox.EXPORTER_KEY, {"owner": "elsewhere", "generation": 5, "until": time.time() - 5})
     with twins.at(root):
         assert _status_line(root).startswith("Exporter lease: free")
