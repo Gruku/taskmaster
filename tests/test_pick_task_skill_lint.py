@@ -114,29 +114,36 @@ def test_description_contains_key_trigger_phrases():
 # ── Content / glance-first checks ────────────────────────────────────────────
 
 def test_glance_mcp_calls_present():
-    """Glance path must reference the slim MCP calls from spec §4."""
+    """Glance path must reference the slim MCP calls from spec §4, as N09 narrowed them.
+
+    The N09 journey harness (tests/test_agent_journeys.py) measured the pick
+    journey at 6 calls on the old sequence and 4 on `backlog_claim` +
+    `backlog_context`, with fewer bytes and every required blocker named.
+    """
     body = _body_without_frontmatter(PLAYBOOK_MD)
     required_calls = [
         "backlog_get_task",
-        "backlog_dependencies",
-        "backlog_handover_list",
-        "backlog_issue_list",
+        "backlog_claim",
+        "backlog_context",
+        "backlog_next_available",
     ]
     missing = [c for c in required_calls if c not in body]
     assert not missing, f"Glance MCP calls missing from SKILL.md body: {missing}"
 
 
-def test_handover_list_filters_to_open():
-    """pick-task glance must filter handovers to status=open (Plan B requirement).
-
-    Current step 5a calls backlog_handover_list(task_id=<id>, limit=3) WITHOUT
-    status="open" — this test fails today and passes after the glance rewrite.
-    """
+def test_glance_does_not_repeat_what_context_answers():
+    """The dependency check, the handover list and the issue list are one
+    `backlog_context` call now; the glance must not pay for them twice, and the
+    parallel-task check must not re-read the whole dashboard."""
     body = _body_without_frontmatter(PLAYBOOK_MD)
-    assert 'backlog_handover_list' in body
-    assert 'status="open"' in body or "status='open'" in body, (
-        "pick-task glance must filter handovers to status=open (Plan B requirement)"
-    )
+    for replaced in ("backlog_dependencies", "backlog_issue_list", "backlog_status"):
+        assert replaced not in body, f"{replaced} is answered by backlog_context/backlog_claim now"
+
+
+def test_context_selects_handovers_and_issues():
+    """Steps 5a/5b read the open handovers and issues from the one context call."""
+    body = _body_without_frontmatter(PLAYBOOK_MD)
+    assert 'include=["handovers", "issues"]' in body
 
 
 def test_blast_radius_not_in_glance_body():
