@@ -7,10 +7,16 @@ one task, and that cost is paid silently.
 The contract, in one place, so the native command layer, the native adapter and
 the legacy tool cannot drift on it (D8's dual path):
 
-- **The holder is `locked_by`.** `claim_expires` is only ever read beside it; a
-  `claim_expires` with no `locked_by` is not a claim, it is a leftover. That is
-  why nothing here has to chase the dozen shipped sites that drop `locked_by` —
-  dropping the holder drops the claim.
+- **The holder is `locked_by`, and an expiry belongs to the holder it was
+  stamped for.** Only pick and renew stamp `claim_expires`, only release clears
+  it, and a dozen shipped writers drop or set `locked_by` without touching it
+  (status change, complete, archive, bare `locked_by` writes, batch lines,
+  viewer writes). So every stamp records its holder in `claim_expires_for`, and
+  `read` ignores an expiry stamped for anyone else. A new holder therefore never
+  inherits a burnt expiry from the claim before it, and no writer has to be
+  taught about expiry — the next new one cannot reintroduce the bug. A holder
+  with no expiry of its own is judged on liveness alone, like a migrated
+  `locked_by`.
 - **Expiry is liveness *or* the stored TTL, with liveness as the authority**
   (D6). Liveness is three-valued: proven live, proven dead, or unknown. Only a
   proven-dead holder expires a claim early; an unknown one waits out the TTL,
@@ -36,6 +42,8 @@ from . import blockers
 
 HOLDER_FIELD = "locked_by"
 EXPIRES_FIELD = "claim_expires"
+# Who `claim_expires` was stamped for. Written and cleared with it, never alone.
+EXPIRES_FOR_FIELD = "claim_expires_for"
 
 # Four hours (D6 ii): the unit of work here is a task carried across a long
 # session, not a job in a queue. A short TTL would expire claims mid-review-gate
@@ -220,7 +228,10 @@ def read(task, *, task_id: str, session: str, connection, now=None) -> ClaimStat
     if not holder:
         return ClaimState(task_id, "", "", None, False, False)
     raw = task.get(EXPIRES_FIELD)
-    expires_at = raw if isinstance(raw, str) else ""
+    # An expiry stamped for another holder — or for nobody, before stamps were
+    # bound — says nothing about this one, so it is not read.
+    stamped_for_holder = task.get(EXPIRES_FOR_FIELD) == holder
+    expires_at = raw if isinstance(raw, str) and stamped_for_holder else ""
     live = holder_liveness(connection, holder, now=now)
     deadline = parse_stamp(expires_at)
     expired = live is False or (deadline is not None and now >= deadline)
@@ -231,12 +242,14 @@ def held(doc, ttl: int, *, session: str, now=None) -> dict:
     """Stamp a claim onto a task document: this session, expiring in `ttl`."""
     doc[HOLDER_FIELD] = session
     doc[EXPIRES_FIELD] = expiry(ttl, now=now)
+    doc[EXPIRES_FOR_FIELD] = session
     return doc
 
 
 def released(doc) -> dict:
     doc.pop(HOLDER_FIELD, None)
     doc.pop(EXPIRES_FIELD, None)
+    doc.pop(EXPIRES_FOR_FIELD, None)
     return doc
 
 
