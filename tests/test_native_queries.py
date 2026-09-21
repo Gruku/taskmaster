@@ -115,6 +115,24 @@ def test_requested_metadata_columns_do_not_load_unrequested_core_fields(legacy):
         assert not any("SELECT *" in sql or "SELECT c.*" in sql or "title_json" in sql for sql in selects)
 
 
+@pytest.fixture
+def store_db(native):
+    """The activated fixture store, with a history that reaches its high-water mark.
+
+    `test_native_migration`'s legacy fixture writes change 100 and deletes it, to
+    prove AUTOINCREMENT never recycles a sequence, so the backfill imports history
+    ending at 13 under an `event_high_water` of 100 — a state no real store
+    reaches, since nothing deletes a change row. Restoring that row makes the two
+    agree, so every feed and context answer here is checked against a store whose
+    reported sequence is the last event it holds.
+    """
+    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+        connection.execute("INSERT INTO domain_events(seq,ts,session,tool,kind,id,op) "
+                           "VALUES(100,'date','s','t','task','gone','delete')")
+        assert connection.execute("SELECT MAX(seq) FROM domain_events").fetchone()[0] == 100
+    return native
+
+
 # ── The change feed ─────────────────────────────────────────────────────────
 # `changes_since` is the query a resuming agent asks instead of re-reading the
 # whole backlog, so what is pinned here is the promise it makes: sequence order,
@@ -148,8 +166,8 @@ def _seqs(answer):
     return [change["seq"] for commit in answer["commits"] for change in commit["changes"]]
 
 
-def test_a_call_without_a_cursor_starts_from_now_and_answers_a_cursor_only(native):
-    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+def test_a_call_without_a_cursor_starts_from_now_and_answers_a_cursor_only(store_db):
+    with closing(sqlite3.connect(store_db, isolation_level=None)) as connection:
         answer = _feed(connection)
         assert answer["commits"] == [] and answer["more"] is False
         assert answer["resync_required"] is False and answer["reason"] is None
@@ -158,8 +176,8 @@ def test_a_call_without_a_cursor_starts_from_now_and_answers_a_cursor_only(nativ
         assert _seqs(_feed(connection, cursor=answer["cursor"])) == [101]
 
 
-def test_commits_are_reported_in_sequence_order_and_then_the_tail_is_empty(native):
-    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+def test_commits_are_reported_in_sequence_order_and_then_the_tail_is_empty(store_db):
+    with closing(sqlite3.connect(store_db, isolation_level=None)) as connection:
         start = _feed(connection)["cursor"]
         for n in range(3):
             _patch(connection, f"k{n}", next_step=f"step {n}")
@@ -171,8 +189,8 @@ def test_commits_are_reported_in_sequence_order_and_then_the_tail_is_empty(nativ
         assert tail["commits"] == [] and tail["more"] is False and tail["resync_required"] is False
 
 
-def test_a_multi_entity_commit_is_one_commit_carrying_every_event_it_wrote(native):
-    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+def test_a_multi_entity_commit_is_one_commit_carrying_every_event_it_wrote(store_db):
+    with closing(sqlite3.connect(store_db, isolation_level=None)) as connection:
         start = _feed(connection)["cursor"]
         _batch(connection, "batch", "one", "batched")
         commits = _feed(connection, cursor=start)["commits"]
@@ -185,8 +203,8 @@ def test_a_multi_entity_commit_is_one_commit_carrying_every_event_it_wrote(nativ
         assert commit["changes"][0]["fields"] == ["next_step"]
 
 
-def test_group_commits_false_flattens_to_events_in_sequence_order(native):
-    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+def test_group_commits_false_flattens_to_events_in_sequence_order(store_db):
+    with closing(sqlite3.connect(store_db, isolation_level=None)) as connection:
         start = _feed(connection, group_commits=False)["cursor"]
         _batch(connection, "batch", "one", "batched")
         answer = _feed(connection, cursor=start, group_commits=False)
@@ -195,8 +213,8 @@ def test_group_commits_false_flattens_to_events_in_sequence_order(native):
             (101, "task", "batch"), (102, "note", "batch")]
 
 
-def test_a_limit_pages_whole_commits_and_the_continuation_loses_nothing(native):
-    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+def test_a_limit_pages_whole_commits_and_the_continuation_loses_nothing(store_db):
+    with closing(sqlite3.connect(store_db, isolation_level=None)) as connection:
         start = _feed(connection)["cursor"]
         _batch(connection, "batch", "one", "batched")
         _patch(connection, "after", next_step="two")
@@ -207,8 +225,8 @@ def test_a_limit_pages_whole_commits_and_the_continuation_loses_nothing(native):
         assert _seqs(second) == [103] and second["more"] is False
 
 
-def test_a_scope_filter_reports_only_the_kinds_and_ids_it_names(native):
-    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+def test_a_scope_filter_reports_only_the_kinds_and_ids_it_names(store_db):
+    with closing(sqlite3.connect(store_db, isolation_level=None)) as connection:
         tasks_only = _feed(connection, kinds=["task"])["cursor"]
         notes_only = _feed(connection, kinds=["note"])["cursor"]
         by_id = _feed(connection, ids=["NOTE-1000"])["cursor"]
@@ -228,10 +246,10 @@ def _move(connection, key, epic):
                     {"id": "same", "patch": {"epic": epic}, "if_match": ""}, key)
 
 
-def test_an_epic_scope_reports_the_epic_row_its_tasks_and_a_task_leaving_it(native):
+def test_an_epic_scope_reports_the_epic_row_its_tasks_and_a_task_leaving_it(store_db):
     """Filtered removal is the dangerous case: scoping by current membership
     alone would silently never report the change that moved a task out."""
-    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+    with closing(sqlite3.connect(store_db, isolation_level=None)) as connection:
         # The fixture task sits in an epic that does not exist; give it one so the
         # viewer patch — the only operation that reassigns an epic — will run.
         _command(connection, "epic.create", {"epic_id": "missing", "name": "Missing", "done_when": "never"}, "mk")
@@ -247,20 +265,20 @@ def test_an_epic_scope_reports_the_epic_row_its_tasks_and_a_task_leaving_it(nati
         assert "epic" in answer["commits"][2]["changes"][0]["fields"]
 
 
-def test_backfilled_history_without_a_commit_row_is_one_commit_each(native):
+def test_backfilled_history_without_a_commit_row_is_one_commit_each(store_db):
     """The backfill copies the legacy `changes` table straight in, so its rows
     carry no `commit_key`; each must still be a commit of its own."""
-    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+    with closing(sqlite3.connect(store_db, isolation_level=None)) as connection:
         answer = _feed(connection, since_seq=0, limit=500)
         commits = answer["commits"]
-        assert len(commits) == 13 and _seqs(answer) == list(range(1, 14))
+        assert len(commits) == 14 and _seqs(answer) == [*range(1, 14), 100]
         assert commits[0]["first_seq"] == commits[0]["final_seq"] == commits[0]["commit_seq"] == 1
         assert commits[0]["operation"] == "fixture"
 
 
-def test_since_seq_resumes_from_an_explicit_sequence_and_never_shares_a_call(native):
-    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
-        assert _seqs(_feed(connection, since_seq=10, limit=500)) == [11, 12, 13]
+def test_since_seq_resumes_from_an_explicit_sequence_and_never_shares_a_call(store_db):
+    with closing(sqlite3.connect(store_db, isolation_level=None)) as connection:
+        assert _seqs(_feed(connection, since_seq=10, limit=500)) == [11, 12, 13, 100]
         # Past the end of history is "from now", not a cursor into the future.
         assert _feed(connection, since_seq=9999)["sequence"] == 100
         _patch(connection, "one", next_step="one")
@@ -271,8 +289,8 @@ def test_since_seq_resumes_from_an_explicit_sequence_and_never_shares_a_call(nat
             _feed(connection, since_seq=-1)
 
 
-def test_a_cursor_from_a_rebuilt_store_or_a_changed_scope_answers_resync_not_an_error(native):
-    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+def test_a_cursor_from_a_rebuilt_store_or_a_changed_scope_answers_resync_not_an_error(store_db):
+    with closing(sqlite3.connect(store_db, isolation_level=None)) as connection:
         cursor = _feed(connection)["cursor"]
         _patch(connection, "one", next_step="one")
         narrowed = _feed(connection, cursor=cursor, kinds=["task"])
@@ -287,18 +305,18 @@ def test_a_cursor_from_a_rebuilt_store_or_a_changed_scope_answers_resync_not_an_
         assert _feed(connection, cursor=rebuilt["cursor"])["commits"] == []
 
 
-def test_a_write_never_invalidates_a_change_cursor(native):
-    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+def test_a_write_never_invalidates_a_change_cursor(store_db):
+    with closing(sqlite3.connect(store_db, isolation_level=None)) as connection:
         cursor = _feed(connection)["cursor"]
         for n in range(3):
             _patch(connection, f"k{n}", next_step=f"step {n}")
             assert _feed(connection, cursor=cursor)["resync_required"] is False
 
 
-def test_no_change_is_lost_or_duplicated_across_a_cursor_chain(native):
+def test_no_change_is_lost_or_duplicated_across_a_cursor_chain(store_db):
     """Writes interleaved with one-commit pages: the union of every page equals
     the events in `(start, end]` exactly, with no repeats."""
-    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+    with closing(sqlite3.connect(store_db, isolation_level=None)) as connection:
         cursor, seen = _feed(connection)["cursor"], []
         for n in range(5):
             _patch(connection, f"k{n}", next_step=f"step {n}")
@@ -314,8 +332,8 @@ def test_no_change_is_lost_or_duplicated_across_a_cursor_chain(native):
         assert seen == expected and len(set(seen)) == len(seen)
 
 
-def test_the_feed_refuses_an_unknown_kind_and_an_out_of_range_limit(native):
-    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+def test_the_feed_refuses_an_unknown_kind_and_an_out_of_range_limit(store_db):
+    with closing(sqlite3.connect(store_db, isolation_level=None)) as connection:
         with pytest.raises(ValueError, match="unknown entity kind"):
             _feed(connection, kinds=["nonsense"])
         with pytest.raises(ValueError, match="limit"):
@@ -329,11 +347,11 @@ def _set_floor(connection, value):
                        "ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json", (json.dumps(value),))
 
 
-def test_a_cursor_below_the_retention_floor_answers_history_expired(native):
+def test_a_cursor_below_the_retention_floor_answers_history_expired(store_db):
     """No pruner ships (D4) — pruning `domain_events` would break the migration
     oracle that compares it row-for-row against the legacy `changes` table — so
     expiry is expressed, and tested, by raising the floor."""
-    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+    with closing(sqlite3.connect(store_db, isolation_level=None)) as connection:
         cursor = _feed(connection)["cursor"]
         _patch(connection, "one", next_step="one")
         _set_floor(connection, 100)
@@ -346,8 +364,8 @@ def test_a_cursor_below_the_retention_floor_answers_history_expired(native):
         assert _feed(connection, cursor=expired["cursor"])["resync_required"] is False
 
 
-def test_the_floor_is_read_on_every_call_not_cached_for_the_snapshot(native):
-    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+def test_the_floor_is_read_on_every_call_not_cached_for_the_snapshot(store_db):
+    with closing(sqlite3.connect(store_db, isolation_level=None)) as connection:
         cursor = _feed(connection)["cursor"]
         assert _feed(connection, cursor=cursor)["resync_required"] is False
         _set_floor(connection, 101)
@@ -356,21 +374,54 @@ def test_the_floor_is_read_on_every_call_not_cached_for_the_snapshot(native):
         assert _feed(connection, cursor=cursor)["resync_required"] is False
 
 
-def test_an_explicit_since_seq_below_the_floor_expires_the_same_way(native):
-    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+def test_an_explicit_since_seq_below_the_floor_expires_the_same_way(store_db):
+    with closing(sqlite3.connect(store_db, isolation_level=None)) as connection:
         _set_floor(connection, 50)
         assert _feed(connection, since_seq=50)["resync_required"] is False
         expired = _feed(connection, since_seq=49)
         assert expired["resync_required"] is True and expired["reason"] == "history_expired"
 
 
-def test_an_unreadable_floor_refuses_loudly_rather_than_admitting_expired_history(native):
+def test_an_unreadable_floor_refuses_loudly_rather_than_admitting_expired_history(store_db):
     """A floor that cannot be read cannot prove history is retained, and a feed
     that silently assumed zero would replay work an agent already acted on."""
-    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+    with closing(sqlite3.connect(store_db, isolation_level=None)) as connection:
         _set_floor(connection, "not a sequence")
         with pytest.raises(ValueError, match="change_history_floor"):
             _feed(connection)
+
+
+def test_a_floor_above_the_high_water_mark_never_loops_on_resync(store_db):
+    """Review B, item 6: with the floor past every event, a cursor issued at the
+    current sequence was itself expired, so each call answered another resync."""
+    with closing(sqlite3.connect(store_db, isolation_level=None)) as connection:
+        before = _feed(connection)
+        _set_floor(connection, before["sequence"] + 5)
+        started = _feed(connection)
+        assert _feed(connection, cursor=started["cursor"])["resync_required"] is False
+        expired = _feed(connection, cursor=before["cursor"])
+        assert expired["resync_required"] is True and expired["reason"] == "history_expired"
+        assert _feed(connection, cursor=expired["cursor"])["resync_required"] is False
+
+
+def test_a_cursor_from_before_a_restore_answers_history_rewound(store_db, tmp_path):
+    """A store restored from a backup keeps its identity, so the rebuild fence
+    passes; only the sequence shows the history went backwards. The next write
+    reuses a sequence the cursor already covers, and resuming would skip it."""
+    backup = tmp_path / "backup.db"
+    with closing(sqlite3.connect(store_db, isolation_level=None)) as connection, \
+            closing(sqlite3.connect(backup)) as copy:
+        connection.backup(copy)
+    with closing(sqlite3.connect(store_db, isolation_level=None)) as connection:
+        _patch(connection, "before-restore", next_step="lost")
+        cursor = _feed(connection)["cursor"]
+    with closing(sqlite3.connect(backup)) as copy, closing(sqlite3.connect(store_db)) as live:
+        copy.backup(live)
+    with closing(sqlite3.connect(store_db, isolation_level=None)) as connection:
+        rewound = _feed(connection, cursor=cursor)
+        assert rewound["resync_required"] is True and rewound["reason"] == "history_rewound", rewound
+        _patch(connection, "after-restore", next_step="kept")
+        assert _seqs(_feed(connection, cursor=rewound["cursor"])) == [101]
 
 
 # ── Bounded agent context ───────────────────────────────────────────────────
@@ -399,8 +450,8 @@ def _now(offset_seconds=0):
     return (datetime.now(timezone.utc) + timedelta(seconds=offset_seconds)).isoformat()
 
 
-def test_context_answers_mandatory_blockers_selected_context_and_a_budget(native):
-    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+def test_context_answers_mandatory_blockers_selected_context_and_a_budget(store_db):
+    with closing(sqlite3.connect(store_db, isolation_level=None)) as connection:
         answer = _context(connection, focus="same", scope="task",
                           include=["dependencies", "links"], budget_bytes=8000)
         assert set(answer) == {"store_id", "sequence", "scope", "focus", "mandatory",
@@ -419,15 +470,15 @@ def test_context_answers_mandatory_blockers_selected_context_and_a_budget(native
         assert answer["budget"]["omitted"] == {"dependencies": 0, "links": 0}
 
 
-def test_context_used_bytes_is_the_bytes_of_the_answer_actually_returned(native):
-    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+def test_context_used_bytes_is_the_bytes_of_the_answer_actually_returned(store_db):
+    with closing(sqlite3.connect(store_db, isolation_level=None)) as connection:
         with Repository(connection).snapshot() as query:
             text = query.context(focus="same", include=["dependencies", "links", "body", "notes"])
         assert json.loads(text)["budget"]["used_bytes"] == len(text.encode("utf-8"))
 
 
-def test_context_returns_mandatory_complete_and_flags_over_budget_rather_than_trimming(native):
-    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+def test_context_returns_mandatory_complete_and_flags_over_budget_rather_than_trimming(store_db):
+    with closing(sqlite3.connect(store_db, isolation_level=None)) as connection:
         whole = _context(connection, focus="same", include=["dependencies"])
         squeezed = _context(connection, focus="same", include=["dependencies"], budget_bytes=64)
         assert squeezed["budget"]["over_budget"] is True
@@ -440,8 +491,8 @@ def test_context_returns_mandatory_complete_and_flags_over_budget_rather_than_tr
         assert squeezed["cursor"] == ""
 
 
-def test_context_reports_clear_only_when_every_mandatory_producer_answered(native):
-    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+def test_context_reports_clear_only_when_every_mandatory_producer_answered(store_db):
+    with closing(sqlite3.connect(store_db, isolation_level=None)) as connection:
         _command(connection, "task.create", {"task_id": "clean", "title": "Clean", "epic": "same",
                                              "phase": "P-1", "priority": "medium"}, "mk")
         # A created task lands on the standard lane, whose review gates are the
@@ -460,10 +511,10 @@ def test_context_reports_clear_only_when_every_mandatory_producer_answered(nativ
         assert unknowns and unknowns[0]["id"] == "task"
 
 
-def test_context_without_a_focus_task_is_never_reported_as_clear(native):
+def test_context_without_a_focus_task_is_never_reported_as_clear(store_db):
     """No focus means no producer answered. Saying `clear` there would tell an
     agent it may proceed on a question nobody asked."""
-    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+    with closing(sqlite3.connect(store_db, isolation_level=None)) as connection:
         answer = _context(connection, scope="project", include=["notes"])
         assert answer["focus"] is None
         assert answer["mandatory"]["clear"] is False
@@ -472,8 +523,8 @@ def test_context_without_a_focus_task_is_never_reported_as_clear(native):
         assert answer["selected"]["notes"]
 
 
-def test_context_takes_its_session_focus_from_the_task_that_session_holds(native):
-    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+def test_context_takes_its_session_focus_from_the_task_that_session_holds(store_db):
+    with closing(sqlite3.connect(store_db, isolation_level=None)) as connection:
         _command(connection, "task.update", {"id": "same", "field": "status", "value": "in-progress"}, "st")
         _lock(connection, "lock", "alpha")
         assert _context(connection, scope="session", session="alpha")["focus"] == "same"
@@ -481,8 +532,8 @@ def test_context_takes_its_session_focus_from_the_task_that_session_holds(native
         assert _context(connection, scope="session", session="beta")["focus"] is None
 
 
-def test_a_peer_claim_blocks_whether_or_not_its_holder_can_be_judged(native):
-    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+def test_a_peer_claim_blocks_whether_or_not_its_holder_can_be_judged(store_db):
+    with closing(sqlite3.connect(store_db, isolation_level=None)) as connection:
         _lock(connection, "lock", "peer")
         # No sessions row and not a session id: unjudgeable, and an unjudgeable
         # holder keeps its claim until the TTL says otherwise (`native.claims`).
@@ -498,8 +549,8 @@ def test_a_peer_claim_blocks_whether_or_not_its_holder_can_be_judged(native):
                     if b["kind"] == "claim"]
 
 
-def test_omitted_counts_are_exact_and_the_cursor_resumes_where_the_page_stopped(native):
-    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+def test_omitted_counts_are_exact_and_the_cursor_resumes_where_the_page_stopped(store_db):
+    with closing(sqlite3.connect(store_db, isolation_level=None)) as connection:
         for n in range(6):
             _command(connection, "note.create", {"text": f"Note number {n}", "author": "claude",
                                                  "pinned": True}, f"note{n}")
@@ -521,8 +572,8 @@ def test_omitted_counts_are_exact_and_the_cursor_resumes_where_the_page_stopped(
         assert seen == every
 
 
-def test_a_context_cursor_is_refused_when_the_question_or_the_store_moved_on(native):
-    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+def test_a_context_cursor_is_refused_when_the_question_or_the_store_moved_on(store_db):
+    with closing(sqlite3.connect(store_db, isolation_level=None)) as connection:
         for n in range(6):
             _command(connection, "note.create", {"text": f"Note number {n}", "author": "claude",
                                                  "pinned": True}, f"note{n}")
@@ -544,8 +595,8 @@ def test_a_context_cursor_is_refused_when_the_question_or_the_store_moved_on(nat
                 query.context(scope="project", include=["notes"], budget_bytes=limit, cursor=cursor)
 
 
-def test_context_validates_its_scope_include_vocabulary_and_budget(native):
-    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+def test_context_validates_its_scope_include_vocabulary_and_budget(store_db):
+    with closing(sqlite3.connect(store_db, isolation_level=None)) as connection:
         with Repository(connection).snapshot() as query:
             with pytest.raises(ValueError, match="scope"):
                 query.context(scope="everything")
@@ -557,8 +608,8 @@ def test_context_validates_its_scope_include_vocabulary_and_budget(native):
                 query.context(focus="same", budget_bytes=0)
 
 
-def test_provenance_names_where_each_selected_section_came_from(native):
-    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+def test_provenance_names_where_each_selected_section_came_from(store_db):
+    with closing(sqlite3.connect(store_db, isolation_level=None)) as connection:
         answer = _context(connection, focus="same", include=["dependencies", "handovers", "spec"])
         assert answer["provenance"]["dependencies"]["query"] == "dependencies.depends_on"
         assert answer["provenance"]["handovers"]["query"] == "memberships.task_ids"
@@ -568,8 +619,8 @@ def test_provenance_names_where_each_selected_section_came_from(native):
         assert answer["provenance"]["spec"]["imported"] is False
 
 
-def test_a_focus_only_section_is_empty_rather_than_wrong_when_there_is_no_focus(native):
-    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+def test_a_focus_only_section_is_empty_rather_than_wrong_when_there_is_no_focus(store_db):
+    with closing(sqlite3.connect(store_db, isolation_level=None)) as connection:
         answer = _context(connection, scope="project", include=["dependencies", "siblings", "notes"])
         assert answer["selected"].get("dependencies") is None
         assert answer["budget"]["omitted"]["dependencies"] == 0

@@ -414,25 +414,23 @@ def test_the_native_sections_path_reads_no_file_when_the_prose_is_stored(tmp_pat
     """S10's contract: a stored document section is served from the store, never from disk.
 
     The projection guard above cannot see this — a task's `docs` paths point outside
-    `.taskmaster/` — so this test rigs the project's document tree directly.
+    `.taskmaster/` — so this test guards the project's document tree directly. The
+    stored prose gets there the only way a real project's does, through
+    `backlog_document_import`; the file is then changed on disk, so a read that
+    reached it would show.
     """
-    from contextlib import closing
-    import sqlite3
-
     def seed():
         bs.backlog_add_task(title="Imported spec", epic="test-epic", phase="dev",
                             options={"docs": "spec:docs/spec.md"})
         tree = Path.cwd() / "docs"
         tree.mkdir(exist_ok=True)
-        (tree / "spec.md").write_text("On-disk text that must not be read.\n", encoding="utf-8")
+        (tree / "spec.md").write_text("Stored spec prose.\n", encoding="utf-8")
 
     twins = make_twins(tmp_path, monkeypatch, seed)
-    database = twins.native / ".taskmaster" / "local" / "store.db"
-    with closing(sqlite3.connect(database, isolation_level=None)) as connection:
-        key = connection.execute("SELECT entity_key FROM entity_core WHERE kind='task' "
-                                 "AND public_id='test-epic-001'").fetchone()[0]
-        connection.execute("INSERT INTO external_documents VALUES(?,'spec','docs/spec.md',?,'storedhash',7)",
-                           (key, "Stored spec prose.\n"))
+    with twins.at(twins.native):
+        imported = bs.backlog_document_import(kind="task", entity_id="test-epic-001", sections=["spec"])
+    assert "spec: imported from docs/spec.md" in imported, imported
+    (twins.native / "docs" / "spec.md").write_text("On-disk text that must not be read.\n", encoding="utf-8")
     tree = (twins.native / "docs").resolve()
     touched = []
 

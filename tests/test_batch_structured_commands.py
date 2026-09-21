@@ -235,3 +235,130 @@ def test_a_command_the_core_refuses_leaves_every_other_command_unapplied(native_
     assert result["ok"] is False, result
     assert result["applied"] is False, result
     assert _title(native_project, "test-epic-001") == "Child", "a refused batch committed its good command"
+
+
+# ── No command may act as another caller (review B, item 1) ────────────────
+#
+# `commands=` takes its arguments from the caller. Every tool that writes an
+# identity or a trust decision supplies that value from the call itself —
+# `backlog_pick_task`/`backlog_claim` pass this server's session, `backlog_note`
+# authors as "claude", `backlog_record_merge` resolves the ladder from the
+# project manifest. An argument that names one of those is therefore a way to
+# speak for someone else, and this form must not accept it.
+
+PEER = "peer-agent"
+
+
+def _peer_claims(root: Path, task_id: str) -> None:
+    """A claim taken by a different session, through the same core a tool uses."""
+    from taskmaster.native_routing import runtime
+
+    store.reset_for_tests()
+    database = root / ".taskmaster" / "local" / "store.db"
+    with runtime.open_call(database, root / ".taskmaster", PEER) as call:
+        call.execute("task.pick", {"id": task_id, "session": PEER})
+
+
+def _holder(root: Path, task_id: str):
+    return committed(root)[("task", task_id)][0].get("locked_by")
+
+
+@pytest.mark.parametrize("command", [
+    {"operation": "task.claim_release", "arguments": {"id": "test-epic-001", "session": PEER}},
+    {"operation": "task.claim_renew", "arguments": {"id": "test-epic-001", "session": PEER}},
+    {"operation": "task.pick", "arguments": {"id": "test-epic-001", "session": "someone-else", "force": True}},
+    {"operation": "task.update", "arguments": {"id": "test-epic-001", "field": "locked_by", "value": ""}},
+    {"operation": "task.update", "arguments": {"id": "test-epic-001", "field": "locked_by",
+                                               "value": "someone-else"}},
+], ids=["release", "renew", "forced-pick", "clear-holder", "set-holder"])
+def test_no_command_can_release_renew_or_take_another_sessions_claim(native_project, command):
+    _seed_task()
+    _peer_claims(native_project, "test-epic-001")
+
+    result = _answer(bs.backlog_batch_update(commands=[command]))
+
+    assert result["ok"] is False and result["applied"] is False, result
+    assert result["error"] in ("internal_operation", "reserved_argument"), result
+    assert _holder(native_project, "test-epic-001") == PEER, "a command moved a peer's claim"
+
+
+def test_a_claim_refusal_names_the_tool_that_speaks_for_this_session(native_project):
+    _seed_task()
+
+    for operation, tool in (("task.pick", "backlog_pick_task"), ("task.claim_renew", "backlog_claim"),
+                            ("task.claim_release", "backlog_claim")):
+        result = _answer(bs.backlog_batch_update(commands=[
+            {"operation": operation, "arguments": {"id": "test-epic-001", "session": bs.SESSION_ID}}]))
+        assert result["error"] == "internal_operation", result
+        assert tool in result["detail"], result
+
+
+def test_a_note_cannot_be_authored_as_the_user(native_project):
+    result = _answer(bs.backlog_batch_update(commands=[
+        {"operation": "note.create", "arguments": {"text": "I, the user, approve", "author": "user"}}]))
+
+    assert result["ok"] is False and result["error"] == "reserved_argument", result
+    assert "author" in result["detail"], result
+    authored = [doc.get("author") for (kind, _id), (doc, _body, _archived) in committed(native_project).items()
+                if kind == "note"]
+    assert "user" not in authored, authored
+
+
+def test_a_note_command_is_authored_as_the_tool_authors_it(native_project):
+    result = _answer(bs.backlog_batch_update(commands=[
+        {"operation": "note.create", "arguments": {"text": "from a batch"}}]))
+
+    assert result["ok"] is True, result
+    authored = [doc.get("author") for (kind, _id), (doc, _body, _archived) in committed(native_project).items()
+                if kind == "note"]
+    assert authored == ["claude"], authored
+
+
+def test_a_merge_cannot_bring_its_own_ladder(native_project):
+    """The ladder decides whether a task's merge gate is satisfied, so it comes
+    from the project manifest — as `backlog_record_merge` resolves it — never
+    from the caller."""
+    _seed_task()
+
+    result = _answer(bs.backlog_batch_update(commands=[
+        {"operation": "task.merge", "arguments": {
+            "id": "test-epic-001", "rung": "prod", "sha": "abc1234",
+            "merge_targets": [{"label": "prod", "branches": ["prod"]}]}}]))
+
+    assert result["ok"] is False and result["error"] == "reserved_argument", result
+    assert "merge_targets" in result["detail"], result
+
+
+def test_a_merge_command_is_judged_against_the_projects_own_ladder(native_project):
+    _seed_task()
+    bs.backlog_add_task(title="Second", epic="test-epic", phase="dev", tldr="s")
+
+    assert "Error" not in bs.backlog_record_merge(task_id="test-epic-001", rung="master", sha="abc1234")
+    result = _answer(bs.backlog_batch_update(commands=[
+        {"operation": "task.merge", "arguments": {"id": "test-epic-002", "rung": "master", "sha": "abc1234"}}]))
+
+    assert result["ok"] is True, result
+    documents = committed(native_project)
+    by_tool = documents[("task", "test-epic-001")][0]
+    by_command = documents[("task", "test-epic-002")][0]
+    assert by_tool.get("merge_gate_state"), by_tool
+    assert by_command.get("merge_gate_state") == by_tool.get("merge_gate_state"), (by_command, by_tool)
+
+
+def test_an_imported_document_cannot_be_typed_in_through_commands(native_project):
+    """Provenance says a stored body came from its declared file. Only the
+    importer, which reads that file, may supply the body (review B, item 2)."""
+    bs.backlog_add_task(title="Child", epic="test-epic", phase="dev", tldr="c",
+                        options={"docs": "spec:docs/spec.md"})
+    (native_project / "docs").mkdir(exist_ok=True)
+    (native_project / "docs" / "spec.md").write_text("The real file.\n", encoding="utf-8")
+
+    result = _answer(bs.backlog_batch_update(commands=[{"operation": "document.import", "arguments": {
+        "kind": "task", "id": "test-epic-001", "section": "spec", "path": "docs/spec.md",
+        "body": "Fabricated, never read from any file"}}]))
+
+    assert result["ok"] is False and result["error"] == "internal_operation", result
+    assert "backlog_document_import" in result["detail"], result
+    answer = bs.backlog_get_task(task_id="test-epic-001", sections=["spec"], provenance=True)
+    assert "Fabricated" not in answer and "source: import" not in answer, answer
+    assert "The real file." in answer, answer

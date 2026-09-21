@@ -157,3 +157,91 @@ def test_import_refuses_on_a_legacy_store(twins):
     with twins.at(twins.legacy):
         answer = bs.backlog_document_import(kind="task", entity_id="test-epic-001")
     assert answer.startswith("Error:") and "native" in answer
+
+
+# -- The importer reads only the project's own files (review B, item 4) --------
+
+
+def _declare(task_id, section, path):
+    answer = bs.backlog_update_task(task_id=task_id, field="docs", value=f"{section}:{path}")
+    assert "Error" not in answer, answer
+
+
+def _stored(task_id, section):
+    return bs.backlog_document(kind="task", entity_id=task_id, sections=[section], provenance=True)
+
+
+@pytest.mark.parametrize("where", ["absolute", "parent"])
+def test_import_refuses_a_path_outside_the_project(twins, tmp_path, where):
+    secret = tmp_path / "outside-secret.txt"
+    secret.write_text("TOP SECRET OUTSIDE PROJECT\n", encoding="utf-8")
+    with twins.at(twins.native):
+        path = str(secret) if where == "absolute" else f"../{secret.name}"
+        assert (twins.native / path).resolve() == secret.resolve()
+        _declare("test-epic-001", "design", path)
+
+        answer = bs.backlog_document_import(kind="task", entity_id="test-epic-001", sections=["design"])
+
+        assert answer.startswith("Error:") and "outside the project" in answer, answer
+        assert "TOP SECRET" not in answer
+        stored = _stored("test-epic-001", "design")
+        assert "source: import" not in stored, stored
+
+
+def test_import_refuses_a_link_that_leads_outside_the_project(twins, tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.md").write_text("TOP SECRET BEHIND A LINK\n", encoding="utf-8")
+    with twins.at(twins.native):
+        link = twins.native / "docs" / "linked"
+        try:
+            link.symlink_to(outside, target_is_directory=True)
+        except OSError:
+            # Windows grants symlinks only to privileged users; a junction needs
+            # no privilege and is resolved the same way.
+            _winapi = pytest.importorskip("_winapi")
+            _winapi.CreateJunction(str(outside), str(link))
+        _declare("test-epic-001", "design", "docs/linked/secret.md")
+
+        answer = bs.backlog_document_import(kind="task", entity_id="test-epic-001", sections=["design"])
+
+        assert answer.startswith("Error:") and "outside the project" in answer, answer
+        assert "source: import" not in _stored("test-epic-001", "design")
+
+
+def test_import_of_a_directory_is_a_clean_error_not_a_crash(twins):
+    with twins.at(twins.native):
+        (twins.native / "adir").mkdir()
+        _declare("test-epic-001", "design", "adir")
+
+        answer = bs.backlog_document_import(kind="task", entity_id="test-epic-001", sections=["design"])
+
+        assert answer.startswith("Error:") and "adir" in answer and "not a file" in answer, answer
+
+
+# -- A partial import reports what committed (review B, item 5) ----------------
+
+
+def test_a_failed_section_does_not_hide_the_sections_that_committed(twins):
+    """Each section commits on its own, so one bad file must neither hide the
+    sections already stored nor stop the ones after it."""
+    from taskmaster.native.contracts import MAX_BYTES
+
+    with twins.at(twins.native):
+        docs = twins.native / "docs"
+        (docs / "bad.md").write_bytes(b"\xff\xfe\x00not text")
+        (docs / "big.md").write_text("x" * (MAX_BYTES + 1), encoding="utf-8")
+        _declare("test-epic-001", "analysis", "docs/bad.md")
+        _declare("test-epic-001", "design", "docs/big.md")
+
+        answer = bs.backlog_document_import(kind="task", entity_id="test-epic-001")
+
+        assert answer.startswith("Error:"), answer
+        lines = answer.splitlines()
+        assert any(l.startswith("- spec:") and "imported" in l and "docs/spec.md" in l for l in lines), answer
+        assert any(l.startswith("- analysis:") and "UTF-8" in l for l in lines), answer
+        design = [l for l in lines if l.startswith("- design:")]
+        assert design and "1 MiB" in design[0] and str(MAX_BYTES) in design[0], answer
+        assert any(l.startswith("- plan:") and "docs/missing.md" in l for l in lines), answer
+        assert "source: import" in _stored("test-epic-001", "spec")
+        assert "source: import" not in _stored("test-epic-001", "design")

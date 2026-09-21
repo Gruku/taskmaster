@@ -117,3 +117,87 @@ def test_the_legacy_store_reports_each_change_as_its_own_commit(twins):
     for commit in whole["commits"]:
         assert len(commit["changes"]) == 1
         assert commit["first_seq"] == commit["final_seq"] == commit["commit_seq"]
+
+
+# ── Epic scope is membership at the time of each event (review B, item 3) ────
+
+
+def _move(twins_, root, task_id, epic):
+    """Reassign a task's epic the one way either store can: the viewer's write."""
+    if root == twins_.native:
+        from taskmaster.native_routing import runtime
+
+        with runtime.open_call(root / ".taskmaster" / "local" / "store.db", root / ".taskmaster",
+                               bs.SESSION_ID) as call:
+            call.execute("task.viewer_update", {"id": task_id, "patch": {"epic": epic}, "if_match": ""})
+    else:
+        bs._viewer_update_task(task_id, {"epic": epic})
+
+
+@pytest.fixture
+def epic_twins(tmp_path, monkeypatch):
+    def seed():
+        bs.backlog_add_epic(epic_id="other-epic", name="Other", done_when="x")
+        bs.backlog_add_task(title="Mover", epic="test-epic", phase="dev")
+        bs.backlog_add_task(title="Stayer", epic="test-epic", phase="dev")
+        bs.backlog_add_task(title="Joiner", epic="other-epic", phase="dev")
+    return make_twins(tmp_path, monkeypatch, seed)
+
+
+@pytest.mark.parametrize("grouped", [False, True])
+def test_an_epic_scope_keeps_what_happened_inside_it_and_nothing_from_outside(epic_twins, grouped):
+    """A change made while a task was in the epic stays in the epic's feed after
+    the task leaves; a change made before a task joined never enters it."""
+    streams = {}
+    for side in ("legacy", "native"):
+        root = getattr(epic_twins, side)
+        start = answer(root, epic_twins, epic="test-epic", group_commits=grouped)["cursor"]
+        with epic_twins.at(root):
+            bs.backlog_update_task(task_id="test-epic-001", field="priority", value="high")
+            bs.backlog_update_task(task_id="other-epic-001", field="priority", value="high")
+            _move(epic_twins, root, "test-epic-001", "other-epic")
+            bs.backlog_update_task(task_id="test-epic-001", field="notes", value="after leaving")
+            _move(epic_twins, root, "other-epic-001", "test-epic")
+            bs.backlog_update_task(task_id="other-epic-001", field="notes", value="after joining")
+        got = answer(root, epic_twins, cursor=start, epic="test-epic", group_commits=grouped)
+        changes = ([c for commit in got["commits"] for c in commit["changes"]] if grouped
+                   else got["changes"])
+        streams[side] = [(c["id"], "epic" in c["fields"], "priority" in c["fields"], "notes" in c["fields"])
+                         for c in changes]
+    expected = [("test-epic-001", False, True, False),    # made inside, before leaving
+                ("test-epic-001", True, False, False),    # the move out
+                ("other-epic-001", True, False, False),   # the move in
+                ("other-epic-001", False, False, True)]   # made inside, after joining
+    assert streams["legacy"] == expected, streams
+    assert streams["native"] == expected, streams
+
+
+# ── A restored store never skips what it lost (review B, item 6) ────────────
+
+
+@pytest.mark.parametrize("side", ["legacy", "native"])
+def test_a_cursor_from_before_a_restore_answers_history_rewound_on_both_stores(twins, side, tmp_path):
+    import sqlite3
+    from contextlib import closing
+    from taskmaster import store
+
+    root = getattr(twins, side)
+    database = root / ".taskmaster" / "local" / "store.db"
+    backup = tmp_path / f"{side}-backup.db"
+    store.reset_for_tests()
+    with closing(sqlite3.connect(database)) as live, closing(sqlite3.connect(backup)) as copy:
+        live.backup(copy)
+    with twins.at(root):
+        bs.backlog_note(action="create", text="Written, then lost to the restore", pinned=False)
+        bs.backlog_note(action="update", note_id="NOTE-002", text="Edited, then lost too")
+    cursor = answer(root, twins)["cursor"]
+    store.reset_for_tests()
+    with closing(sqlite3.connect(backup)) as copy, closing(sqlite3.connect(database)) as live:
+        copy.backup(live)
+    store.reset_for_tests()
+
+    # A legacy read adopts the note file the restore left on disk as one fresh
+    # import, so its history regains one of the two lost sequences, not both.
+    rewound = answer(root, twins, cursor=cursor)
+
+    assert rewound["resync_required"] is True and rewound["reason"] == "history_rewound", rewound

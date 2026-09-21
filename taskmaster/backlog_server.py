@@ -5656,6 +5656,8 @@ def _legacy_change_identity(connection) -> tuple[str, int]:
 
 def _legacy_change_rows(connection, scope, after: int, limit: int) -> list[dict]:
     """The legacy `changes` table under the same scope the native feed applies."""
+    from taskmaster.native import cursors
+
     _label, kinds, ids, epic, _grouped = scope
     conditions, args = ["seq>?"], [after]
     for column, values in (("kind", kinds), ("id", ids)):
@@ -5663,15 +5665,14 @@ def _legacy_change_rows(connection, scope, after: int, limit: int) -> list[dict]
             conditions.append(f"{column} IN ({','.join('?' for _ in values)})")
             args.extend(values)
     if epic:
-        # Membership at the time of the event, not only current membership: the
-        # change a watcher most needs is the one that moved a task out.
-        conditions.append("((kind='epic' AND id=?) OR (kind='task' AND (id IN "
-                          "(SELECT id FROM entities WHERE kind='task' AND epic=?) "
-                          "OR json_extract(before,'$.epic')=? OR json_extract(after,'$.epic')=?)))")
+        # Membership at the time of the event, derived from the log's own history
+        # of epic moves — the same predicate the native feed applies.
+        conditions.append(cursors.epic_condition(
+            "changes", "e", "SELECT epic FROM entities WHERE kind='task' AND id=e.id"))
         args.extend([epic] * 4)
     return [dict(row) for row in connection.execute(
         "SELECT seq,ts,session,tool operation,kind,id,op,fields,seq first_seq,seq final_seq "
-        "FROM changes WHERE " + " AND ".join(conditions) + " ORDER BY seq LIMIT ?", args + [limit + 1])]
+        "FROM changes e WHERE " + " AND ".join(conditions) + " ORDER BY seq LIMIT ?", args + [limit + 1])]
 
 
 @mcp.tool()
@@ -5688,8 +5689,9 @@ def backlog_changes_since(
 
     Call it with no arguments to get a cursor and nothing else ("start watching
     from now"), then pass that cursor back to learn what moved. A cursor survives
-    every write; it stops being usable only if the store was rebuilt, the scope of
-    the question changed, or the history it points at was retired. In that case the
+    every write; it stops being usable only if the store was rebuilt or restored
+    to an earlier state, the scope of the question changed, or the history it
+    points at was retired. In that case the
     answer is not an error: `resync_required` is true, `reason` says which, and a
     fresh cursor comes back, so recovery costs one call. Do not treat a resync as
     a quiet period — re-read what you care about.
@@ -5734,7 +5736,8 @@ def backlog_changes_since(
         # `sync_state` to hold a floor, so its retention floor is zero.
         try:
             if cursor:
-                after = cursors.parse(cursor, store_id=store_id, source_digest=cursors.LEGACY_DIGEST, scope=scope)
+                after = cursors.parse(cursor, store_id=store_id, source_digest=cursors.LEGACY_DIGEST,
+                                      scope=scope, sequence=sequence)
             elif since_seq is not None:
                 after = min(since_seq, sequence)
             else:
