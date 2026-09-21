@@ -164,6 +164,67 @@ def test_a_holder_that_cannot_be_judged_is_never_released_by_a_peer(twins):
     twins.assert_state_matches()
 
 
+# ── An expiry belongs to the holder it was stamped for ──────────────────────
+
+
+HAND_OVER = {
+    "update_task": lambda: bs.backlog_update_task(task_id="test-epic-001", field="locked_by", value=PEER),
+    "batch_line": lambda: bs.backlog_batch_update(operations=f"update test-epic-001 locked_by {PEER}"),
+}
+
+
+@pytest.mark.parametrize("writer", sorted(HAND_OVER))
+def test_a_new_holder_never_inherits_the_expiry_an_earlier_claim_left_behind(twins, writer):
+    """Only pick and renew stamp `claim_expires` and only release clears it, while
+    a dozen writers drop or set `locked_by`. So a paused claim leaves its expiry
+    behind, and when the task is later handed to someone else that burnt expiry
+    made the new holder's live claim read as expired: context reported the task
+    clear, and any peer could release it without `force`."""
+    twins.same("backlog_pick_task", task_id="test-epic-001", ttl_seconds=claims.MIN_TTL_SECONDS)
+    twins.same("backlog_update_task", task_id="test-epic-001", field="status", value="todo")
+    # Every twins call is a minute after the last, so the stale expiry has burnt.
+    twins.same("backlog_update_task", task_id="test-epic-001", field="status", value="in-progress")
+    for root in (twins.legacy, twins.native):
+        with twins.at(root):
+            HAND_OVER[writer]()
+    for text in twins.same("backlog_claim", action="status", task_id="test-epic-001"):
+        state = answer(text)
+        # No expiry was ever stamped for this holder, and it cannot be judged, so
+        # the claim stands on liveness alone — as a migrated `locked_by` does.
+        assert state["holder"] == PEER and state["expires_at"] == "" and state["expired"] is False
+    for text in twins.same("backlog_claim", action="release", task_id="test-epic-001"):
+        assert answer(text)["error"] == "claim_conflict"
+    for text in twins.same("backlog_context", focus="test-epic-001", scope="task", include=[]):
+        mandatory = answer(text)["mandatory"]
+        assert mandatory["clear"] is False
+        assert ("claim", "test-epic-001") in {(b["kind"], b["id"]) for b in mandatory["blockers"]}
+
+
+def test_a_new_holder_with_no_expiry_of_its_own_still_expires_when_proven_dead(twins):
+    """Ignoring a foreign expiry must not turn into ignoring expiry: liveness is
+    still the authority, so a dead new holder releases without `force`."""
+    holder = f"{socket.gethostname()}-{DEAD_PID}-abcdef12"
+    twins.same("backlog_pick_task", task_id="test-epic-001", ttl_seconds=3600)
+    twins.same("backlog_update_task", task_id="test-epic-001", field="locked_by", value=holder)
+    for text in twins.same("backlog_claim", action="status", task_id="test-epic-001"):
+        assert answer(text)["expires_at"] == "" and answer(text)["expired"] is True
+    for text in twins.same("backlog_claim", action="release", task_id="test-epic-001"):
+        assert answer(text)["ok"] is True
+    twins.assert_state_matches()
+
+
+def test_a_claims_own_burnt_expiry_still_expires_it(twins):
+    """The binding narrows which expiry counts; it does not stop one counting."""
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(bs, "SESSION_ID", PEER)
+        twins.same("backlog_pick_task", task_id="test-epic-001", ttl_seconds=claims.MIN_TTL_SECONDS)
+    twins.same("backlog_claim", action="status")  # a minute passes
+    for text in twins.same("backlog_claim", action="status", task_id="test-epic-001"):
+        assert answer(text)["holder"] == PEER and answer(text)["expired"] is True
+    for text in twins.same("backlog_claim", action="release", task_id="test-epic-001"):
+        assert answer(text)["ok"] is True
+
+
 # ── Bundles ─────────────────────────────────────────────────────────────────
 
 
