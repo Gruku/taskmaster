@@ -240,6 +240,23 @@ def test_a_bundle_claim_renews_and_releases_every_member(twins):
     twins.assert_state_matches()
 
 
+def test_a_bundle_renew_extends_only_the_members_this_session_holds(twins):
+    """A claim without a pick is not a state this system has (§2.5). A member
+    that left the bundle's claim — its status changed, so its holder was dropped
+    — must not be re-acquired by renewing its sibling."""
+    twins.same("backlog_pick_task", task_id="test-epic-002", ttl_seconds=3600)
+    twins.same("backlog_update_task", task_id="test-epic-003", field="status", value="todo")
+    for text in twins.same("backlog_claim", action="status", task_id="test-epic-003"):
+        assert answer(text)["holder"] == ""
+    for text in twins.same("backlog_claim", action="renew", task_id="test-epic-002", ttl_seconds=120):
+        assert answer(text)["ok"] is True and answer(text)["holder"] == bs.SESSION_ID
+    for text in twins.same("backlog_claim", action="status", task_id="test-epic-003"):
+        assert answer(text)["holder"] == "" and answer(text)["state"] == "released"
+    for text in twins.same("backlog_claim", action="status"):
+        assert [row["task_id"] for row in answer(text)["claims"]] == ["test-epic-002"]
+    twins.assert_state_matches()
+
+
 # ── Two writers, one task ───────────────────────────────────────────────────
 
 
