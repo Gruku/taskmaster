@@ -205,19 +205,12 @@ def test_merge_and_spec_review_match(twins):
     _check(twins)
 
 
-def test_completion_with_a_session_changelog_is_refused_on_a_native_store(twins):
-    """N08 constraint: native completion would queue the paragraph into a key no
-    exporter drains until N11, silently dropping it from PROGRESS.md; queuing it
-    in the legacy row as well would render it twice once N11 lands. The adapter
-    therefore refuses before any mutation, and says why."""
-    with twins.at(twins.native):
-        bs.backlog_pick_task(task_id="test-epic-001")
-    before = committed(twins.native)
-    with twins.at(twins.native):
-        for kwargs in ({"session_title": "Session"}, {"done": "- a thing"}, {"auto_summary": True}):
-            answer = bs.backlog_complete_task(task_id="test-epic-001", **kwargs)
-            assert answer.startswith("Error:") and "PROGRESS.md" in answer, answer
-    assert committed(twins.native) == before
+def test_completion_with_a_session_changelog_matches_legacy(twins):
+    """N11 lifted N08's changelog refusal: the paragraph is queued as a row and
+    exported exactly once (tests/test_native_progress.py pins the file)."""
+    twins.same("backlog_pick_task", task_id="test-epic-001")
+    twins.same("backlog_complete_task", task_id="test-epic-001", session_title="Session", done="- a thing")
+    _check(twins)
 
 
 # ── Reads ───────────────────────────────────────────────────────────────────

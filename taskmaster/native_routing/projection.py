@@ -23,7 +23,9 @@ They are rendered from the current database and verified like entity files.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
+import socket
 import sqlite3
 import threading
 import time
@@ -191,7 +193,12 @@ def _pending_notices(connection, files: list[str] | None = None) -> list[str]:
         "export pending: projection files — retried on next call"]
 
 
-def drain(connection: sqlite3.Connection, backlog_dir: Path, *, session: str, through: int | None = None) -> list[str]:
+def _owner(session: str) -> str:
+    return f"{session}:{uuid.uuid4().hex[:12]}:{os.getpid()}@{socket.gethostname()}"
+
+
+def drain(connection: sqlite3.Connection, backlog_dir: Path, *, session: str, through: int | None = None,
+          progress_wait: bool = True) -> list[str]:
     """Export every pending projection job, then refresh stale derived files.
 
     Returns the `export pending: …` notices a caller must surface; it never
@@ -199,19 +206,23 @@ def drain(connection: sqlite3.Connection, backlog_dir: Path, *, session: str, th
     already committed. Requires a connection with no open transaction. `through`
     is the caller's commit: while another exporter holds the lease the caller
     waits, at most `WAIT_SECONDS`, until every file that commit touched is
-    exported (`_behind`), and otherwise reports those files pending.
+    exported (`_behind`), and otherwise reports those files pending. `through`
+    and `progress_wait` also go to the PROGRESS export (`progress.export`).
     """
     if connection.in_transaction:
         raise RuntimeError("projection drain requires its own transaction")
     clock, sleep = HOOKS["clock"], HOOKS["sleep"]
-    exporter = outbox.Exporter(connection, backlog_dir, owner=f"{session}:{uuid.uuid4().hex[:12]}",
+    # The owner names its process (`:<pid>@<host>`), so `backlog_store_status` can say
+    # whether a live lease's holder is still running (scope §5.4).
+    exporter = outbox.Exporter(connection, backlog_dir, owner=_owner(session),
                                session=session, clock=clock, checkpoint=HOOKS["checkpoint"])
     deadline = clock() + WAIT_SECONDS
     while (jobs := exporter.claim()) is None:
         if through is not None:
             behind = _behind(connection, through)
             if not behind:
-                return exporter.warnings + progress.export(connection, backlog_dir, session)
+                return exporter.warnings + progress.export(connection, backlog_dir, session, through=through,
+                                                           wait=progress_wait)
             if clock() >= deadline:
                 return _pending_notices(connection, behind)
         elif clock() >= deadline:
@@ -251,7 +262,7 @@ def drain(connection: sqlite3.Connection, backlog_dir: Path, *, session: str, th
         exporter.release()
         raise
     warnings = list(dict.fromkeys(exporter.warnings))
-    return warnings + progress.export(connection, backlog_dir, session)
+    return warnings + progress.export(connection, backlog_dir, session, through=through, wait=progress_wait)
 
 
 # ── Conflict resolution reads (S10) ─────────────────────────────────────────

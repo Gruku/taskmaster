@@ -75,6 +75,9 @@ def test_take_file_refuses_and_points_to_the_importer(twins):
     with twins.at(twins.native):
         answer = bs.backlog_resolve_conflict(file=REL, take="file")
         still = bs.backlog_resolve_conflict()
+    # Every native result names the still-flagged file after its own text (N11 S9).
+    answer, _, notice = answer.partition("\n\nWarning: ")
+    assert REL in notice
     assert answer.startswith("Error: ") and "N13" in answer and answer.endswith("Nothing was changed."), answer
     assert 'take="store"' in answer
     assert REL in still

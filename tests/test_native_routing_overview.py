@@ -128,10 +128,13 @@ def test_linear_local_actions_match(twins):
 
 def test_store_status_reports_every_section_for_a_native_store(twins):
     """Recorded N08 difference: sizes, schema version and change history are facts
-    about each database, so the native report is compared by its lines' labels."""
+    about each database, so the native report is compared by its lines' labels.
+    N11 difference: only a native store has a projection exporter, so only its
+    report carries the `Exporter lease` line (§5.4)."""
     legacy, native = twins.call("backlog_store_status")
     labels = lambda text: [line.split(":", 1)[0] for line in text.splitlines() if not line.startswith("  ")]
-    assert labels(native) == labels(legacy)
+    assert [label for label in labels(native) if label != "Exporter lease"] == labels(legacy)
+    assert labels(native).count("Exporter lease") == 1 and "Exporter lease" not in labels(legacy)
     assert "schema v2" in native and "Warning: none" in native
 
 

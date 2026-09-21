@@ -23,6 +23,19 @@ _TAKE_FILE_REFUSAL = (
 _QUARANTINED = "before activation (quarantined by the legacy store)"
 
 
+def flag_notice(conflict: dict) -> str:
+    """The line every native result carries while a file stays flagged: the legacy
+    notice, ending with what the native resolver can do (D3: take="store" only)."""
+    from taskmaster import store
+    text = store.projection_conflict_notice(conflict)
+    legacy_tail = 'then keep one with take="file" or take="store".'
+    if not text.endswith(legacy_tail):
+        return text
+    return text[:-len(legacy_tail)] + (
+        "then keep the store's version with take=\"store\"; keeping the file's version needs "
+        "the native importer (N13), so copy what you need from it into a normal edit first.")
+
+
 def _conflicts(call) -> list[dict]:
     """Flagged files, oldest first, then quarantines inherited from the legacy store."""
     with call.read() as snapshot:
