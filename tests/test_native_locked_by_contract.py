@@ -79,7 +79,7 @@ def test_a_batch_line_writing_locked_by_is_refused_and_the_other_lines_still_app
     twins.assert_state_matches()
 
 
-# ── A status change does not drop a live peer's claim ───────────────────────
+# ── A non-terminal status change does not drop a live peer's claim ───────────────────────
 
 
 STATUS_CHANGES = {
@@ -90,11 +90,9 @@ STATUS_CHANGES = {
         ("backlog_update_task", {"task_id": TASK, "field": "human_action", "value": "Approve it"}),
         ("backlog_complete_task", {"task_id": TASK, "target_status": "in-review",
                                    "human_action": "Approve it"})],
-    "archive": [("backlog_update_task", {"task_id": TASK, "field": "status", "value": "blocked"}),
-                ("backlog_archive_task", {"task_id": TASK, "reason": "wont-fix"})],
-    "batch_archive": [("backlog_update_task", {"task_id": TASK, "field": "status", "value": "blocked"}),
-                      ("backlog_batch_update", {"operations": f"archive {TASK} wont-fix"})],
 }
+# A move to a terminal status (done, archived) releases any claim, whoever makes
+# it: `test_native_claim_terminal_and_readers.py`.
 
 
 @pytest.mark.parametrize("change", sorted(STATUS_CHANGES))
