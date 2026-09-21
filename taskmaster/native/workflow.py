@@ -644,8 +644,7 @@ def _task_update(transaction, arguments):
         elif value == "done" and not task.get("completed"):
             task["completed"] = domain.now_stamp()
         _apply_archive_flag(task, before=current, after=value)
-        if value != "in-progress":
-            task.pop("locked_by", None)
+        claims.after_status_change(task, before=current, **_caller(transaction))
     elif field == "priority":
         value = domain.normalize_priority(value)
         if value not in domain.VALID_PRIORITIES:
@@ -666,6 +665,8 @@ def _task_update(transaction, arguments):
         except ValueError:
             raise ValueError(f"stage must be an integer, got `{value}`") from None
     elif field == "locked_by":
+        # The tools refuse this field (`claims.HOLDER_WRITE_REFUSAL`) and
+        # `commands=` reserves it; the core keeps the write for its own callers.
         if value == "" or value.lower() == "none":
             task.pop("locked_by", None)
         else:
@@ -766,6 +767,12 @@ def _apply_archive_flag(doc, *, before, after):
         doc.pop("archive_reason", None)
 
 
+def _caller(transaction) -> dict:
+    """The session a command runs for and the connection that judges claims —
+    what `claims.survives_status_change` needs to tell a peer's claim from ours."""
+    return {"session": transaction.request.get("caller_scope", ""), "connection": transaction.connection}
+
+
 def _claim_state(transaction, task, ident, session):
     return claims.read(task, task_id=ident, session=session, connection=transaction.connection)
 
@@ -781,19 +788,18 @@ def _task_pick(transaction, arguments):
     status = task.get("status", "todo")
     if status not in domain.PICKABLE_FROM:
         raise ValueError(f"task `{ident}` is `{status}`, expected one of: {', '.join(domain.PICKABLE_FROM)}")
-    if status == "in-progress":
-        # The lock is only contested for a row already in progress. A todo or
-        # in-review row carrying a leftover `locked_by` — what a migrated row
-        # brings — is claimed, not refused, exactly as the tool does.
-        #
-        # An expired claim is still refused without `force`. Expiry makes the
-        # refusal *informed* — the adapter says the holder is gone — and opens
-        # the release-then-pick path; it does not make a pick a silent steal,
-        # because a pick carries worktree instructions a second agent would act on.
-        locked_by = task.get("locked_by")
-        if locked_by and locked_by != session and not force:
-            raise Conflict(f"task `{ident}` is locked by another session (`{locked_by}`)")
-    else:
+    # A peer's lock is contested on every pickable status, not only in-progress:
+    # the holder is `locked_by` (`claims.foreign_holder`), and `backlog_context`
+    # reports it as held on a todo row too.
+    #
+    # An expired claim is still refused without `force`. Expiry makes the
+    # refusal *informed* — the adapter says the holder is gone — and opens
+    # the release-then-pick path; it does not make a pick a silent steal,
+    # because a pick carries worktree instructions a second agent would act on.
+    locked_by = claims.foreign_holder(task, session)
+    if locked_by and not force:
+        raise Conflict(f"task `{ident}` is locked by another session (`{locked_by}`)")
+    if status != "in-progress":
         task = domain.pick_task_doc(task, session=session)
     claims.held(task, ttl, session=session)
     _write_task(transaction, ident, task, entity["body"], before_entity=entity, enqueue=False)
@@ -808,8 +814,8 @@ def _bundle_pick(transaction, ident, slug, *, session, force, ttl):
         raise ValueError(f"bundle `{slug}` spans multiple sub_repos {repos}; cannot pick")
     sub_repo = next(iter(repos), "")
     for member in members:
-        holder = entities[member]["fields"].get("locked_by")
-        if holder and holder != session and not force:
+        holder = claims.foreign_holder(entities[member]["fields"], session)
+        if holder and not force:
             raise Conflict(f"`{member}` is a member of bundle `{slug}` locked by another session ({holder})")
     branch = f"feature/{slug}"
     worktree = f"{sub_repo}/.worktrees/{slug}" if sub_repo else f".worktrees/{slug}"
@@ -909,7 +915,9 @@ def _task_complete(transaction, arguments):
             raise ValueError(block)
     task = domain.complete_task_doc(task, target_status=target_status, human_action=human_action,
                                     patchnote=arguments.get("patchnote", ""),
-                                    release=arguments.get("release", ""))
+                                    release=arguments.get("release", ""),
+                                    keep_holder=claims.survives_status_change(
+                                        dict(task, status=target_status), **_caller(transaction)))
     _write_task(transaction, ident, task, entity["body"], before_entity=entity)
     if arguments.get("changelog", ""):
         _queue_progress_log(transaction.connection, arguments["changelog"])
@@ -1410,7 +1418,10 @@ def _batch_lookups(transaction):
         return f"Error: unknown area `{value}`. Valid: {', '.join(known) or '(none defined)'}"
 
     return batch_lines.Lookups(task_exists=task_exists, find_phase=find_phase, area_error=area_error,
-                               open_bugs=lambda ident: _bugs_found_in(connection, ident)[0])
+                               open_bugs=lambda ident: _bugs_found_in(connection, ident)[0],
+                               keeps_claim=lambda doc, before: claims.keeps_claim_through(
+                                   doc, before, **_caller(transaction)),
+                               session=_caller(transaction)["session"])
 
 
 def _task_batch_line(transaction, arguments):
@@ -1463,7 +1474,9 @@ def _task_viewer_create(transaction, arguments):
     stamp = _now_iso()
     doc = {"title": payload.get("title", ""), "status": payload.get("status", "todo"),
            "priority": payload.get("priority", "medium"), "created": stamp, "last_referenced": stamp}
-    doc.update({key: value for key, value in payload.items() if key not in ("epic", "id")})
+    # Only the claim tools write `locked_by`; a viewer payload's is dropped.
+    doc.update({key: value for key, value in claims.without_claim_fields(payload).items()
+                if key not in ("epic", "id")})
     doc["epic"] = epic_id
     body = doc.pop("_body", None)
     return transaction.create("task", doc, body or None)
@@ -1471,7 +1484,10 @@ def _task_viewer_create(transaction, arguments):
 
 def _task_viewer_update(transaction, arguments):
     from taskmaster.taskmaster_v3 import _now_iso
-    ident, patch = arguments["id"], dict(arguments["patch"])
+    ident = arguments["id"]
+    # Only the claim tools write `locked_by`; a viewer patch's is dropped (a PUT
+    # carries the holder it read back).
+    patch = claims.without_claim_fields(arguments["patch"])
     _viewer_precondition(transaction, arguments)
     entity = _viewer_task(transaction, ident)
     task = deepcopy(entity["fields"])
@@ -1499,6 +1515,8 @@ def _task_viewer_update(transaction, arguments):
             task["completed"] = _now_iso()
     if after_status == "done":
         task.pop("human_action", None)
+    if after_status != before_status:
+        claims.after_status_change(task, before=before_status, **_caller(transaction))
     task["last_referenced"] = _now_iso()
     _apply_archive_flag(task, before=before_status, after=after_status)
     body = task.pop("_body", None)
@@ -1513,6 +1531,7 @@ def _task_viewer_archive(transaction, arguments):
     task = deepcopy(entity["fields"])
     before = task.get("status")
     task["status"] = "archived"
+    claims.after_status_change(task, **_caller(transaction))
     _apply_archive_flag(task, before=before, after="archived")
     transaction.replace("task", ident, task, entity["body"], before_entity=entity)
     return ident

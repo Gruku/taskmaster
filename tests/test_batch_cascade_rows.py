@@ -28,7 +28,7 @@ def test_a_later_batch_line_does_not_undo_an_epic_cascade(tm_epic_phase):
     root = tm_epic_phase
     added = bs.backlog_add_task(title="Child", epic="test-epic", phase="dev", tldr="c")
     assert "Error" not in added, added
-    bs.backlog_update_task(task_id="test-epic-001", field="locked_by", value="agent-a")
+    assert bs.backlog_pick_task(task_id="test-epic-001").startswith("Picked")
 
     result = bs.backlog_batch_update(
         operations="update_epic test-epic status archived\nupdate test-epic-001 title New"

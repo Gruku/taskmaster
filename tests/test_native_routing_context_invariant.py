@@ -24,7 +24,7 @@ import pytest
 from taskmaster import backlog_server as bs
 from taskmaster import store
 import native_twins
-from native_twins import make_twins
+from native_twins import hand_set_holder, make_twins
 
 SEEDS = (11, 23, 37, 41, 59)
 TASKS = 30
@@ -252,7 +252,7 @@ def _seed(plan, bugs, handovers, holders):
         if story.startswith("handed_to_"):
             holder = holders[story.rsplit("_", 1)[1]]
             bs.backlog_update_task(task_id=ident, field="status", value="in-progress")
-            bs.backlog_update_task(task_id=ident, field="locked_by", value=holder)
+            hand_set_holder(ident, holder)
             truth[ident] = {"holder": holder, "dead": story.endswith("dead")}
         elif story in ("self", "live", "dead", "unjudgeable"):
             holder = bs.SESSION_ID if story == "self" else holders[story]
@@ -262,7 +262,7 @@ def _seed(plan, bugs, handovers, holders):
         elif story.startswith("bare_") and story != "bare_malformed":
             # A holder written without a pick: no expiry was ever stamped for it.
             holder = holders[story.split("_", 1)[1]]
-            bs.backlog_update_task(task_id=ident, field="locked_by", value=holder)
+            hand_set_holder(ident, holder)
             truth[ident] = {"holder": holder}
 
     for n, bug in enumerate(bugs, start=1):

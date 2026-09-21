@@ -2476,9 +2476,12 @@ class Store:
             if _CONTEXT_BUILDER is not None:
                 _CONTEXT_BUILDER(data)
             return data, before, seq
-        self._maybe_scan_on_read()
         connection = self.connection
         owns_snapshot = not connection.in_transaction
+        if owns_snapshot:
+            # A caller already holding a read snapshot has scanned before opening
+            # it; a scan here would need a write transaction nested inside it.
+            self._maybe_scan_on_read()
         if owns_snapshot:
             connection.execute("BEGIN")
         try:

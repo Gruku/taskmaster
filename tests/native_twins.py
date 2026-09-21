@@ -294,6 +294,27 @@ def commit_only(connection, operation: str, arguments: dict) -> dict:
         "operation": operation, "arguments": arguments, "expected_revisions": []})
 
 
+def hand_edit_task(ident: str, change) -> None:
+    """Hand-edit one task row of the legacy project the server points at, the way
+    a hand-edited or migrated backlog arrives — e.g. a `locked_by` no tool may
+    write any more. Run it inside a seed, before the twins are copied, so both
+    stores carry the edit."""
+    store.reset_for_tests()
+    with closing(sqlite3.connect(bs.ROOT / ".taskmaster" / "local" / "store.db",
+                                 isolation_level=None)) as connection:
+        doc = json.loads(connection.execute(
+            "SELECT doc FROM entities WHERE kind='task' AND id=?", (ident,)).fetchone()[0])
+        change(doc)
+        connection.execute("UPDATE entities SET doc=? WHERE kind='task' AND id=?",
+                           (json.dumps(doc), ident))
+    store.reset_for_tests()
+
+
+def hand_set_holder(ident: str, holder: str) -> None:
+    """`hand_edit_task` writing only `locked_by`: a holder no pick stamped."""
+    hand_edit_task(ident, lambda doc: doc.__setitem__("locked_by", holder))
+
+
 def make_twins(tmp_path: Path, monkeypatch, seed=None) -> Twins:
     """Seed a legacy project through the legacy tools, copy it, activate the copy."""
     install_clock(monkeypatch)

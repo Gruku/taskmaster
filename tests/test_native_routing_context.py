@@ -10,7 +10,7 @@ import json
 import pytest
 
 from taskmaster import backlog_server as bs
-from native_twins import make_twins
+from native_twins import hand_set_holder, make_twins
 
 BLOCKED, NEXT = "test-epic-001", "test-epic-002"
 
@@ -239,8 +239,8 @@ def claimed(tmp_path, monkeypatch):
     def seed():
         bs.backlog_add_task(title="Held by a live peer", epic="test-epic", phase="dev")
         bs.backlog_add_task(title="Held by a dead peer", epic="test-epic", phase="dev")
-        bs.backlog_update_task(task_id="test-epic-001", field="locked_by", value=_peer(os.getpid()))
-        bs.backlog_update_task(task_id="test-epic-002", field="locked_by", value=_peer(_dead_pid()))
+        hand_set_holder("test-epic-001", _peer(os.getpid()))
+        hand_set_holder("test-epic-002", _peer(_dead_pid()))
     return make_twins(tmp_path, monkeypatch, seed)
 
 
@@ -290,3 +290,34 @@ def test_a_human_action_of_the_wrong_shape_answers_unknown_instead_of_failing_th
     assert answered["mandatory"]["clear"] is False
     assert ("unknown", "human_action") in {(b["kind"], b["id"])
                                            for b in answered["mandatory"]["blockers"]}
+
+
+def test_the_legacy_recent_section_reads_the_same_snapshot_as_the_rest_of_the_answer(twins, monkeypatch):
+    """A peer's commit landing after the backlog was loaded must not reach one
+    section of the answer and not the others: `recent` named an entity no other
+    section knew, with no title, under a `sequence` the rest was not read at."""
+    from contextlib import closing
+    import sqlite3
+
+    with twins.at(twins.legacy):
+        before = json.loads(bs.backlog_context(scope="project", include=["recent"]))
+        loaded = bs._load
+
+        def load_then_a_peer_commits():
+            data = loaded()
+            with closing(sqlite3.connect(bs.ROOT / ".taskmaster" / "local" / "store.db",
+                                         isolation_level=None)) as peer:
+                seq = peer.execute("SELECT COALESCE(MAX(seq),0)+1 FROM changes").fetchone()[0]
+                peer.execute("INSERT INTO changes(seq,ts,session,tool,kind,id,op) "
+                             "VALUES(?,'2026-09-21T00:00:00Z','peer','peer','bug','B-999','create')",
+                             (seq,))
+                peer.execute("INSERT INTO entities(kind,id,status,doc,rev,updated_seq) "
+                             "VALUES('bug','B-999','open',?,1,?)",
+                             (json.dumps({"id": "B-999", "title": "After the snapshot",
+                                          "status": "open"}), seq))
+            return data
+
+        monkeypatch.setattr(bs, "_load", load_then_a_peer_commits)
+        during = json.loads(bs.backlog_context(scope="project", include=["recent"]))
+    assert during["sequence"] == before["sequence"]
+    assert during["selected"]["recent"] == before["selected"]["recent"]

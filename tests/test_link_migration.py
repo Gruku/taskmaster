@@ -77,6 +77,22 @@ def test_dedupes_when_legacy_and_links_overlap():
     assert links.count({"type": "depends_on", "target": "T-002"}) == 1
 
 
+def test_a_bare_string_list_field_is_one_target_not_one_per_character():
+    """Every dependency reader treats `depends_on: T-002` as one dependency."""
+    links = legacy_links_to_typed({"id": "T-001", "depends_on": "T-002"}, kind="task")
+    assert links == [{"type": "depends_on", "target": "T-002"}]
+
+
+@pytest.mark.parametrize("value", [5, {"T-002": True}, [5], [None, "T-002"]])
+def test_a_list_field_in_a_shape_no_tool_writes_derives_no_guessed_edge(value):
+    """`native.blockers` reports such a `depends_on` as unreadable. Deriving edges
+    from it must not raise — every write to the task derives them — and must not
+    guess ids out of it either: only string ids become targets."""
+    links = legacy_links_to_typed({"id": "T-001", "depends_on": value}, kind="task")
+    expected = [{"type": "depends_on", "target": "T-002"}] if value == [None, "T-002"] else []
+    assert links == expected
+
+
 # ── Migration script tests ─────────────────────────────────────────────
 
 
