@@ -91,6 +91,22 @@ def exported_through(connection) -> int:
     return int(_get(connection, THROUGH_KEY, 0))
 
 
+def export_record(connection, rel: str) -> dict | None:
+    """The retained export record of one file: its latest exported job.
+
+    `tombstone` is true when the file is absent on purpose: the record removed it
+    (a move's old path, or an epic or phase whose heavy fields were cleared) and no
+    projection row describes bytes there. Tombstones never expire in N11; only a
+    later job for the same path replaces them.
+    """
+    row = connection.execute("SELECT job_key,effect,commit_seq FROM projection_jobs WHERE file=? AND state='exported' "
+                             "ORDER BY commit_seq DESC,job_key DESC LIMIT 1", (rel,)).fetchone()
+    if row is None:
+        return None
+    present = connection.execute("SELECT 1 FROM projection WHERE file=?", (rel,)).fetchone() is not None
+    return {"job_key": row[0], "effect": row[1], "commit_seq": row[2], "tombstone": not present}
+
+
 def _held_entity_sql() -> str:
     """Held-entity predicate over `projection_jobs j` (see `held`)."""
     return ("EXISTS(SELECT 1 FROM entity_core e WHERE e.entity_key=j.entity_key AND ("
@@ -464,8 +480,27 @@ class Exporter:
     # ── Finish ──────────────────────────────────────────────────────────────
 
     def finish(self) -> None:
-        """Release the lease so the next exporter need not wait for it to expire."""
-        self.release()
+        """Apply retention to every file this attempt acked, then release the lease."""
+        try:
+            if self.acked:
+                self.checkpoint("retention", "")
+                self._begin()
+                try:
+                    for rel in sorted(self.acked):
+                        record = export_record(self.connection, rel)
+                        if record is not None:
+                            # D7: the latest exported job is the file's export record
+                            # (its tombstone when the file is absent on purpose); every
+                            # other terminal job for the file is history nothing reads.
+                            self.connection.execute(
+                                "DELETE FROM projection_jobs WHERE file=? AND state IN ('exported','superseded') "
+                                "AND job_key!=?", (rel, record["job_key"]))
+                    self.connection.commit()
+                except BaseException:
+                    self.connection.rollback()
+                    raise
+        finally:
+            self.release()
 
     def release(self) -> None:
         if self.generation is None or self.connection.in_transaction:
