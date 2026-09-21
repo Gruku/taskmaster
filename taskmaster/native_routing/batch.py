@@ -60,9 +60,9 @@ class _Overlay:
             open_bugs=lambda ident: _bugs_found_in(self.snapshot.connection, ident)[0],
             keeps_claim=self._keeps_claim, session=bs.SESSION_ID)
 
-    def _keeps_claim(self, doc):
-        return claims.survives_status_change(doc, session=bs.SESSION_ID,
-                                             connection=self.snapshot.connection)
+    def _keeps_claim(self, doc, before):
+        return claims.keeps_claim_through(doc, before, session=bs.SESSION_ID,
+                                          connection=self.snapshot.connection)
 
     def cascade(self, epic_id, now):
         count = 0
@@ -234,7 +234,11 @@ def batch_preview(call, *, operations):
                 else:
                     previews.append(f"- `{task_id}`: Cannot archive — currently `{current}`")
             elif op == "pick":
-                if current in ("todo", "in-review"):
+                holder = claims.foreign_holder(task, bs.SESSION_ID)
+                if holder and current in ("todo", "in-progress", "in-review"):
+                    # The refusal the batch line gives, before it is applied.
+                    previews.append(f"- `{task_id}`: {claims.batch_pick_refusal(task_id, holder)}")
+                elif current in ("todo", "in-review"):
                     previews.append(f"- `{task_id}` ({current} → in-progress): {task['title']}")
                     # The resolver's answer, as `backlog_pick_task` warns it.
                     unmet = blockers.unmet_dependencies(task, dependency_statuses(snapshot, task))

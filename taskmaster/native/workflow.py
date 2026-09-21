@@ -644,8 +644,7 @@ def _task_update(transaction, arguments):
         elif value == "done" and not task.get("completed"):
             task["completed"] = domain.now_stamp()
         _apply_archive_flag(task, before=current, after=value)
-        if value != "in-progress":
-            claims.after_status_change(task, **_caller(transaction))
+        claims.after_status_change(task, before=current, **_caller(transaction))
     elif field == "priority":
         value = domain.normalize_priority(value)
         if value not in domain.VALID_PRIORITIES:
@@ -1420,8 +1419,8 @@ def _batch_lookups(transaction):
 
     return batch_lines.Lookups(task_exists=task_exists, find_phase=find_phase, area_error=area_error,
                                open_bugs=lambda ident: _bugs_found_in(connection, ident)[0],
-                               keeps_claim=lambda doc: claims.survives_status_change(
-                                   doc, **_caller(transaction)),
+                               keeps_claim=lambda doc, before: claims.keeps_claim_through(
+                                   doc, before, **_caller(transaction)),
                                session=_caller(transaction)["session"])
 
 
@@ -1476,7 +1475,8 @@ def _task_viewer_create(transaction, arguments):
     doc = {"title": payload.get("title", ""), "status": payload.get("status", "todo"),
            "priority": payload.get("priority", "medium"), "created": stamp, "last_referenced": stamp}
     # Only the claim tools write `locked_by`; a viewer payload's is dropped.
-    doc.update({key: value for key, value in payload.items() if key not in ("epic", "id", claims.HOLDER_FIELD)})
+    doc.update({key: value for key, value in claims.without_claim_fields(payload).items()
+                if key not in ("epic", "id")})
     doc["epic"] = epic_id
     body = doc.pop("_body", None)
     return transaction.create("task", doc, body or None)
@@ -1487,7 +1487,7 @@ def _task_viewer_update(transaction, arguments):
     ident = arguments["id"]
     # Only the claim tools write `locked_by`; a viewer patch's is dropped (a PUT
     # carries the holder it read back).
-    patch = {key: value for key, value in arguments["patch"].items() if key != claims.HOLDER_FIELD}
+    patch = claims.without_claim_fields(arguments["patch"])
     _viewer_precondition(transaction, arguments)
     entity = _viewer_task(transaction, ident)
     task = deepcopy(entity["fields"])
@@ -1515,8 +1515,8 @@ def _task_viewer_update(transaction, arguments):
             task["completed"] = _now_iso()
     if after_status == "done":
         task.pop("human_action", None)
-    if after_status != before_status and after_status != "in-progress":
-        claims.after_status_change(task, **_caller(transaction))
+    if after_status != before_status:
+        claims.after_status_change(task, before=before_status, **_caller(transaction))
     task["last_referenced"] = _now_iso()
     _apply_archive_flag(task, before=before_status, after=after_status)
     body = task.pop("_body", None)

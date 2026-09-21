@@ -1184,10 +1184,11 @@ def _dependency_statuses(data: dict, task: dict) -> dict[str, str]:
     return statuses
 
 
-def _release_claim_on_status_change(task: dict) -> None:
+def _release_claim_on_status_change(task: dict, before: str | None = None) -> None:
     """A status change releases this session's claim, or a peer's proven expired
     one — never a live peer's (`claims.survives_status_change`)."""
-    _claims.after_status_change(task, session=SESSION_ID, connection=_store().connection)
+    _claims.after_status_change(task, session=SESSION_ID, connection=_store().connection,
+                                before=before)
 
 
 # ── Hot-path task rows ───────────────────────────────────
@@ -7922,9 +7923,8 @@ def backlog_update_task(
         # The store's archive flag is what moves the projection file in or out of
         # tasks/archive/, so the transition has to say so explicitly.
         _apply_archive_transition("task", task_id, task, before=cur, after=value)
-        # Clear lock when leaving in-progress
-        if value not in ("in-progress",):
-            _release_claim_on_status_change(task)
+        # Clear the lock when leaving in-progress, or any status left terminal
+        _release_claim_on_status_change(task, before=cur)
     elif field == "priority":
         value = _normalize_priority(value)
         if value not in VALID_PRIORITIES:
@@ -9245,8 +9245,7 @@ def backlog_batch_update(operations: str = "", commands: list[dict] | None = Non
                 _apply_archive_transition(
                     "task", task_id, task, before=prior_status, after=value
                 )
-                if value not in ("in-progress",):
-                    _release_claim_on_status_change(task)
+                _release_claim_on_status_change(task, before=prior_status)
             elif field == "priority":
                 value = _normalize_priority(value)
                 if value not in VALID_PRIORITIES:
@@ -9370,8 +9369,7 @@ def backlog_batch_update(operations: str = "", commands: list[dict] | None = Non
             _apply_archive_transition(
                 "task", task_id, task, before=prior_status, after=new_status
             )
-            if new_status not in ("in-progress",):
-                _release_claim_on_status_change(task)
+            _release_claim_on_status_change(task, before=prior_status)
             _tx_put_task(task, epic)
             results.append(f"`{task_id}` → {new_status}")
             line_renderers.append(_status_line(task_id, new_status))
@@ -9583,7 +9581,11 @@ def backlog_batch_preview(operations: str) -> str:
                 previews.append(f"- `{task_id}`: Cannot archive — currently `{current_status}`")
 
         elif op == "pick":
-            if current_status in ("todo", "in-review"):
+            holder = _claims.foreign_holder(task, SESSION_ID)
+            if holder and current_status in ("todo", "in-progress", "in-review"):
+                # The refusal the batch line gives, before it is applied.
+                previews.append(f"- `{task_id}`: {_claims.batch_pick_refusal(task_id, holder)}")
+            elif current_status in ("todo", "in-review"):
                 previews.append(f"- `{task_id}` ({current_status} → in-progress): {task['title']}")
                 # Check dependencies
                 # The resolver's answer, as `backlog_pick_task` warns it.
@@ -9954,10 +9956,11 @@ def _viewer_etag() -> str:
 
 
 def _viewer_patch_without_holder(patch: dict) -> dict:
-    """A viewer write never sets or erases `locked_by`: only the claim tools do.
+    """A viewer write never sets or erases a claim field (`locked_by` or its
+    expiry): only the claim tools do.
     Dropped rather than refused, because a PUT sends the whole task back —
     holder included — and must not fail for carrying the value it just read."""
-    return {key: value for key, value in patch.items() if key != _claims.HOLDER_FIELD}
+    return _claims.without_claim_fields(patch)
 
 
 def _viewer_update_task(
@@ -10017,8 +10020,8 @@ def _viewer_update_task(
                 task["completed"] = _now_iso()
         if after_status == "done":
             task.pop("human_action", None)
-        if after_status != before_status and after_status != "in-progress":
-            _release_claim_on_status_change(task)
+        if after_status != before_status:
+            _release_claim_on_status_change(task, before=before_status)
         task["last_referenced"] = _now_iso()
         _apply_archive_transition(
             "task", task_id, task, before=before_status, after=after_status

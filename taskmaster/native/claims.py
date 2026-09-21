@@ -48,6 +48,14 @@ TERMINAL_STATUSES = ("done", "archived")
 EXPIRES_FIELD = "claim_expires"
 # Who `claim_expires` was stamped for. Written and cleared with it, never alone.
 EXPIRES_FOR_FIELD = "claim_expires_for"
+# Every field that makes up a claim. Only the claim tools write any of them: a
+# forged expiry releases a live claim as surely as an erased holder does.
+CLAIM_FIELDS = (HOLDER_FIELD, EXPIRES_FIELD, EXPIRES_FOR_FIELD)
+
+
+def without_claim_fields(payload: dict) -> dict:
+    """A write payload with every claim field dropped (viewer writes)."""
+    return {key: value for key, value in payload.items() if key not in CLAIM_FIELDS}
 
 # Four hours (D6 ii): the unit of work here is a task carried across a long
 # session, not a job in a queue. A short TTL would expire claims mid-review-gate
@@ -289,9 +297,25 @@ def batch_pick_refusal(task_id: str, holder: str) -> str:
             f"`backlog_pick_task({task_id}, force=true)` to reclaim it for this session.")
 
 
-def after_status_change(doc, *, session: str, connection, now=None) -> dict:
-    """Drop the holder a status change releases (`survives_status_change`)."""
-    if not survives_status_change(doc, session=session, connection=connection, now=now):
+def keeps_claim_through(doc, before, *, session: str, connection, now=None) -> bool:
+    """Whether a status change from `before` to `doc`'s status leaves the claim.
+
+    Leaving a terminal status never does: a claim stranded on a `done` or
+    `archived` row (data from before the terminal rule) must not come back to
+    life when the task is reopened. Moving into `in-progress` always did and
+    still does. Anything else is `survives_status_change`. `before=None` means
+    the caller moves from a status that cannot be terminal.
+    """
+    if before in TERMINAL_STATUSES:
+        return False
+    if doc.get("status") == "in-progress":
+        return True
+    return survives_status_change(doc, session=session, connection=connection, now=now)
+
+
+def after_status_change(doc, *, session: str, connection, before=None, now=None) -> dict:
+    """Drop the holder a status change releases (`keeps_claim_through`)."""
+    if not keeps_claim_through(doc, before, session=session, connection=connection, now=now):
         doc.pop(HOLDER_FIELD, None)
     return doc
 

@@ -23,7 +23,7 @@ class Lookups:
     # Whether a status change leaves the task's claim in place: a live peer's
     # claim survives it (`claims.survives_status_change`), which needs the
     # store and the caller's session, so the caller supplies the answer.
-    keeps_claim: Callable[[dict], bool] = lambda doc: False
+    keeps_claim: Callable[[dict, "str | None"], bool] = lambda doc, before: False
     # The session the batch runs for: a `pick` line refuses any other holder.
     session: str = ""
 
@@ -89,8 +89,8 @@ def _archive_transition(doc, before, after, now):
         doc.pop("archive_reason", None)
 
 
-def _release_claim(doc, lookups: Lookups) -> None:
-    if not lookups.keeps_claim(doc):
+def _release_claim(doc, lookups: Lookups, before=None) -> None:
+    if not lookups.keeps_claim(doc, before):
         doc.pop("locked_by", None)
 
 
@@ -178,8 +178,7 @@ def _status(doc, ident, new_status, lookups, now):
             doc["completed"] = now
         doc.pop("human_action", None)
     _archive_transition(doc, prior, new_status, now)
-    if new_status != "in-progress":
-        _release_claim(doc, lookups)
+    _release_claim(doc, lookups, prior)
     return Outcome(doc=doc, report=("status", new_status, ""))
 
 
@@ -201,8 +200,7 @@ def _update(doc, ident, field, value, lookups, now):
         elif value == "done" and not doc.get("completed"):
             doc["completed"] = now
         _archive_transition(doc, prior, value, now)
-        if value != "in-progress":
-            _release_claim(doc, lookups)
+        _release_claim(doc, lookups, prior)
     elif field == "priority":
         value = domain.normalize_priority(value)
         if value not in domain.VALID_PRIORITIES:
