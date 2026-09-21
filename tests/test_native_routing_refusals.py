@@ -29,6 +29,7 @@ REFUSALS = {
         lambda: bs.backlog_linear(action="bootstrap_apply", workspace_alias="cm", team_id="T1", token_env="X"),
         "linear.yaml"),
     ("backlog_linear", "retry"): (lambda: bs.backlog_linear(action="retry"), 'action="status"'),
+    ("backlog_resolve_conflict", None): (lambda: bs.backlog_resolve_conflict(), "backlog_store_status"),
 }
 JSON_ROUTERS = {"backlog_link", "backlog_linear"}
 

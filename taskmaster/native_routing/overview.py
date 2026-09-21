@@ -18,7 +18,7 @@ from taskmaster import store
 from taskmaster import taskmaster_v3 as v3
 from taskmaster.native import compatibility
 
-from . import reads
+from . import projection, reads
 from .registry import adapter
 from .runtime import error_text
 
@@ -112,6 +112,7 @@ def _native_status(call) -> store.StoreStatus:
         stuck = tuple(sorted({r[0] for r in connection.execute(
             "SELECT file FROM projection WHERE dirty=1 AND quarantined=1 UNION "
             "SELECT file FROM projection_jobs WHERE state='pending'")}))
+        flagged = projection.flagged_files(connection)
         seq = int(connection.execute("SELECT COALESCE(MAX(seq),0) FROM domain_events").fetchone()[0])
         recent = tuple({**dict(zip(("seq", "ts", "session", "tool", "kind", "id", "op"), row))}
                        for row in connection.execute(
@@ -135,7 +136,8 @@ def _native_status(call) -> store.StoreStatus:
         schema_version=int(meta.get("schema_version", 0)), db_size=database.stat().st_size,
         wal_size=wal.stat().st_size if wal.exists() else 0, recent_changes=recent, live_sessions=tuple(live),
         merge_conflicts_24h=0, warning=store._network_filesystem_reason(resolution.root) or resolution.filesystem_warning,
-        corrupt_files=backups, linear_pending=queued, stuck_exports=stuck, read_scan_skips=0)
+        corrupt_files=backups, linear_pending=queued, stuck_exports=stuck, flagged_files=flagged,
+        read_scan_skips=0)
 
 
 @adapter("backlog_store_status")

@@ -31,6 +31,9 @@ SPECIAL = {
     "backlog_linear_probe": "external-query", "backlog_linear_bootstrap_apply": "synchronization",
     "backlog_linear_retry": "synchronization",
     "backlog_link_reconcile": "maintenance",
+    # Resolves a legacy projection flag (B-089): it writes through its own store
+    # transaction, not `_transactional`, so it is classified here.
+    "backlog_resolve_conflict": "maintenance",
     # An explicit import: it commits through the native core, and its legacy body
     # only refuses, so it opens no legacy transaction to be detected by one.
     "backlog_document_import": "simple-command",

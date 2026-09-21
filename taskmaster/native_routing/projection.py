@@ -98,6 +98,22 @@ def _record(connection, rel, kind, ident, content, stat, exported_seq):
     connection.execute("DELETE FROM projection_base WHERE file=?", (rel,))
 
 
+def flagged_files(connection) -> tuple[str, ...]:
+    """Files the legacy store flagged (B-089) and nobody resolved before activation."""
+    try:
+        return tuple(r[0] for r in connection.execute("SELECT file FROM projection_conflict ORDER BY file"))
+    except sqlite3.OperationalError:
+        # Activated from a store no 6.0.3 writer opened: there is no flag table.
+        return ()
+
+
+def _flagged(connection, rel: str) -> bool:
+    try:
+        return connection.execute("SELECT 1 FROM projection_conflict WHERE file=?", (rel,)).fetchone() is not None
+    except sqlite3.OperationalError:
+        return False
+
+
 class _Drain:
     def __init__(self, connection: sqlite3.Connection, backlog_dir: Path, session: str):
         self.connection, self.backlog_dir, self.session = connection, backlog_dir, session
@@ -109,6 +125,14 @@ class _Drain:
         if row and row[0]:
             self.connection.execute("UPDATE projection SET dirty=1 WHERE file=?", (rel,))
             self.warnings.append(f"export pending: {rel} is quarantined")
+            return True
+        if _flagged(self.connection, rel):
+            # Flagged by the legacy store before activation (B-089): the file and
+            # the store both changed and nobody has chosen. Writing or removing
+            # it here would discard the file's side, so it waits like a
+            # quarantined file does.
+            self.connection.execute("UPDATE projection SET dirty=1 WHERE file=?", (rel,))
+            self.warnings.append(f"export pending: {rel} is flagged")
             return True
         return False
 

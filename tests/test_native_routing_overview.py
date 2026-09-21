@@ -6,7 +6,9 @@ native store necessarily reports different facts about itself.
 """
 from __future__ import annotations
 
+from contextlib import closing
 import json
+import sqlite3
 
 import pytest
 import yaml
@@ -192,3 +194,25 @@ def test_validate_matches(tmp_path, monkeypatch):
                options={"docs": "plan:docs/missing.md;spec:has a space"})
     legacy, native = twins.same("backlog_validate")
     assert "docs.plan path not found" in native
+
+
+def test_a_file_flagged_before_activation_is_kept_and_reported(twins):
+    """B-089 on the native path: a file the legacy store flagged (both it and the
+    store changed) must not be overwritten by a native write, and store status must
+    name it, until someone chooses a side."""
+    rel = "tasks/test-epic-001.md"
+    path = twins.native / ".taskmaster" / rel
+    hand_edit = path.read_bytes() + b"\nHand edit nobody has chosen against.\n"
+    path.write_bytes(hand_edit)
+    with closing(sqlite3.connect(twins.native / ".taskmaster" / "local" / "store.db")) as connection:
+        connection.execute(
+            "INSERT INTO projection_conflict(file,kind,id,flagged_at,file_hash,file_content) "
+            "VALUES(?,'task','test-epic-001','2026-09-21T00:00:00Z','x',?)", (rel, hand_edit))
+        connection.commit()
+    with twins.at(twins.native):
+        answer = bs.backlog_update_task(task_id="test-epic-001", field="notes", value="store side")
+        report = bs.backlog_store_status()
+    assert path.read_bytes() == hand_edit, answer
+    assert f"export pending: {rel} is flagged" in answer
+    flagged = report.split("Flagged", 1)[1].split("\n", 2)
+    assert rel in "".join(flagged[:2]), report
