@@ -249,7 +249,12 @@ def resolve(facts: Facts) -> Resolution:
             found.append(_from_unknown("dependencies", facts.dependencies))
         else:
             found.extend(dependency_blockers(task, facts.dependencies))
-        human_action = (task.get("human_action") or "").strip()
+        human_action = task.get("human_action") or ""
+        if not isinstance(human_action, str):
+            found.append(_unknown("human_action", "malformed_human_action",
+                                  type(human_action).__name__))
+            human_action = ""
+        human_action = human_action.strip()
         if human_action:
             found.append(Blocker(kind="human_action", id=task_id, state="waiting",
                                  source="task", extra={"action": human_action}))
