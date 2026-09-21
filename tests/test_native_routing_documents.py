@@ -189,15 +189,19 @@ def test_import_refuses_a_path_outside_the_project(twins, tmp_path, where):
 
 
 def test_import_refuses_a_link_that_leads_outside_the_project(twins, tmp_path):
-    secret = tmp_path / "linked-secret.txt"
-    secret.write_text("TOP SECRET BEHIND A LINK\n", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.md").write_text("TOP SECRET BEHIND A LINK\n", encoding="utf-8")
     with twins.at(twins.native):
-        link = twins.native / "docs" / "link.md"
+        link = twins.native / "docs" / "linked"
         try:
-            link.symlink_to(secret)
+            link.symlink_to(outside, target_is_directory=True)
         except OSError:
-            pytest.skip("this platform will not create a symlink without privileges")
-        _declare("test-epic-001", "design", "docs/link.md")
+            # Windows grants symlinks only to privileged users; a junction needs
+            # no privilege and is resolved the same way.
+            _winapi = pytest.importorskip("_winapi")
+            _winapi.CreateJunction(str(outside), str(link))
+        _declare("test-epic-001", "design", "docs/linked/secret.md")
 
         answer = bs.backlog_document_import(kind="task", entity_id="test-epic-001", sections=["design"])
 
