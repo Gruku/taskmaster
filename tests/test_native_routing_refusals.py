@@ -29,7 +29,6 @@ REFUSALS = {
         lambda: bs.backlog_linear(action="bootstrap_apply", workspace_alias="cm", team_id="T1", token_env="X"),
         "linear.yaml"),
     ("backlog_linear", "retry"): (lambda: bs.backlog_linear(action="retry"), 'action="status"'),
-    ("backlog_resolve_conflict", None): (lambda: bs.backlog_resolve_conflict(), "backlog_store_status"),
 }
 JSON_ROUTERS = {"backlog_link", "backlog_linear"}
 
@@ -80,3 +79,11 @@ def test_unservable_native_store_refuses_in_each_router_error_shape(twins):
         assert "not ready" in json.loads(bs.backlog_linear(action="status"))["error"]
         text = bs.backlog_status()
     assert text.startswith("Error: ") and "not ready" in text, text
+
+
+def test_resync_guidance_no_longer_promises_an_overwrite():
+    """N11: a hand-edited file is flagged and kept, never re-exported over (D2)."""
+    for pair in (("backlog_handover_resync", None), ("backlog_issue_resync", None)):
+        text = registry.GUIDANCE[pair]
+        assert "over any hand edit" not in text, text
+        assert "backlog_resolve_conflict" in text, text
