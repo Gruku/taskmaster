@@ -30,7 +30,7 @@ Call `backlog_claim(action="status")` (this session's claims). If 3+: "You have 
 
 ## Step 3 — What blocks it
 
-Call `backlog_context(focus=<task_id>, scope="task", include=["handovers", "issues"])`. If `clear` is false, warn with `mandatory.blockers` (dependencies, gates, P0/P1 bugs, handovers, human action, claims; `unknown` = treat as blocked) — let user decide; do not skip silently.
+Call `backlog_context(focus=<task_id>, scope="task", include=["handovers", "issues"])`. If `clear` is false, warn with `mandatory.blockers` (dependencies, gates, open bugs, handovers, human action, claims; `unknown` = treat as blocked) — let user decide; do not skip silently.
 
 ## Step 4 — Pick the task
 

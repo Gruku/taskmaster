@@ -16,10 +16,11 @@ MANDATORY_BLOCKER_KINDS = (
 )
 UNKNOWN_KIND = "unknown"
 
-# A bug's severity is optional (`taskmaster_v3.BUG_SEVERITIES`), so an unstated
-# severity cannot be ruled out of this set and blocks too — matching
-# `task.complete`, which already refuses on any open bug named via `found_in`.
-BLOCKING_BUG_SEVERITIES = ("P0", "P1")
+# Every open bug whose `found_in` names the task blocks, whatever its severity.
+# `backlog_complete_task` refuses on each of them (`_open_bugs_for_task`, native
+# `workflow._bugs_found_in`), and a task context calls clear must never then be
+# refused at close. The callers feed exactly the rows that close-gate predicate
+# returns, so this producer adds no filter of its own.
 
 
 @dataclass(frozen=True)
@@ -213,10 +214,8 @@ def _bug_blockers(bugs: Sequence[Mapping[str, Any]]) -> list:
         if bug.get("status") != "open":
             continue
         severity = bug.get("severity")
-        if severity in BLOCKING_BUG_SEVERITIES or severity in (None, ""):
-            found.append(Blocker(kind="bug", id=str(bug.get("id", "")), state="open",
-                                 source="found_in",
-                                 extra={"severity": severity if severity else None}))
+        found.append(Blocker(kind="bug", id=str(bug.get("id", "")), state="open",
+                             source="found_in", extra={"severity": severity if severity else None}))
     return found
 
 

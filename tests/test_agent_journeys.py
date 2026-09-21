@@ -149,7 +149,7 @@ def _measure(base, tmp_path, monkeypatch, side, journey):
     if key not in MEASURED:
         roots, ids = base
         ids = {**ids, "close_open_bugs": [ids["close_bug"]]}
-        MEASURED[key] = aj.measure(journey, ids, _fresh(roots[side], tmp_path, monkeypatch))
+        MEASURED[key] = aj.measure(journey, ids, _fresh(roots[side], tmp_path / side, monkeypatch))
         print(f"\n[{side}] {MEASURED[key].row()}")
     return MEASURED[key]
 
