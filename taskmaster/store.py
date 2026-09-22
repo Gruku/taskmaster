@@ -1112,17 +1112,26 @@ def detect_dominant_crlf(backlog_path: Path, *, path_guard=None) -> bool:
     exporter and the native compatibility drain so a new file matches its
     neighbours whichever writer creates it.
     """
-    checked = path_guard or (lambda rel: backlog_path / rel)
+    guard = path_guard or (lambda rel: backlog_path / rel)
+
+    def probe_crlf(rel):
+        # A path the guard refuses (a link, a missing root) casts no vote; it
+        # must never fail the write or export that asked for the default.
+        try:
+            return _probe_crlf(guard(rel))
+        except (OSError, ValueError):
+            return None
+
     crlf = lf = 0.0
     for name in ("backlog.yaml", "project.yaml"):
-        probe = _probe_crlf(checked(name))
+        probe = probe_crlf(name)
         if probe is True:
             crlf += 1
         elif probe is False:
             lf += 1
     for folder in _LINE_ENDING_SAMPLE_DIRS:
-        directory = checked(folder)
         try:
+            directory = guard(folder)
             # Listed eagerly, inside the guard: `Path.iterdir` is lazy on
             # 3.11, so a project with no `bugs/` raised FileNotFoundError
             # out of the loop below and took the write that asked with it.
@@ -1130,13 +1139,13 @@ def detect_dominant_crlf(backlog_path: Path, *, path_guard=None) -> bool:
             names = [
                 name for name in os.listdir(directory) if name.endswith(".md")
             ]
-        except OSError:
+        except (OSError, ValueError):
             continue
         if not names:
             continue
         sampled_crlf = sampled_lf = 0
         for name in names[:_LINE_ENDING_SAMPLE_PER_DIR]:
-            probe = _probe_crlf(checked(f"{folder}/{name}"))
+            probe = probe_crlf(f"{folder}/{name}")
             if probe is True:
                 sampled_crlf += 1
             elif probe is False:

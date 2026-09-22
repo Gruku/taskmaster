@@ -187,3 +187,39 @@ def test_sync_refuses_linked_projection_without_touching_its_target(root, tmp_pa
         assert result['state'] == 'pending' and REL in result['unresolved']
         assert outside.read_bytes() == b'private target must stay unchanged'
         assert path.is_symlink()
+
+
+def junction(target, link):
+    _winapi = pytest.importorskip('_winapi')
+    target.mkdir(parents=True, exist_ok=True)
+    _winapi.CreateJunction(str(target), str(link))
+
+
+def test_junctioned_sample_directory_does_not_block_unrelated_publication(root, tmp_path):
+    junction(tmp_path / 'outside-bugs', root / '.taskmaster' / 'bugs')
+    with Coordinator(root) as owner:
+        client = Client(root, autostart=False, visibility='legacy')
+        outcome = client.execute(request(client, 'beside-junction', 'Published beside junction'))
+        assert outcome['projection']['state'] == 'exported', outcome
+        assert 'Published beside junction' in (root / '.taskmaster' / REL).read_text(encoding='utf-8')
+        assert owner.last_export_error is None
+    assert not any((tmp_path / 'outside-bugs').iterdir())
+
+
+def test_junctioned_job_file_is_a_per_job_refusal_not_a_drain_failure(root, tmp_path):
+    tasks = root / '.taskmaster' / 'tasks'
+    outside = tmp_path / 'outside-tasks'
+    outside.mkdir()
+    for path in tasks.iterdir():
+        (outside / path.name).write_bytes(path.read_bytes())
+        path.unlink()
+    tasks.rmdir()
+    junction(outside, tasks)
+    before = (outside / 'test-epic-001.md').read_bytes()
+    with Coordinator(root) as owner:
+        client = Client(root, autostart=False, visibility='legacy')
+        outcome = client.execute(request(client, 'into-junction', 'Refused target'))
+        assert outcome['receipt']['commit_seq']
+        assert outcome['projection']['state'] == 'pending'
+        assert any(REL in notice and 'refused' in notice for notice in outcome['projection']['notices']), outcome
+        assert (outside / 'test-epic-001.md').read_bytes() == before

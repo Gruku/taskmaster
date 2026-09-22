@@ -16,10 +16,24 @@ def relative(rel):
     return path
 
 
+_REPARSE_POINT = 0x400  # FILE_ATTRIBUTE_REPARSE_POINT
+_NAME_SURROGATE = 0x20000000  # IsReparseTagNameSurrogate: symlink, junction/mount point
+
+
 def check_component(path):
+    """Refuse components that redirect a name elsewhere.
+
+    Only name-surrogate reparse tags (symlinks, junctions/mount points) redirect;
+    cloud/dedup placeholders are ordinary local files and stay publishable. A
+    reparse point whose tag cannot be read is refused conservatively.
+    """
     info = path.lstat()
-    if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+    if stat.S_ISLNK(info.st_mode):
         raise UnsafePath(f"linked/reparse projection path refused: {path}")
+    if getattr(info, "st_file_attributes", 0) & _REPARSE_POINT:
+        tag = getattr(info, "st_reparse_tag", 0)
+        if not tag or tag & _NAME_SURROGATE:
+            raise UnsafePath(f"linked/reparse projection path refused: {path}")
     return info
 
 

@@ -28,7 +28,7 @@ import sqlite3
 import time
 from typing import Callable, Iterable
 
-from taskmaster.projection_paths import safe_path
+from taskmaster.projection_paths import UnsafePath, safe_path
 
 from .db import assert_native
 
@@ -493,8 +493,12 @@ class Exporter:
         A name is forgotten only once its file is gone, so recovery can always
         find an aside file some step could not restore or remove.
         """
-        path = self._path(rel)
-        return [name for name in _get(self.connection, ASIDE_PREFIX + rel, []) if path.with_name(name).exists()]
+        names = _get(self.connection, ASIDE_PREFIX + rel, [])
+        try:
+            path = self._path(rel)
+        except (OSError, UnsafePath):
+            return names             # unprovable now: every name stays on record
+        return [name for name in names if path.with_name(name).exists()]
 
     def _remember(self, rel: str, names: list[str]) -> None:
         """Inside a write transaction: keep exactly `names` on record for `rel`.
@@ -556,7 +560,10 @@ class Exporter:
         and the file is flagged. A crash with the file aside is undone by lease
         recovery (`_recover_asides`), which knows the aside name from `intend`.
         """
-        path = self._path(rel)
+        try:
+            path = self._path(rel)
+        except (OSError, UnsafePath) as exc:
+            return self.refuse(job if job is not None else rel, exc)
         tag = tag or self._tag(job if job is not None else rel)
         self.checkpoint("before_write", rel)
         if not self._owns():
@@ -670,7 +677,10 @@ class Exporter:
                                        (ASIDE_PREFIX, ASIDE_PREFIX[:-1] + "/")).fetchall()
         for key, value in rows:
             rel = key[len(ASIDE_PREFIX):]
-            path = self._path(rel)
+            try:
+                path = self._path(rel)
+            except (OSError, UnsafePath):
+                continue                 # refused path: its names stay on record for a later recovery
             keep = []
             for name in json.loads(value):
                 aside = path.with_name(name)
@@ -729,6 +739,30 @@ class Exporter:
             raise
         self.warnings.append(f"export pending: {rel} is flagged")
         return "flagged"
+
+    def refuse(self, target: Job | str, reason) -> str:
+        """The path guard refused this file: nothing on disk was touched.
+
+        Only this job goes back to pending; the drain never raises for it, so
+        unrelated files still publish and the committed caller gets a notice.
+        """
+        rel = target if isinstance(target, str) else target.file
+        if not isinstance(target, str):
+            self._begin()
+            try:
+                self._fenced()
+                self.connection.execute("UPDATE projection_jobs SET state='pending',lease_owner=NULL,lease_until=NULL "
+                                        "WHERE job_key=? AND state='claimed'", (target.key,))
+                self.connection.commit()
+            except LeaseLost:
+                self.connection.rollback()
+                return "lost"
+            except BaseException:
+                self.connection.rollback()
+                raise
+            self.outcomes[target.key] = "failed"
+        self.warnings.append(f"export pending: {rel} refused ({reason})")
+        return "failed"
 
     def _failed(self, rel: str, job: Job | None) -> None:
         """A write or removal the filesystem refused: retried by the next drain."""

@@ -129,3 +129,49 @@ def test_native_publisher_reuses_checked_path_boundary(tmp_path, monkeypatch):
     with pytest.raises(sync_files.UnsafePath):
         exporter._path("tasks/a.md")
     assert called == [(tmp_path, "tasks/a.md")]
+
+
+class _Stat:
+    def __init__(self, attributes, tag):
+        import stat as _stat
+        self.st_mode, self.st_file_attributes, self.st_reparse_tag = _stat.S_IFREG, attributes, tag
+
+
+@pytest.mark.parametrize("attributes,tag,refused", [
+    (0x20, 0, False),                 # ordinary file
+    (0x420, 0x9000001A, False),       # cloud placeholder: not a name surrogate
+    (0x420, 0x80000013, False),       # dedup: not a name surrogate
+    (0x410, 0xA0000003, True),        # junction / mount point
+    (0x420, 0xA000000C, True),        # symbolic link
+    (0x420, 0, True),                 # reparse point with an unreadable tag
+])
+def test_only_name_surrogate_reparse_points_are_refused(monkeypatch, attributes, tag, refused):
+    from taskmaster import projection_paths
+
+    class Fake:
+        def lstat(self):
+            return _Stat(attributes, tag)
+
+        def __str__(self):
+            return "fake"
+
+    if refused:
+        with pytest.raises(projection_paths.UnsafePath):
+            projection_paths.check_component(Fake())
+    else:
+        projection_paths.check_component(Fake())
+
+
+def test_crlf_detection_treats_refused_or_missing_paths_as_no_vote(tmp_path):
+    from taskmaster import store
+    from taskmaster.projection_paths import safe_path, UnsafePath
+    write(tmp_path, "tasks/a.md", b"a\r\nb\r\n")
+
+    def guard(rel):
+        if rel.startswith("bugs") or rel == "backlog.yaml":
+            raise UnsafePath(f"refused {rel}")
+        return safe_path(tmp_path, rel)
+
+    assert store.detect_dominant_crlf(tmp_path, path_guard=guard) is True
+    missing = tmp_path / "absent-root"
+    assert store.detect_dominant_crlf(missing, path_guard=lambda rel: safe_path(missing, rel)) is False
