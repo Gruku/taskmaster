@@ -142,3 +142,17 @@ def test_an_identical_retry_after_a_lost_response_is_not_an_error(twins):
     again = _bootstrap(twins)
     assert first["ok"] and again == dict(first, unchanged=True), again
     assert _config_path(twins).read_bytes() == written
+
+
+@pytest.mark.parametrize("overrides", [
+    {"team_id": "lin_api_0123456789abcdef"},
+    {"workspace_alias": "lin_oauth_abc"},
+    {"status_mapping": "todo:lin_api_0123456789abcdef"},
+    {"status_mapping": "LIN_API_key:state-1"},
+    {"priority_mapping": "high:lin_oauth_abc"},
+])
+def test_bootstrap_refuses_a_credential_in_any_field(twins, overrides):
+    _config_path(twins).write_text(EXISTING, encoding="utf-8")
+    answer = _bootstrap(twins, **overrides)
+    assert "credential" in answer.get("error", ""), answer
+    assert _config_path(twins).read_text(encoding="utf-8") == EXISTING

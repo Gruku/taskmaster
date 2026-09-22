@@ -38,6 +38,13 @@ def validate(entry, default_workspace):
     if not _ENVIRONMENT_NAME.fullmatch(token_env) or token_env.lower().startswith(_TOKEN_PREFIXES):
         raise ValueError("token_env must be the name of the environment variable that holds the Linear "
                          "token (for example LINEAR_TOKEN), never the token itself; linear.yaml was not changed")
+    # linear.yaml is tracked: no key or value anywhere in the entry may be a token.
+    texts = [(key, entry[key]) for key in _TEXT_FIELDS]
+    texts += [(key, text) for key in _MAPPINGS for pair in (entry.get(key) or {}).items() for text in pair]
+    for key, text in texts:
+        if text.strip().lower().startswith(_TOKEN_PREFIXES):
+            raise ValueError(f"{key} looks like a Linear credential; linear.yaml is tracked and must never "
+                             f"hold a token; linear.yaml was not changed")
 
 
 def _parse(content):
