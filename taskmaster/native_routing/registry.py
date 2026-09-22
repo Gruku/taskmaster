@@ -67,10 +67,6 @@ GUIDANCE: dict[tuple[str, "str | None"], str] = {
         f"{_NATIVE}, where every link write records its inverse in the same transaction. Run "
         "`backlog_link(action=\"validate\")` to list any asymmetric or orphaned links, and fix them "
         "with `backlog_link` create or remove."),
-    ("backlog_linear", "bootstrap_apply"): (
-        f"{_NATIVE}, and adding a Linear workspace still writes `linear.yaml` under the legacy store's "
-        "configuration lock. Add the workspace to `.taskmaster/linear.yaml` by hand, using the team "
-        "and state ids from `backlog_linear(action=\"probe\")`; `backlog_validate` checks the file."),
 }
 # Routers that answer errors as JSON rather than text.
 JSON_ERRORS = frozenset({"backlog_changes_since", "backlog_claim", "backlog_context", "backlog_link",

@@ -23,9 +23,6 @@ REFUSALS = {
     ("backlog_backfill_lanes", None): (lambda: bs.backlog_backfill_lanes(), "backlog_update_task"),
     ("backlog_index_status", None): (lambda: bs.backlog_index_status(rebuild=True), "backlog_store_status"),
     ("backlog_link", "reconcile"): (lambda: bs.backlog_link(action="reconcile"), 'action="validate"'),
-    ("backlog_linear", "bootstrap_apply"): (
-        lambda: bs.backlog_linear(action="bootstrap_apply", workspace_alias="cm", team_id="T1", token_env="X"),
-        "linear.yaml"),
 }
 JSON_ROUTERS = {"backlog_link", "backlog_linear"}
 

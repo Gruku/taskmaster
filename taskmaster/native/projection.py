@@ -1013,3 +1013,56 @@ def apply_resolve(transaction, arguments: dict) -> None:
     transaction.affected[(kind, ident)] = {"kind": kind, "id": ident, "revision": revision,
                                            "last_seq": transaction.seq, "fields": {}}
     update_through(connection)
+
+
+# Authored configuration beside the projection that a coordinator route may rewrite
+# (N13 step 7). It is not a projection of the store: no job, base or flag covers it.
+CONFIG_FILES = frozenset({"linear.yaml"})
+CONFIG_MAX_BYTES = 1024 * 1024
+
+
+def read_config(backlog_dir: Path, name: str) -> bytes | None:
+    """The configuration file's bytes, or None when absent; links and oversized files refuse."""
+    if name not in CONFIG_FILES:
+        raise ValueError(f"not a coordinator-owned configuration file: {name!r}")
+    path = safe_path(backlog_dir, name)
+    try:
+        with open(path, "rb") as handle:
+            content = handle.read(CONFIG_MAX_BYTES + 1)
+    except FileNotFoundError:
+        return None
+    if len(content) > CONFIG_MAX_BYTES:
+        raise ValueError(f"{name} exceeds {CONFIG_MAX_BYTES} bytes")
+    return content
+
+
+def replace_config(backlog_dir: Path, name: str, *, expected: bytes | None, content: bytes) -> None:
+    """Install `content` as the configuration file, all or nothing.
+
+    The caller holds the coordinator's publication boundary. The new bytes are
+    written and synced under a private temp name, the file is rechecked against
+    `expected` (what the caller parsed), then renamed into place: a replace when
+    it existed, a no-overwrite install when it did not. Any failure leaves the
+    old file and no temp. Editors that ignore the boundary can still race the
+    final rename; that window is the same one publication documents.
+    """
+    path = safe_path(backlog_dir, name)
+    stale = f"{name} changed while it was being updated; it was left as it is"
+    if read_config(backlog_dir, name) != expected:
+        raise ValueError(stale)
+    temp = path.with_name(f"{name}.tmp.{os.getpid()}.{random.getrandbits(64):016x}")
+    try:
+        with open(temp, "xb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if read_config(backlog_dir, name) != expected:
+            raise ValueError(stale)
+        if expected is None:
+            if not _retry(lambda: _install(temp, path)):
+                raise ValueError(f"{name} appeared while it was being created; it was left as it is")
+        else:
+            _retry(lambda: os.replace(temp, path) or True)
+    finally:
+        if os.path.lexists(temp):
+            _quietly(lambda: _drop(temp))

@@ -65,6 +65,13 @@ def _resolved_by_file(rel):
     return answer
 
 
+def _bootstrapped():
+    value = bs.backlog_linear(action="bootstrap_apply", workspace_alias="gate", team_id="T2",
+                              token_env="GATE_TWO_TOKEN", default_workspace=False)
+    assert json.loads(value).get("ok"), value
+    return value
+
+
 def _linear_retry_gate():
     value = bs.backlog_linear(action='retry', request_id='bypass-retry', caller_scope='bypass-gate')
     result = json.loads(value)
@@ -261,6 +268,7 @@ EXERCISES = {
     ("backlog_project_error_trace_ladder", None): lambda: bs.backlog_project_error_trace_ladder(),
     ("backlog_linear", "link"): lambda: bs.backlog_linear(action="link", task_id="test-epic-002", external_key="ENG-9"),
     ("backlog_linear", "unlink"): lambda: bs.backlog_linear(action="unlink", task_id="test-epic-002"),
+    ("backlog_linear", "bootstrap_apply"): lambda: _bootstrapped(),
     ("backlog_linear", "probe"): lambda: bs.backlog_linear(action="probe", token_env="GATE_UNSET_TOKEN"),
     ("backlog_linear", "list"): lambda: bs.backlog_linear(action="list"),
     ("backlog_linear", "show"): lambda: bs.backlog_linear(action="show", tracker_id="linear-cm-eng-9"),

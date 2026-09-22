@@ -172,6 +172,13 @@ class Client:
                             request_id=request_id, caller_scope=caller_scope,
                             may_have_committed=exc.may_have_committed) from exc
 
+    def linear_bootstrap(self, *, entry, default_workspace):
+        """Add a Linear workspace to linear.yaml under the coordinator's publication
+        boundary. Not a store command: an identical retry answers `unchanged`."""
+        from .linear_config import validate
+        validate(entry, default_workspace)
+        return self.call('linear_bootstrap', entry=entry, default_workspace=default_workspace)
+
     def flush(self, through):
         return self.call('flush', through=through)
 

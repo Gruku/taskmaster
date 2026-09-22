@@ -346,6 +346,9 @@ class Coordinator:
             scope = operation_scope(message.get('caller_scope'), message.get('request_id'))
             with closing(self._connect(readonly=True)) as connection:
                 return operation_state(connection, scope) or {'state': 'unknown'}
+        if method == 'linear_bootstrap':
+            from .linear_config import bootstrap
+            return bootstrap(self, message.get('entry'), message.get('default_workspace'))
         if method == 'linear_retry':
             return self.linear.response(message.get('caller_scope'), message.get('request_id'), message.get('target_id', ''))
         if method == 'receipt':
