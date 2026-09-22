@@ -592,16 +592,39 @@ def _active_tx() -> "_TxFrame | None":
 # deadline waiting on a *log line*. Measured: a store writer overran a 30 s
 # deadline to 82 s that way. A full queue drops the notice instead; a dropped
 # progress line costs nothing, a stalled writer costs the call.
+#
+# The pump writes to the stderr *file descriptor*, never through
+# `sys.stderr`: a daemon thread parked inside a buffered write holds the
+# BufferedWriter lock, and interpreter shutdown then aborts the whole process
+# ("_enter_buffered_busy: could not acquire lock ... at interpreter shutdown",
+# Windows exit 0xC0000409) when it flushes stderr. A raw `os.write` takes no
+# Python-level lock, so a blocked or abandoned notice cannot break the exit.
 _WRITER_WAIT_NOTICES: "queue.Queue[str]" = queue.Queue(maxsize=64)
 _WRITER_WAIT_PUMP: "threading.Thread | None" = None
 _WRITER_WAIT_PUMP_LOCK = threading.Lock()
+
+
+def _write_writer_wait_notice(line: str) -> None:
+    stream = sys.stderr
+    if stream is None:
+        return
+    try:
+        fd = stream.fileno()
+    except (AttributeError, OSError, ValueError):
+        # A replaced stream with no descriptor (an in-process capture) has no
+        # buffer lock shared with interpreter shutdown; write through it.
+        print(line, file=stream, flush=True)
+        return
+    data = (line + "\n").encode(getattr(stream, "encoding", None) or "utf-8", "replace")
+    while data:
+        data = data[os.write(fd, data):]
 
 
 def _drain_writer_wait_notices() -> None:
     while True:
         line = _WRITER_WAIT_NOTICES.get()
         try:
-            print(line, file=sys.stderr, flush=True)
+            _write_writer_wait_notice(line)
         except Exception:  # noqa: BLE001 - a closed stderr must not kill the pump
             pass
 
