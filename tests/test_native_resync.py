@@ -131,3 +131,16 @@ def test_divergent_edit_without_a_trusted_base_is_flagged_and_both_kept(tmp_path
     assert _entity(twins, "handover", HANDOVER) == before
     assert _path(twins, H_REL).read_bytes() == edited
     assert "Edited before any base" in detail
+
+
+def test_two_recorded_paths_for_one_document_warn_about_the_skipped_copy(twins):
+    stray = f"handovers/archive/{HANDOVER}.md"
+    with native_connection(twins.native) as connection:
+        columns = [row[1] for row in connection.execute("PRAGMA table_info(projection)")]
+        listed = ",".join(columns)
+        picked = ",".join("?" if column == "file" else column for column in columns)
+        connection.execute(f"INSERT INTO projection({listed}) SELECT {picked} FROM projection WHERE file=?",
+                           (stray, H_REL))
+    with twins.at(twins.native):
+        answer = bs.backlog_handover_resync()
+    assert f"{stray}: second copy of handover {HANDOVER} skipped; the store's file is {H_REL}" in answer, answer

@@ -30,7 +30,8 @@ def _documents(call, kind: str) -> tuple[list[str], list[str]]:
             except ValueError:
                 warnings.append(f"{rel}: recorded path is not an importable {kind} path; skipped")
                 continue
-            chosen.setdefault(ident, rel)
+            if chosen.setdefault(ident, rel) != rel:
+                warnings.append(f"{rel}: second copy of {kind} {ident} skipped; the store's file is {chosen[ident]}")
     for rel, (found, ident) in inventory.files.items():
         if found != kind:
             continue
