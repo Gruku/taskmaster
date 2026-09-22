@@ -7,6 +7,7 @@ from __future__ import annotations
 from taskmaster import backlog_server as bs
 from taskmaster.coordinator import sync_files
 from taskmaster.native import sync
+from taskmaster.projection_parse import classify
 
 from .handovers import _backlog_document
 from .registry import adapter
@@ -23,6 +24,12 @@ def _documents(call, kind: str) -> tuple[list[str], list[str]]:
     with call.read() as snapshot:
         for rel, ident in snapshot.connection.execute(
                 "SELECT file,id FROM projection WHERE kind=? ORDER BY file", (kind,)):
+            try:
+                if classify(rel) != (kind, ident):
+                    raise ValueError(rel)
+            except ValueError:
+                warnings.append(f"{rel}: recorded path is not an importable {kind} path; skipped")
+                continue
             chosen.setdefault(ident, rel)
     for rel, (found, ident) in inventory.files.items():
         if found != kind:
