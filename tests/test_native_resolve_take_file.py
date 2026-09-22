@@ -199,3 +199,52 @@ def test_take_file_on_backlog_yaml_never_replaces_task_rows_from_inline_stubs(tw
         assert connection.execute("SELECT 1 FROM entity_core WHERE public_id='test-epic-099'").fetchone() is None
     assert path.read_bytes() == edited
     assert _flagged(twins) == ["backlog.yaml"]
+
+
+def test_take_file_names_its_import_even_when_other_pending_results_fill_the_budget():
+    from taskmaster.coordinator import sync_worker
+    others = [f"tasks/t-{n:05}.md" for n in range(6000)]
+    result = dict(state="pending", unresolved=list(others),
+                  notices=[f"sync pending: {rel}: flagged" for rel in others],
+                  imports=[dict(file=REL, state="accepted", reason="explicit file resolution", commit_seq=9,
+                                request_id="k" * 64, caller_scope="sync-" + "a" * 64)],
+                  warnings=[], receipt_scope="s")
+    assert sync_worker.bound(result)["imports_omitted"] == 1  # the budget really is exhausted
+    bounded = sync_worker.bound(result, named=[REL])
+    assert bounded["imports"] == result["imports"]
+    assert bounded["notices_omitted"] > 0
+
+
+def test_take_file_with_its_import_omitted_reports_an_unknown_outcome(twins, monkeypatch):
+    from taskmaster.coordinator.adapter import NativeCall
+    _flag(twins, _hand_edit)
+    monkeypatch.setattr(NativeCall, "sync", lambda self, files, take_file=False: dict(
+        state="pending", imports=[], imports_omitted=1, unresolved=[], notices=[], receipt_scope="sync-scope"))
+    with twins.at(twins.native):
+        answer = bs.backlog_resolve_conflict(file=REL, take="file")
+    assert answer.startswith("Error: ") and "unknown" in answer and "sync-scope" in answer, answer
+    assert "Nothing was changed" not in answer
+
+
+def test_take_file_retried_after_a_lost_reply_reports_the_committed_resolution(twins, monkeypatch):
+    from taskmaster.coordinator.client import Client
+    _flag(twins, _hand_edit)
+    other = _path(twins, "tasks/test-epic-002.md")  # a second flag keeps each sync run pending
+    other.write_bytes(other.read_bytes().replace(b"title: Second", b"title: Second edited"))
+    with twins.at(twins.native):
+        assert "is flagged" in bs.backlog_update_task(task_id="test-epic-002", field="notes", value="store")
+    real, lost = Client._send, []
+
+    def send(self, record, method, **arguments):
+        answer = real(self, record, method, **arguments)
+        if method == "sync" and not lost:
+            lost.append(answer)
+            raise ConnectionError("reply lost after the coordinator committed")
+        return answer
+    monkeypatch.setattr(Client, "_send", send)
+    with twins.at(twins.native):
+        answer = bs.backlog_resolve_conflict(file=REL, take="file")
+    assert lost and lost[0]["imports"][0]["state"] == "accepted"
+    assert answer.startswith(f"Resolved {REL}: kept the file version."), answer
+    assert _entity(twins)["fields"]["title"] == "Taken from file"
+    assert _flagged(twins) == ["tasks/test-epic-002.md"]

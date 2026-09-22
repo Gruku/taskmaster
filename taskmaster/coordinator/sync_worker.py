@@ -51,26 +51,43 @@ def summarize(result):
     return summary
 
 
-def bound(result):
+def bound(result, named=()):
     """The pending result returned to the caller, within the same byte budget.
 
     Unlike the stored summary it keeps each import's reason and notices, which
     say why a file was not synchronized; whatever does not fit is counted in
-    `*_omitted` and stays inspectable as receipts under `receipt_scope`.
+    `*_omitted` and stays inspectable as receipts under `receipt_scope`. Entries
+    for the files the caller named come first, so a caller that asked about one
+    file always learns its outcome however many other files are pending.
     """
     lists = ('unresolved', 'notices', 'imports', 'warnings')  # the why first
+    named = set(named or ())
+    prefixes = tuple(f'sync pending: {rel}: ' for rel in named)
+
+    def pinned(key, item):
+        if key == 'imports':
+            return isinstance(item, dict) and item.get('file') in named
+        if key == 'unresolved':
+            return item in named
+        return key == 'notices' and bool(prefixes) and item.startswith(prefixes)
+
     bounded = {key: value for key, value in result.items() if key not in lists}
     used = len(encode(bounded).encode()) + 256
+    kept = {key: set() for key in lists}
+    for first in (True, False):
+        for key in lists:
+            for index, item in enumerate(result.get(key) or []):
+                if pinned(key, item) != first:
+                    continue
+                size = len(encode(item).encode()) + 1
+                if used + size > SUMMARY_BYTES:
+                    break
+                kept[key].add(index)
+                used += size
     for key in lists:
-        kept = []
-        for item in result.get(key) or []:
-            size = len(encode(item).encode()) + 1
-            if used + size > SUMMARY_BYTES:
-                break
-            kept.append(item)
-            used += size
-        bounded[key] = kept
-        omitted = len(result.get(key) or []) - len(kept)
+        items = result.get(key) or []
+        bounded[key] = [items[index] for index in sorted(kept[key])]
+        omitted = len(items) - len(bounded[key])
         if omitted:
             bounded[key + '_omitted'] = omitted
     return bounded
@@ -85,7 +102,7 @@ def operation_scope(caller_scope, request_id):
 def synchronize(owner, **arguments):
     result = _synchronize(owner, **arguments)
     # A completed result is already the bounded stored summary.
-    return result if result.get('state') == 'synchronized' else bound(result)
+    return result if result.get('state') == 'synchronized' else bound(result, arguments.get('files') or ())
 
 
 def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=0,

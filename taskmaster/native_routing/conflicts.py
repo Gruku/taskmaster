@@ -7,6 +7,7 @@ from __future__ import annotations
 import base64
 import hashlib
 
+from taskmaster.coordinator import sync_files
 from taskmaster.native import projection as outbox
 
 from . import projection
@@ -118,6 +119,14 @@ def _take_file(call, file: str) -> str:
     reasons = [notice.split(": ", 2)[-1] for notice in result.get("notices") or []
                if notice.startswith(f"sync pending: {file}: ")]
     if imported is None:
+        if _already_taken(call, file):
+            # A retry of the same sync id (a lost reply) finds the bytes already
+            # imported and reports them unchanged: the first attempt committed.
+            return _resolved(call, file, result)
+        if result.get("imports_omitted"):
+            return (f"Error: the outcome of taking {file} is unknown: its import receipt is not in the bounded "
+                    f"result. Inspect the receipts in scope {result.get('receipt_scope')!r} (or "
+                    f"backlog_resolve_conflict() for the flag) before retrying.")
         reason = "; ".join(reasons) or "; ".join(result.get("notices") or []) or "it was not imported"
         return (f"Error: {file} cannot be taken: {reason}. The file and the store were left as they are "
                 f"and the flag stays. Nothing was changed.")
@@ -126,6 +135,26 @@ def _take_file(call, file: str) -> str:
                 f"{'; '.join(reasons) or imported.get('reason', '')}. Inspect receipt "
                 f"{imported.get('request_id')!r} in scope {imported.get('caller_scope')!r} before retrying.")
     call.seq = imported.get("commit_seq")
+    return _resolved(call, file, result)
+
+
+def _already_taken(call, file: str) -> bool:
+    """The flag is gone and the store records exactly the bytes on disk."""
+    try:
+        observed = sync_files.observe(call.backlog_dir, file)
+    except (ValueError, OSError):
+        return False
+    if observed is None:
+        return False
+    with call.read() as snapshot:
+        connection = snapshot.connection
+        if outbox.held_file(connection, file):
+            return False
+        record = connection.execute("SELECT content_hash FROM projection WHERE file=?", (file,)).fetchone()
+    return record is not None and record[0] == observed.digest
+
+
+def _resolved(call, file: str, result: dict) -> str:
     for notice in result.get("notices") or []:
         if notice not in call.notices:
             call.notices.append(notice)
