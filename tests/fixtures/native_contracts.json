@@ -445,6 +445,7 @@
   "http_routes": {
     "GET": [
       "/api/backlog",
+      "/api/board",
       "/api/bugs",
       "/api/continuity",
       "/api/dashboard/recent-events",
@@ -636,6 +637,7 @@
       "(m := re.fullmatch('/api/decisions/([A-Za-z0-9_\\\\-]+)', clean_path))",
       "(m := re.fullmatch('/api/handover/([A-Za-z0-9_\\\\-]+)', clean_path))",
       "clean_path == '/api/backlog'",
+      "clean_path == '/api/board'",
       "clean_path == '/api/continuity'",
       "clean_path == '/api/identity'",
       "clean_path == '/api/notes'",

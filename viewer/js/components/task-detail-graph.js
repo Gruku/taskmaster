@@ -8,6 +8,7 @@ import { renderMarkdown } from './markdown.js';
 import { claimTopbar, tmSegmented, tmAction } from '../lib/topbar.js';
 
 export function mountTaskDetailGraph(root, ctx) {
+  if (ctx.etag) ctx.store?.setEtag?.(`task:${ctx.task.id}`, ctx.etag);
   root.innerHTML = '';
   root.classList.add('td-page', 'td-page-B');
 

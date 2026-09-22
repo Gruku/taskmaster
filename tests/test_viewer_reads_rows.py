@@ -194,7 +194,14 @@ def test_every_list_get_carries_the_snapshot_etag(server, path):
     _status, _body, headers = _get(base, path)
     etag = headers.get("ETag")
     assert etag, f"{path} served no ETag"
-    assert etag.strip('"') == bs._viewer_etag(), path
+    if path == "/api/backlog":
+        expected = f"c1:{bs._viewer_etag()}:{bs.VERSION}:{bs.SESSION_ID}"
+    elif path.startswith("/api/task/"):
+        from taskmaster.viewer_detail import legacy_etag
+        expected = legacy_etag(path.rsplit("/", 1)[1])
+    else:
+        expected = bs._viewer_etag()
+    assert etag.strip('"') == expected, path
 
 
 def test_list_etags_move_together_after_a_write(server):
@@ -240,6 +247,24 @@ def test_projection_only_etag_is_not_a_constant(seeded, monkeypatch):
     assert bs._viewer_etag() != first, (
         "the projection-only ETag did not move when the projection changed"
     )
+
+
+def test_projection_only_board_is_conditional_and_resyncs_external_edits(seeded, monkeypatch):
+    from taskmaster import viewer_board
+    _go_projection_only(seeded, monkeypatch)
+    status, before, tag, _ = viewer_board.response()
+    assert status == 200
+    assert viewer_board.response(if_none_match=f'"{tag}"')[0] == 304
+    # Change only an existing marked test project's task projection.
+    task = next((seeded / '.taskmaster' / 'tasks').rglob('test-epic-001.md'))
+    source = task.read_text(encoding='utf-8')
+    assert 'title: Work' in source
+    task.write_text(source.replace('title: Work', 'title: External edit'), encoding='utf-8')
+    store.reset_for_tests()
+    status, changed, new_tag, _ = viewer_board.response(since=before['cursor'])
+    assert status == 200 and new_tag != tag
+    assert 'tasks' in changed and 'resync' in changed
+    assert next(t for t in changed['tasks'] if t['id'] == 'test-epic-001')['title'] == 'External edit'
 
 
 # ── a refused legacy layout is a 409, not a 500 ───────────────────────────────

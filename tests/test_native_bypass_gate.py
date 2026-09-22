@@ -354,6 +354,7 @@ def test_routed_tool_never_reaches_the_legacy_store_or_scans_the_projection(rigg
 
 
 VIEWER_ROUTES = [
+    ("GET", "/api/board", None), ("GET", "/api/task/test-epic-001/detail", None),
     ("GET", "/api/backlog", None), ("GET", "/api/task/test-epic-001", None),
     ("GET", "/api/task/test-epic-001/related", None), ("GET", "/api/epic/test-epic", None),
     ("GET", "/api/threads", None), ("GET", "/api/sessions", None), ("GET", "/api/bugs?include_archive=true", None),

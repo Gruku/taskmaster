@@ -12,10 +12,10 @@ from taskmaster.native.queries import MAX_PAGE
 from taskmaster.taskmaster_v3 import BODY_KEY
 
 
-def page(snapshot, kind, **filters) -> list[dict]:
+def page(snapshot, kind, *, fields=None, **filters) -> list[dict]:
     items, cursor = [], None
     while True:
-        result = snapshot.list(kind, fields=None, limit=MAX_PAGE, cursor=cursor, **filters)
+        result = snapshot.list(kind, fields=fields, limit=MAX_PAGE, cursor=cursor, **filters)
         items.extend(result["items"])
         cursor = result["cursor"]
         if cursor is None:

@@ -327,8 +327,25 @@ def _handover_status(handler, database, handover_id):
 
 def _task_errors(database, task_id, patch):
     """The legacy write gate — `validate_task_write` plus status and transition — over the native tree."""
-    data, _etag = snapshot(database)
     with _open(database) as call, call.read() as snap:
+        epics = [{"id": e["id"], "tasks": []} for e in reads.page(snap, "epic", fields=("id",), include_archived=True)]
+        by_id = {e["id"]: e for e in epics}
+        # Validation needs this task and the reachable dependency closure, not
+        # every task's prose or every continuity entity in the repository.
+        pending = [task_id] + (bs._dependency_ids(patch.get("depends_on")) or [])
+        seen = set()
+        while pending:
+            ident = pending.pop()
+            if ident in seen:
+                continue
+            seen.add(ident)
+            found = reads.find_task(snap, ident)
+            if found:
+                task, epic = found
+                by_id[epic["id"]]["tasks"].append(task)
+                if "depends_on" in patch:
+                    pending.extend(bs._dependency_ids(task.get("depends_on")) or [])
+        data = {"epics": epics, "phases": [e["fields"] for e in reads.page(snap, "phase", fields=("id",), include_archived=True)]}
         areas = reads.area_ids(snap)
     errors = v3.validate_task_write(task_id, patch, bs._backlog_path(), data=data, area_ids=areas)
     return data, errors
@@ -392,7 +409,9 @@ def _task_archive(handler, database, task_id):
     _call, refusal = _execute(handler, database, "task.viewer_archive",
                               {"id": task_id, "if_match": handler.headers.get("If-Match") or ""})
     if refusal is None:
-        handler._send_json(200, {"ok": True}, etag=snapshot(database)[1])
+        from taskmaster.viewer_detail import read
+        detail = read(task_id, database)
+        handler._send_json(200, {"ok": True}, etag=detail["etag"])
     elif not _stale_or(handler, task_id, refusal):
         code = 404 if isinstance(refusal, KeyError) else 500
         handler._send_json(code, {"ok": False, "error": str(refusal)})
@@ -408,10 +427,12 @@ def _task_update(handler, database, task_id, method):
         handler._send_json(400, {"ok": False, "error": "body must be object" if method == "PUT" else "patch must be object"})
         return
     if_match = handler.headers.get("If-Match") or ""
-    current = snapshot(database)
-    if if_match and current is not None and if_match.strip('"') != current[1]:
-        handler._send_stale(task_id, current[1])
-        return
+    from taskmaster.viewer_detail import task_etag
+    with _open(database) as reader, reader.read() as snap:
+        current = task_etag(snap.connection, snap.identity["store_id"], task_id, native=True) if if_match.strip('"').startswith("t1:") else _etag(snap)
+        if if_match and if_match.strip('"') != current:
+            handler._send_stale(task_id, current)
+            return
     data, errors = _task_errors(database, task_id, patch)
     if "_task" in errors:
         handler._send_json(404, {"ok": False, "error": repr(errors["_task"])})
@@ -438,15 +459,9 @@ def _task_update(handler, database, task_id, method):
             return
         handler._send_json(404 if isinstance(refusal, KeyError) else 500, {"ok": False, "error": str(refusal)})
         return
-    committed = reads.committed(call.receipts).get(("task", task_id), {})
-    with _open(database) as reader, reader.read() as snap:
-        body = (reads.get(snap, "task", task_id, body=True) or {}).get("body")
-    # The legacy answer is the patched in-memory task: `_body` appears when the
-    # task had prose or the patch named it, with the value that was written.
-    if "_body" in patch or body:
-        committed = dict(committed, _body=patch["_body"] if "_body" in patch else body)
-    task = bs._normalize_task(dict(committed))
-    handler._send_json(200, {"ok": True, "task": task}, etag=snapshot(database)[1])
+    from taskmaster.viewer_detail import write_response
+    task, etag = write_response(task_id, database)
+    handler._send_json(200, {"ok": True, "task": task}, etag=etag)
 
 
 def _decision_resolve(handler, database, decision_id):

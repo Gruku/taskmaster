@@ -12,6 +12,16 @@ export const EPIC_PALETTE = [
 
 const FALLBACK = '#7c8290'; // var(--ink-3)
 
+export function activeEpic({tasks = [], epics = []} = {}) {
+  const counts = new Map();
+  for (const t of tasks) {
+    if (t.status === 'in-progress' || t.status === 'in-review') counts.set(t.epic, (counts.get(t.epic) || 0) + 1);
+  }
+  const lexical = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+  if (counts.size) return [...counts].sort((a, b) => b[1] - a[1] || lexical(a[0], b[0]))[0][0];
+  return epics.filter(e => e.status === 'active').map(e => e.id).sort(lexical)[0] || epics[0]?.id || '';
+}
+
 /** Build {epicId → hexColor} for the epic list. */
 export function assignEpicColors(epics) {
   const map = {};

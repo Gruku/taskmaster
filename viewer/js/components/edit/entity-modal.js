@@ -7,7 +7,7 @@ import { runValidation } from './schema.js';
 
 const HOST_ID = 'entity-modal-host';
 
-export function openEntityModal({ schema, mode, initialEntity, onSave, onCancel }) {
+export function openEntityModal({ schema, mode, initialEntity, onSave, onCancel, onClose }) {
   const host = document.getElementById(HOST_ID);
   if (!host) throw new Error(`#${HOST_ID} not found in DOM`);
 
@@ -122,6 +122,7 @@ export function openEntityModal({ schema, mode, initialEntity, onSave, onCancel 
     root.remove();
     document.body.classList.remove('em-open');
     document.removeEventListener('keydown', onKeyDown);
+    onClose?.();
   }
 
   function onKeyDown(e) {

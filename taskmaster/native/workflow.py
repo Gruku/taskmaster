@@ -1467,6 +1467,9 @@ def _viewer_precondition(transaction, arguments):
         return
     identity = transaction.snapshot.identity
     current = f"{identity['store_id']}:{int(identity['event_high_water'])}"
+    if expected.startswith("t1:"):
+        from taskmaster.viewer_detail import task_etag
+        current = task_etag(transaction.snapshot.connection, identity["store_id"], arguments["id"], native=True)
     if expected != current:
         raise Conflict(f"stale:{current}")
 

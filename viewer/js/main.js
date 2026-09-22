@@ -96,7 +96,7 @@ async function pollBacklogForever() {
 
   while (true) {
     try {
-      store.setBacklog(await api.backlog());
+      await store.refreshBoard(api);
       consecutiveFailures = 0;
     } catch (e) {
       consecutiveFailures++;

@@ -3,6 +3,14 @@ import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
 import { RightRail, mountRightRail } from '../../js/components/right-rail.js';
 
+test('legacy string blockers render without breaking task detail', () => {
+  const dom = new JSDOM('<!doctype html><body><aside></aside></body>');
+  global.document = dom.window.document;
+  const aside = document.querySelector('aside');
+  mountRightRail(aside, {task: {blockers: 'Waiting for review'}, related: {}, onNavigate() {}});
+  assert.equal(aside.querySelector('.td-blocker').textContent, 'Waiting for review');
+});
+
 test('open() injects rendered content; close() removes it', () => {
   const dom = new JSDOM('<!doctype html><body></body>');
   global.document = dom.window.document;

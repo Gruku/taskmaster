@@ -1,9 +1,9 @@
-import { getTaskFull, getTaskRelatedFull, invalidateTask } from '../store.js';
+import { getTaskDetailFull, invalidateTask } from '../store.js';
 import { mountTaskDetailDocument } from '../components/task-detail-document.js';
 
 export const meta = { title: 'Task Detail', icon: '◧', sidebarKey: 'task' };
 
-export async function mount(root, { params, store, api, prefs, subpath }) {
+export function mount(root, { params, store, api, prefs, subpath }) {
   let id = subpath?.[0] || params?.id || null;
   root.innerHTML = '<div class="td-page td-loading">Loading…</div>';
 
@@ -30,23 +30,10 @@ export async function mount(root, { params, store, api, prefs, subpath }) {
   // re-opens it when clicked without an id.
   if (prefs?.patch) prefs.patch({ ui: { last_task_id: id } });
 
-  let task = null, related = null;
-  try {
-    [task, related] = await Promise.all([
-      getTaskFull(id),
-      getTaskRelatedFull(id),
-    ]);
-  } catch (e) {
-    const empty = document.createElement('div');
-    empty.className = 'td-page td-empty';
-    empty.textContent = `Could not load ${id}: ${e.message}`;
-    root.replaceChildren(empty);
-    return () => {};
-  }
-
   const onNavigate = (toId) => { location.hash = `#/task/${toId}`; };
   const onToggleVariant = async (next) => {
     await api.savePrefs({ screens: { task_detail: { view: next } } });
+    if (disposed) return;
     invalidateTask(id);
     location.reload();
   };
@@ -55,11 +42,31 @@ export async function mount(root, { params, store, api, prefs, subpath }) {
   const urlView = params?.view === 'A' || params?.view === 'B' ? params.view : null;
   const view = urlView || (prefsData?.screens?.task_detail?.view === 'B' ? 'B' : 'A');
   let cleanup;
-  if (view === 'B') {
-    const mod = await import('../components/task-detail-graph.js');
-    cleanup = mod.mountTaskDetailGraph(root, { task, related, prefs: prefsData, onNavigate, onToggleVariant });
-  } else {
-    cleanup = mountTaskDetailDocument(root, { task, related, prefs: prefsData, store, api, onNavigate, onToggleVariant });
+  let disposed = false, generation = 0;
+  async function paint(value, request) {
+    cleanup?.();
+    const ctx = {...value, prefs: prefsData, store, api, onNavigate, onToggleVariant};
+    if (view === 'B') {
+      const mod = await import('../components/task-detail-graph.js');
+      if (!disposed && request === generation) cleanup = mod.mountTaskDetailGraph(root, ctx);
+    } else cleanup = mountTaskDetailDocument(root, ctx);
   }
-  return cleanup;
+  async function refresh() {
+    if (disposed || store.isEditing(id)) return;
+    const request = ++generation;
+    try {
+      const value = await getTaskDetailFull(id, {force: true});
+      if (!disposed && request === generation && !store.isEditing(id)) await paint(value, request);
+    } catch (e) {
+      if (!disposed && request === generation && !store.isEditing(id)) {
+        cleanup?.();
+        root.textContent = `Could not load ${id}: ${e.message}`;
+      }
+    }
+  }
+  const unsubscribe = store.subscribe(`task:${id}`, refresh);
+  // Return cleanup before the first read resolves. The router cannot cancel an
+  // async mount whose disposer has not arrived, and every route shares its root.
+  void refresh();
+  return () => { disposed = true; generation++; unsubscribe(); cleanup?.(); };
 }
