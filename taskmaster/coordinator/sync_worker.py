@@ -138,7 +138,16 @@ def synchronize(owner, *, caller_scope, request_id, import_files=True, through=0
         # No import is awaiting the sole writer when this pause is acquired.
         # Writers queued after this point remain durable intent for the next
         # generation rather than extending this finite barrier indefinitely.
-        if not owner.execution.acquire(timeout=remaining()):
+        # The admission gate stops new dequeues first, so waiting here covers
+        # at most the one command already in flight.
+        owner.pause_writer()
+        paused = False
+        try:
+            paused =owner.execution.acquire(timeout=remaining())
+        finally:
+            if not paused:
+                owner.resume_writer()
+        if not paused:
             pending(None, 'writer busy')
             return result
         try:
@@ -156,6 +165,7 @@ def synchronize(owner, *, caller_scope, request_id, import_files=True, through=0
             except (ValueError, OSError) as exc:
                 pending(None, str(exc))
                 return result
+            owner.checkpoint('sync_published')
             result['notices'].extend(notice for notice in publication['notices'] if notice not in result['notices'])
             if publication['state'] != 'exported':
                 pending(None, 'projection publication incomplete')
@@ -179,6 +189,7 @@ def synchronize(owner, *, caller_scope, request_id, import_files=True, through=0
                         pending(rel, str(exc))
         finally:
             owner.execution.release()
+            owner.resume_writer()
         if not result['notices'] and not result['unresolved']:
             result['state'] = 'synchronized'
             try:

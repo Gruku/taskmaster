@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 import json
 import threading
+import time
 
 import pytest
 
@@ -93,6 +94,7 @@ def test_database_changed_after_parse_rejects_stale_import(root):
 
 def test_generation_pause_is_finite_and_later_admitted_writer_cannot_interleave(root):
     pinned, resume = threading.Event(), threading.Event()
+    seen = {}
     with Coordinator(root) as owner:
         client = Client(root, autostart=False)
         client.sync(files=[REL])
@@ -100,13 +102,19 @@ def test_generation_pause_is_finite_and_later_admitted_writer_cannot_interleave(
             if stage == 'sync_pinned':
                 pinned.set()
                 assert resume.wait(10)
+            elif stage == 'sync_published':
+                seen['file'] = (root / '.taskmaster' / REL).read_text(encoding='utf-8')
+                seen['later_done'] = later.done()
         owner.checkpoint = checkpoint
         with ThreadPoolExecutor(max_workers=2) as pool:
             barrier = pool.submit(client.sync, import_files=False)
             try:
                 assert pinned.wait(10)
                 later = owner.submit(request(client, 'after-pin', 'Later intent'))
-                assert not later.done()
+                deadline = time.monotonic() + 0.5
+                while time.monotonic() < deadline:
+                    assert not later.done(), 'a writer admitted after the pin committed inside the barrier'
+                    time.sleep(0.02)
                 assert not owner.idle_expired(0), 'active synchronization must hold service ownership'
             finally:
                 resume.set()
@@ -114,6 +122,35 @@ def test_generation_pause_is_finite_and_later_admitted_writer_cannot_interleave(
             receipt = later.result(timeout=10)
         assert result['state'] == 'synchronized', result
         assert receipt['commit_seq'] > result['through']
+        assert not seen['later_done'] and 'Later intent' not in seen['file'], seen
+        assert owner.flush(receipt['commit_seq'])['state'] == 'exported'
+        assert 'Later intent' in (root / '.taskmaster' / REL).read_text(encoding='utf-8')
+
+
+def test_sync_reaches_a_finite_target_despite_continuous_unrelated_writes(root):
+    stop = threading.Event()
+    with Coordinator(root) as owner:
+        client = Client(root, autostart=False)
+        client.sync(files=[REL])
+        # Each command holds the writer's execution lock for most of its life, as
+        # a loaded store does; the gap between two commands is microseconds.
+        owner.checkpoint = lambda stage: time.sleep(0.005) if stage == 'admitted' else None
+        def writes(lane):
+            count = 0
+            while not stop.is_set():
+                count += 1
+                owner.submit(request(client, f'stream-{lane}-{count}', f'Stream {lane} {count}')).result(timeout=10)
+            return count
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            streams = [pool.submit(writes, lane) for lane in range(4)]
+            try:
+                time.sleep(0.2)
+                result = owner.sync(caller_scope='stream', request_id='finite', import_files=False, timeout=5)
+            finally:
+                stop.set()
+            counts = [stream.result(timeout=15) for stream in streams]
+        assert result['state'] == 'synchronized', result
+        assert result['captured'] and min(counts) > 1
 
 
 def test_invalid_file_and_missing_file_have_distinct_durable_outcomes(root):
@@ -223,3 +260,47 @@ def test_junctioned_job_file_is_a_per_job_refusal_not_a_drain_failure(root, tmp_
         assert outcome['projection']['state'] == 'pending'
         assert any(REL in notice and 'refused' in notice for notice in outcome['projection']['notices']), outcome
         assert (outside / 'test-epic-001.md').read_bytes() == before
+
+
+def test_admission_gate_holds_queued_commands_while_paused(root):
+    with Coordinator(root) as owner:
+        client = Client(root, autostart=False)
+        owner.pause_writer()
+        try:
+            queued = owner.submit(request(client, 'gated', 'Gated intent'))
+            deadline = time.monotonic() + 0.3
+            while time.monotonic() < deadline:
+                assert not queued.done(), 'the writer admitted a command through a pause'
+                time.sleep(0.02)
+        finally:
+            owner.resume_writer()
+        assert queued.result(timeout=10)['commit_seq']
+
+
+def test_writer_busy_timeout_reports_pending_and_releases_the_pause(root):
+    admitted, release = threading.Event(), threading.Event()
+    with Coordinator(root) as owner:
+        client = Client(root, autostart=False)
+        client.sync(files=[REL])
+        def checkpoint(stage):
+            if stage == 'admitted' and slow and not admitted.is_set():
+                admitted.set()
+                assert release.wait(10)
+        slow, pause = [], owner.pause_writer
+        owner.checkpoint = checkpoint
+        def pause_with_command_in_flight():
+            # The command is admitted after sync.begin and before the pause.
+            slow.append(owner.submit(request(client, 'slow', 'Slow command')))
+            assert admitted.wait(10)
+            pause()
+        owner.pause_writer = pause_with_command_in_flight
+        try:
+            result = owner.sync(caller_scope='busy', request_id='one', import_files=False, timeout=2)
+        finally:
+            release.set()
+        assert slow, result
+        slow = slow[0]
+        assert result['state'] == 'pending' and any('writer busy' in n for n in result['notices']), result
+        assert slow.result(timeout=10)['commit_seq']
+        assert owner.submit(request(client, 'after-busy', 'After busy')).result(timeout=10)['commit_seq']
+        assert owner.pauses == 0

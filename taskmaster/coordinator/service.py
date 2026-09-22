@@ -91,6 +91,11 @@ class Coordinator:
         # N13 import and Git generation pinning share this publisher boundary.
         self.publication = threading.RLock()
         self.execution = threading.RLock()
+        # Explicit admission gate: a lock alone lets a busy writer re-acquire
+        # `execution` ahead of a waiting sync indefinitely. While `pauses` is
+        # non-zero the writer admits nothing new; the in-flight command finishes.
+        self.admission = threading.Condition()
+        self.pauses = 0
         self.active_syncs = 0
         self.stopping, self.export_needed = threading.Event(), threading.Event()
         self.checkpoint = checkpoint or (lambda stage: None)
@@ -197,6 +202,10 @@ class Coordinator:
                     work = self.queue.get(timeout=0.1)
                 except queue.Empty:
                     continue
+                # Gate after dequeue: a command taken during a pause waits here,
+                # outside `execution`, so the pausing sync never waits for it.
+                with self.admission:
+                    self.admission.wait_for(lambda: not self.pauses or self.stopping.is_set())
                 try:
                     self.checkpoint('dequeued')
                     with self.execution:
@@ -232,6 +241,16 @@ class Coordinator:
         finally:
             if connection is not None:
                 connection.close()
+
+    def pause_writer(self):
+        """Stop admitting new commands; pair with `resume_writer`."""
+        with self.admission:
+            self.pauses += 1
+
+    def resume_writer(self):
+        with self.admission:
+            self.pauses -= 1
+            self.admission.notify_all()
 
     def _drain(self, connection, through=None):
         if self.exporter is not None:
@@ -367,6 +386,8 @@ class Coordinator:
         # stranded after the writer has already exited.
         with self.guard:
             self.stopping.set()
+        with self.admission:
+            self.admission.notify_all()
 
     def close(self):
         self.stop()
