@@ -110,6 +110,8 @@ def base(tmp_path_factory):
 
 
 def _fresh(source, tmp_path, monkeypatch):
+    from taskmaster.coordinator import adapter
+    from tests.native_coordinator_helpers import compatibility_client, close_owned
     install_clock(monkeypatch)
 
     @contextmanager
@@ -120,8 +122,15 @@ def _fresh(source, tmp_path, monkeypatch):
             os.remove(leftover)
         point_server_at(monkeypatch, target)
         try:
-            yield
+            # This comparison needs one fake clock on both stores. Retain real
+            # HTTP IPC, but own the coordinator in-process like the twin suite;
+            # an autostarted child cannot inherit the patched clock. Process
+            # startup/recovery has its own real-process acceptance matrix.
+            with monkeypatch.context() as local:
+                local.setattr(adapter, 'Client', compatibility_client)
+                yield
         finally:
+            close_owned()
             store.reset_for_tests()
     return fresh
 
