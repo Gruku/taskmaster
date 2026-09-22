@@ -17,6 +17,40 @@ from . import sync_files
 from .sync_prepare import prepare
 
 
+# sync.finish runs after the caller's budget may be spent on publication; it
+# gets its own short minimum so a synchronized run is not reported pending.
+FINISH_TIMEOUT = 5
+# The completed result is stored durably and must fit one request envelope.
+SUMMARY_BYTES = 256 * 1024
+_WARNINGS_KEPT = 50
+
+
+def summarize(result):
+    """A bounded completed result: receipt keys, not whole receipts.
+
+    Every import keeps file/state/commit_seq/request_id (its receipt key under
+    `receipt_scope`) until the byte budget is reached; the rest are counted in
+    `imports_omitted` and stay inspectable as receipts in that scope.
+    """
+    summary = {key: value for key, value in result.items() if key not in ('imports', 'warnings')}
+    warnings = list(result['warnings'])
+    summary['warnings'] = warnings[:_WARNINGS_KEPT]
+    if len(warnings) > _WARNINGS_KEPT:
+        summary['warnings_omitted'] = len(warnings) - _WARNINGS_KEPT
+    imports, used = [], len(encode(summary).encode()) + 64
+    for item in result['imports']:
+        entry = {key: item[key] for key in ('file', 'state', 'commit_seq', 'request_id') if key in item}
+        size = len(encode(entry).encode()) + 1
+        if used + size > SUMMARY_BYTES:
+            break
+        imports.append(entry)
+        used += size
+    summary['imports'] = imports
+    if len(imports) < len(result['imports']):
+        summary['imports_omitted'] = len(result['imports']) - len(imports)
+    return summary
+
+
 def operation_scope(caller_scope, request_id):
     if not all(isinstance(value, str) and 1 <= len(value) <= 256 for value in (caller_scope, request_id)):
         raise ValueError('sync requires caller_scope and request_id')
@@ -46,12 +80,12 @@ def synchronize(owner, *, caller_scope, request_id, import_files=True, through=0
         if notice not in result['notices']:
             result['notices'].append(notice)
 
-    def execute(operation, key, arguments):
+    def execute(operation, key, arguments, timeout=None):
         envelope = dict(protocol=2, store_id=owner.identity['store_id'], caller_scope=scope,
                         request_id=key, operation=operation, arguments=arguments, expected_revisions=[])
         # Validate before enqueue, including the fully encoded 1 MiB limit.
         contracts.validate(envelope)
-        return owner.submit(envelope).result(timeout=remaining())
+        return owner.submit(envelope).result(timeout=remaining() if timeout is None else timeout)
 
     def current(plan):
         if plan.observation is not None:
@@ -66,6 +100,10 @@ def synchronize(owner, *, caller_scope, request_id, import_files=True, through=0
         if not acquired:
             pending(None, 'publisher busy')
             return result
+        # Refuse an impossible target before anything, including imports, commits.
+        with closing(owner._connect(readonly=True)) as connection:
+            if through > connection.execute('SELECT COALESCE(MAX(seq),0) FROM domain_events').fetchone()[0]:
+                raise ValueError('flush target exceeds committed sequence')
         try:
             execute('sync.begin', 'begin', {'input': options})
         except FutureTimeout:
@@ -157,13 +195,16 @@ def synchronize(owner, *, caller_scope, request_id, import_files=True, through=0
             with closing(owner._connect(readonly=True)) as connection:
                 captured = connection.execute('SELECT COALESCE(MAX(seq),0) FROM domain_events').fetchone()[0]
             if through > captured:
-                raise ValueError('flush target exceeds committed sequence')
+                # Imports may have committed: report, never raise past them.
+                pending(None, 'flush target exceeds committed sequence')
+                return result
             result.update(through=max(through, captured), captured=True)
             owner.checkpoint('sync_pinned')
             try:
                 publication = owner.flush(result['through'], timeout=remaining())
-            except (ValueError, OSError) as exc:
-                pending(None, str(exc))
+            except Exception as exc:
+                # Imports have committed; an export failure is a pending barrier.
+                pending(None, f'projection publication failed: {exc}')
                 return result
             owner.checkpoint('sync_published')
             result['notices'].extend(notice for notice in publication['notices'] if notice not in result['notices'])
@@ -191,12 +232,18 @@ def synchronize(owner, *, caller_scope, request_id, import_files=True, through=0
             owner.execution.release()
             owner.resume_writer()
         if not result['notices'] and not result['unresolved']:
-            result['state'] = 'synchronized'
+            # The caller receives exactly what is stored, so a lost-response
+            # replay returns the same result.
+            completed = summarize(dict(result, state='synchronized'))
             try:
-                execute('sync.finish', 'finish', {'result': result})
+                execute('sync.finish', 'finish', {'result': completed},
+                        timeout=max(remaining(), FINISH_TIMEOUT))
             except FutureTimeout:
-                result['state'] = 'pending'
                 pending(None, 'completion receipt uncertain; retry the same sync id')
+            except Exception as exc:
+                pending(None, f'completion receipt not recorded: {exc}; retry the same sync id')
+            else:
+                return completed
         return result
     finally:
         if acquired:

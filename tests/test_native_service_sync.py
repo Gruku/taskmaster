@@ -38,7 +38,7 @@ def test_explicit_sync_imports_and_exports_through_post_import_target(root):
         assert title(root) == 'Authored via file'
         assert result['imports'][0]['state'] == 'accepted'
         assert result['through'] >= result['imports'][0]['commit_seq']
-        receipt = client.receipt(result['imports'][0]['caller_scope'], result['imports'][0]['request_id'])
+        receipt = client.receipt(result["receipt_scope"], result['imports'][0]['request_id'])
         assert receipt['state'] == 'committed'
         assert not owner.active_syncs
 
@@ -304,3 +304,130 @@ def test_writer_busy_timeout_reports_pending_and_releases_the_pause(root):
         assert slow.result(timeout=10)['commit_seq']
         assert owner.submit(request(client, 'after-busy', 'After busy')).result(timeout=10)['commit_seq']
         assert owner.pauses == 0
+
+
+@pytest.mark.allow_projection_bypass  # the checkpoint edits the file on the coordinator's stack
+def test_external_edit_after_publication_is_reported_pending(root):
+    with Coordinator(root) as owner:
+        client = Client(root, autostart=False)
+        client.sync(files=[REL])
+        path = root / '.taskmaster' / REL
+        def checkpoint(stage):
+            if stage == 'sync_published':
+                path.write_bytes(path.read_bytes().replace(b'Service task', b'Edited after flush'))
+        owner.checkpoint = checkpoint
+        result = client.sync(files=[REL], caller_scope='recheck', request_id='one')
+        assert result['state'] == 'pending' and REL in result['unresolved'], result
+        assert client.sync_status('recheck', 'one')['state'] != 'complete'
+        assert b'Edited after flush' in path.read_bytes()
+
+
+@pytest.mark.parametrize('failure', ['pending', 'oserror', 'runtime'])
+def test_incomplete_export_never_records_a_completed_sync(root, failure):
+    def exporter(connection, backlog_dir, through=None):
+        if failure == 'oserror':
+            raise OSError('disk refused')
+        if failure == 'runtime':
+            raise RuntimeError('exporter bug')
+        return ['export pending: stub']
+    with Coordinator(root, exporter=exporter) as owner:
+        client = Client(root, autostart=False)
+        owner.submit(request(client, 'owed', 'Owed export')).result(timeout=10)
+        result = owner.sync(caller_scope='stub', request_id=failure, import_files=False, timeout=1)
+        assert result['state'] == 'pending' and result['notices'], result
+        assert client.sync_status('stub', failure)['state'] != 'complete'
+
+
+def test_flush_target_beyond_committed_sequence_is_refused_before_any_import(root):
+    with Coordinator(root) as owner:
+        client = Client(root, autostart=False)
+        client.sync(files=[REL])
+        edit(root, 'Must not import')
+        with pytest.raises(ValueError, match='exceeds committed'):
+            owner.sync(caller_scope='beyond', request_id='one', files=[REL], through=10**9)
+        assert title(root) == 'Service task'
+
+
+def test_begin_outcome_uncertain_is_pending(root):
+    admitted, release = threading.Event(), threading.Event()
+    with Coordinator(root) as owner:
+        client = Client(root, autostart=False)
+        def checkpoint(stage):
+            if stage == 'admitted' and not admitted.is_set():
+                admitted.set()
+                assert release.wait(10)
+        owner.checkpoint = checkpoint
+        blocker = owner.submit(request(client, 'blocker', 'Blocking command'))
+        assert admitted.wait(10)
+        try:
+            result = owner.sync(caller_scope='uncertain', request_id='begin', import_files=False, timeout=2)
+        finally:
+            release.set()
+        assert result['state'] == 'pending' and any('begin outcome uncertain' in n for n in result['notices']), result
+        blocker.result(timeout=10)
+
+
+def test_import_outcome_uncertain_is_pending_and_names_the_receipt(root):
+    release = threading.Event()
+    with Coordinator(root) as owner:
+        client = Client(root, autostart=False)
+        client.sync(files=[REL])
+        edit(root, 'Slow import')
+        def checkpoint(stage):
+            if stage == 'sync_prepared':
+                owner.checkpoint = lambda inner: release.wait(10) if inner == 'admitted' else None
+        owner.checkpoint = checkpoint
+        try:
+            result = owner.sync(caller_scope='uncertain', request_id='import', files=[REL], timeout=1.5)
+        finally:
+            release.set()
+        assert result['state'] == 'pending' and REL in result['unresolved'], result
+        assert result['imports'][0]['state'] == 'uncertain' and result['imports'][0]['may_have_committed']
+
+
+def test_completion_receipt_gets_its_own_budget_after_a_slow_publication(root):
+    with Coordinator(root) as owner:
+        client = Client(root, autostart=False)
+        client.sync(files=[REL])
+        owner.checkpoint = lambda stage: time.sleep(1.2) if stage == 'sync_published' else None
+        result = owner.sync(caller_scope='budget', request_id='one', import_files=False, timeout=1)
+        assert result['state'] == 'synchronized', result
+        assert client.sync_status('budget', 'one')['result'] == result
+
+
+@pytest.mark.parametrize('failure', ['timeout', 'rejected'])
+def test_completion_receipt_failure_is_pending(root, monkeypatch, failure):
+    from concurrent.futures import Future
+    from taskmaster.coordinator import sync_worker
+    monkeypatch.setattr(sync_worker, 'FINISH_TIMEOUT', 0.3)
+    with Coordinator(root) as owner:
+        client = Client(root, autostart=False)
+        client.sync(files=[REL])
+        original = owner.submit
+        def submit(envelope):
+            if envelope['operation'] != 'sync.finish':
+                return original(envelope)
+            if failure == 'rejected':
+                raise ValueError('encoded request exceeds limit')
+            return Future()
+        owner.submit = submit
+        result = owner.sync(caller_scope='finish', request_id=failure, import_files=False, timeout=5)
+        assert result['state'] == 'pending' and result['notices'], result
+        assert client.sync_status('finish', failure)['state'] != 'complete'
+
+
+def test_completed_result_is_bounded_and_counts_omitted_receipts():
+    from taskmaster.coordinator import sync_worker
+    from taskmaster.coordinator.protocol import MAX_MESSAGE_BYTES
+    from taskmaster.native.migrate import encode
+    result = dict(state='synchronized', through=5, captured=True, observed=0, unresolved=[], notices=[],
+                  warnings=[f'duplicate import path skipped: tasks/x-{n}.md' for n in range(5000)],
+                  caller_scope='c', request_id='r', receipt_scope='sync-' + 'a' * 64, import_files=True,
+                  imports=[dict(file=f'tasks/t-{n:05}.md', state='accepted', reason='r' * 4096, commit_seq=n,
+                                caller_scope='sync-' + 'a' * 64, request_id='b' * 64) for n in range(10000)])
+    summary = sync_worker.summarize(result)
+    assert len(encode({'result': summary}).encode()) < MAX_MESSAGE_BYTES // 2
+    assert summary['state'] == 'synchronized' and summary['through'] == 5
+    assert summary['imports'] == [{'file': item['file'], 'state': 'accepted', 'commit_seq': item['commit_seq'],
+                                   'request_id': item['request_id']} for item in result['imports']][:len(summary['imports'])]
+    assert summary['imports_omitted'] == 10000 - len(summary['imports'])
