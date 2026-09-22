@@ -10380,6 +10380,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
         # may set them.
         _TX_STATE.last_seq = None
         _TX_STATE.export_warnings = []
+        from taskmaster.coordinator.protocol import ServiceUnavailable
         try:
             super().handle_one_request()
         except (store.LegacyLayoutError, UnsupportedStoreError) as exc:
@@ -10393,6 +10394,10 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 self._send_json(409, {"ok": False, "error": str(exc)})
             except Exception:
                 pass
+
+        except ServiceUnavailable as exc:
+            self.close_connection = True
+            self._send_json(503, {"ok": False, **exc.public_payload()})
 
     def _native(self):
         """This request's native database, or None on a legacy store (checked once)."""
@@ -11746,13 +11751,17 @@ def backlog_linear(
     default_workspace: bool = True,
     tracker_id: str = "",
     target_id: str = "",
+    request_id: str = "",
+    caller_scope: str = "",
 ) -> str:
     """Drive Taskmaster's Linear sync. Route through the taskmaster:linear skill.
 
     Params by action: probe(token_env); bootstrap_apply(workspace_alias, team_id,
     token_env, status_mapping, priority_mapping, default_workspace);
     link(task_id, external_key, workspace_alias); unlink(task_id); list();
-    show(tracker_id); status(); retry(target_id).
+    show(tracker_id); status(); retry(target_id, request_id, caller_scope).
+    Native retry returns its request_id/caller_scope; retain both and the target
+    to inspect a pending result or recover a lost response without a new push.
     """
     if action == "probe":
         return backlog_linear_probe(token_env)
@@ -11772,6 +11781,8 @@ def backlog_linear(
     if action == "status":
         return backlog_linear_status()
     if action == "retry":
+        if request_id or caller_scope:
+            return json.dumps({"error": "durable Linear retry IDs require a native coordinator; legacy retry was not started"})
         return backlog_linear_retry(target_id)
     return json.dumps({"error": f"unknown action {action!r}"})
 

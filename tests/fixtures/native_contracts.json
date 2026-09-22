@@ -2971,7 +2971,7 @@
         ]
       },
       "category": "action-router",
-      "documentation": "Drive Taskmaster's Linear sync. Route through the taskmaster:linear skill.\n\nParams by action: probe(token_env); bootstrap_apply(workspace_alias, team_id,\ntoken_env, status_mapping, priority_mapping, default_workspace);\nlink(task_id, external_key, workspace_alias); unlink(task_id); list();\nshow(tracker_id); status(); retry(target_id).",
+      "documentation": "Drive Taskmaster's Linear sync. Route through the taskmaster:linear skill.\n\nParams by action: probe(token_env); bootstrap_apply(workspace_alias, team_id,\ntoken_env, status_mapping, priority_mapping, default_workspace);\nlink(task_id, external_key, workspace_alias); unlink(task_id); list();\nshow(tracker_id); status(); retry(target_id, request_id, caller_scope).\nNative retry returns its request_id/caller_scope; retain both and the target\nto inspect a pending result or recover a lost response without a new push.",
       "parameters": [
         {
           "mode": "positional",
@@ -3056,6 +3056,22 @@
           "default_value": "",
           "mode": "positional",
           "name": "target_id",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "request_id",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "caller_scope",
           "required": false,
           "type": "str"
         }

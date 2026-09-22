@@ -278,10 +278,10 @@ def project_init(call, *, name, slug):
 # ── Linear (local actions only) ─────────────────────────────────────────────
 
 
-@adapter("backlog_linear", actions=("probe", "link", "unlink", "list", "show", "status"),
+@adapter("backlog_linear", actions=("probe", "link", "unlink", "list", "show", "status", "retry"),
          unknown=lambda action: json.dumps({"error": f"unknown action {action!r}"}))
 def linear(call, *, action, task_id, external_key, workspace_alias, token_env, team_id, status_mapping,
-           priority_mapping, default_workspace, tracker_id, target_id):
+           priority_mapping, default_workspace, tracker_id, target_id, request_id, caller_scope):
     if action == "probe":
         # An external query against Linear's API; it reads no store and no projection.
         return bs.backlog_linear_probe(token_env)
@@ -298,6 +298,12 @@ def linear(call, *, action, task_id, external_key, workspace_alias, token_env, t
             return bs._linear_show_text(reads.rows_only(snapshot), tracker_id)
     if action == "status":
         return _linear_status(call, backlog)
+    if action == 'retry':
+        try:
+            return json.dumps(call.client.linear_retry(caller_scope=caller_scope or call.session,
+                                                      request_id=request_id or None, target_id=target_id))
+        except (ValueError, KeyError) as exc:
+            return json.dumps({'error': str(exc)})
     if not backlog.exists():
         return json.dumps({"error": "No backlog found."})
     if action == "unlink":

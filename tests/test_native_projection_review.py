@@ -21,7 +21,8 @@ import pytest
 
 from taskmaster import backlog_server as bs
 from taskmaster.native import projection as outbox
-from taskmaster.native_routing import projection, runtime
+from taskmaster.native_routing import projection
+from tests import native_projection_oracle as runtime
 from native_twins import commit_only, make_twins, native_connection, native_database
 from test_native_projection_faults import assert_lossless
 
@@ -40,7 +41,7 @@ def _seed():
 
 @pytest.fixture
 def twins(tmp_path, monkeypatch):
-    return make_twins(tmp_path, monkeypatch, _seed)
+    return make_twins(tmp_path, monkeypatch, _seed, engine_oracle=True)
 
 
 def _dir(root):
@@ -107,7 +108,8 @@ def test_a_removal_never_deletes_an_edit_made_before_it(twins, monkeypatch, stag
 CHILD = textwrap.dedent("""
     import json, os, sys
     from pathlib import Path
-    from taskmaster.native_routing import projection, runtime
+    from taskmaster.native_routing import projection
+    from tests import native_projection_oracle as runtime
     root, stage, rel, edit = sys.argv[1:5]
     path = Path(root) / ".taskmaster" / rel
 
@@ -133,7 +135,9 @@ def test_a_crash_while_the_file_is_aside_is_restored_by_recovery(twins, monkeypa
     path = _dir(root) / LIVE
     if variant == "exit":
         done = subprocess.run([sys.executable, "-c", CHILD, str(root), "aside", LIVE, "no"],
-                              capture_output=True, text=True, timeout=120)
+                              capture_output=True, text=True, timeout=120,
+                              env=runtime.child_environment(),
+                              creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         assert done.returncode == 17, done.stderr[-2000:]
         monkeypatch.setitem(projection.HOOKS, "clock", lambda: time.time() + outbox.LEASE_SECONDS + 1)
     else:
@@ -156,7 +160,9 @@ def test_an_edit_caught_aside_by_a_crash_is_restored_and_flagged(twins, monkeypa
     root = twins.native
     path = _dir(root) / LIVE
     done = subprocess.run([sys.executable, "-c", CHILD, str(root), "aside", LIVE, "yes"],
-                          capture_output=True, text=True, timeout=120)
+                          capture_output=True, text=True, timeout=120,
+                          env=runtime.child_environment(),
+                          creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     assert done.returncode == 17, done.stderr[-2000:]
     assert not path.exists()
     monkeypatch.setitem(projection.HOOKS, "clock", lambda: time.time() + outbox.LEASE_SECONDS + 1)

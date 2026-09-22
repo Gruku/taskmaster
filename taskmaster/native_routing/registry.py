@@ -82,9 +82,6 @@ GUIDANCE: dict[tuple[str, "str | None"], str] = {
         f"{_NATIVE}, and adding a Linear workspace still writes `linear.yaml` under the legacy store's "
         "configuration lock. Add the workspace to `.taskmaster/linear.yaml` by hand, using the team "
         "and state ids from `backlog_linear(action=\"probe\")`; `backlog_validate` checks the file."),
-    ("backlog_linear", "retry"): (
-        f"{_NATIVE}, and pushing queued changes to Linear needs native synchronization, which has not "
-        "shipped yet. Queued changes are kept; `backlog_linear(action=\"status\")` lists them."),
 }
 # Routers that answer errors as JSON rather than text.
 JSON_ERRORS = frozenset({"backlog_changes_since", "backlog_claim", "backlog_context", "backlog_link",
@@ -160,4 +157,8 @@ def route(tool: str, legacy: Callable, backlog_path, session: str, args, kwargs)
         return json.dumps({"error": str(exc)}) if tool in JSON_ERRORS else f"Error: {exc}"
     if database is None:
         return NotImplemented
-    return dispatch(tool, legacy, database, database.parent.parent, session, args, kwargs)
+    from taskmaster.coordinator.protocol import ServiceUnavailable
+    try:
+        return dispatch(tool, legacy, database, database.parent.parent, session, args, kwargs)
+    except ServiceUnavailable as exc:
+        return json.dumps(exc.public_payload()) if tool in JSON_ERRORS else f"Error: {exc}"

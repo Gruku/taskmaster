@@ -1,0 +1,182 @@
+"""Thin authenticated coordinator client; no direct-writer fallback."""
+from __future__ import annotations
+
+import http.client
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import threading
+import time
+import uuid
+
+from taskmaster.admission import UnsupportedStoreError
+from taskmaster.native import contracts
+from .ownership import verify_private
+from .protocol import (HandshakeError, MAX_RESPONSE_BYTES, ServiceUnavailable,
+                               encode, identify)
+
+_START_LOCK = threading.Lock()
+
+
+def _launch(root):
+    package_root = Path(__file__).resolve().parents[2]
+    environment = dict(os.environ, TASKMASTER_ROOT=str(root))
+    environment['PYTHONPATH'] = str(package_root) + (os.pathsep + environment['PYTHONPATH'] if environment.get('PYTHONPATH') else '')
+    flags = ({'creationflags': subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP}
+             if os.name == 'nt' else {'start_new_session': True})
+    return subprocess.Popen([sys.executable, '-m', 'taskmaster.coordinator.service', '--root', str(root)],
+                            cwd=package_root, env=environment, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **flags)
+
+
+class Client:
+    def __init__(self, root, *, autostart=True, visibility='native', timeout=30):
+        self.root = Path(root).resolve(strict=True)
+        self.identity = identify(self.root)
+        if visibility not in ('native', 'legacy'):
+            raise ValueError('visibility must be native or legacy')
+        self.autostart, self.visibility, self.timeout = autostart, visibility, timeout
+
+    def _discovery(self):
+        path = self.root / '.taskmaster/local/coordinator/discovery.json'
+        try:
+            if not path.exists():
+                raise FileNotFoundError(path)
+            verify_private(path.parent)
+            verify_private(path)
+            with path.open('rb') as stream:
+                raw = stream.read(8193)
+            if len(raw) > 8192:
+                raise HandshakeError('oversized coordinator discovery')
+            record = json.loads(raw)
+        except (ValueError, UnicodeError) as exc:
+            raise HandshakeError('invalid coordinator discovery; inspect service recovery status') from exc
+        except PermissionError as exc:
+            raise HandshakeError('coordinator discovery permissions are unsafe or inaccessible; no writer fallback') from exc
+        if not isinstance(record, dict) or any(record.get(k) != v for k, v in self.identity.items()):
+            raise HandshakeError('discovery root/store/schema/protocol mismatch; no writer fallback')
+        if (type(record.get('port')) is not int or not 0 < record['port'] < 65536 or
+                not isinstance(record.get('token'), str) or len(record['token']) != 64 or
+                not isinstance(record.get('nonce'), str) or len(record['nonce']) != 48):
+            raise HandshakeError('invalid coordinator address or generation')
+        return record
+
+    def _send(self, record, method, **arguments):
+        payload = encode(dict(identity=dict(self.identity, nonce=record['nonce']), method=method, **arguments))
+        connection = http.client.HTTPConnection('127.0.0.1', record['port'], timeout=self.timeout)
+        try:
+            connection.request('POST', '/rpc', body=payload,
+                               headers={'Content-Type': 'application/json', 'Authorization': f"Bearer {record['token']}"})
+            response = connection.getresponse()
+            try:
+                length = int(response.getheader('Content-Length', ''))
+            except ValueError as exc:
+                raise http.client.HTTPException('coordinator response has no valid length') from exc
+            if not 0 < length <= MAX_RESPONSE_BYTES:
+                raise ServiceUnavailable('invalid coordinator response length; command may have committed; retain request_id')
+            raw = response.read(MAX_RESPONSE_BYTES + 1)
+            # Bounded HTTPResponse.read may return a short body without raising
+            # IncompleteRead. Treat truncation/malformed replies as ambiguous
+            # transport failures so the identical durable request is retried.
+            if len(raw) != length:
+                raise http.client.HTTPException('incomplete coordinator response')
+            try:
+                value = json.loads(raw)
+            except (ValueError, UnicodeError) as exc:
+                raise http.client.HTTPException('malformed coordinator response') from exc
+            if not isinstance(value, dict) or (response.status == 200 and 'result' not in value):
+                raise http.client.HTTPException('invalid coordinator response shape')
+            if response.status != 200:
+                errors = {'Conflict': contracts.Conflict, 'CancelledBeforeExecution': contracts.CancelledBeforeExecution,
+                          'ValueError': ValueError, 'KeyError': KeyError, 'HandshakeError': HandshakeError,
+                          'UnsupportedStoreError': UnsupportedStoreError}
+                raise errors.get(value.get('type'), ServiceUnavailable)(value.get('error', 'coordinator refused request'))
+            return value['result']
+        finally:
+            connection.close()
+
+    def _ready(self):
+        try:
+            record = self._discovery()
+            self._send(record, 'status')
+            return record
+        except (FileNotFoundError, ConnectionError, TimeoutError, http.client.HTTPException):
+            if not self.autostart:
+                raise ServiceUnavailable('repository coordinator unavailable; start it or retry later') from None
+        with _START_LOCK:
+            # Another client in this process may already have completed startup.
+            try:
+                record = self._discovery()
+                self._send(record, 'status')
+                return record
+            except (FileNotFoundError, ConnectionError, TimeoutError, http.client.HTTPException):
+                pass
+            child = _launch(self.root)
+            deadline = time.monotonic() + min(self.timeout, 15)
+            while time.monotonic() < deadline:
+                try:
+                    record = self._discovery()
+                    self._send(record, 'status')
+                    child.poll()  # Reap a startup loser, never signal an arbitrary PID.
+                    return record
+                except (FileNotFoundError, ConnectionError, TimeoutError, http.client.HTTPException):
+                    if child.poll() not in (None, 0):
+                        break
+                    time.sleep(0.05)
+        raise ServiceUnavailable('coordinator startup unavailable; inspect .taskmaster/local/coordinator/service.log; no writer fallback')
+
+    def call(self, method, **arguments):
+        # Retain identical arguments across transport retries. In particular,
+        # never mint a new command request_id after an ambiguous disconnect.
+        for attempt in range(2):
+            record = self._ready()
+            try:
+                return self._send(record, method, **arguments)
+            except (ConnectionError, TimeoutError, http.client.HTTPException):
+                if attempt:
+                    raise ServiceUnavailable('coordinator disconnected; retry the same request_id to recover its receipt') from None
+
+    def execute(self, envelope):
+        request, _ = contracts.validate(envelope)
+        if request.get('request_id') is None:
+            raise ValueError('IPC commands require a durable request_id')
+        try:
+            return self.call('execute', envelope=request, visibility=self.visibility)
+        except ServiceUnavailable as exc:
+            # Public adapters may have minted the ID on behalf of the caller;
+            # expose it on ambiguity so the durable receipt is inspectable.
+            raise type(exc)(
+                f"{exc}; retry the same request to recover its receipt; "
+                f"request_id={request['request_id']!r}, caller_scope={request['caller_scope']!r}",
+                request_id=request['request_id'], caller_scope=request['caller_scope'],
+                may_have_committed=exc.may_have_committed) from exc
+
+    def status(self):
+        return self.call('status')
+
+    def receipt(self, caller_scope, request_id):
+        return self.call('receipt', caller_scope=caller_scope, request_id=request_id)
+
+    def linear_retry(self, *, caller_scope, request_id=None, target_id=''):
+        request_id = uuid.uuid4().hex if request_id is None else request_id
+        if not all(isinstance(value, str) and 1 <= len(value) <= 256 for value in (caller_scope, request_id)):
+            raise ValueError('Linear retry requires caller_scope and request_id')
+        if target_id:
+            contracts._identifier(target_id, 'target_id')
+        try:
+            return self.call('linear_retry', caller_scope=caller_scope, request_id=request_id, target_id=target_id)
+        except ServiceUnavailable as exc:
+            raise type(exc)(f'{exc}; retry the same request; request_id={request_id!r}, caller_scope={caller_scope!r}',
+                            request_id=request_id, caller_scope=caller_scope,
+                            may_have_committed=exc.may_have_committed) from exc
+
+    def flush(self, through):
+        return self.call('flush', through=through)
+
+    def cancel(self, caller_scope, request_id):
+        return self.call('cancel', caller_scope=caller_scope, request_id=request_id)
+
+    def shutdown(self):
+        return self.call('shutdown')

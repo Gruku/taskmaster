@@ -440,7 +440,7 @@ def _enqueue_linear(transaction, task_id, task):
     if existing:
         seq, stored_tracker, stored_payload = existing
         connection.execute("UPDATE linear_queue SET tracker_id=?,payload=? WHERE seq=?",
-                           (stored_tracker or tracker_id, stored_payload or payload, seq))
+                           (tracker_id, stored_payload or payload, seq))
         return
     connection.execute("INSERT INTO linear_queue(op,target_id,tracker_id,payload,state,attempts,last_error) "
                        "VALUES('task_upsert',?,?,?,'pending',0,NULL)", (task_id, str(tracker_id), payload))
@@ -1390,6 +1390,11 @@ def _linear_link(transaction, arguments):
         "", requested_id=tracker_id)
     task["tracker_id"] = tracker_id
     transaction.replace("task", task_id, task, entity["body"], before_entity=entity)
+    # Linking alone is local, as on legacy. Transfer only an already-owed push
+    # when relinking: a claimed old tracker must not consume the new linkage.
+    if transaction.connection.execute("SELECT 1 FROM linear_queue WHERE target_id=? AND op='task_upsert' "
+                                      "AND state IN ('pending','claimed') LIMIT 1", (task_id,)).fetchone():
+        _enqueue_linear(transaction, task_id, task)
     return tracker_id
 
 

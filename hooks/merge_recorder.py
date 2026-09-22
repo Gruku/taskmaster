@@ -109,6 +109,7 @@ def main() -> int:
         subprocess.run(
             [sys.executable or "python", str(stamp_script), src],
             capture_output=True,
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
         )
     except Exception:
         pass

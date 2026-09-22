@@ -304,6 +304,8 @@ def execute(connection: sqlite3.Connection, envelope, *, cancelled=lambda: False
         outcome = {"operation": request["operation"], "request_id": request.get("request_id"), "store_id": identity["store_id"],
                    "affected": list(transaction.affected.values()), "commit_seq": transaction.seq,
                    "projection_state": "pending" if transaction.affected else "unchanged", "work": transaction.counters}
+        if hasattr(transaction, 'result'):
+            outcome['result'] = transaction.result
         receipts.save(connection, request, fingerprint, outcome)
         checkpoint("receipt")
         if transaction.affected:

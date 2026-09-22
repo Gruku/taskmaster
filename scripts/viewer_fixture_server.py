@@ -144,19 +144,26 @@ def main():
         return
     root = seed(args.store)
     while True:
-        server, port = bs._make_server(host="127.0.0.1", port=args.port)
-        print(json.dumps({"root": str(root), "port": port}), flush=True)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
+        from taskmaster.coordinator.service import Coordinator
+        owner = Coordinator(root).start() if args.store == 'native' else None
+        server = thread = None
         try:
+            server, port = bs._make_server(host="127.0.0.1", port=args.port)
+            print(json.dumps({"root": str(root), "port": port}), flush=True)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
             while not (root / '.swap-request').exists():
                 thread.join(0.1)
                 if not thread.is_alive():
                     return
         finally:
-            server.shutdown()
-            server.server_close()
-            thread.join()
+            if server is not None:
+                if thread is not None and thread.is_alive():
+                    server.shutdown()
+                    thread.join()
+                server.server_close()
+            if owner is not None:
+                owner.close()
         # Rebind only after every request on the old server has stopped.
         store.reset_for_tests()
         root = seed(args.store)

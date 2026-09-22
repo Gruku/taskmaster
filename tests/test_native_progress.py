@@ -22,7 +22,8 @@ from taskmaster import backlog_server as bs
 from taskmaster import store
 from taskmaster.native import commands
 from taskmaster.native import projection as outbox
-from taskmaster.native_routing import progress, reads, runtime
+from taskmaster.native_routing import progress, reads
+from tests import native_projection_oracle as runtime
 from native_twins import commit_only, make_twins, native_connection, native_database
 
 LOG_BEGIN, LOG_END = "<!-- taskmaster:session-log -->", "<!-- /taskmaster:session-log -->"
@@ -81,12 +82,12 @@ def _seed_with_history():
 
 @pytest.fixture
 def twins(tmp_path, monkeypatch):
-    return make_twins(tmp_path, monkeypatch, _seed)
+    return make_twins(tmp_path, monkeypatch, _seed, engine_oracle=True)
 
 
 @pytest.fixture
 def history(tmp_path, monkeypatch):
-    return make_twins(tmp_path, monkeypatch, _seed_with_history)
+    return make_twins(tmp_path, monkeypatch, _seed_with_history, engine_oracle=True)
 
 
 def _progress_path(root):
@@ -276,7 +277,8 @@ def test_the_pre_n11_native_queue_is_written_before_newer_rows_then_dropped(twin
 CHILD = textwrap.dedent("""
     import json, os, sys
     from pathlib import Path
-    from taskmaster.native_routing import progress, runtime
+    from taskmaster.native_routing import progress
+    from tests import native_projection_oracle as runtime
     root, stage, operation, arguments = sys.argv[1:5]
 
     def checkpoint(at):
@@ -302,7 +304,9 @@ def test_a_crash_between_the_write_and_the_move_rewrites_the_identical_file(twin
     arguments = {"id": "test-epic-001", "changelog": PARAGRAPH}
     if variant == "exit":
         done = subprocess.run([sys.executable, "-c", CHILD, str(root), "progress_written", "task.complete",
-                               json.dumps(arguments)], capture_output=True, text=True, timeout=120)
+                               json.dumps(arguments)], capture_output=True, text=True, timeout=120,
+                              env=runtime.child_environment(),
+                              creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         assert done.returncode == 17, (done.returncode, done.stderr[-2000:])
         import time
         fake_time.at = time.time()  # the child leased on the real clock
@@ -361,7 +365,9 @@ def test_a_killed_process_at_every_checkpoint_loses_nothing_and_leaves_no_temp(t
     root = twins.native
     arguments = {"id": "test-epic-001", "changelog": PARAGRAPH}
     done = subprocess.run([sys.executable, "-c", CHILD, str(root), stage, "task.complete",
-                           json.dumps(arguments)], capture_output=True, text=True, timeout=120)
+                           json.dumps(arguments)], capture_output=True, text=True, timeout=120,
+                          env=runtime.child_environment(),
+                          creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     assert done.returncode == 17, (done.returncode, done.stderr[-2000:])
     if stage == "progress_temp_written":
         assert _temps(root) == ["PROGRESS.md.tmp.child"]  # the stray this kill leaves
@@ -607,7 +613,7 @@ def test_store_status_says_whether_the_exporter_lease_holder_is_alive(twins):
     # machines, cannot be told apart from the holder itself.
     assert "generation 3" in line and f"pid {os.getpid()} running on this host" in line, line
     finished = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"], capture_output=True,
-                              text=True, timeout=60)
+                              text=True, timeout=60, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     dead = int(finished.stdout.strip())
     _put(root, outbox.EXPORTER_KEY, {"owner": f"peer:abc:{dead}@{host}", "generation": 4,
                                      "until": time.time() + 25})
