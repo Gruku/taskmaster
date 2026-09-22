@@ -55,7 +55,7 @@ CLAIM_FIELDS = (HOLDER_FIELD, EXPIRES_FIELD, EXPIRES_FOR_FIELD)
 
 def without_claim_fields(payload: dict) -> dict:
     """A write payload with every claim field dropped (viewer writes)."""
-    return {key: value for key, value in payload.items() if key not in CLAIM_FIELDS}
+    return {key: value for key, value in payload.items() if key not in (*CLAIM_FIELDS, "claim")}
 
 # Four hours (D6 ii): the unit of work here is a task carried across a long
 # session, not a job in a queue. A short TTL would expire claims mid-review-gate
@@ -128,7 +128,7 @@ def session_row(connection, session: str):
     """The `sessions` row for a session, or None. `sessions` is retained local
     state on a native store (`schema.RETAINED_TABLES`) and the same table on a
     legacy one, so one query serves both."""
-    if not session:
+    if not session or connection is None:
         return None
     row = connection.execute(
         "SELECT session,pid,host,started,last_seen,cwd,current_tool FROM sessions WHERE session=?",

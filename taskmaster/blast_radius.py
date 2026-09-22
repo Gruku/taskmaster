@@ -48,6 +48,7 @@ def get_changed_files(branch: str, base: str, cwd: Path) -> list[str]:
             text=True,
             timeout=30,
             cwd=cwd,
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
         )
         if result.returncode != 0:
             return []
@@ -330,6 +331,7 @@ def has_export_changes(file_rel: str, base_branch: str, project_root: Path) -> b
             text=True,
             timeout=30,
             cwd=project_root,
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
         )
         if result.returncode != 0:
             return False

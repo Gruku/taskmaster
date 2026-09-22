@@ -279,11 +279,13 @@ def test_viewer_archive_records_an_explicit_store_archive(viewer):
     assert (root / ".taskmaster" / "tasks" / "archive" / "test-epic-001.md").exists()
 
 
-def test_viewer_etag_is_the_store_creation_token_and_sequence(viewer):
+def test_viewer_task_etag_is_the_store_creation_token_and_row_sequence(viewer):
     base, root = viewer
     etag = _etag(base)
     status = store.status(_bp(root))
-    assert etag == f"{status.creation_token}:{status.max_seq}"
+    seq = store.open_store(_bp(root)).connection.execute(
+        "SELECT updated_seq FROM entities WHERE kind='task' AND id='test-epic-001'").fetchone()[0]
+    assert etag == f"t1:{status.creation_token}:{seq}"
 
 
 def test_viewer_etag_advances_after_a_write(viewer):

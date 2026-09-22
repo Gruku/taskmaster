@@ -2,6 +2,10 @@
 """Shared pytest fixtures for taskmaster tests."""
 from __future__ import annotations
 
+import functools
+import inspect
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -24,11 +28,44 @@ def pytest_configure(config):
         "markers",
         "allow_projection_bypass: disable the store projection write guard",
     )
+    # Configuration runs in the controller before xdist starts its workers;
+    # an autouse fixture alone starts too late to hide those first children.
+    config._taskmaster_child_patch = _windowless_test_children()
+
+
+def pytest_unconfigure(config):
+    patch = getattr(config, '_taskmaster_child_patch', None)
+    if patch is not None:
+        patch.undo()
 
 # Make `import skill_budget_helper` work from tests that live in this directory.
 TESTS_ROOT = Path(__file__).resolve().parent
 if str(TESTS_ROOT) not in sys.path:
     sys.path.insert(0, str(TESTS_ROOT))
+
+
+def _windowless_test_children():
+    """Test-created console helpers stay invisible; process semantics are intact.
+
+    The outer runner being hidden does not make every descendant windowless.
+    Preserve explicit detached/new-console tests, existing flags and Popen's
+    class identity; only supply the no-window flag to ordinary Windows children.
+    Production launch flags are tested separately with mocked subprocess.run.
+    """
+    if os.name != 'nt':
+        return None
+    original = subprocess.Popen.__init__
+    signature = inspect.signature(original)
+    @functools.wraps(original)
+    def initialize(process, *args, **kwargs):
+        bound = signature.bind_partial(process, *args, **kwargs)
+        flags = bound.arguments.get('creationflags', 0)
+        if not flags & (subprocess.CREATE_NEW_CONSOLE | subprocess.DETACHED_PROCESS):
+            bound.arguments['creationflags'] = flags | subprocess.CREATE_NO_WINDOW
+        original(*bound.args, **bound.kwargs)
+    patch = pytest.MonkeyPatch()
+    patch.setattr(subprocess.Popen, '__init__', initialize)
+    return patch
 
 
 @pytest.fixture(autouse=True)
@@ -47,6 +84,18 @@ def _store_isolation():
     finally:
         store.reset_for_tests()
         store.close_thread_connection()
+
+
+@pytest.fixture(autouse=True)
+def _native_coordinator_isolation(monkeypatch):
+    # The monkeypatch dependency keeps fixture clocks installed until every
+    # in-process coordinator thread has stopped. Only test-owned services close.
+    from tests.native_coordinator_helpers import close_owned
+    close_owned()
+    try:
+        yield
+    finally:
+        close_owned()
 
 
 @pytest.fixture()

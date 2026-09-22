@@ -330,6 +330,21 @@ def _owes(connection, through: int | None) -> bool:
                               progress_key_range(progress_pending_key(through, 0)[:-4])).fetchone() is not None
 
 
+def owes_through(connection, through: int) -> bool:
+    """Cumulative coordinator barrier debt, unlike a command's exact-seq notice.
+
+    Seeding/pre-N11 list import is owed before every barrier. Bound the key scan
+    to pending rows and compare the numeric sequence, so the minimum 12-digit
+    key padding is not mistaken for a maximum supported sequence width.
+    """
+    if _get(connection, PROGRESS_LEGACY_KEY) is not None or _get(connection, SEEDED_KEY) is None:
+        return True
+    return connection.execute(
+        'SELECT 1 FROM sync_state WHERE key>=? AND key<? '
+        'AND CAST(substr(key,?) AS INTEGER)<=? LIMIT 1',
+        (*progress_key_range(PENDING_PREFIX), len(PENDING_PREFIX) + 1, through)).fetchone() is not None
+
+
 def _failed(writer: "_Writer", connection, through: int | None, exc: BaseException) -> list[str]:
     _log(writer.target.parent, f"progress export failed: {exc!r}")
     try:

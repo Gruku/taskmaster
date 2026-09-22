@@ -24,7 +24,7 @@ def _seed():
 
 @pytest.fixture
 def twins(tmp_path, monkeypatch):
-    return make_twins(tmp_path, monkeypatch, _seed)
+    return make_twins(tmp_path, monkeypatch, _seed, engine_oracle=True)
 
 
 class FakeTime:

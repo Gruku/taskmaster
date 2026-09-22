@@ -56,6 +56,14 @@ def _hand_edit(rel):
         handle.write("\nGate hand edit.\n")
 
 
+def _linear_retry_gate():
+    value = bs.backlog_linear(action='retry', request_id='bypass-retry', caller_scope='bypass-gate')
+    result = json.loads(value)
+    assert result.get('ok') and not result.get('pending'), result
+    assert result['counts'] == dict(ok=0, skipped=0, transient=0, permanent=0, unknown=0)
+    return value
+
+
 EXERCISES = {
     ("backlog_note", "create"): lambda: bs.backlog_note(action="create", text="gate note"),
     ("backlog_note", "list"): lambda: bs.backlog_note(action="list", include_archived=True),
@@ -239,6 +247,7 @@ EXERCISES = {
     ("backlog_linear", "list"): lambda: bs.backlog_linear(action="list"),
     ("backlog_linear", "show"): lambda: bs.backlog_linear(action="show", tracker_id="linear-cm-eng-9"),
     ("backlog_linear", "status"): lambda: bs.backlog_linear(action="status"),
+    ("backlog_linear", "retry"): _linear_retry_gate,
     ("backlog_batch_preview", None): lambda: bs.backlog_batch_preview(
         operations=chr(10).join(["pick test-epic-002", "complete test-epic-001", "status test-epic-001 done"])),
 }
@@ -281,6 +290,10 @@ def rigged(tmp_path, monkeypatch):
     (twins.native / ".taskmaster" / "linear.yaml").write_text(
         "version: 1\ndefault_workspace: cm\nworkspaces:\n- {alias: cm, team_id: T1, token_env: GATE_TOKEN}\n",
         encoding="utf-8")
+    monkeypatch.setenv('GATE_TOKEN', 'test-only-not-a-credential')
+    def no_remote(*args, **kwargs):
+        raise AssertionError('an empty queue bypass check must never construct a remote transport')
+    monkeypatch.setattr('taskmaster.integrations.linear.client.LinearClient', no_remote)
     (twins.native / ".taskmaster" / "local" / "PROGRESS.md").write_text(
         "## Changelog\n\n### 2026-09-16 — Gate\n- x\n", encoding="utf-8")
     project = twins.native
@@ -354,6 +367,7 @@ def test_routed_tool_never_reaches_the_legacy_store_or_scans_the_projection(rigg
 
 
 VIEWER_ROUTES = [
+    ("GET", "/api/board", None), ("GET", "/api/task/test-epic-001/detail", None),
     ("GET", "/api/backlog", None), ("GET", "/api/task/test-epic-001", None),
     ("GET", "/api/task/test-epic-001/related", None), ("GET", "/api/epic/test-epic", None),
     ("GET", "/api/threads", None), ("GET", "/api/sessions", None), ("GET", "/api/bugs?include_archive=true", None),

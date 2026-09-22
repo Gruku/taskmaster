@@ -1,0 +1,19 @@
+{
+  "input": {
+    "tasks": [
+      {"id":"e-002","epic":"e","title":"Archived","status":"archived","completed":"2026-09-20","archived_reason":"duplicate","order":2,"_body":"not on board"},
+      {"id":"e-001","epic":"e","title":"Task","status":"in-progress","priority":"high","phase":"dev","started":"2026-09-21","order":1,"spec_review":{"verdict":"pass","codex_note":"private review prose"},"blockers":["one","two"],"description":"not on board","locked_by":"not on board","docs":{"spec":"docs/spec.md"}},
+      {"id":"orphan","epic":"missing","title":"Not a board member"}
+    ],
+    "epics":[{"id":"e","name":"Epic","status":"active","color":"#123456","description":"not on board","tasks":[]}],
+    "phases":[{"id":"later","name":"Later","order":2,"description":"not on board"},{"id":"dev","name":"Development","status":"active","order":1}]
+  },
+  "expected": {
+    "tasks": [
+      {"id":"e-001","epic":"e","title":"Task","status":"in-progress","priority":"high","phase":"dev","created":"2026-09-21","started":"2026-09-21","order":1,"spec_review":{"verdict":"pass"},"blockers_count":2,"docs":{"spec":"docs/spec.md"}},
+      {"id":"e-002","epic":"e","title":"Archived","status":"archived","created":"2026-09-20","completed":"2026-09-20","archived_reason":"duplicate","order":2}
+    ],
+    "epics":[{"id":"e","name":"Epic","status":"active","color":"#123456"}],
+    "phases":[{"id":"dev","name":"Development","status":"active","order":1},{"id":"later","name":"Later","order":2}]
+  }
+}

@@ -9,7 +9,7 @@ from functools import lru_cache
 from types import UnionType
 from typing import Any, Union, get_args, get_origin, get_type_hints
 from taskmaster import taskmaster_v3 as domain
-from . import documents, projection, workflow
+from . import documents, linear_outbox, projection, workflow
 
 BUILDERS = {"decision": domain.build_decision_doc, "bug": domain.build_bug_doc,
             "issue": domain.build_issue_doc, "idea": domain.build_idea_doc, "handover": domain.build_handover_doc}
@@ -32,7 +32,7 @@ CREATE_EXTRAS = {"auto_link"}
 # as the tools do (`auto_link_on_save`).
 AUTO_LINKED = {"issue", "idea", "handover"}
 # `projection.resolve` keeps the store's version of a flagged projection file (N11 S10).
-OPERATIONS = ENTITY_OPERATIONS | workflow.OPERATIONS | documents.OPERATIONS | {projection.RESOLVE}
+OPERATIONS = ENTITY_OPERATIONS | workflow.OPERATIONS | documents.OPERATIONS | linear_outbox.OPERATIONS | {projection.RESOLVE}
 
 
 def _accepts(value, annotation):
@@ -55,6 +55,8 @@ def _builder_contract(kind):
 
 def validate(operation, arguments):
     from .contracts import _identifier
+    if operation in linear_outbox.OPERATIONS:
+        return linear_outbox.validate(operation, arguments)
     if operation in workflow.OPERATIONS:
         return workflow.validate(operation, arguments)
     if operation in documents.OPERATIONS:
@@ -136,6 +138,8 @@ def validate(operation, arguments):
 
 
 def apply(transaction, operation, arguments):
+    if operation in linear_outbox.OPERATIONS:
+        return linear_outbox.apply(transaction, operation, arguments)
     if operation in workflow.OPERATIONS:
         return workflow.apply(transaction, operation, arguments)
     if operation in documents.OPERATIONS:

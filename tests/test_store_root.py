@@ -11,6 +11,19 @@ import yaml
 from taskmaster import store
 
 
+@pytest.mark.parametrize('helper', ['_git_common_root', '_git_checkout_root'])
+def test_git_root_probes_request_no_visible_windows(tmp_path, monkeypatch, helper):
+    from taskmaster import root
+    observed = []
+    def run(command, **kwargs):
+        observed.append(kwargs)
+        return subprocess.CompletedProcess(command, 0, stdout=str(tmp_path), stderr='')
+    monkeypatch.setattr(root.subprocess, 'run', run)
+    getattr(root, helper)(tmp_path)
+    assert len(observed) == 1
+    assert observed[0]['creationflags'] == getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+
+
 @pytest.fixture(autouse=True)
 def _isolated_store_state(monkeypatch):
     """Keep process-level root/warning/connection state out of adjacent tests."""

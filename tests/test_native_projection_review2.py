@@ -25,6 +25,7 @@ import pytest
 from taskmaster import backlog_server as bs
 from taskmaster.native import projection as outbox
 from taskmaster.native_routing import projection
+from tests.native_projection_oracle import child_environment
 from native_twins import commit_only, make_twins, native_connection, native_database
 
 LIVE, ARCHIVED = "tasks/test-epic-001.md", "tasks/archive/test-epic-001.md"
@@ -37,7 +38,7 @@ def _seed():
 
 @pytest.fixture
 def twins(tmp_path, monkeypatch):
-    return make_twins(tmp_path, monkeypatch, _seed)
+    return make_twins(tmp_path, monkeypatch, _seed, engine_oracle=True)
 
 
 def _dir(root):
@@ -199,7 +200,8 @@ def test_an_up_to_date_derived_file_does_not_hold_a_caller(twins, monkeypatch):
 CHILD = textwrap.dedent("""
     import json, os, sys, time
     from pathlib import Path
-    from taskmaster.native_routing import projection, runtime
+    from taskmaster.native_routing import projection
+    from tests import native_projection_oracle as runtime
     root, stage, target, operation, arguments, newcomer, offset = sys.argv[1:8]
     backlog_dir = Path(root) / ".taskmaster"
 
@@ -222,7 +224,9 @@ ARCHIVE = ("task.archive", {"id": "test-epic-001", "reason": "wont-fix"})
 
 def _kill(root, stage, target, operation, arguments, newcomer="-", offset=0.0):
     done = subprocess.run([sys.executable, "-c", CHILD, str(root), stage, target, operation,
-                           json.dumps(arguments), newcomer, str(offset)], capture_output=True, text=True, timeout=120)
+                           json.dumps(arguments), newcomer, str(offset)], capture_output=True, text=True, timeout=120,
+                          env=child_environment(),
+                          creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     assert done.returncode == 17, done.stderr[-2000:]
 
 

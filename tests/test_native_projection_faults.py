@@ -25,7 +25,8 @@ from taskmaster import backlog_server as bs
 from taskmaster import store
 from taskmaster.native import commands
 from taskmaster.native import projection as outbox
-from taskmaster.native_routing import projection, runtime
+from taskmaster.native_routing import projection
+from tests import native_projection_oracle as runtime
 from native_twins import commit_only, make_twins, native_connection, native_database
 
 LIVE, ARCHIVED = "tasks/test-epic-001.md", "tasks/archive/test-epic-001.md"
@@ -42,7 +43,7 @@ def _seed():
 
 @pytest.fixture
 def twins(tmp_path, monkeypatch):
-    return make_twins(tmp_path, monkeypatch, _seed)
+    return make_twins(tmp_path, monkeypatch, _seed, engine_oracle=True)
 
 
 def _dir(root):
@@ -126,7 +127,8 @@ def _recover(root, monkeypatch, *, skip_lease=False):
 CHILD = textwrap.dedent("""
     import json, os, sys
     from pathlib import Path
-    from taskmaster.native_routing import projection, runtime
+    from taskmaster.native_routing import projection
+    from tests import native_projection_oracle as runtime
     root, stage, target, operation, arguments = sys.argv[1:6]
 
     def checkpoint(at, rel):
@@ -145,7 +147,9 @@ def _crash(root, monkeypatch, variant, stage, target, operation, arguments):
     """Run one command whose export dies at `stage` for file `target` ("*": any)."""
     if variant == "exit":
         done = subprocess.run([sys.executable, "-c", CHILD, str(root), stage, target, operation,
-                               json.dumps(arguments)], capture_output=True, text=True, timeout=120)
+                               json.dumps(arguments)], capture_output=True, text=True, timeout=120,
+                              env=runtime.child_environment(),
+                              creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         assert done.returncode == 17, (done.returncode, done.stderr[-2000:])
         return
 
@@ -208,7 +212,9 @@ def test_crash_before_the_db_commit_leaves_nothing_and_a_retry_executes_once(twi
             os._exit(0)
         """)
         done = subprocess.run([sys.executable, "-c", child, str(native_database(root)), json.dumps(envelope)],
-                              capture_output=True, text=True, timeout=120)
+                              capture_output=True, text=True, timeout=120,
+                              env=runtime.child_environment(),
+                              creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         assert done.returncode == 17, done.stderr[-2000:]
     else:
         with native_connection(root) as connection, pytest.raises(Crash):
@@ -407,7 +413,7 @@ def test_an_external_edit_while_an_old_job_renders_is_flagged_and_kept(twins, mo
 WRITER = textwrap.dedent("""
     import sys
     from pathlib import Path
-    from taskmaster.native_routing import runtime
+    from tests import native_projection_oracle as runtime
     root, name, rounds = sys.argv[1], sys.argv[2], int(sys.argv[3])
     backlog_dir = Path(root) / ".taskmaster"
     for n in range(rounds):
@@ -421,7 +427,9 @@ WRITER = textwrap.dedent("""
 def test_two_processes_exporting_one_store_converge_without_a_flag(twins, monkeypatch):
     root = twins.native
     writers = [subprocess.Popen([sys.executable, "-c", WRITER, str(root), name, "12"],
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for name in ("a", "b")]
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                env=runtime.child_environment(),
+                                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)) for name in ("a", "b")]
     for writer in writers:
         _out, err = writer.communicate(timeout=600)
         assert writer.returncode == 0, err[-3000:]

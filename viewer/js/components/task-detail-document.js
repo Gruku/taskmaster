@@ -16,7 +16,7 @@ function inlineSave(taskId, fieldKey, ctx) {
     try {
       await ctx.api.patchTask(taskId, { [fieldKey]: newValue });
       // Refresh backlog so the change is reflected in store + other screens.
-      ctx.store.setBacklog(await ctx.api.backlog());
+      await ctx.store.refreshBoard(ctx.api);
     } catch (e) {
       if (e && e.code === 409) throw e; // re-throw so inline-field can show conflict banner
       return { error: e.message || String(e) };
@@ -25,6 +25,9 @@ function inlineSave(taskId, fieldKey, ctx) {
 }
 
 export function mountTaskDetailDocument(root, ctx) {
+  // The write precondition belongs to the revision the user actually sees,
+  // never to a refresh that was fetched but suppressed during an active edit.
+  if (ctx.etag) ctx.store?.setEtag?.(`task:${ctx.task.id}`, ctx.etag);
   root.innerHTML = '';
   root.classList.add('td-page', 'td-page-A');
 
@@ -40,6 +43,17 @@ export function mountTaskDetailDocument(root, ctx) {
   root.appendChild(renderHeader(ctx));
   const grid = renderGrid(ctx);
   root.appendChild(grid);
+  // A claim can expire without any committed row changing (and hence while
+  // every board poll is 304). Never leave its banner visible past that instant.
+  let expiryTimer;
+  const expiresAt = Date.parse(ctx.claim?.expires_at);
+  function expireBanner() {
+    if (!Number.isFinite(expiresAt)) return;
+    const remaining = expiresAt - Date.now();
+    if (remaining <= 0) root.querySelector('.td-lock-banner')?.remove();
+    else expiryTimer = setTimeout(expireBanner, Math.min(remaining, 2147483647));
+  }
+  if (root.querySelector('.td-lock-banner')) expireBanner();
 
   // Fire-and-forget: fetch linked bugs and inject section into the body asynchronously.
   if (ctx.api?.listBugs && ctx.task?.id) {
@@ -47,6 +61,8 @@ export function mountTaskDetailDocument(root, ctx) {
   }
 
   return () => {
+    clearTimeout(expiryTimer);
+    for (const field of root.querySelectorAll('.if-wrap')) field.disposeInline?.();
     root.innerHTML = '';
     root.classList.remove('td-page', 'td-page-A');
   };
@@ -110,9 +126,9 @@ function renderBody(ctx) {
     renderMeta(task),
     renderTitle(task, ctx),
   ];
-  if (task.locked_by) {
+  if (ctx.claim?.state === 'held' && !ctx.claim.expired) {
     children.push(h('div', { class: 'td-lock-banner', 'data-test': 'lock-banner' },
-      [h('span', {}, '🔒 '), h('span', {}, `locked by ${task.locked_by}`)]));
+      [h('span', {}, '🔒 '), h('span', {}, `locked by ${ctx.claim.holder}${ctx.claim.expires_at ? ` until ${ctx.claim.expires_at}` : ''}`)]));
   }
   children.push(renderChips(task, ctx));
   children.push(renderSpecReview(task));

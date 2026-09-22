@@ -9925,7 +9925,7 @@ class ViewerPreconditionFailed(Exception):
         self.current_etag = current_etag
 
 
-def _check_if_match(if_match: str | None) -> None:
+def _check_if_match(if_match: str | None, task_id: str | None = None) -> None:
     """Fail the write when `If-Match` no longer names committed state.
 
     Called *inside* the write transaction, after the store has imported and
@@ -9935,7 +9935,8 @@ def _check_if_match(if_match: str | None) -> None:
     """
     if not if_match:
         return
-    current = _viewer_etag()
+    from taskmaster.viewer_detail import legacy_etag
+    current = legacy_etag(task_id) if task_id and if_match.strip('"').startswith("t1:") else _viewer_etag()
     if if_match.strip('"') != current:
         raise ViewerPreconditionFailed(current)
 
@@ -10015,7 +10016,7 @@ def _viewer_update_task(
 
     patch = _viewer_patch_without_holder(patch)
     with _transaction(tool=f"viewer:{method} /api/tasks") as data:
-        _check_if_match(if_match)
+        _check_if_match(if_match, task_id)
         found = _find_task(data, task_id)
         if found is None:
             raise KeyError(f"task {task_id} not found")
@@ -10111,7 +10112,7 @@ def _viewer_create_task(payload: dict) -> str:
 def _viewer_archive_task(task_id: str, *, if_match: str | None = None) -> None:
     """Soft-delete a task: status flip plus the explicit store archive."""
     with _transaction(tool="viewer:POST /api/tasks/archive") as data:
-        _check_if_match(if_match)
+        _check_if_match(if_match, task_id)
         found = _find_task(data, task_id)
         if found is None:
             raise KeyError(f"task {task_id} not found")
@@ -10379,6 +10380,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
         # may set them.
         _TX_STATE.last_seq = None
         _TX_STATE.export_warnings = []
+        from taskmaster.coordinator.protocol import ServiceUnavailable
         try:
             super().handle_one_request()
         except (store.LegacyLayoutError, UnsupportedStoreError) as exc:
@@ -10392,6 +10394,10 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 self._send_json(409, {"ok": False, "error": str(exc)})
             except Exception:
                 pass
+
+        except ServiceUnavailable as exc:
+            self.close_connection = True
+            self._send_json(503, {"ok": False, **exc.public_payload()})
 
     def _native(self):
         """This request's native database, or None on a legacy store (checked once)."""
@@ -10465,6 +10471,15 @@ class ViewerHandler(BaseHTTPRequestHandler):
             self._serve_file(_backlog_path(), "text/yaml")
         elif clean_path.startswith("/api/task/"):
             rest = clean_path[len("/api/task/"):].rstrip("/")
+            if rest.endswith("/detail"):
+                from taskmaster.viewer_detail import read
+                task_id = rest[:-len("/detail")]
+                detail = read(task_id, self._native())
+                if detail is None:
+                    self._send_json(404, {"ok": False, "error": f"task {task_id} not found"})
+                else:
+                    self._send_json(200, detail, etag=detail["etag"])
+                return
             if rest.endswith("/related"):
                 task_id = rest[: -len("/related")]
                 related = self._related(task_id)
@@ -10491,6 +10506,14 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 self._send_json(200, full, etag=etag)
                 return
             self.send_error(HTTPStatus.NOT_FOUND)
+        elif clean_path == "/api/board":
+            from urllib.parse import parse_qs
+            from taskmaster.viewer_board import response
+            query = parse_qs(parsed.query, keep_blank_values=True)
+            status, body, etag, timings = response(
+                self._native(), since=query.get("since", [None])[0],
+                if_none_match=self.headers.get("If-None-Match"))
+            self._send_json(status, body, etag=etag, timings=timings)
         elif clean_path == "/api/backlog":
             self._serve_json()
         elif clean_path == "/api/session":
@@ -10683,10 +10706,9 @@ class ViewerHandler(BaseHTTPRequestHandler):
         return load_viewer_prefs(_backlog_path())
 
     def _task_full(self, task_id: str):
-        if self._native():
-            from taskmaster.native_routing import viewer as _native_viewer
-            return _native_viewer.task_full(self._native(), task_id)
-        return _load_task_full_identified(task_id)
+        from taskmaster.viewer_detail import read
+        detail = read(task_id, self._native(), compatibility=True)
+        return (detail["task"], detail["etag"]) if detail else (None, "")
 
     def _epic_full(self, epic_id: str):
         if self._native():
@@ -10780,40 +10802,9 @@ class ViewerHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _serve_json(self) -> None:
-        try:
-            if self._native():
-                from taskmaster.native_routing.reads import NativeRows
-                data, etag = self._snapshot()
-                # The legacy payload carries its lazy row map, which JSON renders
-                # as an object repr; the board does not read it (N10 removes it).
-                data["_rows"] = NativeRows(None)
-            else:
-                data, etag = _load_snapshot()
-            data.setdefault("meta", {})["_version"] = VERSION
-            if not isinstance(data.get("tasks"), list):
-                data["tasks"] = [
-                    {**t, "epic": t.get("epic", e.get("id"))}
-                    for e in (data.get("epics") or [])
-                    for t in (e.get("tasks") or [])
-                ]
-            # Sort phases by order so the viewer always receives them in logical
-            # sequence, regardless of YAML insertion order. Phases added out of
-            # order (e.g. inserting "1.5" after "2" was written) would otherwise
-            # appear in the wrong position in the phase stepper / board grouping.
-            if isinstance(data.get("phases"), list):
-                data["phases"] = sorted(
-                    data["phases"],
-                    key=lambda p: (p.get("order") if p.get("order") is not None else 999),
-                )
-            self._send_json(200, data, etag=etag)
-        except (store.LegacyLayoutError, UnsupportedStoreError) as exc:
-            # A layout the store refuses, or a store no client may open, is a
-            # conflict the operator can fix, not a server fault: 500 sent the
-            # viewer into its generic error state and hid the one instruction
-            # that resolves it. The blanket handler below would swallow these.
-            self._send_json(409, {"ok": False, "error": str(exc)})
-        except Exception as e:
-            self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(e))
+        from taskmaster.viewer_board import compatibility
+        status, data, etag, timings = compatibility(self._native(), if_none_match=self.headers.get("If-None-Match"))
+        self._send_json(status, data, etag=etag, timings=timings)
 
     def do_POST(self):
         import json
@@ -10998,7 +10989,8 @@ class ViewerHandler(BaseHTTPRequestHandler):
             task_id = m.group(1)
             try:
                 _viewer_archive_task(task_id, if_match=self.headers.get("If-Match"))
-                self._send_json(200, {"ok": True}, etag=_viewer_etag())
+                from taskmaster.viewer_detail import legacy_etag
+                self._send_json(200, {"ok": True}, etag=legacy_etag(task_id))
             except ViewerPreconditionFailed as e:
                 self._send_stale(task_id, e.current_etag)
             except KeyError as e:
@@ -11245,7 +11237,9 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 task = _viewer_update_task(
                     task_id, full, method="PUT", if_match=self.headers.get("If-Match")
                 )
-                self._send_json(200, {"ok": True, "task": task}, etag=_viewer_etag())
+                from taskmaster.viewer_detail import write_response
+                task, etag = write_response(task_id)
+                self._send_json(200, {"ok": True, "task": task}, etag=etag)
             except ViewerPreconditionFailed as e:
                 self._send_stale(task_id, e.current_etag)
             except ViewerCompletionBlocked as e:
@@ -11283,7 +11277,9 @@ class ViewerHandler(BaseHTTPRequestHandler):
                 task = _viewer_update_task(
                     task_id, patch, if_match=self.headers.get("If-Match")
                 )
-                self._send_json(200, {"ok": True, "task": task}, etag=_viewer_etag())
+                from taskmaster.viewer_detail import write_response
+                task, etag = write_response(task_id)
+                self._send_json(200, {"ok": True, "task": task}, etag=etag)
             except ViewerPreconditionFailed as e:
                 self._send_stale(task_id, e.current_etag)
             except ViewerCompletionBlocked as e:
@@ -11302,14 +11298,16 @@ class ViewerHandler(BaseHTTPRequestHandler):
 
     def _send_stale(self, task_id: str, current_etag: str) -> None:
         """The unchanged 409 contract, with the revision the write lost to."""
-        current, _etag = self._task_full(task_id)
+        from taskmaster.viewer_detail import read
+        detail = read(task_id, self._native())
+        current, current_etag = (detail["task"], detail["etag"]) if detail else (None, current_etag)
         self._send_json(409, {
             "ok": False, "error": "stale",
             "current_etag": current_etag,
             "current": current,
         })
 
-    def _send_json(self, status: int, payload: dict, etag: str | None = None):
+    def _send_json(self, status: int, payload: dict, etag: str | None = None, *, timings=None):
         """Serialize *payload* as JSON and write the complete HTTP response.
 
         A successful mutation carries the `changes.seq` its commit ended at, the
@@ -11322,10 +11320,16 @@ class ViewerHandler(BaseHTTPRequestHandler):
             and self.command in ("POST", "PATCH", "PUT", "DELETE")
         ):
             payload = _json_with_seq(dict(payload))
-        body = json.dumps(payload, default=str).encode("utf-8")
+        from time import perf_counter
+        encode_start = perf_counter()
+        body = b"" if status == 304 else json.dumps(payload, default=str).encode("utf-8")
+        timing = dict(timings or {})
+        timing["encode"] = (perf_counter() - encode_start) * 1000
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Server-Timing", ", ".join(f"{key};dur={value:.3f}" for key, value in timing.items()))
+        self.send_header("Cache-Control", "no-store")
         if etag:
             self.send_header("ETag", f'"{etag}"')
         # JSON API responses are intentionally uncached — no Cache-Control header
@@ -11747,13 +11751,17 @@ def backlog_linear(
     default_workspace: bool = True,
     tracker_id: str = "",
     target_id: str = "",
+    request_id: str = "",
+    caller_scope: str = "",
 ) -> str:
     """Drive Taskmaster's Linear sync. Route through the taskmaster:linear skill.
 
     Params by action: probe(token_env); bootstrap_apply(workspace_alias, team_id,
     token_env, status_mapping, priority_mapping, default_workspace);
     link(task_id, external_key, workspace_alias); unlink(task_id); list();
-    show(tracker_id); status(); retry(target_id).
+    show(tracker_id); status(); retry(target_id, request_id, caller_scope).
+    Native retry returns its request_id/caller_scope; retain both and the target
+    to inspect a pending result or recover a lost response without a new push.
     """
     if action == "probe":
         return backlog_linear_probe(token_env)
@@ -11773,6 +11781,8 @@ def backlog_linear(
     if action == "status":
         return backlog_linear_status()
     if action == "retry":
+        if request_id or caller_scope:
+            return json.dumps({"error": "durable Linear retry IDs require a native coordinator; legacy retry was not started"})
         return backlog_linear_retry(target_id)
     return json.dumps({"error": f"unknown action {action!r}"})
 

@@ -1,15 +1,16 @@
 // Thin HTTP client for /api/* endpoints. All viewer mutations go through here.
 
 const BASE = ''; // same-origin
+import { beginMeasure, endMeasure } from './lib/measure.js';
 
-async function http(method, path, body) {
-  const init = { method, headers: {} };
+async function http(method, path, body, options = {}) {
+  const init = { method, headers: {...options.headers}, cache: 'no-store' };
   if (body !== undefined) {
     init.headers['Content-Type'] = 'application/json';
     init.body = JSON.stringify(body);
   }
   // Attach If-Match for write methods if we have an etag for this resource.
-  if (method === 'PATCH' || method === 'PUT') {
+  if (method === 'PATCH' || method === 'PUT' || (method === 'POST' && path.endsWith('/archive'))) {
     const m = path.match(/^\/api\/tasks\/([^/]+)/);
     if (m) {
       const { store } = await import('./store.js');
@@ -17,10 +18,14 @@ async function http(method, path, body) {
       if (et) init.headers['If-Match'] = et;
     }
   }
+  const fetchStart = beginMeasure();
   const resp = await fetch(BASE + path, init);
+  endMeasure('fetch', fetchStart);
+  if (resp.status === 304) return {status: 304};
+  if (!resp.ok && 'fallback' in options) return options.fallback;
   // Capture returned ETag for next time.
   const et = resp.headers.get('ETag');
-  if (et) {
+  if (et && options.capture !== false) {
     const { store } = await import('./store.js');
     const m1 = path.match(/^\/api\/task\/([^/]+)$/);  // GET single task
     const m2 = path.match(/^\/api\/tasks\/([^/]+)/);   // PATCH/PUT
@@ -50,7 +55,11 @@ async function http(method, path, body) {
   const ctype = resp.headers.get('Content-Type') || '';
   if (ctype.includes('application/json')) {
     try {
-      return await resp.json();
+      const raw = await resp.text();
+      const parseStart = beginMeasure();
+      const data = JSON.parse(raw);
+      endMeasure('parse', parseStart);
+      return data;
     } catch (e) {
       throw new Error(`${method} ${path} → JSON parse failed: ${e.message}`);
     }
@@ -60,30 +69,17 @@ async function http(method, path, body) {
 }
 
 export async function getTask(id) {
-  const resp = await fetch(`/api/task/${encodeURIComponent(id)}`);
-  if (!resp.ok) {
-    const body = await resp.json().catch(() => ({}));
-    throw new Error(body.error || `task ${id} not found`);
-  }
-  return resp.json();
+  return http('GET', `/api/task/${encodeURIComponent(id)}`);
 }
 
 export async function getTaskRelated(id) {
-  const resp = await fetch(`/api/task/${encodeURIComponent(id)}/related`);
-  if (!resp.ok) {
-    const body = await resp.json().catch(() => ({}));
-    throw new Error(body.error || `related for ${id} not found`);
-  }
-  return resp.json();
+  return http('GET', `/api/task/${encodeURIComponent(id)}/related`);
 }
 
+export const getTaskDetail = id => http('GET', `/api/task/${encodeURIComponent(id)}/detail`, undefined, {capture: false});
+
 export async function getEpic(id) {
-  const resp = await fetch(`/api/epic/${encodeURIComponent(id)}`);
-  if (!resp.ok) {
-    const body = await resp.json().catch(() => ({}));
-    throw new Error(body.error || `epic ${id} not found`);
-  }
-  return resp.json();
+  return http('GET', `/api/epic/${encodeURIComponent(id)}`);
 }
 
 export const api = {
@@ -94,11 +90,14 @@ export const api = {
   post:            (path, body)  => http('POST', path, body ?? {}),
   identity:        ()    => http('GET', '/api/identity'),
   backlog:         ()    => http('GET', '/api/backlog'),
+  board: (since) => http('GET', '/api/board' + (since ? `?since=${encodeURIComponent(since)}` : ''), undefined,
+    {headers: since ? {'If-None-Match': `"${since}"`} : {}}),
   prefs:           ()    => http('GET', '/api/viewer/prefs'),
   savePrefs:       (p)   => http('PUT', '/api/viewer/prefs', p),
   getTask,
   getEpic,
   getTaskRelated,
+  getTaskDetail,
   patchTask:    (id, patch) => http('PATCH', `/api/tasks/${encodeURIComponent(id)}`, patch),
   putTask:      (id, full)  => http('PUT',   `/api/tasks/${encodeURIComponent(id)}`, full),
   createTask:   (payload)   => http('POST',  '/api/tasks', payload),
@@ -108,35 +107,26 @@ export const api = {
   async getRecentEvents(since) {
     const u = new URL('/api/dashboard/recent-events', location.origin);
     u.searchParams.set('since', since);
-    const r = await fetch(u);
-    if (!r.ok) throw new Error(`recent-events: ${r.status}`);
-    return r.json();
+    return http('GET', u.pathname + u.search);
   },
 
   async getLastSession() {
-    const r = await fetch('/api/sessions/last');
-    if (!r.ok) return null;
-    return r.json();
+    return http('GET', '/api/sessions/last', undefined, {fallback: null});
   },
 
   async listIssues(filter = {}) {
     const u = new URL('/api/issues', location.origin);
     for (const [k, v] of Object.entries(filter)) u.searchParams.set(k, v);
-    const r = await fetch(u);
-    if (!r.ok) return [];
-    return r.json();
+    return http('GET', u.pathname + u.search, undefined, {fallback: []});
   },
 
   async getRecentCommits({ limit = 8 } = {}) {
-    const r = await fetch(`/api/git/commits?limit=${limit}`);
-    if (!r.ok) return [];
-    return r.json();
+    return http('GET', `/api/git/commits?limit=${limit}`, undefined, {fallback: []});
   },
 
   async getBuildTestPulse() {
-    const r = await fetch('/api/build-test-pulse');
-    if (!r.ok) return { build: 'unknown', tests: { passed: 0, failed: 0, total: 0 }, ts: null };
-    return r.json();
+    return http('GET', '/api/build-test-pulse', undefined,
+      {fallback: { build: 'unknown', tests: { passed: 0, failed: 0, total: 0 }, ts: null }});
   },
 
   async quickCapture(text) {
@@ -162,21 +152,15 @@ export const api = {
 // --- Sessions (Plan 5a) -------------------------------------------
 
 export async function listSessions() {
-  const r = await fetch('/api/sessions');
-  if (!r.ok) throw new Error(`listSessions: ${r.status}`);
-  return r.json();
+  return http('GET', '/api/sessions');
 }
 
 export async function getSessionDetail(sid) {
-  const r = await fetch(`/api/sessions/${encodeURIComponent(sid)}`);
-  if (!r.ok) throw new Error(`getSessionDetail(${sid}): ${r.status}`);
-  return r.json();
+  return http('GET', `/api/sessions/${encodeURIComponent(sid)}`);
 }
 
 export async function listThreads() {
-  const r = await fetch('/api/threads');
-  if (!r.ok) throw new Error(`listThreads: ${r.status}`);
-  return r.json();
+  return http('GET', '/api/threads');
 }
 
 export async function savePrefs(patch) {
@@ -192,9 +176,7 @@ export async function savePrefs(patch) {
 // --- Issues ----------------------------------------------------------------
 export async function getIssues({ includeResolved = true } = {}) {
   const qs = includeResolved ? '' : '?include_resolved=false';
-  const r = await fetch(`/api/issues${qs}`);
-  if (!r.ok) throw new Error(`getIssues failed: ${r.status}`);
-  return r.json();
+  return http('GET', `/api/issues${qs}`);
 }
 
 // ── Bugs ─────────────────────────────────────────────────────────────────
@@ -205,15 +187,11 @@ export async function listBugs({ status, found_in, include_archive } = {}) {
   if (found_in) params.set('found_in', found_in);
   if (include_archive) params.set('include_archive', '1');
   const qs = params.toString();
-  const r = await fetch(`/api/bugs${qs ? '?' + qs : ''}`);
-  if (!r.ok) throw new Error(`listBugs failed: ${r.status}`);
-  return r.json();
+  return http('GET', `/api/bugs${qs ? '?' + qs : ''}`);
 }
 
 export async function getBug(bugId) {
-  const r = await fetch(`/api/bugs/${encodeURIComponent(bugId)}`);
-  if (!r.ok) throw new Error(`getBug ${bugId} failed: ${r.status}`);
-  return r.json();
+  return http('GET', `/api/bugs/${encodeURIComponent(bugId)}`);
 }
 
 export async function createBug(payload) {

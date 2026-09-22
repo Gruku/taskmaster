@@ -204,14 +204,25 @@ def projected_files(root: Path) -> dict:
 class Twins:
     """A legacy project and its native copy, driven through the same public calls."""
 
-    def __init__(self, monkeypatch, legacy: Path, native: Path):
+    def __init__(self, monkeypatch, legacy: Path, native: Path, *, visibility='legacy', engine_oracle=False):
         self.monkeypatch, self.legacy, self.native = monkeypatch, legacy, native
+        self.visibility, self.engine_oracle = visibility, engine_oracle
 
     @contextmanager
     def at(self, root: Path):
         point_server_at(self.monkeypatch, root)
         try:
-            yield
+            with self.monkeypatch.context() as local:
+                if root == self.native:
+                    if self.engine_oracle:
+                        from taskmaster.native_routing import runtime
+                        from tests.native_projection_oracle import open_call
+                        local.setattr(runtime, 'open_call', open_call)
+                    elif self.visibility == 'legacy':
+                        from taskmaster.coordinator import adapter
+                        from tests.native_coordinator_helpers import compatibility_client
+                        local.setattr(adapter, 'Client', compatibility_client)
+                yield
         finally:
             store.reset_for_tests()
 
@@ -328,7 +339,7 @@ def hand_set_holder(ident: str, holder: str) -> None:
     hand_edit_task(ident, lambda doc: doc.__setitem__("locked_by", holder))
 
 
-def make_twins(tmp_path: Path, monkeypatch, seed=None) -> Twins:
+def make_twins(tmp_path: Path, monkeypatch, seed=None, *, visibility='legacy', engine_oracle=False) -> Twins:
     """Seed a legacy project through the legacy tools, copy it, activate the copy."""
     install_clock(monkeypatch)
     legacy = scaffold(tmp_path / "legacy")
@@ -343,4 +354,4 @@ def make_twins(tmp_path: Path, monkeypatch, seed=None) -> Twins:
     for leftover in native.rglob("*.tmp.*"):
         os.remove(leftover)
     activate_native(native)
-    return Twins(monkeypatch, legacy, native)
+    return Twins(monkeypatch, legacy, native, visibility=visibility, engine_oracle=engine_oracle)

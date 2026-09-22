@@ -190,6 +190,7 @@ def _git(args: list[str], cwd: Path) -> str | None:
             capture_output=True,
             text=True,
             timeout=10,
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
         )
         if r.returncode == 0:
             return r.stdout.strip() or None

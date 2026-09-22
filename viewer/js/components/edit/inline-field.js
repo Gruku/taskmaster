@@ -3,6 +3,7 @@
 
 import { h } from '../../util/h.js';
 import { fieldByKey, isSystemManaged } from './schema.js';
+import { store } from '../../store.js';
 
 const DEBOUNCE_MS = 600;
 
@@ -20,9 +21,18 @@ export function mountInlineField(parent, {
   let mode = 'read';
   let pendingValue = currentEntity[fieldKey];
   let saveTimer = null;
-  let inFlight = false;
+  let inFlight = null;
+  let disposed = false;
+  let conflicted = false;
+  let dismissConflict;
 
   const wrap = h('span', { class: 'if-wrap', 'data-key': fieldKey });
+  wrap.disposeInline = () => {
+    disposed = true;
+    dismissConflict?.();
+    if (saveTimer) clearTimeout(saveTimer);
+    if (mode === 'edit') { mode = 'read'; store.endEdit(currentEntity.id); }
+  };
   parent.appendChild(wrap);
 
   const status = h('span', { class: 'if-status' });
@@ -50,17 +60,22 @@ export function mountInlineField(parent, {
         },
         onCommit: (v) => {
           pendingValue = renderer.coerce ? renderer.coerce(v) : v;
-          flushSave().then(() => {
+          flushSave().then((saved) => {
+            if (!saved || disposed) return;
             mode = 'read';
             currentEntity[fieldKey] = pendingValue;
             paint();
+            store.endEdit(currentEntity.id);
           });
         },
         onCancel: () => {
           if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+          conflicted = false;
+          dismissConflict?.();
           pendingValue = currentEntity[fieldKey];
           mode = 'read';
           paint();
+          store.endEdit(currentEntity.id);
         },
         getBacklog,
         ...fieldSpec,
@@ -73,6 +88,7 @@ export function mountInlineField(parent, {
     if (ro) return;
     pendingValue = currentEntity[fieldKey];
     mode = 'edit';
+    store.beginEdit(currentEntity.id);
     paint();
   }
 
@@ -82,52 +98,79 @@ export function mountInlineField(parent, {
   }
 
   async function flushSave() {
+    if (disposed || conflicted) return false;
     if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+    // A commit during autosave must wait and then drain the newest draft. Do
+    // not drop it, close the editor early, or issue concurrent stale writes.
+    if (inFlight) {
+      if (!await inFlight || disposed) return false;
+      return flushSave();
+    }
     const v = pendingValue;
-    if (sameValue(v, currentEntity[fieldKey])) return;
-    inFlight = true;
+    if (sameValue(v, currentEntity[fieldKey])) return true;
+    const saving = saveValue(v);
+    inFlight = saving;
+    let saved;
+    try { saved = await saving; }
+    finally { if (inFlight === saving) inFlight = null; }
+    if (!saved || disposed) return false;
+    return sameValue(v, pendingValue) || await flushSave();
+  }
+
+  async function saveValue(v) {
     setStatus('saving');
     try {
       const result = await onSave(v);
       if (result && result.error) {
         setStatus('error', result.error);
-        return;
+        return false;
       }
       currentEntity[fieldKey] = v;
       setStatus('ok');
       setTimeout(() => setStatus(''), 800);
+      return true;
     } catch (e) {
       if (e && e.code === 409) {
         // Stale write — surface conflict banner.
+        conflicted = true;
+        if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
         const { showFieldConflict } = await import('./conflict-banner.js');
-        showFieldConflict({
+        if (disposed) return false;
+        dismissConflict = showFieldConflict({
           entityKind: schema.entity || 'entity',
           entityId: currentEntity.id || '?',
           fieldKey, fieldLabel: fieldSpec.label || fieldKey,
-          localValue: v,
+          localValue: pendingValue,
           currentValue: e.current?.[fieldKey],
           currentEtag: e.current_etag,
           onKeepMine: async () => {
-            // Update local etag and re-PATCH.
-            const { store } = await import('../../store.js');
+            if (disposed) return;
+            // Drain the current draft, including typing during either save;
+            // the value rejected by the first request may already be obsolete.
             store.setEtag(`task:${currentEntity.id}`, e.current_etag);
-            try { await onSave(v); } catch (e2) { setStatus('error', e2.message); return; }
-            currentEntity[fieldKey] = v;
+            conflicted = false;
+            if (!await flushSave() || disposed) return;
+            mode = 'read';
             paint();
+            store.endEdit(currentEntity.id);
           },
           onUseServer: async () => {
+            if (disposed) return;
+            conflicted = false;
+            if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
             currentEntity[fieldKey] = e.current?.[fieldKey];
-            const { store } = await import('../../store.js');
             store.setEtag(`task:${currentEntity.id}`, e.current_etag);
+            pendingValue = currentEntity[fieldKey];
+            mode = 'read';
             paint();
+            store.endEdit(currentEntity.id);
           },
         });
         setStatus('error', 'stale — see banner');
-        return;
+        return false;
       }
       setStatus('error', e.message || String(e));
-    } finally {
-      inFlight = false;
+      return false;
     }
   }
 
@@ -153,7 +196,7 @@ export function mountInlineField(parent, {
       if (mode === 'read') paint();
     },
     destroy() {
-      if (saveTimer) clearTimeout(saveTimer);
+      wrap.disposeInline();
       wrap.remove();
       status.remove();
     },

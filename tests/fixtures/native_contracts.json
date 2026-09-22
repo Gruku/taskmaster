@@ -445,6 +445,7 @@
   "http_routes": {
     "GET": [
       "/api/backlog",
+      "/api/board",
       "/api/bugs",
       "/api/continuity",
       "/api/dashboard/recent-events",
@@ -636,6 +637,7 @@
       "(m := re.fullmatch('/api/decisions/([A-Za-z0-9_\\\\-]+)', clean_path))",
       "(m := re.fullmatch('/api/handover/([A-Za-z0-9_\\\\-]+)', clean_path))",
       "clean_path == '/api/backlog'",
+      "clean_path == '/api/board'",
       "clean_path == '/api/continuity'",
       "clean_path == '/api/identity'",
       "clean_path == '/api/notes'",
@@ -2969,7 +2971,7 @@
         ]
       },
       "category": "action-router",
-      "documentation": "Drive Taskmaster's Linear sync. Route through the taskmaster:linear skill.\n\nParams by action: probe(token_env); bootstrap_apply(workspace_alias, team_id,\ntoken_env, status_mapping, priority_mapping, default_workspace);\nlink(task_id, external_key, workspace_alias); unlink(task_id); list();\nshow(tracker_id); status(); retry(target_id).",
+      "documentation": "Drive Taskmaster's Linear sync. Route through the taskmaster:linear skill.\n\nParams by action: probe(token_env); bootstrap_apply(workspace_alias, team_id,\ntoken_env, status_mapping, priority_mapping, default_workspace);\nlink(task_id, external_key, workspace_alias); unlink(task_id); list();\nshow(tracker_id); status(); retry(target_id, request_id, caller_scope).\nNative retry returns its request_id/caller_scope; retain both and the target\nto inspect a pending result or recover a lost response without a new push.",
       "parameters": [
         {
           "mode": "positional",
@@ -3054,6 +3056,22 @@
           "default_value": "",
           "mode": "positional",
           "name": "target_id",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "request_id",
+          "required": false,
+          "type": "str"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "caller_scope",
           "required": false,
           "type": "str"
         }
