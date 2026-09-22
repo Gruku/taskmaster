@@ -172,3 +172,30 @@ def test_take_file_on_backlog_yaml_never_erases_absent_rows(twins):
     assert {("epic", "test-epic"), ("phase", "dev"), ("task", "test-epic-001"), ("task", "test-epic-002")} <= live
     assert _entity(twins, "backlog", "__backlog__")["fields"]["x_team_note"] == "kept"
     assert _flagged(twins) == []
+
+
+def _with_inline_task_stubs(path):
+    """backlog.yaml naming task rows under epics[].tasks, the legacy inline shape."""
+    import yaml
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    epic = next(epic for epic in data["epics"] if epic["id"] == "test-epic")
+    epic["tasks"] = [{"id": "test-epic-001", "title": "Stub"}, {"id": "test-epic-099", "title": "Invented"}]
+    path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    return path.read_bytes()
+
+
+def test_take_file_on_backlog_yaml_never_replaces_task_rows_from_inline_stubs(twins):
+    path = _path(twins, "backlog.yaml")
+    edited = _with_inline_task_stubs(path)
+    before = _entity(twins)
+    assert len(before["fields"]) > 3
+    with twins.at(twins.native):
+        flagged = bs.backlog_update_epic(epic_id="test-epic", field="name", value="Renamed")
+        assert "export pending: backlog.yaml is flagged" in flagged
+        answer = bs.backlog_resolve_conflict(file="backlog.yaml", take="file")
+    assert answer.startswith("Error: ") and "task" in answer and "Nothing was changed." in answer, answer
+    assert _entity(twins) == before  # not {epic, id, title: Stub}
+    with native_connection(twins.native) as connection:
+        assert connection.execute("SELECT 1 FROM entity_core WHERE public_id='test-epic-099'").fetchone() is None
+    assert path.read_bytes() == edited
+    assert _flagged(twins) == ["backlog.yaml"]

@@ -141,15 +141,18 @@ def test_multirow_failure_rolls_back_earlier_creation_and_every_side_effect(twin
                   "domain_events", "command_commits", "command_receipts", "projection", "projection_base",
                   "projection_jobs", "document_search", "document_search_keys")
         before = {table: connection.execute(f'SELECT * FROM "{table}"').fetchall() for table in tables}
-        first = {"kind": "task", "id": "test-epic-900", "revision": 0, "body": "new",
-                 "fields": {"id": "test-epic-900", "title": "Earlier create", "epic": "test-epic"}}
-        second = replacement(connection, title="Later failing replace")
+        # backlog.yaml is the one multi-row import; it owns epics and phases, never tasks.
+        first = {"kind": "epic", "id": "later-epic", "revision": 0, "body": None,
+                 "fields": {"id": "later-epic", "name": "Earlier create"}}
+        with Repository(connection).snapshot() as snapshot:
+            epic = snapshot.get("epic", "test-epic", include_body=True)
+        second = {"kind": "epic", "id": "test-epic", "revision": epic["revision"],
+                  "fields": dict(epic["fields"], name="Later failing replace"), "body": epic["body"]}
         args = candidate(connection, file="backlog.yaml", rows=[first, second])
         original = Transaction.replace
 
         def fail_after_creation(transaction, kind, ident, *args, **kwargs):
-            assert transaction.connection.execute("SELECT 1 FROM id_reservations WHERE public_id='test-epic-900'").fetchone()
-            assert transaction.connection.execute("SELECT high_water FROM id_counters WHERE kind='task' AND prefix='test-epic-'").fetchone()[0] == 900
+            assert transaction.connection.execute("SELECT 1 FROM id_reservations WHERE public_id='later-epic'").fetchone()
             original(transaction, kind, ident, *args, **kwargs)
             raise RuntimeError("injected failure after both entity writes")
 

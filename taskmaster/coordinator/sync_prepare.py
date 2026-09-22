@@ -84,6 +84,16 @@ def prepare(snapshot, backlog_dir, rel, *, take_file=False):
             # recording a quarantine the caller did not ask for.
             raise ValueError(f"{rel} cannot be taken: it does not parse ({exc})") from None
         return result("quarantine", f"invalid authored projection: {exc}")
+    # Tasks are owned by their task documents. A legacy inline `epics[].tasks`
+    # entry is a stub, never a whole row: importing it would replace the task.
+    inline = sorted(ident for kind_, ident in parsed if kind_ == "task") if kind == "backlog" else []
+    if inline:
+        named = ", ".join(inline[:5]) + (f" and {len(inline) - 5} more" if len(inline) > 5 else "")
+        reason = (f"backlog.yaml names task rows under epics[].tasks ({named}); tasks are owned by "
+                  f"their task documents, so remove the inline tasks and edit tasks/<id>.md instead")
+        if take_file:
+            raise ValueError(f"{rel} cannot be taken: {reason}")
+        return result("quarantine", f"invalid authored projection: {reason}")
     base_rows = None
     if trusted and not take_file:
         try:
