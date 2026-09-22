@@ -824,13 +824,50 @@ def _local_host() -> str:
 
 
 def _local_pid_alive(pid: int | None) -> bool:
-    if not pid:
-        return False
     try:
-        os.kill(int(pid), 0)
+        pid = int(pid)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    if not 0 < pid <= 0xFFFFFFFF:
+        return False
+    if os.name == "nt":
+        return _windows_pid_alive(pid)
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        # Lack of permission is not proof that a peer is dead.
+        return True
     except (OSError, ValueError):
         return False
     return True
+
+
+def _windows_pid_alive(pid: int) -> bool:
+    """Inspect a process handle without sending a signal.
+
+    Windows os.kill(pid, 0) calls TerminateProcess with exit code zero. It is
+    never a liveness probe. SYNCHRONIZE grants only the right to wait on the
+    process; a zero-time wait distinguishes running from exited, including a
+    process that exited with STILL_ACTIVE (259) as its application exit code.
+    Inaccessible or unqueryable processes are conservatively considered live.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+    kernel.WaitForSingleObject.restype = wintypes.DWORD
+    kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel.CloseHandle.restype = wintypes.BOOL
+    handle = kernel.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+    if not handle:
+        return ctypes.get_last_error() != 87  # ERROR_INVALID_PARAMETER: no such pid
+    try:
+        return kernel.WaitForSingleObject(handle, 0) != 0  # only WAIT_OBJECT_0 proves exit
+    finally:
+        kernel.CloseHandle(handle)
 
 
 def _resolve_for(backlog_path: Path | None, root: Path | None) -> RootResolution:
