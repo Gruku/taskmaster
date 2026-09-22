@@ -79,6 +79,10 @@ def prepare(snapshot, backlog_dir, rel, *, take_file=False):
             for doc, _ in parsed.values():
                 doc["archived"] = True
     except (ValueError, TypeError, AttributeError, yaml.YAMLError) as exc:
+        if take_file:
+            # An explicit resolution keeps the last good state rather than
+            # recording a quarantine the caller did not ask for.
+            raise ValueError(f"{rel} cannot be taken: it does not parse ({exc})") from None
         return result("quarantine", f"invalid authored projection: {exc}")
     base_rows = None
     if trusted and not take_file:
@@ -90,6 +94,8 @@ def prepare(snapshot, backlog_dir, rel, *, take_file=False):
     for key, (fields, body) in parsed.items():
         current = entity(*key)
         if current is not None and current["deleted"]:
+            if take_file:
+                raise ValueError(f"{rel} cannot be taken: it names a deleted/reserved tombstone: {key[0]} {key[1]}")
             return result("conflict", f"file names a deleted/reserved tombstone: {key[0]} {key[1]}")
         if key[0] not in {"backlog", "project"}:
             fields["id"] = key[1]
@@ -97,6 +103,8 @@ def prepare(snapshot, backlog_dir, rel, *, take_file=False):
         theirs = fields, body
         if current is None:
             if connection.execute("SELECT 1 FROM id_reservations WHERE kind=? AND public_id=?", key).fetchone():
+                if take_file:
+                    raise ValueError(f"{rel} cannot be taken: it names a reserved tombstone: {key[0]} {key[1]}")
                 return result("conflict", f"file names a reserved tombstone: {key[0]} {key[1]}")
             chosen = theirs
         else:

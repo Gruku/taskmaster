@@ -51,14 +51,45 @@ def summarize(result):
     return summary
 
 
+def bound(result):
+    """The pending result returned to the caller, within the same byte budget.
+
+    Unlike the stored summary it keeps each import's reason and notices, which
+    say why a file was not synchronized; whatever does not fit is counted in
+    `*_omitted` and stays inspectable as receipts under `receipt_scope`.
+    """
+    lists = ('unresolved', 'notices', 'imports', 'warnings')  # the why first
+    bounded = {key: value for key, value in result.items() if key not in lists}
+    used = len(encode(bounded).encode()) + 256
+    for key in lists:
+        kept = []
+        for item in result.get(key) or []:
+            size = len(encode(item).encode()) + 1
+            if used + size > SUMMARY_BYTES:
+                break
+            kept.append(item)
+            used += size
+        bounded[key] = kept
+        omitted = len(result.get(key) or []) - len(kept)
+        if omitted:
+            bounded[key + '_omitted'] = omitted
+    return bounded
+
+
 def operation_scope(caller_scope, request_id):
     if not all(isinstance(value, str) and 1 <= len(value) <= 256 for value in (caller_scope, request_id)):
         raise ValueError('sync requires caller_scope and request_id')
     return 'sync-' + hashlib.sha256(encode([caller_scope, request_id]).encode()).hexdigest()
 
 
-def synchronize(owner, *, caller_scope, request_id, import_files=True, through=0,
-                files=None, take_file=False, timeout=20):
+def synchronize(owner, **arguments):
+    result = _synchronize(owner, **arguments)
+    # A completed result is already the bounded stored summary.
+    return result if result.get('state') == 'synchronized' else bound(result)
+
+
+def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=0,
+                 files=None, take_file=False, timeout=20):
     options = dict(import_files=import_files, through=through, files=files, take_file=take_file)
     sync.validate_input(options)
     scope = operation_scope(caller_scope, request_id)

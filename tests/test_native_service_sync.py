@@ -431,3 +431,34 @@ def test_completed_result_is_bounded_and_counts_omitted_receipts():
     assert summary['imports'] == [{'file': item['file'], 'state': 'accepted', 'commit_seq': item['commit_seq'],
                                    'request_id': item['request_id']} for item in result['imports']][:len(summary['imports'])]
     assert summary['imports_omitted'] == 10000 - len(summary['imports'])
+
+
+def test_pending_result_returned_to_the_caller_is_bounded_and_counts_omissions():
+    from taskmaster.coordinator import sync_worker
+    from taskmaster.coordinator.protocol import MAX_MESSAGE_BYTES
+    from taskmaster.native.migrate import encode
+    files = [f'tasks/t-{n:05}.md' for n in range(10000)]
+    result = dict(state='pending', through=5, captured=False, observed=0, unresolved=list(files),
+                  notices=[f'sync pending: {rel}: ' + 'why ' * 1000 for rel in files],
+                  warnings=[f'duplicate import path skipped: {rel}' for rel in files],
+                  caller_scope='c', request_id='r', receipt_scope='sync-' + 'a' * 64, import_files=True,
+                  imports=[dict(file=rel, state='conflict', reason='r' * 4096, commit_seq=n,
+                                caller_scope='sync-' + 'a' * 64, request_id='b' * 64) for n, rel in enumerate(files)])
+    assert len(encode({'result': result}).encode()) > MAX_MESSAGE_BYTES
+    bounded = sync_worker.bound(result)
+    assert len(encode({'result': bounded}).encode()) < MAX_MESSAGE_BYTES // 2
+    assert bounded['state'] == 'pending' and bounded['receipt_scope'] == result['receipt_scope']
+    for key in ('unresolved', 'notices', 'imports', 'warnings'):
+        assert bounded[key] == result[key][:len(bounded[key])]
+        assert len(bounded[key]) + bounded.get(key + '_omitted', 0) == len(result[key])
+    # The why survives first: every unresolved path, and notices before receipts.
+    assert bounded['unresolved'] == files and bounded['notices']
+    assert bounded['imports_omitted'] > 0
+
+
+def test_synchronize_bounds_a_pending_result(monkeypatch):
+    from taskmaster.coordinator import sync_worker
+    big = dict(state='pending', unresolved=[], notices=['n' * 4096] * 1000, imports=[], warnings=[])
+    monkeypatch.setattr(sync_worker, '_synchronize', lambda owner, **arguments: big)
+    bounded = sync_worker.synchronize(None, caller_scope='c', request_id='r')
+    assert bounded['notices_omitted'] > 0
