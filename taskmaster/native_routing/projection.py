@@ -32,6 +32,7 @@ import time
 import uuid
 
 from taskmaster import store
+from taskmaster.projection_paths import safe_path
 from taskmaster.native import db as native_db
 from taskmaster.native import projection as outbox
 from taskmaster.native.migrate import rows
@@ -54,7 +55,8 @@ _DOMINANT_LOCK = threading.Lock()
 def _dominant_crlf(backlog_dir: Path) -> bool:
     with _DOMINANT_LOCK:
         if backlog_dir not in _DOMINANT:
-            _DOMINANT[backlog_dir] = store.detect_dominant_crlf(backlog_dir)
+            _DOMINANT[backlog_dir] = store.detect_dominant_crlf(
+                backlog_dir, path_guard=lambda rel: safe_path(backlog_dir, rel))
         return _DOMINANT[backlog_dir]
 
 
@@ -70,6 +72,7 @@ class _Render:
         self.connection, self.backlog_dir = connection, backlog_dir
 
     def job(self, job: outbox.Job) -> bytes | None:
+        safe_path(self.backlog_dir, job.file)
         if job.effect == "delete":
             return None
         entity = job.entity
@@ -80,10 +83,10 @@ class _Render:
         if job.moved_from:
             # A move carries the old file's line endings to the new path; the old
             # file is still on disk here, because every render precedes every publish.
-            default_crlf = store._probe_crlf(self.backlog_dir / job.moved_from)
+            default_crlf = store._probe_crlf(safe_path(self.backlog_dir, job.moved_from))
         if default_crlf is None:
             default_crlf = _dominant_crlf(self.backlog_dir)
-        return store._match_line_endings(content, self.backlog_dir / job.file, default_crlf)
+        return store._match_line_endings(content, safe_path(self.backlog_dir, job.file), default_crlf)
 
     def _stale(self, rel: str, kinds: tuple[str, ...]) -> int | None:
         placeholders = ",".join("?" for _ in kinds)
@@ -100,7 +103,7 @@ class _Render:
         return snapshot._assemble(cores, None, include_body=True)
 
     def _matched(self, rel: str, content: bytes) -> bytes:
-        return store._match_line_endings(content, self.backlog_dir / rel, _dominant_crlf(self.backlog_dir))
+        return store._match_line_endings(content, safe_path(self.backlog_dir, rel), _dominant_crlf(self.backlog_dir))
 
     def derived(self, warnings: list[str]) -> list[tuple[str, str, bytes, int]]:
         """`(file, kind, bytes, seq)` for every stale, unheld derived file, from one read snapshot."""

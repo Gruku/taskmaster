@@ -175,6 +175,25 @@ class Client:
     def flush(self, through):
         return self.call('flush', through=through)
 
+    def sync(self, *, import_files=True, through=0, files=None, take_file=False,
+             caller_scope='explicit-sync', request_id=None):
+        from taskmaster.native.sync import validate_input
+        request_id = uuid.uuid4().hex if request_id is None else request_id
+        options = dict(import_files=import_files, through=through, files=files, take_file=take_file)
+        validate_input(options)
+        if not all(isinstance(value, str) and 1 <= len(value) <= 256 for value in (caller_scope, request_id)):
+            raise ValueError('sync requires caller_scope and request_id')
+        try:
+            return self.call('sync', caller_scope=caller_scope, request_id=request_id, **options)
+        except ServiceUnavailable as exc:
+            raise type(exc)(f'{exc}; inspect sync_status or retry the same sync id; '
+                            f'request_id={request_id!r}, caller_scope={caller_scope!r}',
+                            request_id=request_id, caller_scope=caller_scope,
+                            may_have_committed=exc.may_have_committed) from exc
+
+    def sync_status(self, caller_scope, request_id):
+        return self.call('sync_status', caller_scope=caller_scope, request_id=request_id)
+
     def cancel(self, caller_scope, request_id):
         return self.call('cancel', caller_scope=caller_scope, request_id=request_id)
 

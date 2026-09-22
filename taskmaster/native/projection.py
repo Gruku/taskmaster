@@ -28,6 +28,8 @@ import sqlite3
 import time
 from typing import Callable, Iterable
 
+from taskmaster.projection_paths import safe_path
+
 from .db import assert_native
 
 LEASE_SECONDS = 30.0
@@ -511,7 +513,7 @@ class Exporter:
             self.connection.execute("DELETE FROM sync_state WHERE key=?", (ASIDE_PREFIX + rel,))
 
     def _path(self, rel: str) -> Path:
-        return self.backlog_dir / safe_relative(rel)
+        return safe_path(self.backlog_dir, str(safe_relative(rel)))
 
     def _classify(self, rel: str, path: Path, content: bytes | None) -> tuple[str, bytes | None]:
         """§2.4: what the bytes on disk say about publishing over them.
@@ -565,7 +567,7 @@ class Exporter:
             if verdict == "flag":
                 return self._flag(rel, kind, ident, data, job)
             if verdict == "agrees":
-                return self._ack(rel, kind, ident, _digest(data), path.stat(), exported_seq, job)
+                return self._ack(rel, kind, ident, _digest(data), path.stat(), exported_seq, job, content=data)
             if content is not None:
                 temp = self._write_temp(path, content, tag, rel)
             if data is not None:
@@ -618,7 +620,7 @@ class Exporter:
             self._failed(rel, job)
             return "failed"
         return self._ack(rel, kind, ident, None if content is None else _digest(content), stat,
-                         exported_seq, job)
+                         exported_seq, job, content=content)
 
     def _write_temp(self, path: Path, content: bytes, tag: str, rel: str) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -747,7 +749,13 @@ class Exporter:
             raise
         self.warnings.append(f"export pending: {rel} — retried on next call")
 
-    def _ack(self, rel, kind, ident, digest, stat, exported_seq, job) -> str:
+    def _ack(self, rel, kind, ident, digest, stat, exported_seq, job, *, content) -> str:
+        # N13 needs the exact bytes this generation observed/wrote, not a render
+        # of a later database revision. Keep them atomically with their manifest
+        # digest; an editor changing the file after publication is then a merge
+        # against this real base rather than an invented one.
+        if (content is None) != (digest is None) or (content is not None and _digest(content) != digest):
+            raise ValueError("projection acknowledgement bytes do not match digest")
         keep = self._still_on_disk(rel)
         self._begin()
         try:
@@ -759,6 +767,7 @@ class Exporter:
                 return "lost"
             if digest is None:
                 self.connection.execute("DELETE FROM projection WHERE file=?", (rel,))
+                self.connection.execute("DELETE FROM projection_base WHERE file=?", (rel,))
             else:
                 self.connection.execute(
                     "INSERT INTO projection(file,kind,id,content_hash,mtime,size,dirty,quarantined,exported_seq) "
@@ -766,7 +775,8 @@ class Exporter:
                     "content_hash=excluded.content_hash,mtime=excluded.mtime,size=excluded.size,dirty=0,quarantined=0,"
                     "exported_seq=excluded.exported_seq",
                     (rel, kind, ident, digest, stat.st_mtime, stat.st_size, exported_seq))
-            self.connection.execute("DELETE FROM projection_base WHERE file=?", (rel,))
+                self.connection.execute("INSERT INTO projection_base(file,content) VALUES(?,?) "
+                                        "ON CONFLICT(file) DO UPDATE SET content=excluded.content", (rel, content))
             self._remember(rel, keep)
             self.checkpoint("ack_manifest", rel)
             if job is not None:

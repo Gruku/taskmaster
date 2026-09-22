@@ -90,6 +90,8 @@ class Coordinator:
         self.guard = threading.RLock()
         # N13 import and Git generation pinning share this publisher boundary.
         self.publication = threading.RLock()
+        self.execution = threading.RLock()
+        self.active_syncs = 0
         self.stopping, self.export_needed = threading.Event(), threading.Event()
         self.checkpoint = checkpoint or (lambda stage: None)
         self.exporter = exporter
@@ -197,24 +199,25 @@ class Coordinator:
                     continue
                 try:
                     self.checkpoint('dequeued')
-                    # Recheck the path after queue wait, even when the persistent
-                    # writer handle still names a previously opened database.
-                    with closing(self._connect(readonly=True)):
-                        pass
-                    if connection is None:
-                        connection = self._connect()
-                    def admitted(stage):
-                        if stage == 'admitted':
-                            with self.guard:
-                                # Cancel and admission have one ordering point.
-                                if work.cancelled.is_set():
-                                    raise contracts.CancelledBeforeExecution('cancelled before execution')
-                                work.admitted = True
-                        self.checkpoint(stage)
-                    receipt = commands.execute(connection, work.request, cancelled=work.cancelled.is_set,
-                                               checkpoint=admitted)
-                    work.future.set_result(receipt)
-                    self.export_needed.set()
+                    with self.execution:
+                        # Check after both queue wait and any generation pause;
+                        # a persistent handle may still name a replaced database.
+                        with closing(self._connect(readonly=True)):
+                            pass
+                        if connection is None:
+                            connection = self._connect()
+                        def admitted(stage):
+                            if stage == 'admitted':
+                                with self.guard:
+                                    # Cancel and admission have one ordering point.
+                                    if work.cancelled.is_set():
+                                        raise contracts.CancelledBeforeExecution('cancelled before execution')
+                                    work.admitted = True
+                            self.checkpoint(stage)
+                        receipt = commands.execute(connection, work.request, cancelled=work.cancelled.is_set,
+                                                   checkpoint=admitted)
+                        work.future.set_result(receipt)
+                        self.export_needed.set()
                 except BaseException as exc:
                     # A failed job must not strand the writer or its queue. The
                     # durable receipt, not this transport error, resolves retry.
@@ -296,6 +299,10 @@ class Coordinator:
         finally:
             self.publication.release()
 
+    def sync(self, **arguments):
+        from .sync_worker import synchronize
+        return synchronize(self, **arguments)
+
     def dispatch(self, message):
         if not isinstance(message, dict):
             raise ValueError('IPC message must be an object')
@@ -309,7 +316,17 @@ class Coordinator:
         if method == 'status':
             return dict(self.identity, nonce=self.nonce, queued=self.queue.qsize(),
                         linear_queued=len(self.linear.jobs),
-                        export_error=self.last_export_error)
+                        export_error=self.last_export_error, active_syncs=self.active_syncs)
+        if method == 'sync':
+            return self.sync(caller_scope=message.get('caller_scope'), request_id=message.get('request_id'),
+                             import_files=message.get('import_files', True), through=message.get('through', 0),
+                             files=message.get('files'), take_file=message.get('take_file', False))
+        if method == 'sync_status':
+            from .sync_worker import operation_scope
+            from taskmaster.native.sync import operation_state
+            scope = operation_scope(message.get('caller_scope'), message.get('request_id'))
+            with closing(self._connect(readonly=True)) as connection:
+                return operation_state(connection, scope) or {'state': 'unknown'}
         if method == 'linear_retry':
             return self.linear.response(message.get('caller_scope'), message.get('request_id'), message.get('target_id', ''))
         if method == 'receipt':
@@ -341,7 +358,7 @@ class Coordinator:
 
     def idle_expired(self, seconds):
         with self.guard, self.linear.guard:
-            return (not self.pending and not self.linear.jobs
+            return (not self.pending and not self.linear.jobs and not self.active_syncs
                     and time.monotonic() - self.last_activity >= seconds)
 
     def stop(self):

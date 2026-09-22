@@ -6,7 +6,9 @@ import sqlite3
 
 from taskmaster.native import contracts, db, schema
 
-SERVICE_PROTOCOL = 1
+# N13 adds explicit import/barrier operations. A stale N12 owner must refuse the
+# new client handshake rather than accepting only part of its synchronization.
+SERVICE_PROTOCOL = 2
 MAX_MESSAGE_BYTES = contracts.MAX_BYTES + 8192
 # Receipts include committed fields for up to 100 existing entities. Their
 # output can exceed a small metadata request without accepting a larger input.
