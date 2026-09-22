@@ -22,8 +22,6 @@ REFUSALS = {
     ("backlog_canonicalize_layout", None): (lambda: bs.backlog_canonicalize_layout(), ".taskmaster/"),
     ("backlog_backfill_lanes", None): (lambda: bs.backlog_backfill_lanes(), "backlog_update_task"),
     ("backlog_index_status", None): (lambda: bs.backlog_index_status(rebuild=True), "backlog_store_status"),
-    ("backlog_handover_resync", None): (lambda: bs.backlog_handover_resync(), "backlog_handover_update_status"),
-    ("backlog_issue_resync", None): (lambda: bs.backlog_issue_resync(), "backlog_issue_update"),
     ("backlog_link", "reconcile"): (lambda: bs.backlog_link(action="reconcile"), 'action="validate"'),
     ("backlog_linear", "bootstrap_apply"): (
         lambda: bs.backlog_linear(action="bootstrap_apply", workspace_alias="cm", team_id="T1", token_env="X"),
@@ -78,11 +76,3 @@ def test_unservable_native_store_refuses_in_each_router_error_shape(twins):
         assert "not ready" in json.loads(bs.backlog_linear(action="status"))["error"]
         text = bs.backlog_status()
     assert text.startswith("Error: ") and "not ready" in text, text
-
-
-def test_resync_guidance_no_longer_promises_an_overwrite():
-    """N11: a hand-edited file is flagged and kept, never re-exported over (D2)."""
-    for pair in (("backlog_handover_resync", None), ("backlog_issue_resync", None)):
-        text = registry.GUIDANCE[pair]
-        assert "over any hand edit" not in text, text
-        assert "backlog_resolve_conflict" in text, text

@@ -187,6 +187,11 @@ EXERCISES = {
         bs.backlog_handover_supersede(old_id="2026-09-17-gate-handover", new_id="2026-09-17-gate-successor")),
     ("backlog_handover_update_status", None): lambda: bs.backlog_handover_update_status(
         handover_id="2026-09-17-gate-handover", status="closed", reason="gate"),
+    # N13 step 7: a hand edit to each kind is imported through the coordinator's barrier.
+    ("backlog_handover_resync", None): lambda: (
+        _hand_edit(".taskmaster/handovers/2026-09-17-gate-handover.md"), bs.backlog_handover_resync())[1],
+    ("backlog_issue_resync", None): lambda: (
+        _hand_edit(".taskmaster/issues/ISS-001.md"), bs.backlog_issue_resync())[1],
     ("backlog_thread_list", None): lambda: bs.backlog_thread_list(include_closed=True),
     ("backlog_thread_resume", None): lambda: [bs.backlog_thread_resume(ref="test-epic"),
                                               bs.backlog_thread_resume(ref="2026-09-17-gate-handover")],

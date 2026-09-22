@@ -35,7 +35,7 @@ def adapter(tool: str, *, actions: "tuple[str, ...] | None" = None, unknown=None
 def _load_families() -> None:
     # Imported for their registrations; each module is one routed family.
     from . import (batch, changes, claims, conflicts, context, documents, epics_phases,  # noqa: F401
-                   handovers, links_areas, notes, overview, records, tasks)
+                   handovers, links_areas, notes, overview, records, resync, tasks)
 
 
 _NATIVE = "this project's store is a native authority"
@@ -63,17 +63,6 @@ GUIDANCE: dict[tuple[str, "str | None"], str] = {
     ("backlog_index_status", None): (
         f"{_NATIVE}, which keeps no separate derived index to report or rebuild: its search and graph "
         "tables are maintained inside every command. Use `backlog_store_status` for store health."),
-    ("backlog_handover_resync", None): (
-        f"{_NATIVE}: handovers are database rows and edited handover files are never read back. The "
-        "next write to a hand-edited handover keeps the file as it is and flags it rather than exporting "
-        "over it; `backlog_resolve_conflict` compares the two and keeps the store's version. The handover "
-        "index and its cap are maintained on every write. Make changes with "
-        "`backlog_handover_update_status` or `backlog_handover_supersede`."),
-    ("backlog_issue_resync", None): (
-        f"{_NATIVE}: issues are database rows and the issue index is derived from them on every read, "
-        "so there is nothing to resync. Edited issue files are never read back: the next write to one "
-        "keeps it and flags it, and `backlog_resolve_conflict` compares the two. Make changes with "
-        "`backlog_issue_update`."),
     ("backlog_link", "reconcile"): (
         f"{_NATIVE}, where every link write records its inverse in the same transaction. Run "
         "`backlog_link(action=\"validate\")` to list any asymmetric or orphaned links, and fix them "
