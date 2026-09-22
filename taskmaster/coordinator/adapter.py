@@ -60,6 +60,12 @@ class NativeCall:
             if notice not in self.notices:
                 self.notices.append(notice)
 
+    def sync(self, files, *, take_file=False):
+        """Explicit import of named projection files through the coordinator's sync
+        barrier (N13): prepare -> fenced sync.apply -> generation publication."""
+        return self.client.sync(files=list(files), take_file=take_file, caller_scope=self.session,
+                                request_id=uuid.uuid4().hex)
+
     def drain(self, through=None):
         if through is None:
             with self.read() as snapshot:

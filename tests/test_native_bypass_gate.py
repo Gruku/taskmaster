@@ -26,6 +26,9 @@ from native_twins import make_twins
 
 ROUTING_DIR = Path(bs.__file__).resolve().parent / "native_routing"
 EXPORT_FILE = ROUTING_DIR / "projection.py"
+# N13 explicit import: the one sanctioned reader of authored projection files,
+# run by the coordinator (in-process in these tests) under its publication boundary.
+IMPORT_FILE = ROUTING_DIR.parent / "coordinator" / "sync_files.py"
 INVENTORY = Path(__file__).resolve().parent / "fixtures" / "native_contracts.json"
 
 
@@ -54,6 +57,19 @@ def _hand_edit(rel):
     # Appending writes the file without reading it: the rig forbids projection reads.
     with (Path.cwd() / rel).open("a", encoding="utf-8") as handle:
         handle.write("\nGate hand edit.\n")
+
+
+def _resolved_by_file(rel):
+    answer = bs.backlog_resolve_conflict(file=rel, take="file")
+    assert answer.startswith(f"Resolved {rel}: kept the file version."), answer
+    return answer
+
+
+def _bootstrapped():
+    value = bs.backlog_linear(action="bootstrap_apply", workspace_alias="gate", team_id="T2",
+                              token_env="GATE_TWO_TOKEN", default_workspace=False)
+    assert json.loads(value).get("ok"), value
+    return value
 
 
 def _linear_retry_gate():
@@ -178,6 +194,11 @@ EXERCISES = {
         bs.backlog_handover_supersede(old_id="2026-09-17-gate-handover", new_id="2026-09-17-gate-successor")),
     ("backlog_handover_update_status", None): lambda: bs.backlog_handover_update_status(
         handover_id="2026-09-17-gate-handover", status="closed", reason="gate"),
+    # N13 step 7: a hand edit to each kind is imported through the coordinator's barrier.
+    ("backlog_handover_resync", None): lambda: (
+        _hand_edit(".taskmaster/handovers/2026-09-17-gate-handover.md"), bs.backlog_handover_resync())[1],
+    ("backlog_issue_resync", None): lambda: (
+        _hand_edit(".taskmaster/issues/ISS-001.md"), bs.backlog_issue_resync())[1],
     ("backlog_thread_list", None): lambda: bs.backlog_thread_list(include_closed=True),
     ("backlog_thread_resume", None): lambda: [bs.backlog_thread_resume(ref="test-epic"),
                                               bs.backlog_thread_resume(ref="2026-09-17-gate-handover")],
@@ -217,13 +238,17 @@ EXERCISES = {
     ("backlog_area_get", None): lambda: bs.backlog_area_get(area_id="gate-seed-area"),
     ("backlog_area_update", None): lambda: bs.backlog_area_update(area_id="gate-seed-area", field="anchors",
                                                                   value='["a/**"]'),
-    # A native flag (the drain meets a hand edit), then every branch of resolving it.
+    # A native flag (the drain meets a hand edit), then every branch of resolving it:
+    # keep the store's version, then flag again and keep the file's (N13 import).
     ("backlog_resolve_conflict", None): lambda: (
         _hand_edit(".taskmaster/tasks/test-epic-001.md"),
         bs.backlog_update_task(task_id="test-epic-001", field="notes", value="gate flag"),
         bs.backlog_resolve_conflict(),
         bs.backlog_resolve_conflict(file="tasks/test-epic-001.md"),
-        bs.backlog_resolve_conflict(file="tasks/test-epic-001.md", take="store"))[1:],
+        bs.backlog_resolve_conflict(file="tasks/test-epic-001.md", take="store"),
+        _hand_edit(".taskmaster/tasks/test-epic-001.md"),
+        bs.backlog_update_task(task_id="test-epic-001", field="notes", value="gate flag again"),
+        _resolved_by_file("tasks/test-epic-001.md"))[1:],
     ("viewer_prefs_get", None): lambda: bs.viewer_prefs_get(),
     ("viewer_prefs_set", None): lambda: bs.viewer_prefs_set(patch_json='{"theme": "dark"}'),
     ("backlog_open_viewer", None): lambda: _opened_viewer(),
@@ -243,6 +268,7 @@ EXERCISES = {
     ("backlog_project_error_trace_ladder", None): lambda: bs.backlog_project_error_trace_ladder(),
     ("backlog_linear", "link"): lambda: bs.backlog_linear(action="link", task_id="test-epic-002", external_key="ENG-9"),
     ("backlog_linear", "unlink"): lambda: bs.backlog_linear(action="unlink", task_id="test-epic-002"),
+    ("backlog_linear", "bootstrap_apply"): lambda: _bootstrapped(),
     ("backlog_linear", "probe"): lambda: bs.backlog_linear(action="probe", token_env="GATE_UNSET_TOKEN"),
     ("backlog_linear", "list"): lambda: bs.backlog_linear(action="list"),
     ("backlog_linear", "show"): lambda: bs.backlog_linear(action="show", tracker_id="linear-cm-eng-9"),
@@ -266,7 +292,7 @@ def routed_pairs() -> set:
 
 def _in_export(frame) -> bool:
     while frame is not None:
-        if Path(frame.f_code.co_filename).resolve() == EXPORT_FILE:
+        if Path(frame.f_code.co_filename).resolve() in (EXPORT_FILE, IMPORT_FILE):
             return True
         frame = frame.f_back
     return False

@@ -784,6 +784,9 @@ NATIVE_MAPPING = {
     "backlog_project_set": ["project.set"],
     "backlog_linear": ["linear.link", "linear.unlink"],
     "backlog_claim": ["task.claim_renew", "task.claim_release"],
+    # N13 step 7: resync imports the documents through the coordinator's sync barrier.
+    "backlog_handover_resync": ["sync.begin", "sync.apply", "sync.finish"],
+    "backlog_issue_resync": ["sync.begin", "sync.apply", "sync.finish"],
 }
 DEFERRED = {
     # Maintenance and migration tools own the whole store, not one entity; they
@@ -791,8 +794,6 @@ DEFERRED = {
     "backlog_init": "N15", "backlog_migrate_v3": "N15", "backlog_migrate_v4": "N15",
     "backlog_canonicalize_layout": "N15", "backlog_backfill_lanes": "N15",
     "backlog_index_status": "N15", "backlog_validate": "N15",
-    # Resync and Linear delivery are synchronization, owned by N11-N13.
-    "backlog_handover_resync": "N13", "backlog_issue_resync": "N13",
     # Resolving a file flagged because it and the store both changed (6.0.3,
     # B-089) is projection reconciliation, owned by the N11 outbox.
     "backlog_resolve_conflict": "N11",

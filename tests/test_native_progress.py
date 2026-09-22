@@ -576,9 +576,10 @@ def test_a_native_flag_is_named_on_every_result(twins):
         bs.backlog_update_task(task_id="test-epic-002", field="notes", value="store side")
         from taskmaster.native_routing.conflicts import flag_notice
         notice = flag_notice({"file": "tasks/test-epic-002.md", "kind": "task", "id": "test-epic-002"})
-        assert notice.startswith(store.projection_conflict_notice(
-            {"file": "tasks/test-epic-002.md", "kind": "task", "id": "test-epic-002"})[:120])
-        assert 'take="file"' not in notice and 'take="store"' in notice
+        # N13 step 7: the native resolver keeps either side, so the legacy notice stands.
+        assert notice == store.projection_conflict_notice(
+            {"file": "tasks/test-epic-002.md", "kind": "task", "id": "test-epic-002"})
+        assert 'take="file"' in notice and 'take="store"' in notice
         answer = bs.backlog_get_task(task_id="test-epic-001")
         assert notice in answer, answer
         assert answer.count(notice) == 1

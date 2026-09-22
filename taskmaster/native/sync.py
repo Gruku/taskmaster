@@ -120,7 +120,9 @@ def validate(operation, arguments):
         if not isinstance(row_kind, str) or row_kind not in schema.KINDS:
             raise ValueError("invalid import entity kind")
         if kind == "backlog":
-            if row_kind not in {"backlog", "epic", "phase", "task"}:
+            if row_kind == "task":
+                raise ValueError("backlog import cannot replace task rows; tasks are owned by their task documents")
+            if row_kind not in {"backlog", "epic", "phase"}:
                 raise ValueError("backlog import cannot replace indexed narrative rows")
             if row_kind == "backlog" and row_id != BACKLOG_ID:
                 raise ValueError("invalid backlog singleton")

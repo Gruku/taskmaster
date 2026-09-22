@@ -278,7 +278,7 @@ def project_init(call, *, name, slug):
 # ── Linear (local actions only) ─────────────────────────────────────────────
 
 
-@adapter("backlog_linear", actions=("probe", "link", "unlink", "list", "show", "status", "retry"),
+@adapter("backlog_linear", actions=("probe", "bootstrap_apply", "link", "unlink", "list", "show", "status", "retry"),
          unknown=lambda action: json.dumps({"error": f"unknown action {action!r}"}))
 def linear(call, *, action, task_id, external_key, workspace_alias, token_env, team_id, status_mapping,
            priority_mapping, default_workspace, tracker_id, target_id, request_id, caller_scope):
@@ -298,6 +298,9 @@ def linear(call, *, action, task_id, external_key, workspace_alias, token_env, t
             return bs._linear_show_text(reads.rows_only(snapshot), tracker_id)
     if action == "status":
         return _linear_status(call, backlog)
+    if action == "bootstrap_apply":
+        return _linear_bootstrap(call, workspace_alias, team_id, token_env, status_mapping, priority_mapping,
+                                 default_workspace)
     if action == 'retry':
         try:
             return json.dumps(call.client.linear_retry(caller_scope=caller_scope or call.session,
@@ -309,6 +312,17 @@ def linear(call, *, action, task_id, external_key, workspace_alias, token_env, t
     if action == "unlink":
         return _linear_unlink(call, task_id)
     return _linear_link(call, backlog, task_id, external_key, workspace_alias)
+
+
+def _linear_bootstrap(call, workspace_alias, team_id, token_env, status_mapping, priority_mapping,
+                      default_workspace):
+    # linear.yaml is authored configuration: the coordinator rewrites it atomically
+    # under its publication boundary (N13 step 7), never this process.
+    try:
+        entry = bs._linear_workspace_entry(workspace_alias, team_id, token_env, status_mapping, priority_mapping)
+        return json.dumps(call.client.linear_bootstrap(entry=entry, default_workspace=bool(default_workspace)))
+    except (ValueError, KeyError) as exc:
+        return json.dumps({"error": exc.args[0] if isinstance(exc, KeyError) and exc.args else str(exc)})
 
 
 def _linear_status(call, backlog):

@@ -1,39 +1,27 @@
 # User intent: a native store that flags a hand-edited projection file (N11, D2) must
-# be able to clear the flag with its own tool: list, compare, keep the store's version.
-# Keeping the file's version needs the native importer (N13), so that side refuses.
-"""`backlog_resolve_conflict` on native stores (N11 S10, decision D3)."""
+# be able to clear the flag with its own tool: list, compare, keep either version.
+# Keeping the file's version imports its observed bytes through the N13 sync barrier.
+"""`backlog_resolve_conflict` on native stores (N11 S10, decision D3; N13 step 7)."""
 from __future__ import annotations
 
 import base64
 import hashlib
 
+from taskmaster.coordinator import sync_files
 from taskmaster.native import projection as outbox
 
 from . import projection
 from .registry import adapter
 from .runtime import error_text
 
-_TAKE_FILE_REFUSAL = (
-    '`backlog_resolve_conflict` with take="file" cannot run here: this project\'s store is a native '
-    "authority, and importing an edited file into it needs the native importer, which ships with N13. "
-    "To keep the file's version, copy what you need from backlog_resolve_conflict(file=\"{file}\") into "
-    "a normal edit (for example `backlog_update_task`), then resolve with take=\"store\". Nothing was changed.")
-
-
 _QUARANTINED = "before activation (quarantined by the legacy store)"
 
 
 def flag_notice(conflict: dict) -> str:
     """The line every native result carries while a file stays flagged: the legacy
-    notice, ending with what the native resolver can do (D3: take="store" only)."""
+    notice, since the native resolver now keeps either side (N13 step 7)."""
     from taskmaster import store
-    text = store.projection_conflict_notice(conflict)
-    legacy_tail = 'then keep one with take="file" or take="store".'
-    if not text.endswith(legacy_tail):
-        return text
-    return text[:-len(legacy_tail)] + (
-        "then keep the store's version with take=\"store\"; keeping the file's version needs "
-        "the native importer (N13), so copy what you need from it into a normal edit first.")
+    return store.projection_conflict_notice(conflict)
 
 
 def _conflicts(call) -> list[dict]:
@@ -97,7 +85,7 @@ def resolve_conflict(call, *, file, take):
     if file not in dict.fromkeys(c["file"] for c in _conflicts(call)):
         return f"Error: {file} is not flagged; there is nothing to resolve"
     if take == "file":
-        return "Error: " + _TAKE_FILE_REFUSAL.format(file=file)
+        return _take_file(call, file)
     replaced = projection.read_file(call.backlog_dir, file)
     try:
         # The exact bytes go into the resolution, never a lossy decoding of them.
@@ -111,4 +99,67 @@ def resolve_conflict(call, *, file, take):
     if file == "backlog.yaml":
         message += (" This took the whole file: every epic and phase entry in "
                     "backlog.yaml now comes from the store version.")
+    return call.finish(message)
+
+
+def _take_file(call, file: str) -> str:
+    """Keep the file's version: an explicit import of exactly the bytes on disk.
+
+    The coordinator observes the file, parses it (identity included), fences the
+    candidate against the projection manifest (flag, trusted base, publication)
+    and every entity revision, rechecks the bytes before submitting and after
+    committing, and imports only the entities the file names. Nothing is deleted
+    because the file omits it; the observed bytes stay in the event history.
+    """
+    try:
+        result = call.sync([file], take_file=True)
+    except (ValueError, KeyError) as exc:
+        return error_text(exc)
+    imported = next((item for item in result.get("imports") or [] if item.get("file") == file), None)
+    reasons = [notice.split(": ", 2)[-1] for notice in result.get("notices") or []
+               if notice.startswith(f"sync pending: {file}: ")]
+    if imported is None:
+        if _already_taken(call, file):
+            # A retry of the same sync id (a lost reply) finds the bytes already
+            # imported and reports them unchanged: the first attempt committed.
+            return _resolved(call, file, result)
+        if result.get("imports_omitted"):
+            return (f"Error: the outcome of taking {file} is unknown: its import receipt is not in the bounded "
+                    f"result. Inspect the receipts in scope {result.get('receipt_scope')!r} (or "
+                    f"backlog_resolve_conflict() for the flag) before retrying.")
+        reason = "; ".join(reasons) or "; ".join(result.get("notices") or []) or "it was not imported"
+        return (f"Error: {file} cannot be taken: {reason}. The file and the store were left as they are "
+                f"and the flag stays. Nothing was changed.")
+    if imported.get("state") != "accepted":
+        return (f"Error: {file} was not taken ({imported.get('state')}): "
+                f"{'; '.join(reasons) or imported.get('reason', '')}. Inspect receipt "
+                f"{imported.get('request_id')!r} in scope {imported.get('caller_scope')!r} before retrying.")
+    call.seq = imported.get("commit_seq")
+    return _resolved(call, file, result)
+
+
+def _already_taken(call, file: str) -> bool:
+    """The flag is gone and the store records exactly the bytes on disk."""
+    try:
+        observed = sync_files.observe(call.backlog_dir, file)
+    except (ValueError, OSError):
+        return False
+    if observed is None:
+        return False
+    with call.read() as snapshot:
+        connection = snapshot.connection
+        if outbox.held_file(connection, file):
+            return False
+        record = connection.execute("SELECT content_hash FROM projection WHERE file=?", (file,)).fetchone()
+    return record is not None and record[0] == observed.digest
+
+
+def _resolved(call, file: str, result: dict) -> str:
+    for notice in result.get("notices") or []:
+        if notice not in call.notices:
+            call.notices.append(notice)
+    message = f"Resolved {file}: kept the file version."
+    if file == "backlog.yaml":
+        message += (" This took the whole file: every epic and phase entry in "
+                    "backlog.yaml now comes from the file version.")
     return call.finish(message)
