@@ -407,9 +407,14 @@ def _bounded_results(results):
     return kept
 
 
-def run(owner, *, kind, caller_scope, request_id, message=None, ref=None, timeout=GIT_TIMEOUT, worktree=None):
+def run(owner, *, kind, caller_scope, request_id, message=None, ref=None, timeout=GIT_TIMEOUT, worktree=None,
+        sync_timeout=None):
+    """`sync_timeout` bounds the pre-sync (protocol.SYNC_TIMEOUT by default); `timeout`
+    bounds the Git child."""
+    from .protocol import SYNC_TIMEOUT, validate_sync_timeout
     request = _request(caller_scope, request_id)
     _validate(kind, message, ref)
+    sync_timeout = validate_sync_timeout(SYNC_TIMEOUT if sync_timeout is None else sync_timeout)
     if worktree is not None and (not isinstance(worktree, str) or not worktree):
         raise ValueError('worktree must be an absolute checkout path')
     if type(timeout) not in (int, float) or not 1 <= timeout <= 3600:
@@ -429,7 +434,7 @@ def run(owner, *, kind, caller_scope, request_id, message=None, ref=None, timeou
         return {'state': 'pending', 'reason': 'publisher busy' + (
             '; a managed Git operation is in progress' if owner.git_active else '')}
     try:
-        return _run_held(owner, kind, request, message, ref, timeout, worktree)
+        return _run_held(owner, kind, request, message, ref, timeout, worktree, sync_timeout)
     finally:
         owner.publication.release()
 
@@ -438,7 +443,7 @@ def _refused(reason, **extra):
     return dict(extra, state='refused', reason=reason)
 
 
-def _run_held(owner, kind, request, message, ref, timeout, worktree=None):
+def _run_held(owner, kind, request, message, ref, timeout, worktree=None, sync_timeout=None):
     if owner.stopping.is_set():
         return _refused('coordinator stopping')
     if owner.git_pin is not None:
@@ -481,7 +486,8 @@ def _run_held(owner, kind, request, message, ref, timeout, worktree=None):
     # captured target. Later domain writes stay pending for the next generation.
     synced = owner.sync(caller_scope=f'git:{request[0]}'[:256], request_id=f'{op_id}:pre',
                         import_files=True, through=0, files=None, take_file=False,
-                        **({'worktree': str(root)} if checkout.linked else {}))
+                        **({'worktree': str(root)} if checkout.linked else {}),
+                        **({} if sync_timeout is None else {'timeout': sync_timeout}))
     if synced.get('state') != 'synchronized':
         return _refused('projections are not synchronized; resolve the listed paths first', sync=synced)
     gen, files, mismatched = generation(owner, synced.get('through', 0), checkout.backlog)

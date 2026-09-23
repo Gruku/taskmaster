@@ -14,6 +14,7 @@ from taskmaster.native.migrate import encode
 from taskmaster.native.queries import Repository
 from taskmaster.projection_parse import classify
 from . import sync_files
+from .protocol import SYNC_TIMEOUT, validate_sync_timeout as validate_timeout
 from .sync_prepare import prepare
 
 
@@ -106,9 +107,10 @@ def synchronize(owner, **arguments):
 
 
 def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=0,
-                 files=None, take_file=False, timeout=20, worktree=None):
+                 files=None, take_file=False, timeout=SYNC_TIMEOUT, worktree=None):
     options = dict(import_files=import_files, through=through, files=files, take_file=take_file)
     sync.validate_input(options)
+    validate_timeout(timeout)
     if worktree is not None and (not isinstance(worktree, str) or not worktree):
         raise ValueError('worktree must be an absolute checkout path')
     scope = operation_scope(caller_scope, request_id)
@@ -235,6 +237,7 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
                     found, warnings = {}, [unverified]
                 result['warnings'].extend(warnings)
                 drift |= set(found)
+            owner.checkpoint('sync_files_selected')
             for rel in selected:
                 if not remaining() or owner.stopping.is_set():
                     pending(rel, 'time budget exhausted or coordinator stopping; retry the same sync id')
