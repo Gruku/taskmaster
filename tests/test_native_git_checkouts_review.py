@@ -274,3 +274,30 @@ def test_cli_release_drift_verbs_and_checkout_echo(repo, monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out)['checkout'] == str(repo)
     git_cli.main(['--root', str(repo), 'recover', '--release-drift', 'import'])
     assert calls[-1]['release_drift'] == 'import'
+
+
+# ── M4: a worktree removed and re-added under the same name ────────────────
+
+def _linked_records(owner):
+    from taskmaster.native import checkouts as store
+    with closing(owner._connect(readonly=True)) as connection:
+        return [ident for ident, value in store.records(connection).items() if value.get('linked')]
+
+
+def test_same_name_worktree_cycles_forget_the_replaced_checkout(repo, monkeypatch):
+    from taskmaster.coordinator import checkouts
+    monkeypatch.setattr(checkouts, 'MAX_LINKED', 1)  # every stale record would hit the cap
+    path = repo.parent / 'cycled'
+    with Coordinator(repo) as owner:
+        client = client_for(repo)
+        ids = set()
+        for cycle in range(3):
+            git(repo, 'worktree', 'add', '-q', '-b', f'cycle-{cycle}', str(path))
+            result = client.sync(worktree=path)
+            assert result['state'] == 'synchronized', result
+            ids.add(result['checkout']['id'])
+            git(repo, 'worktree', 'remove', str(path))
+        assert len(ids) == 3
+        git(repo, 'worktree', 'add', '-q', '-b', 'cycle-last', str(path))
+        assert client.sync(worktree=path)['state'] == 'synchronized'
+        assert len(_linked_records(owner)) == 1

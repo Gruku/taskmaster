@@ -119,10 +119,27 @@ def resolve(root, worktree=None) -> Checkout:
         raise GitRefused(f'worktree must be the top level of its checkout ({top})')
     if _norm(git_dir.parent) != _norm(common / 'worktrees'):
         raise GitRefused(f'{path} is not a linked worktree of {owner.root}')
+    return Checkout(_identity(common, git_dir), top.resolve(), git_dir.resolve(), common.resolve(), True)
+
+
+def _identity(common, git_dir) -> str:
+    """A linked checkout's id: its admin directory (common dir, name, device:inode)."""
     info = os.stat(git_dir)
-    key = f'{_norm(common)}\0{git_dir.name}\0{info.st_dev}:{info.st_ino}'
-    ident = 'wt-' + hashlib.sha256(key.encode('utf-8', 'surrogateescape')).hexdigest()[:24]
-    return Checkout(ident, top.resolve(), git_dir.resolve(), common.resolve(), True)
+    key = f'{_norm(common)}\0{Path(git_dir).name}\0{info.st_dev}:{info.st_ino}'
+    return 'wt-' + hashlib.sha256(key.encode('utf-8', 'surrogateescape')).hexdigest()[:24]
+
+
+def _replaced(checkout: Checkout, ident: str, value: dict) -> str | None:
+    """Why a recorded linked checkout no longer exists in Git, or None."""
+    git_dir = value.get('git_dir')
+    if not git_dir or not Path(git_dir).is_dir():
+        return 'its Git admin directory is gone'
+    try:
+        if _identity(checkout.common_dir, git_dir) != ident:
+            return 'its Git admin directory was replaced (worktree removed and re-added under the same name)'
+    except OSError:
+        return 'its Git admin directory is gone'
+    return None
 
 
 # ── Observations ───────────────────────────────────────────────────────────
@@ -319,18 +336,19 @@ def remember(owner, checkout: Checkout, observed: dict | None, **extra):
 
 
 def register(owner, checkout: Checkout) -> list[str]:
-    """Admit a linked checkout, forgetting checkouts whose Git admin directory is gone."""
+    """Admit a linked checkout, forgetting checkouts whose Git admin directory is gone or
+    now belongs to another checkout (the id is recomputed from the directory itself)."""
     notices = []
 
     def apply(connection):
         known = store.records(connection)
         for ident, value in known.items():
-            if ident == store.MAIN or ident == checkout.id:
+            if ident == store.MAIN or ident == checkout.id or not value.get('linked'):
                 continue
-            git_dir = value.get('git_dir')
-            if git_dir and not Path(git_dir).is_dir():
+            why = _replaced(checkout, ident, value)
+            if why:
                 store.forget(connection, ident)
-                notices.append(f'forgot removed worktree {value.get("path")} ({ident}): its Git admin directory is gone')
+                notices.append(f'forgot removed worktree {value.get("path")} ({ident}): {why}')
         linked = [ident for ident, value in store.records(connection).items() if value.get('linked')]
         if checkout.id not in linked and len(linked) >= MAX_LINKED:
             raise ValueError(f'more than {MAX_LINKED} linked checkouts are registered; remove unused worktrees')
