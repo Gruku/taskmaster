@@ -12,6 +12,7 @@ pytestmark = [pytest.mark.skipif(sys.platform != 'win32', reason='Windows Job Ob
 
 from taskmaster.coordinator import job as jobs  # noqa: E402
 from taskmaster.coordinator.contained import ManagedChild  # noqa: E402
+from native_git_helpers import gone  # noqa: E402
 
 
 def python(tmp_path, code, *args):
@@ -34,7 +35,7 @@ def test_name_is_private_unpredictable_and_never_reused():
     with jobs.Job.create(first):
         with pytest.raises(jobs.JobUnavailable, match='already exists'):
             jobs.Job.create(first)
-    assert jobs.Job.open(first) is None
+    assert gone(first)
 
 
 def test_permitted_command_and_its_descendant_run_inside_the_job(tmp_path):
@@ -54,7 +55,7 @@ def test_permitted_command_and_its_descendant_run_inside_the_job(tmp_path):
         assert child.job.active_processes() == 0
     finally:
         child.close()
-    assert jobs.Job.open(child.job_name) is None
+    assert gone(child.job_name)
 
 
 def test_eof_before_assignment_exits_without_launching(tmp_path):
@@ -65,7 +66,7 @@ def test_eof_before_assignment_exits_without_launching(tmp_path):
         assert child.process.wait(timeout=20) == 0
     finally:
         child.close()
-    assert jobs.Job.open(child.job_name) is None
+    assert gone(child.job_name)
 
 
 def test_eof_before_permission_holds_the_job_until_retired(tmp_path):
@@ -87,7 +88,7 @@ def test_eof_before_permission_holds_the_job_until_retired(tmp_path):
     finally:
         child.close()
     assert not marker.exists()
-    assert jobs.Job.open(child.job_name) is None
+    assert gone(child.job_name)
 
 
 def test_completed_helper_holds_job_after_coordinator_eof(tmp_path):
@@ -109,7 +110,7 @@ def test_completed_helper_holds_job_after_coordinator_eof(tmp_path):
         child.close()
 
 
-def test_closing_the_last_handle_kills_members(tmp_path):
+def test_members_survive_coordinator_handle_close_while_helper_holds_job(tmp_path):
     started = tmp_path / 'started'
     child = ManagedChild(jobs.new_name())
     try:

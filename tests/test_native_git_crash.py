@@ -18,7 +18,7 @@ from taskmaster.coordinator import job as jobs
 from taskmaster.coordinator.client import Client
 from taskmaster.coordinator.protocol import ServiceUnavailable
 from taskmaster.coordinator.service import Coordinator
-from native_git_helpers import REL, commit_count, git, init_repo, install_hook, pausing_hook, wait_for
+from native_git_helpers import REL, commit_count, git, gone, init_repo, install_hook, pausing_hook, wait_for
 from test_native_service import root, request  # noqa: F401
 from test_native_service_process import ready
 
@@ -139,7 +139,7 @@ def test_replacement_cannot_publish_before_the_job_is_proven_empty(root, window)
         # Only now may the pending domain write publish.
         assert replacement.flush(racing['commit_seq'])['state'] == 'exported'
         assert 'Racing title' in (root / REL).read_text(encoding='utf-8')
-        assert jobs.Job.open(marker['job']) is None
+        assert gone(marker['job'])
     finally:
         if first.poll() is None:
             first.kill()

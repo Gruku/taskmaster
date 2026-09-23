@@ -59,3 +59,17 @@ def show(root, rev, path=REL):
 
 def commit_count(root):
     return int(git(root, 'rev-list', '--count', 'HEAD').strip())
+
+
+def gone(name, timeout=10):
+    """The job name disappears once every handle closes; handle-table teardown of an
+    exited member can lag its active-count decrement by a moment."""
+    from taskmaster.coordinator import job as jobs
+
+    def absent():
+        found = jobs.Job.open(name)
+        if found is None:
+            return True
+        found.close()
+        return False
+    return wait_for(absent, timeout)
