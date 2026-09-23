@@ -33,6 +33,9 @@ MARKER_KEY = 'git.managed'
 LAST_KEY = 'git.last'
 DRIFT_KEY = 'git.drift'  # == native.projection.DRIFT_KEY
 RECEIPTS_KEY = 'git.receipts'
+# Set-aside dirs whose files could not all be settled: [{op_id, dir, backlog, files: {rel: sha1|null}}].
+# Kept durably after the marker clears; retried by the startup sweep and shown by git_status.
+ASIDE_KEY = 'git.aside'
 RECEIPTS_KEPT = 32
 TRAILER = 'Taskmaster-Op'
 DRIFT_GUIDANCE = ('managed checkout drift: the checked-out file differs from the published generation and is '
@@ -190,20 +193,41 @@ def generation(owner, through, backlog=None):
             [rel for rel, _ in rows], mismatched)
 
 
-def _verify_tree(owner, marker, root=None):
-    """Committed .taskmaster blobs must be the recorded generation's blobs, never
-    whatever is on disk at reconcile time. None when nothing was recorded."""
-    blobs = (marker.get('generation') or {}).get('blobs')
-    if blobs is None:
-        return None
-    _, raw = probe(owner.root if root is None else root, 'ls-tree', '-r', '-z', '--full-tree', 'HEAD', '--', '.taskmaster')
+def _head_tree(root):
+    _, raw = probe(root, 'ls-tree', '-r', '-z', '--full-tree', 'HEAD', '--', '.taskmaster')
     tree = {}
     for entry in raw.split(b'\0'):
         if not entry:
             continue
         meta, _, path = entry.partition(b'\t')
         tree[path.decode('utf-8', 'surrogateescape')] = meta.split()[2].decode()
+    return tree
+
+
+def _verify_tree(owner, marker, root=None):
+    """Committed .taskmaster blobs must be the recorded generation's blobs, never
+    whatever is on disk at reconcile time. None when nothing was recorded."""
+    blobs = (marker.get('generation') or {}).get('blobs')
+    if blobs is None:
+        return None
+    tree = _head_tree(owner.root if root is None else root)
     return [rel for rel, ids in sorted(blobs.items()) if tree.get(f'.taskmaster/{rel}') not in ids]
+
+
+def _head_records_generation(marker, root):
+    """HEAD already holds what the commit would stage: every generation file as one of
+    its blobs, and no tracked path the commit would stage as a deletion (the same rule
+    as `_commands`: tracked, not in the generation, not local, gone from disk)."""
+    generation = marker.get('generation') or {}
+    blobs = generation.get('blobs')
+    if blobs is None or len(blobs) != generation.get('files'):
+        return False  # unrecorded, or a file whose blobs were not captured
+    tree = _head_tree(root)
+    if not all(tree.get(f'.taskmaster/{rel}') in ids for rel, ids in blobs.items()):
+        return False
+    wanted = {f'.taskmaster/{rel}' for rel in blobs}
+    return not any(path not in wanted and not path.startswith('.taskmaster/local/') and not (Path(root) / path).exists()
+                   for path in tree)
 
 
 def _trailer_ops(root, commit):
@@ -226,7 +250,8 @@ def write_state(owner, **values):
         connection.execute('BEGIN IMMEDIATE')
         try:
             for name, value in values.items():
-                key = {'marker': MARKER_KEY, 'last': LAST_KEY, 'drift': DRIFT_KEY, 'receipts': RECEIPTS_KEY}[name]
+                key = {'marker': MARKER_KEY, 'last': LAST_KEY, 'drift': DRIFT_KEY, 'receipts': RECEIPTS_KEY,
+                       'aside': ASIDE_KEY}[name]
                 if value is None:
                     connection.execute('DELETE FROM sync_state WHERE key=?', (key,))
                 else:
@@ -277,7 +302,8 @@ def status(owner):
         discarded = checkouts.discarded(connection)
     return {'pin': owner.git_pin, 'active': _public(read_state(owner, MARKER_KEY)),
             'last': read_state(owner, LAST_KEY), 'drift': read_state(owner, DRIFT_KEY),
-            'checkouts': known, 'discarded': discarded, 'contained': jobs.supported()}
+            'checkouts': known, 'discarded': discarded, 'contained': jobs.supported(),
+            'aside': read_state(owner, ASIDE_KEY)}
 
 
 def _checkout_of(owner, marker):
@@ -420,79 +446,105 @@ def _aside_plan(owner, checkout, target_commit, op_id):
     target_tree = checkouts.tree_blobs(checkout, target_commit)
     head_tree = checkouts.tree_blobs(checkout, 'HEAD')
     with closing(owner._connect(readonly=True)) as connection:
-        generation = checkouts.published(connection, owner.root / '.taskmaster')
-    files = {}
-    for path, state in sorted(entries.items()):
-        if not path.startswith('.taskmaster/'):
-            continue
-        rel = path[len('.taskmaster/'):]
-        if rel.startswith('local/'):
-            continue
-        untracked = state == '??' and rel in target_tree
-        modified = state == ' M' and target_tree.get(rel) != head_tree.get(rel)
-        if not (untracked or modified):
-            continue
-        value, trusted, held = generation.get(rel, (None, None, 'unpublished'))
-        content = checkouts.read(checkout.backlog, rel)
-        if held or trusted is None or content in (None, checkouts.UNREADABLE):
-            continue
-        if value in checkouts._variants(content) or checkouts.same_text(trusted, content):
-            files[rel] = hashlib.sha1(content).hexdigest()
+        generation = checkouts.published(connection)
+        files = {}
+        for path, state in sorted(entries.items()):
+            rel = _blocking(path, state, target_tree, head_tree)
+            if rel is None:
+                continue
+            value, _, held = generation.get(rel, (None, None, 'unpublished'))
+            content = checkouts.read(checkout.backlog, rel)
+            if held or content in (None, checkouts.UNREADABLE):
+                continue
+            # Only bytes the store can reproduce are set aside (L2): a retained base, or a
+            # derived index whose re-render carries the recorded digest. A disk file is
+            # never its own authority.
+            base = checkouts.reference_bytes(connection, checkout, rel)
+            if base is None and checkouts.derived(rel):
+                rendered = checkouts.render_derived(connection, owner.root / '.taskmaster', rel)
+                base = rendered if rendered is not None and hashlib.sha1(rendered).hexdigest() == value else None
+            if checkouts.same_text(base, content):  # equal to the reproducible bytes, up to line endings
+                files[rel] = hashlib.sha1(content).hexdigest()
     if not files:
         return None
     return {'dir': str(Path(checkout.git_dir) / ASIDE_DIR / op_id), 'backlog': str(checkout.backlog),
             'files': files}
 
 
-def _move_aside(backlog, aside):
-    """Move each planned file aside, verifying the moved bytes; the first path whose bytes
-    changed since planning (it is put back) is returned, else None."""
+def _blocking(path, state, target_tree, head_tree):
+    """The projection rel of a status entry Git would refuse to replace, else None."""
+    if not path.startswith('.taskmaster/'):
+        return None
+    rel = path[len('.taskmaster/'):]
+    if rel.startswith('local/'):
+        return None
+    untracked = state == '??' and rel in target_tree
+    modified = state == ' M' and target_tree.get(rel) != head_tree.get(rel)
+    return rel if untracked or modified else None
+
+
+def _move_aside(backlog, aside, checkpoint=lambda stage: None):
+    """Move each planned file aside, verifying the moved bytes. Returns None when every
+    file moved verified; ('changed', rel) when a file changed since planning and was put
+    back (or vanished); ('stuck', rel) when a changed file could not be put back because
+    its path was written again - its bytes stay in the aside dir, never dropped.
+    OSError propagates (sharing violations are retried first)."""
     from taskmaster.native import projection
     base = Path(aside['dir'])
     for rel, digest in sorted(aside['files'].items()):
         source = safe_path(backlog, rel)
         target = base / rel
         target.parent.mkdir(parents=True, exist_ok=True)
-        if not projection._move(source, target):
-            return rel
+        if not projection._retry(lambda: projection._move(source, target)):
+            return 'changed', rel
+        checkpoint('git_aside_file_moved')
         if hashlib.sha1(target.read_bytes()).hexdigest() != digest:
-            projection._install(target, source)
-            return rel
+            if projection._retry(lambda: projection._install(target, source)):
+                return 'changed', rel
+            return 'stuck', rel
     return None
 
 
-def restore_asides(marker):
-    """Settle the files a managed checkout set aside: a path Git left empty gets its
-    published bytes back; where Git wrote the target's bytes the aside copy (the store's
-    own published bytes) is dropped. Returns notices."""
+def _settle_aside(aside, verified):
+    """Settle one aside dir. A path left empty gets its aside bytes back; an occupied path
+    drops the aside copy only when `verified(rel, content)` proves it the store's own
+    bytes; anything else stays in the dir. Returns (restored, dropped, kept)."""
     from taskmaster.native import projection
-    aside = marker.get('aside')
-    if not aside:
-        return []
     base, backlog = Path(aside['dir']), Path(aside['backlog'])
+    names = aside.get('files')
+    if names is None:  # every file in the dir (a stray dir, or a recorded entry being retried)
+        names = sorted(path.relative_to(base).as_posix() for path in base.rglob('*') if path.is_file()) \
+            if base.is_dir() else []
     restored, dropped, kept = [], [], []
-    for rel in sorted(aside['files']):
+    for rel in sorted(names):
         source = base / rel
         if not source.exists():
-            continue
+            continue  # never moved, or already settled
         try:
             target = safe_path(backlog, rel)
             target.parent.mkdir(parents=True, exist_ok=True)
-            if projection._install(source, target):
+            if projection._retry(lambda: projection._install(source, target)):
                 restored.append(rel)
-            elif projection._drop(source):
+            elif verified(rel, source.read_bytes()) and projection._drop(source):
                 dropped.append(rel)
-        except (OSError, UnsafePath):
+            else:
+                kept.append(rel)
+        except (OSError, UnsafePath, ValueError):
             kept.append(rel)
-    for directory in sorted((path for path in base.rglob('*') if path.is_dir()), key=lambda p: -len(p.parts)):
+    if base.is_dir():
+        for directory in sorted((path for path in base.rglob('*') if path.is_dir()), key=lambda p: -len(p.parts)):
+            try:
+                directory.rmdir()
+            except OSError:
+                pass
         try:
-            directory.rmdir()
+            base.rmdir()
         except OSError:
             pass
-    try:
-        base.rmdir()
-    except OSError:
-        pass
+    return restored, dropped, kept
+
+
+def _aside_notices(base, restored, dropped, kept):
     notices = []
     if restored:
         notices.append(f'{len(restored)} published file(s) set aside for the checkout were put back: '
@@ -501,8 +553,97 @@ def restore_asides(marker):
         notices.append(f'{len(dropped)} published file(s) set aside for the checkout were replaced by the checked-out '
                        'bytes (the store still holds them): ' + ', '.join(dropped[:_KEPT]))
     if kept:
-        notices.append(f'{len(kept)} set-aside file(s) could not be settled and remain in {base}: '
-                       + ', '.join(kept[:_KEPT]))
+        notices.append(f'{len(kept)} set-aside file(s) could not be settled and remain in {base} (their path holds '
+                       'other bytes, or they could not be moved; see git_status aside): ' + ', '.join(kept[:_KEPT]))
+    return notices
+
+
+def _remember_unsettled(owner, entry):
+    """Record one unsettled aside dir durably, or forget it once nothing in it is kept."""
+    recorded = read_state(owner, ASIDE_KEY) or []
+    entries = [item for item in recorded if item.get('dir') != entry['dir']]
+    if entry['files']:
+        entries.append(entry)
+    if entries != recorded:
+        write_state(owner, aside=entries or None)
+
+
+def restore_asides(owner, marker):
+    """Settle the files a managed checkout set aside: a path Git left empty gets its
+    bytes back; where the path is occupied, the aside copy is dropped only when its
+    digest is the planned one (the store's own published bytes). A copy whose bytes
+    changed since planning is kept and recorded durably (`git.aside`). Returns notices."""
+    aside = marker.get('aside')
+    if not aside:
+        return []
+    planned = aside['files']
+    restored, dropped, kept = _settle_aside(
+        aside, lambda rel, content: hashlib.sha1(content).hexdigest() == planned.get(rel))
+    _remember_unsettled(owner, {'op_id': marker['op_id'], 'dir': aside['dir'], 'backlog': aside['backlog'],
+                                'files': {rel: planned.get(rel) for rel in kept}})
+    return _aside_notices(aside['dir'], restored, dropped, kept)
+
+
+def _store_bytes(owner):
+    """verified(rel, content) for bytes with no plan: equal (up to line endings) to the
+    retained published base, or to the re-render of a derived index."""
+    from . import checkouts
+
+    def verified(rel, content):
+        with closing(owner._connect(readonly=True)) as connection:
+            base = checkouts.main_base(connection, rel)
+            if base is None and checkouts.derived(rel):
+                base = checkouts.render_derived(connection, owner.root / '.taskmaster', rel)
+        return checkouts.same_text(base, content)
+    return verified
+
+
+def sweep_asides(owner):
+    """Startup, with no marker and before the exporter runs: settle the recorded unsettled
+    aside dirs and any stray `taskmaster-aside/*` dir of a known checkout. A path left
+    empty gets the bytes back; an occupied path drops the copy only when it is verified
+    as the store's own bytes (the planned digest, or the published base); the rest is
+    kept, recorded in `git.aside` and reported. Returns notices."""
+    from taskmaster.native import checkouts as store
+    candidates = {item['dir']: item for item in read_state(owner, ASIDE_KEY) or []}
+    roots = []
+    try:
+        roots.append((Path(repository(owner.root)['git_dir']), owner.root / '.taskmaster'))
+    except (GitRefused, OSError):
+        pass
+    try:
+        with closing(owner._connect(readonly=True)) as connection:
+            for record in store.records(connection).values():
+                if record.get('linked') and record.get('git_dir') and record.get('path'):
+                    roots.append((Path(record['git_dir']), Path(record['path']) / '.taskmaster'))
+    except Exception as exc:  # noqa: BLE001 - a sweep never blocks startup
+        LOG.warning('aside sweep could not list linked checkouts: %s', exc)
+    for git_dir, backlog in roots:
+        parent = git_dir / ASIDE_DIR
+        if not parent.is_dir():
+            continue
+        for directory in sorted(parent.iterdir()):
+            if directory.is_dir() and str(directory) not in candidates:
+                candidates[str(directory)] = {'op_id': directory.name, 'dir': str(directory),
+                                              'backlog': str(backlog), 'files': {}}
+    notices, verified = [], _store_bytes(owner)
+    for directory, entry in sorted(candidates.items()):
+        planned = entry.get('files') or {}
+
+        def check(rel, content, planned=planned):
+            if planned.get(rel) and hashlib.sha1(content).hexdigest() == planned[rel]:
+                return True
+            return verified(rel, content)
+        try:
+            restored, dropped, kept = _settle_aside(dict(entry, files=None), check)
+            _remember_unsettled(owner, {'op_id': entry.get('op_id'), 'dir': directory, 'backlog': entry['backlog'],
+                                        'files': {rel: planned.get(rel) for rel in kept}})
+        except Exception as exc:  # noqa: BLE001 - a sweep never blocks startup
+            notices.append(f'aside dir {directory} could not be swept: {exc}'[:500])
+            continue
+        notices.extend(_aside_notices(directory, restored, dropped, kept))
+    for notice in notices:
+        LOG.warning('managed checkout aside sweep: %s', notice)
     return notices
 
 
@@ -681,17 +822,31 @@ def _run_held(owner, kind, request, message, ref, timeout, worktree=None, sync_t
     try:
         owner.checkpoint('git_marker_written')
         if aside:
-            moved = _move_aside(checkout.backlog, aside)
-            if moved is not None:
-                notices = restore_asides(marker)
+            try:
+                moved = _move_aside(checkout.backlog, aside, owner.checkpoint)
+            except OSError as exc:
+                # Nothing was run: put back what moved and settle as refused in place.
+                notices = restore_asides(owner, marker)
                 write_state(owner, marker=None)
-                return _refused(f'{moved} changed while being set aside for the checkout; nothing was run',
+                return _refused(f'a published file could not be set aside for the checkout ({exc}); nothing was '
+                                'run', notices=notices)
+            if moved is not None and moved[0] == 'stuck':
+                # Changed bytes sit in the aside dir and their path was written again:
+                # never guess. The marker stays; recovery keeps and reports them.
+                reason = (f'{moved[1]} changed while being set aside for the checkout and its path was written '
+                          f"again; the changed bytes are kept in {aside['dir']}; nothing was run; run git recover")
+                owner.git_pin = {'state': 'recovery_required', 'op_id': op_id, 'reason': reason}
+                return {'state': 'recovery_required', 'op_id': op_id, 'reason': reason, 'active': _public(marker)}
+            if moved is not None:
+                notices = restore_asides(owner, marker)
+                write_state(owner, marker=None)
+                return _refused(f'{moved[1]} changed while being set aside for the checkout; nothing was run',
                                 notices=notices)
             owner.checkpoint('git_aside_moved')
             try:
                 marker['pre'] = snapshot(root, repo)  # the tree Git starts from
             except GitRefused as exc:
-                notices = restore_asides(marker)
+                notices = restore_asides(owner, marker)
                 write_state(owner, marker=None)
                 return _refused(str(exc), notices=notices)
             write_state(owner, marker=marker)
@@ -726,8 +881,9 @@ def _execute(owner, marker, commands, timeout):
             child.close()
     except (OSError, ValueError) as exc:
         if not permitted and quiet:
-            write_state(owner, marker=None)  # nothing could have launched Git
-            return _refused(f'managed Git could not start: {exc}')
+            notices = restore_asides(owner, marker)  # nothing could have launched Git
+            write_state(owner, marker=None)
+            return _refused(f'managed Git could not start: {exc}', notices=notices)
         raise
     if not quiet:
         owner.git_pin = {'state': 'recovery_required', 'op_id': marker['op_id'],
@@ -777,7 +933,13 @@ def reconcile(owner, marker, *, results=None, done=None):
         report['notices'].append('stale .git/index.lock left by the retired Git process; remove it after inspection')
     if kind == 'commit':
         if after['head'] == pre['head'] and after['ref'] == pre['ref']:
-            report['state'] = 'failed'
+            if after['head'] and _head_records_generation(marker, root):
+                # N1: HEAD already records exactly this generation - a successful no-op,
+                # never an empty commit and never a failure.
+                report.update(state='completed', no_changes=True, commit=None, generation_verified=True)
+                report['notices'].append('nothing to commit: HEAD already records the published generation')
+            else:
+                report['state'] = 'failed'
         elif after['ref'] == pre['ref'] and after['head'] and _parents(root, after['head']) == (
                 [pre['head']] if pre['head'] else []):
             report['commit'] = after['head']
@@ -818,7 +980,7 @@ def reconcile(owner, marker, *, results=None, done=None):
         else:
             report['state'] = 'ambiguous'
             report['notices'].append('HEAD is neither the original nor the requested checkout target')
-    if results is not None and report['state'] in ('completed', 'failed'):
+    if results is not None and report['state'] in ('completed', 'failed') and not report.get('no_changes'):
         codes = [item.get('returncode') for item in results]
         expected_ok = report['state'] == 'completed'
         if expected_ok != (bool(done) and all(code == 0 for code in codes)):
@@ -838,7 +1000,7 @@ def settle(owner, marker, report, *, recovered=False):
     linked = None
     marked_linked = bool((marker.get('checkout') or {}).get('linked'))
     if report['state'] in ('completed', 'failed'):
-        report['notices'].extend(restore_asides(marker))  # before drift is judged
+        report['notices'].extend(restore_asides(owner, marker))  # before drift is judged
     if report['state'] in ('completed', 'failed') and marked_linked:
         try:
             linked = _checkout_of(owner, marker)
@@ -992,7 +1154,7 @@ def recover(owner, *, acknowledge_quiescent=False, accept_outcome=False, release
 
 def _release(owner, outcome, marker=None):
     if marker is not None:
-        outcome = dict(outcome, notices=[*outcome.get('notices', []), *restore_asides(marker)])
+        outcome = dict(outcome, notices=[*outcome.get('notices', []), *restore_asides(owner, marker)])
     last = dict(outcome, recovered=True, settled=time.time())
     write_state(owner, marker=None, **_settled(owner, last))
     owner.git_pin = None
@@ -1107,4 +1269,10 @@ def startup(owner):
     if marker is not None:
         owner.git_pin = {'state': 'recovering', 'op_id': marker['op_id'],
                          'reason': 'recovering an interrupted managed Git operation'}
+    else:
+        # Nothing runs in the checkout yet: settle aside dirs a past operation left.
+        try:
+            sweep_asides(owner)
+        except Exception:  # noqa: BLE001 - a sweep never blocks startup
+            LOG.exception('managed checkout aside sweep failed')
     return marker is not None

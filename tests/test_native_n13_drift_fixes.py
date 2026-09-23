@@ -97,9 +97,10 @@ def test_d5_bypassed_restore_of_a_derived_index_is_reported_and_rerendered(repo)
         assert ideas_bytes(repo) == published
         assert client.sync()['state'] == 'synchronized'
         # Managed Git agrees: the generation check passes (the re-render equals HEAD, so
-        # there is nothing to commit and the commit settles as failed, not refused).
+        # there is nothing to commit and the commit settles as a completed no-op, not refused).
         committed = client.git_run(kind='commit', message='tm: index')
-        assert committed['state'] == 'failed' and committed['post']['head'] == committed['pre']['head'], committed
+        assert committed['state'] == 'completed' and committed['no_changes'], committed
+        assert committed['post']['head'] == committed['pre']['head'], committed
 
 
 def test_d5_linked_derived_index_is_never_imported_and_take_published_rerenders(repo):
