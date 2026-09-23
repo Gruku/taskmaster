@@ -214,6 +214,30 @@ class Client:
     def sync_status(self, caller_scope, request_id):
         return self.call('sync_status', caller_scope=caller_scope, request_id=request_id)
 
+    def git_run(self, *, kind, message=None, ref=None, caller_scope='explicit-git', request_id=None, timeout=600):
+        """Managed commit/checkout under the coordinator's publication hold.
+
+        A retry with the same request_id never repeats Git: it answers
+        `in_progress` or the settled result."""
+        request_id = uuid.uuid4().hex if request_id is None else request_id
+        if not all(isinstance(value, str) and 1 <= len(value) <= 256 for value in (caller_scope, request_id)):
+            raise ValueError('managed Git requires caller_scope and request_id')
+        try:
+            return self.call('git_run', kind=kind, message=message, ref=ref, caller_scope=caller_scope,
+                             request_id=request_id, timeout=timeout)
+        except ServiceUnavailable as exc:
+            raise type(exc)(f'{exc}; inspect git_status or retry the same request; '
+                            f'request_id={request_id!r}, caller_scope={caller_scope!r}',
+                            request_id=request_id, caller_scope=caller_scope,
+                            may_have_committed=exc.may_have_committed) from exc
+
+    def git_status(self):
+        return self.call('git_status')
+
+    def git_recover(self, *, acknowledge_quiescent=False, accept_outcome=False, release_drift=False):
+        return self.call('git_recover', acknowledge_quiescent=acknowledge_quiescent, accept_outcome=accept_outcome,
+                         release_drift=release_drift)
+
     def cancel(self, caller_scope, request_id):
         return self.call('cancel', caller_scope=caller_scope, request_id=request_id)
 

@@ -69,6 +69,9 @@ def bootstrap(owner, entry, default_workspace):
     if not owner.publication.acquire(timeout=PUBLICATION_TIMEOUT):
         raise ValueError(f"publisher busy; {CONFIG} was not changed; retry")
     try:
+        refusal = owner.publication_refusal()
+        if refusal:
+            raise ValueError(f"{refusal}; {CONFIG} was not changed")
         current = projection.read_config(backlog_dir, CONFIG)
         config = _parse(current)
         present = next((ws for ws in config.get("workspaces") or []
