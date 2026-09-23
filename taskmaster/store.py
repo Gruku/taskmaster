@@ -720,10 +720,31 @@ def _quick_check(connection: sqlite3.Connection, limit: int | None = None) -> st
     return "" if row is None else str(row[0])
 
 
+# backlog.yaml path -> ((st_ino, st_mtime_ns, st_size), fenced schema). The fence
+# runs on every `open_store` -- several times per tool call -- and re-parsing the
+# whole file each time grew with the project (measured 4 x 12 ms per call on a
+# 12 KB projection). The stat key is taken *before* the read, so a write racing
+# the parse can only cost one extra parse, never pin a stale answer; projection
+# writes replace the file, which moves the inode as well as the mtime.
+_PROJECTION_SCHEMA_CACHE: dict[str, tuple[tuple[int, int, int], int | None]] = {}
+
+
 def _projection_schema(backlog_dir: Path) -> int | None:
     path = backlog_dir / "backlog.yaml"
-    if not path.exists():
+    try:
+        before = path.stat()
+    except OSError:
         return None
+    key = (before.st_ino, before.st_mtime_ns, before.st_size)
+    cached = _PROJECTION_SCHEMA_CACHE.get(str(path))
+    if cached is not None and cached[0] == key:
+        return cached[1]
+    value = _parse_projection_schema(path)
+    _PROJECTION_SCHEMA_CACHE[str(path)] = (key, value)
+    return value
+
+
+def _parse_projection_schema(path: Path) -> int | None:
     try:
         raw = yaml_io.safe_load(path.read_text(encoding="utf-8")) or {}
     except (OSError, UnicodeError, yaml.YAMLError):
@@ -1017,6 +1038,7 @@ def reset_for_tests() -> None:
         _STORES.clear()
         _CACHE.clear()
         _WARNED_CLOUD_ROOTS.clear()
+        _PROJECTION_SCHEMA_CACHE.clear()
         _CONTEXT_BUILDER = None
         _PROGRESS_RENDERER = None
         _WAIT_OBSERVER = None
