@@ -148,6 +148,10 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
         if not acquired:
             pending(None, 'publisher busy')
             return result
+        refusal = owner.publication_refusal()
+        if refusal:
+            pending(None, refusal)
+            return result
         # Refuse an impossible target before anything, including imports, commits.
         with closing(owner._connect(readonly=True)) as connection:
             if through > connection.execute('SELECT COALESCE(MAX(seq),0) FROM domain_events').fetchone()[0]:

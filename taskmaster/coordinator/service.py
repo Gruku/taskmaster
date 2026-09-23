@@ -98,6 +98,11 @@ class Coordinator:
         self.admission = threading.Condition()
         self.pauses = 0
         self.active_syncs = 0
+        # Managed Git (N13 step 8): `git_pin` blocks every publication path until an
+        # interrupted operation is proven over and reconciled; `git_active` is the
+        # operation currently holding `publication` in this process.
+        self.git_pin = None
+        self.git_active = None
         self.stopping, self.export_needed = threading.Event(), threading.Event()
         self.checkpoint = checkpoint or (lambda stage: None)
         self.exporter = exporter
@@ -131,11 +136,19 @@ class Coordinator:
         try:
             with closing(self._connect(readonly=True)):
                 pass
+            from . import git
+            # Pin before the exporter exists: a marker left by a dead owner means
+            # its Git child may still be running.
+            recovering = git.startup(self)
             self.server = _Server(('127.0.0.1', 0), _Handler, handler_limit=self.handler_limit)
             self.server.coordinator = self
             for name, target in (('writer', self._writer), ('exporter', self._export), ('linear', self.linear.run),
                                  ('ipc', self.server.serve_forever)):
                 thread = threading.Thread(target=target, name=f'taskmaster-{name}', daemon=True)
+                thread.start()
+                self.threads.append(thread)
+            if recovering:
+                thread = threading.Thread(target=self._recover_git, name='taskmaster-git-recovery', daemon=True)
                 thread.start()
                 self.threads.append(thread)
             self.ownership.publish(self.discovery())
@@ -144,6 +157,22 @@ class Coordinator:
         except BaseException:
             self.close()
             raise
+
+    def _recover_git(self):
+        from . import git
+        try:
+            outcome = git.recover(self)
+            LOG.warning('managed Git recovery: %s', json.dumps(outcome, default=str)[:4000])
+        except Exception as exc:
+            self.git_pin = {'state': 'recovery_required', 'reason': f'managed Git recovery failed: {exc}'[:500]}
+            LOG.exception('managed Git recovery failed; publication stays pinned')
+
+    def publication_refusal(self):
+        """Why publication must not happen now (caller holds `publication`), or None."""
+        pin = self.git_pin
+        if pin is None:
+            return None
+        return f"managed Git recovery required ({pin.get('state')}): {pin.get('reason')}"
 
     def discovery(self):
         return dict(self.identity, nonce=self.nonce, token=self.token, pid=os.getpid(),
@@ -266,8 +295,11 @@ class Coordinator:
                 continue
             self.export_needed.clear()
             try:
-                with self.publication, closing(self._connect()) as connection:
-                    notices = self._drain(connection)
+                with self.publication:
+                    if self.publication_refusal():
+                        continue  # recovery sets export_needed once the pin clears
+                    with closing(self._connect()) as connection:
+                        notices = self._drain(connection)
                 self.last_export_error = None
                 if notices and not self.stopping.wait(1):
                     self.export_needed.set()
@@ -289,7 +321,8 @@ class Coordinator:
         if not self.publication.acquire(timeout=max(0, timeout)):
             # The background pass that holds publication retries owed PROGRESS;
             # losing that race must not hide the debt from this barrier.
-            notices = ['export pending: publisher busy']
+            notices = ['export pending: publisher busy' + (
+                '; a managed Git operation is in progress' if self.git_active is not None else '')]
             with closing(self._connect(readonly=True)) as connection:
                 if progress.owes_through(connection, through):
                     notices.append(progress.NOTICE)
@@ -297,6 +330,9 @@ class Coordinator:
         try:
             if self.stopping.is_set():
                 return {'state': 'pending', 'through': through, 'notices': ['export pending: coordinator stopping']}
+            refusal = self.publication_refusal()
+            if refusal:
+                return {'state': 'pending', 'through': through, 'notices': [f'export pending: {refusal}']}
             with closing(self._connect()) as connection:
                 high = connection.execute('SELECT COALESCE(MAX(seq),0) FROM domain_events').fetchone()[0]
                 if through > high:
@@ -380,6 +416,22 @@ class Coordinator:
             return self.flush(message.get('through'))
         if method == 'cancel':
             return self.cancel(message.get('caller_scope'), message.get('request_id'))
+        if method == 'git_run':
+            from . import git
+            timeout = message.get('timeout', git.GIT_TIMEOUT)
+            return git.run(self, kind=message.get('kind'), caller_scope=message.get('caller_scope'),
+                           request_id=message.get('request_id'), message=message.get('message'),
+                           ref=message.get('ref'), timeout=timeout)
+        if method == 'git_status':
+            from . import git
+            return git.status(self)
+        if method == 'git_recover':
+            from . import git
+            flags = [message.get('acknowledge_quiescent', False), message.get('accept_outcome', False)]
+            if any(type(flag) is not bool for flag in flags):
+                raise ValueError('git_recover flags must be boolean')
+            return git.recover(self, acknowledge_quiescent=flags[0], accept_outcome=flags[1],
+                               timeout=git.PUBLICATION_TIMEOUT)
         if method == 'shutdown':
             self.stop()
             return {'state': 'stopping'}
@@ -387,7 +439,7 @@ class Coordinator:
 
     def idle_expired(self, seconds):
         with self.guard, self.linear.guard:
-            return (not self.pending and not self.linear.jobs and not self.active_syncs
+            return (not self.pending and not self.linear.jobs and not self.active_syncs and self.git_active is None
                     and time.monotonic() - self.last_activity >= seconds)
 
     def stop(self):
