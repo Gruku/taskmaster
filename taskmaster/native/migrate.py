@@ -10,7 +10,7 @@ import json
 import sqlite3
 
 from taskmaster.admission import UnsupportedStoreError, assert_compatible
-from . import schema
+from . import neighbourhood, schema
 from .db import manifest, probe_capabilities
 
 STAGES = ("admitted", "schema", "entities", "relations", "history", "search", "verified")
@@ -239,6 +239,8 @@ def backfill(connection: sqlite3.Connection, *, checkpoint=lambda stage: None) -
         checkpoint("history")
         _backfill_search(connection)
         checkpoint("search")
+        # Transparent native-only graph indexes (N14): no schema version change.
+        neighbourhood.ensure_indexes(connection)
         digest = _verify(connection, source)
         _put_manifest(connection, state="verified", source_digest=digest, event_high_water=high_water,
                       entity_count=len(source), capabilities="json,fts5,transactional-ddl,stable-keys")

@@ -8,7 +8,7 @@ from copy import deepcopy
 import re
 import sqlite3
 
-from . import contracts, events, receipts, schema, search, relations
+from . import contracts, events, neighbourhood, receipts, schema, search, relations
 from .contracts import Conflict, CancelledBeforeExecution  # public exceptions
 from .db import assert_native
 from .migrate import encode, _put_entity, _put_manifest, _put_relations
@@ -294,6 +294,9 @@ def execute(connection: sqlite3.Connection, envelope, *, cancelled=lambda: False
             row = connection.execute("SELECT revision FROM entity_core WHERE kind=? AND public_id=? AND deleted=0", (expected["kind"], expected["id"])).fetchone()
             if row is None or row[0] != expected["revision"]:
                 raise Conflict(f"revision conflict for {expected['kind']} {expected['id']}")
+        # Backfill builds the native graph indexes; this upgrades a store activated
+        # before N14, only once the command is admitted (a lookup when present).
+        neighbourhood.ensure_indexes(connection)
         checkpoint("admitted")
         transaction = Transaction(connection, request, identity)
         try:

@@ -232,7 +232,9 @@ def _count_related(con, listed: list, matched: dict, native: bool = False) -> in
     neighbours = set()
     for entry in listed:
         key = (entry.kind, entry.id)
-        for kind, eid in con.execute(_RELATED_SQL, (key[0], key[1], key[0], key[1])):
+        found = (hook_reads.neighbours(con, *key) if native else
+                 con.execute(_RELATED_SQL, (key[0], key[1], key[0], key[1])))
+        for kind, eid in found:
             if (kind, eid) not in matched:
                 neighbours.add((kind, eid))
     count = 0

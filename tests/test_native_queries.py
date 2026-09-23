@@ -624,3 +624,38 @@ def test_a_focus_only_section_is_empty_rather_than_wrong_when_there_is_no_focus(
         assert answer["selected"].get("dependencies") is None
         assert answer["budget"].get("omitted", {}).get("dependencies", 0) == 0
         assert answer["provenance"]["dependencies"]["query"] == "no_focus"
+
+
+def test_neighbourhood_is_distinct_aggregated_and_paged(tmp_path):
+    """Path neighbours weigh by matching claim pairs; handover multiplicity is summed."""
+    from types import SimpleNamespace
+    from taskmaster import store
+    database = tmp_path / "graph.db"
+    with closing(sqlite3.connect(database, isolation_level=None)) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.executescript(store.SCHEMA_SQL)
+        connection.executemany("INSERT INTO meta VALUES(?,?)", [("schema_version", "1"), ("creation_token", "test")])
+        docs = {("task", "T-1"): {"anchors": ["src/a.py", "src/*"]}, ("task", "T-2"): {"anchors": ["src/a.py"]},
+                ("task", "T-3"): {}, ("bug", "B-1"): {"location": ["src/b.py"]},
+                ("handover", "H-1"): {"task_ids": ["T-1", "T-2", "T-2"]}, ("handover", "H-2"): {"task_ids": ["T-1", "T-3"]}}
+        fake_store = store.Store.__new__(store.Store)
+        for (kind, ident), doc in docs.items():
+            connection.execute("INSERT INTO entities VALUES(?,?,NULL,NULL,0,0,?,NULL,1,1)", (kind, ident, json.dumps(dict(doc, id=ident))))
+        fake_store._refresh_derived(SimpleNamespace(connection=connection, _derived_keys=set(docs)))
+        connection.row_factory = None
+        backfill(connection)
+        with Repository(connection).snapshot() as query:
+            whole = query.neighbourhood("task", "T-1", limit=10)
+            assert whole["items"] == [
+                {"kind": "bug", "id": "B-1", "via": "path", "weight": 1},
+                {"kind": "task", "id": "T-2", "via": "handover", "weight": 2},
+                {"kind": "task", "id": "T-2", "via": "path", "weight": 2},
+                {"kind": "task", "id": "T-3", "via": "handover", "weight": 1}]
+            assert whole["truncated"] is False
+            page = query.neighbourhood("task", "T-1", limit=1)
+            assert page["items"] == whole["items"][:1] and page["truncated"] is True
+            assert query.neighbourhood("task", "T-3", limit=5)["items"] == [{"kind": "task", "id": "T-1", "via": "handover", "weight": 1}]
+            with pytest.raises(KeyError):
+                query.neighbourhood("task", "absent")
+            with pytest.raises(ValueError, match="limit"):
+                query.neighbourhood("task", "T-1", limit=0)

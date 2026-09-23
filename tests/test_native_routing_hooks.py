@@ -158,3 +158,104 @@ def test_merge_recorder_stamps_when_the_native_ladder_read_fails(twins, monkeypa
     assert stamped["qa"]["merge_commit"] == "f00dcafe", stamped
     log = (twins.native / ".taskmaster" / "local" / "hook.log").read_text(encoding="utf-8")
     assert "merge_recorder_stamp" in log and "database is locked" in log, log
+
+
+# ── N14: the edit hook's related count from the canonical neighbourhood ──
+
+def _both(twins, hook, rels):
+    for rel in rels:
+        legacy = hook.resolve(_database(twins.legacy), rel)
+        native = hook.resolve(_database(twins.native), rel)
+        assert _shape(native) == _shape(legacy), rel
+        yield rel, _shape(native)
+
+
+def test_native_related_open_work_is_counted_not_named(twins):
+    """Path and handover neighbours of listed work count once each, open ones only."""
+    hook = _module("edit_resurface")
+    twins.same("backlog_add_task", title="Path neighbour", epic="test-epic", phase="dev",
+               options={"anchors": "api/other.py"})           # matched by test-epic-003's api/**
+    twins.same("backlog_add_task", title="Closed neighbour", epic="test-epic", phase="dev",
+               options={"anchors": "api/third.py"})
+    twins.same("backlog_update_task", task_id="test-epic-005", field="status", value="archived")
+    twins.same("backlog_handover_create", tldr="Pairing", task_ids=["test-epic-001", "test-epic-002", "test-epic-002"])
+    answers = dict(_both(twins, hook, ["api/model.py"]))
+    # test-epic-004 via path, test-epic-002 via handover (twice listed, counted once).
+    assert answers["api/model.py"][3] == 2, answers
+    line = hook.format_line("api/model.py", hook.resolve(_database(twins.native), "api/model.py"))
+    assert "+2 related" in line and "test-epic-004" not in line and "test-epic-002" not in line
+
+
+def test_native_edit_hook_reads_no_related_table(twins):
+    """The native branch answers from the canonical neighbourhood, not the `related` table."""
+    hook = _module("edit_resurface")
+    twins.same("backlog_handover_create", tldr="Pairing", task_ids=["test-epic-001", "test-epic-002"])
+    statements = []
+    connection = hook._connect_ro(_database(twins.native))
+    try:
+        connection.set_trace_callback(statements.append)
+        result = hook._resolve(connection, "api/model.py")
+    finally:
+        connection.close()
+    assert result.related == 1
+    assert not any("FROM related" in sql for sql in statements), statements
+
+
+def test_edit_hook_answers_match_across_stores_over_seeded_edits(twins):
+    import random
+    rng = random.Random(1914)
+    hook = _module("edit_resurface")
+    rels = ["api/model.py", "api/other.py", "web/x.py", "docs/a.md"]
+    anchors = ["api/model.py", "api/other.py", "api/*", "web/x.py", "web/", "docs/*.md", "*.py", "Api/model.py"]
+    tasks = ["test-epic-001", "test-epic-002", "test-epic-003"]
+    for step in range(16):
+        action = rng.randrange(4)
+        if action == 0:
+            twins.same("backlog_add_task", title=f"Seeded {step}", epic="test-epic", phase="dev",
+                       options={"anchors": ",".join(rng.sample(anchors, rng.randrange(1, 3)))})
+            tasks.append(f"test-epic-{len(tasks) + 1:03d}")
+        elif action == 1:
+            twins.same("backlog_update_task", task_id=rng.choice(tasks), field="anchors",
+                       value=",".join(rng.sample(anchors, rng.randrange(1, 3))))
+        elif action == 2:
+            twins.same("backlog_update_task", task_id=rng.choice(tasks), field="status",
+                       value=rng.choice(["todo", "in-progress", "done"]))
+        else:
+            twins.same("backlog_handover_create", tldr=f"Seeded {step}",
+                       task_ids=[rng.choice(tasks) for _ in range(rng.randrange(1, 4))])
+        list(_both(twins, hook, rels))
+
+
+def test_native_dedupe_reprints_only_when_the_related_count_changes(twins):
+    """Dedupe on a native store, with the neighbourhood read in the subprocess hook."""
+    import json
+    import os
+    import subprocess
+    import sys
+    root = twins.native
+    (root / "api").mkdir(exist_ok=True)
+    (root / "api" / "model.py").write_text("x", encoding="utf-8")
+    # The native branch must run as the hook does in production: without yaml.
+    blocker = root.parent / "blocked"
+    blocker.mkdir(exist_ok=True)
+    for name in ("yaml", "fastmcp"):
+        (blocker / f"{name}.py").write_text("raise ImportError('blocked for the hook test')", encoding="utf-8")
+    env = dict(os.environ, TASKMASTER_ROOT=str(root), PYTHONPATH=str(blocker))
+
+    def run():
+        payload = {"session_id": "s1", "cwd": str(root), "tool_name": "Edit",
+                   "tool_input": {"file_path": str(root / "api" / "model.py")}, "tool_response": {"success": True}}
+        done = subprocess.run([sys.executable, str(HOOKS / "edit_resurface.py")], input=json.dumps(payload), text=True,
+                              encoding="utf-8", capture_output=True, cwd=str(root), env=env, timeout=60)
+        assert done.returncode == 0, done.stderr
+        return json.loads(done.stdout)["hookSpecificOutput"]["additionalContext"] if done.stdout else ""
+
+    first = run()
+    assert first.startswith("TM: api/model.py → ") and "related" not in first, first
+    assert run() == ""
+    twins.same("backlog_handover_create", tldr="Pairing", task_ids=["test-epic-001", "test-epic-002"])
+    assert run().endswith(", +1 related)")
+    assert run() == ""
+    twins.same("backlog_update_task", task_id="test-epic-002", field="status", value="archived")
+    assert run() == first
+    assert run() == ""
