@@ -100,6 +100,88 @@ def test_transport_capacity_refuses_without_starting_another_owner(root, monkeyp
         assert client.status()['nonce'] == owner.nonce
 
 
+def test_overload_reply_survives_a_large_unread_request_body(root):
+    from taskmaster.coordinator.protocol import MAX_MESSAGE_BYTES
+    with Coordinator(root, handler_limit=1) as owner:
+        assert owner.server.handlers.acquire(blocking=False)
+        try:
+            # Closing a socket with unread request bytes sends RST on Windows,
+            # which used to race the structured 503 the client must read.
+            body = b'x' * (MAX_MESSAGE_BYTES - 16)
+            for _ in range(10):
+                connection = http.client.HTTPConnection('127.0.0.1', owner.server.server_port, timeout=10)
+                try:
+                    connection.request('POST', '/rpc', body=body, headers={'Content-Type': 'application/json'})
+                    response = connection.getresponse()
+                    assert response.status == 503
+                    assert 'capacity' in json.loads(response.read())['error']
+                finally:
+                    connection.close()
+        finally:
+            owner.server.handlers.release()
+
+
+def _resetting_listener():
+    import socket
+    import struct
+    listener = socket.socket()
+    listener.bind(('127.0.0.1', 0))
+    listener.listen(8)
+    def serve():
+        while True:
+            try:
+                accepted, _ = listener.accept()
+            except OSError:
+                return
+            accepted.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
+            accepted.close()  # abortive close: the client sees a reset
+    threading.Thread(target=serve, daemon=True).start()
+    return listener
+
+
+def test_reset_from_live_owner_address_is_unavailable_not_a_startup(root, monkeypatch):
+    from taskmaster.coordinator import client as client_module
+    from taskmaster.coordinator.protocol import ServiceUnavailable
+    with Coordinator(root) as owner:
+        listener = _resetting_listener()
+        try:
+            record = dict(Client(root)._discovery(), port=listener.getsockname()[1])
+            monkeypatch.setattr(Client, '_discovery', lambda self: record)
+            def forbidden(*args):
+                raise AssertionError('a live owner that resets must not trigger another startup')
+            monkeypatch.setattr(client_module, '_launch', forbidden)
+            client = Client(root, timeout=2)
+            with pytest.raises(ServiceUnavailable, match='retry') as failure:
+                client.execute(request(client, key='reset-owner'))
+            assert failure.value.public_payload()['request_id'] == 'reset-owner'
+        finally:
+            listener.close()
+        assert owner.server.server_port != record['port']
+
+
+def test_reset_from_stale_discovery_without_owner_still_starts_one(root, monkeypatch):
+    from taskmaster.coordinator import client as client_module
+    with Coordinator(root) as owner:
+        record = dict(Client(root)._discovery())
+    # The owner exited and released its kernel lock; an unrelated listener
+    # now answers on the recorded port. Only the free lock proves it stale.
+    listener = _resetting_listener()
+    launched = []
+    class Launched(Exception):
+        pass
+    def launch(path):
+        launched.append(path)
+        raise Launched()
+    try:
+        monkeypatch.setattr(Client, '_discovery', lambda self: dict(record, port=listener.getsockname()[1]))
+        monkeypatch.setattr(client_module, '_launch', launch)
+        with pytest.raises(Launched):
+            Client(root, timeout=2).status()
+        assert launched == [root]
+    finally:
+        listener.close()
+
+
 @pytest.mark.parametrize('failure_at', ['verify', 'exists', 'open'])
 def test_unsafe_discovery_is_a_structured_refusal_without_owner_startup(root, monkeypatch, failure_at):
     from pathlib import Path

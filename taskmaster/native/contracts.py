@@ -67,6 +67,8 @@ def validate_operation(operation, arguments, *, in_batch=False):
             raise ValueError(f"unsupported operation: {operation}")
         if in_batch and operation in lifecycle.linear_outbox.OPERATIONS:
             raise ValueError('Linear queue operations require their own durable receipts')
+        if in_batch and operation in lifecycle.sync.OPERATIONS:
+            raise ValueError('sync imports require their own manifest preconditions and durable receipts')
         lifecycle.validate(operation, arguments)
 
 

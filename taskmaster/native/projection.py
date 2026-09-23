@@ -28,6 +28,8 @@ import sqlite3
 import time
 from typing import Callable, Iterable
 
+from taskmaster.projection_paths import UnsafePath, safe_path
+
 from .db import assert_native
 
 LEASE_SECONDS = 30.0
@@ -40,6 +42,10 @@ OWN_PREFIX = "projection.own."
 OWN_RING = 8
 # Per file, the names a publication may set the file aside under (see `_publish_file`).
 ASIDE_PREFIX = "projection.aside."
+# Projection paths a managed checkout left differing from the published generation
+# (N13 step 8). The checked-out bytes are drift, not authority: they are neither
+# imported nor overwritten until explicitly resolved. {"op_id", "target", "files": {rel: sha1|null}}
+DRIFT_KEY = "git.drift"
 # The legacy store's B-089 flag table. A store no 6.0.3 writer opened lacks it; the
 # first native flag creates it with the legacy definition, the only DDL here.
 _CONFLICT_DDL = ("CREATE TABLE IF NOT EXISTS projection_conflict(file TEXT PRIMARY KEY, kind TEXT NOT NULL, "
@@ -213,6 +219,10 @@ def held(connection, kind: str, ident: str | None) -> list[tuple[str, str]]:
     """
     found = {file: "quarantined" for (file,) in connection.execute(
         "SELECT file FROM projection WHERE kind=? AND id IS ? AND quarantined=1", (kind, ident))}
+    drift = set(drift_files(connection))
+    if drift:
+        found.update((file, DRIFT_REASON) for (file,) in connection.execute(
+            "SELECT file FROM projection WHERE kind=? AND id IS ?", (kind, ident)) if file in drift)
     if _has_conflict_table(connection):
         found.update((file, "flagged") for (file,) in connection.execute(
             "SELECT file FROM projection_conflict WHERE kind=? AND id IS ?", (kind, ident)))
@@ -220,14 +230,24 @@ def held(connection, kind: str, ident: str | None) -> list[tuple[str, str]]:
 
 
 def held_file(connection, rel: str) -> str | None:
-    """Why one file may not be written (`quarantined`, `flagged`), or None."""
+    """Why one file may not be written (`quarantined`, `flagged`, drift), or None."""
     row = connection.execute("SELECT quarantined FROM projection WHERE file=?", (rel,)).fetchone()
     if row and row[0]:
         return "quarantined"
     if _has_conflict_table(connection) and connection.execute(
             "SELECT 1 FROM projection_conflict WHERE file=?", (rel,)).fetchone():
         return "flagged"
+    if rel in drift_files(connection):
+        return DRIFT_REASON
     return None
+
+
+DRIFT_REASON = "managed checkout drift"
+
+
+def drift_files(connection) -> tuple[str, ...]:
+    """Paths a managed checkout left differing from the published generation."""
+    return tuple(sorted((_get(connection, DRIFT_KEY) or {}).get("files") or {}))
 
 
 def flagged_files(connection) -> tuple[str, ...]:
@@ -246,6 +266,9 @@ def _held_sql(connection) -> str:
         entity += (" OR EXISTS(SELECT 1 FROM entity_core e JOIN projection_conflict c ON c.kind=e.kind "
                    "AND c.id=e.public_id WHERE e.entity_key=j.entity_key)"
                    " OR EXISTS(SELECT 1 FROM projection_conflict c WHERE c.file=j.file)")
+    drift = (f"SELECT d.key FROM sync_state s, json_each(s.value_json, '$.files') d WHERE s.key='{DRIFT_KEY}'")
+    entity += (f" OR j.file IN ({drift}) OR EXISTS(SELECT 1 FROM entity_core e JOIN projection p ON p.kind=e.kind "
+               f"AND p.id=e.public_id WHERE e.entity_key=j.entity_key AND p.file IN ({drift}))")
     return f"({entity})"
 
 
@@ -491,8 +514,12 @@ class Exporter:
         A name is forgotten only once its file is gone, so recovery can always
         find an aside file some step could not restore or remove.
         """
-        path = self._path(rel)
-        return [name for name in _get(self.connection, ASIDE_PREFIX + rel, []) if path.with_name(name).exists()]
+        names = _get(self.connection, ASIDE_PREFIX + rel, [])
+        try:
+            path = self._path(rel)
+        except (OSError, UnsafePath):
+            return names             # unprovable now: every name stays on record
+        return [name for name in names if path.with_name(name).exists()]
 
     def _remember(self, rel: str, names: list[str]) -> None:
         """Inside a write transaction: keep exactly `names` on record for `rel`.
@@ -511,7 +538,7 @@ class Exporter:
             self.connection.execute("DELETE FROM sync_state WHERE key=?", (ASIDE_PREFIX + rel,))
 
     def _path(self, rel: str) -> Path:
-        return self.backlog_dir / safe_relative(rel)
+        return safe_path(self.backlog_dir, str(safe_relative(rel)))
 
     def _classify(self, rel: str, path: Path, content: bytes | None) -> tuple[str, bytes | None]:
         """§2.4: what the bytes on disk say about publishing over them.
@@ -554,7 +581,10 @@ class Exporter:
         and the file is flagged. A crash with the file aside is undone by lease
         recovery (`_recover_asides`), which knows the aside name from `intend`.
         """
-        path = self._path(rel)
+        try:
+            path = self._path(rel)
+        except (OSError, UnsafePath) as exc:
+            return self.refuse(job if job is not None else rel, exc)
         tag = tag or self._tag(job if job is not None else rel)
         self.checkpoint("before_write", rel)
         if not self._owns():
@@ -565,7 +595,7 @@ class Exporter:
             if verdict == "flag":
                 return self._flag(rel, kind, ident, data, job)
             if verdict == "agrees":
-                return self._ack(rel, kind, ident, _digest(data), path.stat(), exported_seq, job)
+                return self._ack(rel, kind, ident, _digest(data), path.stat(), exported_seq, job, content=data)
             if content is not None:
                 temp = self._write_temp(path, content, tag, rel)
             if data is not None:
@@ -618,7 +648,7 @@ class Exporter:
             self._failed(rel, job)
             return "failed"
         return self._ack(rel, kind, ident, None if content is None else _digest(content), stat,
-                         exported_seq, job)
+                         exported_seq, job, content=content)
 
     def _write_temp(self, path: Path, content: bytes, tag: str, rel: str) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -668,7 +698,10 @@ class Exporter:
                                        (ASIDE_PREFIX, ASIDE_PREFIX[:-1] + "/")).fetchall()
         for key, value in rows:
             rel = key[len(ASIDE_PREFIX):]
-            path = self._path(rel)
+            try:
+                path = self._path(rel)
+            except (OSError, UnsafePath):
+                continue                 # refused path: its names stay on record for a later recovery
             keep = []
             for name in json.loads(value):
                 aside = path.with_name(name)
@@ -728,6 +761,30 @@ class Exporter:
         self.warnings.append(f"export pending: {rel} is flagged")
         return "flagged"
 
+    def refuse(self, target: Job | str, reason) -> str:
+        """The path guard refused this file: nothing on disk was touched.
+
+        Only this job goes back to pending; the drain never raises for it, so
+        unrelated files still publish and the committed caller gets a notice.
+        """
+        rel = target if isinstance(target, str) else target.file
+        if not isinstance(target, str):
+            self._begin()
+            try:
+                self._fenced()
+                self.connection.execute("UPDATE projection_jobs SET state='pending',lease_owner=NULL,lease_until=NULL "
+                                        "WHERE job_key=? AND state='claimed'", (target.key,))
+                self.connection.commit()
+            except LeaseLost:
+                self.connection.rollback()
+                return "lost"
+            except BaseException:
+                self.connection.rollback()
+                raise
+            self.outcomes[target.key] = "failed"
+        self.warnings.append(f"export pending: {rel} refused ({reason})")
+        return "failed"
+
     def _failed(self, rel: str, job: Job | None) -> None:
         """A write or removal the filesystem refused: retried by the next drain."""
         keep = self._still_on_disk(rel)
@@ -747,7 +804,13 @@ class Exporter:
             raise
         self.warnings.append(f"export pending: {rel} — retried on next call")
 
-    def _ack(self, rel, kind, ident, digest, stat, exported_seq, job) -> str:
+    def _ack(self, rel, kind, ident, digest, stat, exported_seq, job, *, content) -> str:
+        # N13 needs the exact bytes this generation observed/wrote, not a render
+        # of a later database revision. Keep them atomically with their manifest
+        # digest; an editor changing the file after publication is then a merge
+        # against this real base rather than an invented one.
+        if (content is None) != (digest is None) or (content is not None and _digest(content) != digest):
+            raise ValueError("projection acknowledgement bytes do not match digest")
         keep = self._still_on_disk(rel)
         self._begin()
         try:
@@ -759,6 +822,7 @@ class Exporter:
                 return "lost"
             if digest is None:
                 self.connection.execute("DELETE FROM projection WHERE file=?", (rel,))
+                self.connection.execute("DELETE FROM projection_base WHERE file=?", (rel,))
             else:
                 self.connection.execute(
                     "INSERT INTO projection(file,kind,id,content_hash,mtime,size,dirty,quarantined,exported_seq) "
@@ -766,7 +830,8 @@ class Exporter:
                     "content_hash=excluded.content_hash,mtime=excluded.mtime,size=excluded.size,dirty=0,quarantined=0,"
                     "exported_seq=excluded.exported_seq",
                     (rel, kind, ident, digest, stat.st_mtime, stat.st_size, exported_seq))
-            self.connection.execute("DELETE FROM projection_base WHERE file=?", (rel,))
+                self.connection.execute("INSERT INTO projection_base(file,content) VALUES(?,?) "
+                                        "ON CONFLICT(file) DO UPDATE SET content=excluded.content", (rel, content))
             self._remember(rel, keep)
             self.checkpoint("ack_manifest", rel)
             if job is not None:
@@ -969,3 +1034,151 @@ def apply_resolve(transaction, arguments: dict) -> None:
     transaction.affected[(kind, ident)] = {"kind": kind, "id": ident, "revision": revision,
                                            "last_seq": transaction.seq, "fields": {}}
     update_through(connection)
+
+
+# ── Linked-checkout publication (N13 step 9) ─────────────────────────────────
+
+def _checkout_names(path: Path, token: str) -> tuple[Path, Path]:
+    return path.with_name(f"{path.name}.tmp.co-{token}"), path.with_name(f"{path.name}.aside.co-{token}")
+
+
+def publish_checkout_file(backlog_dir: Path, rel: str, content: bytes | None, expected: str | None,
+                          token: str) -> str:
+    """Compare-and-swap one file of a linked checkout: replace it only while it still
+    holds `expected` (a digest of the checkout's base; None = the path is absent).
+
+    Same no-overwrite discipline as the exporter: the file is set aside under a name
+    the caller recorded (`token`) before any rename, the aside bytes are verified,
+    and the new bytes are installed without overwriting. Returns `published`,
+    `removed`, `agrees`, `changed` (someone else's bytes: left untouched) or
+    `failed` (the filesystem refused; nothing unverified was replaced)."""
+    try:
+        path = safe_path(backlog_dir, str(safe_relative(rel)))
+    except (OSError, UnsafePath, ValueError):
+        return "failed"
+    temp, aside = _checkout_names(path, token)
+
+    def matches(data: bytes) -> bool:
+        return expected is not None and expected in {_digest(data), _digest(_lf(data)), _digest(_crlf(data))}
+    try:
+        try:
+            data = path.read_bytes()
+        except FileNotFoundError:
+            data = None
+        if content is not None and data is not None and _lf(data) == _lf(content):
+            return "agrees"
+        if data is None and content is None:
+            return "removed"
+        if data is not None and not matches(data):
+            return "changed"
+        if content is not None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with temp.open("wb") as handle:
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+        moved = False
+        if data is not None:
+            moved = _retry(lambda: _move(path, aside))
+            if moved and not matches(aside.read_bytes()):
+                _quietly(lambda: _retry(lambda: _install(aside, path)))
+                if content is not None:
+                    _quietly(lambda: _drop(temp))
+                return "changed"
+        if content is not None:
+            if not _retry(lambda: _install(temp, path)):
+                _quietly(lambda: _drop(temp))
+                if moved:
+                    _quietly(lambda: _drop(aside))  # verified base bytes; the newcomer stays
+                return "changed"
+        elif path.exists():
+            if moved:
+                _quietly(lambda: _drop(aside))
+            return "changed"
+        if moved:
+            _drop(aside)
+        return "published" if content is not None else "removed"
+    except OSError:
+        if aside.exists() and not path.exists():
+            _quietly(lambda: _retry(lambda: _install(aside, path)))
+        _quietly(lambda: _drop(temp))
+        return "failed"
+
+
+def recover_checkout_file(backlog_dir: Path, rel: str, token: str, target: str | None) -> str:
+    """Undo what an interrupted `publish_checkout_file` left behind (its names are recorded).
+
+    The temp is a copy of published bytes and is dropped. A set-aside file goes back
+    when the path is empty; when the path already carries the target the aside bytes
+    were the verified base and are dropped; anything else stays for inspection."""
+    try:
+        path = safe_path(backlog_dir, str(safe_relative(rel)))
+    except (OSError, UnsafePath, ValueError):
+        return "refused"
+    temp, aside = _checkout_names(path, token)
+    _quietly(lambda: _drop(temp))
+    if not aside.exists():
+        return "clean"
+    if _quietly(lambda: _retry(lambda: _install(aside, path))) and not aside.exists():
+        return "restored"
+    try:
+        current = path.read_bytes()
+    except OSError:
+        return "aside kept"
+    if target is not None and target in {_digest(current), _digest(_lf(current)), _digest(_crlf(current))}:
+        _quietly(lambda: _drop(aside))
+        return "dropped"
+    return "aside kept"
+
+
+# Authored configuration beside the projection that a coordinator route may rewrite
+# (N13 step 7). It is not a projection of the store: no job, base or flag covers it.
+CONFIG_FILES = frozenset({"linear.yaml"})
+CONFIG_MAX_BYTES = 1024 * 1024
+
+
+def read_config(backlog_dir: Path, name: str) -> bytes | None:
+    """The configuration file's bytes, or None when absent; links and oversized files refuse."""
+    if name not in CONFIG_FILES:
+        raise ValueError(f"not a coordinator-owned configuration file: {name!r}")
+    path = safe_path(backlog_dir, name)
+    try:
+        with open(path, "rb") as handle:
+            content = handle.read(CONFIG_MAX_BYTES + 1)
+    except FileNotFoundError:
+        return None
+    if len(content) > CONFIG_MAX_BYTES:
+        raise ValueError(f"{name} exceeds {CONFIG_MAX_BYTES} bytes")
+    return content
+
+
+def replace_config(backlog_dir: Path, name: str, *, expected: bytes | None, content: bytes) -> None:
+    """Install `content` as the configuration file, all or nothing.
+
+    The caller holds the coordinator's publication boundary. The new bytes are
+    written and synced under a private temp name, the file is rechecked against
+    `expected` (what the caller parsed), then renamed into place: a replace when
+    it existed, a no-overwrite install when it did not. Any failure leaves the
+    old file and no temp. Editors that ignore the boundary can still race the
+    final rename; that window is the same one publication documents.
+    """
+    path = safe_path(backlog_dir, name)
+    stale = f"{name} changed while it was being updated; it was left as it is"
+    if read_config(backlog_dir, name) != expected:
+        raise ValueError(stale)
+    temp = path.with_name(f"{name}.tmp.{os.getpid()}.{random.getrandbits(64):016x}")
+    try:
+        with open(temp, "xb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if read_config(backlog_dir, name) != expected:
+            raise ValueError(stale)
+        if expected is None:
+            if not _retry(lambda: _install(temp, path)):
+                raise ValueError(f"{name} appeared while it was being created; it was left as it is")
+        else:
+            _retry(lambda: os.replace(temp, path) or True)
+    finally:
+        if os.path.lexists(temp):
+            _quietly(lambda: _drop(temp))

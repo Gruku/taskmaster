@@ -172,6 +172,7 @@ def test_first_open_creates_local_files_complete_schema_and_metadata(tmp_path):
     assert session == (os.getpid(), socket.gethostname(), str(Path.cwd().resolve()), None)
 
 
+@pytest.mark.xdist_group("heavy_processes")  # conftest: one multi-process test at a time
 def test_simultaneous_fresh_process_opens_serialize_schema_creation(tmp_path):
     root = tmp_path / "repo"
     backlog_path = _write_projection(root)
@@ -467,6 +468,31 @@ def test_newer_projection_schema_is_refused_before_database_creation(tmp_path):
         store.open_store(root=root, session="too-new")
 
     assert not _database(root).exists()
+
+
+def test_projection_schema_fence_parses_an_unchanged_backlog_yaml_once(tmp_path, monkeypatch):
+    """The forward-schema fence runs on every `open_store`, several per tool call.
+
+    Re-parsing the whole of backlog.yaml each time was a measured 4 x 12 ms per
+    tool call on a 12 KB projection, growing with the project. An unchanged file
+    must be parsed once; a rewritten one must be read again and still refused.
+    """
+    root = tmp_path / "repo"
+    backlog_path = _write_projection(root)
+    parses: list[int] = []
+    original = store.yaml_io.safe_load
+    monkeypatch.setattr(
+        store.yaml_io, "safe_load", lambda text: parses.append(1) or original(text)
+    )
+
+    for _ in range(5):
+        assert store._projection_schema(backlog_path) is None
+    assert len(parses) == 1
+
+    _write_projection(root, projection_schema=store.PROJECTION_SCHEMA + 1)
+    assert store._projection_schema(backlog_path) == store.PROJECTION_SCHEMA + 1
+    with pytest.raises(RuntimeError, match=r"(?i)newer"):
+        store.open_store(root=root, session="rewritten")
 
 
 def test_creation_token_change_invalidates_cached_dict_without_new_change_seq(tmp_path):

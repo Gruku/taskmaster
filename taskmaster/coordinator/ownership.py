@@ -123,6 +123,34 @@ def verify_private(path: Path):
             raise PermissionError('coordinator discovery permissions are not owner-only')
 
 
+def ownership_held(root: Path) -> bool:
+    """Whether some process holds the kernel ownership lock right now.
+
+    Probes by taking and immediately releasing the lock. A concurrent startup
+    that loses to the probe exits cleanly; the caller then starts its own."""
+    try:
+        descriptor = os.open(Path(root) / '.taskmaster/local/coordinator/owner.lock', os.O_RDWR)
+    except FileNotFoundError:
+        return False
+    try:
+        if os.name == 'nt':
+            import msvcrt
+            msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+    except OSError as exc:
+        if exc.errno in (errno.EACCES, errno.EAGAIN, 13, 36):
+            return True
+        raise
+    finally:
+        os.close(descriptor)
+    return False
+
+
 class Ownership:
     """A held byte/flock, released only by closing our own handle or process exit."""
     def __init__(self, root: Path):

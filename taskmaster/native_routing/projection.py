@@ -32,6 +32,7 @@ import time
 import uuid
 
 from taskmaster import store
+from taskmaster.projection_paths import UnsafePath, safe_path
 from taskmaster.native import db as native_db
 from taskmaster.native import projection as outbox
 from taskmaster.native.migrate import rows
@@ -54,7 +55,8 @@ _DOMINANT_LOCK = threading.Lock()
 def _dominant_crlf(backlog_dir: Path) -> bool:
     with _DOMINANT_LOCK:
         if backlog_dir not in _DOMINANT:
-            _DOMINANT[backlog_dir] = store.detect_dominant_crlf(backlog_dir)
+            _DOMINANT[backlog_dir] = store.detect_dominant_crlf(
+                backlog_dir, path_guard=lambda rel: safe_path(backlog_dir, rel))
         return _DOMINANT[backlog_dir]
 
 
@@ -70,6 +72,7 @@ class _Render:
         self.connection, self.backlog_dir = connection, backlog_dir
 
     def job(self, job: outbox.Job) -> bytes | None:
+        safe_path(self.backlog_dir, job.file)
         if job.effect == "delete":
             return None
         entity = job.entity
@@ -80,10 +83,14 @@ class _Render:
         if job.moved_from:
             # A move carries the old file's line endings to the new path; the old
             # file is still on disk here, because every render precedes every publish.
-            default_crlf = store._probe_crlf(self.backlog_dir / job.moved_from)
+            # A refused old path only loses its vote; its removal is refused on its own.
+            try:
+                default_crlf = store._probe_crlf(safe_path(self.backlog_dir, job.moved_from))
+            except (OSError, UnsafePath):
+                default_crlf = None
         if default_crlf is None:
             default_crlf = _dominant_crlf(self.backlog_dir)
-        return store._match_line_endings(content, self.backlog_dir / job.file, default_crlf)
+        return store._match_line_endings(content, safe_path(self.backlog_dir, job.file), default_crlf)
 
     def _stale(self, rel: str, kinds: tuple[str, ...]) -> int | None:
         placeholders = ",".join("?" for _ in kinds)
@@ -100,7 +107,7 @@ class _Render:
         return snapshot._assemble(cores, None, include_body=True)
 
     def _matched(self, rel: str, content: bytes) -> bytes:
-        return store._match_line_endings(content, self.backlog_dir / rel, _dominant_crlf(self.backlog_dir))
+        return store._match_line_endings(content, safe_path(self.backlog_dir, rel), _dominant_crlf(self.backlog_dir))
 
     def derived(self, warnings: list[str]) -> list[tuple[str, str, bytes, int]]:
         """`(file, kind, bytes, seq)` for every stale, unheld derived file, from one read snapshot."""
@@ -111,13 +118,18 @@ class _Render:
             try:
                 seq = self._stale(BACKLOG_FILE, ("backlog", "epic", "phase") + derived.KINDS)
                 if seq is not None and not self._held(BACKLOG_FILE, warnings):
-                    out.append((BACKLOG_FILE, "backlog", self._matched(BACKLOG_FILE, self.backlog(snapshot)), seq))
+                    content = self._refusable(BACKLOG_FILE, warnings, lambda: self._matched(
+                        BACKLOG_FILE, self.backlog(snapshot)))
+                    if content is not None:
+                        out.append((BACKLOG_FILE, "backlog", content, seq))
                 seq = self._stale(store._IDEAS_INDEX_REL, ("idea",))
                 if seq is not None and not self._held(store._IDEAS_INDEX_REL, warnings):
                     content = self.ideas(snapshot)
                     if content is not None:
-                        out.append((store._IDEAS_INDEX_REL, store._IDEAS_INDEX_KIND,
-                                    self._matched(store._IDEAS_INDEX_REL, content), seq))
+                        content = self._refusable(store._IDEAS_INDEX_REL, warnings,
+                                                  lambda: self._matched(store._IDEAS_INDEX_REL, content))
+                    if content is not None:
+                        out.append((store._IDEAS_INDEX_REL, store._IDEAS_INDEX_KIND, content, seq))
             finally:
                 snapshot.active = False
         finally:
@@ -142,6 +154,15 @@ class _Render:
         if entries or (self.backlog_dir / store._IDEAS_INDEX_REL).exists():
             return render_ideas_index(entries).encode("utf-8")
         return None
+
+    @staticmethod
+    def _refusable(rel: str, warnings: list[str], render):
+        """One derived file the path guard refuses is skipped with a notice, not fatal."""
+        try:
+            return render()
+        except (OSError, UnsafePath) as exc:
+            warnings.append(f"export pending: {rel} refused ({exc})")
+            return None
 
     def _held(self, rel: str, warnings: list[str]) -> bool:
         reason = outbox.held_file(self.connection, rel)
@@ -230,7 +251,14 @@ def drain(connection: sqlite3.Connection, backlog_dir: Path, *, session: str, th
         sleep(_POLL_SECONDS)
     try:
         render = _Render(connection, backlog_dir)
-        rendered = [(job, render.job(job)) for job in jobs]
+        rendered = []
+        for job in jobs:
+            # A refused path (link/reparse entry, missing root) is one job's
+            # problem: it goes back to pending with a notice, the rest publish.
+            try:
+                rendered.append((job, render.job(job)))
+            except (OSError, UnsafePath) as exc:
+                exporter.refuse(job, exc)
         files = render.derived(exporter.warnings)
         lost = False
         if rendered or files:

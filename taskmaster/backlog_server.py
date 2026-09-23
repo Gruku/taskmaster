@@ -592,16 +592,39 @@ def _active_tx() -> "_TxFrame | None":
 # deadline waiting on a *log line*. Measured: a store writer overran a 30 s
 # deadline to 82 s that way. A full queue drops the notice instead; a dropped
 # progress line costs nothing, a stalled writer costs the call.
+#
+# The pump writes to the stderr *file descriptor*, never through
+# `sys.stderr`: a daemon thread parked inside a buffered write holds the
+# BufferedWriter lock, and interpreter shutdown then aborts the whole process
+# ("_enter_buffered_busy: could not acquire lock ... at interpreter shutdown",
+# Windows exit 0xC0000409) when it flushes stderr. A raw `os.write` takes no
+# Python-level lock, so a blocked or abandoned notice cannot break the exit.
 _WRITER_WAIT_NOTICES: "queue.Queue[str]" = queue.Queue(maxsize=64)
 _WRITER_WAIT_PUMP: "threading.Thread | None" = None
 _WRITER_WAIT_PUMP_LOCK = threading.Lock()
+
+
+def _write_writer_wait_notice(line: str) -> None:
+    stream = sys.stderr
+    if stream is None:
+        return
+    try:
+        fd = stream.fileno()
+    except (AttributeError, OSError, ValueError):
+        # A replaced stream with no descriptor (an in-process capture) has no
+        # buffer lock shared with interpreter shutdown; write through it.
+        print(line, file=stream, flush=True)
+        return
+    data = (line + "\n").encode(getattr(stream, "encoding", None) or "utf-8", "replace")
+    while data:
+        data = data[os.write(fd, data):]
 
 
 def _drain_writer_wait_notices() -> None:
     while True:
         line = _WRITER_WAIT_NOTICES.get()
         try:
-            print(line, file=sys.stderr, flush=True)
+            _write_writer_wait_notice(line)
         except Exception:  # noqa: BLE001 - a closed stderr must not kill the pump
             pass
 
@@ -11834,6 +11857,52 @@ def backlog_linear_probe(token_env: str) -> str:
     return json.dumps({"teams": result}, indent=2)
 
 
+def _linear_workspace_entry(
+    workspace_alias: str,
+    team_id: str,
+    token_env: str,
+    status_mapping: str = "",
+    priority_mapping: str = "",
+) -> dict:
+    """The `linear.yaml` workspace entry `bootstrap_apply` adds; ValueError says why not.
+
+    Shared by the legacy writer and the native coordinator route (N13), so both
+    refuse the same arguments with the same words.
+    """
+    if not workspace_alias or not workspace_alias.strip():
+        raise ValueError("workspace_alias is required")
+    if not team_id or not team_id.strip():
+        raise ValueError("team_id is required")
+    if not token_env or not token_env.strip():
+        raise ValueError("token_env is required")
+
+    def _parse_mapping(raw: str) -> dict:
+        """Parse 'a:b,c:d' into {'a': 'b', 'c': 'd'}, deduped, no empty halves."""
+        out: dict = {}
+        for pair in raw.split(","):
+            pair = pair.strip()
+            if not pair:
+                continue
+            parts = pair.split(":", 1)
+            if len(parts) != 2 or not parts[0].strip() or not parts[1].strip():
+                raise ValueError(f"invalid mapping pair {pair!r} — expected tm_value:linear_id")
+            out[parts[0].strip()] = parts[1].strip()
+        return out
+
+    sm = _parse_mapping(status_mapping) if status_mapping.strip() else {}
+    pm = _parse_mapping(priority_mapping) if priority_mapping.strip() else {}
+    ws_entry: dict = {
+        "alias": workspace_alias,
+        "team_id": team_id,
+        "token_env": token_env,
+    }
+    if sm:
+        ws_entry["status_mapping"] = sm
+    if pm:
+        ws_entry["priority_mapping"] = pm
+    return ws_entry
+
+
 def backlog_linear_bootstrap_apply(
     workspace_alias: str,
     team_id: str,
@@ -11864,44 +11933,15 @@ def backlog_linear_bootstrap_apply(
         _validate_linear_config,
     )
 
-    if not workspace_alias or not workspace_alias.strip():
-        return json.dumps({"error": "workspace_alias is required"})
-    if not team_id or not team_id.strip():
-        return json.dumps({"error": "team_id is required"})
-    if not token_env or not token_env.strip():
-        return json.dumps({"error": "token_env is required"})
-
-    def _parse_mapping(raw: str) -> dict:
-        """Parse 'a:b,c:d' into {'a': 'b', 'c': 'd'}, deduped, no empty halves."""
-        out: dict = {}
-        for pair in raw.split(","):
-            pair = pair.strip()
-            if not pair:
-                continue
-            parts = pair.split(":", 1)
-            if len(parts) != 2 or not parts[0].strip() or not parts[1].strip():
-                raise ValueError(f"invalid mapping pair {pair!r} — expected tm_value:linear_id")
-            out[parts[0].strip()] = parts[1].strip()
-        return out
-
     try:
-        sm = _parse_mapping(status_mapping) if status_mapping.strip() else {}
-        pm = _parse_mapping(priority_mapping) if priority_mapping.strip() else {}
+        ws_entry = _linear_workspace_entry(
+            workspace_alias, team_id, token_env, status_mapping, priority_mapping
+        )
     except ValueError as e:
         return json.dumps({"error": str(e)})
 
     bp = _backlog_path()
     cfg_path = linear_config_path(bp)
-
-    ws_entry: dict = {
-        "alias": workspace_alias,
-        "team_id": team_id,
-        "token_env": token_env,
-    }
-    if sm:
-        ws_entry["status_mapping"] = sm
-    if pm:
-        ws_entry["priority_mapping"] = pm
 
     def _add_workspace(cfg: dict) -> dict:
         # The collision check, the append and the write are one critical

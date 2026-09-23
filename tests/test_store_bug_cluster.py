@@ -549,3 +549,53 @@ def test_the_writer_wait_sink_never_blocks_its_caller(monkeypatch):
         )
     assert time.monotonic() - started < 2.0
     assert reached.wait(5), "the notice never reached the sink at all"
+
+
+_NOTICE_FLOOD = r'''
+import time
+from taskmaster import backlog_server as server
+from taskmaster import store
+
+for index in range(2000):
+    server._report_writer_wait(
+        store.WriterWait(operation="update_root_config", waited=float(index), deadline=30.0)
+    )
+# Let the pump fill the (undrained) pipe and park inside a stderr write.
+time.sleep(0.5)
+'''
+
+
+def test_writer_wait_notices_never_abort_interpreter_shutdown(tmp_path):
+    """A process that exits while notices are in flight must exit cleanly.
+
+    The pump used to `print` through `sys.stderr`, so it held the stderr buffer
+    lock across the write syscall. A process that finished while the pump was
+    mid-write -- certain when the reader of the pipe is slow -- aborted at
+    shutdown with "_enter_buffered_busy: could not acquire lock for <stderr>"
+    (Windows exit 0xC0000409), turning a successful run into a crash.
+    """
+    import os
+    import subprocess
+    import sys
+
+    script = tmp_path / "flood.py"
+    script.write_text(_NOTICE_FLOOD, encoding="utf-8")
+    env = dict(os.environ)
+    env["TASKMASTER_ROOT"] = str(tmp_path)
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
+    env.pop("PYTEST_CURRENT_TEST", None)
+    process = subprocess.Popen(
+        [sys.executable, str(script)],
+        cwd=str(tmp_path),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    # Nobody drains stderr until the child has had time to reach shutdown, so
+    # the pump is blocked mid-write exactly when the interpreter finalizes.
+    time.sleep(6)
+    _, err = process.communicate(timeout=120)
+    text = err.decode("utf-8", "replace")
+    assert "Fatal Python error" not in text, text[-2000:]
+    assert process.returncode == 0, (process.returncode, text[-2000:])
+    assert "has waited" in text, "no notice reached stderr at all"

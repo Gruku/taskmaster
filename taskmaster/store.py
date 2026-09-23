@@ -34,7 +34,7 @@ from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 import yaml
 
-from taskmaster import yaml_io
+from taskmaster import projection_parse, yaml_io
 from taskmaster.integrity import check_database
 from taskmaster.admission import (
     BRIDGE_CAPABILITIES, CLIENT_PROTOCOL, LEGACY_SCHEMA_VERSION,
@@ -720,10 +720,31 @@ def _quick_check(connection: sqlite3.Connection, limit: int | None = None) -> st
     return "" if row is None else str(row[0])
 
 
+# backlog.yaml path -> ((st_ino, st_mtime_ns, st_size), fenced schema). The fence
+# runs on every `open_store` -- several times per tool call -- and re-parsing the
+# whole file each time grew with the project (measured 4 x 12 ms per call on a
+# 12 KB projection). The stat key is taken *before* the read, so a write racing
+# the parse can only cost one extra parse, never pin a stale answer; projection
+# writes replace the file, which moves the inode as well as the mtime.
+_PROJECTION_SCHEMA_CACHE: dict[str, tuple[tuple[int, int, int], int | None]] = {}
+
+
 def _projection_schema(backlog_dir: Path) -> int | None:
     path = backlog_dir / "backlog.yaml"
-    if not path.exists():
+    try:
+        before = path.stat()
+    except OSError:
         return None
+    key = (before.st_ino, before.st_mtime_ns, before.st_size)
+    cached = _PROJECTION_SCHEMA_CACHE.get(str(path))
+    if cached is not None and cached[0] == key:
+        return cached[1]
+    value = _parse_projection_schema(path)
+    _PROJECTION_SCHEMA_CACHE[str(path)] = (key, value)
+    return value
+
+
+def _parse_projection_schema(path: Path) -> int | None:
     try:
         raw = yaml_io.safe_load(path.read_text(encoding="utf-8")) or {}
     except (OSError, UnicodeError, yaml.YAMLError):
@@ -745,32 +766,11 @@ def _projection_schema(backlog_dir: Path) -> int | None:
 
 
 def _schema_integer(value: Any) -> int:
-    if isinstance(value, bool):
-        raise ValueError("boolean is not a schema integer")
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str) and re.fullmatch(r"[0-9]+", value):
-        return int(value)
-    raise ValueError("schema value must be an integer")
+    return projection_parse.schema_integer(value)
 
 
 def _validate_backlog_document(raw: Any) -> None:
-    if not isinstance(raw, dict):
-        raise ValueError("backlog.yaml must be a mapping")
-    meta_value = raw.get("meta")
-    if meta_value is None:
-        meta: dict[str, Any] = {}
-    elif not isinstance(meta_value, dict):
-        raise ValueError("backlog.yaml meta must be a mapping")
-    else:
-        meta = meta_value
-    for field in ("schema_version", "projection_schema"):
-        if field not in meta:
-            continue
-        try:
-            _schema_integer(meta[field])
-        except ValueError as exc:
-            raise ValueError(f"backlog.yaml meta.{field} must be an integer") from exc
+    projection_parse.validate_backlog(raw)
 
 
 def _read_file_snapshot(path: Path) -> tuple[bytes, os.stat_result]:
@@ -1038,6 +1038,7 @@ def reset_for_tests() -> None:
         _STORES.clear()
         _CACHE.clear()
         _WARNED_CLOUD_ROOTS.clear()
+        _PROJECTION_SCHEMA_CACHE.clear()
         _CONTEXT_BUILDER = None
         _PROGRESS_RENDERER = None
         _WAIT_OBSERVER = None
@@ -1126,23 +1127,33 @@ def status(backlog_path: Path | None = None) -> StoreStatus:
     return open_store(backlog_path=backlog_path).status()
 
 
-def detect_dominant_crlf(backlog_path: Path) -> bool:
+def detect_dominant_crlf(backlog_path: Path, *, path_guard=None) -> bool:
     """Whether a backlog directory's git-facing files are mostly CRLF.
 
     Bounded sampling (see `_LINE_ENDING_SAMPLE_PER_DIR`), shared by the legacy
     exporter and the native compatibility drain so a new file matches its
     neighbours whichever writer creates it.
     """
+    guard = path_guard or (lambda rel: backlog_path / rel)
+
+    def probe_crlf(rel):
+        # A path the guard refuses (a link, a missing root) casts no vote; it
+        # must never fail the write or export that asked for the default.
+        try:
+            return _probe_crlf(guard(rel))
+        except (OSError, ValueError):
+            return None
+
     crlf = lf = 0.0
     for name in ("backlog.yaml", "project.yaml"):
-        probe = _probe_crlf(backlog_path / name)
+        probe = probe_crlf(name)
         if probe is True:
             crlf += 1
         elif probe is False:
             lf += 1
     for folder in _LINE_ENDING_SAMPLE_DIRS:
-        directory = backlog_path / folder
         try:
+            directory = guard(folder)
             # Listed eagerly, inside the guard: `Path.iterdir` is lazy on
             # 3.11, so a project with no `bugs/` raised FileNotFoundError
             # out of the loop below and took the write that asked with it.
@@ -1150,13 +1161,13 @@ def detect_dominant_crlf(backlog_path: Path) -> bool:
             names = [
                 name for name in os.listdir(directory) if name.endswith(".md")
             ]
-        except OSError:
+        except (OSError, ValueError):
             continue
         if not names:
             continue
         sampled_crlf = sampled_lf = 0
         for name in names[:_LINE_ENDING_SAMPLE_PER_DIR]:
-            probe = _probe_crlf(directory / name)
+            probe = probe_crlf(f"{folder}/{name}")
             if probe is True:
                 sampled_crlf += 1
             elif probe is False:
@@ -4378,22 +4389,7 @@ class Store:
 
     # Ordered canonical-first: a legacy duplicate path is an import fallback
     # and never overrides the canonical one.
-    _ENTITY_FILE_SPECS = (
-        ("task", ("tasks/*.md", "tasks/archive/*.md")),
-        ("epic", ("epics/*.md",)),
-        ("phase", ("phases/*.md",)),
-        ("bug", ("bugs/*.md", "bugs/archive/*.md")),
-        ("issue", ("issues/*.md", "issues/archive/*.md")),
-        (
-            "handover",
-            ("handovers/*.md", "handovers/_archive/*/*.md", "handovers/archive/*.md"),
-        ),
-        ("decision", ("decisions/*.md",)),
-        ("idea", ("ideas/IDEA-*.md",)),
-        ("note", ("notes/NOTE-*.md", "notes/_archive/NOTE-*.md")),
-        ("area", ("areas/*.md",)),
-        ("tracker", ("trackers/*.md", "integrations/trackers/*.md")),
-    )
+    _ENTITY_FILE_SPECS = projection_parse.ENTITY_FILE_SPECS
 
     @contextmanager
     def _memoized_entity_files(self) -> Iterator[None]:
@@ -4482,23 +4478,11 @@ class Store:
         return self._parse_entity_text(kind, path.read_text(encoding="utf-8"))
 
     def _parse_entity_text(self, kind: str, raw: str) -> tuple[dict[str, Any], str | None]:
-        if any(marker in raw for marker in ("<<<<<<<", "=======", ">>>>>>>")):
-            raise ValueError("git conflict markers")
-        fm, body = parse_frontmatter(raw)
-        if not fm or not isinstance(fm, dict):
-            raise ValueError("missing or invalid frontmatter")
-        if kind == "task":
-            doc = task_v4_from_file(fm, body.removesuffix("\n"))
-            return _split_body(doc)
-        return _clean_doc(fm), body.removesuffix("\n") or None
+        return projection_parse.entity_text(kind, raw)
 
     @staticmethod
     def _validate_projected_identity(kind: str, ident: str, doc: Mapping[str, Any]) -> None:
-        declared = doc.get("id")
-        if declared is not None and str(declared) != ident:
-            raise ValueError(
-                f"{kind} path id {ident!r} does not match frontmatter id {declared!r}"
-            )
+        projection_parse.validate_identity(kind, ident, doc)
 
     def _scan_projection(
         self, tx: "Transaction", *, generation: str | None = None
@@ -4699,50 +4683,13 @@ class Store:
         import writes, which is what lets "would importing this change
         anything?" be answered without importing.
         """
-        text = content.decode("utf-8")
-        if kind == "backlog":
-            raw = yaml_io.safe_load(text) or {}
-            _validate_backlog_document(raw)
-            rows = _flatten_backlog_dict(raw)
-            for key, (doc, body) in list(rows.items()):
-                if key[0] not in {"epic", "phase"}:
-                    continue
-                current = tx.connection.execute(
-                    "SELECT doc,body FROM entities WHERE kind=? AND id=?", key
-                ).fetchone()
-                if current:
-                    current_doc = _from_json(current["doc"], {})
-                    heavy_fields = (
-                        EPIC_HEAVY_FIELDS if key[0] == "epic" else PHASE_HEAVY_FIELDS
-                    )
-                    for field in heavy_fields:
-                        if field in current_doc:
-                            doc[field] = current_doc[field]
-                    rows[key] = (doc, current["body"])
-            return rows
-        if kind == "project":
-            doc = yaml_io.safe_load(text) or {}
-            if not isinstance(doc, dict):
-                raise ValueError("project.yaml must be a mapping")
-            return {("project", ident or _PROJECT_ID): (doc, None)}
-        if not ident:
-            return None
-        doc, body = self._parse_entity_text(kind, text)
-        self._validate_projected_identity(kind, ident, doc)
-        if kind in {"epic", "phase"}:
+        def lookup(kind, ident):
             current = tx.connection.execute(
-                "SELECT doc FROM entities WHERE kind=? AND id=?", (kind, ident)
+                "SELECT doc,body FROM entities WHERE kind=? AND id=?", (kind, ident)
             ).fetchone()
-            if current:
-                merged = _from_json(current["doc"], {})
-                heavy_fields = EPIC_HEAVY_FIELDS if kind == "epic" else PHASE_HEAVY_FIELDS
-                for field in heavy_fields:
-                    if field in doc:
-                        merged[field] = doc[field]
-                    else:
-                        merged.pop(field, None)
-                doc = merged
-        return {(kind, ident): (doc, body)}
+            return (_from_json(current["doc"], {}), current["body"]) if current else None
+
+        return projection_parse.projected_file(kind, ident, content, lookup)
 
     def _apply_projected_file(
         self,
@@ -6842,15 +6789,11 @@ class Transaction:
 
 
 def _clean_doc(doc: Mapping[str, Any]) -> dict[str, Any]:
-    return _v4_strip_private_fields(dict(doc), preserve_body=False)
+    return projection_parse.clean_doc(doc)
 
 
 def _split_body(doc: Mapping[str, Any]) -> tuple[dict[str, Any], str | None]:
-    materialized = copy.deepcopy(dict(doc))
-    body = materialized.pop(BODY_KEY, None)
-    if isinstance(body, str):
-        body = body.removesuffix("\n") or None
-    return _clean_doc(materialized), body
+    return projection_parse.split_body(doc)
 
 
 def _top_level_diff(
@@ -7058,46 +7001,7 @@ def name_missing_ids(
 def _flatten_backlog_dict(
     data: Mapping[str, Any],
 ) -> dict[tuple[str, str], tuple[dict[str, Any], str | None]]:
-    result: dict[tuple[str, str], tuple[dict[str, Any], str | None]] = {}
-
-    def claim(key: tuple[str, str], value: tuple[dict[str, Any], str | None]) -> None:
-        # Two documents under one id used to collapse silently here, which turned
-        # an accidental duplicate create into an update that replaced the live
-        # entity's fields.  A duplicate is never a legal write-back.
-        if key in result:
-            raise ValueError(
-                f"{key[0]} {key[1]} appears twice in the backlog dict; a create "
-                f"cannot reuse an existing id"
-            )
-        result[key] = value
-
-    backlog_doc = {
-        key: copy.deepcopy(value)
-        for key, value in data.items()
-        if key not in {"epics", "phases", "context"}
-        and not (isinstance(key, str) and key.startswith("_"))
-    }
-    if isinstance(backlog_doc.get("meta"), dict):
-        backlog_doc["meta"].pop("updated", None)
-    claim(("backlog", _BACKLOG_ID), (_clean_doc(backlog_doc), None))
-    for epic in data.get("epics") or []:
-        epic_doc = {key: copy.deepcopy(value) for key, value in epic.items() if key != "tasks"}
-        epic_doc, body = _split_body(epic_doc)
-        ident = str(epic_doc.get("id") or "")
-        if ident:
-            claim(("epic", ident), (epic_doc, body))
-        for task in epic.get("tasks") or []:
-            task_doc, task_body = _split_body(task)
-            task_id = str(task_doc.get("id") or "")
-            if task_id:
-                task_doc.setdefault("epic", ident)
-                claim(("task", task_id), (task_doc, task_body))
-    for phase in data.get("phases") or []:
-        phase_doc, body = _split_body(phase)
-        ident = str(phase_doc.get("id") or "")
-        if ident:
-            claim(("phase", ident), (phase_doc, body))
-    return result
+    return projection_parse.flatten_backlog(data)
 
 
 def _is_archive_path(path: Path, backlog_dir: Path) -> bool:

@@ -18,6 +18,7 @@ import os
 from pathlib import Path
 import queue
 import secrets
+import socket
 import threading
 import time
 
@@ -90,6 +91,18 @@ class Coordinator:
         self.guard = threading.RLock()
         # N13 import and Git generation pinning share this publisher boundary.
         self.publication = threading.RLock()
+        self.execution = threading.RLock()
+        # Explicit admission gate: a lock alone lets a busy writer re-acquire
+        # `execution` ahead of a waiting sync indefinitely. While `pauses` is
+        # non-zero the writer admits nothing new; the in-flight command finishes.
+        self.admission = threading.Condition()
+        self.pauses = 0
+        self.active_syncs = 0
+        # Managed Git (N13 step 8): `git_pin` blocks every publication path until an
+        # interrupted operation is proven over and reconciled; `git_active` is the
+        # operation currently holding `publication` in this process.
+        self.git_pin = None
+        self.git_active = None
         self.stopping, self.export_needed = threading.Event(), threading.Event()
         self.checkpoint = checkpoint or (lambda stage: None)
         self.exporter = exporter
@@ -123,11 +136,19 @@ class Coordinator:
         try:
             with closing(self._connect(readonly=True)):
                 pass
+            from . import git
+            # Pin before the exporter exists: a marker left by a dead owner means
+            # its Git child may still be running.
+            recovering = git.startup(self)
             self.server = _Server(('127.0.0.1', 0), _Handler, handler_limit=self.handler_limit)
             self.server.coordinator = self
             for name, target in (('writer', self._writer), ('exporter', self._export), ('linear', self.linear.run),
                                  ('ipc', self.server.serve_forever)):
                 thread = threading.Thread(target=target, name=f'taskmaster-{name}', daemon=True)
+                thread.start()
+                self.threads.append(thread)
+            if recovering:
+                thread = threading.Thread(target=self._recover_git, name='taskmaster-git-recovery', daemon=True)
                 thread.start()
                 self.threads.append(thread)
             self.ownership.publish(self.discovery())
@@ -136,6 +157,22 @@ class Coordinator:
         except BaseException:
             self.close()
             raise
+
+    def _recover_git(self):
+        from . import git
+        try:
+            outcome = git.recover(self)
+            LOG.warning('managed Git recovery: %s', json.dumps(outcome, default=str)[:4000])
+        except Exception as exc:
+            self.git_pin = {'state': 'recovery_required', 'reason': f'managed Git recovery failed: {exc}'[:500]}
+            LOG.exception('managed Git recovery failed; publication stays pinned')
+
+    def publication_refusal(self):
+        """Why publication must not happen now (caller holds `publication`), or None."""
+        pin = self.git_pin
+        if pin is None:
+            return None
+        return f"managed Git recovery required ({pin.get('state')}): {pin.get('reason')}"
 
     def discovery(self):
         return dict(self.identity, nonce=self.nonce, token=self.token, pid=os.getpid(),
@@ -195,26 +232,31 @@ class Coordinator:
                     work = self.queue.get(timeout=0.1)
                 except queue.Empty:
                     continue
+                # Gate after dequeue: a command taken during a pause waits here,
+                # outside `execution`, so the pausing sync never waits for it.
+                with self.admission:
+                    self.admission.wait_for(lambda: not self.pauses or self.stopping.is_set())
                 try:
                     self.checkpoint('dequeued')
-                    # Recheck the path after queue wait, even when the persistent
-                    # writer handle still names a previously opened database.
-                    with closing(self._connect(readonly=True)):
-                        pass
-                    if connection is None:
-                        connection = self._connect()
-                    def admitted(stage):
-                        if stage == 'admitted':
-                            with self.guard:
-                                # Cancel and admission have one ordering point.
-                                if work.cancelled.is_set():
-                                    raise contracts.CancelledBeforeExecution('cancelled before execution')
-                                work.admitted = True
-                        self.checkpoint(stage)
-                    receipt = commands.execute(connection, work.request, cancelled=work.cancelled.is_set,
-                                               checkpoint=admitted)
-                    work.future.set_result(receipt)
-                    self.export_needed.set()
+                    with self.execution:
+                        # Check after both queue wait and any generation pause;
+                        # a persistent handle may still name a replaced database.
+                        with closing(self._connect(readonly=True)):
+                            pass
+                        if connection is None:
+                            connection = self._connect()
+                        def admitted(stage):
+                            if stage == 'admitted':
+                                with self.guard:
+                                    # Cancel and admission have one ordering point.
+                                    if work.cancelled.is_set():
+                                        raise contracts.CancelledBeforeExecution('cancelled before execution')
+                                    work.admitted = True
+                            self.checkpoint(stage)
+                        receipt = commands.execute(connection, work.request, cancelled=work.cancelled.is_set,
+                                                   checkpoint=admitted)
+                        work.future.set_result(receipt)
+                        self.export_needed.set()
                 except BaseException as exc:
                     # A failed job must not strand the writer or its queue. The
                     # durable receipt, not this transport error, resolves retry.
@@ -230,6 +272,16 @@ class Coordinator:
             if connection is not None:
                 connection.close()
 
+    def pause_writer(self):
+        """Stop admitting new commands; pair with `resume_writer`."""
+        with self.admission:
+            self.pauses += 1
+
+    def resume_writer(self):
+        with self.admission:
+            self.pauses -= 1
+            self.admission.notify_all()
+
     def _drain(self, connection, through=None):
         if self.exporter is not None:
             return self.exporter(connection, self.root / '.taskmaster', through=through)
@@ -243,8 +295,11 @@ class Coordinator:
                 continue
             self.export_needed.clear()
             try:
-                with self.publication, closing(self._connect()) as connection:
-                    notices = self._drain(connection)
+                with self.publication:
+                    if self.publication_refusal():
+                        continue  # recovery sets export_needed once the pin clears
+                    with closing(self._connect()) as connection:
+                        notices = self._drain(connection)
                 self.last_export_error = None
                 if notices and not self.stopping.wait(1):
                     self.export_needed.set()
@@ -264,10 +319,20 @@ class Coordinator:
             return {'state': 'pending', 'through': through, 'notices': ['export pending: coordinator stopping']}
         deadline = time.monotonic() + timeout
         if not self.publication.acquire(timeout=max(0, timeout)):
-            return {'state': 'pending', 'through': through, 'notices': ['export pending: publisher busy']}
+            # The background pass that holds publication retries owed PROGRESS;
+            # losing that race must not hide the debt from this barrier.
+            notices = ['export pending: publisher busy' + (
+                '; a managed Git operation is in progress' if self.git_active is not None else '')]
+            with closing(self._connect(readonly=True)) as connection:
+                if progress.owes_through(connection, through):
+                    notices.append(progress.NOTICE)
+            return {'state': 'pending', 'through': through, 'notices': notices}
         try:
             if self.stopping.is_set():
                 return {'state': 'pending', 'through': through, 'notices': ['export pending: coordinator stopping']}
+            refusal = self.publication_refusal()
+            if refusal:
+                return {'state': 'pending', 'through': through, 'notices': [f'export pending: {refusal}']}
             with closing(self._connect()) as connection:
                 high = connection.execute('SELECT COALESCE(MAX(seq),0) FROM domain_events').fetchone()[0]
                 if through > high:
@@ -277,7 +342,7 @@ class Coordinator:
                     # A prior background pass may already have changed a job
                     # from pending to conflict. It is then absent from this
                     # drain's claims and warnings, but remains unpublished.
-                    held = set(outbox.flagged_files(connection))
+                    held = set(outbox.flagged_files(connection)) | set(outbox.drift_files(connection))
                     held.update(row[0] for row in connection.execute(
                         'SELECT file FROM projection WHERE quarantined=1'))
                     notices = list(dict.fromkeys([*notices, *(
@@ -296,6 +361,10 @@ class Coordinator:
         finally:
             self.publication.release()
 
+    def sync(self, **arguments):
+        from .sync_worker import synchronize
+        return synchronize(self, **arguments)
+
     def dispatch(self, message):
         if not isinstance(message, dict):
             raise ValueError('IPC message must be an object')
@@ -309,7 +378,22 @@ class Coordinator:
         if method == 'status':
             return dict(self.identity, nonce=self.nonce, queued=self.queue.qsize(),
                         linear_queued=len(self.linear.jobs),
-                        export_error=self.last_export_error)
+                        export_error=self.last_export_error, active_syncs=self.active_syncs)
+        if method == 'sync':
+            from .protocol import ABSENT_SYNC_TIMEOUT
+            return self.sync(caller_scope=message.get('caller_scope'), request_id=message.get('request_id'),
+                             import_files=message.get('import_files', True), through=message.get('through', 0),
+                             files=message.get('files'), take_file=message.get('take_file', False),
+                             worktree=message.get('worktree'), timeout=message.get('timeout', ABSENT_SYNC_TIMEOUT))
+        if method == 'sync_status':
+            from .sync_worker import operation_scope
+            from taskmaster.native.sync import operation_state
+            scope = operation_scope(message.get('caller_scope'), message.get('request_id'))
+            with closing(self._connect(readonly=True)) as connection:
+                return operation_state(connection, scope) or {'state': 'unknown'}
+        if method == 'linear_bootstrap':
+            from .linear_config import bootstrap
+            return bootstrap(self, message.get('entry'), message.get('default_workspace'))
         if method == 'linear_retry':
             return self.linear.response(message.get('caller_scope'), message.get('request_id'), message.get('target_id', ''))
         if method == 'receipt':
@@ -334,6 +418,28 @@ class Coordinator:
             return self.flush(message.get('through'))
         if method == 'cancel':
             return self.cancel(message.get('caller_scope'), message.get('request_id'))
+        if method == 'git_run':
+            from . import git
+            from .protocol import ABSENT_SYNC_TIMEOUT
+            timeout = message.get('timeout', git.GIT_TIMEOUT)
+            return git.run(self, kind=message.get('kind'), caller_scope=message.get('caller_scope'),
+                           request_id=message.get('request_id'), message=message.get('message'),
+                           ref=message.get('ref'), timeout=timeout, worktree=message.get('worktree'),
+                           sync_timeout=message.get('sync_timeout', ABSENT_SYNC_TIMEOUT))
+        if method == 'git_status':
+            from . import git
+            return git.status(self)
+        if method == 'git_recover':
+            from . import git
+            flags = [message.get(name, False) for name in ('acknowledge_quiescent', 'accept_outcome')]
+            if any(type(flag) is not bool for flag in flags):
+                raise ValueError('git_recover flags must be boolean')
+            release = message.get('release_drift')
+            if release is not None and release is not False and not isinstance(release, str):
+                raise ValueError("release_drift must be 'import' or 'take_published'")
+            return git.recover(self, acknowledge_quiescent=flags[0], accept_outcome=flags[1],
+                               release_drift=release, timeout=git.PUBLICATION_TIMEOUT,
+                               worktree=message.get('worktree'))
         if method == 'shutdown':
             self.stop()
             return {'state': 'stopping'}
@@ -341,7 +447,7 @@ class Coordinator:
 
     def idle_expired(self, seconds):
         with self.guard, self.linear.guard:
-            return (not self.pending and not self.linear.jobs
+            return (not self.pending and not self.linear.jobs and not self.active_syncs and self.git_active is None
                     and time.monotonic() - self.last_activity >= seconds)
 
     def stop(self):
@@ -350,6 +456,8 @@ class Coordinator:
         # stranded after the writer has already exited.
         with self.guard:
             self.stopping.set()
+        with self.admission:
+            self.admission.notify_all()
 
     def close(self):
         self.stop()
@@ -372,6 +480,48 @@ class Coordinator:
         self.close()
 
 
+_OVERLOAD_BUDGET = 0.5
+_HEADER_LIMIT = 64 * 1024
+
+
+def _drain(sock, deadline, *, whole_request):
+    """Discard inbound bytes until one whole request (or else EOF) arrives, bounded in bytes and time."""
+    head, expected, total = b'', None, 0
+    while total < MAX_MESSAGE_BYTES + _HEADER_LIMIT:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        sock.settimeout(remaining)
+        try:
+            chunk = sock.recv(65536)
+        except TimeoutError:
+            return
+        if not chunk:
+            return
+        total += len(chunk)
+        if not whole_request:
+            continue
+        if expected is None:
+            head += chunk
+            lines, separator, _ = head.partition(b'\r\n\r\n')
+            if not separator:
+                if len(head) > _HEADER_LIMIT:
+                    return
+                continue
+            length = 0
+            for line in lines.split(b'\r\n')[1:]:
+                name, _, value = line.partition(b':')
+                if name.strip().lower() == b'content-length':
+                    try:
+                        length = int(value.strip())
+                    except ValueError:
+                        return
+            expected = len(lines) + len(separator) + min(max(length, 0), MAX_MESSAGE_BYTES)
+            head = b''
+        if total >= expected:
+            return
+
+
 class _Server(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = False
@@ -387,13 +537,22 @@ class _Server(ThreadingHTTPServer):
             # and repeatedly launching startup contenders.
             raw = encode({'type': 'ServiceUnavailable', 'error': 'coordinator IPC capacity reached; retry later'})
             try:
-                request.settimeout(0.1)
+                # Closing with unread request bytes sends RST (always on
+                # Windows), which can destroy the reply before the client reads
+                # it. Drain the bounded request, reply, half-close, then wait
+                # briefly for the client's close. This runs on the accept
+                # thread, so the whole exchange shares one small deadline.
+                deadline = time.monotonic() + _OVERLOAD_BUDGET
+                _drain(request, deadline, whole_request=True)
+                request.settimeout(max(0.01, deadline - time.monotonic()))
                 request.sendall(b'HTTP/1.0 503 Service Unavailable\r\nContent-Type: application/json\r\n'
                                 + f'Content-Length: {len(raw)}\r\nConnection: close\r\n\r\n'.encode('ascii') + raw)
+                request.shutdown(socket.SHUT_WR)
+                _drain(request, deadline, whole_request=False)
             except OSError:
                 pass
             finally:
-                self.shutdown_request(request)
+                self.close_request(request)
             return
         try:
             super().process_request(request, address)

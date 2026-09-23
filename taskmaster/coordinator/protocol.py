@@ -6,11 +6,34 @@ import sqlite3
 
 from taskmaster.native import contracts, db, schema
 
-SERVICE_PROTOCOL = 1
+# N13 adds explicit import/barrier operations. A stale N12 owner must refuse the
+# new client handshake rather than accepting only part of its synchronization.
+# 3: managed Git; an owner without the durable publication pin must refuse.
+SERVICE_PROTOCOL = 4
 MAX_MESSAGE_BYTES = contracts.MAX_BYTES + 8192
 # Receipts include committed fields for up to 100 existing entities. Their
 # output can exceed a small metadata request without accepting a larger input.
 MAX_RESPONSE_BYTES = 64 * 1024 * 1024
+# The default budget of one sync (IPC, MCP resync, managed-Git pre-sync). Measured on
+# CodeMaestro (3,708 projection files; N13 report, "Rehearsal fixes: D1 performance"):
+# a warm no-edit full sync takes ~1.3 s, a cold one ~6 s, and the first touch of files
+# Git or a copy just wrote ~35-37 s (22 s of it the OS's first open of 3.7k new files).
+# 120 s is ~3x that worst case. Callers may pass 1..MAX_SYNC_TIMEOUT; an exhausted
+# budget answers `pending`, never a guess.
+SYNC_TIMEOUT = 120
+# The budget of a request that names none: a client from before budgets were sent waits
+# 30 s for the reply, so it keeps the fixed 20 s budget it was built against. Current
+# clients always send their budget (and wait budget + REPLY_MARGIN).
+ABSENT_SYNC_TIMEOUT = 20
+MAX_SYNC_TIMEOUT = 3600
+# How much longer than a call's own budget a client waits for the reply.
+REPLY_MARGIN = 30
+
+
+def validate_sync_timeout(timeout):
+    if type(timeout) not in (int, float) or not 1 <= timeout <= MAX_SYNC_TIMEOUT:
+        raise ValueError(f'sync timeout must be 1..{MAX_SYNC_TIMEOUT} seconds')
+    return timeout
 
 
 class ServiceUnavailable(RuntimeError):

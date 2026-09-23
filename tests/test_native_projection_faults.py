@@ -424,6 +424,7 @@ WRITER = textwrap.dedent("""
 """)
 
 
+@pytest.mark.xdist_group("heavy_processes")  # conftest: one multi-process test at a time
 def test_two_processes_exporting_one_store_converge_without_a_flag(twins, monkeypatch):
     root = twins.native
     writers = [subprocess.Popen([sys.executable, "-c", WRITER, str(root), name, "12"],

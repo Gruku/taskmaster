@@ -1,7 +1,8 @@
 """User intent: a native store that flags a hand-edited file (N11, D2) must be able to
 clear the flag with its own tools (S10, D3): `backlog_resolve_conflict` lists and
 compares flagged files, `take="store"` re-exports the store's version and records the
-replaced file text, and `take="file"` refuses until the native importer (N13) exists.
+replaced file text. `take="file"` (N13 step 7) is covered with the real coordinator in
+test_native_resolve_take_file.py.
 """
 from __future__ import annotations
 
@@ -68,20 +69,6 @@ def test_take_store_re_exports_the_store_version_and_records_the_replaced_text(t
         later = bs.backlog_update_task(task_id="test-epic-001", field="notes", value="after resolve")
     assert "export pending" not in later
     assert b"after resolve" in _path(twins).read_bytes()
-
-
-def test_take_file_refuses_and_points_to_the_importer(twins):
-    edited = _flag_by_hand_edit(twins)
-    with twins.at(twins.native):
-        answer = bs.backlog_resolve_conflict(file=REL, take="file")
-        still = bs.backlog_resolve_conflict()
-    # Every native result names the still-flagged file after its own text (N11 S9).
-    answer, _, notice = answer.partition("\n\nWarning: ")
-    assert REL in notice
-    assert answer.startswith("Error: ") and "N13" in answer and answer.endswith("Nothing was changed."), answer
-    assert 'take="store"' in answer
-    assert REL in still
-    assert _path(twins).read_bytes() == edited
 
 
 def test_resolving_a_file_that_is_not_flagged_is_an_error(twins):

@@ -6,6 +6,8 @@ import subprocess
 import sys
 import time
 
+import pytest
+
 from taskmaster.coordinator.client import Client, _launch
 from taskmaster.coordinator.protocol import ServiceUnavailable
 from test_native_service import root, request  # noqa: F401
@@ -37,6 +39,7 @@ def stop_owned(processes, root):
             process.wait(timeout=10)
 
 
+@pytest.mark.xdist_group("heavy_processes")  # conftest: one multi-process test at a time
 def test_concurrent_process_start_elects_exactly_one_owner(root):
     with ThreadPoolExecutor(max_workers=4) as pool:
         processes = list(pool.map(lambda _: _launch(root), range(4)))

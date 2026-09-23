@@ -308,6 +308,7 @@ def test_cached_read_refreshes_only_entities_newer_than_cached_sequence(
     assert _task(opened.load_dict(), "e-001")["title"] == "Incrementally refreshed"
 
 
+@pytest.mark.xdist_group("heavy_processes")  # conftest: one multi-process test at a time
 def test_two_process_writers_preserve_both_independent_updates(tmp_path: Path) -> None:
     store.reset_for_tests()
     backlog_path = _write_v4_project(tmp_path)
