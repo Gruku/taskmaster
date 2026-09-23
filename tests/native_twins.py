@@ -19,7 +19,7 @@ import yaml
 
 from taskmaster import backlog_server as bs
 from taskmaster import store
-from taskmaster.native.migrate import backfill, reconstruct_entities
+from taskmaster.native.migrate import backfill, reconstruct_entities, repair_graph_for_activation
 from taskmaster.native_routing import projection
 from taskmaster.native_routing.derived import KEYS as DERIVED_BACKLOG_KEYS
 
@@ -139,6 +139,8 @@ def activate_native(root: Path) -> None:
         connection.execute("UPDATE native_manifest SET value='ready' WHERE key='state'")
         connection.execute("INSERT INTO native_manifest VALUES('local_state_imported','1') "
                            "ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+        # The one-time graph repair belongs to the authority switch (N14).
+        repair_graph_for_activation(connection)
         for kind, prefix in PREFIXES.items():
             ids = [row[0] for row in connection.execute(
                 "SELECT public_id FROM entity_core WHERE kind=?", (kind,))]

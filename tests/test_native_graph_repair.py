@@ -280,23 +280,148 @@ def test_activation_repairs_graph_drift_inherited_from_the_legacy_store(tmp_path
         assert connection.execute("SELECT value FROM native_manifest WHERE key='graph_repaired_at'").fetchone()
 
 
-def test_backfill_reports_the_graph_repair_cost(tmp_path):
+def _legacy_db(path, *, drift=False):
     import json
     from taskmaster import store
+    connection = sqlite3.connect(path, isolation_level=None)
+    connection.executescript(store.SCHEMA_SQL)
+    connection.executemany("INSERT INTO meta VALUES(?,?)", [("schema_version", "1"), ("creation_token", "t")])
+    connection.execute("INSERT INTO entities VALUES('task','T-1',NULL,NULL,0,0,?,NULL,1,1)",
+                       (json.dumps({"id": "T-1", "anchors": ["src/a.py"]}),))
+    connection.execute("INSERT INTO entities VALUES('task','T-2',NULL,NULL,0,0,?,NULL,1,1)",
+                       (json.dumps({"id": "T-2", "anchors": ["src/*"]}),))
+    if drift:
+        connection.execute("INSERT INTO links VALUES('task','T-1','blocks','task','ghost',0)")
+    return connection
+
+
+def _raw_graph(connection):
+    return {table: connection.execute(f"SELECT rowid,* FROM {table} ORDER BY rowid").fetchall() for table in TABLES}
+
+
+def _begin_activation(connection):
+    connection.execute("BEGIN IMMEDIATE")
+    connection.execute("UPDATE native_manifest SET value='native' WHERE key='authority'")
+
+
+def test_backfill_on_a_legacy_authority_store_leaves_the_graph_tables_byte_identical(tmp_path):
+    """Backfill is a repeatable staging step while legacy owns these rows: it must not
+    rewrite them (review round 2, finding 2). The repair belongs to activation."""
     from taskmaster.native.migrate import backfill
-    with closing(sqlite3.connect(tmp_path / "s.db", isolation_level=None)) as connection:
-        connection.executescript(store.SCHEMA_SQL)
-        connection.executemany("INSERT INTO meta VALUES(?,?)", [("schema_version", "1"), ("creation_token", "t")])
-        connection.execute("INSERT INTO entities VALUES('task','T-1',NULL,NULL,0,0,?,NULL,1,1)",
-                           (json.dumps({"id": "T-1", "anchors": ["src/a.py"]}),))
-        connection.execute("INSERT INTO entities VALUES('task','T-2',NULL,NULL,0,0,?,NULL,1,1)",
-                           (json.dumps({"id": "T-2", "anchors": ["src/*"]}),))
+    with closing(_legacy_db(tmp_path / "s.db", drift=True)) as connection:
+        before = _raw_graph(connection)
         result = backfill(connection)
-        repair = result["graph_repair"]
-        # No derived rows existed: two entity_paths rows and one related row were missing.
-        assert repair["repaired"] and repair["differences"] == 3, repair
-        assert repair["rows_compared"] > 0 and repair["seconds"] >= 0
+        again = backfill(connection)
+        assert _raw_graph(connection) == before
+        assert "graph_repair" not in result and "graph_repair" not in again
+        assert connection.execute("SELECT value FROM native_manifest WHERE key='authority'").fetchone()[0] == "legacy"
+
+
+def test_the_activation_repair_runs_only_as_native_becomes_the_authority(tmp_path):
+    from taskmaster.admission import UnsupportedStoreError
+    from taskmaster.native import migrate
+    with closing(_legacy_db(tmp_path / "s.db", drift=True)) as connection:
+        migrate.backfill(connection)
+        with pytest.raises(RuntimeError):
+            migrate.repair_graph_for_activation(connection)
+        connection.execute("BEGIN IMMEDIATE")
+        with pytest.raises(UnsupportedStoreError):
+            migrate.repair_graph_for_activation(connection)
+        connection.rollback()
+        _begin_activation(connection)
+        report = migrate.repair_graph_for_activation(connection)
+        connection.commit()
+        # No derived rows existed: two entity_paths rows and one related row were
+        # missing, and the injected link was spurious.
+        assert report["repaired"] and report["differences"] == 4, report
+        assert report["rows_compared"] > 0 and report["seconds"] >= 0
         assert _actual(connection)["related"] == Counter({("task", "T-1", "task", "T-2", "path", 1): 1})
+
+
+def test_a_crashed_activation_repair_rolls_back_and_resumes(tmp_path, monkeypatch):
+    from taskmaster.native import migrate
+    with closing(_legacy_db(tmp_path / "s.db", drift=True)) as connection:
+        migrate.backfill(connection)
+        before = _raw_graph(connection)
+
+        def crash(*args, **kwargs):
+            raise RuntimeError("crash mid-activation")
+        with monkeypatch.context() as local:
+            local.setattr(graph_repair, "_insert", crash)
+            _begin_activation(connection)
+            with pytest.raises(RuntimeError):
+                migrate.repair_graph_for_activation(connection)
+            connection.rollback()
+        assert _raw_graph(connection) == before
+        assert connection.execute("SELECT value FROM native_manifest WHERE key='authority'").fetchone()[0] == "legacy"
+        _begin_activation(connection)
+        assert migrate.repair_graph_for_activation(connection)["repaired"]
+        connection.commit()
+
+
+# -- Tie-break between kinds sharing an id (review round 2, finding 1) --
+
+
+@pytest.mark.parametrize("first", ["phase", "epic"])
+def test_an_id_that_is_both_an_epic_and_a_phase_resolves_alike_on_both_stores(twins, first):
+    make = {"phase": lambda: bs.backlog_add_phase(phase_id="shared", name="Shared"),
+            "epic": lambda: bs.backlog_add_epic(epic_id="shared", name="Shared", done_when="x")}
+    order = [first, "epic" if first == "phase" else "phase"]
+    for root in (twins.legacy, twins.native):
+        with twins.at(root):
+            assert "Error" not in bs.backlog_idea_create(title="Before", related_tasks=["shared"])
+            for kind in order:
+                make[kind]()
+            assert "Error" not in bs.backlog_idea_create(title="After", related_tasks=["shared"])
+    incremental = _legacy_links(twins.legacy)
+    assert incremental == _legacy_links(twins.native), "legacy and native rows diverged"
+    assert {row[3] for row in incremental if row[4] == "shared" and row[5] == 0} == {"epic"}
+    assert _verify(twins.native)["clean"]
+    with twins.at(twins.legacy):
+        bs.backlog_index_status(rebuild=True)
+    assert _legacy_links(twins.legacy) == incremental
+
+
+def test_one_batch_creating_entities_that_link_to_each_other_verifies_clean(twins):
+    from native_twins import commit_only
+    with native_connection(twins.native) as connection:
+        commit_only(connection, "batch", {"commands": [
+            {"operation": "idea.create", "arguments": {"title": "one", "related_tasks": ["IDEA-003", "ISS-002"]}},
+            {"operation": "issue.create", "arguments": {"title": "iss", "severity": "P2", "evidence": "x",
+                                                        "related_tasks": ["IDEA-003", "ISS-003"]}},
+            {"operation": "idea.create", "arguments": {"title": "two", "related_tasks": ["IDEA-002"]}},
+            {"operation": "issue.create", "arguments": {"title": "iss2", "severity": "P2", "evidence": "x"}},
+        ]})
+    assert _verify(twins.native)["clean"]
+
+
+# -- Indexed kind resolution (review round 2, finding 3) --
+
+
+def _plans(connection, call):
+    statements = []
+    connection.set_trace_callback(statements.append)
+    try:
+        call()
+    finally:
+        connection.set_trace_callback(None)
+    return [" ".join(str(row[-1]) for row in connection.execute("EXPLAIN QUERY PLAN " + sql))
+            for sql in statements if sql.lstrip().upper().startswith("SELECT")]
+
+
+def test_kind_resolution_and_the_incoming_link_lookup_are_indexed(twins):
+    from taskmaster import store
+    from taskmaster.taskmaster_v3 import LINK_ENDPOINT_KINDS, LINKS_TO_ID_SQL
+    with twins.at(twins.legacy):
+        bs.backlog_status()   # opens the legacy store, which creates its indexes
+    for root, resolve, index in ((twins.legacy, store.Store._kind_for_id, "ix_entities_id"),
+                                 (twins.native, relations._kind_for_id, "ix_entity_core_public_id")):
+        with closing(sqlite3.connect(root / ".taskmaster" / "local" / "store.db")) as connection:
+            plans = _plans(connection, lambda: resolve(connection, "test-epic-001"))
+            assert plans and all(index in plan and "SCAN" not in plan for plan in plans), (root.name, plans)
+            plan = " ".join(str(row[-1]) for row in connection.execute(
+                "EXPLAIN QUERY PLAN " + LINKS_TO_ID_SQL, (*LINK_ENDPOINT_KINDS, "x")))
+            assert "ix_links_dst" in plan and "SCAN" not in plan, plan
 
 
 # -- Hook revision and the repair stamp (review finding 3) --
@@ -326,6 +451,11 @@ def test_a_row_changing_repair_moves_the_hook_revision(twins):
 def test_a_clean_repair_neither_stamps_nor_moves_the_hook_revision(twins):
     before, stamp = _hook_revision(twins.native), _stamp(twins.native)
     with twins.at(twins.native):
-        assert "Graph check: clean" in bs.backlog_index_status(rebuild=True)
+        text = bs.backlog_index_status(rebuild=True)
+    assert "Graph check: clean" in text
     assert _hook_revision(twins.native) == before
     assert _stamp(twins.native) == stamp
+    # The report still shows when this check ran (review round 2, finding 4).
+    with native_connection(twins.native) as connection:
+        checked = connection.execute("SELECT value FROM native_manifest WHERE key='graph_checked_at'").fetchone()
+    assert checked and f"Rebuilt: {checked[0]}" in text, text

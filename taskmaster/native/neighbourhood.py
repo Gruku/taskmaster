@@ -16,7 +16,7 @@ prefix index that jumps straight to the next possible prefix, never by building
 a bound for every prefix (that is quadratic in the path length). A prefix-less
 glob (`*.py`) genuinely can match anything, so it visits every structural claim.
 
-`ensure_indexes` adds the three native-only indexes; the native writer creates
+`ensure_indexes` adds the four native-only indexes; the native writer creates
 them, never a reader or the legacy store. Without them every query here is
 still exact, only unindexed.
 """
@@ -31,18 +31,26 @@ INDEXES = (
     f"CREATE INDEX IF NOT EXISTS ix_entity_paths_structural ON entity_paths(path) WHERE {_STRUCTURAL}",
     f"CREATE INDEX IF NOT EXISTS ix_entity_paths_glob_literal ON entity_paths({LITERAL}) WHERE match_kind='glob' AND {_STRUCTURAL}",
     "CREATE INDEX IF NOT EXISTS ix_handover_tasks_task ON handover_tasks(task_id,handover_id)",
+    # Resolving a link target's kind by id alone (`relations._kind_for_id`).
+    "CREATE INDEX IF NOT EXISTS ix_entity_core_public_id ON entity_core(public_id,deleted,kind)",
 )
 _ROWS = f"SELECT rowid,kind,id,path,match_kind FROM entity_paths WHERE {_STRUCTURAL}"
 _GLOBS = f"FROM entity_paths WHERE match_kind='glob' AND {_STRUCTURAL}"
-_NAMES = ("ix_entity_paths_structural", "ix_entity_paths_glob_literal", "ix_handover_tasks_task")
+_NAMES = ("ix_entity_paths_structural", "ix_entity_paths_glob_literal", "ix_handover_tasks_task",
+          "ix_entity_core_public_id")
 
 
 def ensure_indexes(connection):
     """Create any missing native graph index; once present, one catalogue lookup."""
-    present = connection.execute("SELECT COUNT(*) FROM sqlite_schema WHERE type='index' AND name IN (?,?,?)", _NAMES).fetchone()[0]
+    present = connection.execute("SELECT COUNT(*) FROM sqlite_schema WHERE type='index' AND name IN ("
+                                 + ",".join("?" for _ in _NAMES) + ")", _NAMES).fetchone()[0]
     if present != len(_NAMES):
+        # The id index needs the native core table; a bare graph-table database
+        # (the relation tests' fixtures) still gets the path indexes.
+        core = connection.execute("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='entity_core'").fetchone()
         for statement in INDEXES:
-            connection.execute(statement)
+            if core or " ON entity_core(" not in statement:
+                connection.execute(statement)
 
 
 def _after(prefix):

@@ -448,8 +448,9 @@ def index_status(call, *, rebuild, verify):
         # The native search table serves the public `entity_fts` name.
         counts["entity_fts"] = int(connection.execute("SELECT COUNT(*) FROM document_search").fetchone()[0])
         counts["entities"] = int(connection.execute("SELECT COUNT(*) FROM entity_core WHERE deleted=0").fetchone()[0])
+        # The last repair's run time, clean or not, as legacy shows its last rebuild.
         repaired = connection.execute("SELECT value FROM native_manifest WHERE key=?",
-                                      (graph_repair.REPAIRED_AT,)).fetchone()
+                                      (graph_repair.CHECKED_AT,)).fetchone()
     database = Path(call.connection.execute("PRAGMA database_list").fetchone()[2])
     text = bs._render_derived_report({"row_counts": counts, "rebuilt_at": repaired[0] if repaired else None}, database)
     return "\n".join([text, *(_graph_report(report) if report is not None else [])])

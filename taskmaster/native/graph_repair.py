@@ -32,6 +32,8 @@ COLUMNS = {
 }
 EXAMPLES = 10
 REPAIRED_AT = "graph_repaired_at"
+# When the last repair ran, changed rows or not: display only, never a revision input.
+CHECKED_AT = "graph_checked_at"
 # How many repairs have changed rows; the hooks' dedupe revision adds it to the
 # event high water, since a repair appends no event (see `hook_reads.revision`).
 REPAIRS = "graph_repairs"
@@ -142,9 +144,12 @@ def repair(snapshot):
         for row, count in sorted(missing.items(), key=repr):
             _insert(connection, table, row, count)
     report["repaired"] = not report["clean"]
+    stamp = datetime.now(timezone.utc).isoformat()
+    connection.execute("INSERT INTO native_manifest VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                       (CHECKED_AT, stamp))
+    report["checked_at"] = stamp
     if report["repaired"]:
-        # Only a repair that changed rows is recorded: a clean one changed nothing.
-        stamp = datetime.now(timezone.utc).isoformat()
+        # Only a repair that changed rows moves the revision input: a clean one changed nothing.
         repairs = connection.execute("SELECT value FROM native_manifest WHERE key=?", (REPAIRS,)).fetchone()
         connection.executemany("INSERT INTO native_manifest VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                                [(REPAIRED_AT, stamp), (REPAIRS, str(int(repairs[0]) + 1 if repairs else 1))])

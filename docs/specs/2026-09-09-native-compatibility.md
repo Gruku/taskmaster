@@ -164,17 +164,34 @@ archived-but-live entities kept, deleted entities dropped. `backlog_query` still
 materializes these tables in its per-call private snapshot, so its latency is
 unchanged.
 
-**Bug fix: links written before their target (N14 review).** A link is resolved
-when it is written, so a link to an id that did not exist yet recorded the `task`
-fallback kind and kept it after the target was created. The same drift existed in
-legacy incremental maintenance on both stores, while `rebuild_derived` resolved
-the kind correctly. Now, when an entity is created (native `relations.maintain`
-on creation; legacy `Store._refresh_derived` for every touched key), the declared
-`links` rows whose `dst_id` is that id are re-resolved with `_kind_for_id`. The
-lookup is indexed through `ix_links_dst`, with every stored kind listed, and is
-never a scan. Their mirrors are then re-derived. The public `links` rows now match
-`rebuild_derived` at commit, and legacy and native produce identical rows. A
-target that never appears keeps the `task` fallback, which is the legacy answer.
+**Bug fixes: link target kinds (N14 review).**
+
+- *Links written before their target.* A link is resolved when it is written, so a
+  link to an id that did not exist yet recorded the `task` fallback kind and kept
+  it after the target was created. The same drift existed in legacy incremental
+  maintenance, while `rebuild_derived` resolved the kind correctly. Now, when an
+  entity is created (native `relations.maintain` on creation; legacy
+  `Store._refresh_derived` for every touched key), the declared `links` rows whose
+  `dst_id` is that id are re-resolved with `_kind_for_id`, and their mirrors are
+  re-derived.
+- *Tie-break.* When one id belongs to several kinds, for example an epic and a
+  phase both named `shared`, `_kind_for_id` orders task, then issue, then by kind
+  name, on both stores. Before this fix, legacy had no tie-break, so the answer
+  depended on insertion order.
+- *Indexes.* Both lookups are index searches: the incoming rows use
+  `ix_links_dst` with every stored kind listed. The kind uses
+  `ix_entities_id(id,deleted,kind)` on legacy, a new `CREATE INDEX IF NOT EXISTS`
+  in the schema script that runs on every store open. It needs no version bump,
+  and older clients ignore it. On native it uses
+  `ix_entity_core_public_id(public_id,deleted,kind)`, created by
+  `neighbourhood.ensure_indexes` at backfill and on the first admitted command.
+  A test asserts the query plans.
+
+The public `links` rows now match `rebuild_derived` at commit, and legacy and
+native produce identical rows. This is tested for both epic/phase insertion
+orders, for targets that are an issue, a bug, a task or never appear, and for one
+batch that creates entities linking to each other. A target that never appears
+keeps the `task` fallback, which is the legacy answer.
 
 **Repair operation.** `backlog_index_status(verify=True)` compares the four tables
 with the full oracle and reports missing and spurious rows, with examples, the
@@ -188,24 +205,39 @@ state. Only a repair that changed rows records `graph_repaired_at` and increment
 that changed rows invalidates remembered hook answers. A clean repair changes
 nothing. The oracle recomputes rows from canonical documents with
 `relations.grouped_weights` plus the legacy link, mirror and handover rebuild
-rules (`native/graph_repair.py`). No command or read path calls it. Backfill runs
-the same repair once, inside its transaction, so a store activated from a drifted
-legacy store verifies clean. The backfill result reports it as `graph_repair`.
+rules (`native/graph_repair.py`). No command or read path calls it. Backfill
+leaves the shared graph tables untouched: it is a repeatable staging step, and
+legacy still owns those rows. Instead, `migrate.repair_graph_for_activation` runs
+the repair once, inside the activation transaction, after `authority` has been set
+to `native` there. It refuses to run outside such a transaction. A crash rolls the
+switch and the repair back together, and activation can simply be re-run. As a
+result, a store activated from a drifted legacy store verifies clean. Every repair
+records `graph_checked_at`, which `backlog_index_status` shows as "Rebuilt:". Only
+`graph_repaired_at` and `graph_repairs` feed the hook revision.
 With `rebuild=True, verify=True` on a native store, the repair runs. On a legacy
 store, `rebuild=True` alone is the unchanged `Store.rebuild_derived`, and any call
 with `verify=True`, with or without `rebuild`, is refused and changes nothing. On
 native, `rebuild` covers only these four graph tables, not the search table.
-Measured on a synthetic native store with 4,000 path claims (35,607 `related`
-rows, about 80,860 rows compared), across two runs: verify 0.2–0.4 s, repair
-0.2–0.5 s, and the backfill repair 0.24 s out of a 0.48 s backfill.
+Measured on a synthetic store with 4,000 tasks: 15,998 `links` rows, 23,583
+`entity_paths` rows (19,583 of them prose), 9,351 `related` rows, 97,864 rows
+compared. Verify took 0.45 s. Repair took 0.55 s with 20 `links` rows missing and
+0.51 s when clean. Backfill took about 1.05 s. The one-time activation repair took
+0.45 s (0 differences).
 
 **Explicit additions.** `Snapshot.neighbourhood(kind, id, limit)` returns distinct
 `(kind, id, via, weight)` neighbours, with weight summed over `related` rows. The
 optional `verify` parameter and the native `graph.repair` operation are also new.
 Neither adds top-K ranking or changes relevance.
 
-**Known limit.** `Snapshot.neighbourhood`, like `Snapshot.relations()`, pages with
-`truncated` only and has no continuation cursor.
+**Known limits.**
+
+- `Snapshot.neighbourhood`, like `Snapshot.relations()`, pages with `truncated`
+  only and has no continuation cursor.
+- The canonical `declared_links` and `memberships` rows keep the `task` fallback
+  in `target_kind` for a target written before it existed. Only the public
+  `links` table is re-resolved. `Snapshot.relations()` and `references_to()`,
+  which read these rows, have no production caller today. Correcting them is
+  future work.
 
 **Later capability, not unfinished work.** Materializing `related` on demand from
 canonical claims (option B) instead of maintaining it at commit is recorded as a

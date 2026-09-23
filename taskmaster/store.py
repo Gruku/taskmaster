@@ -409,6 +409,7 @@ CREATE INDEX IF NOT EXISTS ix_related_a ON related(a_kind, a_id);
 CREATE INDEX IF NOT EXISTS ix_related_b ON related(b_kind, b_id);
 CREATE INDEX IF NOT EXISTS ix_handover_tasks_pair ON handover_tasks(handover_id, task_id);
 CREATE INDEX IF NOT EXISTS ix_entities_kind_status ON entities(kind, status);
+CREATE INDEX IF NOT EXISTS ix_entities_id ON entities(id, deleted, kind);
 CREATE INDEX IF NOT EXISTS ix_changes_entity ON changes(kind, id, seq);
 CREATE INDEX IF NOT EXISTS ix_projection_entity ON projection(kind, id);
 """
@@ -5191,8 +5192,9 @@ class Store:
         A link is resolved when it is written, so one written before its target
         existed records the `task` fallback, and one whose target stops existing
         keeps the old kind. Creating or deleting `ident` is when that answer can
-        change; the lookup is by target id on `ix_links_dst`, never a scan. The
-        mirrors follow in `_close_reverse_links`.
+        change. The incoming rows are found on `ix_links_dst` (every endpoint kind
+        listed) and the kind on `ix_entities_id`, both index searches. The mirrors
+        follow in `_close_reverse_links`.
         """
         incoming = connection.execute(
             LINKS_TO_ID_SQL, (*LINK_ENDPOINT_KINDS, ident)
@@ -5242,7 +5244,7 @@ class Store:
     def _kind_for_id(connection: sqlite3.Connection, ident: str) -> str:
         row = connection.execute(
             "SELECT kind FROM entities WHERE id=? AND deleted=0 "
-            "ORDER BY CASE kind WHEN 'task' THEN 0 WHEN 'issue' THEN 1 ELSE 2 END LIMIT 1",
+            "ORDER BY CASE kind WHEN 'task' THEN 0 WHEN 'issue' THEN 1 ELSE 2 END,kind LIMIT 1",
             (ident,),
         ).fetchone()
         return str(row[0]) if row else "task"

@@ -124,8 +124,10 @@ def _reresolve_link_targets(connection, ident):
 
     A link is resolved when it is written, so one written before its target existed
     records the `task` fallback. Creating (or deleting) `ident` is when that answer
-    can change; the lookup is by target id on `ix_links_dst`, never a scan, and the
-    mirrors of every re-resolved pair are re-derived under both kinds.
+    can change. The incoming rows are found on `ix_links_dst` (every endpoint kind
+    listed) and the kind on `ix_entity_core_public_id`, both index searches once
+    `neighbourhood.ensure_indexes` has run; the mirrors of every re-resolved pair
+    are re-derived under both kinds.
     """
     incoming = connection.execute(LINKS_TO_ID_SQL, (*LINK_ENDPOINT_KINDS, ident)).fetchall()
     if not incoming:
