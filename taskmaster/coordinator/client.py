@@ -239,7 +239,7 @@ class Client:
     def git_status(self):
         return self.call('git_status')
 
-    def git_recover(self, *, acknowledge_quiescent=False, accept_outcome=False, release_drift=False, worktree=None):
+    def git_recover(self, *, acknowledge_quiescent=False, accept_outcome=False, release_drift=None, worktree=None):
         extra = {} if worktree is None else {'worktree': str(Path(worktree).resolve())}
         return self.call('git_recover', **extra, acknowledge_quiescent=acknowledge_quiescent, accept_outcome=accept_outcome,
                          release_drift=release_drift)

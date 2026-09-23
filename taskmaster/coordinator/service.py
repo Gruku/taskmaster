@@ -428,11 +428,14 @@ class Coordinator:
             return git.status(self)
         if method == 'git_recover':
             from . import git
-            flags = [message.get(name, False) for name in ('acknowledge_quiescent', 'accept_outcome', 'release_drift')]
+            flags = [message.get(name, False) for name in ('acknowledge_quiescent', 'accept_outcome')]
             if any(type(flag) is not bool for flag in flags):
                 raise ValueError('git_recover flags must be boolean')
+            release = message.get('release_drift')
+            if release is not None and release is not False and not isinstance(release, str):
+                raise ValueError("release_drift must be 'import' or 'take_published'")
             return git.recover(self, acknowledge_quiescent=flags[0], accept_outcome=flags[1],
-                               release_drift=flags[2], timeout=git.PUBLICATION_TIMEOUT,
+                               release_drift=release, timeout=git.PUBLICATION_TIMEOUT,
                                worktree=message.get('worktree'))
         if method == 'shutdown':
             self.stop()

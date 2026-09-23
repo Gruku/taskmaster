@@ -87,7 +87,7 @@ def _adopt(client, linked):
     """First sync of a fresh worktree: Git-provided older bytes are drift until released."""
     first = client.sync(worktree=linked)
     if first['state'] != 'synchronized':
-        released = client.git_recover(release_drift=True, worktree=linked)
+        released = client.git_recover(release_drift='take_published', worktree=linked)
         assert released['state'] == 'clear', released
         first = client.sync(worktree=linked)
     assert first["state"] == "synchronized", (first.get("notices"), first.get("unresolved"), first.get("warnings"))
@@ -122,7 +122,7 @@ def test_fresh_worktree_with_older_committed_bytes_is_drift_until_released(repo,
         assert pending['state'] == 'pending' and FILE in pending['unresolved'], pending
         assert 'Service task' in text(linked), 'a Git-provided file is never overwritten unasked'
         assert title(repo) == 'Newer title', 'older checked-out bytes never roll the store back'
-        released = client.git_recover(release_drift=True, worktree=linked)
+        released = client.git_recover(release_drift='take_published', worktree=linked)
         assert FILE in released['released_drift'], released
         assert client.sync(worktree=linked)['state'] == 'synchronized'
         assert 'Newer title' in text(linked) and title(repo) == 'Newer title'
@@ -308,7 +308,7 @@ def test_released_main_drift_is_left_to_ordinary_sync(repo):
         _commit_published(repo, client)
         git(repo, 'checkout', '-q', '-b', 'old', initial)
         assert client.sync()['state'] == 'pending'
-        assert FILE in client.git_recover(release_drift=True)['released_drift']
+        assert FILE in client.git_recover(release_drift='import')['released_drift']
         client.sync()  # explicit: the released bytes are now treated as an authored file
         assert client.git_status()['drift'] is None
 

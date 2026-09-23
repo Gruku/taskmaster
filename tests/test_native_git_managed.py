@@ -209,7 +209,7 @@ def test_checkout_drift_can_be_released_explicitly(repo):
         client.execute(request(client, 'main-title', 'Main title'))
         assert client.git_run(kind='commit', message='tm: main')['state'] == 'completed'
         assert client.git_run(kind='checkout', ref='side')['drift']['paths']
-        released = client.git_recover(release_drift=True)
+        released = client.git_recover(release_drift='import')
         assert released['state'] == 'clear' and released['released_drift'], released
         assert client.git_status()['drift'] is None
 

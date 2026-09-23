@@ -37,7 +37,8 @@ RECEIPTS_KEPT = 32
 TRAILER = 'Taskmaster-Op'
 DRIFT_GUIDANCE = ('managed checkout drift: the checked-out file differs from the published generation and is '
                   'not imported or overwritten; restore the published file (e.g. check the previous branch out '
-                  'again), adopt it with sync take_file, or run git recover with release_drift')
+                  'again), adopt it with sync take_file, or run git recover --release-drift import (sync '
+                  'imports it) or take-published (it receives the published file; its bytes are retained)')
 TOKEN_ENV = 'TASKMASTER_MANAGED_GIT'
 PUBLICATION_TIMEOUT = 10
 GIT_TIMEOUT = 600
@@ -257,15 +258,17 @@ def _settled(owner, last):
 
 def status(owner):
     from taskmaster.native import checkouts as store
+    from . import checkouts
     with closing(owner._connect(readonly=True)) as connection:
         known = {ident: {key: value for key, value in record.items() if key in ('path', 'linked', 'observed',
                                                                                'generation', 'intent')}
                  for ident, record in store.records(connection).items()}
         for ident, record in known.items():
             record['holds'] = {rel: reason for rel, (reason, _) in store.holds(connection, ident).items()}
+        discarded = checkouts.discarded(connection)
     return {'pin': owner.git_pin, 'active': _public(read_state(owner, MARKER_KEY)),
             'last': read_state(owner, LAST_KEY), 'drift': read_state(owner, DRIFT_KEY),
-            'checkouts': known, 'contained': jobs.supported()}
+            'checkouts': known, 'discarded': discarded, 'contained': jobs.supported()}
 
 
 def _checkout_of(owner, marker):
@@ -704,11 +707,18 @@ def _remember(owner, linked):
 
 # ── Recovery ───────────────────────────────────────────────────────────────
 
-def recover(owner, *, acknowledge_quiescent=False, accept_outcome=False, release_drift=False, timeout=None,
+def recover(owner, *, acknowledge_quiescent=False, accept_outcome=False, release_drift=None, timeout=None,
             worktree=None):
-    """Prove the recorded child boundary is over, reconcile, then (maybe) clear."""
+    """Prove the recorded child boundary is over, reconcile, then (maybe) clear.
+
+    `release_drift` is an explicit verb: `import` (ordinary sync imports the held bytes)
+    or `take_published` (the held bytes, retained first, receive the published file)."""
     from . import checkouts
-    if worktree is not None and not release_drift:
+    if release_drift is False:
+        release_drift = None
+    if release_drift is not None and release_drift not in checkouts.RELEASE_MODES:
+        raise ValueError("release_drift must be 'import' or 'take_published'")
+    if worktree is not None and release_drift is None:
         raise ValueError('worktree applies only to release_drift')
     acquired = owner.publication.acquire(timeout=-1 if timeout is None else timeout)
     if not acquired:
@@ -723,23 +733,25 @@ def recover(owner, *, acknowledge_quiescent=False, accept_outcome=False, release
                 raise ValueError(str(exc)) from None
             linked = linked if linked.linked else None
         if linked is not None:
-            # A linked checkout is a view: releasing adopts the published generation
-            # for its held/unbased paths (the observed bytes become the base the next
-            # publication replaces). Independent of any main-checkout marker.
-            return {'state': 'clear', 'released_drift': checkouts.release(owner, linked),
-                    'checkout': linked.public()}
+            # A linked checkout is a view: independent of any main-checkout marker.
+            released, kept = checkouts.release(owner, linked, release_drift)
+            return {'state': 'pending' if kept else 'clear', 'release': release_drift, 'released_drift': released,
+                    'kept': kept, 'checkout': linked.public()}
         if marker is None:
-            released = None
-            if release_drift:
+            result = {'state': 'clear', 'checkout': {'id': 'main', 'path': str(owner.root), 'linked': False}}
+            if release_drift == 'import':
                 # Explicit: ordinary sync may now import (or repair) these paths.
                 released = sorted((read_state(owner, DRIFT_KEY) or {}).get('files') or {})
                 write_state(owner, drift=None)
                 checkouts.release_main(owner, released)
+                result.update(release=release_drift, released_drift=released, kept={})
+            elif release_drift == 'take_published':
+                released, kept = checkouts.take_published_main(owner)
+                result.update(release=release_drift, released_drift=released, kept=kept,
+                              state='pending' if kept else 'clear')
             owner.git_pin = None
             owner.export_needed.set()
-            result = {'state': 'clear', 'last': read_state(owner, LAST_KEY), 'drift': read_state(owner, DRIFT_KEY)}
-            if released is not None:
-                result['released_drift'] = released
+            result.update(last=read_state(owner, LAST_KEY), drift=read_state(owner, DRIFT_KEY))
             return result
         outcome = marker.get('outcome')
         if outcome is None:

@@ -174,3 +174,103 @@ def test_head_moving_during_a_sync_defers_the_import(repo, monkeypatch):
         monkeypatch.setattr(checkouts, 'detect', original)
         assert client.sync()['state'] == 'synchronized'
         assert title(repo) == 'Authored while HEAD moves'
+
+
+# ── M2/M3: explicit release verbs; a changed hold is never released ────────
+
+def _fresh_linked_drift(repo, linked, client):
+    client.execute(request(client, 'newer', 'Newer'))
+    assert client.sync()['state'] == 'synchronized'
+    assert held(client.sync(worktree=linked))  # the worktree's committed bytes are older
+
+
+def test_take_published_keeps_a_linked_hold_whose_bytes_changed(repo, linked):
+    with Coordinator(repo):
+        client = client_for(repo)
+        _fresh_linked_drift(repo, linked, client)
+        target = linked / REL
+        target.write_bytes(target.read_bytes().replace(b'Service task', b'My careful edit'))
+        result = client.git_recover(release_drift='take_published', worktree=linked)
+        assert FILE in result['kept'] and FILE not in result['released_drift'], result
+        assert result['checkout']['path'] == str(linked.resolve())
+        assert held(client.sync(worktree=linked))
+        assert b'My careful edit' in target.read_bytes(), 'a hand edit was overwritten by publication'
+        taken = client.sync(worktree=linked, files=[FILE], take_file=True)
+        assert title(repo) == 'My careful edit', taken
+
+
+def test_take_published_retains_the_bytes_it_lets_publication_replace(repo, linked):
+    with Coordinator(repo):
+        client = client_for(repo)
+        _fresh_linked_drift(repo, linked, client)
+        older = (linked / REL).read_bytes()
+        result = client.git_recover(release_drift='take_published', worktree=linked)
+        assert result['state'] == 'clear' and FILE in result['released_drift'], result
+        assert client.sync(worktree=linked)['state'] == 'synchronized'
+        assert 'Newer' in text(linked) and title(repo) == 'Newer'
+        from taskmaster.native.checkouts import digest
+        kept = client.git_status()['discarded']
+        assert any(item['file'] == FILE and item['digest'] == digest(older) for item in kept), kept
+
+
+def test_main_take_published_replaces_only_the_held_bytes(repo):
+    initial = git(repo, 'rev-parse', 'HEAD').strip()
+    with Coordinator(repo):
+        client = client_for(repo)
+        client.execute(request(client, 'main', 'Main title'))
+        _commit_published(repo, client)
+        git(repo, 'checkout', '-q', '-b', 'old', initial)
+        assert held(client.sync())
+        result = client.git_recover(release_drift='take_published')
+        assert result['checkout']['id'] == 'main' and FILE in result['released_drift'], result['kept']
+        assert 'Main title' in text(repo) and title(repo) == 'Main title'
+        assert client.git_status()['drift'] is None
+        assert client.sync()['state'] == 'synchronized'
+        assert any(item['file'] == FILE for item in client.git_status()['discarded'])
+
+
+def test_linked_import_verb_lets_ordinary_sync_import_the_held_bytes(repo, linked):
+    from test_native_git_checkouts import _adopt
+    with Coordinator(repo):
+        client = client_for(repo)
+        _adopt(client, linked)
+        client.execute(request(client, 'newer', 'Main newer'))
+        assert client.sync()['state'] == 'synchronized'
+        assert client.sync(worktree=linked)['state'] == 'synchronized' and 'Main newer' in text(linked)
+        git(linked, 'checkout', '--', REL)  # Git restores the committed (older) bytes
+        assert held(client.sync(worktree=linked))
+        assert title(repo) == 'Main newer'
+        result = client.git_recover(release_drift='import', worktree=linked)
+        assert FILE in result['released_drift'], result
+        imported = client.sync(worktree=linked)
+        assert imported['state'] == 'synchronized', imported
+        assert title(repo) == 'Service task'
+
+
+def test_release_drift_requires_an_explicit_verb(repo):
+    with Coordinator(repo):
+        with pytest.raises(ValueError, match='take_published'):
+            client_for(repo).git_recover(release_drift=True)
+
+
+def test_cli_release_drift_verbs_and_checkout_echo(repo, monkeypatch, capsys):
+    import json
+    from taskmaster.coordinator import client as client_module, git_cli
+    calls = []
+
+    class Recorder:
+        def __init__(self, root, timeout=None):
+            pass
+
+        def git_recover(self, **arguments):
+            calls.append(arguments)
+            return {'state': 'clear'}
+    monkeypatch.setattr(client_module, 'Client', Recorder)
+    with pytest.raises(SystemExit):
+        git_cli.main(['--root', str(repo), 'recover', '--release-drift'])
+    capsys.readouterr()
+    assert git_cli.main(['--root', str(repo), 'recover', '--release-drift', 'take-published']) == 0
+    assert calls[-1]['release_drift'] == 'take_published' and calls[-1]['worktree'] is None
+    assert json.loads(capsys.readouterr().out)['checkout'] == str(repo)
+    git_cli.main(['--root', str(repo), 'recover', '--release-drift', 'import'])
+    assert calls[-1]['release_drift'] == 'import'

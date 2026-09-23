@@ -10,9 +10,11 @@ demand, by copying the main checkout's published generation with compare-and-swa
 """
 from __future__ import annotations
 
+import base64
 from contextlib import closing
 from dataclasses import dataclass
 import hashlib
+import json
 import os
 from pathlib import Path
 import secrets
@@ -30,12 +32,16 @@ HISTORY_CHUNK = 100   # paths per `git log` (command-line length)
 IN_PROGRESS = ('MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'SQUASH_MSG', 'AUTO_MERGE', 'rebase-merge',
                'rebase-apply')
 PLAIN_COMMITS = ('commit:', 'commit (amend):', 'commit (initial):')
+RELEASE_MODES = ('import', 'take_published')
+DISCARDED_KEY = 'git.discarded'  # bytes a take_published release let publication replace
+DISCARDED_KEPT = 32
+DISCARDED_BYTES = 256 * 1024
 NO_BASE = ('no trusted base in this checkout for bytes that differ from the published generation; import them '
-           'with sync take_file (worktree), or release them with git recover --release-drift --worktree to '
-           'receive the published file')
+           'with sync take_file (worktree), or receive the published file with git recover --release-drift '
+           'take-published --worktree W')
 LINKED_DRIFT = ('checkout drift: Git put bytes here that differ from this checkout\'s base; they are not imported '
-                'or overwritten; restore them, take them with sync take_file, or release them with git recover '
-                '--release-drift --worktree to receive the published file')
+                'or overwritten; restore them, take them with sync take_file, or run git recover --release-drift '
+                'import|take-published --worktree W')
 
 
 @dataclass(frozen=True)
@@ -491,34 +497,121 @@ def publish(owner, checkout: Checkout, through: int) -> list[str]:
     return pending
 
 
-def release(owner, checkout: Checkout) -> list[str]:
-    """Explicit: a linked checkout adopts the published generation for held/unbased paths.
+def retain(connection, checkout_id: str, rel: str, content: bytes, why: str) -> None:
+    """Keep bytes a release lets publication replace (newest DISCARDED_KEPT entries; a
+    file above DISCARDED_BYTES keeps its digest and size only). Caller owns the transaction."""
+    row = connection.execute('SELECT value_json FROM sync_state WHERE key=?', (DISCARDED_KEY,)).fetchone()
+    kept = [] if row is None else json.loads(row[0])
+    entry = {'checkout': checkout_id, 'file': rel, 'digest': store.digest(content), 'size': len(content),
+             'at': time.time(), 'why': why}
+    if len(content) <= DISCARDED_BYTES:
+        entry['content_base64'] = base64.b64encode(content).decode('ascii')
+    connection.execute('INSERT INTO sync_state(key,value_json) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET '
+                       'value_json=excluded.value_json', (DISCARDED_KEY, json.dumps((kept + [entry])[-DISCARDED_KEPT:])))
 
-    The observed bytes become the base (so the next publication replaces exactly
-    them); a missing held path simply loses its hold and is written."""
+
+def discarded(connection) -> list[dict]:
+    row = connection.execute('SELECT value_json FROM sync_state WHERE key=?', (DISCARDED_KEY,)).fetchone()
+    return [] if row is None else [{key: value for key, value in item.items() if key != 'content_base64'}
+                                   for item in json.loads(row[0])]
+
+
+def _changed(reason):
+    return (f'bytes changed since they were held ({reason}); not released: import them with sync take_file, '
+            'or restore the held bytes first')
+
+
+def release(owner, checkout: Checkout, mode: str) -> tuple[list[str], dict[str, str]]:
+    """Explicit release of a linked checkout's held and unbased paths: (released, kept).
+
+    `take_published`: a held path whose bytes are still exactly the held digest (or is
+    missing), and an unbased differing path, adopts the published generation: its bytes
+    are retained, then become the base the next publication replaces by compare-and-swap.
+    A held path whose bytes changed since the hold is kept (never silently discarded).
+    `import`: the hold is dropped and the current digest recorded as released, so
+    ordinary sync imports those bytes against this checkout's base; unbased paths need
+    take_file."""
     backlog = checkout.backlog
     with closing(owner._connect(readonly=True)) as connection:
         holding = store.holds(connection, checkout.id)
         known = store.bases(connection, checkout.id)
         generation = published(connection)
-    targets = set(holding)
+    released, kept = {}, {}
+    for rel, (reason, value) in sorted(holding.items()):
+        current = read(backlog, rel)
+        if current == UNREADABLE:
+            kept[rel] = 'unreadable; not released'
+        elif mode == 'take_published' and current is not None and store.digest(current) != value:
+            kept[rel] = _changed(reason)
+        else:
+            released[rel] = current
     for rel, (value, _, _) in generation.items():
+        if rel in holding or rel in known:
+            continue
         current = read(backlog, rel)
-        if current is not None and rel not in known and value not in _variants(current):
-            targets.add(rel)
-    released = {}
-    for rel in sorted(targets):
-        current = read(backlog, rel)
-        if current != UNREADABLE:
+        if current in (None, UNREADABLE) or value in _variants(current):
+            continue
+        if mode == 'import':
+            kept[rel] = 'no base in this checkout to import against; import it with sync take_file'
+        else:
             released[rel] = current
 
     def apply(connection):
+        record = dict(store.record(connection, checkout.id) or {})
         for rel, content in released.items():
             store.set_hold(connection, checkout.id, rel, None)
-            if content is not None:
+            if mode == 'import':
+                record.setdefault('released', {})[rel] = None if content is None else store.digest(content)
+            elif content is not None:
+                retain(connection, checkout.id, rel, content, 'released to receive the published file')
                 store.set_base(connection, checkout.id, rel, content)
+        if mode == 'import' and record:
+            store.put_record(connection, checkout.id, record)
     write(owner, apply)
-    return sorted(released)
+    return sorted(released), kept
+
+
+def take_published_main(owner) -> tuple[list[str], dict[str, str]]:
+    """Explicit: the main checkout's drift paths receive the published generation.
+
+    Only a path still carrying exactly its held bytes (or missing) is replaced, by
+    compare-and-swap after the bytes are retained; anything else stays held. Caller
+    holds publication."""
+    from . import git as managed_git
+    backlog = owner.root / '.taskmaster'
+    files = dict((managed_git.read_state(owner, managed_git.DRIFT_KEY) or {}).get('files') or {})
+    with closing(owner._connect(readonly=True)) as connection:
+        generation = published(connection, backlog)
+    kept, plan = {}, {}
+    for rel, value in sorted(files.items()):
+        current = read(backlog, rel)
+        if current == UNREADABLE:
+            kept[rel] = 'unreadable; not released'
+            continue
+        observed = None if current is None else store.digest(current)
+        if observed is not None and observed != value:
+            kept[rel] = _changed('drift')
+            continue
+        target = generation.get(rel)
+        if target is not None and (target[2] not in (None, projection.DRIFT_REASON) or target[1] is None):
+            kept[rel] = f'no trusted published bytes ({target[2] or "untrusted"}); not released'
+            continue
+        plan[rel] = (current, observed, None if target is None else target[1])
+
+    def keep(connection):
+        for rel, (current, _, _) in plan.items():
+            if current is not None:
+                retain(connection, store.MAIN, rel, current, 'released to receive the published file')
+    write(owner, keep)  # durable before any file is replaced
+    released, token = [], secrets.token_hex(8)
+    for rel, (_, observed, content) in sorted(plan.items()):
+        outcome = projection.publish_checkout_file(backlog, rel, content, observed, token)
+        if outcome in ('published', 'removed', 'agrees'):
+            released.append(rel)
+        else:
+            kept[rel] = f'not replaced ({outcome}); still held'
+    managed_git.drop_drift(owner, released)
+    return released, kept
 
 
 # ── Bypass detection (step 10) ─────────────────────────────────────────────
