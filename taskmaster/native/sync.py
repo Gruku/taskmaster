@@ -13,7 +13,7 @@ import json
 import re
 
 from taskmaster.projection_parse import BACKLOG_ID, PROJECT_ID, classify
-from . import events, projection, schema
+from . import checkouts, events, projection, schema
 from .contracts import Conflict, _identifier
 from .migrate import encode
 from .sync_merge import protect_local
@@ -25,6 +25,10 @@ OPERATION_PREFIX = "sync.operation."
 MODES = {"apply", "conflict", "quarantine", "repair", "observe"}
 _FIELDS = {"file", "mode", "rows", "reason", "observed_base64", "observed_hash", "expected_manifest"}
 _MANIFEST_COLUMNS = "kind,id,content_hash,dirty,quarantined,exported_seq,quarantine_hash"
+
+
+def _checkout_id(value):
+    return isinstance(value, str) and re.fullmatch(r"wt-[0-9a-f]{24}", value) is not None
 
 
 def manifest_token(connection, rel):
@@ -46,8 +50,10 @@ def observed_bytes(arguments):
 
 
 def validate_input(value):
-    if not isinstance(value, dict) or set(value) != {"import_files", "through", "files", "take_file"}:
+    if not isinstance(value, dict) or set(value) - {"checkout"} != {"import_files", "through", "files", "take_file"}:
         raise ValueError("invalid sync input")
+    if "checkout" in value and not _checkout_id(value["checkout"]):
+        raise ValueError("invalid sync checkout")
     if type(value["import_files"]) is not bool or type(value["take_file"]) is not bool:
         raise ValueError("sync import_files/take_file must be boolean")
     if type(value["through"]) is not int or not 0 <= value["through"] < 2 ** 63:
@@ -84,12 +90,19 @@ def validate(operation, arguments):
         if type(result.get("through")) is not int or result["through"] < 0:
             raise ValueError("invalid completed sync sequence")
         return
-    if set(arguments) != _FIELDS:
+    if set(arguments) - {"checkout"} != _FIELDS:
         raise ValueError("sync.apply requires file, mode, rows, reason, observed bytes/hash and expected_manifest")
     kind, ident = classify(arguments["file"])
     mode = arguments["mode"]
     if not isinstance(mode, str) or mode not in MODES:
         raise ValueError("invalid sync mode")
+    if "checkout" in arguments:
+        # A linked checkout's observation fences its own base; it never repairs or
+        # observes the main checkout's manifest.
+        if not _checkout_id(arguments["checkout"]):
+            raise ValueError("invalid sync checkout")
+        if mode not in {"apply", "conflict", "quarantine"}:
+            raise ValueError("a linked checkout import is apply, conflict or quarantine")
     if not isinstance(arguments["reason"], str) or len(arguments["reason"]) > 4096:
         raise ValueError("sync reason must be bounded text")
     token = arguments["expected_manifest"]
@@ -216,7 +229,11 @@ def apply(transaction, operation, arguments):
         return
     rel, mode = arguments["file"], arguments["mode"]
     kind, ident = classify(rel)
-    if manifest_token(connection, rel) != arguments["expected_manifest"]:
+    linked = arguments.get("checkout")
+    if linked is not None:
+        if checkouts.token(connection, linked, rel) != arguments["expected_manifest"]:
+            raise Conflict(f"checkout base changed while parsing {rel}")
+    elif manifest_token(connection, rel) != arguments["expected_manifest"]:
         raise Conflict(f"projection manifest changed while parsing {rel}")
     current = {}
     # Revalidate every row before applying any. Rollback also covers allocation,
@@ -249,14 +266,22 @@ def apply(transaction, operation, arguments):
     # future flag can replace the current conflict row but cannot erase history.
     event_id = ident or (BACKLOG_ID if kind == "backlog" else PROJECT_ID)
     flagged = None
-    if projection._has_conflict_table(connection):
+    if linked is None and projection._has_conflict_table(connection):
         flagged = connection.execute("SELECT file_content FROM projection_conflict WHERE file=?", (rel,)).fetchone()
     transaction.group, transaction.seq = events.append(
         connection, transaction.request, transaction.group, kind, event_id, "sync.apply",
         {"file_base64": arguments["observed_base64"], "file_hash": digest,
          "flagged_base64": None if flagged is None else base64.b64encode(flagged[0]).decode("ascii")},
-        {"file": rel, "mode": mode, "reason": arguments["reason"]})
-    if mode in {"apply", "repair"}:
+        dict({"file": rel, "mode": mode, "reason": arguments["reason"]}, **({"checkout": linked} if linked else {})))
+    if linked is not None:
+        # The linked checkout's base/hold changes atomically with the import; the
+        # main checkout's manifest, flags and quarantine are not this file's.
+        if mode == "apply":
+            checkouts.set_base(connection, linked, rel, content)
+            checkouts.set_hold(connection, linked, rel, None)
+        else:
+            checkouts.set_hold(connection, linked, rel, "conflict" if mode == "conflict" else "quarantined", digest)
+    elif mode in {"apply", "repair"}:
         if projection._has_conflict_table(connection):
             connection.execute("DELETE FROM projection_conflict WHERE file=?", (rel,))
         if mode == "apply":
@@ -275,7 +300,10 @@ def apply(transaction, operation, arguments):
             _advance_counter(connection, key[0], key[1], fields)
         else:
             transaction.replace(*key, fields, row["body"], before_entity=before)
-    if mode == "conflict":
+    if linked is not None:
+        if mode == "apply":
+            _queue_entity(transaction, kind, ident, rel)
+    elif mode == "conflict":
         projection.ensure_conflict_table(connection)
         connection.execute("INSERT INTO projection_conflict(file,kind,id,flagged_at,file_hash,file_content) "
                            "VALUES(?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'),?,?) ON CONFLICT(file) DO UPDATE SET "

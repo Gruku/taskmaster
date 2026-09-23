@@ -1036,6 +1036,101 @@ def apply_resolve(transaction, arguments: dict) -> None:
     update_through(connection)
 
 
+# ── Linked-checkout publication (N13 step 9) ─────────────────────────────────
+
+def _checkout_names(path: Path, token: str) -> tuple[Path, Path]:
+    return path.with_name(f"{path.name}.tmp.co-{token}"), path.with_name(f"{path.name}.aside.co-{token}")
+
+
+def publish_checkout_file(backlog_dir: Path, rel: str, content: bytes | None, expected: str | None,
+                          token: str) -> str:
+    """Compare-and-swap one file of a linked checkout: replace it only while it still
+    holds `expected` (a digest of the checkout's base; None = the path is absent).
+
+    Same no-overwrite discipline as the exporter: the file is set aside under a name
+    the caller recorded (`token`) before any rename, the aside bytes are verified,
+    and the new bytes are installed without overwriting. Returns `published`,
+    `removed`, `agrees`, `changed` (someone else's bytes: left untouched) or
+    `failed` (the filesystem refused; nothing unverified was replaced)."""
+    try:
+        path = safe_path(backlog_dir, str(safe_relative(rel)))
+    except (OSError, UnsafePath, ValueError):
+        return "failed"
+    temp, aside = _checkout_names(path, token)
+
+    def matches(data: bytes) -> bool:
+        return expected is not None and expected in {_digest(data), _digest(_lf(data)), _digest(_crlf(data))}
+    try:
+        try:
+            data = path.read_bytes()
+        except FileNotFoundError:
+            data = None
+        if content is not None and data is not None and _lf(data) == _lf(content):
+            return "agrees"
+        if data is None and content is None:
+            return "removed"
+        if data is not None and not matches(data):
+            return "changed"
+        if content is not None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with temp.open("wb") as handle:
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+        moved = False
+        if data is not None:
+            moved = _retry(lambda: _move(path, aside))
+            if moved and not matches(aside.read_bytes()):
+                _quietly(lambda: _retry(lambda: _install(aside, path)))
+                if content is not None:
+                    _quietly(lambda: _drop(temp))
+                return "changed"
+        if content is not None:
+            if not _retry(lambda: _install(temp, path)):
+                _quietly(lambda: _drop(temp))
+                if moved:
+                    _quietly(lambda: _drop(aside))  # verified base bytes; the newcomer stays
+                return "changed"
+        elif path.exists():
+            if moved:
+                _quietly(lambda: _drop(aside))
+            return "changed"
+        if moved:
+            _drop(aside)
+        return "published" if content is not None else "removed"
+    except OSError:
+        if aside.exists() and not path.exists():
+            _quietly(lambda: _retry(lambda: _install(aside, path)))
+        _quietly(lambda: _drop(temp))
+        return "failed"
+
+
+def recover_checkout_file(backlog_dir: Path, rel: str, token: str, target: str | None) -> str:
+    """Undo what an interrupted `publish_checkout_file` left behind (its names are recorded).
+
+    The temp is a copy of published bytes and is dropped. A set-aside file goes back
+    when the path is empty; when the path already carries the target the aside bytes
+    were the verified base and are dropped; anything else stays for inspection."""
+    try:
+        path = safe_path(backlog_dir, str(safe_relative(rel)))
+    except (OSError, UnsafePath, ValueError):
+        return "refused"
+    temp, aside = _checkout_names(path, token)
+    _quietly(lambda: _drop(temp))
+    if not aside.exists():
+        return "clean"
+    if _quietly(lambda: _retry(lambda: _install(aside, path))) and not aside.exists():
+        return "restored"
+    try:
+        current = path.read_bytes()
+    except OSError:
+        return "aside kept"
+    if target is not None and target in {_digest(current), _digest(_lf(current)), _digest(_crlf(current))}:
+        _quietly(lambda: _drop(aside))
+        return "dropped"
+    return "aside kept"
+
+
 # Authored configuration beside the projection that a coordinator route may rewrite
 # (N13 step 7). It is not a projection of the store: no job, base or flag covers it.
 CONFIG_FILES = frozenset({"linear.yaml"})
