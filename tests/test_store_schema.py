@@ -172,6 +172,7 @@ def test_first_open_creates_local_files_complete_schema_and_metadata(tmp_path):
     assert session == (os.getpid(), socket.gethostname(), str(Path.cwd().resolve()), None)
 
 
+@pytest.mark.xdist_group("heavy_processes")  # conftest: one multi-process test at a time
 def test_simultaneous_fresh_process_opens_serialize_schema_creation(tmp_path):
     root = tmp_path / "repo"
     backlog_path = _write_projection(root)

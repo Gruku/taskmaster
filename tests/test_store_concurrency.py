@@ -403,6 +403,7 @@ print(json.dumps(out))
 '''
 
 
+@pytest.mark.xdist_group("heavy_processes")  # conftest: one multi-process test at a time
 def test_two_processes_compat_and_direct_store_transactions_both_survive(tmp_path):
     """Defect 2: two OS processes, two write paths, no lost field and no lost creation."""
     root = tmp_path / "repo"
@@ -783,6 +784,7 @@ REQUIRED_OPS = (
 )
 
 
+@pytest.mark.xdist_group("heavy_processes")  # conftest: one multi-process test at a time
 @pytest.mark.slow
 def test_mixed_public_tool_operations_across_processes_never_lose_a_write(tmp_path):
     """The acceptance case: N processes x M real public tool calls on one store.

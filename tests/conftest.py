@@ -28,9 +28,33 @@ def pytest_configure(config):
         "markers",
         "allow_projection_bypass: disable the store projection write guard",
     )
+    config.addinivalue_line(
+        "markers",
+        "xdist_group(name): tests sharing a name run on one xdist worker, in turn",
+    )
+    # Tests that run several Python processes at once are grouped as
+    # `heavy_processes`; under plain `-n N` (xdist's default `load`) the marker
+    # is ignored and eight-process stress tests stacked their peak RAM until the
+    # OS killed workers. Upgrade the default to `loadgroup` so at most one of
+    # them runs at a time (an explicit `--dist load` reads the same and is
+    # upgraded too); any other `--dist` mode is left alone.
+    # Workers decide the `@group` nodeid suffix from their own argv before this
+    # hook runs, so the controller hands them the decision (`pytest_configure_node`).
+    if getattr(config.option, "numprocesses", None) and getattr(config.option, "dist", None) == "load":
+        config.option.dist = "loadgroup"
+    workerinput = getattr(config, "workerinput", None)
+    if workerinput is not None and workerinput.get("taskmaster_loadgroup"):
+        config.option.loadgroup = True
     # Configuration runs in the controller before xdist starts its workers;
     # an autouse fixture alone starts too late to hide those first children.
     config._taskmaster_child_patch = _windowless_test_children()
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_configure_node(node):
+    """xdist controller hook: tell each worker the run is grouped (see above)."""
+    if node.config.option.dist == "loadgroup":
+        node.workerinput["taskmaster_loadgroup"] = True
 
 
 def pytest_unconfigure(config):
