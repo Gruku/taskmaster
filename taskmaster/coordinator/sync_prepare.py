@@ -141,7 +141,9 @@ def prepare(snapshot, backlog_dir, rel, *, take_file=False, checkout=None):
         if key[0] not in {"backlog", "project"}:
             fields["id"] = key[1]
         fields = protect_local(key[0], fields, current["fields"] if current else None)
-        theirs = fields, body
+        # Compare like with like: a stored body may keep the trailing newline the
+        # parser strips from both the base and the file (D4).
+        theirs = fields, projection_parse.normal_body(body)
         if current is None:
             if connection.execute("SELECT 1 FROM id_reservations WHERE kind=? AND public_id=?", key).fetchone():
                 if take_file:
@@ -149,7 +151,7 @@ def prepare(snapshot, backlog_dir, rel, *, take_file=False, checkout=None):
                 return result("conflict", f"file names a reserved tombstone: {key[0]} {key[1]}")
             chosen = theirs
         else:
-            ours = current["fields"], current["body"]
+            ours = current["fields"], projection_parse.normal_body(current["body"])
             if take_file or encode(ours) == encode(theirs):
                 chosen = theirs
             elif checkout is not None and base is None:
@@ -163,8 +165,11 @@ def prepare(snapshot, backlog_dir, rel, *, take_file=False, checkout=None):
                 if key[0] not in {"backlog", "project"}:
                     base_fields["id"] = key[1]
                 base_fields = protect_local(key[0], base_fields, current["fields"])
-                chosen, conflicts = merge((base_fields, base_body), ours, theirs)
+                chosen, conflicts = merge((base_fields, projection_parse.normal_body(base_body)), ours, theirs)
                 overlaps.extend(f"{key[0]}:{key[1]}.{field}" for field in conflicts)
+            if chosen[1] == ours[1]:
+                # Unchanged prose keeps its stored bytes; normalising is not an edit.
+                chosen = chosen[0], current["body"]
         # A large backlog index may contain hundreds of unchanged entities.
         # Only rows we will write need a full replacement/revision precondition;
         # leaving another row untouched cannot overwrite its concurrent edit.

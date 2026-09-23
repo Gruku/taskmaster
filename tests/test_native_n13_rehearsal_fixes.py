@@ -116,3 +116,91 @@ def test_d2_previously_quarantined_bytes_become_eligible_once_they_parse(bug_roo
         assert result["imports"] and result["imports"][0]["state"] in {"accepted", "conflict"}, result
     with native_connection(bug_root) as connection:
         assert connection.execute("SELECT quarantined FROM projection WHERE file=?", (rel,)).fetchone()[0] == 0
+
+
+# --- D4: stored bodies ending in a newline ------------------------------------
+
+@pytest.fixture
+def handover_root(tmp_path, monkeypatch):
+    def seed():
+        bs.backlog_handover_create(tldr="Newline body", next_action="Continue",
+                                   body="## Where execution stands\n\nFirst line.")
+        [path] = (bs.ROOT / ".taskmaster" / "handovers").glob("*.md")
+        store.reset_for_tests()
+        # 6.x stored some bodies with a trailing newline; reproduce that row shape.
+        with closing(sqlite3.connect(bs.ROOT / ".taskmaster" / "local" / "store.db",
+                                     isolation_level=None)) as connection:
+            connection.execute("UPDATE entities SET body=body || char(10) WHERE kind='handover' AND id=?",
+                               (path.stem,))
+        store.reset_for_tests()
+    twins = make_twins(tmp_path, monkeypatch, seed, visibility=None)
+    with twins.at(twins.native):
+        yield twins.native
+
+
+def test_d4_append_to_newline_terminated_body_merges_cleanly(handover_root):
+    root = handover_root
+    [path] = (root / ".taskmaster" / "handovers").glob("*.md")
+    rel = path.relative_to(root / ".taskmaster").as_posix()
+    with closing(connect(root, readonly=True)) as connection, Repository(connection).snapshot() as snapshot:
+        assert snapshot.get("handover", path.stem, include_body=True)["body"].endswith("\n")
+    with Coordinator(root):
+        client = Client(root, autostart=False)
+        assert client.sync(files=[rel])["state"] == "synchronized"
+        # The first sync recorded the base; the stored body still ends in a newline.
+        with closing(connect(root, readonly=True)) as connection, Repository(connection).snapshot() as snapshot:
+            assert snapshot.get("handover", path.stem, include_body=True)["body"].endswith("\n")
+        path.write_bytes(path.read_bytes() + b"\nAppended line.\n")
+        result = client.sync(files=[rel])
+        [outcome] = result["imports"]
+        assert outcome["state"] == "accepted", result
+        with closing(connect(root, readonly=True)) as connection, Repository(connection).snapshot() as snapshot:
+            assert snapshot.get("handover", path.stem, include_body=True)["body"].rstrip("\n").endswith("Appended line.")
+
+
+def test_d4_sweep_legacy_dirty_merge_keeps_an_append_to_a_newline_terminated_body(tmp_path, monkeypatch):
+    """Control for the legacy merge of a hand edit over a failed export: it compares
+    the stored body with a parsed base too, but every legacy write that can leave a
+    row dirty goes through `split_body`, which drops the trailing newline first."""
+    import os
+    from pathlib import Path
+    from taskmaster.taskmaster_v3 import parse_frontmatter, render_frontmatter
+    store.reset_for_tests()
+    tm = tmp_path / "repo" / ".taskmaster"
+    (tm / "tasks").mkdir(parents=True)
+    backlog = tm / "backlog.yaml"
+    backlog.write_text(yaml.safe_dump({"version": 4, "meta": {"schema_version": 4},
+                                       "epics": [{"id": "core", "name": "Core", "status": "in-progress"}],
+                                       "phases": []}, sort_keys=False), encoding="utf-8")
+    task_path = tm / "tasks" / "core-001.md"
+    task_path.write_text(render_frontmatter({"id": "core-001", "title": "Base title", "status": "todo",
+                                             "epic": "core", "order": 1.0}, "Base body"), encoding="utf-8")
+    opened = store.open_store(backlog_path=backlog, session="d4-legacy")
+    try:
+        with closing(sqlite3.connect(opened.db_path, isolation_level=None)) as connection:
+            connection.execute("UPDATE entities SET body=body || char(10) WHERE kind='task' AND id='core-001'")
+        real_replace = os.replace
+
+        def fail_task_export(source, destination):
+            if Path(destination) == task_path:
+                raise PermissionError(13, "held open", str(destination))
+            return real_replace(source, destination)
+
+        monkeypatch.setattr(os, "replace", fail_task_export)
+        with opened.transaction(tool="db-title") as tx:
+            task = tx.get("task", "core-001")
+            task["title"] = "DB title"
+            tx.put("task", "core-001", task)
+        monkeypatch.setattr(os, "replace", real_replace)
+        disk_fm, disk_body = parse_frontmatter(task_path.read_text(encoding="utf-8"))
+        task_path.write_text(render_frontmatter(disk_fm, disk_body.rstrip("\n") + "\n\nAppended line."),
+                             encoding="utf-8")
+        with opened.transaction(tool="merge-dirty"):
+            pass
+        with closing(sqlite3.connect(opened.db_path)) as connection:
+            doc, body = connection.execute(
+                "SELECT doc,body FROM entities WHERE kind='task' AND id='core-001'").fetchone()
+        assert json.loads(doc)["title"] == "DB title"
+        assert "Appended line." in body
+    finally:
+        store.reset_for_tests()

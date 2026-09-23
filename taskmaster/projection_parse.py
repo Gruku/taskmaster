@@ -61,11 +61,19 @@ def clean_doc(doc: Mapping[str, Any]) -> dict[str, Any]:
     return _v4_strip_private_fields(dict(doc), preserve_body=False)
 
 
+def normal_body(body: str | None) -> str | None:
+    """A body as the parser yields it: one trailing newline is file framing, not prose.
+
+    Stored bodies written by 6.x may still end in a newline. Every merge input
+    (base, database, file) must pass through this, or an untouched body differs
+    from its own base and a pure append looks like an overlapping edit.
+    """
+    return (body.removesuffix("\n") or None) if isinstance(body, str) else body
+
+
 def split_body(doc: Mapping[str, Any]) -> Document:
     materialized = deepcopy(dict(doc))
-    body = materialized.pop(BODY_KEY, None)
-    if isinstance(body, str):
-        body = body.removesuffix("\n") or None
+    body = normal_body(materialized.pop(BODY_KEY, None))
     return clean_doc(materialized), body
 
 
@@ -148,7 +156,7 @@ def entity_text(kind: str, raw: str) -> Document:
         raise ValueError("missing or invalid frontmatter")
     if kind == "task":
         return split_body(task_v4_from_file(fm, body.removesuffix("\n")))
-    return clean_doc(fm), body.removesuffix("\n") or None
+    return clean_doc(fm), normal_body(body)
 
 
 def validate_identity(kind: str, ident: str, doc: Mapping[str, Any]) -> None:
