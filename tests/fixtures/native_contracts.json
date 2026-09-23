@@ -1994,13 +1994,21 @@
     },
     "backlog_dependencies": {
       "category": "targeted-query",
-      "documentation": "Show the full dependency chain for a task — what it depends on (upstream) and what it unblocks (downstream).\n\nArgs:\n    task_id: The task ID (e.g., \"cpp-parser-003\")",
+      "documentation": "Show the full dependency chain for a task — what it depends on (upstream) and what it unblocks (downstream).\n\nArgs:\n    task_id: The task ID (e.g., \"cpp-parser-003\")\n    depth: How many hops to follow each way, 1 to 10. Default 1: direct\n        dependencies and dependents only, exactly as before. Above 1, a\n        transitive section per direction follows the one-hop answer, listing\n        each task at its shortest distance (2..depth) with the task it was\n        reached through. Archived tasks are followed; deleted ids upstream show\n        as missing and are not followed; an unreadable `depends_on` is named,\n        not followed. Cycles are reported, never looped. At most 200 tasks are\n        listed per direction (the rest are counted as truncated), and the\n        traversal stops after 5 s, saying so.",
       "parameters": [
         {
           "mode": "positional",
           "name": "task_id",
           "required": true,
           "type": "str"
+        },
+        {
+          "default_expression": "1",
+          "default_value": 1,
+          "mode": "positional",
+          "name": "depth",
+          "required": false,
+          "type": "int"
         }
       ],
       "returns": "str",

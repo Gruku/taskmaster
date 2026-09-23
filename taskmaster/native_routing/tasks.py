@@ -15,7 +15,8 @@ from __future__ import annotations
 from copy import deepcopy
 
 from taskmaster import backlog_server as bs
-from taskmaster.native import blockers, claims, domain
+from taskmaster import dependency_chain
+from taskmaster.native import blockers, claims, dependency_graph, domain
 from taskmaster.native.workflow import _bugs_found_in
 from taskmaster.taskmaster_v3 import (
     VALID_GATE_VERDICTS,
@@ -859,7 +860,10 @@ def list_tasks(call, *, epic, status, priority, phase, area, verbose, limit):
 
 
 @adapter("backlog_dependencies")
-def dependencies(call, *, task_id):
+def dependencies(call, *, task_id, depth):
+    depth_error = dependency_chain.depth_error(depth)
+    if depth_error:
+        return depth_error
     with call.read() as snapshot:
         found = reads.find_task(snapshot, task_id)
         if not found:
@@ -887,19 +891,31 @@ def dependencies(call, *, task_id):
             lines.append(f"\nAll dependencies met: **{'Yes' if all_met else 'No'}**")
         else:
             lines.append("**Depends on:** none")
-        downstream = []
-        for ep in reads.epics(snapshot):
-            for t in reads.epic_tasks(snapshot, ep["id"]):
-                deps = blockers.declared_dependencies(t)
-                if not isinstance(deps, blockers.Unknown) and task_id in deps:
-                    downstream.append(t)
-    if downstream:
-        lines.append("\n**Unblocks (downstream):**")
-        for t in downstream:
-            lines.append(f"- `{t['id']}` — {t['title']} ({t.get('status', 'todo')})")
-    else:
-        lines.append("\n**Unblocks:** nothing")
+        downstream = reads.dependent_tasks(snapshot, task_id)
+        if downstream:
+            lines.append("\n**Unblocks (downstream):**")
+            for t in downstream:
+                lines.append(f"- `{t['id']}` — {t['title']} ({t.get('status', 'todo')})")
+        else:
+            lines.append("\n**Unblocks:** nothing")
+        if depth > 1:
+            lines.extend(_dependency_chain(snapshot, task_id, depth))
     return "\n".join(lines)
+
+
+def _dependency_chain(snapshot, task_id, depth) -> list[str]:
+    """`backlog_dependencies`' transitive sections: a recursive CTE per direction
+    over canonical `dependencies`, rendered as the legacy walk renders."""
+    def describe(ident):
+        task = reads.find_task(snapshot, ident)[0]
+        return task["title"], task.get("status", "todo")
+
+    deadline = dependency_chain.Deadline()
+    out = []
+    for label, checks in (("upstream", True), ("downstream", False)):
+        walked = dependency_graph.traverse(snapshot.connection, task_id, depth, label, deadline)
+        out.extend(dependency_chain.lines(label, walked, depth, describe, checks=checks))
+    return out
 
 
 @adapter("backlog_next_available")

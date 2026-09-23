@@ -117,6 +117,22 @@ def bundle_members(snapshot, slug) -> list[dict]:
     return [task for task, _epic in members]
 
 
+def tasks_in_tree_order(snapshot, ids) -> list[dict]:
+    """The tasks `find_task` finds among `ids`, once each, in the order a scan of the
+    legacy tree lists them (epic creation, then order, then id)."""
+    found = [pair for pair in (find_task(snapshot, ident) for ident in dict.fromkeys(ids)) if pair is not None]
+    found.sort(key=lambda pair: (_epic_rank(snapshot, pair[1]["id"]),
+                                 float(pair[0].get("order", 0.0)), str(pair[0].get("id", ""))))
+    return [task for task, _epic in found]
+
+
+def dependent_tasks(snapshot, task_id) -> list[dict]:
+    """Tasks whose `depends_on` names `task_id`, from the canonical reverse index
+    rather than a scan of every task, in the legacy scan's order."""
+    from taskmaster.native import dependency_graph
+    return tasks_in_tree_order(snapshot, dependency_graph.dependents(snapshot.connection, task_id))
+
+
 def _epic_rank(snapshot, epic_id):
     row = snapshot.connection.execute(
         "SELECT entity_key FROM entity_core WHERE kind='epic' AND public_id=?", (epic_id,)).fetchone()

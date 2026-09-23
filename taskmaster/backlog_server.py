@@ -36,6 +36,7 @@ from taskmaster import yaml_io
 # The claim contract (holder, TTL, liveness, refusal wording) lives in one
 # module so the legacy tool and the native adapter cannot drift on it.
 from taskmaster.native import blockers as _blockers
+from taskmaster import dependency_chain as _dependency_chain
 from taskmaster.native import claims as _claims
 from taskmaster.admission import UnsupportedStoreError
 from taskmaster.blast_radius import (
@@ -3152,12 +3153,24 @@ def _unreadable_dependencies_line(unknown) -> str:
 
 
 @mcp.tool()
-def backlog_dependencies(task_id: str) -> str:
+def backlog_dependencies(task_id: str, depth: int = 1) -> str:
     """Show the full dependency chain for a task — what it depends on (upstream) and what it unblocks (downstream).
 
     Args:
         task_id: The task ID (e.g., "cpp-parser-003")
+        depth: How many hops to follow each way, 1 to 10. Default 1: direct
+            dependencies and dependents only, exactly as before. Above 1, a
+            transitive section per direction follows the one-hop answer, listing
+            each task at its shortest distance (2..depth) with the task it was
+            reached through. Archived tasks are followed; deleted ids upstream show
+            as missing and are not followed; an unreadable `depends_on` is named,
+            not followed. Cycles are reported, never looped. At most 200 tasks are
+            listed per direction (the rest are counted as truncated), and the
+            traversal stops after 5 s, saying so.
     """
+    depth_error = _dependency_chain.depth_error(depth)
+    if depth_error:
+        return depth_error
     data = _load()
     result = _find_task(data, task_id)
     if not result:
@@ -3209,7 +3222,36 @@ def backlog_dependencies(task_id: str) -> str:
     else:
         lines.append("\n**Unblocks:** nothing")
 
+    if depth > 1:
+        lines.extend(_legacy_dependency_chain(all_tasks, task_id, depth))
     return "\n".join(lines)
+
+
+def _legacy_dependency_chain(all_tasks: list, task_id: str, depth: int) -> list[str]:
+    """`backlog_dependencies`' transitive sections, walked over the loaded tree."""
+    tasks, dependents = {}, {}
+    for t, _ep in all_tasks:
+        tasks.setdefault(t["id"], t)
+    for t, _ep in all_tasks:
+        deps = _blockers.declared_dependencies(t)
+        if not isinstance(deps, _blockers.Unknown):
+            for dep_id in dict.fromkeys(deps):
+                dependents.setdefault(dep_id, []).append(t["id"])
+
+    def upstream(ident):
+        deps = _blockers.declared_dependencies(tasks[ident])
+        return None if isinstance(deps, _blockers.Unknown) else deps
+
+    def describe(ident):
+        return tasks[ident]["title"], tasks[ident].get("status", "todo")
+
+    deadline = _dependency_chain.Deadline()
+    out = []
+    for label, neighbours, checks in (("upstream", upstream, True),
+                                      ("downstream", lambda ident: dependents.get(ident, []), False)):
+        walked = _dependency_chain.walk(task_id, depth, neighbours, tasks.__contains__, deadline)
+        out.extend(_dependency_chain.lines(label, walked, depth, describe, checks=checks))
+    return out
 
 
 def _claimed_lines(claimed: list) -> list[str]:

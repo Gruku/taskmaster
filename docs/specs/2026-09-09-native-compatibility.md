@@ -32,6 +32,11 @@ Host preferences, session identity and file serving remain host services, not
 entity commands. `/api/tasks/validate` and `/api/bugs/pattern-scan` are queries
 despite using POST. Other entity POST/PUT/PATCH routes are command adapters.
 
+Explicit additive changes since the freeze (N14): `backlog_dependencies` gained an
+optional `depth` (int, default 1). `depth=1` is the frozen answer byte for byte on
+both stores; 2..10 appends bounded transitive sections (200 tasks per direction,
+5 s deadline, cycles and truncation reported), identical on legacy and native.
+
 ## Behavioral contract sources and acceptance matrix
 
 Public text results are not replaced with JSON merely because SQL is underneath.
