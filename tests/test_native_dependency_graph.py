@@ -239,7 +239,8 @@ def test_every_traversal_statement_probes_an_index_by_equality(graph):
         resolve = next(sql for sql, _args, constraint in dependency_graph.explain_statements()
                        if constraint == "public_id=?")
         plan = [row[-1] for row in connection.execute("EXPLAIN QUERY PLAN " + resolve, ('["x"]',))]
-        assert "SEARCH t USING INDEX sqlite_autoindex_entity_core_1 (kind=? AND public_id=?)" in plan, plan
+        # Either entity_core index resolves ids by equality; N14's ix_entity_core_public_id wins once built.
+        assert any(step.startswith("SEARCH t USING ") and "public_id=?" in step for step in plan), plan
 
 
 def test_viewer_related_never_loads_the_task_tree(graph, monkeypatch):
