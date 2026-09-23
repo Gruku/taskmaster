@@ -14,7 +14,7 @@ from pathlib import PurePosixPath
 import yaml
 
 from taskmaster import projection_parse
-from taskmaster.native import projection, sync
+from taskmaster.native import checkouts, projection, sync
 from taskmaster.native.migrate import encode
 from taskmaster.native.sync_merge import merge, protect_local
 from . import sync_files
@@ -29,11 +29,13 @@ class Prepared:
     arguments: dict | None
 
 
-def prepare(snapshot, backlog_dir, rel, *, take_file=False):
+def prepare(snapshot, backlog_dir, rel, *, take_file=False, checkout=None):
+    """`checkout` names a linked checkout: its own base, holds and token replace the
+    main checkout's manifest, and a linked file is never judged by main's bytes."""
     connection = snapshot.connection
     kind, ident = projection_parse.classify(rel)
     observed = sync_files.observe(backlog_dir, rel)
-    token = sync.manifest_token(connection, rel)
+    token = sync.manifest_token(connection, rel) if checkout is None else checkouts.token(connection, checkout, rel)
     cached = {}
 
     def entity(kind, ident):
@@ -54,17 +56,38 @@ def prepare(snapshot, backlog_dir, rel, *, take_file=False):
             "file": rel, "mode": mode, "reason": reason[:4096], "rows": rows or [],
             "observed_base64": None if observed is None else base64.b64encode(observed.content).decode("ascii"),
             "observed_hash": None if observed is None else observed.digest, "expected_manifest": token}
+        if arguments is not None and checkout is not None:
+            arguments["checkout"] = checkout
         return Prepared(rel, mode or "unchanged", reason, observed, arguments)
 
     if observed is None:
         if take_file:
             raise ValueError(f"cannot take missing file: {rel}; use ordinary sync to repair it")
+        if checkout is not None:
+            return Prepared(rel, "unchanged", "missing in the linked checkout; publication writes it", None, None)
         return result("repair", "missing file; repair from database, not a domain deletion")
-    record = connection.execute("SELECT content_hash,quarantined,quarantine_hash FROM projection WHERE file=?", (rel,)).fetchone()
-    base_row = connection.execute("SELECT content FROM projection_base WHERE file=?", (rel,)).fetchone()
-    base = None if base_row is None or base_row[0] is None else bytes(base_row[0])
-    trusted = base is not None and record is not None and hashlib.sha1(base).hexdigest() == record[0]
-    held = projection.held_file(connection, rel)
+    if checkout is None:
+        record = connection.execute("SELECT content_hash,quarantined,quarantine_hash FROM projection WHERE file=?", (rel,)).fetchone()
+        base_row = connection.execute("SELECT content FROM projection_base WHERE file=?", (rel,)).fetchone()
+        base = None if base_row is None or base_row[0] is None else bytes(base_row[0])
+        trusted = base is not None and record is not None and hashlib.sha1(base).hexdigest() == record[0]
+        held = projection.held_file(connection, rel)
+    else:
+        found, hold = checkouts.base(connection, checkout, rel), checkouts.hold(connection, checkout, rel)
+        base = None if found is None else found[1]
+        record = None if found is None and hold is None else (
+            None if found is None else found[0], hold is not None and hold[0] == "quarantined",
+            None if hold is None else hold[1])
+        trusted = found is not None
+        held = None if hold is None else hold[0]
+        if found is None and not take_file:
+            published = connection.execute("SELECT content_hash FROM projection WHERE file=?", (rel,)).fetchone()
+            content = observed.content
+            if published is not None and published[0] in {
+                    projection._digest(content), projection._digest(projection._lf(content)),
+                    projection._digest(projection._crlf(content))}:
+                # Identical bytes may establish this checkout's base; nothing to import.
+                return Prepared(rel, "establish", "file equals the published generation", observed, None)
     if record is not None and observed.digest == record[0] and not held:
         return result(None if trusted else "observe", "file matches the trusted projection")
     if not take_file and record is not None and record[1] and observed.digest == record[2]:
@@ -121,6 +144,10 @@ def prepare(snapshot, backlog_dir, rel, *, take_file=False):
             ours = current["fields"], current["body"]
             if take_file or encode(ours) == encode(theirs):
                 chosen = theirs
+            elif checkout is not None and base is None:
+                return Prepared(rel, "pending", "no trusted base in this checkout for divergent "
+                                f"{key[0]} {key[1]}; take the file with sync take_file or release it to receive "
+                                "the published version", observed, None)
             elif base_rows is None or key not in base_rows:
                 return result("conflict", f"no verified prior base for divergent {key[0]} {key[1]}; explicit resolution required")
             else:

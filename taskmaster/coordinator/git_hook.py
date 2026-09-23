@@ -42,6 +42,23 @@ def _variants(content):
     return {hashlib.sha1(value).hexdigest() for value in (content, lf, lf.replace(b'\n', b'\r\n'))}
 
 
+def _same(left, right) -> bool:
+    return os.path.normcase(str(Path(left).resolve())) == os.path.normcase(str(Path(right).resolve()))
+
+
+def _is_linked(root) -> bool:
+    lines = _git(root, 'rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir').decode(
+        'utf-8', 'surrogateescape').splitlines()
+    return not _same(lines[0], lines[1])
+
+
+def _main_worktree(root) -> Path | None:
+    for line in _git(root, 'worktree', 'list', '--porcelain').decode('utf-8', 'surrogateescape').splitlines():
+        if line.startswith('worktree '):
+            return Path(line[len('worktree '):])
+    return None
+
+
 def check(root) -> tuple[bool, str]:
     root = Path(root)
     staged = [path.decode('utf-8', 'surrogateescape') for path in
@@ -50,8 +67,21 @@ def check(root) -> tuple[bool, str]:
     staged = [path for path in staged if not path.startswith('.taskmaster/local/')]
     if not staged:
         return True, 'no projection files staged'
-    store = root / '.taskmaster' / 'local' / 'store.db'
+    # The main checkout (git dir == common dir; also submodules and --separate-git-dir)
+    # holds its own store; a linked worktree's authority is the main worktree Git lists
+    # first. Never "no native store" while a store exists that could not be resolved.
+    local = root / '.taskmaster' / 'local' / 'store.db'
+    try:
+        main_root = _main_worktree(root) if _is_linked(root) else root
+    except (RuntimeError, OSError, IndexError):
+        main_root = None
+    if main_root is None:
+        return False, f'cannot resolve the main checkout of {root}; refusing projection staging\n{GUIDANCE}'
+    store = main_root / '.taskmaster' / 'local' / 'store.db'
     if not store.exists():
+        if local.exists() and not _same(main_root, root):
+            return False, (f'cannot resolve the native store: {root} has one but its main checkout {main_root} '
+                           f'does not; refusing projection staging\n{GUIDANCE}')
         return True, 'no native store'
     try:
         with closing(sqlite3.connect(store.as_uri() + '?mode=ro', uri=True, timeout=30)) as connection:

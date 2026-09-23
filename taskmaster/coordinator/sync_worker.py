@@ -106,9 +106,11 @@ def synchronize(owner, **arguments):
 
 
 def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=0,
-                 files=None, take_file=False, timeout=20):
+                 files=None, take_file=False, timeout=20, worktree=None):
     options = dict(import_files=import_files, through=through, files=files, take_file=take_file)
     sync.validate_input(options)
+    if worktree is not None and (not isinstance(worktree, str) or not worktree):
+        raise ValueError('worktree must be an absolute checkout path')
     scope = operation_scope(caller_scope, request_id)
     result = dict(state='pending', through=through, captured=False, imports=[], observed=0,
                   unresolved=[], notices=[], warnings=[], caller_scope=caller_scope,
@@ -135,10 +137,12 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
         contracts.validate(envelope)
         return owner.submit(envelope).result(timeout=remaining() if timeout is None else timeout)
 
+    backlog = owner.root / '.taskmaster'
+
     def current(plan):
         if plan.observation is not None:
-            return sync_files.unchanged(owner.root / '.taskmaster', plan.observation)
-        return sync_files.observe(owner.root / '.taskmaster', plan.file) is None
+            return sync_files.unchanged(backlog, plan.observation)
+        return sync_files.observe(backlog, plan.file) is None
 
     try:
         if owner.stopping.is_set():
@@ -152,6 +156,23 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
         if refusal:
             pending(None, refusal)
             return result
+        from . import checkouts
+        from .git import GitRefused
+        linked = None
+        if worktree is not None:
+            try:
+                named = checkouts.resolve(owner.root, worktree)
+            except GitRefused as exc:
+                raise ValueError(str(exc)) from None
+            if named.linked:
+                linked = named
+                backlog = linked.backlog
+                options['checkout'] = linked.id
+                result['checkout'] = linked.public()
+                result['warnings'].extend(checkouts.register(owner, linked))
+        # Git detection runs on the checkout this sync imports from; a root that is
+        # not a Git top level has no HEAD to observe.
+        observed_checkout = linked or checkouts.optional_main(owner.root)
         # Refuse an impossible target before anything, including imports, commits.
         with closing(owner._connect(readonly=True)) as connection:
             if through > connection.execute('SELECT COALESCE(MAX(seq),0) FROM domain_events').fetchone()[0]:
@@ -165,12 +186,20 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
             state = sync.operation_state(connection, scope)
         if state['state'] == 'complete':
             return state['result']
+        if linked is not None:
+            for notice in checkouts.recover_intent(owner, linked):
+                if notice.startswith('sync pending: '):
+                    rel, _, reason = notice.removeprefix('sync pending: ').partition(': ')
+                    pending(rel, reason)
+                else:
+                    result['warnings'].append(notice)
         selected = []
+        observation, seen, unverified, moved = None, {}, None, False
         if import_files:
             if files is not None:
                 selected = list(files)
             else:
-                inventory = sync_files.discover(owner.root / '.taskmaster')
+                inventory = sync_files.discover(backlog)
                 selected = list(inventory.files)
                 result['warnings'].extend(f'duplicate import path skipped: {rel}; canonical {canonical}'
                                           for rel, canonical in inventory.duplicates.items())
@@ -192,24 +221,50 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
             from . import git as managed_git
             # Paths a managed checkout left differing from the published generation are
             # drift: restored ones resolve here; the rest are neither imported nor repaired.
-            drift = managed_git.prune_drift(owner)
+            drift = (managed_git.prune_drift(owner) if linked is None
+                     else checkouts.prune_drift(owner, linked))
+            if observed_checkout is not None and not take_file:
+                # Step 10: Git operations that bypassed the coordinator put bytes here
+                # that are drift (an older or foreign generation), never import authority.
+                # Named files (MCP resync) are classified too; take_file is the explicit adopt.
+                try:
+                    observation, found, warnings, seen = checkouts.detect(owner, observed_checkout, selected, drift)
+                except (GitRefused, OSError) as exc:
+                    # Fail closed: nothing is imported while Git state is unknown.
+                    unverified = f'Git state could not be inspected ({exc}); not imported, retry the sync'[:500]
+                    found, warnings = {}, [unverified]
+                result['warnings'].extend(warnings)
+                drift |= set(found)
             for rel in selected:
                 if not remaining() or owner.stopping.is_set():
                     pending(rel, 'time budget exhausted or coordinator stopping; retry the same sync id')
                     return result
                 if rel in drift and not take_file:
-                    pending(rel, managed_git.DRIFT_GUIDANCE)
+                    pending(rel, managed_git.DRIFT_GUIDANCE if linked is None else checkouts.LINKED_DRIFT)
+                    continue
+                if unverified:
+                    pending(rel, unverified)
                     continue
                 try:
                     with closing(owner._connect(readonly=True)) as connection, Repository(connection).snapshot() as snapshot:
-                        plan = prepare(snapshot, owner.root / '.taskmaster', rel, take_file=take_file)
+                        plan = prepare(snapshot, backlog, rel, take_file=take_file,
+                                       checkout=None if linked is None else linked.id)
                     if plan.arguments is None:
-                        if plan.state != 'unchanged':
+                        if plan.state not in ('unchanged', 'establish'):
                             pending(rel, plan.reason)
                         continue
                     owner.checkpoint('sync_prepared')
                     if not current(plan):
                         pending(rel, 'file changed after parse; not imported')
+                        continue
+                    if rel in seen and seen[rel] != (None if plan.observation is None else plan.observation.digest):
+                        # Only the classified bytes were judged authored (a Git restore may land between).
+                        pending(rel, 'file changed after Git classification; not imported, retry the sync')
+                        continue
+                    if observation is not None and not moved and checkouts.observe(observed_checkout) != observation:
+                        moved = True
+                    if moved:
+                        pending(rel, 'HEAD moved during the sync; not imported, retry the sync')
                         continue
                     key = hashlib.sha256(encode(plan.arguments).encode()).hexdigest()
                     try:
@@ -224,7 +279,7 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
                     else:
                         result['imports'].append(dict(receipt['result'], commit_seq=receipt['commit_seq'],
                                                       caller_scope=scope, request_id=key))
-                        if rel in drift and receipt['result'].get('state') == 'accepted':
+                        if rel in drift and receipt['result'].get('state') == 'accepted' and linked is None:
                             managed_git.drop_drift(owner, [rel])  # explicitly taken
                             drift.discard(rel)
                     owner.checkpoint('sync_import_committed')
@@ -272,10 +327,25 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
             result['notices'].extend(notice for notice in publication['notices'] if notice not in result['notices'])
             if publication['state'] != 'exported':
                 pending(None, 'projection publication incomplete')
+            if linked is not None:
+                # A participating linked checkout: the published generation is copied in,
+                # compare-and-swap against its own bases, while publication is held.
+                for notice in checkouts.publish(owner, linked, result['through']):
+                    rel, _, reason = notice.removeprefix('sync pending: ').partition(': ')
+                    pending(rel, reason)
+                selected = []
+            if observation is not None and files is None and not moved:
+                # Only a full sync advances the observation, and only while HEAD is still
+                # where classification saw it (an older observation re-detects, never skips).
+                try:
+                    if checkouts.observe(observed_checkout) == observation:
+                        checkouts.remember(owner, observed_checkout, observation)
+                except (GitRefused, OSError) as exc:
+                    result['warnings'].append(f'checkout observation not recorded: {exc}'[:500])
             with closing(owner._connect(readonly=True)) as connection:
                 held = set(projection.flagged_files(connection)) | set(projection.drift_files(connection))
                 held.update(row[0] for row in connection.execute('SELECT file FROM projection WHERE quarantined=1'))
-                for rel in sorted(held):
+                for rel in sorted(held if linked is None else ()):
                     pending(rel, projection.held_file(connection, rel) or 'held projection')
                 for rel in selected:
                     try:
