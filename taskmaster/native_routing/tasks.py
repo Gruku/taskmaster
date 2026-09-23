@@ -904,8 +904,9 @@ def dependencies(call, *, task_id, depth):
 
 
 def _dependency_chain(snapshot, task_id, depth) -> list[str]:
-    """`backlog_dependencies`' transitive sections: a recursive CTE per direction
-    over canonical `dependencies`, rendered as the legacy walk renders."""
+    """`backlog_dependencies`' transitive sections: a breadth-first walk per
+    direction with one indexed query per level over canonical `dependencies`,
+    rendered as the legacy walk renders."""
     def describe(ident):
         task = reads.find_task(snapshot, ident)[0]
         return task["title"], task.get("status", "todo")

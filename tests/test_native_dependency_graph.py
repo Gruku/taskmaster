@@ -6,6 +6,8 @@ output byte for byte unchanged, bounded, with cycles and truncation said out lou
 from __future__ import annotations
 
 from contextlib import closing
+import json
+from pathlib import Path
 import sqlite3
 
 import pytest
@@ -78,6 +80,9 @@ def _seed_graph():
     bs.backlog_archive_task(task_id="test-epic-007", reason="deprecated")
     _legacy_row("test-epic-019", "epic=?", "ghost-epic")
     _legacy_row("test-epic-017", "deleted=1")
+    bs.backlog_handover_create(tldr="Handover on three", task_ids=["test-epic-003", "other-001"])
+    bs.backlog_issue_create(title="An issue", severity="P1", evidence="seen",
+                            related_tasks=["test-epic-003"])
 
 
 IDS = ([f"test-epic-{n:03d}" for n in range(1, 20)] + [f"other-{n:03d}" for n in range(1, 14)]
@@ -93,11 +98,18 @@ def graph(tmp_path_factory):
         monkeypatch.undo()
 
 
-def test_default_output_is_unchanged_and_depth_one_is_the_default(graph):
+# Every default answer as the pre-N14 code gave it (`43acef1`, both stores agreed),
+# generated once from that tree over this seed: the frozen contract, not the new code.
+GOLDEN = Path(__file__).parent / "fixtures" / "native_dependencies_depth1_golden.json"
+
+
+def test_default_output_is_the_frozen_pre_n14_answer(graph):
+    golden = json.loads(GOLDEN.read_text(encoding="utf-8"))
+    assert sorted(golden) == sorted(IDS)
     for ident in IDS:
         legacy, native = graph.same("backlog_dependencies", task_id=ident)
-        assert graph.same("backlog_dependencies", task_id=ident, depth=1) == (legacy, native)
-        assert "Transitive" not in legacy
+        assert legacy == native == golden[ident], ident
+        assert graph.same("backlog_dependencies", task_id=ident, depth=1) == (golden[ident], golden[ident])
 
 
 def test_one_hop_covers_archived_duplicate_self_missing_and_unreadable(graph):
@@ -216,7 +228,7 @@ def test_every_traversal_statement_probes_an_index_by_equality(graph):
     with native_connection(graph.native) as connection:
         for sql, args, constraint in dependency_graph.explain_statements():
             plan = [row[-1] for row in connection.execute("EXPLAIN QUERY PLAN " + sql, args)]
-            driving = next(step for step in plan if step.startswith(("SEARCH x ", "SEARCH t ")))
+            driving = next(step for step in plan if step.startswith(("SEARCH x ", "SEARCH t ", "SEARCH c ")))
             assert constraint in driving, plan
             scans = [step for step in plan if step.startswith("SCAN")]
             assert scans and all(step.startswith(("SCAN json_each ", "SCAN j ")) for step in scans), plan
@@ -256,14 +268,24 @@ def _related(graph, root, ident):
         return viewer.related(viewer.database(), ident)
 
 
-def test_viewer_dependency_half_matches(graph):
+def _paths_rooted(answer, root):
+    if answer is None:
+        return None
+    return {key: [{**row, "_path": row["_path"].replace(str(root), "<root>")} if "_path" in row else row
+                  for row in rows] if isinstance(rows, list) else rows for key, rows in answer.items()}
+
+
+def test_viewer_related_panel_matches(graph):
+    seen = set()
     for ident in IDS:
-        legacy, native = _related(graph, graph.legacy, ident), _related(graph, graph.native, ident)
-        if legacy is None:
-            assert native is None, ident
-            continue
-        for key in ("dependencies", "unblocks"):
-            assert native[key] == legacy[key], (ident, key)
+        legacy = _paths_rooted(_related(graph, graph.legacy, ident), graph.legacy)
+        native = _paths_rooted(_related(graph, graph.native, ident), graph.native)
+        assert native == legacy, ident
+        if legacy:
+            seen.update(key for key in ("handovers", "issues", "dependencies", "unblocks") if legacy[key])
+    # Issues carry `related_tasks`, and no tool writes an issue `task_ids`, so the
+    # issues list is empty on both stores; it is still compared.
+    assert seen == {"handovers", "dependencies", "unblocks"}
 
 
 
@@ -323,7 +345,8 @@ def _star(n):
 
 SHAPES = {"clique-20": (_clique(20), "c0"), "clique-60": (_clique(60), "c0"), "hub-300": (_hub(300), "r"),
           "hub-300-up": (_hub(300), "h"), "diamonds-12": (_diamonds(12), "d12"),
-          "diamonds-12-down": (_diamonds(12), "d0"), "star-2000": (_star(2000), "r")}
+          "diamonds-12-down": (_diamonds(12), "d0"), "star-2000": (_star(2000), "r"),
+          "hub-4000": (_hub(4000), "r"), "clique-250": (_clique(250), "c0")}
 
 
 @pytest.mark.parametrize("shape", sorted(SHAPES))
@@ -342,14 +365,14 @@ def test_graph_shapes_answer_identically_well_inside_the_deadline(shape, depth):
             native_s = time.perf_counter() - started
             legacy = dependency_chain.tree_walk(tasks, root, depth, direction, dependency_chain.Deadline())
             assert not native.timed_out and not legacy.timed_out
-            assert native_s < 0.5, (shape, direction, native_s)
+            assert native_s < 1.0, (shape, direction, native_s)
 
             def describe(ident):
                 return ident.upper(), "todo"
             assert (dependency_chain.lines(direction, native, depth, describe, checks=True)
                     == dependency_chain.lines(direction, legacy, depth, describe, checks=True))
-            assert (native.distance, native.edges, native.missing, native.unreadable) == \
-                   (legacy.distance, legacy.edges, legacy.missing, legacy.unreadable)
+            assert (native.distance, native.edges, native.missing, native.unreadable, native.via) == \
+                   (legacy.distance, legacy.edges, legacy.missing, legacy.unreadable, legacy.via)
     finally:
         connection.close()
 
@@ -394,7 +417,7 @@ def test_the_deadline_interrupts_a_running_native_statement():
     finally:
         connection.close()
     # The first check came from SQLite's progress handler inside a level's query.
-    assert native_deadline.checked_by in ("_downstream_level", "_resolve"), native_deadline.checked_by
+    assert native_deadline.checked_by in ("_dependent_pairs", "_resolve"), native_deadline.checked_by
     assert native.timed_out and legacy.timed_out
     rendered = [dependency_chain.lines("downstream", w, 3, None, checks=False) for w in (native, legacy)]
     assert rendered[0] == rendered[1] == [
@@ -430,3 +453,81 @@ def test_native_answers_where_legacy_raises_on_an_unrelated_null_order(tmp_path,
     with twins.at(twins.native):
         answer = bs.backlog_dependencies(task_id="test-epic-001")
     assert "- `test-epic-002` — Needs it (todo)" in answer
+
+
+def _layered(width):
+    deps = {"r": []}
+    deps.update({f"a{i:03d}": ["r"] for i in range(width)})
+    deps.update({f"b{j:03d}": [f"a{i:03d}" for i in range(width)] for j in range(width)})
+    return deps
+
+
+def test_rendering_a_dense_graph_is_linear_in_its_hops():
+    """400 x 400 layers: 160k hops. `via` is recorded while walking, so rendering
+    never rescans the hops for each listed task."""
+    import time
+    from taskmaster import dependency_chain
+    walked = dependency_chain.tree_walk(_tasks(_layered(400)), "r", 3, "downstream", dependency_chain.Deadline())
+    assert len(walked.edges) == 400 + 400 * 400
+    started = time.perf_counter()
+    out = dependency_chain.lines("downstream", walked, 3, lambda ident: (ident.upper(), "todo"), checks=False)
+    assert time.perf_counter() - started < 1.0
+    assert out[1] == "- [2] `b000` — B000 (todo) ← via `a000`"
+    assert out[-1] == "Truncated: showing 200 of 400 tasks reached — ask for a smaller depth"
+
+
+def _fan(listed):
+    """Root, one task depending on it, and `listed` tasks two hops away."""
+    deps = {"r": [], "m": ["r"]}
+    deps.update({f"t{i:03d}": ["m"] for i in range(listed)})
+    return deps
+
+
+@pytest.mark.parametrize("listed", [200, 201])
+def test_the_output_cap_boundary(listed):
+    from taskmaster import dependency_chain
+    from taskmaster.native import dependency_graph
+    tasks = _tasks(_fan(listed))
+    connection = _native_graph(tasks)
+    try:
+        native = dependency_graph.traverse(connection, "r", 2, "downstream", dependency_chain.Deadline())
+    finally:
+        connection.close()
+    legacy = dependency_chain.tree_walk(tasks, "r", 2, "downstream", dependency_chain.Deadline())
+    rendered = [dependency_chain.lines("downstream", w, 2, lambda i: (i.upper(), "todo"), checks=False)
+                for w in (native, legacy)]
+    assert rendered[0] == rendered[1]
+    assert len([line for line in rendered[0] if line.startswith("- [2] ")]) == 200
+    truncation = [line for line in rendered[0] if line.startswith("Truncated")]
+    if listed == 200:
+        assert truncation == []
+    else:
+        assert truncation == ["Truncated: showing 200 of 201 tasks reached — ask for a smaller depth"]
+
+
+class _ExpiresAfter:
+    """A deadline with room for exactly `checks` checks."""
+
+    def __init__(self, checks):
+        self.left, self.expired = checks, False
+
+    def __call__(self):
+        self.left -= 1
+        self.expired = self.expired or self.left < 0
+        return 1 if self.expired else 0
+
+
+def test_a_finished_walk_is_never_reported_as_timed_out():
+    """r <- a: two levels of work, and room for exactly the checks made while
+    work remains; any check after the last level would expire the deadline."""
+    from taskmaster import dependency_chain
+    from taskmaster.native import dependency_graph
+    tasks = _tasks({"r": [], "a": ["r"]})
+    connection = _native_graph(tasks)
+    try:
+        native = dependency_graph.traverse(connection, "r", 5, "downstream", _ExpiresAfter(1))
+    finally:
+        connection.close()
+    legacy = dependency_chain.tree_walk(tasks, "r", 5, "downstream", _ExpiresAfter(2))
+    assert not native.timed_out and not legacy.timed_out
+    assert native.distance == legacy.distance == {"r": 0, "a": 1}

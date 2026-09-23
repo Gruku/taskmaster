@@ -63,7 +63,18 @@ class Walk:
     edges: set = field(default_factory=set)        # followed (from, to) hops
     missing: set = field(default_factory=set)      # reached ids naming no task
     unreadable: set = field(default_factory=set)   # followed-from tasks with unreadable depends_on
+    via: dict = field(default_factory=dict)        # id -> least-id task one hop nearer the root
     timed_out: bool = False
+
+    def hop(self, source, target, level) -> bool:
+        """Record a followed hop from a task at `level - 1`; True when it reaches a new id."""
+        self.edges.add((source, target))
+        if target not in self.distance:
+            self.distance[target], self.via[target] = level, source
+            return True
+        if self.distance[target] == level and source < self.via[target]:
+            self.via[target] = source
+        return False
 
 
 def walk(root, depth, neighbours, exists, deadline) -> Walk:
@@ -82,17 +93,13 @@ def walk(root, depth, neighbours, exists, deadline) -> Walk:
                 result.unreadable.add(node)
                 continue
             for other in found:
-                result.edges.add((node, other))
-                if other in result.distance:
+                if not result.hop(node, other, level):
                     continue
-                result.distance[other] = level
                 if exists(other):
                     following.append(other)
                 else:
                     result.missing.add(other)
         frontier = following
-    if deadline():
-        result.timed_out = True
     return result
 
 
@@ -161,7 +168,7 @@ def lines(label: str, result: Walk, depth: int, describe, *, checks: bool) -> li
         return [f"{heading} none"]
     out = [heading if reached else f"{heading} none"]
     for distance, node in reached[:MAX_NODES]:
-        via = min(s for s, t in result.edges if t == node and result.distance.get(s) == distance - 1)
+        via = result.via[node]
         if node in result.missing:
             text = f"[missing] `{node}` — NOT FOUND"
         else:
