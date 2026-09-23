@@ -23,6 +23,8 @@ from taskmaster import store  # noqa: E402
 
 HOOK = str((PLUGIN_ROOT / "hooks" / "edit_resurface.py").resolve())
 FIXTURE_SRC = PLUGIN_ROOT / "tests" / "fixtures" / "index_backlog" / ".taskmaster"
+# Behaviour that must hold on a legacy store and on its activated native twin alike.
+STORES = pytest.mark.parametrize("store_kind", ["legacy", "native"])
 
 
 # ── Harness (subprocess, mirrors test_worktree_submodule_init_hook.py) ──
@@ -229,49 +231,56 @@ def test_non_git_project_is_found_from_a_subdirectory(tmp_path):
         "TM: svc/deep/a.py → B-1 open")
 
 
-def test_dedupe_per_session(stored_root):
+@STORES
+def test_dedupe_per_session(stored_root, store_kind):
+    if store_kind == "native":
+        from native_twins import activate_native, is_native  # noqa: PLC0415
+        activate_native(stored_root)
+        assert is_native(stored_root)
     _run(stored_root, "api/src/svc/model.py")
     assert _run(stored_root, "api/src/svc/model.py").stdout == ""
     assert _run(stored_root, "api/src/svc/model.py", session="s2").stdout != ""
 
 
-def test_a_new_change_seq_reprints_a_changed_line(tmp_path):
-    """Dedupe is scoped to a store revision: `MAX(changes.seq)` versus the seq
+@STORES
+def test_a_new_change_seq_reprints_a_changed_line(tmp_path, store_kind):
+    """Dedupe is scoped to a store revision: the store's revision versus the seq
     recorded beside the memoised line in `local/hook-seen/`."""
-    root = _synthetic_root(tmp_path, [
-        ("B-900", "bug", "open", "svc/a.py", "exact", "location")])
+    root = _store_root(tmp_path, [
+        ("B-900", "bug", "open", "svc/a.py", "exact", "location")], store_kind)
     (root / "svc").mkdir(parents=True)
     (root / "svc" / "a.py").write_text("x", encoding="utf-8")
     assert context(_run(root, "svc/a.py")) == "TM: svc/a.py → B-900 open"
     assert _run(root, "svc/a.py").stdout == ""
 
-    _append_rows(root, [("B-901", "bug", "open", "svc/a.py", "exact", "location")], bump_seq=True)
+    _append_docs(root, [("B-901", "bug", "open", "svc/a.py", "exact", "location")], store_kind)
     assert context(_run(root, "svc/a.py")) == "TM: svc/a.py → B-900 open, B-901 open"
 
 
-def test_an_unrelated_change_does_not_repeat_the_same_line(tmp_path):
+@STORES
+def test_an_unrelated_change_does_not_repeat_the_same_line(tmp_path, store_kind):
     """A new seq alone is not news — the line is only reprinted when it differs."""
-    root = _synthetic_root(tmp_path, [
-        ("B-900", "bug", "open", "svc/a.py", "exact", "location")])
+    root = _store_root(tmp_path, [
+        ("B-900", "bug", "open", "svc/a.py", "exact", "location")], store_kind)
     (root / "svc").mkdir(parents=True)
     (root / "svc" / "a.py").write_text("x", encoding="utf-8")
     assert _run(root, "svc/a.py").stdout != ""
-    _append_rows(root, [("B-901", "bug", "open", "svc/elsewhere.py", "exact", "location")],
-                 bump_seq=True)
+    _append_docs(root, [("B-901", "bug", "open", "svc/elsewhere.py", "exact", "location")], store_kind)
     assert _run(root, "svc/a.py").stdout == ""
 
 
-def test_one_paths_print_does_not_answer_for_another(tmp_path):
+@STORES
+def test_one_paths_print_does_not_answer_for_another(tmp_path, store_kind):
     """The seq is recorded per path, not per session file.
 
     A single top-level seq would let the print for one path mark every other
     path as already answered at that revision, and the second path's changed
     line would never be shown.
     """
-    root = _synthetic_root(tmp_path, [
+    root = _store_root(tmp_path, [
         ("B-1", "bug", "open", "svc/a.py", "exact", "location"),
         ("B-2", "bug", "open", "svc/b.py", "exact", "location"),
-    ])
+    ], store_kind)
     (root / "svc").mkdir(parents=True)
     for name in ("a.py", "b.py"):
         (root / "svc" / name).write_text("x", encoding="utf-8")
@@ -280,29 +289,29 @@ def test_one_paths_print_does_not_answer_for_another(tmp_path):
     assert context(_run(root, "svc/b.py")) == "TM: svc/b.py → B-2 open"
 
     # One change touching both paths, then b is edited first and prints.
-    _append_rows(root, [
+    _append_docs(root, [
         ("B-3", "bug", "open", "svc/a.py", "exact", "location"),
         ("B-4", "bug", "open", "svc/b.py", "exact", "location"),
-    ], bump_seq=True)
+    ], store_kind)
     assert context(_run(root, "svc/b.py")) == "TM: svc/b.py → B-2 open, B-4 open"
     # a's line changed too, and b's print must not have answered for it.
     assert context(_run(root, "svc/a.py")) == "TM: svc/a.py → B-1 open, B-3 open"
 
 
-def test_silent_edit_does_not_burn_the_dedupe_slot(tmp_path):
+@STORES
+def test_silent_edit_does_not_burn_the_dedupe_slot(tmp_path, store_kind):
     """Dedupe suppresses a repeated *line*, not a repeated edit.
 
     Editing a file before anyone files a bug against it must not mute the line
     for the rest of the session once the bug exists.
     """
-    root = _synthetic_root(tmp_path, [
-        ("B-900", "bug", "fixed", "svc/quiet.py", "exact", "location")])
+    root = _store_root(tmp_path, [
+        ("B-900", "bug", "fixed", "svc/quiet.py", "exact", "location")], store_kind)
     (root / "svc").mkdir(parents=True)
     (root / "svc" / "quiet.py").write_text("x", encoding="utf-8")
     assert _run(root, "svc/quiet.py").stdout == ""
 
-    _append_rows(root, [("B-901", "bug", "open", "svc/quiet.py", "exact", "location")],
-                 bump_seq=True)
+    _append_docs(root, [("B-901", "bug", "open", "svc/quiet.py", "exact", "location")], store_kind)
     assert context(_run(root, "svc/quiet.py")) == "TM: svc/quiet.py → B-901 open (+1 closed)"
 
 
@@ -505,6 +514,76 @@ def _append_rows(root: Path, rows, *, bump_seq: bool = False) -> None:
     con.close()
 
 
+
+# ── Both stores: the same entities, legacy or activated native ──
+
+def _docs(rows):
+    """rows: (entity_id, kind, status, path, match_kind, source) -> {(kind, id): (doc, body)}."""
+    docs = {}
+    for eid, kind, status, path, _mk, source in rows:
+        doc, body = docs.setdefault((kind, eid), ({"id": eid, "status": status}, ""))
+        if source == "prose":
+            docs[kind, eid] = (doc, body + f"See `{path}`. ")
+        else:
+            doc.setdefault(source, []).append(path)
+    return docs
+
+
+def _derive(con, keys) -> None:
+    con.row_factory = sqlite3.Row
+    store.Store.__new__(store.Store)._refresh_derived(
+        type("Tx", (), {"connection": con, "_derived_keys": set(keys)})())
+    con.row_factory = None
+
+
+def _store_root(tmp_path: Path, rows, store_kind: str) -> Path:
+    """A project whose store holds `rows` as real documents, derived by the store itself;
+    `native` then activates it, so relations come from the native core, not raw rows."""
+    root = tmp_path / "syn"
+    (root / ".taskmaster" / "local").mkdir(parents=True)
+    (root / ".taskmaster" / "backlog.yaml").write_text("version: 4\n", encoding="utf-8")
+    con = sqlite3.connect(root / ".taskmaster" / "local" / "store.db", isolation_level=None)
+    con.executescript(store.SCHEMA_SQL)
+    con.executemany("INSERT OR REPLACE INTO meta VALUES(?,?)", [("schema_version", "1"), ("creation_token", "syn")])
+    docs = _docs(rows)
+    for (kind, eid), (doc, body) in docs.items():
+        con.execute("insert into entities(kind,id,epic,status,archived,deleted,doc,body,rev,updated_seq) "
+                    "values (?,?,NULL,?,0,0,?,?,1,0)", (kind, eid, doc["status"], json.dumps(doc), body))
+    _derive(con, docs)
+    con.close()
+    if store_kind == "native":
+        from native_twins import activate_native, is_native  # noqa: PLC0415
+        activate_native(root)
+        assert is_native(root)
+    return root
+
+
+def _append_docs(root: Path, rows, store_kind: str) -> None:
+    """New entities in one new store revision, written as each store writes them."""
+    docs = _docs(rows)
+    con = sqlite3.connect(root / ".taskmaster" / "local" / "store.db", isolation_level=None)
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        if store_kind == "native":
+            from taskmaster.native import commands  # noqa: PLC0415
+            from taskmaster.native.db import assert_native  # noqa: PLC0415
+            from taskmaster.native.migrate import _put_manifest  # noqa: PLC0415
+            tx = commands.Transaction(con, {"operation": "tests.append", "caller_scope": "tests"}, assert_native(con))
+            for (kind, eid), (doc, body) in docs.items():
+                tx.create(kind, doc, body or None, requested_id=eid)
+            _put_manifest(con, event_high_water=tx.seq)
+        else:
+            for (kind, eid), (doc, body) in docs.items():
+                con.execute("insert into entities(kind,id,epic,status,archived,deleted,doc,body,rev,updated_seq) "
+                            "values (?,?,NULL,?,0,0,?,?,1,0)", (kind, eid, doc["status"], json.dumps(doc), body))
+            _derive(con, docs)
+            con.execute("insert into changes(ts,session,tool,kind,id,op) "
+                        "values ('2026-09-05','s','test','bug','B-x','create')")
+        con.commit()
+    finally:
+        con.close()
+
+
 def _resolve(mod, root: Path, rel: str):
     return mod.resolve(root / ".taskmaster" / "local" / "store.db", rel)
 
@@ -553,22 +632,18 @@ def test_format_counts_closed_and_prose(tmp_path):
         "TM: a/b.py → B-1 open (+1 closed, +1 prose)")
 
 
-def test_related_open_work_is_counted_not_named(tmp_path):
-    """`related` rows carry work that travels with the matched item; the count
-    is the invitation to ask, the ids stay behind backlog_query."""
+@STORES
+def test_related_open_work_is_counted_not_named(tmp_path, store_kind):
+    """Work that travels with the matched item is counted; the ids stay behind backlog_query.
+    t-9 shares a path with B-1 and is open (counted); t-8 shares one too but is done."""
     mod = _load_hook_module()
-    root = _synthetic_root(tmp_path, [
+    root = _store_root(tmp_path, [
         ("B-1", "bug", "open", "a/b.py", "exact", "location"),
-    ])
-    con = _connect(root)
-    _insert(con, [("t-9", "task", "todo", "other/z.py", "exact", "anchors")])
-    _insert(con, [("t-8", "task", "done", "other/y.py", "exact", "anchors")])
-    con.execute("insert into related(a_kind,a_id,b_kind,b_id,via,weight) "
-                "values ('bug','B-1','task','t-9','path',2)")
-    con.execute("insert into related(a_kind,a_id,b_kind,b_id,via,weight) "
-                "values ('task','t-8','bug','B-1','path',1)")
-    con.commit()
-    con.close()
+        ("B-1", "bug", "open", "other/z.py", "exact", "location"),
+        ("B-1", "bug", "open", "other/y.py", "exact", "location"),
+        ("t-9", "task", "todo", "other/z.py", "exact", "anchors"),
+        ("t-8", "task", "done", "other/y.py", "exact", "anchors"),
+    ], store_kind)
     assert mod.format_line("a/b.py", _resolve(mod, root, "a/b.py")) == (
         "TM: a/b.py → B-1 open (+1 related)")
 
