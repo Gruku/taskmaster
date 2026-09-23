@@ -93,14 +93,16 @@ def _text(root, *args, ok=(0,)):
 
 
 def repository(root):
-    """The Git top level must be the coordinator root (linked worktrees are step 9)."""
+    """`root` must be the Git top level of the checkout operated on (main or linked)."""
     _, top = _text(root, 'rev-parse', '--show-toplevel')
     if os.path.normcase(str(Path(top).resolve())) != os.path.normcase(str(Path(root).resolve())):
-        raise GitRefused('coordinator root is not the Git top level; linked checkouts are not managed yet')
+        raise GitRefused('checkout root is not the Git top level')
     _, git_dir = _text(root, 'rev-parse', '--absolute-git-dir')
     _, index = _text(root, 'rev-parse', '--git-path', 'index')
+    _, common = _text(root, 'rev-parse', '--git-common-dir')
     index_path = Path(index) if Path(index).is_absolute() else Path(root) / index
-    return {'git_dir': str(Path(git_dir)), 'index': str(index_path)}
+    common_path = Path(common) if Path(common).is_absolute() else Path(root) / common
+    return {'git_dir': str(Path(git_dir)), 'index': str(index_path), 'common_dir': str(common_path.resolve())}
 
 
 def snapshot(root, repo):
@@ -113,8 +115,10 @@ def snapshot(root, repo):
     except FileNotFoundError:
         digest = None
     git_dir = Path(repo['git_dir'])
-    candidates = ['index.lock', 'HEAD.lock'] + ([ref + '.lock'] if ref else [])
-    locks = [name for name in candidates if (git_dir / name).exists()]
+    # A linked worktree keeps its own index/HEAD; branch refs live in the common dir.
+    common = Path(repo.get('common_dir') or git_dir)
+    candidates = [(git_dir, 'index.lock'), (git_dir, 'HEAD.lock')] + ([(common, ref + '.lock')] if ref else [])
+    locks = [name for base, name in candidates if (base / name).exists()]
     # Worktree fingerprint: a checkout killed mid-unpack may have rewritten files
     # (and created new ones) before it ever updated the index or HEAD.
     _, status_raw = probe(root, 'status', '--porcelain=v1', '-z', '--untracked-files=normal')
@@ -145,12 +149,14 @@ def _variants(content):
             projection._digest(projection._crlf(content))}
 
 
-def generation(owner, through):
+def generation(owner, through, backlog=None):
     """The published generation and whether every file on disk still carries it.
 
     `through` is the barrier's synchronized target: a domain write committed after
-    the writer pause was released is not part of this generation."""
-    backlog = owner.root / '.taskmaster'
+    the writer pause was released is not part of this generation. `backlog` is the
+    participating checkout's projection directory (a linked worktree carries the
+    published bytes after its own synchronization)."""
+    backlog = owner.root / '.taskmaster' if backlog is None else backlog
     with closing(owner._connect(readonly=True)) as connection:
         connection.execute('BEGIN')
         rows = connection.execute("SELECT file,content_hash FROM projection WHERE file NOT LIKE 'local/%' "
@@ -174,13 +180,13 @@ def generation(owner, through):
             [rel for rel, _ in rows], mismatched)
 
 
-def _verify_tree(owner, marker):
+def _verify_tree(owner, marker, root=None):
     """Committed .taskmaster blobs must be the recorded generation's blobs, never
     whatever is on disk at reconcile time. None when nothing was recorded."""
     blobs = (marker.get('generation') or {}).get('blobs')
     if blobs is None:
         return None
-    _, raw = probe(owner.root, 'ls-tree', '-r', '-z', '--full-tree', 'HEAD', '--', '.taskmaster')
+    _, raw = probe(owner.root if root is None else root, 'ls-tree', '-r', '-z', '--full-tree', 'HEAD', '--', '.taskmaster')
     tree = {}
     for entry in raw.split(b'\0'):
         if not entry:
@@ -250,9 +256,28 @@ def _settled(owner, last):
 
 
 def status(owner):
+    from taskmaster.native import checkouts as store
+    with closing(owner._connect(readonly=True)) as connection:
+        known = {ident: {key: value for key, value in record.items() if key in ('path', 'linked', 'observed',
+                                                                               'generation', 'intent')}
+                 for ident, record in store.records(connection).items()}
+        for ident, record in known.items():
+            record['holds'] = {rel: reason for rel, (reason, _) in store.holds(connection, ident).items()}
     return {'pin': owner.git_pin, 'active': _public(read_state(owner, MARKER_KEY)),
             'last': read_state(owner, LAST_KEY), 'drift': read_state(owner, DRIFT_KEY),
-            'contained': jobs.supported()}
+            'checkouts': known, 'contained': jobs.supported()}
+
+
+def _checkout_of(owner, marker):
+    """The checkout a marker operated on; a replaced linked worktree is refused."""
+    from . import checkouts
+    recorded = marker.get('checkout') or {}
+    if not recorded.get('linked'):
+        return None
+    checkout = checkouts.resolve(owner.root, recorded['path'])
+    if checkout.id != recorded['id']:
+        raise GitRefused(f"the linked checkout {recorded['path']} was replaced since the operation started")
+    return checkout
 
 
 # ── Checkout drift (step 9 adds per-checkout bases; until then drift is held) ──
@@ -347,18 +372,19 @@ def _validate(kind, message, ref):
 QUIET_GIT = ['-c', 'gc.auto=0', '-c', 'maintenance.auto=false', '-c', 'core.fsmonitor=false']
 
 
-def _commands(owner, kind, files, message, ref, token, op_id):
-    git, root = [executable(), *QUIET_GIT], str(owner.root)
+def _commands(owner, kind, files, message, ref, token, op_id, checkout_root=None):
+    top = Path(owner.root if checkout_root is None else checkout_root)
+    git, root = [executable(), *QUIET_GIT], str(top)
     env = environment({TOKEN_ENV: token})
     if kind == 'checkout':
         return [{'argv': [*git, 'checkout', '--quiet', ref, '--'], 'cwd': root, 'env': env}]
-    _, raw = probe(owner.root, 'ls-files', '-z', '--full-name', '--', '.taskmaster')
+    _, raw = probe(top, 'ls-files', '-z', '--full-name', '--', '.taskmaster')
     tracked = {entry.decode('utf-8', 'surrogateescape') for entry in raw.split(b'\0') if entry}
     wanted = {f'.taskmaster/{rel}' for rel in files}
     # Tracked projection paths that the generation no longer contains (moves,
     # archives) are staged as deletions; local state is never staged.
     gone = {path for path in tracked - wanted
-            if not path.startswith('.taskmaster/local/') and not (owner.root / path).exists()}
+            if not path.startswith('.taskmaster/local/') and not (top / path).exists()}
     specs = base64.b64encode('\0'.join(f':(top,literal){path}' for path in sorted(wanted | gone))
                              .encode('utf-8')).decode('ascii')
     # `--only` with the same pathspec commits exactly the generation: whatever else
@@ -378,9 +404,11 @@ def _bounded_results(results):
     return kept
 
 
-def run(owner, *, kind, caller_scope, request_id, message=None, ref=None, timeout=GIT_TIMEOUT):
+def run(owner, *, kind, caller_scope, request_id, message=None, ref=None, timeout=GIT_TIMEOUT, worktree=None):
     request = _request(caller_scope, request_id)
     _validate(kind, message, ref)
+    if worktree is not None and (not isinstance(worktree, str) or not worktree):
+        raise ValueError('worktree must be an absolute checkout path')
     if type(timeout) not in (int, float) or not 1 <= timeout <= 3600:
         raise ValueError('managed Git timeout must be 1..3600 seconds')
     active = owner.git_active
@@ -398,7 +426,7 @@ def run(owner, *, kind, caller_scope, request_id, message=None, ref=None, timeou
         return {'state': 'pending', 'reason': 'publisher busy' + (
             '; a managed Git operation is in progress' if owner.git_active else '')}
     try:
-        return _run_held(owner, kind, request, message, ref, timeout)
+        return _run_held(owner, kind, request, message, ref, timeout, worktree)
     finally:
         owner.publication.release()
 
@@ -407,7 +435,7 @@ def _refused(reason, **extra):
     return dict(extra, state='refused', reason=reason)
 
 
-def _run_held(owner, kind, request, message, ref, timeout):
+def _run_held(owner, kind, request, message, ref, timeout, worktree=None):
     if owner.stopping.is_set():
         return _refused('coordinator stopping')
     if owner.git_pin is not None:
@@ -419,17 +447,29 @@ def _run_held(owner, kind, request, message, ref, timeout):
     settled = _receipt(owner, request)
     if settled is not None:
         return dict(settled, replayed=True)
+    from . import checkouts
     try:
-        repo = repository(owner.root)
-        before = snapshot(owner.root, repo)
+        # Step 9: a validated linked worktree of the same repository is managed like
+        # the main checkout; a different repository is refused (common-root mismatch).
+        checkout = checkouts.resolve(owner.root, worktree)
+        root = checkout.root
+        repo = repository(root)
+        before = snapshot(root, repo)
         if before['locks']:
             return _refused('Git lock present; another Git process may be running', locks=before['locks'])
+        if checkout.linked:
+            with closing(owner._connect(readonly=True)) as connection:
+                from taskmaster.native import checkouts as store
+                held = {rel: reason for rel, (reason, _) in store.holds(connection, checkout.id).items()}
+            if held:
+                return _refused('the linked checkout has held projection paths; resolve them first',
+                                paths=sorted(held)[:_KEPT])
         target = None
         if kind == 'checkout':
-            code, commit = _text(owner.root, 'rev-parse', '--verify', '-q', ref + '^{commit}', ok=(0, 1))
+            code, commit = _text(root, 'rev-parse', '--verify', '-q', ref + '^{commit}', ok=(0, 1))
             if code:
                 return _refused(f'unknown checkout target {ref!r}')
-            _, full = _text(owner.root, 'rev-parse', '--symbolic-full-name', ref, ok=(0, 1, 128))
+            _, full = _text(root, 'rev-parse', '--symbolic-full-name', ref, ok=(0, 1, 128))
             target = {'ref': ref, 'commit': commit, 'branch': full if full.startswith('refs/heads/') else None}
     except GitRefused as exc:
         return _refused(str(exc))
@@ -437,19 +477,20 @@ def _run_held(owner, kind, request, message, ref, timeout):
     # One coherent generation: import external edits, then publish through the
     # captured target. Later domain writes stay pending for the next generation.
     synced = owner.sync(caller_scope=f'git:{request[0]}'[:256], request_id=f'{op_id}:pre',
-                        import_files=True, through=0, files=None, take_file=False)
+                        import_files=True, through=0, files=None, take_file=False,
+                        **({'worktree': str(root)} if checkout.linked else {}))
     if synced.get('state') != 'synchronized':
         return _refused('projections are not synchronized; resolve the listed paths first', sync=synced)
-    gen, files, mismatched = generation(owner, synced.get('through', 0))
+    gen, files, mismatched = generation(owner, synced.get('through', 0), checkout.backlog)
     if mismatched:
         return _refused('projection files differ from the published generation', paths=mismatched[:_KEPT],
                         paths_omitted=max(0, len(mismatched) - _KEPT))
     token = secrets.token_hex(32)
     try:
-        commands = _commands(owner, kind, files, message, ref, token, op_id)
+        commands = _commands(owner, kind, files, message, ref, token, op_id, checkout_root=root)
         # Re-observed after the barrier published: reconciliation compares against
         # the state Git actually starts from, not the pre-publication tree.
-        before = snapshot(owner.root, repo)
+        before = snapshot(root, repo)
         if before['locks']:
             return _refused('Git lock present; another Git process may be running', locks=before['locks'])
     except GitRefused as exc:
@@ -459,7 +500,7 @@ def _run_held(owner, kind, request, message, ref, timeout):
               'job': jobs.new_name() if jobs.supported() else None,
               'identity': jobs.identity() if jobs.supported() else None,
               'token_hash': hashlib.sha256(token.encode()).hexdigest(), 'pre': before, 'generation': gen,
-              'target': target, 'started': time.time()}
+              'target': target, 'started': time.time(), 'checkout': checkout.public()}
     write_state(owner, marker=marker)  # durable before any child exists
     owner.git_active = marker
     try:
@@ -524,8 +565,10 @@ def _execute(owner, marker, commands, timeout):
 
 def reconcile(owner, marker, *, results=None, done=None):
     """Classify what Git did, from Git state alone; results only annotate."""
-    repo = repository(owner.root)
-    after = snapshot(owner.root, repo)
+    linked = _checkout_of(owner, marker)
+    root = owner.root if linked is None else linked.root
+    repo = repository(root)
+    after = snapshot(root, repo)
     pre, kind = marker['pre'], marker['kind']
     report = {'state': None, 'op_id': marker['op_id'], 'kind': kind, 'request': marker['request'],
               'pre': pre, 'post': after, 'notices': []}
@@ -545,12 +588,12 @@ def reconcile(owner, marker, *, results=None, done=None):
     if kind == 'commit':
         if after['head'] == pre['head'] and after['ref'] == pre['ref']:
             report['state'] = 'failed'
-        elif after['ref'] == pre['ref'] and after['head'] and _parents(owner.root, after['head']) == (
+        elif after['ref'] == pre['ref'] and after['head'] and _parents(root, after['head']) == (
                 [pre['head']] if pre['head'] else []):
             report['commit'] = after['head']
-            problems = _verify_tree(owner, marker)
+            problems = _verify_tree(owner, marker, root)
             report['generation_verified'] = problems == [] if problems is not None else None
-            if marker['op_id'] not in _trailer_ops(owner.root, after['head']):
+            if marker['op_id'] not in _trailer_ops(root, after['head']):
                 report['state'] = 'ambiguous'
                 report['notices'].append(f'HEAD moved by one commit that lacks this operation\'s {TRAILER} trailer '
                                          '(a concurrent commit?)')
@@ -600,8 +643,27 @@ def _parents(root, commit):
 
 def settle(owner, marker, report, *, recovered=False):
     """Clear the marker only for a reconciled completed/failed outcome."""
+    from . import checkouts
     drift = {}
-    if report['state'] == 'completed' and marker['kind'] == 'checkout':
+    linked = None
+    marked_linked = bool((marker.get('checkout') or {}).get('linked'))
+    if report['state'] in ('completed', 'failed') and marked_linked:
+        try:
+            linked = _checkout_of(owner, marker)
+        except (GitRefused, OSError, ValueError) as exc:
+            report['notices'].append(f'linked checkout could not be observed after the operation: {exc}'[:500])
+    if marked_linked and linked is None:
+        pass  # never judge the main checkout by a linked operation's outcome
+    elif report['state'] == 'completed' and marker['kind'] == 'checkout' and linked is not None:
+        # A linked checkout holds its own drift; the main checkout is not affected.
+        drift = checkouts.checkout_drift(owner, linked)
+        report['drift'] = {'state': 'pending' if drift else 'clean', 'count': len(drift),
+                           'paths': sorted(drift)[:200], 'checkout': linked.public()}
+        if drift:
+            report['notices'].append(f'{len(drift)} projection file(s) in {linked.root} differ from its base after '
+                                     f'checkout; {checkouts.LINKED_DRIFT}')
+        drift = {}
+    elif report['state'] == 'completed' and marker['kind'] == 'checkout':
         # The checked-out bytes are drift, not rollback authority: record, never import.
         drift = checkout_drift(owner)
         report['drift'] = {'state': 'pending' if drift else 'clean', 'count': len(drift),
@@ -611,11 +673,13 @@ def settle(owner, marker, report, *, recovered=False):
                                      f'checkout; {DRIFT_GUIDANCE}')
     if report['state'] in ('completed', 'failed'):
         last = dict(report, recovered=recovered, settled=time.time())
-        if marker['kind'] == 'checkout' and report['state'] == 'completed':
+        if marker['kind'] == 'checkout' and report['state'] == 'completed' and not marked_linked:
             state = {'op_id': marker['op_id'], 'target': marker.get('target'), 'files': drift}
             write_state(owner, marker=None, drift=state if drift else None, **_settled(owner, last))
         else:
             write_state(owner, marker=None, **_settled(owner, last))
+        if linked is not None or not marked_linked:
+            _remember(owner, linked)
         owner.git_pin = None
         owner.export_needed.set()
         return last
@@ -626,21 +690,51 @@ def settle(owner, marker, report, *, recovered=False):
     return report
 
 
+def _remember(owner, linked):
+    """Step 10: the HEAD a settled operation left is observed, so the next sync does
+    not mistake a managed commit or checkout for a bypassed one."""
+    from . import checkouts
+    try:
+        checkout = linked or checkouts.optional_main(owner.root)
+        if checkout is not None:
+            checkouts.remember(owner, checkout, checkouts.observe(checkout))
+    except (GitRefused, OSError) as exc:
+        LOG.warning('checkout observation not recorded: %s', exc)
+
+
 # ── Recovery ───────────────────────────────────────────────────────────────
 
-def recover(owner, *, acknowledge_quiescent=False, accept_outcome=False, release_drift=False, timeout=None):
+def recover(owner, *, acknowledge_quiescent=False, accept_outcome=False, release_drift=False, timeout=None,
+            worktree=None):
     """Prove the recorded child boundary is over, reconcile, then (maybe) clear."""
+    from . import checkouts
+    if worktree is not None and not release_drift:
+        raise ValueError('worktree applies only to release_drift')
     acquired = owner.publication.acquire(timeout=-1 if timeout is None else timeout)
     if not acquired:
         return {'state': 'pending', 'reason': 'publisher busy'}
     try:
         marker = read_state(owner, MARKER_KEY)
+        linked = None
+        if worktree is not None:
+            try:
+                linked = checkouts.resolve(owner.root, worktree)
+            except GitRefused as exc:
+                raise ValueError(str(exc)) from None
+            linked = linked if linked.linked else None
+        if linked is not None:
+            # A linked checkout is a view: releasing adopts the published generation
+            # for its held/unbased paths (the observed bytes become the base the next
+            # publication replaces). Independent of any main-checkout marker.
+            return {'state': 'clear', 'released_drift': checkouts.release(owner, linked),
+                    'checkout': linked.public()}
         if marker is None:
             released = None
             if release_drift:
                 # Explicit: ordinary sync may now import (or repair) these paths.
                 released = sorted((read_state(owner, DRIFT_KEY) or {}).get('files') or {})
                 write_state(owner, drift=None)
+                checkouts.release_main(owner, released)
             owner.git_pin = None
             owner.export_needed.set()
             result = {'state': 'clear', 'last': read_state(owner, LAST_KEY), 'drift': read_state(owner, DRIFT_KEY)}

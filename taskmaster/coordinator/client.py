@@ -196,7 +196,9 @@ class Client:
         return self.call('flush', through=through)
 
     def sync(self, *, import_files=True, through=0, files=None, take_file=False,
-             caller_scope='explicit-sync', request_id=None):
+             caller_scope='explicit-sync', request_id=None, worktree=None):
+        """`worktree` names a linked checkout of this repository: its edits are imported
+        against its own bases and the published generation is copied into it."""
         from taskmaster.native.sync import validate_input
         request_id = uuid.uuid4().hex if request_id is None else request_id
         options = dict(import_files=import_files, through=through, files=files, take_file=take_file)
@@ -204,7 +206,8 @@ class Client:
         if not all(isinstance(value, str) and 1 <= len(value) <= 256 for value in (caller_scope, request_id)):
             raise ValueError('sync requires caller_scope and request_id')
         try:
-            return self.call('sync', caller_scope=caller_scope, request_id=request_id, **options)
+            extra = {} if worktree is None else {'worktree': str(Path(worktree).resolve())}
+            return self.call('sync', caller_scope=caller_scope, request_id=request_id, **options, **extra)
         except ServiceUnavailable as exc:
             raise type(exc)(f'{exc}; inspect sync_status or retry the same sync id; '
                             f'request_id={request_id!r}, caller_scope={caller_scope!r}',
@@ -214,7 +217,8 @@ class Client:
     def sync_status(self, caller_scope, request_id):
         return self.call('sync_status', caller_scope=caller_scope, request_id=request_id)
 
-    def git_run(self, *, kind, message=None, ref=None, caller_scope='explicit-git', request_id=None, timeout=600):
+    def git_run(self, *, kind, message=None, ref=None, caller_scope='explicit-git', request_id=None, timeout=600,
+                worktree=None):
         """Managed commit/checkout under the coordinator's publication hold.
 
         A retry with the same request_id never repeats Git: it answers
@@ -223,8 +227,9 @@ class Client:
         if not all(isinstance(value, str) and 1 <= len(value) <= 256 for value in (caller_scope, request_id)):
             raise ValueError('managed Git requires caller_scope and request_id')
         try:
+            extra = {} if worktree is None else {'worktree': str(Path(worktree).resolve())}
             return self.call('git_run', kind=kind, message=message, ref=ref, caller_scope=caller_scope,
-                             request_id=request_id, timeout=timeout)
+                             request_id=request_id, timeout=timeout, **extra)
         except ServiceUnavailable as exc:
             raise type(exc)(f'{exc}; inspect git_status or retry the same request; '
                             f'request_id={request_id!r}, caller_scope={caller_scope!r}',
@@ -234,8 +239,9 @@ class Client:
     def git_status(self):
         return self.call('git_status')
 
-    def git_recover(self, *, acknowledge_quiescent=False, accept_outcome=False, release_drift=False):
-        return self.call('git_recover', acknowledge_quiescent=acknowledge_quiescent, accept_outcome=accept_outcome,
+    def git_recover(self, *, acknowledge_quiescent=False, accept_outcome=False, release_drift=False, worktree=None):
+        extra = {} if worktree is None else {'worktree': str(Path(worktree).resolve())}
+        return self.call('git_recover', **extra, acknowledge_quiescent=acknowledge_quiescent, accept_outcome=accept_outcome,
                          release_drift=release_drift)
 
     def cancel(self, caller_scope, request_id):

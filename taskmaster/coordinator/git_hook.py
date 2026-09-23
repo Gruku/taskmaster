@@ -50,7 +50,12 @@ def check(root) -> tuple[bool, str]:
     staged = [path for path in staged if not path.startswith('.taskmaster/local/')]
     if not staged:
         return True, 'no projection files staged'
-    store = root / '.taskmaster' / 'local' / 'store.db'
+    # A linked worktree has no store of its own: the authority is the main checkout,
+    # found through the common Git dir (never "no native store" for a linked commit).
+    common = Path(_git(root, 'rev-parse', '--git-common-dir').decode('utf-8', 'replace').strip())
+    common = common if common.is_absolute() else root / common
+    main_root = common.resolve().parent
+    store = main_root / '.taskmaster' / 'local' / 'store.db'
     if not store.exists():
         return True, 'no native store'
     try:

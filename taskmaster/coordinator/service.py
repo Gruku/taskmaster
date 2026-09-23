@@ -382,7 +382,8 @@ class Coordinator:
         if method == 'sync':
             return self.sync(caller_scope=message.get('caller_scope'), request_id=message.get('request_id'),
                              import_files=message.get('import_files', True), through=message.get('through', 0),
-                             files=message.get('files'), take_file=message.get('take_file', False))
+                             files=message.get('files'), take_file=message.get('take_file', False),
+                             worktree=message.get('worktree'))
         if method == 'sync_status':
             from .sync_worker import operation_scope
             from taskmaster.native.sync import operation_state
@@ -421,7 +422,7 @@ class Coordinator:
             timeout = message.get('timeout', git.GIT_TIMEOUT)
             return git.run(self, kind=message.get('kind'), caller_scope=message.get('caller_scope'),
                            request_id=message.get('request_id'), message=message.get('message'),
-                           ref=message.get('ref'), timeout=timeout)
+                           ref=message.get('ref'), timeout=timeout, worktree=message.get('worktree'))
         if method == 'git_status':
             from . import git
             return git.status(self)
@@ -431,7 +432,8 @@ class Coordinator:
             if any(type(flag) is not bool for flag in flags):
                 raise ValueError('git_recover flags must be boolean')
             return git.recover(self, acknowledge_quiescent=flags[0], accept_outcome=flags[1],
-                               release_drift=flags[2], timeout=git.PUBLICATION_TIMEOUT)
+                               release_drift=flags[2], timeout=git.PUBLICATION_TIMEOUT,
+                               worktree=message.get('worktree'))
         if method == 'shutdown':
             self.stop()
             return {'state': 'stopping'}

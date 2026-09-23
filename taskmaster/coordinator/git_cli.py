@@ -5,7 +5,8 @@ committed or checked out only under the coordinator's publication pin.
     python -m taskmaster.coordinator.git_cli checkout REF [--request-id ID]
     python -m taskmaster.coordinator.git_cli status
     python -m taskmaster.coordinator.git_cli recover [--acknowledge-quiescent] [--accept-outcome] [--release-drift]
-Prints JSON. Exit 0 only for completed/clear outcomes.
+Run inside a linked worktree (or pass --worktree) to operate on that checkout; the
+store is always the main checkout's. Prints JSON. Exit 0 only for completed/clear outcomes.
 """
 from __future__ import annotations
 
@@ -20,7 +21,9 @@ OK_STATES = {'completed', 'clear', 'accepted'}
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--root', type=Path, default=Path.cwd())
+    parser.add_argument('--root', type=Path, default=None, help='main checkout (default: resolved from cwd)')
+    parser.add_argument('--worktree', type=Path, default=None,
+                        help='linked checkout to operate on (default: the checkout containing cwd)')
     parser.add_argument('--timeout', type=int, default=600)
     commands = parser.add_subparsers(dest='command', required=True)
     commit = commands.add_parser('commit')
@@ -39,19 +42,26 @@ def main(argv=None):
                          help='let ordinary sync import/repair paths a managed checkout left drifted')
     args = parser.parse_args(argv)
     from .client import Client
-    client = Client(args.root, timeout=args.timeout + 60)
+    from taskmaster.root import _git_checkout_root, resolve_root
+    root = args.root or resolve_root(Path.cwd()).root
+    worktree = args.worktree or _git_checkout_root(Path.cwd())
+    if worktree is not None and Path(worktree).resolve() == Path(root).resolve():
+        worktree = None
+    client = Client(root, timeout=args.timeout + 60)
     if args.command in ('commit', 'checkout'):
         # Print the id first: a lost response is recovered by retrying it, never by re-running Git.
         request_id = args.request_id or uuid.uuid4().hex
         print(json.dumps({'request_id': request_id}), file=sys.stderr)
         result = client.git_run(kind=args.command, message=getattr(args, 'message', None),
-                                ref=getattr(args, 'ref', None), request_id=request_id, timeout=args.timeout)
+                                ref=getattr(args, 'ref', None), request_id=request_id, timeout=args.timeout,
+                                worktree=worktree)
     elif args.command == 'status':
         result = client.git_status()
         result = dict(result, state='clear' if result['active'] is None and result['pin'] is None else 'pinned')
     else:
         result = client.git_recover(acknowledge_quiescent=args.acknowledge_quiescent,
-                                    accept_outcome=args.accept_outcome, release_drift=args.release_drift)
+                                    accept_outcome=args.accept_outcome, release_drift=args.release_drift,
+                                    worktree=worktree if args.release_drift else None)
     print(json.dumps(result, indent=2, default=str))
     return 0 if result.get('state') in OK_STATES else 1
 
