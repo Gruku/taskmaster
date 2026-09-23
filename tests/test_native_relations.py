@@ -39,7 +39,7 @@ def test_selective_derived_matches_full_oracle_under_domain_and_random_edits():
             before, before_body, before_deleted = state[kind, ident]
             after = dict(before, anchors=[rng.choice(choices) for _ in range(rng.randrange(4))],
                          location=[rng.choice(choices) for _ in range(rng.randrange(3))],
-                         links=[{"type": rng.choice(["relates_to", "depends_on", "blocks"]), "target": rng.choice(["T-0", "T-1", "missing"])}])
+                         links=[{"type": rng.choice(["relates_to", "depends_on", "blocks"]), "target": rng.choice(["T-0", "T-1", "missing", "H-1"])}])
             if kind == "handover":
                 after["task_ids"] = [rng.choice(["T-0", "T-1", "T-2"]) for _ in range(rng.randrange(5))]
             deleted = rng.randrange(8) == 0
@@ -51,6 +51,14 @@ def test_selective_derived_matches_full_oracle_under_domain_and_random_edits():
             maintain(native, kind, ident, before if not before_deleted else None, after if not deleted else None,
                      before_body=before_body, after_body=body)
             assert derived(native) == derived(oracle), (kind, ident)
+            # Both incremental paths also equal the legacy full rebuild, so a link
+            # written before its target (H-1 deleted, then live) cannot drift.
+            with closing(sqlite3.connect(':memory:', isolation_level=None)) as full:
+                full.row_factory = sqlite3.Row
+                oracle.backup(full)
+                everything = {(r[0], r[1]) for r in full.execute('SELECT kind,id FROM entities')}
+                fake_store._refresh_derived(SimpleNamespace(connection=full, _derived_keys=everything))
+                assert derived(full) == derived(oracle), ('full rebuild', kind, ident)
             state[kind, ident] = (after, body, deleted)
 
 
