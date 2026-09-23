@@ -128,3 +128,76 @@ def test_members_survive_coordinator_handle_close_while_helper_holds_job(tmp_pat
     finally:
         child.close()
     assert child.process.wait(timeout=10) == jobs.RETIRED_EXIT_CODE
+
+
+BASE = getattr(sys, '_base_executable', sys.executable)
+# A venv-style launcher: it starts the real interpreter as its own child and waits.
+LAUNCHER = 'import subprocess,sys; sys.exit(subprocess.Popen(sys.argv[1:], close_fds=False).wait())'
+
+
+def test_helper_is_the_assigned_process_not_a_launcher(tmp_path):
+    """H1: the process we assign must be the helper itself (no venv launcher between)."""
+    child = ManagedChild(jobs.new_name())
+    try:
+        child.start()
+        child.assign()
+        child.permit([{'argv': [BASE, '-I', '-S', '-c', 'import os; print(os.getppid())'], 'cwd': str(tmp_path),
+                       'env': dict(os.environ)}])
+        done, results = child.results(30)
+        assert done and results[0]['returncode'] == 0, results
+        assert int(results[0]['stdout'].strip()) == child.process.pid
+        assert child.retire(10)
+    finally:
+        child.close()
+
+
+def test_helper_outside_its_job_never_runs_a_command(tmp_path):
+    """H1: a launcher assigned after it already started the real helper leaves the helper
+    outside the job; the helper must verify membership itself and refuse."""
+    ran = tmp_path / 'ran'
+    child = ManagedChild(jobs.new_name(), launcher=[BASE, '-I', '-S', '-c', LAUNCHER])
+    try:
+        child.start()
+        time.sleep(0.5)  # delayed assignment: the real helper already exists
+        child.assign()
+        child.permit([python(tmp_path, 'import pathlib,sys; pathlib.Path(sys.argv[1]).touch()', ran)])
+        done, results = child.results(30)
+        assert done and results and results[0].get('returncode') is None, results
+        assert 'not inside its managed job' in results[0]['error']
+        assert not ran.exists()
+        assert child.retire(10)
+    finally:
+        child.close()
+    assert not ran.exists()
+
+
+def test_inherited_job_handle_is_query_only():
+    """M6: the helper's handle can prove membership but cannot terminate or reassign."""
+    job = jobs.Job.create(jobs.new_name())
+    try:
+        duplicate = job.inheritable()
+        try:
+            api = jobs._load()
+            assert jobs.current_process_in(duplicate) is False
+            assert not api.kernel.TerminateJobObject(duplicate, 1)
+            assert api.c.get_last_error() == 5  # ERROR_ACCESS_DENIED
+        finally:
+            jobs.close_handle(duplicate)
+    finally:
+        job.close()
+
+
+def test_recovery_access_is_query_and_terminate_only():
+    """L2: recovery opens the job with exactly what retire needs."""
+    assert jobs._JOB_ACCESS == 0x0004 | 0x0008
+
+
+def test_unassigned_helper_exits_when_membership_is_unprovable(monkeypatch):
+    """L5: before assignment is known, an IsProcessInJob failure must not hold forever."""
+    from taskmaster.coordinator import git_helper
+
+    def broken(handle):
+        raise OSError(6, 'invalid handle')
+    monkeypatch.setattr(jobs, 'current_process_in', broken)
+    with pytest.raises(SystemExit):
+        git_helper._hold_or_exit(1234, assigned=False)

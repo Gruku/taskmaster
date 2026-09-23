@@ -15,7 +15,8 @@ ERROR_FILE_NOT_FOUND = 2
 ERROR_INVALID_NAME = 123
 _KILL_ON_JOB_CLOSE = 0x2000
 _DIE_ON_UNHANDLED_EXCEPTION = 0x400
-_JOB_ACCESS = 0x0004 | 0x0008 | 0x0010 | 0x00100000  # query, terminate, set attributes, synchronize
+_JOB_QUERY = 0x0004
+_JOB_ACCESS = _JOB_QUERY | 0x0008  # recovery needs only query + terminate
 _NAME_PREFIX = 'Local\\taskmaster-git-'
 RETIRED_EXIT_CODE = 0x7A5C
 
@@ -238,11 +239,14 @@ class Job:
             time.sleep(0.02)
 
     def inheritable(self):
-        """A temporary inheritable duplicate for one helper launch; caller closes it."""
+        """A temporary inheritable, query-only duplicate for one helper launch; caller closes it.
+
+        Query is all the helper needs (IsProcessInJob); a hook that somehow reached this
+        handle could neither terminate the job nor assign other processes to it."""
         api = _load()
         current = api.kernel.GetCurrentProcess()
         duplicate = api.w.HANDLE()
-        if not api.kernel.DuplicateHandle(current, self.handle, current, api.c.byref(duplicate), 0, True, 2):
+        if not api.kernel.DuplicateHandle(current, self.handle, current, api.c.byref(duplicate), _JOB_QUERY, True, 0):
             raise _error(api, 'DuplicateHandle')
         return duplicate.value
 

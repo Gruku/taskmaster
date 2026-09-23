@@ -3,6 +3,8 @@ an owned boundary, and prove that boundary empty before publication resumes.
 
 Launch order is the containment proof: create the private job, start the hidden
 helper blocked on an owned pipe, assign it, and only then grant permission.
+The helper is the real interpreter (never a venv launcher) started isolated, and it
+re-verifies its own membership before running anything.
 POSIX has no equivalent tested boundary yet; there it is honestly `contained=False`.
 """
 from __future__ import annotations
@@ -20,9 +22,29 @@ from . import job as jobs
 MAX_LINE = 16 * 1024 * 1024
 
 
+# The helper imports only the standard library and this package. It is started
+# isolated (-I: no PYTHON* variables, no user site; -S: no site/.pth code), so
+# nothing but interpreter start-up runs before it is assigned to the job.
+_BOOTSTRAP = ('import sys; sys.path.insert(0, sys.argv[1]); '
+              'from taskmaster.coordinator.git_helper import main; main(sys.argv[2:])')
+
+
+def interpreter():
+    """The real interpreter. A venv's python.exe on Windows is a launcher that starts the
+    base interpreter as its own child, so assigning the launcher would leave the helper
+    (and Git) outside the job."""
+    base = getattr(sys, '_base_executable', None)
+    return base if base and Path(base).is_file() else sys.executable
+
+
+def helper_argv(package_root):
+    return [interpreter(), '-I', '-S', '-c', _BOOTSTRAP, str(package_root)]
+
+
 class ManagedChild:
-    def __init__(self, job_name, *, checkpoint=None):
+    def __init__(self, job_name, *, checkpoint=None, launcher=None):
         self.job_name = job_name
+        self.launcher = list(launcher or [])  # tests only: simulate an interposed launcher
         self.checkpoint = checkpoint or (lambda stage: None)
         self.contained = jobs.supported()
         self.job = None
@@ -32,10 +54,8 @@ class ManagedChild:
 
     def start(self):
         package_root = Path(__file__).resolve().parents[2]
-        environment = dict(os.environ)
-        environment['PYTHONPATH'] = str(package_root) + (os.pathsep + environment['PYTHONPATH']
-                                                         if environment.get('PYTHONPATH') else '')
-        argv = [sys.executable, '-m', 'taskmaster.coordinator.git_helper']
+        environment = {key: value for key, value in os.environ.items() if not key.upper().startswith('PYTHON')}
+        argv = self.launcher + helper_argv(package_root)
         options = dict(cwd=package_root, env=environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                        stderr=subprocess.DEVNULL)
         if self.contained:
@@ -65,8 +85,15 @@ class ManagedChild:
                     self.lines.put(json.loads(line))
                 except ValueError:
                     self.lines.put({'error': 'malformed helper output'})
-        except OSError:
+        except (OSError, ValueError):
             pass
+        finally:
+            # The pipe is released on every path once the helper is gone, including
+            # after an unproven retirement that recovery later completes.
+            try:
+                stream.close()
+            except OSError:
+                pass
         self.lines.put(None)
 
     def assign(self):
@@ -122,15 +149,16 @@ class ManagedChild:
         return quiet
 
     def _reap(self):
-        for stream in (self.process.stdin, self.process.stdout):
-            try:
-                stream.close()
-            except OSError:
-                pass
+        try:
+            self.process.stdin.close()
+        except OSError:
+            pass
         try:
             self.process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             pass
+        if self.reader is not None:
+            self.reader.join(5)  # EOF follows the helper's exit; the reader closes stdout
 
     def close(self):
         """Close our handles. On Windows the job's kill-on-close retires any member left."""

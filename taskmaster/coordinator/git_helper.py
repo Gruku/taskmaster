@@ -4,6 +4,8 @@ has placed it inside its private job and explicitly granted permission.
 stdin is an anonymous pipe owned by the coordinator. EOF before the permission
 line never launches Git: an unassigned helper exits, an assigned one keeps
 waiting (holding its job) so a replacement coordinator can prove and retire it.
+Before running anything it verifies its own job membership: the coordinator can
+only verify the process it started, and an interposed launcher would not be us.
 """
 from __future__ import annotations
 
@@ -20,17 +22,34 @@ OUTPUT_LIMIT = 64 * 1024
 READER_GRACE = 2
 
 
-def _hold_or_exit(job_handle):
-    """The coordinator is gone. Stay inside a recoverable job; never outlive one silently."""
+def _member(job_handle):
+    """True/False, or None when membership cannot be determined."""
+    from . import job
+    try:
+        return job.current_process_in(job_handle)
+    except OSError:
+        return None
+
+
+def _hold_or_exit(job_handle, *, assigned):
+    """The coordinator is gone. Stay inside a recoverable job; never outlive one silently.
+
+    `assigned` is True once membership is known. Before that, unprovable membership
+    exits rather than holding forever: an unassigned helper pins nothing recoverable."""
     if job_handle is not None:
-        from . import job
-        try:
-            member = job.current_process_in(job_handle)
-        except OSError:
-            member = True  # unprovable: keep the handle so recovery can decide
-        if member:
+        member = _member(job_handle)
+        if member or (member is None and assigned):
             threading.Event().wait()  # retired only by TerminateJobObject
     sys.exit(0)
+
+
+def _drain_and_hold(job_handle, *, assigned):
+    try:
+        while sys.stdin.buffer.read(65536):
+            pass
+    except OSError:
+        pass
+    _hold_or_exit(job_handle, assigned=assigned)
 
 
 def _bounded(stream, sink):
@@ -96,10 +115,20 @@ def main(argv=None):
     args = parser.parse_args(argv)
     line = sys.stdin.buffer.readline(MAX_PLAN_BYTES)
     if not line.endswith(b'\n'):
-        _hold_or_exit(args.job_handle)  # EOF (or oversize) before permission: never launch
+        _hold_or_exit(args.job_handle, assigned=False)  # EOF (or oversize) before permission: never launch
     plan = json.loads(line)
     if plan.get('permit') is not True:
-        _hold_or_exit(args.job_handle)
+        _hold_or_exit(args.job_handle, assigned=False)
+    if args.job_handle is not None:
+        # The coordinator verified the process it assigned; prove that process is
+        # really this one (no launcher in between) before anything can start Git.
+        member = _member(args.job_handle)
+        if member is not True:
+            reason = ('helper is not inside its managed job; nothing was launched' if member is False
+                      else 'helper job membership cannot be verified; nothing was launched')
+            _emit({'index': 0, 'returncode': None, 'error': reason})
+            _emit({'done': True})
+            _drain_and_hold(args.job_handle, assigned=member is None)
     for index, command in enumerate(plan['commands']):
         try:
             result = run(command)
@@ -109,9 +138,7 @@ def main(argv=None):
         if result.get('returncode') != 0:
             break
     _emit({'done': True})
-    while sys.stdin.buffer.read(65536):
-        pass
-    _hold_or_exit(args.job_handle)
+    _drain_and_hold(args.job_handle, assigned=True)
 
 
 if __name__ == '__main__':
