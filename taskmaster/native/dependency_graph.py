@@ -40,78 +40,94 @@ def _in_tree(alias: str) -> str:
             "AND json_type(o.epic_json)='text')")
 
 
-def _tree_key(ident: str) -> str:
-    return (f"(SELECT t.entity_key FROM entity_core t WHERE t.kind='task' AND t.public_id={ident} "
-            f"AND t.deleted=0 AND {_in_tree('t')})")
-
-
-# Tree tasks whose readable `depends_on` names the id: the reverse index, not a scan.
-_DEPENDENTS = ("SELECT DISTINCT c.public_id FROM dependencies x JOIN entity_core c ON c.entity_key=x.entity_key "
-               f"WHERE x.target_kind='task' AND x.target_id=? AND {_ROW} "
+# Tree tasks whose readable `depends_on` names one of the ids: the reverse index
+# `ix_dependencies_target` on (target_kind, target_id), probed once per id.
+_DEPENDENTS = ("SELECT x.target_id,c.public_id FROM dependencies x JOIN entity_core c ON c.entity_key=x.entity_key "
+               f"WHERE x.target_kind='task' AND x.target_id IN (SELECT value FROM json_each(?)) AND {_ROW} "
                f"AND c.kind='task' AND c.deleted=0 AND {_in_tree('c')} AND {_readable('c.entity_key')}")
-
-# Rows (id, entity_key or NULL when missing, hops, reached-from). UNION dedups
-# whole rows, so a cycle stops at the depth cap and the row count is bounded by
-# hops x depth.
-_UPSTREAM = ("WITH RECURSIVE walk(id,key,depth,parent) AS (SELECT ?,?,0,NULL UNION "
-             f"SELECT json_extract(x.value_json,'$'),{_tree_key(_TARGET)},w.depth+1,w.id "
-             f"FROM walk w JOIN dependencies x ON x.entity_key=w.key {_SHAPE} "
-             f"WHERE w.key IS NOT NULL AND w.depth<? AND {_ID_ROW} AND {_readable('w.key')}) "
-             "SELECT id,key,depth,parent FROM walk")
-_DOWNSTREAM = ("WITH RECURSIVE walk(id,key,depth,parent) AS (SELECT ?,?,0,NULL UNION "
-               "SELECT c.public_id,c.entity_key,w.depth+1,w.id FROM walk w "
-               f"JOIN dependencies x ON x.target_kind='task' AND x.target_id=w.id AND {_ROW} "
-               "JOIN entity_core c ON c.entity_key=x.entity_key "
-               f"WHERE w.depth<? AND c.kind='task' AND c.deleted=0 AND {_in_tree('c')} "
-               f"AND {_readable('c.entity_key')}) "
-               "SELECT id,key,depth,parent FROM walk")
+# The declared ids of each task, by primary key, in declared order.
+_DECLARED = (f"SELECT x.entity_key,{_TARGET} FROM dependencies x {_SHAPE} "
+             f"WHERE x.entity_key IN (SELECT value FROM json_each(?)) AND {_ID_ROW} ORDER BY x.entity_key,x.ordinal")
+# The tasks among `ids` whose `depends_on` cannot be read.
 _UNREADABLE = (f"SELECT DISTINCT x.entity_key FROM dependencies x {_SHAPE} "
                f"WHERE x.entity_key IN (SELECT value FROM json_each(?)) AND {_UNREADABLE_ROW}")
+# Which of the ids are tree tasks, by the (kind, public_id) unique index.
+# CROSS JOIN pins the ids as the outer loop: the planner otherwise may prefer
+# the (kind, status) index and walk every task.
+_RESOLVE = ("SELECT t.public_id,t.entity_key FROM json_each(?) j CROSS JOIN entity_core t "
+            f"ON t.kind='task' AND t.public_id=j.value WHERE t.deleted=0 AND {_in_tree('t')}")
+PROGRESS_INSTRUCTIONS = 10_000
+
+
+def _ids(values) -> str:
+    return json.dumps(list(values))
 
 
 def dependents(connection, ident: str) -> list[str]:
     """Ids of the tree tasks that declare `ident` as a dependency, in no order."""
-    return [row[0] for row in connection.execute(_DEPENDENTS, (ident,))]
+    return list(dict.fromkeys(source for _target, source in connection.execute(_DEPENDENTS, (_ids([ident]),))))
 
 
-def tree_key(connection, ident: str):
-    return connection.execute("SELECT " + _tree_key("?"), (ident,)).fetchone()[0]
+def _resolve(connection, ids) -> dict:
+    return dict(connection.execute(_RESOLVE, (_ids(ids),)))
+
+
+def _upstream_level(connection, frontier: dict, level: int, result) -> dict:
+    """Follow every frontier task's declared ids at once; answers the next frontier."""
+    by_key = {key: ident for ident, key in frontier.items()}
+    unreadable = {key for (key,) in connection.execute(_UNREADABLE, (_ids(by_key),))}
+    result.unreadable.update(by_key[key] for key in unreadable)
+    reached = []
+    for key, target in connection.execute(_DECLARED, (_ids(by_key),)):
+        if key in unreadable:
+            continue
+        result.edges.add((by_key[key], target))
+        if target not in result.distance:
+            result.distance[target] = level
+            reached.append(target)
+    keys = _resolve(connection, reached) if reached else {}
+    result.missing.update(ident for ident in reached if ident not in keys)
+    return {ident: keys[ident] for ident in reached if ident in keys}
+
+
+def _downstream_level(connection, frontier: dict, level: int, result) -> dict:
+    reached = {}
+    for target, source in connection.execute(_DEPENDENTS, (_ids(frontier),)):
+        result.edges.add((target, source))
+        if source not in result.distance:
+            result.distance[source] = level
+            reached[source] = None
+    return reached
 
 
 def traverse(connection, root: str, depth: int, direction: str, deadline) -> dependency_chain.Walk:
-    """One direction of `backlog_dependencies(depth=N)` as a recursive CTE, under
-    the traversal deadline as the connection's progress handler."""
+    """One direction of `backlog_dependencies(depth=N)`: a breadth-first walk with
+    one indexed query per frontier, so every task is expanded once however many
+    paths reach it. The traversal deadline is the connection's progress handler,
+    so it interrupts a running statement, and is checked again between levels."""
     result = dependency_chain.Walk(root, {root: 0})
-    sql = _UPSTREAM if direction == "upstream" else _DOWNSTREAM
-    connection.set_progress_handler(deadline, 10_000)
+    step = _upstream_level if direction == "upstream" else _downstream_level
+    connection.set_progress_handler(deadline, PROGRESS_INSTRUCTIONS)
     try:
-        values = connection.execute(sql, (root, tree_key(connection, root), depth)).fetchall()
+        frontier = {root: _resolve(connection, [root]).get(root)}
+        for level in range(1, depth + 1):
+            if not frontier:
+                break
+            frontier = step(connection, frontier, level, result)
+            if deadline():
+                break
     except sqlite3.OperationalError:
         if not deadline.expired:
             raise
-        values = []
     finally:
         connection.set_progress_handler(None, 0)
-    if deadline():
-        result.timed_out = True
-        return result
-    keys = {}
-    for ident, key, hops, parent in values:
-        if hops < result.distance.get(ident, hops + 1):
-            result.distance[ident] = hops
-        if parent is not None:
-            result.edges.add((parent, ident))
-        if key is None:
-            result.missing.add(ident)
-        else:
-            keys[ident] = key
-    if direction == "upstream":
-        followed = {keys[n]: n for n, hops in result.distance.items() if hops < depth and n in keys}
-        for (key,) in connection.execute(_UNREADABLE, (json.dumps(sorted(followed)),)):
-            result.unreadable.add(followed[key])
+    if deadline.expired or deadline():
+        return dependency_chain.Walk(root, {root: 0}, timed_out=True)
     return result
 
 
 def explain_statements():
-    """The reverse lookups, for a test to hold to the target index."""
-    return [(_DEPENDENTS, ("x",)), (_DOWNSTREAM, ("x", 1, 2))]
+    """Every traversal statement, with the index constraint its plan must show."""
+    ids = _ids(["x", "y"])
+    return [(_DEPENDENTS, (ids,), "target_id=?"), (_DECLARED, (_ids([1, 2]),), "entity_key=?"),
+            (_UNREADABLE, (_ids([1, 2]),), "entity_key=?"), (_RESOLVE, (ids,), "public_id=?")]

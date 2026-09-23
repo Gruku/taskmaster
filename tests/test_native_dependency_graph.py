@@ -48,6 +48,9 @@ def _seed_graph():
         _add(title)                                                # 009..019
     for title in ("Cycle a", "Cycle b", "Cycle c"):
         _add(title, epic="other")                                  # other-002..004
+    for title in ("K1", "K2", "K3", "K4", "K5", "Diamond top", "Diamond left", "Diamond right",
+                  "Diamond bottom"):
+        _add(title, epic="other")                                  # other-005..013
     _set("test-epic-003", depends_on=["test-epic-002", "test-epic-001", "test-epic-002"])
     _set("test-epic-004", depends_on=["test-epic-003", "ghost-9"])
     _set("test-epic-005", depends_on=["test-epic-005", "test-epic-004"])
@@ -65,14 +68,20 @@ def _seed_graph():
     _set("other-002", depends_on=["other-004"])
     _set("other-003", depends_on=["other-002"])
     _set("other-004", depends_on=["other-003", "test-epic-005"])
+    clique = [f"other-{n:03d}" for n in range(5, 10)]
+    for ident in clique:
+        _set(ident, depends_on=[other for other in clique if other != ident])
+    _set("other-010", depends_on=["other-011", "other-012"])
+    _set("other-011", depends_on=["other-013"])
+    _set("other-012", depends_on=["other-013"])
     bs.backlog_archive_task(task_id="test-epic-006", reason="deprecated")
     bs.backlog_archive_task(task_id="test-epic-007", reason="deprecated")
     _legacy_row("test-epic-019", "epic=?", "ghost-epic")
     _legacy_row("test-epic-017", "deleted=1")
 
 
-IDS = [f"test-epic-{n:03d}" for n in range(1, 20)] + ["other-001", "other-002", "other-003",
-                                                        "other-004", "ghost-9", "nope"]
+IDS = ([f"test-epic-{n:03d}" for n in range(1, 20)] + [f"other-{n:03d}" for n in range(1, 14)]
+       + ["ghost-9", "nope"])
 
 
 @pytest.fixture(scope="module")
@@ -152,17 +161,40 @@ def test_output_cap_truncates_identically(graph, monkeypatch):
     assert "Truncated: showing 2 of " in answer
 
 
-def test_deadline_is_reported_identically(graph, monkeypatch):
-    from taskmaster import dependency_chain
-    monkeypatch.setattr(dependency_chain, "DEADLINE_S", 0.0)
-    answer, _ = graph.same("backlog_dependencies", task_id="test-epic-005", depth=3)
-    assert "not completed — traversal exceeded 0 s" in answer
-
-
 @pytest.mark.parametrize("depth", [0, -1, 11, True, 2.0, "2"])
-def test_invalid_depth_is_refused_identically(graph, depth):
+def test_invalid_depth_is_refused_identically_by_direct_calls(graph, depth):
     answer, _ = graph.same("backlog_dependencies", task_id="test-epic-001", depth=depth)
     assert answer == "Error: depth must be an integer from 1 to 10"
+
+
+def _call_tool(arguments):
+    import asyncio
+    from fastmcp.exceptions import ToolError, ValidationError
+    try:
+        result = asyncio.run(bs.mcp.call_tool("backlog_dependencies", arguments))
+    except (ToolError, ValidationError) as exc:
+        return "refused: " + str(exc)
+    return "".join(block.text for block in result.content)
+
+
+@pytest.mark.parametrize("depth", [True, "2", 2.0, 0, 11])
+def test_mcp_refuses_a_non_integer_depth_rather_than_coercing_it(graph, depth):
+    for root in (graph.legacy, graph.native):
+        with graph.at(root):
+            answer = _call_tool({"task_id": "test-epic-005", "depth": depth})
+        if type(depth) is int:
+            assert answer == "Error: depth must be an integer from 1 to 10", answer
+        else:
+            assert answer.startswith("refused: ") and "depth" in answer, answer
+            assert "Transitive" not in answer
+
+
+def test_mcp_depth_matches_the_direct_call(graph):
+    for root in (graph.legacy, graph.native):
+        with graph.at(root):
+            direct = bs.backlog_dependencies(task_id="test-epic-005", depth=3)
+            assert _call_tool({"task_id": "test-epic-005", "depth": 3}) == direct
+            assert _call_tool({"task_id": "test-epic-005"}) == bs.backlog_dependencies(task_id="test-epic-005")
 
 
 def test_native_dependencies_never_enumerate_tasks(graph, monkeypatch):
@@ -177,13 +209,43 @@ def test_native_dependencies_never_enumerate_tasks(graph, monkeypatch):
             assert "Unblocks" in bs.backlog_dependencies(task_id="test-epic-003", depth=depth)
 
 
-def test_reverse_lookups_use_the_target_index(graph):
+def test_every_traversal_statement_probes_an_index_by_equality(graph):
+    """The driving table of each step is searched by equality on the ids it is
+    handed, and nothing but the id list itself is scanned."""
     from taskmaster.native import dependency_graph
     with native_connection(graph.native) as connection:
-        for sql, args in dependency_graph.explain_statements():
-            plan = " ".join(row[-1] for row in connection.execute("EXPLAIN QUERY PLAN " + sql, args))
-            assert "ix_dependencies_target" in plan, plan
-            assert "SCAN x" not in plan and "SCAN dependencies" not in plan, plan
+        for sql, args, constraint in dependency_graph.explain_statements():
+            plan = [row[-1] for row in connection.execute("EXPLAIN QUERY PLAN " + sql, args)]
+            driving = next(step for step in plan if step.startswith(("SEARCH x ", "SEARCH t ")))
+            assert constraint in driving, plan
+            scans = [step for step in plan if step.startswith("SCAN")]
+            assert scans and all(step.startswith(("SCAN json_each ", "SCAN j ")) for step in scans), plan
+        target = next(sql for sql, _args, constraint in dependency_graph.explain_statements()
+                      if constraint == "target_id=?")
+        plan = [row[-1] for row in connection.execute("EXPLAIN QUERY PLAN " + target, ('["x"]',))]
+        assert plan[0] == "SEARCH x USING INDEX ix_dependencies_target (target_kind=? AND target_id=?)", plan
+        resolve = next(sql for sql, _args, constraint in dependency_graph.explain_statements()
+                       if constraint == "public_id=?")
+        plan = [row[-1] for row in connection.execute("EXPLAIN QUERY PLAN " + resolve, ('["x"]',))]
+        assert "SEARCH t USING INDEX sqlite_autoindex_entity_core_1 (kind=? AND public_id=?)" in plan, plan
+
+
+def test_viewer_related_never_loads_the_task_tree(graph, monkeypatch):
+    from taskmaster.native_routing import reads, viewer
+
+    def refuse(*_args, **_kwargs):
+        raise AssertionError("the related panel loaded the task tree")
+    page = reads.page
+
+    def page_without_tasks(snapshot, kind, **kwargs):
+        if kind == "task":
+            refuse()
+        return page(snapshot, kind, **kwargs)
+    monkeypatch.setattr(reads, "tree", refuse)
+    monkeypatch.setattr(reads, "page", page_without_tasks)
+    with graph.at(graph.native):
+        answer = viewer.related(viewer.database(), "test-epic-003")
+    assert [row["id"] for row in answer["unblocks"]] == ["test-epic-004", "other-001"]
 
 
 def _related(graph, root, ident):
@@ -203,3 +265,168 @@ def test_viewer_dependency_half_matches(graph):
         for key in ("dependencies", "unblocks"):
             assert native[key] == legacy[key], (ident, key)
 
+
+
+# ── Shapes at scale: identical answers, each task expanded once ─────────────
+
+
+def _native_graph(tasks):
+    """An in-memory native store holding just these tasks, all in epic `e`."""
+    from taskmaster.native import migrate, schema
+    connection = sqlite3.connect(":memory:", isolation_level=None)
+    connection.execute("BEGIN")
+    schema.create_schema(connection)
+    connection.execute("INSERT INTO entity_core(kind,public_id,revision,last_seq) VALUES('epic','e',1,1)")
+    for task in tasks:
+        connection.execute("INSERT INTO entity_core(kind,public_id,revision,last_seq,title_json,status_json) "
+                           "VALUES('task',?,1,1,?,'\"todo\"')", (task["id"], migrate.encode(task["title"])))
+        key = connection.execute("SELECT entity_key FROM entity_core WHERE kind='task' AND public_id=?",
+                                 (task["id"],)).fetchone()[0]
+        connection.execute("INSERT INTO task_operational(entity_key,epic_json) VALUES(?,'\"e\"')", (key,))
+        migrate._put_relations(connection, key, "task", {"depends_on": task["depends_on"]})
+    connection.execute("COMMIT")
+    connection.execute("BEGIN")
+    return connection
+
+
+def _tasks(deps):
+    return [{"id": ident, "title": ident.upper(), "status": "todo", "depends_on": value}
+            for ident, value in deps.items()]
+
+
+def _clique(k):
+    return {f"c{i}": [f"c{j}" for j in range(k) if j != i] for i in range(k)}
+
+
+def _hub(n):
+    deps = {"r": [], "h": [f"a{i}" for i in range(n)]}
+    deps.update({f"a{i}": ["r"] for i in range(n)})
+    deps.update({f"b{j}": ["h"] for j in range(n)})
+    return deps
+
+
+def _diamonds(levels):
+    """Stacked diamonds: every level doubles the paths to the bottom, never the tasks."""
+    deps = {"d0": []}
+    for level in range(1, levels + 1):
+        deps[f"l{level}"] = [f"d{level - 1}"]
+        deps[f"r{level}"] = [f"d{level - 1}"]
+        deps[f"d{level}"] = [f"l{level}", f"r{level}"]
+    return deps
+
+
+def _star(n):
+    deps = {"r": []}
+    deps.update({f"t{i}": ["r"] for i in range(n)})
+    return deps
+
+
+SHAPES = {"clique-20": (_clique(20), "c0"), "clique-60": (_clique(60), "c0"), "hub-300": (_hub(300), "r"),
+          "hub-300-up": (_hub(300), "h"), "diamonds-12": (_diamonds(12), "d12"),
+          "diamonds-12-down": (_diamonds(12), "d0"), "star-2000": (_star(2000), "r")}
+
+
+@pytest.mark.parametrize("shape", sorted(SHAPES))
+@pytest.mark.parametrize("depth", [3, 10])
+def test_graph_shapes_answer_identically_well_inside_the_deadline(shape, depth):
+    import time
+    from taskmaster import dependency_chain
+    from taskmaster.native import dependency_graph
+    deps, root = SHAPES[shape]
+    tasks = _tasks(deps)
+    connection = _native_graph(tasks)
+    try:
+        for direction in ("upstream", "downstream"):
+            started = time.perf_counter()
+            native = dependency_graph.traverse(connection, root, depth, direction, dependency_chain.Deadline())
+            native_s = time.perf_counter() - started
+            legacy = dependency_chain.tree_walk(tasks, root, depth, direction, dependency_chain.Deadline())
+            assert not native.timed_out and not legacy.timed_out
+            assert native_s < 0.5, (shape, direction, native_s)
+
+            def describe(ident):
+                return ident.upper(), "todo"
+            assert (dependency_chain.lines(direction, native, depth, describe, checks=True)
+                    == dependency_chain.lines(direction, legacy, depth, describe, checks=True))
+            assert (native.distance, native.edges, native.missing, native.unreadable) == \
+                   (legacy.distance, legacy.edges, legacy.missing, legacy.unreadable)
+    finally:
+        connection.close()
+
+
+def test_one_hop_dependents_of_a_star_centre_are_an_index_probe():
+    import time
+    from taskmaster.native import dependency_graph
+    connection = _native_graph(_tasks(_star(2000)))
+    try:
+        started = time.perf_counter()
+        found = dependency_graph.dependents(connection, "r")
+        assert time.perf_counter() - started < 0.5
+        assert sorted(found) == sorted(f"t{i}" for i in range(2000))
+    finally:
+        connection.close()
+
+
+class _Tripwire:
+    """A deadline that expires on its first check, recording who checked it."""
+
+    def __init__(self, seconds=None):
+        import sys
+        self._frame = sys._getframe
+        self.expired, self.checked_by = False, None
+
+    def __call__(self):
+        if self.checked_by is None:
+            self.checked_by = self._frame(1).f_code.co_name
+        self.expired = True
+        return 1
+
+
+def test_the_deadline_interrupts_a_running_native_statement():
+    from taskmaster import dependency_chain
+    from taskmaster.native import dependency_graph
+    tasks = _tasks(_star(2000))
+    connection = _native_graph(tasks)
+    try:
+        native_deadline, legacy_deadline = _Tripwire(), _Tripwire()
+        native = dependency_graph.traverse(connection, "r", 3, "downstream", native_deadline)
+        legacy = dependency_chain.tree_walk(tasks, "r", 3, "downstream", legacy_deadline)
+    finally:
+        connection.close()
+    # The first check came from SQLite's progress handler inside a level's query.
+    assert native_deadline.checked_by in ("_downstream_level", "_resolve"), native_deadline.checked_by
+    assert native.timed_out and legacy.timed_out
+    rendered = [dependency_chain.lines("downstream", w, 3, None, checks=False) for w in (native, legacy)]
+    assert rendered[0] == rendered[1] == [
+        f"\n**Transitive downstream (depth 2–3):** not completed — traversal exceeded {dependency_chain.DEADLINE_S:g} s"]
+
+
+def test_an_expired_deadline_reads_the_same_through_the_tool(graph, monkeypatch):
+    from taskmaster import dependency_chain
+    monkeypatch.setattr(dependency_chain, "Deadline", _Tripwire)
+    answer, _ = graph.same("backlog_dependencies", task_id="test-epic-005", depth=3)
+    assert "**Transitive upstream (depth 2–3):** not completed — traversal exceeded 5 s" in answer
+    assert "**Transitive downstream (depth 2–3):** not completed — traversal exceeded 5 s" in answer
+
+
+# ── Intentional difference: an unrelated unreadable `order` ─────────────────
+
+
+def _seed_bad_order():
+    _add("Needed")
+    _add("Needs it", depends_on="test-epic-001")
+    _add("Unrelated")
+    _set("test-epic-003", order=None)
+    _legacy_row("test-epic-003", "doc=json_set(doc,'$.order',json('null'))")
+
+
+def test_native_answers_where_legacy_raises_on_an_unrelated_null_order(tmp_path, monkeypatch):
+    """Recorded in the N02 spec: the legacy scan sorts every task and raises on an
+    unrelated task's `order: null`; the native reverse lookup never reads it."""
+    twins = make_twins(tmp_path, monkeypatch, _seed_bad_order)
+    with twins.at(twins.legacy):
+        with pytest.raises(TypeError):
+            bs.backlog_dependencies(task_id="test-epic-001")
+    with twins.at(twins.native):
+        answer = bs.backlog_dependencies(task_id="test-epic-001")
+    assert "- `test-epic-002` — Needs it (todo)" in answer

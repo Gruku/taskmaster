@@ -33,9 +33,14 @@ entity commands. `/api/tasks/validate` and `/api/bugs/pattern-scan` are queries
 despite using POST. Other entity POST/PUT/PATCH routes are command adapters.
 
 Explicit additive changes since the freeze (N14): `backlog_dependencies` gained an
-optional `depth` (int, default 1). `depth=1` is the frozen answer byte for byte on
+optional `depth` (strict int, default 1; over MCP a boolean, string or float is
+refused by validation, never coerced). `depth=1` is the frozen answer byte for byte on
 both stores; 2..10 appends bounded transitive sections (200 tasks per direction,
 5 s deadline, cycles and truncation reported), identical on legacy and native.
+Intentional difference: when an *unrelated* task has an unreadable `order` (e.g.
+`null`), legacy `backlog_dependencies` raises while sorting every task; native
+answers, because its reverse index never reads that task. Pinned by
+`tests/test_native_dependency_graph.py::test_native_answers_where_legacy_raises_on_an_unrelated_null_order`.
 
 ## Behavioral contract sources and acceptance matrix
 

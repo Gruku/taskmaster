@@ -4,9 +4,10 @@
 """Bounded transitive dependency traversal: the shared walk result and its rendering.
 
 Each store gathers a `Walk` its own way — the legacy store with `walk()` over its
-in-memory task tree, the native store with a recursive CTE over the canonical
-`dependencies` table — and both render through `lines()`, so a parity difference
-can only come from gathering, never from presentation.
+in-memory task tree (`tree_walk`), the native store level by level with one
+indexed query per frontier over the canonical `dependencies` table — and both
+render through `lines()`, so a parity difference can only come from gathering,
+never from presentation.
 
 Semantics, per direction:
 - Distance is the shortest hop count from the root. Hops of distance 1 are the
@@ -93,6 +94,28 @@ def walk(root, depth, neighbours, exists, deadline) -> Walk:
     if deadline():
         result.timed_out = True
     return result
+
+
+def tree_walk(tasks, root, depth, direction, deadline) -> Walk:
+    """`walk` over a loaded task list, the legacy store's way: every task is read
+    through the one `depends_on` normaliser, and the first task with an id wins."""
+    from taskmaster.native import blockers
+    by_id, dependents = {}, {}
+    for task in tasks:
+        by_id.setdefault(task["id"], task)
+    for task in tasks:
+        declared = blockers.declared_dependencies(task)
+        if not isinstance(declared, blockers.Unknown):
+            for ident in dict.fromkeys(declared):
+                dependents.setdefault(ident, []).append(task["id"])
+
+    def upstream(ident):
+        declared = blockers.declared_dependencies(by_id[ident])
+        return None if isinstance(declared, blockers.Unknown) else declared
+
+    def downstream(ident):
+        return dependents.get(ident, [])
+    return walk(root, depth, upstream if direction == "upstream" else downstream, by_id.__contains__, deadline)
 
 
 def _first_cycle(result: Walk):
