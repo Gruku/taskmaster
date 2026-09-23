@@ -259,6 +259,8 @@ EXERCISES = {
     ("backlog_query", None): lambda: bs.backlog_query(sql="SELECT kind,id FROM entities ORDER BY kind,id"),
     ("backlog_store_status", None): lambda: bs.backlog_store_status(),
     ("backlog_validate", None): lambda: bs.backlog_validate(),
+    ("backlog_index_status", None): lambda: [bs.backlog_index_status(), bs.backlog_index_status(verify=True),
+                                             bs.backlog_index_status(rebuild=True)],
     ("backlog_project_init", None): lambda: bs.backlog_project_init(name="Gate project"),
     ("backlog_project_set", None): lambda: bs.backlog_project_set(
         yaml_content="schema_version: 1\nmeta: {name: Gate, slug: gate, kind: app}\n"),

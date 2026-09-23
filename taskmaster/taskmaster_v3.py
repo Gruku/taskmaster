@@ -630,6 +630,18 @@ REVERSE_TYPE: dict[str, str] = {
 }
 LINK_TYPES: tuple[str, ...] = tuple(REVERSE_TYPE.keys())
 
+# Every kind a derived `links` row can record for an endpoint (the stored entity
+# kinds; `task` is also the fallback for an unresolved target). Both stores list
+# them so a lookup by target id alone still seeks `ix_links_dst(dst_kind,dst_id)`.
+LINK_ENDPOINT_KINDS: tuple[str, ...] = (
+    "task", "epic", "phase", "handover", "issue", "bug", "decision", "idea", "note",
+    "area", "tracker", "backlog", "project")
+# Declared links recorded against a target id, under any kind: one written before
+# its target existed carries the `task` fallback until the target is created.
+LINKS_TO_ID_SQL = (
+    "SELECT src_kind,src_id,type,dst_kind FROM links WHERE dst_kind IN ("
+    + ",".join("?" for _ in LINK_ENDPOINT_KINDS) + ") AND dst_id=? AND derived=0")
+
 # Entity-kind dispatch by ID prefix. Longest prefix wins (IDEA before I-).
 ENTITY_KIND_BY_PREFIX: dict[str, str] = {
     "T":    "task",

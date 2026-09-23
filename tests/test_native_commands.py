@@ -227,7 +227,8 @@ def test_native_admission_does_not_read_unrelated_meta_payloads(native):
         assert all("WHERE" in sql for sql in statements if "FROM meta" in sql)
 
 
-GRAPH_INDEXES = ("ix_entity_paths_structural", "ix_entity_paths_glob_literal", "ix_handover_tasks_task")
+GRAPH_INDEXES = ("ix_entity_paths_structural", "ix_entity_paths_glob_literal", "ix_handover_tasks_task",
+                 "ix_entity_core_public_id")
 
 
 def _graph_indexes(connection):

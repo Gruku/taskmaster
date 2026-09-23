@@ -2686,15 +2686,23 @@ def _render_derived_report(status: dict, db_file: Path) -> str:
 
 
 @mcp.tool()
-def backlog_index_status(rebuild: bool = False) -> str:
+def backlog_index_status(rebuild: bool = False, verify: bool = False) -> str:
     """Report the state of the store's derived tables (FTS, paths, links, related).
 
     They live in `.taskmaster/local/store.db` beside the authoritative rows and are
-    refreshed inside the transaction of every tool call, so they are never stale.
+    refreshed inside the transaction of every tool call; `rebuild` recomputes them
+    from the entity rows should they ever drift.
 
     Args:
         rebuild: Recompute every derived table from the entity rows before reporting.
-            The authoritative tables are not touched and no file is re-read.
+            The authoritative tables are not touched and no file is re-read. On a
+            native store this is the graph repair and covers only `entity_paths`,
+            `links`, `handover_tasks` and `related` (not search): they are compared
+            with the full oracle and only the differing rows are replaced, in one
+            transaction.
+        verify: Native stores only. Compare the graph tables with the full oracle
+            and report the differences and the cost, changing nothing. Refused on
+            a legacy store, with or without `rebuild`.
     """
     bp = _backlog_path()
     if not bp.exists():
@@ -2702,6 +2710,10 @@ def backlog_index_status(rebuild: bool = False) -> str:
         # project that has no backlog yet, and must not open a store beside one
         # that does not exist. `rebuild=True` has nothing to rebuild either.
         return f"no backlog found at {bp}"
+    if verify:
+        return ("Error: verify=True checks a native store's graph tables against the full oracle; "
+                "this legacy store has no separate verifier. Use rebuild=True to recompute every "
+                "derived table. Nothing was changed.")
     st = _store()
     if rebuild:
         # Derived rows only: `entities`, `changes` and `projection` are the

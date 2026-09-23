@@ -9,7 +9,7 @@ from functools import lru_cache
 from types import UnionType
 from typing import Any, Union, get_args, get_origin, get_type_hints
 from taskmaster import taskmaster_v3 as domain
-from . import documents, linear_outbox, projection, sync, workflow
+from . import documents, graph_repair, linear_outbox, projection, sync, workflow
 
 BUILDERS = {"decision": domain.build_decision_doc, "bug": domain.build_bug_doc,
             "issue": domain.build_issue_doc, "idea": domain.build_idea_doc, "handover": domain.build_handover_doc}
@@ -32,7 +32,9 @@ CREATE_EXTRAS = {"auto_link"}
 # as the tools do (`auto_link_on_save`).
 AUTO_LINKED = {"issue", "idea", "handover"}
 # `projection.resolve` keeps the store's version of a flagged projection file (N11 S10).
-OPERATIONS = ENTITY_OPERATIONS | workflow.OPERATIONS | documents.OPERATIONS | linear_outbox.OPERATIONS | sync.OPERATIONS | {projection.RESOLVE}
+# `graph.repair` is the explicit graph-table repair maintenance operation (N14).
+OPERATIONS = (ENTITY_OPERATIONS | workflow.OPERATIONS | documents.OPERATIONS | linear_outbox.OPERATIONS
+              | sync.OPERATIONS | graph_repair.OPERATIONS | {projection.RESOLVE})
 
 
 def _accepts(value, annotation):
@@ -65,6 +67,8 @@ def validate(operation, arguments):
         return documents.validate(operation, arguments)
     if operation == projection.RESOLVE:
         return projection.validate_resolve(arguments)
+    if operation in graph_repair.OPERATIONS:
+        return graph_repair.validate(operation, arguments)
     kind, action = operation.split(".")
     if action == "create":
         parameters = dict(arguments)
@@ -150,6 +154,8 @@ def apply(transaction, operation, arguments):
         return documents.apply(transaction, operation, arguments)
     if operation == projection.RESOLVE:
         return projection.apply_resolve(transaction, arguments)
+    if operation in graph_repair.OPERATIONS:
+        return graph_repair.apply(transaction, operation, arguments)
     kind, action = operation.split(".")
     if action == "create":
         options = dict(arguments)

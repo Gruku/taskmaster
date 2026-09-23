@@ -184,6 +184,30 @@ def _verify(connection, source):
     return hashlib.sha256(encode(source).encode("utf-8")).hexdigest()
 
 
+def repair_graph_for_activation(connection):
+    """Bring the inherited graph tables to the full oracle, once, as native takes over.
+
+    The legacy store's `entity_paths`/`links`/`handover_tasks`/`related` rows arrive
+    as they are, including any drift its incremental maintenance left, and a store
+    activated from them must verify clean. Those rows belong to legacy until the
+    authority switches, and backfill is a repeatable staging step, so the repair runs
+    only inside the activation transaction, after `authority` has been set to
+    `native` there: a crash rolls the switch and the repair back together.
+    """
+    from . import graph_repair
+    from .queries import Snapshot
+    if not connection.in_transaction:
+        raise RuntimeError("the activation graph repair must run inside the activation transaction")
+    state = dict(connection.execute("SELECT key,value FROM native_manifest WHERE key IN "
+                                    "('authority','store_id','event_high_water')"))
+    if state.get("authority") != "native":
+        raise UnsupportedStoreError("the graph tables belong to legacy until native becomes the authority")
+    neighbourhood.ensure_indexes(connection)
+    report = graph_repair.repair(Snapshot(connection, state))
+    return {"repaired": report["repaired"], "rows_compared": report["rows_compared"], "seconds": report["seconds"],
+            "differences": sum(t["missing"] + t["spurious"] for t in report["tables"].values())}
+
+
 def backfill(connection: sqlite3.Connection, *, checkpoint=lambda stage: None) -> dict:
     """Atomically stage, compare, and mark verified; reject any active caller tx.
 

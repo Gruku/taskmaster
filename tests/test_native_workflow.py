@@ -787,13 +787,15 @@ NATIVE_MAPPING = {
     # N13 step 7: resync imports the documents through the coordinator's sync barrier.
     "backlog_handover_resync": ["sync.begin", "sync.apply", "sync.finish"],
     "backlog_issue_resync": ["sync.begin", "sync.apply", "sync.finish"],
+    # N14 step 6: `rebuild=True` on a native store is the graph repair.
+    "backlog_index_status": ["graph.repair"],
 }
 DEFERRED = {
     # Maintenance and migration tools own the whole store, not one entity; they
     # stay on the legacy writer until the N15 migration rehearsal.
     "backlog_init": "N15", "backlog_migrate_v3": "N15", "backlog_migrate_v4": "N15",
     "backlog_canonicalize_layout": "N15", "backlog_backfill_lanes": "N15",
-    "backlog_index_status": "N15", "backlog_validate": "N15",
+    "backlog_validate": "N15",
     # Resolving a file flagged because it and the store both changed (6.0.3,
     # B-089) is projection reconciliation, owned by the N11 outbox.
     "backlog_resolve_conflict": "N11",

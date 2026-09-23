@@ -200,7 +200,8 @@ nothing tracks the file, and also when there is no store yet, since a hook
 never builds one. `backlog_query(sql, limit)` runs guarded read-only SQL
 directly over the store for ad hoc lookups, `backlog_search` ranks across every
 entity kind through the store's FTS, and `backlog_index_status` reports the
-derived tables and rebuilds them on demand.
+derived tables and rebuilds them on demand (on a native store, `verify=True`
+checks the graph tables against the full oracle without changing them).
 
 ## Built-in workflows
 

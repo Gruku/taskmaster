@@ -69,6 +69,8 @@ def validate_operation(operation, arguments, *, in_batch=False):
             raise ValueError('Linear queue operations require their own durable receipts')
         if in_batch and operation in lifecycle.sync.OPERATIONS:
             raise ValueError('sync imports require their own manifest preconditions and durable receipts')
+        if in_batch and operation in lifecycle.graph_repair.OPERATIONS:
+            raise ValueError('graph repair is a whole-store maintenance command and runs on its own')
         lifecycle.validate(operation, arguments)
 
 

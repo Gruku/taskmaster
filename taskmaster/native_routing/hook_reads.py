@@ -57,8 +57,12 @@ def admit(connection: sqlite3.Connection):
 
 
 def revision(connection: sqlite3.Connection) -> int:
+    """The dedupe revision: the event high water plus the count of row-changing graph
+    repairs. A repair rewrites `entity_paths` without an event; both terms only grow,
+    so any commit or repair yields a larger value than every earlier one."""
     row = connection.execute("SELECT MAX(seq) FROM domain_events").fetchone()
-    return int(row[0]) if row and row[0] is not None else 0
+    repairs = connection.execute("SELECT value FROM native_manifest WHERE key='graph_repairs'").fetchone()
+    return (int(row[0]) if row and row[0] is not None else 0) + (int(repairs[0]) if repairs else 0)
 
 
 def neighbours(connection: sqlite3.Connection, kind: str, ident: str) -> set:
