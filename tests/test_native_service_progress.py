@@ -2,6 +2,7 @@
 from contextlib import closing
 import json
 import sqlite3
+import threading
 
 import pytest
 
@@ -22,6 +23,23 @@ def test_cumulative_progress_check_excludes_later_rows_but_includes_seed_zero(th
         assert not progress.owes_through(connection, through)
         progress._put(connection, progress_pending_key(0, 0), {'ts': '', 'text': 'Earlier seed'})
         assert progress.owes_through(connection, through)
+
+
+def _holding(lock, action):
+    held, done = threading.Event(), threading.Event()
+
+    def hold():
+        with lock:
+            held.set()
+            done.wait(10)
+    thread = threading.Thread(target=hold, daemon=True)
+    thread.start()
+    assert held.wait(10)
+    try:
+        return action()
+    finally:
+        done.set()
+        thread.join(10)
 
 
 @pytest.mark.parametrize('debt', ['completion', 'seed_row', 'legacy_list', 'unseeded'])
@@ -57,10 +75,17 @@ def test_later_barrier_cannot_hide_earlier_progress_debt(root, monkeypatch, debt
         later = client.execute(request(client, key='later-unrelated-write'))['receipt']['commit_seq']
         # First settle ordinary entity/derived projection debt. This second
         # barrier must still observe PROGRESS even when no other file is owed.
-        client.flush(later)
+        settled = client.flush(later)
+        assert settled == {'state': 'pending', 'through': later, 'notices': [progress.NOTICE]}, settled
         barrier = owner.flush(later, timeout=0)
         assert barrier['state'] == 'pending'
         assert any('local/PROGRESS.md' in notice for notice in barrier['notices'])
+        # The background exporter retries owed PROGRESS about once a second and
+        # holds publication while it does; a barrier that loses that race is
+        # still a later barrier and must not hide the debt behind "busy".
+        busy = _holding(owner.publication, lambda: owner.flush(later, timeout=0))
+        assert busy['state'] == 'pending' and 'export pending: publisher busy' in busy['notices'], busy
+        assert progress.NOTICE in busy['notices'], busy
         monkeypatch.setattr(progress._Writer, '_take', take)
         assert client.flush(later)['state'] == 'exported'
         with closing(connect(root, readonly=True)) as connection:

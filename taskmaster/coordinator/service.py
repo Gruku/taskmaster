@@ -287,7 +287,13 @@ class Coordinator:
             return {'state': 'pending', 'through': through, 'notices': ['export pending: coordinator stopping']}
         deadline = time.monotonic() + timeout
         if not self.publication.acquire(timeout=max(0, timeout)):
-            return {'state': 'pending', 'through': through, 'notices': ['export pending: publisher busy']}
+            # The background pass that holds publication retries owed PROGRESS;
+            # losing that race must not hide the debt from this barrier.
+            notices = ['export pending: publisher busy']
+            with closing(self._connect(readonly=True)) as connection:
+                if progress.owes_through(connection, through):
+                    notices.append(progress.NOTICE)
+            return {'state': 'pending', 'through': through, 'notices': notices}
         try:
             if self.stopping.is_set():
                 return {'state': 'pending', 'through': through, 'notices': ['export pending: coordinator stopping']}
