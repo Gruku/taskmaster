@@ -158,11 +158,12 @@ def generation(owner, through, backlog=None):
     participating checkout's projection directory (a linked worktree carries the
     published bytes after its own synchronization).
 
-    A file whose fresh lstat fingerprint still carries digests recorded from a checked
-    read (sync_files.Scan) is judged by them, blob ids included; any miss is read."""
+    Every file is read in full (never judged by a cached fingerprint): the generation
+    is what a commit records, and an in-place rewrite that restores size and mtime
+    would otherwise pass. The verified reads refresh the sync fingerprint cache."""
     from . import sync_files
     backlog = owner.root / '.taskmaster' if backlog is None else backlog
-    scan = sync_files.open_scan(owner.root, backlog)
+    scan = sync_files.open_scan(owner.root, backlog, fast=False)
     with closing(owner._connect(readonly=True)) as connection:
         connection.execute('BEGIN')
         rows = connection.execute("SELECT file,content_hash FROM projection WHERE file NOT LIKE 'local/%' "

@@ -814,7 +814,9 @@ def detect(owner, checkout: Checkout, selected, drift, *, scan=None) -> tuple[di
     for rel in selected:
         if rel in drift or rel.startswith('local/') or (not checkout.linked and rel in skipped):
             continue
-        hit = _recorded(scan, rel)
+        # A fresh lstat, taken after HEAD was observed: a file Git rewrote between
+        # discovery and this observation must not be judged by discovery's lstat.
+        hit = _recorded(scan, rel, fresh=True)
         if hit is not None:
             expected = known.get(rel)
             if (expected in hit.variants if expected is not None else

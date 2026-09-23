@@ -399,14 +399,7 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
                     rel, _, reason = notice.removeprefix('sync pending: ').partition(': ')
                     pending(rel, reason)
                 selected = []
-            if observation is not None and files is None and not moved:
-                # Only a full sync advances the observation, and only while HEAD is still
-                # where classification saw it (an older observation re-detects, never skips).
-                try:
-                    if checkouts.observe(observed_checkout) == observation:
-                        checkouts.remember(owner, observed_checkout, observation)
-                except (GitRefused, OSError) as exc:
-                    result['warnings'].append(f'checkout observation not recorded: {exc}'[:500])
+            completion_pending = False
             with closing(owner._connect(readonly=True)) as connection:
                 held = set(projection.flagged_files(connection)) | set(projection.drift_files(connection))
                 held.update(row[0] for row in connection.execute('SELECT file FROM projection WHERE quarantined=1'))
@@ -438,9 +431,21 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
                         if expected is None and not exists:
                             continue  # a recorded move/tombstone requires absence
                         if expected is None or expected[0] not in variants:
+                            completion_pending = True
                             pending(rel, 'file differs from the published generation at completion')
                     except (OSError, ValueError) as exc:
+                        completion_pending = True
                         pending(rel, str(exc))
+            if observation is not None and files is None and not moved and not completion_pending:
+                # Only a full sync advances the observation, only while HEAD is still where
+                # classification saw it (an older observation re-detects, never skips), and
+                # never past a file the completion check could not confirm: the next sync
+                # must judge it against the movement that may have put it there.
+                try:
+                    if checkouts.observe(observed_checkout) == observation:
+                        checkouts.remember(owner, observed_checkout, observation)
+                except (GitRefused, OSError) as exc:
+                    result['warnings'].append(f'checkout observation not recorded: {exc}'[:500])
         finally:
             owner.execution.release()
             owner.resume_writer()
