@@ -301,3 +301,50 @@ def test_same_name_worktree_cycles_forget_the_replaced_checkout(repo, monkeypatc
         git(repo, 'worktree', 'add', '-q', '-b', 'cycle-last', str(path))
         assert client.sync(worktree=path)['state'] == 'synchronized'
         assert len(_linked_records(owner)) == 1
+
+
+# ── M5: the hook finds the store for submodules and separate git dirs ──────
+
+def _configure(path):
+    for key, value in (('user.name', 'Taskmaster Tests'), ('user.email', 'tests@example.invalid'),
+                       ('commit.gpgsign', 'false'), ('core.autocrlf', 'false')):
+        git(path, 'config', key, value)
+
+
+@pytest.mark.parametrize('layout', ['separate-git-dir', 'submodule'])
+def test_hook_resolves_the_store_of_the_checkout_itself(root, tmp_path, layout):
+    from native_git_helpers import init_repo
+    from taskmaster.coordinator import git_hook
+    assert (root / '.taskmaster' / 'local' / 'store.db').exists()
+    if layout == 'separate-git-dir':
+        git(root, 'init', '-q', '-b', 'main', f'--separate-git-dir={tmp_path / "separate.git"}')
+        _configure(root)
+        (root / '.gitignore').write_text('.taskmaster/local/\n', encoding='utf-8')
+        git(root, 'add', '-A')
+        git(root, 'commit', '-q', '-m', 'initial')
+    else:
+        init_repo(root)
+        superproject = root.parent
+        git(superproject, 'init', '-q', '-b', 'main')
+        _configure(superproject)
+        git(superproject, 'submodule', 'add', '-q', f'./{root.name}', root.name)
+        git(superproject, 'submodule', 'absorbgitdirs')
+        assert (root / '.git').is_file()
+    target = root / REL
+    target.write_bytes(target.read_bytes().replace(b'Service task', b'Unmanaged staging'))
+    git(root, 'add', REL)
+    ok, reason = git_hook.check(root)
+    assert not ok and 'unmanaged staging' in reason, reason
+
+
+def test_hook_fails_closed_when_a_local_store_exists_but_resolution_fails(root, monkeypatch):
+    from native_git_helpers import init_repo
+    from taskmaster.coordinator import git_hook
+    init_repo(root)
+    target = root / REL
+    target.write_bytes(target.read_bytes().replace(b'Service task', b'Unmanaged staging'))
+    git(root, 'add', REL)
+    monkeypatch.setattr(git_hook, '_main_worktree', lambda root: None)
+    monkeypatch.setattr(git_hook, '_is_linked', lambda root: True)
+    ok, reason = git_hook.check(root)
+    assert not ok and 'cannot resolve' in reason, reason
