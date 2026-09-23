@@ -349,9 +349,24 @@ def test_flush_target_beyond_committed_sequence_is_refused_before_any_import(roo
 
 
 def test_begin_outcome_uncertain_is_pending(root):
-    admitted, release = threading.Event(), threading.Event()
-    with Coordinator(root) as owner:
+    from taskmaster.native_routing.projection import drain
+    admitted, release, settled = threading.Event(), threading.Event(), threading.Event()
+    passes = []
+
+    def exporter(connection, backlog_dir, through=None):
+        notices = drain(connection, backlog_dir, session='begin-uncertain', through=through, progress_wait=False)
+        passes.append(notices)
+        settled.set()
+        return notices
+
+    with Coordinator(root, exporter=exporter) as owner:
         client = Client(root, autostart=False)
+        # The startup export pass holds publication and claims jobs in a write
+        # transaction; overlapping the blocked writer it would stall there and
+        # sync would stop at "publisher busy" before ever submitting begin.
+        assert settled.wait(30) and passes == [[]], passes
+        with owner.publication:
+            pass
         def checkpoint(stage):
             if stage == 'admitted' and not admitted.is_set():
                 admitted.set()
