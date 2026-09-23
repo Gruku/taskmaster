@@ -97,6 +97,7 @@ def test_replacement_cannot_publish_before_the_job_is_proven_empty(root, window)
             marker = json.loads(connection.execute('SELECT value_json FROM sync_state WHERE key=?',
                                                    (managed.MARKER_KEY,)).fetchone()[0])
         assert marker['phase'] == ('prepared' if window == 'pre_assignment' else 'launch')
+        assert marker['identity'] == jobs.identity()  # L3
         seen = {}
 
         def checkpoint(name):
@@ -108,6 +109,11 @@ def test_replacement_cannot_publish_before_the_job_is_proven_empty(root, window)
                 seen['published_before'] = 'Racing title' in (root / REL).read_text(encoding='utf-8')
                 # Same thread holds publication; every publication path must still refuse.
                 seen['flush_before'] = replacement.flush(racing['commit_seq'], timeout=0)
+            elif name == 'git_recovery_settling':
+                # L10: unconditional, whether or not the job still existed to retire.
+                seen['published_settling'] = 'Racing title' in (root / REL).read_text(encoding='utf-8')
+                seen['flush_settling'] = replacement.flush(racing['commit_seq'], timeout=0)
+                seen['pin_settling'] = replacement.git_pin
             elif name == 'git_recovery_quiesced':
                 observer = jobs.Job.open(marker['job'])
                 with observer:
@@ -117,6 +123,8 @@ def test_replacement_cannot_publish_before_the_job_is_proven_empty(root, window)
         assert replacement.git_pin is None
         replacement.start()
         assert wait_for(lambda: replacement.git_pin is None, timeout=60), replacement.git_pin
+        assert seen['pin_settling'] is not None and seen['published_settling'] is False
+        assert seen['flush_settling']['state'] == 'pending'
         if window != 'pre_assignment' or 'active_before' in seen:
             assert seen['pin_before'] is not None
             assert seen['published_before'] is False and seen['published_at_quiesce'] is False
@@ -252,3 +260,52 @@ def test_checkout_killed_mid_unpack_is_ambiguous_and_stays_pinned(root):
             replacement.close()
         retire_leftover(root)
         (root / 'hook-release').touch()
+
+
+def test_crash_after_proven_quiescence_recovers_without_acknowledgement(root):
+    """L7: phase `quiesced` is durable before reconcile, so a crash there needs no operator."""
+    init_repo(root)
+    before = commit_count(root)
+    first = launch(root, 'git_quiesced')
+    replacement = None
+    try:
+        client = ready(root)
+        client.execute(request(client, 'quiesced', 'Quiesced title'))
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            running = pool.submit(Client(root, autostart=False, timeout=120).git_run,
+                                  kind='commit', message='tm: quiesced')
+            assert wait_for((root / 'reached-git_quiesced').exists)
+            first.kill()
+            first.wait(timeout=10)
+            with pytest.raises(ServiceUnavailable):
+                running.result(timeout=60)
+        replacement = Coordinator(root)
+        replacement.start()
+        assert wait_for(lambda: replacement.git_pin is None, timeout=60), replacement.git_pin
+        last = managed.read_state(replacement, managed.LAST_KEY)
+        assert last['state'] == 'completed' and last['recovered'] is True, last
+        assert commit_count(root) == before + 1
+    finally:
+        if first.poll() is None:
+            first.kill()
+            first.wait(timeout=10)
+        if replacement is not None and replacement.server is not None:
+            replacement.close()
+        retire_leftover(root)
+
+
+def test_recovery_from_another_session_reports_the_identity_mismatch(root):
+    """L3: a Local\\ job is invisible from another logon session; say so specifically."""
+    init_repo(root)
+    with Coordinator(root) as owner:
+        current = jobs.identity()
+        marker = {'op_id': 'elsewhere', 'request': ['t', 'r'], 'kind': 'commit', 'phase': 'launch',
+                  'contained': True, 'platform': sys.platform, 'job': jobs.new_name(), 'token_hash': 'x',
+                  'identity': dict(current, session=current['session'] + 4242),
+                  'pre': managed.snapshot(root, managed.repository(root)), 'generation': {}, 'target': None}
+        with owner.publication:
+            managed.write_state(owner, marker=marker)
+    with Coordinator(root) as owner:
+        assert wait_for(lambda: owner.git_pin and owner.git_pin['state'] == 'recovery_required')
+        assert 'logon session' in owner.git_pin['reason'], owner.git_pin
+        Client(root, autostart=False).git_recover(acknowledge_quiescent=True, accept_outcome=True)

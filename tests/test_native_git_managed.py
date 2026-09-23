@@ -383,3 +383,81 @@ def test_operator_can_accept_when_the_job_or_git_state_cannot_be_inspected(repo,
         assert result['state'] == 'accepted' and result['reconciled'] is False, result
         assert any('unreconciled' in notice for notice in result['notices']), result
         assert owner.git_pin is None and managed.read_state(owner, managed.MARKER_KEY) is None
+
+
+def test_managed_git_disables_background_maintenance(repo):
+    """L4: retirement must not kill an auto gc/maintenance/fsmonitor mid-write."""
+    from types import SimpleNamespace
+    owner = SimpleNamespace(root=repo)
+    for kind, extra in (('commit', {'message': 'm'}), ('checkout', {'ref': 'main'})):
+        commands = managed._commands(owner, kind, [], extra.get('message'), extra.get('ref'), 'token', 'op')
+        for command in commands:
+            argv = command['argv']
+            for setting in ('gc.auto=0', 'maintenance.auto=false', 'core.fsmonitor=false'):
+                assert argv[argv.index(setting) - 1] == '-c', argv
+
+
+def test_generation_through_is_the_synchronized_target(repo):
+    """L9: a write landing after the barrier must not overstate the captured generation."""
+    captured = {}
+    owner_box = {}
+
+    def checkpoint(name):
+        if name == 'git_marker_written':
+            captured['marker'] = managed.read_state(owner_box['owner'], managed.MARKER_KEY)
+    with Coordinator(repo, checkpoint=checkpoint) as owner:
+        owner_box['owner'] = owner
+        client = Client(repo, autostart=False, timeout=120)
+        client.execute(request(client, 'gen', 'Generation title'))
+        original = owner.sync
+
+        def racing_sync(**arguments):
+            result = original(**arguments)
+            if arguments['request_id'].endswith(':pre'):
+                captured['synced'] = result['through']
+                Client(repo, autostart=False, timeout=120).execute(request(client, 'late', 'Late title'))
+            return result
+        owner.sync = racing_sync
+        assert client.git_run(kind='commit', message='tm: gen')['state'] == 'completed'
+    assert captured['marker']['generation']['through'] == captured['synced']
+
+
+def test_uncontained_helper_outcome_needs_acknowledgement(repo, monkeypatch):
+    """L8/L10: the real POSIX (uncontained) path runs, but a helper exit is not proof that
+    hook descendants stopped: the outcome waits for acknowledge_quiescent."""
+    from taskmaster.coordinator import job as jobs
+    monkeypatch.setattr(jobs, 'supported', lambda: False)
+    with Coordinator(repo) as owner:
+        client = Client(repo, autostart=False, timeout=120)
+        client.execute(request(client, 'posix', 'Posix title'))
+        before = commit_count(repo)
+        result = client.git_run(kind='commit', message='tm: posix')
+        assert result['state'] == 'recovery_required', result
+        assert result['outcome_preview']['state'] == 'completed', result
+        marker = managed.read_state(owner, managed.MARKER_KEY)
+        assert marker['contained'] is False and marker['job'] is None
+        assert owner.git_pin['state'] == 'recovery_required'
+        assert commit_count(repo) == before + 1
+        assert client.git_recover()['state'] == 'recovery_required'
+        settled = client.git_recover(acknowledge_quiescent=True)
+        assert settled['state'] == 'completed' and settled['generation_verified'] is True, settled
+        assert owner.git_pin is None and commit_count(repo) == before + 1
+
+
+def test_exporter_stays_idle_under_a_startup_pin(repo):
+    """L10: the background exporter never publishes while a startup marker is unresolved."""
+    with Coordinator(repo) as owner:
+        marker = {'op_id': 'held', 'request': ['t', 'held'], 'kind': 'commit', 'phase': 'launch',
+                  'contained': False, 'platform': 'test-other', 'job': None, 'token_hash': 'x',
+                  'pre': managed.snapshot(repo, managed.repository(repo)), 'generation': {}, 'target': None}
+        with owner.publication:
+            managed.write_state(owner, marker=marker)
+    with Coordinator(repo) as owner:
+        client = Client(repo, autostart=False, timeout=120)
+        assert wait_for(lambda: owner.git_pin is not None and owner.git_pin['state'] == 'recovery_required')
+        receipt = client.execute(request(client, 'idle', 'Idle title'))['receipt']
+        owner.export_needed.set()
+        assert not wait_for(lambda: 'Idle title' in (repo / REL).read_text(encoding='utf-8'), timeout=2)
+        assert client.git_recover(acknowledge_quiescent=True)['state'] == 'failed'
+        assert owner.flush(receipt['commit_seq'])['state'] == 'exported'
+        assert 'Idle title' in (repo / REL).read_text(encoding='utf-8')

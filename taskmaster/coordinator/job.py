@@ -104,6 +104,9 @@ def _load():
     advapi.ConvertSidToStringSidW.restype = w.BOOL
     advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [w.LPCWSTR, w.DWORD, c.POINTER(c.c_void_p), c.c_void_p]
     advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW.restype = w.BOOL
+    kernel.ProcessIdToSessionId.argtypes = [w.DWORD, c.POINTER(w.DWORD)]
+    kernel.ProcessIdToSessionId.restype = w.BOOL
+    kernel.GetCurrentProcessId.restype = w.DWORD
 
     class Api:
         pass
@@ -119,16 +122,18 @@ def _error(api, action):
     return JobUnavailable(code, f'{action} failed: {api.c.FormatError(code).strip()}')
 
 
-def _user_sid(api):
+def _user_sid(api, information_class=1):
+    """String SID from the process token: TokenUser (1) or TokenIntegrityLevel (25);
+    both structures start with the SID pointer."""
     c, w = api.c, api.w
     token = w.HANDLE()
     if not api.advapi.OpenProcessToken(api.kernel.GetCurrentProcess(), 8, c.byref(token)):
         raise _error(api, 'OpenProcessToken')
     try:
         size = w.DWORD()
-        api.advapi.GetTokenInformation(token, 1, None, 0, c.byref(size))
+        api.advapi.GetTokenInformation(token, information_class, None, 0, c.byref(size))
         buffer = c.create_string_buffer(size.value)
-        if not api.advapi.GetTokenInformation(token, 1, buffer, size, c.byref(size)):
+        if not api.advapi.GetTokenInformation(token, information_class, buffer, size, c.byref(size)):
             raise _error(api, 'GetTokenInformation')
         text = w.LPWSTR()
         if not api.advapi.ConvertSidToStringSidW(c.cast(buffer, c.POINTER(c.c_void_p))[0], c.byref(text)):
@@ -139,6 +144,15 @@ def _user_sid(api):
             api.kernel.LocalFree(c.cast(text, c.c_void_p))
     finally:
         api.kernel.CloseHandle(token)
+
+
+def identity() -> dict:
+    """Where a `Local\\` job name is visible and openable: logon session + integrity level."""
+    api = _load()
+    session = api.w.DWORD()
+    if not api.kernel.ProcessIdToSessionId(api.kernel.GetCurrentProcessId(), api.c.byref(session)):
+        raise _error(api, 'ProcessIdToSessionId')
+    return {'session': int(session.value), 'integrity': _user_sid(api, 25)}
 
 
 class Job:

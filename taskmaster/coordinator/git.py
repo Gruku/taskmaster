@@ -145,14 +145,16 @@ def _variants(content):
             projection._digest(projection._crlf(content))}
 
 
-def generation(owner):
-    """The published generation and whether every file on disk still carries it."""
+def generation(owner, through):
+    """The published generation and whether every file on disk still carries it.
+
+    `through` is the barrier's synchronized target: a domain write committed after
+    the writer pause was released is not part of this generation."""
     backlog = owner.root / '.taskmaster'
     with closing(owner._connect(readonly=True)) as connection:
         connection.execute('BEGIN')
         rows = connection.execute("SELECT file,content_hash FROM projection WHERE file NOT LIKE 'local/%' "
                                   'ORDER BY file').fetchall()
-        through = connection.execute('SELECT COALESCE(MAX(seq),0) FROM domain_events').fetchone()[0]
         connection.rollback()
     mismatched, blobs = [], {}
     from taskmaster.native import projection
@@ -340,11 +342,16 @@ def _validate(kind, message, ref):
         raise ValueError('managed Git kind must be commit or checkout')
 
 
+# Retirement terminates the whole job, so nothing Git starts in the background
+# (auto gc/maintenance, an fsmonitor daemon) may be mid-write when it does.
+QUIET_GIT = ['-c', 'gc.auto=0', '-c', 'maintenance.auto=false', '-c', 'core.fsmonitor=false']
+
+
 def _commands(owner, kind, files, message, ref, token, op_id):
-    git, root = executable(), str(owner.root)
+    git, root = [executable(), *QUIET_GIT], str(owner.root)
     env = environment({TOKEN_ENV: token})
     if kind == 'checkout':
-        return [{'argv': [git, 'checkout', '--quiet', ref, '--'], 'cwd': root, 'env': env}]
+        return [{'argv': [*git, 'checkout', '--quiet', ref, '--'], 'cwd': root, 'env': env}]
     _, raw = probe(owner.root, 'ls-files', '-z', '--full-name', '--', '.taskmaster')
     tracked = {entry.decode('utf-8', 'surrogateescape') for entry in raw.split(b'\0') if entry}
     wanted = {f'.taskmaster/{rel}' for rel in files}
@@ -357,9 +364,9 @@ def _commands(owner, kind, files, message, ref, token, op_id):
     # `--only` with the same pathspec commits exactly the generation: whatever else
     # the user had staged stays staged and out of this commit. The trailer names
     # the operation so a concurrent commit is never mistaken for it.
-    return [{'argv': [git, 'add', '-A', '--pathspec-from-file=-', '--pathspec-file-nul'], 'cwd': root, 'env': env,
+    return [{'argv': [*git, 'add', '-A', '--pathspec-from-file=-', '--pathspec-file-nul'], 'cwd': root, 'env': env,
              'stdin_b64': specs},
-            {'argv': [git, 'commit', '--quiet', '--only', '--pathspec-from-file=-', '--pathspec-file-nul',
+            {'argv': [*git, 'commit', '--quiet', '--only', '--pathspec-from-file=-', '--pathspec-file-nul',
                       '-m', message, '--trailer', f'{TRAILER}: {op_id}'], 'cwd': root, 'env': env,
              'stdin_b64': specs}]
 
@@ -433,7 +440,7 @@ def _run_held(owner, kind, request, message, ref, timeout):
                         import_files=True, through=0, files=None, take_file=False)
     if synced.get('state') != 'synchronized':
         return _refused('projections are not synchronized; resolve the listed paths first', sync=synced)
-    gen, files, mismatched = generation(owner)
+    gen, files, mismatched = generation(owner, synced.get('through', 0))
     if mismatched:
         return _refused('projection files differ from the published generation', paths=mismatched[:_KEPT],
                         paths_omitted=max(0, len(mismatched) - _KEPT))
@@ -450,6 +457,7 @@ def _run_held(owner, kind, request, message, ref, timeout):
     marker = {'op_id': op_id, 'request': request, 'kind': kind, 'phase': 'prepared',
               'contained': jobs.supported(), 'platform': sys.platform,
               'job': jobs.new_name() if jobs.supported() else None,
+              'identity': jobs.identity() if jobs.supported() else None,
               'token_hash': hashlib.sha256(token.encode()).hexdigest(), 'pre': before, 'generation': gen,
               'target': target, 'started': time.time()}
     write_state(owner, marker=marker)  # durable before any child exists
@@ -495,8 +503,21 @@ def _execute(owner, marker, commands, timeout):
                          'reason': 'managed Git boundary not proven empty after retirement'}
         return {'state': 'ambiguous', 'op_id': marker['op_id'], 'reason': owner.git_pin['reason'],
                 'results': _bounded_results(results)}
-    owner.checkpoint('git_quiesced')
+    if not child.contained:
+        # A helper's exit does not prove its hooks' background children stopped.
+        # The outcome is previewed, but only an operator acknowledgement settles it.
+        reason = ('no verified child-lifetime boundary on this platform; confirm no Git/hook process from this '
+                  'operation remains, then run git recover with acknowledge_quiescent')
+        owner.git_pin = {'state': 'recovery_required', 'op_id': marker['op_id'], 'reason': reason}
+        try:
+            preview = reconcile(owner, marker, results=results, done=done)
+        except (GitRefused, OSError) as exc:
+            preview = {'state': None, 'notices': [f'cannot inspect Git state: {exc}'[:500]]}
+        return {'state': 'recovery_required', 'op_id': marker['op_id'], 'reason': reason,
+                'outcome_preview': preview}
     marker['phase'] = 'quiesced'
+    write_state(owner, marker=marker)  # proven: a crash from here on needs no acknowledgement
+    owner.checkpoint('git_quiesced')
     report = reconcile(owner, marker, results=results, done=done)
     return settle(owner, marker, report)
 
@@ -636,6 +657,7 @@ def recover(owner, *, acknowledge_quiescent=False, accept_outcome=False, release
                 owner.git_pin = {'state': 'recovery_required', 'op_id': marker['op_id'], 'reason': reason}
                 return {'state': 'recovery_required', 'op_id': marker['op_id'], 'reason': reason,
                         'active': _public(marker)}
+            owner.checkpoint('git_recovery_settling')
             if not_launched:
                 # Permission is only sent after `launch` is durable, so Git never ran:
                 # later repository changes are someone else's, not this outcome.
@@ -696,6 +718,9 @@ def _quiesce(owner, marker, acknowledged):
     if marker['phase'] == 'quiesced':
         return True, None
     if marker.get('contained') and jobs.supported() and marker.get('platform') == sys.platform:
+        mismatch = _identity_mismatch(marker)
+        if mismatch:
+            return False, mismatch
         try:
             recorded = jobs.Job.open(marker['job'])
         except (OSError, ValueError) as exc:
@@ -723,6 +748,23 @@ def _quiesce(owner, marker, acknowledged):
         return True, None
     return False, ('no verified child-lifetime boundary on this platform; confirm no Git/hook process from this '
                    'operation remains, then run git recover with acknowledge_quiescent')
+
+
+def _identity_mismatch(marker):
+    """A Local\\ job is only visible in its own logon session (and openable at its
+    integrity level): recovering elsewhere would look like a missing job."""
+    recorded = marker.get('identity')
+    if not recorded:
+        return None
+    try:
+        current = jobs.identity()
+    except OSError as exc:
+        return f'cannot determine this coordinator\'s logon session: {exc}'[:500]
+    if current == recorded:
+        return None
+    return (f"recorded managed Git job belongs to logon session {recorded.get('session')} at integrity "
+            f"{recorded.get('integrity')}; this coordinator runs in logon session {current['session']} at "
+            f"integrity {current['integrity']}; run recovery from the original session")
 
 
 def startup(owner):

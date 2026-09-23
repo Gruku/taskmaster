@@ -156,3 +156,18 @@ def test_bootstrap_refuses_a_credential_in_any_field(twins, overrides):
     answer = _bootstrap(twins, **overrides)
     assert "credential" in answer.get("error", ""), answer
     assert _config_path(twins).read_text(encoding="utf-8") == EXISTING
+
+
+def test_bootstrap_refuses_while_managed_git_pins_publication(twins, monkeypatch):
+    """N13 step 8 (L10): a managed Git pin blocks the config write; the file is untouched."""
+    _config_path(twins).write_text(EXISTING, encoding="utf-8")
+    monkeypatch.setenv("OPS_LINEAR_TOKEN", "lin_api_x")
+    owner = _owner(twins)
+    owner.git_pin = {"state": "recovery_required", "reason": "test pin"}
+    try:
+        answer = _bootstrap(twins)
+    finally:
+        owner.git_pin = None
+    assert answer.get("ok") is not True, answer
+    assert "managed Git recovery required" in json.dumps(answer), answer
+    assert _config_path(twins).read_text(encoding="utf-8") == EXISTING
