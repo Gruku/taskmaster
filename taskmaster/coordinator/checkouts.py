@@ -24,6 +24,11 @@ from taskmaster.projection_paths import UnsafePath
 
 MAX_LINKED = 32
 REFLOG_LIMIT = 256
+HISTORY_LIMIT = 5000  # commits walked per chunk of paths when proving bytes are new
+HISTORY_CHUNK = 100   # paths per `git log` (command-line length)
+# Present while Git is part-way through an operation in a checkout's git dir.
+IN_PROGRESS = ('MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'SQUASH_MSG', 'AUTO_MERGE', 'rebase-merge',
+               'rebase-apply')
 PLAIN_COMMITS = ('commit:', 'commit (amend):', 'commit (initial):')
 NO_BASE = ('no trusted base in this checkout for bytes that differ from the published generation; import them '
            'with sync take_file (worktree), or release them with git recover --release-drift --worktree to '
@@ -128,8 +133,10 @@ def _paths(raw: bytes) -> set[str]:
             if entry.startswith(b'.taskmaster/')}
 
 
-def movement(checkout: Checkout, old: str | None, new: str | None) -> tuple[str, set[str] | None, list[str]]:
-    """(kind, projection paths Git changed between old and new or None if unknown, reflog actions).
+def movement(checkout: Checkout, old: str | None, new: str | None
+             ) -> tuple[str, set[str] | None, list[str], set[str]]:
+    """(kind, projection paths Git changed between old and new or None if unknown, reflog
+    actions, commits the reflog recorded since old).
 
     `none`: HEAD did not move. `commits`: every reflog action since `old` was a plain
     commit, which records the worktree without rewriting it. `rewrite`: anything else
@@ -137,10 +144,10 @@ def movement(checkout: Checkout, old: str | None, new: str | None) -> tuple[str,
     unreadable reflog. `unknown`: nothing was observed before."""
     from .git import probe
     if old is None or new is None:
-        return ('none' if old == new else 'unknown'), None, []
+        return ('none' if old == new else 'unknown'), None, [], set()
     if old == new:
-        return 'none', set(), []
-    actions, found = [], False
+        return 'none', set(), [], set()
+    actions, commits, found = [], set(), False
     code, raw = probe(checkout.root, 'reflog', 'show', '--format=%H%x09%gs', '-n', str(REFLOG_LIMIT), 'HEAD',
                       ok=(0, 128))
     if code == 0:
@@ -150,12 +157,49 @@ def movement(checkout: Checkout, old: str | None, new: str | None) -> tuple[str,
                 found = True
                 break
             actions.append(subject)
+            commits.add(commit)
     kind = 'commits' if found and actions and all(a.startswith(PLAIN_COMMITS) for a in actions) else 'rewrite'
     code, _ = probe(checkout.root, 'cat-file', '-e', f'{old}^{{commit}}', ok=(0, 1, 128))
     if code:
-        return kind, None, actions[:20]
+        return kind, None, actions[:20], commits
     _, raw = probe(checkout.root, 'diff', '--name-only', '-z', '--no-renames', old, new, '--', '.taskmaster')
-    return kind, _paths(raw), actions[:20]
+    return kind, _paths(raw), actions[:20], commits
+
+
+def in_progress(checkout: Checkout) -> str | None:
+    """Why Git is part-way through an operation in this checkout (its result is not an
+    authored edit yet), or None."""
+    from .git import probe
+    found = [name for name in IN_PROGRESS if os.path.lexists(checkout.git_dir / name)]
+    if found:
+        return f"a Git operation is in progress ({', '.join(found)})"
+    _, raw = probe(checkout.root, 'ls-files', '-u', '-z')
+    return 'the index has unmerged entries' if raw else None
+
+
+def history_blobs(checkout: Checkout, rels, exclude=frozenset()) -> tuple[set[str], bool]:
+    """(blob ids these paths had in any commit Git still knows - every ref, the stash and
+    every reflog - except the `exclude` commits, whether the bounded walk was complete).
+
+    Bounded: at most HISTORY_LIMIT commits per chunk of paths; a walk that reaches the
+    bound is incomplete and callers must treat unmatched bytes as unverifiable."""
+    from .git import probe
+    blobs, complete, names = set(), True, sorted(rels)
+    for start in range(0, len(names), HISTORY_CHUNK):
+        specs = [f':(literal).taskmaster/{rel}' for rel in names[start:start + HISTORY_CHUNK]]
+        _, raw = probe(checkout.root, 'log', '--all', '--reflog', '--no-abbrev', '--raw', '--no-renames', '--root',
+                       '-m', '--format=%x01%H', '-n', str(HISTORY_LIMIT), '--', *specs)
+        seen, skip = set(), False
+        for line in raw.decode('utf-8', 'replace').splitlines():
+            if line.startswith('\x01'):
+                seen.add(line[1:])
+                skip = line[1:] in exclude
+            elif line.startswith(':') and not skip:
+                fields = line.partition('\t')[0].split()
+                if len(fields) >= 4 and fields[3].strip('0'):
+                    blobs.add(fields[3])
+        complete = complete and len(seen) < HISTORY_LIMIT
+    return blobs, complete
 
 
 def tree_blobs(checkout: Checkout, rev: str) -> dict[str, str]:
@@ -181,16 +225,24 @@ def classify(checkout: Checkout, differing: dict, previous: dict | None, current
              released: dict | None = None, base_bytes=None) -> tuple[dict, list[str]]:
     """({rel: reason} drift, warnings) for files that differ from the checkout's base.
 
-    `differing` maps rel -> observed bytes (None = missing). A file is drift when Git
-    rewrote this checkout and changed that path since the last observation (or the
-    change is unknowable), or when it carries the HEAD blob although no plain commit
-    introduced it (`checkout -- p`, `restore`, `stash`). Released digests are left to
-    ordinary sync."""
+    `differing` maps rel -> observed bytes (None = missing). A file is drift (held, never
+    imported) when:
+    - Git is part-way through an operation (merge/cherry-pick/revert/rebase/squash state
+      or unmerged index entries): every differing file, missing ones included;
+    - Git rewrote this checkout and changed that path since the last observation (or the
+      change is unknowable);
+    - its bytes equal a blob that path had in any commit Git still knows (refs, stash,
+      reflogs) other than the plain commits made since the last observation: `checkout
+      <rev> -- p`, `restore --source`, reverts, stash applies, and a hand revert to an
+      earlier committed value. A bounded history walk that cannot finish holds too.
+    Anything else is authored: bytes no earlier commit holds, including a plain commit
+    of them. An unknown previous observation (first sync after upgrade) is judged by the
+    same byte rules instead of holding everything. Released digests go to ordinary sync."""
     warnings = []
     if current is None or current.get('head') is None:
         return {}, warnings
     old = (previous or {}).get('head')
-    kind, changed, actions = movement(checkout, old, current['head'])
+    kind, changed, actions, commits = movement(checkout, old, current['head'])
     if kind == 'commits' and changed and base_bytes is not None:
         blobs = tree_blobs(checkout, current['head'])
         mixed = sorted(rel for rel in changed if rel in blobs and (base_bytes(rel) is None
@@ -199,27 +251,32 @@ def classify(checkout: Checkout, differing: dict, previous: dict | None, current
             warnings.append(f"unmanaged commit(s) {old[:12]}..{current['head'][:12]} in {checkout.root} committed "
                             f"projection bytes that are not this checkout's published generation (possibly a mixed "
                             f"generation): {', '.join(mixed[:20])}")
-    if not differing:
-        return {}, warnings
     released = released or {}
-    head_blobs = None
-    drift = {}
+    candidates = {rel: content for rel, content in sorted(differing.items())
+                  if not (rel in released and released[rel] == (None if content is None else store.digest(content)))}
+    if not candidates:
+        return {}, warnings
+    busy = in_progress(checkout)
+    if busy:
+        return {rel: f'{busy}; its result is not an authored edit' for rel in candidates}, warnings
+    drift, check = {}, {}
     detail = f"{kind}: {'; '.join(actions[:3]) or 'no reflog'}"
-    for rel, content in sorted(differing.items()):
-        observed = None if content is None else store.digest(content)
-        if rel in released and released[rel] == observed:
-            continue
+    for rel, content in candidates.items():
         if kind == 'rewrite' and (changed is None or rel in changed):
             drift[rel] = f'Git rewrote this checkout since the last sync ({detail})'
-            continue
-        if content is None:
-            continue  # a missing file Git did not remove is repaired, not drift
-        if kind == 'commits' and changed is not None and rel in changed:
-            continue  # this checkout's own plain commit recorded these bytes
-        if head_blobs is None:
-            head_blobs = tree_blobs(checkout, current['head'])
-        if head_blobs.get(rel) in _blobs_of(content):
-            drift[rel] = 'bytes restored from HEAD (an older committed generation), not an authored edit'
+        elif content is not None:
+            check[rel] = content  # a missing file Git did not remove is repaired, not drift
+    if check:
+        # The plain commits since the last observation are this checkout's own; every
+        # other commit Git knows is an earlier (or foreign) generation.
+        known, complete = history_blobs(checkout, check, commits if kind == 'commits' else frozenset())
+        for rel, content in check.items():
+            if known & _blobs_of(content):
+                drift[rel] = ('bytes equal an earlier committed version of this path (restored, reverted or '
+                              'applied by Git), not an authored edit')
+            elif not complete:
+                drift[rel] = (f'history of this path exceeds {HISTORY_LIMIT} commits: these bytes cannot be '
+                              'proven to be a new authored edit')
     return drift, warnings
 
 
