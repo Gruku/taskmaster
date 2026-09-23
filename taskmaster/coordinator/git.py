@@ -305,19 +305,21 @@ def checkout_drift(owner):
     """{rel: observed sha1 | None (missing)} for every projection the checkout left
     differing from the published generation, including files only the checkout has."""
     from . import sync_files
+    from . import checkouts
     backlog = owner.root / '.taskmaster'
     with closing(owner._connect(readonly=True)) as connection:
         published = dict(connection.execute(
             "SELECT file,content_hash FROM projection WHERE file NOT LIKE 'local/%'").fetchall())
-    drift = {}
-    for rel, digest in published.items():
-        try:
-            content = _read_projection(backlog, rel)
-        except (OSError, UnsafePath):
-            drift[rel] = 'unreadable'
-            continue
-        if content is None or digest not in _variants(content):
-            drift[rel] = None if content is None else hashlib.sha1(content).hexdigest()
+        drift = {}
+        for rel, digest in published.items():
+            try:
+                content = _read_projection(backlog, rel)
+            except (OSError, UnsafePath):
+                drift[rel] = 'unreadable'
+                continue
+            if content is None or (digest not in _variants(content)
+                                   and not checkouts.same_text(checkouts.main_base(connection, rel), content)):
+                drift[rel] = None if content is None else hashlib.sha1(content).hexdigest()
     for rel in sync_files.discover(backlog).files:
         if rel not in published and not rel.startswith('local/'):
             drift[rel] = _observed_digest(backlog, rel)
@@ -330,6 +332,7 @@ def prune_drift(owner):
     state = read_state(owner, DRIFT_KEY)
     if not state:
         return set()
+    from . import checkouts
     files = dict(state.get('files') or {})
     backlog = owner.root / '.taskmaster'
     with closing(owner._connect(readonly=True)) as connection:
@@ -339,8 +342,8 @@ def prune_drift(owner):
                 content = _read_projection(backlog, rel)
             except (OSError, UnsafePath):
                 continue
-            if (row is None and content is None) or (row is not None and content is not None
-                                                      and row[0] in _variants(content)):
+            if (row is None and content is None) or (row is not None and content is not None and (
+                    row[0] in _variants(content) or checkouts.same_text(checkouts.main_base(connection, rel), content))):
                 del files[rel]
     if files != state.get('files'):
         write_state(owner, drift=dict(state, files=files) if files else None)

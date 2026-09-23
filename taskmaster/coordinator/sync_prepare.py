@@ -17,7 +17,7 @@ from taskmaster import projection_parse
 from taskmaster.native import checkouts, projection, sync
 from taskmaster.native.migrate import encode
 from taskmaster.native.sync_merge import merge, protect_local, unapplied
-from . import sync_files
+from . import checkouts as checkouts_view, sync_files
 
 
 @dataclass(frozen=True)
@@ -84,13 +84,23 @@ def prepare(snapshot, backlog_dir, rel, *, take_file=False, checkout=None, scan=
         if found is None and not take_file:
             published = connection.execute("SELECT content_hash FROM projection WHERE file=?", (rel,)).fetchone()
             content = observed.content
-            if published is not None and published[0] in {
+            reference = checkouts_view.main_base(connection, rel) if published is not None else None
+            if published is not None and (published[0] in {
                     projection._digest(content), projection._digest(projection._lf(content)),
-                    projection._digest(projection._crlf(content))}:
+                    projection._digest(projection._crlf(content))} or (
+                    reference is not None and projection._lf(reference) == projection._lf(content))):
                 # Identical bytes may establish this checkout's base; nothing to import.
                 return Prepared(rel, "establish", "file equals the published generation", observed, None)
     if record is not None and observed.digest == record[0] and not held:
         return result(None if trusted else "observe", "file matches the trusted projection")
+    if (not take_file and not held and record is not None and base is not None and trusted
+            and projection._lf(observed.content) == projection._lf(base)):
+        # D7: Git's eol conversion rewrote only the base's line endings. Equal text is the
+        # base, never drift or an import: main records these bytes as the published ones;
+        # a linked checkout's publication records them as its new base.
+        if checkout is not None:
+            return Prepared(rel, "establish", "file equals this checkout's base up to line endings", observed, None)
+        return result("observe", "file equals the published bytes up to line endings")
     # Unchanged quarantined bytes are parsed again: a parser fix (D2: prose that
     # merely resembles a conflict marker) must make them eligible without a repair.
     # Only a still-failing parse is skipped without recording a new quarantine.

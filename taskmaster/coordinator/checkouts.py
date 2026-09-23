@@ -429,6 +429,36 @@ def _variants(content):
             projection._digest(projection._crlf(content))}
 
 
+def same_text(reference: bytes | None, content) -> bool:
+    """`content` differs from `reference` at most by line-ending normalisation (D7).
+
+    The store records published bytes verbatim, so an authored file that mixes CRLF
+    with lone LF is a mixed base; Git's eol/autocrlf conversion then writes a uniform
+    form no digest variant of the mixed bytes matches. Equal text is equal to the
+    base: never drift, never an import."""
+    return (isinstance(reference, bytes) and isinstance(content, bytes) and content != UNREADABLE
+            and projection._lf(reference) == projection._lf(content))
+
+
+def main_base(connection, rel: str) -> bytes | None:
+    """The main checkout's trusted base bytes for `rel` (they carry the recorded digest)."""
+    row = connection.execute('SELECT p.content_hash,b.content FROM projection p JOIN projection_base b '
+                             'ON b.file=p.file WHERE p.file=?', (rel,)).fetchone()
+    if row is None or row[1] is None or projection._digest(bytes(row[1])) != row[0]:
+        return None
+    return bytes(row[1])
+
+
+def reference_bytes(connection, checkout, rel: str) -> bytes | None:
+    """What a checkout's file is expected to equal: a linked checkout's own base, else
+    (unbased, or the main checkout) the trusted published bytes."""
+    if checkout is not None and checkout.linked:
+        found = store.base(connection, checkout.id, rel)
+        if found is not None:
+            return found[1]
+    return main_base(connection, rel)
+
+
 UNREADABLE = b'\0unreadable'  # never equal to any base or published bytes
 UNSEEN = 'unreadable'  # a classified digest no observed file can carry
 MAX_READ = 64 * 1024 * 1024  # == git.MAX_PROJECTION_BYTES, the bound `read` applies
@@ -507,6 +537,12 @@ def publish(owner, checkout: Checkout, through: int, *, scan=None) -> list[str]:
         generation = published(connection, owner.root / '.taskmaster')
         known = store.bases(connection, checkout.id)
         holding = store.holds(connection, checkout.id)
+
+    def base_bytes(rel):
+        # Only for files that differ from their base digest (line-ending-only differences).
+        with closing(owner._connect(readonly=True)) as connection:
+            found = store.base(connection, checkout.id, rel)
+        return None if found is None else found[1]
     pending, plan = [], {}
     for rel, (value, content, held) in generation.items():
         if held:
@@ -526,7 +562,7 @@ def publish(owner, checkout: Checkout, through: int, *, scan=None) -> list[str]:
                 plan[rel] = ('record', content, None)  # the file holds exactly the trusted bytes
                 continue
         current = read(backlog, rel)
-        if current is not None and value in _variants(current):
+        if current is not None and (value in _variants(current) or same_text(content, current)):
             if known.get(rel) != store.digest(current):
                 plan[rel] = ('record', current, None)
             continue
@@ -535,6 +571,8 @@ def publish(owner, checkout: Checkout, through: int, *, scan=None) -> list[str]:
             plan[rel] = ('write', content, None)
         elif expected is not None and expected in _variants(current):
             plan[rel] = ('write', content, expected)
+        elif expected is not None and same_text(base_bytes(rel), current):
+            plan[rel] = ('write', content, store.digest(current))  # the base, up to line endings
         else:
             pending.append(f'sync pending: {rel}: {checkout.root} holds bytes that are not this checkout\'s base; '
                            f'never overwritten ({NO_BASE if expected is None else "unimported edit"})')
@@ -742,11 +780,7 @@ def _base_reader(owner, checkout: Checkout):
             if checkout.linked:
                 found = store.base(connection, checkout.id, rel)
                 return None if found is None else found[1]
-            row = connection.execute('SELECT p.content_hash,b.content FROM projection p JOIN projection_base b '
-                                     'ON b.file=p.file WHERE p.file=?', (rel,)).fetchone()
-        if row is None or row[1] is None or projection._digest(bytes(row[1])) != row[0]:
-            return None
-        return bytes(row[1])
+            return main_base(connection, rel)
     return base_bytes
 
 
@@ -765,6 +799,11 @@ def detect(owner, checkout: Checkout, selected, drift, *, scan=None) -> tuple[di
     record = read_record(owner, checkout.id) or {}
     current = observe(checkout)
     backlog = checkout.backlog
+
+    def reference(rel):
+        # Read only for the few files whose digests differ (line-ending-only differences).
+        with closing(owner._connect(readonly=True)) as connection:
+            return reference_bytes(connection, checkout, rel)
     with closing(owner._connect(readonly=True)) as connection:
         generation = {rel: value for rel, (value, _, _) in published(connection).items()}
         # Quarantined and flagged main files are already held with their bytes kept.
@@ -791,10 +830,11 @@ def detect(owner, checkout: Checkout, selected, drift, *, scan=None) -> tuple[di
         if expected is None:
             if content is None:
                 continue
-            if checkout.linked and generation.get(rel) in _variants(content):
-                continue  # identical bytes establish this checkout's base
+            if checkout.linked and (generation.get(rel) in _variants(content)
+                                    or same_text(reference(rel), content)):
+                continue  # identical bytes (or text) establish this checkout's base
             differing[rel] = content
-        elif content is None or expected not in _variants(content):
+        elif content is None or (expected not in _variants(content) and not same_text(reference(rel), content)):
             differing[rel] = content
     released = record.get('released') or {}
     # A release covers exactly the bytes it saw, once: consumed when they are imported or gone.
@@ -850,6 +890,10 @@ def prune_drift(owner, checkout: Checkout) -> set[str]:
         elif (expected is not None and expected in _variants(content)) or (
                 expected is None and generation.get(rel) in _variants(content)):
             cleared.append(rel)
+        else:
+            with closing(owner._connect(readonly=True)) as connection:
+                if same_text(reference_bytes(connection, checkout, rel), content):
+                    cleared.append(rel)
     if cleared:
         def apply(connection):
             for rel in cleared:
@@ -896,6 +940,12 @@ def checkout_drift(owner, checkout: Checkout) -> dict:
                 contents[rel] = None
         elif content == UNREADABLE or expected is None or expected not in _variants(content):
             contents[rel] = None if content == UNREADABLE else content
+    if contents:
+        with closing(owner._connect(readonly=True)) as connection:
+            for rel in [rel for rel, content in contents.items() if content is not None]:
+                if (rel in known or rel in generation) and same_text(reference_bytes(connection, checkout, rel),
+                                                                     contents[rel]):
+                    del contents[rel]
     if contents:
         hold(owner, checkout, contents, {rel: 'managed checkout' for rel in contents})
     return {rel: None if content is None else store.digest(content) for rel, content in contents.items()}

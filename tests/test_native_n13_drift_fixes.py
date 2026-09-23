@@ -117,3 +117,76 @@ def test_d5_linked_derived_index_is_never_imported_and_take_published_rerenders(
         assert IDEAS in taken['released_drift'], taken
         assert client.sync(worktree=linked)['state'] == 'synchronized'
         assert (linked / '.taskmaster' / IDEAS).read_bytes() == published
+
+
+# ── D7: line-ending-only differences Git makes ─────────────────────────────
+
+def _mixed(content: bytes) -> bytes:
+    """CRLF with the last lines LF: the shape of two live CodeMaestro handovers."""
+    lines = content.replace(b'\r\n', b'\n').split(b'\n')
+    head, tail = lines[:-3], lines[-3:]
+    return b'\r\n'.join(head) + b'\r\n' + b'\n'.join(tail)
+
+
+def _published_digest(repo, rel):
+    import sqlite3
+    with closing(sqlite3.connect((repo / '.taskmaster/local/store.db').as_uri() + '?mode=ro', uri=True)) as db:
+        return db.execute('SELECT content_hash FROM projection WHERE file=?', (rel,)).fetchone()[0]
+
+
+def _publish_mixed(repo, client, eol):
+    import hashlib
+    if eol == 'autocrlf':
+        git(repo, 'config', 'core.autocrlf', 'true')
+    else:
+        (repo / '.gitattributes').write_text('* text=auto eol=lf\n', encoding='utf-8')
+    # The repository stores LF blobs, as CodeMaestro's does.
+    git(repo, 'add', '--renormalize', '-A')
+    git(repo, 'commit', '-q', '--allow-empty', '-m', 'eol settings')
+    assert client.sync()['state'] == 'synchronized'  # records the trusted bases
+    target = repo / REL
+    mixed = _mixed(target.read_bytes().replace(b'Service task', b'Mixed title'))
+    assert b'\r\n' in mixed and b'\n' in mixed.replace(b'\r\n', b'')
+    target.write_bytes(mixed)
+    imported = client.sync()
+    assert imported['state'] == 'synchronized', (imported['notices'], imported['unresolved'], imported['imports'])
+    assert title(repo) == 'Mixed title'
+    assert _published_digest(repo, FILE) == hashlib.sha1(mixed).hexdigest(), 'the store published the mixed bytes'
+    git(repo, 'add', '-A')
+    git(repo, 'commit', '-q', '-m', 'plain commit of the mixed generation')
+    assert git(repo, 'ls-files', '--eol', REL).startswith('i/lf'), 'Git stores the normalised blob'
+    assert client.sync()['state'] == 'synchronized'
+    return mixed
+
+
+@pytest.mark.parametrize('eol', ['autocrlf', 'eol-lf'])
+def test_d7_git_line_ending_normalisation_is_not_drift_in_main(repo, eol):
+    with Coordinator(repo):
+        client = client_for(repo)
+        mixed = _publish_mixed(repo, client, eol)
+        (repo / REL).unlink()
+        git(repo, 'checkout', '--', REL)  # Git writes its normalised form
+        normalised = (repo / REL).read_bytes()
+        assert normalised != mixed and normalised.replace(b'\r\n', b'\n') == mixed.replace(b'\r\n', b'\n')
+        synced = client.sync()
+        assert synced['state'] == 'synchronized', synced
+        assert not synced['imports'], 'a line-ending-only difference is not an import'
+        assert not (client.git_status()['drift'] or {}).get('files')
+        assert title(repo) == 'Mixed title'
+        # Managed Git agrees, and keeps agreeing on the next Git write.
+        assert client.git_run(kind='commit', message='tm: nothing')['state'] in ('completed', 'failed')
+        (repo / REL).unlink()
+        git(repo, 'checkout', '--', REL)
+        assert client.sync()['state'] == 'synchronized'
+
+
+@pytest.mark.parametrize('eol', ['autocrlf', 'eol-lf'])
+def test_d7_fresh_linked_worktree_of_a_mixed_generation_is_not_held(repo, eol):
+    with Coordinator(repo):
+        client = client_for(repo)
+        _publish_mixed(repo, client, eol)
+        linked = repo.parent / 'linked-eol'
+        git(repo, 'worktree', 'add', '-q', '-b', 'feature', str(linked))
+        synced = client.sync(worktree=linked)
+        assert synced['state'] == 'synchronized', synced
+        assert not synced['imports']
