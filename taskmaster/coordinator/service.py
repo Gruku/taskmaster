@@ -342,7 +342,7 @@ class Coordinator:
                     # A prior background pass may already have changed a job
                     # from pending to conflict. It is then absent from this
                     # drain's claims and warnings, but remains unpublished.
-                    held = set(outbox.flagged_files(connection))
+                    held = set(outbox.flagged_files(connection)) | set(outbox.drift_files(connection))
                     held.update(row[0] for row in connection.execute(
                         'SELECT file FROM projection WHERE quarantined=1'))
                     notices = list(dict.fromkeys([*notices, *(
@@ -427,11 +427,11 @@ class Coordinator:
             return git.status(self)
         if method == 'git_recover':
             from . import git
-            flags = [message.get('acknowledge_quiescent', False), message.get('accept_outcome', False)]
+            flags = [message.get(name, False) for name in ('acknowledge_quiescent', 'accept_outcome', 'release_drift')]
             if any(type(flag) is not bool for flag in flags):
                 raise ValueError('git_recover flags must be boolean')
             return git.recover(self, acknowledge_quiescent=flags[0], accept_outcome=flags[1],
-                               timeout=git.PUBLICATION_TIMEOUT)
+                               release_drift=flags[2], timeout=git.PUBLICATION_TIMEOUT)
         if method == 'shutdown':
             self.stop()
             return {'state': 'stopping'}

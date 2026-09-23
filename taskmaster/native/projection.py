@@ -42,6 +42,10 @@ OWN_PREFIX = "projection.own."
 OWN_RING = 8
 # Per file, the names a publication may set the file aside under (see `_publish_file`).
 ASIDE_PREFIX = "projection.aside."
+# Projection paths a managed checkout left differing from the published generation
+# (N13 step 8). The checked-out bytes are drift, not authority: they are neither
+# imported nor overwritten until explicitly resolved. {"op_id", "target", "files": {rel: sha1|null}}
+DRIFT_KEY = "git.drift"
 # The legacy store's B-089 flag table. A store no 6.0.3 writer opened lacks it; the
 # first native flag creates it with the legacy definition, the only DDL here.
 _CONFLICT_DDL = ("CREATE TABLE IF NOT EXISTS projection_conflict(file TEXT PRIMARY KEY, kind TEXT NOT NULL, "
@@ -215,6 +219,10 @@ def held(connection, kind: str, ident: str | None) -> list[tuple[str, str]]:
     """
     found = {file: "quarantined" for (file,) in connection.execute(
         "SELECT file FROM projection WHERE kind=? AND id IS ? AND quarantined=1", (kind, ident))}
+    drift = set(drift_files(connection))
+    if drift:
+        found.update((file, DRIFT_REASON) for (file,) in connection.execute(
+            "SELECT file FROM projection WHERE kind=? AND id IS ?", (kind, ident)) if file in drift)
     if _has_conflict_table(connection):
         found.update((file, "flagged") for (file,) in connection.execute(
             "SELECT file FROM projection_conflict WHERE kind=? AND id IS ?", (kind, ident)))
@@ -222,14 +230,24 @@ def held(connection, kind: str, ident: str | None) -> list[tuple[str, str]]:
 
 
 def held_file(connection, rel: str) -> str | None:
-    """Why one file may not be written (`quarantined`, `flagged`), or None."""
+    """Why one file may not be written (`quarantined`, `flagged`, drift), or None."""
     row = connection.execute("SELECT quarantined FROM projection WHERE file=?", (rel,)).fetchone()
     if row and row[0]:
         return "quarantined"
     if _has_conflict_table(connection) and connection.execute(
             "SELECT 1 FROM projection_conflict WHERE file=?", (rel,)).fetchone():
         return "flagged"
+    if rel in drift_files(connection):
+        return DRIFT_REASON
     return None
+
+
+DRIFT_REASON = "managed checkout drift"
+
+
+def drift_files(connection) -> tuple[str, ...]:
+    """Paths a managed checkout left differing from the published generation."""
+    return tuple(sorted((_get(connection, DRIFT_KEY) or {}).get("files") or {}))
 
 
 def flagged_files(connection) -> tuple[str, ...]:
@@ -248,6 +266,9 @@ def _held_sql(connection) -> str:
         entity += (" OR EXISTS(SELECT 1 FROM entity_core e JOIN projection_conflict c ON c.kind=e.kind "
                    "AND c.id=e.public_id WHERE e.entity_key=j.entity_key)"
                    " OR EXISTS(SELECT 1 FROM projection_conflict c WHERE c.file=j.file)")
+    drift = (f"SELECT d.key FROM sync_state s, json_each(s.value_json, '$.files') d WHERE s.key='{DRIFT_KEY}'")
+    entity += (f" OR j.file IN ({drift}) OR EXISTS(SELECT 1 FROM entity_core e JOIN projection p ON p.kind=e.kind "
+               f"AND p.id=e.public_id WHERE e.entity_key=j.entity_key AND p.file IN ({drift}))")
     return f"({entity})"
 
 

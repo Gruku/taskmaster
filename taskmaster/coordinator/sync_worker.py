@@ -189,10 +189,17 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
             if len(selected) > sync.MAX_FILES:
                 pending(None, f'more than {sync.MAX_FILES} projection files; bounded scan refused')
                 return result
+            from . import git as managed_git
+            # Paths a managed checkout left differing from the published generation are
+            # drift: restored ones resolve here; the rest are neither imported nor repaired.
+            drift = managed_git.prune_drift(owner)
             for rel in selected:
                 if not remaining() or owner.stopping.is_set():
                     pending(rel, 'time budget exhausted or coordinator stopping; retry the same sync id')
                     return result
+                if rel in drift and not take_file:
+                    pending(rel, managed_git.DRIFT_GUIDANCE)
+                    continue
                 try:
                     with closing(owner._connect(readonly=True)) as connection, Repository(connection).snapshot() as snapshot:
                         plan = prepare(snapshot, owner.root / '.taskmaster', rel, take_file=take_file)
@@ -217,6 +224,9 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
                     else:
                         result['imports'].append(dict(receipt['result'], commit_seq=receipt['commit_seq'],
                                                       caller_scope=scope, request_id=key))
+                        if rel in drift and receipt['result'].get('state') == 'accepted':
+                            managed_git.drop_drift(owner, [rel])  # explicitly taken
+                            drift.discard(rel)
                     owner.checkpoint('sync_import_committed')
                     if not current(plan):
                         pending(rel, 'file changed after import commit; newer bytes retained')
@@ -263,7 +273,7 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
             if publication['state'] != 'exported':
                 pending(None, 'projection publication incomplete')
             with closing(owner._connect(readonly=True)) as connection:
-                held = set(projection.flagged_files(connection))
+                held = set(projection.flagged_files(connection)) | set(projection.drift_files(connection))
                 held.update(row[0] for row in connection.execute('SELECT file FROM projection WHERE quarantined=1'))
                 for rel in sorted(held):
                     pending(rel, projection.held_file(connection, rel) or 'held projection')

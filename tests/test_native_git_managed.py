@@ -153,19 +153,65 @@ def test_pin_blocks_every_publication_path(repo):
         assert owner.flush(receipt['commit_seq'])['state'] == 'exported'
 
 
-def test_managed_checkout_imports_the_checked_out_generation(repo):
+def _tree(repo, rev):
+    return set(git(repo, 'ls-tree', '-r', '--name-only', rev, '--', '.taskmaster').split())
+
+
+def test_managed_checkout_reports_drift_and_never_rolls_back(repo):
+    """H2: older checked-out projections are drift, never authority to roll the store back."""
+    from test_native_service_sync import title
     with Coordinator(repo) as owner:
         client = Client(repo, autostart=False, timeout=120)
         git(repo, 'branch', 'side')
         client.execute(request(client, 'main-title', 'Main title'))
+        note = request(client, 'main-note')
+        note.update(operation='note.create', arguments={'text': 'main only note'})
+        client.execute(note)
         assert client.git_run(kind='commit', message='tm: main')['state'] == 'completed'
+        added = _tree(repo, 'main') - _tree(repo, 'side')
+        assert added, 'main must add a projection file side lacks'
         result = client.git_run(kind='checkout', ref='side')
         assert result['state'] == 'completed', result
         assert git(repo, 'symbolic-ref', 'HEAD').strip() == 'refs/heads/side'
-        assert result['post_import']['state'] == 'synchronized', result
-        from test_native_service_sync import title
-        assert title(repo) == 'Service task'
+        assert 'post_import' not in result
+        assert title(repo) == 'Main title', 'the store must not roll back to the checked-out bytes'
+        drift = set(result['drift']['paths'])
+        assert REL.removeprefix('.taskmaster/') in drift and {p.removeprefix('.taskmaster/') for p in added} <= drift
+        # Nothing is written into the checked-out tree: no apply, no repair.
+        assert 'Main title' not in (repo / REL).read_text(encoding='utf-8')
+        assert not any((repo / path).exists() for path in added)
+        synced = client.sync()
+        assert synced['state'] == 'pending', synced
+        assert REL.removeprefix('.taskmaster/') in synced['unresolved']
+        assert title(repo) == 'Main title'
+        assert not any((repo / path).exists() for path in added)
+        # A later write to a drifted entity stays unpublished until resolution.
+        later = client.execute(request(client, 'later', 'Later title'))['receipt']
+        assert owner.flush(later['commit_seq'], timeout=1)['state'] == 'pending'
+        assert 'Later title' not in (repo / REL).read_text(encoding='utf-8')
+        assert client.git_status()['drift']['files']
+        # Managed Git refuses until the drift is resolved.
+        assert client.git_run(kind='commit', message='tm: blocked')['state'] == 'refused'
+        # Restoring the published generation resolves it; publication resumes.
+        git(repo, 'checkout', '-q', 'main')
+        assert client.sync()['state'] == 'synchronized'
+        assert client.git_status()['drift'] is None
+        assert owner.flush(later['commit_seq'])['state'] == 'exported'
+        assert 'Later title' in (repo / REL).read_text(encoding='utf-8')
         assert owner.git_pin is None
+
+
+def test_checkout_drift_can_be_released_explicitly(repo):
+    """H2: an operator may release drift; only then does ordinary sync treat files normally."""
+    with Coordinator(repo):
+        client = Client(repo, autostart=False, timeout=120)
+        git(repo, 'branch', 'side')
+        client.execute(request(client, 'main-title', 'Main title'))
+        assert client.git_run(kind='commit', message='tm: main')['state'] == 'completed'
+        assert client.git_run(kind='checkout', ref='side')['drift']['paths']
+        released = client.git_recover(release_drift=True)
+        assert released['state'] == 'clear' and released['released_drift'], released
+        assert client.git_status()['drift'] is None
 
 
 @pytest.mark.skipif(sys.platform != 'win32', reason='checks the Windows job path')
@@ -193,3 +239,4 @@ def test_non_windows_interruption_stays_a_recovery_requirement(repo, monkeypatch
         result = client.git_recover(acknowledge_quiescent=True)
         assert result['state'] in ('failed', 'ambiguous'), result
         assert any('acknowledged by operator' in notice for notice in result.get('notices', []))
+

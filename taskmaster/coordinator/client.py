@@ -234,8 +234,9 @@ class Client:
     def git_status(self):
         return self.call('git_status')
 
-    def git_recover(self, *, acknowledge_quiescent=False, accept_outcome=False):
-        return self.call('git_recover', acknowledge_quiescent=acknowledge_quiescent, accept_outcome=accept_outcome)
+    def git_recover(self, *, acknowledge_quiescent=False, accept_outcome=False, release_drift=False):
+        return self.call('git_recover', acknowledge_quiescent=acknowledge_quiescent, accept_outcome=accept_outcome,
+                         release_drift=release_drift)
 
     def cancel(self, caller_scope, request_id):
         return self.call('cancel', caller_scope=caller_scope, request_id=request_id)

@@ -4,7 +4,7 @@ committed or checked out only under the coordinator's publication pin.
     python -m taskmaster.coordinator.git_cli commit -m MESSAGE [--request-id ID]
     python -m taskmaster.coordinator.git_cli checkout REF [--request-id ID]
     python -m taskmaster.coordinator.git_cli status
-    python -m taskmaster.coordinator.git_cli recover [--acknowledge-quiescent] [--accept-outcome]
+    python -m taskmaster.coordinator.git_cli recover [--acknowledge-quiescent] [--accept-outcome] [--release-drift]
 Prints JSON. Exit 0 only for completed/clear outcomes.
 """
 from __future__ import annotations
@@ -35,6 +35,8 @@ def main(argv=None):
                          help='assert no Git/hook process of the interrupted operation remains')
     recover.add_argument('--accept-outcome', action='store_true',
                          help='accept an inspected ambiguous Git state and release the pin')
+    recover.add_argument('--release-drift', action='store_true',
+                         help='let ordinary sync import/repair paths a managed checkout left drifted')
     args = parser.parse_args(argv)
     from .client import Client
     client = Client(args.root, timeout=args.timeout + 60)
@@ -49,7 +51,7 @@ def main(argv=None):
         result = dict(result, state='clear' if result['active'] is None and result['pin'] is None else 'pinned')
     else:
         result = client.git_recover(acknowledge_quiescent=args.acknowledge_quiescent,
-                                    accept_outcome=args.accept_outcome)
+                                    accept_outcome=args.accept_outcome, release_drift=args.release_drift)
     print(json.dumps(result, indent=2, default=str))
     return 0 if result.get('state') in OK_STATES else 1
 

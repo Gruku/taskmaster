@@ -28,6 +28,10 @@ from .contained import ManagedChild
 
 MARKER_KEY = 'git.managed'
 LAST_KEY = 'git.last'
+DRIFT_KEY = 'git.drift'  # == native.projection.DRIFT_KEY
+DRIFT_GUIDANCE = ('managed checkout drift: the checked-out file differs from the published generation and is '
+                  'not imported or overwritten; restore the published file (e.g. check the previous branch out '
+                  'again), adopt it with sync take_file, or run git recover with release_drift')
 TOKEN_ENV = 'TASKMASTER_MANAGED_GIT'
 PUBLICATION_TIMEOUT = 10
 GIT_TIMEOUT = 600
@@ -187,7 +191,7 @@ def write_state(owner, **values):
         connection.execute('BEGIN IMMEDIATE')
         try:
             for name, value in values.items():
-                key = {'marker': MARKER_KEY, 'last': LAST_KEY}[name]
+                key = {'marker': MARKER_KEY, 'last': LAST_KEY, 'drift': DRIFT_KEY}[name]
                 if value is None:
                     connection.execute('DELETE FROM sync_state WHERE key=?', (key,))
                 else:
@@ -208,7 +212,74 @@ def _public(marker):
 
 def status(owner):
     return {'pin': owner.git_pin, 'active': _public(read_state(owner, MARKER_KEY)),
-            'last': read_state(owner, LAST_KEY), 'contained': jobs.supported()}
+            'last': read_state(owner, LAST_KEY), 'drift': read_state(owner, DRIFT_KEY),
+            'contained': jobs.supported()}
+
+
+# ── Checkout drift (step 9 adds per-checkout bases; until then drift is held) ──
+
+def _observed_digest(backlog, rel):
+    try:
+        content = _read_projection(backlog, rel)
+    except (OSError, UnsafePath):
+        return 'unreadable'
+    return None if content is None else hashlib.sha1(content).hexdigest()
+
+
+def checkout_drift(owner):
+    """{rel: observed sha1 | None (missing)} for every projection the checkout left
+    differing from the published generation, including files only the checkout has."""
+    from . import sync_files
+    backlog = owner.root / '.taskmaster'
+    with closing(owner._connect(readonly=True)) as connection:
+        published = dict(connection.execute(
+            "SELECT file,content_hash FROM projection WHERE file NOT LIKE 'local/%'").fetchall())
+    drift = {}
+    for rel, digest in published.items():
+        try:
+            content = _read_projection(backlog, rel)
+        except (OSError, UnsafePath):
+            drift[rel] = 'unreadable'
+            continue
+        if content is None or digest not in _variants(content):
+            drift[rel] = None if content is None else hashlib.sha1(content).hexdigest()
+    for rel in sync_files.discover(backlog).files:
+        if rel not in published and not rel.startswith('local/'):
+            drift[rel] = _observed_digest(backlog, rel)
+    return drift
+
+
+def prune_drift(owner):
+    """Drop drift entries whose file again carries the published bytes (or whose
+    published record and file are both absent). Caller holds publication."""
+    state = read_state(owner, DRIFT_KEY)
+    if not state:
+        return set()
+    files = dict(state.get('files') or {})
+    backlog = owner.root / '.taskmaster'
+    with closing(owner._connect(readonly=True)) as connection:
+        for rel in list(files):
+            row = connection.execute('SELECT content_hash FROM projection WHERE file=?', (rel,)).fetchone()
+            try:
+                content = _read_projection(backlog, rel)
+            except (OSError, UnsafePath):
+                continue
+            if (row is None and content is None) or (row is not None and content is not None
+                                                      and row[0] in _variants(content)):
+                del files[rel]
+    if files != state.get('files'):
+        write_state(owner, drift=dict(state, files=files) if files else None)
+        owner.export_needed.set()
+    return set(files)
+
+
+def drop_drift(owner, rels):
+    state = read_state(owner, DRIFT_KEY)
+    if not state:
+        return
+    files = {rel: value for rel, value in (state.get('files') or {}).items() if rel not in set(rels)}
+    write_state(owner, drift=dict(state, files=files) if files else None)
+    owner.export_needed.set()
 
 
 # ── Operation ──────────────────────────────────────────────────────────────
@@ -436,11 +507,22 @@ def _parents(root, commit):
 
 def settle(owner, marker, report, *, recovered=False):
     """Clear the marker only for a reconciled completed/failed outcome."""
+    drift = {}
     if report['state'] == 'completed' and marker['kind'] == 'checkout':
-        report['post_import'] = _post_import(owner, marker)
+        # The checked-out bytes are drift, not rollback authority: record, never import.
+        drift = checkout_drift(owner)
+        report['drift'] = {'state': 'pending' if drift else 'clean', 'count': len(drift),
+                           'paths': sorted(drift)[:200]}
+        if drift:
+            report['notices'].append(f'{len(drift)} projection file(s) differ from the published generation after '
+                                     f'checkout; {DRIFT_GUIDANCE}')
     if report['state'] in ('completed', 'failed'):
         last = dict(report, recovered=recovered, settled=time.time())
-        write_state(owner, marker=None, last=last)
+        if marker['kind'] == 'checkout' and report['state'] == 'completed':
+            state = {'op_id': marker['op_id'], 'target': marker.get('target'), 'files': drift}
+            write_state(owner, marker=None, last=last, drift=state if drift else None)
+        else:
+            write_state(owner, marker=None, last=last)
         owner.git_pin = None
         owner.export_needed.set()
         return last
@@ -451,23 +533,9 @@ def settle(owner, marker, report, *, recovered=False):
     return report
 
 
-def _post_import(owner, marker):
-    """Import the checked-out projections inside the same publication hold."""
-    pin, owner.git_pin = owner.git_pin, None  # publication is held by this thread
-    try:
-        result = owner.sync(caller_scope=f"git:{marker['request'][0]}"[:256], request_id=f"{marker['op_id']}:post",
-                            import_files=True, through=0, files=None, take_file=False)
-    except Exception as exc:  # the checkout completed; report, never replay it
-        result = {'state': 'pending', 'notices': [f'post-checkout import failed: {exc}']}
-    finally:
-        if owner.git_pin is None:
-            owner.git_pin = pin
-    return {key: result.get(key) for key in ('state', 'through', 'unresolved', 'notices') if key in result}
-
-
 # ── Recovery ───────────────────────────────────────────────────────────────
 
-def recover(owner, *, acknowledge_quiescent=False, accept_outcome=False, timeout=None):
+def recover(owner, *, acknowledge_quiescent=False, accept_outcome=False, release_drift=False, timeout=None):
     """Prove the recorded child boundary is over, reconcile, then (maybe) clear."""
     acquired = owner.publication.acquire(timeout=-1 if timeout is None else timeout)
     if not acquired:
@@ -475,9 +543,17 @@ def recover(owner, *, acknowledge_quiescent=False, accept_outcome=False, timeout
     try:
         marker = read_state(owner, MARKER_KEY)
         if marker is None:
+            released = None
+            if release_drift:
+                # Explicit: ordinary sync may now import (or repair) these paths.
+                released = sorted((read_state(owner, DRIFT_KEY) or {}).get('files') or {})
+                write_state(owner, drift=None)
             owner.git_pin = None
             owner.export_needed.set()
-            return {'state': 'clear', 'last': read_state(owner, LAST_KEY)}
+            result = {'state': 'clear', 'last': read_state(owner, LAST_KEY), 'drift': read_state(owner, DRIFT_KEY)}
+            if released is not None:
+                result['released_drift'] = released
+            return result
         outcome = marker.get('outcome')
         if outcome is None:
             proven, reason = _quiesce(owner, marker, acknowledge_quiescent)
