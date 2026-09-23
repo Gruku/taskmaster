@@ -8,7 +8,7 @@ from copy import deepcopy
 import re
 import sqlite3
 
-from . import contracts, events, receipts, schema, search, relations
+from . import contracts, events, neighbourhood, receipts, schema, search, relations
 from .contracts import Conflict, CancelledBeforeExecution  # public exceptions
 from .db import assert_native
 from .migrate import encode, _put_entity, _put_manifest, _put_relations
@@ -282,6 +282,8 @@ def execute(connection: sqlite3.Connection, envelope, *, cancelled=lambda: False
     try:
         connection.execute("BEGIN IMMEDIATE")
         identity = assert_native(connection)
+        # Native-only graph indexes, created by the writer on first use (idempotent).
+        neighbourhood.ensure_indexes(connection)
         if cancelled():
             raise CancelledBeforeExecution("cancelled while waiting for admission")
         if request["store_id"] != identity["store_id"]:

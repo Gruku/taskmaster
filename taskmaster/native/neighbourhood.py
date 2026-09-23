@@ -8,25 +8,43 @@ pair when their texts are equal or either one is a glob that `fnmatchcase`
 matches against the other's text (so a glob can match a glob). A pair weighs
 once per matching claim pair, duplicates included; prose never pairs.
 
-Candidates come from `ix_entity_paths_path` alone. A glob can only match text
-that starts with the glob's literal prefix (everything before its first
-`*`, `?` or `[`), so the globs that can match a text are found by, for every
-prefix of that text, the range of rows that continue it with a wildcard; the
-rows a glob can match are the range under its own literal prefix. A prefix-less
-glob (`*.py`) genuinely can match anything, so it examines every row.
+A glob can only match text starting with its literal prefix (everything before
+its first `*`, `?` or `[`). So the claims a glob can match lie in one range of
+the structural path index, and the globs that can match a text are those whose
+literal prefix is a prefix of it: found by a descending walk of the literal-
+prefix index that jumps straight to the next possible prefix, never by building
+a bound for every prefix (that is quadratic in the path length). A prefix-less
+glob (`*.py`) genuinely can match anything, so it visits every structural claim.
+
+`ensure_indexes` adds the three native-only indexes; the native writer creates
+them, never a reader or the legacy store. Without them every query here is
+still exact, only unindexed.
 """
 from collections import Counter
 import fnmatch
-import json
-import re
+import os
 
-_WILDCARD = re.compile(r"[*?\[]")
-_ROWS = ("SELECT e.rowid,e.kind,e.id,e.path,e.match_kind FROM entity_paths e "
-         "WHERE e.source IN ('anchors','location') AND NOT(e.kind=? AND e.id=?)")
-# Each (low, high) bound is one index range; the bounds table drives the join.
-_RANGES = ("SELECT e.rowid,e.kind,e.id,e.path,e.match_kind FROM json_each(?) b "
-           "JOIN entity_paths e ON e.path>=json_extract(b.value,'$[0]') AND e.path<json_extract(b.value,'$[1]') "
-           "WHERE e.source IN ('anchors','location') AND NOT(e.kind=? AND e.id=?)")
+_STRUCTURAL = "source IN ('anchors','location')"
+# The literal prefix as SQL; the index below is on this exact expression.
+LITERAL = "substr(path,1,min(" + ",".join(f"coalesce(nullif(instr(path,'{c}'),0),1073741824)" for c in "*?[") + ")-1)"
+INDEXES = (
+    f"CREATE INDEX IF NOT EXISTS ix_entity_paths_structural ON entity_paths(path) WHERE {_STRUCTURAL}",
+    f"CREATE INDEX IF NOT EXISTS ix_entity_paths_glob_literal ON entity_paths({LITERAL}) WHERE match_kind='glob' AND {_STRUCTURAL}",
+    "CREATE INDEX IF NOT EXISTS ix_handover_tasks_task ON handover_tasks(task_id,handover_id)",
+)
+_ROWS = f"SELECT kind,id,path,match_kind FROM entity_paths WHERE {_STRUCTURAL}"
+_GLOBS = f"FROM entity_paths WHERE match_kind='glob' AND {_STRUCTURAL}"
+
+
+_NAMES = ("ix_entity_paths_structural", "ix_entity_paths_glob_literal", "ix_handover_tasks_task")
+
+
+def ensure_indexes(connection):
+    """Create any missing native graph index; once present, one catalogue lookup."""
+    present = connection.execute("SELECT COUNT(*) FROM sqlite_schema WHERE type='index' AND name IN (?,?,?)", _NAMES).fetchone()[0]
+    if present != len(_NAMES):
+        for statement in INDEXES:
+            connection.execute(statement)
 
 
 def _after(prefix):
@@ -40,42 +58,62 @@ def _after(prefix):
     return None
 
 
+def _literal(pattern):
+    return pattern[:min((i for i in (pattern.find(c) for c in "*?[") if i >= 0), default=len(pattern))]
+
+
 def pairs(path, match, other_path, other_match):
     return (path == other_path or (match == "glob" and fnmatch.fnmatchcase(other_path, path))
             or (other_match == "glob" and fnmatch.fnmatchcase(path, other_path)))
 
 
-def candidates(connection, kind, ident, path, match):
-    """Every structural claim of another entity that can pair with (path, match)."""
-    found = {}
-    for row in connection.execute(_ROWS + " AND e.path=?", (kind, ident, path)):
-        found[row[0]] = row[1:]
-    # Globs whose literal prefix is a prefix of `path`: the wildcard follows it.
-    bounds = [(path[:i] + low, path[:i] + high) for i in range(len(path) + 1)
-              for low, high in (("*", "+"), ("?", "@"), ("[", "\\"))]
-    if match == "glob":
-        literal = _WILDCARD.split(path, maxsplit=1)[0]
-        high = _after(literal)
-        if high is None:
-            for row in connection.execute(_ROWS, (kind, ident)):
-                found[row[0]] = row[1:]
+def candidates(connection, path, match):
+    """`(claims that can pair with (path, match), index entries visited)`, own claims included.
+
+    Duplicate claims are all returned (each weighs); a claim is never returned by
+    two of the three discoveries, which partition by text.
+    """
+    found = connection.execute(_ROWS + " AND path=?", (path,)).fetchall()
+    visited = len(found)
+    # Globs whose literal prefix is a prefix of `path`. Invariant: every such
+    # literal not yet taken is <= bound (< bound when `strict`).
+    bound, strict = path, False
+    while True:
+        row = connection.execute(f"SELECT {LITERAL} {_GLOBS} AND {LITERAL}{'<' if strict else '<='}? "
+                                 f"ORDER BY {LITERAL} DESC LIMIT 1", (bound,)).fetchone()
+        visited += 1
+        if row is None:
+            break
+        literal = row[0]
+        if path.startswith(literal):
+            rows = connection.execute(f"SELECT kind,id,path,match_kind {_GLOBS} AND {LITERAL}=?", (literal,)).fetchall()
+            # Globs equal to `path` were already taken by the equality lookup.
+            found += [r for r in rows if r[2] != path]
+            visited += len(rows)
+            bound, strict = literal, True
         else:
-            bounds.append((literal, high))
-    for row in connection.execute(_RANGES, (json.dumps(bounds), kind, ident)):
-        found[row[0]] = row[1:]
-    return list(found.values())
+            bound, strict = path[:len(os.path.commonprefix([literal, path]))], False
+    if match == "glob":
+        literal = _literal(path)
+        high = _after(literal)
+        rows = connection.execute(_ROWS + (" AND path>=? AND path<?" if high else " AND path>=?"),
+                                  (literal, high) if high else (literal,)).fetchall()
+        visited += len(rows)
+        # Claims already taken above: equal text, or a glob found by its literal.
+        found += [r for r in rows if r[2] != path and not (r[3] == "glob" and path.startswith(_literal(r[2])))]
+    return found, visited
 
 
 def path_weights(connection, kind, ident, own):
-    """`(Counter{(kind, id): weight}, candidates examined)` for `own` (path, match) claims."""
-    weights, examined = Counter(), 0
+    """`(Counter{(kind, id): weight}, index entries visited)` for `own` (path, match) claims."""
+    weights, visited = Counter(), 0
     for path, match in own:
-        found = candidates(connection, kind, ident, path, match)
-        examined += len(found)
+        found, cost = candidates(connection, path, match)
+        visited += cost
         for other_kind, other_id, other_path, other_match in found:
-            if pairs(path, match, other_path, other_match):
+            if (other_kind, other_id) != (kind, ident) and pairs(path, match, other_path, other_match):
                 weights[other_kind, other_id] += 1
-    return weights, examined
+    return weights, visited
 
 
 def neighbours(connection, kind, ident):
@@ -83,16 +121,16 @@ def neighbours(connection, kind, ident):
 
     Self-pairs (a task listed twice in one handover) are excluded: an entity is
     not its own neighbour. Handover multiplicity, stored in `related` as repeated
-    rows, is summed into the weight.
+    rows, is summed into the weight. Co-members come from `handover_tasks`, the
+    source `related` itself is built from, so non-string task ids pair alike.
     """
     own = connection.execute("SELECT path,match_kind FROM entity_paths WHERE kind=? AND id=? "
-                             "AND source IN ('anchors','location')", (kind, ident)).fetchall()
+                             f"AND {_STRUCTURAL}", (kind, ident)).fetchall()
     found = Counter({(k, i, "path"): w for (k, i), w in path_weights(connection, kind, ident, own)[0].items()})
     if kind == "task":
         handovers = connection.execute(
-            "SELECT DISTINCT c.public_id FROM memberships m JOIN entity_core c USING(entity_key) "
-            "WHERE m.target_kind='task' AND m.target_id=? AND m.field='task_ids' AND c.kind='handover' AND c.deleted=0",
-            (ident,)).fetchall()
+            "SELECT DISTINCT h.handover_id FROM handover_tasks h JOIN entity_core c "
+            "ON c.kind='handover' AND c.public_id=h.handover_id AND c.deleted=0 WHERE h.task_id=?", (ident,)).fetchall()
         for (handover,) in handovers:
             members = Counter(task for (task,) in connection.execute(
                 "SELECT task_id FROM handover_tasks WHERE handover_id=?", (handover,)))

@@ -198,7 +198,9 @@ def test_metadata_edit_has_no_graph_or_fts_work_when_inputs_are_unchanged(native
         connection.set_trace_callback(statements.append)
         receipt = execute(connection, envelope())
         assert all(value == 0 for value in receipt["work"].values())
-        assert not any("entity_paths" in sql or "FROM related" in sql or "INTO related" in sql or "document_search " in sql for sql in statements)
+        # The native graph indexes (N14) are looked up, and added once; that is schema, not graph work.
+        statements = [sql for sql in statements if not sql.startswith(("CREATE INDEX IF NOT EXISTS", "SELECT COUNT(*) FROM sqlite_schema"))]
+        assert not [sql for sql in statements if "entity_paths" in sql or "FROM related" in sql or "INTO related" in sql or "document_search " in sql]
 
 
 def test_search_replacement_keeps_stable_document_identity(native):
@@ -223,3 +225,24 @@ def test_native_admission_does_not_read_unrelated_meta_payloads(native):
         with Repository(connection).snapshot() as query:
             query.get("task", "same", fields=["id"])
         assert all("WHERE" in sql for sql in statements if "FROM meta" in sql)
+
+
+def test_native_writer_creates_the_graph_indexes_and_legacy_ddl_has_none(native):
+    """The N14 graph indexes are native-only: the writer adds them; legacy DDL never does."""
+    from taskmaster import store
+    from taskmaster.native.neighbourhood import INDEXES
+    names = ("ix_entity_paths_structural", "ix_entity_paths_glob_literal", "ix_handover_tasks_task")
+    assert not any(name in store.SCHEMA_SQL for name in names)
+    assert all(any(name in statement for statement in INDEXES) for name in names)
+    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+        def present():
+            return {row[0] for row in connection.execute("SELECT name FROM sqlite_schema WHERE type='index'")} & set(names)
+        assert present() == set()
+        execute(connection, envelope())
+        assert present() == set(names)
+        statements = []
+        connection.set_trace_callback(statements.append)
+        execute(connection, envelope(args={"id": "same", "set": {"next_step": "Again"}}, key="again"))
+        connection.set_trace_callback(None)
+        assert present() == set(names)
+        assert not any(sql.startswith("CREATE INDEX") for sql in statements), statements
