@@ -60,9 +60,6 @@ GUIDANCE: dict[tuple[str, "str | None"], str] = {
         f"{_NATIVE}, and the one-time lane backfill has only a legacy implementation. Set a lane per "
         "task with `backlog_update_task(task_id, field=\"lane\", value=...)`, and use "
         "`backlog_skip_gate` for gates in-flight work has already passed."),
-    ("backlog_index_status", None): (
-        f"{_NATIVE}, which keeps no separate derived index to report or rebuild: its search and graph "
-        "tables are maintained inside every command. Use `backlog_store_status` for store health."),
     ("backlog_link", "reconcile"): (
         f"{_NATIVE}, where every link write records its inverse in the same transaction. Run "
         "`backlog_link(action=\"validate\")` to list any asymmetric or orphaned links, and fix them "

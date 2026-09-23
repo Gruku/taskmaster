@@ -21,7 +21,6 @@ REFUSALS = {
     ("backlog_migrate_v4", None): (lambda: bs.backlog_migrate_v4(), "backlog_store_status"),
     ("backlog_canonicalize_layout", None): (lambda: bs.backlog_canonicalize_layout(), ".taskmaster/"),
     ("backlog_backfill_lanes", None): (lambda: bs.backlog_backfill_lanes(), "backlog_update_task"),
-    ("backlog_index_status", None): (lambda: bs.backlog_index_status(rebuild=True), "backlog_store_status"),
     ("backlog_link", "reconcile"): (lambda: bs.backlog_link(action="reconcile"), 'action="validate"'),
 }
 JSON_ROUTERS = {"backlog_link", "backlog_linear"}
