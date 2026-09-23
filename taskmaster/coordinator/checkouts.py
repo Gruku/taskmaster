@@ -492,6 +492,19 @@ def _scan_read(scan, rel):
     return None if observed is None else observed.content
 
 
+def observed_read(backlog: Path, rel: str, scan=None):
+    """`read` through sync_files, the one projection reader sync may use, with or
+    without a scan (a named-file sync has none)."""
+    from . import sync_files
+    if scan is not None:
+        return _scan_read(scan, rel)
+    try:
+        observed = sync_files._read_observed(backlog, rel, MAX_READ)
+    except (OSError, ValueError):
+        return UNREADABLE
+    return None if observed is None else observed.content
+
+
 def recover_intent(owner, checkout: Checkout) -> list[str]:
     """Settle a linked publication a crash interrupted; returns what was found."""
     value = read_record(owner, checkout.id) or {}

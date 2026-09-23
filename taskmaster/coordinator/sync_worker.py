@@ -413,7 +413,7 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
                                                          "file NOT LIKE 'local/%' AND content_hash!=''").fetchall():
                         if rel in held or not checkouts.derived(rel):
                             continue
-                        actual = checkouts.read(backlog, rel)
+                        actual = checkouts.observed_read(backlog, rel, scan)
                         if actual in (None, checkouts.UNREADABLE) or value not in checkouts._variants(actual):
                             pending(rel, 'derived index differs from the published generation; '
                                     + checkouts.DERIVED_GUIDANCE)
