@@ -153,6 +153,19 @@ def _variants(content):
             projection._digest(projection._crlf(content))}
 
 
+def _same_text_digests(owner, backlog, rel):
+    """D8: the disk file's digests when its text equals the trusted published bytes up to
+    line endings (D7: Git's eol conversion writes a mixed-EOL generation in a uniform
+    form, which sync accepts), else None. Read only for files no digest variant matches."""
+    from . import checkouts, sync_files
+    content = _read_projection(backlog, rel)
+    if content is None:
+        return None
+    with closing(owner._connect(readonly=True)) as connection:
+        base = checkouts.main_base(connection, rel)
+    return sync_files.Digests.of(content) if checkouts.same_text(base, content) else None
+
+
 def generation(owner, through, backlog=None):
     """The published generation and whether every file on disk still carries it.
 
@@ -179,13 +192,17 @@ def generation(owner, through, backlog=None):
             if known is None:
                 observed = scan.observe(rel, authored=False, limit=MAX_PROJECTION_BYTES)
                 known = None if observed is None else sync_files.Digests.of(observed.content)
+            if known is not None and digest not in known.variants:
+                known = _same_text_digests(owner, backlog, rel)
         except (OSError, ValueError) as exc:
             mismatched.append(f'{rel}: {exc}')
             continue
-        if known is None or digest not in known.variants:
+        if known is None:
             mismatched.append(rel)
             continue
-        # The Git blobs this generation may be committed as (exact, or LF-normalised).
+        # The Git blobs this generation may be committed as: the disk bytes exactly, or
+        # LF-normalised. Both carry the generation's text (up to line endings), so
+        # whatever eol conversion Git applies when staging, a foreign blob is caught.
         blobs[rel] = sorted({known.blob, known.blob_lf})
     sync_files.save_scan(owner.root, scan)
     value = hashlib.sha256(json.dumps(rows, separators=(',', ':')).encode()).hexdigest()

@@ -42,6 +42,23 @@ def _variants(content):
     return {hashlib.sha1(value).hexdigest() for value in (content, lf, lf.replace(b'\n', b'\r\n'))}
 
 
+def _same_text(base, content) -> bool:
+    """D7/D8: equal to the trusted published bytes up to line endings (Git's eol
+    conversion writes a mixed-EOL generation in a uniform form)."""
+    return base is not None and base.replace(b'\r\n', b'\n') == content.replace(b'\r\n', b'\n')
+
+
+def _published_bases(connection, published, staged) -> dict:
+    """{rel: bytes} of the staged paths' retained published bases that carry the recorded digest."""
+    bases = {}
+    for path in staged:
+        rel = path[len('.taskmaster/'):]
+        row = connection.execute('SELECT content FROM projection_base WHERE file=?', (rel,)).fetchone()
+        if row is not None and row[0] is not None and hashlib.sha1(bytes(row[0])).hexdigest() == published.get(rel):
+            bases[rel] = bytes(row[0])
+    return bases
+
+
 def _same(left, right) -> bool:
     return os.path.normcase(str(Path(left).resolve())) == os.path.normcase(str(Path(right).resolve()))
 
@@ -89,6 +106,7 @@ def check(root) -> tuple[bool, str]:
             row = connection.execute("SELECT value_json FROM sync_state WHERE key='git.managed'").fetchone()
             published = dict(connection.execute(
                 "SELECT file,content_hash FROM projection WHERE file NOT LIKE 'local/%'").fetchall())
+            bases = _published_bases(connection, published, staged)
     except sqlite3.Error as exc:
         return False, f'cannot read the native store ({exc}); refusing projection staging\n{GUIDANCE}'
     marker = None if row is None else json.loads(row[0])
@@ -115,7 +133,8 @@ def check(root) -> tuple[bool, str]:
             content = (root / path).read_bytes()
         except OSError:
             content = None
-        if (digest is None or content is None or digest not in _variants(content)
+        if (digest is None or content is None
+                or (digest not in _variants(content) and not _same_text(bases.get(rel), content))
                 or blobs[path] not in {_blob_id(content), _blob_id(content.replace(b'\r\n', b'\n'))}):
             stale.append(path)
     if stale:
