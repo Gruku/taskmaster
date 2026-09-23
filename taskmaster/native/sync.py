@@ -304,6 +304,10 @@ def apply(transaction, operation, arguments):
         if mode == "apply":
             _queue_entity(transaction, kind, ident, rel)
     elif mode == "conflict":
+        # The bytes parsed, so a quarantine recorded for them no longer holds; the
+        # conflict flag alone keeps the file.
+        connection.execute("UPDATE projection SET quarantined=0,quarantine_hash=NULL,quarantine_mtime=NULL,"
+                           "quarantine_size=NULL WHERE file=? AND quarantined=1", (rel,))
         projection.ensure_conflict_table(connection)
         connection.execute("INSERT INTO projection_conflict(file,kind,id,flagged_at,file_hash,file_content) "
                            "VALUES(?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'),?,?) ON CONFLICT(file) DO UPDATE SET "

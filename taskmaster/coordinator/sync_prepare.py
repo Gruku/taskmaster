@@ -90,8 +90,12 @@ def prepare(snapshot, backlog_dir, rel, *, take_file=False, checkout=None):
                 return Prepared(rel, "establish", "file equals the published generation", observed, None)
     if record is not None and observed.digest == record[0] and not held:
         return result(None if trusted else "observe", "file matches the trusted projection")
-    if not take_file and record is not None and record[1] and observed.digest == record[2]:
-        return Prepared(rel, "quarantined", "unchanged quarantined bytes; repair the file before retrying", observed, None)
+    # Unchanged quarantined bytes are parsed again: a parser fix (D2: prose that
+    # merely resembles a conflict marker) must make them eligible without a repair.
+    # Only a still-failing parse is skipped without recording a new quarantine.
+    unchanged_quarantine = not take_file and record is not None and record[1] and observed.digest == record[2]
+    still_quarantined = Prepared(rel, "quarantined", "unchanged quarantined bytes; repair the file before retrying",
+                                 observed, None)
     try:
         parsed = projection_parse.projected_file(kind, ident, observed.content, lookup)
         if parsed is None:
@@ -106,6 +110,8 @@ def prepare(snapshot, backlog_dir, rel, *, take_file=False, checkout=None):
             # An explicit resolution keeps the last good state rather than
             # recording a quarantine the caller did not ask for.
             raise ValueError(f"{rel} cannot be taken: it does not parse ({exc})") from None
+        if unchanged_quarantine:
+            return still_quarantined
         return result("quarantine", f"invalid authored projection: {exc}")
     # Tasks are owned by their task documents. A legacy inline `epics[].tasks`
     # entry is a stub, never a whole row: importing it would replace the task.
@@ -116,6 +122,8 @@ def prepare(snapshot, backlog_dir, rel, *, take_file=False, checkout=None):
                   f"their task documents, so remove the inline tasks and edit tasks/<id>.md instead")
         if take_file:
             raise ValueError(f"{rel} cannot be taken: {reason}")
+        if unchanged_quarantine:
+            return still_quarantined
         return result("quarantine", f"invalid authored projection: {reason}")
     base_rows = None
     if trusted and not take_file:

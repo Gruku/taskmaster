@@ -129,8 +129,19 @@ def flatten_backlog(data: Mapping[str, Any]) -> dict[tuple[str, str], Document]:
     return result
 
 
+# Git writes a conflict's outer markers as whole lines at column 0: seven `<` or
+# `>` followed by a space and label, or by nothing. `=======` and diff3's
+# `|||||||` only ever appear between them, so on their own they are prose (a
+# setext heading underline, a quoted pytest summary rule) and never a conflict.
+_CONFLICT_MARKER = re.compile(r"^(?:<{7}|>{7})(?:[ \t].*)?\r?$", re.MULTILINE)
+
+
+def has_conflict_markers(raw: str) -> bool:
+    return _CONFLICT_MARKER.search(raw) is not None
+
+
 def entity_text(kind: str, raw: str) -> Document:
-    if any(marker in raw for marker in ("<<<<<<<", "=======", ">>>>>>>")):
+    if has_conflict_markers(raw):
         raise ValueError("git conflict markers")
     fm, body = parse_frontmatter(raw)
     if not fm or not isinstance(fm, dict):
