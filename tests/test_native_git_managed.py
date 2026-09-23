@@ -106,11 +106,17 @@ def test_git_failure_is_reported_and_releases_the_pin(repo):
         assert owner.flush(later['commit_seq'])['state'] == 'exported'
 
 
-def test_nothing_to_commit_is_a_failed_outcome(repo):
+def test_nothing_to_commit_is_a_completed_no_op(repo):
+    # N13 set-aside review N1: HEAD already records the generation - a successful no-op,
+    # never a failure and never an empty commit.
     with Coordinator(repo):
         client = Client(repo, autostart=False, timeout=120)
-        assert client.git_run(kind='commit', message='one')['state'] in ('completed', 'failed')
-        assert client.git_run(kind='commit', message='two')['state'] == 'failed'
+        assert client.git_run(kind='commit', message='one')['state'] == 'completed'
+        count = commit_count(repo)
+        again = client.git_run(kind='commit', message='two')
+        assert again['state'] == 'completed' and again['no_changes'] is True, again
+        assert again.get('commit') is None and commit_count(repo) == count
+        assert not any('disagrees' in notice for notice in again['notices']), again
 
 
 def test_refusals_leave_no_marker(repo):
