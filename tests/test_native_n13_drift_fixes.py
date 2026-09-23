@@ -190,3 +190,134 @@ def test_d7_fresh_linked_worktree_of_a_mixed_generation_is_not_held(repo, eol):
         synced = client.sync(worktree=linked)
         assert synced['state'] == 'synchronized', synced
         assert not synced['imports']
+
+
+# ── D6: a managed way back after a managed checkout ────────────────────────
+
+def _tree(repo, rev):
+    return {path.removeprefix('.taskmaster/') for path in
+            git(repo, 'ls-tree', '-r', '--name-only', rev, '--', '.taskmaster').split()}
+
+
+def _newer_generation_on_main(repo, client):
+    """main gains a newer title and a projection file `old` lacks, committed by managed Git."""
+    head = git(repo, 'rev-parse', '--abbrev-ref', 'HEAD').strip()
+    git(repo, 'branch', 'old')
+    client.execute(request(client, 'main-title', 'Main title'))
+    note = request(client, 'main-note')
+    note.update(operation='note.create', arguments={'text': 'main only note'})
+    client.execute(note)
+    assert client.git_run(kind='commit', message='tm: main')['state'] == 'completed'
+    added = _tree(repo, head) - _tree(repo, 'old')
+    assert added and FILE not in added
+    return head, added
+
+
+def _published_files(repo):
+    return {path.relative_to(repo / '.taskmaster').as_posix(): path.read_bytes()
+            for path in (repo / '.taskmaster').rglob('*') if path.is_file()
+            and not path.relative_to(repo / '.taskmaster').as_posix().startswith('local/')}
+
+
+def _assert_home(repo, client, head, before):
+    assert git(repo, 'symbolic-ref', 'HEAD').strip() == f'refs/heads/{head}'
+    assert title(repo) == 'Main title'
+    assert client.git_status()['drift'] is None
+    synced = client.sync()
+    assert synced['state'] == 'synchronized', synced
+    assert not synced['imports'], 'returning home imports nothing'
+    assert _published_files(repo) == before
+    assert git(repo, 'status', '--porcelain', '--', '.taskmaster').strip() == ''
+
+
+def test_d6_managed_checkout_back_while_drift_is_held(repo):
+    with Coordinator(repo) as owner:
+        client = client_for(repo)
+        head, added = _newer_generation_on_main(repo, client)
+        before = _published_files(repo)
+        away = client.git_run(kind='checkout', ref='old')
+        assert away['state'] == 'completed' and FILE in away['drift']['paths'], away
+        back = client.git_run(kind='checkout', ref=head)
+        assert back['state'] == 'completed', back
+        _assert_home(repo, client, head, before)
+        assert owner.git_pin is None
+
+
+def test_d6_managed_checkout_back_after_take_published(repo):
+    """take_published leaves published bytes that `old` tracks differently (dirty) or not at
+    all (untracked): Git alone refuses to overwrite them; they are the store's own bytes."""
+    with Coordinator(repo) as owner:
+        client = client_for(repo)
+        head, added = _newer_generation_on_main(repo, client)
+        before = _published_files(repo)
+        assert client.git_run(kind='checkout', ref='old')['state'] == 'completed'
+        released = client.git_recover(release_drift='take_published')
+        assert released['state'] == 'clear', released
+        assert all((repo / '.taskmaster' / rel).exists() for rel in added)
+        back = client.git_run(kind='checkout', ref=head)
+        assert back['state'] == 'completed', back
+        _assert_home(repo, client, head, before)
+        assert owner.git_pin is None
+
+
+def test_d6_managed_checkout_back_never_overwrites_authored_bytes(repo):
+    with Coordinator(repo):
+        client = client_for(repo)
+        head, added = _newer_generation_on_main(repo, client)
+        assert client.git_run(kind='checkout', ref='old')['state'] == 'completed'
+        # An edit typed over held drift, and a foreign file where main tracks a projection.
+        edited = (repo / REL).read_bytes().replace(b'Service task', b'Typed while away')
+        (repo / REL).write_bytes(edited)
+        foreign = sorted(added)[0]
+        (repo / '.taskmaster' / foreign).parent.mkdir(parents=True, exist_ok=True)
+        (repo / '.taskmaster' / foreign).write_bytes(b'not the store\'s bytes\n')
+        back = client.git_run(kind='checkout', ref=head)
+        assert back['state'] in ('failed', 'refused'), back
+        assert git(repo, 'rev-parse', '--abbrev-ref', 'HEAD').strip() == 'old'  # never moved
+        assert (repo / REL).read_bytes() == edited
+        assert (repo / '.taskmaster' / foreign).read_bytes() == b'not the store\'s bytes\n'
+        assert title(repo) == 'Main title'
+
+
+def test_d6_crash_after_setting_files_aside_is_undone_by_recovery(repo):
+    with Coordinator(repo) as owner:
+        client = client_for(repo)
+        head, added = _newer_generation_on_main(repo, client)
+        assert client.git_run(kind='checkout', ref='old')['state'] == 'completed'
+        assert client.git_recover(release_drift='take_published')['state'] == 'clear'
+        published = {rel: (repo / '.taskmaster' / rel).read_bytes() for rel in [FILE, *added]}
+
+        def crash(stage):
+            if stage == 'git_aside_moved':
+                raise RuntimeError('simulated coordinator death after the aside')
+        owner.checkpoint = crash
+        with pytest.raises(Exception, match='simulated'):
+            client.git_run(kind='checkout', ref=head)
+        owner.checkpoint = lambda stage: None
+        assert not (repo / REL).exists(), 'the files were set aside before the crash'
+        recovered = client.git_recover()
+        assert recovered['state'] == 'failed', recovered
+        assert git(repo, 'rev-parse', '--abbrev-ref', 'HEAD').strip() == 'old'
+        assert {rel: (repo / '.taskmaster' / rel).read_bytes() for rel in published} == published
+        assert not (repo / '.git' / 'taskmaster-aside').exists() or not any((repo / '.git' / 'taskmaster-aside').iterdir())
+        assert owner.git_pin is None
+        # The round trip still completes afterwards.
+        assert client.git_run(kind='checkout', ref=head)['state'] == 'completed'
+
+
+def test_d6_linked_checkout_round_trip(repo):
+    with Coordinator(repo):
+        client = client_for(repo)
+        head, added = _newer_generation_on_main(repo, client)
+        linked = repo.parent / 'linked-rt'
+        git(repo, 'worktree', 'add', '-q', '-b', 'feature', str(linked), head)
+        assert client.sync(worktree=linked)['state'] == 'synchronized'
+        before = _published_files(linked)
+        away = client.git_run(kind='checkout', ref='old', worktree=linked)
+        assert away['state'] == 'completed' and away['drift']['count'], away
+        back = client.git_run(kind='checkout', ref='feature', worktree=linked)
+        assert back['state'] == 'completed', back
+        synced = client.sync(worktree=linked)
+        assert synced['state'] == 'synchronized', synced
+        assert not synced['imports'] and _published_files(linked) == before
+        assert title(repo) == 'Main title'
