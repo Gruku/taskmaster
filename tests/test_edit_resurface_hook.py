@@ -243,76 +243,70 @@ def test_dedupe_per_session(stored_root, store_kind):
 
 
 @STORES
-def test_a_new_change_seq_reprints_a_changed_line(tmp_path, store_kind):
+def test_a_new_change_seq_reprints_a_changed_line(tmp_path, monkeypatch, store_kind):
     """Dedupe is scoped to a store revision: the store's revision versus the seq
     recorded beside the memoised line in `local/hook-seen/`."""
-    root = _store_root(tmp_path, [
-        ("B-900", "bug", "open", "svc/a.py", "exact", "location")], store_kind)
+    twins, root = _twin(tmp_path, monkeypatch, store_kind, _bug("svc/a.py"))
     (root / "svc").mkdir(parents=True)
     (root / "svc" / "a.py").write_text("x", encoding="utf-8")
-    assert context(_run(root, "svc/a.py")) == "TM: svc/a.py → B-900 open"
+    assert context(_run(root, "svc/a.py")) == "TM: svc/a.py → B-001 open"
     assert _run(root, "svc/a.py").stdout == ""
 
-    _append_docs(root, [("B-901", "bug", "open", "svc/a.py", "exact", "location")], store_kind)
-    assert context(_run(root, "svc/a.py")) == "TM: svc/a.py → B-900 open, B-901 open"
+    _call(twins, _bug("svc/a.py"))
+    assert context(_run(root, "svc/a.py")) == "TM: svc/a.py → B-001 open, B-002 open"
 
 
 @STORES
-def test_an_unrelated_change_does_not_repeat_the_same_line(tmp_path, store_kind):
+def test_an_unrelated_change_does_not_repeat_the_same_line(tmp_path, monkeypatch, store_kind):
     """A new seq alone is not news — the line is only reprinted when it differs."""
-    root = _store_root(tmp_path, [
-        ("B-900", "bug", "open", "svc/a.py", "exact", "location")], store_kind)
+    twins, root = _twin(tmp_path, monkeypatch, store_kind, _bug("svc/a.py"))
     (root / "svc").mkdir(parents=True)
     (root / "svc" / "a.py").write_text("x", encoding="utf-8")
     assert _run(root, "svc/a.py").stdout != ""
-    _append_docs(root, [("B-901", "bug", "open", "svc/elsewhere.py", "exact", "location")], store_kind)
+    _call(twins, _bug("svc/elsewhere.py"))
     assert _run(root, "svc/a.py").stdout == ""
 
 
 @STORES
-def test_one_paths_print_does_not_answer_for_another(tmp_path, store_kind):
+def test_one_paths_print_does_not_answer_for_another(tmp_path, monkeypatch, store_kind):
     """The seq is recorded per path, not per session file.
 
     A single top-level seq would let the print for one path mark every other
     path as already answered at that revision, and the second path's changed
     line would never be shown.
     """
-    root = _store_root(tmp_path, [
-        ("B-1", "bug", "open", "svc/a.py", "exact", "location"),
-        ("B-2", "bug", "open", "svc/b.py", "exact", "location"),
-    ], store_kind)
+    twins, root = _twin(tmp_path, monkeypatch, store_kind, _bug("svc/a.py"), _bug("svc/b.py"))
     (root / "svc").mkdir(parents=True)
     for name in ("a.py", "b.py"):
         (root / "svc" / name).write_text("x", encoding="utf-8")
 
-    assert context(_run(root, "svc/a.py")) == "TM: svc/a.py → B-1 open"
-    assert context(_run(root, "svc/b.py")) == "TM: svc/b.py → B-2 open"
+    assert context(_run(root, "svc/a.py")) == "TM: svc/a.py → B-001 open"
+    assert context(_run(root, "svc/b.py")) == "TM: svc/b.py → B-002 open"
 
-    # One change touching both paths, then b is edited first and prints.
-    _append_docs(root, [
-        ("B-3", "bug", "open", "svc/a.py", "exact", "location"),
-        ("B-4", "bug", "open", "svc/b.py", "exact", "location"),
-    ], store_kind)
-    assert context(_run(root, "svc/b.py")) == "TM: svc/b.py → B-2 open, B-4 open"
+    # One bug touching both paths, then b is edited first and prints. B-003 shares
+    # a path with each earlier bug, so each line also counts one related item.
+    _call(twins, _bug("svc/a.py", "svc/b.py"))
+    assert context(_run(root, "svc/b.py")) == "TM: svc/b.py → B-002 open, B-003 open (+1 related)"
     # a's line changed too, and b's print must not have answered for it.
-    assert context(_run(root, "svc/a.py")) == "TM: svc/a.py → B-1 open, B-3 open"
+    assert context(_run(root, "svc/a.py")) == "TM: svc/a.py → B-001 open, B-003 open (+1 related)"
 
 
 @STORES
-def test_silent_edit_does_not_burn_the_dedupe_slot(tmp_path, store_kind):
+def test_silent_edit_does_not_burn_the_dedupe_slot(tmp_path, monkeypatch, store_kind):
     """Dedupe suppresses a repeated *line*, not a repeated edit.
 
     Editing a file before anyone files a bug against it must not mute the line
     for the rest of the session once the bug exists.
     """
-    root = _store_root(tmp_path, [
-        ("B-900", "bug", "fixed", "svc/quiet.py", "exact", "location")], store_kind)
+    twins, root = _twin(tmp_path, monkeypatch, store_kind, _bug("svc/quiet.py"),
+                        ("backlog_bug_update", {"bug_id": "B-001", "field": "fix_commit", "value": "abc1234"}),
+                        ("backlog_bug_update", {"bug_id": "B-001", "field": "status", "value": "fixed"}))
     (root / "svc").mkdir(parents=True)
     (root / "svc" / "quiet.py").write_text("x", encoding="utf-8")
     assert _run(root, "svc/quiet.py").stdout == ""
 
-    _append_docs(root, [("B-901", "bug", "open", "svc/quiet.py", "exact", "location")], store_kind)
-    assert context(_run(root, "svc/quiet.py")) == "TM: svc/quiet.py → B-901 open (+1 closed)"
+    _call(twins, _bug("svc/quiet.py"))
+    assert context(_run(root, "svc/quiet.py")) == "TM: svc/quiet.py → B-002 open (+1 closed)"
 
 
 def test_dedupe_prunes_seen_files_older_than_seven_days(stored_root):
@@ -515,73 +509,26 @@ def _append_rows(root: Path, rows, *, bump_seq: bool = False) -> None:
 
 
 
-# ── Both stores: the same entities, legacy or activated native ──
-
-def _docs(rows):
-    """rows: (entity_id, kind, status, path, match_kind, source) -> {(kind, id): (doc, body)}."""
-    docs = {}
-    for eid, kind, status, path, _mk, source in rows:
-        doc, body = docs.setdefault((kind, eid), ({"id": eid, "status": status}, ""))
-        if source == "prose":
-            docs[kind, eid] = (doc, body + f"See `{path}`. ")
-        else:
-            doc.setdefault(source, []).append(path)
-    return docs
+# ── Both stores: the same public calls, legacy or activated native ──
 
 
-def _derive(con, keys) -> None:
-    con.row_factory = sqlite3.Row
-    store.Store.__new__(store.Store)._refresh_derived(
-        type("Tx", (), {"connection": con, "_derived_keys": set(keys)})())
-    con.row_factory = None
+def _twin(tmp_path: Path, monkeypatch, store_kind: str, *calls):
+    """`(twins, root)`: every call runs through the public tools against a legacy project
+    and its activated native copy (native commands, N14 indexes), answers compared."""
+    from native_twins import make_twins  # noqa: PLC0415
+    twins = make_twins(tmp_path, monkeypatch)
+    for call in calls:
+        _call(twins, call)
+    return twins, twins.legacy if store_kind == "legacy" else twins.native
 
 
-def _store_root(tmp_path: Path, rows, store_kind: str) -> Path:
-    """A project whose store holds `rows` as real documents, derived by the store itself;
-    `native` then activates it, so relations come from the native core, not raw rows."""
-    root = tmp_path / "syn"
-    (root / ".taskmaster" / "local").mkdir(parents=True)
-    (root / ".taskmaster" / "backlog.yaml").write_text("version: 4\n", encoding="utf-8")
-    con = sqlite3.connect(root / ".taskmaster" / "local" / "store.db", isolation_level=None)
-    con.executescript(store.SCHEMA_SQL)
-    con.executemany("INSERT OR REPLACE INTO meta VALUES(?,?)", [("schema_version", "1"), ("creation_token", "syn")])
-    docs = _docs(rows)
-    for (kind, eid), (doc, body) in docs.items():
-        con.execute("insert into entities(kind,id,epic,status,archived,deleted,doc,body,rev,updated_seq) "
-                    "values (?,?,NULL,?,0,0,?,?,1,0)", (kind, eid, doc["status"], json.dumps(doc), body))
-    _derive(con, docs)
-    con.close()
-    if store_kind == "native":
-        from native_twins import activate_native, is_native  # noqa: PLC0415
-        activate_native(root)
-        assert is_native(root)
-    return root
+def _bug(*location):
+    return ("backlog_bug_create", {"title": "Bug", "location": list(location)})
 
 
-def _append_docs(root: Path, rows, store_kind: str) -> None:
-    """New entities in one new store revision, written as each store writes them."""
-    docs = _docs(rows)
-    con = sqlite3.connect(root / ".taskmaster" / "local" / "store.db", isolation_level=None)
-    try:
-        con.execute("BEGIN IMMEDIATE")
-        if store_kind == "native":
-            from taskmaster.native import commands  # noqa: PLC0415
-            from taskmaster.native.db import assert_native  # noqa: PLC0415
-            from taskmaster.native.migrate import _put_manifest  # noqa: PLC0415
-            tx = commands.Transaction(con, {"operation": "tests.append", "caller_scope": "tests"}, assert_native(con))
-            for (kind, eid), (doc, body) in docs.items():
-                tx.create(kind, doc, body or None, requested_id=eid)
-            _put_manifest(con, event_high_water=tx.seq)
-        else:
-            for (kind, eid), (doc, body) in docs.items():
-                con.execute("insert into entities(kind,id,epic,status,archived,deleted,doc,body,rev,updated_seq) "
-                            "values (?,?,NULL,?,0,0,?,?,1,0)", (kind, eid, doc["status"], json.dumps(doc), body))
-            _derive(con, docs)
-            con.execute("insert into changes(ts,session,tool,kind,id,op) "
-                        "values ('2026-09-05','s','test','bug','B-x','create')")
-        con.commit()
-    finally:
-        con.close()
+def _call(twins, call):
+    tool, kwargs = call
+    return twins.same(tool, **kwargs)
 
 
 def _resolve(mod, root: Path, rel: str):
@@ -633,19 +580,19 @@ def test_format_counts_closed_and_prose(tmp_path):
 
 
 @STORES
-def test_related_open_work_is_counted_not_named(tmp_path, store_kind):
+def test_related_open_work_is_counted_not_named(tmp_path, monkeypatch, store_kind):
     """Work that travels with the matched item is counted; the ids stay behind backlog_query.
-    t-9 shares a path with B-1 and is open (counted); t-8 shares one too but is done."""
+    test-epic-001 shares a path with B-001 and is open (counted); test-epic-002 shares
+    one too but is archived."""
     mod = _load_hook_module()
-    root = _store_root(tmp_path, [
-        ("B-1", "bug", "open", "a/b.py", "exact", "location"),
-        ("B-1", "bug", "open", "other/z.py", "exact", "location"),
-        ("B-1", "bug", "open", "other/y.py", "exact", "location"),
-        ("t-9", "task", "todo", "other/z.py", "exact", "anchors"),
-        ("t-8", "task", "done", "other/y.py", "exact", "anchors"),
-    ], store_kind)
+    task = {"title": "Task", "epic": "test-epic", "phase": "dev"}
+    twins, root = _twin(tmp_path, monkeypatch, store_kind,
+                        _bug("a/b.py", "other/z.py", "other/y.py"),
+                        ("backlog_add_task", dict(task, options={"anchors": "other/z.py"})),
+                        ("backlog_add_task", dict(task, options={"anchors": "other/y.py"})),
+                        ("backlog_update_task", {"task_id": "test-epic-002", "field": "status", "value": "archived"}))
     assert mod.format_line("a/b.py", _resolve(mod, root, "a/b.py")) == (
-        "TM: a/b.py → B-1 open (+1 related)")
+        "TM: a/b.py → B-001 open (+1 related)")
 
 
 def test_open_status_vocab(tmp_path):
