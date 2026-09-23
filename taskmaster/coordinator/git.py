@@ -755,11 +755,17 @@ def recover(owner, *, acknowledge_quiescent=False, accept_outcome=False, release
         if marker is None:
             result = {'state': 'clear', 'checkout': {'id': 'main', 'path': str(owner.root), 'linked': False}}
             if release_drift == 'import':
-                # Explicit: ordinary sync may now import (or repair) these paths.
-                released = sorted((read_state(owner, DRIFT_KEY) or {}).get('files') or {})
-                write_state(owner, drift=None)
+                # Explicit: ordinary sync may now import (or repair) these paths. A derived
+                # index has no authored content to import: it stays held until re-rendered.
+                state = read_state(owner, DRIFT_KEY) or {}
+                files = dict(state.get('files') or {})
+                kept = {rel: checkouts.DERIVED_GUIDANCE for rel in files if checkouts.derived(rel)}
+                released = sorted(rel for rel in files if rel not in kept)
+                remaining = {rel: files[rel] for rel in kept}
+                write_state(owner, drift=dict(state, files=remaining) if remaining else None)
                 checkouts.release_main(owner, released)
-                result.update(release=release_drift, released_drift=released, kept={})
+                result.update(release=release_drift, released_drift=released, kept=kept,
+                              state='pending' if kept else 'clear')
             elif release_drift == 'take_published':
                 released, kept = checkouts.take_published_main(owner)
                 result.update(release=release_drift, released_drift=released, kept=kept,

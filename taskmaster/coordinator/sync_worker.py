@@ -411,7 +411,19 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
                 held = set(projection.flagged_files(connection)) | set(projection.drift_files(connection))
                 held.update(row[0] for row in connection.execute('SELECT file FROM projection WHERE quarantined=1'))
                 for rel in sorted(held if linked is None else ()):
-                    pending(rel, projection.held_file(connection, rel) or 'held projection')
+                    reason = projection.held_file(connection, rel) or 'held projection'
+                    pending(rel, f'{reason}; {checkouts.DERIVED_GUIDANCE}' if checkouts.derived(rel) else reason)
+                if linked is None and import_files:
+                    # A derived index is never import input, so nothing above looks at it;
+                    # managed Git would refuse its differing bytes, and so must sync (D5).
+                    for rel, value in connection.execute("SELECT file,content_hash FROM projection WHERE "
+                                                         "file NOT LIKE 'local/%' AND content_hash!=''").fetchall():
+                        if rel in held or not checkouts.derived(rel):
+                            continue
+                        actual = checkouts.read(backlog, rel)
+                        if actual in (None, checkouts.UNREADABLE) or value not in checkouts._variants(actual):
+                            pending(rel, 'derived index differs from the published generation; '
+                                    + checkouts.DERIVED_GUIDANCE)
                 for rel in selected:
                     try:
                         # A fresh lstat: publication may have rewritten the file since.

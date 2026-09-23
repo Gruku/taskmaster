@@ -22,6 +22,7 @@ import time
 
 from taskmaster.native import checkouts as store
 from taskmaster.native import projection
+from taskmaster.projection_parse import classify as classify_path
 from taskmaster.projection_paths import UnsafePath
 
 MAX_LINKED = 32
@@ -39,6 +40,8 @@ DISCARDED_BYTES = 256 * 1024
 NO_BASE = ('no trusted base in this checkout for bytes that differ from the published generation; import them '
            'with sync take_file (worktree), or receive the published file with git recover --release-drift '
            'take-published --worktree W')
+DERIVED_GUIDANCE = ('derived index: rendered from the store, never imported; re-render it with git recover '
+                    '--release-drift take-published (its current bytes are retained)')
 LINKED_DRIFT = ('checkout drift: Git put bytes here that differ from this checkout\'s base; they are not imported '
                 'or overwritten; restore them, take them with sync take_file, or run git recover --release-drift '
                 'import|take-published --worktree W')
@@ -140,6 +143,39 @@ def _replaced(checkout: Checkout, ident: str, value: dict) -> str | None:
     except OSError:
         return 'its Git admin directory is gone'
     return None
+
+
+def derived(rel: str) -> bool:
+    """A projection rendered wholly from other entities, with no authored content of its
+    own (today only `ideas/IDEAS.md`): never import input, only ever re-rendered.
+    Local state is not a projection at all."""
+    if rel.startswith('local/'):
+        return False
+    try:
+        classify_path(rel)
+    except ValueError:
+        return True
+    return False
+
+
+def render_derived(connection, backlog: Path, rel: str) -> bytes | None:
+    """The store's current bytes for a derived file, line endings matched as the exporter
+    matches them; None when the store would not write one. Uses its own read transaction."""
+    from taskmaster.native_routing import projection as routing
+    row = connection.execute('SELECT kind FROM projection WHERE file=?', (rel,)).fetchone()
+    if row is None:
+        return None
+    own = not connection.in_transaction
+    if own:
+        connection.execute('BEGIN')
+    try:
+        text, target = routing.store_version(connection, backlog, row[0], None, rel)
+        if text is None or target != rel:
+            return None
+        return routing._Render(connection, backlog)._matched(rel, text.encode('utf-8'))
+    finally:
+        if own:
+            connection.rollback()
 
 
 # ── Observations ───────────────────────────────────────────────────────────
@@ -378,6 +414,12 @@ def published(connection, main_backlog: Path | None = None) -> dict[str, tuple[s
             disk = read(main_backlog, rel)
             if disk not in (None, UNREADABLE) and projection._digest(disk) == value:
                 trusted = disk
+            elif derived(rel):
+                # A derived file is the store's render: rendering it again is trusted
+                # exactly when it reproduces the recorded digest.
+                rendered = render_derived(connection, main_backlog, rel)
+                if rendered is not None and projection._digest(rendered) == value:
+                    trusted = rendered
         found[rel] = (value, trusted, projection.held_file(connection, rel))
     return found
 
@@ -590,6 +632,8 @@ def release(owner, checkout: Checkout, mode: str) -> tuple[list[str], dict[str, 
         current = read(backlog, rel)
         if current == UNREADABLE:
             kept[rel] = 'unreadable; not released'
+        elif mode == 'import' and derived(rel):
+            kept[rel] = DERIVED_GUIDANCE
         elif mode == 'take_published' and current is not None and store.digest(current) != value:
             kept[rel] = _changed(reason)
         else:
@@ -601,7 +645,8 @@ def release(owner, checkout: Checkout, mode: str) -> tuple[list[str], dict[str, 
         if current in (None, UNREADABLE) or value in _variants(current):
             continue
         if mode == 'import':
-            kept[rel] = 'no base in this checkout to import against; import it with sync take_file'
+            kept[rel] = (DERIVED_GUIDANCE if derived(rel) else
+                         'no base in this checkout to import against; import it with sync take_file')
         else:
             released[rel] = current
 
@@ -624,14 +669,25 @@ def take_published_main(owner) -> tuple[list[str], dict[str, str]]:
     """Explicit: the main checkout's drift paths receive the published generation.
 
     Only a path still carrying exactly its held bytes (or missing) is replaced, by
-    compare-and-swap after the bytes are retained; anything else stays held. Caller
-    holds publication."""
+    compare-and-swap after the bytes are retained; anything else stays held. A derived
+    index (D5) is re-rendered from the store, whether it is held as drift or merely
+    differs from its published bytes (a bypassed restore). Caller holds publication."""
     from . import git as managed_git
     backlog = owner.root / '.taskmaster'
     files = dict((managed_git.read_state(owner, managed_git.DRIFT_KEY) or {}).get('files') or {})
+    rendered = {}
     with closing(owner._connect(readonly=True)) as connection:
         generation = published(connection, backlog)
-    kept, plan = {}, {}
+        for rel, (value, _, reason) in generation.items():
+            if not derived(rel) or (rel not in files and reason is not None):
+                continue
+            current = read(backlog, rel)
+            if rel not in files and (current in (None, UNREADABLE) or value in _variants(current)):
+                continue
+            if rel not in files:
+                files[rel] = None if current is None else store.digest(current)
+            rendered[rel] = render_derived(connection, backlog, rel)
+    kept, plan, stale = {}, {}, []
     for rel, value in sorted(files.items()):
         current = read(backlog, rel)
         if current == UNREADABLE:
@@ -642,6 +698,14 @@ def take_published_main(owner) -> tuple[list[str], dict[str, str]]:
             kept[rel] = _changed('drift')
             continue
         target = generation.get(rel)
+        if rel in rendered and target is not None and target[2] in (None, projection.DRIFT_REASON):
+            if rendered[rel] is None:
+                kept[rel] = 'the store renders no bytes for this derived file now; not released'
+                continue
+            if projection._digest(rendered[rel]) != target[0]:
+                stale.append(rel)  # the exporter records the fresh render's digest
+            plan[rel] = (current, observed, rendered[rel])
+            continue
         if target is not None and (target[2] not in (None, projection.DRIFT_REASON) or target[1] is None):
             kept[rel] = f'no trusted published bytes ({target[2] or "untrusted"}); not released'
             continue
@@ -660,6 +724,13 @@ def take_published_main(owner) -> tuple[list[str], dict[str, str]]:
         else:
             kept[rel] = f'not replaced ({outcome}); still held'
     managed_git.drop_drift(owner, released)
+    refresh = [rel for rel in stale if rel in released]
+    if refresh:
+        def mark(connection):
+            for rel in refresh:
+                connection.execute('UPDATE projection SET exported_seq=NULL WHERE file=?', (rel,))
+        write(owner, mark)
+        owner.export_needed.set()
     return released, kept
 
 
