@@ -240,3 +240,30 @@ def test_non_windows_interruption_stays_a_recovery_requirement(repo, monkeypatch
         assert result['state'] in ('failed', 'ambiguous'), result
         assert any('acknowledged by operator' in notice for notice in result.get('notices', []))
 
+
+def test_checkout_with_leftover_index_lock_or_worktree_change_is_ambiguous(repo):
+    """H3: a checkout killed mid-unpack leaves HEAD/index unchanged but the tree partly
+    switched; that is never a clean `failed`."""
+    from types import SimpleNamespace
+    head = init_head = git(repo, 'rev-parse', 'HEAD').strip()
+    tracked = repo / '.gitignore'
+    owner = SimpleNamespace(root=repo)
+    pre = managed.snapshot(repo, managed.repository(repo))
+    marker = {'op_id': 'co', 'request': ['t', 'r'], 'kind': 'checkout', 'pre': pre,
+              'target': {'ref': 'side', 'commit': '1' * 40, 'branch': 'refs/heads/side'}}
+    lock = repo / '.git' / 'index.lock'
+    lock.write_bytes(b'')
+    try:
+        report = managed.reconcile(owner, marker, [])
+        assert report['state'] == 'ambiguous', report
+    finally:
+        lock.unlink()
+    original = tracked.read_bytes()
+    tracked.write_bytes(original + b'partially-unpacked\n')
+    try:
+        report = managed.reconcile(owner, marker, [])
+        assert report['state'] == 'ambiguous', report
+    finally:
+        tracked.write_bytes(original)
+    assert managed.reconcile(owner, marker, [])['state'] == 'failed'
+    assert git(repo, 'rev-parse', 'HEAD').strip() == head == init_head

@@ -202,3 +202,49 @@ def test_ambiguous_outcome_stays_pinned_until_accepted(root):
         assert wait_for(lambda: owner.git_pin and owner.git_pin['state'] == 'ambiguous')
         result = Client(root, autostart=False).git_recover(accept_outcome=True)
         assert result['state'] == 'accepted' and owner.git_pin is None
+
+
+def test_checkout_killed_mid_unpack_is_ambiguous_and_stays_pinned(root):
+    """H3: a checkout retired while unpacking (a paused smudge filter holds index.lock)
+    is reconciled as ambiguous, never `failed` with the pin released."""
+    init_repo(root)
+    base = root.as_posix()
+    git(root, 'checkout', '-q', '-b', 'side')
+    (root / '.gitattributes').write_text('slow.txt filter=slow\n', encoding='utf-8')
+    (root / 'slow.txt').write_text('slow\n', encoding='utf-8')
+    (root / 'plain.txt').write_text('plain\n', encoding='utf-8')
+    git(root, 'add', '-A')
+    git(root, 'commit', '-q', '-m', 'side files')
+    git(root, 'checkout', '-q', 'main')
+    git(root, 'config', 'filter.slow.smudge',
+        f'touch "{base}/smudge-entered"; while [ ! -f "{base}/hook-release" ]; do sleep 0.05; done; cat')
+    head = git(root, 'rev-parse', 'HEAD').strip()
+    first = launch(root, 'never')
+    replacement = None
+    try:
+        client = ready(root)
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            running = pool.submit(Client(root, autostart=False, timeout=120).git_run, kind='checkout', ref='side')
+            assert wait_for((root / 'smudge-entered').exists), 'checkout never reached the smudge filter'
+            assert (root / '.git' / 'index.lock').exists()
+            first.kill()
+            first.wait(timeout=10)
+            with pytest.raises(ServiceUnavailable):
+                running.result(timeout=60)
+        replacement = Coordinator(root)
+        replacement.start()
+        assert wait_for(lambda: replacement.git_pin is not None and replacement.git_pin['state'] == 'ambiguous',
+                        timeout=60), replacement.git_pin
+        assert git(root, 'rev-parse', 'HEAD').strip() == head
+        marker = managed.read_state(replacement, managed.MARKER_KEY)
+        assert marker['outcome']['state'] == 'ambiguous'
+        (root / '.git' / 'index.lock').unlink()
+        assert Client(root, autostart=False).git_recover(accept_outcome=True)['state'] == 'accepted'
+    finally:
+        if first.poll() is None:
+            first.kill()
+            first.wait(timeout=10)
+        if replacement is not None and replacement.server is not None:
+            replacement.close()
+        retire_leftover(root)
+        (root / 'hook-release').touch()

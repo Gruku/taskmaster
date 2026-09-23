@@ -109,7 +109,11 @@ def snapshot(root, repo):
     git_dir = Path(repo['git_dir'])
     candidates = ['index.lock', 'HEAD.lock'] + ([ref + '.lock'] if ref else [])
     locks = [name for name in candidates if (git_dir / name).exists()]
-    return {'head': head, 'ref': ref, 'index': digest, 'locks': locks}
+    # Worktree fingerprint: a checkout killed mid-unpack may have rewritten files
+    # (and created new ones) before it ever updated the index or HEAD.
+    _, status_raw = probe(root, 'status', '--porcelain=v1', '-z', '--untracked-files=normal')
+    worktree = hashlib.sha256(status_raw).hexdigest()
+    return {'head': head, 'ref': ref, 'index': digest, 'locks': locks, 'worktree': worktree}
 
 
 def _blob_id(content):
@@ -392,6 +396,11 @@ def _run_held(owner, kind, request, message, ref, timeout):
     token = secrets.token_hex(32)
     try:
         commands = _commands(owner, kind, files, message, ref, token)
+        # Re-observed after the barrier published: reconciliation compares against
+        # the state Git actually starts from, not the pre-publication tree.
+        before = snapshot(owner.root, repo)
+        if before['locks']:
+            return _refused('Git lock present; another Git process may be running', locks=before['locks'])
     except GitRefused as exc:
         return _refused(str(exc))
     marker = {'op_id': op_id, 'request': request, 'kind': kind, 'phase': 'prepared',
@@ -459,7 +468,10 @@ def reconcile(owner, marker, files, *, results=None, done=None):
         report['results'] = _bounded_results(results)
         report['helper_done'] = bool(done)
     if after['locks']:
-        stale_index = after['locks'] == ['index.lock'] and after['head'] == pre['head'] and after['ref'] == pre['ref']
+        # Only a commit may leave a harmless stale index.lock (its HEAD did not move).
+        # A checkout holding index.lock was stopped mid-unpack: the tree is partly switched.
+        stale_index = (kind == 'commit' and after['locks'] == ['index.lock'] and after['head'] == pre['head']
+                       and after['ref'] == pre['ref'])
         if not stale_index:
             report['state'] = 'ambiguous'
             report['notices'].append(f"Git locks remain after quiescence: {', '.join(after['locks'])}")
@@ -486,9 +498,16 @@ def reconcile(owner, marker, files, *, results=None, done=None):
         if on_target and (after['head'], after['ref']) != (pre['head'], pre['ref']):
             report['state'] = 'completed'
         elif (after['head'], after['ref']) == (pre['head'], pre['ref']):
-            report['state'] = 'failed' if after['index'] == pre['index'] or on_target else 'ambiguous'
-            if report['state'] == 'failed' and on_target:
+            unchanged = after['index'] == pre['index'] and (
+                'worktree' not in pre or after.get('worktree') == pre['worktree'])
+            if on_target:
                 report['state'] = 'completed'  # already there: checkout was a no-op
+            elif unchanged:
+                report['state'] = 'failed'
+            else:
+                report['state'] = 'ambiguous'
+                report['notices'].append('HEAD is unchanged but the index or working tree changed: the checkout '
+                                         'may have stopped part-way; inspect before accepting')
         else:
             report['state'] = 'ambiguous'
             report['notices'].append('HEAD is neither the original nor the requested checkout target')
