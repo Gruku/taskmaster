@@ -32,10 +32,8 @@ INDEXES = (
     f"CREATE INDEX IF NOT EXISTS ix_entity_paths_glob_literal ON entity_paths({LITERAL}) WHERE match_kind='glob' AND {_STRUCTURAL}",
     "CREATE INDEX IF NOT EXISTS ix_handover_tasks_task ON handover_tasks(task_id,handover_id)",
 )
-_ROWS = f"SELECT kind,id,path,match_kind FROM entity_paths WHERE {_STRUCTURAL}"
+_ROWS = f"SELECT rowid,kind,id,path,match_kind FROM entity_paths WHERE {_STRUCTURAL}"
 _GLOBS = f"FROM entity_paths WHERE match_kind='glob' AND {_STRUCTURAL}"
-
-
 _NAMES = ("ix_entity_paths_structural", "ix_entity_paths_glob_literal", "ix_handover_tasks_task")
 
 
@@ -70,11 +68,17 @@ def pairs(path, match, other_path, other_match):
 def candidates(connection, path, match):
     """`(claims that can pair with (path, match), index entries visited)`, own claims included.
 
-    Duplicate claims are all returned (each weighs); a claim is never returned by
-    two of the three discoveries, which partition by text.
+    The three discoveries overlap, and SQL's literal prefix can be shorter than
+    Python's (SQLite text functions stop at NUL), so claims are keyed by rowid:
+    each claim, duplicates included, is examined exactly once.
     """
-    found = connection.execute(_ROWS + " AND path=?", (path,)).fetchall()
-    visited = len(found)
+    found = {}
+
+    def take(sql, args):
+        rows = connection.execute(sql, args).fetchall()
+        found.update((row[0], row[1:]) for row in rows)
+        return len(rows)
+    visited = take(_ROWS + " AND path=?", (path,))
     # Globs whose literal prefix is a prefix of `path`. Invariant: every such
     # literal not yet taken is <= bound (< bound when `strict`).
     bound, strict = path, False
@@ -86,22 +90,15 @@ def candidates(connection, path, match):
             break
         literal = row[0]
         if path.startswith(literal):
-            rows = connection.execute(f"SELECT kind,id,path,match_kind {_GLOBS} AND {LITERAL}=?", (literal,)).fetchall()
-            # Globs equal to `path` were already taken by the equality lookup.
-            found += [r for r in rows if r[2] != path]
-            visited += len(rows)
+            visited += take(f"SELECT rowid,kind,id,path,match_kind {_GLOBS} AND {LITERAL}=?", (literal,))
             bound, strict = literal, True
         else:
             bound, strict = path[:len(os.path.commonprefix([literal, path]))], False
     if match == "glob":
         literal = _literal(path)
         high = _after(literal)
-        rows = connection.execute(_ROWS + (" AND path>=? AND path<?" if high else " AND path>=?"),
-                                  (literal, high) if high else (literal,)).fetchall()
-        visited += len(rows)
-        # Claims already taken above: equal text, or a glob found by its literal.
-        found += [r for r in rows if r[2] != path and not (r[3] == "glob" and path.startswith(_literal(r[2])))]
-    return found, visited
+        visited += take(_ROWS + (" AND path>=? AND path<?" if high else " AND path>=?"), (literal, high) if high else (literal,))
+    return list(found.values()), visited
 
 
 def path_weights(connection, kind, ident, own):

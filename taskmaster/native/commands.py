@@ -282,8 +282,6 @@ def execute(connection: sqlite3.Connection, envelope, *, cancelled=lambda: False
     try:
         connection.execute("BEGIN IMMEDIATE")
         identity = assert_native(connection)
-        # Native-only graph indexes, created by the writer on first use (idempotent).
-        neighbourhood.ensure_indexes(connection)
         if cancelled():
             raise CancelledBeforeExecution("cancelled while waiting for admission")
         if request["store_id"] != identity["store_id"]:
@@ -296,6 +294,9 @@ def execute(connection: sqlite3.Connection, envelope, *, cancelled=lambda: False
             row = connection.execute("SELECT revision FROM entity_core WHERE kind=? AND public_id=? AND deleted=0", (expected["kind"], expected["id"])).fetchone()
             if row is None or row[0] != expected["revision"]:
                 raise Conflict(f"revision conflict for {expected['kind']} {expected['id']}")
+        # Backfill builds the native graph indexes; this upgrades a store activated
+        # before N14, only once the command is admitted (a lookup when present).
+        neighbourhood.ensure_indexes(connection)
         checkpoint("admitted")
         transaction = Transaction(connection, request, identity)
         try:

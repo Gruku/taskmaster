@@ -148,7 +148,9 @@ def test_anchor_edit_work_is_bounded_by_candidates_not_unrelated_paths():
 
 ADVERSARIAL = ["src/a.py", "src/B.py", "SRC/a.py", "src/*", "src/*.py", "src/?.py", "*", "*.py", "**",
                "src/[aB].py", "src/[aB]*.py", "src/[!a]*", "[s]rc/*", "src/", "src/**", "src/a?py",
-               "src/*/", "src/a.py/", "s*", "sr?/*", "src/[", "src/[*", "docs/x", "docs/X*"]
+               "src/*/", "src/a.py/", "s*", "sr?/*", "src/[", "src/[*", "docs/x", "docs/X*",
+               # SQLite text functions stop at NUL, so the SQL literal prefix is shorter than Python's.
+               "\x00q*", "\x00q", "src/\x00*", "src/\x00a.py", "s\x00?"]
 
 
 @pytest.mark.parametrize("indexed", [True, False], ids=["indexed", "unindexed-reader"])
@@ -287,3 +289,12 @@ def test_candidate_queries_use_the_native_partial_indexes():
         (f"SELECT kind {nb._GLOBS} AND {nb.LITERAL}=?", ("x",)))}
     assert [("ix_entity_paths_structural" in p, "ix_entity_paths_glob_literal" in p) for p in plans.values()] == \
         [(True, False), (True, False), (False, True), (False, True)], plans
+
+
+@pytest.mark.parametrize("indexed", [True, False], ids=["indexed", "unindexed-reader"])
+def test_a_nul_in_a_glob_does_not_double_count(indexed):
+    """SQL `substr`/`instr` stop at NUL; each claim must still be examined exactly once."""
+    connection = _paths_connection(indexed)
+    maintain(connection, "task", "A", None, {"id": "A", "anchors": ["\x00q*"]})
+    maintain(connection, "task", "B", None, {"id": "B", "anchors": ["*"]})
+    assert _path_related(connection) == _oracle(connection) == Counter({(("task", "A"), ("task", "B")): 1})
