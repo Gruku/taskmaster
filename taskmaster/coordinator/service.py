@@ -18,6 +18,7 @@ import os
 from pathlib import Path
 import queue
 import secrets
+import socket
 import threading
 import time
 
@@ -413,6 +414,48 @@ class Coordinator:
         self.close()
 
 
+_OVERLOAD_BUDGET = 0.5
+_HEADER_LIMIT = 64 * 1024
+
+
+def _drain(sock, deadline, *, whole_request):
+    """Discard inbound bytes until one whole request (or else EOF) arrives, bounded in bytes and time."""
+    head, expected, total = b'', None, 0
+    while total < MAX_MESSAGE_BYTES + _HEADER_LIMIT:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        sock.settimeout(remaining)
+        try:
+            chunk = sock.recv(65536)
+        except TimeoutError:
+            return
+        if not chunk:
+            return
+        total += len(chunk)
+        if not whole_request:
+            continue
+        if expected is None:
+            head += chunk
+            lines, separator, _ = head.partition(b'\r\n\r\n')
+            if not separator:
+                if len(head) > _HEADER_LIMIT:
+                    return
+                continue
+            length = 0
+            for line in lines.split(b'\r\n')[1:]:
+                name, _, value = line.partition(b':')
+                if name.strip().lower() == b'content-length':
+                    try:
+                        length = int(value.strip())
+                    except ValueError:
+                        return
+            expected = len(lines) + len(separator) + min(max(length, 0), MAX_MESSAGE_BYTES)
+            head = b''
+        if total >= expected:
+            return
+
+
 class _Server(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = False
@@ -428,13 +471,22 @@ class _Server(ThreadingHTTPServer):
             # and repeatedly launching startup contenders.
             raw = encode({'type': 'ServiceUnavailable', 'error': 'coordinator IPC capacity reached; retry later'})
             try:
-                request.settimeout(0.1)
+                # Closing with unread request bytes sends RST (always on
+                # Windows), which can destroy the reply before the client reads
+                # it. Drain the bounded request, reply, half-close, then wait
+                # briefly for the client's close. This runs on the accept
+                # thread, so the whole exchange shares one small deadline.
+                deadline = time.monotonic() + _OVERLOAD_BUDGET
+                _drain(request, deadline, whole_request=True)
+                request.settimeout(max(0.01, deadline - time.monotonic()))
                 request.sendall(b'HTTP/1.0 503 Service Unavailable\r\nContent-Type: application/json\r\n'
                                 + f'Content-Length: {len(raw)}\r\nConnection: close\r\n\r\n'.encode('ascii') + raw)
+                request.shutdown(socket.SHUT_WR)
+                _drain(request, deadline, whole_request=False)
             except OSError:
                 pass
             finally:
-                self.shutdown_request(request)
+                self.close_request(request)
             return
         try:
             super().process_request(request, address)

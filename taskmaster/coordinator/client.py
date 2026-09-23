@@ -13,7 +13,7 @@ import uuid
 
 from taskmaster.admission import UnsupportedStoreError
 from taskmaster.native import contracts
-from .ownership import verify_private
+from .ownership import ownership_held, verify_private
 from .protocol import (HandshakeError, MAX_RESPONSE_BYTES, ServiceUnavailable,
                                encode, identify)
 
@@ -97,22 +97,35 @@ class Client:
         finally:
             connection.close()
 
-    def _ready(self):
+    def _probe(self):
+        """Return a ready discovery record, or None only on evidence that no owner is listening."""
         try:
             record = self._discovery()
             self._send(record, 'status')
             return record
-        except (FileNotFoundError, ConnectionError, TimeoutError, http.client.HTTPException):
+        except (FileNotFoundError, ConnectionRefusedError):
             if not self.autostart:
                 raise ServiceUnavailable('repository coordinator unavailable; start it or retry later') from None
+            return None
+        except (ConnectionError, TimeoutError, http.client.HTTPException) as exc:
+            if not self.autostart:
+                raise ServiceUnavailable('repository coordinator unavailable; start it or retry later') from None
+            # A reset, timeout or garbled reply at a recorded address is a live
+            # but unhealthy owner (e.g. overloaded), unless the kernel lock is
+            # free: then the record is stale and its port may be reused.
+            if ownership_held(self.root):
+                raise ServiceUnavailable('repository coordinator is running but not responding; retry later') from exc
+            return None
+
+    def _ready(self):
+        record = self._probe()
+        if record is not None:
+            return record
         with _START_LOCK:
             # Another client in this process may already have completed startup.
-            try:
-                record = self._discovery()
-                self._send(record, 'status')
+            record = self._probe()
+            if record is not None:
                 return record
-            except (FileNotFoundError, ConnectionError, TimeoutError, http.client.HTTPException):
-                pass
             child = _launch(self.root)
             deadline = time.monotonic() + min(self.timeout, 15)
             while time.monotonic() < deadline:
