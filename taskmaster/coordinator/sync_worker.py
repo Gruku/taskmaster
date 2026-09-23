@@ -14,6 +14,7 @@ from taskmaster.native.migrate import encode
 from taskmaster.native.queries import Repository
 from taskmaster.projection_parse import classify
 from . import sync_files
+from .protocol import SYNC_TIMEOUT, validate_sync_timeout as validate_timeout
 from .sync_prepare import prepare
 
 
@@ -23,6 +24,59 @@ FINISH_TIMEOUT = 5
 # The completed result is stored durably and must fit one request envelope.
 SUMMARY_BYTES = 256 * 1024
 _WARNINGS_KEPT = 50
+
+
+def _hit(scan, rel, *, fresh=False):
+    """Recorded digests for an unchanged fingerprint; None on a miss or any doubt
+    (including a refused path: the full read then reports the refusal)."""
+    try:
+        return scan.digests(rel, fresh=fresh)
+    except (OSError, ValueError):
+        return None
+
+
+def _unchanged_rule(owner, linked):
+    """A predicate (rel, digests) -> True when `prepare` would certainly return a plan
+    with nothing to submit, decided from one bulk read instead of a snapshot, a parse
+    and a file read per file. `digests` come from an unchanged fingerprint.
+
+    It is prepare's own first tests, in prepare's order:
+    main - `unchanged`: a projection row whose content_hash is the file's digest, a
+    retained base whose sha1 is that hash (trusted), and no quarantine, flag or drift
+    hold (an untrusted base means `observe`, which needs the bytes: full path);
+    linked - with no base of that checkout (blob present), `establish`: the main
+    generation's content_hash is one of the file's LF/CRLF variants; with a base,
+    `unchanged`: the base digest is the file's digest and the checkout holds nothing.
+    Anything else (differing bytes, holds, missing files) goes through prepare."""
+    from taskmaster.native import checkouts as checkout_store
+    with closing(owner._connect(readonly=True)) as connection:
+        connection.execute('BEGIN')
+        try:
+            if linked is None:
+                rows = connection.execute('SELECT p.file,p.content_hash,p.quarantined,b.content FROM projection p '
+                                          'LEFT JOIN projection_base b ON b.file=p.file').fetchall()
+                held = set(projection.flagged_files(connection)) | set(projection.drift_files(connection))
+                clean = {rel: value for rel, value, quarantined, base in rows
+                         if not quarantined and rel not in held and base is not None
+                         and hashlib.sha1(bytes(base)).hexdigest() == value}
+                published = {}
+            else:
+                clean = checkout_store.trusted_bases(connection, linked.id)
+                based = set(clean)
+                for rel in checkout_store.holds(connection, linked.id):
+                    clean.pop(rel, None)
+                published = {rel: value for rel, value in connection.execute('SELECT file,content_hash FROM projection')
+                             if rel not in based}
+        finally:
+            connection.rollback()
+
+    def skippable(rel, digests):
+        if digests is None:
+            return False
+        if rel in published:
+            return published[rel] in digests.variants
+        return clean.get(rel) == digests.digest
+    return skippable
 
 
 def summarize(result):
@@ -106,9 +160,10 @@ def synchronize(owner, **arguments):
 
 
 def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=0,
-                 files=None, take_file=False, timeout=20, worktree=None):
+                 files=None, take_file=False, timeout=SYNC_TIMEOUT, worktree=None):
     options = dict(import_files=import_files, through=through, files=files, take_file=take_file)
     sync.validate_input(options)
+    validate_timeout(timeout)
     if worktree is not None and (not isinstance(worktree, str) or not worktree):
         raise ValueError('worktree must be an absolute checkout path')
     scope = operation_scope(caller_scope, request_id)
@@ -138,6 +193,10 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
         return owner.submit(envelope).result(timeout=remaining() if timeout is None else timeout)
 
     backlog = owner.root / '.taskmaster'
+    # Only a full ordinary sync takes the stat fast path; a named resync or take_file
+    # always reads the bytes (the explicit escape from any fingerprint doubt).
+    fast = files is None and not take_file
+    scan = None
 
     def current(plan):
         if plan.observation is not None:
@@ -196,10 +255,11 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
         selected = []
         observation, seen, unverified, moved = None, {}, None, False
         if import_files:
+            scan = sync_files.open_scan(owner.root, backlog, fast=fast)
             if files is not None:
                 selected = list(files)
             else:
-                inventory = sync_files.discover(backlog)
+                inventory = sync_files.discover(backlog, scan)
                 selected = list(inventory.files)
                 result['warnings'].extend(f'duplicate import path skipped: {rel}; canonical {canonical}'
                                           for rel, canonical in inventory.duplicates.items())
@@ -228,13 +288,16 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
                 # that are drift (an older or foreign generation), never import authority.
                 # Named files (MCP resync) are classified too; take_file is the explicit adopt.
                 try:
-                    observation, found, warnings, seen = checkouts.detect(owner, observed_checkout, selected, drift)
+                    observation, found, warnings, seen = checkouts.detect(owner, observed_checkout, selected, drift,
+                                                                          scan=scan)
                 except (GitRefused, OSError) as exc:
                     # Fail closed: nothing is imported while Git state is unknown.
                     unverified = f'Git state could not be inspected ({exc}); not imported, retry the sync'[:500]
                     found, warnings = {}, [unverified]
                 result['warnings'].extend(warnings)
                 drift |= set(found)
+            skippable = _unchanged_rule(owner, linked) if fast else None
+            owner.checkpoint('sync_files_selected')
             for rel in selected:
                 if not remaining() or owner.stopping.is_set():
                     pending(rel, 'time budget exhausted or coordinator stopping; retry the same sync id')
@@ -245,10 +308,12 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
                 if unverified:
                     pending(rel, unverified)
                     continue
+                if skippable is not None and skippable(rel, _hit(scan, rel)):
+                    continue  # exactly prepare's no-op outcome; see _unchanged_rule
                 try:
                     with closing(owner._connect(readonly=True)) as connection, Repository(connection).snapshot() as snapshot:
                         plan = prepare(snapshot, backlog, rel, take_file=take_file,
-                                       checkout=None if linked is None else linked.id)
+                                       checkout=None if linked is None else linked.id, scan=scan)
                     if plan.arguments is None:
                         if plan.state not in ('unchanged', 'establish'):
                             pending(rel, plan.reason)
@@ -330,7 +395,7 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
             if linked is not None:
                 # A participating linked checkout: the published generation is copied in,
                 # compare-and-swap against its own bases, while publication is held.
-                for notice in checkouts.publish(owner, linked, result['through']):
+                for notice in checkouts.publish(owner, linked, result['through'], scan=scan if fast else None):
                     rel, _, reason = notice.removeprefix('sync pending: ').partition(': ')
                     pending(rel, reason)
                 selected = []
@@ -349,13 +414,17 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
                     pending(rel, projection.held_file(connection, rel) or 'held projection')
                 for rel in selected:
                     try:
-                        actual = sync_files.observe(owner.root / '.taskmaster', rel)
+                        # A fresh lstat: publication may have rewritten the file since.
+                        hit = _hit(scan, rel, fresh=True) if fast else None
+                        if hit is not None:
+                            exists, variants = True, hit.variants
+                        else:
+                            actual = scan.observe(rel) if scan is not None else sync_files.observe(backlog, rel)
+                            exists = actual is not None
+                            variants = set() if actual is None else sync_files.Digests.of(actual.content).variants
                         expected = connection.execute('SELECT content_hash FROM projection WHERE file=?', (rel,)).fetchone()
-                        if expected is None and actual is None:
+                        if expected is None and not exists:
                             continue  # a recorded move/tombstone requires absence
-                        variants = set() if actual is None else {
-                            projection._digest(actual.content), projection._digest(projection._lf(actual.content)),
-                            projection._digest(projection._crlf(actual.content))}
                         if expected is None or expected[0] not in variants:
                             pending(rel, 'file differs from the published generation at completion')
                     except (OSError, ValueError) as exc:
@@ -378,6 +447,8 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
                 return completed
         return result
     finally:
+        if scan is not None and fast:
+            sync_files.save_scan(owner.root, scan)
         if acquired:
             owner.publication.release()
         with owner.guard:

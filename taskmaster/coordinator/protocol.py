@@ -14,6 +14,22 @@ MAX_MESSAGE_BYTES = contracts.MAX_BYTES + 8192
 # Receipts include committed fields for up to 100 existing entities. Their
 # output can exceed a small metadata request without accepting a larger input.
 MAX_RESPONSE_BYTES = 64 * 1024 * 1024
+# The default budget of one sync (IPC, MCP resync, managed-Git pre-sync). Measured on
+# CodeMaestro (3,708 projection files; N13 report, "Rehearsal fixes: D1 performance"):
+# a warm no-edit full sync takes ~1.3 s, a cold one ~6 s, and the first touch of files
+# Git or a copy just wrote ~35-37 s (22 s of it the OS's first open of 3.7k new files).
+# 120 s is ~3x that worst case. Callers may pass 1..MAX_SYNC_TIMEOUT; an exhausted
+# budget answers `pending`, never a guess.
+SYNC_TIMEOUT = 120
+MAX_SYNC_TIMEOUT = 3600
+# How much longer than a call's own budget a client waits for the reply.
+REPLY_MARGIN = 30
+
+
+def validate_sync_timeout(timeout):
+    if type(timeout) not in (int, float) or not 1 <= timeout <= MAX_SYNC_TIMEOUT:
+        raise ValueError(f'sync timeout must be 1..{MAX_SYNC_TIMEOUT} seconds')
+    return timeout
 
 
 class ServiceUnavailable(RuntimeError):

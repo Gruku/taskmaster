@@ -380,10 +380,11 @@ class Coordinator:
                         linear_queued=len(self.linear.jobs),
                         export_error=self.last_export_error, active_syncs=self.active_syncs)
         if method == 'sync':
+            from .protocol import SYNC_TIMEOUT
             return self.sync(caller_scope=message.get('caller_scope'), request_id=message.get('request_id'),
                              import_files=message.get('import_files', True), through=message.get('through', 0),
                              files=message.get('files'), take_file=message.get('take_file', False),
-                             worktree=message.get('worktree'))
+                             worktree=message.get('worktree'), timeout=message.get('timeout', SYNC_TIMEOUT))
         if method == 'sync_status':
             from .sync_worker import operation_scope
             from taskmaster.native.sync import operation_state
@@ -419,10 +420,12 @@ class Coordinator:
             return self.cancel(message.get('caller_scope'), message.get('request_id'))
         if method == 'git_run':
             from . import git
+            from .protocol import SYNC_TIMEOUT
             timeout = message.get('timeout', git.GIT_TIMEOUT)
             return git.run(self, kind=message.get('kind'), caller_scope=message.get('caller_scope'),
                            request_id=message.get('request_id'), message=message.get('message'),
-                           ref=message.get('ref'), timeout=timeout, worktree=message.get('worktree'))
+                           ref=message.get('ref'), timeout=timeout, worktree=message.get('worktree'),
+                           sync_timeout=message.get('sync_timeout', SYNC_TIMEOUT))
         if method == 'git_status':
             from . import git
             return git.status(self)

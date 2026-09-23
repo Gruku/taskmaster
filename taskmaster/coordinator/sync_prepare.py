@@ -29,12 +29,13 @@ class Prepared:
     arguments: dict | None
 
 
-def prepare(snapshot, backlog_dir, rel, *, take_file=False, checkout=None):
+def prepare(snapshot, backlog_dir, rel, *, take_file=False, checkout=None, scan=None):
     """`checkout` names a linked checkout: its own base, holds and token replace the
     main checkout's manifest, and a linked file is never judged by main's bytes."""
     connection = snapshot.connection
     kind, ident = projection_parse.classify(rel)
-    observed = sync_files.observe(backlog_dir, rel)
+    # A sync's scan records the fingerprint of what it read (same checks as observe).
+    observed = sync_files.observe(backlog_dir, rel) if scan is None else scan.observe(rel)
     token = sync.manifest_token(connection, rel) if checkout is None else checkouts.token(connection, checkout, rel)
     cached = {}
 

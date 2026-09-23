@@ -29,7 +29,9 @@ def main(argv=None):
     parser.add_argument('--root', type=Path, default=None, help='main checkout (default: resolved from cwd)')
     parser.add_argument('--worktree', type=Path, default=None,
                         help='linked checkout to operate on (default: the checkout containing cwd)')
-    parser.add_argument('--timeout', type=int, default=600)
+    parser.add_argument('--timeout', type=int, default=600, help='seconds allowed for the Git child')
+    parser.add_argument('--sync-timeout', type=int, default=None,
+                        help='seconds allowed for the pre-sync (default: the coordinator sync budget)')
     commands = parser.add_subparsers(dest='command', required=True)
     commit = commands.add_parser('commit')
     commit.add_argument('-m', '--message', required=True)
@@ -64,6 +66,7 @@ def main(argv=None):
         print(json.dumps({'request_id': request_id}), file=sys.stderr)
         result = client.git_run(kind=args.command, message=getattr(args, 'message', None),
                                 ref=getattr(args, 'ref', None), request_id=request_id, timeout=args.timeout,
+                                sync_timeout=args.sync_timeout,
                                 worktree=worktree)
     elif args.command == 'status':
         result = client.git_status()

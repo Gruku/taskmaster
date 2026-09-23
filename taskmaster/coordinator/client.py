@@ -14,8 +14,8 @@ import uuid
 from taskmaster.admission import UnsupportedStoreError
 from taskmaster.native import contracts
 from .ownership import ownership_held, verify_private
-from .protocol import (HandshakeError, MAX_RESPONSE_BYTES, ServiceUnavailable,
-                               encode, identify)
+from .protocol import (HandshakeError, MAX_RESPONSE_BYTES, REPLY_MARGIN, SYNC_TIMEOUT, ServiceUnavailable,
+                       encode, identify, validate_sync_timeout)
 
 _START_LOCK = threading.Lock()
 
@@ -63,9 +63,11 @@ class Client:
             raise HandshakeError('invalid coordinator address or generation')
         return record
 
-    def _send(self, record, method, **arguments):
+    def _send(self, record, method, *, wait=None, **arguments):
+        """`wait` extends the reply timeout for a call whose own budget is longer."""
         payload = encode(dict(identity=dict(self.identity, nonce=record['nonce']), method=method, **arguments))
-        connection = http.client.HTTPConnection('127.0.0.1', record['port'], timeout=self.timeout)
+        connection = http.client.HTTPConnection('127.0.0.1', record['port'],
+                                                timeout=self.timeout if wait is None else max(self.timeout, wait))
         try:
             connection.request('POST', '/rpc', body=payload,
                                headers={'Content-Type': 'application/json', 'Authorization': f"Bearer {record['token']}"})
@@ -140,13 +142,13 @@ class Client:
                     time.sleep(0.05)
         raise ServiceUnavailable('coordinator startup unavailable; inspect .taskmaster/local/coordinator/service.log; no writer fallback')
 
-    def call(self, method, **arguments):
+    def call(self, method, *, wait=None, **arguments):
         # Retain identical arguments across transport retries. In particular,
         # never mint a new command request_id after an ambiguous disconnect.
         for attempt in range(2):
             record = self._ready()
             try:
-                return self._send(record, method, **arguments)
+                return self._send(record, method, wait=wait, **arguments)
             except (ConnectionError, TimeoutError, http.client.HTTPException):
                 if attempt:
                     raise ServiceUnavailable('coordinator disconnected; retry the same request_id to recover its receipt') from None
@@ -196,18 +198,24 @@ class Client:
         return self.call('flush', through=through)
 
     def sync(self, *, import_files=True, through=0, files=None, take_file=False,
-             caller_scope='explicit-sync', request_id=None, worktree=None):
+             caller_scope='explicit-sync', request_id=None, worktree=None, timeout=None):
         """`worktree` names a linked checkout of this repository: its edits are imported
-        against its own bases and the published generation is copied into it."""
+        against its own bases and the published generation is copied into it.
+        `timeout` is the sync's budget (default protocol.SYNC_TIMEOUT); the reply is
+        awaited that long, and an exhausted budget answers `pending`."""
         from taskmaster.native.sync import validate_input
         request_id = uuid.uuid4().hex if request_id is None else request_id
         options = dict(import_files=import_files, through=through, files=files, take_file=take_file)
         validate_input(options)
+        budget = validate_sync_timeout(SYNC_TIMEOUT if timeout is None else timeout)
+        if timeout is not None:
+            options['timeout'] = timeout
         if not all(isinstance(value, str) and 1 <= len(value) <= 256 for value in (caller_scope, request_id)):
             raise ValueError('sync requires caller_scope and request_id')
         try:
             extra = {} if worktree is None else {'worktree': str(Path(worktree).resolve())}
-            return self.call('sync', caller_scope=caller_scope, request_id=request_id, **options, **extra)
+            return self.call('sync', caller_scope=caller_scope, request_id=request_id, wait=budget + REPLY_MARGIN,
+                             **options, **extra)
         except ServiceUnavailable as exc:
             raise type(exc)(f'{exc}; inspect sync_status or retry the same sync id; '
                             f'request_id={request_id!r}, caller_scope={caller_scope!r}',
@@ -218,18 +226,21 @@ class Client:
         return self.call('sync_status', caller_scope=caller_scope, request_id=request_id)
 
     def git_run(self, *, kind, message=None, ref=None, caller_scope='explicit-git', request_id=None, timeout=600,
-                worktree=None):
+                worktree=None, sync_timeout=None):
         """Managed commit/checkout under the coordinator's publication hold.
 
         A retry with the same request_id never repeats Git: it answers
-        `in_progress` or the settled result."""
+        `in_progress` or the settled result. `sync_timeout` bounds the pre-sync."""
         request_id = uuid.uuid4().hex if request_id is None else request_id
+        budget = validate_sync_timeout(SYNC_TIMEOUT if sync_timeout is None else sync_timeout)
+        extra_sync = {} if sync_timeout is None else {'sync_timeout': sync_timeout}
         if not all(isinstance(value, str) and 1 <= len(value) <= 256 for value in (caller_scope, request_id)):
             raise ValueError('managed Git requires caller_scope and request_id')
         try:
             extra = {} if worktree is None else {'worktree': str(Path(worktree).resolve())}
             return self.call('git_run', kind=kind, message=message, ref=ref, caller_scope=caller_scope,
-                             request_id=request_id, timeout=timeout, **extra)
+                             request_id=request_id, timeout=timeout, wait=budget + timeout + REPLY_MARGIN,
+                             **extra, **extra_sync)
         except ServiceUnavailable as exc:
             raise type(exc)(f'{exc}; inspect git_status or retry the same request; '
                             f'request_id={request_id!r}, caller_scope={caller_scope!r}',

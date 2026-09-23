@@ -156,26 +156,34 @@ def generation(owner, through, backlog=None):
     `through` is the barrier's synchronized target: a domain write committed after
     the writer pause was released is not part of this generation. `backlog` is the
     participating checkout's projection directory (a linked worktree carries the
-    published bytes after its own synchronization)."""
+    published bytes after its own synchronization).
+
+    A file whose fresh lstat fingerprint still carries digests recorded from a checked
+    read (sync_files.Scan) is judged by them, blob ids included; any miss is read."""
+    from . import sync_files
     backlog = owner.root / '.taskmaster' if backlog is None else backlog
+    scan = sync_files.open_scan(owner.root, backlog)
     with closing(owner._connect(readonly=True)) as connection:
         connection.execute('BEGIN')
         rows = connection.execute("SELECT file,content_hash FROM projection WHERE file NOT LIKE 'local/%' "
                                   'ORDER BY file').fetchall()
         connection.rollback()
     mismatched, blobs = [], {}
-    from taskmaster.native import projection
     for rel, digest in rows:
         try:
-            content = _read_projection(backlog, rel)
-        except (OSError, UnsafePath) as exc:
+            known = scan.digests(rel)
+            if known is None:
+                observed = scan.observe(rel, authored=False, limit=MAX_PROJECTION_BYTES)
+                known = None if observed is None else sync_files.Digests.of(observed.content)
+        except (OSError, ValueError) as exc:
             mismatched.append(f'{rel}: {exc}')
             continue
-        if content is None or digest not in _variants(content):
+        if known is None or digest not in known.variants:
             mismatched.append(rel)
             continue
         # The Git blobs this generation may be committed as (exact, or LF-normalised).
-        blobs[rel] = sorted({_blob_id(content), _blob_id(projection._lf(content))})
+        blobs[rel] = sorted({known.blob, known.blob_lf})
+    sync_files.save_scan(owner.root, scan)
     value = hashlib.sha256(json.dumps(rows, separators=(',', ':')).encode()).hexdigest()
     return ({'digest': value, 'files': len(rows), 'through': through, 'blobs': blobs},
             [rel for rel, _ in rows], mismatched)
@@ -407,9 +415,14 @@ def _bounded_results(results):
     return kept
 
 
-def run(owner, *, kind, caller_scope, request_id, message=None, ref=None, timeout=GIT_TIMEOUT, worktree=None):
+def run(owner, *, kind, caller_scope, request_id, message=None, ref=None, timeout=GIT_TIMEOUT, worktree=None,
+        sync_timeout=None):
+    """`sync_timeout` bounds the pre-sync (protocol.SYNC_TIMEOUT by default); `timeout`
+    bounds the Git child."""
+    from .protocol import SYNC_TIMEOUT, validate_sync_timeout
     request = _request(caller_scope, request_id)
     _validate(kind, message, ref)
+    sync_timeout = validate_sync_timeout(SYNC_TIMEOUT if sync_timeout is None else sync_timeout)
     if worktree is not None and (not isinstance(worktree, str) or not worktree):
         raise ValueError('worktree must be an absolute checkout path')
     if type(timeout) not in (int, float) or not 1 <= timeout <= 3600:
@@ -429,7 +442,7 @@ def run(owner, *, kind, caller_scope, request_id, message=None, ref=None, timeou
         return {'state': 'pending', 'reason': 'publisher busy' + (
             '; a managed Git operation is in progress' if owner.git_active else '')}
     try:
-        return _run_held(owner, kind, request, message, ref, timeout, worktree)
+        return _run_held(owner, kind, request, message, ref, timeout, worktree, sync_timeout)
     finally:
         owner.publication.release()
 
@@ -438,7 +451,7 @@ def _refused(reason, **extra):
     return dict(extra, state='refused', reason=reason)
 
 
-def _run_held(owner, kind, request, message, ref, timeout, worktree=None):
+def _run_held(owner, kind, request, message, ref, timeout, worktree=None, sync_timeout=None):
     if owner.stopping.is_set():
         return _refused('coordinator stopping')
     if owner.git_pin is not None:
@@ -481,7 +494,8 @@ def _run_held(owner, kind, request, message, ref, timeout, worktree=None):
     # captured target. Later domain writes stay pending for the next generation.
     synced = owner.sync(caller_scope=f'git:{request[0]}'[:256], request_id=f'{op_id}:pre',
                         import_files=True, through=0, files=None, take_file=False,
-                        **({'worktree': str(root)} if checkout.linked else {}))
+                        **({'worktree': str(root)} if checkout.linked else {}),
+                        **({} if sync_timeout is None else {'timeout': sync_timeout}))
     if synced.get('state') != 'synchronized':
         return _refused('projections are not synchronized; resolve the listed paths first', sync=synced)
     gen, files, mismatched = generation(owner, synced.get('through', 0), checkout.backlog)
