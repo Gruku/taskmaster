@@ -13,7 +13,7 @@ from taskmaster.admission import UnsupportedStoreError, assert_compatible
 from . import neighbourhood, schema
 from .db import manifest, probe_capabilities
 
-STAGES = ("admitted", "schema", "entities", "relations", "history", "search", "verified")
+STAGES = ("admitted", "schema", "entities", "relations", "history", "search", "graph", "verified")
 
 
 def encode(value):
@@ -184,6 +184,21 @@ def _verify(connection, source):
     return hashlib.sha256(encode(source).encode("utf-8")).hexdigest()
 
 
+def _repair_graph(connection, store_id, high_water):
+    """Bring the inherited graph tables to the full oracle, once, inside the backfill.
+
+    The legacy store's `entity_paths`/`links`/`handover_tasks`/`related` rows arrive
+    as they are, including any drift its incremental maintenance left; a store
+    activated from them must verify clean. This is the explicit maintenance repair
+    (`graph_repair`), run here because backfill is itself a maintenance operation.
+    """
+    from . import graph_repair
+    from .queries import Snapshot
+    report = graph_repair.repair(Snapshot(connection, {"store_id": store_id, "event_high_water": high_water}))
+    return {"repaired": report["repaired"], "rows_compared": report["rows_compared"], "seconds": report["seconds"],
+            "differences": sum(t["missing"] + t["spurious"] for t in report["tables"].values())}
+
+
 def backfill(connection: sqlite3.Connection, *, checkpoint=lambda stage: None) -> dict:
     """Atomically stage, compare, and mark verified; reject any active caller tx.
 
@@ -242,11 +257,14 @@ def backfill(connection: sqlite3.Connection, *, checkpoint=lambda stage: None) -
         # Transparent native-only graph indexes (N14): no schema version change.
         neighbourhood.ensure_indexes(connection)
         digest = _verify(connection, source)
+        graph = _repair_graph(connection, meta["creation_token"], high_water)
+        checkpoint("graph")
         _put_manifest(connection, state="verified", source_digest=digest, event_high_water=high_water,
                       entity_count=len(source), capabilities="json,fts5,transactional-ddl,stable-keys")
         checkpoint("verified")
         connection.commit()
-        return {"state": "verified", "entities": len(source), "event_high_water": high_water, "source_digest": digest}
+        return {"state": "verified", "entities": len(source), "event_high_water": high_water, "source_digest": digest,
+                "graph_repair": graph}
     except BaseException:
         connection.rollback()
         raise

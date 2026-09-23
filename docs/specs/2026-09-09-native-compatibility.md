@@ -151,9 +151,10 @@ views/materialization until these consumers migrate and equivalence passes.
 | SQL name | Native freshness | Maintained by | Repair |
 |---|---|---|---|
 | `entity_paths` | Current at commit | `relations.maintain`, per changed document | Full oracle |
-| `links` (incl. `derived=1` mirrors) | Current at commit | `relations.maintain`, per changed link set | Full oracle |
+| `links` (incl. `derived=1` mirrors) | Current at commit | `relations.maintain`, per changed link set, plus re-resolution of links to an id when that id is created | Full oracle |
 | `handover_tasks` | Current at commit | `relations.maintain`, per changed handover | Full oracle |
 | `related` | Current at commit | `relations.maintain`; path pairs through the indexed candidate search in `native/neighbourhood.py`, which costs the edited entity's candidates rather than every claim | Full oracle |
+| `backlog_dependencies` `depth` (typed API, not SQL) | Current at read: canonical `dependencies` in the call's snapshot | No stored graph | None needed; bounds and parity are in the N14 step 5 additive-changes note |
 
 All four tables are maintained incrementally inside the command's transaction, and
 the full oracle is the repair operation. Rows, weights and multiplicity are the
@@ -163,19 +164,40 @@ archived-but-live entities kept, deleted entities dropped. `backlog_query` still
 materializes these tables in its per-call private snapshot, so its latency is
 unchanged.
 
+**Bug fix: links written before their target (N14 review).** A link is resolved
+when it is written, so a link to an id that did not exist yet recorded the `task`
+fallback kind and kept it after the target was created. The same drift existed in
+legacy incremental maintenance on both stores, while `rebuild_derived` resolved
+the kind correctly. Now, when an entity is created (native `relations.maintain`
+on creation; legacy `Store._refresh_derived` for every touched key), the declared
+`links` rows whose `dst_id` is that id are re-resolved with `_kind_for_id`. The
+lookup is indexed through `ix_links_dst`, with every stored kind listed, and is
+never a scan. Their mirrors are then re-derived. The public `links` rows now match
+`rebuild_derived` at commit, and legacy and native produce identical rows. A
+target that never appears keeps the `task` fallback, which is the legacy answer.
+
 **Repair operation.** `backlog_index_status(verify=True)` compares the four tables
 with the full oracle and reports missing and spurious rows, with examples, the
 entity count, rows compared and seconds. It changes nothing. `rebuild=True` runs the
 native `graph.repair` command, which is admitted through `commands.execute` on its
 own (never inside a batch). It replaces only the differing rows in one writer
-transaction, appends no domain event because derived rows are not authored state,
-and records `graph_repaired_at` in `native_manifest`. The oracle recomputes rows
-from canonical documents with `relations.grouped_weights` plus the legacy link,
-mirror and handover rebuild rules (`native/graph_repair.py`). No command or read
-path calls it. On a legacy store, `rebuild=True` is the unchanged
-`Store.rebuild_derived`, and `verify=True` is refused. Measured on a synthetic
-native store with 4,000 path claims (35,607 `related` rows, 80,862 rows compared):
-verify takes about 0.4 s and repair about 0.5 s.
+transaction and appends no domain event, because derived rows are not authored
+state. Only a repair that changed rows records `graph_repaired_at` and increments
+`graph_repairs` in `native_manifest`. The hooks' dedupe revision on native stores
+(`hook_reads.revision`) is the event high water plus `graph_repairs`, so a repair
+that changed rows invalidates remembered hook answers. A clean repair changes
+nothing. The oracle recomputes rows from canonical documents with
+`relations.grouped_weights` plus the legacy link, mirror and handover rebuild
+rules (`native/graph_repair.py`). No command or read path calls it. Backfill runs
+the same repair once, inside its transaction, so a store activated from a drifted
+legacy store verifies clean. The backfill result reports it as `graph_repair`.
+With `rebuild=True, verify=True` on a native store, the repair runs. On a legacy
+store, `rebuild=True` alone is the unchanged `Store.rebuild_derived`, and any call
+with `verify=True`, with or without `rebuild`, is refused and changes nothing. On
+native, `rebuild` covers only these four graph tables, not the search table.
+Measured on a synthetic native store with 4,000 path claims (35,607 `related`
+rows, about 80,860 rows compared), across two runs: verify 0.2–0.4 s, repair
+0.2–0.5 s, and the backfill repair 0.24 s out of a 0.48 s backfill.
 
 **Explicit additions.** `Snapshot.neighbourhood(kind, id, limit)` returns distinct
 `(kind, id, via, weight)` neighbours, with weight summed over `related` rows. The

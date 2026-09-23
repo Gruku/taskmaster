@@ -198,6 +198,134 @@ def test_normal_commands_keep_the_tables_equal_to_the_oracle(twins):
 def test_legacy_rebuild_is_unchanged_and_verify_is_native_only(twins):
     with twins.at(twins.legacy):
         rebuilt = bs.backlog_index_status(rebuild=True)
-        refused = bs.backlog_index_status(verify=True)
+        before = _legacy_links(twins.legacy)
+        refused = [bs.backlog_index_status(verify=True), bs.backlog_index_status(rebuild=True, verify=True)]
     assert rebuilt.startswith("Store: ") and "Graph check" not in rebuilt, rebuilt
-    assert refused.startswith("Error: ") and "rebuild=True" in refused, refused
+    for answer in refused:
+        assert answer.startswith("Error: ") and "rebuild=True" in answer and "Nothing was changed" in answer, answer
+    assert _legacy_links(twins.legacy) == before
+
+
+def _legacy_links(root):
+    with closing(sqlite3.connect(root / ".taskmaster" / "local" / "store.db")) as connection:
+        return sorted(connection.execute("SELECT * FROM links").fetchall())
+
+
+# -- Link-before-target (review finding 1) --
+
+
+def test_links_written_before_their_target_exists_match_the_full_rebuild_at_commit(twins):
+    """A link recorded while its target was missing takes the target's kind when the
+    target is created, on both stores, so incremental rows equal `rebuild_derived`."""
+    for root in (twins.legacy, twins.native):
+        with twins.at(root):
+            assert "Error" not in bs.backlog_idea_create(
+                title="Early idea", related_tasks=["ISS-002", "B-001", "ISS-999"])
+            assert "Error" not in bs.backlog_issue_create(title="Later issue", severity="P2", evidence="x")
+            assert "Error" not in bs.backlog_bug_create(title="Later bug", severity="P2")
+    incremental = _legacy_links(twins.legacy)
+    assert incremental == _legacy_links(twins.native), "legacy and native rows diverged"
+    assert _verify(twins.native)["clean"]
+    with twins.at(twins.legacy):
+        bs.backlog_index_status(rebuild=True)
+    assert _legacy_links(twins.legacy) == incremental, "legacy incremental rows differ from rebuild_derived"
+    kinds = {row[4]: row[3] for row in incremental if row[1] == "IDEA-002" and row[5] == 0}
+    assert kinds == {"ISS-002": "issue", "B-001": "bug", "ISS-999": "task"}, kinds
+    mirrors = {(row[0], row[1]) for row in incremental if row[5] == 1 and row[4] == "IDEA-002"}
+    assert ("issue", "ISS-002") in mirrors and ("bug", "B-001") in mirrors
+    assert not [row for row in incremental if row[5] == 1 and row[4] == "IDEA-002" and row[0] == "task"
+                and row[1] in ("ISS-002", "B-001")], "a mirror under the fallback kind survived"
+
+
+def test_an_unresolved_link_target_keeps_the_task_fallback_on_both_stores(twins):
+    """Step 2's promise: a target that never exists is recorded as `task`, the legacy
+    answer, and the full oracle agrees."""
+    for root in (twins.legacy, twins.native):
+        with twins.at(root):
+            assert "Error" not in bs.backlog_idea_create(title="Orphan idea", related_tasks=["ISS-404"])
+    for root in (twins.legacy, twins.native):
+        rows = [row for row in _legacy_links(root) if row[4] == "ISS-404"]
+        assert rows and all(row[3] == "task" for row in rows), rows
+    assert _legacy_links(twins.legacy) == _legacy_links(twins.native)
+    assert _verify(twins.native)["clean"]
+
+
+def test_link_before_a_task_target(twins):
+    for root in (twins.legacy, twins.native):
+        with twins.at(root):
+            assert "Error" not in bs.backlog_idea_create(title="Task idea", related_tasks=["test-epic-004"])
+            assert "Error" not in bs.backlog_add_task(title="Delta", epic="test-epic", phase="dev")
+    assert _legacy_links(twins.legacy) == _legacy_links(twins.native)
+    assert _verify(twins.native)["clean"]
+
+
+# -- Backfill repair (review finding 2) --
+
+
+def test_activation_repairs_graph_drift_inherited_from_the_legacy_store(tmp_path, monkeypatch):
+    from native_twins import native_database
+
+    def drifted():
+        _seed()
+        from taskmaster import store
+        store.reset_for_tests()
+        with closing(sqlite3.connect(bs.ROOT / ".taskmaster" / "local" / "store.db", isolation_level=None)) as c:
+            c.execute("DELETE FROM related WHERE rowid IN (SELECT rowid FROM related LIMIT 2)")
+            c.execute("INSERT INTO links VALUES('task','test-epic-001','blocks','task','ghost',0)")
+            c.execute("INSERT INTO handover_tasks VALUES('ghost-handover','test-epic-001')")
+        store.reset_for_tests()
+    twins = make_twins(tmp_path, monkeypatch, drifted)
+    assert _verify(twins.native)["clean"]
+    with closing(sqlite3.connect(native_database(twins.native))) as connection:
+        assert connection.execute("SELECT value FROM native_manifest WHERE key='graph_repaired_at'").fetchone()
+
+
+def test_backfill_reports_the_graph_repair_cost(tmp_path):
+    import json
+    from taskmaster import store
+    from taskmaster.native.migrate import backfill
+    with closing(sqlite3.connect(tmp_path / "s.db", isolation_level=None)) as connection:
+        connection.executescript(store.SCHEMA_SQL)
+        connection.executemany("INSERT INTO meta VALUES(?,?)", [("schema_version", "1"), ("creation_token", "t")])
+        connection.execute("INSERT INTO entities VALUES('task','T-1',NULL,NULL,0,0,?,NULL,1,1)",
+                           (json.dumps({"id": "T-1", "anchors": ["src/a.py"]}),))
+        connection.execute("INSERT INTO entities VALUES('task','T-2',NULL,NULL,0,0,?,NULL,1,1)",
+                           (json.dumps({"id": "T-2", "anchors": ["src/*"]}),))
+        result = backfill(connection)
+        repair = result["graph_repair"]
+        # No derived rows existed: two entity_paths rows and one related row were missing.
+        assert repair["repaired"] and repair["differences"] == 3, repair
+        assert repair["rows_compared"] > 0 and repair["seconds"] >= 0
+        assert _actual(connection)["related"] == Counter({("task", "T-1", "task", "T-2", "path", 1): 1})
+
+
+# -- Hook revision and the repair stamp (review finding 3) --
+
+
+def _hook_revision(root):
+    from taskmaster.native_routing import hook_reads
+    with native_connection(root) as connection:
+        return hook_reads.revision(connection)
+
+
+def _stamp(root):
+    with native_connection(root) as connection:
+        row = connection.execute("SELECT value FROM native_manifest WHERE key='graph_repaired_at'").fetchone()
+        return row[0] if row else None
+
+
+def test_a_row_changing_repair_moves_the_hook_revision(twins):
+    before, stamp = _hook_revision(twins.native), _stamp(twins.native)
+    _corrupt(twins.native)
+    with twins.at(twins.native):
+        bs.backlog_index_status(rebuild=True)
+    assert _hook_revision(twins.native) > before
+    assert _stamp(twins.native) != stamp
+
+
+def test_a_clean_repair_neither_stamps_nor_moves_the_hook_revision(twins):
+    before, stamp = _hook_revision(twins.native), _stamp(twins.native)
+    with twins.at(twins.native):
+        assert "Graph check: clean" in bs.backlog_index_status(rebuild=True)
+    assert _hook_revision(twins.native) == before
+    assert _stamp(twins.native) == stamp
