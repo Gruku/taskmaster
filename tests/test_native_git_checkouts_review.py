@@ -119,3 +119,58 @@ def test_authored_commit_on_top_of_history_is_still_imported(repo):
         result = client.sync()
         assert result['state'] == 'synchronized', result
         assert title(repo) == 'Fresh authored title'
+
+
+# ── H3/M1: named-file syncs and bytes that change during a sync ────────────
+
+def test_named_file_sync_still_detects_bypassed_git(repo):
+    initial = git(repo, 'rev-parse', 'HEAD').strip()
+    with Coordinator(repo):
+        client = client_for(repo)
+        client.execute(request(client, 'a', 'Main title'))
+        _commit_published(repo, client)
+        git(repo, 'reset', '-q', '--hard', initial)
+        named = client.sync(files=[FILE])  # what MCP resync tools do
+        assert held(named), named
+        assert title(repo) == 'Main title', 'a named-file sync rolled the store back'
+        # The observation was not advanced by the named sync: a full sync still sees it.
+        assert held(client.sync())
+        assert title(repo) == 'Main title'
+
+
+def test_bytes_git_restores_after_classification_are_not_imported(repo, monkeypatch):
+    from taskmaster.coordinator import checkouts
+    original = checkouts.detect
+
+    def racing(owner, checkout, selected, drift):
+        found = original(owner, checkout, selected, drift)
+        git(repo, 'checkout', 'HEAD~1', '--', REL)  # Git rewrites the file mid-sync
+        return found
+    with Coordinator(repo):
+        client = client_for(repo)
+        two_generations(repo, client)
+        monkeypatch.setattr(checkouts, 'detect', racing)
+        result = client.sync()
+        assert held(result), result
+        assert title(repo) == 'Title B', 'bytes Git put there after classification were imported'
+
+
+def test_head_moving_during_a_sync_defers_the_import(repo, monkeypatch):
+    from taskmaster.coordinator import checkouts
+    original = checkouts.detect
+    with Coordinator(repo):
+        client = client_for(repo)
+        _commit_published(repo, client)
+        target = repo / REL
+        target.write_bytes(target.read_bytes().replace(b'Service task', b'Authored while HEAD moves'))
+
+        def racing(owner, checkout, selected, drift):
+            found = original(owner, checkout, selected, drift)
+            git(repo, 'commit', '-q', '--allow-empty', '-m', 'concurrent commit')
+            return found
+        monkeypatch.setattr(checkouts, 'detect', racing)
+        result = client.sync()
+        assert held(result) and any('HEAD moved' in notice for notice in result['notices']), result
+        monkeypatch.setattr(checkouts, 'detect', original)
+        assert client.sync()['state'] == 'synchronized'
+        assert title(repo) == 'Authored while HEAD moves'

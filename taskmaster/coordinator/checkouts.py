@@ -364,6 +364,7 @@ def _variants(content):
 
 
 UNREADABLE = b'\0unreadable'  # never equal to any base or published bytes
+UNSEEN = 'unreadable'  # a classified digest no observed file can carry
 
 
 def read(backlog: Path, rel: str):
@@ -536,12 +537,14 @@ def _base_reader(owner, checkout: Checkout):
     return base_bytes
 
 
-def detect(owner, checkout: Checkout, selected, drift) -> tuple[dict, dict, list[str]]:
-    """(current observation, {rel: reason} newly held as drift, warnings).
+def detect(owner, checkout: Checkout, selected, drift) -> tuple[dict, dict, list[str], dict]:
+    """(current observation, {rel: reason} newly held as drift, warnings, {rel: digest
+    or None (missing) or UNSEEN} of the bytes classified).
 
     Compares every selected file with this checkout's base; the files that differ
     are classified against the HEAD movement since the last observation. New drift
-    is durable before anything is imported."""
+    is durable before anything is imported. The caller imports a file only while it
+    still carries exactly the classified bytes."""
     record = read_record(owner, checkout.id) or {}
     current = observe(checkout)
     backlog = checkout.backlog
@@ -551,13 +554,15 @@ def detect(owner, checkout: Checkout, selected, drift) -> tuple[dict, dict, list
         skipped = {row[0] for row in connection.execute('SELECT file FROM projection WHERE quarantined=1')}
         skipped.update(projection.flagged_files(connection))
         known = store.bases(connection, checkout.id) if checkout.linked else dict(generation)
-    differing = {}
+    differing, seen = {}, {}
     for rel in selected:
         if rel in drift or rel.startswith('local/') or (not checkout.linked and rel in skipped):
             continue
         content = read(backlog, rel)
         if content == UNREADABLE:
+            seen[rel] = UNSEEN
             continue
+        seen[rel] = None if content is None else store.digest(content)
         expected = known.get(rel)
         if expected is None:
             if content is None:
@@ -583,7 +588,7 @@ def detect(owner, checkout: Checkout, selected, drift) -> tuple[dict, dict, list
         hold(owner, checkout, {rel: differing.get(rel) for rel in found}, found)
         warnings.append(f'{len(found)} projection file(s) in {checkout.root} were put there by Git since the last '
                         f'sync and are held as drift, not imported: ' + ', '.join(sorted(found)[:20]))
-    return current, found, warnings
+    return current, found, warnings, seen
 
 
 def hold(owner, checkout: Checkout, contents: dict, reasons: dict) -> None:

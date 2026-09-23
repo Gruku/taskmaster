@@ -194,7 +194,7 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
                 else:
                     result['warnings'].append(notice)
         selected = []
-        observation = None
+        observation, seen, unverified, moved = None, {}, None, False
         if import_files:
             if files is not None:
                 selected = list(files)
@@ -223,13 +223,16 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
             # drift: restored ones resolve here; the rest are neither imported nor repaired.
             drift = (managed_git.prune_drift(owner) if linked is None
                      else checkouts.prune_drift(owner, linked))
-            if observed_checkout is not None and files is None:
+            if observed_checkout is not None and not take_file:
                 # Step 10: Git operations that bypassed the coordinator put bytes here
                 # that are drift (an older or foreign generation), never import authority.
+                # Named files (MCP resync) are classified too; take_file is the explicit adopt.
                 try:
-                    observation, found, warnings = checkouts.detect(owner, observed_checkout, selected, drift)
+                    observation, found, warnings, seen = checkouts.detect(owner, observed_checkout, selected, drift)
                 except (GitRefused, OSError) as exc:
-                    observation, found, warnings = None, {}, [f'Git state could not be inspected: {exc}'[:500]]
+                    # Fail closed: nothing is imported while Git state is unknown.
+                    unverified = f'Git state could not be inspected ({exc}); not imported, retry the sync'[:500]
+                    found, warnings = {}, [unverified]
                 result['warnings'].extend(warnings)
                 drift |= set(found)
             for rel in selected:
@@ -238,6 +241,9 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
                     return result
                 if rel in drift and not take_file:
                     pending(rel, managed_git.DRIFT_GUIDANCE if linked is None else checkouts.LINKED_DRIFT)
+                    continue
+                if unverified:
+                    pending(rel, unverified)
                     continue
                 try:
                     with closing(owner._connect(readonly=True)) as connection, Repository(connection).snapshot() as snapshot:
@@ -250,6 +256,15 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
                     owner.checkpoint('sync_prepared')
                     if not current(plan):
                         pending(rel, 'file changed after parse; not imported')
+                        continue
+                    if rel in seen and seen[rel] != (None if plan.observation is None else plan.observation.digest):
+                        # Only the classified bytes were judged authored (a Git restore may land between).
+                        pending(rel, 'file changed after Git classification; not imported, retry the sync')
+                        continue
+                    if observation is not None and not moved and checkouts.observe(observed_checkout) != observation:
+                        moved = True
+                    if moved:
+                        pending(rel, 'HEAD moved during the sync; not imported, retry the sync')
                         continue
                     key = hashlib.sha256(encode(plan.arguments).encode()).hexdigest()
                     try:
@@ -318,11 +333,15 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
                 for notice in checkouts.publish(owner, linked, result['through']):
                     rel, _, reason = notice.removeprefix('sync pending: ').partition(': ')
                     pending(rel, reason)
-                if observation is not None:
-                    checkouts.remember(owner, linked, observation)
                 selected = []
-            elif observation is not None:
-                checkouts.remember(owner, observed_checkout, observation)
+            if observation is not None and files is None and not moved:
+                # Only a full sync advances the observation, and only while HEAD is still
+                # where classification saw it (an older observation re-detects, never skips).
+                try:
+                    if checkouts.observe(observed_checkout) == observation:
+                        checkouts.remember(owner, observed_checkout, observation)
+                except (GitRefused, OSError) as exc:
+                    result['warnings'].append(f'checkout observation not recorded: {exc}'[:500])
             with closing(owner._connect(readonly=True)) as connection:
                 held = set(projection.flagged_files(connection)) | set(projection.drift_files(connection))
                 held.update(row[0] for row in connection.execute('SELECT file FROM projection WHERE quarantined=1'))
