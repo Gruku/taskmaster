@@ -49,6 +49,14 @@ def base(connection, checkout: str, rel: str) -> tuple[str, bytes] | None:
     return None if row is None else (row[0], bytes(row[1]))
 
 
+def trusted_bases(connection, checkout: str) -> dict[str, str]:
+    """{rel: digest} of the bases `base` would return (their blob is retained)."""
+    if not _exists(connection):
+        return {}
+    return dict(connection.execute("SELECT b.file,b.digest FROM checkout_base b JOIN checkout_blob c "
+                                   "ON c.digest=b.digest WHERE b.checkout=?", (checkout,)))
+
+
 def bases(connection, checkout: str) -> dict[str, str]:
     if not _exists(connection):
         return {}

@@ -156,26 +156,34 @@ def generation(owner, through, backlog=None):
     `through` is the barrier's synchronized target: a domain write committed after
     the writer pause was released is not part of this generation. `backlog` is the
     participating checkout's projection directory (a linked worktree carries the
-    published bytes after its own synchronization)."""
+    published bytes after its own synchronization).
+
+    A file whose fresh lstat fingerprint still carries digests recorded from a checked
+    read (sync_files.Scan) is judged by them, blob ids included; any miss is read."""
+    from . import sync_files
     backlog = owner.root / '.taskmaster' if backlog is None else backlog
+    scan = sync_files.open_scan(owner.root, backlog)
     with closing(owner._connect(readonly=True)) as connection:
         connection.execute('BEGIN')
         rows = connection.execute("SELECT file,content_hash FROM projection WHERE file NOT LIKE 'local/%' "
                                   'ORDER BY file').fetchall()
         connection.rollback()
     mismatched, blobs = [], {}
-    from taskmaster.native import projection
     for rel, digest in rows:
         try:
-            content = _read_projection(backlog, rel)
-        except (OSError, UnsafePath) as exc:
+            known = scan.digests(rel)
+            if known is None:
+                observed = scan.observe(rel, authored=False, limit=MAX_PROJECTION_BYTES)
+                known = None if observed is None else sync_files.Digests.of(observed.content)
+        except (OSError, ValueError) as exc:
             mismatched.append(f'{rel}: {exc}')
             continue
-        if content is None or digest not in _variants(content):
+        if known is None or digest not in known.variants:
             mismatched.append(rel)
             continue
         # The Git blobs this generation may be committed as (exact, or LF-normalised).
-        blobs[rel] = sorted({_blob_id(content), _blob_id(projection._lf(content))})
+        blobs[rel] = sorted({known.blob, known.blob_lf})
+    sync_files.save_scan(owner.root, scan)
     value = hashlib.sha256(json.dumps(rows, separators=(',', ':')).encode()).hexdigest()
     return ({'digest': value, 'files': len(rows), 'through': through, 'blobs': blobs},
             [rel for rel, _ in rows], mismatched)

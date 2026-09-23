@@ -389,6 +389,7 @@ def _variants(content):
 
 UNREADABLE = b'\0unreadable'  # never equal to any base or published bytes
 UNSEEN = 'unreadable'  # a classified digest no observed file can carry
+MAX_READ = 64 * 1024 * 1024  # == git.MAX_PROJECTION_BYTES, the bound `read` applies
 
 
 def read(backlog: Path, rel: str):
@@ -397,6 +398,26 @@ def read(backlog: Path, rel: str):
         return _read_projection(backlog, rel)
     except (OSError, UnsafePath):
         return UNREADABLE
+
+
+def _recorded(scan, rel, *, fresh=False):
+    """Digests recorded under the file's unchanged fingerprint, or None (any doubt)."""
+    if scan is None:
+        return None
+    try:
+        return scan.digests(rel, fresh=fresh)
+    except (OSError, ValueError):
+        return None
+
+
+def _scan_read(scan, rel):
+    """`read` through a sync's scan: the same bytes/None/UNREADABLE answers, with the
+    before/after identity checks of `observe` (a file changing mid-read is UNREADABLE)."""
+    try:
+        observed = scan.observe(rel, authored=False, limit=MAX_READ)
+    except (OSError, ValueError):
+        return UNREADABLE
+    return None if observed is None else observed.content
 
 
 def recover_intent(owner, checkout: Checkout) -> list[str]:
@@ -429,11 +450,14 @@ def recover_intent(owner, checkout: Checkout) -> list[str]:
     return notices
 
 
-def publish(owner, checkout: Checkout, through: int) -> list[str]:
+def publish(owner, checkout: Checkout, through: int, *, scan=None) -> list[str]:
     """Copy the main checkout's published generation into a linked checkout.
 
     Returns pending notices. Only files carrying this
-    checkout's base (or absent) are replaced; a held, dirty or unbased file is named."""
+    checkout's base (or absent) are replaced; a held, dirty or unbased file is named.
+    With the sync's `scan`, a file whose fresh fingerprint still carries recorded
+    digests equal to both the generation and this checkout's base needs nothing and
+    is not read; every write still compares the bytes on disk (compare-and-swap)."""
     backlog = checkout.backlog
     if not os.path.lexists(backlog):
         backlog.mkdir()  # a branch without projections still receives the generation
@@ -452,6 +476,13 @@ def publish(owner, checkout: Checkout, through: int) -> list[str]:
         if rel in holding:
             pending.append(f'sync pending: {rel}: {holding[rel][0]} in {checkout.root}; {LINKED_DRIFT}')
             continue
+        hit = _recorded(scan, rel, fresh=True)
+        if hit is not None and value in hit.variants:
+            if known.get(rel) == hit.digest:
+                continue
+            if hit.digest == value:
+                plan[rel] = ('record', content, None)  # the file holds exactly the trusted bytes
+                continue
         current = read(backlog, rel)
         if current is not None and value in _variants(current):
             if known.get(rel) != store.digest(current):
@@ -648,14 +679,18 @@ def _base_reader(owner, checkout: Checkout):
     return base_bytes
 
 
-def detect(owner, checkout: Checkout, selected, drift) -> tuple[dict, dict, list[str], dict]:
+def detect(owner, checkout: Checkout, selected, drift, *, scan=None) -> tuple[dict, dict, list[str], dict]:
     """(current observation, {rel: reason} newly held as drift, warnings, {rel: digest
     or None (missing) or UNSEEN} of the bytes classified).
 
     Compares every selected file with this checkout's base; the files that differ
     are classified against the HEAD movement since the last observation. New drift
     is durable before anything is imported. The caller imports a file only while it
-    still carries exactly the classified bytes."""
+    still carries exactly the classified bytes.
+
+    With the sync's `scan`, a file whose fingerprint is unchanged since its digests
+    were recorded is compared by those digests (the classified digest is that
+    recorded digest); a file that differs, or any miss, is read in full."""
     record = read_record(owner, checkout.id) or {}
     current = observe(checkout)
     backlog = checkout.backlog
@@ -669,7 +704,14 @@ def detect(owner, checkout: Checkout, selected, drift) -> tuple[dict, dict, list
     for rel in selected:
         if rel in drift or rel.startswith('local/') or (not checkout.linked and rel in skipped):
             continue
-        content = read(backlog, rel)
+        hit = _recorded(scan, rel)
+        if hit is not None:
+            expected = known.get(rel)
+            if (expected in hit.variants if expected is not None else
+                    checkout.linked and generation.get(rel) in hit.variants):
+                seen[rel] = hit.digest
+                continue
+        content = read(backlog, rel) if scan is None else _scan_read(scan, rel)
         if content == UNREADABLE:
             seen[rel] = UNSEEN
             continue

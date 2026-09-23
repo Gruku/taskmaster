@@ -142,8 +142,8 @@ def test_bytes_git_restores_after_classification_are_not_imported(repo, monkeypa
     from taskmaster.coordinator import checkouts
     original = checkouts.detect
 
-    def racing(owner, checkout, selected, drift):
-        found = original(owner, checkout, selected, drift)
+    def racing(owner, checkout, selected, drift, **options):
+        found = original(owner, checkout, selected, drift, **options)
         git(repo, 'checkout', 'HEAD~1', '--', REL)  # Git rewrites the file mid-sync
         return found
     with Coordinator(repo):
@@ -164,8 +164,8 @@ def test_head_moving_during_a_sync_defers_the_import(repo, monkeypatch):
         target = repo / REL
         target.write_bytes(target.read_bytes().replace(b'Service task', b'Authored while HEAD moves'))
 
-        def racing(owner, checkout, selected, drift):
-            found = original(owner, checkout, selected, drift)
+        def racing(owner, checkout, selected, drift, **options):
+            found = original(owner, checkout, selected, drift, **options)
             git(repo, 'commit', '-q', '--allow-empty', '-m', 'concurrent commit')
             return found
         monkeypatch.setattr(checkouts, 'detect', racing)
