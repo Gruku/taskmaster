@@ -158,11 +158,12 @@ def generation(owner, through, backlog=None):
     participating checkout's projection directory (a linked worktree carries the
     published bytes after its own synchronization).
 
-    A file whose fresh lstat fingerprint still carries digests recorded from a checked
-    read (sync_files.Scan) is judged by them, blob ids included; any miss is read."""
+    Every file is read in full (never judged by a cached fingerprint): the generation
+    is what a commit records, and an in-place rewrite that restores size and mtime
+    would otherwise pass. The verified reads refresh the sync fingerprint cache."""
     from . import sync_files
     backlog = owner.root / '.taskmaster' if backlog is None else backlog
-    scan = sync_files.open_scan(owner.root, backlog)
+    scan = sync_files.open_scan(owner.root, backlog, fast=False)
     with closing(owner._connect(readonly=True)) as connection:
         connection.execute('BEGIN')
         rows = connection.execute("SELECT file,content_hash FROM projection WHERE file NOT LIKE 'local/%' "
@@ -305,19 +306,21 @@ def checkout_drift(owner):
     """{rel: observed sha1 | None (missing)} for every projection the checkout left
     differing from the published generation, including files only the checkout has."""
     from . import sync_files
+    from . import checkouts
     backlog = owner.root / '.taskmaster'
     with closing(owner._connect(readonly=True)) as connection:
         published = dict(connection.execute(
             "SELECT file,content_hash FROM projection WHERE file NOT LIKE 'local/%'").fetchall())
-    drift = {}
-    for rel, digest in published.items():
-        try:
-            content = _read_projection(backlog, rel)
-        except (OSError, UnsafePath):
-            drift[rel] = 'unreadable'
-            continue
-        if content is None or digest not in _variants(content):
-            drift[rel] = None if content is None else hashlib.sha1(content).hexdigest()
+        drift = {}
+        for rel, digest in published.items():
+            try:
+                content = _read_projection(backlog, rel)
+            except (OSError, UnsafePath):
+                drift[rel] = 'unreadable'
+                continue
+            if content is None or (digest not in _variants(content)
+                                   and not checkouts.same_text(checkouts.main_base(connection, rel), content)):
+                drift[rel] = None if content is None else hashlib.sha1(content).hexdigest()
     for rel in sync_files.discover(backlog).files:
         if rel not in published and not rel.startswith('local/'):
             drift[rel] = _observed_digest(backlog, rel)
@@ -330,6 +333,7 @@ def prune_drift(owner):
     state = read_state(owner, DRIFT_KEY)
     if not state:
         return set()
+    from . import checkouts
     files = dict(state.get('files') or {})
     backlog = owner.root / '.taskmaster'
     with closing(owner._connect(readonly=True)) as connection:
@@ -339,8 +343,8 @@ def prune_drift(owner):
                 content = _read_projection(backlog, rel)
             except (OSError, UnsafePath):
                 continue
-            if (row is None and content is None) or (row is not None and content is not None
-                                                      and row[0] in _variants(content)):
+            if (row is None and content is None) or (row is not None and content is not None and (
+                    row[0] in _variants(content) or checkouts.same_text(checkouts.main_base(connection, rel), content))):
                 del files[rel]
     if files != state.get('files'):
         write_state(owner, drift=dict(state, files=files) if files else None)
@@ -355,6 +359,151 @@ def drop_drift(owner, rels):
     files = {rel: value for rel, value in (state.get('files') or {}).items() if rel not in set(rels)}
     write_state(owner, drift=dict(state, files=files) if files else None)
     owner.export_needed.set()
+
+
+# ── Managed checkout round trip (D6) ───────────────────────────────────────
+
+ASIDE_DIR = 'taskmaster-aside'
+
+
+def _held_drift(owner, checkout):
+    """Paths held as checkout drift in the checkout operated on."""
+    if not checkout.linked:
+        return set((read_state(owner, DRIFT_KEY) or {}).get('files') or {})
+    from taskmaster.native import checkouts as store
+    with closing(owner._connect(readonly=True)) as connection:
+        return {rel for rel, (reason, _) in store.holds(connection, checkout.id).items() if reason == 'drift'}
+
+
+def _only_drift(synced, drift):
+    """Whether a pre-sync is pending for held drift alone (the barrier itself completed)."""
+    if not synced.get('captured') or synced.get('unresolved_omitted') or synced.get('notices_omitted'):
+        return False
+    if not set(synced.get('unresolved') or ()) <= drift:
+        return False
+    for notice in synced.get('notices') or ():
+        if notice == 'sync pending: projection publication incomplete':
+            continue  # every cause of it is an `export pending:` notice, each checked here
+        if notice.startswith('sync pending: '):
+            rel = notice.removeprefix('sync pending: ').partition(': ')[0]
+        elif notice.startswith('export pending: '):
+            rel = notice.removeprefix('export pending: ').partition(' ')[0]
+        else:
+            return False
+        if rel not in drift:
+            return False
+    return True
+
+
+def _status_entries(root):
+    """{path: XY} of `.taskmaster` entries Git reports as changed or untracked."""
+    _, raw = probe(root, '-c', 'status.renames=false', 'status', '--porcelain=v1', '-z', '--untracked-files=all',
+                   '--', '.taskmaster')
+    found = {}
+    for entry in raw.split(b'\0'):
+        if len(entry) > 3:
+            found[entry[3:].decode('utf-8', 'surrogateescape')] = entry[:2].decode('ascii', 'replace')
+    return found
+
+
+def _aside_plan(owner, checkout, target_commit, op_id):
+    """The store's own published files Git would refuse to replace when checking out
+    `target_commit`: untracked files the target tracks, and worktree-only modifications
+    of paths the target changes. Only bytes equal (up to line endings) to the trusted
+    published bytes are set aside - they are reproducible from the store, so Git may
+    replace them. Anything else (an authored edit, foreign bytes, staged changes) is left
+    for Git to refuse. None when nothing blocks."""
+    from . import checkouts
+    entries = _status_entries(checkout.root)
+    if not entries:
+        return None
+    target_tree = checkouts.tree_blobs(checkout, target_commit)
+    head_tree = checkouts.tree_blobs(checkout, 'HEAD')
+    with closing(owner._connect(readonly=True)) as connection:
+        generation = checkouts.published(connection, owner.root / '.taskmaster')
+    files = {}
+    for path, state in sorted(entries.items()):
+        if not path.startswith('.taskmaster/'):
+            continue
+        rel = path[len('.taskmaster/'):]
+        if rel.startswith('local/'):
+            continue
+        untracked = state == '??' and rel in target_tree
+        modified = state == ' M' and target_tree.get(rel) != head_tree.get(rel)
+        if not (untracked or modified):
+            continue
+        value, trusted, held = generation.get(rel, (None, None, 'unpublished'))
+        content = checkouts.read(checkout.backlog, rel)
+        if held or trusted is None or content in (None, checkouts.UNREADABLE):
+            continue
+        if value in checkouts._variants(content) or checkouts.same_text(trusted, content):
+            files[rel] = hashlib.sha1(content).hexdigest()
+    if not files:
+        return None
+    return {'dir': str(Path(checkout.git_dir) / ASIDE_DIR / op_id), 'backlog': str(checkout.backlog),
+            'files': files}
+
+
+def _move_aside(backlog, aside):
+    """Move each planned file aside, verifying the moved bytes; the first path whose bytes
+    changed since planning (it is put back) is returned, else None."""
+    from taskmaster.native import projection
+    base = Path(aside['dir'])
+    for rel, digest in sorted(aside['files'].items()):
+        source = safe_path(backlog, rel)
+        target = base / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if not projection._move(source, target):
+            return rel
+        if hashlib.sha1(target.read_bytes()).hexdigest() != digest:
+            projection._install(target, source)
+            return rel
+    return None
+
+
+def restore_asides(marker):
+    """Settle the files a managed checkout set aside: a path Git left empty gets its
+    published bytes back; where Git wrote the target's bytes the aside copy (the store's
+    own published bytes) is dropped. Returns notices."""
+    from taskmaster.native import projection
+    aside = marker.get('aside')
+    if not aside:
+        return []
+    base, backlog = Path(aside['dir']), Path(aside['backlog'])
+    restored, dropped, kept = [], [], []
+    for rel in sorted(aside['files']):
+        source = base / rel
+        if not source.exists():
+            continue
+        try:
+            target = safe_path(backlog, rel)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if projection._install(source, target):
+                restored.append(rel)
+            elif projection._drop(source):
+                dropped.append(rel)
+        except (OSError, UnsafePath):
+            kept.append(rel)
+    for directory in sorted((path for path in base.rglob('*') if path.is_dir()), key=lambda p: -len(p.parts)):
+        try:
+            directory.rmdir()
+        except OSError:
+            pass
+    try:
+        base.rmdir()
+    except OSError:
+        pass
+    notices = []
+    if restored:
+        notices.append(f'{len(restored)} published file(s) set aside for the checkout were put back: '
+                       + ', '.join(restored[:_KEPT]))
+    if dropped:
+        notices.append(f'{len(dropped)} published file(s) set aside for the checkout were replaced by the checked-out '
+                       'bytes (the store still holds them): ' + ', '.join(dropped[:_KEPT]))
+    if kept:
+        notices.append(f'{len(kept)} set-aside file(s) could not be settled and remain in {base}: '
+                       + ', '.join(kept[:_KEPT]))
+    return notices
 
 
 # ── Operation ──────────────────────────────────────────────────────────────
@@ -476,7 +625,8 @@ def _run_held(owner, kind, request, message, ref, timeout, worktree=None, sync_t
         if checkout.linked:
             with closing(owner._connect(readonly=True)) as connection:
                 from taskmaster.native import checkouts as store
-                held = {rel: reason for rel, (reason, _) in store.holds(connection, checkout.id).items()}
+                held = {rel: reason for rel, (reason, _) in store.holds(connection, checkout.id).items()
+                        if kind != 'checkout' or reason != 'drift'}
             if held:
                 return _refused('the linked checkout has held projection paths; resolve them first',
                                 paths=sorted(held)[:_KEPT])
@@ -496,15 +646,20 @@ def _run_held(owner, kind, request, message, ref, timeout, worktree=None, sync_t
                         import_files=True, through=0, files=None, take_file=False,
                         **({'worktree': str(root)} if checkout.linked else {}),
                         **({} if sync_timeout is None else {'timeout': sync_timeout}))
-    if synced.get('state') != 'synchronized':
+    # D6: a checkout may leave held drift behind. Held drift is Git's own bytes, never
+    # import authority; Git itself refuses to overwrite anything it considers modified.
+    drift = _held_drift(owner, checkout) if kind == 'checkout' else set()
+    if synced.get('state') != 'synchronized' and not (drift and _only_drift(synced, drift)):
         return _refused('projections are not synchronized; resolve the listed paths first', sync=synced)
     gen, files, mismatched = generation(owner, synced.get('through', 0), checkout.backlog)
+    mismatched = [rel for rel in mismatched if rel not in drift]
     if mismatched:
         return _refused('projection files differ from the published generation', paths=mismatched[:_KEPT],
                         paths_omitted=max(0, len(mismatched) - _KEPT))
     token = secrets.token_hex(32)
     try:
         commands = _commands(owner, kind, files, message, ref, token, op_id, checkout_root=root)
+        aside = _aside_plan(owner, checkout, target['commit'], op_id) if kind == 'checkout' else None
         # Re-observed after the barrier published: reconciliation compares against
         # the state Git actually starts from, not the pre-publication tree.
         before = snapshot(root, repo)
@@ -519,10 +674,27 @@ def _run_held(owner, kind, request, message, ref, timeout, worktree=None, sync_t
               'token_hash': hashlib.sha256(token.encode()).hexdigest(), 'pre': before, 'generation': gen,
               'target': target, 'started': time.time(),
               'checkout': dict(checkout.public(), git_dir=str(checkout.git_dir))}
-    write_state(owner, marker=marker)  # durable before any child exists
+    if aside:
+        marker['aside'] = aside
+    write_state(owner, marker=marker)  # durable before any child exists (and before any aside)
     owner.git_active = marker
     try:
         owner.checkpoint('git_marker_written')
+        if aside:
+            moved = _move_aside(checkout.backlog, aside)
+            if moved is not None:
+                notices = restore_asides(marker)
+                write_state(owner, marker=None)
+                return _refused(f'{moved} changed while being set aside for the checkout; nothing was run',
+                                notices=notices)
+            owner.checkpoint('git_aside_moved')
+            try:
+                marker['pre'] = snapshot(root, repo)  # the tree Git starts from
+            except GitRefused as exc:
+                notices = restore_asides(marker)
+                write_state(owner, marker=None)
+                return _refused(str(exc), notices=notices)
+            write_state(owner, marker=marker)
         return _execute(owner, marker, commands, timeout)
     except BaseException as exc:
         # Fail closed: the durable marker stays and publication is pinned.
@@ -665,6 +837,8 @@ def settle(owner, marker, report, *, recovered=False):
     drift = {}
     linked = None
     marked_linked = bool((marker.get('checkout') or {}).get('linked'))
+    if report['state'] in ('completed', 'failed'):
+        report['notices'].extend(restore_asides(marker))  # before drift is judged
     if report['state'] in ('completed', 'failed') and marked_linked:
         try:
             linked = _checkout_of(owner, marker)
@@ -755,11 +929,17 @@ def recover(owner, *, acknowledge_quiescent=False, accept_outcome=False, release
         if marker is None:
             result = {'state': 'clear', 'checkout': {'id': 'main', 'path': str(owner.root), 'linked': False}}
             if release_drift == 'import':
-                # Explicit: ordinary sync may now import (or repair) these paths.
-                released = sorted((read_state(owner, DRIFT_KEY) or {}).get('files') or {})
-                write_state(owner, drift=None)
+                # Explicit: ordinary sync may now import (or repair) these paths. A derived
+                # index has no authored content to import: it stays held until re-rendered.
+                state = read_state(owner, DRIFT_KEY) or {}
+                files = dict(state.get('files') or {})
+                kept = {rel: checkouts.DERIVED_GUIDANCE for rel in files if checkouts.derived(rel)}
+                released = sorted(rel for rel in files if rel not in kept)
+                remaining = {rel: files[rel] for rel in kept}
+                write_state(owner, drift=dict(state, files=remaining) if remaining else None)
                 checkouts.release_main(owner, released)
-                result.update(release=release_drift, released_drift=released, kept={})
+                result.update(release=release_drift, released_drift=released, kept=kept,
+                              state='pending' if kept else 'clear')
             elif release_drift == 'take_published':
                 released, kept = checkouts.take_published_main(owner)
                 result.update(release=release_drift, released_drift=released, kept=kept,
@@ -804,13 +984,15 @@ def recover(owner, *, acknowledge_quiescent=False, accept_outcome=False, release
         if outcome['state'] == 'ambiguous' and accept_outcome:
             outcome = dict(outcome, state='accepted', reconciled=True,
                            notices=[*outcome['notices'], 'ambiguous outcome accepted by operator'])
-            return _release(owner, outcome)
+            return _release(owner, outcome, marker)
         return settle(owner, marker, outcome, recovered=True)
     finally:
         owner.publication.release()
 
 
-def _release(owner, outcome):
+def _release(owner, outcome, marker=None):
+    if marker is not None:
+        outcome = dict(outcome, notices=[*outcome.get('notices', []), *restore_asides(marker)])
     last = dict(outcome, recovered=True, settled=time.time())
     write_state(owner, marker=None, **_settled(owner, last))
     owner.git_pin = None
@@ -862,7 +1044,7 @@ def _accept_unreconciled(owner, marker, reason):
                'notices': [reason, 'boundary acknowledged and outcome accepted by operator; unreconciled: '
                                    'inspect HEAD, index and projections before relying on them']}
     LOG.warning('managed Git outcome accepted unreconciled: %s', reason)
-    return _release(owner, outcome)
+    return _release(owner, outcome, marker)
 
 
 def _quiesce(owner, marker, acknowledged):

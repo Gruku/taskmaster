@@ -164,7 +164,8 @@ def test_warm_no_edit_full_sync_reads_no_file_and_resolves_per_directory(repo, m
         assert not mismatched
         assert synced['reads'] == 0, synced
         assert synced['file_realpath'] == 0, synced  # directories once per sync, never files
-        assert counts['reads'] == 0, 'the managed-Git generation check reuses fingerprints too'
+        # The managed-Git generation is what a commit records: it reads every file in full.
+        assert counts['reads'] - synced['reads'] >= len(files)
 
 
 def test_edit_after_warm_sync_is_imported(repo):

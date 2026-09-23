@@ -255,8 +255,18 @@ def apply(transaction, operation, arguments):
     digest = arguments["observed_hash"]
     if mode == "observe":
         record = connection.execute("SELECT content_hash FROM projection WHERE file=?", (rel,)).fetchone()
-        if record is None or record[0] != digest or projection.held_file(connection, rel):
+        if record is None or projection.held_file(connection, rel):
             raise Conflict(f"observed bytes do not match a trusted unheld projection: {rel}")
+        if record[0] != digest:
+            # D7: bytes equal to the trusted base up to line endings (Git's eol conversion)
+            # become the recorded published bytes; nothing else may be observed.
+            base = connection.execute("SELECT content FROM projection_base WHERE file=?", (rel,)).fetchone()
+            base = None if base is None or base[0] is None else bytes(base[0])
+            if (base is None or hashlib.sha1(base).hexdigest() != record[0]
+                    or projection._lf(base) != projection._lf(content)):
+                raise Conflict(f"observed bytes do not match a trusted unheld projection: {rel}")
+            connection.execute("UPDATE projection SET content_hash=?,size=?,mtime=NULL WHERE file=?",
+                               (digest, len(content), rel))
         connection.execute("INSERT INTO projection_base(file,content) VALUES(?,?) "
                            "ON CONFLICT(file) DO UPDATE SET content=excluded.content", (rel, content))
         transaction.result = {"file": rel, "state": "observed"}

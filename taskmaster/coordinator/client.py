@@ -208,8 +208,7 @@ class Client:
         options = dict(import_files=import_files, through=through, files=files, take_file=take_file)
         validate_input(options)
         budget = validate_sync_timeout(SYNC_TIMEOUT if timeout is None else timeout)
-        if timeout is not None:
-            options['timeout'] = timeout
+        options['timeout'] = budget  # always named: the reply is awaited budget + REPLY_MARGIN
         if not all(isinstance(value, str) and 1 <= len(value) <= 256 for value in (caller_scope, request_id)):
             raise ValueError('sync requires caller_scope and request_id')
         try:
@@ -233,7 +232,7 @@ class Client:
         `in_progress` or the settled result. `sync_timeout` bounds the pre-sync."""
         request_id = uuid.uuid4().hex if request_id is None else request_id
         budget = validate_sync_timeout(SYNC_TIMEOUT if sync_timeout is None else sync_timeout)
-        extra_sync = {} if sync_timeout is None else {'sync_timeout': sync_timeout}
+        extra_sync = {'sync_timeout': budget}  # always named, like sync's budget
         if not all(isinstance(value, str) and 1 <= len(value) <= 256 for value in (caller_scope, request_id)):
             raise ValueError('managed Git requires caller_scope and request_id')
         try:

@@ -5,9 +5,10 @@
 
     python scripts/native_n13_rehearsal.py --copy C:/.../tmn13/cm --phase setup|s1|repair|s1|s2|resolve|s3|...|s7
 
-Phases were run in that order on 2026-09-23; between s4 and s5 the copy needed hand steps
-(recorded in results.jsonl and the N13 report: release/restore, a bypassed checkout -f, and
-normalising a mixed-EOL handover). REHEARSAL_WORKTREE names the linked worktree dir for s5.
+Phases were run in that order on 2026-09-23; between s4 and s5 the copy then needed hand steps
+(release/restore, a bypassed checkout -f, normalising a mixed-EOL handover: defects D5-D7). With
+those fixed, the rerun is setup, s1, s4 (managed round trip), eol (D7), s5 on a fresh clone.
+REHEARSAL_WORKTREE names the linked worktree dir for s5 (default <copy>-wt).
 
 The copy is prepared by hand first (read-only on the source):
     git clone --no-hardlinks <live> <copy>; git -C <copy> remote remove origin
@@ -333,49 +334,89 @@ def s3(copy):
 
 
 # ── 4: managed checkout to an older commit and back ─────────────────────────
+def _drift(client):
+    return (client.git_status().get('drift') or {}).get('files') or {}
+
+
 def s4(copy):
+    """Round trip A -> HEAD~30 -> A through managed Git only, twice: first back while the
+    drift is still held (D6), then out again, release with take_published (which leaves
+    store-published bytes Git sees as modified or untracked, D5 re-renders IDEAS.md) and
+    back. The store is never rolled back and the return imports nothing."""
     older = git(copy, 'rev-parse', 'HEAD~30').strip()
     branch = git(copy, 'symbolic-ref', '--short', 'HEAD').strip()
     before = fingerprint(copy)
     with owner(copy) as (_, client):
-        out, seconds = timed(lambda: client.git_run(kind='checkout', ref=older, request_id='s4-out'))
-        after = fingerprint(copy)
-        drift = (client.git_status().get('drift') or {}).get('files') or {}
-        record('s4', step='managed checkout HEAD~30', seconds=seconds, result=brief(out), drift_count=len(drift),
-               store_before=before, store_after=after, store_rolled_back=before != after)
-        synced, sync_seconds, _ = sync_until_settled(client)
-        record('s4', step='full sync while drift held', seconds=sync_seconds, state=synced.get('state'),
-               unresolved_n=len(synced.get('unresolved', [])), imports_n=len(synced.get('imports', [])),
-               store_after=fingerprint(copy))
-        back, seconds = timed(lambda: client.git_run(kind='checkout', ref=branch, request_id='s4-back-1'))
-        record('s4', step='managed checkout back while drift held', seconds=seconds, result=brief(back))
-        # take_file on one drift path: the explicit adoption of the older bytes.
-        taken = sorted(rel for rel, digest in drift.items() if digest is not None)[:1]
-        if taken:
-            took, seconds = timed(lambda: client.sync(files=taken, take_file=True))
-            record('s4', step='take_file one drift path', file=taken, seconds=seconds, result=brief(took),
-                   drift_left=len((client.git_status().get('drift') or {}).get('files') or {}))
-        released, seconds = timed(lambda: client.git_recover(release_drift='take_published'))
-        record('s4', step='release take_published', seconds=seconds, result=brief(released),
-               drift_left=len((client.git_status().get('drift') or {}).get('files') or {}))
-        back, seconds = timed(lambda: client.git_run(kind='checkout', ref=branch, request_id='s4-back-2'))
-        record('s4', step='managed checkout back after release', seconds=seconds, result=brief(back),
-               head=git(copy, 'rev-parse', '--abbrev-ref', 'HEAD').strip(),
-               drift_left=len((client.git_status().get('drift') or {}).get('files') or {}))
-        synced, sync_seconds, _ = sync_until_settled(client)
-        record('s4', step='full sync after return', seconds=sync_seconds, result=brief(synced),
-               store_after=fingerprint(copy), git_status=git(copy, 'status', '--porcelain').splitlines()[:20])
+        for trip, release in (('held', False), ('released', True)):
+            out, seconds = timed(lambda: client.git_run(kind='checkout', ref=older, request_id=f's4-out-{trip}'))
+            drift = _drift(client)
+            record('s4', trip=trip, step='managed checkout HEAD~30', seconds=seconds, result=brief(out),
+                   drift_count=len(drift), ideas_index_held='ideas/IDEAS.md' in drift,
+                   store_rolled_back=fingerprint(copy) != before)
+            synced, sync_seconds, _ = sync_until_settled(client)
+            record('s4', trip=trip, step='full sync while drift held', seconds=sync_seconds, state=synced.get('state'),
+                   unresolved_n=len(synced.get('unresolved', [])), imports_n=len(synced.get('imports', [])),
+                   store_rolled_back=fingerprint(copy) != before)
+            if release:
+                released, seconds = timed(lambda: client.git_recover(release_drift='take_published'))
+                record('s4', trip=trip, step='release take_published', seconds=seconds, result=brief(released),
+                       ideas_index_released='ideas/IDEAS.md' in released.get('released_drift', []),
+                       drift_left=len(_drift(client)),
+                       git_dirty=len(git(copy, 'status', '--porcelain', '--', '.taskmaster').splitlines()))
+            back, seconds = timed(lambda: client.git_run(kind='checkout', ref=branch, request_id=f's4-back-{trip}'))
+            record('s4', trip=trip, step='managed checkout back', seconds=seconds, result=brief(back),
+                   head=git(copy, 'rev-parse', '--abbrev-ref', 'HEAD').strip(), drift_left=len(_drift(client)))
+            synced, sync_seconds, _ = sync_until_settled(client)
+            record('s4', trip=trip, step='full sync after return', seconds=sync_seconds, result=brief(synced),
+                   store_rolled_back=fingerprint(copy) != before,
+                   git_status=git(copy, 'status', '--porcelain', '--', '.taskmaster').splitlines()[:20])
+
+
+# ── eol: a mixed-EOL published file survives Git's eol conversion (D7) ──────
+def eol(copy):
+    """Reproduces the two live mixed-EOL handovers: an authored edit leaves a handover mixing
+    CRLF with lone LF, sync publishes it, a plain commit stores the LF blob, and Git then
+    rewrites the file in its normalised form. Neither that nor a fresh worktree is drift."""
+    tm = copy / '.taskmaster'
+    rel = pick(copy, 'handover', 'handovers')
+    raw = (tm / rel).read_bytes().replace(b'\r\n', b'\n')
+    lines = raw.split(b'\n')
+    mixed = b'\r\n'.join(lines[:-3]) + b'\r\n' + b'\n'.join(lines[-3:])
+    (tm / rel).write_bytes(mixed)
+    with owner(copy) as (_, client):
+        seq = max_seq(copy)
+        synced, seconds, _ = sync_until_settled(client)
+        record('eol', step='authored mixed-EOL edit, sync', file=rel, seconds=seconds, state=synced.get('state'),
+               imports_n=len(synced.get('imports', [])), events=events_since(copy, seq),
+               published_is_mixed=projection_hash(copy, rel) == __import__('hashlib').sha1(mixed).hexdigest())
+        committed, seconds = timed(lambda: client.git_run(kind='commit', message='tm: rehearsal mixed-EOL handover',
+                                                          request_id='eol-commit'))
+        record('eol', step='managed commit', seconds=seconds, state=committed.get('state'),
+               index_eol=git(copy, 'ls-files', '--eol', '--', f'.taskmaster/{rel}').split('\t')[0])
+        (tm / rel).unlink()
+        git(copy, 'checkout', '--', f'.taskmaster/{rel}')
+        rewritten = (tm / rel).read_bytes()
+        seq = max_seq(copy)
+        synced, seconds, _ = sync_until_settled(client)
+        record('eol', step='Git rewrote it normalised, sync', seconds=seconds, state=synced.get('state'),
+               bytes_changed=rewritten != mixed, unresolved=synced.get('unresolved', [])[:5],
+               imports_n=len(synced.get('imports', [])), new_events=len(events_since(copy, seq)),
+               drift=len(_drift(client)))
 
 
 # ── 5: linked worktree ──────────────────────────────────────────────────────
 def s5(copy):
-    wt = copy.parent / os.environ.get('REHEARSAL_WORKTREE', 'cm-wt')
+    wt = copy.parent / os.environ.get('REHEARSAL_WORKTREE', f'{copy.name}-wt')
     assert LIVE not in wt.resolve().parents
     if not wt.exists():
         git(copy, 'worktree', 'add', '-q', '-b', f'rehearsal-{wt.name}', str(wt), 'HEAD')
     with owner(copy) as (_, client):
         first, seconds, rounds = sync_until_settled(client, worktree=wt)
         record('s5', step='first sync(worktree=W)', seconds=seconds, rounds=rounds, result=brief(first))
+        if first.get('state') != 'synchronized':
+            # A worktree of an older commit holds its Git bytes until released.
+            released, seconds = timed(lambda: client.git_recover(release_drift='take_published', worktree=str(wt)))
+            record('s5', step='release take_published in fresh W', seconds=seconds, result=brief(released))
         again, seconds, _ = sync_until_settled(client, worktree=wt)
         record('s5', step='repeat sync(worktree=W), no edits', seconds=seconds, result=brief(again))
         task = pick(copy, 'task', 'tasks')
@@ -599,7 +640,8 @@ def widen_sync_budget():
     sync_worker._synchronize.__kwdefaults__['timeout'] = SYNC_BUDGET
 
 
-PHASES = {'setup': setup, 's1': s1, 'repair': repair, 's2': s2, 'resolve': resolve, 's3': s3, 's4': s4, 's5': s5, 's6': s6, 's7': s7}
+PHASES = {'setup': setup, 's1': s1, 'repair': repair, 's2': s2, 'resolve': resolve, 's3': s3, 's4': s4, 'eol': eol,
+          's5': s5, 's6': s6, 's7': s7}
 
 
 def main():

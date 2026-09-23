@@ -21,6 +21,10 @@ MAX_RESPONSE_BYTES = 64 * 1024 * 1024
 # 120 s is ~3x that worst case. Callers may pass 1..MAX_SYNC_TIMEOUT; an exhausted
 # budget answers `pending`, never a guess.
 SYNC_TIMEOUT = 120
+# The budget of a request that names none: a client from before budgets were sent waits
+# 30 s for the reply, so it keeps the fixed 20 s budget it was built against. Current
+# clients always send their budget (and wait budget + REPLY_MARGIN).
+ABSENT_SYNC_TIMEOUT = 20
 MAX_SYNC_TIMEOUT = 3600
 # How much longer than a call's own budget a client waits for the reply.
 REPLY_MARGIN = 30

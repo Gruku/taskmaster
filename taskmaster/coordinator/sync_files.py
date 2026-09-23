@@ -190,9 +190,13 @@ class Scan:
       as differing or published is read in full.
     """
 
-    def __init__(self, root: Path, known: dict | None = None):
+    def __init__(self, root: Path, known: dict | None = None, *, since: float | None = None,
+                 cacheable: bool = True):
         self.root = Path(root).absolute()
         self.known = known or {}
+        # When the entries in `known` began to be carried forward (a full read resets it).
+        self.since = time.time() if since is None else since
+        self.cacheable = cacheable
         self._entries: dict[str, list] = {}
         self._directories: dict[str, Path | BaseException] = {}
         self._info: dict[str, os.stat_result | None] = {}
@@ -251,12 +255,17 @@ class Scan:
 
     def record(self, observed: Observation) -> None:
         fingerprint = observed.fingerprint
-        if not fingerprint:
+        if not fingerprint or not self.cacheable:
+            return
+        # A filesystem without stable file ids or timestamps cannot vouch for a file.
+        if not fingerprint[1] or not fingerprint[3]:
             return
         # POSIX ctime is the inode change time (a write moves it); Windows reports the
         # creation time there, which says nothing about later writes.
         changed = fingerprint[3] if os.name == "nt" else max(fingerprint[3], fingerprint[4])
-        if time.time_ns() - changed > RACY_NS:
+        now = time.time_ns()
+        # Racy window: only timestamps safely in the past (a future one means clock skew).
+        if RACY_NS < now - changed and changed <= now:
             self._entries[observed.file] = [list(fingerprint), list(Digests.of(observed.content))]
             self._info.pop(observed.file, None)  # the next lookup takes a fresh lstat
 
@@ -281,8 +290,11 @@ def _valid_entry(entry) -> bool:
 
 
 # ── Persisted fingerprints (a cache: any doubt means a full read) ──────────────
-CACHE_VERSION = 1
+CACHE_VERSION = 2
 CACHE_CHECKOUTS = 40
+# Entries are carried forward at most this long; then one sync reads every file again,
+# so a change no fingerprint shows (same size, restored mtime) cannot persist forever.
+CACHE_TTL = 3600
 
 
 def cache_path(store_root: Path) -> Path:
@@ -294,33 +306,60 @@ def _cache_key(backlog: Path) -> str:
 
 
 def _load_cache(store_root: Path) -> dict:
+    """{checkout key: {"since": float, "entries": {...}}}; any doubt is an empty cache."""
     try:
         with cache_path(store_root).open("rb") as stream:
             value = json.loads(stream.read(64 * 1024 * 1024))
-    except (OSError, ValueError, UnicodeError):
+        if not isinstance(value, dict) or value.get("version") != CACHE_VERSION \
+                or not isinstance(value.get("checkouts"), dict):
+            return {}
+        return {key: item for key, item in value["checkouts"].items()
+                if isinstance(item, dict) and isinstance(item.get("entries"), dict)
+                and type(item.get("since")) in (int, float)}
+    except Exception:  # noqa: BLE001 - a corrupt cache (deep nesting, huge values) is only a miss
         return {}
-    if not isinstance(value, dict) or value.get("version") != CACHE_VERSION or not isinstance(value.get("checkouts"), dict):
-        return {}
-    return value["checkouts"]
+
+
+def _remote(path: Path) -> bool:
+    """Whether `path` is on a network volume, whose timestamps and file ids the
+    fingerprint cannot trust (Windows drive type; UNC paths). POSIX: not detected."""
+    text = str(Path(path).absolute())
+    if text.startswith(("\\\\", "//")):
+        return True
+    if os.name != "nt":
+        return False
+    try:
+        import ctypes
+        drive = os.path.splitdrive(text)[0] + "\\"
+        return ctypes.windll.kernel32.GetDriveTypeW(ctypes.c_wchar_p(drive)) == 4  # DRIVE_REMOTE
+    except (AttributeError, OSError, ValueError):
+        return True
 
 
 def open_scan(store_root: Path, backlog: Path, *, fast: bool = True) -> Scan:
-    """A scan of `backlog` seeded with its persisted fingerprints (none when not `fast`)."""
-    known = _load_cache(store_root).get(_cache_key(backlog)) if fast else None
-    return Scan(backlog, known if isinstance(known, dict) else None)
+    """A scan of `backlog` seeded with its persisted fingerprints: none when not `fast`,
+    when they are older than CACHE_TTL, or on a network volume (never cached there)."""
+    if _remote(backlog):
+        return Scan(backlog, None, cacheable=False)
+    item = _load_cache(store_root).get(_cache_key(backlog)) if fast else None
+    if item is None or not 0 <= time.time() - item["since"] <= CACHE_TTL:
+        return Scan(backlog, None)
+    return Scan(backlog, item["entries"], since=item["since"])
 
 
 def save_scan(store_root: Path, scan: Scan) -> None:
     """Replace `scan.root`'s fingerprints with what this scan confirmed; best effort."""
-    entries = scan.merged()
-    if entries == scan.known:
+    if not scan.cacheable:
         return
+    entries = scan.merged()
     checkouts = _load_cache(store_root)
     key = _cache_key(scan.root)
-    checkouts.pop(key, None)
+    stored = checkouts.pop(key, None)
+    if stored is not None and stored.get("entries") == entries and stored.get("since") == scan.since:
+        return
     while len(checkouts) >= CACHE_CHECKOUTS:
         checkouts.pop(next(iter(checkouts)))
-    checkouts[key] = entries
+    checkouts[key] = {"since": scan.since, "entries": entries}
     path = cache_path(store_root)
     temp = path.with_name(f"{path.name}.tmp.{os.getpid()}")
     try:
