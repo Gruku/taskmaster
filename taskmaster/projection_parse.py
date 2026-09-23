@@ -165,33 +165,19 @@ def validate_identity(kind: str, ident: str, doc: Mapping[str, Any]) -> None:
         raise ValueError(f"{kind} path id {ident!r} does not match frontmatter id {declared!r}")
 
 
-def projected_file(kind: str, ident: str | None, content: bytes,
-                   lookup: Lookup = lambda *_: None) -> dict[tuple[str, str], Document] | None:
-    """Rows these bytes own, overlaid on a caller-provided current snapshot.
+def authored_rows(kind: str, ident: str | None, content: bytes) -> dict[tuple[str, str], Document] | None:
+    """What these bytes literally say, before split ownership is applied.
 
-    An epic/phase document owns heavy fields and prose only; backlog.yaml owns
-    its slim fields. Absence in an entity file removes a heavy field. No absent
-    file or absent backlog member is represented as an entity deletion here.
+    The comparison point for "did the author change something this file does
+    not own?": an epic document's `title` mirror, a claim written into a task
+    file, a derived index or heavy field typed into backlog.yaml.
     """
     text = content.decode("utf-8")
     if kind == "backlog":
         raw = yaml_io.safe_load(text)
         raw = {} if raw is None else raw
         validate_backlog(raw)
-        result = flatten_backlog(raw)
-        for key, (doc, body) in list(result.items()):
-            if key[0] not in {"epic", "phase"}:
-                continue
-            current = lookup(*key)
-            if current is not None:
-                heavy = EPIC_HEAVY_FIELDS if key[0] == "epic" else PHASE_HEAVY_FIELDS
-                for field in heavy:
-                    if field in current[0]:
-                        doc[field] = deepcopy(current[0][field])
-                    else:
-                        doc.pop(field, None)
-                result[key] = (doc, current[1])
-        return result
+        return flatten_backlog(raw)
     if kind == "project":
         doc = yaml_io.safe_load(text)
         doc = {} if doc is None else doc
@@ -202,15 +188,46 @@ def projected_file(kind: str, ident: str | None, content: bytes,
         return None
     doc, body = entity_text(kind, text)
     validate_identity(kind, ident, doc)
-    if kind in {"epic", "phase"}:
-        current = lookup(kind, ident)
-        if current is not None:
+    return {(kind, ident): (doc, body)}
+
+
+def owned_rows(kind: str, rows: dict[tuple[str, str], Document] | None,
+               lookup: Lookup = lambda *_: None) -> dict[tuple[str, str], Document] | None:
+    """Authored rows overlaid on a caller-provided current snapshot (not mutated).
+
+    An epic/phase document owns heavy fields and prose only; backlog.yaml owns
+    its slim fields. Absence in an entity file removes a heavy field. No absent
+    file or absent backlog member is represented as an entity deletion here.
+    """
+    if rows is None:
+        return None
+    result = {key: (deepcopy(doc), body) for key, (doc, body) in rows.items()}
+    for key, (doc, body) in list(result.items()):
+        if key[0] not in {"epic", "phase"}:
+            continue
+        current = lookup(*key)
+        if current is None:
+            continue
+        heavy = EPIC_HEAVY_FIELDS if key[0] == "epic" else PHASE_HEAVY_FIELDS
+        if kind == "backlog":
+            for field in heavy:
+                if field in current[0]:
+                    doc[field] = deepcopy(current[0][field])
+                else:
+                    doc.pop(field, None)
+            result[key] = (doc, current[1])
+        else:
             merged = deepcopy(current[0])
-            heavy = EPIC_HEAVY_FIELDS if kind == "epic" else PHASE_HEAVY_FIELDS
             for field in heavy:
                 if field in doc:
                     merged[field] = doc[field]
                 else:
                     merged.pop(field, None)
-            doc = merged
-    return {(kind, ident): (doc, body)}
+            result[key] = (merged, body)
+    return result
+
+
+def projected_file(kind: str, ident: str | None, content: bytes,
+                   lookup: Lookup = lambda *_: None) -> dict[tuple[str, str], Document] | None:
+    """Rows these bytes own, overlaid on a caller-provided current snapshot."""
+    return owned_rows(kind, authored_rows(kind, ident, content), lookup)
