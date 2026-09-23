@@ -119,7 +119,7 @@ with no authored field values.
 
 | Caller | Category / core boundary |
 |---|---|
-| `edit_resurface.py` | Committed query over entity paths, related graph and change sequence; advisory memo is local derived state |
+| `edit_resurface.py` | Committed query over entity paths, related graph and change sequence; advisory memo is local derived state. On native stores (N14) it reads the canonical neighbourhood (`Snapshot.neighbourhood` via `hook_reads`), not the `related` table; legacy stores are unchanged |
 | `merge_gate_decide.py` | Committed task/gate query with established file fallback; system-Python admission |
 | `merge_recorder_stamp.py` | Command adapter to `backlog_record_merge`; successful Git operation already occurred |
 | `merge_gate.py`, `merge_recorder.py`, `.sh` wrappers, `run_hook.sh` | Host dispatch; preserve stdin/stdout/exit and fail-open behavior |
@@ -145,3 +145,46 @@ the full graph as the oracle. Viewer related-data currently scans continuity
 files instead of consuming the graph. Therefore removing `related` or changing
 edge multiplicity before N14 would break a supported contract. Keep compatibility
 views/materialization until these consumers migrate and equivalence passes.
+
+### Graph SQL freshness (N14, decision F1 = A)
+
+| SQL name | Native freshness | Maintained by | Repair |
+|---|---|---|---|
+| `entity_paths` | Current at commit | `relations.maintain`, per changed document | Full oracle |
+| `links` (incl. `derived=1` mirrors) | Current at commit | `relations.maintain`, per changed link set | Full oracle |
+| `handover_tasks` | Current at commit | `relations.maintain`, per changed handover | Full oracle |
+| `related` | Current at commit | `relations.maintain`; path pairs through the indexed candidate search in `native/neighbourhood.py`, which costs the edited entity's candidates rather than every claim | Full oracle |
+
+All four tables are maintained incrementally inside the command's transaction, and
+the full oracle is the repair operation. Rows, weights and multiplicity are the
+frozen legacy contract: undirected sorted pairs, path weight = matching claim
+pairs (glob-vs-glob, case-sensitive), one `handover` row per co-membership,
+archived-but-live entities kept, deleted entities dropped. `backlog_query` still
+materializes these tables in its per-call private snapshot, so its latency is
+unchanged.
+
+**Repair operation.** `backlog_index_status(verify=True)` compares the four tables
+with the full oracle and reports missing and spurious rows, with examples, the
+entity count, rows compared and seconds. It changes nothing. `rebuild=True` runs the
+native `graph.repair` command, which is admitted through `commands.execute` on its
+own (never inside a batch). It replaces only the differing rows in one writer
+transaction, appends no domain event because derived rows are not authored state,
+and records `graph_repaired_at` in `native_manifest`. The oracle recomputes rows
+from canonical documents with `relations.grouped_weights` plus the legacy link,
+mirror and handover rebuild rules (`native/graph_repair.py`). No command or read
+path calls it. On a legacy store, `rebuild=True` is the unchanged
+`Store.rebuild_derived`, and `verify=True` is refused. Measured on a synthetic
+native store with 4,000 path claims (35,607 `related` rows, 80,862 rows compared):
+verify takes about 0.4 s and repair about 0.5 s.
+
+**Explicit additions.** `Snapshot.neighbourhood(kind, id, limit)` returns distinct
+`(kind, id, via, weight)` neighbours, with weight summed over `related` rows. The
+optional `verify` parameter and the native `graph.repair` operation are also new.
+Neither adds top-K ranking or changes relevance.
+
+**Known limit.** `Snapshot.neighbourhood`, like `Snapshot.relations()`, pages with
+`truncated` only and has no continuation cursor.
+
+**Later capability, not unfinished work.** Materializing `related` on demand from
+canonical claims (option B) instead of maintaining it at commit is recorded as a
+possible later capability. This release does not need it.
