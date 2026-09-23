@@ -503,7 +503,8 @@ def _run_held(owner, kind, request, message, ref, timeout, worktree=None):
               'job': jobs.new_name() if jobs.supported() else None,
               'identity': jobs.identity() if jobs.supported() else None,
               'token_hash': hashlib.sha256(token.encode()).hexdigest(), 'pre': before, 'generation': gen,
-              'target': target, 'started': time.time(), 'checkout': checkout.public()}
+              'target': target, 'started': time.time(),
+              'checkout': dict(checkout.public(), git_dir=str(checkout.git_dir))}
     write_state(owner, marker=marker)  # durable before any child exists
     owner.git_active = marker
     try:
@@ -768,6 +769,11 @@ def recover(owner, *, acknowledge_quiescent=False, accept_outcome=False, release
                 # Permission is only sent after `launch` is durable, so Git never ran:
                 # later repository changes are someone else's, not this outcome.
                 return settle(owner, marker, _not_launched(marker), recovered=True)
+            vanished = _vanished_linked(owner, marker)
+            if vanished:
+                # The boundary is proven empty and the linked worktree Git operated in no
+                # longer exists: nothing is left to reconcile or to publish into.
+                return settle(owner, marker, _vanished(marker, vanished), recovered=True)
             if marker['phase'] != 'quiesced':
                 marker['phase'] = 'quiesced'
                 write_state(owner, marker=marker)
@@ -802,6 +808,32 @@ def _not_launched(marker):
     return {'state': 'failed', 'op_id': marker['op_id'], 'kind': marker['kind'], 'request': marker['request'],
             'pre': marker['pre'], 'post': None,
             'notices': ['operation was not launched: permission is only sent after phase launch is durable']}
+
+
+def _vanished_linked(owner, marker) -> str | None:
+    """Why the linked worktree a marker operated in is gone (its admin directory was
+    removed or replaced), or None (main checkout, or the worktree still exists)."""
+    from . import checkouts
+    from taskmaster.native import checkouts as store
+    recorded = marker.get('checkout') or {}
+    if not recorded.get('linked'):
+        return None
+    git_dir = recorded.get('git_dir')
+    if git_dir is None:  # a marker written before git_dir was recorded
+        with closing(owner._connect(readonly=True)) as connection:
+            git_dir = (store.record(connection, recorded['id']) or {}).get('git_dir')
+    try:
+        return checkouts._replaced(checkouts.main(owner.root), recorded['id'], {'git_dir': git_dir})
+    except (GitRefused, OSError):
+        return None
+
+
+def _vanished(marker, why):
+    return {'state': 'failed', 'op_id': marker['op_id'], 'kind': marker['kind'], 'request': marker['request'],
+            'pre': marker['pre'], 'post': None,
+            'notices': [f"the linked worktree {(marker.get('checkout') or {}).get('path')} vanished ({why}) after "
+                        'its managed Git boundary was proven empty; settled as failed without reconciliation. A '
+                        'commit may still exist on its branch: inspect the branch before relying on it']}
 
 
 def _accept_unreconciled(owner, marker, reason):

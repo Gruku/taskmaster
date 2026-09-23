@@ -348,3 +348,61 @@ def test_hook_fails_closed_when_a_local_store_exists_but_resolution_fails(root, 
     monkeypatch.setattr(git_hook, '_is_linked', lambda root: True)
     ok, reason = git_hook.check(root)
     assert not ok and 'cannot resolve' in reason, reason
+
+
+# ── L1/L2: unknown observation; a marker whose linked worktree vanished ────
+
+def _forget_observation(owner):
+    from taskmaster.coordinator import checkouts
+    from taskmaster.native import checkouts as store
+
+    def apply(connection):
+        value = dict(store.record(connection, store.MAIN) or {})
+        value.pop('observed', None)
+        store.put_record(connection, store.MAIN, value)
+    checkouts.write(owner, apply)
+
+
+def test_unknown_previous_observation_is_judged_by_bytes(repo):
+    """First sync after an upgrade (nothing observed): Git-restored older bytes are held,
+    an authored edit is imported; nothing is held just because the observation is new."""
+    with Coordinator(repo) as owner:
+        client = client_for(repo)
+        two_generations(repo, client)
+        _forget_observation(owner)
+        git(repo, 'checkout', 'HEAD~1', '--', REL)
+        assert held(client.sync())
+        assert title(repo) == 'Title B'
+        git(repo, 'checkout', 'HEAD', '--', REL)  # the published bytes again: drift resolves
+        assert client.sync()['state'] == 'synchronized'
+        _forget_observation(owner)
+        target = repo / REL
+        target.write_bytes(target.read_bytes().replace(b'Title B', b'Authored after upgrade'))
+        assert client.sync()['state'] == 'synchronized'
+        assert title(repo) == 'Authored after upgrade'
+
+
+@pytest.mark.parametrize('source', ['marker', 'record'])
+def test_marker_of_a_vanished_linked_worktree_settles_as_failed(repo, linked, source):
+    import sys
+    from native_git_helpers import wait_for
+    from taskmaster.coordinator import checkouts, git as managed, job as jobs
+    from test_native_git_checkouts import _adopt
+    with Coordinator(repo) as owner:
+        client = client_for(repo)
+        _adopt(client, linked)
+        checkout = checkouts.resolve(repo, str(linked))
+        recorded = checkout.public() if source == 'record' else dict(checkout.public(), git_dir=str(checkout.git_dir))
+        marker = {'op_id': 'wt-gone', 'request': ['t', 'wt-gone'], 'kind': 'commit', 'phase': 'quiesced',
+                  'contained': jobs.supported(), 'platform': sys.platform, 'job': None, 'token_hash': 'x',
+                  'pre': managed.snapshot(linked, managed.repository(linked)), 'generation': {}, 'target': None,
+                  'checkout': recorded}
+        with owner.publication:
+            managed.write_state(owner, marker=marker)
+    git(repo, 'worktree', 'remove', str(linked))
+    with Coordinator(repo) as owner:
+        assert wait_for(lambda: owner.git_pin is None, timeout=30), owner.git_pin
+        last = managed.read_state(owner, managed.LAST_KEY)
+        assert last['state'] == 'failed' and last['recovered'] is True, last
+        assert any('vanished' in notice for notice in last['notices']), last
+        assert managed.read_state(owner, managed.MARKER_KEY) is None

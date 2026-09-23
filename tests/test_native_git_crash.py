@@ -309,3 +309,85 @@ def test_recovery_from_another_session_reports_the_identity_mismatch(root):
         assert wait_for(lambda: owner.git_pin and owner.git_pin['state'] == 'recovery_required')
         assert 'logon session' in owner.git_pin['reason'], owner.git_pin
         Client(root, autostart=False).git_recover(acknowledge_quiescent=True, accept_outcome=True)
+
+
+@pytest.mark.parametrize('window', ['pre_permission', 'active_git', 'completed_pre_receipt'])
+def test_linked_worktree_op_killed_is_recovered_in_that_worktree(root, window):
+    """L3: the kill matrix for a managed commit in a linked worktree. Publication is global,
+    so main stays pinned until the linked operation's job is proven empty and settled."""
+    init_repo(root)
+    linked = root.parent / 'linked-crash'
+    git(root, 'worktree', 'add', '-q', '-b', 'feature', str(linked))
+    git(root, 'config', 'core.hooksPath', (root / '.git' / 'hooks').as_posix())  # shared by the worktree
+    stage = {'pre_permission': 'git_permit', 'active_git': 'never', 'completed_pre_receipt': 'git_helper_done'}[window]
+    if window == 'active_git':
+        pausing_hook(root)
+    else:
+        install_hook(root, 'pre-commit', f'touch "{root.as_posix()}/hook-entered"\nexit 0')
+    main_head = git(root, 'rev-parse', 'HEAD').strip()
+    before = commit_count(linked)
+    linked_head = git(linked, 'rev-parse', 'HEAD').strip()
+    first = launch(root, stage)
+    replacement = None
+    try:
+        client = ready(root)
+        # The fresh worktree carries the published bytes: this establishes its bases.
+        assert Client(root, autostart=False, timeout=120).sync(worktree=linked)['state'] == 'synchronized'
+        client.execute(request(client, 'generation', 'Generation title'))
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            running = pool.submit(Client(root, autostart=False, timeout=120).git_run,
+                                  kind='commit', message='tm: linked crash window', worktree=linked)
+            reached = (root / 'hook-entered') if window == 'active_git' else (root / f'reached-{stage}')
+            assert wait_for(reached.exists, timeout=60), f'{window} window never reached'
+            racing = client.execute(request(client, 'racing', 'Racing title'))['receipt']
+            first.kill()
+            first.wait(timeout=10)
+            with pytest.raises(ServiceUnavailable):
+                running.result(timeout=60)
+        from contextlib import closing
+        import json
+        from taskmaster.coordinator.protocol import connect
+        with closing(connect(root, readonly=True)) as connection:
+            marker = json.loads(connection.execute('SELECT value_json FROM sync_state WHERE key=?',
+                                                   (managed.MARKER_KEY,)).fetchone()[0])
+        assert marker['phase'] == 'launch' and marker['checkout']['linked'] is True
+        seen = {}
+
+        def checkpoint(name):
+            if name == 'git_recovery_retiring':
+                observer = jobs.Job.open(marker['job'])
+                with observer:
+                    seen['active_before'] = observer.active_processes()
+                seen['published_before'] = 'Racing title' in (root / REL).read_text(encoding='utf-8')
+                seen['flush_before'] = replacement.flush(racing['commit_seq'], timeout=0)
+            elif name == 'git_recovery_quiesced':
+                observer = jobs.Job.open(marker['job'])
+                with observer:
+                    seen['active_after'] = observer.active_processes()
+        replacement = Coordinator(root, checkpoint=checkpoint)
+        replacement.start()
+        assert wait_for(lambda: replacement.git_pin is None, timeout=60), replacement.git_pin
+        assert seen['active_before'] >= 1 and seen['active_after'] == 0
+        assert seen['published_before'] is False and seen['flush_before']['state'] == 'pending'
+        last = managed.read_state(replacement, managed.LAST_KEY)
+        assert last['recovered'] is True and managed.read_state(replacement, managed.MARKER_KEY) is None
+        assert git(root, 'rev-parse', 'HEAD').strip() == main_head, 'the main checkout was committed'
+        if window == 'completed_pre_receipt':
+            assert last['state'] == 'completed' and last['generation_verified'] is True, last
+            assert commit_count(linked) == before + 1
+        else:
+            assert last['state'] == 'failed', last
+            assert git(linked, 'rev-parse', 'HEAD').strip() == linked_head
+        if window == 'pre_permission':
+            assert not (root / 'hook-entered').exists(), 'Git ran without permission'
+        assert replacement.flush(racing['commit_seq'])['state'] == 'exported'
+        assert 'Racing title' in (root / REL).read_text(encoding='utf-8')
+        assert gone(marker['job'])
+    finally:
+        if first.poll() is None:
+            first.kill()
+            first.wait(timeout=10)
+        if replacement is not None and replacement.server is not None:
+            replacement.close()
+        retire_leftover(root)
+        (root / 'hook-release').touch()
