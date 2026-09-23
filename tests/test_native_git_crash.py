@@ -179,9 +179,13 @@ def test_prepared_marker_with_missing_job_is_proven_not_launched(root):
                   'pre': snapshot, 'generation': {}, 'target': None}
         with owner.publication:
             managed.write_state(owner, marker=marker)
+    # M1: the user commits meanwhile; the op never ran, so that commit is not its outcome.
+    git(root, 'commit', '-q', '--allow-empty', '-m', 'user commit meanwhile')
     with Coordinator(root) as owner:
         assert wait_for(lambda: owner.git_pin is None)
-        assert managed.read_state(owner, managed.LAST_KEY)['state'] == 'failed'
+        last = managed.read_state(owner, managed.LAST_KEY)
+        assert last['state'] == 'failed' and 'commit' not in last, last
+        assert any('not launched' in notice for notice in last['notices']), last
 
 
 def test_ambiguous_outcome_stays_pinned_until_accepted(root):
@@ -190,7 +194,7 @@ def test_ambiguous_outcome_stays_pinned_until_accepted(root):
         snapshot = managed.snapshot(root, managed.repository(root))
         # HEAD will not match: pretend the operation started from another commit.
         snapshot['head'] = '0' * 40
-        marker = {'op_id': 'odd', 'request': ['t', 'r'], 'kind': 'commit', 'phase': 'prepared',
+        marker = {'op_id': 'odd', 'request': ['t', 'r'], 'kind': 'commit', 'phase': 'quiesced',
                   'contained': True, 'platform': sys.platform, 'job': jobs.new_name(), 'token_hash': 'x',
                   'pre': snapshot, 'generation': {}, 'target': None}
         with owner.publication:

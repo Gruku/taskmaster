@@ -254,16 +254,132 @@ def test_checkout_with_leftover_index_lock_or_worktree_change_is_ambiguous(repo)
     lock = repo / '.git' / 'index.lock'
     lock.write_bytes(b'')
     try:
-        report = managed.reconcile(owner, marker, [])
+        report = managed.reconcile(owner, marker)
         assert report['state'] == 'ambiguous', report
     finally:
         lock.unlink()
     original = tracked.read_bytes()
     tracked.write_bytes(original + b'partially-unpacked\n')
     try:
-        report = managed.reconcile(owner, marker, [])
+        report = managed.reconcile(owner, marker)
         assert report['state'] == 'ambiguous', report
     finally:
         tracked.write_bytes(original)
-    assert managed.reconcile(owner, marker, [])['state'] == 'failed'
+    assert managed.reconcile(owner, marker)['state'] == 'failed'
     assert git(repo, 'rev-parse', 'HEAD').strip() == head == init_head
+
+
+def _proven_marker(owner, repo, op_id, **extra):
+    """A marker whose boundary is already proven (phase quiesced), for reconcile tests."""
+    marker = {'op_id': op_id, 'request': ['t', op_id], 'kind': 'commit', 'phase': 'quiesced',
+              'contained': managed.jobs.supported(), 'platform': sys.platform, 'job': None, 'token_hash': 'x',
+              'pre': managed.snapshot(repo, managed.repository(repo)), 'generation': {}, 'target': None}
+    marker.update(extra)
+    return marker
+
+
+def _recorded(repo):
+    from taskmaster.coordinator.git import _blob_id
+    content = (repo / REL).read_bytes()
+    return {REL.removeprefix('.taskmaster/'): [_blob_id(content)]}
+
+
+def test_commit_blobs_are_verified_against_recorded_hashes_not_disk(repo):
+    """M2: a commit whose projection blobs differ from the recorded generation is ambiguous."""
+    with Coordinator(repo) as owner:
+        client = Client(repo, autostart=False, timeout=120)
+        marker = _proven_marker(owner, repo, 'm2', generation={'blobs': {REL.removeprefix('.taskmaster/'): ['0' * 40]}})
+        git(repo, 'commit', '-q', '--allow-empty', '-m', 'managed', '--trailer', 'Taskmaster-Op: m2')
+        with owner.publication:
+            managed.write_state(owner, marker=marker)
+        result = client.git_recover()
+        assert result['state'] == 'ambiguous', result
+        assert owner.git_pin['state'] == 'ambiguous'
+        assert client.git_recover(accept_outcome=True)['state'] == 'accepted'
+
+
+def test_commit_without_this_operation_trailer_is_not_claimed(repo):
+    """L6: a concurrent user commit (no op-id trailer) is never recorded as the managed commit."""
+    with Coordinator(repo) as owner:
+        client = Client(repo, autostart=False, timeout=120)
+        marker = _proven_marker(owner, repo, 'l6', generation={'blobs': _recorded(repo)})
+        git(repo, 'commit', '-q', '--allow-empty', '-m', 'a user commit')
+        with owner.publication:
+            managed.write_state(owner, marker=marker)
+        result = client.git_recover()
+        assert result['state'] == 'ambiguous', result
+        assert any('Taskmaster-Op' in notice for notice in result['notices']), result
+        client.git_recover(accept_outcome=True)
+
+
+def test_managed_commit_carries_its_operation_trailer(repo):
+    with Coordinator(repo):
+        client = Client(repo, autostart=False, timeout=120)
+        client.execute(request(client, 'trailer', 'Trailer title'))
+        result = client.git_run(kind='commit', message='tm: trailer')
+        assert result['state'] == 'completed' and result['generation_verified'] is True, result
+        assert f"Taskmaster-Op: {result['op_id']}" in git(repo, 'log', '-1', '--format=%B')
+
+
+def test_user_staged_work_is_left_staged_and_uncommitted(repo):
+    """M3: only the generation's paths are committed."""
+    with Coordinator(repo):
+        client = Client(repo, autostart=False, timeout=120)
+        (repo / 'user.txt').write_text('user work\n', encoding='utf-8')
+        git(repo, 'add', 'user.txt')
+        client.execute(request(client, 'staged', 'Staged title'))
+        result = client.git_run(kind='commit', message='tm: only projections')
+        assert result['state'] == 'completed', result
+        assert 'user.txt' not in git(repo, 'show', '--name-only', '--format=', 'HEAD').split()
+        assert 'user.txt' in git(repo, 'diff', '--cached', '--name-only').split()
+        assert 'Staged title' in show(repo, 'HEAD')
+
+
+def test_retry_of_an_older_request_never_reruns_git(repo):
+    """M4: settled results are receipted per request, not only the last one."""
+    with Coordinator(repo):
+        client = Client(repo, autostart=False, timeout=120)
+        client.execute(request(client, 'a', 'Title A'))
+        first = client.git_run(kind='commit', message='tm: a', request_id='req-a')
+        client.execute(request(client, 'b', 'Title B'))
+        second = client.git_run(kind='commit', message='tm: b', request_id='req-b')
+        assert first['state'] == second['state'] == 'completed'
+        count = commit_count(repo)
+        client.execute(request(client, 'c', 'Title C'))
+        again = client.git_run(kind='commit', message='tm: a', request_id='req-a')
+        assert again['replayed'] is True and again['op_id'] == first['op_id'], again
+        assert commit_count(repo) == count
+
+
+def test_retry_matching_the_unsettled_marker_reports_that_operation(repo):
+    """M4: the durable marker's own request is answered with its op, not a generic refusal."""
+    with Coordinator(repo) as owner:
+        marker = _proven_marker(owner, repo, 'pending-op', request=['explicit-git', 'req-p'], phase='launch',
+                                contained=False, platform='test-other')
+        with owner.publication:
+            managed.write_state(owner, marker=marker)
+        result = Client(repo, autostart=False, timeout=120).git_run(kind='commit', message='tm', request_id='req-p')
+        assert result['state'] == 'recovery_required' and result['op_id'] == 'pending-op', result
+
+
+def test_operator_can_accept_when_the_job_or_git_state_cannot_be_inspected(repo, monkeypatch):
+    """M5: acknowledge_quiescent + accept_outcome settles as `accepted` (unreconciled)."""
+    from taskmaster.coordinator import job as jobs
+    with Coordinator(repo) as owner:
+        marker = _proven_marker(owner, repo, 'm5', phase='launch', contained=True, platform=sys.platform,
+                                job=jobs.new_name())
+        with owner.publication:
+            managed.write_state(owner, marker=marker)
+    def denied(name):
+        raise jobs.JobUnavailable(5, 'OpenJobObject failed: Access is denied.')
+    monkeypatch.setattr(jobs, 'supported', lambda: True)
+    monkeypatch.setattr(jobs.Job, 'open', staticmethod(denied))
+    monkeypatch.setattr(managed, 'repository', lambda root: (_ for _ in ()).throw(managed.GitRefused('git broken')))
+    with Coordinator(repo) as owner:
+        client = Client(repo, autostart=False, timeout=120)
+        assert wait_for(lambda: owner.git_pin is not None and owner.git_pin['state'] == 'recovery_required')
+        assert client.git_recover(acknowledge_quiescent=True)['state'] == 'recovery_required'
+        result = client.git_recover(acknowledge_quiescent=True, accept_outcome=True)
+        assert result['state'] == 'accepted' and result['reconciled'] is False, result
+        assert any('unreconciled' in notice for notice in result['notices']), result
+        assert owner.git_pin is None and managed.read_state(owner, managed.MARKER_KEY) is None

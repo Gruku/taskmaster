@@ -12,6 +12,7 @@ import base64
 from contextlib import closing
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import secrets
@@ -26,9 +27,14 @@ from taskmaster.projection_paths import UnsafePath, check_component, safe_path
 from . import job as jobs
 from .contained import ManagedChild
 
+LOG = logging.getLogger(__name__)
+
 MARKER_KEY = 'git.managed'
 LAST_KEY = 'git.last'
 DRIFT_KEY = 'git.drift'  # == native.projection.DRIFT_KEY
+RECEIPTS_KEY = 'git.receipts'
+RECEIPTS_KEPT = 32
+TRAILER = 'Taskmaster-Op'
 DRIFT_GUIDANCE = ('managed checkout drift: the checked-out file differs from the published generation and is '
                   'not imported or overwritten; restore the published file (e.g. check the previous branch out '
                   'again), adopt it with sync take_file, or run git recover with release_drift')
@@ -148,7 +154,8 @@ def generation(owner):
                                   'ORDER BY file').fetchall()
         through = connection.execute('SELECT COALESCE(MAX(seq),0) FROM domain_events').fetchone()[0]
         connection.rollback()
-    mismatched = []
+    mismatched, blobs = [], {}
+    from taskmaster.native import projection
     for rel, digest in rows:
         try:
             content = _read_projection(backlog, rel)
@@ -157,12 +164,20 @@ def generation(owner):
             continue
         if content is None or digest not in _variants(content):
             mismatched.append(rel)
+            continue
+        # The Git blobs this generation may be committed as (exact, or LF-normalised).
+        blobs[rel] = sorted({_blob_id(content), _blob_id(projection._lf(content))})
     value = hashlib.sha256(json.dumps(rows, separators=(',', ':')).encode()).hexdigest()
-    return {'digest': value, 'files': len(rows), 'through': through}, [rel for rel, _ in rows], mismatched
+    return ({'digest': value, 'files': len(rows), 'through': through, 'blobs': blobs},
+            [rel for rel, _ in rows], mismatched)
 
 
-def _verify_tree(owner, files):
-    """Committed .taskmaster blobs must be the published bytes (LF-normalised allowed)."""
+def _verify_tree(owner, marker):
+    """Committed .taskmaster blobs must be the recorded generation's blobs, never
+    whatever is on disk at reconcile time. None when nothing was recorded."""
+    blobs = (marker.get('generation') or {}).get('blobs')
+    if blobs is None:
+        return None
     _, raw = probe(owner.root, 'ls-tree', '-r', '-z', '--full-tree', 'HEAD', '--', '.taskmaster')
     tree = {}
     for entry in raw.split(b'\0'):
@@ -170,14 +185,12 @@ def _verify_tree(owner, files):
             continue
         meta, _, path = entry.partition(b'\t')
         tree[path.decode('utf-8', 'surrogateescape')] = meta.split()[2].decode()
-    backlog, problems = owner.root / '.taskmaster', []
-    for rel in files:
-        content = _read_projection(backlog, rel)
-        committed = tree.get(f'.taskmaster/{rel}')
-        from taskmaster.native import projection
-        if content is None or committed not in {_blob_id(content), _blob_id(projection._lf(content))}:
-            problems.append(rel)
-    return problems
+    return [rel for rel, ids in sorted(blobs.items()) if tree.get(f'.taskmaster/{rel}') not in ids]
+
+
+def _trailer_ops(root, commit):
+    _, text = _text(root, 'log', '-1', f'--format=%(trailers:key={TRAILER},valueonly)', commit)
+    return {line.strip() for line in text.splitlines() if line.strip()}
 
 
 # ── Durable marker ─────────────────────────────────────────────────────────
@@ -195,7 +208,7 @@ def write_state(owner, **values):
         connection.execute('BEGIN IMMEDIATE')
         try:
             for name, value in values.items():
-                key = {'marker': MARKER_KEY, 'last': LAST_KEY, 'drift': DRIFT_KEY}[name]
+                key = {'marker': MARKER_KEY, 'last': LAST_KEY, 'drift': DRIFT_KEY, 'receipts': RECEIPTS_KEY}[name]
                 if value is None:
                     connection.execute('DELETE FROM sync_state WHERE key=?', (key,))
                 else:
@@ -211,7 +224,27 @@ def write_state(owner, **values):
 def _public(marker):
     if marker is None:
         return None
-    return {key: value for key, value in marker.items() if key not in ('token_hash',)}
+    public = {key: value for key, value in marker.items() if key not in ('token_hash',)}
+    if isinstance(public.get('generation'), dict):
+        public['generation'] = {key: value for key, value in public['generation'].items() if key != 'blobs'}
+    return public
+
+
+def _receipt(owner, request):
+    """The settled result for this request, if any (bounded per-request receipts)."""
+    last = read_state(owner, LAST_KEY)
+    if last is not None and last.get('request') == request:
+        return last
+    for item in read_state(owner, RECEIPTS_KEY) or []:
+        if item.get('request') == request:
+            return item
+    return None
+
+
+def _settled(owner, last):
+    """The rows that record a settled result: `git.last` plus the keyed receipt."""
+    kept = [item for item in (read_state(owner, RECEIPTS_KEY) or []) if item.get('request') != last.get('request')]
+    return {'last': last, 'receipts': (kept + [last])[-RECEIPTS_KEPT:]}
 
 
 def status(owner):
@@ -307,7 +340,7 @@ def _validate(kind, message, ref):
         raise ValueError('managed Git kind must be commit or checkout')
 
 
-def _commands(owner, kind, files, message, ref, token):
+def _commands(owner, kind, files, message, ref, token, op_id):
     git, root = executable(), str(owner.root)
     env = environment({TOKEN_ENV: token})
     if kind == 'checkout':
@@ -319,10 +352,16 @@ def _commands(owner, kind, files, message, ref, token):
     # archives) are staged as deletions; local state is never staged.
     gone = {path for path in tracked - wanted
             if not path.startswith('.taskmaster/local/') and not (owner.root / path).exists()}
-    specs = '\0'.join(f':(top,literal){path}' for path in sorted(wanted | gone)).encode('utf-8')
+    specs = base64.b64encode('\0'.join(f':(top,literal){path}' for path in sorted(wanted | gone))
+                             .encode('utf-8')).decode('ascii')
+    # `--only` with the same pathspec commits exactly the generation: whatever else
+    # the user had staged stays staged and out of this commit. The trailer names
+    # the operation so a concurrent commit is never mistaken for it.
     return [{'argv': [git, 'add', '-A', '--pathspec-from-file=-', '--pathspec-file-nul'], 'cwd': root, 'env': env,
-             'stdin_b64': base64.b64encode(specs).decode('ascii')},
-            {'argv': [git, 'commit', '--quiet', '-m', message], 'cwd': root, 'env': env}]
+             'stdin_b64': specs},
+            {'argv': [git, 'commit', '--quiet', '--only', '--pathspec-from-file=-', '--pathspec-file-nul',
+                      '-m', message, '--trailer', f'{TRAILER}: {op_id}'], 'cwd': root, 'env': env,
+             'stdin_b64': specs}]
 
 
 def _bounded_results(results):
@@ -340,9 +379,14 @@ def run(owner, *, kind, caller_scope, request_id, message=None, ref=None, timeou
     active = owner.git_active
     if active is not None and active.get('request') == request:
         return {'state': 'in_progress', 'op_id': active['op_id']}
-    last = read_state(owner, LAST_KEY)
-    if last is not None and last.get('request') == request:
-        return dict(last, replayed=True)
+    settled = _receipt(owner, request)
+    if settled is not None:
+        return dict(settled, replayed=True)
+    marker = read_state(owner, MARKER_KEY)
+    if marker is not None and marker.get('request') == request:
+        # This request is the unsettled operation: never start it again.
+        return {'state': 'recovery_required', 'op_id': marker['op_id'], 'pin': owner.git_pin,
+                'active': _public(marker)}
     if not owner.publication.acquire(timeout=PUBLICATION_TIMEOUT):
         return {'state': 'pending', 'reason': 'publisher busy' + (
             '; a managed Git operation is in progress' if owner.git_active else '')}
@@ -365,9 +409,9 @@ def _run_held(owner, kind, request, message, ref, timeout):
     if marker is not None:
         owner.git_pin = {'state': 'recovery_required', 'reason': 'unsettled managed Git marker'}
         return _refused('managed Git recovery required', active=_public(marker))
-    last = read_state(owner, LAST_KEY)
-    if last is not None and last.get('request') == request:
-        return dict(last, replayed=True)
+    settled = _receipt(owner, request)
+    if settled is not None:
+        return dict(settled, replayed=True)
     try:
         repo = repository(owner.root)
         before = snapshot(owner.root, repo)
@@ -395,7 +439,7 @@ def _run_held(owner, kind, request, message, ref, timeout):
                         paths_omitted=max(0, len(mismatched) - _KEPT))
     token = secrets.token_hex(32)
     try:
-        commands = _commands(owner, kind, files, message, ref, token)
+        commands = _commands(owner, kind, files, message, ref, token, op_id)
         # Re-observed after the barrier published: reconciliation compares against
         # the state Git actually starts from, not the pre-publication tree.
         before = snapshot(owner.root, repo)
@@ -412,7 +456,7 @@ def _run_held(owner, kind, request, message, ref, timeout):
     owner.git_active = marker
     try:
         owner.checkpoint('git_marker_written')
-        return _execute(owner, marker, commands, files, timeout)
+        return _execute(owner, marker, commands, timeout)
     except BaseException as exc:
         # Fail closed: the durable marker stays and publication is pinned.
         owner.git_pin = {'state': 'recovery_required', 'reason': f'managed Git interrupted: {exc}'[:500],
@@ -422,7 +466,7 @@ def _run_held(owner, kind, request, message, ref, timeout):
         owner.git_active = None
 
 
-def _execute(owner, marker, commands, files, timeout):
+def _execute(owner, marker, commands, timeout):
     child = ManagedChild(marker['job'] or 'posix', checkpoint=owner.checkpoint)
     results, done, permitted, quiet = [], None, False, False
     try:
@@ -453,11 +497,11 @@ def _execute(owner, marker, commands, files, timeout):
                 'results': _bounded_results(results)}
     owner.checkpoint('git_quiesced')
     marker['phase'] = 'quiesced'
-    report = reconcile(owner, marker, files, results=results, done=done)
+    report = reconcile(owner, marker, results=results, done=done)
     return settle(owner, marker, report)
 
 
-def reconcile(owner, marker, files, *, results=None, done=None):
+def reconcile(owner, marker, *, results=None, done=None):
     """Classify what Git did, from Git state alone; results only annotate."""
     repo = repository(owner.root)
     after = snapshot(owner.root, repo)
@@ -482,13 +526,22 @@ def reconcile(owner, marker, files, *, results=None, done=None):
             report['state'] = 'failed'
         elif after['ref'] == pre['ref'] and after['head'] and _parents(owner.root, after['head']) == (
                 [pre['head']] if pre['head'] else []):
-            report['state'] = 'completed'
             report['commit'] = after['head']
-            problems = _verify_tree(owner, files) if files is not None else None
+            problems = _verify_tree(owner, marker)
             report['generation_verified'] = problems == [] if problems is not None else None
-            if problems:
-                report['notices'].append('committed projection blobs differ from the published generation: '
+            if marker['op_id'] not in _trailer_ops(owner.root, after['head']):
+                report['state'] = 'ambiguous'
+                report['notices'].append(f'HEAD moved by one commit that lacks this operation\'s {TRAILER} trailer '
+                                         '(a concurrent commit?)')
+            elif problems is None:
+                report['state'] = 'ambiguous'
+                report['notices'].append('no recorded generation blobs; the commit cannot be verified')
+            elif problems:
+                report['state'] = 'ambiguous'
+                report['notices'].append('committed projection blobs differ from the recorded generation: '
                                          + ', '.join(problems[:_KEPT]))
+            else:
+                report['state'] = 'completed'
         else:
             report['state'] = 'ambiguous'
             report['notices'].append('HEAD moved but not by exactly one commit on the original branch')
@@ -539,9 +592,9 @@ def settle(owner, marker, report, *, recovered=False):
         last = dict(report, recovered=recovered, settled=time.time())
         if marker['kind'] == 'checkout' and report['state'] == 'completed':
             state = {'op_id': marker['op_id'], 'target': marker.get('target'), 'files': drift}
-            write_state(owner, marker=None, last=last, drift=state if drift else None)
+            write_state(owner, marker=None, drift=state if drift else None, **_settled(owner, last))
         else:
-            write_state(owner, marker=None, last=last)
+            write_state(owner, marker=None, **_settled(owner, last))
         owner.git_pin = None
         owner.export_needed.set()
         return last
@@ -575,37 +628,67 @@ def recover(owner, *, acknowledge_quiescent=False, accept_outcome=False, release
             return result
         outcome = marker.get('outcome')
         if outcome is None:
+            not_launched = marker['phase'] == 'prepared'
             proven, reason = _quiesce(owner, marker, acknowledge_quiescent)
             if not proven:
+                if acknowledge_quiescent and accept_outcome:
+                    return _accept_unreconciled(owner, marker, reason)
                 owner.git_pin = {'state': 'recovery_required', 'op_id': marker['op_id'], 'reason': reason}
                 return {'state': 'recovery_required', 'op_id': marker['op_id'], 'reason': reason,
                         'active': _public(marker)}
+            if not_launched:
+                # Permission is only sent after `launch` is durable, so Git never ran:
+                # later repository changes are someone else's, not this outcome.
+                return settle(owner, marker, _not_launched(marker), recovered=True)
             if marker['phase'] != 'quiesced':
                 marker['phase'] = 'quiesced'
                 write_state(owner, marker=marker)
             try:
-                outcome = reconcile(owner, marker, _generation_files(owner))
+                outcome = reconcile(owner, marker)
             except (GitRefused, OSError) as exc:
-                owner.git_pin = {'state': 'recovery_required', 'op_id': marker['op_id'],
-                                 'reason': f'cannot inspect Git state: {exc}'[:500]}
+                reason = f'cannot inspect Git state: {exc}'[:500]
+                if acknowledge_quiescent and accept_outcome:
+                    return _accept_unreconciled(owner, marker, reason)
+                owner.git_pin = {'state': 'recovery_required', 'op_id': marker['op_id'], 'reason': reason}
                 return dict(owner.git_pin, state='recovery_required')
             if acknowledge_quiescent:
                 outcome['notices'].append('boundary acknowledged by operator, not proven by the job')
         if outcome['state'] == 'ambiguous' and accept_outcome:
-            outcome = dict(outcome, state='accepted', notices=[*outcome['notices'], 'ambiguous outcome accepted by operator'])
-            write_state(owner, marker=None, last=dict(outcome, recovered=True, settled=time.time()))
-            owner.git_pin = None
-            owner.export_needed.set()
-            return outcome
+            outcome = dict(outcome, state='accepted', reconciled=True,
+                           notices=[*outcome['notices'], 'ambiguous outcome accepted by operator'])
+            return _release(owner, outcome)
         return settle(owner, marker, outcome, recovered=True)
     finally:
         owner.publication.release()
 
 
-def _generation_files(owner):
-    with closing(owner._connect(readonly=True)) as connection:
-        return [row[0] for row in connection.execute(
-            "SELECT file FROM projection WHERE file NOT LIKE 'local/%' ORDER BY file")]
+def _release(owner, outcome):
+    last = dict(outcome, recovered=True, settled=time.time())
+    write_state(owner, marker=None, **_settled(owner, last))
+    owner.git_pin = None
+    owner.export_needed.set()
+    return last
+
+
+def _not_launched(marker):
+    return {'state': 'failed', 'op_id': marker['op_id'], 'kind': marker['kind'], 'request': marker['request'],
+            'pre': marker['pre'], 'post': None,
+            'notices': ['operation was not launched: permission is only sent after phase launch is durable']}
+
+
+def _accept_unreconciled(owner, marker, reason):
+    """Operator path when the boundary or Git state cannot be inspected at all."""
+    report = None
+    try:
+        report = reconcile(owner, marker)
+    except (GitRefused, OSError):
+        pass
+    outcome = {'state': 'accepted', 'reconciled': False, 'op_id': marker['op_id'], 'kind': marker['kind'],
+               'request': marker['request'], 'pre': marker['pre'], 'observed': report,
+               'notices': [reason, 'boundary acknowledged and outcome accepted by operator; unreconciled: '
+                                   'inspect HEAD, index and projections before relying on them']}
+    LOG.warning('managed Git outcome accepted unreconciled: %s', reason)
+    return _release(owner, outcome)
 
 
 def _quiesce(owner, marker, acknowledged):
