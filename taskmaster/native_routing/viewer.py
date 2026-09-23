@@ -100,13 +100,15 @@ def related(database, task_id):
     backlog_path = bs._backlog_path()
     if not backlog_path.exists():
         return None
-    data, _etag = snapshot(database)
-    tasks = [{**t, "epic": t.get("epic", e.get("id"))} for e in data.get("epics") or [] for t in e.get("tasks") or []]
-    me = next((t for t in tasks if t.get("id") == task_id), None)
-    if me is None:
-        return None
+    with _open(database) as call, call.read() as snap:
+        dependencies, unblocks = _related_dependencies(snap, task_id)
+        if dependencies is None:
+            return None
+        # Only the two continuity kinds the panel names: no task is enumerated.
+        rows = reads.rows_only(snap)["_rows"]
+        rows = {kind: rows[kind] for kind in ("handover", "issue")}
     handovers, issues = [], []
-    for ident, fm, body in sorted((i, d, b) for i, (d, b) in data["_rows"]["handover"].items()):
+    for ident, fm, body in sorted((i, d, b) for i, (d, b) in rows["handover"].items()):
         if fm.get("archived") or task_id not in list(fm.get("task_ids") or []):
             continue
         text = body or ""
@@ -114,14 +116,28 @@ def related(database, task_id):
                           "created": fm.get("created"), "status": fm.get("status", "todo"),
                           "quote": text.strip().splitlines()[0] if text.strip() else "",
                           "_path": str(v3.handover_path(backlog_path, ident))})
-    for ident, fm, _body in sorted((i, d, b) for i, (d, b) in data["_rows"]["issue"].items()):
+    for ident, fm, _body in sorted((i, d, b) for i, (d, b) in rows["issue"].items()):
         if fm.get("archived") or task_id not in list(fm.get("task_ids") or []):
             continue
         issues.append({"id": fm.get("id") or ident, "severity": fm.get("severity"), "status": fm.get("status"),
                        "title": fm.get("title") or "", "_path": str(v3.issue_path(backlog_path, ident))})
-    dependencies, unblocks = bs._related_dependencies(tasks, me, task_id)
     return {"task_id": task_id, "handovers": handovers, "issues": issues, "dependencies": dependencies,
             "unblocks": unblocks}
+
+
+def _related_dependencies(snap, task_id):
+    """`bs._related_dependencies` through the canonical reverse index: `(None, None)`
+    when the task is not in the tree, as the legacy panel answers no task."""
+    found = reads.find_task(snap, task_id)
+    if found is None:
+        return None, None
+    me = found[0]
+
+    def row(t):
+        return {"id": t["id"], "title": t.get("title", ""), "status": t.get("status", "")}
+    mine = bs._dependency_ids(me.get("depends_on")) or []
+    return ([row(t) for t in reads.tasks_in_tree_order(snap, mine)],
+            [row(t) for t in reads.dependent_tasks(snap, task_id)])
 
 
 # ── Writes ──────────────────────────────────────────────────────────────────
