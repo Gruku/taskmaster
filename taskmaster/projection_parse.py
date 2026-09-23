@@ -61,11 +61,19 @@ def clean_doc(doc: Mapping[str, Any]) -> dict[str, Any]:
     return _v4_strip_private_fields(dict(doc), preserve_body=False)
 
 
+def normal_body(body: str | None) -> str | None:
+    """A body as the parser yields it: one trailing newline is file framing, not prose.
+
+    Stored bodies written by 6.x may still end in a newline. Every merge input
+    (base, database, file) must pass through this, or an untouched body differs
+    from its own base and a pure append looks like an overlapping edit.
+    """
+    return (body.removesuffix("\n") or None) if isinstance(body, str) else body
+
+
 def split_body(doc: Mapping[str, Any]) -> Document:
     materialized = deepcopy(dict(doc))
-    body = materialized.pop(BODY_KEY, None)
-    if isinstance(body, str):
-        body = body.removesuffix("\n") or None
+    body = normal_body(materialized.pop(BODY_KEY, None))
     return clean_doc(materialized), body
 
 
@@ -129,15 +137,26 @@ def flatten_backlog(data: Mapping[str, Any]) -> dict[tuple[str, str], Document]:
     return result
 
 
+# Git writes a conflict's outer markers as whole lines at column 0: seven `<` or
+# `>` followed by a space and label, or by nothing. `=======` and diff3's
+# `|||||||` only ever appear between them, so on their own they are prose (a
+# setext heading underline, a quoted pytest summary rule) and never a conflict.
+_CONFLICT_MARKER = re.compile(r"^(?:<{7}|>{7})(?:[ \t].*)?\r?$", re.MULTILINE)
+
+
+def has_conflict_markers(raw: str) -> bool:
+    return _CONFLICT_MARKER.search(raw) is not None
+
+
 def entity_text(kind: str, raw: str) -> Document:
-    if any(marker in raw for marker in ("<<<<<<<", "=======", ">>>>>>>")):
+    if has_conflict_markers(raw):
         raise ValueError("git conflict markers")
     fm, body = parse_frontmatter(raw)
     if not fm or not isinstance(fm, dict):
         raise ValueError("missing or invalid frontmatter")
     if kind == "task":
         return split_body(task_v4_from_file(fm, body.removesuffix("\n")))
-    return clean_doc(fm), body.removesuffix("\n") or None
+    return clean_doc(fm), normal_body(body)
 
 
 def validate_identity(kind: str, ident: str, doc: Mapping[str, Any]) -> None:
@@ -146,33 +165,19 @@ def validate_identity(kind: str, ident: str, doc: Mapping[str, Any]) -> None:
         raise ValueError(f"{kind} path id {ident!r} does not match frontmatter id {declared!r}")
 
 
-def projected_file(kind: str, ident: str | None, content: bytes,
-                   lookup: Lookup = lambda *_: None) -> dict[tuple[str, str], Document] | None:
-    """Rows these bytes own, overlaid on a caller-provided current snapshot.
+def authored_rows(kind: str, ident: str | None, content: bytes) -> dict[tuple[str, str], Document] | None:
+    """What these bytes literally say, before split ownership is applied.
 
-    An epic/phase document owns heavy fields and prose only; backlog.yaml owns
-    its slim fields. Absence in an entity file removes a heavy field. No absent
-    file or absent backlog member is represented as an entity deletion here.
+    The comparison point for "did the author change something this file does
+    not own?": an epic document's `title` mirror, a claim written into a task
+    file, a derived index or heavy field typed into backlog.yaml.
     """
     text = content.decode("utf-8")
     if kind == "backlog":
         raw = yaml_io.safe_load(text)
         raw = {} if raw is None else raw
         validate_backlog(raw)
-        result = flatten_backlog(raw)
-        for key, (doc, body) in list(result.items()):
-            if key[0] not in {"epic", "phase"}:
-                continue
-            current = lookup(*key)
-            if current is not None:
-                heavy = EPIC_HEAVY_FIELDS if key[0] == "epic" else PHASE_HEAVY_FIELDS
-                for field in heavy:
-                    if field in current[0]:
-                        doc[field] = deepcopy(current[0][field])
-                    else:
-                        doc.pop(field, None)
-                result[key] = (doc, current[1])
-        return result
+        return flatten_backlog(raw)
     if kind == "project":
         doc = yaml_io.safe_load(text)
         doc = {} if doc is None else doc
@@ -183,15 +188,46 @@ def projected_file(kind: str, ident: str | None, content: bytes,
         return None
     doc, body = entity_text(kind, text)
     validate_identity(kind, ident, doc)
-    if kind in {"epic", "phase"}:
-        current = lookup(kind, ident)
-        if current is not None:
+    return {(kind, ident): (doc, body)}
+
+
+def owned_rows(kind: str, rows: dict[tuple[str, str], Document] | None,
+               lookup: Lookup = lambda *_: None) -> dict[tuple[str, str], Document] | None:
+    """Authored rows overlaid on a caller-provided current snapshot (not mutated).
+
+    An epic/phase document owns heavy fields and prose only; backlog.yaml owns
+    its slim fields. Absence in an entity file removes a heavy field. No absent
+    file or absent backlog member is represented as an entity deletion here.
+    """
+    if rows is None:
+        return None
+    result = {key: (deepcopy(doc), body) for key, (doc, body) in rows.items()}
+    for key, (doc, body) in list(result.items()):
+        if key[0] not in {"epic", "phase"}:
+            continue
+        current = lookup(*key)
+        if current is None:
+            continue
+        heavy = EPIC_HEAVY_FIELDS if key[0] == "epic" else PHASE_HEAVY_FIELDS
+        if kind == "backlog":
+            for field in heavy:
+                if field in current[0]:
+                    doc[field] = deepcopy(current[0][field])
+                else:
+                    doc.pop(field, None)
+            result[key] = (doc, current[1])
+        else:
             merged = deepcopy(current[0])
-            heavy = EPIC_HEAVY_FIELDS if kind == "epic" else PHASE_HEAVY_FIELDS
             for field in heavy:
                 if field in doc:
                     merged[field] = doc[field]
                 else:
                     merged.pop(field, None)
-            doc = merged
-    return {(kind, ident): (doc, body)}
+            result[key] = (merged, body)
+    return result
+
+
+def projected_file(kind: str, ident: str | None, content: bytes,
+                   lookup: Lookup = lambda *_: None) -> dict[tuple[str, str], Document] | None:
+    """Rows these bytes own, overlaid on a caller-provided current snapshot."""
+    return owned_rows(kind, authored_rows(kind, ident, content), lookup)
