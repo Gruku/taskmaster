@@ -9,6 +9,7 @@ import fnmatch
 from itertools import combinations
 import re
 
+from taskmaster.native.neighbourhood import path_weights
 from taskmaster.paths import as_list, extract_prose_paths, normalize_location, normalize_task_anchor
 from taskmaster.taskmaster_v3 import REVERSE_TYPE, legacy_links_to_typed
 
@@ -83,15 +84,13 @@ def _path_neighborhood(connection, kind, ident, new_paths):
     own = [(path, match) for path, match, source in new_paths if source in ("anchors", "location")]
     if not own:
         return 0
-    peers = connection.execute("SELECT kind,id,path,match_kind FROM entity_paths WHERE source IN ('anchors','location') AND NOT(kind=? AND id=?)", (kind, ident)).fetchall()
-    weights = Counter()
-    for path, match in own:
-        for rk, ri, rp, rm in peers:
-            if path == rp or (match == "glob" and fnmatch.fnmatchcase(rp, path)) or (rm == "glob" and fnmatch.fnmatchcase(path, rp)):
-                weights[tuple(sorted(((kind, ident), (rk, ri))))] += 1
+    # Candidates come from the path index, never a scan of every claim; the
+    # count is the candidates examined, so unrelated claims cost nothing.
+    weights, examined = path_weights(connection, kind, ident, own)
+    pairs = ((tuple(sorted(((kind, ident), other))), weight) for other, weight in weights.items())
     connection.executemany("INSERT INTO related VALUES(?,?,?,?,?,?)",
-                           [(a[0], a[1], b[0], b[1], "path", weight) for (a, b), weight in weights.items()])
-    return len(own) * len(peers)
+                           [(a[0], a[1], b[0], b[1], "path", weight) for (a, b), weight in pairs])
+    return examined
 
 
 def _declared_links(connection, kind, ident, new_links):

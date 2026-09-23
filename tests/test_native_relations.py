@@ -74,3 +74,125 @@ def test_grouped_prefix_oracle_matches_naive_duplicate_glob_weights():
                 if (kind, ident) != (rk, ri) and (path == rp or (match == "glob" and fnmatch.fnmatchcase(rp, path)) or (rm == "glob" and fnmatch.fnmatchcase(path, rp))):
                     expected[tuple(sorted(((kind, ident), (rk, ri))))] += 1
         assert grouped_weights(values) == expected
+
+
+# ── N14: indexed candidate discovery and the canonical neighbourhood ──
+
+def _paths_connection():
+    connection = sqlite3.connect(":memory:", isolation_level=None)
+    connection.executescript(store.SCHEMA_SQL)
+    return connection
+
+
+def _seed_paths(connection, docs):
+    """`docs` is {(kind, id): anchors}; `related` is seeded from the full oracle."""
+    for (kind, ident), anchors in docs.items():
+        maintain_rows = [(kind, ident, path, match, "anchors") for path, match in
+                         ((a, "glob" if ("*" in a or "?" in a) else "exact") for a in anchors)]
+        connection.executemany("INSERT INTO entity_paths VALUES(?,?,?,?,?)", maintain_rows)
+    connection.execute("DELETE FROM related WHERE via='path'")
+    connection.executemany("INSERT INTO related VALUES(?,?,?,?,'path',?)",
+                           [(*a, *b, w) for (a, b), w in _oracle(connection).items()])
+
+
+def _oracle(connection):
+    return grouped_weights(connection.execute(
+        "SELECT kind,id,path,match_kind FROM entity_paths WHERE source IN ('anchors','location')").fetchall())
+
+
+def _path_related(connection):
+    return Counter({((a, b), (c, d)): w for a, b, c, d, w in
+                    connection.execute("SELECT a_kind,a_id,b_kind,b_id,weight FROM related WHERE via='path'")})
+
+
+def _anchor_edit_work(unrelated):
+    connection = _paths_connection()
+    docs = {("task", f"T-{i}"): anchors for i, anchors in enumerate(
+        [["src/app/main.py"], ["src/app/*.py"], ["src/**"], ["src/app/util.py", "docs/x.md"], ["docs/*"]])}
+    # Unrelated anchored documents: literal and glob claims in a disjoint tree.
+    docs.update({("task", f"U-{n}"): [f"zz/m{n % 97}/f{n}.py", f"zz/m{n % 89}/**"] for n in range(unrelated)})
+    _seed_paths(connection, docs)
+    before = {"id": "T-9", "anchors": ["src/app/old.py"]}
+    connection.execute("INSERT INTO entity_paths VALUES('task','T-9','src/app/old.py','exact','anchors')")
+    after = {"id": "T-9", "anchors": ["src/app/main.py", "src/app/*.py", "src/app/main.py"]}
+    counts = maintain(connection, "task", "T-9", before, after)
+    assert _path_related(connection) == _oracle(connection)
+    return counts["path_comparisons"]
+
+
+def test_anchor_edit_work_is_bounded_by_candidates_not_unrelated_paths():
+    """Candidates examined for an anchor edit must not grow with 2,000 unrelated documents."""
+    small, large = _anchor_edit_work(0), _anchor_edit_work(2000)
+    assert small > 0
+    assert large == small, (small, large)
+
+
+ADVERSARIAL = ["src/a.py", "src/B.py", "SRC/a.py", "src/*", "src/*.py", "src/?.py", "*", "*.py", "**",
+               "src/[aB].py", "src/[aB]*.py", "src/[!a]*", "[s]rc/*", "src/", "src/**", "src/a?py",
+               "src/*/", "src/a.py/", "s*", "sr?/*", "src/[", "src/[*", "docs/x", "docs/X*"]
+
+
+def test_indexed_path_neighbourhood_matches_full_oracle_on_adversarial_globs():
+    """Character classes, case, glob-matching-glob, prefix-less globs and duplicate anchors."""
+    rng = random.Random(1414)
+    connection = _paths_connection()
+    state = {("task", f"T-{i}"): None for i in range(4)} | {("bug", f"B-{i}"): None for i in range(3)}
+    for step in range(300):
+        kind, ident = rng.choice(list(state))
+        before = state[kind, ident]
+        after = {"id": ident, "anchors": [rng.choice(ADVERSARIAL) for _ in range(rng.randrange(5))]}
+        if kind == "bug":
+            after = {"id": ident, "location": [rng.choice(ADVERSARIAL) for _ in range(rng.randrange(4))]}
+        if rng.randrange(10) == 0:
+            after = None
+        maintain(connection, kind, ident, before, after)
+        assert _path_related(connection) == _oracle(connection), (step, kind, ident, after)
+        state[kind, ident] = after
+
+
+def _related_neighbours(connection, kind, ident):
+    """The legacy answer: every `related` row touching the entity, aggregated, self excluded."""
+    found = Counter()
+    for a_kind, a_id, b_kind, b_id, via, weight in connection.execute("SELECT * FROM related"):
+        for (mine, other) in ((((a_kind, a_id)), (b_kind, b_id)), (((b_kind, b_id)), (a_kind, a_id))):
+            if mine == (kind, ident) and other != (kind, ident):
+                found[(*other, via)] += weight
+    return found
+
+
+def test_canonical_neighbourhood_matches_related_on_both_stores_over_seeded_edits():
+    from taskmaster.native import neighbourhood
+    from taskmaster.native.commands import _write_field
+    rng = random.Random(4242)
+    with closing(sqlite3.connect(":memory:", isolation_level=None)) as oracle, closing(sqlite3.connect(":memory:", isolation_level=None)) as native:
+        oracle.row_factory = sqlite3.Row
+        oracle.executescript(store.SCHEMA_SQL)
+        oracle.executemany("INSERT INTO meta VALUES(?,?)", [("schema_version", "1"), ("creation_token", "test")])
+        state = {}
+        for kind, ident in [("task", f"T-{i}") for i in range(5)] + [("bug", "B-1"), ("handover", "H-1"), ("handover", "H-2")]:
+            doc = {"id": ident, "title": ident}
+            oracle.execute("INSERT INTO entities VALUES(?,?,NULL,NULL,0,0,?,NULL,1,1)", (kind, ident, json.dumps(doc)))
+            state[kind, ident] = (doc, False)
+        oracle.backup(native)
+        backfill(native)
+        fake_store = store.Store.__new__(store.Store)
+        for step in range(80):
+            kind, ident = rng.choice(list(state))
+            before, before_deleted = state[kind, ident]
+            after = dict(before, anchors=[rng.choice(ADVERSARIAL) for _ in range(rng.randrange(4))])
+            if kind == "handover":
+                after["task_ids"] = [rng.choice(["T-0", "T-1", "T-2", "T-3"]) for _ in range(rng.randrange(5))]
+            deleted = rng.randrange(8) == 0
+            oracle.execute("UPDATE entities SET doc=?,deleted=? WHERE kind=? AND id=?", (json.dumps(after), deleted, kind, ident))
+            fake_store._refresh_derived(SimpleNamespace(connection=oracle, _derived_keys={(kind, ident)}))
+            key = native.execute("SELECT entity_key FROM entity_core WHERE kind=? AND public_id=?", (kind, ident)).fetchone()[0]
+            native.execute("UPDATE entity_core SET deleted=? WHERE entity_key=?", (deleted, key))
+            if "task_ids" in after:
+                _write_field(native, key, kind, "task_ids", after["task_ids"])
+            maintain(native, kind, ident, before if not before_deleted else None, after if not deleted else None)
+            state[kind, ident] = (after, deleted)
+            for (k, i), (_, gone) in state.items():
+                if not gone:
+                    expected = _related_neighbours(oracle, k, i)
+                    assert _related_neighbours(native, k, i) == expected, (step, k, i)
+                    assert neighbourhood.neighbours(native, k, i) == expected, (step, k, i)
