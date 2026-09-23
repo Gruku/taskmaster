@@ -10,6 +10,8 @@ Phases were run in that order on 2026-09-23; between s4 and s5 the copy then nee
 those fixed, the rerun is setup, s1, s4 (managed round trip), eol (D7), s5 on a fresh clone.
 The final run (stock settings, no budget override) was setup, s1, repair, s2, resolve, s3, s4, eol,
 s5 (refused: D8), eolfix, s5 again with REHEARSAL_WORKTREE=<copy>-wt2, s6, s7.
+D8 rerun (after the fix, same copy): remix (restores the live mixed-EOL publication that eolfix
+removed), then s5 with REHEARSAL_WORKTREE=<copy>-wt3 - no eolfix.
 REHEARSAL_WORKTREE names the linked worktree dir for s5 (default <copy>-wt).
 
 The copy is prepared by hand first (read-only on the source):
@@ -453,6 +455,31 @@ def eolfix(copy):
         record('eolfix', step='sync', mixed=mixed, seconds=seconds, state=settled.get('state'))
 
 
+MIXED_LIVE = 'handovers/2026-09-08-completed-t3-and-t6-merged-locally-and-p.md'
+
+
+def eol_counts(raw: bytes) -> dict:
+    return {'crlf': raw.count(b'\r\n'), 'lone_lf': raw.replace(b'\r\n', b'').count(b'\n')}
+
+
+def remix(copy):
+    """D8 rerun on a copy where eolfix already ran: restore the live precondition - main publishes
+    the mixed-EOL handover (CRLF with its last 7 line endings lone LF, as live). The text is
+    unchanged, so D7's observe step records the mixed bytes as published with no event/import."""
+    import hashlib
+    path = copy / '.taskmaster' / MIXED_LIVE
+    lines = path.read_bytes().replace(b'\r\n', b'\n').split(b'\n')
+    mixed = b'\r\n'.join(lines[:-8]) + b'\r\n' + b'\n'.join(lines[-8:])
+    path.write_bytes(mixed)
+    with owner(copy) as (_, client):
+        seq = max_seq(copy)
+        synced, seconds, _ = sync_until_settled(client)
+        record('remix', file=MIXED_LIVE, crlf=mixed.count(b'\r\n'), lone_lf=mixed.replace(b'\r\n', b'').count(b'\n'),
+               seconds=seconds, state=synced.get('state'), imports_n=len(synced.get('imports', [])),
+               new_events=len(events_since(copy, seq)),
+               published_is_mixed=projection_hash(copy, MIXED_LIVE) == hashlib.sha1(mixed).hexdigest())
+
+
 # ── 5: linked worktree ──────────────────────────────────────────────────────
 def s5(copy):
     wt = copy.parent / os.environ.get('REHEARSAL_WORKTREE', f'{copy.name}-wt')
@@ -461,7 +488,12 @@ def s5(copy):
         git(copy, 'worktree', 'add', '-q', '-b', f'rehearsal-{wt.name}', str(wt), 'HEAD')
     with owner(copy) as (_, client):
         first, seconds, rounds = sync_until_settled(client, worktree=wt)
-        record('s5', step='first sync(worktree=W)', seconds=seconds, rounds=rounds, result=brief(first))
+        mixed_w = wt / '.taskmaster' / MIXED_LIVE
+        raw = mixed_w.read_bytes() if mixed_w.is_file() else b''
+        record('s5', step='first sync(worktree=W)', seconds=seconds, rounds=rounds, result=brief(first),
+               w_mixed_file=eol_counts(raw),
+               main_published_is_main_bytes=projection_hash(copy, MIXED_LIVE) == __import__('hashlib').sha1(
+                   (copy / '.taskmaster' / MIXED_LIVE).read_bytes()).hexdigest())
         if first.get('state') != 'synchronized':
             # A worktree of an older commit holds its Git bytes until released.
             released, seconds = timed(lambda: client.git_recover(release_drift='take_published', worktree=str(wt)))
@@ -474,7 +506,7 @@ def s5(copy):
         seq = max_seq(copy)
         head = git(wt, 'rev-parse', 'HEAD').strip()
         result, seconds = timed(lambda: client.git_run(kind='commit', message='tm: rehearsal linked commit',
-                                                       request_id='s5-commit', worktree=str(wt)))
+                                                       request_id=f's5-commit-{wt.name}', worktree=str(wt)))
         files = git(wt, 'show', '--name-only', '--format=', 'HEAD').split()
         record('s5', step='managed commit in W', seconds=seconds, result=brief(result), file=task,
                events=events_since(copy, seq), commits_added=int(git(wt, 'rev-list', '--count',
@@ -675,7 +707,7 @@ def s7(copy):
 
 
 PHASES = {'setup': setup, 's1': s1, 'repair': repair, 's2': s2, 'resolve': resolve, 's3': s3, 's4': s4, 'eol': eol,
-          'eolfix': eolfix, 's5': s5, 's6': s6, 's7': s7}
+          'eolfix': eolfix, 'remix': remix, 's5': s5, 's6': s6, 's7': s7}
 
 
 def main():
