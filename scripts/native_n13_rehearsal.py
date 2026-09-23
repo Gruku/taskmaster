@@ -8,6 +8,8 @@
 Phases were run in that order on 2026-09-23; between s4 and s5 the copy then needed hand steps
 (release/restore, a bypassed checkout -f, normalising a mixed-EOL handover: defects D5-D7). With
 those fixed, the rerun is setup, s1, s4 (managed round trip), eol (D7), s5 on a fresh clone.
+The final run (stock settings, no budget override) was setup, s1, repair, s2, resolve, s3, s4, eol,
+s5 (refused: D8), eolfix, s5 again with REHEARSAL_WORKTREE=<copy>-wt2, s6, s7.
 REHEARSAL_WORKTREE names the linked worktree dir for s5 (default <copy>-wt).
 
 The copy is prepared by hand first (read-only on the source):
@@ -97,7 +99,7 @@ def owner(copy, **kwargs):
     from taskmaster.coordinator.client import Client
     from taskmaster.coordinator.service import Coordinator
     with Coordinator(copy, **kwargs) as coordinator:
-        yield coordinator, Client(copy, autostart=False, timeout=900)
+        yield coordinator, Client(copy, autostart=False)  # stock reply timeout and sync budget
 
 
 def db(copy):
@@ -121,6 +123,11 @@ def events_since(copy, seq):
                            (seq,)).fetchall()
 
 
+def quarantined(copy):
+    with db(copy) as con:
+        return [r[0] for r in con.execute('SELECT file FROM projection WHERE quarantined=1 ORDER BY file')]
+
+
 def projection_hash(copy, rel):
     with db(copy) as con:
         row = con.execute('SELECT content_hash FROM projection WHERE file=?', (rel,)).fetchone()
@@ -135,6 +142,7 @@ def setup(copy):
     if state_value_safe(copy, 'native'):
         record('setup', skipped='already native')
         return
+    record('setup', step='live quarantines at copy time', quarantined=quarantined(copy))
     if git(copy, 'status', '--porcelain', '--', '.taskmaster').strip():
         git(copy, 'add', '-A', '--', '.taskmaster')
         git(copy, 'commit', '-q', '-m', 'rehearsal baseline: live working-tree .taskmaster at copy time')
@@ -172,8 +180,7 @@ def s1(copy):
         with db(copy) as con:
             rows = con.execute("SELECT COUNT(*) FROM projection WHERE file NOT LIKE 'local/%'").fetchone()[0]
         seq = max_seq(copy)
-        # The first syncs after activation record an observed base per file (`observe`
-        # plans, one writer command each) and hit the fixed 20 s sync budget; converge.
+        # Stock budget (protocol.SYNC_TIMEOUT); repeat only while a round reports the budget ran out.
         rounds, total, first = [], 0.0, None
         for _ in range(80):
             first, seconds = timed(lambda: client.sync())
@@ -195,6 +202,7 @@ def s1(copy):
                new_events=len(events_since(copy, seq)))
         flushed, seconds = timed(lambda: client.flush(max_seq(copy)))
         record('s1', step='flush to max seq', seconds=seconds, result=brief(flushed))
+        record('s1', step='quarantines after full sync (no repair)', quarantined=quarantined(copy))
 
 
 def fingerprint(copy):
@@ -206,7 +214,7 @@ def fingerprint(copy):
 
 
 def sync_until_settled(client, rounds=40, **kwargs):
-    """Repeat a full sync while it only ran out of the fixed 20 s budget."""
+    """Repeat a full sync while it only ran out of its (stock) budget; `n` > 1 is reported."""
     spent, result, n = 0.0, None, 0
     for n in range(1, rounds + 1):
         result, seconds = timed(lambda: client.sync(**kwargs))
@@ -245,10 +253,11 @@ def repair(copy):
     frontmatter. Repair the copy's files so sync can settle; record what it imports."""
     tm = copy / '.taskmaster'
     bug = tm / 'bugs/B-339.md'
-    raw = bug.read_bytes()
     import re
-    bug.write_bytes(re.sub(rb'={7,}', lambda m: b'-' * len(m.group(0)), raw))
     fixed = []
+    if 'bugs/B-339.md' in quarantined(copy):  # D2 fixed: B-339 now parses and needs no repair
+        bug.write_bytes(re.sub(rb'={7,}', lambda m: b'-' * len(m.group(0)), bug.read_bytes()))
+        fixed.append('bugs/B-339.md')
     for rel in ('handovers/_archive/2026/2026-06-12-taskmaster-notes-grounded-handover.md',
                 'handovers/_archive/2026/2026-06-14-mock-grounded-playable-chain-plans-ready.md',
                 'handovers/_archive/2026/2026-06-15-build-glass-shipped-slide-up-orchestrator-driven.md'):
@@ -264,25 +273,31 @@ def repair(copy):
     with owner(copy) as (_, client):
         seq = max_seq(copy)
         result, seconds, rounds = sync_until_settled(client)
-        record('repair', seconds=seconds, rounds=rounds, repaired=['bugs/B-339.md', *fixed], result=brief(result, 20),
-               events=events_since(copy, seq))
+        record('repair', seconds=seconds, rounds=rounds, repaired=fixed, result=brief(result, 20),
+               events=events_since(copy, seq), quarantined=quarantined(copy))
 
 
 # ── 2: hand edits import exactly those files ──────────────────────────────────
 def s2(copy):
     tm = copy / '.taskmaster'
     task, epic = pick(copy, 'task', 'tasks'), pick(copy, 'epic', 'epics')
-    handover = pick(copy, 'handover', 'handovers')
+    # D4: a 6.x handover whose stored body ends in a newline (verified on the live store).
+    handover = 'handovers/2026-09-22-removed-hidden-playable-llm-fallbacks-an.md'
+    assert (tm / handover).is_file()
+    bug = pick(copy, 'bug', 'bugs', skip=('bugs/B-339.md',))
     marker = uuid.uuid4().hex[:8]
     body_append(tm / task, f'\nRehearsal prose edit {marker}: task body line.')
     body_append(tm / handover, f'\nRehearsal prose edit {marker}: handover line.')
+    # D2: B-339-style quoted pytest rules, including a bare 7-char rule line; prose, not markers.
+    body_append(tm / bug, f'\nRehearsal quoted output {marker}:\n\n=======\n'
+                          f'============ 3 passed in 1.20s ============\n=======')
     raw = (tm / epic).read_bytes()
     import re
     edited = re.sub(rb'(?m)^(title: )(.*)$', lambda m: m.group(1) + m.group(2).rstrip(b'\r') + b' (rehearsal)'
                     + (b'\r' if m.group(2).endswith(b'\r') else b''), raw, count=1)
     assert edited != raw, 'epic has no title line'
     (tm / epic).write_bytes(edited)
-    edits = {rel: (tm / rel).read_bytes() for rel in (task, epic, handover)}
+    edits = {rel: (tm / rel).read_bytes() for rel in (task, epic, handover, bug)}
     with owner(copy) as (_, client):
         seq = max_seq(copy)
         result, seconds, rounds = sync_until_settled(client)
@@ -290,7 +305,10 @@ def s2(copy):
         stable = {rel: (tm / rel).read_bytes() == content for rel, content in edits.items()}
         again, seconds2, _ = sync_until_settled(client)
         stable_after = {rel: (tm / rel).read_bytes() == content for rel, content in edits.items()}
-        record('s2', edited=[task, epic, handover], seconds=seconds, rounds=rounds, result=brief(result),
+        states = {i.get('file'): i.get('state') for i in result.get('imports', [])}
+        record('s2', edited=[task, epic, handover, bug], seconds=seconds, rounds=rounds, result=brief(result),
+               import_states={rel: states.get(rel) for rel in edits}, quarantined=quarantined(copy),
+               unresolved=result.get('unresolved', []),
                events=events, bytes_unchanged_after_import=stable, second_sync_seconds=seconds2,
                second=brief(again), second_new_events=len(events_since(copy, max_seq(copy))),
                bytes_unchanged_after_second=stable_after,
@@ -305,6 +323,14 @@ def resolve(copy):
         for rel in flagged:
             took, seconds = timed(lambda: client.sync(files=[rel], take_file=True))
             record('resolve', file=rel, seconds=seconds, result=brief(took))
+            if rel in took.get('unresolved', []):
+                # take_file refuses an edit the entity cannot hold (D3): put the committed bytes back.
+                (copy / '.taskmaster' / rel).write_bytes(
+                    subprocess.run(['git', '-C', str(copy), 'show', f'HEAD:.taskmaster/{rel}'],
+                                   capture_output=True, check=True).stdout)
+                back, seconds = timed(lambda: client.sync(files=[rel]))
+                record('resolve', file=rel, step='restored committed bytes, resync', seconds=seconds,
+                       result=brief(back))
         after, seconds, _ = sync_until_settled(client)
         record('resolve', step='sync after take_file', seconds=seconds, result=brief(after))
 
@@ -330,7 +356,8 @@ def s3(copy):
            files_in_commit=files, only_projection=all(f.startswith('.taskmaster/') for f in files),
            trailer=[line for line in body.splitlines() if line.startswith('Taskmaster-Op')],
            still_staged=git(copy, 'diff', '--cached', '--name-only').split(), head_moved=new_head != head,
-           replay_seconds=replay_seconds, replay=brief(replay), idle_seconds=idle_seconds, idle=brief(idle))
+           replay_seconds=replay_seconds, replay=brief(replay), idle_seconds=idle_seconds, idle=brief(idle),
+           head_after_idle=git(copy, 'rev-parse', 'HEAD').strip())
 
 
 # ── 4: managed checkout to an older commit and back ─────────────────────────
@@ -402,6 +429,28 @@ def eol(copy):
                bytes_changed=rewritten != mixed, unresolved=synced.get('unresolved', [])[:5],
                imports_n=len(synced.get('imports', [])), new_events=len(events_since(copy, seq)),
                drift=len(_drift(client)))
+
+
+def eolfix(copy):
+    """Workaround for D8 (final rehearsal): a linked checkout's managed commit is refused while
+    main publishes a mixed-EOL file, because Git writes it normalised in the worktree. Adopt
+    the CRLF-normalised bytes in main with take_file so the rest of s5 can run."""
+    tm = copy / '.taskmaster'
+    with db(copy) as con:
+        rels = [r[0] for r in con.execute("SELECT file FROM projection WHERE file NOT LIKE 'local/%'")]
+    mixed = []
+    for rel in rels:
+        path = tm / rel
+        raw = path.read_bytes() if path.is_file() else b''
+        if b'\r\n' in raw and b'\n' in raw.replace(b'\r\n', b''):
+            mixed.append(rel)
+    with owner(copy) as (_, client):
+        for rel in mixed:
+            (tm / rel).write_bytes((tm / rel).read_bytes().replace(b'\r\n', b'\n').replace(b'\n', b'\r\n'))
+            took, seconds = timed(lambda: client.sync(files=[rel], take_file=True))
+            record('eolfix', file=rel, seconds=seconds, state=took.get('state'), imports=brief(took).get('imports'))
+        settled, seconds, _ = sync_until_settled(client)
+        record('eolfix', step='sync', mixed=mixed, seconds=seconds, state=settled.get('state'))
 
 
 # ── 5: linked worktree ──────────────────────────────────────────────────────
@@ -504,9 +553,7 @@ def s6(copy):
 CRASH_SCRIPT = """
 import sys, time
 from pathlib import Path
-from taskmaster.coordinator import sync_worker
 from taskmaster.coordinator.service import Coordinator
-sync_worker._synchronize.__kwdefaults__['timeout'] = int(sys.argv[2])
 with Coordinator(Path(sys.argv[1])):
     while True:
         time.sleep(0.1)
@@ -534,12 +581,12 @@ def s7(copy):
     racer_id = Path(racer).stem
     head, count = git(copy, 'rev-parse', 'HEAD').strip(), int(git(copy, 'rev-list', '--count', 'HEAD').strip())
     environment = dict(os.environ, PYTHONPATH=str(WT), TASKMASTER_ROOT=str(copy))
-    first = subprocess.Popen([sys.executable, '-c', CRASH_SCRIPT, str(copy), str(SYNC_BUDGET)], cwd=WT, env=environment,
+    first = subprocess.Popen([sys.executable, '-c', CRASH_SCRIPT, str(copy)], cwd=WT, env=environment,
                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                              creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     replacement, marker, seen = None, None, {}
     try:
-        client = Client(copy, autostart=False, timeout=900)
+        client = Client(copy, autostart=False)
         deadline = time.monotonic() + 60
         while True:
             try:
@@ -550,7 +597,7 @@ def s7(copy):
                 time.sleep(0.1)
         with ThreadPoolExecutor(max_workers=1) as pool:
             started = time.perf_counter()
-            running = pool.submit(Client(copy, autostart=False, timeout=900).git_run, kind='commit',
+            running = pool.submit(Client(copy, autostart=False).git_run, kind='commit',
                                   message='tm: rehearsal crash window', request_id='s7-crash')
             while not entered.exists():
                 assert time.monotonic() < deadline + 600 and not running.done(), \
@@ -627,21 +674,8 @@ def s7(copy):
             hook.unlink()
 
 
-SYNC_BUDGET = 900
-
-
-def widen_sync_budget():
-    """Rehearsal-only: the coordinator's full sync has a fixed 20 s budget that IPC callers
-    cannot change, and at CodeMaestro scale a no-edit sync needs ~60-90 s, so it never
-    reaches `synchronized` and managed Git always refuses (defect D1 in the N13 report).
-    Widening the default in this process (and in the s7 subprocess) lets the remaining
-    behaviour be exercised; product code is unchanged."""
-    from taskmaster.coordinator import sync_worker
-    sync_worker._synchronize.__kwdefaults__['timeout'] = SYNC_BUDGET
-
-
 PHASES = {'setup': setup, 's1': s1, 'repair': repair, 's2': s2, 'resolve': resolve, 's3': s3, 's4': s4, 'eol': eol,
-          's5': s5, 's6': s6, 's7': s7}
+          'eolfix': eolfix, 's5': s5, 's6': s6, 's7': s7}
 
 
 def main():
@@ -650,8 +684,7 @@ def main():
     parser.add_argument('--copy', type=Path, required=True)
     parser.add_argument('--phase', required=True, choices=sorted(PHASES))
     args = parser.parse_args()
-    copy = guard(args.copy)
-    widen_sync_budget()
+    copy = guard(args.copy)  # stock product settings: no budget or timeout override
     RESULTS = copy.parent / 'results.jsonl'
     os.chdir(copy.parent)
     PHASES[args.phase](copy)
