@@ -122,6 +122,10 @@ def test_resync_with_nothing_edited_reports_the_index_and_changes_nothing(twins)
 
 def test_divergent_edit_without_a_trusted_base_is_flagged_and_both_kept(tmp_path, monkeypatch):
     twins = make_twins(tmp_path, monkeypatch, _seed)
+    # Activation seeds a base from bytes equal to the published digest (N16); a store
+    # whose bases were lost (or never recorded) has none for the edited file.
+    with native_connection(twins.native) as connection:
+        connection.execute("DELETE FROM projection_base WHERE file=?", (H_REL,))
     before = _entity(twins, "handover", HANDOVER)
     edited = _replace(twins, H_REL, "tldr: Resync handover", "tldr: Edited before any base")
     with twins.at(twins.native):

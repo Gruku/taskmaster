@@ -12,7 +12,8 @@ Stages, in order, each idempotent and recorded in `native_cutover_journal`:
     backfill   `migrate.backfill` with its checkpoints wired into the journal
     compare    a trial activation (always rolled back): `carryover.verify_carryover` must be []
     activate   one transaction: markers, authority, graph repair, ID import, progress
-               reconcile, `verify_carryover` == [] (else the whole switch rolls back), ready
+               reconcile, `verify_carryover` == [] (else the whole switch rolls back), ready,
+               then additive projection merge bases for files whose bytes it hashed (N16)
     release    record completion and drop the ownership lock
 
 Journal design: a dedicated table, not `meta` keys. Every write to `meta` fires the
@@ -502,16 +503,79 @@ class CarryoverMismatch(RuntimeError):
     """`verify_carryover` found local state the switch would lose; the switch rolled back."""
 
 
+def seed_projection_bases(connection, root: Path):
+    """Additive merge bases for the first sync after activation (N16 A); `(scan, seeded, counts)`.
+
+    A legacy store adopted from its files can hold no `projection_base` rows, and then every
+    file of the first sync takes the `observe` path (one writer command and one Git HEAD
+    probe per file: 310-682 s on CodeMaestro). Here, for each projection row that is not
+    quarantined, flagged or drift, has a recorded digest and has no base row, the file is read
+    once with `sync_files`' identity checks and hashed by this function; only bytes whose sha1
+    is the recorded `content_hash` become the base. A hash this code did not compute is never
+    trusted, an existing base (trusted or not) is never replaced, and a file that differs, is
+    missing or cannot be read safely keeps the ordinary sync path.
+
+    Runs inside the activation transaction after `verify_carryover`, so a crash rolls it back
+    with the switch; the carry-over oracle is told the seeded paths (`seeded_bases`). The
+    returned scan holds the fingerprints of exactly the files read here, for the sync cache.
+    """
+    from taskmaster.coordinator import sync_files
+    from . import projection
+    backlog = Path(root) / ".taskmaster"
+    scan = sync_files.open_scan(Path(root), backlog, fast=False)
+    held = set(projection.flagged_files(connection)) | set(projection.drift_files(connection))
+    counts = {"seeded": 0, "held": 0, "differs": 0, "missing": 0, "unreadable": 0}
+    seeded = []
+    rows = connection.execute(
+        "SELECT p.file,p.content_hash FROM projection p WHERE p.quarantined=0 AND p.file NOT LIKE 'local/%' "
+        "AND COALESCE(p.content_hash,'')!='' AND NOT EXISTS(SELECT 1 FROM projection_base b WHERE b.file=p.file) "
+        "ORDER BY p.file").fetchall()
+    for rel, value in rows:
+        if rel in held:
+            counts["held"] += 1
+            continue
+        try:
+            observed = scan.observe(rel, authored=False)
+        except (OSError, ValueError):  # UnsafePath, ChangedDuringRead and the byte limit are ValueErrors
+            counts["unreadable"] += 1
+            continue
+        if observed is None:
+            counts["missing"] += 1
+            continue
+        if hashlib.sha1(observed.content).hexdigest() != value:
+            counts["differs"] += 1
+            continue
+        connection.execute("INSERT INTO projection_base(file,content) VALUES(?,?)", (rel, observed.content))
+        seeded.append(rel)
+    counts["seeded"] = len(seeded)
+    return scan, seeded, counts
+
+
+def _save_seed_scan(root: Path, scan) -> None:
+    """Persist the fingerprints activation read (best effort, after commit: a cache, not state)."""
+    from taskmaster.coordinator import sync_files
+    if not scan.entries():
+        return  # nothing old enough to vouch for (racy window): leave any cache as it is
+    try:
+        sync_files.save_scan(Path(root), scan)
+    except Exception:  # noqa: BLE001 - a lost cache only means one cold read at the first sync
+        pass
+
+
 def activate(connection, root: Path, *, token: str | None = None, before: dict | None = None,
              record=None, trial: bool = False) -> dict:
     """One transaction: publish native markers and authority, repair the graph, import ID
     state, reconcile the progress changelog and, given the pre-backfill carry-over snapshot
     `before`, require `verify_carryover` to report nothing lost. A fenced cutover also
-    returns `migration_state` to `ready` here.
+    returns `migration_state` to `ready` here. Last, after verification, it seeds additive
+    projection merge bases from files it hashed (`seed_projection_bases`) and, after commit,
+    the sync fingerprint cache from the same reads.
 
     `token=None` is the unfenced fast path for test fixtures; it requires an unfenced store.
-    `record(connection)` runs inside the transaction, before commit (the journal row).
-    `trial=True` does all of it and rolls back: the cutover's compare stage.
+    `record(connection, detail)` runs inside the transaction, before commit (the journal row;
+    `detail["seeded_bases"]` names the seeded paths for the post-activation oracle).
+    `trial=True` does all of it but the seeding and rolls back: the cutover's compare stage.
+    The result's `seeded_bases` lists the seeded paths (the oracle's `seeded_bases`).
     """
     migrate, carryover = _migrate(), _carryover()
     from .db import manifest
@@ -559,10 +623,15 @@ def activate(connection, root: Path, *, token: str | None = None, before: dict |
         if trial:
             connection.rollback()
             return result
+        # After verification, so the oracle above compares the carried rows only; the bases
+        # added here are named to any later oracle run through the journal row.
+        scan, seeded, result["bases"] = seed_projection_bases(connection, root)
+        result["seeded_bases"] = seeded
         if record is not None:
-            record(connection)
+            record(connection, {"seeded_bases": seeded})
         _checkpoint("activate:before-commit")
         connection.commit()
+        _save_seed_scan(root, scan)
         return result
     except BaseException:
         if connection.in_transaction:
@@ -726,16 +795,18 @@ class _Run:
         self._commit_stage("compare", {"problems": [], "ids": trial["ids"], "progress": trial["progress"]})
 
     def activate(self):
-        def record(connection):
-            _record(connection, "activate", "done", self.owner, self.token)
+        def record(connection, detail):
+            _record(connection, "activate", "done", self.owner, self.token, detail)
         try:
             result = activate(self.connection, self.root, token=self.token, before=self._before(), record=record)
         except StoreDamaged:
             raise
         except (CarryoverMismatch, ValueError) as error:
             raise CutoverAborted(str(error)) from error
+        result.pop("seeded_bases", None)  # journaled on the activate row; too long for the report
         self.report["stages"]["activate"] = result
-        self.log(f"[activate] done: authority=native; graph repair {result['graph_repair']}; ids {result['ids']}")
+        self.log(f"[activate] done: authority=native; graph repair {result['graph_repair']}; ids {result['ids']}; "
+                 f"merge bases {result['bases']}")
         _checkpoint("activate:after-commit")
 
     def release(self):
@@ -876,7 +947,8 @@ def dry_run(root: Path, *, confirm_stopped: bool = False) -> dict:
         f"backfill: stage {counts['entities']} entities and {counts['changes']} changes into native tables",
         "compare: trial activation, rolled back; verify_carryover must report nothing lost",
         "activate: one transaction: schema_version=2, minimum_client_protocol=2, migration_state=ready, "
-        "authority=native, graph repair, ID import, progress reconcile, verify_carryover (any loss rolls it back)",
+        "authority=native, graph repair, ID import, progress reconcile, verify_carryover (any loss rolls it back), "
+        "then merge bases for projection files whose bytes hash to their recorded digest",
         "release: record completion, release the ownership lock",
     ]
     report["ok"] = not report["refusals"]

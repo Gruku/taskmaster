@@ -158,6 +158,11 @@ def test_take_file_that_does_not_parse_refuses_without_quarantining(twins):
 
 
 def test_take_file_on_backlog_yaml_never_erases_absent_rows(twins):
+    # Written for a store with no merge base for backlog.yaml. Activation now seeds one
+    # (N16); with a base, take_file refuses the removed epic/phase entries outright (sync_prepare
+    # `dropped`), which erases nothing either. Pin the premise this test was written for.
+    with native_connection(twins.native) as connection:
+        connection.execute("DELETE FROM projection_base WHERE file='backlog.yaml'")
     path = _path(twins, "backlog.yaml")
     head, _, _ = path.read_text(encoding="utf-8").partition("epics:\n")
     path.write_text(head + "x_team_note: kept\nepics: []\n", encoding="utf-8")
