@@ -25,8 +25,10 @@ import os
 from pathlib import Path, PurePosixPath
 import random
 import sqlite3
+import stat as _stat
+import threading
 import time
-from typing import Callable, Iterable
+from typing import Callable, Iterable, NamedTuple
 
 from taskmaster.projection_paths import UnsafePath, safe_path
 
@@ -88,6 +90,139 @@ def _lf(data: bytes) -> bytes:
 
 def _crlf(data: bytes) -> bytes:
     return _lf(data).replace(LF, CR + LF)
+
+
+# ── Stat fingerprints (N16-B): a cache; any doubt means a full read ───────────
+# A file the exporter read in full, and that held still while it was read, is
+# recorded under its fingerprint (volume, file id, size, mtime_ns, ctime_ns) with the
+# digests `_judge` needs. While the file still shows that fingerprint, its verdict is
+# taken from the digests without reading it. Doubt means a full read:
+# - a timestamp inside the racy window when it was read (an edit in the same tick
+#   would not move it: Git's racy-clean rule; 2 s also covers coarse filesystems),
+#   so a file the exporter has just written is only recorded at a later read;
+# - an entry older than FINGERPRINT_TTL (periodic full verification: an in-place
+#   edit that keeps the size and restores mtime is invisible to any fingerprint), or
+#   FULL_VERIFY_ENV set (forced full verification);
+# - a network volume, or a filesystem without file ids or timestamps;
+# - any verdict that needs the bytes themselves (a flag keeps them, and an agreeing
+#   file whose line endings differ is acknowledged with its own bytes).
+# Entries live in this process only: a new process starts cold and reads in full.
+FINGERPRINT_TTL = 3600.0
+FULL_VERIFY_ENV = "TASKMASTER_EXPORT_FULL_VERIFY"
+RACY_NS = 2_000_000_000
+_FINGERPRINT_LIMIT = 100_000
+_FINGERPRINTS: dict = {}
+_FINGERPRINT_LOCK = threading.Lock()
+_REMOTE: dict = {}
+
+
+class _Digests(NamedTuple):
+    digest: str    # sha1 of the bytes
+    lf: str        # sha1 of the LF-normalised bytes
+    crlf: str      # sha1 of the CRLF-normalised bytes
+
+    @property
+    def variants(self) -> set:
+        return {self.digest, self.lf, self.crlf}
+
+    @classmethod
+    def of(cls, data: bytes) -> "_Digests":
+        return cls(_digest(data), _digest(_lf(data)), _digest(_crlf(data)))
+
+
+def reset_fingerprints() -> None:
+    with _FINGERPRINT_LOCK:
+        _FINGERPRINTS.clear()
+
+
+def _fingerprint(info) -> tuple:
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def _cache_key(path: Path) -> str:
+    return os.path.normcase(os.path.abspath(path))
+
+
+def _remote(path: Path) -> bool:
+    """Whether `path` is on a network volume, whose timestamps and file ids cannot
+    vouch for a file (UNC paths; Windows drive type). The sync cache's rule."""
+    text = os.path.abspath(path)
+    if text.startswith(("\\\\", "//")):
+        return True
+    drive = os.path.splitdrive(text)[0]
+    if drive not in _REMOTE:
+        remote = False
+        if os.name == "nt":
+            try:
+                import ctypes
+                remote = ctypes.windll.kernel32.GetDriveTypeW(ctypes.c_wchar_p(drive + "\\")) == 4
+            except (AttributeError, OSError, ValueError):
+                remote = True
+        _REMOTE[drive] = remote
+    return _REMOTE[drive]
+
+
+def _read_file(path: Path) -> bytes:
+    """Read a projection file in full, recording its fingerprint when that is safe.
+
+    Recorded only when the open handle and the path still name the same file with
+    the same size and mtime after the read (the bytes read are that file's), and
+    the file's last change is older than the racy window measured from *before*
+    the read: a write during the read, in place or by replacement, moves the
+    timestamps inside the window and nothing is recorded. Two stat calls, so a
+    cold read costs little more than the plain read it replaces. Lookups compare
+    `lstat` with `lstat` only: on Windows `fstat` and `lstat` report different ctimes.
+    """
+    started = time.time_ns()
+    with open(path, "rb") as handle:
+        data = handle.read()
+        opened = os.fstat(handle.fileno())
+    try:
+        current = os.lstat(path)
+    except OSError:
+        return data
+    fingerprint = _fingerprint(current)
+    changed = max(current.st_mtime_ns, current.st_ctime_ns)
+    if ((opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns) != fingerprint[:4]
+            or len(data) != current.st_size or not _stat.S_ISREG(current.st_mode)
+            or not current.st_ino or not current.st_mtime_ns
+            or not RACY_NS < started - changed or _remote(path)):
+        return data
+    with _FINGERPRINT_LOCK:
+        if len(_FINGERPRINTS) >= _FINGERPRINT_LIMIT:
+            _FINGERPRINTS.clear()
+        _FINGERPRINTS[_cache_key(path)] = (fingerprint, _Digests.of(data), started)
+    return data
+
+
+def _known(path: Path, at: Path | None = None) -> "_Digests | None":
+    """The digests recorded for `path` while the file at `at` (default `path`; the
+    aside name after a rename) still shows the recorded fingerprint and the entry is
+    fresh; None on any doubt."""
+    if os.environ.get(FULL_VERIFY_ENV):
+        return None
+    key = _cache_key(path)
+    with _FINGERPRINT_LOCK:
+        entry = _FINGERPRINTS.get(key)
+    if entry is None:
+        return None
+    fingerprint, digests, verified = entry
+    try:
+        info = os.lstat(at if at is not None else path)
+    except OSError:
+        return None
+    fresh = 0 <= time.time_ns() - verified < FINGERPRINT_TTL * 1_000_000_000
+    if not fresh or not _stat.S_ISREG(info.st_mode) or _fingerprint(info) != fingerprint:
+        if at is None or not fresh:
+            with _FINGERPRINT_LOCK:
+                if _FINGERPRINTS.get(key) is entry:
+                    del _FINGERPRINTS[key]
+        return None
+    return digests
+
+
+# The file exists and an unchanged fingerprint vouched for it: its bytes were not read.
+_UNREAD = object()
 
 
 def _move(source: Path, target: Path) -> bool:
@@ -540,16 +675,53 @@ class Exporter:
     def _path(self, rel: str) -> Path:
         return safe_path(self.backlog_dir, str(safe_relative(rel)))
 
-    def _classify(self, rel: str, path: Path, content: bytes | None) -> tuple[str, bytes | None]:
+    def _classify(self, rel: str, path: Path, content: bytes | None) -> tuple[str, object]:
         """§2.4: what the bytes on disk say about publishing over them.
 
         `agrees` (the file already holds this content), `publish`, or `flag`.
+        The data is None for an absent file and `_UNREAD` when an unchanged
+        fingerprint answered `publish` without a read; `agrees` always comes with
+        the bytes on disk, and `flag` with bytes actually read.
         """
+        known = _known(path)
+        if known is not None:
+            verdict = self._judge_digests(rel, known, content)
+            if verdict == "publish":
+                return verdict, _UNREAD
+            if verdict == "agrees" and content is not None and known.digest == _digest(content):
+                return verdict, content  # the same bytes, byte for byte
         try:
-            data = path.read_bytes()
+            data = _read_file(path)
         except FileNotFoundError:
             return "publish", None       # a new file, or a missing one repaired
         return self._judge(rel, data, content), data
+
+    def _verify_aside(self, rel: str, path: Path, aside: Path,
+                      content: bytes | None) -> "tuple[str, bytes | None, str]":
+        """`_judge` of the set-aside bytes, with their digest: from the fingerprint
+        when the aside file still shows the one recorded for `path` (a rename keeps
+        it on Windows), else read in full. `flag` always comes with the bytes read."""
+        known = _known(path, at=aside)
+        if known is not None:
+            verdict = self._judge_digests(rel, known, content)
+            if verdict != "flag":
+                return verdict, None, known.digest
+        seen = _read_file(aside)
+        return self._judge(rel, seen, content), seen, _digest(seen)
+
+    def _judge_digests(self, rel: str, known: "_Digests", content: bytes | None) -> str:
+        """`_judge` over recorded digests: equal bytes have equal digests."""
+        if content is not None and known.lf == _digest(_lf(content)):
+            return "agrees"
+        return self._judge_variants(rel, known.variants)
+
+    def _judge_variants(self, rel: str, variants: set) -> str:
+        record = self.connection.execute("SELECT content_hash FROM projection WHERE file=?", (rel,)).fetchone()
+        if record is not None and record[0] in variants:
+            return "publish"
+        if variants & set(_get(self.connection, OWN_PREFIX + rel, [])):
+            return "publish"             # bytes an exporter wrote here and never acked
+        return "flag"
 
     def _judge(self, rel: str, data: bytes, content: bytes | None) -> str:
         """Whether `data`, found at `rel`, may be replaced by `content`.
@@ -560,15 +732,9 @@ class Exporter:
         alone never make a conflict, as they do not for the legacy exporter: a
         file whose only change is CRLF against LF matches its record.
         """
-        variants = {_digest(data), _digest(_lf(data)), _digest(_crlf(data))}
         if content is not None and _lf(data) == _lf(content):
             return "agrees"
-        record = self.connection.execute("SELECT content_hash FROM projection WHERE file=?", (rel,)).fetchone()
-        if record is not None and record[0] in variants:
-            return "publish"
-        if variants & set(_get(self.connection, OWN_PREFIX + rel, [])):
-            return "publish"             # bytes an exporter wrote here and never acked
-        return "flag"
+        return self._judge_variants(rel, _Digests.of(data).variants)
 
     def _publish_file(self, rel, kind, ident, content, exported_seq, *, job=None, tag=None) -> str:
         """Verify, then publish without ever overwriting bytes that were not verified.
@@ -604,10 +770,10 @@ class Exporter:
                     aside = None         # the file vanished meanwhile: nothing to set aside
                 self.checkpoint("aside", rel)
                 if aside is not None:
-                    seen = aside.read_bytes()
-                    if self._judge(rel, seen, content) == "flag":
+                    verdict, seen, digest = self._verify_aside(rel, path, aside, content)
+                    if verdict == "flag":
                         return self._put_back(rel, kind, ident, path, aside, temp, seen, job)
-                    self._verified[rel] = _digest(seen)
+                    self._verified[rel] = digest
             if not self._owns():
                 self._undo(path, aside, temp)
                 return "lost"
