@@ -1,7 +1,7 @@
 <!-- User intent: let a cold session finish N14's last gate (full suite, merge into foundation)
      and start N15 without re-deriving N14's state, decisions and conventions. -->
 
-# Handoff: N14 complete locally, full suite owed; next is N15 (2026-09-23)
+# Handoff: N14 complete locally; next is N15 (2026-09-23)
 
 ## State
 
