@@ -19,11 +19,11 @@ import yaml
 
 from taskmaster import backlog_server as bs
 from taskmaster import store
+from taskmaster.native.carryover import import_id_state
 from taskmaster.native.migrate import backfill, reconstruct_entities, repair_graph_for_activation
 from taskmaster.native_routing import projection
 from taskmaster.native_routing.derived import KEYS as DERIVED_BACKLOG_KEYS
 
-PREFIXES = {"bug": "B-", "issue": "ISS-", "decision": "DEC-", "idea": "IDEA-", "note": "NOTE-"}
 
 
 # ── A shared clock ──────────────────────────────────────────────────────────
@@ -125,10 +125,6 @@ def activate_native(root: Path) -> None:
     """
     store.reset_for_tests()
     database = root / ".taskmaster" / "local" / "store.db"
-    reserved = {}
-    reservations = database.parent / "id-reservations.json"
-    if reservations.exists():
-        reserved = json.loads(reservations.read_text(encoding="utf-8"))
     with closing(sqlite3.connect(database, isolation_level=None, timeout=30)) as connection:
         backfill(connection)
         connection.execute("BEGIN IMMEDIATE")
@@ -141,16 +137,8 @@ def activate_native(root: Path) -> None:
                            "ON CONFLICT(key) DO UPDATE SET value=excluded.value")
         # The one-time graph repair belongs to the authority switch (N14).
         repair_graph_for_activation(connection)
-        for kind, prefix in PREFIXES.items():
-            ids = [row[0] for row in connection.execute(
-                "SELECT public_id FROM entity_core WHERE kind=?", (kind,))]
-            ids += list(reserved.get(kind, []))
-            high = max((int(m.group(1)) for m in (re.fullmatch(re.escape(prefix) + r"(\d+)", i) for i in ids) if m),
-                       default=0)
-            connection.execute("INSERT INTO id_counters VALUES(?,?,?)", (kind, prefix, high))
-        for kind, ids in reserved.items():
-            connection.executemany("INSERT OR IGNORE INTO id_reservations VALUES(?,?)",
-                                   [(kind, ident) for ident in ids])
+        # The production ID import (N15): counters from rows + sidecar, reservations kept.
+        import_id_state(connection, root)
         connection.commit()
 
 
