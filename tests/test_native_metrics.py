@@ -138,7 +138,7 @@ def test_replay_and_error_are_recorded_with_their_outcome(native):
             execute(connection, envelope(key="stale", expected=[{"kind": "task", "id": "same", "revision": 1}]))
     first, replay, error = kinds("command")
     assert replay["outcome"] == "replayed" and replay["commit_seq"] == first["commit_seq"]
-    assert replay["rows_written"] == 0
+    assert "rows_written" not in replay and "rows_written" not in error
     assert error["outcome"] == "error" and error["error"] == "Conflict" and error["request_id"] == "stale"
 
 
@@ -279,3 +279,84 @@ def test_disabled_overhead_is_negligible_on_the_command_hot_path(native):
                                   globals={"metrics": metrics, "meter": None})) / 200_000
     overhead = DISABLED_CHECKS_PER_COMMAND * per_check
     assert overhead < command * 0.001, (overhead, command)
+
+
+# ── review fixes: per-process files, skipped lines, config, caps, FTS rows ─────
+CHILD = """
+import sys
+from taskmaster.native import metrics
+for k in range(int(sys.argv[2])):
+    metrics.emit('t', w=int(sys.argv[1]), k=k, pad='x' * 100)
+"""
+
+
+def test_many_processes_appending_to_one_base_path_lose_nothing(tmp_path):
+    base = tmp_path / "multi.jsonl"
+    environment = dict(os.environ, **{metrics.ENV: str(base)})
+    children = [subprocess.Popen([sys.executable, "-c", CHILD, str(worker), "1500"], env=environment,
+                                 cwd=Path(__file__).resolve().parents[1]) for worker in range(6)]
+    assert all(child.wait(timeout=120) == 0 for child in children)
+    loaded = metrics.load(base)
+    assert loaded.skipped == 0 and len(loaded.files) == 6
+    assert sorted((r["w"], r["k"]) for r in loaded) == [(w, k) for w in range(6) for k in range(1500)]
+    assert len(metrics.load(tmp_path / "multi.*.jsonl")) == 9000  # a glob reads the same files
+
+
+def test_each_process_writes_its_own_file_and_load_counts_skipped_lines(tmp_path):
+    base = tmp_path / "own.jsonl"
+    with recording(base):
+        metrics.emit("probe", n=1)
+    own = tmp_path / f"own.{os.getpid()}.jsonl"
+    assert own.exists() and not base.exists()
+    with own.open("a", encoding="utf-8") as stream:
+        stream.write('{"kind": "torn"\nnot json\n[1]\n')
+    loaded = metrics.load(base)
+    assert [r["kind"] for r in loaded] == ["probe"] and loaded.skipped == 3 and loaded.files == [own]
+    assert metrics.load(own).skipped == 3  # one exact file is read as given
+
+
+@pytest.mark.parametrize("value", ["relative/m.jsonl", "m.jsonl", "enabled", "2"])
+def test_relative_paths_and_unknown_words_disable_with_one_warning(value, capsys):
+    metrics._warned.clear()
+    metrics.configure({metrics.ENV: value})
+    metrics.configure({metrics.ENV: value})
+    assert not metrics.ENABLED
+    assert capsys.readouterr().err.count("TASKMASTER_METRICS") == 1
+
+
+def test_memory_keeps_the_newest_records_and_counts_the_dropped(monkeypatch):
+    monkeypatch.setattr(metrics, "MEMORY_LIMIT", 5)
+    with recording():
+        for index in range(8):
+            metrics.emit("n", i=index)
+        assert [r["i"] for r in metrics.records()] == [3, 4, 5, 6, 7] and metrics.dropped() == 3
+    metrics.clear()
+    assert metrics.dropped() == 0
+
+
+def test_title_edit_counts_fts_shadow_rows_and_only_committed_commands_report_rows(native):
+    with recording(), connect(native) as connection:
+        execute(connection, envelope(args={"id": "same", "set": {"title": "Oranges"}}, key="fts"))
+        with pytest.raises(Conflict):
+            execute(connection, envelope(args={"id": "same", "set": {"title": "Pears"}}, key="late",
+                                         expected=[{"kind": "task", "id": "same", "revision": 1}]))
+    fts, error = kinds("command")
+    # The FTS5 table's shadow rows count too: more than the eight metadata rows.
+    assert fts["fts_documents"] == 1 and fts["rows_written"] > 8
+    assert error["outcome"] == "error" and "rows_written" not in error
+
+
+def test_receipt_encoding_happens_after_the_commit(native, monkeypatch):
+    real = metrics.json.dumps
+
+    def slow(*args, **kwargs):
+        time.sleep(0.3)
+        return real(*args, **kwargs)
+    # Only the metrics module's encoder is slowed; the store's own encoding is untouched.
+    from types import SimpleNamespace
+    monkeypatch.setattr(metrics, "json", SimpleNamespace(dumps=slow, loads=json.loads))
+    with recording(), connect(native) as connection:
+        execute(connection, envelope())
+        [record] = kinds("command")
+    assert record["receipt_bytes"] > 0
+    assert record["lock_hold_ms"] < 250 and record["commit_ms"] < 250

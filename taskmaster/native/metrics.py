@@ -8,12 +8,20 @@ Enabling
 Per process, from the environment at import time::
 
     TASKMASTER_METRICS=1                 in-memory; read back with `records()`
-    TASKMASTER_METRICS=/abs/path.jsonl   one JSON object per line, appended
+    TASKMASTER_METRICS=/abs/path.jsonl   JSON lines, one file per process
 
 or programmatically with `enable(path=None)` / `disable()`. The coordinator
 service is a child process launched with the client's environment, so an
-absolute file path set before the client starts reaches both. Several
-processes may append to one file; every record carries its `pid`.
+absolute file path set before the client starts reaches both. A relative
+path or an unknown word leaves metrics disabled and warns once on stderr
+(a child process has another working directory, so a relative path would
+scatter files).
+
+Each process appends to its own file, ``<stem>.<pid><suffix>`` next to the
+base path (``m.jsonl`` -> ``m.4242.jsonl``): Windows append mode is not atomic
+across processes, and one shared file tore and lost records. Files grow
+without bound; the harness owns their lifetime. The in-memory sink keeps the
+newest MEMORY_LIMIT records and counts the older ones it dropped (`dropped()`).
 
 When disabled every instrumentation point is one `if metrics.ENABLED:` check
 (a module attribute read); nothing is allocated, timed, installed on a
@@ -22,8 +30,10 @@ the instrumented code (a failing sink is dropped silently).
 
 Reading
 -------
-`load(path)` returns the records of a JSONL file (malformed lines skipped);
-`summarize(records)` groups them by (kind, op) and reports count, sum, min,
+`load(path)` takes the base path (reads it, if present, and every
+``<stem>.<pid><suffix>`` sibling), one exact per-process file, or a glob. It
+returns a list of records with `.skipped` (malformed or non-record lines) and
+`.files` (what was read). `summarize(records)` groups them by (kind, op) and reports count, sum, min,
 max and p50/p95/p99 of every numeric field.
 
 Record schema
@@ -40,14 +50,25 @@ Durations are milliseconds (float, ``*_ms``); counts are ints.
     db_ms         lock_wait_ms + lock_hold_ms: wall time inside the database
                   transaction, Python domain logic included (a proxy: SQL time
                   is not separated from the Python between statements);
-    rows_written  `sqlite3.Connection.total_changes` delta (exact rows inserted,
-                  updated or deleted by statements, triggers included; an FTS
-                  write counts at the virtual table, not its shadow tables);
+    rows_written  committed commands only (absent on replay/error, where the
+                  rows were rolled back): the `total_changes` delta, i.e. rows
+                  inserted, updated or deleted by statements, triggers included.
+                  Exact for ordinary tables. A command that touches the search
+                  index (fts_documents > 0) also counts the FTS5 shadow-table
+                  rows, which vary with segment merges: an approximate figure;
     vm_steps      rows-read proxy: SQLite virtual-machine instructions, sampled
                   by a progress handler every VM_STEP_SAMPLE instructions. It
                   undercounts each statement by < VM_STEP_SAMPLE, so it is a
-                  lower bound that grows with rows scanned (full scans show);
-    receipt_bytes the encoded receipt (the command's reply payload);
+                  lower bound that grows with rows scanned (full scans show).
+                  sqlite3 has no progress-handler getter, so the meter cannot
+                  save and restore one: it installs its own and clears it at the
+                  end. That is safe because every other handler in the codebase
+                  (search, dependency walks, query guards) is set and cleared
+                  inside a read call, so none is installed when a command
+                  starts; one nested inside a command would end the sampling
+                  early (still a lower bound), never break the command;
+    receipt_bytes the encoded receipt (the command's reply payload), computed
+                  after COMMIT so it is not inside commit_ms or lock_hold_ms;
     fts_documents, path_comparisons, link_pairs, handover_pairs
                   the transaction's own graph/FTS work counters (exact).
 ``request`` -- one per command the coordinator writer runs
@@ -80,27 +101,36 @@ Durations are milliseconds (float, ``*_ms``); counts are ints.
 """
 from __future__ import annotations
 
+from collections import deque
+import glob
 import json
 import math
 import os
 from pathlib import Path
+import re
+import sys
 import threading
 import time
 
 ENV = "TASKMASTER_METRICS"
 VM_STEP_SAMPLE = 32
+MEMORY_LIMIT = 200_000
 
 ENABLED = False
 _path: Path | None = None
-_memory: list[dict] = []
+_memory: deque = deque()
+_dropped = 0
+_stream = None  # (pid, open file) of this process's own file
 _lock = threading.Lock()
 _local = threading.local()
+_warned: set = set()
 
 
 def enable(path=None) -> None:
-    """Record to `path` (appended JSONL) or, with None, in memory."""
+    """Record to per-process files beside `path`, or, with None, in memory."""
     global ENABLED, _path
     with _lock:
+        _close_stream()
         _path = None if path is None else Path(path).absolute()
         ENABLED = True
 
@@ -108,18 +138,45 @@ def enable(path=None) -> None:
 def disable() -> None:
     global ENABLED, _path
     with _lock:
+        _close_stream()
         ENABLED, _path = False, None
+
+
+def _close_stream():
+    global _stream
+    if _stream is not None:
+        try:
+            _stream[1].close()
+        except OSError:
+            pass
+        _stream = None
+
+
+def _warn(message):
+    if message not in _warned:
+        _warned.add(message)
+        print(f"taskmaster metrics: {message}", file=sys.stderr)
 
 
 def configure(environ=None) -> None:
     """Apply `TASKMASTER_METRICS` from `environ` (default `os.environ`)."""
     value = (os.environ if environ is None else environ).get(ENV, "").strip()
-    if not value or value.lower() in ("0", "false", "off", "no"):
+    word = value.lower()
+    if not value or word in ("0", "false", "off", "no"):
         disable()
-    elif value.lower() in ("1", "true", "on", "yes", "memory"):
+    elif word in ("1", "true", "on", "yes", "memory"):
         enable()
-    else:
+    elif os.path.isabs(value):
         enable(value)
+    else:
+        disable()
+        _warn(f"{ENV}={value!r} is neither 1/0 nor an absolute file path; metrics stay disabled")
+
+
+def process_file(base, pid=None) -> Path:
+    """This process's file for base path `base`: `<stem>.<pid><suffix>`."""
+    base = Path(base)
+    return base.with_name(f"{base.stem}.{os.getpid() if pid is None else pid}{base.suffix}")
 
 
 def records() -> list[dict]:
@@ -127,23 +184,37 @@ def records() -> list[dict]:
         return list(_memory)
 
 
+def dropped() -> int:
+    """In-memory records discarded because more than MEMORY_LIMIT were kept."""
+    return _dropped
+
+
 def clear() -> None:
+    global _dropped
     with _lock:
         _memory.clear()
+        _dropped = 0
 
 
 def emit(kind: str, **fields) -> None:
+    global _dropped, _stream
     if not ENABLED:
         return
-    record = {"kind": kind, "ts": time.time(), "pid": os.getpid(), **fields}
+    pid = os.getpid()
+    record = {"kind": kind, "ts": time.time(), "pid": pid, **fields}
     try:
         with _lock:
             if _path is None:
                 _memory.append(record)
+                while len(_memory) > MEMORY_LIMIT:
+                    _memory.popleft()
+                    _dropped += 1
                 return
             line = json.dumps(record, default=str, separators=(",", ":")) + "\n"
-            with open(_path, "a", encoding="utf-8") as stream:
-                stream.write(line)
+            if _stream is None or _stream[0] != pid:  # a forked child opens its own file
+                _stream = (pid, open(process_file(_path, pid), "a", encoding="utf-8"))
+            _stream[1].write(line)
+            _stream[1].flush()
     except Exception:  # noqa: BLE001 - instrumentation never breaks the measured code
         pass
 
@@ -203,7 +274,7 @@ class CommandMeter:
         self.record = {"op": request.get("operation"), "request_id": request.get("request_id"),
                        "caller_scope": request.get("caller_scope"), "outcome": "error"}
         self.steps = 0
-        self.issued = self.acquired = self.committing = None
+        self.issued = self.acquired = self.committing = self.outcome = None
         self.changes = connection.total_changes
         self.done = False
 
@@ -220,18 +291,18 @@ class CommandMeter:
 
     def commit(self, outcome):
         self.committing = time.perf_counter()
+        self.outcome = outcome  # encoded in close(), after the write lock is released
         self.record.update(outcome="committed", commit_seq=outcome.get("commit_seq"),
                            affected=len(outcome.get("affected") or ()), **(outcome.get("work") or {}))
-        try:
-            self.record["receipt_bytes"] = len(json.dumps(outcome, default=str, separators=(",", ":")).encode())
-        except (TypeError, ValueError):
-            pass
 
     def replayed(self, outcome):
         self.record.update(outcome="replayed", commit_seq=outcome.get("commit_seq"))
 
     def failed(self, exc):
+        self.outcome = None
         self.record.update(outcome="error", error=type(exc).__name__)
+        for name in ("commit_seq", "affected"):
+            self.record.pop(name, None)
 
     def close(self):
         if self.done:
@@ -250,26 +321,61 @@ class CommandMeter:
             record["db_ms"] = (end - self.issued) * 1000
         if self.committing is not None:
             record["commit_ms"] = (end - self.committing) * 1000
-        try:
-            record["rows_written"] = self.connection.total_changes - self.changes
-        except Exception:  # noqa: BLE001
-            pass
+        if record["outcome"] == "committed":
+            try:
+                record["rows_written"] = self.connection.total_changes - self.changes
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                record["receipt_bytes"] = len(json.dumps(self.outcome, default=str,
+                                                         separators=(",", ":")).encode())
+            except (TypeError, ValueError):
+                pass
         record["vm_steps"] = self.steps * VM_STEP_SAMPLE
         emit("command", **record)
 
 
 # ── Reader API for the acceptance harness ───────────────────────────────────
-def load(path) -> list[dict]:
-    """Every record of a JSONL metrics file, in order; malformed lines skipped."""
-    found = []
-    with open(path, encoding="utf-8") as stream:
-        for line in stream:
-            try:
-                value = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(value, dict) and "kind" in value:
-                found.append(value)
+class Records(list):
+    """`load`'s result: the records, plus `skipped` lines and the `files` read."""
+    skipped: int = 0
+    files: list
+
+
+def _files(path) -> list[Path]:
+    text = str(path)
+    if glob.has_magic(text):
+        return sorted(Path(item) for item in glob.glob(text))
+    base = Path(path)
+    sibling = re.compile(re.escape(base.stem) + r"\.\d+" + re.escape(base.suffix) + "$")
+    if re.search(r"\.\d+$", base.stem) and base.exists():
+        return [base]  # one exact per-process file
+    found = [base] if base.exists() else []
+    if base.parent.is_dir():
+        found += sorted(item for item in base.parent.iterdir() if sibling.match(item.name))
+    return found
+
+
+def load(path) -> Records:
+    """Every record under a base path, one exact file or a glob (see the module docs).
+
+    Records keep file order within a file; files are read in name order. A line
+    that is not a JSON object with a `kind` is counted in `.skipped`."""
+    found = Records()
+    found.files = _files(path)
+    for file in found.files:
+        with open(file, encoding="utf-8") as stream:
+            for line in stream:
+                if not line.strip():
+                    continue
+                try:
+                    value = json.loads(line)
+                except ValueError:
+                    value = None
+                if isinstance(value, dict) and "kind" in value:
+                    found.append(value)
+                else:
+                    found.skipped += 1
     return found
 
 

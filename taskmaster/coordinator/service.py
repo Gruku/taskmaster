@@ -330,9 +330,13 @@ class Coordinator:
         notices = self._drain_once(connection, through)
         end = time.perf_counter()
         after = outbox.exported_through(connection)
-        covered = sorted(seq for seq in list(self.commit_clock) if seq <= after)
-        for seq in covered:
-            metrics.emit('export_lag', commit_seq=seq, ms=(end - self.commit_clock.pop(seq)) * 1000)
+        covered = []
+        for seq in sorted(seq for seq in list(self.commit_clock) if seq <= after):
+            # A concurrent drain (background vs flush) may have reported this commit already.
+            committed = self.commit_clock.pop(seq, None)
+            if committed is not None:
+                covered.append(seq)
+                metrics.emit('export_lag', commit_seq=seq, ms=(end - committed) * 1000)
         self.exported_seen = max(self.exported_seen, after)
         metrics.emit('export', source='background' if threading.current_thread().name == 'taskmaster-exporter'
                      else 'flush', through=through, commit_seq=high, exported_before=before, exported_seq=after,
