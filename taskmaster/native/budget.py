@@ -103,6 +103,42 @@ def _stabilise(envelope, mandatory, selected, *, limit_bytes, mandatory_bytes, o
     raise RuntimeError("byte budget failed to settle on a stable used_bytes")
 
 
+class _Sizer:
+    """Predicts `_stabilise`'s settled size without rendering the selected rows.
+
+    The encoding is compositional: a list of k rows encodes as `[` + the rows
+    joined by `,` + `]`, and the mandatory value appears once. So the frame is
+    rendered with every non-empty section as `[0]` and mandatory as `0`, and the
+    row bytes, separators and mandatory bytes are added back. Each row is
+    encoded once; each candidate costs the frame (envelope + budget block), not
+    the rows delivered so far. The result is checked against a real render
+    before it is returned (see `budget`).
+    """
+
+    def __init__(self, envelope, mandatory_bytes, limit_bytes):
+        self.envelope = envelope
+        self.mandatory_extra = mandatory_bytes - 1  # "0" stands in for mandatory
+        self.limit_bytes = limit_bytes
+        self.mandatory_bytes = mandatory_bytes
+
+    def settle(self, counts, row_bytes, omitted) -> dict:
+        # `[0]` rather than `[]`: `_assemble` drops empty sections from the wire.
+        frame_selected = {name: [0] for name, count in counts.items() if count}
+        extra = self.mandatory_extra + sum(row_bytes[name] + counts[name] - 2
+                                           for name in frame_selected)
+        used = 0
+        for _ in range(12):
+            block = _budget_block(limit_bytes=self.limit_bytes, used_bytes=used,
+                                  mandatory_bytes=self.mandatory_bytes, over_budget=False,
+                                  omitted=omitted)
+            frame = _encode(_assemble(self.envelope, 0, frame_selected, block))
+            size = len(frame.encode("utf-8")) + extra
+            if size == used:
+                return block
+            used = size
+        raise RuntimeError("byte budget failed to settle on a stable used_bytes")
+
+
 def budget(*, envelope: Mapping[str, Any], mandatory: Any,
            selections: Sequence[Selection], limit_bytes: int) -> Answer:
     """Assemble one answer, dropping selected rows until it fits.
@@ -118,11 +154,8 @@ def budget(*, envelope: Mapping[str, Any], mandatory: Any,
 
     mandatory_bytes = _size(mandatory)
     omitted = {selection.name: selection.total - selection.offset for selection in selections}
-    selected: dict = {selection.name: [] for selection in selections}
-
-    def render(rows, left):
-        return _stabilise(envelope, mandatory, rows, limit_bytes=limit_bytes,
-                          mandatory_bytes=mandatory_bytes, omitted=left, over_budget=False)
+    names = {selection.name: None for selection in selections}
+    sizer = _Sizer(envelope, mandatory_bytes, limit_bytes)
 
     # The longest prefix that fits, not the first prefix that does not: the wire
     # budget block names only sections with rows left out, so delivering one more
@@ -130,21 +163,28 @@ def budget(*, envelope: Mapping[str, Any], mandatory: Any,
     # is complete), and the empty selection is not the smallest answer. Rows only
     # ever add bytes, so the scan stops once a prefix would overflow even with its
     # whole omission entry taken away.
+    #
+    # The scan works on sizes only (`_Sizer`); rows are rendered once, for the
+    # answer actually returned. `trial` only ever grows by appending, so the best
+    # answer is recorded as per-section prefix lengths, not copies.
+    trial = {name: [] for name in names}
+    counts = {name: 0 for name in names}
+    row_bytes = {name: 0 for name in names}
+    trial_omitted = dict(omitted)
     best = None
-    text, block = render(selected, omitted)
-    if block["used_bytes"] <= limit_bytes:
-        best = ({name: [] for name in selected}, dict(omitted), text, block)
-    trial, trial_omitted = {name: [] for name in selected}, dict(omitted)
+    if sizer.settle(counts, row_bytes, omitted)["used_bytes"] <= limit_bytes:
+        best = (dict(counts), dict(omitted))
     done = False
     for selection in selections:
+        name = selection.name
         for item in selection.items:
-            trial[selection.name].append(item)
-            trial_omitted[selection.name] = (selection.total - selection.offset
-                                             - len(trial[selection.name]))
-            candidate, candidate_block = render(trial, trial_omitted)
+            trial[name].append(item)
+            counts[name] += 1
+            row_bytes[name] += _size(item)
+            trial_omitted[name] = selection.total - selection.offset - counts[name]
+            candidate_block = sizer.settle(counts, row_bytes, trial_omitted)
             if candidate_block["used_bytes"] <= limit_bytes:
-                best = ({name: list(rows) for name, rows in trial.items()}, dict(trial_omitted),
-                        candidate, candidate_block)
+                best = (dict(counts), dict(trial_omitted))
             elif candidate_block["used_bytes"] - _omission_bytes(candidate_block) > limit_bytes:
                 done = True
                 break
@@ -154,10 +194,22 @@ def budget(*, envelope: Mapping[str, Any], mandatory: Any,
     # Over budget means exactly one thing: no answer fits, not even the one that
     # carries the blockers alone. It is never "some selected row was dropped".
     if best is None:
-        text, block = _stabilise(envelope, mandatory, selected, limit_bytes=limit_bytes,
+        empty = {name: [] for name in names}
+        text, block = _stabilise(envelope, mandatory, empty, limit_bytes=limit_bytes,
                                  mandatory_bytes=mandatory_bytes, omitted=omitted,
                                  over_budget=True)
         return Answer(text=text, budget=block, selected={})
-    selected, omitted, text, block = best
+    best_counts, best_omitted = best
+    selected = {name: trial[name][:best_counts[name]] for name in names}
+    text, block = _stabilise(envelope, mandatory, selected, limit_bytes=limit_bytes,
+                             mandatory_bytes=mandatory_bytes, omitted=best_omitted,
+                             over_budget=False)
+    if block["used_bytes"] != sizer.settle(best_counts, _row_bytes(selected),
+                                           best_omitted)["used_bytes"]:
+        raise RuntimeError("byte budget size prediction disagrees with the rendered answer")
     return Answer(text=text, budget=block,
                   selected={name: rows for name, rows in selected.items() if rows})
+
+
+def _row_bytes(selected: Mapping[str, Sequence[Any]]) -> dict:
+    return {name: sum(_size(row) for row in rows) for name, rows in selected.items()}
