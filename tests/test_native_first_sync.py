@@ -1,0 +1,369 @@
+# User intent: N16 track A - the first explicit sync after a legacy->native cutover must be fast
+# (activation seeds merge bases and fingerprints from bytes it hashed itself; observes need no Git
+# HEAD probe) and honest (a write that committed is never reported as "outcome uncertain").
+"""Activation seeding, the observe HEAD-probe rule and the honest sync outcome."""
+from __future__ import annotations
+
+from contextlib import closing
+import hashlib
+import json
+import os
+from pathlib import Path
+import sqlite3
+import threading
+import time
+
+import pytest
+
+from taskmaster.coordinator import checkouts, sync_files, sync_worker
+from taskmaster.coordinator.client import Client
+from taskmaster.coordinator.service import Coordinator
+from taskmaster.native import carryover, cutover
+from tests.native_twins import activate_native, committed
+from tests.test_native_cutover import project, quiesce  # noqa: F401
+from native_git_helpers import git, init_repo
+from test_native_service import root, request  # noqa: F401
+from test_native_service_sync import REL, edit, title
+
+TAMPERED = "tasks/cut-epic-002.md"
+QUARANTINED = "tasks/cut-epic-001.md"
+
+
+def _db(root):
+    return closing(sqlite3.connect(cutover.database_path(root), isolation_level=None, timeout=30))
+
+
+def _sha1(data: bytes) -> str:
+    return hashlib.sha1(data).hexdigest()
+
+
+def _age_projection(root: Path, seconds: int = 60) -> None:
+    """Fingerprints are recorded only for files older than the racy window."""
+    stamp = time.time() - seconds
+    for path in (root / ".taskmaster").rglob("*"):
+        if path.is_file() and "local" not in path.relative_to(root / ".taskmaster").parts:
+            os.utime(path, (stamp, stamp))
+
+
+def _adopted_without_bases(root: Path) -> None:
+    """A legacy store adopted from its files: no merge bases at all (CodeMaestro's shape),
+    and one quarantined row."""
+    with _db(root) as connection:
+        connection.execute("DELETE FROM projection_base")
+        connection.execute("UPDATE projection SET quarantined=1,quarantine_hash=content_hash WHERE file=?",
+                           (QUARANTINED,))
+
+
+def _tamper_when_activation_begins(root: Path, monkeypatch) -> bytes:
+    """Bytes that differ from the recorded digest, written after the cutover's drift check."""
+    path = root / ".taskmaster" / TAMPERED
+    changed = path.read_bytes() + b"\nEdited by hand during the cutover.\n"
+
+    def hook(name):
+        if name == "activate:begin":
+            path.write_bytes(changed)
+    monkeypatch.setitem(cutover.HOOKS, "checkpoint", hook)
+    return changed
+
+
+def _bases(root: Path) -> dict[str, bytes]:
+    with _db(root) as connection:
+        return {rel: bytes(content) for rel, content in connection.execute("SELECT file,content FROM projection_base")}
+
+
+def _published(root: Path) -> dict[str, str]:
+    with _db(root) as connection:
+        return dict(connection.execute("SELECT file,content_hash FROM projection WHERE quarantined=0 "
+                                       "AND file NOT LIKE 'local/%'"))
+
+
+# ── 1. Activation seeds merge bases only from bytes it hashed ────────────────
+
+# The hook stands in for a hand edit, but it runs on the cutover's stack.
+@pytest.mark.allow_projection_bypass
+def test_activation_seeds_bases_only_for_files_whose_bytes_it_hashed(project, quiesce, monkeypatch):
+    _adopted_without_bases(project)
+    changed = _tamper_when_activation_begins(project, monkeypatch)
+    report = cutover.cutover(project)
+    assert report["ok"], report
+    bases, published = _bases(project), _published(project)
+    backlog = project / ".taskmaster"
+    assert TAMPERED not in bases and QUARANTINED not in bases
+    assert (backlog / TAMPERED).read_bytes() == changed
+    expected = sorted(rel for rel, value in published.items()
+                      if rel != TAMPERED and (backlog / rel).is_file()
+                      and _sha1((backlog / rel).read_bytes()) == value)
+    assert expected and sorted(bases) == expected
+    for rel, content in bases.items():
+        assert content == (backlog / rel).read_bytes() and _sha1(content) == published[rel]
+    counts = report["stages"]["activate"]["bases"]
+    assert counts["seeded"] == len(expected) and counts["differs"] == 1, counts
+    with _db(project) as connection:
+        detail = cutover._detail(cutover.journal(connection), "activate")
+    assert sorted(detail["seeded_bases"]) == expected
+
+
+def test_activation_never_replaces_an_existing_base(project, quiesce):
+    rel = "tasks/cut-epic-002.md"
+    with _db(project) as connection:
+        connection.execute("UPDATE projection_base SET content=? WHERE file=?", (b"an older generation", rel))
+        kept = {r: bytes(c) for r, c in connection.execute("SELECT file,content FROM projection_base")}
+    assert cutover.cutover(project)["ok"]
+    bases = _bases(project)
+    assert {r: bases.get(r) for r in kept} == kept  # an existing base, trusted or not, is kept as it was
+
+
+def test_the_post_activation_oracle_allows_exactly_the_seeded_bases(project, quiesce):
+    _adopted_without_bases(project)
+    assert cutover.cutover(project)["ok"]
+    with _db(project) as connection:
+        entries = cutover.journal(connection)
+        before = cutover._detail(entries, "backup")["carryover"]
+        seeded = cutover._detail(entries, "activate")["seeded_bases"]
+        assert seeded
+        connection.execute("BEGIN")
+        try:
+            assert carryover.verify_carryover(connection, before, seeded_bases=seeded) == []
+            # Without the journaled list the added rows are a change, as before N16.
+            assert any("projection_base" in p for p in carryover.verify_carryover(connection, before))
+            # A seeded base that is not the recorded bytes is refused, as is an unnamed extra row.
+            connection.execute("UPDATE projection_base SET content=? WHERE file=?", (b"forged", seeded[0]))
+            problems = carryover.verify_carryover(connection, before, seeded_bases=seeded)
+            assert any(seeded[0] in p for p in problems), problems
+        finally:
+            connection.rollback()
+        connection.execute("BEGIN")
+        try:
+            connection.execute("INSERT INTO projection_base(file,content) VALUES('tasks/unnamed.md',x'00')")
+            assert carryover.verify_carryover(connection, before, seeded_bases=seeded)
+        finally:
+            connection.rollback()
+
+
+def test_a_crash_before_the_activation_commit_seeds_nothing_and_resume_seeds(project, quiesce, monkeypatch):
+    _adopted_without_bases(project)
+
+    def hook(name):
+        if name == "activate:before-commit":
+            raise RuntimeError("crash at activate:before-commit")
+    monkeypatch.setitem(cutover.HOOKS, "checkpoint", hook)
+    with pytest.raises(RuntimeError):
+        cutover.cutover(project)
+    assert _bases(project) == {}
+    assert not sync_files.cache_path(project).exists()
+    monkeypatch.setitem(cutover.HOOKS, "checkpoint", None)
+    assert cutover.cutover(project, resume=True)["ok"]
+    assert _bases(project)
+
+
+# ── 2. Activation seeds the sync fingerprint cache from the same reads ───────
+
+# The hook stands in for a hand edit, but it runs on the cutover's stack.
+@pytest.mark.allow_projection_bypass
+def test_activation_seeds_the_fingerprint_cache_from_the_bytes_it_read(project, quiesce, monkeypatch):
+    _adopted_without_bases(project)
+    _age_projection(project)
+    changed = _tamper_when_activation_begins(project, monkeypatch)  # fresh mtime: racy, never cached
+    assert cutover.cutover(project)["ok"]
+    cache = json.loads(sync_files.cache_path(project).read_text(encoding="utf-8"))
+    backlog = project / ".taskmaster"
+    entries = cache["checkouts"][sync_files._cache_key(backlog)]["entries"]
+    seeded = _bases(project)
+    assert entries and set(entries) <= set(seeded) | {TAMPERED}
+    assert TAMPERED not in entries and _sha1(changed) not in json.dumps(entries)
+    for rel, (fingerprint, digests) in entries.items():
+        assert digests[0] == _sha1((backlog / rel).read_bytes())
+    scan = sync_files.open_scan(project, backlog)
+    assert all(scan.digests(rel) is not None for rel in entries)
+
+
+def test_twins_activation_seeds_bases_and_commits_the_same_domain(tmp_path, monkeypatch):
+    from tests.test_native_cutover import build_project
+    root = build_project(tmp_path / "twin", monkeypatch)
+    before = committed(root)
+    _adopted_without_bases(root)
+    activate_native(root)
+    assert committed(root) == before
+    assert set(_bases(root)) == set(_published(root))
+
+
+# ── 3. Observe plans need no Git HEAD probe; imports keep theirs ─────────────
+
+def _drop_native_bases(root: Path, keep=()) -> int:
+    """Bases lost (as on an adopted store); `keep` retains some, so an edit there is a merge."""
+    with _db(root) as connection:
+        connection.execute(f"DELETE FROM projection_base WHERE file NOT IN ({','.join('?' for _ in keep)})",
+                           tuple(keep))
+        return connection.execute("SELECT COUNT(*) FROM projection WHERE quarantined=0 "
+                                  "AND file NOT LIKE 'local/%'").fetchone()[0] - len(keep)
+
+
+def test_observes_skip_the_head_probe_and_an_import_keeps_it(root, monkeypatch):
+    init_repo(root)
+    probes = []
+    original = checkouts.observe
+    monkeypatch.setattr(checkouts, "observe", lambda checkout: probes.append(1) or original(checkout))
+    with Coordinator(root):
+        client = Client(root, autostart=False, timeout=120)
+        assert client.sync()["state"] == "synchronized"
+        git(root, "add", "-A")
+        git(root, "commit", "-q", "--allow-empty", "-m", "published generation")
+        assert client.sync()["state"] == "synchronized"
+    files = _drop_native_bases(root, keep=[REL])
+    edit(root, "Authored after the bases were lost")
+    probes.clear()
+    with Coordinator(root):
+        client = Client(root, autostart=False, timeout=120)
+        result = client.sync()
+    assert result["state"] == "synchronized", result
+    assert result["observed"] == files >= 1, (result, files)
+    assert [item["file"] for item in result["imports"]] == [REL], result
+    # detect, the one import's check and the completion check: never one per observed file.
+    assert len(probes) == 3, probes
+    assert title(root) == "Authored after the bases were lost"
+
+
+def test_head_moving_during_observes_records_them_but_not_the_observation(root, monkeypatch):
+    init_repo(root)
+    with Coordinator(root):
+        client = Client(root, autostart=False, timeout=120)
+        assert client.sync()["state"] == "synchronized"
+        git(root, "add", "-A")
+        git(root, "commit", "-q", "--allow-empty", "-m", "published generation")
+        assert client.sync()["state"] == "synchronized"
+    _drop_native_bases(root)
+    remembered = []
+    monkeypatch.setattr(checkouts, "remember", lambda *a, **k: remembered.append(a))
+    with Coordinator(root) as owner:
+        moved = []
+
+        def checkpoint(stage):
+            if stage == "sync_prepared" and not moved:
+                moved.append(1)
+                git(root, "commit", "-q", "--allow-empty", "-m", "concurrent commit")
+        owner.checkpoint = checkpoint
+        result = owner.sync(caller_scope="head", request_id="moves")
+    assert moved and result["observed"] > 1, result
+    assert not any("HEAD moved" in notice for notice in result["notices"]), result
+    assert remembered == []  # HEAD moved: the next sync re-detects instead of skipping
+
+
+# ── 4. Honest outcome: time reserve, grace, receipt ─────────────────────────
+
+def _block_writer_at_admission(owner, seconds=None, release=None):
+    """The next command the writer admits waits (for `seconds`, or until `release`)."""
+    def writer_checkpoint(stage):
+        if stage == "admitted":
+            owner.checkpoint = lambda inner: None
+            if release is not None:
+                release.wait(30)
+            else:
+                time.sleep(seconds)
+    return writer_checkpoint
+
+
+def test_an_import_that_commits_within_the_grace_is_reported_committed(root, monkeypatch):
+    monkeypatch.setattr(sync_worker, "IMPORT_GRACE", 5)
+    with Coordinator(root) as owner:
+        client = Client(root, autostart=False)
+        client.sync(files=[REL])
+        edit(root, "Slow but committed")
+
+        def checkpoint(stage):
+            if stage == "sync_prepared":
+                owner.checkpoint = _block_writer_at_admission(owner, seconds=2.0)
+        owner.checkpoint = checkpoint
+        result = owner.sync(caller_scope="grace", request_id="one", files=[REL], timeout=1)
+    assert not any("uncertain" in n for n in result["notices"]), result
+    assert [item["state"] for item in result["imports"]] == ["accepted"], result
+    assert title(root) == "Slow but committed"
+
+
+def test_an_import_still_queued_after_the_grace_is_cancelled_and_not_committed(root, monkeypatch):
+    monkeypatch.setattr(sync_worker, "IMPORT_GRACE", 0.5)
+    release = threading.Event()
+    with Coordinator(root) as owner:
+        client = Client(root, autostart=False)
+        client.sync(files=[REL])
+        edit(root, "Never started")
+        blockers = []
+
+        def checkpoint(stage):
+            if stage == "sync_prepared" and not blockers:
+                owner.checkpoint = _block_writer_at_admission(owner, release=release)
+                other_field = dict(request(client, "blocker"), arguments={"id": "test-epic-001",
+                                                                          "set": {"priority": "low"}})
+                blockers.append(owner.submit(other_field))
+                time.sleep(0.3)  # the blocker is admitted before the import is queued behind it
+        owner.checkpoint = checkpoint
+        try:
+            result = owner.sync(caller_scope="queued", request_id="one", files=[REL], timeout=1)
+        finally:
+            release.set()
+        blockers[0].result(timeout=30)
+        (item,) = result["imports"]
+        assert item["state"] == "not_committed" and item["may_have_committed"] is False, result
+        assert any("not committed" in n for n in result["notices"]), result
+        assert not any("uncertain" in n for n in result["notices"]), result
+        assert client.receipt(item["caller_scope"], item["request_id"]) == {"state": "unknown"}
+        assert title(root) == "Service task"
+        retried = owner.sync(caller_scope="queued", request_id="one", files=[REL], timeout=60)
+        assert retried["state"] == "synchronized", retried
+        assert title(root) == "Never started"
+
+
+def test_an_import_the_writer_is_still_running_is_the_only_uncertain_outcome(root, monkeypatch):
+    monkeypatch.setattr(sync_worker, "IMPORT_GRACE", 0.5)
+    release = threading.Event()
+    with Coordinator(root) as owner:
+        client = Client(root, autostart=False)
+        client.sync(files=[REL])
+        edit(root, "Still running")
+
+        def checkpoint(stage):
+            if stage == "sync_prepared":
+                owner.checkpoint = _block_writer_at_admission(owner, release=release)
+        owner.checkpoint = checkpoint
+        try:
+            result = owner.sync(caller_scope="running", request_id="one", files=[REL], timeout=1)
+        finally:
+            release.set()
+    (item,) = result["imports"]
+    assert item["state"] == "uncertain" and item["may_have_committed"], result
+    assert any("still running" in n for n in result["notices"]), result
+
+
+def test_an_observe_outcome_is_reported_apart_from_imports(root, monkeypatch):
+    monkeypatch.setattr(sync_worker, "IMPORT_GRACE", 0.5)
+    _drop_native_bases(root)
+    release = threading.Event()
+    with Coordinator(root) as owner:
+        def checkpoint(stage):
+            if stage == "sync_prepared":
+                owner.checkpoint = _block_writer_at_admission(owner, release=release)
+        owner.checkpoint = checkpoint
+        try:
+            result = owner.sync(caller_scope="observe", request_id="one", files=[REL], timeout=1)
+        finally:
+            release.set()
+    assert result["imports"] == [] and result["observed"] == 0, result
+    (item,) = result["observes"]
+    assert item["state"] == "uncertain" and item["file"] == REL, result
+    assert not any("import outcome" in n for n in result["notices"]), result
+    assert any(n.startswith(f"sync pending: {REL}: ") and "base record" in n for n in result["notices"]), result
+
+
+def test_no_file_is_started_inside_the_time_reserve(root, monkeypatch):
+    monkeypatch.setattr(sync_worker, "FILE_RESERVE", 10)
+    monkeypatch.setattr(sync_worker, "RESERVE_SHARE", 1.0)
+    submitted = []
+    with Coordinator(root) as owner:
+        client = Client(root, autostart=False)
+        client.sync(files=[REL])
+        edit(root, "Not started")
+        original = owner.submit
+        owner.submit = lambda envelope: submitted.append(envelope["operation"]) or original(envelope)
+        result = owner.sync(caller_scope="reserve", request_id="one", files=[REL], timeout=5)
+    assert submitted == ["sync.begin"], submitted
+    assert REL in result["unresolved"] and any("time budget" in n for n in result["notices"]), result
+    assert result["imports"] == []
