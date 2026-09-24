@@ -8,6 +8,7 @@ from concurrent.futures import TimeoutError as FutureTimeout
 from contextlib import closing
 import hashlib
 import json
+import sqlite3
 import time
 
 from taskmaster.native import contracts, projection, sync
@@ -31,6 +32,15 @@ RESERVE_SHARE = 0.1
 # settled from the admission queue and its durable receipt (`_settle`). The grace and the
 # sync.finish minimum share one FINISH_TIMEOUT allowance: a reply comes within budget + 5 s.
 IMPORT_GRACE = FINISH_TIMEOUT
+# sync.finish always gets at least this long, however much of the allowance the grace used.
+FINISH_FLOOR = 0.5
+
+
+def _finish_timeout(remaining, grace_used):
+    """The sync.finish wait: the rest of the budget, else what the grace left of
+    FINISH_TIMEOUT, never below FINISH_FLOOR (a zero wait would report a finished
+    completion receipt as uncertain)."""
+    return max(remaining, FINISH_TIMEOUT - grace_used, FINISH_FLOOR)
 # Why a file's write is unsettled, by (observe?, outcome). An observe records the published
 # bytes as the merge base and changes no task data, so it is never called an import.
 _UNSETTLED = {
@@ -126,7 +136,20 @@ def _await(future, timeout):
 
 
 def _settle(owner, future, scope, key, grace):
-    """`(receipt or None, outcome)` of a submitted sync.apply that did not simply finish.
+    """`(receipt or None, outcome, grace waited)` of a submitted sync.apply that did not
+    simply finish; a store error while settling (a locked database) is `uncertain`.
+    """
+    started = time.monotonic()
+    receipt, outcome = _await(future, grace)
+    waited = time.monotonic() - started
+    try:
+        return (*_settled(owner, future, scope, key, receipt, outcome), waited)
+    except sqlite3.Error:
+        return None, 'uncertain', waited
+
+
+def _settled(owner, future, scope, key, receipt, outcome):
+    """The rest of `_settle`, after its grace wait: `(receipt or None, outcome)`.
 
     - `committed`: it finished within `grace`, or its durable receipt exists (a receipt
       commits in the command's own transaction).
@@ -136,7 +159,6 @@ def _settle(owner, future, scope, key, grace):
       (interrupted) and no receipt exists.
     A refusal (a ValueError such as Conflict) is raised to the caller: nothing committed.
     """
-    receipt, outcome = _await(future, grace)
     if outcome is None:
         if owner.cancel(scope, key)['state'] == 'cancelled_before_execution':
             return None, 'not_committed'
@@ -427,10 +449,9 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
                     future = submit('sync.apply', key, plan.arguments)
                     receipt, outcome = _await(future, remaining())
                     if outcome != 'committed':
-                        started = time.monotonic()
-                        receipt, outcome = _settle(owner, future, scope, key,
-                                                   max(0.0, IMPORT_GRACE - grace_used) if outcome is None else 0)
-                        grace_used += time.monotonic() - started
+                        receipt, outcome, waited = _settle(
+                            owner, future, scope, key, max(0.0, IMPORT_GRACE - grace_used) if outcome is None else 0)
+                        grace_used += waited  # only the grace wait, not the cancel/receipt reads
                     if receipt is None:
                         observing = plan.state == 'observe'
                         result['observes' if observing else 'imports'].append(dict(
@@ -554,7 +575,7 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
             completed = summarize(dict(result, state='synchronized'))
             try:
                 execute('sync.finish', 'finish', {'result': completed},
-                        timeout=max(remaining(), FINISH_TIMEOUT - grace_used))
+                        timeout=_finish_timeout(remaining(), grace_used))
             except FutureTimeout:
                 pending(None, 'completion receipt uncertain; retry the same sync id')
             except Exception as exc:

@@ -158,7 +158,12 @@ What each stage does:
   ordinary path.
 - The sync result reports `imports` (domain writes) and `observed` (published bytes recorded as
   a base) separately. A write the time budget runs out on gets a grace period. The grace and
-  the completion receipt share one 5 s allowance, so a reply comes within the budget plus 5 s.
+  the completion receipt share one 5 s allowance (the receipt always gets at least 0.5 s), so
+  the target is a reply within the budget plus about 5 s. That is a target, not a bound: two
+  steps are not budgeted. A write the budget ran out on still has its outcome looked up
+  (a queue cancel and a receipt read). And after the last file, the final publication and the
+  completion check re-read the published files. These normally take a few seconds, but a
+  slow disk or a large store can push the reply past the target.
   The write is then reported as one of three outcomes:
   - `committed`: its receipt exists.
   - `not_committed`: it was cancelled before the writer ran it.

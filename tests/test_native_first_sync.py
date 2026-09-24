@@ -433,16 +433,16 @@ def test_settle_maps_writer_failures_by_what_is_known(root):
             future.set_exception(error)
             return future
         interrupted = failed(ServiceUnavailable("writer interrupted; retry the same request_id"))
-        assert sync_worker._settle(owner, interrupted, "scope", "never-committed", 0.1) == (None, "uncertain")
+        assert sync_worker._settle(owner, interrupted, "scope", "never-committed", 0.1)[:2] == (None, "uncertain")
         cancelled = failed(CancelledBeforeExecution("cancelled while queued"))
-        assert sync_worker._settle(owner, cancelled, "scope", "key", 0.1) == (None, "not_committed")
+        assert sync_worker._settle(owner, cancelled, "scope", "key", 0.1)[:2] == (None, "not_committed")
         with pytest.raises(Conflict):  # a refusal: rolled back, reported as the file's reason
             sync_worker._settle(owner, failed(Conflict("revision changed")), "scope", "key", 0.1)
         # A receipt proves the commit whatever the transport said.
         client = Client(root, autostart=False)
         receipt = client.execute(request(client, "committed-key", "Committed"))["receipt"]
         lost = failed(ServiceUnavailable("writer interrupted; retry the same request_id"))
-        assert sync_worker._settle(owner, lost, "service-tests", "committed-key", 0.1) == (receipt, "committed")
+        assert sync_worker._settle(owner, lost, "service-tests", "committed-key", 0.1)[:2] == (receipt, "committed")
 
 
 def test_the_reply_stays_within_the_budget_plus_the_finish_minimum(root, monkeypatch):
@@ -523,3 +523,30 @@ def test_the_backup_reads_each_projection_file_once_and_its_records_agree(projec
         assert listed[rel]["sha256"] == hashlib.sha256(data).hexdigest() and listed[rel]["size"] == len(data)
     with _db(project) as connection:
         assert cutover.projection_files(project, connection) == manifest["projection_files"]
+
+
+# ── 7. Combined-review follow-ups: finish floor, store errors while settling ─
+
+def test_the_finish_wait_keeps_a_floor_however_long_settling_took():
+    assert sync_worker._finish_timeout(0, 0) == sync_worker.FINISH_TIMEOUT
+    assert sync_worker._finish_timeout(0, 2.0) == sync_worker.FINISH_TIMEOUT - 2.0
+    assert sync_worker._finish_timeout(0, 7.5) == sync_worker.FINISH_FLOOR > 0
+    assert sync_worker._finish_timeout(30, 7.5) == 30
+
+
+@pytest.mark.parametrize("failing", ["cancel", "receipt"])
+def test_a_store_error_while_settling_is_uncertain_not_a_failed_sync(root, monkeypatch, failing):
+    from concurrent.futures import Future
+    from taskmaster.coordinator.protocol import ServiceUnavailable
+
+    def locked(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+    with Coordinator(root) as owner:
+        if failing == "cancel":
+            monkeypatch.setattr(owner, "cancel", locked)
+            future = Future()  # still running after the grace
+        else:
+            monkeypatch.setattr(sync_worker, "_receipt", locked)
+            future = Future()
+            future.set_exception(ServiceUnavailable("writer interrupted; retry the same request_id"))
+        assert sync_worker._settle(owner, future, "scope", "key", 0.05)[:2] == (None, "uncertain")
