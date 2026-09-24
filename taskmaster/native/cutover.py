@@ -376,19 +376,32 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _projection_reads(root: Path, connection) -> list[tuple[dict, bytes, float]]:
+    """`(entry, bytes, mtime)` for each file of the projection set, each read exactly once, so
+    the manifest entry, the archive entry and any comparison describe the same bytes."""
+    base = Path(root) / ".taskmaster"
+    if connection is None or not _has_table(connection, "projection"):
+        return []
+    reads = []
+    for (rel,) in connection.execute("SELECT file FROM projection ORDER BY file").fetchall():
+        path = base / rel
+        if not path.is_file():
+            continue
+        try:
+            with path.open("rb") as stream:
+                data = stream.read()
+                mtime = os.fstat(stream.fileno()).st_mtime
+        except FileNotFoundError:
+            continue
+        reads.append(({"path": rel, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}, data, mtime))
+    return reads
+
+
 def projection_files(root: Path, connection=None) -> list[dict]:
     """The projection set: files the store tracks in its `projection` table (backlog.yaml,
     task/bug/... documents) that exist on disk. Other files under `.taskmaster/` are the
     user's and are never archived, compared or restored."""
-    base = Path(root) / ".taskmaster"
-    if connection is None or not _has_table(connection, "projection"):
-        return []
-    files = []
-    for (rel,) in connection.execute("SELECT file FROM projection ORDER BY file").fetchall():
-        path = base / rel
-        if path.is_file():
-            files.append({"path": rel, "sha256": _sha256(path), "size": path.stat().st_size})
-    return files
+    return [entry for entry, _, _ in _projection_reads(root, connection)]
 
 
 def _fsync(path: Path) -> None:
@@ -454,7 +467,8 @@ def write_backup(connection, root: Path, carryover: dict) -> dict:
     backup_digest = verify_backup(target, domain_digest(connection))
     sidecar = database_path(root).parent / "id-reservations.json"
     sidecar_sha = _sha256(sidecar) if sidecar.exists() else None
-    archive = archive_projection(root, target.with_suffix(".projection.zip"), connection)
+    reads = _projection_reads(root, connection)  # one read per file: the archive and manifest agree
+    archive = archive_projection(root, target.with_suffix(".projection.zip"), connection, reads=reads)
     sidecar_copy = None
     if sidecar.exists():
         sidecar_copy = target.with_name(target.stem + ".id-reservations.json")
@@ -463,7 +477,7 @@ def write_backup(connection, root: Path, carryover: dict) -> dict:
     manifest = {
         "created_at": _now(), "store": str(database_path(root)), "backup": str(target),
         "backup_sha256": _sha256(target), "domain_digest": backup_digest,
-        "projection_files": projection_files(root, connection),
+        "projection_files": [entry for entry, _, _ in reads],
         "id_reservations": None if sidecar_copy is None else {
             "source": str(sidecar), "copy": str(sidecar_copy), "sha256": _sha256(sidecar_copy)},
         "projection_archive": archive,
@@ -1128,18 +1142,26 @@ def _summarize_files(divergence: dict) -> str:
                      for kind, paths in divergence.items() if paths)
 
 
-def archive_projection(root: Path, target: Path, connection) -> dict:
-    """Zip the projection set beside the backup."""
-    base = Path(root) / ".taskmaster"
-    files = projection_files(root, connection)
+def _zip_time(mtime: float) -> tuple:
+    """A zip timestamp, clamped to the format's 1980..2107 range (as `strict_timestamps=False`)."""
+    stamp = _dt.datetime.fromtimestamp(max(mtime, 0)).timetuple()[:6]
+    return max((1980, 1, 1, 0, 0, 0), min(stamp, (2107, 12, 31, 23, 59, 59)))
+
+
+def archive_projection(root: Path, target: Path, connection, *, reads=None) -> dict:
+    """Zip the projection set beside the backup, from `reads` (`_projection_reads`) when given."""
+    reads = _projection_reads(root, connection) if reads is None else reads
     temp = target.with_name(target.name + ".partial")
     temp.unlink(missing_ok=True)
-    with zipfile.ZipFile(temp, "w", compression=zipfile.ZIP_DEFLATED, strict_timestamps=False) as archive:
-        for entry in files:
-            archive.write(base / entry["path"], entry["path"])
+    with zipfile.ZipFile(temp, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for entry, data, mtime in reads:
+            info = zipfile.ZipInfo(entry["path"], date_time=_zip_time(mtime))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = 0o100644 << 16
+            archive.writestr(info, data)
     os.replace(temp, target)
     _fsync(target)
-    return {"path": str(target), "sha256": _sha256(target), "size": target.stat().st_size, "files": len(files)}
+    return {"path": str(target), "sha256": _sha256(target), "size": target.stat().st_size, "files": len(reads)}
 
 
 def _archived(detail: dict) -> dict[str, bytes]:

@@ -479,3 +479,49 @@ def test_the_reply_stays_within_the_budget_plus_the_finish_minimum(root, monkeyp
     assert "sync.finish" in operations, (operations, result)
     assert any("completion receipt uncertain" in n for n in result["notices"]), result
     assert elapsed < 1 + sync_worker.FINISH_TIMEOUT + 1.0, elapsed  # was budget + grace + 5 s
+
+
+# ── 6. Backup archive: one read per file; archive, manifest and disk agree ───
+
+def test_the_backup_reads_each_projection_file_once_and_its_records_agree(project, quiesce, monkeypatch):
+    import builtins
+    import io
+    import zipfile
+    backlog = (project / ".taskmaster").resolve()
+    opened, active = {}, []
+    real_open = builtins.open
+
+    def counting_open(file, *args, **kwargs):
+        try:
+            path = Path(os.fspath(file)).resolve()
+        except TypeError:
+            path = None
+        if active and path is not None and backlog in path.parents and "local" not in path.relative_to(backlog).parts:
+            opened[path] = opened.get(path, 0) + 1
+        return real_open(file, *args, **kwargs)
+    monkeypatch.setattr(builtins, "open", counting_open)
+    monkeypatch.setattr(io, "open", counting_open)
+    real_backup = cutover.write_backup
+
+    def counted_backup(*args, **kwargs):
+        active.append(1)
+        try:
+            return real_backup(*args, **kwargs)
+        finally:
+            active.clear()
+    monkeypatch.setattr(cutover, "write_backup", counted_backup)
+    report = cutover.cutover(project)
+    assert report["ok"], report
+    assert opened and max(opened.values()) == 1, opened
+    backup = report["stages"]["backup"]
+    manifest = json.loads(Path(backup["manifest"]).read_text(encoding="utf-8"))
+    listed = {entry["path"]: entry for entry in manifest["projection_files"]}
+    with zipfile.ZipFile(manifest["projection_archive"]["path"]) as archive:
+        assert archive.testzip() is None
+        assert all(info.compress_type == zipfile.ZIP_DEFLATED for info in archive.infolist())
+        zipped = {name: archive.read(name) for name in archive.namelist()}
+    assert set(zipped) == set(listed) and len(listed) == manifest["projection_archive"]["files"]
+    for rel, data in zipped.items():
+        assert listed[rel]["sha256"] == hashlib.sha256(data).hexdigest() and listed[rel]["size"] == len(data)
+    with _db(project) as connection:
+        assert cutover.projection_files(project, connection) == manifest["projection_files"]
