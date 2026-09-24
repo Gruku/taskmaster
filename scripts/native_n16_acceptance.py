@@ -80,7 +80,8 @@ SUCCESS = {
     "backlog_add_task": r"^Added `",
     "backlog_archive_task": r"^Archived `",
     "backlog_link": r"^ok: ",
-    "backlog_pick_task": r"^Picked `[^`]+` .*\(locked to this session\)",
+    # A fresh pick, or a task already in progress that this session now holds.
+    "backlog_pick_task": r"^(Picked `[^`]+` .*\(locked to this session\)|Already in progress: `)",
     "backlog_batch_update": "json-ok",
     "backlog_claim": "json-ok",
 }
