@@ -19,6 +19,7 @@ import stat
 import time
 from typing import NamedTuple
 
+from taskmaster.native import metrics
 from taskmaster.projection_parse import ENTITY_FILE_SPECS, classify
 from taskmaster.projection_paths import UnsafePath, check_component as _check_component, relative, safe_path
 
@@ -61,6 +62,8 @@ def discover(root: Path, scan: "Scan | None" = None) -> Inventory:
     def listing(rel, *, directories_only=False):
         try:
             directory = scan.directory(rel)
+            if metrics.ENABLED:
+                metrics.add("directories_listed")
             with os.scandir(directory) as entries:
                 return sorted((entry.name for entry in entries
                                if not directories_only or entry.is_dir(follow_symlinks=False)
@@ -135,6 +138,9 @@ def _read_observed(root: Path, rel: str, limit: int) -> Observation | None:
         # An absent path is distinguishable from a parser failure; callers still
         # revalidate absence before treating it as a publication repair.
         return None
+    if metrics.ENABLED:
+        metrics.add("files_read")
+        metrics.add("bytes_read", len(content))
     if not (_signature(before) == _signature(opened) == _signature(after) == _signature(current)):
         raise ChangedDuringRead(f"projection changed during read: {rel}")
     return Observation(rel, content, hashlib.sha1(content).hexdigest(), after.st_mtime_ns,
@@ -276,6 +282,8 @@ class Scan:
     def info(self, rel: str, *, fresh: bool = False):
         """lstat of a regular projection file, None when it (or its directory) is absent."""
         if fresh or rel not in self._info:
+            if metrics.ENABLED:
+                metrics.add("files_stated")
             try:
                 path = self.path(rel)
                 info = _check_component(path)
@@ -294,9 +302,13 @@ class Scan:
         if info is None or not _valid_entry(entry) or tuple(entry[0]) != _fingerprint(info, self.path(rel)):
             self._stale.add(rel)
             self._entries.pop(rel, None)
+            if metrics.ENABLED:
+                metrics.add("cache_misses")
             return None
         self._entries[rel] = entry
         self.hits += 1
+        if metrics.ENABLED:
+            metrics.add("cache_hits")
         return Digests(*entry[1])
 
     def observe(self, rel: str, *, authored: bool = True, limit: int = MAX_FILE_BYTES) -> Observation | None:

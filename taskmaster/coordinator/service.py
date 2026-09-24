@@ -22,7 +22,7 @@ import socket
 import threading
 import time
 
-from taskmaster.native import commands, contracts
+from taskmaster.native import commands, contracts, metrics
 from taskmaster.admission import UnsupportedStoreError
 from .ownership import Ownership, OwnershipUnavailable
 from .protocol import (MAX_MESSAGE_BYTES, MAX_RESPONSE_BYTES, ServiceUnavailable, check_handshake,
@@ -37,6 +37,7 @@ class Work:
     future: Future = field(default_factory=Future)
     cancelled: threading.Event = field(default_factory=threading.Event)
     admitted: bool = False
+    queued_at: float = 0.0  # perf_counter at enqueue; set only while metrics are enabled
 
 
 class AdmissionQueue:
@@ -108,6 +109,9 @@ class Coordinator:
         self.exporter = exporter
         self.last_activity = time.monotonic()
         self.last_export_error = None
+        # Metrics only: commit_seq -> perf_counter when the writer returned it (export lag).
+        self.commit_clock = {}
+        self.exported_seen = 0
         self.server = None
         self.threads = []
         from .linear_worker import LinearWorker
@@ -196,6 +200,8 @@ class Coordinator:
                 if old.request != request:
                     raise contracts.Conflict('request_id reused with a different queued payload')
                 return old.future
+            if metrics.ENABLED:
+                work.queued_at = time.perf_counter()
             try:
                 self.queue.put_nowait(work)
             except queue.Full:
@@ -234,6 +240,8 @@ class Coordinator:
                     work = self.queue.get(timeout=0.1)
                 except queue.Empty:
                     continue
+                dequeued = time.perf_counter() if metrics.ENABLED else None
+                started, failure = None, None
                 # Gate after dequeue: a command taken during a pause waits here,
                 # outside `execution`, so the pausing sync never waits for it.
                 with self.admission:
@@ -255,8 +263,12 @@ class Coordinator:
                                         raise contracts.CancelledBeforeExecution('cancelled before execution')
                                     work.admitted = True
                             self.checkpoint(stage)
+                        if dequeued is not None:
+                            started = time.perf_counter()
                         receipt = commands.execute(connection, work.request, cancelled=work.cancelled.is_set,
                                                    checkpoint=admitted)
+                        if dequeued is not None:
+                            self._committed(receipt)
                         work.future.set_result(receipt)
                         self.export_needed.set()
                 except BaseException as exc:
@@ -266,15 +278,37 @@ class Coordinator:
                         connection.close()
                         connection = None
                     error = exc if isinstance(exc, Exception) else ServiceUnavailable('writer interrupted; retry the same request_id')
+                    failure = exc
                     work.future.set_exception(error)
                 finally:
                     with self.guard:
                         key = (work.request['caller_scope'], work.request['request_id'])
                         if self.pending.get(key) is work:  # a retry may have replaced a cancelled entry
                             del self.pending[key]
+                    if dequeued is not None:
+                        self._request_metrics(work, dequeued, started, failure)
         finally:
             if connection is not None:
                 connection.close()
+
+    def _committed(self, receipt):
+        """Metrics only: when a new commit that owes projection work returned."""
+        seq = receipt.get('commit_seq')
+        if receipt.get('projection_state') == 'pending' and type(seq) is int and seq > self.exported_seen:
+            self.commit_clock.setdefault(seq, time.perf_counter())
+            while len(self.commit_clock) > 10000:
+                self.commit_clock.pop(next(iter(self.commit_clock)))
+
+    def _request_metrics(self, work, dequeued, started, failure):
+        finished = time.perf_counter()
+        request = work.request
+        metrics.emit('request', op=request.get('operation'), request_id=request.get('request_id'),
+                     caller_scope=request.get('caller_scope'),
+                     outcome='error' if failure is not None else 'ok',
+                     **({'error': type(failure).__name__} if failure is not None else {}),
+                     queue_wait_ms=(dequeued - work.queued_at) * 1000 if work.queued_at else None,
+                     admission_wait_ms=((started or finished) - dequeued) * 1000,
+                     service_ms=(finished - started) * 1000 if started is not None else 0.0)
 
     def pause_writer(self):
         """Stop admitting new commands; pair with `resume_writer`."""
@@ -287,6 +321,26 @@ class Coordinator:
             self.admission.notify_all()
 
     def _drain(self, connection, through=None):
+        if not metrics.ENABLED:
+            return self._drain_once(connection, through)
+        from taskmaster.native import projection as outbox
+        high = connection.execute('SELECT COALESCE(MAX(seq),0) FROM domain_events').fetchone()[0]
+        before = outbox.exported_through(connection)
+        start = time.perf_counter()
+        notices = self._drain_once(connection, through)
+        end = time.perf_counter()
+        after = outbox.exported_through(connection)
+        covered = sorted(seq for seq in list(self.commit_clock) if seq <= after)
+        for seq in covered:
+            metrics.emit('export_lag', commit_seq=seq, ms=(end - self.commit_clock.pop(seq)) * 1000)
+        self.exported_seen = max(self.exported_seen, after)
+        metrics.emit('export', source='background' if threading.current_thread().name == 'taskmaster-exporter'
+                     else 'flush', through=through, commit_seq=high, exported_before=before, exported_seq=after,
+                     lag_seqs=high - after, drain_ms=(end - start) * 1000, notices=len(notices or ()),
+                     published_commits=len(covered))
+        return notices
+
+    def _drain_once(self, connection, through=None):
         if self.exporter is not None:
             return self.exporter(connection, self.root / '.taskmaster', through=through)
         from taskmaster.native_routing.projection import drain
@@ -581,6 +635,22 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         owner = self.server.coordinator
+        self.message, self.reply_bytes, self.reply_status = None, 0, None
+        started = time.perf_counter() if metrics.ENABLED else None
+        try:
+            self._post(owner)
+        finally:
+            if started is not None:
+                self._ipc_metrics(started)
+
+    def _ipc_metrics(self, started):
+        message = self.message if isinstance(self.message, dict) else {}
+        envelope = message.get('envelope')
+        request_id = envelope.get('request_id') if isinstance(envelope, dict) else message.get('request_id')
+        metrics.emit('ipc', method=message.get('method'), request_id=request_id, status=self.reply_status,
+                     handler_ms=(time.perf_counter() - started) * 1000, reply_bytes=self.reply_bytes)
+
+    def _post(self, owner):
         try:
             if self.path != '/rpc' or not secrets.compare_digest(self.headers.get('Authorization', ''), f'Bearer {owner.token}'):
                 self.answer(403, {'error': 'authentication required', 'type': 'ServiceUnavailable'})
@@ -593,7 +663,8 @@ class _Handler(BaseHTTPRequestHandler):
             raw = self.rfile.read(size)
             if len(raw) != size:
                 raise ValueError('incomplete coordinator message')
-            value = owner.dispatch(json.loads(raw))
+            self.message = json.loads(raw)
+            value = owner.dispatch(self.message)
             self.answer(200, {'result': value})
         except (BrokenPipeError, ConnectionResetError):
             pass  # Disconnect does not undo an admitted command.
@@ -607,6 +678,7 @@ class _Handler(BaseHTTPRequestHandler):
             status = 503
             raw = encode({'type': 'ServiceUnavailable', 'error':
                           'response too large; command may have committed; retain request_id and inspect its durable receipt'})
+        self.reply_bytes, self.reply_status = len(raw), status
         self.send_response(status)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(raw)))

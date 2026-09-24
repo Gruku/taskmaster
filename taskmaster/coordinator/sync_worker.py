@@ -11,7 +11,7 @@ import json
 import sqlite3
 import time
 
-from taskmaster.native import contracts, projection, sync
+from taskmaster.native import contracts, metrics, projection, sync
 from taskmaster.native.contracts import CancelledBeforeExecution
 from taskmaster.native.migrate import encode
 from taskmaster.native.queries import Repository
@@ -248,8 +248,18 @@ def operation_scope(caller_scope, request_id):
     return 'sync-' + hashlib.sha256(encode([caller_scope, request_id]).encode()).hexdigest()
 
 
+# The `sync` metrics record always carries these (0 when nothing was counted).
+SYNC_COUNTERS = dict.fromkeys(('files_selected', 'files_stated', 'files_read', 'bytes_read', 'files_parsed',
+                               'cache_hits', 'cache_misses', 'directories_listed'), 0)
+
+
 def synchronize(owner, **arguments):
-    result = _synchronize(owner, **arguments)
+    with metrics.scope('sync', caller_scope=arguments.get('caller_scope'), request_id=arguments.get('request_id'),
+                       **SYNC_COUNTERS) as record:
+        result = _synchronize(owner, **arguments)
+        if metrics.ENABLED:
+            record.update(state=result.get('state'), imports=len(result.get('imports') or ()),
+                          unresolved=len(result.get('unresolved') or ()))
     # A completed result is already the bounded stored summary.
     return result if result.get('state') == 'synchronized' else bound(result, arguments.get('files') or ())
 
@@ -377,6 +387,8 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
                             continue
                         if rel not in inventory.duplicates and rel not in selected:
                             selected.append(rel)
+            if metrics.ENABLED:
+                metrics.add('files_selected', len(selected))
             if len(selected) > sync.MAX_FILES:
                 pending(None, f'more than {sync.MAX_FILES} projection files; bounded scan refused')
                 return result
