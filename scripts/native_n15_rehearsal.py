@@ -152,6 +152,12 @@ def tree_diff(before: dict, after: dict) -> dict:
             'changed': sorted(k for k in set(before) & set(after) if before[k] != after[k])[:20]}
 
 
+def schema_rows(root) -> list:
+    with ro(root) as con:
+        return [list(r) for r in con.execute("SELECT type,name,tbl_name,sql FROM sqlite_master "
+                                             "ORDER BY type,name")]
+
+
 def domain(root) -> dict:
     """The rollback equivalence (`cutover.domain_digest`) plus authority markers, read-only."""
     from taskmaster.native import cutover
@@ -228,15 +234,24 @@ def cli(root, *args, timed_marks=False, timeout=3600):
 TIMED_CLI = r'''
 import json, sys, time
 from taskmaster.native import cutover
-marks = []
+marks, checks = [], []
 cutover.HOOKS["checkpoint"] = lambda name: marks.append((name, time.perf_counter()))
+_real_integrity = getattr(cutover, "_integrity_ok", None)
+if _real_integrity is not None:
+    def _timed_integrity(connection):
+        begin = time.perf_counter()
+        try:
+            return _real_integrity(connection)
+        finally:
+            checks.append((marks[-1][0] if marks else "start", round(time.perf_counter() - begin, 3)))
+    cutover._integrity_ok = _timed_integrity
 started = time.perf_counter()
 code = 99
 try:
     code = cutover.main(sys.argv[2:])
 finally:
     with open(sys.argv[1], "w", encoding="utf-8") as stream:
-        json.dump({"started": started, "ended": time.perf_counter(), "marks": marks}, stream)
+        json.dump({"started": started, "ended": time.perf_counter(), "marks": marks, "integrity": checks}, stream)
 sys.exit(code)
 '''
 
@@ -272,6 +287,7 @@ def stage_times(marks) -> dict:
         if f'{stage}:begin' in at and f'{stage}:after-commit' in at:
             out[stage] = round(at[f'{stage}:after-commit'] - at[f'{stage}:begin'], 3)
     out['total_s'] = round(marks['ended'] - marks['started'], 3)
+    out['integrity_checks'] = [{'after': after, 's': seconds} for after, seconds in marks.get('integrity', [])]
     return out
 
 
@@ -415,6 +431,19 @@ def carryover_problems(root) -> list:
             con.rollback()
 
 
+def export_backlog(root) -> dict:
+    """Unexported work: dirty unquarantined projection rows and open native export jobs."""
+    with ro(root) as con:
+        def count(sql):
+            try:
+                return con.execute(sql).fetchone()[0]
+            except sqlite3.OperationalError:
+                return None
+        return {'dirty': count("SELECT COUNT(*) FROM projection WHERE dirty=1 AND quarantined=0"),
+                'quarantined': count("SELECT COUNT(*) FROM projection WHERE quarantined=1"),
+                'jobs_open': count("SELECT COUNT(*) FROM projection_jobs WHERE state IN ('pending','claimed','conflict')")}
+
+
 def assert_native_ok(root) -> str | None:
     from taskmaster.native.db import assert_native
     try:
@@ -555,7 +584,8 @@ def cutover_phase(args):
     after = domain(cm)
     record('cutover', step='post-activation checks', authority=after['authority'],
            schema_version=after['schema_version'], migration_state=after['migration_state'],
-           assert_native=assert_native_ok(cm), carryover_problems=problems[:10], graph=native_graph_verify(cm))
+           assert_native=assert_native_ok(cm), carryover_problems=problems[:10], graph=native_graph_verify(cm),
+           export_backlog=export_backlog(cm))
     if problems:
         failures.append('carry-over verification not empty')
     if assert_native_ok(cm):
@@ -582,7 +612,11 @@ def cutover_phase(args):
     record('cutover', step='native reads vs legacy', calls=len(answers), differ_n=len(differ), differ=differ[:25],
            first_call_with_coordinator_start_s=start_s, native_read_s=stats(times),
            index_status_verify_s=verify_s, index_status_clean='Graph check: clean' in text,
-           index_status_lines=[line[:160] for line in text.splitlines() if line.startswith(('Graph', 'Cost'))][:6])
+           index_status_lines=[line[:160] for line in text.splitlines() if line.startswith(('Graph', 'Cost'))][:6],
+           export_backlog_after_first_drain=export_backlog(cm))
+    drained = export_backlog(cm)
+    if drained['dirty'] or drained['jobs_open']:
+        failures.append('dirty rows or open export jobs remain after the first drain')
     if differ:
         failures.append(f'{len(differ)} native answers differ')
     if 'Graph check: clean' not in text:
@@ -598,10 +632,11 @@ def cutover_phase(args):
             result, seconds = timed(lambda: client.sync())
             total += seconds
             imports = result.get('imports', []) if isinstance(result, dict) else []
+            notices = result.get('notices', []) if isinstance(result, dict) else []
             rounds.append({'s': seconds, 'state': result.get('state') if isinstance(result, dict) else None,
                            'imports': len(imports),
                            'import_states': sorted({str(i.get('state')) for i in imports}),
-                           'notices': len(result.get('notices', [])) if isinstance(result, dict) else None})
+                           'notices': len(notices), 'notice_heads': [str(n)[:120] for n in notices[:10]]})
             if not any(i.get('state') == 'uncertain' for i in imports) and \
                     not any('time budget' in str(n) for n in (result.get('notices', []) if isinstance(result, dict) else [])):
                 break
@@ -609,7 +644,7 @@ def cutover_phase(args):
     record('cutover', step='first explicit sync after activation', rounds=len(rounds), total_s=round(total, 1),
            per_round=rounds, second_sync_s=second_s, second_imports=len(second.get('imports', [])),
            git_changed=len(git(cm, 'status', '--porcelain', '--', '.taskmaster').splitlines()),
-           carry_forward_reference_s=350)
+           carry_forward_reference_s=350, export_backlog_after_sync=export_backlog(cm))
     # A normal write, twice (cold coordinator start, then warm).
     task = facts['sample']['task'][0]
     from tests.native_twins import committed
@@ -634,9 +669,10 @@ def crash_phase(args):
     for point in points:
         slug = point.replace(':', '-').replace('.', '-')
         outcome = {'point': point}
-        for twin in ('r', 'b'):
+        for twin in args.twins:
             root = init_mini(BASE / 'crash' / f'{slug}-{twin}', TMN / 'golden' / '.taskmaster')
             pre = domain(root)
+            pre['schema'] = schema_rows(root)
             pre_projection = tree(root, local=False)
             assert pre['digest'] == facts['domain_digest'], 'mini copy does not match the golden digest'
             code, err = crash(root, point)
@@ -698,6 +734,16 @@ def rollback_check(root, point, pre, pre_projection, failures) -> dict:
     elif code != 0 or not (report or {}).get('ok'):
         failures.append(f'{point}: rollback failed (exit {code})')
     out['digest_exact'] = after['digest'] == pre['digest']
+    schema_after = schema_rows(root)
+    out['sqlite_master_identical'] = schema_after == pre['schema']
+    if not out['sqlite_master_identical']:
+        before_names = {(r[0], r[1]): r[3] for r in pre['schema']}
+        after_names = {(r[0], r[1]): r[3] for r in schema_after}
+        out['sqlite_master_diff'] = {
+            'added': sorted(map(list, set(after_names) - set(before_names)))[:20],
+            'removed': sorted(map(list, set(before_names) - set(after_names)))[:20],
+            'sql_changed': sorted(list(k) for k in set(before_names) & set(after_names)
+                                  if before_names[k] != after_names[k])[:20]}
     out['projection_files_unchanged'] = tree(root, local=False) == pre_projection
     from taskmaster.admission import assert_compatible
     try:
@@ -706,63 +752,110 @@ def rollback_check(root, point, pre, pre_projection, failures) -> dict:
         out['bridge_admits'] = True
     except Exception as error:  # noqa: BLE001
         out['bridge_admits'] = f'{type(error).__name__}: {error}'
-    if not out['digest_exact'] or after['journal'] or after['authority'] not in ('legacy', None) \
+    if not out['digest_exact'] or not out['sqlite_master_identical'] or after['journal'] or after['authority'] not in ('legacy', None) \
             or out['bridge_admits'] is not True or not out['projection_files_unchanged']:
         failures.append(f'{point}: rolled-back store is not the exact pre-cutover legacy store')
     return out
 
 
 # ── 5 acked write ───────────────────────────────────────────────────────────
-def acked_discard(facts) -> list:
-    """Crash at compare, leak a write (row and its projection file, as an old client exporting
-    would), then `--rollback --discard-writes-since-backup`: the exact pre-cutover digest and
-    byte-identical projection files must come back."""
+def runbook_restore_script() -> str:
+    """The runbook's manual-restore block, verbatim (the operator saves it as restore_backup.py)."""
+    text = (WT / 'docs' / 'runbooks' / 'native-cutover.md').read_text(encoding='utf-8')
+    fence = '```python manual-restore\n'
+    begin = text.index(fence) + len(fence)
+    return text[begin:text.index('\n```', begin) + 1]
+
+
+def operator_cli(root, *args):
+    """A runbook CLI line as written; the real scan refuses this machine's other-project plugin
+    servers, so it is re-run with --confirm-stopped exactly as runbook section 2 prescribes."""
+    code, report, _, seconds, _ = cli(root, *args, '--json')
+    literal = {'exit': code, 'refusals': (report or {}).get('refusals')}
+    if code == 2 and all('processes from the launcher inventory' in r for r in (report or {}).get('refusals', [])):
+        code, report, _, seconds, _ = cli(root, *args, '--json', '--confirm-stopped')
+    return code, report, seconds, literal
+
+
+def acked_manual_restore(facts) -> list:
+    """Crash at compare and leak a write (row and its projection file). `--rollback` refuses;
+    the runbook's manual restore, run literally, must end at the exact pre-cutover digest and
+    byte-identical projection files with the leaked write kept aside, and a fresh cutover on
+    that copy must then succeed."""
     failures = []
-    root = init_mini(BASE / 'acked-discard', TMN / 'golden' / '.taskmaster')
+    root = init_mini(BASE / 'acked-restore', TMN / 'golden' / '.taskmaster')
     pre, pre_files = domain(root), tree(root, local=False)
+    sidecar = db_path(root).parent / 'id-reservations.json'
+    pre_sidecar = sha(sidecar.read_bytes()) if sidecar.exists() else None
     code, _ = crash(root, 'compare:before-commit')
     if code != 37:
-        failures.append(f'discard: crash exit {code}')
+        failures.append(f'restore: crash exit {code}')
     with rw(root) as con:
         bug = con.execute("SELECT id FROM entities WHERE kind='bug' AND deleted=0 ORDER BY id LIMIT 1").fetchone()[0]
         con.execute('UPDATE entities SET body=COALESCE(body,\'\')||? WHERE kind=\'bug\' AND id=?', (ACKED_MARK, bug))
-        rel = con.execute("SELECT file FROM projection WHERE kind='bug' AND id=?", (bug,)).fetchone()
-    if rel:
-        path = root / '.taskmaster' / rel[0]
-        path.write_bytes(path.read_bytes() + ACKED_MARK.encode('utf-8'))
+        rel = con.execute("SELECT file FROM projection WHERE kind='bug' AND id=?", (bug,)).fetchone()[0]
+    path = root / '.taskmaster' / rel
+    path.write_bytes(path.read_bytes() + ACKED_MARK.encode('utf-8'))
     leaked_files = tree_diff(pre_files, tree(root, local=False))
     code, report, _, seconds, _ = cli(root, '--rollback', '--confirm-stopped', '--json')
     text = ' '.join((report or {}).get('refusals', []))
-    refused = code == 2 and f'"{bug}"' in text and (not rel or 'projection files differ' in text)
-    record('acked', step='discard: plain rollback after a leaked row + file write', bug=bug, exit=code,
-           refused_naming_row_and_file=refused, leaked_files=leaked_files,
-           refusal_head=text[:500].replace(ACKED_MARK, '<mark>'))
+    refused = code == 2 and f'"{bug}"' in text
+    record('acked', step='restore: plain rollback after a leaked row + file write', bug=bug, exit=code,
+           refused_naming_entity=refused, also_names_file=rel in text, leaked_files=leaked_files,
+           refusal_head=text[:600].replace(ACKED_MARK, '<mark>'))
     if not refused:
-        failures.append('discard: plain rollback did not refuse naming the row and the file')
-    code, report, _, seconds, _ = cli(root, '--rollback', '--discard-writes-since-backup', '--confirm-stopped',
-                                      '--json')
+        failures.append('restore: plain rollback did not refuse naming the entity')
+    # Runbook step 1: save the block as restore_backup.py, run `python restore_backup.py <project>`.
+    script = BASE / 'restore_backup.py'
+    script.write_text(runbook_restore_script(), encoding='utf-8')
+    started = time.perf_counter()
+    done = subprocess.run([PYTHON, str(script), str(root)], cwd=root, env=clean_env(), capture_output=True,
+                          text=True, encoding='utf-8', errors='replace', timeout=1800)
+    step1 = {'exit': done.returncode, 'seconds': round(time.perf_counter() - started, 2),
+             'stdout_tail': done.stdout.strip()[-300:], 'stderr_tail': done.stderr.strip()[-600:]}
+    # Step 2: clear the fence the restored store carries.
+    code2, report2, seconds2, literal2 = operator_cli(root, '--rollback', '--clear-orphan-fence')
+    # Step 3: verify with the dry run.
+    code3, report3, _, literal3 = operator_cli(root, '--dry-run')
+    state3 = (report3 or {}).get('store_state') or {}
     after, after_files = domain(root), tree(root, local=False)
-    exact = after['digest'] == pre['digest']
-    files_same = after_files == pre_files
-    saved = [(report or {}).get(k) for k in ('pre_rollback_copy', 'pre_rollback_files')]
-    record('acked', step='discard: --rollback --discard-writes-since-backup', exit=code, seconds=seconds,
-           report=brief_report(report), digest_exact=exact, projection_files_byte_identical=files_same,
-           report_digest_matches=(report or {}).get('domain_digest') == pre['digest'],
-           files_diff=None if files_same else tree_diff(pre_files, after_files), authority=after['authority'],
-           journal=after['journal'], migration_state=after['migration_state'],
-           saved_copies_exist=[bool(p) and Path(p).exists() for p in saved])
-    if code != 0 or not exact or not files_same or after['journal'] or after['migration_state'] != 'ready':
-        failures.append('discard: rollback did not restore the exact pre-cutover store and files')
+    exact, files_same = after['digest'] == pre['digest'], after_files == pre_files
+    sidecar_same = (sha(sidecar.read_bytes()) if sidecar.exists() else None) == pre_sidecar
+    asides = sorted((db_path(root).parent / 'backups').glob('aside-*'))
+    kept_row = kept_file = False
+    if asides:
+        aside = asides[-1]
+        with closing(sqlite3.connect(f'{(aside / "store.db").resolve().as_uri()}?mode=ro', uri=True)) as con:
+            row = con.execute("SELECT body FROM entities WHERE kind='bug' AND id=?", (bug,)).fetchone()
+        kept_row = bool(row and (row[0] or '').endswith(ACKED_MARK))
+        saved = aside / 'files' / rel
+        kept_file = saved.exists() and saved.read_bytes().endswith(ACKED_MARK.encode('utf-8'))
+    record('acked', step='restore: runbook manual restore (steps 1-3, literal)', script_step=step1,
+           clear_fence={'exit': code2, 'seconds': seconds2, 'literal': literal2, 'ok': (report2 or {}).get('ok'),
+                        'warnings': (report2 or {}).get('warnings'), 'error': (report2 or {}).get('error'),
+                        'refusals': (report2 or {}).get('refusals')},
+           verify_dry_run={'exit': code3, 'literal': literal3, 'authority': state3.get('authority'),
+                           'migration_state': state3.get('migration_state'),
+                           'refusals': (report3 or {}).get('refusals')},
+           digest_exact=exact, projection_files_byte_identical=files_same, sidecar_identical=sidecar_same,
+           files_diff=None if files_same else tree_diff(pre_files, after_files), journal=after['journal'],
+           authority=after['authority'], migration_state=after['migration_state'],
+           aside=asides[-1].name if asides else None, leaked_row_kept_aside=kept_row, leaked_file_kept_aside=kept_file)
+    if step1['exit'] != 0 or code2 != 0 or code3 != 0 or state3.get('authority') != 'legacy' \
+            or state3.get('migration_state') != 'ready' or not exact or not files_same or not sidecar_same \
+            or after['journal'] or not kept_row or not kept_file:
+        failures.append('restore: the manual restore did not return the exact pre-cutover store and files '
+                        'with the leaked write kept aside')
     code, report, _, seconds, _ = cli(root, '--confirm-stopped', '--json')
     completed = (report or {}).get('completed_stages') or []
     same = index_hash(committed_index(root)) == facts['committed_hash']
-    record('acked', step='discard: fresh cutover on the rolled-back copy', exit=code, seconds=seconds,
+    record('acked', step='restore: fresh cutover on the restored copy', exit=code, seconds=seconds,
            completed=completed, assert_native=assert_native_ok(root), committed_identical_to_golden=same,
            carryover_problems=carryover_problems(root)[:5], graph_clean=native_graph_verify(root)['clean'],
            warnings=(report or {}).get('warnings'), error=(report or {}).get('error'),
            refusals=(report or {}).get('refusals'))
     if code != 0 or not completed or completed[-1] != 'release' or assert_native_ok(root) or not same:
-        failures.append('discard: a fresh cutover after the discard rollback did not succeed')
+        failures.append('restore: a fresh cutover after the manual restore did not succeed')
     return failures
 
 
@@ -802,14 +895,27 @@ def acked_dirty(facts) -> list:
            assert_native=assert_native_ok(root), carryover_problems=carryover_problems(root)[:5],
            graph_clean=native_graph_verify(root)['clean'], warnings=(report or {}).get('warnings'),
            error=(report or {}).get('error'))
-    if code != 0 or not carried or not exported or assert_native_ok(root):
-        failures.append('dirty: resume did not carry and export the dirty leaked write')
+    backlog_after_resume = export_backlog(root)
+    with tools(root, native=True) as bs:  # The first native drain.
+        bs.backlog_status()
+    drained = export_backlog(root)
+    exported_after_drain = ACKED_MARK.strip().encode('utf-8') in path.read_bytes()
+    record('acked', step='dirty: first native drain', export_backlog_after_resume=backlog_after_resume,
+           export_backlog_after_drain=drained, exported_after_drain=exported_after_drain)
+    if code != 0 or not carried or not exported_after_drain or assert_native_ok(root) or drained['dirty'] \
+            or drained['jobs_open']:
+        failures.append('dirty: the dirty leaked write was not carried and exported by the first drain')
     return failures
 
 
 def acked(args):
     facts = state()
     failures = []
+    if args.only == 'restore':
+        failures += acked_manual_restore(facts)
+        record('acked', only='restore', verdict='pass' if not failures else 'fail', failures=failures,
+               live=live_fingerprint())
+        return
     root = init_mini(BASE / 'acked', TMN / 'golden' / '.taskmaster')
     code, _ = crash(root, 'compare:before-commit')
     if code != 37:
@@ -852,7 +958,7 @@ def acked(args):
         failures.append('resume did not carry the acknowledged write')
     if not drifts or not drift_names_bug:
         failures.append('resume recorded no drift row naming the write')
-    failures += acked_discard(facts)
+    failures += acked_manual_restore(facts)
     failures += acked_dirty(facts)
     record('acked', verdict='pass' if not failures else 'fail', failures=failures, live=live_fingerprint())
 
@@ -917,7 +1023,12 @@ def escape(args):
                     for f, i in fields.items()}
         with ro(fresh) as con:
             schema = con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+        with ro(fresh) as con:
+            quarantined = [r[0] for r in con.execute('SELECT file FROM projection WHERE quarantined=1 ORDER BY file')]
+        native_quarantined = export_backlog(cm)['quarantined']
         record('escape', build=name, adopt_s=adopt_s, schema_version=schema[0] if schema else None,
+               quarantined_after_adoption=quarantined, native_quarantined=native_quarantined,
+               b339_present='bug:B-339' in adopted, b339_in_native='bug:B-339' in authored,
                authored=len(authored), adopted=len(adopted), missing_n=len(missing), missing=missing[:20],
                extra_n=len(extra), extra=extra[:10],
                mismatched={f: {'n': len(v), 'keys': v[:10]} for f, v in mismatch.items()},
@@ -1054,6 +1165,8 @@ def main():
     parser.add_argument('--phase', required=True, choices=list(PHASES))
     parser.add_argument('--source', type=Path, default=LIVE, help='setup: the repo to clone (default: live)')
     parser.add_argument('--run', help='rerun namespace: copies go under <tmn>/<run> (fresh from the golden seed)')
+    parser.add_argument('--twins', default='rb', help="crash: which twins to run, 'r' resume, 'b' rollback")
+    parser.add_argument('--only', choices=['restore'], help='acked: run only the manual-restore check')
     parser.add_argument('--points', help='crash: comma-separated checkpoint names (default: the representative set)')
     args = parser.parse_args()
     TMN = args.tmn.resolve()
