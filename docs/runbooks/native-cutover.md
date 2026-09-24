@@ -157,11 +157,15 @@ What each stage does:
   pending. A file whose bytes differ from its digest gets no base, so its first sync takes the
   ordinary path.
 - The sync result reports `imports` (domain writes) and `observed` (published bytes recorded as
-  a base) separately. A write the time budget runs out on gets a 5 s grace period. Then it is
-  reported `committed` (from its receipt), `not_committed` (it was still queued, so it is
-  cancelled), or `uncertain`. `uncertain` means the writer is still running the write, and it
-  is the only case where you need to inspect the receipt. Unsettled observes are listed under
-  `observes`, never as imports.
+  a base) separately. A write the time budget runs out on gets a grace period. The grace and
+  the completion receipt share one 5 s allowance, so a reply comes within the budget plus 5 s.
+  The write is then reported as one of three outcomes:
+  - `committed`: its receipt exists.
+  - `not_committed`: it was cancelled before the writer ran it.
+  - `uncertain`: the writer is still running it, or was interrupted and left no receipt. This
+    is the only case where you need to inspect the receipt.
+
+  Unsettled observes are listed under `observes`, never as imports.
 - An old (bridge-only) client has to refuse the store with `Unsupported Taskmaster schema_version=2`.
   This is tested in `test_pre_native_clients_are_refused_by_an_activated_store`.
 

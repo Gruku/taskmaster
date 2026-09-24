@@ -367,3 +367,115 @@ def test_no_file_is_started_inside_the_time_reserve(root, monkeypatch):
     assert submitted == ["sync.begin"], submitted
     assert REL in result["unresolved"] and any("time budget" in n for n in result["notices"]), result
     assert result["imports"] == []
+
+
+# ── 5. Review follow-ups: cancel/retry, error futures, reply bound ───────────
+
+def _wait(predicate, seconds=10):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def test_a_retry_after_a_cancel_the_queue_could_not_undo_runs_afresh(root):
+    """The writer already dequeued the command (it waits at the admission gate), so the
+    cancel cannot remove it; the same key submitted again must run, not inherit the
+    cancelled future."""
+    from taskmaster.native.contracts import CancelledBeforeExecution
+    with Coordinator(root) as owner:
+        client = Client(root, autostart=False)
+        owner.pause_writer()
+        try:
+            first = owner.submit(request(client, "retry-key", "Cancelled first"))
+            assert _wait(lambda: owner.queue.empty())  # dequeued, held at the gate
+            assert owner.cancel("service-tests", "retry-key")["state"] == "cancelled_before_execution"
+            second = owner.submit(request(client, "retry-key", "Cancelled first"))
+            assert second is not first
+        finally:
+            owner.resume_writer()
+        with pytest.raises(CancelledBeforeExecution):
+            first.result(timeout=30)
+        assert second.result(timeout=30)["commit_seq"] > 0
+        assert title(root) == "Cancelled first"
+        assert _wait(lambda: not owner.pending)
+
+
+def test_a_cancelled_future_in_the_file_loop_is_a_pending_notice(root, monkeypatch):
+    from concurrent.futures import Future
+    from taskmaster.native.contracts import CancelledBeforeExecution
+    with Coordinator(root) as owner:
+        client = Client(root, autostart=False)
+        client.sync(files=[REL])
+        edit(root, "Cancelled elsewhere")
+        original = owner.submit
+
+        def submit(envelope):
+            if envelope["operation"] != "sync.apply":
+                return original(envelope)
+            future = Future()
+            future.set_exception(CancelledBeforeExecution("cancelled before execution"))
+            return future
+        owner.submit = submit
+        result = owner.sync(caller_scope="cancelled", request_id="one", files=[REL], timeout=30)
+    (item,) = result["imports"]
+    assert item["state"] == "not_committed" and item["may_have_committed"] is False, result
+    assert REL in result["unresolved"] and title(root) == "Service task"
+
+
+def test_settle_maps_writer_failures_by_what_is_known(root):
+    from concurrent.futures import Future
+    from taskmaster.coordinator.protocol import ServiceUnavailable
+    from taskmaster.native.contracts import CancelledBeforeExecution, Conflict
+    with Coordinator(root) as owner:
+        def failed(error):
+            future = Future()
+            future.set_exception(error)
+            return future
+        interrupted = failed(ServiceUnavailable("writer interrupted; retry the same request_id"))
+        assert sync_worker._settle(owner, interrupted, "scope", "never-committed", 0.1) == (None, "uncertain")
+        cancelled = failed(CancelledBeforeExecution("cancelled while queued"))
+        assert sync_worker._settle(owner, cancelled, "scope", "key", 0.1) == (None, "not_committed")
+        with pytest.raises(Conflict):  # a refusal: rolled back, reported as the file's reason
+            sync_worker._settle(owner, failed(Conflict("revision changed")), "scope", "key", 0.1)
+        # A receipt proves the commit whatever the transport said.
+        client = Client(root, autostart=False)
+        receipt = client.execute(request(client, "committed-key", "Committed"))["receipt"]
+        lost = failed(ServiceUnavailable("writer interrupted; retry the same request_id"))
+        assert sync_worker._settle(owner, lost, "service-tests", "committed-key", 0.1) == (receipt, "committed")
+
+
+def test_the_reply_stays_within_the_budget_plus_the_finish_minimum(root, monkeypatch):
+    """Grace (import) and sync.finish share one FINISH_TIMEOUT allowance past the budget."""
+    monkeypatch.setattr(sync_worker, "IMPORT_GRACE", 5)
+    release = threading.Event()
+    with Coordinator(root) as owner:
+        client = Client(root, autostart=False)
+        client.sync(files=[REL])
+        edit(root, "Committed in the grace")
+        operations = []
+        original = owner.submit
+
+        def submit(envelope):
+            operations.append(envelope["operation"])
+            if envelope["operation"] == "sync.finish":
+                owner.checkpoint = _block_writer_at_admission(owner, release=release)
+            return original(envelope)
+        owner.submit = submit
+
+        def checkpoint(stage):
+            if stage == "sync_prepared":
+                owner.checkpoint = _block_writer_at_admission(owner, seconds=3.0)
+        owner.checkpoint = checkpoint
+        started = time.monotonic()
+        try:
+            result = owner.sync(caller_scope="bound", request_id="one", files=[REL], timeout=1)
+        finally:
+            elapsed = time.monotonic() - started
+            release.set()
+    assert [item["state"] for item in result["imports"]] == ["accepted"], result
+    assert "sync.finish" in operations, (operations, result)
+    assert any("completion receipt uncertain" in n for n in result["notices"]), result
+    assert elapsed < 1 + sync_worker.FINISH_TIMEOUT + 1.0, elapsed  # was budget + grace + 5 s

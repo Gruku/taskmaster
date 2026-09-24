@@ -190,7 +190,9 @@ class Coordinator:
             if self.stopping.is_set():
                 raise ServiceUnavailable('coordinator is stopping; retry the same request_id')
             old = self.pending.get(key)
-            if old is not None:
+            # A cancelled entry the writer had already dequeued stays pending until it
+            # fails at admission; a retry of the key is new work, never that cancelled future.
+            if old is not None and not old.cancelled.is_set():
                 if old.request != request:
                     raise contracts.Conflict('request_id reused with a different queued payload')
                 return old.future
@@ -267,7 +269,9 @@ class Coordinator:
                     work.future.set_exception(error)
                 finally:
                     with self.guard:
-                        self.pending.pop((work.request['caller_scope'], work.request['request_id']), None)
+                        key = (work.request['caller_scope'], work.request['request_id'])
+                        if self.pending.get(key) is work:  # a retry may have replaced a cancelled entry
+                            del self.pending[key]
         finally:
             if connection is not None:
                 connection.close()
