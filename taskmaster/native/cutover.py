@@ -275,12 +275,6 @@ def sidecar_refusal(root: Path) -> str | None:
     return None
 
 
-def _flush_hint(reasons) -> str:
-    return ("Refusing cutover: " + "; ".join(reasons) + ". Flush them first: run any Taskmaster tool call "
-            "(e.g. backlog_status) through a bridge client so the legacy store drains its exports, stop it "
-            "again, then retry.")
-
-
 # ── Preconditions ────────────────────────────────────────────────────────────
 
 def _process_label(process: dict) -> str:
@@ -372,12 +366,17 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def projection_files(root: Path) -> list[dict]:
+def projection_files(root: Path, connection=None) -> list[dict]:
+    """The projection set: files the store tracks in its `projection` table (backlog.yaml,
+    task/bug/... documents) that exist on disk. Other files under `.taskmaster/` are the
+    user's and are never archived, compared or restored."""
     base = Path(root) / ".taskmaster"
+    if connection is None or not _has_table(connection, "projection"):
+        return []
     files = []
-    for path in sorted(base.rglob("*")):
-        rel = path.relative_to(base).as_posix()
-        if path.is_file() and not rel.startswith("local/") and ".tmp." not in rel:
+    for (rel,) in connection.execute("SELECT file FROM projection ORDER BY file").fetchall():
+        path = base / rel
+        if path.is_file():
             files.append({"path": rel, "sha256": _sha256(path), "size": path.stat().st_size})
     return files
 
@@ -427,18 +426,25 @@ def verify_backup(path: Path, expected_digest: str | None = None) -> str:
 
 
 def write_backup(connection, root: Path, carryover: dict) -> dict:
+    """Back up the store while `connection` holds BEGIN IMMEDIATE and has written nothing.
+
+    The copy is made by a second, read-only connection: no other connection can commit
+    while the lock is held, so the copy, the domain digest and the caller's carry-over
+    snapshot (taken in the same locked transaction) all describe one committed state.
+    """
+    if not connection.in_transaction:
+        raise RuntimeError("write_backup requires the caller's BEGIN IMMEDIATE")
     target = _backup_target(root)
     temp = target.with_name(target.name + ".partial")
     temp.unlink(missing_ok=True)
-    with closing(sqlite3.connect(temp)) as destination:
-        connection.backup(destination)
+    with closing(_connect_readonly(database_path(root))) as reader, closing(sqlite3.connect(temp)) as destination:
+        reader.backup(destination)
     os.replace(temp, target)
     _fsync(target)
-    live = domain_digest(connection)
-    backup_digest = verify_backup(target, live)
+    backup_digest = verify_backup(target, domain_digest(connection))
     sidecar = database_path(root).parent / "id-reservations.json"
     sidecar_sha = _sha256(sidecar) if sidecar.exists() else None
-    archive = archive_projection(root, target.with_suffix(".projection.zip"))
+    archive = archive_projection(root, target.with_suffix(".projection.zip"), connection)
     sidecar_copy = None
     if sidecar.exists():
         sidecar_copy = target.with_name(target.stem + ".id-reservations.json")
@@ -447,7 +453,7 @@ def write_backup(connection, root: Path, carryover: dict) -> dict:
     manifest = {
         "created_at": _now(), "store": str(database_path(root)), "backup": str(target),
         "backup_sha256": _sha256(target), "domain_digest": backup_digest,
-        "projection_files": projection_files(root),
+        "projection_files": projection_files(root, connection),
         "id_reservations": None if sidecar_copy is None else {
             "source": str(sidecar), "copy": str(sidecar_copy), "sha256": _sha256(sidecar_copy)},
         "projection_archive": archive,
@@ -459,6 +465,26 @@ def write_backup(connection, root: Path, carryover: dict) -> dict:
     return {"path": str(target), "manifest": str(manifest_path), "domain_digest": backup_digest,
             "sha256": manifest["backup_sha256"], "projection_files": len(manifest["projection_files"]),
             "projection_archive": archive, "sidecar_sha256": sidecar_sha}
+
+
+def legacy_flush(root: Path, token: str) -> dict:
+    """Drain the legacy store's pending exports and export intents under the fence.
+
+    The cutover acts as one bridge client admitted past its own fence (`migration_owner`):
+    one no-op legacy write transaction recovers export intents, imports hand edits and
+    exports every dirty projection row, exactly as a bridge client's next call would. No
+    external client can do this while the fence is up, so the cutover must.
+    """
+    from taskmaster import backlog_server as server  # Installs the exporter's derivers.
+    from taskmaster import store as legacy
+    with migration_owner(token):
+        instance = server._store_for(Path(root) / ".taskmaster" / "backlog.yaml")
+        try:
+            with instance.transaction(tool="native_cutover_flush"):
+                pass
+        finally:
+            legacy.close_thread_connection()
+    return {"flushed": True}
 
 
 # ── Activation core (production; the twins fixture flips authority through it) ──
@@ -589,29 +615,42 @@ class _Run:
         # The progress changelog itself is reconciled inside the activation transaction,
         # after the final backfill (`carryover.reconcile_progress`): a meta entry written
         # after its seed marker would never be copied. Here: no export may be stranded.
+        flushed = None
+        before = reconcile_counts(self.connection, self.root)
+        if _blocking(before):
+            # No bridge client can flush through the fence, so the cutover does it itself.
+            flushed = legacy_flush(self.root, self.token)
+            self.log(f"[reconcile] flushed pending legacy exports ({'; '.join(_blocking(before))})")
         self._begin_owned()
         counts = reconcile_counts(self.connection, self.root)
-        blocking = _blocking(counts)
-        if blocking:
-            self.connection.rollback()
-            raise CutoverAborted(_flush_hint(blocking) + " The fence is up: run --rollback, flush, and start again.")
-        self._commit_stage("reconcile", {"counts": counts, "domain_digest": domain_digest(self.connection)})
+        carried = _blocking(counts)
+        if carried:
+            # Never trap an acknowledged write: what the flush could not export is carried
+            # (verify_carryover checks the dirty flags survive) and reported as pending.
+            warning = ("carried unexported legacy projection work into the cutover: " + "; ".join(carried)
+                       + " (the rows are kept; backlog_store_status on the native store lists them as pending)")
+            self.report.setdefault("warnings", []).append(warning)
+            self.log(f"warning: {warning}")
+        self._commit_stage("reconcile", {"counts_before": before, "counts": counts, "flushed": flushed,
+                                         "carried": carried, "domain_digest": domain_digest(self.connection)})
 
     def backup(self):
-        try:
-            with migration_owner(self.token):
-                carryover = _carryover().snapshot_carryover(self.connection)
-        except ValueError as error:
-            raise CutoverAborted(f"carry-over snapshot failed: {error}") from error
-        if self.connection.in_transaction:
-            raise CutoverAborted("snapshot_carryover left a transaction open")
-        result = write_backup(self.connection, self.root, carryover)
+        # The carry-over snapshot, the backup copy, its digest and the projection archive are
+        # all taken while this connection holds the write lock: one committed state.
         self._begin_owned()
-        if domain_digest(self.connection) != result["domain_digest"]:
-            self.connection.rollback()
-            raise CutoverAborted("the store changed while it was being backed up")
-        # The snapshot commits with the stage row: resume never depends on the external manifest.
-        self._commit_stage("backup", {**result, "carryover": carryover})
+        try:
+            try:
+                with migration_owner(self.token):
+                    carryover = _carryover().snapshot_carryover(self.connection)
+            except ValueError as error:
+                raise CutoverAborted(f"carry-over snapshot failed: {error}") from error
+            result = write_backup(self.connection, self.root, carryover)
+            # The snapshot commits with the stage row: resume never depends on the external manifest.
+            self._commit_stage("backup", {**result, "carryover": carryover})
+        except BaseException:
+            if self.connection.in_transaction:
+                self.connection.rollback()
+            raise
 
     def backfill(self):
         def checkpoint(sub):
@@ -676,10 +715,15 @@ class _Run:
         sidecar = database_path(self.root).parent / "id-reservations.json"
         if (_sha256(sidecar) if sidecar.exists() else None) != detail.get("sidecar_sha256"):
             reasons.append("id-reservations.json changed")
+        if detail.get("projection_archive"):
+            divergence = projection_divergence(self.root, _archived(detail["projection_archive"]), self.connection)
+            if any(divergence.values()):
+                reasons.append(f"projection files differ from the backup: {_summarize_files(divergence)}")
         return reasons
 
     def run_from(self, done):
-        done, absorbed = list(done), 0
+        done = list(done)
+        absorbed = sum(1 for entry in journal(self.connection) if entry["stage"] == "drift")
         while True:
             pending = [stage for stage in STAGES if stage not in done]
             if not pending:
@@ -689,7 +733,7 @@ class _Run:
                 reasons = self._drift()
                 if reasons:
                     absorbed += 1
-                    if absorbed > MAX_DRIFT_ABSORPTIONS:
+                    if absorbed > MAX_DRIFT_ABSORPTIONS:  # Per cutover: drift rows persist across resumes.
                         raise CutoverAborted("the store keeps changing under the fence (" + "; ".join(reasons)
                                              + "): a client is still writing. Stop it, then --resume or --rollback")
                     self.connection.execute("BEGIN IMMEDIATE")
@@ -745,7 +789,9 @@ def dry_run(root: Path, *, confirm_stopped: bool = False) -> dict:
             counts = reconcile_counts(connection, root)
             report["counts"] = counts
             if not state["native"] and state["migration_state"] == "ready":
-                report["refusals"] += [_flush_hint(_blocking(counts))] if _blocking(counts) else []
+                if _blocking(counts):
+                    report["warnings"].append("; ".join(_blocking(counts)) + ": the cutover flushes them itself "
+                                              "under the fence (reconcile stage)")
                 report["refusals"] += [r for r in [handover_refusal(connection)] if r]
                 try:
                     assert_compatible(connection)
@@ -763,10 +809,11 @@ def dry_run(root: Path, *, confirm_stopped: bool = False) -> dict:
     report["quiesce"] = quiesced
     report["refusals"] += quiesced["refusals"]
     report["warnings"] += quiesced["warnings"]
-    report["projection_files"] = len(projection_files(root))
+    with closing(_connect_readonly(path)) as connection:
+        report["projection_files"] = len(projection_files(root, connection))
     report["planned"] = [] if report["refusals"] else [
         "fence: publish meta.migration_state='migrating' with owner/token under the ownership lock",
-        "reconcile: re-check unexported projection work under the fence",
+        "reconcile: flush pending legacy exports under the fence (as one admitted bridge client)",
         f"backup: {path.parent / 'backups' / 'pre-native-<UTC ts>.db'} + manifest ({report['projection_files']} projection files)",
         f"backfill: stage {counts['entities']} entities and {counts['changes']} changes into native tables",
         "compare: trial activation, rolled back; verify_carryover must report nothing lost",
@@ -795,8 +842,8 @@ def cutover(root: Path, *, confirm_stopped: bool = False, resume: bool = False, 
     activated = state["native"] or "activate" in state["completed_stages"]
     if resume and activated:
         return _finish_release(path, token=token, log=log)
-    if not resume and not refusals and _blocking(counts):
-        refusals.append(_flush_hint(_blocking(counts)))
+    if not resume and _blocking(counts):
+        log("note: " + "; ".join(_blocking(counts)) + " will be flushed by the cutover under the fence")
     if not resume and not refusals and handovers:
         refusals.append(handovers)
     if not activated:
@@ -831,6 +878,7 @@ def cutover(root: Path, *, confirm_stopped: bool = False, resume: bool = False, 
                         {"from_owner": fence["owner"], "resume_after": done[-1] if done else None})
                 connection.commit()
                 log(f"resuming cutover {run_token} after stage {done[-1] if done else '-'}")
+                undo_rollback_files(connection, root, log)
             else:
                 owner = f"cutover:{uuid.uuid4().hex[:8]}@{socket.gethostname()}:{os.getpid()}"
                 run_token = uuid.uuid4().hex
@@ -952,13 +1000,13 @@ def _summarize_files(divergence: dict) -> str:
 
 # ── Projection-file archive (taken with every backup) ────────────────────────
 
-def archive_projection(root: Path, target: Path) -> dict:
-    """Zip the projection files (the manifest's list) beside the backup."""
+def archive_projection(root: Path, target: Path, connection) -> dict:
+    """Zip the projection set beside the backup."""
     base = Path(root) / ".taskmaster"
-    files = projection_files(root)
+    files = projection_files(root, connection)
     temp = target.with_name(target.name + ".partial")
     temp.unlink(missing_ok=True)
-    with zipfile.ZipFile(temp, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+    with zipfile.ZipFile(temp, "w", compression=zipfile.ZIP_DEFLATED, strict_timestamps=False) as archive:
         for entry in files:
             archive.write(base / entry["path"], entry["path"])
     os.replace(temp, target)
@@ -974,36 +1022,75 @@ def _archived(detail: dict) -> dict[str, bytes]:
         return {name: archive.read(name) for name in archive.namelist()}
 
 
-def projection_divergence(root: Path, archived: dict[str, bytes]) -> dict:
-    """Projection files on disk vs the archived generation: changed, added, removed paths."""
-    base = Path(root) / ".taskmaster"
-    disk = {entry["path"]: entry["sha256"] for entry in projection_files(root)}
+def projection_divergence(root: Path, archived: dict[str, bytes], connection) -> dict:
+    """The projection set on disk vs the archived generation: changed, added, removed paths.
+    `added` are files the store now tracks that the archive lacks (e.g. a leaked document)."""
+    disk = {entry["path"]: entry["sha256"] for entry in projection_files(root, connection)}
     then = {name: hashlib.sha256(content).hexdigest() for name, content in archived.items()}
     return {"changed": sorted(p for p in disk.keys() & then.keys() if disk[p] != then[p]),
             "added": sorted(disk.keys() - then.keys()),
-            "removed": sorted(then.keys() - disk.keys())} if base.exists() else {}
+            "removed": sorted(then.keys() - disk.keys())}
 
 
-def _restore_files(root: Path, archived: dict[str, bytes], divergence: dict, saved_db: Path) -> str:
-    """Save the divergent files beside the pre-rollback copy, then put the archived generation back."""
+def _save_divergent_files(root: Path, divergence: dict, saved_db: Path) -> str:
+    """Zip the current divergent projection files beside the pre-rollback copy."""
     base = Path(root) / ".taskmaster"
     target = saved_db.with_suffix(".projection.zip")
     temp = target.with_name(target.name + ".partial")
-    with zipfile.ZipFile(temp, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+    with zipfile.ZipFile(temp, "w", compression=zipfile.ZIP_DEFLATED, strict_timestamps=False) as archive:
         for rel in divergence["changed"] + divergence["added"]:
-            archive.write(base / rel, rel)
+            if (base / rel).is_file():
+                archive.write(base / rel, rel)
         archive.writestr("_pre_rollback_files.json", _encode(divergence))
     os.replace(temp, target)
     _fsync(target)
+    return str(target)
+
+
+def _write_file(path: Path, content: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    staged = path.with_name(path.name + ".rollback.partial")
+    staged.write_bytes(content)
+    os.replace(staged, path)
+
+
+def _restore_files(root: Path, archived: dict[str, bytes], divergence: dict) -> None:
+    """Put the archived projection generation back: changed and removed files rewritten,
+    files added since the backup deleted. Idempotent."""
+    base = Path(root) / ".taskmaster"
     for rel in divergence["changed"] + divergence["removed"]:
-        path = base / rel
-        path.parent.mkdir(parents=True, exist_ok=True)
-        staged = path.with_name(path.name + ".rollback.partial")
-        staged.write_bytes(archived[rel])
-        os.replace(staged, path)
+        _write_file(base / rel, archived[rel])
     for rel in divergence["added"]:
         (base / rel).unlink(missing_ok=True)
-    return str(target)
+
+
+def undo_rollback_files(connection, root: Path, log=lambda line: None) -> int:
+    """A rollback that restored projection files but never committed (it was interrupted)
+    left files matching the backup while the store still holds the newer writes. Before a
+    resume continues, put back the files each such rollback saved, newest first, so the
+    files match the store again. Returns how many rollback file sets were undone."""
+    entries = journal(connection)
+    pending = []
+    for entry in entries:
+        if entry["stage"] == "rollback-files":
+            pending.append(entry)
+        elif entry["stage"] == "rollback-files-undone":
+            pending = []
+    base = Path(root) / ".taskmaster"
+    for entry in reversed(pending):
+        saved, divergence = Path(entry["detail"]["saved_files"]), entry["detail"]["divergence"]
+        with zipfile.ZipFile(saved) as archive:
+            for rel in divergence["changed"] + divergence["added"]:
+                if rel in archive.namelist():
+                    _write_file(base / rel, archive.read(rel))
+        for rel in divergence["removed"]:
+            (base / rel).unlink(missing_ok=True)
+    if pending:
+        connection.execute("BEGIN IMMEDIATE")
+        _record(connection, "rollback-files-undone", "done", None, None, {"undone": len(pending)})
+        connection.commit()
+        log(f"warning: put back the projection files of {len(pending)} interrupted rollback(s) before resuming")
+    return len(pending)
 
 
 # ── Rollback ─────────────────────────────────────────────────────────────────
@@ -1055,16 +1142,26 @@ def _integrity_ok(connection) -> bool:
         raise
 
 
+def _has_rowid_alias(connection, table: str, schema: str = "main") -> bool:
+    info = connection.execute(f'PRAGMA {schema}.table_info("{table}")').fetchall()
+    keys = [row for row in info if row[5]]
+    return len(keys) == 1 and str(keys[0][2]).upper() == "INTEGER"
+
+
 def _restore_rows(connection) -> None:
-    """Replace every legacy domain table's rows (and the `changes` sequence) with the ATTACHed
-    backup's, inside the caller's transaction. The staging-stale triggers fire as they should."""
+    """Replace every legacy domain table's rows (rowids included: legacy renders in rowid
+    order, and backfill allocates keys in it) and the `changes` sequence with the ATTACHed
+    backup's, inside the caller's transaction."""
     for table in (*DOMAIN_TABLES, "entity_fts"):
         if not _has(connection, table):
             continue
         connection.execute(f'DELETE FROM main."{table}"')
         if _has(connection, table, "pre"):
             wanted = set(_columns(connection, table, "pre"))
-            common = ",".join(f'"{c}"' for c in _columns(connection, table) if c in wanted)
+            names = [f'"{c}"' for c in _columns(connection, table) if c in wanted]
+            if not _has_rowid_alias(connection, table):
+                names.insert(0, "rowid")
+            common = ",".join(names)
             connection.execute(f'INSERT INTO main."{table}"({common}) SELECT {common} FROM pre."{table}"')
     if _has(connection, "sqlite_sequence"):
         connection.execute("DELETE FROM main.sqlite_sequence WHERE name='changes'")
@@ -1073,19 +1170,59 @@ def _restore_rows(connection) -> None:
                                "SELECT name,seq FROM pre.sqlite_sequence WHERE name='changes'")
 
 
+def _legacy_objects() -> set[str]:
+    from taskmaster import store as legacy
+    with closing(sqlite3.connect(":memory:")) as scratch:
+        scratch.executescript(legacy.SCHEMA_SQL)
+        return {row[0] for row in scratch.execute("SELECT name FROM sqlite_master")}
+
+
+def drop_native_staging(connection) -> list[str]:
+    """Remove every native staging object (tables, virtual tables, triggers) from a store
+    whose authority is still legacy, inside the caller's transaction. Staging is a
+    disposable, re-derivable copy; after a rollback it may name identities the restored
+    legacy rows no longer have, which would block every later backfill."""
+    if _native_manifest(connection).get("authority") == "native":
+        raise UnsupportedStoreError("native tables of an activated store are the authority, never staging")
+    keep = _legacy_objects() | {JOURNAL}
+    dropped = []
+    for (name,) in connection.execute("SELECT name FROM main.sqlite_master WHERE type='trigger'").fetchall():
+        if name not in keep:
+            connection.execute(f'DROP TRIGGER main."{name}"')
+            dropped.append(name)
+    for kind in ("virtual", "table"):
+        rows = connection.execute("SELECT name,sql FROM main.sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchall()
+        for name, sql in rows:
+            virtual = str(sql or "").upper().startswith("CREATE VIRTUAL")
+            if name in keep or (kind == "virtual") != virtual:
+                continue
+            if not _has(connection, name):
+                continue  # A shadow table already dropped with its virtual table.
+            connection.execute(f'DROP TABLE main."{name}"')
+            dropped.append(name)
+    return dropped
+
+
+def _repair_indexes(connection) -> bool:
+    """Index-only damage is repaired, not treated as corruption: REINDEX every main table
+    (never the read-only attached backup), then re-check. True when the store is healthy."""
+    for (table,) in connection.execute(
+            "SELECT name FROM main.sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' "
+            "AND sql NOT LIKE 'CREATE VIRTUAL%'").fetchall():
+        try:
+            connection.execute(f'REINDEX main."{table}"')
+        except sqlite3.DatabaseError as error:
+            code = getattr(error, "sqlite_errorcode", None)
+            if code is not None and code & 0xFF not in _CORRUPT_CODES:
+                raise
+    return _integrity_ok(connection)
+
+
 def rollback(root: Path, *, confirm_stopped: bool = False, token: str | None = None,
              discard_writes_since_backup: bool = False, clear_orphan_fence: bool = False,
              log=lambda line: None) -> dict:
-    """Before activation commits: drop the fence and journal, restoring from backup if needed.
-
-    One atomic unit on one connection under BEGIN IMMEDIATE: the diff, the pre-rollback copy
-    (see `_copy_committed`), the projection-file restore, the row restore from the ATTACHed
-    verified backup, marking staging stale, and clearing the fence all happen before a
-    single commit, so no write can land between the copy and the restore. A restore never
-    silently discards an acknowledged write: differences in `WRITE_TABLES` or in the
-    projection files refuse unless `discard_writes_since_backup`. A store failing
-    `integrity_check` restores its rows without the flag (after REINDEX), still saved first.
-    """
+    """Before activation commits: drop the fence, the journal and native staging, restoring
+    from backup when needed. See `_locked_rollback` for the write-safety argument."""
     root = Path(root)
     path = database_path(root)
     try:
@@ -1116,12 +1253,24 @@ def rollback(root: Path, *, confirm_stopped: bool = False, token: str | None = N
         raise CutoverRefused("--token does not match the cutover journal's token")
     ownership = _ownership(root)  # Takeover rule: see `cutover`.
     try:
-        return _atomic_rollback(root, path, fence, discard_writes_since_backup, log)
+        return _locked_rollback(root, path, fence, discard_writes_since_backup, log)
     finally:
         ownership.close()
 
 
-def _atomic_rollback(root: Path, path: Path, fence: dict, discard: bool, log) -> dict:
+def _locked_rollback(root: Path, path: Path, fence: dict, discard: bool, log) -> dict:
+    """Two transactions under BEGIN IMMEDIATE on one connection, so no write is lost.
+
+    Phase 1 decides: integrity (index damage is repaired by REINDEX and committed; only
+    unreadable rows count as corruption), the diff against the ATTACHed verified backup and
+    the projection archive, the refusal, the pre-rollback copy (see `_copy_committed`), the
+    saved divergent files, and a `rollback-files` journal row committed *before* any file
+    is touched. Phase 2 re-checks, under the lock, that the store and files are exactly what
+    phase 1 saw (else it stops without touching anything), then restores files and rows,
+    drops native staging and the journal, clears the fence, and commits once. A crash
+    after files are restored but before that commit leaves the `rollback-files` row, so a
+    later `--resume` puts the saved files back (`undo_rollback_files`).
+    """
     with closing(sqlite3.connect(path.resolve().as_uri(), uri=True, isolation_level=None, timeout=30)) as connection:
         connection.execute("PRAGMA busy_timeout=30000")
         backup = _detail(journal(connection), "backup")
@@ -1130,36 +1279,61 @@ def _atomic_rollback(root: Path, path: Path, fence: dict, discard: bool, log) ->
             verify_backup(Path(backup["path"]), backup["domain_digest"])
             if backup.get("projection_archive"):
                 archived = _archived(backup["projection_archive"])
-            # ATTACH is refused inside a transaction; the journal is re-checked under the lock below.
+            # ATTACH is refused inside a transaction; the journal is re-checked under the lock.
             connection.execute("ATTACH DATABASE ? AS pre", (Path(backup["path"]).resolve().as_uri() + "?mode=ro",))
-        connection.execute("BEGIN IMMEDIATE")
-        try:
+        warnings: list[str] = []
+
+        def locked_view():
             entries = journal(connection)
             if _detail(entries, "backup").get("path") != backup.get("path") or \
                     not any(e["stage"] == "fence" and e["token"] == fence["token"] for e in entries):
-                raise CutoverAborted("the cutover journal changed while the rollback was starting; run it again")
-            meta = _meta(connection)
-            if meta.get("migration_token") not in (None, fence["token"]):
+                raise CutoverAborted("the cutover journal changed while the rollback was running; run it again")
+            if _meta(connection).get("migration_token") not in (None, fence["token"]):
                 raise CutoverAborted("the store carries a different cutover fence; refusing to clear it")
-            fence_detail = _detail(entries, "fence")
-            accepted = {fence_detail.get("domain_digest"), _detail(entries, "reconcile").get("domain_digest"),
-                        backup.get("domain_digest")} - {None}
+            return entries
+
+        # Phase 0: index-only damage is repaired and committed on its own, so the repair
+        # survives a refusal and the store is then judged like any healthy one.
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            locked_view()
             healthy = _integrity_ok(connection)
+            if not healthy and _repair_indexes(connection):
+                healthy = True
+                warnings.append("rebuilt damaged indexes (REINDEX); the rows were intact")
+                connection.commit()
+            else:
+                connection.rollback()
+        except BaseException:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
+
+        # Phase 1: decide, save, journal.
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            entries = locked_view()
+            healthy = healthy and _integrity_ok(connection)
+            fence_detail = _detail(entries, "fence")
+            accepted = {fence_detail.get("domain_digest"), backup.get("domain_digest")} | \
+                {e["detail"].get("domain_digest") for e in entries if e["stage"] == "reconcile"}
+            accepted -= {None}
             current = domain_digest(connection) if healthy else None
-            restored, saved, saved_files, warnings, differences, divergence = None, None, None, [], {}, {}
+            differences, divergence, saved, saved_files = {}, {}, None, None
+            restore = bool(backup) and current not in accepted
             if not healthy and not backup:
-                raise CutoverAborted(f"the store fails integrity_check and no backup was taken; see {RUNBOOK}")
+                raise CutoverAborted(f"the store has unreadable rows and no backup was taken; see {RUNBOOK}")
             if current not in accepted and not backup:
                 # No backup means no backfill either: the cutover itself wrote nothing but the
                 # fence, so the difference came from an unfenced (pre-bridge) writer. The store
                 # is still a legacy authority; clearing the fence is all that is owed.
                 warnings.append("domain state differs from fence time and no backup exists; "
                                 "fence cleared without restore (check for unstopped pre-bridge clients)")
-            elif current not in accepted:
+            if restore:
                 if healthy:
                     differences = domain_differences(connection, connection, reference_schema="pre")
                 if archived is not None:
-                    divergence = projection_divergence(root, archived)
+                    divergence = projection_divergence(root, archived, connection)
                     if not any(divergence.values()):
                         divergence = {}
                 writes = {t: d for t, d in differences.items() if t in WRITE_TABLES}
@@ -1171,36 +1345,57 @@ def _atomic_rollback(root: Path, path: Path, fence: dict, discard: bool, log) ->
                         + "; ".join(parts) + ". An unstopped client wrote through the fence. To keep them, stop "
                         "that client and run --resume: the cutover re-takes its backup and carries them into the "
                         "native store. To discard them, re-run with --rollback --discard-writes-since-backup (the "
-                        "current store and files are saved as backups/pre-rollback-<ts>.* first)")
+                        "current store and projection files are saved as backups/pre-rollback-<ts>.* first)")
                 saved = _copy_committed(root)
                 _checkpoint("rollback:saved")
                 if divergence:
-                    saved_files = _restore_files(root, archived, divergence, Path(saved))
+                    saved_files = _save_divergent_files(root, divergence, Path(saved))
+                    _record(connection, "rollback-files", "done", None, fence["token"],
+                            {"saved_files": saved_files, "divergence": divergence})
+            connection.commit()
+        except BaseException:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
+
+        # Phase 2: verify nothing moved, restore, clear, commit once.
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            entries = locked_view()
+            if restore:
+                if healthy and domain_digest(connection) != current:
+                    raise CutoverAborted("the store changed while the rollback was running (a client is writing "
+                                         "through the fence); nothing was restored. Stop it and run --rollback again")
+                if archived is not None and divergence and \
+                        projection_divergence(root, archived, connection) != divergence:
+                    raise CutoverAborted("the projection files changed while the rollback was running; nothing "
+                                         "was restored. Stop every client and run --rollback again")
+                if divergence:
+                    _restore_files(root, archived, divergence)
                     _checkpoint("rollback:files-restored")
-                if not healthy:  # Rebuild main's indexes from table data (never the read-only backup's).
-                    for (table,) in connection.execute(
-                            "SELECT name FROM main.sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' "
-                            "AND sql NOT LIKE 'CREATE VIRTUAL%'").fetchall():
-                        connection.execute(f'REINDEX main."{table}"')
-                _restore_rows(connection)
-                if not healthy and not _integrity_ok(connection):
-                    raise CutoverAborted(f"the store is damaged beyond a row-level restore; restore it by hand "
-                                         f"from {backup['path']} (see {RUNBOOK})")
-                restored = backup["path"]
-                reason = "the store failed integrity_check" if not healthy else (_summarize(differences) or "-")
-                warnings.append(f"restored from backup {restored}; the store as it was is saved as {saved}"
+                beyond = (f"the store is damaged beyond a row-level restore; nothing was committed. Restore it by "
+                          f"hand from {backup['path']} (the damaged store is saved as {saved}; see {RUNBOOK})")
+                try:
+                    _restore_rows(connection)
+                except sqlite3.DatabaseError as error:
+                    if healthy:
+                        raise
+                    raise CutoverAborted(beyond) from error
+                if not healthy and not _repair_indexes(connection):
+                    raise CutoverAborted(beyond)
+                reason = "the store had unreadable rows" if not healthy else (_summarize(differences) or "-")
+                warnings.append(f"restored from backup {backup['path']}; the store as it was is saved as {saved}"
                                 + (f", the divergent projection files as {saved_files}" if saved_files else "")
                                 + f"; discarded: {reason}"
                                 + (f"; files: {_summarize_files(divergence)}" if divergence else ""))
                 _checkpoint("rollback:restored")
-            for key, value in (fence_detail.get("previous_meta") or {}).items():
+            for key, value in (_detail(entries, "fence").get("previous_meta") or {}).items():
                 if value is None:
                     connection.execute("DELETE FROM meta WHERE key=?", (key,))
                 else:
                     connection.execute("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) "
                                        "DO UPDATE SET value=excluded.value", (key, value))
-            if _has(connection, "native_manifest"):
-                connection.execute("UPDATE native_manifest SET value='stale' WHERE key='state'")
+            staging = drop_native_staging(connection)
             _drop_journal(connection)
             _checkpoint("rollback:before-commit")
             connection.commit()
@@ -1208,12 +1403,13 @@ def _atomic_rollback(root: Path, path: Path, fence: dict, discard: bool, log) ->
             if connection.in_transaction:
                 connection.rollback()
             raise
-        log("rolled back: fence and journal cleared; authority remains legacy")
+        log("rolled back: fence, journal and native staging cleared; authority remains legacy")
         for warning in warnings:
             log(f"warning: {warning}")
-        return {"ok": True, "mode": "rollback", "restored_from": restored, "pre_rollback_copy": saved,
-                "pre_rollback_files": saved_files, "differences": differences, "file_divergence": divergence,
-                "warnings": warnings, "domain_digest": domain_digest(connection)}
+        return {"ok": True, "mode": "rollback", "restored_from": backup["path"] if restore else None,
+                "pre_rollback_copy": saved, "pre_rollback_files": saved_files, "differences": differences,
+                "file_divergence": divergence, "staging_dropped": len(staging), "warnings": warnings,
+                "domain_digest": domain_digest(connection)}
 
 
 def _clear_orphan_fence(root: Path, path: Path, log) -> dict:
@@ -1255,7 +1451,7 @@ def fence_state(root: Path) -> dict:
     except (sqlite3.Error, OSError) as error:
         return {"readable": False, "error": str(error), "fence_up": None, "release_pending": None}
     return {"readable": True, "migration_state": state["migration_state"], "native": state["native"],
-            "fence_up": state["migration_state"] == "migrating",
+            "fence_up": state["migration_state"] != "ready",
             "release_pending": "activate" in state["completed_stages"] and "release" not in state["completed_stages"],
             "completed_stages": state["completed_stages"]}
 

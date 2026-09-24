@@ -79,7 +79,7 @@ counts: {"changes":7,"dirty_unexported":0,"entities":6,"export_intents":0,"flagg
 quiesce: {"confirm_stopped":false,"live_owner":null,"open_writers":"not probed in dry run","processes":[],...}
 warning: open writers not probed in dry run (the probe can checkpoint the WAL); the real run probes them
 would fence: publish meta.migration_state='migrating' with owner/token under the ownership lock
-would reconcile: re-check unexported projection work under the fence
+would reconcile: flush pending legacy exports under the fence (as one admitted bridge client)
 would backup: <project>\.taskmaster\local\backups\pre-native-<UTC ts>.db + manifest (5 projection files)
 would backfill: stage 6 entities and 7 changes into native tables
 would compare: trial activation, rolled back; verify_carryover must report nothing lost
@@ -94,12 +94,12 @@ Deal with every `refused:` line before the real run:
 | `a live coordinator or service owns this project` | Stop the service |
 | `the store has another open writer` (real run only) | Some client still has the store open. Go back to step 1 |
 | `processes from the launcher inventory ...: pid N ...` | Stop each named process. If you have checked that a match is a false positive, add `--confirm-stopped` |
-| `N dirty projection row(s) not yet exported` / `export-intent file(s)` | Start one bridge client, run any tool call (`backlog_status`) so it drains its exports, then stop it again |
 | `the legacy handover-status backfill has not run on this store` | Start one bridge client, run `backlog_handover_list` once (it runs the one-shot backfill), then stop it again. A native store never runs that backfill |
 | `malformed ID reservation sidecar` | Fix `.taskmaster/local/id-reservations.json`, which must map each kind to a list of ID strings |
 | `already a native authority` | Nothing to do |
 | `newer than this legacy->native cutover supports` | Wrong binary for this store. Upgrade |
 | `a cutover fence is already up` / `a cutover journal already exists` | A previous run was interrupted. See section 4. A fresh run never reuses an old journal |
+| `warning: N dirty projection row(s) ... / export-intent file(s): the cutover flushes them itself` | Nothing to do. This is not a refusal: the `reconcile` stage exports them under the fence, acting as one admitted bridge client, because no external client can once the fence is up. Anything it cannot export is carried into the native store with its dirty flag and reported as pending, never dropped |
 | `warning: process scan: ...` | The scan was partial or impossible. Check the stop list by hand |
 
 On Windows the scan cannot see a process's working directory, so a Taskmaster plugin server
@@ -133,8 +133,8 @@ What each stage does:
 | Stage | Writes | Committed state after it |
 |---|---|---|
 | `fence` | Sets `meta.migration_state='migrating'`, `migration_owner` and `migration_token`, and creates `native_cutover_journal`, all in one `BEGIN IMMEDIATE`. The coordinator ownership lock (`.taskmaster/local/coordinator/owner.lock`) is held for the whole run | Bridge clients refuse the store |
-| `reconcile` | Re-checks, under the fence, that no projection export is still pending. The progress changelog itself is reconciled inside `activate`, after the final backfill | Journal row with the counts |
-| `backup` | `carryover.snapshot_carryover` (before any marker change), then `backups/pre-native-<UTC ts>.db` via the SQLite online backup, plus `pre-native-<UTC ts>.projection.zip` (every projection file, with the archive's sha256 and size recorded) and a `.json` manifest: projection files (path, sha256, size), a copy of the ID-reservation sidecar, the carry-over snapshot and the domain digest. The files are fsynced, and the backup is reopened and must pass `integrity_check` | Journal row with the backup path, the archive, the sidecar hash **and the carry-over snapshot**, so resume never depends on the manifest |
+| `reconcile` | Flushes pending legacy exports and export intents itself, under the fence: one no-op legacy write transaction admitted by `migration_owner`, the same drain a bridge client's next call runs. Whatever still cannot be exported is carried, and a warning lists it. The progress changelog itself is reconciled inside `activate`, after the final backfill | Journal row with the counts before and after, and what was carried |
+| `backup` | All taken while the cutover holds the write lock, so they describe one committed state: `carryover.snapshot_carryover` (before any marker change), `backups/pre-native-<UTC ts>.db` (the SQLite online backup, made by a read-only connection), `pre-native-<UTC ts>.projection.zip` (the **projection set**, meaning the files the store tracks in its `projection` table: `backlog.yaml` and every document file; other files under `.taskmaster/` are the user's and are never archived, compared or restored; with the archive's sha256 and size recorded) and a `.json` manifest: projection files (path, sha256, size), a copy of the ID-reservation sidecar, the carry-over snapshot and the domain digest. The files are fsynced, and the backup is reopened and must pass `integrity_check` | Journal row with the backup path, the archive, the sidecar hash **and the carry-over snapshot**, so resume never depends on the manifest |
 | `backfill` | `migrate.backfill` in one transaction; sub-stage checkpoints go into the journal | Native staging `verified`; authority still `legacy` |
 | `compare` | A trial of the whole activation transaction, always rolled back: `carryover.verify_carryover` against the journaled snapshot must be empty | Journal row with the trial's ID import and progress counts |
 | `activate` | One transaction: `schema_version=2`, `minimum_client_protocol=2`, `migration_state=ready`, fence owner/token removed, `authority=native`, `state=ready`, `local_state_imported=1`, graph repair, `carryover.import_id_state`, `carryover.reconcile_progress`, `carryover.verify_carryover`, journal row. Any carry-over difference rolls the whole switch back | **The store is native. Roll forward only from here** |
@@ -168,7 +168,7 @@ verified staging. The takeover is recorded as a `takeover` journal row. If you p
 | Crash point | `--resume` | `--rollback` |
 |---|---|---|
 | During `fence` (before its commit) | Refused (`no cutover journal`). Nothing was written; run the plain command again | Refused (`no cutover fence`). Nothing to undo |
-| After `fence`, during or after `reconcile`, `backup`, `backfill` or `compare` | Continues from the next stage and ends native | Clears the fence and journal and restores the previous `migration_*` meta values. Authority stays legacy and the domain rows are identical to before the cutover (or to the latest backup, if leaked writes were absorbed into it). Native staging is left behind, marked `stale` |
+| After `fence`, during or after `reconcile`, `backup`, `backfill` or `compare` | Continues from the next stage and ends native | Clears the fence and journal and restores the previous `migration_*` meta values. Authority stays legacy and the domain rows are identical to before the cutover (or to the latest backup, if leaked writes were absorbed into it). Native staging is **dropped**, so a fresh cutover starts from nothing |
 | During `activate` (before its commit) | The activation transaction rolled back; resume re-runs it | Same as the row above |
 | After `activate` committed (including during `release`) | Records `release` and finishes. **No quiesce and no ownership lock needed**: native clients may already be running, and the fence is gone | **Refused**, see section 5 |
 
@@ -177,21 +177,39 @@ activates.
 
 **Writes that leaked through the fence are absorbed, not lost.** Before `backfill`,
 `compare` and `activate`, the run checks for legacy writes since the latest backup: any
-domain row (retained tables such as `sessions`, `projection` and `meta` included) or a changed
-`id-reservations.json`. If it finds any, it records a `drift` journal row naming them, then
-re-runs `reconcile`, `backup` (a fresh backup, archive and carry-over snapshot, committed
+domain row (retained tables such as `sessions`, `projection` and `meta` included), a changed
+`id-reservations.json`, or a projection file that differs from the latest archive. If it finds any, it records a `drift` journal row naming them, then
+re-runs `reconcile` (which flushes any export the leaked write left pending), `backup` (a fresh backup, archive and carry-over snapshot, committed
 with its journal row) and `backfill` under the fence. The writes then carry into the native
 store, and the report's `warnings` and `drift_absorbed` say so. If a client keeps writing, the
-run stops after 3 absorptions with `a client is still writing`. Stop it, then `--resume`.
+run stops after 3 absorptions with `a client is still writing`. The cap is per cutover: `drift` rows
+stay in the journal, so a resume gets no fresh allowance. Stop the client, then `--resume` or
+`--rollback`.
 
 ### What rollback does when the store changed
 
-The whole rollback is **one transaction on one connection** (`BEGIN IMMEDIATE`). The diff,
-the pre-rollback copy, the file restore, the row restore from the attached backup, marking the
-staging stale, and clearing the fence all happen before a single commit. While that write
-lock is held, no other writer can commit, so no write can land between the copy and the
-restore. The pre-rollback copy is taken by a second, read-only connection while the lock is
-held, so it contains exactly the committed state being replaced.
+The rollback holds the write lock (`BEGIN IMMEDIATE`) on one connection for each of its steps,
+so no other writer can commit while it decides or restores:
+
+1. **Repair.** If `integrity_check` fails, it runs `REINDEX` on the store's tables (native
+   staging included), re-checks, and commits the repair on its own. Index-only damage, such
+   as `row N missing from index`, is repaired here, and the store is then judged like any
+   healthy one, so an acknowledged write is never discarded because of it.
+2. **Decide and save.** It diffs against the attached verified backup and the archived
+   projection set, then refuses or goes on. Before any restore, it saves the pre-rollback
+   copy: a read-only connection copies the committed state while the lock is held, so the
+   copy is exactly the state being replaced. It also saves the divergent projection files,
+   and it commits a `rollback-files` journal row **before any file is touched**.
+3. **Restore and clear.** Under the lock again, it first re-checks that the store and the
+   files are exactly what step 2 saw. If anything moved, it stops without touching anything.
+   Otherwise, in one commit, it restores the files and the rows (rowids and the `changes`
+   sequence included, so render order and backfill keys are unchanged), drops native
+   staging, drops the journal and clears the fence.
+
+If a rollback dies after restoring files but before its commit, the store still holds the
+newer writes and the fence. Running `--rollback` again finishes it. Running `--resume` instead
+first puts back the files every interrupted rollback saved (`rollback-files` rows, newest
+first), so the files match the store again before anything is activated.
 
 Before it clears the fence, `--rollback` checks `integrity_check` and compares the legacy
 domain digest with the digests journaled at the fence, reconcile and backup stages.
@@ -218,11 +236,14 @@ domain digest with the digests journaled at the fence, reconcile and backup stag
 
   If only disposable or derived tables differ (`sessions`, graph tables, FTS), rollback
   restores without the flag and prints a warning.
-- **The store fails `integrity_check`** (only genuine corruption: `SQLITE_CORRUPT` or
-  `SQLITE_NOTADB`): it rebuilds the store's indexes, restores the rows from the verified
-  backup without the flag, and checks integrity again. If that still fails, it refuses and
-  names the backup for a manual restore. Other errors, such as `database is locked` or an I/O
-  error, are never treated as corruption; the rollback stops and changes nothing.
+- **The store still fails `integrity_check` after `REINDEX`:** the table rows themselves are
+  unreadable (genuine corruption: `SQLITE_CORRUPT` or `SQLITE_NOTADB`), so no diff is
+  possible. It saves the pre-rollback copy first, or copies the files raw if even the backup
+  API cannot read them. Then it restores the rows from the verified backup without the flag
+  and checks integrity again. If the row-level restore cannot run on the damaged store, it
+  refuses and names both the backup and the saved copy for a manual restore. Other errors,
+  such as `database is locked` or an I/O error, are never treated as corruption; the rollback
+  stops and changes nothing.
 
 **Before any restore**, the current store is saved as `backups/pre-rollback-<UTC ts>.db`.
 If the projection files are restored, the divergent ones are saved first as
@@ -231,9 +252,9 @@ which lists what was changed, added and removed. If the store is too damaged for
 API, the database file and its `-wal` are copied as they are and fsynced; the `-shm` index is
 never copied. The report names both copies and lists what was discarded.
 
-A rollback interrupted part-way, even by a killed process, can simply be run again. The
-database side is one transaction. The file restore happens inside that unit, before the
-commit, and repeating it is harmless.
+A rollback interrupted part-way, even by a killed process, can simply be run again, or the
+cutover can be resumed instead (see above). After any rollback, a fresh cutover starts
+cleanly.
 
 ```
 python -m taskmaster.native.cutover --root <project> --resume [--token <token>]

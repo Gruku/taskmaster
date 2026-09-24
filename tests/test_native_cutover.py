@@ -199,34 +199,31 @@ def test_already_native_and_newer_schema_are_refused(project, quiesce, tmp_path)
     assert tree_hash(newer) == before
 
 
-def test_unexported_projection_work_is_refused_with_counts(project, quiesce):
+def test_unexported_projection_work_is_flushed_by_the_cutover_itself(project, quiesce):
     with closing(sqlite3.connect(db(project), isolation_level=None)) as connection:
-        connection.execute("UPDATE projection SET dirty=1 WHERE file=(SELECT MIN(file) FROM projection)")
+        first = connection.execute("SELECT MIN(file) FROM projection").fetchone()[0]
+        connection.execute("UPDATE projection SET dirty=1 WHERE file=?", (first,))
     (db(project).parent / "export-intent.peer.json").write_text('{"entries": {"x": {}}}', encoding="utf-8")
     report = cutover.dry_run(project)
     assert report["counts"]["dirty_unexported"] == 1 and report["counts"]["export_intents"] == 1
-    assert any("1 dirty projection row" in r and "export-intent" in r for r in report["refusals"])
-    before = tree_hash(project)
-    with pytest.raises(cutover.CutoverRefused, match="1 dirty projection row"):
-        cutover.cutover(project)
-    assert tree_hash(project) == before
+    assert report["ok"] and any("flushes them itself" in w for w in report["warnings"])
+    result = cutover.cutover(project)
+    assert result["ok"] and result["stages"]["reconcile"]["flushed"]
+    assert result["stages"]["reconcile"]["carried"] == []
+    with closing(sqlite3.connect(db(project))) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM projection WHERE dirty=1").fetchone()[0] == 0
+    assert not list(db(project).parent.glob("export-intent.*.json"))
 
 
-def test_unexported_work_appearing_under_the_fence_aborts_reconcile(project, quiesce, monkeypatch):
-    before = legacy_state(project)
-
+def test_unexported_work_appearing_under_the_fence_is_flushed_too(project, quiesce, monkeypatch):
     def dirty(name):
         if name == "reconcile:begin":
             with closing(sqlite3.connect(db(project), isolation_level=None)) as connection:
                 connection.execute("UPDATE projection SET dirty=1 WHERE file=(SELECT MIN(file) FROM projection)")
     monkeypatch.setitem(cutover.HOOKS, "checkpoint", dirty)
-    with pytest.raises(cutover.CutoverAborted, match="dirty projection"):
-        cutover.cutover(project)
-    monkeypatch.setitem(cutover.HOOKS, "checkpoint", None)
-    report = cutover.rollback(project)  # No backup yet: the fence is cleared, the change is reported.
-    assert report["ok"] and report["restored_from"] is None and report["warnings"]
-    after = legacy_state(project)
-    assert after["meta"] == before["meta"] and after["entities"] == before["entities"]
+    assert cutover.cutover(project)["ok"]
+    with closing(sqlite3.connect(db(project))) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM projection WHERE dirty=1").fetchone()[0] == 0
 
 
 # ── Compare ──────────────────────────────────────────────────────────────────
@@ -447,27 +444,49 @@ def test_p2_rollback_never_silently_discards_a_write_acknowledged_after_backup(p
                if kind == "bug")
 
 
-def test_corrupt_store_restores_without_the_flag_but_is_saved_first(project, quiesce, monkeypatch):
-    before = legacy_state(project)
-    crash_at(monkeypatch, "compare:begin")
-    with pytest.raises(Injected):
-        cutover.cutover(project)
-    monkeypatch.setitem(cutover.HOOKS, "checkpoint", None)
-    with closing(sqlite3.connect(db(project), isolation_level=None)) as connection:
-        connection.execute("CREATE TABLE corrupt_probe(a,b)")
-        connection.executemany("INSERT INTO corrupt_probe VALUES(?,?)", [(i, -i) for i in range(50)])
-        connection.execute("CREATE INDEX corrupt_probe_a ON corrupt_probe(a)")
+def _break_index(path, table="entities", index="ix_probe_entities_status", columns=("status", "id")):
+    """Index-only damage: rows intact, the index disagrees with them ("row N missing from index")."""
+    with closing(sqlite3.connect(path, isolation_level=None)) as connection:
+        connection.execute(f"CREATE INDEX IF NOT EXISTS {index} ON {table}({columns[0]})")
         connection.execute("PRAGMA writable_schema=ON")
-        connection.execute("UPDATE sqlite_schema SET sql='CREATE INDEX corrupt_probe_a ON corrupt_probe(b)' "
-                           "WHERE name='corrupt_probe_a'")
-    with closing(sqlite3.connect(db(project))) as connection:
-        assert connection.execute("PRAGMA integrity_check").fetchone()[0] != "ok"
+        connection.execute(f"UPDATE sqlite_schema SET sql='CREATE INDEX {index} ON {table}({columns[1]})' "
+                           f"WHERE name='{index}'")
+        connection.execute("PRAGMA writable_schema=OFF")
+    with closing(sqlite3.connect(path)) as connection:
+        assert "missing from index" in connection.execute("PRAGMA integrity_check").fetchone()[0]
+
+
+def test_index_only_damage_is_repaired_not_restored(project, quiesce, monkeypatch):
+    before = legacy_state(project)
+    _stop_after_backup(project, monkeypatch)
+    _break_index(db(project))
     report = cutover.rollback(project)
-    assert report["restored_from"] and "integrity_check" in report["warnings"][0]
-    assert Path(report["pre_rollback_copy"]).exists()
+    assert report["restored_from"] is None and "REINDEX" in report["warnings"][0]
     assert legacy_state(project) == before
     with closing(sqlite3.connect(db(project))) as connection:
         assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+
+def test_t3_index_damage_never_discards_an_acknowledged_write(project, quiesce, monkeypatch):
+    _stop_after_backup(project, monkeypatch)
+    with closing(sqlite3.connect(db(project), isolation_level=None)) as connection:
+        connection.execute("UPDATE entities SET body='ACKNOWLEDGED EDIT' WHERE kind='bug' AND id='B-001'")
+    _break_index(db(project))
+    with pytest.raises(cutover.CutoverRefused, match=r"entities: 0 added, 0 removed, 1 changed"):
+        cutover.rollback(project)
+    with closing(sqlite3.connect(db(project))) as connection:
+        assert connection.execute("SELECT body FROM entities WHERE kind='bug' AND id='B-001'").fetchone()[0] == \
+            "ACKNOWLEDGED EDIT"
+        assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"  # The repair was kept.
+    assert cutover.cutover(project, resume=True)["ok"]  # And the write rolls forward.
+    assert committed(project)[("bug", "B-001")][1] == "ACKNOWLEDGED EDIT"
+
+
+def test_damaged_native_staging_indexes_are_repaired_too(project, quiesce, monkeypatch):
+    _stop_after_backup(project, monkeypatch)
+    _break_index(db(project), table="entity_core", index="ix_probe_entity_core", columns=("kind", "public_id"))
+    assert cutover.rollback(project)["ok"]
+    assert cutover.cutover(project)["ok"]
 
 
 def test_p3_resume_survives_a_lost_manifest(project, quiesce, monkeypatch):
@@ -834,3 +853,213 @@ def test_integrity_errors_that_are_not_corruption_refuse():
     with pytest.raises(sqlite3.OperationalError):
         cutover._integrity_ok(Locked())
     assert cutover._integrity_ok(Corrupt()) is False
+
+
+# ── Round 4 (probes T1-T8, suspicions a-c) ──────────────────────────────────
+
+def test_t1_a_leak_with_a_pending_export_is_flushed_on_resume_not_deadlocked(project, quiesce, monkeypatch):
+    _stop_after_backup(project, monkeypatch)
+    _leak_bug(project, monkeypatch)
+    with closing(sqlite3.connect(db(project), isolation_level=None)) as connection:
+        connection.execute("UPDATE projection SET dirty=1 WHERE file LIKE 'bugs/B-010%'")
+    report = cutover.cutover(project, resume=True)
+    assert report["ok"] and report["drift_absorbed"] == 1
+    assert committed(project)[("bug", "B-010")][0]["title"] == "Leaked acknowledged bug"
+    assert "Leaked acknowledged bug" in (project / ".taskmaster" / "bugs" / "B-010.md").read_text(encoding="utf-8")
+    with closing(sqlite3.connect(db(project))) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM projection WHERE dirty=1").fetchone()[0] == 0
+
+
+def test_t1_work_the_flush_cannot_export_is_carried_and_reported_pending(project, quiesce, monkeypatch):
+    _stop_after_backup(project, monkeypatch)
+    _leak_bug(project, monkeypatch)
+    with closing(sqlite3.connect(db(project), isolation_level=None)) as connection:
+        connection.execute("UPDATE projection SET dirty=1 WHERE file LIKE 'bugs/B-010%'")
+    monkeypatch.setattr(cutover, "legacy_flush", lambda root, token: {"flushed": False})  # e.g. a locked file
+    report = cutover.cutover(project, resume=True)
+    assert report["ok"] and any("carried unexported" in w for w in report["warnings"])
+    assert ("bug", "B-010") in committed(project)
+    from taskmaster.native_routing.overview import __name__ as _  # noqa: F401 - native status reads the flag
+    with closing(sqlite3.connect(db(project))) as connection:
+        assert connection.execute("SELECT file FROM projection WHERE dirty=1").fetchall() == [("bugs/B-010.md",)]
+
+
+def test_t2_a_write_racing_the_backup_cannot_wedge_compare(project, quiesce, monkeypatch):
+    real, fired = cutover.write_backup, []
+
+    def racing(connection, root, carryover):
+        if not fired:
+            fired.append(1)
+            with closing(sqlite3.connect(db(root), isolation_level=None, timeout=0.2)) as writer:
+                with pytest.raises(sqlite3.OperationalError, match="locked"):
+                    writer.execute("INSERT INTO meta VALUES('linear_receipt_x','raced')")
+        return real(connection, root, carryover)
+    monkeypatch.setattr(cutover, "write_backup", racing)
+    assert cutover.cutover(project)["ok"]
+
+
+@pytest.mark.allow_projection_bypass
+def test_t4_an_interrupted_file_restore_is_undone_before_resume(project, quiesce, monkeypatch):
+    _stop_after_backup(project, monkeypatch)
+    _leak_bug(project, monkeypatch)
+    bug_file = project / ".taskmaster" / "bugs" / "B-010.md"
+    leaked = bug_file.read_bytes()
+    crash_at(monkeypatch, "rollback:files-restored")
+    with pytest.raises(Injected):
+        cutover.rollback(project, discard_writes_since_backup=True)
+    monkeypatch.setitem(cutover.HOOKS, "checkpoint", None)
+    assert not bug_file.exists()
+    report = cutover.cutover(project, resume=True)
+    assert report["ok"] and bug_file.read_bytes() == leaked
+    assert ("bug", "B-010") in committed(project)
+
+
+def test_t5_any_fence_state_other_than_ready_is_up(project, quiesce, monkeypatch, capsys):
+    with closing(sqlite3.connect(db(project), isolation_level=None)) as connection:
+        connection.execute("INSERT INTO meta VALUES('migration_state','paused')")
+
+    def boom(root, path, log):
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(cutover, "_clear_orphan_fence", boom)
+    assert cutover.main(["--root", str(project), "--rollback", "--clear-orphan-fence", "--json"]) == cutover.EXIT_FENCED
+    report = json.loads(capsys.readouterr().out)
+    assert not report["ok"] and report["fence"]["fence_up"] is True
+
+
+def test_t6_pre_1980_mtimes_do_not_abort_the_archive(project, quiesce):
+    import os
+    os.utime(project / ".taskmaster" / "backlog.yaml", (0, 0))
+    assert cutover.cutover(project)["ok"]
+
+
+@pytest.mark.allow_projection_bypass
+def test_t8_the_drift_cap_then_a_discard_rollback_leaves_a_clean_slate(project, quiesce, monkeypatch):
+    n = [0]
+
+    def writer(name):
+        if name == "backfill:begin":
+            n[0] += 1
+            with closing(sqlite3.connect(db(project), isolation_level=None)) as w:
+                w.execute("INSERT INTO entities(kind,id,epic,status,archived,deleted,doc,body,rev,updated_seq) "
+                          f"SELECT kind,'B-{700 + n[0]}',epic,status,0,0,json_set(doc,'$.id','B-{700 + n[0]}'),"
+                          "body,1,99 FROM entities WHERE kind='bug' AND id='B-001'")
+    monkeypatch.setitem(cutover.HOOKS, "checkpoint", writer)
+    with pytest.raises(cutover.CutoverAborted, match="keeps changing"):
+        cutover.cutover(project)
+    monkeypatch.setitem(cutover.HOOKS, "checkpoint", None)
+    report = cutover.rollback(project, discard_writes_since_backup=True)
+    assert report["staging_dropped"] > 0
+    with closing(sqlite3.connect(db(project))) as connection:
+        assert not connection.execute("SELECT 1 FROM sqlite_master WHERE name='entity_core'").fetchone()
+    assert cutover.cutover(project)["ok"]
+
+
+def test_the_drift_cap_is_per_cutover_not_per_invocation(project, quiesce, monkeypatch):
+    def writer(name):
+        if name == "backfill:begin":
+            with closing(sqlite3.connect(db(project), isolation_level=None)) as w:
+                w.execute("INSERT INTO sessions(session,pid) VALUES(hex(randomblob(8)),1)")
+    monkeypatch.setitem(cutover.HOOKS, "checkpoint", writer)
+    with pytest.raises(cutover.CutoverAborted, match="keeps changing"):
+        cutover.cutover(project)
+    with pytest.raises(cutover.CutoverAborted, match="keeps changing"):  # No fresh allowance on resume.
+        cutover.cutover(project, resume=True)
+    with closing(sqlite3.connect(db(project))) as connection:
+        drifts = connection.execute(f"SELECT COUNT(*) FROM {cutover.JOURNAL} WHERE stage='drift'").fetchone()[0]
+    assert drifts == cutover.MAX_DRIFT_ABSORPTIONS
+
+
+def _rollback_variant(name, project, monkeypatch):
+    if name == "clear":
+        _stop_after_backup(project, monkeypatch)
+        return cutover.rollback(project)
+    if name == "derived-restore":
+        _stop_after_backup(project, monkeypatch)
+        with closing(sqlite3.connect(db(project), isolation_level=None)) as connection:
+            connection.execute("INSERT INTO sessions(session,pid) VALUES('reader',1)")
+        return cutover.rollback(project)
+    if name == "discard-with-files":
+        _stop_after_backup(project, monkeypatch)
+        _leak_bug(project, monkeypatch)
+        return cutover.rollback(project, discard_writes_since_backup=True)
+    if name == "index-repair":
+        _stop_after_backup(project, monkeypatch)
+        _break_index(db(project))
+        return cutover.rollback(project)
+    if name == "no-backup":
+        _stop_after_backup(project, monkeypatch, point="backup:begin")
+        with closing(sqlite3.connect(db(project), isolation_level=None)) as connection:
+            connection.execute("UPDATE entities SET body='unfenced' WHERE kind='bug'")
+        return cutover.rollback(project)
+    if name == "orphan-fence":
+        with closing(sqlite3.connect(db(project), isolation_level=None)) as connection:
+            connection.execute("INSERT INTO meta VALUES('migration_state','migrating')")
+        return cutover.rollback(project, clear_orphan_fence=True)
+    raise AssertionError(name)
+
+
+@pytest.mark.allow_projection_bypass
+@pytest.mark.parametrize("variant", ["clear", "derived-restore", "discard-with-files", "index-repair",
+                                     "no-backup", "orphan-fence"])
+def test_a_fresh_cutover_succeeds_after_every_rollback_variant(project, quiesce, monkeypatch, variant):
+    assert _rollback_variant(variant, project, monkeypatch)["ok"]
+    assert cutover.cutover(project)["ok"]
+    with closing(sqlite3.connect(db(project))) as connection:
+        assert_native(connection)
+
+
+@pytest.mark.allow_projection_bypass
+def test_a_restore_keeps_rowids_so_render_order_and_keys_match(project, quiesce, monkeypatch, tmp_path):
+    with closing(sqlite3.connect(db(project), isolation_level=None)) as connection:
+        # Gaps and a non-insertion order, as legacy upserts leave them: a restore that let
+        # SQLite assign fresh rowids would compact them and reorder rendering and keys.
+        connection.execute("UPDATE entities SET rowid=rowid+1000 WHERE kind IN ('epic','bug')")
+        order = connection.execute("SELECT rowid,kind,id FROM entities ORDER BY rowid").fetchall()
+    twin = tmp_path / "twin"
+    shutil.copytree(project, twin)
+    backlog = (project / ".taskmaster" / "backlog.yaml").read_bytes()
+    _stop_after_backup(project, monkeypatch)
+    _leak_bug(project, monkeypatch)
+    cutover.rollback(project, discard_writes_since_backup=True)
+    with closing(sqlite3.connect(db(project))) as connection:
+        assert connection.execute("SELECT rowid,kind,id FROM entities ORDER BY rowid").fetchall() == order
+    assert (project / ".taskmaster" / "backlog.yaml").read_bytes() == backlog
+    cutover.cutover(project)
+    cutover.cutover(twin)
+    keys = "SELECT kind,public_id,entity_key FROM entity_core ORDER BY entity_key"
+    with closing(sqlite3.connect(db(project))) as a, closing(sqlite3.connect(db(twin))) as b:
+        assert a.execute(keys).fetchall() == b.execute(keys).fetchall()
+
+
+def test_only_the_projection_set_is_archived_and_compared(project, quiesce, monkeypatch):
+    notes = project / ".taskmaster" / "my-notes.txt"
+    notes.write_text("the user's own file", encoding="utf-8")
+    _stop_after_backup(project, monkeypatch)
+    import zipfile
+    with closing(sqlite3.connect(db(project))) as connection:
+        archive = cutover._detail(cutover.journal(connection), "backup")["projection_archive"]["path"]
+    with zipfile.ZipFile(archive) as zipped:
+        assert "my-notes.txt" not in zipped.namelist() and "backlog.yaml" in zipped.namelist()
+    notes.write_text("edited during the fence", encoding="utf-8")
+    assert cutover.rollback(project)["ok"]  # A user file is neither a divergence nor restored.
+    assert notes.read_text(encoding="utf-8") == "edited during the fence"
+
+
+def test_unreadable_rows_are_never_blindly_overwritten(project, quiesce, monkeypatch):
+    """Table pages that cannot be read: the copy is saved, nothing is committed, and the
+    operator is sent to a manual restore with both files named."""
+    _stop_after_backup(project, monkeypatch)
+    path = db(project)
+    with closing(sqlite3.connect(path, isolation_level=None)) as connection:
+        connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        size = connection.execute("PRAGMA page_size").fetchone()[0]
+        root = connection.execute("SELECT rootpage FROM sqlite_master WHERE name='changes'").fetchone()[0]
+    with open(path, "r+b") as stream:
+        stream.seek(size * (root - 1))
+        stream.write(b"\xff" * 64)
+    with pytest.raises(cutover.CutoverAborted, match=r"damaged beyond a row-level restore.*pre-native-.*saved as .*pre-rollback-"):
+        cutover.rollback(project)
+    saved = sorted((path.parent / "backups").glob("pre-rollback-*.db"))
+    assert saved
+    with closing(sqlite3.connect(path)) as connection:
+        assert connection.execute("SELECT value FROM meta WHERE key='migration_state'").fetchone()[0] == "migrating"
