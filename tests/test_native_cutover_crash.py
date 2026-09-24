@@ -136,3 +136,40 @@ def test_interrupted_rollback_can_be_repeated(project, point, monkeypatch):
     report = cutover.rollback(project, discard_writes_since_backup=True)
     assert report["ok"]
     assert legacy_state(project) == before
+
+
+ROLLBACK_SCRIPT = """
+import os, sys
+from pathlib import Path
+from tests import cutover_stubs
+from taskmaster.native import cutover
+cutover_stubs.install()
+def hook(name):
+    if name == sys.argv[2]:
+        os._exit(37)
+cutover.HOOKS["checkpoint"] = hook
+cutover.rollback(Path(sys.argv[1]), discard_writes_since_backup=True)
+os._exit(0)
+"""
+
+
+@pytest.mark.allow_projection_bypass  # The rollback restores the archived projection files.
+@pytest.mark.parametrize("point", ["rollback:saved", "rollback:files-restored", "rollback:restored",
+                                   "rollback:before-commit"])
+def test_process_death_inside_the_atomic_rollback_then_rollback_again(project, point, monkeypatch):
+    before = legacy_state(project)
+    backlog = project / ".taskmaster" / "backlog.yaml"
+    original = backlog.read_bytes()
+    crash(project, "compare:before-commit", "exception", monkeypatch)
+    with closing(sqlite3.connect(cutover.database_path(project), isolation_level=None)) as connection:
+        connection.execute("DELETE FROM entities WHERE kind='bug'")
+    backlog.write_bytes(original + b"# written through the fence\n")
+    repo = str(Path(__file__).resolve().parents[1])
+    result = subprocess.run([sys.executable, "-c", ROLLBACK_SCRIPT, str(project), point], cwd=repo, timeout=120,
+                            env=dict(os.environ, PYTHONPATH=repo), capture_output=True, text=True)
+    assert result.returncode == 37, result.stdout + result.stderr
+    with closing(sqlite3.connect(cutover.database_path(project))) as connection:  # Nothing committed.
+        assert connection.execute("SELECT value FROM meta WHERE key='migration_state'").fetchone()[0] == "migrating"
+    report = cutover.rollback(project, discard_writes_since_backup=True)
+    assert report["ok"]
+    assert legacy_state(project) == before and backlog.read_bytes() == original
