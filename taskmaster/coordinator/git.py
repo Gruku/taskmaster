@@ -175,8 +175,12 @@ def generation(owner, through, backlog=None):
     published bytes after its own synchronization).
 
     Every file is read in full (never judged by a cached fingerprint): the generation
-    is what a commit records, and an in-place rewrite that restores size and mtime
-    would otherwise pass. The verified reads refresh the sync fingerprint cache."""
+    is what a commit records, and it is the last check before Git may overwrite a file.
+    A write through a memory mapping moves no timestamp at all (measured on NTFS, the
+    real ChangeTime included), so a fingerprint hit could let a commit record, or a
+    checkout overwrite, bytes the store never published; `_verify_tree` would only catch
+    the first after the commit. N16 measured the cost (3.1-6.2 s for 3,708 files) and kept
+    it. The verified reads refresh the sync fingerprint cache."""
     from . import sync_files
     backlog = owner.root / '.taskmaster' if backlog is None else backlog
     scan = sync_files.open_scan(owner.root, backlog, fast=False)

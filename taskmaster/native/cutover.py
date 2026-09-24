@@ -12,7 +12,8 @@ Stages, in order, each idempotent and recorded in `native_cutover_journal`:
     backfill   `migrate.backfill` with its checkpoints wired into the journal
     compare    a trial activation (always rolled back): `carryover.verify_carryover` must be []
     activate   one transaction: markers, authority, graph repair, ID import, progress
-               reconcile, `verify_carryover` == [] (else the whole switch rolls back), ready
+               reconcile, `verify_carryover` == [] (else the whole switch rolls back), ready,
+               then additive projection merge bases for files whose bytes it hashed (N16)
     release    record completion and drop the ownership lock
 
 Journal design: a dedicated table, not `meta` keys. Every write to `meta` fires the
@@ -375,19 +376,32 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _projection_reads(root: Path, connection) -> list[tuple[dict, bytes, float]]:
+    """`(entry, bytes, mtime)` for each file of the projection set, each read exactly once, so
+    the manifest entry, the archive entry and any comparison describe the same bytes."""
+    base = Path(root) / ".taskmaster"
+    if connection is None or not _has_table(connection, "projection"):
+        return []
+    reads = []
+    for (rel,) in connection.execute("SELECT file FROM projection ORDER BY file").fetchall():
+        path = base / rel
+        if not path.is_file():
+            continue
+        try:
+            with path.open("rb") as stream:
+                data = stream.read()
+                mtime = os.fstat(stream.fileno()).st_mtime
+        except FileNotFoundError:
+            continue
+        reads.append(({"path": rel, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}, data, mtime))
+    return reads
+
+
 def projection_files(root: Path, connection=None) -> list[dict]:
     """The projection set: files the store tracks in its `projection` table (backlog.yaml,
     task/bug/... documents) that exist on disk. Other files under `.taskmaster/` are the
     user's and are never archived, compared or restored."""
-    base = Path(root) / ".taskmaster"
-    if connection is None or not _has_table(connection, "projection"):
-        return []
-    files = []
-    for (rel,) in connection.execute("SELECT file FROM projection ORDER BY file").fetchall():
-        path = base / rel
-        if path.is_file():
-            files.append({"path": rel, "sha256": _sha256(path), "size": path.stat().st_size})
-    return files
+    return [entry for entry, _, _ in _projection_reads(root, connection)]
 
 
 def _fsync(path: Path) -> None:
@@ -453,7 +467,8 @@ def write_backup(connection, root: Path, carryover: dict) -> dict:
     backup_digest = verify_backup(target, domain_digest(connection))
     sidecar = database_path(root).parent / "id-reservations.json"
     sidecar_sha = _sha256(sidecar) if sidecar.exists() else None
-    archive = archive_projection(root, target.with_suffix(".projection.zip"), connection)
+    reads = _projection_reads(root, connection)  # one read per file: the archive and manifest agree
+    archive = archive_projection(root, target.with_suffix(".projection.zip"), connection, reads=reads)
     sidecar_copy = None
     if sidecar.exists():
         sidecar_copy = target.with_name(target.stem + ".id-reservations.json")
@@ -462,7 +477,7 @@ def write_backup(connection, root: Path, carryover: dict) -> dict:
     manifest = {
         "created_at": _now(), "store": str(database_path(root)), "backup": str(target),
         "backup_sha256": _sha256(target), "domain_digest": backup_digest,
-        "projection_files": projection_files(root, connection),
+        "projection_files": [entry for entry, _, _ in reads],
         "id_reservations": None if sidecar_copy is None else {
             "source": str(sidecar), "copy": str(sidecar_copy), "sha256": _sha256(sidecar_copy)},
         "projection_archive": archive,
@@ -502,16 +517,79 @@ class CarryoverMismatch(RuntimeError):
     """`verify_carryover` found local state the switch would lose; the switch rolled back."""
 
 
+def seed_projection_bases(connection, root: Path):
+    """Additive merge bases for the first sync after activation (N16 A); `(scan, seeded, counts)`.
+
+    A legacy store adopted from its files can hold no `projection_base` rows, and then every
+    file of the first sync takes the `observe` path (one writer command and one Git HEAD
+    probe per file: 310-682 s on CodeMaestro). Here, for each projection row that is not
+    quarantined, flagged or drift, has a recorded digest and has no base row, the file is read
+    once with `sync_files`' identity checks and hashed by this function; only bytes whose sha1
+    is the recorded `content_hash` become the base. A hash this code did not compute is never
+    trusted, an existing base (trusted or not) is never replaced, and a file that differs, is
+    missing or cannot be read safely keeps the ordinary sync path.
+
+    Runs inside the activation transaction after `verify_carryover`, so a crash rolls it back
+    with the switch; the carry-over oracle is told the seeded paths (`seeded_bases`). The
+    returned scan holds the fingerprints of exactly the files read here, for the sync cache.
+    """
+    from taskmaster.coordinator import sync_files
+    from . import projection
+    backlog = Path(root) / ".taskmaster"
+    scan = sync_files.open_scan(Path(root), backlog, fast=False)
+    held = set(projection.flagged_files(connection)) | set(projection.drift_files(connection))
+    counts = {"seeded": 0, "held": 0, "differs": 0, "missing": 0, "unreadable": 0}
+    seeded = []
+    rows = connection.execute(
+        "SELECT p.file,p.content_hash FROM projection p WHERE p.quarantined=0 AND p.file NOT LIKE 'local/%' "
+        "AND COALESCE(p.content_hash,'')!='' AND NOT EXISTS(SELECT 1 FROM projection_base b WHERE b.file=p.file) "
+        "ORDER BY p.file").fetchall()
+    for rel, value in rows:
+        if rel in held:
+            counts["held"] += 1
+            continue
+        try:
+            observed = scan.observe(rel, authored=False)
+        except (OSError, ValueError):  # UnsafePath, ChangedDuringRead and the byte limit are ValueErrors
+            counts["unreadable"] += 1
+            continue
+        if observed is None:
+            counts["missing"] += 1
+            continue
+        if hashlib.sha1(observed.content).hexdigest() != value:
+            counts["differs"] += 1
+            continue
+        connection.execute("INSERT INTO projection_base(file,content) VALUES(?,?)", (rel, observed.content))
+        seeded.append(rel)
+    counts["seeded"] = len(seeded)
+    return scan, seeded, counts
+
+
+def _save_seed_scan(root: Path, scan) -> None:
+    """Persist the fingerprints activation read (best effort, after commit: a cache, not state)."""
+    from taskmaster.coordinator import sync_files
+    if not scan.entries():
+        return  # nothing old enough to vouch for (racy window): leave any cache as it is
+    try:
+        sync_files.save_scan(Path(root), scan)
+    except Exception:  # noqa: BLE001 - a lost cache only means one cold read at the first sync
+        pass
+
+
 def activate(connection, root: Path, *, token: str | None = None, before: dict | None = None,
              record=None, trial: bool = False) -> dict:
     """One transaction: publish native markers and authority, repair the graph, import ID
     state, reconcile the progress changelog and, given the pre-backfill carry-over snapshot
     `before`, require `verify_carryover` to report nothing lost. A fenced cutover also
-    returns `migration_state` to `ready` here.
+    returns `migration_state` to `ready` here. Last, after verification, it seeds additive
+    projection merge bases from files it hashed (`seed_projection_bases`) and, after commit,
+    the sync fingerprint cache from the same reads.
 
     `token=None` is the unfenced fast path for test fixtures; it requires an unfenced store.
-    `record(connection)` runs inside the transaction, before commit (the journal row).
-    `trial=True` does all of it and rolls back: the cutover's compare stage.
+    `record(connection, detail)` runs inside the transaction, before commit (the journal row;
+    `detail["seeded_bases"]` names the seeded paths for the post-activation oracle).
+    `trial=True` does all of it but the seeding and rolls back: the cutover's compare stage.
+    The result's `seeded_bases` lists the seeded paths (the oracle's `seeded_bases`).
     """
     migrate, carryover = _migrate(), _carryover()
     from .db import manifest
@@ -559,10 +637,15 @@ def activate(connection, root: Path, *, token: str | None = None, before: dict |
         if trial:
             connection.rollback()
             return result
+        # After verification, so the oracle above compares the carried rows only; the bases
+        # added here are named to any later oracle run through the journal row.
+        scan, seeded, result["bases"] = seed_projection_bases(connection, root)
+        result["seeded_bases"] = seeded
         if record is not None:
-            record(connection)
+            record(connection, {"seeded_bases": seeded})
         _checkpoint("activate:before-commit")
         connection.commit()
+        _save_seed_scan(root, scan)
         return result
     except BaseException:
         if connection.in_transaction:
@@ -726,16 +809,18 @@ class _Run:
         self._commit_stage("compare", {"problems": [], "ids": trial["ids"], "progress": trial["progress"]})
 
     def activate(self):
-        def record(connection):
-            _record(connection, "activate", "done", self.owner, self.token)
+        def record(connection, detail):
+            _record(connection, "activate", "done", self.owner, self.token, detail)
         try:
             result = activate(self.connection, self.root, token=self.token, before=self._before(), record=record)
         except StoreDamaged:
             raise
         except (CarryoverMismatch, ValueError) as error:
             raise CutoverAborted(str(error)) from error
+        result.pop("seeded_bases", None)  # journaled on the activate row; too long for the report
         self.report["stages"]["activate"] = result
-        self.log(f"[activate] done: authority=native; graph repair {result['graph_repair']}; ids {result['ids']}")
+        self.log(f"[activate] done: authority=native; graph repair {result['graph_repair']}; ids {result['ids']}; "
+                 f"merge bases {result['bases']}")
         _checkpoint("activate:after-commit")
 
     def release(self):
@@ -876,7 +961,8 @@ def dry_run(root: Path, *, confirm_stopped: bool = False) -> dict:
         f"backfill: stage {counts['entities']} entities and {counts['changes']} changes into native tables",
         "compare: trial activation, rolled back; verify_carryover must report nothing lost",
         "activate: one transaction: schema_version=2, minimum_client_protocol=2, migration_state=ready, "
-        "authority=native, graph repair, ID import, progress reconcile, verify_carryover (any loss rolls it back)",
+        "authority=native, graph repair, ID import, progress reconcile, verify_carryover (any loss rolls it back), "
+        "then merge bases for projection files whose bytes hash to their recorded digest",
         "release: record completion, release the ownership lock",
     ]
     report["ok"] = not report["refusals"]
@@ -1056,18 +1142,26 @@ def _summarize_files(divergence: dict) -> str:
                      for kind, paths in divergence.items() if paths)
 
 
-def archive_projection(root: Path, target: Path, connection) -> dict:
-    """Zip the projection set beside the backup."""
-    base = Path(root) / ".taskmaster"
-    files = projection_files(root, connection)
+def _zip_time(mtime: float) -> tuple:
+    """A zip timestamp, clamped to the format's 1980..2107 range (as `strict_timestamps=False`)."""
+    stamp = _dt.datetime.fromtimestamp(max(mtime, 0)).timetuple()[:6]
+    return max((1980, 1, 1, 0, 0, 0), min(stamp, (2107, 12, 31, 23, 59, 59)))
+
+
+def archive_projection(root: Path, target: Path, connection, *, reads=None) -> dict:
+    """Zip the projection set beside the backup, from `reads` (`_projection_reads`) when given."""
+    reads = _projection_reads(root, connection) if reads is None else reads
     temp = target.with_name(target.name + ".partial")
     temp.unlink(missing_ok=True)
-    with zipfile.ZipFile(temp, "w", compression=zipfile.ZIP_DEFLATED, strict_timestamps=False) as archive:
-        for entry in files:
-            archive.write(base / entry["path"], entry["path"])
+    with zipfile.ZipFile(temp, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for entry, data, mtime in reads:
+            info = zipfile.ZipInfo(entry["path"], date_time=_zip_time(mtime))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = 0o100644 << 16
+            archive.writestr(info, data)
     os.replace(temp, target)
     _fsync(target)
-    return {"path": str(target), "sha256": _sha256(target), "size": target.stat().st_size, "files": len(files)}
+    return {"path": str(target), "sha256": _sha256(target), "size": target.stat().st_size, "files": len(reads)}
 
 
 def _archived(detail: dict) -> dict[str, bytes]:

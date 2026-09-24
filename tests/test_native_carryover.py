@@ -76,10 +76,10 @@ def cutover(project):
     """Snapshot, backfill + activate through the twins, reconcile: a clean cutover."""
     with _connect(project) as connection:
         before = carryover.snapshot_carryover(connection)
-    activate_native(project)
+    seeded = activate_native(project)["seeded_bases"]
     with _connect(project) as connection:
         carryover.reconcile_progress(connection)
-    return project, before
+    return project, before, seeded
 
 
 # ── snapshot ────────────────────────────────────────────────────────────────
@@ -106,7 +106,7 @@ def test_snapshot_is_deterministic_json_and_counts_local_state(project):
 
 
 def test_snapshot_refuses_an_activated_store(cutover):
-    root, _ = cutover
+    root, _, _ = cutover
     with _connect(root) as connection, pytest.raises(Exception, match="before activation"):
         carryover.snapshot_carryover(connection)
 
@@ -120,9 +120,9 @@ def test_snapshot_refuses_a_malformed_reservation_sidecar(project):
 # ── round trip ──────────────────────────────────────────────────────────────
 
 def test_a_clean_cutover_preserves_everything(cutover):
-    root, before = cutover
+    root, before, seeded = cutover
     with _connect(root) as connection:
-        assert carryover.verify_carryover(connection, before) == []
+        assert carryover.verify_carryover(connection, before, seeded_bases=seeded) == []
         assert connection.execute("SELECT high_water FROM id_counters WHERE kind='bug'").fetchone()[0] == 9
         assert connection.execute("SELECT 1 FROM id_reservations WHERE kind='task' AND public_id='test-epic-042'").fetchone()
 
@@ -153,29 +153,29 @@ EXPECT = {"id counter": "bug", "id counter missing": "idea", "reservation": "tes
 
 @pytest.mark.parametrize("category", sorted(CORRUPTIONS))
 def test_each_corrupted_category_is_reported(cutover, category):
-    root, before = cutover
+    root, before, seeded = cutover
     with _connect(root) as connection:
         connection.execute("BEGIN IMMEDIATE")
         try:
             for statement in CORRUPTIONS[category]:
                 connection.execute(statement)
-            differences = carryover.verify_carryover(connection, before)
+            differences = carryover.verify_carryover(connection, before, seeded_bases=seeded)
         finally:
             connection.rollback()
         assert differences, category
         assert any(EXPECT.get(category, category) in line for line in differences), differences
-        assert carryover.verify_carryover(connection, before) == []
+        assert carryover.verify_carryover(connection, before, seeded_bases=seeded) == []
 
 
 def test_a_changed_reservation_sidecar_is_reported(cutover):
-    root, before = cutover
+    root, before, _ = cutover
     (root / ".taskmaster" / "local" / "id-reservations.json").write_text('{"bug":["B-001"]}', encoding="utf-8")
     with _connect(root) as connection:
         assert any("id-reservations" in line for line in carryover.verify_carryover(connection, before))
 
 
 def test_a_digest_of_another_version_is_refused(cutover):
-    root, before = cutover
+    root, before, _ = cutover
     with _connect(root) as connection:
         assert carryover.verify_carryover(connection, dict(before, version=0))
 
@@ -190,15 +190,15 @@ def test_a_repeat_backfill_leaves_native_local_state_alone(project):
                            (json.dumps([{"ts": "", "text": "pre-N11 native"}]),))
         before = carryover.snapshot_carryover(connection)
     assert before["native_local"]["projection_jobs"]["rows"] == 1
-    activate_native(project)  # backfills again
+    seeded = activate_native(project)["seeded_bases"]  # backfills again
     with _connect(project) as connection:
         carryover.reconcile_progress(connection)
-        assert carryover.verify_carryover(connection, before) == []
+        assert carryover.verify_carryover(connection, before, seeded_bases=seeded) == []
         connection.execute("BEGIN IMMEDIATE")
         try:
             connection.execute("DELETE FROM command_receipts")
             connection.execute("DELETE FROM sync_state WHERE key='checkout.x'")
-            differences = carryover.verify_carryover(connection, before)
+            differences = carryover.verify_carryover(connection, before, seeded_bases=seeded)
         finally:
             connection.rollback()
     assert any("command_receipts" in line for line in differences)
@@ -213,7 +213,7 @@ def _id_state(connection):
 
 
 def test_import_id_state_is_idempotent_and_never_lowers(cutover):
-    root, _ = cutover
+    root, _, _ = cutover
     with _connect(root) as connection:
         first = _id_state(connection)
         carryover.import_id_state(connection, root)

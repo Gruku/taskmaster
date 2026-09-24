@@ -7,9 +7,12 @@ never take publication, so an import cannot deadlock the writer it is awaiting.
 from concurrent.futures import TimeoutError as FutureTimeout
 from contextlib import closing
 import hashlib
+import json
+import sqlite3
 import time
 
 from taskmaster.native import contracts, projection, sync
+from taskmaster.native.contracts import CancelledBeforeExecution
 from taskmaster.native.migrate import encode
 from taskmaster.native.queries import Repository
 from taskmaster.projection_parse import classify
@@ -21,6 +24,35 @@ from .sync_prepare import prepare
 # sync.finish runs after the caller's budget may be spent on publication; it
 # gets its own short minimum so a synchronized run is not reported pending.
 FINISH_TIMEOUT = 5
+# A file is started only while more than this is left of the budget (at most RESERVE_SHARE
+# of it, so a short budget still starts files): room for one prepare and writer command.
+FILE_RESERVE = 1.0
+RESERVE_SHARE = 0.1
+# A sync.apply still running when the budget ends gets up to this long before its outcome is
+# settled from the admission queue and its durable receipt (`_settle`). The grace and the
+# sync.finish minimum share one FINISH_TIMEOUT allowance: a reply comes within budget + 5 s.
+IMPORT_GRACE = FINISH_TIMEOUT
+# sync.finish always gets at least this long, however much of the allowance the grace used.
+FINISH_FLOOR = 0.5
+
+
+def _finish_timeout(remaining, grace_used):
+    """The sync.finish wait: the rest of the budget, else what the grace left of
+    FINISH_TIMEOUT, never below FINISH_FLOOR (a zero wait would report a finished
+    completion receipt as uncertain)."""
+    return max(remaining, FINISH_TIMEOUT - grace_used, FINISH_FLOOR)
+# Why a file's write is unsettled, by (observe?, outcome). An observe records the published
+# bytes as the merge base and changes no task data, so it is never called an import.
+_UNSETTLED = {
+    (False, 'uncertain'): 'import outcome uncertain: the writer is still running it, or was interrupted, and no '
+                          'receipt exists yet; inspect its receipt or retry the same sync id',
+    (False, 'not_committed'): 'import not committed: it was cancelled before the writer ran it; retry the same '
+                              'sync id',
+    (True, 'uncertain'): 'base record (observe) outcome uncertain: the writer is still running it, or was '
+                         'interrupted; it changes no task data either way; retry the same sync id',
+    (True, 'not_committed'): 'base record (observe) not committed: it was cancelled before the writer ran it; it '
+                             'changes no task data; retry the same sync id',
+}
 # The completed result is stored durably and must fit one request envelope.
 SUMMARY_BYTES = 256 * 1024
 _WARNINGS_KEPT = 50
@@ -79,6 +111,69 @@ def _unchanged_rule(owner, linked):
     return skippable
 
 
+def _receipt(owner, scope, key):
+    with closing(owner._connect(readonly=True)) as connection:
+        row = connection.execute('SELECT outcome_json FROM command_receipts WHERE store_id=? AND caller_scope=? '
+                                 'AND request_id=?', (owner.identity['store_id'], scope, key)).fetchone()
+    return None if row is None else json.loads(row[0])
+
+
+def _await(future, timeout):
+    """`(receipt, 'committed')`, `(None, None)` while it is still running after `timeout`,
+    `(None, 'not_committed')` for a command cancelled before execution, or `(None, 'error')`
+    when the writer failed without a verdict (e.g. ServiceUnavailable: interrupted). A
+    refusal (Conflict and other ValueErrors: the transaction rolled back) is raised."""
+    try:
+        return future.result(timeout=timeout), 'committed'
+    except FutureTimeout:
+        return None, None
+    except CancelledBeforeExecution:
+        return None, 'not_committed'
+    except ValueError:
+        raise
+    except Exception:  # noqa: BLE001 - the durable receipt, not the transport error, decides
+        return None, 'error'
+
+
+def _settle(owner, future, scope, key, grace):
+    """`(receipt or None, outcome, grace waited)` of a submitted sync.apply that did not
+    simply finish; a store error while settling (a locked database) is `uncertain`.
+    """
+    started = time.monotonic()
+    receipt, outcome = _await(future, grace)
+    waited = time.monotonic() - started
+    try:
+        return (*_settled(owner, future, scope, key, receipt, outcome), waited)
+    except sqlite3.Error:
+        return None, 'uncertain', waited
+
+
+def _settled(owner, future, scope, key, receipt, outcome):
+    """The rest of `_settle`, after its grace wait: `(receipt or None, outcome)`.
+
+    - `committed`: it finished within `grace`, or its durable receipt exists (a receipt
+      commits in the command's own transaction).
+    - `not_committed`: it was cancelled before execution (cancel and admission share one
+      ordering point, so a cancelled command can never run).
+    - `uncertain`: the writer is still executing it, or failed without a verdict
+      (interrupted) and no receipt exists.
+    A refusal (a ValueError such as Conflict) is raised to the caller: nothing committed.
+    """
+    if outcome is None:
+        if owner.cancel(scope, key)['state'] == 'cancelled_before_execution':
+            return None, 'not_committed'
+        receipt = _receipt(owner, scope, key)
+        if receipt is not None:
+            return receipt, 'committed'
+        if not future.done():
+            return None, 'uncertain'
+        receipt, outcome = _await(future, 0)  # finished between the grace and the cancel
+    if outcome == 'error':
+        receipt = _receipt(owner, scope, key)
+        return (receipt, 'committed') if receipt is not None else (None, 'uncertain')
+    return receipt, outcome
+
+
 def summarize(result):
     """A bounded completed result: receipt keys, not whole receipts.
 
@@ -114,12 +209,12 @@ def bound(result, named=()):
     for the files the caller named come first, so a caller that asked about one
     file always learns its outcome however many other files are pending.
     """
-    lists = ('unresolved', 'notices', 'imports', 'warnings')  # the why first
+    lists = ('unresolved', 'notices', 'imports', 'observes', 'warnings')  # the why first
     named = set(named or ())
     prefixes = tuple(f'sync pending: {rel}: ' for rel in named)
 
     def pinned(key, item):
-        if key == 'imports':
+        if key in ('imports', 'observes'):
             return isinstance(item, dict) and item.get('file') in named
         if key == 'unresolved':
             return item in named
@@ -167,10 +262,14 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
     if worktree is not None and (not isinstance(worktree, str) or not worktree):
         raise ValueError('worktree must be an absolute checkout path')
     scope = operation_scope(caller_scope, request_id)
-    result = dict(state='pending', through=through, captured=False, imports=[], observed=0,
+    # `imports` are domain writes; `observed` counts committed observes (the published bytes
+    # recorded as merge base) and `observes` lists any whose outcome the budget left unsettled.
+    result = dict(state='pending', through=through, captured=False, imports=[], observed=0, observes=[],
                   unresolved=[], notices=[], warnings=[], caller_scope=caller_scope,
                   request_id=request_id, receipt_scope=scope, import_files=import_files)
     deadline = time.monotonic() + max(0, timeout)
+    reserve = min(FILE_RESERVE, max(0, timeout) * RESERVE_SHARE)
+    grace_used = 0.0  # past the budget, taken from the FINISH_TIMEOUT allowance
     acquired = False
     with owner.guard:
         owner.active_syncs += 1
@@ -185,12 +284,15 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
         if notice not in result['notices']:
             result['notices'].append(notice)
 
-    def execute(operation, key, arguments, timeout=None):
+    def submit(operation, key, arguments):
         envelope = dict(protocol=2, store_id=owner.identity['store_id'], caller_scope=scope,
                         request_id=key, operation=operation, arguments=arguments, expected_revisions=[])
         # Validate before enqueue, including the fully encoded 1 MiB limit.
         contracts.validate(envelope)
-        return owner.submit(envelope).result(timeout=remaining() if timeout is None else timeout)
+        return owner.submit(envelope)
+
+    def execute(operation, key, arguments, timeout=None):
+        return submit(operation, key, arguments).result(timeout=remaining() if timeout is None else timeout)
 
     backlog = owner.root / '.taskmaster'
     # Only a full ordinary sync takes the stat fast path; a named resync or take_file
@@ -299,7 +401,9 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
             skippable = _unchanged_rule(owner, linked) if fast else None
             owner.checkpoint('sync_files_selected')
             for rel in selected:
-                if not remaining() or owner.stopping.is_set():
+                # Start a file only with room left to finish it: a write submitted as the budget
+                # ends is what used to be reported "uncertain" although it committed.
+                if remaining() <= reserve or owner.stopping.is_set():
                     pending(rel, 'time budget exhausted or coordinator stopping; retry the same sync id')
                     return result
                 if rel in drift and not take_file:
@@ -326,19 +430,35 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
                         # Only the classified bytes were judged authored (a Git restore may land between).
                         pending(rel, 'file changed after Git classification; not imported, retry the sync')
                         continue
-                    if observation is not None and not moved and checkouts.observe(observed_checkout) != observation:
+                    # The HEAD guard keeps bytes a bypassed Git operation put here from being
+                    # imported as authored edits. An `observe` imports nothing: sync.apply accepts
+                    # it only for bytes equal to the published generation's recorded digest (or,
+                    # D7, to its trusted base up to line endings) under the manifest token, and it
+                    # changes no domain row. Those bytes are the published generation whatever put
+                    # them on disk, so a HEAD move cannot change what an observe records; and the
+                    # completion check still re-reads HEAD before the observation may advance.
+                    # Every other mode (apply, conflict, quarantine, repair) keeps the check.
+                    guarded = plan.arguments['mode'] != 'observe'
+                    if (guarded and observation is not None and not moved
+                            and checkouts.observe(observed_checkout) != observation):
                         moved = True
-                    if moved:
+                    if moved and guarded:
                         pending(rel, 'HEAD moved during the sync; not imported, retry the sync')
                         continue
                     key = hashlib.sha256(encode(plan.arguments).encode()).hexdigest()
-                    try:
-                        receipt = execute('sync.apply', key, plan.arguments)
-                    except FutureTimeout:
-                        result['imports'].append(dict(file=rel, state='uncertain', caller_scope=scope, request_id=key,
-                                                      may_have_committed=True))
-                        pending(rel, 'import outcome uncertain; inspect its receipt or retry the same sync id')
-                        return result
+                    future = submit('sync.apply', key, plan.arguments)
+                    receipt, outcome = _await(future, remaining())
+                    if outcome != 'committed':
+                        receipt, outcome, waited = _settle(
+                            owner, future, scope, key, max(0.0, IMPORT_GRACE - grace_used) if outcome is None else 0)
+                        grace_used += waited  # only the grace wait, not the cancel/receipt reads
+                    if receipt is None:
+                        observing = plan.state == 'observe'
+                        result['observes' if observing else 'imports'].append(dict(
+                            file=rel, state=outcome, caller_scope=scope, request_id=key,
+                            may_have_committed=outcome == 'uncertain'))
+                        pending(rel, _UNSETTLED[observing, outcome])
+                        continue  # the loop's budget check ends the sync once the time is gone
                     if plan.state == 'observe':
                         result['observed'] += 1
                     else:
@@ -455,7 +575,7 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
             completed = summarize(dict(result, state='synchronized'))
             try:
                 execute('sync.finish', 'finish', {'result': completed},
-                        timeout=max(remaining(), FINISH_TIMEOUT))
+                        timeout=_finish_timeout(remaining(), grace_used))
             except FutureTimeout:
                 pending(None, 'completion receipt uncertain; retry the same sync id')
             except Exception as exc:

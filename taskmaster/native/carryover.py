@@ -68,7 +68,7 @@ def _activation_key(key: str) -> bool:
     return key in ACTIVATION_META_KEYS or key.startswith(ACTIVATION_META_PREFIXES)
 
 
-def _table_digest(connection, table) -> dict | None:
+def _table_digest(connection, table, *, skip_files=frozenset()) -> dict | None:
     if not _exists(connection, table):
         return None
     cursor = connection.execute(f'SELECT * FROM "{table}"')
@@ -76,7 +76,23 @@ def _table_digest(connection, table) -> dict | None:
     rows = (dict(zip(names, map(_cell, row))) for row in cursor)
     if table == "meta":
         rows = (row for row in rows if not _activation_key(str(row["key"])))
+    if skip_files:
+        rows = (row for row in rows if row.get("file") not in skip_files)
     return _digest(rows)
+
+
+def _seeded_base_problems(connection, seeded) -> list[str]:
+    """Each base activation seeded must be the published bytes of an unquarantined row."""
+    bad = []
+    for rel in sorted(seeded):
+        row = connection.execute("SELECT b.content,p.content_hash,p.quarantined FROM projection_base b "
+                                 "JOIN projection p ON p.file=b.file WHERE b.file=?", (rel,)).fetchone()
+        if row is None or row[0] is None or row[2] or hashlib.sha1(bytes(row[0])).hexdigest() != row[1]:
+            bad.append(rel)
+    if not bad:
+        return []
+    shown = ", ".join(bad[:_LISTED]) + (" ..." if len(bad) > _LISTED else "")
+    return [f"{len(bad)} activation-seeded projection_base row(s) are not the recorded published bytes: {shown}"]
 
 
 def _sync_state_digest(connection) -> dict | None:
@@ -244,12 +260,17 @@ def _changed(label, before, now) -> str:
     return f"{label} changed: {detail}"
 
 
-def verify_carryover(connection: sqlite3.Connection, before: dict) -> list[str]:
+def verify_carryover(connection: sqlite3.Connection, before: dict, *, seeded_bases=()) -> list[str]:
     """Recompute the carry-over digest from the native side; return the differences.
 
     Call it after backfill, activation, `import_id_state` and `reconcile_progress`, and
     before any native write (inside the activation transaction is ideal: a non-empty
     result there rolls the switch back). Read-only; joins a caller transaction.
+
+    `seeded_bases`: the paths activation added to `projection_base` after its own
+    verification (N16; the cutover journals them on its `activate` row). Seeding is
+    additive, so the carried rows are exactly the others, and they must still match the
+    snapshot; each seeded row must be the recorded published bytes of an unquarantined file.
     """
     from taskmaster.native_routing import progress
     from taskmaster.native.workflow import PROGRESS_LEGACY_KEY
@@ -264,10 +285,13 @@ def verify_carryover(connection: sqlite3.Connection, before: dict) -> list[str]:
             out.append(f"native authority is not active (authority={authority[0] if authority else None!r})")
 
         # Retained legacy tables, read in place by the native store.
+        seeded = frozenset(seeded_bases or ())
         for table in RETAINED:
-            now = _table_digest(connection, table)
+            now = _table_digest(connection, table, skip_files=seeded if table == "projection_base" else frozenset())
             if now != before["retained"].get(table):
                 out.append(_changed(f"retained table {table}", before["retained"].get(table), now))
+        if seeded and _exists(connection, "projection_base"):
+            out.extend(_seeded_base_problems(connection, seeded))
         if _exists(connection, "linear_queue") and (states := _queue_states(connection)) != before["linear_queue"]:
             out.append(f"linear_queue states changed: {before['linear_queue']} -> {states}")
         if _exists(connection, "projection") and (flags := _projection_flags(connection)) != before["projection"]:

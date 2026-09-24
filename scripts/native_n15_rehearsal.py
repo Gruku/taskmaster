@@ -418,15 +418,18 @@ def native_graph_verify(root) -> dict:
 
 
 def carryover_problems(root) -> list:
-    """`verify_carryover` against the snapshot the cutover journaled at its backup stage."""
+    """`verify_carryover` against the snapshot the cutover journaled at its backup stage, told
+    the merge bases activation seeded after its own verification (journaled on `activate`)."""
     from taskmaster.native import carryover, cutover
     with ro(root) as con:
-        before = cutover._detail(cutover.journal(con), 'backup').get('carryover')
+        entries = cutover.journal(con)
+        before = cutover._detail(entries, 'backup').get('carryover')
+        seeded = cutover._detail(entries, 'activate').get('seeded_bases') or ()
         if before is None:
             return ['no carry-over snapshot in the journal']
         con.execute('BEGIN')
         try:
-            return list(carryover.verify_carryover(con, before))
+            return list(carryover.verify_carryover(con, before, seeded_bases=seeded))
         finally:
             con.rollback()
 
@@ -635,6 +638,8 @@ def cutover_phase(args):
             notices = result.get('notices', []) if isinstance(result, dict) else []
             rounds.append({'s': seconds, 'state': result.get('state') if isinstance(result, dict) else None,
                            'imports': len(imports),
+                           'observed': result.get('observed') if isinstance(result, dict) else None,
+                           'observes_unsettled': len(result.get('observes') or []) if isinstance(result, dict) else None,
                            'import_states': sorted({str(i.get('state')) for i in imports}),
                            'notices': len(notices), 'notice_heads': [str(n)[:120] for n in notices[:10]]})
             if not any(i.get('state') == 'uncertain' for i in imports) and \
