@@ -10,7 +10,8 @@ of the base commit to measure "before". Measures:
 
 - `dashboard`: `reads.tree` / `reads.dashboard_tree` (when present) plus the three
   dashboard renders; `--out` writes the rendered texts for a byte comparison.
-- `classify`: `Exporter._classify` over every projection file, cold and warm.
+- `classify`: `Exporter._classify` over every projection file, cold and warm (the
+  fingerprint cache is opt-in: set TASKMASTER_EXPORT_FINGERPRINTS=1 to measure it).
 - `generation`: `coordinator.git.generation`'s per-file loop without Git: full
   `observe` against sync-fingerprint hits.
 - `archive`: `cutover.archive_projection` plus the manifest's second pass, against a
