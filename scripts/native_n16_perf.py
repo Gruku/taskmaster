@@ -1,5 +1,5 @@
 # User intent: N16-B before/after evidence on a copied CodeMaestro project, never the
-# live one — dashboard read, export classification, the Git generation loop, the backup
+# live one — dashboard read, the Git generation loop, the backup
 # archive and the board DTO — each run against a given code tree (base or current).
 """N16-B performance measurements on a marked, activated copy.
 
@@ -10,15 +10,16 @@ of the base commit to measure "before". Measures:
 
 - `dashboard`: `reads.tree` / `reads.dashboard_tree` (when present) plus the three
   dashboard renders; `--out` writes the rendered texts for a byte comparison.
-- `classify`: `Exporter._classify` over every projection file, cold and warm (the
-  fingerprint cache is opt-in: set TASKMASTER_EXPORT_FINGERPRINTS=1 to measure it).
 - `generation`: `coordinator.git.generation`'s per-file loop without Git: full
   `observe` against sync-fingerprint hits.
 - `archive`: `cutover.archive_projection` plus the manifest's second pass, against a
   one-pass prototype (DEFLATED and STORED). `--out` is the archive directory here.
 
-Read-only except `archive` (archives under `--out`'s directory) and the exporter's
-in-memory fingerprints. The board DTO uses `scripts/native_n10_viewer_bench.py`.
+An exporter stat-fingerprint cache was measured and dropped: on Windows the
+change-time check it needs to be safe costs about as much as reading a small file.
+
+Read-only except `archive` (archives under `--out`'s directory). The board DTO uses
+`scripts/native_n10_viewer_bench.py`.
 """
 from __future__ import annotations
 
@@ -37,7 +38,7 @@ import zipfile
 
 def _args():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("measure", choices=("dashboard", "classify", "generation", "archive"))
+    parser.add_argument("measure", choices=("dashboard", "generation", "archive"))
     parser.add_argument("--project", type=Path, required=True)
     parser.add_argument("--code", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--out", type=Path)
@@ -83,22 +84,6 @@ def dashboard(args, database):
         print("renders identical:", texts["dashboard_tree"] == texts["tree"])
     if args.out:
         args.out.write_text(json.dumps(texts), encoding="utf-8")
-
-
-def classify(args, database):
-    from taskmaster.native import projection as outbox
-    backlog = args.project / ".taskmaster"
-    connection = sqlite3.connect(database, isolation_level=None)
-    exporter = outbox.Exporter(connection, backlog, owner="n16", session="n16", clock=time.time)
-    rels = [rel for (rel,) in connection.execute("SELECT file FROM projection ORDER BY file")]
-    paths = {rel: exporter._path(rel) for rel in rels}
-    contents = {rel: path.read_bytes() for rel, path in paths.items() if path.exists()}
-    print(f"{len(contents)} files, {sum(map(len, contents.values())) / 1e6:.1f} MB")
-    for label, changed in (("agrees", False), ("agrees", False), ("publish", True), ("publish", True)):
-        started = time.perf_counter()
-        for rel, data in contents.items():
-            exporter._classify(rel, paths[rel], data + b"x" if changed else data)
-        print(f"classify, {label}: {(time.perf_counter() - started) * 1000:.0f} ms")
 
 
 def generation(args, database):
