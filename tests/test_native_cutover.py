@@ -600,3 +600,47 @@ def test_pre_native_clients_are_refused_by_an_activated_store(project, quiesce):
         store.open_store(root=project).get("task", "cut-epic-001")
     store.reset_for_tests()
     assert tree_hash(project) == before
+
+
+def test_twins_verify_opt_in_runs_the_carryover_oracle(project, monkeypatch):
+    from taskmaster.native import carryover
+    from tests.native_twins import activate_native
+    calls = []
+    real = carryover.verify_carryover
+    monkeypatch.setattr(carryover, "verify_carryover", lambda c, before: calls.append(before) or real(c, before))
+    monkeypatch.setenv("TASKMASTER_TWINS_VERIFY", "1")
+    activate_native(project)
+    assert len(calls) == 1 and calls[0]["version"] == carryover.DIGEST_VERSION
+
+
+def test_escape_hatch_recovers_every_authored_document_into_a_fresh_legacy_store(project, quiesce, monkeypatch,
+                                                                                    tmp_path):
+    """M1 = A: after activation, the projection files re-adopted by a fresh legacy store
+    carry every authored document, including ones written natively after activation."""
+    from tests.native_twins import Twins
+    cutover.cutover(project)
+    twins = Twins(monkeypatch, project, project)
+    with twins.at(project):
+        bs.backlog_add_task(title="Written natively", epic="cut-epic", phase="dev")
+        bs.backlog_bug_create(title="Native bug")
+    native = committed(project)
+    with closing(sqlite3.connect(db(project))) as connection:  # Step 1: every export drained.
+        assert connection.execute("SELECT COUNT(*) FROM projection_jobs "
+                                  "WHERE state IN ('pending','claimed','conflict')").fetchone()[0] == 0
+    store.reset_for_tests()
+    # Steps 4-5: the files, without the native store, adopted by a fresh legacy store.
+    fresh = tmp_path / "fresh"
+    shutil.copytree(project, fresh, ignore=shutil.ignore_patterns("store.db*", "backups", "coordinator"))
+    point_server_at(monkeypatch, fresh)
+    bs.backlog_status()
+    store.reset_for_tests()
+    adopted = committed(fresh)
+    authored = {key for key in native if key[0] not in ("backlog", "project")}
+    # Written after activation; B-010 because the legacy sidecar reserved B-9 (ID import).
+    assert {("task", "cut-epic-003"), ("bug", "B-010")} <= authored
+    missing = sorted(authored - set(adopted))
+    assert not missing, f"documents lost by the escape hatch: {missing}"
+    for key in sorted(authored):
+        (n_doc, n_body, n_arch), (a_doc, a_body, a_arch) = native[key], adopted[key]
+        assert (a_doc.get("title"), a_doc.get("name"), a_arch) == (n_doc.get("title"), n_doc.get("name"), n_arch), key
+        assert (a_body or "").strip() == (n_body or "").strip(), key

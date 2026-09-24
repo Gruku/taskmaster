@@ -1076,9 +1076,11 @@ def _failure(root: Path, mode: str, error: BaseException, *, refused: bool) -> t
     if fence["release_pending"]:
         report["hint"] = "activation committed; run --resume to record the release"
         return report, (EXIT_REFUSED if refused else EXIT_FENCED)
-    report["hint"] = ("no cutover fence is up" + ("" if refused else "; this run did not change the store's authority")
-                      + "; fix the cause and re-run")
-    return report, (EXIT_REFUSED if refused else EXIT_FAILED_UNFENCED)
+    if refused:
+        report["hint"] = "nothing was changed; no cutover fence is up"
+        return report, EXIT_REFUSED
+    report["hint"] = "no cutover fence is up; this run did not change the store's authority; fix the cause and re-run"
+    return report, EXIT_FAILED_UNFENCED
 
 
 def _text(report: dict) -> str:

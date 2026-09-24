@@ -120,16 +120,21 @@ def activate_native(root: Path) -> None:
     through the production activation core (`native.cutover.activate`), which runs
     the production ID import (`carryover.import_id_state`) and progress reconcile.
 
-    Fast path for fixtures: no fence, backup, carry-over comparison or process
-    checks — but authority flips through exactly the function the real cutover
-    commits with.
+    Fast path for fixtures: no fence, backup or process checks — but authority
+    flips through exactly the function the real cutover commits with. With
+    `TASKMASTER_TWINS_VERIFY=1` the full carry-over oracle runs too: a snapshot
+    before backfill (JSON round-tripped, as the cutover journals it) and
+    `verify_carryover` inside the activation transaction.
     """
-    from taskmaster.native import cutover
+    from taskmaster.native import carryover, cutover
     store.reset_for_tests()
     database = root / ".taskmaster" / "local" / "store.db"
     with closing(sqlite3.connect(database, isolation_level=None, timeout=30)) as connection:
+        before = None
+        if os.environ.get("TASKMASTER_TWINS_VERIFY") == "1":
+            before = json.loads(json.dumps(carryover.snapshot_carryover(connection)))
         backfill(connection)
-        cutover.activate(connection, root)
+        cutover.activate(connection, root, before=before)
 
 
 def is_native(root: Path) -> bool:
