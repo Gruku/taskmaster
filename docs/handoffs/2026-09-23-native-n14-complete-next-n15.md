@@ -19,8 +19,8 @@
     test looks heavy.
 - Step worktrees `.worktrees/n14`, `n14-paths`, `n14-deps`, `n14-compat` and `test-ram` are
   merged and can be removed (`git worktree remove` without `--force`).
-- Rehearsal copies are in `%TEMP%	mn14\` (`cm`, `cml`, `cm2`, `cml2` plus logs). They are
-  disposable, and `%TEMP%	mn13\` can go too.
+- Rehearsal copies are in `%TEMP%\tmn14\` (`cm`, `cml`, `cm2`, `cml2` plus logs). They are
+  disposable, and `%TEMP%\tmn13\` can go too.
 
 ## Decisions made
 
