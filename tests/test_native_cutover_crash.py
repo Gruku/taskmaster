@@ -120,24 +120,6 @@ def test_crash_then_rollback(project, point, mode, monkeypatch):
     assert cutover.cutover(project)["ok"]
 
 
-@pytest.mark.parametrize("point", ["rollback:saved", "rollback:restored", "rollback:before-commit"])
-def test_interrupted_rollback_can_be_repeated(project, point, monkeypatch):
-    before = legacy_state(project)
-    crash(project, "compare:before-commit", "exception", monkeypatch)
-    with closing(sqlite3.connect(cutover.database_path(project), isolation_level=None)) as connection:
-        connection.execute("DELETE FROM entities WHERE kind='bug'")  # Force the restore path.
-    def hook(name):
-        if name == point:
-            raise Injected(point)
-    monkeypatch.setitem(cutover.HOOKS, "checkpoint", hook)
-    with pytest.raises(Injected):
-        cutover.rollback(project, discard_writes_since_backup=True)
-    monkeypatch.setitem(cutover.HOOKS, "checkpoint", None)
-    report = cutover.rollback(project, discard_writes_since_backup=True)
-    assert report["ok"]
-    assert legacy_state(project) == before
-
-
 ROLLBACK_SCRIPT = """
 import os, sys
 from pathlib import Path
@@ -148,57 +130,35 @@ def hook(name):
     if name == sys.argv[2]:
         os._exit(37)
 cutover.HOOKS["checkpoint"] = hook
-cutover.rollback(Path(sys.argv[1]), discard_writes_since_backup=True)
+cutover.rollback(Path(sys.argv[1]))
 os._exit(0)
 """
 
 
-@pytest.mark.allow_projection_bypass  # The rollback restores the archived projection files.
-@pytest.mark.parametrize("point", ["rollback:saved", "rollback:files-restored", "rollback:restored",
-                                   "rollback:before-commit"])
-def test_process_death_inside_the_atomic_rollback_then_rollback_again(project, point, monkeypatch):
+
+
+
+@pytest.mark.parametrize("mode", ["exception", "exit"])
+def test_an_interrupted_rollback_changed_nothing_and_runs_again(project, mode, monkeypatch):
+    """The simplified rollback is one transaction: dying inside it (before its commit) leaves
+    the fenced store exactly as it was, and a second rollback completes it."""
     before = legacy_state(project)
-    backlog = project / ".taskmaster" / "backlog.yaml"
-    original = backlog.read_bytes()
     crash(project, "compare:before-commit", "exception", monkeypatch)
-    with closing(sqlite3.connect(cutover.database_path(project), isolation_level=None)) as connection:
-        connection.execute("DELETE FROM entities WHERE kind='bug'")
-    backlog.write_bytes(original + b"# written through the fence\n")
-    repo = str(Path(__file__).resolve().parents[1])
-    result = subprocess.run([sys.executable, "-c", ROLLBACK_SCRIPT, str(project), point], cwd=repo, timeout=120,
-                            env=dict(os.environ, PYTHONPATH=repo), capture_output=True, text=True)
-    assert result.returncode == 37, result.stdout + result.stderr
-    with closing(sqlite3.connect(cutover.database_path(project))) as connection:  # Nothing committed.
-        assert connection.execute("SELECT value FROM meta WHERE key='migration_state'").fetchone()[0] == "migrating"
-    report = cutover.rollback(project, discard_writes_since_backup=True)
-    assert report["ok"]
-    assert legacy_state(project) == before and backlog.read_bytes() == original
-
-
-RESUME_AFTER_ROLLBACK_SCRIPT = ROLLBACK_SCRIPT
-
-
-@pytest.mark.allow_projection_bypass
-def test_process_death_after_the_file_restore_then_resume_keeps_the_write(project, monkeypatch):
-    """T4 with os._exit: the rollback restored the files and died before its commit; a resume
-    puts the saved files back so the store and its files agree before activation."""
-    from taskmaster import backlog_server as bs
-    from taskmaster import store
-    from taskmaster.admission import migration_owner
-    from tests.native_twins import point_server_at
-    crash(project, "compare:before-commit", "exception", monkeypatch)
-    with closing(sqlite3.connect(cutover.database_path(project))) as connection:
-        token = connection.execute("SELECT value FROM meta WHERE key='migration_token'").fetchone()[0]
-    point_server_at(monkeypatch, project)
-    with migration_owner(token):
-        bs.backlog_bug_create(title="Leaked through the fence")
-    store.reset_for_tests()
-    bug_file = project / ".taskmaster" / "bugs" / "B-010.md"
-    leaked = bug_file.read_bytes()
-    repo = str(Path(__file__).resolve().parents[1])
-    result = subprocess.run([sys.executable, "-c", ROLLBACK_SCRIPT, str(project), "rollback:files-restored"],
-                            cwd=repo, timeout=120, env=dict(os.environ, PYTHONPATH=repo), capture_output=True, text=True)
-    assert result.returncode == 37, result.stdout + result.stderr
-    assert not bug_file.exists()
-    assert cutover.cutover(project, resume=True)["ok"]
-    assert bug_file.read_bytes() == leaked and ("bug", "B-010") in committed(project)
+    fenced = legacy_state(project)
+    if mode == "exception":
+        def hook(name):
+            if name == "rollback:before-commit":
+                raise Injected(name)
+        monkeypatch.setitem(cutover.HOOKS, "checkpoint", hook)
+        with pytest.raises(Injected):
+            cutover.rollback(project)
+        monkeypatch.setitem(cutover.HOOKS, "checkpoint", None)
+    else:
+        repo = str(Path(__file__).resolve().parents[1])
+        result = subprocess.run([sys.executable, "-c", ROLLBACK_SCRIPT, str(project), "rollback:before-commit"],
+                                cwd=repo, timeout=120, env=dict(os.environ, PYTHONPATH=repo),
+                                capture_output=True, text=True)
+        assert result.returncode == 37, result.stdout + result.stderr
+    assert legacy_state(project) == fenced
+    assert cutover.rollback(project)["ok"]
+    assert legacy_state(project) == before
