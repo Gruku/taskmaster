@@ -76,7 +76,7 @@ SERVICE_IDLE = "90"
 # when the op must commit, a commit sequence. Anything else - an unknown sentence, a stripped suffix,
 # "(not persisted)" - is a failure, never a silent pass.
 SUCCESS = {
-    "backlog_update_task": r"^Updated `",
+    "backlog_update_task": r"^(Updated|No change to) `",
     "backlog_add_task": r"^Added `",
     "backlog_archive_task": r"^Archived `",
     "backlog_link": r"^ok: ",
@@ -86,6 +86,8 @@ SUCCESS = {
     "backlog_claim": "json-ok",
 }
 NOT_PERSISTED = "(not persisted)"
+# A native write whose value already matched commits nothing and says so explicitly.
+UNCHANGED = re.compile(r"^No change to `|→ unchanged \(already `")
 
 
 def _json(result):
@@ -110,11 +112,14 @@ def classify(result, *, success=None, commit="none", noop_ok=False) -> tuple[boo
     if result is None or (isinstance(result, str) and not result.strip()):
         return False, "empty answer"
     if isinstance(result, str) and NOT_PERSISTED in result:
-        # An unchanged value commits nothing and the native tool then answers "(not persisted)". That
-        # is accepted only where a no-op is the expected outcome, and only without a sequence; the
-        # scenario verifies the stored value separately.
+        return False, "answer says (not persisted)"
+    if isinstance(result, str) and UNCHANGED.search(result):
+        # An unchanged value commits nothing and the native tool says so. That is accepted only
+        # where a no-op is the expected outcome, and only without a sequence; the scenario
+        # verifies the stored value separately.
         if not (noop_ok and seq_of(result) is None):
-            return False, "answer says (not persisted)"
+            return False, "answer says unchanged"
+        return True, None
     if success == "json-ok":
         if payload is None or payload.get("ok") is not True:
             return False, "unrecognized answer (expected JSON ok=true)"
@@ -209,7 +214,7 @@ class Worker:
                 result = getattr(self.bs(), op["tool"])(**kwargs)
                 ok, error = classify(result, success=op.get("success", SUCCESS.get(op["tool"]) if op.get("expect", "ok") != "read" else None),
                                      commit=op.get("commit", "none"), noop_ok=op.get("noop_ok", False))
-                if ok and isinstance(result, str) and NOT_PERSISTED in result:
+                if ok and isinstance(result, str) and UNCHANGED.search(result):
                     record["noop"] = True
             except Exception as exc:  # noqa: BLE001 - an exception is an outcome to report
                 result, ok, error = None, False, f"{type(exc).__name__}: {exc}"[:300]

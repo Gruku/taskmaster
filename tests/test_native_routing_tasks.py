@@ -270,3 +270,18 @@ def test_dependencies_and_next_available_match(rich):
     rich.same("backlog_next_available", include_future_phases=True)
     rich.same("backlog_pick_task", task_id="test-epic-003")
     rich.same("backlog_complete_task", task_id="test-epic-002", target_status="in-review", human_action="sign")
+
+
+def test_native_update_that_changes_nothing_says_so(twins):
+    """A native command commits whole or refuses, so an unchanged value is a no-op, never "(not persisted)"."""
+    with twins.at(twins.native):
+        bs.backlog_update_task("test-epic-002", "priority", "low")
+        answer = bs.backlog_update_task("test-epic-002", "priority", "low")
+        keyword = bs.backlog_update_task("test-epic-002", tldr="Same")
+        keyword_again = bs.backlog_update_task("test-epic-002", tldr="Same")
+        batch = bs.backlog_batch_update(operations="update test-epic-002 priority low")
+    assert answer == "No change to `test-epic-002` field `priority` — already `low`", answer
+    assert keyword.startswith("Updated `test-epic-002`: tldr → Same"), keyword
+    assert keyword_again == "No change to `test-epic-002`: tldr already `Same`", keyword_again
+    assert "`test-epic-002`.priority → unchanged (already `low`)" in batch, batch
+    assert bs.NOT_PERSISTED not in answer + keyword_again + batch

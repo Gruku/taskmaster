@@ -46,6 +46,24 @@ def _committed(call):
     return reads.committed(call.receipts)
 
 
+def _current_field(call, kind, ident, field) -> str:
+    with call.read() as snapshot:
+        entity = reads.get(snapshot, kind, ident)
+    return bs._format_task_field(reads.document(entity, body=False).get(field) if entity is not None else None)
+
+
+def field_display(call, committed, ident, field, expected, kind="task") -> str:
+    """The committed value, or `unchanged (already …)`.
+
+    A native command commits whole or refuses, so an entity absent from its receipts
+    was left as it was because the value already matched, not lost. The legacy
+    "(not persisted)" marker would misreport that as a failed write.
+    """
+    if (kind, ident) not in committed:
+        return f"unchanged (already `{_current_field(call, kind, ident, field)}`)"
+    return bs._committed_field_display(committed, ident, field, expected, kind=kind)
+
+
 def _task_taken(snapshot, task_id) -> bool:
     return snapshot.connection.execute(
         "SELECT 1 FROM entity_core WHERE kind='task' AND public_id=? UNION ALL "
@@ -185,8 +203,11 @@ def update_task(call, *, task_id, field, value, tldr, next_step):
             return refusal
         committed = _committed(call)
         document = committed.get(("task", task_id)) or {}
+        if ("task", task_id) not in committed:
+            return call.finish(f"No change to `{task_id}`: " + "; ".join(
+                f"{name} already `{_current_field(call, 'task', task_id, name)}`" for name in written))
         return call.finish(f"Updated `{task_id}`: " + "; ".join(
-            f"{name} → " + bs._committed_field_display(committed, task_id, name, document.get(name, bs._MISSING_FIELD))
+            f"{name} → " + field_display(call, committed, task_id, name, document.get(name, bs._MISSING_FIELD))
             for name in written))
     if not field:
         return "Error: provide either `field`/`value` or keyword args `tldr`/`next_step`"
@@ -209,7 +230,10 @@ def update_task(call, *, task_id, field, value, tldr, next_step):
         return refusal
     committed = _committed(call)
     document = committed.get(("task", task_id))
-    expected = (document or {}).get(field, bs._MISSING_FIELD)
+    if document is None:
+        return call.finish(f"No change to `{task_id}` field `{field}` — already "
+                           f"`{_current_field(call, 'task', task_id, field)}`")
+    expected = document.get(field, bs._MISSING_FIELD)
     return call.finish(f"Updated `{task_id}` field `{field}` → "
                        + bs._committed_field_display(committed, task_id, field, expected))
 

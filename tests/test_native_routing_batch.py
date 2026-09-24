@@ -113,8 +113,13 @@ def test_a_batch_with_only_errors_commits_nothing(twins):
     _check(twins)
 
 
-def test_a_batch_of_no_op_lines_matches(twins):
-    twins.same("backlog_batch_update", operations="update test-epic-001 title One")
+def test_a_batch_of_no_op_lines_commits_the_same_and_native_says_unchanged(twins):
+    # Intentional difference (N16): a native batch commits whole or refuses, so a line
+    # absent from its receipt is a no-op and says so. Legacy keeps "(not persisted)",
+    # where an absent document can also mean a lost write.
+    legacy, native = twins.call("backlog_batch_update", operations="update test-epic-001 title One")
+    assert "`test-epic-001`.title → (not persisted)" in legacy
+    assert "`test-epic-001`.title → unchanged (already `One`)" in native
     _check(twins)
 
 
