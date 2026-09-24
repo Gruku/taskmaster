@@ -262,8 +262,18 @@ def test_rollback_restores_damaged_staging_from_backup(project, quiesce, monkeyp
     monkeypatch.setitem(cutover.HOOKS, "checkpoint", None)
     with closing(sqlite3.connect(db(project), isolation_level=None)) as connection:
         connection.execute("DELETE FROM entities WHERE kind='bug'")  # Damage after the backup.
-    report = cutover.rollback(project)
+    damaged = legacy_state(project)
+    # A difference in `entities` may be an acknowledged write: never discarded silently.
+    with pytest.raises(cutover.CutoverRefused, match=r"entities: 0 added, 1 removed.*B-001.*--discard-writes-since-backup"):
+        cutover.rollback(project)
+    assert legacy_state(project) == damaged  # Refusal restored nothing.
+    report = cutover.rollback(project, discard_writes_since_backup=True)
     assert report["restored_from"] and Path(report["restored_from"]).name.startswith("pre-native-")
+    assert report["warnings"] and "discarded" in report["warnings"][0]
+    saved = Path(report["pre_rollback_copy"])
+    assert saved.name.startswith("pre-rollback-") and saved.parent == db(project).parent / "backups"
+    with closing(sqlite3.connect(saved)) as copy:
+        assert copy.execute("SELECT COUNT(*) FROM entities WHERE kind='bug'").fetchone()[0] == 0
     assert legacy_state(project) == before
     with closing(sqlite3.connect(db(project))) as connection:
         assert_compatible(connection)
@@ -304,10 +314,22 @@ def test_stale_fence_needs_ownership_and_matching_token(project, quiesce, monkey
 def test_forged_fence_without_journal_is_not_cleared(project, quiesce):
     with closing(sqlite3.connect(db(project), isolation_level=None)) as connection:
         connection.execute("INSERT INTO meta VALUES('migration_state','migrating')")
-    with pytest.raises(cutover.CutoverRefused, match="no cutover journal"):
+    with pytest.raises(cutover.CutoverRefused, match="no cutover journal.*--clear-orphan-fence"):
         cutover.rollback(project)
     with pytest.raises(cutover.CutoverRefused, match="no cutover journal"):
         cutover.cutover(project, resume=True)
+
+
+def test_orphan_fence_is_cleared_only_on_request(project, quiesce, capsys):
+    before = legacy_state(project)
+    with closing(sqlite3.connect(db(project), isolation_level=None)) as connection:
+        connection.executemany("INSERT INTO meta VALUES(?,?)", [("migration_state", "migrating"),
+                                                               ("migration_owner", "someone")])
+    assert cutover.main(["--root", str(project), "--rollback", "--clear-orphan-fence", "--json"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["cleared"] == {"migration_state": "migrating", "migration_owner": "someone"}
+    assert legacy_state(project) == before
+    assert cutover.cutover(project)["ok"]
 
 
 # ── Dry run ──────────────────────────────────────────────────────────────────
@@ -403,3 +425,178 @@ def test_real_owner_and_writer_probes_refuse(project, monkeypatch):
     finally:
         holder.close()
     assert cutover.cutover(project)["ok"]  # Our own probe connections are closed before probing.
+
+
+# ── Review fixes (N15 adversarial review, probes P1-P7) ─────────────────────
+
+def test_p2_rollback_never_silently_discards_a_write_acknowledged_after_backup(project, quiesce, monkeypatch):
+    crash_at(monkeypatch, "compare:begin")
+    with pytest.raises(Injected):
+        cutover.cutover(project)
+    monkeypatch.setitem(cutover.HOOKS, "checkpoint", None)
+    with closing(sqlite3.connect(db(project), isolation_level=None)) as connection:  # A pre-bridge writer.
+        connection.execute("UPDATE entities SET body=COALESCE(body,'')||' ACKED' WHERE kind='bug'")
+    with pytest.raises(cutover.CutoverRefused, match=r"entities: 0 added, 0 removed, 1 changed.*bug"):
+        cutover.rollback(project)
+    backups = sorted((db(project).parent / "backups").glob("pre-rollback-*"))
+    assert backups == []  # A refusal restores nothing, so nothing needed saving.
+    # The write survives, and the operator can keep it by rolling forward.
+    report = cutover.cutover(project, resume=True)
+    assert report["ok"]
+    assert any(body and body.endswith(" ACKED") for (kind, _), (_, body, _) in committed(project).items()
+               if kind == "bug")
+
+
+def test_corrupt_store_restores_without_the_flag_but_is_saved_first(project, quiesce, monkeypatch):
+    before = legacy_state(project)
+    crash_at(monkeypatch, "compare:begin")
+    with pytest.raises(Injected):
+        cutover.cutover(project)
+    monkeypatch.setitem(cutover.HOOKS, "checkpoint", None)
+    with closing(sqlite3.connect(db(project), isolation_level=None)) as connection:
+        connection.execute("CREATE TABLE corrupt_probe(a,b)")
+        connection.executemany("INSERT INTO corrupt_probe VALUES(?,?)", [(i, -i) for i in range(50)])
+        connection.execute("CREATE INDEX corrupt_probe_a ON corrupt_probe(a)")
+        connection.execute("PRAGMA writable_schema=ON")
+        connection.execute("UPDATE sqlite_schema SET sql='CREATE INDEX corrupt_probe_a ON corrupt_probe(b)' "
+                           "WHERE name='corrupt_probe_a'")
+    with closing(sqlite3.connect(db(project))) as connection:
+        assert connection.execute("PRAGMA integrity_check").fetchone()[0] != "ok"
+    report = cutover.rollback(project)
+    assert report["restored_from"] and "integrity_check" in report["warnings"][0]
+    assert Path(report["pre_rollback_copy"]).exists()
+    assert legacy_state(project) == before
+    with closing(sqlite3.connect(db(project))) as connection:
+        assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+
+def test_p3_resume_survives_a_lost_manifest(project, quiesce, monkeypatch):
+    crash_at(monkeypatch, "backfill:begin")
+    with pytest.raises(Injected):
+        cutover.cutover(project)
+    monkeypatch.setitem(cutover.HOOKS, "checkpoint", None)
+    manifest = next(p for p in (db(project).parent / "backups").glob("pre-native-*.json")
+                    if not p.name.endswith("id-reservations.json"))
+    manifest.write_text("", encoding="utf-8")  # Power loss before the manifest reached disk.
+    assert cutover.cutover(project, resume=True)["ok"]
+
+
+def test_resume_names_an_unreadable_manifest_when_the_journal_lacks_the_snapshot(project, quiesce, monkeypatch):
+    crash_at(monkeypatch, "backfill:begin")
+    with pytest.raises(Injected):
+        cutover.cutover(project)
+    monkeypatch.setitem(cutover.HOOKS, "checkpoint", None)
+    with closing(sqlite3.connect(db(project), isolation_level=None)) as connection:  # A pre-fix journal row.
+        connection.execute(f"UPDATE {cutover.JOURNAL} SET detail_json=json_remove(detail_json,'$.carryover') "
+                           "WHERE stage='backup'")
+    manifest = next(p for p in (db(project).parent / "backups").glob("pre-native-*.json")
+                    if not p.name.endswith("id-reservations.json"))
+    manifest.write_text("", encoding="utf-8")
+    with pytest.raises(cutover.CutoverAborted, match=r"not in the journal and the backup manifest .* is unreadable"):
+        cutover.cutover(project, resume=True)
+
+
+def test_p4_lock_timeout_before_the_fence_reports_no_fence(project, quiesce, monkeypatch, capsys):
+    monkeypatch.setattr(cutover, "_connect", lambda p: sqlite3.connect(p, isolation_level=None, timeout=0.2))
+    holder = sqlite3.connect(db(project), isolation_level=None)
+    holder.execute("BEGIN IMMEDIATE")
+    try:
+        code = cutover.main(["--root", str(project), "--json"])
+    finally:
+        holder.rollback()
+        holder.close()
+    report = json.loads(capsys.readouterr().out)
+    assert code == cutover.EXIT_FAILED_UNFENCED
+    assert report["fence"]["fence_up"] is False and "locked" in report["error"]
+    assert "no cutover fence is up" in report["hint"]
+
+
+def test_p5_backfill_failure_reports_the_fence_that_is_up(project, quiesce, capsys):
+    with closing(sqlite3.connect(db(project), isolation_level=None)) as connection:
+        connection.execute("INSERT INTO entity_fts(kind,id,title,body) VALUES('bug','B-404','orphan','x')")
+    assert cutover.main(["--root", str(project), "--json"]) == cutover.EXIT_FENCED
+    report = json.loads(capsys.readouterr().out)
+    assert report["fence"]["fence_up"] is True and "ValueError" in report["error"]
+    assert "--resume or --rollback" in report["hint"]
+    assert cutover.main(["--root", str(project), "--rollback"]) == 0
+
+
+def test_p1_dry_run_leaves_a_leftover_wal_untouched(project, monkeypatch):
+    import subprocess
+    import sys
+    from taskmaster.native import quiesce as real
+    monkeypatch.setitem(sys.modules, "taskmaster.native.quiesce", real)
+    monkeypatch.setattr(real, "scan_processes", lambda root, **k: real.ScanResult([]))
+    monkeypatch.setattr(real, "open_writers", lambda p: pytest.fail("the dry run must not probe open writers"))
+    script = ("import sqlite3,os,sys; c=sqlite3.connect(sys.argv[1],isolation_level=None);"
+              "c.execute('PRAGMA wal_autocheckpoint=0');"
+              "c.execute(\"INSERT INTO meta VALUES('probe_crash','1')\"); os._exit(0)")
+    subprocess.run([sys.executable, "-c", script, str(db(project))], check=True)
+    wal = db(project).with_name("store.db-wal")
+    assert wal.stat().st_size > 0
+    before = {path: path.read_bytes() for path in (db(project), wal)}
+    report = cutover.dry_run(project)
+    assert report["quiesce"]["open_writers"] == "not probed in dry run"
+    assert {path: path.read_bytes() for path in (db(project), wal)} == before
+
+
+def test_unbackfilled_handover_status_is_refused_until_the_legacy_latch_runs(project, quiesce, monkeypatch):
+    point_server_at(monkeypatch, project)
+    bs.backlog_handover_create(tldr="a session", next_action="continue")
+    store.reset_for_tests()
+    with closing(sqlite3.connect(db(project), isolation_level=None)) as connection:
+        connection.execute("UPDATE entities SET doc=json_remove(doc,'$.status') WHERE kind='handover'")
+        connection.execute("UPDATE entities SET doc=json_remove(doc,'$.handover_status_backfilled') "
+                           "WHERE kind='backlog'")
+    before = tree_hash(project)
+    with pytest.raises(cutover.CutoverRefused, match="handover-status backfill has not run.*1 handover"):
+        cutover.cutover(project)
+    assert any("handover-status" in r for r in cutover.dry_run(project)["refusals"])
+    assert tree_hash(project) == before
+    monkeypatch.setattr(bs, "_HANDOVER_STATUS_BACKFILL_RAN", False)
+    bs.backlog_handover_list()  # The guidance: one bridge-client handover call runs the latch.
+    store.reset_for_tests()
+    assert cutover.cutover(project)["ok"]
+    handovers = [doc for (kind, _), (doc, _, _) in committed(project).items() if kind == "handover"]
+    assert handovers and all(doc.get("status") == "open" for doc in handovers)
+
+
+def test_post_activation_resume_needs_no_quiesce_or_lock(project, quiesce, monkeypatch):
+    from taskmaster.coordinator.ownership import Ownership
+    crash_at(monkeypatch, "activate:after-commit")
+    with pytest.raises(Injected):
+        cutover.cutover(project)
+    monkeypatch.setitem(cutover.HOOKS, "checkpoint", None)
+    quiesce.scan_processes = lambda root, **k: [{"pid": 9, "name": "native mcp server"}]
+    quiesce.live_owner = lambda root: {"pid": 10, "kind": "native coordinator"}
+    with Ownership(project):  # A native coordinator already runs.
+        report = cutover.cutover(project, resume=True)
+    assert report["ok"] and report["completed_stages"][-1] == "release"
+
+
+def test_a_normal_run_refuses_a_leftover_journal(project, quiesce, monkeypatch):
+    crash_at(monkeypatch, "reconcile:begin")
+    with pytest.raises(Injected):
+        cutover.cutover(project)
+    monkeypatch.setitem(cutover.HOOKS, "checkpoint", None)
+    with closing(sqlite3.connect(db(project), isolation_level=None)) as connection:  # Fence cleared by hand.
+        connection.execute("DELETE FROM meta WHERE key LIKE 'migration_%'")
+    with pytest.raises(cutover.CutoverRefused, match="cutover journal already exists.*--resume or --rollback"):
+        cutover.cutover(project)
+
+
+def test_pre_native_clients_are_refused_by_an_activated_store(project, quiesce):
+    """Code rollback to a bridge (legacy-only) build: its admission and its Store both refuse,
+    and refusing writes nothing."""
+    from taskmaster import admission
+    cutover.cutover(project)
+    before = tree_hash(project)
+    with closing(sqlite3.connect(db(project))) as connection:
+        assert (admission.LEGACY_SCHEMA_VERSION, admission.CLIENT_PROTOCOL) == (1, 1)
+        with pytest.raises(UnsupportedStoreError, match="schema_version=2"):
+            assert_compatible(connection)
+    store.reset_for_tests()
+    with pytest.raises(UnsupportedStoreError):
+        store.open_store(root=project).get("task", "cut-epic-001")
+    store.reset_for_tests()
+    assert tree_hash(project) == before

@@ -120,7 +120,7 @@ def test_crash_then_rollback(project, point, mode, monkeypatch):
     assert cutover.cutover(project)["ok"]
 
 
-@pytest.mark.parametrize("point", ["rollback:restored", "rollback:before-commit"])
+@pytest.mark.parametrize("point", ["rollback:saved", "rollback:restored", "rollback:before-commit"])
 def test_interrupted_rollback_can_be_repeated(project, point, monkeypatch):
     before = legacy_state(project)
     crash(project, "compare:before-commit", "exception", monkeypatch)
@@ -131,8 +131,8 @@ def test_interrupted_rollback_can_be_repeated(project, point, monkeypatch):
             raise Injected(point)
     monkeypatch.setitem(cutover.HOOKS, "checkpoint", hook)
     with pytest.raises(Injected):
-        cutover.rollback(project)
+        cutover.rollback(project, discard_writes_since_backup=True)
     monkeypatch.setitem(cutover.HOOKS, "checkpoint", None)
-    report = cutover.rollback(project)
+    report = cutover.rollback(project, discard_writes_since_backup=True)
     assert report["ok"]
     assert legacy_state(project) == before

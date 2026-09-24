@@ -149,6 +149,10 @@ def _native_manifest(connection) -> dict:
     return dict(connection.execute("SELECT key,value FROM native_manifest")) if _has_table(connection, "native_manifest") else {}
 
 
+def _drop_journal(connection) -> None:
+    connection.execute("DROP TABLE " + JOURNAL)
+
+
 def journal(connection) -> list[dict]:
     if not _has_table(connection, JOURNAL):
         return []
@@ -276,11 +280,15 @@ def _process_label(process: dict) -> str:
     return " ".join(parts)
 
 
-def check_quiesced(root: Path, *, confirm_stopped: bool) -> dict:
-    """Refuse live owners and open writers; name matching processes unless confirmed stopped."""
+def check_quiesced(root: Path, *, confirm_stopped: bool, probe_writers: bool = True) -> dict:
+    """Refuse live owners and open writers; name matching processes unless confirmed stopped.
+
+    `probe_writers=False` (the dry run) skips `open_writers`: its read-write probe
+    connection can checkpoint a leftover WAL into the store file, which is a write.
+    """
     quiesce = _quiesce()
     owner = quiesce.live_owner(Path(root))
-    writers = quiesce.open_writers(database_path(root))
+    writers = quiesce.open_writers(database_path(root)) if probe_writers else "not probed in dry run"
     scan = quiesce.scan_processes(Path(root))
     processes = list(scan or [])
     report = {"live_owner": owner, "open_writers": writers, "processes": processes,
@@ -293,6 +301,9 @@ def check_quiesced(root: Path, *, confirm_stopped: bool) -> dict:
         report["refusals"].append("the store has another open writer; stop every Taskmaster client first")
     elif writers is None:
         report["warnings"].append("open-writer probe was inconclusive (not a WAL database, or unreadable)")
+    elif not probe_writers:
+        report["warnings"].append("open writers not probed in dry run (the probe can checkpoint the WAL); "
+                                  "the real run probes them")
     if processes:
         names = "; ".join(_process_label(p) for p in processes)
         if confirm_stopped:
@@ -316,7 +327,28 @@ def _store_refusals(state: dict, *, mode: str) -> list[str]:
         if fenced:
             return [f"a cutover fence is already up (migration_state={state['migration_state']!r}, "
                     f"owner {state['migration_owner']!r}); use --resume or --rollback"]
+        if state["journal"]:
+            return [f"a cutover journal already exists ({len(state['journal'])} row(s), last "
+                    f"{state['journal'][-1]['stage']!r}); use --resume or --rollback, never a fresh run over it"]
     return []
+
+
+def handover_refusal(connection) -> str | None:
+    """The legacy one-shot handover-status backfill (`backlog_server._ensure_handover_status_backfilled`)
+    never runs on a native store, so handovers still owed a `status` must get it first."""
+    if not _has_table(connection, "entities"):
+        return None
+    marker = connection.execute("SELECT json_extract(doc,'$.handover_status_backfilled') FROM entities "
+                                "WHERE kind='backlog' LIMIT 1").fetchone()
+    if marker and marker[0]:
+        return None
+    owed = connection.execute("SELECT COUNT(*) FROM entities WHERE kind='handover' AND deleted=0 "
+                              "AND json_type(doc,'$.status') IS NULL").fetchone()[0]
+    if not owed:
+        return None
+    return (f"the legacy handover-status backfill has not run on this store ({owed} handover(s) without a "
+            "status). Start one bridge client, run backlog_handover_list once so it backfills them, stop the "
+            "client again, then retry")
 
 
 # ── Backup ───────────────────────────────────────────────────────────────────
@@ -339,14 +371,34 @@ def projection_files(root: Path) -> list[dict]:
     return files
 
 
-def _backup_target(root: Path) -> Path:
+def _fsync(path: Path) -> None:
+    """Flush a file, then its directory entry (a no-op where directories cannot be opened)."""
+    with open(path, "rb+") as stream:
+        os.fsync(stream.fileno())
+    try:
+        descriptor = os.open(path.parent, os.O_RDONLY)
+    except OSError:
+        return  # Windows: directories cannot be opened for fsync; NTFS journals the rename.
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
+
+
+def _stamped(root: Path, prefix: str) -> Path:
     directory = database_path(root).parent / "backups"
     directory.mkdir(parents=True, exist_ok=True)
     stamp = _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    target, n = directory / f"pre-native-{stamp}.db", 1
+    target, n = directory / f"{prefix}-{stamp}.db", 1
     while target.exists() or target.with_suffix(".json").exists():
-        target, n = directory / f"pre-native-{stamp}-{n}.db", n + 1
+        target, n = directory / f"{prefix}-{stamp}-{n}.db", n + 1
     return target
+
+
+def _backup_target(root: Path) -> Path:
+    return _stamped(root, "pre-native")
 
 
 def verify_backup(path: Path, expected_digest: str | None = None) -> str:
@@ -370,6 +422,7 @@ def write_backup(connection, root: Path, carryover: dict) -> dict:
     with closing(sqlite3.connect(temp)) as destination:
         connection.backup(destination)
     os.replace(temp, target)
+    _fsync(target)
     live = domain_digest(connection)
     backup_digest = verify_backup(target, live)
     sidecar = database_path(root).parent / "id-reservations.json"
@@ -377,6 +430,7 @@ def write_backup(connection, root: Path, carryover: dict) -> dict:
     if sidecar.exists():
         sidecar_copy = target.with_name(target.stem + ".id-reservations.json")
         shutil.copyfile(sidecar, sidecar_copy)
+        _fsync(sidecar_copy)
     manifest = {
         "created_at": _now(), "store": str(database_path(root)), "backup": str(target),
         "backup_sha256": _sha256(target), "domain_digest": backup_digest,
@@ -387,6 +441,7 @@ def write_backup(connection, root: Path, carryover: dict) -> dict:
     }
     manifest_path = target.with_suffix(".json")
     manifest_path.write_text(_encode(manifest), encoding="utf-8")
+    _fsync(manifest_path)
     return {"path": str(target), "manifest": str(manifest_path), "domain_digest": backup_digest,
             "sha256": manifest["backup_sha256"], "projection_files": len(manifest["projection_files"])}
 
@@ -540,7 +595,8 @@ class _Run:
         if domain_digest(self.connection) != result["domain_digest"]:
             self.connection.rollback()
             raise CutoverAborted("the store changed while it was being backed up")
-        self._commit_stage("backup", result)
+        # The snapshot commits with the stage row: resume never depends on the external manifest.
+        self._commit_stage("backup", {**result, "carryover": carryover})
 
     def backfill(self):
         def checkpoint(sub):
@@ -558,8 +614,16 @@ class _Run:
         _checkpoint("backfill:after-commit")
 
     def _before(self) -> dict:
-        manifest_path = Path(_detail(journal(self.connection), "backup")["manifest"])
-        return json.loads(manifest_path.read_text(encoding="utf-8"))["carryover"]
+        detail = _detail(journal(self.connection), "backup")
+        if "carryover" in detail:
+            return detail["carryover"]
+        manifest_path = Path(detail.get("manifest", "<unrecorded>"))
+        try:
+            return json.loads(manifest_path.read_text(encoding="utf-8"))["carryover"]
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            raise CutoverAborted(
+                f"the carry-over snapshot is not in the journal and the backup manifest {manifest_path} is "
+                f"unreadable ({type(error).__name__}: {error}); run --rollback and start the cutover again") from error
 
     def compare(self):
         try:
@@ -606,7 +670,9 @@ def _ownership(root: Path):
 
 
 def dry_run(root: Path, *, confirm_stopped: bool = False) -> dict:
-    """Every check, the counts and the planned actions; opens the store read-only."""
+    """Every check, the counts and the planned actions. Writes nothing: the store is opened
+    read-only and `open_writers` is not probed. `live_owner` may take and at once release
+    the ownership byte lock when `owner.lock` exists; that changes no file bytes."""
     root = Path(root)
     path = database_path(root)
     report = {"mode": "dry-run", "root": str(root), "store": str(path), "refusals": [], "warnings": []}
@@ -628,6 +694,7 @@ def dry_run(root: Path, *, confirm_stopped: bool = False) -> dict:
             report["counts"] = counts
             if not state["native"] and state["migration_state"] == "ready":
                 report["refusals"] += [_flush_hint(_blocking(counts))] if _blocking(counts) else []
+                report["refusals"] += [r for r in [handover_refusal(connection)] if r]
                 try:
                     assert_compatible(connection)
                 except UnsupportedStoreError as error:
@@ -640,7 +707,7 @@ def dry_run(root: Path, *, confirm_stopped: bool = False) -> dict:
             report["domain_digest"] = domain_digest(connection)
         finally:
             connection.rollback()
-    quiesced = check_quiesced(root, confirm_stopped=confirm_stopped)
+    quiesced = check_quiesced(root, confirm_stopped=confirm_stopped, probe_writers=False)
     report["quiesce"] = quiesced
     report["refusals"] += quiesced["refusals"]
     report["warnings"] += quiesced["warnings"]
@@ -651,7 +718,8 @@ def dry_run(root: Path, *, confirm_stopped: bool = False) -> dict:
         f"backup: {path.parent / 'backups' / 'pre-native-<UTC ts>.db'} + manifest ({report['projection_files']} projection files)",
         f"backfill: stage {counts['entities']} entities and {counts['changes']} changes into native tables",
         "compare: trial activation, rolled back; verify_carryover must report nothing lost",
-        "activate: markers, authority=native, graph repair, ID import, progress reconcile, verify_carryover, migration_state=ready",
+        "activate: one transaction: schema_version=2, minimum_client_protocol=2, migration_state=ready, "
+        "authority=native, graph repair, ID import, progress reconcile, verify_carryover (any loss rolls it back)",
         "release: record completion, release the ownership lock",
     ]
     report["ok"] = not report["refusals"]
@@ -670,10 +738,16 @@ def cutover(root: Path, *, confirm_stopped: bool = False, resume: bool = False, 
     with closing(_connect_readonly(path)) as probe:
         state = classify(probe)
         counts = reconcile_counts(probe, root)
+        handovers = handover_refusal(probe)
     refusals = _store_refusals(state, mode=mode)
+    activated = state["native"] or "activate" in state["completed_stages"]
+    if resume and activated:
+        return _finish_release(path, token=token, log=log)
     if not resume and not refusals and _blocking(counts):
         refusals.append(_flush_hint(_blocking(counts)))
-    if not state["native"] and "activate" not in state["completed_stages"]:
+    if not resume and not refusals and handovers:
+        refusals.append(handovers)
+    if not activated:
         refusals += [r for r in [sidecar_refusal(root)] if r]
     quiesced = check_quiesced(root, confirm_stopped=confirm_stopped)
     refusals += quiesced["refusals"]
@@ -721,8 +795,128 @@ def cutover(root: Path, *, confirm_stopped: bool = False, resume: bool = False, 
         ownership.close()
 
 
-def rollback(root: Path, *, confirm_stopped: bool = False, token: str | None = None, log=lambda line: None) -> dict:
-    """Before activation commits: drop the fence and journal, restoring from backup if damaged."""
+def _finish_release(path: Path, *, token: str | None, log) -> dict:
+    """After activation committed, only the `release` row is owed. Native clients may
+    already be running (and a native coordinator holds the ownership lock), so neither
+    quiesce nor the lock is required: the fence is gone and the row is bookkeeping."""
+    with closing(_connect(path)) as connection:
+        entries = journal(connection)
+        if not entries:
+            raise CutoverRefused("the store is native but has no cutover journal; nothing to resume")
+        fence = next(e for e in entries if e["stage"] == "fence")
+        if token is not None and token != fence["token"]:
+            raise CutoverRefused("--token does not match the cutover journal's token")
+        owner = f"cutover:{uuid.uuid4().hex[:8]}@{socket.gethostname()}:{os.getpid()}"
+        if "release" not in _done(entries):
+            connection.execute("BEGIN IMMEDIATE")
+            _record(connection, "takeover", "done", owner, fence["token"],
+                    {"from_owner": fence["owner"], "resume_after": "activate", "post_activation": True})
+            _record(connection, "release", "done", owner, fence["token"], {})
+            connection.commit()
+            log("[release] done (post-activation resume; quiesce not required)")
+        return {"ok": True, "mode": "resume", "token": fence["token"], "stages": {},
+                "completed_stages": _done(journal(connection))}
+
+
+# Tables whose rows are acknowledged user or queue writes: a restore that would drop a
+# difference in them needs `--discard-writes-since-backup`.
+WRITE_TABLES = ("entities", "changes", "linear_queue", "sessions", "projection")
+KEY_COLUMNS = {"meta": ("key",), "entities": ("kind", "id"), "changes": ("seq",), "linear_queue": ("seq",),
+               "sessions": ("session",), "projection": ("file",), "projection_base": ("file",),
+               "projection_conflict": ("file",)}
+
+
+def _keyed_rows(connection, table) -> dict:
+    if not _has_table(connection, table):
+        return {}
+    columns = [row[1] for row in connection.execute(f'PRAGMA table_info("{table}")')]
+    keys = KEY_COLUMNS.get(table)
+    result, seen = {}, {}
+    for row in connection.execute(f'SELECT * FROM "{table}"'):
+        values = dict(zip(columns, [r.hex() if isinstance(r, bytes) else r for r in row]))
+        if table == "meta" and values["key"] in FENCE_KEYS:
+            continue
+        if keys:
+            key = tuple(values[c] for c in keys)
+        else:  # No natural key: a multiset of whole rows.
+            whole = _encode(values)
+            seen[whole] = seen.get(whole, 0) + 1
+            key = (whole, seen[whole])
+        result[key] = _encode(values)
+    return result
+
+
+def _fts_rows(connection) -> dict:
+    if not _has_table(connection, "entity_fts"):
+        return {}
+    result, seen = {}, {}
+    for row in connection.execute("SELECT kind,id,title,body FROM entity_fts"):
+        whole = _encode(list(row))
+        seen[whole] = seen.get(whole, 0) + 1
+        result[(row[0], row[1], seen[whole], whole)] = whole
+    return result
+
+
+def domain_differences(current, reference) -> dict:
+    """Per legacy domain table: rows added, removed or changed in `current` vs `reference`."""
+    out = {}
+    for table in (*DOMAIN_TABLES, "entity_fts"):
+        if table == "entity_fts":
+            now, then = _fts_rows(current), _fts_rows(reference)
+        else:
+            now, then = _keyed_rows(current, table), _keyed_rows(reference, table)
+        added = sorted(set(now) - set(then), key=repr)
+        removed = sorted(set(then) - set(now), key=repr)
+        changed = sorted((k for k in set(now) & set(then) if now[k] != then[k]), key=repr)
+        if added or removed or changed:
+            shown = [list(k[:2]) if table == "entity_fts" else list(k) for k in (added + removed + changed)[:10]]
+            out[table] = {"added": len(added), "removed": len(removed), "changed": len(changed), "keys": shown}
+    return out
+
+
+def _summarize(differences: dict) -> str:
+    return "; ".join(f"{table}: {d['added']} added, {d['removed']} removed, {d['changed']} changed "
+                     f"(e.g. {_encode(d['keys'][:5])})" for table, d in differences.items())
+
+
+def save_pre_rollback(connection, root: Path) -> str:
+    """Copy the current store aside before any restore overwrites it."""
+    target = _stamped(root, "pre-rollback")
+    temp = target.with_name(target.name + ".partial")
+    temp.unlink(missing_ok=True)
+    try:
+        with closing(sqlite3.connect(temp)) as destination:
+            connection.backup(destination)
+    except sqlite3.DatabaseError:
+        temp.unlink(missing_ok=True)  # Too damaged for the backup API: copy its files raw.
+        source = database_path(root)
+        shutil.copyfile(source, temp)
+        for suffix in ("-wal", "-shm"):
+            sidecar = source.with_name(source.name + suffix)
+            if sidecar.exists():
+                shutil.copyfile(sidecar, target.with_name(target.name + suffix))
+    os.replace(temp, target)
+    _fsync(target)
+    return str(target)
+
+
+def _integrity_ok(connection) -> bool:
+    try:
+        return [tuple(r) for r in connection.execute("PRAGMA integrity_check").fetchall()] == [("ok",)]
+    except sqlite3.DatabaseError:
+        return False
+
+
+def rollback(root: Path, *, confirm_stopped: bool = False, token: str | None = None,
+             discard_writes_since_backup: bool = False, clear_orphan_fence: bool = False,
+             log=lambda line: None) -> dict:
+    """Before activation commits: drop the fence and journal, restoring from backup if damaged.
+
+    A restore never silently discards an acknowledged write: differences in `WRITE_TABLES`
+    refuse unless `discard_writes_since_backup`, and every restore first saves the current
+    store as `backups/pre-rollback-<ts>.db`. A store failing `integrity_check` restores
+    without the flag (it cannot be trusted), but is still saved first.
+    """
     root = Path(root)
     path = database_path(root)
     try:
@@ -738,12 +932,16 @@ def rollback(root: Path, *, confirm_stopped: bool = False, token: str | None = N
         raise CutoverRefused(ESCAPE_HATCH)
     if not entries and state["migration_state"] == "ready":
         raise CutoverRefused("no cutover fence or journal to roll back")
-    if not entries:
-        raise CutoverRefused(f"migration_state={state['migration_state']!r} but no cutover journal; "
-                             f"see {RUNBOOK} before touching this store")
+    if not entries and not clear_orphan_fence:
+        raise CutoverRefused(f"migration_state={state['migration_state']!r} but no cutover journal: this fence was "
+                             "not published by a cutover run that reached its first commit. If you are sure no "
+                             "migration is in progress, re-run with --rollback --clear-orphan-fence "
+                             f"(see {RUNBOOK}, 'A fence with no journal')")
     quiesced = check_quiesced(root, confirm_stopped=confirm_stopped)
     if quiesced["refusals"]:
         raise CutoverRefused("; ".join(quiesced["refusals"]))
+    if not entries:
+        return _clear_orphan_fence(root, path, log)
     fence = next(e for e in entries if e["stage"] == "fence")
     if token is not None and token != fence["token"]:
         raise CutoverRefused("--token does not match the cutover journal's token")
@@ -754,24 +952,40 @@ def rollback(root: Path, *, confirm_stopped: bool = False, token: str | None = N
             fence_detail, backup = _detail(entries, "fence"), _detail(entries, "backup")
             accepted = {fence_detail.get("domain_digest"), _detail(entries, "reconcile").get("domain_digest"),
                         backup.get("domain_digest")} - {None}
-            integrity = [tuple(r) for r in connection.execute("PRAGMA integrity_check").fetchall()]
-            current = domain_digest(connection) if integrity == [("ok",)] else None
-            restored, warnings = None, []
-            if current is None and not backup:
+            healthy = _integrity_ok(connection)
+            current = domain_digest(connection) if healthy else None
+            restored, saved, warnings, differences = None, None, [], {}
+            if not healthy and not backup:
                 raise CutoverAborted(f"the store fails integrity_check and no backup was taken; see {RUNBOOK}")
             if current not in accepted and not backup:
                 # No backup means no backfill either: the cutover itself wrote nothing but the
-                # fence, so the difference came from reconcile or an unfenced (pre-bridge) writer.
-                # The store is still a legacy authority; clearing the fence is all that is owed.
+                # fence, so the difference came from an unfenced (pre-bridge) writer. The store
+                # is still a legacy authority; clearing the fence is all that is owed.
                 warnings.append("domain state differs from fence time and no backup exists; "
                                 "fence cleared without restore (check for unstopped pre-bridge clients)")
             elif current not in accepted:
                 source = Path(backup["path"])
                 verify_backup(source, backup["domain_digest"])
+                if healthy:
+                    with closing(_connect_readonly(source)) as reader:
+                        differences = domain_differences(connection, reader)
+                    writes = {t: d for t, d in differences.items() if t in WRITE_TABLES}
+                    if writes and not discard_writes_since_backup:
+                        raise CutoverRefused(
+                            "the store holds writes made after the backup that a restore would discard: "
+                            f"{_summarize(writes)}. An unstopped client wrote through the fence. To keep them, "
+                            "stop that client and run --resume. To discard them, re-run with --rollback "
+                            "--discard-writes-since-backup (the current store is saved as "
+                            "backups/pre-rollback-<ts>.db first)")
+                saved = save_pre_rollback(connection, root)
+                _checkpoint("rollback:saved")
                 with closing(_connect_readonly(source)) as reader:
                     reader.backup(connection)
                 restored = str(source)
-                log(f"restored domain state from backup {source}")
+                reason = "the store failed integrity_check" if not healthy else _summarize(differences)
+                warnings.append(f"restored from backup {source}; the store as it was is saved as {saved}; "
+                                f"discarded: {reason}")
+                log(f"restored domain state from backup {source} (previous store saved as {saved})")
             _checkpoint("rollback:restored")
             connection.execute("BEGIN IMMEDIATE")
             try:
@@ -786,7 +1000,7 @@ def rollback(root: Path, *, confirm_stopped: bool = False, token: str | None = N
                                            "DO UPDATE SET value=excluded.value", (key, value))
                 if _has_table(connection, "native_manifest"):
                     connection.execute("UPDATE native_manifest SET value='stale' WHERE key='state'")
-                connection.execute(f"DROP TABLE {JOURNAL}")
+                _drop_journal(connection)
                 _checkpoint("rollback:before-commit")
                 connection.commit()
             except BaseException:
@@ -796,16 +1010,80 @@ def rollback(root: Path, *, confirm_stopped: bool = False, token: str | None = N
             log("rolled back: fence and journal cleared; authority remains legacy")
             for warning in warnings:
                 log(f"warning: {warning}")
-            return {"ok": True, "mode": "rollback", "restored_from": restored, "warnings": warnings,
-                    "domain_digest": domain_digest(connection)}
+            return {"ok": True, "mode": "rollback", "restored_from": restored, "pre_rollback_copy": saved,
+                    "differences": differences, "warnings": warnings, "domain_digest": domain_digest(connection)}
+    finally:
+        ownership.close()
+
+
+def _clear_orphan_fence(root: Path, path: Path, log) -> dict:
+    """`--rollback --clear-orphan-fence`: a `migrating` fence with no journal (never this
+    command's committed state). Only the fence keys are removed, under the ownership lock."""
+    marks = ",".join("?" for _ in FENCE_KEYS)
+    ownership = _ownership(root)
+    try:
+        with closing(_connect(path)) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                if _has_table(connection, JOURNAL):
+                    raise CutoverRefused("a cutover journal appeared; use --resume or --rollback")
+                removed = dict(connection.execute(f"SELECT key,value FROM meta WHERE key IN ({marks})", FENCE_KEYS))
+                connection.execute(f"DELETE FROM meta WHERE key IN ({marks})", FENCE_KEYS)
+                connection.commit()
+            except BaseException:
+                if connection.in_transaction:
+                    connection.rollback()
+                raise
+        warning = f"cleared an orphan fence with no journal: {_encode(removed)}"
+        log(f"warning: {warning}")
+        return {"ok": True, "mode": "rollback", "restored_from": None, "warnings": [warning], "cleared": removed}
     finally:
         ownership.close()
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
 
+EXIT_OK, EXIT_FENCED, EXIT_REFUSED, EXIT_FAILED_UNFENCED = 0, 1, 2, 3
+
+
+def fence_state(root: Path) -> dict:
+    """Re-read the store after a failure: is a fence up, or is only the release row owed?"""
+    path = database_path(root)
+    try:
+        with closing(_connect_readonly(path)) as connection:
+            state = classify(connection)
+    except (sqlite3.Error, OSError) as error:
+        return {"readable": False, "error": str(error), "fence_up": None, "release_pending": None}
+    return {"readable": True, "migration_state": state["migration_state"], "native": state["native"],
+            "fence_up": state["migration_state"] == "migrating",
+            "release_pending": "activate" in state["completed_stages"] and "release" not in state["completed_stages"],
+            "completed_stages": state["completed_stages"]}
+
+
+def _failure(root: Path, mode: str, error: BaseException, *, refused: bool) -> tuple[dict, int]:
+    fence = fence_state(root)
+    report = {"ok": False, "mode": mode, "fence": fence}
+    if refused:
+        report["refusals"] = [str(error)]
+    else:
+        report["error"] = f"{type(error).__name__}: {error}"
+    if fence["fence_up"] is None:
+        report["hint"] = f"the store could not be re-read to tell whether a fence is up; see {RUNBOOK}"
+        return report, EXIT_FENCED
+    if fence["fence_up"]:
+        report["hint"] = f"the cutover fence is up; run --resume or --rollback (see {RUNBOOK})"
+        return report, (EXIT_REFUSED if refused else EXIT_FENCED)
+    if fence["release_pending"]:
+        report["hint"] = "activation committed; run --resume to record the release"
+        return report, (EXIT_REFUSED if refused else EXIT_FENCED)
+    report["hint"] = ("no cutover fence is up" + ("" if refused else "; this run did not change the store's authority")
+                      + "; fix the cause and re-run")
+    return report, (EXIT_REFUSED if refused else EXIT_FAILED_UNFENCED)
+
+
 def _text(report: dict) -> str:
-    lines = [f"cutover {report.get('mode', 'run')}: {'OK' if report.get('ok') else 'REFUSED'}"]
+    status = "OK" if report.get("ok") else ("REFUSED" if report.get("refusals") else "FAILED")
+    lines = [f"cutover {report.get('mode', 'run')}: {status}"]
     for key in ("store_state", "counts", "quiesce"):
         if key in report:
             lines.append(f"{key}: {_encode(report[key])}")
@@ -818,9 +1096,11 @@ def _text(report: dict) -> str:
     if report.get("completed_stages"):
         lines.append("completed: " + ", ".join(report["completed_stages"]))
     if report.get("restored_from"):
-        lines.append(f"restored from: {report['restored_from']}")
+        lines.append(f"restored from: {report['restored_from']} (previous store saved as {report.get('pre_rollback_copy')})")
     if report.get("error"):
         lines.append(f"error: {report['error']}")
+    if report.get("hint"):
+        lines.append(f"next: {report['hint']}")
     return "\n".join(lines)
 
 
@@ -835,25 +1115,33 @@ def main(argv=None) -> int:
     parser.add_argument("--confirm-stopped", action="store_true",
                         help="proceed past matching processes you have verified are stopped")
     parser.add_argument("--token", help="the cutover token printed at start (optional ownership proof)")
+    parser.add_argument("--discard-writes-since-backup", action="store_true",
+                        help="with --rollback: restore the backup even though the store holds newer writes "
+                             "(the current store is saved as backups/pre-rollback-<ts>.db first)")
+    parser.add_argument("--clear-orphan-fence", action="store_true",
+                        help="with --rollback: clear a 'migrating' fence that has no cutover journal")
     parser.add_argument("--json", action="store_true", help="print a JSON report")
     args = parser.parse_args(argv)
-    lines = []
-    log = (lambda line: None) if args.json else (lambda line: (print(line), lines.append(line)))
-    code = 0
+    if (args.discard_writes_since_backup or args.clear_orphan_fence) and not args.rollback:
+        parser.error("--discard-writes-since-backup and --clear-orphan-fence require --rollback")
+    log = (lambda line: None) if args.json else print
+    mode = "dry-run" if args.dry_run else "rollback" if args.rollback else "resume" if args.resume else "run"
+    code = EXIT_OK
     try:
         if args.dry_run:
             report = dry_run(args.root, confirm_stopped=args.confirm_stopped)
-            code = 0 if report["ok"] else 2
+            code = EXIT_OK if report["ok"] else EXIT_REFUSED
         elif args.rollback:
-            report = rollback(args.root, confirm_stopped=args.confirm_stopped, token=args.token, log=log)
+            report = rollback(args.root, confirm_stopped=args.confirm_stopped, token=args.token,
+                              discard_writes_since_backup=args.discard_writes_since_backup,
+                              clear_orphan_fence=args.clear_orphan_fence, log=log)
         else:
             report = cutover(args.root, confirm_stopped=args.confirm_stopped, resume=args.resume,
                              token=args.token, log=log)
     except CutoverRefused as error:
-        report, code = {"ok": False, "mode": "refused", "refusals": [str(error)]}, 2
-    except (CutoverAborted, UnsupportedStoreError) as error:
-        report, code = {"ok": False, "mode": "aborted", "error": str(error),
-                        "hint": f"the fence stays up; run --resume or --rollback (see {RUNBOOK})"}, 1
+        report, code = _failure(args.root, mode, error, refused=True)
+    except Exception as error:  # noqa: BLE001 - every failure gets a report and a truthful exit code
+        report, code = _failure(args.root, mode, error, refused=False)
     print(_encode(report) if args.json else _text(report))
     return code
 
