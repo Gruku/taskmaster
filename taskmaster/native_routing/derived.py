@@ -33,9 +33,20 @@ KINDS = ("bug", "issue", "tracker", "handover")
 
 
 def live_rows(connection, snapshot, kind) -> list:
-    ids = [row[0] for row in connection.execute(
-        "SELECT public_id FROM entity_core WHERE kind=? AND deleted=0 AND archived=0 ORDER BY public_id", (kind,))]
-    return [(ident, snapshot.get(kind, ident)["fields"], None) for ident in ids]
+    """`(id, fields, None)` for every live, unarchived row of a kind, in id order.
+
+    Paged (`list` orders by kind then id and filters archived and deleted rows
+    exactly as the old per-id `get` loop did), so the cost is a few queries per
+    kind rather than one `get` per row.
+    """
+    from taskmaster.native.queries import MAX_PAGE
+    out, cursor = [], None
+    while True:
+        result = snapshot.list(kind, fields=None, limit=MAX_PAGE, cursor=cursor)
+        out.extend((entity["id"], entity["fields"], None) for entity in result["items"])
+        cursor = result["cursor"]
+        if cursor is None:
+            return out
 
 
 def _any(connection, kind) -> bool:

@@ -26,8 +26,8 @@ The region is regenerated whole from `applied[-room:] + pending` on every render
 so a crash between the file write and the move re-renders the identical file.
 PROGRESS.md is a local, store-owned region inside a user-owned file: it is re-read
 on each render and not verified against a recorded base (scope §2.4), as legacy.
-The dashboard is the one full-tree read (`reads.tree`) a normal command makes on a
-native store, bounded by the throttle; targeted queries are N16's (D6).
+The dashboard reads `reads.dashboard_tree` — every task, but only the fields the
+dashboard renders and no prose (N16-B) — bounded by the throttle (D6).
 """
 from __future__ import annotations
 
@@ -229,7 +229,7 @@ class _Writer:
         with Repository(self.connection).snapshot() as snapshot:
             applied = _entries(_get(self.connection, APPLIED_KEY, []))
             rows = _pending_rows(self.connection)
-            data = reads.tree(snapshot)
+            data = reads.dashboard_tree(snapshot)
         pending = [entry for _key, entry in rows]
         room = max(CAP - len(pending), 0)
         entries = (applied[-room:] if room else []) + pending

@@ -446,12 +446,13 @@ def test_a_failed_write_keeps_the_rows_and_warns(twins, fake_time, monkeypatch):
 
 
 def test_the_dashboard_is_rendered_at_most_every_five_seconds(twins, fake_time, monkeypatch):
-    """D6: the dashboard is the one full-tree read a normal native command makes,
-    named here: `reads.tree`, at most once per 5 s unless a paragraph is pending."""
+    """D6: the dashboard is the one every-task read a normal native command makes,
+    named here: `reads.dashboard_tree` (N16-B: slim fields, no prose), at most once
+    per 5 s unless a paragraph is pending."""
     root = twins.native
     reads_made = []
-    real_tree = reads.tree
-    monkeypatch.setattr(reads, "tree", lambda *a, **k: reads_made.append(1) or real_tree(*a, **k))
+    real_tree = reads.dashboard_tree
+    monkeypatch.setattr(reads, "dashboard_tree", lambda *a, **k: reads_made.append(1) or real_tree(*a, **k))
     with twins.at(root):
         _touch(root, "one")
         assert len(reads_made) == 1

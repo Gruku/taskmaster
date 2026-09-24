@@ -39,7 +39,7 @@ def _run(call, operation, arguments):
 @adapter("backlog_status")
 def status(call, *, verbose):
     with call.read() as snapshot:
-        return bs._status_text(reads.tree(snapshot), verbose)
+        return bs._status_text(reads.dashboard_tree(snapshot), verbose)
 
 
 @adapter("backlog_blast_radius")

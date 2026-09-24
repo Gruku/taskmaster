@@ -201,8 +201,33 @@ def tree(snapshot, *, context=True) -> dict:
 
     It reads every task, as the legacy dict does; it exists so the whole-backlog
     read tools render through their own shared presentation code rather than a
-    second copy. Bounded replacements for those reads are N09/N10 work.
+    second copy. The dashboard reads `dashboard_tree` instead.
     """
+    return _tree(snapshot, context=context, task_fields=None)
+
+
+# Every task key `_derive_context`, `_status_text` and `_render_progress_dashboard`
+# read (with `_normalize_task`, `_find_task`, the dependency resolver and the claim
+# check). `test_native_dashboard_reads` records the keys those renderers touch on a
+# full tree and fails if one is missing here, so a renderer change cannot silently
+# read a field this slim read leaves out.
+DASHBOARD_TASK_FIELDS = ("id", "title", "status", "epic", "phase", "priority", "order",
+                         "created", "started", "completed", "branch", "locked_by",
+                         "blockers", "depends_on", "last_referenced")
+
+
+def dashboard_tree(snapshot) -> dict:
+    """`tree` for the dashboard (`backlog_status`, PROGRESS.md): the same document,
+    with each task carrying only `DASHBOARD_TASK_FIELDS` and no prose.
+
+    Decoding every task's full document and body is most of a whole-tree read's
+    cost, and the dashboard renders none of it. Output is byte-identical to the
+    same renderers over `tree` (N16-B oracle).
+    """
+    return _tree(snapshot, context=True, task_fields=DASHBOARD_TASK_FIELDS)
+
+
+def _tree(snapshot, *, context, task_fields) -> dict:
     from . import derived
     backlog = get(snapshot, "backlog", "__backlog__")
     data = derived.apply(snapshot, deepcopy(backlog["fields"]) if backlog else {})
@@ -211,10 +236,12 @@ def tree(snapshot, *, context=True) -> dict:
     for epic in epic_list:
         epic["tasks"] = []
         by_id[epic["id"]] = epic
-    prose = bodies(snapshot, "task")
+    prose = bodies(snapshot, "task") if task_fields is None else {}
     orphans = []
-    for entity in page(snapshot, "task", include_archived=True):
-        task = deepcopy(entity["fields"])
+    # `fields` is freshly decoded per page and shared with nothing, so it is
+    # handed on without the defensive deep copy a cached document would need.
+    for entity in page(snapshot, "task", fields=task_fields, include_archived=True):
+        task = entity["fields"]
         if prose.get(entity["id"]):
             task[BODY_KEY] = prose[entity["id"]]
         epic = by_id.get(task.get("epic"))
