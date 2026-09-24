@@ -248,7 +248,13 @@ def compute_stats(entities: dict) -> dict:
     return stats
 
 
-_SAFE_KEY = re.compile(r"^[a-z0-9_.\-]*$")
+# Every structural key `compute_stats` writes; anything else in a statistics file is refused.
+STRUCTURAL_KEYS = frozenset({
+    "bodies", "components", "counts", "dangling_share", "decision_options", "degree", "depth", "distinct",
+    "enums", "epic_fanout", "extension_rank_share", "format", "glob_forms", "glob_share", "handover_task_ids",
+    "handover_task_ids_resolving", "length", "line_suffix_by_kind", "line_suffix_share", "links",
+    "orphan_task_share", "paths", "per_entity", "phase_fanout", "phase_share", "prefix_ratio", "present",
+    "references", "refs_per_path", "same_epic_share", "target_kinds", "text", "top_rank_share", "types", "archived"})
 
 
 def assert_anonymous(stats) -> None:
@@ -260,7 +266,7 @@ def assert_anonymous(stats) -> None:
     def walk(value, where):
         if isinstance(value, dict):
             for key, item in value.items():
-                if not (key in allowed or key.isdigit() or (_SAFE_KEY.match(key) and len(key) <= 32 and not key.isupper())):
+                if not (key in allowed or key in STRUCTURAL_KEYS or key.isdigit()):
                     raise ValueError(f"statistics key {key!r} at {where} is not structural")
                 walk(item, f"{where}.{key}")
         elif isinstance(value, list):
@@ -407,6 +413,8 @@ def build_paths(stats: dict, references: int, rng) -> list[str]:
         children = {}
         deeper_total = sum(1 for x in depths if x > d)
         wanted_total = max(1, round(ratio * deeper_total))
+        if d == 1:  # a larger project keeps the measured top-level layout and grows beneath it
+            wanted_total = min(wanted_total, len(rank))
         for parent, members in sorted(parents.items()):
             deeper = [m for m in members if depths[m] > d]
             if not deeper:
@@ -416,8 +424,14 @@ def build_paths(stats: dict, references: int, rng) -> list[str]:
                 weights = [rank[min(len(rank) - 1, int(i * len(rank) / wanted))] or 1e-6 for i in range(wanted)]
             else:
                 weights = [1.0 / (i + 1) for i in range(wanted)]
+            # Deep paths share long prefixes: the shallowest members seed one child each (the lightest
+            # slots first) and the deeper ones crowd into the heaviest slots, so few prefixes carry
+            # members to the next level, as measured.
             rng.shuffle(deeper)
-            slots = list(range(wanted)) + rng.choices(range(wanted), weights=weights, k=len(deeper) - wanted)
+            deeper.sort(key=lambda m: depths[m])
+            seeds = list(range(wanted - 1, -1, -1))
+            rest = sorted(rng.choices(range(wanted), weights=weights, k=len(deeper) - wanted), reverse=True)
+            slots = seeds + rest
             for member, slot in zip(deeper, slots):
                 children.setdefault(parent + (slot,), []).append(member)
         for key, members in children.items():
@@ -427,16 +441,23 @@ def build_paths(stats: dict, references: int, rng) -> list[str]:
     glob_share = float(p.get("glob_share", 0.0))
     forms = p.get("glob_forms") or {"dir_star": 1.0}
     exts = p.get("extension_rank_share") or [1.0]
-    paths = []
+    paths, dir_globs = [], set()
     for index in range(n):
         dirs = [("t" if level == 0 else "d") + f"{slot:03d}" for level, slot in enumerate(assignment[index])]
         ext = f"x{rng.choices(range(len(exts)), weights=exts)[0]}"
+        parent = "/".join(dirs[:max(0, depths[index] - 1)])
         if rng.random() < glob_share:
             form = pick_share(forms, rng, "dir_star")
-            leaf = "**" if form == "dir_star" else (f"*.{ext}" if form == "star_ext" else f"f*{index % 7}.{ext}")
+            if form == "dir_star" and parent not in dir_globs:
+                dir_globs.add(parent)  # one `dir/**` per directory; a repeat would merge into it
+                leaf = "**"
+            elif form == "star_ext":
+                leaf = f"*.{ext}"
+            else:
+                leaf = f"f{index:05d}*.{ext}"
         else:
             leaf = f"f{index:05d}.{ext}"
-        paths.append("/".join(dirs[:max(0, depths[index] - 1)] + [leaf]))
+        paths.append("/".join(filter(None, (parent, leaf))))
     multiset = [path for path, count in zip(paths, counts) for _ in range(count)]
     rng.shuffle(multiset)
     return multiset[:references]
@@ -481,6 +502,11 @@ def generate_entities(stats: dict, scale: float, seed: int) -> dict:
     def archived(kind):
         return rng.random() < stats["archived"].get(kind, 0.0)
 
+    def archive_given_status(kind):
+        """P(archived flag | status archived): the measured flag ratio over the archived-status share."""
+        share = (enums.get(f"{kind}.status") or {}).get("archived", 0.0)
+        return min(1.0, stats["archived"].get(kind, 0.0) / share) if share else 0.0
+
     out = {k: [] for k in KINDS}
     minute = 0
     # phases
@@ -502,8 +528,8 @@ def generate_entities(stats: dict, scale: float, seed: int) -> dict:
             value = field_text("epic", field)
             if value:
                 doc[field] = value
-        if status == "archived" or archived("epic"):
-            doc.update(status="archived", archived=stamp(minute + 1), archive_reason="done")
+        if status == "archived" and rng.random() < archive_given_status("epic"):
+            doc.update(archived=stamp(minute + 1), archive_reason="done")
         out["epic"].append((doc, ""))
         minute += 11
     # tasks: epic fan-out, phase fan-out, anchors, depends_on
@@ -528,12 +554,13 @@ def generate_entities(stats: dict, scale: float, seed: int) -> dict:
     location_counts = {k: [location_hist[k].sample(rng) for _ in range(counts[k])] for k in ("bug", "issue")}
     refs = build_paths(stats, sum(anchor_counts) + sum(map(sum, location_counts.values())), rng)
     line_share = stats["paths"].get("line_suffix_by_kind", {})
+    literal_share = max(0.05, 1.0 - float(stats["paths"].get("glob_share", 0.0)))  # globs take no line suffix
 
     def take(n, kind):
         chosen = []
         while n > 0 and refs:
             path = refs.pop()
-            if kind != "task" and rng.random() < line_share.get(kind, 0.0) and "*" not in path:
+            if kind != "task" and "*" not in path and rng.random() < line_share.get(kind, 0.0) / literal_share:
                 path = f"{path}:{rng.randint(1, 900)}"
             if path not in chosen:
                 chosen.append(path)
@@ -546,6 +573,7 @@ def generate_entities(stats: dict, scale: float, seed: int) -> dict:
     degree = Hist(stats["depends_on"]["degree"])
     same_epic = stats["depends_on"]["same_epic_share"]
     index_of = {t["id"]: i for i, t in enumerate(tasks)}
+    carry = {}
     for position, (task, anchor_count) in enumerate(zip(tasks, anchor_counts)):
         status = pick_share(enums.get("task.status"), rng, "todo")
         doc = {"id": task["id"], "title": field_text("task", "title", title) or title(rng, 40), "status": status,
@@ -567,21 +595,27 @@ def generate_entities(stats: dict, scale: float, seed: int) -> dict:
         if anchors:
             doc["anchors"] = anchors
         # depends_on: earlier tasks only (a DAG), same epic with the measured share
+        # A same-epic draw with no earlier task in the epic is carried to the epic's next task,
+        # so the same-epic share holds instead of leaking into cross-epic edges.
         deps = []
-        for _ in range(degree.sample(rng)):
-            pool = by_epic[task["epic"]] if rng.random() < same_epic else None
-            candidates = [t for t in (pool or []) if index_of[t] < position]
-            if not candidates and position:
-                candidates = [tasks[rng.randrange(position)]["id"]]
+        for _ in range(degree.sample(rng) + carry.pop(task["epic"], 0)):
+            if rng.random() < same_epic:
+                candidates = [t for t in by_epic[task["epic"]] if index_of[t] < position]
+                if not candidates:
+                    carry[task["epic"]] = carry.get(task["epic"], 0) + 1
+                    continue
+            else:
+                candidates = [tasks[rng.randrange(position)]["id"]] if position else []
             if candidates:
                 dep = rng.choice(candidates)
                 if dep not in deps:
                     deps.append(dep)
         if deps:
             doc["depends_on"] = deps
-        if status == "archived" or (status == "done" and archived("task")):
-            doc.update(status="archived", archive_reason=pick_share(enums.get("task.archive_reason"), rng, "done"),
-                       archived=stamp(minute + 3))
+        if status == "archived":
+            doc["archive_reason"] = pick_share(enums.get("task.archive_reason"), rng, "done")
+            if rng.random() < archive_given_status("task"):  # in tasks/archive/, as measured
+                doc["archived"] = stamp(minute + 3)
         elif status in ("done",):
             doc["completed"] = stamp(minute + 2)
         out["task"].append((doc, body("task")))
@@ -726,7 +760,7 @@ def write_projection(root: Path, entities: dict, project: str) -> int:
                 put(f"{directory}/{doc['id']}.md", content)
     for doc, body in entities["task"]:
         content, _ = render_entity_file("task", doc, body)
-        put(("tasks/archive/" if doc.get("status") == "archived" else "tasks/") + f"{doc['id']}.md", content)
+        put(("tasks/archive/" if doc.get("archived") else "tasks/") + f"{doc['id']}.md", content)
     for kind, directory, archive in (("bug", "bugs", "archive/"), ("issue", "issues", "archive/"),
                                      ("decision", "decisions", ""), ("idea", "ideas", ""),
                                      ("note", "notes", "_archive/")):
