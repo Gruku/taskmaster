@@ -19,6 +19,11 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 if str(PLUGIN_ROOT) not in sys.path:
     sys.path.insert(0, str(PLUGIN_ROOT))
 
+# Every twins activation runs the full N15 carry-over oracle (snapshot + verify_carryover)
+# through the production activation core. Measured 2026-09-24 on the 20-file twins sample:
+# 258 s off vs 264 s on (+2.3%). Opt out with TASKMASTER_TWINS_VERIFY=0.
+os.environ.setdefault("TASKMASTER_TWINS_VERIFY", "1")
+
 
 def pytest_configure(config):
     """Register custom markers (avoids PytestUnknownMarkWarning)."""

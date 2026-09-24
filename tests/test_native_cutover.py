@@ -613,17 +613,61 @@ def test_twins_verify_opt_in_runs_the_carryover_oracle(project, monkeypatch):
     assert len(calls) == 1 and calls[0]["version"] == carryover.DIGEST_VERSION
 
 
+# Keys a fresh legacy adoption adds that the native store never held: `projection_schema`
+# is stamped into the backlog meta by the legacy importer (documented in the runbook).
+ADOPTION_ONLY = {("backlog", "__backlog__"): {"meta": {"projection_schema"}}}
+
+
+def _without_adoption_only(key, doc):
+    from taskmaster.native_routing.derived import KEYS as DERIVED_BACKLOG_KEYS
+    doc = json.loads(json.dumps(doc))
+    if key == ("backlog", "__backlog__"):  # Derived on native stores (the twins compare them the same way).
+        doc = {k: v for k, v in doc.items() if k not in DERIVED_BACKLOG_KEYS}
+    for field, subkeys in ADOPTION_ONLY.get(key, {}).items():
+        if isinstance(doc.get(field), dict):
+            for sub in subkeys:
+                doc[field].pop(sub, None)
+    return doc
+
+
 def test_escape_hatch_recovers_every_authored_document_into_a_fresh_legacy_store(project, quiesce, monkeypatch,
                                                                                     tmp_path):
-    """M1 = A: after activation, the projection files re-adopted by a fresh legacy store
-    carry every authored document, including ones written natively after activation."""
+    """M1 = A: after activation, the projection files re-adopted by a fresh legacy store carry
+    every authored document of every kind (archived ones, prose bodies and unknown fields
+    included), and the documents written natively after activation."""
     from tests.native_twins import Twins
+    point_server_at(monkeypatch, project)
+    bs.backlog_handover_create(tldr="legacy handover", next_action="go",
+                               body="Long prose body\n\nwith paragraphs\n\n- and a list")
+    bs.backlog_idea_create(title="An idea", body="idea prose\n\nsecond paragraph")
+    bs.backlog_decision_create(title="A decision", options=["a", "b"], recommendation=1)
+    bs.backlog_issue_create(title="An issue", severity="P2", evidence="ev")
+    bs.backlog_note(action="create", text="a note")
+    bs.backlog_bug_create(title="To archive")
+    bs.backlog_bug_update(bug_id="B-010", field="fix_commit", value="abc123")
+    bs.backlog_bug_update(bug_id="B-010", field="status", value="fixed")
+    bs.backlog_bug_archive(bug_id="B-010")
+    # An unknown field and a prose body, hand-edited into a task file and adopted by legacy.
+    task_file = project / ".taskmaster" / "tasks" / "cut-epic-002.md"
+    text = task_file.read_text(encoding="utf-8")
+    head, _, _ = text.partition("\n---\n")
+    task_file.write_text(head + "\nx_custom_field:\n  nested:\n  - 1\n  - null\n---\n\n## Notes\n\nHand prose.\n",
+                         encoding="utf-8")
+    bs.backlog_status()
+    store.reset_for_tests()
+    assert committed(project)[("task", "cut-epic-002")][0]["x_custom_field"] == {"nested": [1, None]}
     cutover.cutover(project)
     twins = Twins(monkeypatch, project, project)
     with twins.at(project):
         bs.backlog_add_task(title="Written natively", epic="cut-epic", phase="dev")
         bs.backlog_bug_create(title="Native bug")
+        bs.backlog_complete_task(task_id="cut-epic-001", session_title="s", done="d")
+        bs.backlog_update_task(task_id="cut-epic-002", tldr="updated natively")
     native = committed(project)
+    kinds = {kind for kind, _ in native}
+    assert {"task", "bug", "handover", "idea", "decision", "issue", "note", "epic", "phase"} <= kinds
+    assert any(archived for (_, _, archived) in native.values())
+    assert native[("task", "cut-epic-002")][0]["x_custom_field"] == {"nested": [1, None]}
     with closing(sqlite3.connect(db(project))) as connection:  # Step 1: every export drained.
         assert connection.execute("SELECT COUNT(*) FROM projection_jobs "
                                   "WHERE state IN ('pending','claimed','conflict')").fetchone()[0] == 0
@@ -635,15 +679,13 @@ def test_escape_hatch_recovers_every_authored_document_into_a_fresh_legacy_store
     bs.backlog_status()
     store.reset_for_tests()
     adopted = committed(fresh)
-    authored = {key for key in native if key[0] not in ("backlog", "project")}
-    # Written after activation; B-010 because the legacy sidecar reserved B-9 (ID import).
-    assert {("task", "cut-epic-003"), ("bug", "B-010")} <= authored
-    missing = sorted(authored - set(adopted))
+    missing = sorted(set(native) - set(adopted))
     assert not missing, f"documents lost by the escape hatch: {missing}"
-    for key in sorted(authored):
+    assert {("task", "cut-epic-003"), ("bug", "B-011")} <= set(native)  # Written after activation.
+    for key in sorted(native):
         (n_doc, n_body, n_arch), (a_doc, a_body, a_arch) = native[key], adopted[key]
-        assert (a_doc.get("title"), a_doc.get("name"), a_arch) == (n_doc.get("title"), n_doc.get("name"), n_arch), key
-        assert (a_body or "").strip() == (n_body or "").strip(), key
+        assert _without_adoption_only(key, a_doc) == _without_adoption_only(key, n_doc), key
+        assert (a_body or "").strip() == (n_body or "").strip() and a_arch == n_arch, key
 
 
 # ── Re-review round 3 (probes A-G) ──────────────────────────────────────────
