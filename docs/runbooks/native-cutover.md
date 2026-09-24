@@ -83,7 +83,7 @@ would reconcile: flush pending legacy exports under the fence (as one admitted b
 would backup: <project>\.taskmaster\local\backups\pre-native-<UTC ts>.db + manifest (5 projection files)
 would backfill: stage 6 entities and 7 changes into native tables
 would compare: trial activation, rolled back; verify_carryover must report nothing lost
-would activate: one transaction: schema_version=2, minimum_client_protocol=2, migration_state=ready, authority=native, graph repair, ID import, progress reconcile, verify_carryover (any loss rolls it back)
+would activate: one transaction: schema_version=2, minimum_client_protocol=2, migration_state=ready, authority=native, graph repair, ID import, progress reconcile, verify_carryover (any loss rolls it back), then merge bases for projection files whose bytes hash to their recorded digest
 would release: record completion, release the ownership lock
 ```
 
@@ -137,14 +137,31 @@ What each stage does:
 | `backup` | All taken while the cutover holds the write lock, so they describe one committed state: `carryover.snapshot_carryover` (before any marker change), `backups/pre-native-<UTC ts>.db` (the SQLite online backup, made by a read-only connection), `pre-native-<UTC ts>.projection.zip` (the **projection set**, meaning the files the store tracks in its `projection` table: `backlog.yaml` and every document file; other files under `.taskmaster/` are the user's and are never archived, compared or restored; with the archive's sha256 and size recorded) and a `.json` manifest: projection files (path, sha256, size), a copy of the ID-reservation sidecar, the carry-over snapshot and the domain digest. The files are fsynced, and the backup is reopened and must pass `integrity_check` | Journal row with the backup path, the archive, the sidecar hash **and the carry-over snapshot**, so resume never depends on the manifest |
 | `backfill` | `migrate.backfill` in one transaction; sub-stage checkpoints go into the journal | Native staging `verified`; authority still `legacy` |
 | `compare` | A trial of the whole activation transaction, always rolled back: `carryover.verify_carryover` against the journaled snapshot must be empty | Journal row with the trial's ID import and progress counts |
-| `activate` | One transaction: `schema_version=2`, `minimum_client_protocol=2`, `migration_state=ready`, fence owner/token removed, `authority=native`, `state=ready`, `local_state_imported=1`, graph repair, `carryover.import_id_state`, `carryover.reconcile_progress`, `carryover.verify_carryover`, journal row. Any carry-over difference rolls the whole switch back | **The store is native. Roll forward only from here** |
+| `activate` | One transaction: `schema_version=2`, `minimum_client_protocol=2`, `migration_state=ready`, fence owner/token removed, `authority=native`, `state=ready`, `local_state_imported=1`, graph repair, `carryover.import_id_state`, `carryover.reconcile_progress`, `carryover.verify_carryover`, then merge-base seeding (below), journal row. Any carry-over difference rolls the whole switch back | **The store is native. Roll forward only from here** |
 | `release` | Journal row, then the ownership lock is released | Done |
 
 ### Verify
 
 - `python -m taskmaster.native.cutover --root <project> --dry-run` refuses with `already a native authority`.
-- Start one native-capable client and run `backlog_status`. The first sync after activation
-  can be slow; about 350 s was measured on CodeMaestro.
+- Start one native-capable client and run `backlog_status`.
+- The first explicit sync after activation is fast when activation could seed its merge bases.
+  Activation reads every projection file that has no base and hashes it itself. When the bytes
+  hash to the recorded `content_hash`, it stores them as the file's `projection_base`. It never
+  replaces an existing base, and it skips quarantined, flagged and drift files. The seeded paths
+  are journaled on the `activate` row, and `verify_carryover(..., seeded_bases=...)` accepts
+  exactly those. After commit, the same reads seed the sync fingerprint cache
+  (`local/cache/sync-fingerprints.json`, valid for an hour).
+- Measured on a CodeMaestro copy (3,704 files): seeding adds about 9 s to `activate`, and the
+  first sync then takes 4.4 s in one round. Before N16 it took 626 s unbounded, or about 680 s
+  over six 120 s rounds. Only files that really differ are imported, and only held files stay
+  pending. A file whose bytes differ from its digest gets no base, so its first sync takes the
+  ordinary path.
+- The sync result reports `imports` (domain writes) and `observed` (published bytes recorded as
+  a base) separately. A write the time budget runs out on gets a 5 s grace period. Then it is
+  reported `committed` (from its receipt), `not_committed` (it was still queued, so it is
+  cancelled), or `uncertain`. `uncertain` means the writer is still running the write, and it
+  is the only case where you need to inspect the receipt. Unsettled observes are listed under
+  `observes`, never as imports.
 - An old (bridge-only) client has to refuse the store with `Unsupported Taskmaster schema_version=2`.
   This is tested in `test_pre_native_clients_are_refused_by_an_activated_store`.
 
