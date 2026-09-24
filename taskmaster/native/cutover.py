@@ -68,6 +68,11 @@ class CutoverAborted(RuntimeError):
     """A stage failed after the fence went up; the fence stays for --resume or --rollback."""
 
 
+class StoreDamaged(CutoverRefused):
+    """The store fails integrity_check: neither resume, activation nor rollback may proceed;
+    the only way on is the runbook's manual restore from a backup."""
+
+
 def _checkpoint(name: str) -> None:
     hook = HOOKS.get("checkpoint")
     if hook is not None:
@@ -510,6 +515,8 @@ def activate(connection, root: Path, *, token: str | None = None, before: dict |
         raise RuntimeError("activation requires its own transaction")
     connection.execute("BEGIN IMMEDIATE")
     try:
+        if not _integrity_ok(connection):  # Index damage leaves every digest unchanged.
+            raise _damaged(connection)
         meta = _meta(connection)
         state = meta.get("migration_state", "ready")
         if token is None:
@@ -707,6 +714,8 @@ class _Run:
     def compare(self):
         try:
             trial = activate(self.connection, self.root, token=self.token, before=self._before(), trial=True)
+        except StoreDamaged:
+            raise
         except (CarryoverMismatch, UnsupportedStoreError, ValueError) as error:
             raise CutoverAborted(f"trial activation failed; nothing activated: {error}") from error
         self._begin_owned()
@@ -717,6 +726,8 @@ class _Run:
             _record(connection, "activate", "done", self.owner, self.token)
         try:
             result = activate(self.connection, self.root, token=self.token, before=self._before(), record=record)
+        except StoreDamaged:
+            raise
         except (CarryoverMismatch, ValueError) as error:
             raise CutoverAborted(str(error)) from error
         self.report["stages"]["activate"] = result
@@ -734,16 +745,25 @@ class _Run:
         reasons = []
         if domain_digest(self.connection) != detail.get("domain_digest"):
             source = Path(detail["path"])
-            with closing(_connect_readonly(source)) as reference:
-                changes = domain_differences(self.connection, reference)
-            reasons.append(_summarize(changes) or "legacy domain rows changed")
+            try:
+                with closing(_connect_readonly(source)) as reference:
+                    changes = domain_differences(self.connection, reference)
+                reasons.append(_summarize(changes) or "legacy domain rows changed")
+            except (sqlite3.Error, OSError):
+                reasons.append(f"legacy domain rows changed (the backup {source} to name them is unavailable)")
         sidecar = database_path(self.root).parent / "id-reservations.json"
         if (_sha256(sidecar) if sidecar.exists() else None) != detail.get("sidecar_sha256"):
             reasons.append("id-reservations.json changed")
         if detail.get("projection_archive"):
-            divergence = projection_divergence(self.root, _archived(detail["projection_archive"]), self.connection)
-            if any(divergence.values()):
-                reasons.append(f"projection files differ from the backup: {_summarize_files(divergence)}")
+            try:
+                archived = _archived(detail["projection_archive"])
+            except CutoverAborted:
+                reasons.append("the latest projection archive is missing or damaged, so the files cannot be "
+                               "compared; a fresh backup and archive are taken")
+            else:
+                divergence = projection_divergence(self.root, archived, self.connection)
+                if any(divergence.values()):
+                    reasons.append(f"projection files differ from the backup: {_summarize_files(divergence)}")
         return reasons
 
     def run_from(self, done):
@@ -866,6 +886,8 @@ def cutover(root: Path, *, confirm_stopped: bool = False, resume: bool = False, 
         raise CutoverRefused(f"no store at {path}")
     mode = "resume" if resume else "run"
     with closing(_connect_readonly(path)) as probe:
+        if not _integrity_ok(probe):
+            raise _damaged(probe)
         state = classify(probe)
         counts = reconcile_counts(probe, root)
         handovers = handover_refusal(probe)
@@ -1096,6 +1118,12 @@ def drop_native_staging(connection) -> list[str]:
         if name not in keep:
             connection.execute(f'DROP TRIGGER main."{name}"')
             dropped.append(name)
+    for (name,) in connection.execute("SELECT name FROM main.sqlite_master WHERE type='index' "
+                                      "AND name NOT LIKE 'sqlite_%'").fetchall():
+        table = connection.execute("SELECT tbl_name FROM main.sqlite_master WHERE name=?", (name,)).fetchone()[0]
+        if name not in keep and table in keep:  # Native-only indexes on legacy tables (N14 graph indexes).
+            connection.execute(f'DROP INDEX main."{name}"')
+            dropped.append(name)
     for kind in ("virtual", "table"):
         rows = connection.execute("SELECT name,sql FROM main.sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchall()
         for name, sql in rows:
@@ -1119,22 +1147,33 @@ MANUAL_RESTORE = f"{RUNBOOK}, 'Manual restore from a backup'"
 def _rollback_refusal(what: str, backup: dict) -> CutoverRefused:
     where = backup.get("path", "the latest backups/pre-native-*.db")
     return CutoverRefused(
-        f"{what}. A client wrote through the fence, so rolling back would lose those writes. Run --resume to "
-        f"keep them (recommended): the cutover absorbs them into the native store. Or restore manually from "
-        f"{where} per {MANUAL_RESTORE}")
+        f"{what}. --rollback restores nothing, so it clears the fence only when the store matches what the "
+        f"cutover recorded. Choose one: (1) --resume: go native, keeping every write (recommended); "
+        f"(2) --rollback --clear-orphan-fence: stay legacy, keeping every row and file as it is now; "
+        f"(3) discard everything written since the backup {where} with the manual restore in {MANUAL_RESTORE} "
+        f"(it copies what it replaces aside first)")
+
+
+def _damaged(connection) -> StoreDamaged:
+    backup = _detail(journal(connection), "backup") if _has_table(connection, JOURNAL) else {}
+    where = backup.get("path", "the latest backups/pre-native-*.db")
+    return StoreDamaged(f"the store fails integrity_check; nothing was changed, and it will not be resumed, "
+                        f"activated or rolled back. Restore it manually from {where} per {MANUAL_RESTORE}")
 
 
 def rollback(root: Path, *, confirm_stopped: bool = False, token: str | None = None,
              clear_orphan_fence: bool = False, log=lambda line: None) -> dict:
     """Before activation commits: clear the fence, journal and native staging, restoring nothing.
 
-    It succeeds only when nothing leaked through the fence: under one BEGIN IMMEDIATE the
-    store is healthy, its legacy domain rows (retained tables included) and ID sidecar equal
-    the latest backup's (or, before any backup, the fence-time state), and the projection
-    files on disk equal the latest archive's. Anything else refuses and names what differs:
-    `--resume` keeps the writes; a manual restore (runbook) discards them. With
-    `clear_orphan_fence` the checks are skipped: it clears a fence left without a journal, or
-    one left behind by a manual restore, keeping every row as it is.
+    It never loses a write, because it restores nothing. It clears the fence only when, under
+    one BEGIN IMMEDIATE, the store passes integrity_check and matches what the cutover
+    recorded: with a backup, the legacy domain rows (retained tables included) equal the
+    latest backup's digest (or a reconcile digest recorded after it), the ID sidecar its hash,
+    and the projection files its archive; before any backup, only the rows are compared, with
+    the fence-time or reconcile-time digest. Anything else refuses, naming what differs and
+    the three ways on (`_rollback_refusal`). With `clear_orphan_fence` the comparison is
+    skipped: it clears a fence left without a journal, or by a manual restore, keeping every
+    row and file as it is.
     """
     root = Path(root)
     path = database_path(root)
@@ -1192,8 +1231,7 @@ def _clear(connection, root: Path, fence: dict | None, *, verify: bool) -> dict:
         raise CutoverAborted("the store carries a different cutover fence; refusing to clear it")
     backup = _detail(entries, "backup")
     if not _integrity_ok(connection):
-        raise CutoverRefused(f"the store fails integrity_check; nothing was changed. Restore manually from "
-                             f"{backup.get('path', 'the latest backups/pre-native-*.db')} per {MANUAL_RESTORE}")
+        raise _damaged(connection)
     warnings = []
     if verify:
         _check_nothing_leaked(connection, root, entries, backup)
@@ -1212,7 +1250,7 @@ def _clear(connection, root: Path, fence: dict | None, *, verify: bool) -> dict:
     staging = drop_native_staging(connection)
     if _has_table(connection, JOURNAL):
         _drop_journal(connection)
-    return {"ok": True, "mode": "rollback", "restored_from": None, "cleared": cleared,
+    return {"ok": True, "mode": "rollback", "cleared": cleared,
             "staging_dropped": len(staging), "warnings": warnings, "domain_digest": domain_digest(connection)}
 
 
@@ -1230,16 +1268,23 @@ def _check_nothing_leaked(connection, root: Path, entries: list[dict], backup: d
     accepted -= {None}
     if current not in accepted:
         what = "the store changed since the latest backup"
-        if backup and Path(backup["path"]).exists():
-            with closing(_connect_readonly(Path(backup["path"]))) as reference:
-                what += ": " + (_summarize(domain_differences(connection, reference)) or "rows differ")
+        if backup:
+            try:
+                with closing(_connect_readonly(Path(backup["path"]))) as reference:
+                    what += ": " + (_summarize(domain_differences(connection, reference)) or "rows differ")
+            except (sqlite3.Error, OSError):
+                what += f" (the backup {backup['path']} to name the rows is unavailable)"
         raise _rollback_refusal(what, backup)
     if backup:
         sidecar = database_path(root).parent / "id-reservations.json"
         if "sidecar_sha256" in backup and (_sha256(sidecar) if sidecar.exists() else None) != backup["sidecar_sha256"]:
             raise _rollback_refusal("id-reservations.json changed since the latest backup", backup)
         if backup.get("projection_archive"):
-            divergence = projection_divergence(root, _archived(backup["projection_archive"]), connection)
+            try:
+                archived = _archived(backup["projection_archive"])
+            except CutoverAborted as error:
+                raise _rollback_refusal(f"the projection files cannot be compared: {error}", backup) from error
+            divergence = projection_divergence(root, archived, connection)
             if any(divergence.values()):
                 raise _rollback_refusal(
                     f"projection files differ from the latest backup's archive: {_summarize_files(divergence)}",
@@ -1277,6 +1322,10 @@ def _failure(root: Path, mode: str, error: BaseException, *, refused: bool) -> t
             return {"ok": True, "mode": mode, "fence": fence, "warnings": [warning],
                     "hint": "nothing to do; check the warning"}, EXIT_OK
     report = {"ok": False, "mode": mode, "fence": fence}
+    if isinstance(error, StoreDamaged):
+        report["refusals"] = [str(error)]
+        report["hint"] = f"the store is damaged; restore it manually per {MANUAL_RESTORE}"
+        return report, EXIT_REFUSED
     if refused:
         report["refusals"] = [str(error)]
     else:
@@ -1311,8 +1360,6 @@ def _text(report: dict) -> str:
         lines.append(f"would {step}")
     if report.get("completed_stages"):
         lines.append("completed: " + ", ".join(report["completed_stages"]))
-    if report.get("restored_from"):
-        lines.append(f"restored from: {report['restored_from']}")
     if report.get("error"):
         lines.append(f"error: {report['error']}")
     if report.get("hint"):
@@ -1327,7 +1374,9 @@ def main(argv=None) -> int:
     action = parser.add_mutually_exclusive_group()
     action.add_argument("--dry-run", action="store_true", help="run every check and report; write nothing")
     action.add_argument("--resume", action="store_true", help="continue an interrupted cutover from its journal")
-    action.add_argument("--rollback", action="store_true", help="undo a cutover that has not activated")
+    action.add_argument("--rollback", action="store_true",
+                        help="clear the fence of a cutover that has not activated, when the store still matches "
+                             "its backup; restores nothing")
     parser.add_argument("--confirm-stopped", action="store_true",
                         help="proceed past matching processes you have verified are stopped")
     parser.add_argument("--token", help="the cutover token printed at start (optional ownership proof)")

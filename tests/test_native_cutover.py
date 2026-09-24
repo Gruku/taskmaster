@@ -674,7 +674,7 @@ def _leak_bug(project, monkeypatch, title="Leaked acknowledged bug"):
 def test_probe_a_resume_keeps_a_real_leaked_write(project, quiesce, monkeypatch):
     _stop_after_backup(project, monkeypatch)
     _leak_bug(project, monkeypatch)
-    with pytest.raises(cutover.CutoverRefused, match=r"B-010.*--resume to keep them"):
+    with pytest.raises(cutover.CutoverRefused, match=r"B-010.*--resume: go native"):
         cutover.rollback(project)
     report = cutover.cutover(project, resume=True)
     assert report["ok"] and report["drift_absorbed"] == 1 and "absorbed" in report["warnings"][0]
@@ -803,12 +803,19 @@ def _digest(root):
         return cutover.domain_digest(connection)
 
 
+def schema_objects(root):
+    with closing(sqlite3.connect(db(root))) as connection:
+        return connection.execute("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name").fetchall()
+
+
 def test_rollback_with_nothing_leaked_is_exact_and_restores_nothing(project, quiesce, monkeypatch):
     before, files, digest = legacy_state(project), _projection_tree(project), _digest(project)
+    objects = schema_objects(project)
     _stop_after_backup(project, monkeypatch)
     report = cutover.rollback(project)
-    assert report["ok"] and report["restored_from"] is None and report["staging_dropped"] > 0
+    assert report["ok"] and "restored_from" not in report and report["staging_dropped"] > 0
     assert legacy_state(project) == before and _projection_tree(project) == files and _digest(project) == digest
+    assert schema_objects(project) == objects  # Native graph indexes on legacy tables included.
     assert not list((db(project).parent / "backups").glob("pre-rollback-*"))
     assert cutover.cutover(project)["ok"]
 
@@ -818,7 +825,9 @@ def test_rollback_refuses_changed_rows_and_names_them(project, quiesce, monkeypa
     with closing(sqlite3.connect(db(project), isolation_level=None)) as connection:
         connection.execute("DELETE FROM entities WHERE kind='bug'")
     with pytest.raises(cutover.CutoverRefused,
-                       match=r"entities: 0 added, 1 removed.*B-001.*--resume to keep them.*pre-native-.*Manual restore"):
+                       match=r"entities: 0 added, 1 removed.*B-001.*restores nothing.*\(1\) --resume: go native, keeping "
+                             r"every write.*\(2\) --rollback --clear-orphan-fence: stay legacy.*\(3\) discard.*"
+                             r"pre-native-.*Manual restore"):
         cutover.rollback(project)
     with closing(sqlite3.connect(db(project))) as connection:
         assert connection.execute("SELECT value FROM meta WHERE key='migration_state'").fetchone()[0] == "migrating"
@@ -852,7 +861,7 @@ def test_rollback_refuses_a_changed_reservation_sidecar(project, quiesce, monkey
 def test_rollback_refuses_a_damaged_store_and_names_the_manual_restore(project, quiesce, monkeypatch):
     _stop_after_backup(project, monkeypatch)
     _break_index(db(project))
-    with pytest.raises(cutover.CutoverRefused, match=r"fails integrity_check.*pre-native-.*Manual restore from a backup"):
+    with pytest.raises(cutover.StoreDamaged, match=r"fails integrity_check.*pre-native-.*Manual restore from a backup"):
         cutover.rollback(project)
     with closing(sqlite3.connect(db(project))) as connection:  # No REINDEX, no restore: untouched.
         assert "missing from index" in connection.execute("PRAGMA integrity_check").fetchone()[0]
@@ -921,7 +930,7 @@ def test_t8_after_the_drift_cap_resume_keeps_the_writes_or_clear_orphan_fence_ke
     monkeypatch.setitem(cutover.HOOKS, "checkpoint", None)
     twin = tmp_path / "twin"
     shutil.copytree(project, twin)
-    with pytest.raises(cutover.CutoverRefused, match="--resume to keep them"):
+    with pytest.raises(cutover.CutoverRefused, match="--resume: go native"):
         cutover.rollback(project)
     assert cutover.cutover(project, resume=True)["ok"]  # The writer stopped: the writes go native.
     assert ("bug", "B-704") in committed(project)
@@ -1015,3 +1024,108 @@ def test_carried_work_is_exported_by_the_native_exporter_after_activation(projec
         assert connection.execute("SELECT COUNT(*) FROM projection WHERE dirty=1").fetchone()[0] == 0
         assert connection.execute("SELECT COUNT(*) FROM projection_jobs WHERE state IN "
                                   "('pending','claimed','conflict')").fetchone()[0] == 0
+
+
+# ── Round 5 (probes A-M) ────────────────────────────────────────────────────
+
+def test_probe_b_a_damaged_store_is_never_resumed_or_activated(project, quiesce, monkeypatch, capsys):
+    _stop_after_backup(project, monkeypatch)
+    _break_index(db(project))
+    assert cutover.main(["--root", str(project), "--resume", "--json"]) == cutover.EXIT_REFUSED
+    report = json.loads(capsys.readouterr().out)
+    assert "fails integrity_check" in report["refusals"][0] and "Manual restore" in report["hint"]
+    assert "--resume" not in report["hint"]
+    with closing(sqlite3.connect(db(project))) as connection:
+        assert connection.execute("SELECT value FROM native_manifest WHERE key='authority'").fetchone()[0] == "legacy"
+
+
+def test_probe_b_damage_appearing_just_before_activation_is_caught_inside_its_transaction(
+        project, quiesce, monkeypatch, capsys):
+    def damage(name):
+        if name == "activate:begin":
+            _break_index(db(project))
+    monkeypatch.setitem(cutover.HOOKS, "checkpoint", damage)
+    assert cutover.main(["--root", str(project), "--json"]) == cutover.EXIT_REFUSED
+    report = json.loads(capsys.readouterr().out)
+    assert "fails integrity_check" in report["refusals"][0] and "Manual restore" in report["hint"]
+    with closing(sqlite3.connect(db(project))) as connection:
+        assert connection.execute("SELECT value FROM native_manifest WHERE key='authority'").fetchone()[0] == "legacy"
+
+
+def _backup_detail(root):
+    with closing(sqlite3.connect(db(root))) as connection:
+        return cutover._detail(cutover.journal(connection), "backup")
+
+
+def test_probe_c_a_missing_archive_is_drift_for_resume_and_named_by_rollback(project, quiesce, monkeypatch):
+    _stop_after_backup(project, monkeypatch)
+    Path(_backup_detail(project)["projection_archive"]["path"]).unlink()
+    with pytest.raises(cutover.CutoverRefused, match=r"cannot be compared.*--rollback --clear-orphan-fence: stay legacy"):
+        cutover.rollback(project)
+    report = cutover.cutover(project, resume=True)
+    assert report["ok"] and report["drift_absorbed"] == 1 and "archive is missing" in report["warnings"][0]
+
+
+def test_probe_l_a_missing_backup_db_with_a_leak_is_drift_for_resume(project, quiesce, monkeypatch):
+    _stop_after_backup(project, monkeypatch)
+    _leak_bug(project, monkeypatch)
+    Path(_backup_detail(project)["path"]).unlink()
+    with pytest.raises(cutover.CutoverRefused, match=r"backup .* is unavailable.*--clear-orphan-fence"):
+        cutover.rollback(project)
+    report = cutover.cutover(project, resume=True)
+    assert report["ok"] and ("bug", "B-010") in committed(project)
+
+
+def _run_restore_script(project, tmp_path):
+    import subprocess
+    import sys
+    script = tmp_path / "restore_backup.py"
+    script.write_text(_runbook_restore_script(), encoding="utf-8")
+    return subprocess.run([sys.executable, str(script), str(project)], capture_output=True, text=True, timeout=120)
+
+
+def test_probe_j_the_restore_script_refuses_an_activated_store(project, quiesce, tmp_path):
+    cutover.cutover(project)
+    before = tree_hash(project)
+    result = _run_restore_script(project, tmp_path)
+    assert result.returncode != 0 and "native authority" in result.stderr
+    assert tree_hash(project) == before
+
+
+def test_the_restore_script_refuses_while_a_client_writes(project, quiesce, monkeypatch, tmp_path):
+    _stop_after_backup(project, monkeypatch)
+    before = tree_hash(project)
+    writer = sqlite3.connect(db(project), isolation_level=None)
+    writer.execute("BEGIN IMMEDIATE")
+    try:
+        result = _run_restore_script(project, tmp_path)
+    finally:
+        writer.rollback()
+        writer.close()
+    assert result.returncode != 0 and "another connection is writing" in result.stderr
+    assert tree_hash(project) == before
+
+
+def test_the_restore_script_refuses_while_the_ownership_lock_is_held(project, quiesce, monkeypatch, tmp_path):
+    from taskmaster.coordinator.ownership import Ownership
+    _stop_after_backup(project, monkeypatch)
+    with Ownership(project):
+        result = _run_restore_script(project, tmp_path)
+    assert result.returncode != 0 and "ownership lock" in result.stderr
+
+
+def test_the_documented_backup_pruning_keeps_the_newest_set(project, quiesce, monkeypatch):
+    import re
+    import subprocess
+    import sys
+    _stop_after_backup(project, monkeypatch)
+    _leak_bug(project, monkeypatch)
+    cutover.cutover(project, resume=True)  # A drift absorption: two backup sets.
+    backups = db(project).parent / "backups"
+    sets = sorted(backups.glob("pre-native-*.db"))
+    assert len(sets) == 2
+    text = (Path(__file__).resolve().parents[1] / "docs" / "runbooks" / "native-cutover.md").read_text(encoding="utf-8")
+    command = re.search(r'python -c "(import pathlib,sys;.*?)" <project>', text).group(1)
+    subprocess.run([sys.executable, "-c", command, str(project)], check=True, timeout=60)
+    assert sorted(backups.glob("pre-native-*.db")) == sets[-1:]
+    assert not list(backups.glob(sets[0].stem + ".*"))

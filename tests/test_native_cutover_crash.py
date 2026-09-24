@@ -99,6 +99,7 @@ def test_crash_then_rollback(project, point, mode, monkeypatch):
     before, digest = legacy_state(project), None
     with closing(sqlite3.connect(cutover.database_path(project))) as connection:
         digest = cutover.domain_digest(connection)
+        objects = connection.execute("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name").fetchall()
     crash(project, point, mode, monkeypatch)
     if point in ACTIVATED:
         with pytest.raises(cutover.CutoverRefused, match="(?i)escape hatch"):
@@ -110,12 +111,14 @@ def test_crash_then_rollback(project, point, mode, monkeypatch):
             cutover.rollback(project)
     else:
         report = cutover.rollback(project)
-        assert report["ok"] and report["restored_from"] is None and report["domain_digest"] == digest
+        assert report["ok"] and report["domain_digest"] == digest
     assert legacy_state(project) == before
     assert authority(project) in (None, "legacy")
     with closing(sqlite3.connect(cutover.database_path(project))) as connection:
         assert_compatible(connection)
         assert not connection.execute("SELECT 1 FROM sqlite_schema WHERE name=?", (cutover.JOURNAL,)).fetchone()
+        assert connection.execute("SELECT type,name,tbl_name,sql FROM sqlite_master "
+                                  "ORDER BY type,name").fetchall() == objects
     # A rolled-back store can be cut over again from scratch.
     assert cutover.cutover(project)["ok"]
 
