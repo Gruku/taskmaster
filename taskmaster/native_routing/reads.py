@@ -202,6 +202,12 @@ def tree(snapshot, *, context=True) -> dict:
     It reads every task, as the legacy dict does; it exists so the whole-backlog
     read tools render through their own shared presentation code rather than a
     second copy. The dashboard reads `dashboard_tree` instead.
+
+    Whole-tree consumers left on it on purpose (N16-B), because their renderers
+    read arbitrary task fields or prose: epic/phase status and phase advance,
+    blast radius, the search fallback (FTS unavailable), `backlog_validate`,
+    `backlog_continuity_items`, and the viewer's compatibility snapshot. None is
+    on a per-command path.
     """
     return _tree(snapshot, context=context, task_fields=None)
 
