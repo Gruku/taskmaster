@@ -34,7 +34,7 @@ import json
 import os
 from pathlib import Path
 import shutil
-import socket
+import platform
 import sqlite3
 import sys
 import uuid
@@ -641,7 +641,7 @@ class _Run:
                                    [("migration_state", "migrating"), ("migration_owner", self.owner),
                                     ("migration_token", self.token)])
             self._commit_stage("fence", {"previous_meta": previous, "domain_digest": digest,
-                                         "pid": os.getpid(), "host": socket.gethostname()})
+                                         "pid": os.getpid(), "host": platform.node()})
         except BaseException:
             if connection.in_transaction:
                 connection.rollback()
@@ -929,7 +929,7 @@ def cutover(root: Path, *, confirm_stopped: bool = False, resume: bool = False, 
                 activated = "activate" in done
                 if not activated and meta.get("migration_token") != fence["token"]:
                     raise CutoverRefused("the store's fence token does not match its journal; refusing to resume")
-                owner, run_token = f"cutover:{uuid.uuid4().hex[:8]}@{socket.gethostname()}:{os.getpid()}", fence["token"]
+                owner, run_token = f"cutover:{uuid.uuid4().hex[:8]}@{platform.node()}:{os.getpid()}", fence["token"]
                 # Takeover rule: holding the ownership lock proves the fencing process is gone
                 # (it holds that lock for its whole run), so its token is inherited, not rotated:
                 # rotating it would write `meta` and stale the verified staging snapshot.
@@ -939,7 +939,7 @@ def cutover(root: Path, *, confirm_stopped: bool = False, resume: bool = False, 
                 connection.commit()
                 log(f"resuming cutover {run_token} after stage {done[-1] if done else '-'}")
             else:
-                owner = f"cutover:{uuid.uuid4().hex[:8]}@{socket.gethostname()}:{os.getpid()}"
+                owner = f"cutover:{uuid.uuid4().hex[:8]}@{platform.node()}:{os.getpid()}"
                 run_token = uuid.uuid4().hex
                 log(f"cutover token {run_token}")
             run = _Run(root, connection, owner, run_token, log)
@@ -965,7 +965,7 @@ def _finish_release(path: Path, *, token: str | None, log) -> dict:
         fence = next(e for e in entries if e["stage"] == "fence")
         if token is not None and token != fence["token"]:
             raise CutoverRefused("--token does not match the cutover journal's token")
-        owner = f"cutover:{uuid.uuid4().hex[:8]}@{socket.gethostname()}:{os.getpid()}"
+        owner = f"cutover:{uuid.uuid4().hex[:8]}@{platform.node()}:{os.getpid()}"
         if "release" not in _done(entries):
             connection.execute("BEGIN IMMEDIATE")
             _record(connection, "takeover", "done", owner, fence["token"],
