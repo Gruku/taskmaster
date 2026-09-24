@@ -19,11 +19,10 @@ import yaml
 
 from taskmaster import backlog_server as bs
 from taskmaster import store
-from taskmaster.native.migrate import backfill, reconstruct_entities, repair_graph_for_activation
+from taskmaster.native.migrate import backfill, reconstruct_entities
 from taskmaster.native_routing import projection
 from taskmaster.native_routing.derived import KEYS as DERIVED_BACKLOG_KEYS
 
-PREFIXES = {"bug": "B-", "issue": "ISS-", "decision": "DEC-", "idea": "IDEA-", "note": "NOTE-"}
 
 
 # ── A shared clock ──────────────────────────────────────────────────────────
@@ -117,41 +116,25 @@ def point_server_at(monkeypatch, root: Path) -> None:
 
 
 def activate_native(root: Path) -> None:
-    """Backfill a legacy project's store and mark it a ready native authority.
+    """Backfill a legacy project's store and flip it to a ready native authority
+    through the production activation core (`native.cutover.activate`), which runs
+    the production ID import (`carryover.import_id_state`) and progress reconcile.
 
-    Mirrors the test-only activation in `test_native_commands.native`, plus the
-    id high-water import a real cutover must perform: every allocated prefix is
-    seeded from the live rows and the legacy reservation file.
+    Fast path for fixtures: no fence, backup or process checks — but authority
+    flips through exactly the function the real cutover commits with. With
+    `TASKMASTER_TWINS_VERIFY=1` the full carry-over oracle runs too: a snapshot
+    before backfill (JSON round-tripped, as the cutover journals it) and
+    `verify_carryover` inside the activation transaction.
     """
+    from taskmaster.native import carryover, cutover
     store.reset_for_tests()
     database = root / ".taskmaster" / "local" / "store.db"
-    reserved = {}
-    reservations = database.parent / "id-reservations.json"
-    if reservations.exists():
-        reserved = json.loads(reservations.read_text(encoding="utf-8"))
     with closing(sqlite3.connect(database, isolation_level=None, timeout=30)) as connection:
+        before = None
+        if os.environ.get("TASKMASTER_TWINS_VERIFY") == "1":
+            before = json.loads(json.dumps(carryover.snapshot_carryover(connection)))
         backfill(connection)
-        connection.execute("BEGIN IMMEDIATE")
-        connection.execute("UPDATE meta SET value='2' WHERE key='schema_version'")
-        connection.execute("INSERT INTO meta(key,value) VALUES('minimum_client_protocol','2') "
-                           "ON CONFLICT(key) DO UPDATE SET value=excluded.value")
-        connection.execute("UPDATE native_manifest SET value='native' WHERE key='authority'")
-        connection.execute("UPDATE native_manifest SET value='ready' WHERE key='state'")
-        connection.execute("INSERT INTO native_manifest VALUES('local_state_imported','1') "
-                           "ON CONFLICT(key) DO UPDATE SET value=excluded.value")
-        # The one-time graph repair belongs to the authority switch (N14).
-        repair_graph_for_activation(connection)
-        for kind, prefix in PREFIXES.items():
-            ids = [row[0] for row in connection.execute(
-                "SELECT public_id FROM entity_core WHERE kind=?", (kind,))]
-            ids += list(reserved.get(kind, []))
-            high = max((int(m.group(1)) for m in (re.fullmatch(re.escape(prefix) + r"(\d+)", i) for i in ids) if m),
-                       default=0)
-            connection.execute("INSERT INTO id_counters VALUES(?,?,?)", (kind, prefix, high))
-        for kind, ids in reserved.items():
-            connection.executemany("INSERT OR IGNORE INTO id_reservations VALUES(?,?)",
-                                   [(kind, ident) for ident in ids])
-        connection.commit()
+        cutover.activate(connection, root, before=before)
 
 
 def is_native(root: Path) -> bool:
