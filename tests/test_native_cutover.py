@@ -1070,8 +1070,9 @@ def test_probe_l_a_missing_backup_db_with_a_leak_is_drift_for_resume(project, qu
     _stop_after_backup(project, monkeypatch)
     _leak_bug(project, monkeypatch)
     Path(_backup_detail(project)["path"]).unlink()
-    with pytest.raises(cutover.CutoverRefused, match=r"backup .* is unavailable.*--clear-orphan-fence"):
+    with pytest.raises(cutover.CutoverRefused, match=r"backup .* is unavailable.*--clear-orphan-fence") as refused:
         cutover.rollback(project)
+    assert "(3)" not in str(refused.value)  # No manual restore is offered without its backup.
     report = cutover.cutover(project, resume=True)
     assert report["ok"] and ("bug", "B-010") in committed(project)
 
@@ -1114,18 +1115,73 @@ def test_the_restore_script_refuses_while_the_ownership_lock_is_held(project, qu
     assert result.returncode != 0 and "ownership lock" in result.stderr
 
 
-def test_the_documented_backup_pruning_keeps_the_newest_set(project, quiesce, monkeypatch):
+
+
+# ── Round 6 ─────────────────────────────────────────────────────────────────
+
+def _runbook_prune_command():
     import re
+    text = (Path(__file__).resolve().parents[1] / "docs" / "runbooks" / "native-cutover.md").read_text(encoding="utf-8")
+    return re.search(r'python -c "(import pathlib,re,sys;.*?)" <project>', text).group(1)
+
+
+def test_the_documented_pruning_keeps_the_newest_set_by_timestamp_then_number(tmp_path):
+    """Same-second backups are `<ts>`, `<ts>-1`, ... `<ts>-10`: a name sort would keep the wrong set."""
     import subprocess
     import sys
+    backups = tmp_path / ".taskmaster" / "local" / "backups"
+    backups.mkdir(parents=True)
+    stems = ["pre-native-20260924T115959Z", "pre-native-20260924T120000Z"] + \
+        [f"pre-native-20260924T120000Z-{n}" for n in (1, 2, 9, 10)]
+    for stem in stems:
+        for extension in (".db", ".json", ".projection.zip", ".id-reservations.json"):
+            (backups / (stem + extension)).write_text("x", encoding="utf-8")
+    (backups / "aside-20260924T120001Z").mkdir()
+    subprocess.run([sys.executable, "-c", _runbook_prune_command(), str(tmp_path)], check=True, timeout=60)
+    survivor = "pre-native-20260924T120000Z-10"
+    assert sorted(p.name for p in backups.iterdir()) == sorted(
+        [survivor + e for e in (".db", ".json", ".projection.zip", ".id-reservations.json")] + ["aside-20260924T120001Z"])
+
+
+def test_a_damaged_activated_store_points_at_the_escape_hatch(project, quiesce, capsys):
+    cutover.cutover(project)
+    _break_index(db(project))
+    assert cutover.main(["--root", str(project), "--resume", "--json"]) == cutover.EXIT_REFUSED
+    report = json.loads(capsys.readouterr().out)
+    assert "escape hatch" in report["hint"] and "Manual restore" not in report["hint"]
+    assert "pre-native-" not in report["refusals"][0]  # Names no backup file.
+
+
+def test_a_damaged_store_with_no_cutover_names_no_backup(project, quiesce, capsys):
+    _break_index(db(project))
+    assert cutover.main(["--root", str(project), "--json"]) == cutover.EXIT_REFUSED
+    report = json.loads(capsys.readouterr().out)
+    assert "no cutover backup exists" in report["hint"] and "pre-native-" not in json.dumps(report)
+
+
+def test_a_rollback_refusal_before_any_backup_offers_no_manual_restore(project, quiesce, monkeypatch):
+    _stop_after_backup(project, monkeypatch, point="backup:begin")
+    with closing(sqlite3.connect(db(project), isolation_level=None)) as connection:
+        connection.execute("INSERT INTO meta VALUES('pending_progress_log','[]')")
+    with pytest.raises(cutover.CutoverRefused, match=r"\(1\) --resume.*\(2\) --rollback --clear-orphan-fence") as refused:
+        cutover.rollback(project)
+    assert "(3)" not in str(refused.value) and "Manual restore" not in str(refused.value)
+
+
+def test_a_missing_backup_is_replaced_by_resume_even_without_drift(project, quiesce, monkeypatch, tmp_path):
     _stop_after_backup(project, monkeypatch)
-    _leak_bug(project, monkeypatch)
-    cutover.cutover(project, resume=True)  # A drift absorption: two backup sets.
-    backups = db(project).parent / "backups"
-    sets = sorted(backups.glob("pre-native-*.db"))
-    assert len(sets) == 2
-    text = (Path(__file__).resolve().parents[1] / "docs" / "runbooks" / "native-cutover.md").read_text(encoding="utf-8")
-    command = re.search(r'python -c "(import pathlib,sys;.*?)" <project>', text).group(1)
-    subprocess.run([sys.executable, "-c", command, str(project)], check=True, timeout=60)
-    assert sorted(backups.glob("pre-native-*.db")) == sets[-1:]
-    assert not list(backups.glob(sets[0].stem + ".*"))
+    missing = Path(_backup_detail(project)["path"])
+    missing.unlink()
+    twin = tmp_path / "twin"
+    shutil.copytree(project, twin)
+    report = cutover.cutover(project, resume=True)
+    assert report["ok"] and report["drift_absorbed"] == 1 and "is missing" in report["warnings"][0]
+    fresh = Path(_backup_detail(project)["path"])
+    assert fresh != missing and fresh.exists()
+    # A resume interrupted right after the fresh backup leaves a usable reference for rollback.
+    crash_at(monkeypatch, "backfill:begin")
+    with pytest.raises(Injected):
+        cutover.cutover(twin, resume=True)
+    monkeypatch.setitem(cutover.HOOKS, "checkpoint", None)
+    assert Path(_backup_detail(twin)["path"]).exists()
+    assert cutover.rollback(twin)["ok"]

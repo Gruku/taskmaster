@@ -225,8 +225,8 @@ Anything else refuses, names what differs, and offers three ways on:
 | `the store changed since the latest backup: entities: 0 added, 0 removed, 1 changed (e.g. [["bug","B-001"]]) ...` | A client wrote through the fence |
 | `projection files differ from the latest backup's archive: 1 changed (backlog.yaml); 1 added (bugs/B-010.md)` | A client wrote files through the fence |
 | `id-reservations.json changed since the latest backup` | A client reserved IDs through the fence |
-| `the projection files cannot be compared: ... archive ... is missing` / `... (the backup ... is unavailable)` | A recorded backup file is gone. `--resume` takes a fresh backup; `--rollback --clear-orphan-fence` stays legacy |
-| `the store fails integrity_check; nothing was changed, and it will not be resumed, activated or rolled back` | The store is damaged. Neither `--resume` nor activation proceeds (both check integrity). The manual restore below is the only way on |
+| `the projection files cannot be compared: ... archive ... is missing` / `... (the backup ... is unavailable)` | A recorded backup file is gone, so option 3 is not offered. `--resume` takes a fresh backup (even when nothing else changed); `--rollback --clear-orphan-fence` stays legacy |
+| `the store fails integrity_check; nothing was changed ...` | The store is damaged. Neither `--resume` nor activation proceeds (both check integrity). The message names the way on that exists: the manual restore below when a cutover backup exists; section 5 (the escape hatch) when the store is already native; otherwise a repair with SQLite's tools (such as the `sqlite3` shell's `.recover`) or your own copy |
 | `already a native authority ... Escape hatch` | Activation committed; see section 5 |
 
 A rollback is one transaction, so an interrupted rollback has changed nothing: run it again.
@@ -436,10 +436,12 @@ writes leaves several. Every manual restore leaves an `aside-<ts>/` folder. None
 removed automatically. Once the cutover has activated and you have verified the native store
 (section 3, "Verify"), they are no longer needed for recovery: after activation the only
 recovery is the escape hatch, which uses the projection files. With every client stopped, keep
-the newest `pre-native-*` set as an archive and delete the rest:
+the newest `pre-native-*` set as an archive and delete the rest. Backups taken within the
+same second are named `<ts>.db`, `<ts>-1.db`, `<ts>-2.db` and so on, so the command orders them
+by timestamp and then by that number, never by name:
 
 ```
-python -c "import pathlib,sys; d=pathlib.Path(sys.argv[1])/'.taskmaster'/'local'/'backups'; s=sorted(d.glob('pre-native-*.db')); [p.unlink() for db in s[:-1] for p in d.glob(db.stem+'.*')]" <project>
+python -c "import pathlib,re,sys; d=pathlib.Path(sys.argv[1])/'.taskmaster'/'local'/'backups'; key=lambda p: (lambda m: (m[1], int(m[2] or 0)))(re.fullmatch(r'pre-native-(\d{8}T\d{6}Z)(?:-(\d+))?', p.stem)); s=sorted(d.glob('pre-native-*.db'), key=key); [f.unlink() for db in s[:-1] for f in d.glob(db.stem+'.*')]" <project>
 ```
 
 Delete `aside-*` folders once you no longer need what they hold.

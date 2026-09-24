@@ -69,8 +69,12 @@ class CutoverAborted(RuntimeError):
 
 
 class StoreDamaged(CutoverRefused):
-    """The store fails integrity_check: neither resume, activation nor rollback may proceed;
-    the only way on is the runbook's manual restore from a backup."""
+    """The store fails integrity_check: neither resume, activation nor rollback may proceed.
+    `hint` names the way on that exists for this store (see `_damaged`)."""
+
+    def __init__(self, message: str, hint: str):
+        super().__init__(message)
+        self.hint = hint
 
 
 def _checkpoint(name: str) -> None:
@@ -743,6 +747,9 @@ class _Run:
         ID-reservation sidecar. The carry-over snapshot and staging no longer describe them."""
         detail = _detail(journal(self.connection), "backup")
         reasons = []
+        if not Path(detail.get("path", "")).exists():
+            reasons.append(f"the latest backup {detail.get('path')} is missing; a fresh backup is taken so rollback "
+                           "and the manual restore keep a reference")
         if domain_digest(self.connection) != detail.get("domain_digest"):
             source = Path(detail["path"])
             try:
@@ -1145,20 +1152,29 @@ MANUAL_RESTORE = f"{RUNBOOK}, 'Manual restore from a backup'"
 
 
 def _rollback_refusal(what: str, backup: dict) -> CutoverRefused:
-    where = backup.get("path", "the latest backups/pre-native-*.db")
-    return CutoverRefused(
-        f"{what}. --rollback restores nothing, so it clears the fence only when the store matches what the "
-        f"cutover recorded. Choose one: (1) --resume: go native, keeping every write (recommended); "
-        f"(2) --rollback --clear-orphan-fence: stay legacy, keeping every row and file as it is now; "
-        f"(3) discard everything written since the backup {where} with the manual restore in {MANUAL_RESTORE} "
-        f"(it copies what it replaces aside first)")
+    options = ("Choose one: (1) --resume: go native, keeping every write (recommended); "
+               "(2) --rollback --clear-orphan-fence: stay legacy, keeping every row and file as it is now")
+    if backup and Path(backup.get("path", "")).exists():
+        options += (f"; (3) discard everything written since the backup {backup['path']} with the manual restore "
+                    f"in {MANUAL_RESTORE} (it copies what it replaces aside first)")
+    return CutoverRefused(f"{what}. --rollback restores nothing, so it clears the fence only when the store matches "
+                          f"what the cutover recorded. {options}")
 
 
 def _damaged(connection) -> StoreDamaged:
+    """The refusal for a store failing integrity_check, pointing only at a way on that exists."""
+    head = "the store fails integrity_check; nothing was changed"
+    if _native_manifest(connection).get("authority") == "native":
+        hint = f"activation committed, so no pre-native backup applies: follow {RUNBOOK}, 'Post-activation escape hatch'"
+        return StoreDamaged(f"{head}. It is a native authority: {hint}", hint)
     backup = _detail(journal(connection), "backup") if _has_table(connection, JOURNAL) else {}
-    where = backup.get("path", "the latest backups/pre-native-*.db")
-    return StoreDamaged(f"the store fails integrity_check; nothing was changed, and it will not be resumed, "
-                        f"activated or rolled back. Restore it manually from {where} per {MANUAL_RESTORE}")
+    if backup and Path(backup.get("path", "")).exists():
+        hint = f"restore it manually from {backup['path']} per {MANUAL_RESTORE}"
+        return StoreDamaged(f"{head}, and it will not be resumed, activated or rolled back. {hint[0].upper()}{hint[1:]}",
+                            hint)
+    hint = ("no cutover backup exists to restore from: repair the store with SQLite's tools (for example the "
+            "sqlite3 shell's .recover) or restore it from your own copy, then run the command again")
+    return StoreDamaged(f"{head}. {hint[0].upper()}{hint[1:]}", hint)
 
 
 def rollback(root: Path, *, confirm_stopped: bool = False, token: str | None = None,
@@ -1324,7 +1340,7 @@ def _failure(root: Path, mode: str, error: BaseException, *, refused: bool) -> t
     report = {"ok": False, "mode": mode, "fence": fence}
     if isinstance(error, StoreDamaged):
         report["refusals"] = [str(error)]
-        report["hint"] = f"the store is damaged; restore it manually per {MANUAL_RESTORE}"
+        report["hint"] = f"the store is damaged; {error.hint}"
         return report, EXIT_REFUSED
     if refused:
         report["refusals"] = [str(error)]
