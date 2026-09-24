@@ -173,3 +173,32 @@ def test_process_death_inside_the_atomic_rollback_then_rollback_again(project, p
     report = cutover.rollback(project, discard_writes_since_backup=True)
     assert report["ok"]
     assert legacy_state(project) == before and backlog.read_bytes() == original
+
+
+RESUME_AFTER_ROLLBACK_SCRIPT = ROLLBACK_SCRIPT
+
+
+@pytest.mark.allow_projection_bypass
+def test_process_death_after_the_file_restore_then_resume_keeps_the_write(project, monkeypatch):
+    """T4 with os._exit: the rollback restored the files and died before its commit; a resume
+    puts the saved files back so the store and its files agree before activation."""
+    from taskmaster import backlog_server as bs
+    from taskmaster import store
+    from taskmaster.admission import migration_owner
+    from tests.native_twins import point_server_at
+    crash(project, "compare:before-commit", "exception", monkeypatch)
+    with closing(sqlite3.connect(cutover.database_path(project))) as connection:
+        token = connection.execute("SELECT value FROM meta WHERE key='migration_token'").fetchone()[0]
+    point_server_at(monkeypatch, project)
+    with migration_owner(token):
+        bs.backlog_bug_create(title="Leaked through the fence")
+    store.reset_for_tests()
+    bug_file = project / ".taskmaster" / "bugs" / "B-010.md"
+    leaked = bug_file.read_bytes()
+    repo = str(Path(__file__).resolve().parents[1])
+    result = subprocess.run([sys.executable, "-c", ROLLBACK_SCRIPT, str(project), "rollback:files-restored"],
+                            cwd=repo, timeout=120, env=dict(os.environ, PYTHONPATH=repo), capture_output=True, text=True)
+    assert result.returncode == 37, result.stdout + result.stderr
+    assert not bug_file.exists()
+    assert cutover.cutover(project, resume=True)["ok"]
+    assert bug_file.read_bytes() == leaked and ("bug", "B-010") in committed(project)
