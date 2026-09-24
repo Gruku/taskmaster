@@ -48,7 +48,8 @@ def test_runner_smoke_on_small_synthetic_dataset(tmp_path):
     # Every applicable §11 budget row is reported, met or missed.
     budgets = {b["budget"] for b in report["budgets"]}
     assert budgets == {"bounded reads p95 < 100 ms", "DB command core p95 < 50 ms", "simple tool writes p95 < 250 ms"}
-    assert all(b["status"] in ("met", "missed") for b in report["budgets"])
+    # A smoke run is never budget evidence: every row says so instead of met/missed.
+    assert all(b["status"] == "smoke (<200 samples)" for b in report["budgets"])
     # The instrumented pass: its own records, the real metrics module, nothing malformed, files cleaned up.
     instrumented = report["instrumented"]
     assert len(instrumented) == len(report["results"])
@@ -60,3 +61,4 @@ def test_runner_smoke_on_small_synthetic_dataset(tmp_path):
     assert commands
     text = summary.read_text(encoding="utf-8")
     assert "## Correctness" in text and "## Budgets" in text and "## Instrumented pass" in text
+    assert "(SMOKE - not acceptance evidence)" in text.splitlines()[0]
