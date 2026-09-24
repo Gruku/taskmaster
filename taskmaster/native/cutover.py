@@ -1282,6 +1282,8 @@ def _check_nothing_leaked(connection, root: Path, entries: list[dict], backup: d
         accepted = {_detail(entries, "fence").get("domain_digest")} | \
             {e["detail"].get("domain_digest") for e in entries if e["stage"] == "reconcile"}
     accepted -= {None}
+    # Collect every difference before refusing, so the operator sees rows and files together.
+    problems = []
     if current not in accepted:
         what = "the store changed since the latest backup"
         if backup:
@@ -1290,21 +1292,23 @@ def _check_nothing_leaked(connection, root: Path, entries: list[dict], backup: d
                     what += ": " + (_summarize(domain_differences(connection, reference)) or "rows differ")
             except (sqlite3.Error, OSError):
                 what += f" (the backup {backup['path']} to name the rows is unavailable)"
-        raise _rollback_refusal(what, backup)
+        problems.append(what)
     if backup:
         sidecar = database_path(root).parent / "id-reservations.json"
         if "sidecar_sha256" in backup and (_sha256(sidecar) if sidecar.exists() else None) != backup["sidecar_sha256"]:
-            raise _rollback_refusal("id-reservations.json changed since the latest backup", backup)
+            problems.append("id-reservations.json changed since the latest backup")
         if backup.get("projection_archive"):
             try:
                 archived = _archived(backup["projection_archive"])
             except CutoverAborted as error:
-                raise _rollback_refusal(f"the projection files cannot be compared: {error}", backup) from error
-            divergence = projection_divergence(root, archived, connection)
-            if any(divergence.values()):
-                raise _rollback_refusal(
-                    f"projection files differ from the latest backup's archive: {_summarize_files(divergence)}",
-                    backup)
+                problems.append(f"the projection files cannot be compared: {error}")
+            else:
+                divergence = projection_divergence(root, archived, connection)
+                if any(divergence.values()):
+                    problems.append("projection files differ from the latest backup's archive: "
+                                    + _summarize_files(divergence))
+    if problems:
+        raise _rollback_refusal("; ".join(problems), backup)
 
 
 

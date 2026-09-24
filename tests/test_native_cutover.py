@@ -851,6 +851,17 @@ def test_rollback_refuses_divergent_projection_files_and_names_them(project, qui
     assert backlog.read_bytes().endswith(b"# written through the fence\n")  # Nothing restored.
 
 
+def test_rollback_refusal_names_changed_rows_and_files_together(project, quiesce, monkeypatch):
+    _stop_after_backup(project, monkeypatch)
+    with closing(sqlite3.connect(db(project), isolation_level=None)) as connection:
+        connection.execute("DELETE FROM entities WHERE kind='bug'")
+    backlog = project / ".taskmaster" / "backlog.yaml"
+    backlog.write_bytes(backlog.read_bytes() + b"# written through the fence\n")
+    with pytest.raises(cutover.CutoverRefused,
+                       match=r"entities: 0 added, 1 removed.*B-001.*; projection files differ .*backlog.yaml"):
+        cutover.rollback(project)
+
+
 def test_rollback_refuses_a_changed_reservation_sidecar(project, quiesce, monkeypatch):
     _stop_after_backup(project, monkeypatch)
     (db(project).parent / "id-reservations.json").write_text('{"bug": ["B-9", "B-12"]}\n', encoding="utf-8")
