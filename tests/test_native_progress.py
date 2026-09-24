@@ -243,6 +243,10 @@ def test_the_legacy_session_log_is_seeded_once_and_meta_is_never_written(history
 
 def test_a_seed_interrupted_before_its_commit_seeds_nothing_then_seeds_once(history, fake_time, monkeypatch):
     root = history.native
+    # Activation now seeds explicitly (N15 `carryover.reconcile_progress`); undo that so
+    # this store exercises the lazy first-write seed, as one activated before N15 would.
+    with native_connection(root) as connection:
+        connection.execute("DELETE FROM sync_state WHERE key LIKE 'progress.%'")
 
     def checkpoint(stage):
         if stage == "progress_seeded":
