@@ -155,7 +155,7 @@ def test_fence_refuses_bridge_clients_but_admits_its_owner(project, quiesce, mon
 @pytest.mark.parametrize("setup,match", [
     (lambda q, root: setattr(q, "live_owner", lambda r: {"pid": 4242, "kind": "service"}), "live coordinator"),
     (lambda q, root: setattr(q, "open_writers", lambda p: True), "open writer"),
-    (lambda q, root: setattr(q, "scan_processes", lambda r: [{"pid": 77, "name": "python.exe backlog_server.py"}]),
+    (lambda q, root: setattr(q, "scan_processes", lambda r, **k: [{"pid": 77, "name": "python.exe backlog_server.py"}]),
      r"pid 77 python.exe backlog_server.py"),
 ])
 def test_quiesce_refusals_write_nothing(project, quiesce, setup, match):
@@ -167,7 +167,7 @@ def test_quiesce_refusals_write_nothing(project, quiesce, setup, match):
 
 
 def test_confirm_stopped_proceeds_past_named_processes(project, quiesce):
-    quiesce.scan_processes = lambda r: [{"pid": 77, "name": "viewer"}, {"pid": 78, "name": "hook"}]
+    quiesce.scan_processes = lambda r, **k: [{"pid": 77, "name": "viewer"}, {"pid": 78, "name": "hook"}]
     with pytest.raises(cutover.CutoverRefused) as refused:
         cutover.cutover(project)
     assert "pid 77 viewer" in str(refused.value) and "pid 78 hook" in str(refused.value)
@@ -232,9 +232,8 @@ def test_unexported_work_appearing_under_the_fence_aborts_reconcile(project, qui
 # ── Compare ──────────────────────────────────────────────────────────────────
 
 def test_carryover_loss_aborts_before_activation(project, quiesce, monkeypatch):
-    from taskmaster.native import migrate
-    monkeypatch.setattr(migrate, "verify_carryover", lambda connection, before: ["linear_queue row 9 lost"],
-                        raising=False)
+    from taskmaster.native import carryover
+    monkeypatch.setattr(carryover, "verify_carryover", lambda connection, before: ["linear_queue row 9 lost"])
     before = legacy_state(project)
     with pytest.raises(cutover.CutoverAborted, match="linear_queue row 9 lost"):
         cutover.cutover(project)
@@ -322,7 +321,7 @@ def test_dry_run_reports_and_writes_nothing(project, quiesce, capsys):
     assert cutover.main(["--root", str(project), "--dry-run"]) == 0
     text = capsys.readouterr().out
     assert "would fence" in text and "would activate" in text
-    quiesce.scan_processes = lambda root: [{"pid": 5, "name": "codex"}]
+    quiesce.scan_processes = lambda root, **k: [{"pid": 5, "name": "codex"}]
     assert cutover.main(["--root", str(project), "--dry-run", "--json"]) == 2
     assert "pid 5 codex" in capsys.readouterr().out
     assert tree_hash(project) == before
@@ -349,3 +348,58 @@ def test_missing_primitives_refuse_before_any_write(project, quiesce, monkeypatc
     report = cutover.dry_run(project)
     assert not report["ok"] and "taskmaster.native.quiesce" in report["refusals"][0]
     assert tree_hash(project) == before
+
+
+def test_carryover_loss_found_only_at_activation_rolls_the_switch_back(project, quiesce, monkeypatch):
+    from taskmaster.native import carryover
+    real, calls = carryover.verify_carryover, []
+
+    def second_call_fails(connection, before):
+        calls.append(1)
+        return real(connection, before) if len(calls) == 1 else ["sessions row lost"]
+    monkeypatch.setattr(carryover, "verify_carryover", second_call_fails)
+    with pytest.raises(cutover.CutoverAborted, match="sessions row lost"):
+        cutover.cutover(project)
+    with closing(sqlite3.connect(db(project))) as connection:
+        assert connection.execute("SELECT value FROM native_manifest WHERE key='authority'").fetchone()[0] == "legacy"
+        assert connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == "1"
+        assert connection.execute("SELECT COUNT(*) FROM id_counters").fetchone()[0] == 0
+    assert cutover.rollback(project)["ok"]
+
+
+def test_malformed_reservation_sidecar_is_refused_before_any_write(project, quiesce):
+    (db(project).parent / "id-reservations.json").write_text('{"bug": "B-9"}', encoding="utf-8")
+    before = tree_hash(project)
+    with pytest.raises(cutover.CutoverRefused, match="malformed ID reservation sidecar"):
+        cutover.cutover(project)
+    report = cutover.dry_run(project)
+    assert any("malformed ID reservation sidecar" in r for r in report["refusals"])
+    assert tree_hash(project) == before
+
+
+def test_scan_note_is_reported_as_a_warning(project, quiesce):
+    quiesce.scan_processes = lambda root, **k: quiesce.ScanResult([], "PowerShell not found; process scan skipped")
+    report = cutover.dry_run(project)
+    assert report["ok"] and any("PowerShell not found" in w for w in report["warnings"])
+
+
+def test_real_owner_and_writer_probes_refuse(project, monkeypatch):
+    """The real `live_owner`/`open_writers`; only the machine-wide process scan is quiet."""
+    import sys
+    from taskmaster.coordinator.ownership import Ownership
+    from taskmaster.native import quiesce as real
+    monkeypatch.setitem(sys.modules, "taskmaster.native.quiesce", real)
+    monkeypatch.setattr(real, "scan_processes", lambda root, **k: real.ScanResult([]))
+    with closing(sqlite3.connect(db(project))) as connection:
+        assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+    with Ownership(project):
+        with pytest.raises(cutover.CutoverRefused, match="live coordinator"):
+            cutover.cutover(project)
+    holder = sqlite3.connect(db(project))
+    try:
+        holder.execute("SELECT COUNT(*) FROM entities").fetchone()
+        with pytest.raises(cutover.CutoverRefused, match="open writer"):
+            cutover.cutover(project)
+    finally:
+        holder.close()
+    assert cutover.cutover(project)["ok"]  # Our own probe connections are closed before probing.

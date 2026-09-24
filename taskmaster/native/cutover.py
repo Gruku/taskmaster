@@ -7,11 +7,12 @@ Stages, in order, each idempotent and recorded in `native_cutover_journal`:
 
     fence      publish meta.migration_state='migrating' + owner/token (BEGIN IMMEDIATE,
                coordinator ownership lock held for the whole run)
-    reconcile  reconcile the pending changelog; refuse unexported projection work
-    backup     sqlite3 online backup + JSON manifest, verified by reopening it
+    reconcile  re-check, under the fence, that no projection export is still pending
+    backup     carry-over snapshot, sqlite3 online backup + JSON manifest, verified by reopening
     backfill   `migrate.backfill` with its checkpoints wired into the journal
-    compare    `migrate.verify_carryover` must report nothing lost
-    activate   one transaction: markers, authority, graph repair, ID import, ready
+    compare    a trial activation (always rolled back): `carryover.verify_carryover` must be []
+    activate   one transaction: markers, authority, graph repair, ID import, progress
+               reconcile, `verify_carryover` == [] (else the whole switch rolls back), ready
     release    record completion and drop the ownership lock
 
 Journal design: a dedicated table, not `meta` keys. Every write to `meta` fires the
@@ -84,15 +85,25 @@ def _quiesce():
     return importlib.import_module("taskmaster.native.quiesce")
 
 
-MIGRATE_PRIMITIVES = ("snapshot_carryover", "verify_carryover", "import_id_state", "reconcile_progress",
-                      "backfill", "repair_graph_for_activation")
+MIGRATE_PRIMITIVES = ("backfill", "repair_graph_for_activation")
+CARRYOVER_PRIMITIVES = ("snapshot_carryover", "verify_carryover", "import_id_state", "reconcile_progress",
+                        "read_reservations")
 QUIESCE_PRIMITIVES = ("live_owner", "open_writers", "scan_processes")
+
+
+def _carryover():
+    return importlib.import_module("taskmaster.native.carryover")
 
 
 def missing_primitives() -> list[str]:
     """Primitives this command needs that the installed code lacks; none may be missing
     before a fence goes up."""
     missing = [f"migrate.{name}" for name in MIGRATE_PRIMITIVES if not hasattr(_migrate(), name)]
+    try:
+        carryover = _carryover()
+        missing += [f"carryover.{name}" for name in CARRYOVER_PRIMITIVES if not hasattr(carryover, name)]
+    except ImportError:
+        missing.append("taskmaster.native.carryover")
     try:
         quiesce = _quiesce()
     except ImportError:
@@ -240,6 +251,15 @@ def _blocking(counts: dict) -> list[str]:
     return reasons
 
 
+def sidecar_refusal(root: Path) -> str | None:
+    """A malformed `id-reservations.json` would abort the snapshot and the ID import."""
+    try:
+        _carryover().read_reservations(database_path(root).parent / "id-reservations.json")
+    except ValueError as error:
+        return f"malformed ID reservation sidecar: {error}; fix it before the cutover"
+    return None
+
+
 def _flush_hint(reasons) -> str:
     return ("Refusing cutover: " + "; ".join(reasons) + ". Flush them first: run any Taskmaster tool call "
             "(e.g. backlog_status) through a bridge client so the legacy store drains its exports, stop it "
@@ -250,7 +270,7 @@ def _flush_hint(reasons) -> str:
 
 def _process_label(process: dict) -> str:
     parts = [f"pid {process.get('pid', '?')}"]
-    for key in ("name", "surface", "cmdline", "command"):
+    for key in ("name", "launcher", "scope", "command_line"):
         if process.get(key):
             parts.append(str(process[key])[:160])
     return " ".join(parts)
@@ -261,15 +281,18 @@ def check_quiesced(root: Path, *, confirm_stopped: bool) -> dict:
     quiesce = _quiesce()
     owner = quiesce.live_owner(Path(root))
     writers = quiesce.open_writers(database_path(root))
-    processes = list(quiesce.scan_processes(Path(root)) or [])
+    scan = quiesce.scan_processes(Path(root))
+    processes = list(scan or [])
     report = {"live_owner": owner, "open_writers": writers, "processes": processes,
               "confirm_stopped": confirm_stopped, "refusals": [], "warnings": []}
+    if getattr(scan, "note", None):
+        report["warnings"].append(f"process scan: {scan.note}")
     if owner:
         report["refusals"].append(f"a live coordinator or service owns this project: {_encode(owner)}; stop it first")
     if writers is True:
         report["refusals"].append("the store has another open writer; stop every Taskmaster client first")
     elif writers is None:
-        report["warnings"].append("open-writer probe was inconclusive")
+        report["warnings"].append("open-writer probe was inconclusive (not a WAL database, or unreadable)")
     if processes:
         names = "; ".join(_process_label(p) for p in processes)
         if confirm_stopped:
@@ -370,19 +393,25 @@ def write_backup(connection, root: Path, carryover: dict) -> dict:
 
 # ── Activation core (production; the twins fixture flips authority through it) ──
 
-def activate(connection, root: Path, *, token: str | None = None, import_ids=None, record=None) -> dict:
+class CarryoverMismatch(RuntimeError):
+    """`verify_carryover` found local state the switch would lose; the switch rolled back."""
+
+
+def activate(connection, root: Path, *, token: str | None = None, before: dict | None = None,
+             record=None, trial: bool = False) -> dict:
     """One transaction: publish native markers and authority, repair the graph, import ID
-    state, and (for a fenced cutover) return `migration_state` to `ready`.
+    state, reconcile the progress changelog and, given the pre-backfill carry-over snapshot
+    `before`, require `verify_carryover` to report nothing lost. A fenced cutover also
+    returns `migration_state` to `ready` here.
 
     `token=None` is the unfenced fast path for test fixtures; it requires an unfenced store.
-    `import_ids(connection, root)` defaults to `migrate.import_id_state`.
     `record(connection)` runs inside the transaction, before commit (the journal row).
+    `trial=True` does all of it and rolls back: the cutover's compare stage.
     """
-    migrate = _migrate()
+    migrate, carryover = _migrate(), _carryover()
     from .db import manifest
     if connection.in_transaction:
         raise RuntimeError("activation requires its own transaction")
-    import_ids = import_ids or migrate.import_id_state
     connection.execute("BEGIN IMMEDIATE")
     try:
         meta = _meta(connection)
@@ -410,12 +439,22 @@ def activate(connection, root: Path, *, token: str | None = None, import_ids=Non
                            "ON CONFLICT(key) DO UPDATE SET value=excluded.value")
         # The one-time graph repair belongs to the authority switch (N14).
         repair = migrate.repair_graph_for_activation(connection)
-        import_ids(connection, Path(root))
+        # The carry-over primitives join this transaction: IDs, then the progress
+        # changelog (after the final backfill, under the fence), then verification.
+        ids = carryover.import_id_state(connection, Path(root))
+        progress = carryover.reconcile_progress(connection)
+        problems = [] if before is None else list(carryover.verify_carryover(connection, before))
+        if problems:
+            raise CarryoverMismatch("carry-over verification failed; activation rolled back: " + "; ".join(problems))
+        result = {"graph_repair": repair, "ids": ids, "progress": progress, "verified": before is not None}
+        if trial:
+            connection.rollback()
+            return result
         if record is not None:
             record(connection)
         _checkpoint("activate:before-commit")
         connection.commit()
-        return {"graph_repair": repair}
+        return result
     except BaseException:
         if connection.in_transaction:
             connection.rollback()
@@ -477,10 +516,9 @@ class _Run:
             raise
 
     def reconcile(self):
-        with migration_owner(self.token):
-            _migrate().reconcile_progress(self.connection)
-        if self.connection.in_transaction:
-            raise CutoverAborted("reconcile_progress left a transaction open")
+        # The progress changelog itself is reconciled inside the activation transaction,
+        # after the final backfill (`carryover.reconcile_progress`): a meta entry written
+        # after its seed marker would never be copied. Here: no export may be stranded.
         self._begin_owned()
         counts = reconcile_counts(self.connection, self.root)
         blocking = _blocking(counts)
@@ -490,8 +528,11 @@ class _Run:
         self._commit_stage("reconcile", {"counts": counts, "domain_digest": domain_digest(self.connection)})
 
     def backup(self):
-        with migration_owner(self.token):
-            carryover = _migrate().snapshot_carryover(self.connection)
+        try:
+            with migration_owner(self.token):
+                carryover = _carryover().snapshot_carryover(self.connection)
+        except ValueError as error:
+            raise CutoverAborted(f"carry-over snapshot failed: {error}") from error
         if self.connection.in_transaction:
             raise CutoverAborted("snapshot_carryover left a transaction open")
         result = write_backup(self.connection, self.root, carryover)
@@ -516,31 +557,27 @@ class _Run:
         self.log(f"[backfill] done: {result.get('entities')} entities, event high water {result.get('event_high_water')}")
         _checkpoint("backfill:after-commit")
 
+    def _before(self) -> dict:
+        manifest_path = Path(_detail(journal(self.connection), "backup")["manifest"])
+        return json.loads(manifest_path.read_text(encoding="utf-8"))["carryover"]
+
     def compare(self):
-        entries = journal(self.connection)
-        manifest_path = Path(_detail(entries, "backup")["manifest"])
-        before = json.loads(manifest_path.read_text(encoding="utf-8"))["carryover"]
-        with migration_owner(self.token):
-            problems = list(_migrate().verify_carryover(self.connection, before))
-        if self.connection.in_transaction:
-            raise CutoverAborted("verify_carryover left a transaction open")
+        try:
+            trial = activate(self.connection, self.root, token=self.token, before=self._before(), trial=True)
+        except (CarryoverMismatch, UnsupportedStoreError, ValueError) as error:
+            raise CutoverAborted(f"trial activation failed; nothing activated: {error}") from error
         self._begin_owned()
-        staging = _native_manifest(self.connection).get("state")
-        if staging != "verified":
-            problems.append(f"native staging is {staging!r} after backfill, not verified")
-        if problems:
-            self.connection.rollback()
-            raise CutoverAborted("carryover comparison failed; activation aborted: " + "; ".join(problems))
-        self._commit_stage("compare", {"problems": []})
+        self._commit_stage("compare", {"problems": [], "ids": trial["ids"], "progress": trial["progress"]})
 
     def activate(self):
-        detail = {}
-
         def record(connection):
-            _record(connection, "activate", "done", self.owner, self.token, detail)
-        result = activate(self.connection, self.root, token=self.token, record=record)
+            _record(connection, "activate", "done", self.owner, self.token)
+        try:
+            result = activate(self.connection, self.root, token=self.token, before=self._before(), record=record)
+        except (CarryoverMismatch, ValueError) as error:
+            raise CutoverAborted(str(error)) from error
         self.report["stages"]["activate"] = result
-        self.log(f"[activate] done: authority=native; graph repair {result['graph_repair']}")
+        self.log(f"[activate] done: authority=native; graph repair {result['graph_repair']}; ids {result['ids']}")
         _checkpoint("activate:after-commit")
 
     def release(self):
@@ -595,7 +632,11 @@ def dry_run(root: Path, *, confirm_stopped: bool = False) -> dict:
                     assert_compatible(connection)
                 except UnsupportedStoreError as error:
                     report["refusals"].append(str(error))
-                report["carryover"] = _migrate().snapshot_carryover(connection)
+                sidecar = sidecar_refusal(root)
+                if sidecar:
+                    report["refusals"].append(sidecar)
+                else:
+                    report["carryover"] = _carryover().snapshot_carryover(connection)
             report["domain_digest"] = domain_digest(connection)
         finally:
             connection.rollback()
@@ -606,11 +647,11 @@ def dry_run(root: Path, *, confirm_stopped: bool = False) -> dict:
     report["projection_files"] = len(projection_files(root))
     report["planned"] = [] if report["refusals"] else [
         "fence: publish meta.migration_state='migrating' with owner/token under the ownership lock",
-        "reconcile: reconcile the pending changelog; re-check unexported projection work",
+        "reconcile: re-check unexported projection work under the fence",
         f"backup: {path.parent / 'backups' / 'pre-native-<UTC ts>.db'} + manifest ({report['projection_files']} projection files)",
         f"backfill: stage {counts['entities']} entities and {counts['changes']} changes into native tables",
-        "compare: verify_carryover must report nothing lost",
-        "activate: schema/protocol markers, authority=native, graph repair, ID import, migration_state=ready",
+        "compare: trial activation, rolled back; verify_carryover must report nothing lost",
+        "activate: markers, authority=native, graph repair, ID import, progress reconcile, verify_carryover, migration_state=ready",
         "release: record completion, release the ownership lock",
     ]
     report["ok"] = not report["refusals"]
@@ -632,6 +673,8 @@ def cutover(root: Path, *, confirm_stopped: bool = False, resume: bool = False, 
     refusals = _store_refusals(state, mode=mode)
     if not resume and not refusals and _blocking(counts):
         refusals.append(_flush_hint(_blocking(counts)))
+    if not state["native"] and "activate" not in state["completed_stages"]:
+        refusals += [r for r in [sidecar_refusal(root)] if r]
     quiesced = check_quiesced(root, confirm_stopped=confirm_stopped)
     refusals += quiesced["refusals"]
     if refusals:
