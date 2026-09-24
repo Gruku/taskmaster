@@ -39,6 +39,7 @@ import platform
 import random
 import re
 import shutil
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -71,22 +72,56 @@ SERVICE_IDLE = "90"
 # ════════════════════════════════════════════════════════════════════════════
 # Worker process: a real coordinator client, driven by a JSON op list
 # ════════════════════════════════════════════════════════════════════════════
-def classify(result) -> tuple[bool, str | None]:
-    """(ok, error) of a tool's answer: text `Error...`, or JSON with an error/ok=false."""
-    if isinstance(result, str):
-        stripped = result.lstrip()
-        if stripped.startswith("Error"):
-            return False, stripped[:300]
-        if stripped[:1] == "{":
-            try:
-                payload = json.loads(stripped)
-            except ValueError:
-                return True, None
-            if isinstance(payload, dict) and (payload.get("error") or payload.get("ok") is False):
-                return False, str(payload.get("error") or payload)[:300]
-        return True, None
-    if isinstance(result, dict) and (result.get("error") or result.get("ok") is False):
-        return False, str(result.get("error"))[:300]
+# A write is acknowledged only by a POSITIVE answer: the tool's own success text (or JSON `ok`) and,
+# when the op must commit, a commit sequence. Anything else - an unknown sentence, a stripped suffix,
+# "(not persisted)" - is a failure, never a silent pass.
+SUCCESS = {
+    "backlog_update_task": r"^Updated `",
+    "backlog_add_task": r"^Added `",
+    "backlog_archive_task": r"^Archived `",
+    "backlog_link": r"^ok: ",
+    # A fresh pick, or a task already in progress that this session now holds.
+    "backlog_pick_task": r"^(Picked `[^`]+` .*\(locked to this session\)|Already in progress: `)",
+    "backlog_batch_update": "json-ok",
+    "backlog_claim": "json-ok",
+}
+NOT_PERSISTED = "(not persisted)"
+
+
+def _json(result):
+    if isinstance(result, str) and result.lstrip()[:1] == "{":
+        try:
+            value = json.loads(result)
+            return value if isinstance(value, dict) else None
+        except ValueError:
+            return None
+    return result if isinstance(result, dict) else None
+
+
+def classify(result, *, success=None, commit="none", noop_ok=False) -> tuple[bool, str | None]:
+    """(ok, error). `success`: a regex the answer must match, "json-ok" for a JSON {"ok": true}
+    answer, or None (reads: any non-empty answer that is not an error). `commit`: "required" (the
+    answer must carry a commit sequence), "optional" or "none"."""
+    payload = _json(result)
+    if isinstance(result, str) and result.lstrip().startswith("Error"):
+        return False, result.lstrip()[:300]
+    if payload is not None and (payload.get("error") or payload.get("ok") is False):
+        return False, str(payload.get("error") or payload.get("message") or "ok=false")[:300]
+    if result is None or (isinstance(result, str) and not result.strip()):
+        return False, "empty answer"
+    if isinstance(result, str) and NOT_PERSISTED in result:
+        # An unchanged value commits nothing and the native tool then answers "(not persisted)". That
+        # is accepted only where a no-op is the expected outcome, and only without a sequence; the
+        # scenario verifies the stored value separately.
+        if not (noop_ok and seq_of(result) is None):
+            return False, "answer says (not persisted)"
+    if success == "json-ok":
+        if payload is None or payload.get("ok") is not True:
+            return False, "unrecognized answer (expected JSON ok=true)"
+    elif success is not None and not (isinstance(result, str) and re.search(success, result, re.S)):
+        return False, "unrecognized answer (no success text)"
+    if commit == "required" and seq_of(result) is None:
+        return False, "acknowledged without a commit sequence"
     return True, None
 
 
@@ -95,13 +130,22 @@ def seq_of(result) -> int | None:
         found = SEQ.findall(result)
         if found:
             return int(found[-1])
-        if result.lstrip()[:1] == "{":
-            try:
-                value = json.loads(result).get("seq")
-                return int(value) if value is not None else None
-            except (ValueError, AttributeError, TypeError):
-                return None
+    payload = _json(result)
+    if payload is not None:
+        for value in (payload.get("seq"), (payload.get("receipt") or {}).get("commit_seq")):
+            if isinstance(value, int) and not isinstance(value, bool):
+                return value
     return None
+
+
+def redact(text) -> str | None:
+    """An error for the results file without authored text: its leading type/code and a hash."""
+    if text is None:
+        return None
+    text = str(text)
+    head = re.match(r"^\s*([A-Za-z_][\w.]*(?:Error|Exception|Unavailable|Conflict|Refused)?)(?=[:\s])", text)
+    code = head.group(1) if head else "error"
+    return f"{code[:40]}#{hashlib.sha256(text.encode('utf-8', 'replace')).hexdigest()[:10]}"
 
 
 class Worker:
@@ -163,7 +207,10 @@ class Worker:
             started = time.perf_counter()
             try:
                 result = getattr(self.bs(), op["tool"])(**kwargs)
-                ok, error = classify(result)
+                ok, error = classify(result, success=op.get("success", SUCCESS.get(op["tool"]) if op.get("expect", "ok") != "read" else None),
+                                     commit=op.get("commit", "none"), noop_ok=op.get("noop_ok", False))
+                if ok and isinstance(result, str) and NOT_PERSISTED in result:
+                    record["noop"] = True
             except Exception as exc:  # noqa: BLE001 - an exception is an outcome to report
                 result, ok, error = None, False, f"{type(exc).__name__}: {exc}"[:300]
             record["ms"] = (time.perf_counter() - started) * 1000
@@ -173,8 +220,9 @@ class Worker:
                 if found:
                     record["id"] = found.group(1)
                     self.created.append(found.group(1))
-            if op.get("check"):
-                record["check"] = op["check"]
+            for key in ("check", "composite", "link"):
+                if op.get(key):
+                    record[key] = op[key]
             if kwargs.get("task_id") and op.get("archive_created") is not None:
                 record["target"] = kwargs["task_id"]
         elif kind == "raw":
@@ -198,8 +246,11 @@ class Worker:
                     errors.append(f"{type(exc).__name__}: {exc}"[:300])
             record["ms"] = (time.perf_counter() - started) * 1000
             record.update(ok=not errors, error=errors[0] if errors else None, receipts=receipts,
-                          request_id=op["request_id"], conflict=any(e.startswith("Conflict") for e in errors),
+                          request_id=op["request_id"], scope=op["scope"],
+                          conflict=any(e.startswith("Conflict") for e in errors),
                           seq=receipts[0]["commit_seq"] if receipts else None)
+            if op.get("check"):
+                record["check"] = op["check"]
         elif kind == "viewer":
             if op["mode"] == "delta":  # a peer write the delta must carry (unmeasured)
                 self.bs().backlog_update_task(task_id=op["write_task"], field="next_step", value=op["write_value"])
@@ -445,6 +496,7 @@ def build_inventory(root: Path) -> dict:
         "link_sources": sorted(i for (k, i), (d, b, a) in entities.items() if k in ("issue", "handover") and not a
                                and re.match(r"^(ISS-|IDEA-|\d{4}-\d{2}-\d{2}-[a-z0-9\-]+$)", i)),
         "link_targets": sorted(i for (k, i), (d, b, a) in entities.items() if k in ("idea", "issue") and not a),
+        "entity_kind": {i: k for (k, i) in entities if k in ("issue", "handover", "idea")},
         "anchors": anchors[:2000] or ["src/n16/a.py", "src/n16/b.py"],
         "words": words[:500] or ["alpha"],
         "counts": {k: sum(1 for (kk, _) in entities if kk == k) for k in {k for k, _ in entities}},
@@ -574,7 +626,12 @@ def run_clients(run: Run, root: Path, plans: list, *, label: str, prime=None, lo
     while not all((scenario_dir / f"ready-{i}").exists() for i in range(len(plans))):
         dead = [p for p, _ in processes if p.poll() is not None]
         if dead or time.monotonic() > deadline:
-            break
+            for process, log in processes:
+                if process.poll() is None:
+                    kill_tree(process)
+                log.close()
+            raise RuntimeError(f"client process(es) died or stalled before the barrier (exits "
+                               f"{[p.poll() for p, _ in processes]}); see {scenario_dir}")
         time.sleep(0.02)
     targets = {f"client-{i}": p.pid for i, (p, _) in enumerate(processes)}
     targets["coordinator"] = lambda: discovery_pid(root)
@@ -617,7 +674,7 @@ class Result:
     def __init__(self, name, dataset, *, kind="steady", clients=None, mode=None, cells=()):
         self.data = {"scenario": name, "dataset": dataset, "kind": kind, "clients": clients, "mode": mode,
                      "cells": list(cells), "checks": [], "distributions": {}, "errors": {}, "notes": [],
-                     "verdict": None}
+                     "skipped_cells": [], "verdict": None}
 
     def check(self, name, ok, **detail):
         self.data["checks"].append({"check": name, "ok": bool(ok), **{k: v for k, v in detail.items() if v is not None}})
@@ -625,6 +682,10 @@ class Result:
 
     def note(self, text):
         self.data["notes"].append(text)
+
+    def skip(self, cell, reason):
+        """A matrix cell this scenario could not exercise: reported under "Not run", never as a pass."""
+        self.data["skipped_cells"].append({"cell": cell, "reason": reason})
 
     def measure(self, label, seconds_values, *, worst=None):
         if seconds_values:
@@ -635,45 +696,121 @@ class Result:
             self.data["distributions"][label] = dist
 
     def from_records(self, records, *, samples_required):
+        """Latency from SUCCESSFUL measured ops only (for an expected-error op kind, the refusals);
+        failures are counted separately and never enter a distribution or a budget row."""
         by_op = {}
         for record in records:
             if record.get("measured", True):
                 by_op.setdefault(record["op"], []).append(record)
         for op, items in sorted(by_op.items()):
-            values = [r["ms"] / 1000 for r in items]
-            worst = max(items, key=lambda r: r["ms"])
-            self.measure(op, values, worst={"ms": round(worst["ms"], 3), "worker": worst.get("w"), "n": worst.get("n"),
-                                            "ok": worst.get("ok")})
+            expected_error = all(r.get("expect") == "error" for r in items)
+            good = [r for r in items if (not r.get("ok")) == expected_error]
+            if good:
+                worst = max(good, key=lambda r: r["ms"])
+                self.measure(op, [r["ms"] / 1000 for r in good],
+                             worst={"ms": round(worst["ms"], 3), "worker": worst.get("w"), "n": worst.get("n")})
             errors = [r for r in items if not r.get("ok")]
-            unexpected = [r for r in errors if r.get("expect", "ok") == "ok"]
-            self.data["errors"][op] = {"total": len(errors), "unexpected": len(unexpected),
-                                       "examples": sorted({(r.get("error") or "")[:160] for r in unexpected})[:3]}
+            unexpected = [r for r in errors if r.get("expect", "ok") not in ("error", "conflict-or-ok")]
+            self.data["errors"][op] = {"total": len(errors), "unexpected": len(unexpected), "measured": len(items),
+                                       "examples": sorted({redact(r.get("error")) for r in unexpected})[:3]}
             if samples_required and self.data["kind"] == "steady":
-                self.check(f"samples[{op}]>={samples_required}", len(items) >= samples_required, measured=len(items))
+                self.check(f"samples[{op}]>={samples_required}", len(good) >= samples_required, measured=len(good))
         return by_op
 
     def finish(self):
-        self.data["verdict"] = "pass" if all(c["ok"] for c in self.data["checks"]) else "fail"
+        checks = self.data["checks"]
+        if not checks:
+            self.data["verdict"] = "skipped"
+            if not self.data["skipped_cells"]:
+                self.skip("; ".join(self.data["cells"]) or self.data["scenario"], "no correctness check ran")
+        else:
+            self.data["verdict"] = "pass" if all(c["ok"] for c in checks) else "fail"
         return self.data
 
 
-def check_acks(result: Result, root: Path, records):
-    """No lost ack: every acknowledged commit sequence is a durable domain event."""
-    acked = sorted({r["seq"] for r in records if r.get("ok") and r.get("seq")})
-    missing = []
+def norm(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple)):
+        return ",".join(str(v) for v in value)
+    return str(value)
+
+
+def commit_events(connection, seq):
+    """Every event of the commit that holds `seq` (one command commit may write several)."""
+    row = connection.execute("SELECT commit_key FROM domain_events WHERE seq=?", (seq,)).fetchone()
+    if row is None:
+        return None
+    if row[0] is None:
+        rows = connection.execute("SELECT kind,id,op,fields,after FROM domain_events WHERE seq=?", (seq,))
+    else:
+        rows = connection.execute("SELECT kind,id,op,fields,after FROM domain_events WHERE commit_key=?", (row[0],))
+    events = []
+    for kind, ident, op, fields, after in rows:
+        try:
+            after = json.loads(after) if after else {}
+        except ValueError:
+            after = {}
+        events.append({"kind": kind, "id": ident, "op": op, "fields": json.loads(fields or "[]"),
+                       "after": after if isinstance(after, dict) else {}})
+    return events
+
+
+def record_claims(record) -> list:
+    """What an acknowledged op says it committed: [(kind, id, field or None, value or None)]."""
+    claims = []
+    if record.get("check"):
+        claims.append(tuple(record["check"]))
+    for member in record.get("composite") or ():
+        claims.append(tuple(member))
+    if record.get("id"):  # a created entity
+        claims.append(("task", record["id"], None, None))
+    if record.get("target"):  # an archive
+        claims.append(("task", record["target"], "status", "archived"))
+    if record.get("link"):
+        claims.append(("*", record["link"][0], "links", None))
+    return claims
+
+
+def check_acks(result: Result, root: Path, records, *, writes_expected=True):
+    """No lost ack: the commit at every acknowledged sequence exists AND holds the op's own entity
+    and value, and a raw command's durable receipt names that sequence. With writes expected, at
+    least one acknowledged write must exist: a run that acknowledged nothing proves nothing."""
+    acked = [r for r in records if r.get("ok") and r.get("seq")]
+    missing, mismatched, receipts_bad = [], [], []
     with ro(root) as c:
-        for chunk in range(0, len(acked), 500):
-            part = acked[chunk:chunk + 500]
-            present = {row[0] for row in c.execute(
-                f"SELECT seq FROM domain_events WHERE seq IN ({','.join('?' * len(part))})", part)}
-            missing += [s for s in part if s not in present]
-    result.check("no_lost_ack", not missing, acked=len(acked), missing=missing[:10] or None)
+        for r in acked:
+            events = commit_events(c, r["seq"])
+            if events is None:
+                missing.append(r["seq"])
+                continue
+            for kind, ident, field, value in record_claims(r):
+                hit = [e for e in events if e["id"] == ident and kind in ("*", e["kind"])]
+                if field is not None and value is not None:
+                    hit = [e for e in hit if field in e["after"] and norm(e["after"][field]) == norm(value)]
+                elif field is not None:
+                    hit = [e for e in hit if field in e["fields"]]
+                if not hit:
+                    mismatched.append({"seq": r["seq"], "field": field})
+            if r.get("request_id") and r.get("scope"):
+                row = c.execute("SELECT commit_seq FROM command_receipts WHERE caller_scope=? AND request_id=?",
+                                (r["scope"], r["request_id"])).fetchone()
+                if row is None or row[0] != r["seq"]:
+                    receipts_bad.append(r["request_id"])
+    result.check("no_lost_ack", not missing and not mismatched and not receipts_bad and bool(acked or not writes_expected),
+                 acked=len(acked), missing=missing[:10] or None, mismatched=mismatched[:5] or None,
+                 receipt_mismatch=len(receipts_bad) or None)
+    return acked
 
 
 def check_unexpected(result: Result, records):
-    bad = [r for r in records if not r.get("ok") and r.get("expect", "ok") == "ok"]
+    bad = [r for r in records if not r.get("ok") and r.get("expect", "ok") not in ("error", "conflict-or-ok")]
     result.check("no_unexpected_errors", not bad, count=len(bad),
-                 examples=sorted({(r.get("error") or "")[:160] for r in bad})[:3] or None)
+                 examples=sorted({redact(r.get("error")) for r in bad})[:3] or None)
+
+
+def check_workers(result: Result, meta):
+    result.check("workers_exited_cleanly", all(code == 0 for code in meta["exits"]), exits=meta["exits"])
 
 
 def field_values(root: Path, kind: str, ids, field: str) -> dict:
@@ -690,10 +827,14 @@ def field_values(root: Path, kind: str, ids, field: str) -> dict:
 
 
 def check_last_value(result: Result, root: Path, records):
-    """The committed value of each written field is the one the highest acknowledged seq wrote."""
+    """The committed value of each written field is the one the highest acknowledged seq wrote;
+    with field writes in the run, at least one field must have been checked."""
     last = {}
+    planned = 0
     for r in records:
         check = r.get("check")
+        if check:
+            planned += 1
         if r.get("ok") and r.get("seq") and check:
             key = (check[0], check[1], check[2])
             if key not in last or r["seq"] > last[key][0]:
@@ -701,11 +842,20 @@ def check_last_value(result: Result, root: Path, records):
     wrong = []
     for (kind, ident, field), (seq, value) in sorted(last.items()):
         current = field_values(root, kind, [ident], field)[ident]
-        if isinstance(current, list):
-            current = ",".join(current)
-        if str(current) != str(value):
+        if norm(current) != norm(value):
             wrong.append({"id": ident, "field": field, "seq": seq})
-    result.check("acked_value_is_final", not wrong, fields=len(last), wrong=wrong[:5] or None)
+    result.check("acked_value_is_final", not wrong and bool(last or not planned), fields=len(last),
+                 wrong=wrong[:5] or None)
+
+
+def commit_count(root: Path) -> int:
+    with ro(root) as c:
+        return int(c.execute("SELECT COUNT(*) FROM command_commits").fetchone()[0])
+
+
+def task_ids(root: Path) -> set:
+    with ro(root) as c:
+        return {row[0] for row in c.execute("SELECT public_id FROM entity_core WHERE kind='task' AND deleted=0")}
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -719,10 +869,14 @@ def text_value(rng, worker, index, tag):
 
 
 def plan_write(kind: str, inv: dict, *, worker: int, workers: int, mode: str, count: int, warmup: int, rng,
-               scope: str) -> list:
+               scope: str, current=None) -> list:
+    """One client's ops. `current` holds the committed values before the run
+    ({"priority"|"anchors"|"phase"|"links": {id: value}}), so every disjoint-entity write changes its
+    value and must commit (a sequence is required); same-entity writes race peers and may no-op."""
     tasks = inv["tasks"]
     if not tasks:
         raise Refused("dataset has no open tasks to write")
+    current = {k: dict(v) for k, v in (current or {}).items()}
     if mode == "same":
         own = [tasks[0]]
     else:
@@ -734,53 +888,69 @@ def plan_write(kind: str, inv: dict, *, worker: int, workers: int, mode: str, co
     phases = inv["phases"]
     sources = inv["link_sources"] or []
     targets = inv["link_targets"] or []
+    must = "required" if mode != "same" else "optional"
+    if kind == "link" and total % 2:
+        total += 1  # every create is followed by its remove: the final state is known
     for index in range(total):
         measured = index >= warmup
         task = own[index % len(own)]
         label = f"write.{kind}"
-        if kind == "meta":
-            value = PRIORITIES[(index + worker) % len(PRIORITIES)]
-            ops.append({"t": "tool", "tool": "backlog_update_task", "label": label, "measured": measured,
-                        "kw": {"task_id": task, "field": "priority", "value": value}, "check": ["task", task, "priority", value]})
+        base = {"t": "tool", "label": label, "measured": measured}
+        if kind in ("meta", "path", "membership"):
+            field = {"meta": "priority", "path": "anchors", "membership": "phase"}[kind]
+            now = norm(current.get(field, {}).get(task))
+            if kind == "meta":
+                choices = [v for v in PRIORITIES if v != now]
+            elif kind == "path":
+                choices = []
+                for _ in range(8):
+                    candidate = ",".join(sorted(set(rng.sample(inv["anchors"], min(2, len(inv["anchors"]))))))
+                    if candidate != now:
+                        choices = [candidate]
+                        break
+            else:
+                if not phases:
+                    raise Refused("dataset has no phases")
+                choices = [v for v in phases + ([""] if len(phases) < 2 else []) if v != now]
+            if not choices:
+                raise Refused(f"no value different from the current {field}")
+            value = choices[(index + worker) % len(choices)]
+            current.setdefault(field, {})[task] = value
+            ops.append(dict(base, tool="backlog_update_task", commit=must, noop_ok=mode == "same",
+                            kw={"task_id": task, "field": field, "value": value}, check=["task", task, field, value]))
         elif kind == "prose":
             value = text_value(rng, worker, index, "prose")
-            ops.append({"t": "tool", "tool": "backlog_update_task", "label": label, "measured": measured,
-                        "kw": {"task_id": task, "field": "next_step", "value": value}, "check": ["task", task, "next_step", value]})
-        elif kind == "path":
-            value = ",".join(sorted(set(rng.sample(inv["anchors"], min(2, len(inv["anchors"]))))))
-            ops.append({"t": "tool", "tool": "backlog_update_task", "label": label, "measured": measured,
-                        "kw": {"task_id": task, "field": "anchors", "value": value}, "check": ["task", task, "anchors", value]})
-        elif kind == "membership":
-            if not phases:
-                raise Refused("dataset has no phases")
-            value = phases[(index + worker) % len(phases)]
-            ops.append({"t": "tool", "tool": "backlog_update_task", "label": label, "measured": measured,
-                        "kw": {"task_id": task, "field": "phase", "value": value}, "check": ["task", task, "phase", value]})
+            ops.append(dict(base, tool="backlog_update_task", commit="required",
+                            kw={"task_id": task, "field": "next_step", "value": value},
+                            check=["task", task, "next_step", value]))
         elif kind == "link":
             if not sources or not targets:
                 raise Refused("dataset has no link-capable issue/handover/idea ids")
             source = sources[0] if mode == "same" else sources[worker % len(sources)]
-            target = targets[(index // 2 + worker) % len(targets)]
-            if target == source:
-                target = targets[(index // 2 + worker + 1) % len(targets)]
+            linked = set(current.get("links", {}).get(source) or ())
+            free = [t for t in targets if t != source and t not in linked]
+            if not free:
+                raise Refused("no unlinked link target")
+            target = free[(index // 2 + worker) % len(free)]
             action = "create" if index % 2 == 0 else "remove"
-            ops.append({"t": "tool", "tool": "backlog_link", "label": label, "measured": measured,
-                        "kw": {"action": action, "source": source, "target": target, "type": "relates_to"}})
+            ops.append(dict(base, tool="backlog_link", commit=must,
+                            kw={"action": action, "source": source, "target": target, "type": "relates_to"},
+                            link=[source, target, action]))
         elif kind == "create":
-            ops.append({"t": "tool", "tool": "backlog_add_task", "label": label, "measured": measured,
-                        "kw": {"title": f"n16 create w{worker} c{index}", "epic": epic, "priority": "low",
-                               "phase": phases[0] if phases else "",
-                               "notes": text_value(rng, worker, index, "create")}})
+            ops.append(dict(base, tool="backlog_add_task", commit="required",
+                            kw={"title": f"n16 create w{worker} c{index}", "epic": epic, "priority": "low",
+                                "phase": phases[0] if phases else "", "notes": text_value(rng, worker, index, "create")}))
         elif kind == "archive":
-            ops.append({"t": "tool", "tool": "backlog_add_task", "label": "setup.create", "measured": False,
-                        "kw": {"title": f"n16 archive w{worker} c{index}", "epic": epic, "priority": "low",
-                               "phase": phases[0] if phases else ""}})
+            ops.append(dict(base, tool="backlog_add_task", label="setup.create", measured=False, commit="required",
+                            kw={"title": f"n16 archive w{worker} c{index}", "epic": epic, "priority": "low",
+                                "phase": phases[0] if phases else ""}))
         elif kind == "composite":
             group = [own[(index + k) % len(own)] for k in range(3)] if mode != "same" else [own[0]]
             group = list(dict.fromkeys(group))
             if len(group) < 3 and mode != "same":
                 group = list(dict.fromkeys(group + rng.sample(tasks, min(3, len(tasks)))))[:3]
-            invalid = index % 5 == 4
+            # Every client sends invalid composites (one in five, the first at index 2 or its last op).
+            invalid = index % 5 == 2 or (total < 3 and index == total - 1)
             commands, checks = [], []
             for member in group:
                 value = text_value(rng, worker, index, "composite")
@@ -789,32 +959,36 @@ def plan_write(kind: str, inv: dict, *, worker: int, workers: int, mode: str, co
             if invalid:
                 commands.append({"operation": "task.patch", "arguments": {"id": f"n16-missing-{worker}-{index}",
                                                                            "set": {"next_step": "x"}}})
-            ops.append({"t": "tool", "tool": "backlog_batch_update", "label": "write.composite.invalid" if invalid else label,
-                        "measured": measured, "expect": "error" if invalid else "ok",
-                        "kw": {"commands": commands, "atomic": True}, "composite": checks})
+            op = dict(base, tool="backlog_batch_update", label="write.composite.invalid" if invalid else label,
+                      expect="error" if invalid else "ok", commit="required", kw={"commands": commands, "atomic": True})
+            op["composite" if not invalid else "invalid_composite"] = checks
+            ops.append(op)
         elif kind == "noop":
-            value = inv["task_priority"].get(task, "medium")
-            ops.append({"t": "tool", "tool": "backlog_update_task", "label": label, "measured": measured,
-                        "kw": {"task_id": task, "field": "priority", "value": value}})
+            value = norm(current.get("priority", {}).get(task)) or "medium"
+            ops.append(dict(base, tool="backlog_update_task", noop_ok=True, noop_check=["task", task, "priority", value],
+                            kw={"task_id": task, "field": "priority", "value": value}))
         elif kind == "invalid":
-            ops.append({"t": "tool", "tool": "backlog_update_task", "label": label, "measured": measured,
-                        "expect": "error", "kw": {"task_id": task, "field": "status", "value": "n16-not-a-status"}})
+            ops.append(dict(base, tool="backlog_update_task", expect="error",
+                            kw={"task_id": task, "field": "status", "value": "n16-not-a-status"}))
         elif kind == "retry":
             request = f"n16-retry-{uuid.UUID(int=rng.getrandbits(128)).hex}"
+            value = text_value(rng, worker, index, "retry")
             ops.append({"t": "raw", "label": label, "measured": measured, "scope": scope, "request_id": request,
-                        "operation": "task.patch", "repeat": 2,
-                        "arguments": {"id": task, "set": {"next_step": text_value(rng, worker, index, "retry")}}})
+                        "operation": "task.patch", "repeat": 2, "check": ["task", task, "next_step", value],
+                        "arguments": {"id": task, "set": {"next_step": value}}})
         elif kind == "cas":
+            value = text_value(rng, worker, index, "cas")
             ops.append({"t": "raw", "label": label, "measured": measured, "scope": f"{scope}-w{worker}",
                         "request_id": f"n16-cas-{worker}-{index}-{uuid.UUID(int=rng.getrandbits(128)).hex[:8]}",
                         "operation": "task.patch", "cas": True, "expect": "conflict-or-ok",
-                        "arguments": {"id": task, "set": {"next_step": text_value(rng, worker, index, "cas")}}})
+                        "check": ["task", task, "next_step", value],
+                        "arguments": {"id": task, "set": {"next_step": value}}})
         else:
             raise ValueError(kind)
     if kind == "archive":
         for index in range(total):
             ops.append({"t": "tool", "tool": "backlog_archive_task", "label": "write.archive", "measured": index >= warmup,
-                        "archive_created": index, "kw": {"task_id": "", "reason": "deprecated"}})
+                        "commit": "required", "archive_created": index, "kw": {"task_id": "", "reason": "deprecated"}})
     return ops
 
 
@@ -874,8 +1048,12 @@ def read_scenario(kind):
         ops = plan_read(kind, ds.inventory(), count=run.args.samples, warmup=run.args.warmup, rng=run.rng)
         records, meta = run_clients(run, ds.root, [ops], label=f"read-{kind}", prime=PRIME)
         res.data["run"] = meta
+        check_workers(res, meta)
         res.from_records(records, samples_required=run.required)
         check_unexpected(res, records)
+        sizes = sorted(r["bytes"] for r in records if r.get("measured") and r.get("ok") and r.get("bytes") is not None)
+        if sizes:
+            res.data["output_bytes_p50"] = sizes[len(sizes) // 2]
         if kind == "viewer.delta":
             deltas = [r for r in records if r.get("measured") and r["op"] == "read.viewer.delta"]
             res.check("delta_carries_peer_write", all(r.get("delta_has_write") for r in deltas),
@@ -897,8 +1075,11 @@ def read_during_writes(run: Run, ds: Dataset, clients, mode):
     inv = ds.inventory()
     plans = [plan_read("details", inv, count=run.args.samples, warmup=run.args.warmup, rng=run.rng)]
     for w in range(writers):
-        plans.append(plan_write("prose", inv, worker=w + 1, workers=writers + 1, mode="disjoint", count=50, warmup=0,
-                                rng=run.rng, scope="n16"))
+        plan = plan_write("prose", inv, worker=w + 1, workers=writers + 1, mode="disjoint", count=50, warmup=0,
+                          rng=run.rng, scope="n16")
+        for op in plan:
+            op["commit"] = "optional"  # a looping writer replays its values; a replay may be a no-op
+        plans.append(plan)
     records, meta = run_clients(run, ds.root, plans, label="read-during-writes", prime=PRIME, loop_until_first=True)
     res.data["run"] = meta
     reads = [r for r in records if r["op"].startswith("read.")]
@@ -906,6 +1087,9 @@ def read_during_writes(run: Run, ds: Dataset, clients, mode):
     res.from_records(reads, samples_required=run.required)
     res.from_records(writes, samples_required=0)
     res.data["writes_during"] = len(writes)
+    check_workers(res, meta)
+    res.check("writes_happened_during_reads", len(writes) > 0 and any(r.get("seq") for r in writes),
+              writes=len(writes))
     check_unexpected(res, records)
     check_acks(res, ds.root, writes)
     return res
@@ -959,26 +1143,40 @@ def run_clients_nostart(run, root, plans, label, **kwargs):
     return run_clients(run, root, plans, label=label, start=False, **kwargs)
 
 
+def current_values(root: Path, inv: dict, kind: str, clients: int) -> dict:
+    """The committed values the planner must differ from (earlier scenarios change them)."""
+    ids = inv["tasks"][:clients * 50 + 50]
+    out = {field: field_values(root, "task", ids, field) for field in ("priority", "anchors", "phase")}
+    if kind == "link":
+        links = {}
+        for source in inv["link_sources"]:
+            value = field_values(root, inv["entity_kind"].get(source, "issue"), [source], "links")[source]
+            links[source] = [l.get("target") for l in value or [] if isinstance(l, dict)]
+        out["links"] = links
+    return out
+
+
 def write_scenario(kind):
     def fn(run: Run, ds: Dataset, clients, mode):
         res = Result(f"write.{kind}", ds.name, clients=clients, mode=mode,
                      cells=[f"Writes: {kind}", f"Clients: {clients} {mode}"])
         inv = ds.inventory()
-        if kind == "noop":  # the current values: earlier scenarios may have changed them
-            inv = dict(inv, task_priority=field_values(ds.root, "task", inv["tasks"][:clients * 50 + 50], "priority"))
+        current = current_values(ds.root, inv, kind, clients)
         count = per_client(run, clients)
         scope = f"n16-{kind}-{uuid.uuid4().hex[:6]}"
         plans = [plan_write(kind, inv, worker=w, workers=clients, mode=mode, count=count, warmup=run.args.warmup,
-                            rng=run.rng, scope=scope) for w in range(clients)]
+                            rng=run.rng, scope=scope, current=current) for w in range(clients)]
         if kind == "retry" and clients > 1:
             # Cross-process duplicates: odd workers replay their even neighbour's request ids concurrently.
             for w in range(1, clients, 2):
                 plans[w] = json.loads(json.dumps(plans[w - 1]))
-        before = high_water(ds.root)
+        before, commits_before, tasks_before = high_water(ds.root), commit_count(ds.root), task_ids(ds.root)
         records, meta = run_clients(run, ds.root, plans, label=f"write-{kind}", prime=PRIME)
-        after = high_water(ds.root)
+        after, commits_after, tasks_after = high_water(ds.root), commit_count(ds.root), task_ids(ds.root)
+        commits = commits_after - commits_before
         res.data["run"] = meta
-        res.data["commits"] = after - before
+        res.data["commits"] = commits
+        check_workers(res, meta)
         measured = [r for r in records if r["op"].startswith("write.")]
         res.from_records(measured, samples_required=0)  # the total is checked below (mixed composites)
         res.data["total_measured"] = sum(1 for r in measured if r.get("measured"))
@@ -987,51 +1185,65 @@ def write_scenario(kind):
                       measured=res.data["total_measured"])
         if kind == "cas":
             bad = [r for r in records if not r.get("ok") and not r.get("conflict")]
-            res.check("conflicts_are_explicit", not bad, conflicts=sum(bool(r.get("conflict")) for r in records),
-                      other_errors=len(bad), examples=sorted({(r.get("error") or "")[:120] for r in bad})[:3] or None)
+            conflicts = sum(bool(r.get("conflict")) for r in records)
+            res.check("conflicts_are_explicit", not bad, conflicts=conflicts, other_errors=len(bad),
+                      examples=sorted({redact(r.get("error")) for r in bad})[:3] or None)
+            if clients > 1 and mode == "same":
+                res.check("contention_produced_conflicts", conflicts > 0, conflicts=conflicts)
             revisions = [a["revision"] for r in records if r.get("ok") for rc in r.get("receipts", [])
                          for a in rc["affected"] if a.get("revision") is not None]
             res.check("no_revision_committed_twice", len(revisions) == len(set(revisions)), successes=len(revisions))
         else:
             check_unexpected(res, records)
-        check_acks(res, ds.root, records)
+        acked = check_acks(res, ds.root, records, writes_expected=kind not in ("noop", "invalid"))
+        distinct_acked = len({r["seq"] for r in acked})
+        if kind not in ("noop", "invalid", "retry"):
+            res.check("commits>=distinct_acked_seqs", commits >= distinct_acked, commits=commits, acked=distinct_acked)
         if kind in ("meta", "prose", "path", "membership"):
             check_last_value(res, ds.root, records)
+            res.data["race_noops"] = sum(bool(r.get("noop")) for r in records)
         if kind in ("create", "archive"):
-            created = [r["id"] for r in records if r.get("id")]
-            res.check("no_reused_id", len(created) == len(set(created)), created=len(created))
-            present = field_values(ds.root, "task", created, "title")
-            res.check("created_ids_committed", all(v not in (None, "<missing>") for v in present.values()),
-                      missing=[i for i, v in present.items() if v in (None, "<missing>")][:5] or None)
+            creates = [r for r in records if r.get("ok") and r["op"] in ("write.create", "setup.create")]
+            created = [r["id"] for r in creates if r.get("id")]
+            reused = sorted(set(created) & tasks_before)
+            res.check("no_reused_id", len(created) == len(set(created)) and not reused and len(created) == len(creates),
+                      created=len(created), ok_creates=len(creates), reused_existing=len(reused) or None)
+            res.check("task_count_grew_by_ok_creates", len(tasks_after) - len(tasks_before) == len(creates),
+                      grew=len(tasks_after) - len(tasks_before), ok_creates=len(creates))
+            res.check("created_ids_committed", set(created) <= tasks_after,
+                      missing=len(set(created) - tasks_after) or None)
         if kind == "archive":
             targets = [r.get("target") for r in records if r["op"] == "write.archive" and r.get("ok")]
             status = field_values(ds.root, "task", targets, "status")
-            res.check("archived_are_archived", all(v == "archived" for v in status.values()),
-                      archived=len(targets), wrong=[i for i, v in status.items() if v != "archived"][:5] or None)
-        if kind == "composite":
-            plan_by_worker = {w: [op for op in plans[w]] for w in range(clients)}
-            valid_last, invalid_values = {}, []
+            res.check("archived_are_archived", bool(targets) and all(v == "archived" for v in status.values()),
+                      archived=len(targets), wrong=len([i for i, v in status.items() if v != "archived"]) or None)
+        if kind == "link":
+            touched = {}
             for r in records:
-                op = plan_by_worker[r["w"]][r["n"]] if r["n"] < len(plan_by_worker[r["w"]]) else None
-                if not op or "composite" not in op:
-                    continue
-                if op.get("expect") == "error":
-                    invalid_values += [c[3] for c in op["composite"]]
-                    res.data.setdefault("invalid_composites", 0)
-                    res.data["invalid_composites"] += 1
-                elif r.get("ok"):
-                    for c in op["composite"]:
-                        seq = r.get("seq") or 0
-                        if c[1] not in valid_last or seq > valid_last[c[1]][0]:
-                            valid_last[c[1]] = (seq, c[3])
-            current = field_values(ds.root, "task", sorted({c for c in valid_last}), "next_step")
-            leaked = [v for v in invalid_values if v in current.values()]
-            res.check("no_partial_composite", not leaked, invalid=len(invalid_values), leaked=len(leaked))
-            refused = [r for r in records if r.get("expect") == "error"]
-            res.check("invalid_composite_refused", all(not r.get("ok") for r in refused), refused=len(refused))
-            if mode != "same":
-                wrong = [i for i, (seq, v) in valid_last.items() if seq and current.get(i) != v]
-                res.check("composite_all_parts_visible", not wrong, members=len(valid_last), wrong=len(wrong))
+                if r.get("link"):
+                    touched.setdefault(r["link"][0], set()).add(r["link"][1])
+            present = []
+            for source, targets_ in touched.items():
+                value = field_values(ds.root, inv["entity_kind"].get(source, "issue"), [source], "links")[source]
+                now = {l.get("target") for l in value or [] if isinstance(l, dict)}
+                present += sorted(now & targets_)
+            res.check("final_link_state", not present, pairs=sum(len(v) for v in touched.values()), left=len(present))
+        if kind == "composite":
+            valid_ok = [r for r in records if r["op"] == "write.composite" and r.get("ok")]
+            invalid_ops = [op for plan in plans for op in plan if op.get("invalid_composite")]
+            invalid_values = [c[3] for op in invalid_ops for c in op["invalid_composite"]]
+            res.data["invalid_composites"] = len(invalid_ops)
+            res.check("invalid_composites_sent", len(invalid_ops) > 0, invalid=len(invalid_ops))
+            leaked = 0
+            with ro(ds.root) as c:
+                for value in invalid_values:
+                    leaked += c.execute("SELECT COUNT(*) FROM domain_events WHERE seq>? AND after LIKE ?",
+                                        (before, f"%{value}%")).fetchone()[0]
+            res.check("no_partial_composite", leaked == 0 and commits == len(valid_ok), invalid=len(invalid_values),
+                      leaked=leaked or None, commits=commits, ok_valid=len(valid_ok))
+            refused = [r for r in records if r["op"] == "write.composite.invalid"]
+            res.check("invalid_composite_refused", bool(refused) and all(not r.get("ok") for r in refused),
+                      refused=len(refused))
         if kind == "noop":
             # An unchanged value commits nothing, except the tool's own `last_referenced` minute bump,
             # which is bookkeeping, not a domain change: recorded, and any other field fails.
@@ -1040,21 +1252,24 @@ def write_scenario(kind):
                     "SELECT fields FROM domain_events WHERE seq>? AND seq<=?", (before, after))]
             others = sorted({f for fields in touched for f in fields} - {"last_referenced"})
             res.data["noop_bookkeeping_commits"] = len(touched)
+            planned = {(op["noop_check"][1], op["noop_check"][3]) for plan in plans for op in plan if op.get("noop_check")}
+            values = field_values(ds.root, "task", sorted({t for t, _ in planned}), "priority")
+            changed = [t for t, v in planned if norm(values.get(t)) != norm(v)]
+            res.check("noop_value_unchanged", bool(planned) and not changed, tasks=len(planned), changed=len(changed) or None)
+            res.data["noop_answers_not_persisted"] = sum(bool(r.get("noop")) for r in records)
             res.check("noop_changes_no_domain_field", not others, commits=after - before, fields=others or None)
         if kind == "invalid":
-            res.check("no_commit", after == before, commits=after - before)
-            if kind == "invalid":
-                res.check("invalid_refused", all(not r.get("ok") for r in measured), refused=len(measured))
+            res.check("no_commit", after == before and commits == 0, commits=commits)
+            res.check("invalid_refused", bool(measured) and all(not r.get("ok") for r in measured), refused=len(measured))
         if kind == "retry":
             by_request = {}
             for r in records:
                 for receipt in r.get("receipts", []):
                     by_request.setdefault(r["request_id"], set()).add(receipt["commit_seq"])
             duplicated = {k: v for k, v in by_request.items() if len(v) != 1}
-            res.check("duplicate_requests_one_commit", not duplicated, requests=len(by_request),
+            res.check("duplicate_requests_one_commit", bool(by_request) and not duplicated, requests=len(by_request),
                       duplicated=len(duplicated))
-            res.check("commits_equal_requests", after - before == len(by_request), commits=after - before,
-                      requests=len(by_request))
+            res.check("commits_equal_requests", commits == len(by_request), commits=commits, requests=len(by_request))
         return res
     return fn
 
@@ -1072,19 +1287,36 @@ for _kind, _modes in _WRITE_MODES.items():
 @scenario("core.command", group="core", cells=("DB command core (§11)",))
 def core_command(run: Run, ds: Dataset, clients, mode):
     """The DB command core in process on a backup of the dataset store: no IPC, export or tool text."""
-    from taskmaster.native.commands import execute
-    from taskmaster.native.migrate import encode
-    from taskmaster.native.queries import Repository
     res = Result("core.command", ds.name, clients=1, cells=["DB command core"])
     target = run.work / "core" / f"{ds.name}-{uuid.uuid4().hex[:6]}.db"
     target.parent.mkdir(parents=True, exist_ok=True)
     with ro(ds.root) as source, closing(sqlite3.connect(target)) as copy:
         source.backup(copy)
     inv = ds.inventory()
-    reads, writes, work = [], [], []
+    reads, writes, work, seqs = [], [], [], []
     metrics = metrics_module() if run.instrumented else None
     if metrics is not None:
         metrics.enable(run.metrics_base)
+    try:
+        core_loop(run, target, inv, reads, writes, work, seqs)
+    finally:
+        if metrics is not None:
+            metrics.disable()
+    res.measure("core.read", reads)
+    res.measure("core.command", writes)
+    res.data["max_work"] = {k: max(w.get(k, 0) for w in work) for k in (work[0] if work else {})}
+    if run.required:
+        res.check(f"samples>={run.required}", len(writes) >= run.required, measured=len(writes))
+    res.check("core_commands_committed", len(writes) > 0 and len(seqs) == len(writes)
+              and all(isinstance(q, int) for q in seqs) and len(set(seqs)) == len(seqs), commands=len(seqs))
+    target.unlink(missing_ok=True)
+    return res
+
+
+def core_loop(run, target, inv, reads, writes, work, seqs):
+    from taskmaster.native.commands import execute
+    from taskmaster.native.migrate import encode
+    from taskmaster.native.queries import Repository
     with closing(sqlite3.connect(target, isolation_level=None)) as connection:
         connection.execute("PRAGMA journal_mode=WAL")
         connection.execute("PRAGMA synchronous=FULL")
@@ -1104,15 +1336,7 @@ def core_command(run: Run, ds: Dataset, clients, mode):
                 reads.append(read_s)
                 writes.append(write_s)
                 work.append(receipt.get("work") or {})
-    if metrics is not None:
-        metrics.disable()
-    res.measure("core.read", reads)
-    res.measure("core.command", writes)
-    res.data["max_work"] = {k: max(w.get(k, 0) for w in work) for k in (work[0] if work else {})}
-    if run.required:
-        res.check(f"samples>={run.required}", len(writes) >= run.required, measured=len(writes))
-    target.unlink(missing_ok=True)
-    return res
+                seqs.append(receipt.get("commit_seq"))
 
 
 # ── sync ─────────────────────────────────────────────────────────────────────
@@ -1163,6 +1387,8 @@ def sync_no_edits(run: Run, ds: Dataset, clients, mode):
             states.add(sync_summary(result)["state"])
             blockers |= set((result or {}).get("unresolved") or [])
     res.measure("sync.no_edits", times)
+    if run.sync_required:
+        res.check(f"samples>={run.sync_required}", len(times) >= run.sync_required, measured=len(times))
     res.data.update(states=sorted(map(str, states)), preexisting_quarantined=len(quarantined))
     # A copied project may carry files the store already quarantined (CodeMaestro does): those keep a
     # no-edit sync `pending`, honestly. Anything else unresolved fails.
@@ -1197,6 +1423,8 @@ def sync_dirty(run: Run, ds: Dataset, clients, mode):
         if marker not in body_of(ds.root, task):
             lost.append(task)
     res.measure("sync.dirty_one_file", times)
+    if run.sync_required:
+        res.check(f"samples>={run.sync_required}", len(times) >= run.sync_required, measured=len(times))
     res.data["sync"] = summaries[:3]
     res.check("external_edit_imported", not lost, edits=run.args.sync_samples, lost=len(lost))
     return res
@@ -1204,33 +1432,36 @@ def sync_dirty(run: Run, ds: Dataset, clients, mode):
 
 @scenario("sync.conflict", group="sync", kind="check", cells=("Sync: conflict",))
 def sync_conflict(run: Run, ds: Dataset, clients, mode):
-    """A file edited while the store changed the same entity: the outcome must be explicit, not a loss."""
+    """A projection file edited by hand, then the store changes the same entity before any sync: the
+    export must flag the file (not overwrite it), and after sync both edits survive or the import
+    names the conflict for that file."""
     res = Result("sync.conflict", ds.name, kind="check", clients=1, cells=["Sync: conflict"])
     root = copy_project(run, ds.root, "sync-conflict")
     client = start_coordinator(run, root)
     inv = ds.inventory()
     task = inv["tasks"][3 % len(inv["tasks"])]
     client.flush(high_water(root))
-    path = root / ".taskmaster/tasks" / f"{task}.md"
+    rel = f"tasks/{task}.md"
+    path = root / ".taskmaster" / rel
     marker = f"n16-file-side-{uuid.uuid4().hex[:10]}"
-    tool_value = f"n16 store side {uuid.uuid4().hex[:10]}"
-    original = path.read_text(encoding="utf-8")
-    with blocked_export(root):
-        tool_result = tool_call(run, root, "backlog_update_task", task_id=task, field="next_step", value=tool_value)
-        path.write_text(original.rstrip("\n") + f"\n\n{marker}\n", encoding="utf-8")
+    store_value = f"n16 store side {uuid.uuid4().hex[:10]}"
+    path.write_text(path.read_text(encoding="utf-8").rstrip("\n") + f"\n\n{marker}\n", encoding="utf-8")
+    receipt = client.execute(envelope(root, task, store_value))["receipt"]
+    flushed = client.flush(receipt["commit_seq"])
+    flagged = [n for n in (flushed.get("notices") or []) if rel in str(n)]
+    on_disk = path.read_text(encoding="utf-8")
+    res.check("export_did_not_overwrite_hand_edit", marker in on_disk and store_value not in on_disk)
+    res.check("export_flags_the_file", flushed.get("state") != "exported" and bool(flagged),
+              state=flushed.get("state"), flagged=len(flagged))
     result, seconds = sync_once(client)
     summary = sync_summary(result)
     stored = body_of(root, task)
-    on_disk = path.read_text(encoding="utf-8") if path.exists() else ""
-    siblings = [p.name for p in path.parent.glob(f"{task}*") if p != path]
-    keeps_both = tool_value in stored and (marker in stored or marker in on_disk or siblings)
+    named = [n for n in (result.get("notices") or []) if rel in str(n)] + \
+        [i for i in (result.get("imports") or []) if i.get("file") == rel and i.get("state") == "conflict"]
     res.data["sync"] = summary
-    res.data["tool_ok"] = classify(tool_result)[0]
-    res.check("conflict_explicit_or_both_kept",
-              "conflict" in " ".join(summary.get("import_states", [])) or summary["notices"] > 0 or keeps_both,
-              sync=summary, store_kept_tool_edit=tool_value in stored, file_edit_kept=marker in stored or marker in on_disk,
-              sibling_files=len(siblings))
-    res.check("store_edit_not_lost", tool_value in stored)
+    res.check("store_edit_not_lost", store_value in stored)
+    res.check("both_edits_kept_or_conflict_named", (store_value in stored and marker in stored) or bool(named),
+              file_edit_in_store=marker in stored, named=len(named))
     res.measure("sync.conflict", [seconds])
     stop_coordinator(root)
     return res
@@ -1293,6 +1524,7 @@ def sync_checkout(run: Run, ds: Dataset, clients, mode):
 
 @scenario("sync.missing_files", group="sync", kind="check", cells=("Sync: missing files",))
 def sync_missing(run: Run, ds: Dataset, clients, mode):
+    """A deleted projection file is not a deletion: the entity stays and the file comes back."""
     res = Result("sync.missing_files", ds.name, kind="check", clients=1, cells=["Sync: missing files"])
     root = copy_project(run, ds.root, "sync-missing")
     client = start_coordinator(run, root)
@@ -1303,11 +1535,14 @@ def sync_missing(run: Run, ds: Dataset, clients, mode):
     path.unlink()
     result, seconds = sync_once(client)
     summary = sync_summary(result)
+    client.flush(high_water(root))
+    deadline = time.monotonic() + 15
+    while not path.exists() and time.monotonic() < deadline:
+        time.sleep(0.25)
     present = field_values(root, "task", [task], "title")[task]
     res.data["sync"] = summary
-    res.check("store_entity_not_silently_deleted", present not in (None, "<missing>") or summary["notices"] > 0
-              or "conflict" in " ".join(summary.get("import_states", [])), sync=summary, entity_present=present not in (None, "<missing>"))
-    res.check("file_restored_or_reported", path.exists() or summary["notices"] > 0 or summary["imports"] > 0,
+    res.check("store_entity_kept", present not in (None, "<missing>"))
+    res.check("file_restored_from_store", path.exists() and f"id: {task}" in path.read_text(encoding="utf-8"),
               file_exists=path.exists())
     res.measure("sync.missing_file", [seconds])
     stop_coordinator(root)
@@ -1432,65 +1667,98 @@ def failure_kill(run: Run, ds: Dataset, clients, mode):
     return res
 
 
+def send_and_drop(root: Path, env: dict) -> None:
+    """Send one execute request and close the socket without reading the reply (a client that dies
+    after sending). Deterministic, unlike a short timeout that may still receive the answer."""
+    from taskmaster.coordinator.client import Client
+    from taskmaster.coordinator.protocol import encode
+    from taskmaster.native import contracts
+    client = Client(root, autostart=False)
+    record = client._discovery()
+    request, _ = contracts.validate(env)
+    body = encode(dict(identity=dict(client.identity, nonce=record["nonce"]), method="execute", envelope=request,
+                       visibility="native"))
+    head = (f"POST /rpc HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n"
+            f"Authorization: Bearer {record['token']}\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n")
+    sock = socket.create_connection(("127.0.0.1", record["port"]), timeout=5)
+    try:
+        sock.sendall(head.encode("ascii") + body)
+    finally:
+        sock.close()
+
+
+def receipt_seq(root: Path, scope: str, request_id: str):
+    with ro(root) as c:
+        row = c.execute("SELECT commit_seq FROM command_receipts WHERE caller_scope=? AND request_id=?",
+                        (scope, request_id)).fetchone()
+    return row[0] if row else None
+
+
 @scenario("failure.client_disconnect", group="failure", kind="check", cells=("Failure: client disconnect",))
 def failure_disconnect(run: Run, ds: Dataset, clients, mode):
-    """A client that drops the connection before the reply: the retry with the same id gets the receipt."""
+    """A client that drops the connection right after sending: the command still commits once, its
+    durable receipt exists BEFORE any retry, and the retry with the same id returns that receipt."""
     res = Result("failure.client_disconnect", ds.name, kind="check", clients=1, cells=["Failure: client disconnect"])
     root = copy_project(run, ds.root, "disconnect")
     client = start_coordinator(run, root)
     task = ds.inventory()["tasks"][0]
-    from taskmaster.coordinator.client import Client
-    impatient = Client(root, autostart=False, timeout=0.001)
-    env = envelope(root, task, f"n16 disconnect {uuid.uuid4().hex[:8]}")
-    try:
-        impatient.execute(env)
-        disconnected = False
-    except Exception:  # noqa: BLE001 - the point: the reply was not awaited
-        disconnected = True
-    time.sleep(0.5)
+    value = f"n16 disconnect {uuid.uuid4().hex[:8]}"
+    env = envelope(root, task, value)
+    send_and_drop(root, env)
+    deadline = time.monotonic() + 15
+    seq = None
+    while seq is None and time.monotonic() < deadline:
+        seq = receipt_seq(root, env["caller_scope"], env["request_id"])
+        time.sleep(0.05)
+    res.check("receipt_exists_before_retry", seq is not None)
     retry = client.execute(env)["receipt"]
-    again = client.execute(env)["receipt"]
     with ro(root) as c:
         receipts = c.execute("SELECT COUNT(*) FROM command_receipts WHERE caller_scope=? AND request_id=?",
                              (env["caller_scope"], env["request_id"])).fetchone()[0]
-    res.check("client_disconnected", disconnected)
-    res.check("retry_returns_one_receipt", retry["commit_seq"] == again["commit_seq"] and receipts == 1,
+    res.check("retry_returns_the_same_commit", seq is not None and retry["commit_seq"] == seq and receipts == 1,
               receipts=receipts)
+    res.check("dropped_command_committed_its_value", field_values(root, "task", [task], "next_step")[task] == value)
     stop_coordinator(root)
     return res
 
 
+INJECTED = "n16 injected before commit"
+
+
 @scenario("failure.commit_error", group="failure", kind="check", cells=("Failure: disk/commit errors",))
 def failure_commit_error(run: Run, ds: Dataset, clients, mode):
-    """Injected OperationalError at before_commit: explicit error, nothing committed; the same request
-    then commits exactly once."""
+    """Injected OperationalError at before_commit: the client sees THAT error, nothing is committed and
+    no receipt is kept; the same request then commits exactly once."""
     res = Result("failure.commit_error", ds.name, kind="check", clients=1, cells=["Failure: disk/commit errors"])
     root = copy_project(run, ds.root, "commit-error")
     owner = launch_service(run, root, SERVICE_SCRIPT)
-    task = ds.inventory()["tasks"][1 % len(ds.inventory()["tasks"])]
-    from taskmaster.coordinator.client import Client
-    client = Client(root, autostart=False, timeout=30)
-    env = envelope(root, task, f"n16 commit error {uuid.uuid4().hex[:8]}")
-    before = high_water(root)
-    (root / ".n16-inject-commit-error").write_text("1", encoding="utf-8")
     try:
-        client.execute(env)
-        explicit = False
-    except Exception as exc:  # noqa: BLE001
-        explicit = "disk I/O" in str(exc) or "injected" in str(exc) or True
-        res.data["error_type"] = type(exc).__name__
-    unchanged = high_water(root) == before
-    (root / ".n16-inject-commit-error").unlink()
-    receipt = client.execute(env)["receipt"]
-    committed_once = high_water(root) > before and client.execute(env)["receipt"]["commit_seq"] == receipt["commit_seq"]
-    res.check("injected_error_is_explicit", explicit)
-    res.check("nothing_committed_on_error", unchanged)
-    res.check("retry_commits_once", committed_once)
-    try:
-        client.shutdown()
-    except Exception:  # noqa: BLE001
-        pass
-    kill_tree(owner)
+        task = ds.inventory()["tasks"][1 % len(ds.inventory()["tasks"])]
+        from taskmaster.coordinator.client import Client
+        client = Client(root, autostart=False, timeout=30)
+        env = envelope(root, task, f"n16 commit error {uuid.uuid4().hex[:8]}")
+        before, commits_before = high_water(root), commit_count(root)
+        (root / ".n16-inject-commit-error").write_text("1", encoding="utf-8")
+        error = None
+        try:
+            client.execute(env)
+        except Exception as exc:  # noqa: BLE001
+            error = exc
+        res.check("injected_error_is_explicit", error is not None and INJECTED in str(error),
+                  error_type=type(error).__name__ if error else None)
+        res.check("nothing_committed_on_error", high_water(root) == before and commit_count(root) == commits_before
+                  and receipt_seq(root, env["caller_scope"], env["request_id"]) is None)
+        (root / ".n16-inject-commit-error").unlink()
+        receipt = client.execute(env)["receipt"]
+        again = client.execute(env)["receipt"]
+        res.check("retry_commits_once", commit_count(root) == commits_before + 1
+                  and again["commit_seq"] == receipt["commit_seq"])
+        try:
+            client.shutdown()
+        except Exception:  # noqa: BLE001
+            pass
+    finally:
+        kill_tree(owner)
     return res
 
 
@@ -1515,7 +1783,7 @@ class blocked_export:
 def failure_blocked(run: Run, ds: Dataset, clients, mode):
     res = Result("failure.blocked_replace", ds.name, kind="check", clients=1, cells=["Failure: blocked file replacement"])
     if os.name != "nt":
-        res.note("file locking semantics are Windows-specific; skipped")
+        res.skip("Failure: blocked file replacement", "needs Windows sharing semantics (an open file blocks replace)")
         return res
     root = copy_project(run, ds.root, "blocked")
     client = start_coordinator(run, root)
@@ -1524,9 +1792,7 @@ def failure_blocked(run: Run, ds: Dataset, clients, mode):
     path = root / ".taskmaster/tasks" / f"{task}.md"
     value = f"n16 blocked {uuid.uuid4().hex[:8]}"
     with blocked_export(root, [path]):
-        env = envelope(root, task, value)
-        outcome = client.execute(env)
-        receipt = outcome["receipt"]
+        receipt = client.execute(envelope(root, task, value))["receipt"]
         time.sleep(1.0)
         during = client.flush(receipt["commit_seq"])
         on_disk_during = value in path.read_text(encoding="utf-8")
@@ -1540,8 +1806,9 @@ def failure_blocked(run: Run, ds: Dataset, clients, mode):
     res.data["flush_during"] = {k: during.get(k) for k in ("state", "through")} if isinstance(during, dict) else None
     res.data["flush_after"] = {k: after.get(k) for k in ("state", "through")} if isinstance(after, dict) else None
     res.check("commit_acknowledged_while_blocked", receipt.get("commit_seq") is not None)
-    res.check("blocked_export_not_reported_exported", not on_disk_during and (during or {}).get("state") != "exported"
-              or on_disk_during, on_disk_during=on_disk_during)
+    res.check("block_held_the_file", not on_disk_during)
+    res.check("blocked_export_not_reported_exported", (during or {}).get("state") not in (None, "exported"),
+              state=(during or {}).get("state"))
     res.check("export_completes_after_release", (after or {}).get("state") == "exported"
               and value in path.read_text(encoding="utf-8"))
     stop_coordinator(root)
@@ -1569,15 +1836,15 @@ def failure_expired_lease(run: Run, ds: Dataset, clients, mode):
     records, meta = run_clients(run, root, [holder, taker], label="lease", prime=PRIME)
     got = {r["op"]: r for r in records}
     res.data["run"] = meta
-    res.check("holder_picked", got.get("lease.pick_a", {}).get("ok"), error=got.get("lease.pick_a", {}).get("error"))
+    res.check("holder_picked", got.get("lease.pick_a", {}).get("ok"), error=redact(got.get("lease.pick_a", {}).get("error")))
     res.check("live_lease_refuses_pick", got.get("lease.pick_b_live", {}).get("ok") is False)
     res.check("live_lease_refuses_release", got.get("lease.release_b_live", {}).get("ok") is False)
     expired = got.get("lease.pick_b_expired", {})
     res.check("expired_lease_pick_names_expiry", expired.get("ok") is False and "expired" in (expired.get("error") or ""))
     res.check("expired_lease_release_frees_it", got.get("lease.release_b_expired", {}).get("ok") is True,
-              error=got.get("lease.release_b_expired", {}).get("error"))
+              error=redact(got.get("lease.release_b_expired", {}).get("error")))
     res.check("pick_after_release_succeeds", got.get("lease.pick_b_after_release", {}).get("ok") is True,
-              error=got.get("lease.pick_b_after_release", {}).get("error"))
+              error=redact(got.get("lease.pick_b_after_release", {}).get("error")))
     stop_coordinator(root)
     return res
 
@@ -1624,7 +1891,7 @@ def history_cursor(run: Run, ds: Dataset, clients, mode):
         res.check("filtered_removal_reported", bool(records) and records[0].get("ok") and mover in ids,
                   move_status=records[0].get("status") if records else None, reported=len(moved.get("commits") or []))
     else:
-        res.note("no task/epic pair for the filtered-removal check")
+        res.skip("History: filtered removals", "no task/epic pair in the dataset")
     changed_scope = history_call(root, kinds=["bug"], cursor=after.get("cursor"))
     res.check("scope_change_requires_resync", changed_scope.get("resync_required") is True
               and changed_scope.get("reason") == "scope_changed", reason=changed_scope.get("reason"))
@@ -1651,7 +1918,7 @@ def history_cursor(run: Run, ds: Dataset, clients, mode):
                   and answer.get("reason") in ("store_rebuilt", "history_rewound"), reason=answer.get("reason"))
         res.data["rebuild_reason"] = answer.get("reason")
     else:
-        res.note("store rebuild not exercised: the dataset has no legacy snapshot to rebuild from")
+        res.skip("History: store rebuild", "the dataset has no legacy snapshot to rebuild from")
     return res
 
 
@@ -1710,8 +1977,11 @@ def migration_old_client(run: Run, ds: Dataset, clients, mode):
     try:
         old.status()
         refused["old_service_protocol"] = False
-    except (HandshakeError, Exception):  # noqa: BLE001
+    except HandshakeError:
         refused["old_service_protocol"] = True
+    except Exception as exc:  # noqa: BLE001 - some other failure is not a protocol refusal
+        refused["old_service_protocol"] = False
+        res.data["old_protocol_error"] = type(exc).__name__
     stop_coordinator(root)
     builds = {}
     for name, build in n15.OLD_BUILDS.items():
@@ -1730,7 +2000,11 @@ def migration_old_client(run: Run, ds: Dataset, clients, mode):
     res.check("store_domain_unchanged", n15.domain(root)["digest"] == digest_before)
     res.check("current_bridge_refuses", refused["assert_compatible"] and refused["legacy_store"], **refused)
     res.check("old_protocol_client_refused", refused["old_service_protocol"])
-    res.check("old_builds_refuse", all(v is True for v in builds.values() if v != "not present"), builds=builds)
+    present = {k: v for k, v in builds.items() if v != "not present"}
+    for name in sorted(set(builds) - set(present)):
+        res.skip(f"Migration: old build {name}", "build not present on this machine")
+    if present:
+        res.check("old_builds_refuse", all(v is True for v in present.values()), builds=present)
     res.check("projection_unchanged", not changed, changed=changed[:5] or None)
     return res
 
@@ -1741,7 +2015,8 @@ def migration_interrupted(run: Run, ds: Dataset, clients, mode):
     res = Result("migration.interrupted_cutover", ds.name, kind="check", clients=1,
                  cells=["Migration: interrupted cutover", "Migration: recovery"])
     if ds.legacy is None:
-        res.note("dataset has no legacy snapshot (source copy already native); run on a synthetic dataset")
+        res.skip("Migration: interrupted cutover/recovery",
+                 "the dataset has no legacy snapshot (the source copy is already native); run it on a synthetic dataset")
         return res
     n15 = n15_module(run)
     points = run.args.crash_points
@@ -1820,6 +2095,8 @@ def key_counters(summary: dict) -> str:
 
 
 def budget_rows(results):
+    """One row per applicable distribution. A row is only evidence when its scenario passed its
+    correctness checks and it has >= 200 samples; otherwise it says so instead of met/missed."""
     rows = []
     for result in results:
         if result["kind"] != "steady":
@@ -1829,23 +2106,55 @@ def budget_rows(results):
                 applies = (prefix == "read" and op.startswith("read.")) or \
                           (prefix == "core" and op == "core.command") or \
                           (prefix == "write" and op.startswith("write.") and not op.endswith(".invalid")
-                           and result["scenario"] not in ("write.cas",))
-                if applies:
-                    rows.append({"budget": label, "dataset": result["dataset"], "scenario": result["scenario"],
-                                 "clients": result["clients"], "mode": result["mode"], "op": op,
-                                 "p95_ms": dist["p95_ms"], "limit_ms": limit, "samples": dist["samples"],
-                                 "status": "met" if dist["p95_ms"] < limit else "missed"})
+                           and result["scenario"] not in ("write.cas", "write.invalid"))
+                if not applies:
+                    continue
+                if result["verdict"] != "pass":
+                    status = "invalid (correctness failed)" if result["verdict"] == "fail" else f"invalid ({result['verdict']})"
+                elif dist["samples"] < 200:
+                    status = "smoke (<200 samples)"
+                else:
+                    status = "met" if dist["p95_ms"] < limit else "missed"
+                errors = result["errors"].get(op, {})
+                rows.append({"budget": label, "dataset": result["dataset"], "scenario": result["scenario"],
+                             "clients": result["clients"], "mode": result["mode"], "op": op,
+                             "p95_ms": dist["p95_ms"], "limit_ms": limit, "samples": dist["samples"],
+                             "errors": errors.get("total", 0), "status": status})
     return rows
 
 
+def scaling_check(report) -> dict | None:
+    """Required output vs unrelated data: the same bounded read must not grow with the dataset. Compares
+    each read op's median output bytes on the smallest and largest dataset that ran it."""
+    by_op = {}
+    for r in report["results"]:
+        if r["scenario"] in ("read.details", "read.context") and r["verdict"] == "pass" and r.get("output_bytes_p50"):
+            tasks = (report["datasets"].get(r["dataset"], {}).get("counts") or {}).get("task", 0)
+            by_op.setdefault(r["scenario"], []).append((tasks, r["dataset"], r["output_bytes_p50"]))
+    res = Result("scale.required_output", "cross-dataset", kind="check",
+                 cells=["Scaling: required output vs unrelated data"])
+    for op, rows in sorted(by_op.items()):
+        rows.sort()
+        if len(rows) < 2 or rows[0][0] == rows[-1][0]:
+            continue
+        (small_n, small, small_b), (big_n, big, big_b) = rows[0], rows[-1]
+        res.check(f"bounded_output[{op}]", big_b <= 1.5 * small_b, small=f"{small}:{small_b}B", large=f"{big}:{big_b}B",
+                  task_ratio=round(big_n / max(1, small_n), 1))
+    return res.finish() if res.data["checks"] else None
+
+
 def markdown(report) -> str:
-    lines = [f"# N16 acceptance run {report['meta']['started']}", "",
+    smoke = report["meta"].get("smoke")
+    lines = [f"# N16 acceptance run {report['meta']['started']}" + (" (SMOKE - not acceptance evidence)" if smoke else ""), "",
              f"Code `{report['meta']['git_sha'][:10]}`, Python {report['meta']['python'].split()[0]}, "
              f"SQLite {report['meta']['sqlite']}, {report['meta']['machine']}. Samples >= {report['meta']['samples_required']} "
              f"per steady-state scenario after {report['meta']['warmup']} warmup ops.", ""]
-    failed = [r for r in report["results"] if r["verdict"] != "pass"]
+    failed = [r for r in report["results"] if r["verdict"] not in ("pass", "skipped")]
+    skipped = [r for r in report["results"] if r["verdict"] == "skipped"]
+    passed = sum(r["verdict"] == "pass" for r in report["results"])
     lines += ["## Correctness", "",
-              f"{len(report['results']) - len(failed)} of {len(report['results'])} scenario runs pass their checks.", ""]
+              f"{passed} of {len(report['results'])} scenario runs pass their checks; {len(failed)} fail; "
+              f"{len(skipped)} skipped (see Not run).", ""]
     if failed:
         lines += ["| Dataset | Scenario | Clients | Mode | Failed checks |", "|---|---|---|---|---|"]
         for r in failed:
@@ -1868,7 +2177,9 @@ def markdown(report) -> str:
         lines.append(f"| {b['budget']} | {b['dataset']} | {b['scenario']} | {b['clients'] or ''} | {b['mode'] or ''} | "
                      f"{b['op']} | {b['p95_ms']} | {b['limit_ms']} | **{b['status']}** |")
     missed = sum(b["status"] == "missed" for b in report["budgets"])
-    lines += ["", f"{missed} of {len(report['budgets'])} budget rows missed.", ""]
+    evidence = sum(b["status"] in ("met", "missed") for b in report["budgets"])
+    lines += ["", f"{missed} of {evidence} evidential budget rows missed; {len(report['budgets']) - evidence} rows are "
+              "not evidence (failed correctness, skipped or under 200 samples).", ""]
     if report.get("datasets"):
         lines += ["## Datasets and adoption (cold, separate)", ""]
         for name, info in report["datasets"].items():
@@ -1902,20 +2213,39 @@ def selected(run: Run):
     return names
 
 
+def frames_only(trace: str) -> str:
+    """A traceback's frame lines and exception type only: messages may echo authored text."""
+    lines = [line for line in trace.splitlines() if line.startswith("  File ")]
+    last = trace.strip().splitlines()[-1] if trace.strip() else ""
+    return "\n".join(lines[-12:] + [last.split(":", 1)[0]])
+
+
 def execute_scenario(run: Run, ds: Dataset, name: str, clients, mode):
     spec = SCENARIOS[name]
     try:
         result = spec["fn"](run, ds, clients, mode)
         data = result.finish()
     except Refused as refusal:
-        data = Result(name, ds.name, kind=spec["kind"], clients=clients, mode=mode).finish()
-        data.update(verdict="not-applicable", error=str(refusal))
+        result = Result(name, ds.name, kind=spec["kind"], clients=clients, mode=mode, cells=spec["cells"])
+        result.skip("; ".join(spec["cells"]), str(refusal))
+        data = result.finish()
     except Exception as exc:  # noqa: BLE001 - a crashed scenario is a failed scenario, reported
         import traceback
         data = Result(name, ds.name, kind=spec["kind"], clients=clients, mode=mode).finish()
-        data.update(verdict="fail", error=f"{type(exc).__name__}: {exc}"[:500], traceback=traceback.format_exc()[-3000:])
+        data.update(verdict="fail", error=redact(f"{type(exc).__name__}: {exc}"),
+                    traceback=frames_only(traceback.format_exc()))
     data["group"] = spec["group"]
     return data
+
+
+ALWAYS_NOT_RUN = (
+    "Migration: old runtime ACTIVE during cutover - not exercised (the cutover's quiesce probes refuse a live "
+    "runtime; driving a live 6.0.x server against a copy needs its own design)",
+    "Failure: exporter lease expiry - only the claim lease is exercised here (the exporter lease is covered by "
+    "the N11 in-process tests)",
+    "Failure: disk full - only an injected commit error is exercised",
+    "Allocations - RSS per process is recorded, allocation counts are not",
+)
 
 
 def main(argv=None) -> int:
@@ -1958,9 +2288,12 @@ def main(argv=None) -> int:
     if args.samples < 200 and not args.smoke:
         parser.error("steady-state scenarios need >= 200 measured ops (use --smoke for a smoke run)")
     args.sync_samples = args.sync_samples or args.samples
+    if args.sync_samples < 200 and not args.smoke:
+        parser.error("sync steady-state scenarios need >= 200 rounds (use --smoke for a smoke run)")
     args.crash_points = [p for p in args.crash_points.split(",") if p]
     run = Run(args)
     run.required = args.samples
+    run.sync_required = 0 if args.smoke else 200
     run.work.mkdir(parents=True, exist_ok=True)
     os.environ.pop(METRICS_ENV, None)  # latency samples are uninstrumented, whatever the shell says
     metrics = metrics_module()
@@ -1981,7 +2314,7 @@ def main(argv=None) -> int:
                        "cpu_count": os.cpu_count(), "samples_required": args.samples, "warmup": args.warmup,
                        "smoke": args.smoke, "scenarios": names, "clients": client_axis, "modes": modes,
                        "psutil": bool(run.psutil), "metrics_module": metrics is not None},
-              "datasets": {}, "results": [], "instrumented": [], "skipped": []}
+              "datasets": {}, "results": [], "instrumented": [], "skipped": list(ALWAYS_NOT_RUN)}
     if not run.psutil:
         report["skipped"].append("RSS: psutil not importable (pass --psutil-path; it is not a project dependency)")
     for dataset_name in [d for d in args.dataset.split(",") if d]:
@@ -2015,6 +2348,15 @@ def main(argv=None) -> int:
                         report["results"].append(data)
                     print(f"    -> {data['verdict']} {data.get('error', '')}", flush=True)
             stop_coordinator(ds.root)
+    scaling = scaling_check(report)
+    if scaling is not None:
+        report["results"].append(scaling)
+    else:
+        report["skipped"].append("Scaling: required output vs unrelated data - needs read.details or read.context "
+                                 "passing on two dataset sizes in one run (e.g. --dataset small,10x)")
+    for r in report["results"] + report["instrumented"]:
+        for cell in r.get("skipped_cells") or ():
+            report["skipped"].append(f"{cell['cell']} [{r['dataset']} {r['scenario']}] - {cell['reason']}")
     report["budgets"] = budget_rows(report["results"])
     report["meta"]["finished"] = time.strftime("%Y-%m-%d %H:%M:%S")
     results_path = args.results or (run.work / "n16-results.json")
@@ -2024,9 +2366,14 @@ def main(argv=None) -> int:
     print(json.dumps({"results": str(results_path), "summary": str(summary_path),
                       "pass": sum(r["verdict"] == "pass" for r in report["results"]),
                       "fail": sum(r["verdict"] == "fail" for r in report["results"]),
-                      "not_applicable": sum(r["verdict"] == "not-applicable" for r in report["results"]),
+                      "skipped": sum(r["verdict"] == "skipped" for r in report["results"]),
                       "budget_missed": sum(b["status"] == "missed" for b in report["budgets"])}, indent=1))
-    return 1 if any(r["verdict"] == "fail" for r in report["results"] + report["instrumented"]) else 0
+    everything = report["results"] + report["instrumented"]
+    if any(r["verdict"] == "fail" for r in everything):
+        return 1
+    if any(r["verdict"] == "skipped" or r.get("skipped_cells") for r in everything):
+        return 2  # nothing failed, but part of the selection did not run: not a clean pass
+    return 0
 
 
 if __name__ == "__main__":
