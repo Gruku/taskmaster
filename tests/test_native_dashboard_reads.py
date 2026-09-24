@@ -7,6 +7,7 @@ read left out.
 """
 from __future__ import annotations
 
+from collections.abc import MutableMapping
 from contextlib import closing
 import random
 
@@ -92,27 +93,45 @@ def test_status_and_progress_match_the_legacy_twin(tmp_path, monkeypatch):
     twins.assert_files_match()
 
 
-class _Recording(dict):
-    """A task dict that records every key a renderer reads, and refuses a whole-dict read."""
+class _Recording(MutableMapping):
+    """A task that records every key a renderer reads and refuses a whole-task read.
+
+    Not a dict subclass on purpose: an unbound `dict.get(task, key)` (or any other
+    C-level dict access) would bypass a subclass's overrides silently, and here it
+    raises instead. `get`, `setdefault`, `pop` and `in` all go through the recorded
+    `__getitem__`/`__contains__`."""
 
     seen: set = set()
 
+    def __init__(self, doc):
+        self._doc = dict(doc)
+
     def __getitem__(self, key):
         _Recording.seen.add(key)
-        return super().__getitem__(key)
-
-    def get(self, key, default=None):
-        _Recording.seen.add(key)
-        return super().get(key, default)
+        return self._doc[key]
 
     def __contains__(self, key):
         _Recording.seen.add(key)
-        return super().__contains__(key)
+        return key in self._doc
 
-    def _whole(self, *args, **kwargs):
+    def __setitem__(self, key, value):
+        _Recording.seen.add(key)
+        self._doc[key] = value
+
+    def __delitem__(self, key):
+        _Recording.seen.add(key)
+        del self._doc[key]
+
+    def __len__(self):
+        return len(self._doc)
+
+    def __iter__(self):
         raise AssertionError("a dashboard renderer read a whole task dict")
 
-    keys = items = values = __iter__ = copy = _whole
+    def keys(self):
+        raise AssertionError("a dashboard renderer read a whole task dict")
+
+    items = values = copy = keys
 
 
 def test_renderers_read_only_the_fields_the_slim_read_carries(tmp_path, monkeypatch):
@@ -120,14 +139,30 @@ def test_renderers_read_only_the_fields_the_slim_read_carries(tmp_path, monkeypa
     _Recording.seen = set()
     with native_connection(twins.native) as connection, Repository(connection).snapshot() as snapshot:
         data = reads.tree(snapshot, context=False)
+        plain = reads.tree(snapshot)
     for epic in data["epics"]:
         epic["tasks"] = [_Recording(task) for task in epic["tasks"]]
     bs._derive_context(data)
-    bs._status_text(data, False)
-    bs._status_text(data, True)
-    bs._render_progress_dashboard(data, "", [])
+    texts = (bs._status_text(data, False), bs._status_text(data, True),
+             bs._render_progress_dashboard(data, "", []))
+    assert texts == (bs._status_text(plain, False), bs._status_text(plain, True),
+                     bs._render_progress_dashboard(plain, "", []))
     assert _Recording.seen, "the recorder saw nothing"
     assert _Recording.seen <= set(reads.DASHBOARD_TASK_FIELDS), _Recording.seen - set(reads.DASHBOARD_TASK_FIELDS)
+
+
+def test_the_recorder_catches_every_way_of_reading_a_field():
+    _Recording.seen = set()
+    task = _Recording({"a": 1, "b": 2, "c": 3})
+    task.setdefault("a", 0)
+    task.pop("b")
+    assert "c" in task
+    assert task.get("d") is None
+    assert _Recording.seen == {"a", "b", "c", "d"}
+    with pytest.raises(TypeError):
+        dict.get(task, "e")                  # an unbound dict read cannot slip past
+    with pytest.raises(AssertionError):
+        dict(task)
 
 
 def _statements(root, build):
