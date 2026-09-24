@@ -7,6 +7,7 @@ import inspect
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -31,6 +32,15 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers",
         "xdist_group(name): tests sharing a name run on one xdist worker, in turn",
+    )
+    config.addinivalue_line(
+        "markers",
+        "real_service_process: the test may launch a real `taskmaster.coordinator.service` "
+        "process; without it any such launch fails (see `_child_process_guard`)",
+    )
+    config.addinivalue_line(
+        "markers",
+        "scale: full-size acceptance profiles, deselected by default; run with `-m scale`",
     )
     # Tests that run several Python processes at once are grouped as
     # `heavy_processes`; under plain `-n N` (xdist's default `load`) the marker
@@ -62,10 +72,81 @@ def pytest_unconfigure(config):
     if patch is not None:
         patch.undo()
 
+
+def pytest_collection_modifyitems(config, items):
+    """Deselect `scale` profiles unless the marker expression asks for them."""
+    if "scale" in (getattr(config.option, "markexpr", "") or ""):
+        return
+    kept = [item for item in items if item.get_closest_marker("scale") is None]
+    if len(kept) != len(items):
+        config.hook.pytest_deselected(items=[item for item in items if item.get_closest_marker("scale")])
+        items[:] = kept
+
 # Make `import skill_budget_helper` work from tests that live in this directory.
 TESTS_ROOT = Path(__file__).resolve().parent
 if str(TESTS_ROOT) not in sys.path:
     sys.path.insert(0, str(TESTS_ROOT))
+
+
+# ── Child-process guard ────────────────────────────────────────────────────
+# Leaked children were the suite's largest RAM cost: native fixtures autostarted
+# a real coordinator service (~100 MB each) that lived on for its idle timeout.
+# Every Popen made by a test is now watched: a real service launch needs the
+# `real_service_process` marker, and a Python child still alive after teardown
+# fails the test. Any service a marked test starts exits after a short idle.
+os.environ.setdefault("TASKMASTER_SERVICE_IDLE_SECONDS", "3")
+
+_SERVICE_MODULE = "taskmaster.coordinator.service"
+_LEFTOVER_GRACE_SECONDS = 2.0
+
+
+class RealServiceLaunchError(AssertionError):
+    """A test launched a real coordinator service process without opting in."""
+
+
+class _ChildWatch:
+    """Per-test state the Popen wrapper reads; one test runs at a time per process."""
+
+    allow_service = True  # outside a test (collection, xdist plumbing) nothing is checked
+    nodeid = None
+    spawned = None  # [(Popen, argv)] while a test's function-scoped guard is collecting
+
+
+_WATCH = _ChildWatch()
+
+
+def _argv(bound):
+    args = bound.arguments.get("args")
+    if isinstance(args, (str, bytes, os.PathLike)):
+        return [os.fsdecode(args)]
+    return [os.fsdecode(arg) if isinstance(arg, (bytes, os.PathLike)) else str(arg) for arg in (args or ())]
+
+
+def _is_python(argv) -> bool:
+    if not argv:
+        return False
+    head = argv[0]
+    if head == sys.executable:
+        return True
+    name = os.path.basename(head.split()[0] if len(argv) == 1 else head).lower()
+    return name.startswith("python") or name in ("py", "py.exe")
+
+
+def _is_service(argv) -> bool:
+    return any(_SERVICE_MODULE in arg for arg in argv)
+
+
+def _kill_tree(process) -> None:
+    # A venv `python.exe` is a launcher: killing it alone orphans the real interpreter.
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    else:
+        process.kill()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
 
 
 def _windowless_test_children():
@@ -75,21 +156,80 @@ def _windowless_test_children():
     Preserve explicit detached/new-console tests, existing flags and Popen's
     class identity; only supply the no-window flag to ordinary Windows children.
     Production launch flags are tested separately with mocked subprocess.run.
+
+    The same wrapper feeds the child-process guard: it refuses an unmarked real
+    coordinator service launch and records each child a running test creates.
     """
-    if os.name != 'nt':
-        return None
     original = subprocess.Popen.__init__
     signature = inspect.signature(original)
     @functools.wraps(original)
     def initialize(process, *args, **kwargs):
         bound = signature.bind_partial(process, *args, **kwargs)
-        flags = bound.arguments.get('creationflags', 0)
-        if not flags & (subprocess.CREATE_NEW_CONSOLE | subprocess.DETACHED_PROCESS):
-            bound.arguments['creationflags'] = flags | subprocess.CREATE_NO_WINDOW
+        argv = _argv(bound)
+        if not _WATCH.allow_service and _is_service(argv):
+            raise RealServiceLaunchError(
+                f"{_WATCH.nodeid} launched a real coordinator service process ({' '.join(argv)[:200]}); "
+                "route it through tests.native_coordinator_helpers.compatibility_client, or mark the "
+                "test `@pytest.mark.real_service_process` if the process boundary is what it proves"
+            )
+        if os.name == 'nt':
+            flags = bound.arguments.get('creationflags', 0)
+            if not flags & (subprocess.CREATE_NEW_CONSOLE | subprocess.DETACHED_PROCESS):
+                bound.arguments['creationflags'] = flags | subprocess.CREATE_NO_WINDOW
         original(*bound.args, **bound.kwargs)
+        spawned = _WATCH.spawned
+        if spawned is not None:
+            spawned.append((process, argv))
     patch = pytest.MonkeyPatch()
     patch.setattr(subprocess.Popen, '__init__', initialize)
     return patch
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_protocol(item, nextitem):
+    """Scope the service permission to one test's setup, call and teardown."""
+    _WATCH.nodeid = item.nodeid
+    _WATCH.allow_service = item.get_closest_marker("real_service_process") is not None
+    try:
+        return (yield)
+    finally:
+        _WATCH.allow_service, _WATCH.nodeid = True, None
+
+
+@pytest.fixture(autouse=True)
+def _child_process_guard(request):
+    """Fail a test whose own Python children outlive its teardown.
+
+    Defined first among the autouse fixtures, so it is set up before and torn down
+    after every other function-scoped fixture: a fixture that reaps its process in
+    teardown is fine. Children made while a module- or session-scoped fixture was
+    set up predate this fixture and are that fixture's to own. A real service a
+    `real_service_process` test started is left to its short idle timeout.
+    """
+    spawned = _WATCH.spawned = []
+    try:
+        yield
+    finally:
+        _WATCH.spawned = None
+    exempt_services = request.node.get_closest_marker("real_service_process") is not None
+    watched = [(process, argv) for process, argv in spawned
+               if _is_python(argv) and not (exempt_services and _is_service(argv))]
+    deadline = time.monotonic() + _LEFTOVER_GRACE_SECONDS
+    alive = []
+    for process, argv in watched:
+        try:
+            process.wait(timeout=max(0.0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            alive.append((process, argv))
+    for process, _ in alive:
+        _kill_tree(process)
+    if alive:
+        listing = "\n".join(f"  pid {process.pid}: {' '.join(argv)[:200]}" for process, argv in alive)
+        pytest.fail(
+            f"{len(alive)} child Python process(es) outlived the test by {_LEFTOVER_GRACE_SECONDS:g}s "
+            f"(now killed); reap them in the test or its fixture:\n{listing}",
+            pytrace=False,
+        )
 
 
 @pytest.fixture(autouse=True)

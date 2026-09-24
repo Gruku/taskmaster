@@ -22,6 +22,17 @@ from taskmaster import store
 from native_twins import activate_native, committed, is_native
 
 
+def _in_process_coordinator(monkeypatch) -> None:
+    """Route native calls to a test-owned in-process coordinator, as `Twins.at` does.
+
+    Without it every native case autostarted a real service process that outlived
+    the test by its idle timeout; batch semantics do not depend on the process boundary.
+    """
+    from taskmaster.coordinator import adapter
+    from tests.native_coordinator_helpers import compatibility_client
+    monkeypatch.setattr(adapter, "Client", compatibility_client)
+
+
 # ── Fixtures ────────────────────────────────────────────────────────────────
 
 @pytest.fixture
@@ -31,17 +42,19 @@ def legacy_project(tm_epic_phase):
 
 
 @pytest.fixture
-def native_project(tm_epic_phase):
+def native_project(tm_epic_phase, monkeypatch):
     activate_native(tm_epic_phase)
+    _in_process_coordinator(monkeypatch)
     assert is_native(tm_epic_phase)
     return tm_epic_phase
 
 
 @pytest.fixture(params=["legacy", "native"])
-def either_project(request, tm_epic_phase):
+def either_project(request, tm_epic_phase, monkeypatch):
     """The argument-form contract is the tool's own and holds on either store."""
     if request.param == "native":
         activate_native(tm_epic_phase)
+        _in_process_coordinator(monkeypatch)
         assert is_native(tm_epic_phase)
     return tm_epic_phase
 

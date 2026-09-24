@@ -431,37 +431,50 @@ def test_completion_receipt_failure_is_pending(root, monkeypatch, failure):
         assert client.sync_status('finish', failure)['state'] != 'complete'
 
 
-def test_completed_result_is_bounded_and_counts_omitted_receipts():
+# The byte budget is read at call time, so the bounding tests shrink it instead of
+# building 80 MB payloads; the real budget's fit inside one message is checked apart.
+SMALL_SUMMARY_BYTES = 16 * 1024
+
+
+def test_the_summary_budget_fits_well_inside_one_protocol_message():
     from taskmaster.coordinator import sync_worker
     from taskmaster.coordinator.protocol import MAX_MESSAGE_BYTES
+    assert sync_worker.SUMMARY_BYTES < MAX_MESSAGE_BYTES // 2
+
+
+def test_completed_result_is_bounded_and_counts_omitted_receipts(monkeypatch):
+    from taskmaster.coordinator import sync_worker
     from taskmaster.native.migrate import encode
+    monkeypatch.setattr(sync_worker, 'SUMMARY_BYTES', SMALL_SUMMARY_BYTES)
     result = dict(state='synchronized', through=5, captured=True, observed=0, unresolved=[], notices=[],
-                  warnings=[f'duplicate import path skipped: tasks/x-{n}.md' for n in range(5000)],
+                  warnings=[f'duplicate import path skipped: tasks/x-{n}.md' for n in range(200)],
                   caller_scope='c', request_id='r', receipt_scope='sync-' + 'a' * 64, import_files=True,
-                  imports=[dict(file=f'tasks/t-{n:05}.md', state='accepted', reason='r' * 4096, commit_seq=n,
-                                caller_scope='sync-' + 'a' * 64, request_id='b' * 64) for n in range(10000)])
+                  imports=[dict(file=f'tasks/t-{n:05}.md', state='accepted', reason='r' * 512, commit_seq=n,
+                                caller_scope='sync-' + 'a' * 64, request_id='b' * 64) for n in range(400)])
+    assert len(encode({'result': result}).encode()) > 8 * SMALL_SUMMARY_BYTES
     summary = sync_worker.summarize(result)
-    assert len(encode({'result': summary}).encode()) < MAX_MESSAGE_BYTES // 2
+    assert len(encode({'result': summary}).encode()) <= SMALL_SUMMARY_BYTES
     assert summary['state'] == 'synchronized' and summary['through'] == 5
     assert summary['imports'] == [{'file': item['file'], 'state': 'accepted', 'commit_seq': item['commit_seq'],
                                    'request_id': item['request_id']} for item in result['imports']][:len(summary['imports'])]
-    assert summary['imports_omitted'] == 10000 - len(summary['imports'])
+    assert summary['imports'] and summary['imports_omitted'] == 400 - len(summary['imports'])
+    assert summary['warnings_omitted'] == 200 - len(summary['warnings'])
 
 
-def test_pending_result_returned_to_the_caller_is_bounded_and_counts_omissions():
+def test_pending_result_returned_to_the_caller_is_bounded_and_counts_omissions(monkeypatch):
     from taskmaster.coordinator import sync_worker
-    from taskmaster.coordinator.protocol import MAX_MESSAGE_BYTES
     from taskmaster.native.migrate import encode
-    files = [f'tasks/t-{n:05}.md' for n in range(10000)]
+    monkeypatch.setattr(sync_worker, 'SUMMARY_BYTES', SMALL_SUMMARY_BYTES)
+    files = [f'tasks/t-{n:05}.md' for n in range(400)]
     result = dict(state='pending', through=5, captured=False, observed=0, unresolved=list(files),
-                  notices=[f'sync pending: {rel}: ' + 'why ' * 1000 for rel in files],
+                  notices=[f'sync pending: {rel}: ' + 'why ' * 50 for rel in files],
                   warnings=[f'duplicate import path skipped: {rel}' for rel in files],
                   caller_scope='c', request_id='r', receipt_scope='sync-' + 'a' * 64, import_files=True,
-                  imports=[dict(file=rel, state='conflict', reason='r' * 4096, commit_seq=n,
+                  imports=[dict(file=rel, state='conflict', reason='r' * 512, commit_seq=n,
                                 caller_scope='sync-' + 'a' * 64, request_id='b' * 64) for n, rel in enumerate(files)])
-    assert len(encode({'result': result}).encode()) > MAX_MESSAGE_BYTES
+    assert len(encode({'result': result}).encode()) > 8 * SMALL_SUMMARY_BYTES
     bounded = sync_worker.bound(result)
-    assert len(encode({'result': bounded}).encode()) < MAX_MESSAGE_BYTES // 2
+    assert len(encode({'result': bounded}).encode()) <= SMALL_SUMMARY_BYTES
     assert bounded['state'] == 'pending' and bounded['receipt_scope'] == result['receipt_scope']
     for key in ('unresolved', 'notices', 'imports', 'warnings'):
         assert bounded[key] == result[key][:len(bounded[key])]

@@ -17,10 +17,17 @@ from native_twins import activate_native, committed, is_native
 
 
 @pytest.fixture(params=["legacy", "native"])
-def tm_epic_phase(request, tm_epic_phase):
-    """The same contract on a legacy store and, through the N08 adapter, a native one."""
+def tm_epic_phase(request, tm_epic_phase, monkeypatch):
+    """The same contract on a legacy store and, through the N08 adapter, a native one.
+
+    Native calls reach a test-owned in-process coordinator, as `Twins.at` routes them,
+    rather than autostarting a real service process that outlives the test.
+    """
     if request.param == "native":
         activate_native(tm_epic_phase)
+        from taskmaster.coordinator import adapter
+        from tests.native_coordinator_helpers import compatibility_client
+        monkeypatch.setattr(adapter, "Client", compatibility_client)
         assert is_native(tm_epic_phase)
     return tm_epic_phase
 

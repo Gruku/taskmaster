@@ -12,6 +12,9 @@ from taskmaster.coordinator.client import Client, _launch
 from taskmaster.coordinator.protocol import ServiceUnavailable
 from test_native_service import root, request  # noqa: F401
 
+# The process boundary is what this module proves (conftest refuses unmarked launches).
+pytestmark = pytest.mark.real_service_process
+
 
 def ready(root, *, timeout=20):
     client = Client(root, autostart=False, timeout=2)
