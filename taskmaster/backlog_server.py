@@ -27,6 +27,7 @@ from typing import Any, Literal
 
 import yaml
 from fastmcp import FastMCP
+from pydantic import StrictInt
 
 from contextlib import contextmanager
 from functools import wraps
@@ -36,6 +37,7 @@ from taskmaster import yaml_io
 # The claim contract (holder, TTL, liveness, refusal wording) lives in one
 # module so the legacy tool and the native adapter cannot drift on it.
 from taskmaster.native import blockers as _blockers
+from taskmaster import dependency_chain as _dependency_chain
 from taskmaster.native import claims as _claims
 from taskmaster.admission import UnsupportedStoreError
 from taskmaster.blast_radius import (
@@ -2684,15 +2686,23 @@ def _render_derived_report(status: dict, db_file: Path) -> str:
 
 
 @mcp.tool()
-def backlog_index_status(rebuild: bool = False) -> str:
+def backlog_index_status(rebuild: bool = False, verify: bool = False) -> str:
     """Report the state of the store's derived tables (FTS, paths, links, related).
 
     They live in `.taskmaster/local/store.db` beside the authoritative rows and are
-    refreshed inside the transaction of every tool call, so they are never stale.
+    refreshed inside the transaction of every tool call; `rebuild` recomputes them
+    from the entity rows should they ever drift.
 
     Args:
         rebuild: Recompute every derived table from the entity rows before reporting.
-            The authoritative tables are not touched and no file is re-read.
+            The authoritative tables are not touched and no file is re-read. On a
+            native store this is the graph repair and covers only `entity_paths`,
+            `links`, `handover_tasks` and `related` (not search): they are compared
+            with the full oracle and only the differing rows are replaced, in one
+            transaction.
+        verify: Native stores only. Compare the graph tables with the full oracle
+            and report the differences and the cost, changing nothing. Refused on
+            a legacy store, with or without `rebuild`.
     """
     bp = _backlog_path()
     if not bp.exists():
@@ -2700,6 +2710,10 @@ def backlog_index_status(rebuild: bool = False) -> str:
         # project that has no backlog yet, and must not open a store beside one
         # that does not exist. `rebuild=True` has nothing to rebuild either.
         return f"no backlog found at {bp}"
+    if verify:
+        return ("Error: verify=True checks a native store's graph tables against the full oracle; "
+                "this legacy store has no separate verifier. Use rebuild=True to recompute every "
+                "derived table. Nothing was changed.")
     st = _store()
     if rebuild:
         # Derived rows only: `entities`, `changes` and `projection` are the
@@ -3152,12 +3166,25 @@ def _unreadable_dependencies_line(unknown) -> str:
 
 
 @mcp.tool()
-def backlog_dependencies(task_id: str) -> str:
+def backlog_dependencies(task_id: str, depth: StrictInt = 1) -> str:
     """Show the full dependency chain for a task — what it depends on (upstream) and what it unblocks (downstream).
 
     Args:
         task_id: The task ID (e.g., "cpp-parser-003")
+        depth: How many hops to follow each way: a strict integer from 1 to 10
+            (a boolean, string or float is refused, never coerced). Default 1: direct
+            dependencies and dependents only, exactly as before. Above 1, a
+            transitive section per direction follows the one-hop answer, listing
+            each task at its shortest distance (2..depth) with the task it was
+            reached through. Archived tasks are followed; deleted ids upstream show
+            as missing and are not followed; an unreadable `depends_on` is named,
+            not followed. Cycles are reported, never looped. At most 200 tasks are
+            listed per direction (the rest are counted as truncated), and the
+            traversal stops after 5 s, saying so.
     """
+    depth_error = _dependency_chain.depth_error(depth)
+    if depth_error:
+        return depth_error
     data = _load()
     result = _find_task(data, task_id)
     if not result:
@@ -3209,7 +3236,27 @@ def backlog_dependencies(task_id: str) -> str:
     else:
         lines.append("\n**Unblocks:** nothing")
 
+    if depth > 1:
+        lines.extend(_legacy_dependency_chain(all_tasks, task_id, depth))
     return "\n".join(lines)
+
+
+def _legacy_dependency_chain(all_tasks: list, task_id: str, depth: int) -> list[str]:
+    """`backlog_dependencies`' transitive sections, walked over the loaded tree."""
+    tasks = [t for t, _ep in all_tasks]
+    by_id = {}
+    for t in tasks:
+        by_id.setdefault(t["id"], t)
+
+    def describe(ident):
+        return by_id[ident]["title"], by_id[ident].get("status", "todo")
+
+    deadline = _dependency_chain.Deadline()
+    out = []
+    for label, checks in (("upstream", True), ("downstream", False)):
+        walked = _dependency_chain.tree_walk(tasks, task_id, depth, label, deadline)
+        out.extend(_dependency_chain.lines(label, walked, depth, describe, checks=checks))
+    return out
 
 
 def _claimed_lines(claimed: list) -> list[str]:

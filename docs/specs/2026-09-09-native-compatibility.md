@@ -32,6 +32,16 @@ Host preferences, session identity and file serving remain host services, not
 entity commands. `/api/tasks/validate` and `/api/bugs/pattern-scan` are queries
 despite using POST. Other entity POST/PUT/PATCH routes are command adapters.
 
+Explicit additive changes since the freeze (N14): `backlog_dependencies` gained an
+optional `depth` (strict int, default 1; over MCP a boolean, string or float is
+refused by validation, never coerced). `depth=1` is the frozen answer byte for byte on
+both stores; 2..10 appends bounded transitive sections (200 tasks per direction,
+5 s deadline, cycles and truncation reported), identical on legacy and native.
+Intentional difference: when an *unrelated* task has an unreadable `order` (e.g.
+`null`), legacy `backlog_dependencies` raises while sorting every task; native
+answers, because its reverse index never reads that task. Pinned by
+`tests/test_native_dependency_graph.py::test_native_answers_where_legacy_raises_on_an_unrelated_null_order`.
+
 ## Behavioral contract sources and acceptance matrix
 
 Public text results are not replaced with JSON merely because SQL is underneath.
@@ -119,7 +129,7 @@ with no authored field values.
 
 | Caller | Category / core boundary |
 |---|---|
-| `edit_resurface.py` | Committed query over entity paths, related graph and change sequence; advisory memo is local derived state |
+| `edit_resurface.py` | Committed query over entity paths, related graph and change sequence; advisory memo is local derived state. On native stores (N14) it reads the canonical neighbourhood (`Snapshot.neighbourhood` via `hook_reads`), not the `related` table; legacy stores are unchanged |
 | `merge_gate_decide.py` | Committed task/gate query with established file fallback; system-Python admission |
 | `merge_recorder_stamp.py` | Command adapter to `backlog_record_merge`; successful Git operation already occurred |
 | `merge_gate.py`, `merge_recorder.py`, `.sh` wrappers, `run_hook.sh` | Host dispatch; preserve stdin/stdout/exit and fail-open behavior |
@@ -145,3 +155,100 @@ the full graph as the oracle. Viewer related-data currently scans continuity
 files instead of consuming the graph. Therefore removing `related` or changing
 edge multiplicity before N14 would break a supported contract. Keep compatibility
 views/materialization until these consumers migrate and equivalence passes.
+
+### Graph SQL freshness (N14, decision F1 = A)
+
+| SQL name | Native freshness | Maintained by | Repair |
+|---|---|---|---|
+| `entity_paths` | Current at commit | `relations.maintain`, per changed document | Full oracle |
+| `links` (incl. `derived=1` mirrors) | Current at commit | `relations.maintain`, per changed link set, plus re-resolution of links to an id when that id is created | Full oracle |
+| `handover_tasks` | Current at commit | `relations.maintain`, per changed handover | Full oracle |
+| `related` | Current at commit | `relations.maintain`; path pairs through the indexed candidate search in `native/neighbourhood.py`, which costs the edited entity's candidates rather than every claim | Full oracle |
+| `backlog_dependencies` `depth` (typed API, not SQL) | Current at read: canonical `dependencies` in the call's snapshot | No stored graph | None needed; bounds and parity are in the N14 step 5 additive-changes note |
+
+All four tables are maintained incrementally inside the command's transaction, and
+the full oracle is the repair operation. Rows, weights and multiplicity are the
+frozen legacy contract: undirected sorted pairs, path weight = matching claim
+pairs (glob-vs-glob, case-sensitive), one `handover` row per co-membership,
+archived-but-live entities kept, deleted entities dropped. `backlog_query` still
+materializes these tables in its per-call private snapshot, so its latency is
+unchanged.
+
+**Bug fixes: link target kinds (N14 review).**
+
+- *Links written before their target.* A link is resolved when it is written, so a
+  link to an id that did not exist yet recorded the `task` fallback kind and kept
+  it after the target was created. The same drift existed in legacy incremental
+  maintenance, while `rebuild_derived` resolved the kind correctly. Now, when an
+  entity is created (native `relations.maintain` on creation; legacy
+  `Store._refresh_derived` for every touched key), the declared `links` rows whose
+  `dst_id` is that id are re-resolved with `_kind_for_id`, and their mirrors are
+  re-derived.
+- *Tie-break.* When one id belongs to several kinds, for example an epic and a
+  phase both named `shared`, `_kind_for_id` orders task, then issue, then by kind
+  name, on both stores. Before this fix, legacy had no tie-break, so the answer
+  depended on insertion order.
+- *Indexes.* Both lookups are index searches: the incoming rows use
+  `ix_links_dst` with every stored kind listed. The kind uses
+  `ix_entities_id(id,deleted,kind)` on legacy, a new `CREATE INDEX IF NOT EXISTS`
+  in the schema script that runs on every store open. It needs no version bump,
+  and older clients ignore it. On native it uses
+  `ix_entity_core_public_id(public_id,deleted,kind)`, created by
+  `neighbourhood.ensure_indexes` at backfill and on the first admitted command.
+  A test asserts the query plans.
+
+The public `links` rows now match `rebuild_derived` at commit, and legacy and
+native produce identical rows. This is tested for both epic/phase insertion
+orders, for targets that are an issue, a bug, a task or never appear, and for one
+batch that creates entities linking to each other. A target that never appears
+keeps the `task` fallback, which is the legacy answer.
+
+**Repair operation.** `backlog_index_status(verify=True)` compares the four tables
+with the full oracle and reports missing and spurious rows, with examples, the
+entity count, rows compared and seconds. It changes nothing. `rebuild=True` runs the
+native `graph.repair` command, which is admitted through `commands.execute` on its
+own (never inside a batch). It replaces only the differing rows in one writer
+transaction and appends no domain event, because derived rows are not authored
+state. Only a repair that changed rows records `graph_repaired_at` and increments
+`graph_repairs` in `native_manifest`. The hooks' dedupe revision on native stores
+(`hook_reads.revision`) is the event high water plus `graph_repairs`, so a repair
+that changed rows invalidates remembered hook answers. A clean repair changes
+nothing. The oracle recomputes rows from canonical documents with
+`relations.grouped_weights` plus the legacy link, mirror and handover rebuild
+rules (`native/graph_repair.py`). No command or read path calls it. Backfill
+leaves the shared graph tables untouched: it is a repeatable staging step, and
+legacy still owns those rows. Instead, `migrate.repair_graph_for_activation` runs
+the repair once, inside the activation transaction, after `authority` has been set
+to `native` there. It refuses to run outside such a transaction. A crash rolls the
+switch and the repair back together, and activation can simply be re-run. As a
+result, a store activated from a drifted legacy store verifies clean. Every repair
+records `graph_checked_at`, which `backlog_index_status` shows as "Rebuilt:". Only
+`graph_repaired_at` and `graph_repairs` feed the hook revision.
+With `rebuild=True, verify=True` on a native store, the repair runs. On a legacy
+store, `rebuild=True` alone is the unchanged `Store.rebuild_derived`, and any call
+with `verify=True`, with or without `rebuild`, is refused and changes nothing. On
+native, `rebuild` covers only these four graph tables, not the search table.
+Measured on a synthetic store with 4,000 tasks: 15,998 `links` rows, 23,583
+`entity_paths` rows (19,583 of them prose), 9,351 `related` rows, 97,864 rows
+compared. Verify took 0.45 s. Repair took 0.55 s with 20 `links` rows missing and
+0.51 s when clean. Backfill took about 1.05 s. The one-time activation repair took
+0.45 s (0 differences).
+
+**Explicit additions.** `Snapshot.neighbourhood(kind, id, limit)` returns distinct
+`(kind, id, via, weight)` neighbours, with weight summed over `related` rows. The
+optional `verify` parameter and the native `graph.repair` operation are also new.
+Neither adds top-K ranking or changes relevance.
+
+**Known limits.**
+
+- `Snapshot.neighbourhood`, like `Snapshot.relations()`, pages with `truncated`
+  only and has no continuation cursor.
+- The canonical `declared_links` and `memberships` rows keep the `task` fallback
+  in `target_kind` for a target written before it existed. Only the public
+  `links` table is re-resolved. `Snapshot.relations()` and `references_to()`,
+  which read these rows, have no production caller today. Correcting them is
+  future work.
+
+**Later capability, not unfinished work.** Materializing `related` on demand from
+canonical claims (option B) instead of maintaining it at commit is recorded as a
+possible later capability. This release does not need it.

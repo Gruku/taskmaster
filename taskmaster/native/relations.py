@@ -9,8 +9,10 @@ import fnmatch
 from itertools import combinations
 import re
 
+from taskmaster.native.neighbourhood import path_weights
 from taskmaster.paths import as_list, extract_prose_paths, normalize_location, normalize_task_anchor
-from taskmaster.taskmaster_v3 import REVERSE_TYPE, legacy_links_to_typed
+from taskmaster.taskmaster_v3 import (LINK_ENDPOINT_KINDS, REVERSE_TYPE, LINKS_TO_ID_SQL,
+                                      legacy_links_to_typed)
 
 
 def grouped_weights(values):
@@ -83,15 +85,13 @@ def _path_neighborhood(connection, kind, ident, new_paths):
     own = [(path, match) for path, match, source in new_paths if source in ("anchors", "location")]
     if not own:
         return 0
-    peers = connection.execute("SELECT kind,id,path,match_kind FROM entity_paths WHERE source IN ('anchors','location') AND NOT(kind=? AND id=?)", (kind, ident)).fetchall()
-    weights = Counter()
-    for path, match in own:
-        for rk, ri, rp, rm in peers:
-            if path == rp or (match == "glob" and fnmatch.fnmatchcase(rp, path)) or (rm == "glob" and fnmatch.fnmatchcase(path, rp)):
-                weights[tuple(sorted(((kind, ident), (rk, ri))))] += 1
+    # Candidates come from the path index, never a scan of every claim; the
+    # count is the candidates examined, so unrelated claims cost nothing.
+    weights, examined = path_weights(connection, kind, ident, own)
+    pairs = ((tuple(sorted(((kind, ident), other))), weight) for other, weight in weights.items())
     connection.executemany("INSERT INTO related VALUES(?,?,?,?,?,?)",
-                           [(a[0], a[1], b[0], b[1], "path", weight) for (a, b), weight in weights.items()])
-    return len(own) * len(peers)
+                           [(a[0], a[1], b[0], b[1], "path", weight) for (a, b), weight in pairs])
+    return examined
 
 
 def _declared_links(connection, kind, ident, new_links):
@@ -102,6 +102,12 @@ def _declared_links(connection, kind, ident, new_links):
         target_kind = _kind_for_id(connection, target_id)
         connection.execute("INSERT OR IGNORE INTO links VALUES(?,?,?,?,?,0)", (kind, ident, link_type, target_kind, target_id))
         pairs.add(tuple(sorted(((kind, ident), (target_kind, target_id)))))
+    _mirror_pairs(connection, pairs)
+    return len(pairs)
+
+
+def _mirror_pairs(connection, pairs):
+    """Re-derive the `derived=1` mirrors between each endpoint pair from its declared rows."""
     for left, right in sorted(pairs):
         where = "((src_kind=? AND src_id=? AND dst_kind=? AND dst_id=?) OR (src_kind=? AND src_id=? AND dst_kind=? AND dst_id=?))"
         args = (*left, *right, *right, *left)
@@ -111,6 +117,32 @@ def _declared_links(connection, kind, ident, new_links):
             reverse = REVERSE_TYPE.get(link_type)
             if reverse is not None and not connection.execute("SELECT 1 FROM links WHERE src_kind=? AND src_id=? AND type=? AND dst_kind=? AND dst_id=?", (dk, di, reverse, sk, si)).fetchone():
                 connection.execute("INSERT INTO links VALUES(?,?,?,?,?,1)", (dk, di, reverse, sk, si))
+
+
+def _reresolve_link_targets(connection, ident):
+    """Give links to `ident` the kind it resolves to now, as the full rebuild would.
+
+    A link is resolved when it is written, so one written before its target existed
+    records the `task` fallback. Creating (or deleting) `ident` is when that answer
+    can change. The incoming rows are found on `ix_links_dst` (every endpoint kind
+    listed) and the kind on `ix_entity_core_public_id`, both index searches once
+    `neighbourhood.ensure_indexes` has run; the mirrors of every re-resolved pair
+    are re-derived under both kinds.
+    """
+    incoming = connection.execute(LINKS_TO_ID_SQL, (*LINK_ENDPOINT_KINDS, ident)).fetchall()
+    if not incoming:
+        return 0
+    kind = _kind_for_id(connection, ident)
+    pairs = set()
+    for src_kind, src_id, link_type, old_kind in incoming:
+        if old_kind == kind:
+            continue
+        connection.execute("DELETE FROM links WHERE src_kind=? AND src_id=? AND type=? AND dst_kind=? AND dst_id=? AND derived=0",
+                           (src_kind, src_id, link_type, old_kind, ident))
+        connection.execute("INSERT OR IGNORE INTO links VALUES(?,?,?,?,?,0)", (src_kind, src_id, link_type, kind, ident))
+        pairs.update({tuple(sorted(((src_kind, src_id), (old_kind, ident)))),
+                      tuple(sorted(((src_kind, src_id), (kind, ident))))})
+    _mirror_pairs(connection, pairs)
     return len(pairs)
 
 
@@ -135,9 +167,13 @@ def maintain(connection, kind, ident, before, after, *, before_body=None, after_
         connection.executemany("INSERT INTO entity_paths VALUES(?,?,?,?,?)", [(kind, ident, *value) for value in new_paths])
         if Counter(value for value in old_paths if value[2] != "prose") != Counter(value for value in new_paths if value[2] != "prose"):
             counts["path_comparisons"] = _path_neighborhood(connection, kind, ident, new_paths)
+    if (before is None) != (after is None):
+        # The entity came into (or left) existence: links written against its id
+        # while it resolved elsewhere now resolve to it (N14 review finding 1).
+        counts["link_pairs"] += _reresolve_link_targets(connection, ident)
     old_links, new_links = _links(kind, before), _links(kind, after)
     if old_links != new_links:
-        counts["link_pairs"] = _declared_links(connection, kind, ident, new_links)
+        counts["link_pairs"] += _declared_links(connection, kind, ident, new_links)
     if kind == "handover":
         old_tasks = [str(v) for v in as_list((before or {}).get("task_ids"))]
         new_tasks = [str(v) for v in as_list((after or {}).get("task_ids"))]

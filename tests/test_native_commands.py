@@ -198,7 +198,9 @@ def test_metadata_edit_has_no_graph_or_fts_work_when_inputs_are_unchanged(native
         connection.set_trace_callback(statements.append)
         receipt = execute(connection, envelope())
         assert all(value == 0 for value in receipt["work"].values())
-        assert not any("entity_paths" in sql or "FROM related" in sql or "INTO related" in sql or "document_search " in sql for sql in statements)
+        # The admitted command looks the N14 graph indexes up by name; that is catalogue, not graph work.
+        statements = [sql for sql in statements if not sql.startswith("SELECT COUNT(*) FROM sqlite_schema")]
+        assert not [sql for sql in statements if "entity_paths" in sql or "FROM related" in sql or "INTO related" in sql or "document_search " in sql]
 
 
 def test_search_replacement_keeps_stable_document_identity(native):
@@ -223,3 +225,44 @@ def test_native_admission_does_not_read_unrelated_meta_payloads(native):
         with Repository(connection).snapshot() as query:
             query.get("task", "same", fields=["id"])
         assert all("WHERE" in sql for sql in statements if "FROM meta" in sql)
+
+
+GRAPH_INDEXES = ("ix_entity_paths_structural", "ix_entity_paths_glob_literal", "ix_handover_tasks_task",
+                 "ix_entity_core_public_id")
+
+
+def _graph_indexes(connection):
+    return {row[0] for row in connection.execute("SELECT name FROM sqlite_schema WHERE type='index'")} & set(GRAPH_INDEXES)
+
+
+def test_activation_creates_the_graph_indexes_before_any_write_and_legacy_ddl_has_none(native):
+    """The N14 graph indexes are native-only and built by backfill; legacy DDL never has them."""
+    from taskmaster import store
+    from taskmaster.native.neighbourhood import INDEXES
+    assert not any(name in store.SCHEMA_SQL for name in GRAPH_INDEXES)
+    assert all(any(name in statement for statement in INDEXES) for name in GRAPH_INDEXES)
+    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+        assert _graph_indexes(connection) == set(GRAPH_INDEXES)
+        statements = []
+        connection.set_trace_callback(statements.append)
+        execute(connection, envelope())
+        connection.set_trace_callback(None)
+        assert not any(sql.startswith("CREATE INDEX") for sql in statements), statements
+
+
+def test_a_store_activated_before_n14_gets_the_indexes_only_from_an_admitted_command(native):
+    """Refusals (wrong store, stale revision, receipt replay) never build indexes; an admitted write does."""
+    with closing(sqlite3.connect(native, isolation_level=None)) as connection:
+        for name in GRAPH_INDEXES:
+            connection.execute(f"DROP INDEX {name}")
+        with pytest.raises(Conflict):
+            execute(connection, dict(envelope(key="other-store"), store_id="another-store"))
+        with pytest.raises(Conflict):
+            execute(connection, envelope(key="stale", expected=[{"kind": "task", "id": "same", "revision": 1}]))
+        assert _graph_indexes(connection) == set()
+        first = execute(connection, envelope())
+        assert _graph_indexes(connection) == set(GRAPH_INDEXES)
+        for name in GRAPH_INDEXES:
+            connection.execute(f"DROP INDEX {name}")
+        assert execute(connection, envelope()) == first   # replayed receipt
+        assert _graph_indexes(connection) == set()

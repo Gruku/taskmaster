@@ -62,6 +62,7 @@ def retire_leftover(root):
                 leftover.retire(10)
 
 
+@pytest.mark.real_service_process  # kills its own coordinator process mid-operation
 @pytest.mark.parametrize('window', ['pre_assignment', 'pre_permission', 'active_git', 'completed_pre_receipt'])
 def test_replacement_cannot_publish_before_the_job_is_proven_empty(root, window):
     init_repo(root)
@@ -216,6 +217,7 @@ def test_ambiguous_outcome_stays_pinned_until_accepted(root):
         assert result['state'] == 'accepted' and owner.git_pin is None
 
 
+@pytest.mark.real_service_process  # kills its own coordinator process mid-operation
 def test_checkout_killed_mid_unpack_is_ambiguous_and_stays_pinned(root):
     """H3: a checkout retired while unpacking (a paused smudge filter holds index.lock)
     is reconciled as ambiguous, never `failed` with the pin released."""
@@ -262,6 +264,7 @@ def test_checkout_killed_mid_unpack_is_ambiguous_and_stays_pinned(root):
         (root / 'hook-release').touch()
 
 
+@pytest.mark.real_service_process  # kills its own coordinator process mid-operation
 def test_crash_after_proven_quiescence_recovers_without_acknowledgement(root):
     """L7: phase `quiesced` is durable before reconcile, so a crash there needs no operator."""
     init_repo(root)
@@ -311,6 +314,7 @@ def test_recovery_from_another_session_reports_the_identity_mismatch(root):
         Client(root, autostart=False).git_recover(acknowledge_quiescent=True, accept_outcome=True)
 
 
+@pytest.mark.real_service_process  # kills its own coordinator process mid-operation
 @pytest.mark.parametrize('window', ['pre_permission', 'active_git', 'completed_pre_receipt'])
 def test_linked_worktree_op_killed_is_recovered_in_that_worktree(root, window):
     """L3: the kill matrix for a managed commit in a linked worktree. Publication is global,

@@ -69,6 +69,8 @@ from taskmaster.taskmaster_v3 import (
     SCHEMA_V3,
     SCHEMA_V4,
     REVERSE_TYPE,
+    LINK_ENDPOINT_KINDS,
+    LINKS_TO_ID_SQL,
     _split_entity_for_v3,
     _three_way_merge_fields,
     _v4_strip_private_fields,
@@ -407,6 +409,7 @@ CREATE INDEX IF NOT EXISTS ix_related_a ON related(a_kind, a_id);
 CREATE INDEX IF NOT EXISTS ix_related_b ON related(b_kind, b_id);
 CREATE INDEX IF NOT EXISTS ix_handover_tasks_pair ON handover_tasks(handover_id, task_id);
 CREATE INDEX IF NOT EXISTS ix_entities_kind_status ON entities(kind, status);
+CREATE INDEX IF NOT EXISTS ix_entities_id ON entities(id, deleted, kind);
 CREATE INDEX IF NOT EXISTS ix_changes_entity ON changes(kind, id, seq);
 CREATE INDEX IF NOT EXISTS ix_projection_entity ON projection(kind, id);
 """
@@ -5177,8 +5180,41 @@ class Store:
                         (ident, str(task_id)),
                     )
         if tx._derived_keys:
+            for _kind, ident in tx._derived_keys:
+                self._reresolve_link_targets(tx.connection, ident)
             self._close_reverse_links(tx.connection)
             self._rebuild_related(tx.connection, tx._derived_keys)
+
+    @classmethod
+    def _reresolve_link_targets(cls, connection: sqlite3.Connection, ident: str) -> None:
+        """Give links to `ident` the kind it resolves to now, as a full rebuild would.
+
+        A link is resolved when it is written, so one written before its target
+        existed records the `task` fallback, and one whose target stops existing
+        keeps the old kind. Creating or deleting `ident` is when that answer can
+        change. The incoming rows are found on `ix_links_dst` (every endpoint kind
+        listed) and the kind on `ix_entities_id`, both index searches. The mirrors
+        follow in `_close_reverse_links`.
+        """
+        incoming = connection.execute(
+            LINKS_TO_ID_SQL, (*LINK_ENDPOINT_KINDS, ident)
+        ).fetchall()
+        if not incoming:
+            return
+        kind = cls._kind_for_id(connection, ident)
+        for src_kind, src_id, link_type, old_kind in incoming:
+            if old_kind == kind:
+                continue
+            connection.execute(
+                "DELETE FROM links WHERE src_kind=? AND src_id=? AND type=? AND dst_kind=? "
+                "AND dst_id=? AND derived=0",
+                (src_kind, src_id, link_type, old_kind, ident),
+            )
+            connection.execute(
+                "INSERT OR IGNORE INTO links(src_kind,src_id,type,dst_kind,dst_id,derived) "
+                "VALUES(?,?,?,?,?,0)",
+                (src_kind, src_id, link_type, kind, ident),
+            )
 
     @staticmethod
     def _close_reverse_links(connection: sqlite3.Connection) -> None:
@@ -5208,7 +5244,7 @@ class Store:
     def _kind_for_id(connection: sqlite3.Connection, ident: str) -> str:
         row = connection.execute(
             "SELECT kind FROM entities WHERE id=? AND deleted=0 "
-            "ORDER BY CASE kind WHEN 'task' THEN 0 WHEN 'issue' THEN 1 ELSE 2 END LIMIT 1",
+            "ORDER BY CASE kind WHEN 'task' THEN 0 WHEN 'issue' THEN 1 ELSE 2 END,kind LIMIT 1",
             (ident,),
         ).fetchone()
         return str(row[0]) if row else "task"

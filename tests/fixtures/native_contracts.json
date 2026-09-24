@@ -1994,13 +1994,21 @@
     },
     "backlog_dependencies": {
       "category": "targeted-query",
-      "documentation": "Show the full dependency chain for a task — what it depends on (upstream) and what it unblocks (downstream).\n\nArgs:\n    task_id: The task ID (e.g., \"cpp-parser-003\")",
+      "documentation": "Show the full dependency chain for a task — what it depends on (upstream) and what it unblocks (downstream).\n\nArgs:\n    task_id: The task ID (e.g., \"cpp-parser-003\")\n    depth: How many hops to follow each way: a strict integer from 1 to 10\n        (a boolean, string or float is refused, never coerced). Default 1: direct\n        dependencies and dependents only, exactly as before. Above 1, a\n        transitive section per direction follows the one-hop answer, listing\n        each task at its shortest distance (2..depth) with the task it was\n        reached through. Archived tasks are followed; deleted ids upstream show\n        as missing and are not followed; an unreadable `depends_on` is named,\n        not followed. Cycles are reported, never looped. At most 200 tasks are\n        listed per direction (the rest are counted as truncated), and the\n        traversal stops after 5 s, saying so.",
       "parameters": [
         {
           "mode": "positional",
           "name": "task_id",
           "required": true,
           "type": "str"
+        },
+        {
+          "default_expression": "1",
+          "default_value": 1,
+          "mode": "positional",
+          "name": "depth",
+          "required": false,
+          "type": "StrictInt"
         }
       ],
       "returns": "str",
@@ -2567,13 +2575,21 @@
     },
     "backlog_index_status": {
       "category": "maintenance",
-      "documentation": "Report the state of the store's derived tables (FTS, paths, links, related).\n\nThey live in `.taskmaster/local/store.db` beside the authoritative rows and are\nrefreshed inside the transaction of every tool call, so they are never stale.\n\nArgs:\n    rebuild: Recompute every derived table from the entity rows before reporting.\n        The authoritative tables are not touched and no file is re-read.",
+      "documentation": "Report the state of the store's derived tables (FTS, paths, links, related).\n\nThey live in `.taskmaster/local/store.db` beside the authoritative rows and are\nrefreshed inside the transaction of every tool call; `rebuild` recomputes them\nfrom the entity rows should they ever drift.\n\nArgs:\n    rebuild: Recompute every derived table from the entity rows before reporting.\n        The authoritative tables are not touched and no file is re-read. On a\n        native store this is the graph repair and covers only `entity_paths`,\n        `links`, `handover_tasks` and `related` (not search): they are compared\n        with the full oracle and only the differing rows are replaced, in one\n        transaction.\n    verify: Native stores only. Compare the graph tables with the full oracle\n        and report the differences and the cost, changing nothing. Refused on\n        a legacy store, with or without `rebuild`.",
       "parameters": [
         {
           "default_expression": "False",
           "default_value": false,
           "mode": "positional",
           "name": "rebuild",
+          "required": false,
+          "type": "bool"
+        },
+        {
+          "default_expression": "False",
+          "default_value": false,
+          "mode": "positional",
+          "name": "verify",
           "required": false,
           "type": "bool"
         }

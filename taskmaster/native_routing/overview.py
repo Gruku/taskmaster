@@ -397,3 +397,60 @@ def validate(call):
         missing_tldr = [ident for kind in ("issue", "handover", "idea")
                         for ident, doc, _body in reads.rows(snapshot, kind) if not doc.get("tldr")]
     return bs._validate_text(data, trackers, [], missing_tldr, bs._backlog_path())
+
+
+# ── Derived-table status and the graph repair (N14) ─────────────────────────
+
+
+def _graph_report(report) -> list[str]:
+    differences = sum(t["missing"] + t["spurious"] for t in report["tables"].values())
+    if report["clean"]:
+        state = "clean"
+    elif report["repaired"]:
+        state = f"{differences} differences, repaired"
+    else:
+        state = f"{differences} differences, not repaired (rebuild=True repairs them)"
+    lines = [f"Graph check: {state}"]
+    for table, facts in report["tables"].items():
+        if facts["missing"] or facts["spurious"]:
+            lines.append(f"  {table}: missing {facts['missing']}, spurious {facts['spurious']}")
+            for side in ("missing", "spurious"):
+                lines.extend(f"    {side} {tuple(row)}" for row in facts["examples"][side])
+    lines.append(f"Cost: {report['entities']} entities, {report['rows_compared']} rows compared, "
+                 f"{report['seconds']:.3f}s")
+    return lines
+
+
+@adapter("backlog_index_status")
+def index_status(call, *, rebuild, verify):
+    """Row counts for the derived tables; `verify`/`rebuild` run the graph oracle.
+
+    Only this explicit maintenance call runs the full oracle: commands keep the
+    graph tables current incrementally and no read consults it.
+    """
+    from taskmaster.native import graph_repair
+    backlog = bs._backlog_path()
+    if not backlog.exists():
+        return f"no backlog found at {backlog}"
+    report = None
+    if rebuild:
+        try:
+            report = call.execute("graph.repair", {})["result"]
+        except (ValueError, KeyError) as exc:
+            return error_text(exc)
+    elif verify:
+        with call.read() as snapshot:
+            report = graph_repair.verify(snapshot)
+    with call.read() as snapshot:
+        connection = snapshot.connection
+        counts = {table: int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+                  for table in store.DERIVED_TABLES if table != "entity_fts"}
+        # The native search table serves the public `entity_fts` name.
+        counts["entity_fts"] = int(connection.execute("SELECT COUNT(*) FROM document_search").fetchone()[0])
+        counts["entities"] = int(connection.execute("SELECT COUNT(*) FROM entity_core WHERE deleted=0").fetchone()[0])
+        # The last repair's run time, clean or not, as legacy shows its last rebuild.
+        repaired = connection.execute("SELECT value FROM native_manifest WHERE key=?",
+                                      (graph_repair.CHECKED_AT,)).fetchone()
+    database = Path(call.connection.execute("PRAGMA database_list").fetchone()[2])
+    text = bs._render_derived_report({"row_counts": counts, "rebuilt_at": repaired[0] if repaired else None}, database)
+    return "\n".join([text, *(_graph_report(report) if report is not None else [])])

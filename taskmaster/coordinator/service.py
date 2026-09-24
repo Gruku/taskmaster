@@ -614,10 +614,23 @@ class _Handler(BaseHTTPRequestHandler):
             pass
 
 
+IDLE_SECONDS = 300.0
+IDLE_SECONDS_ENV = 'TASKMASTER_SERVICE_IDLE_SECONDS'
+
+
+def default_idle_seconds():
+    """The idle timeout, overridable by the environment (tests shorten it); junk falls back."""
+    try:
+        value = float(os.environ.get(IDLE_SECONDS_ENV, ''))
+    except ValueError:
+        return IDLE_SECONDS
+    return value if 0 < value < float('inf') else IDLE_SECONDS
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', type=Path, required=True)
-    parser.add_argument('--idle-seconds', type=float, default=300)
+    parser.add_argument('--idle-seconds', type=float, default=default_idle_seconds())
     args = parser.parse_args()
     coordinator = Coordinator(args.root)
     log = RotatingFileHandler(coordinator.ownership.directory / 'service.log', maxBytes=1024 * 1024,

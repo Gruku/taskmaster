@@ -229,6 +229,21 @@ class Snapshot:
         values = rows(self.connection, " UNION ALL ".join(parts) + " ORDER BY kind,id,field,ordinal LIMIT ?", [kind, ident] * len(parts) + [limit + 1])
         return self._envelope(items=values[:limit], truncated=len(values) > limit)
 
+    def neighbourhood(self, kind, ident, *, limit=50):
+        """Distinct `related` neighbours as `(kind, id, via, weight)`, ordered by identity.
+
+        The limit is a page, not a relevance cut: nothing is ranked. Weight is the
+        `related` weight summed over its rows (handover multiplicity included).
+        """
+        self._check()
+        page_limit(limit)
+        if self.connection.execute("SELECT 1 FROM entity_core WHERE kind=? AND public_id=? AND deleted=0", (kind, ident)).fetchone() is None:
+            raise KeyError(f"{kind} {ident} not found")
+        from .neighbourhood import neighbours
+        found = sorted(neighbours(self.connection, kind, ident).items())
+        return self._envelope(items=[{"kind": k, "id": i, "via": via, "weight": weight} for (k, i, via), weight in found[:limit]],
+                              truncated=len(found) > limit)
+
     # The change feed. `domain_events.seq` is `INTEGER PRIMARY KEY AUTOINCREMENT`
     # allocated inside the command's own `BEGIN IMMEDIATE`, and SQLite admits one
     # writer at a time, so seq order is commit order and a reader can never see
