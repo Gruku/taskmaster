@@ -23,7 +23,6 @@ from taskmaster.native.migrate import backfill, reconstruct_entities
 from taskmaster.native_routing import projection
 from taskmaster.native_routing.derived import KEYS as DERIVED_BACKLOG_KEYS
 
-PREFIXES = {"bug": "B-", "issue": "ISS-", "decision": "DEC-", "idea": "IDEA-", "note": "NOTE-"}
 
 
 # ── A shared clock ──────────────────────────────────────────────────────────
@@ -116,39 +115,21 @@ def point_server_at(monkeypatch, root: Path) -> None:
     projection.reset_for_tests()
 
 
-def import_id_state_for_tests(connection, root: Path) -> None:
-    """Placeholder for `migrate.import_id_state` until track B lands it (test-only):
-    every allocated prefix is seeded from the live rows and the legacy reservation file."""
-    reserved = {}
-    reservations = Path(root) / ".taskmaster" / "local" / "id-reservations.json"
-    if reservations.exists():
-        reserved = json.loads(reservations.read_text(encoding="utf-8"))
-    for kind, prefix in PREFIXES.items():
-        ids = [row[0] for row in connection.execute(
-            "SELECT public_id FROM entity_core WHERE kind=?", (kind,))]
-        ids += list(reserved.get(kind, []))
-        high = max((int(m.group(1)) for m in (re.fullmatch(re.escape(prefix) + r"(\d+)", i) for i in ids) if m),
-                   default=0)
-        connection.execute("INSERT INTO id_counters VALUES(?,?,?)", (kind, prefix, high))
-    for kind, ids in reserved.items():
-        connection.executemany("INSERT OR IGNORE INTO id_reservations VALUES(?,?)",
-                               [(kind, ident) for ident in ids])
-
-
 def activate_native(root: Path) -> None:
     """Backfill a legacy project's store and flip it to a ready native authority
-    through the production activation core (`native.cutover.activate`).
+    through the production activation core (`native.cutover.activate`), which runs
+    the production ID import (`carryover.import_id_state`) and progress reconcile.
 
-    Fast path for fixtures: no fence, backup or process checks — but authority
-    flips through exactly the function the real cutover commits with.
+    Fast path for fixtures: no fence, backup, carry-over comparison or process
+    checks — but authority flips through exactly the function the real cutover
+    commits with.
     """
-    from taskmaster.native import cutover, migrate
+    from taskmaster.native import cutover
     store.reset_for_tests()
     database = root / ".taskmaster" / "local" / "store.db"
-    importer = getattr(migrate, "import_id_state", None) or import_id_state_for_tests
     with closing(sqlite3.connect(database, isolation_level=None, timeout=30)) as connection:
         backfill(connection)
-        cutover.activate(connection, root, import_ids=importer)
+        cutover.activate(connection, root)
 
 
 def is_native(root: Path) -> bool:
