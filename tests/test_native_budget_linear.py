@@ -73,11 +73,15 @@ def _value(rng, depth=0):
     if kind == 1:
         return _text(rng)
     if kind == 2:
-        return rng.choice([None, True, False, 1.5, -0.25, 1e21])
+        return rng.choice([None, True, False, 1.5, -0.25, 1e21, float("nan"), float("inf"), float("-inf")])
     if kind == 3:
         return _text(rng, 0, 4)
     if kind in (4, 5):
-        return {_text(rng, 1, 6): _value(rng, depth + 1) for _ in range(rng.randint(0, 4))}
+        # Non-string keys too: json renders 1, 2.5, True and None as "1", "2.5", "true", "null".
+        keys = [_text(rng, 1, 6) for _ in range(rng.randint(0, 4))]
+        if rng.random() < 0.3:
+            keys.append(rng.choice([1, -7, 2.5, True, False, None]))
+        return {key: _value(rng, depth + 1) for key in keys}
     return [_value(rng, depth + 1) for _ in range(rng.randint(0, 4))]
 
 
@@ -111,7 +115,9 @@ def test_linear_budget_matches_the_reference_byte_for_byte(seed):
     for _ in range(25):
         case = _case(rng)
         expected = _reference_budget(**case)
+        fallbacks = budget_mod.FALLBACKS
         actual = budget(**case)
+        assert budget_mod.FALLBACKS == fallbacks, "the size prediction diverged"
         assert actual.text == expected.text
         assert dict(actual.budget) == dict(expected.budget)
         assert {k: list(v) for k, v in actual.selected.items()} == \
@@ -160,3 +166,20 @@ def test_encoding_work_is_linear_in_rows():
     assert large_work / small_work < 10
     # And the constant is small: a handful of full renders, not one per row.
     assert large_work < 12 * large_text
+
+
+def test_a_diverging_prediction_falls_back_to_rendering(monkeypatch):
+    """Should a predicted size ever disagree with the render — too high or too low —
+    the answer still equals the reference: the fill re-runs by rendering, and the
+    event is counted."""
+    real = budget_mod._Sizer.settle
+    for skew in (3, -3, 40):
+        monkeypatch.setattr(budget_mod._Sizer, "settle",
+                            lambda self, *args, skew=skew: dict(real(self, *args),
+                                                               used_bytes=real(self, *args)["used_bytes"] + skew))
+        rng = random.Random(11)
+        before = budget_mod.FALLBACKS
+        for _ in range(60):
+            case = _case(rng)
+            assert budget(**case).text == _reference_budget(**case).text
+        assert budget_mod.FALLBACKS > before

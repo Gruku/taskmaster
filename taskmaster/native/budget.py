@@ -7,6 +7,7 @@ paired `COUNT(*)` — never from the length of the page it happened to read.
 """
 from dataclasses import dataclass, field
 import json
+import logging
 from typing import Any, Mapping, Sequence
 
 
@@ -103,6 +104,12 @@ def _stabilise(envelope, mandatory, selected, *, limit_bytes, mandatory_bytes, o
     raise RuntimeError("byte budget failed to settle on a stable used_bytes")
 
 
+# How many answers fell back to the rendering fill because the size prediction
+# disagreed with a render (see `budget`). Expected to stay 0; logged when it moves.
+FALLBACKS = 0
+_LOG = logging.getLogger(__name__)
+
+
 class _Sizer:
     """Predicts `_stabilise`'s settled size without rendering the selected rows.
 
@@ -172,7 +179,13 @@ def budget(*, envelope: Mapping[str, Any], mandatory: Any,
     row_bytes = {name: 0 for name in names}
     trial_omitted = dict(omitted)
     best = None
-    if sizer.settle(counts, row_bytes, omitted)["used_bytes"] <= limit_bytes:
+    # Checked renders: the answer returned, and the state that ended the scan (the
+    # first prefix too large even without its omission entry, or the empty answer
+    # when nothing fits). If a prediction disagrees with its render, the scan's
+    # decisions cannot be trusted and the answer comes from the rendering fill.
+    checks = []
+    empty_block = sizer.settle(counts, row_bytes, omitted)
+    if empty_block["used_bytes"] <= limit_bytes:
         best = (dict(counts), dict(omitted))
     done = False
     for selection in selections:
@@ -186,10 +199,30 @@ def budget(*, envelope: Mapping[str, Any], mandatory: Any,
             if candidate_block["used_bytes"] <= limit_bytes:
                 best = (dict(counts), dict(trial_omitted))
             elif candidate_block["used_bytes"] - _omission_bytes(candidate_block) > limit_bytes:
+                checks.append((dict(counts), dict(trial_omitted), candidate_block["used_bytes"]))
                 done = True
                 break
         if done:
             break
+
+    def diverged(state_counts, state_omitted, predicted):
+        rows = {name: trial[name][:state_counts[name]] for name in names}
+        _text, rendered = _stabilise(envelope, mandatory, rows, limit_bytes=limit_bytes,
+                                     mandatory_bytes=mandatory_bytes, omitted=state_omitted,
+                                     over_budget=False)
+        return rendered["used_bytes"] != predicted
+
+    def fallback():
+        global FALLBACKS
+        FALLBACKS += 1
+        _LOG.warning("byte budget size prediction diverged from the render; "
+                     "answered by the rendering fill (%d so far)", FALLBACKS)
+        return _budget_by_rendering(envelope, mandatory, selections, limit_bytes, mandatory_bytes)
+
+    if best is None:
+        checks.append(({name: 0 for name in names}, dict(omitted), empty_block["used_bytes"]))
+    if any(diverged(*check) for check in checks):
+        return fallback()
 
     # Over budget means exactly one thing: no answer fits, not even the one that
     # carries the blockers alone. It is never "some selected row was dropped".
@@ -204,12 +237,49 @@ def budget(*, envelope: Mapping[str, Any], mandatory: Any,
     text, block = _stabilise(envelope, mandatory, selected, limit_bytes=limit_bytes,
                              mandatory_bytes=mandatory_bytes, omitted=best_omitted,
                              over_budget=False)
-    if block["used_bytes"] != sizer.settle(best_counts, _row_bytes(selected),
-                                           best_omitted)["used_bytes"]:
-        raise RuntimeError("byte budget size prediction disagrees with the rendered answer")
+    if block["used_bytes"] != sizer.settle(best_counts, _row_bytes(selected), best_omitted)["used_bytes"]:
+        return fallback()
     return Answer(text=text, budget=block,
                   selected={name: rows for name, rows in selected.items() if rows})
 
 
 def _row_bytes(selected: Mapping[str, Sequence[Any]]) -> dict:
     return {name: sum(_size(row) for row in rows) for name, rows in selected.items()}
+
+
+def _budget_by_rendering(envelope, mandatory, selections, limit_bytes, mandatory_bytes) -> Answer:
+    """The pre-N16 fill: every candidate rendered in full. O(n^2); the fallback only."""
+    omitted = {selection.name: selection.total - selection.offset for selection in selections}
+    selected: dict = {selection.name: [] for selection in selections}
+
+    def render(rows, left):
+        return _stabilise(envelope, mandatory, rows, limit_bytes=limit_bytes,
+                          mandatory_bytes=mandatory_bytes, omitted=left, over_budget=False)
+
+    best = None
+    text, block = render(selected, omitted)
+    if block["used_bytes"] <= limit_bytes:
+        best = ({name: [] for name in selected}, dict(omitted), text, block)
+    trial, trial_omitted = {name: [] for name in selected}, dict(omitted)
+    done = False
+    for selection in selections:
+        for item in selection.items:
+            trial[selection.name].append(item)
+            trial_omitted[selection.name] = (selection.total - selection.offset
+                                             - len(trial[selection.name]))
+            candidate, candidate_block = render(trial, trial_omitted)
+            if candidate_block["used_bytes"] <= limit_bytes:
+                best = ({name: list(rows) for name, rows in trial.items()}, dict(trial_omitted),
+                        candidate, candidate_block)
+            elif candidate_block["used_bytes"] - _omission_bytes(candidate_block) > limit_bytes:
+                done = True
+                break
+        if done:
+            break
+    if best is None:
+        text, block = _stabilise(envelope, mandatory, selected, limit_bytes=limit_bytes,
+                                 mandatory_bytes=mandatory_bytes, omitted=omitted, over_budget=True)
+        return Answer(text=text, budget=block, selected={})
+    selected, omitted, text, block = best
+    return Answer(text=text, budget=block,
+                  selected={name: rows for name, rows in selected.items() if rows})
