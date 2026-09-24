@@ -37,12 +37,10 @@ def _sha1(data: bytes) -> str:
     return hashlib.sha1(data).hexdigest()
 
 
-def _age_projection(root: Path, seconds: int = 60) -> None:
-    """Fingerprints are recorded only for files older than the racy window."""
-    stamp = time.time() - seconds
-    for path in (root / ".taskmaster").rglob("*"):
-        if path.is_file() and "local" not in path.relative_to(root / ".taskmaster").parts:
-            os.utime(path, (stamp, stamp))
+def _age_projection(root: Path) -> None:
+    """Fingerprints are recorded only for files older than the racy window (mtime and ChangeTime)."""
+    from test_native_sync_perf import age_projection
+    age_projection(root)
 
 
 def _adopted_without_bases(root: Path) -> None:

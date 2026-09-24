@@ -25,15 +25,15 @@ def client_for(repo):
     return Client(repo, autostart=False, timeout=120)
 
 
-def _rewrite_in_place(path, old, new):
-    """Same size, restored mtime: no fingerprint shows it (Windows ctime is creation time)."""
-    before = path.stat()
+def _rewrite_mapped(path, old, new):
+    """Same size, written through a memory mapping: no timestamp moves (measured on NTFS)."""
+    import mmap
     raw = path.read_bytes()
-    changed = raw.replace(old, new)
-    assert len(changed) == len(raw) and changed != raw
-    with path.open('r+b') as handle:
-        handle.write(changed)
-    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+    at = raw.index(old)
+    assert len(old) == len(new) and old != new
+    with path.open('r+b') as handle, mmap.mmap(handle.fileno(), 0) as mapped:
+        mapped[at:at + len(new)] = new
+        mapped.flush()
 
 
 # ── 1: detect judges cached digests after HEAD is observed ─────────────────
@@ -79,7 +79,7 @@ def test_managed_commit_never_trusts_a_fingerprint_for_the_generation(repo):
     with Coordinator(repo) as owner:
         client = client_for(repo)
         settle(repo, client)
-        _rewrite_in_place(repo / '.taskmaster' / REL, b'Service task', b'Service tusk')
+        _rewrite_mapped(repo / '.taskmaster' / REL, b'Service task', b'Service tusk')
         result = client.git_run(kind='commit', message='tm: must not commit unverified bytes')
         assert result['state'] == 'refused', result
         assert REL in result.get('paths', []), result
@@ -90,7 +90,7 @@ def test_a_change_no_fingerprint_shows_is_read_once_the_cache_ages_out(repo, mon
     with Coordinator(repo):
         client = client_for(repo)
         settle(repo, client)
-        _rewrite_in_place(repo / '.taskmaster' / REL, b'Service task', b'Service tusk')
+        _rewrite_mapped(repo / '.taskmaster' / REL, b'Service task', b'Service tusk')
         assert client.sync()['state'] == 'synchronized'
         assert title(repo) == 'Service task'  # the documented blind spot, within the TTL
         monkeypatch.setattr(sync_files, 'CACHE_TTL', 0, raising=False)
@@ -137,7 +137,8 @@ def test_deeply_nested_cache_file_is_an_empty_cache(tmp_path):
     cache.write_text('[' * 200_000 + ']' * 200_000, encoding='utf-8')
     scan = sync_files.open_scan(tmp_path, tmp_path / '.taskmaster')
     assert scan.known == {}
-    cache.write_text(json.dumps({'version': 2, 'checkouts': {'x': [1, 2]}}), encoding='utf-8')
+    cache.write_text(json.dumps({'version': sync_files.CACHE_VERSION, 'checkouts': {'x': [1, 2]}}),
+                     encoding='utf-8')
     assert sync_files.open_scan(tmp_path, tmp_path / '.taskmaster').known == {}
 
 

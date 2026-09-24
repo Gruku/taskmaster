@@ -166,6 +166,18 @@ What each stage does:
     is the only case where you need to inspect the receipt.
 
   Unsettled observes are listed under `observes`, never as imports.
+- Known limit of the sync fingerprint cache (N13, N16):
+  - What the cache trusts: a file whose volume, file id, size, mtime and change time are all
+    unchanged is not read again for up to an hour (`CACHE_TTL`). On Windows the change time is
+    NTFS ChangeTime. `lstat`'s `st_ctime` there is the creation time.
+  - What it now catches: an in-place rewrite whose mtime is restored moves the change time, so
+    it is read and imported at once.
+  - What it can miss: a write through a memory mapping moves no timestamp, not even
+    ChangeTime, so a sync cannot see it until the cache ages out. That delays the import; it
+    does not lose the edit. A named resync (`files=...`) or `take_file` reads the bytes at
+    once.
+  - Where the cache is never used: managed Git's generation check reads every file, so such
+    an edit is refused before any commit or checkout touches it.
 - An old (bridge-only) client has to refuse the store with `Unsupported Taskmaster schema_version=2`.
   This is tested in `test_pre_native_clients_are_refused_by_an_activated_store`.
 
