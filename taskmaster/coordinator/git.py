@@ -23,6 +23,7 @@ import sys
 import time
 import uuid
 
+from taskmaster.native import metrics
 from taskmaster.projection_paths import UnsafePath, check_component, safe_path
 from . import job as jobs
 from .contained import ManagedChild
@@ -144,7 +145,11 @@ def _read_projection(backlog, rel):
         return None
     if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_PROJECTION_BYTES:
         raise UnsafePath(f'projection is not a bounded regular file: {rel}')
-    return path.read_bytes()
+    content = path.read_bytes()
+    if metrics.ENABLED:
+        metrics.add('files_read')
+        metrics.add('bytes_read', len(content))
+    return content
 
 
 def _variants(content):

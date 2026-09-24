@@ -12,7 +12,7 @@ import time
 import uuid
 
 from taskmaster.admission import UnsupportedStoreError
-from taskmaster.native import contracts
+from taskmaster.native import contracts, metrics
 from .ownership import ownership_held, verify_private
 from .protocol import (HandshakeError, MAX_RESPONSE_BYTES, REPLY_MARGIN, SYNC_TIMEOUT, ServiceUnavailable,
                        encode, identify, validate_sync_timeout)
@@ -120,6 +120,16 @@ class Client:
             return None
 
     def _ready(self):
+        if not metrics.ENABLED:
+            return self._connect_ready()
+        # Client-side IPC startup: entry -> a ready service answered `status`.
+        started, launched = time.perf_counter(), []
+        try:
+            return self._connect_ready(launched)
+        finally:
+            metrics.emit('ipc_connect', ms=(time.perf_counter() - started) * 1000, launched=bool(launched))
+
+    def _connect_ready(self, launched=None):
         record = self._probe()
         if record is not None:
             return record
@@ -129,6 +139,8 @@ class Client:
             if record is not None:
                 return record
             child = _launch(self.root)
+            if launched is not None:
+                launched.append(child)
             deadline = time.monotonic() + min(self.timeout, 15)
             while time.monotonic() < deadline:
                 try:

@@ -8,7 +8,7 @@ from copy import deepcopy
 import re
 import sqlite3
 
-from . import contracts, events, neighbourhood, receipts, schema, search, relations
+from . import contracts, events, metrics, neighbourhood, receipts, schema, search, relations
 from .contracts import Conflict, CancelledBeforeExecution  # public exceptions
 from .db import assert_native
 from .migrate import encode, _put_entity, _put_manifest, _put_relations
@@ -279,8 +279,14 @@ def execute(connection: sqlite3.Connection, envelope, *, cancelled=lambda: False
     connection.execute("PRAGMA foreign_keys=ON")
     # These connections belong to the native service; acknowledgement is FULL.
     connection.execute("PRAGMA synchronous=FULL")
+    # Opt-in N16 work counters: one flag check per point when disabled.
+    meter = metrics.CommandMeter(connection, request) if metrics.ENABLED else None
     try:
+        if meter:
+            meter.begin()
         connection.execute("BEGIN IMMEDIATE")
+        if meter:
+            meter.locked()
         identity = assert_native(connection)
         if cancelled():
             raise CancelledBeforeExecution("cancelled while waiting for admission")
@@ -289,6 +295,8 @@ def execute(connection: sqlite3.Connection, envelope, *, cancelled=lambda: False
         previous = receipts.lookup(connection, request, fingerprint)
         if previous is not None:
             connection.rollback()
+            if meter:
+                meter.replayed(previous)
             return previous
         for expected in request["expected_revisions"]:
             row = connection.execute("SELECT revision FROM entity_core WHERE kind=? AND public_id=? AND deleted=0", (expected["kind"], expected["id"])).fetchone()
@@ -314,10 +322,16 @@ def execute(connection: sqlite3.Connection, envelope, *, cancelled=lambda: False
         if transaction.affected:
             _put_manifest(connection, event_high_water=transaction.seq)
         checkpoint("before_commit")
+        if meter:
+            meter.commit(outcome)
         connection.commit()
         return outcome
-    except BaseException:
+    except BaseException as exc:
         connection.rollback()
+        if meter:
+            meter.failed(exc)
         raise
     finally:
+        if meter:
+            meter.close()
         connection.execute(f"PRAGMA foreign_keys={int(original_fk)}")

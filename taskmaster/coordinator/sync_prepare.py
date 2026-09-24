@@ -14,7 +14,7 @@ from pathlib import PurePosixPath
 import yaml
 
 from taskmaster import projection_parse
-from taskmaster.native import checkouts, projection, sync
+from taskmaster.native import checkouts, metrics, projection, sync
 from taskmaster.native.migrate import encode
 from taskmaster.native.sync_merge import merge, protect_local, unapplied
 from . import checkouts as checkouts_view, sync_files
@@ -107,6 +107,8 @@ def prepare(snapshot, backlog_dir, rel, *, take_file=False, checkout=None, scan=
     unchanged_quarantine = not take_file and record is not None and record[1] and observed.digest == record[2]
     still_quarantined = Prepared(rel, "quarantined", "unchanged quarantined bytes; repair the file before retrying",
                                  observed, None)
+    if metrics.ENABLED:
+        metrics.add("files_parsed")
     try:
         authored = projection_parse.authored_rows(kind, ident, observed.content)
         parsed = projection_parse.owned_rows(kind, authored, lookup)
