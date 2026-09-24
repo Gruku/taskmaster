@@ -22,8 +22,9 @@ python -m taskmaster.native.cutover --root <project> [--dry-run | --resume | --r
 | `2` | Refused. This call changed nothing. |
 | `1` | Aborted after the fence went up. The fence stays up; use `--resume` or `--rollback`. |
 
-The command needs the track-B primitives: `migrate.snapshot_carryover`, `verify_carryover`,
-`import_id_state`, `reconcile_progress` and `taskmaster.native.quiesce`. A build that lacks
+The command needs the carry-over and quiesce primitives: `taskmaster.native.carryover`
+(`snapshot_carryover`, `verify_carryover`, `import_id_state`, `reconcile_progress`,
+`read_reservations`) and `taskmaster.native.quiesce`. A build that lacks
 any of them refuses before it writes anything and names what is missing.
 
 ## 1. Stop every client (the launcher stop list)
@@ -63,13 +64,17 @@ would fence: publish meta.migration_state='migrating' with owner/token under the
 would reconcile: ...
 would backup: <project>\.taskmaster\local\backups\pre-native-<UTC ts>.db + manifest (5 projection files)
 would backfill: stage 6 entities and 7 changes into native tables
-would compare: verify_carryover must report nothing lost
+would compare: trial activation, rolled back; verify_carryover must report nothing lost
 would activate: schema/protocol markers, authority=native, graph repair, ID import, migration_state=ready
 would release: record completion, release the ownership lock
 ```
 
 For a machine-readable report, add `--json`. Every `refused:` line has to be dealt with
 before the real run:
+
+On Windows the scan cannot see a process's working directory, so a Taskmaster plugin server
+running for *another* project is also listed. Once you have checked each one, use
+`--confirm-stopped`.
 
 | Refusal | Action |
 |---|---|
@@ -80,6 +85,8 @@ before the real run:
 | `already a native authority` | Nothing to do |
 | `newer than this legacy->native cutover supports` | Wrong binary for this store. Upgrade |
 | `a cutover fence is already up` | A previous run was interrupted. See section 4 |
+| `malformed ID reservation sidecar` | Fix `.taskmaster/local/id-reservations.json` (a map of kind to a list of ID strings) |
+| `warning: process scan: ...` | The scan was partial or impossible. Check the stop list by hand |
 
 ## 3. Cut over
 
@@ -109,11 +116,11 @@ What each stage does:
 | Stage | Writes | Committed state after it |
 |---|---|---|
 | `fence` | Sets `meta.migration_state='migrating'`, `migration_owner` and `migration_token`, and creates `native_cutover_journal`, all in one `BEGIN IMMEDIATE`. The coordinator ownership lock (`.taskmaster/local/coordinator/owner.lock`) is held for the whole run | Bridge clients refuse the store |
-| `reconcile` | `migrate.reconcile_progress`, then a re-check for unexported projection work under the fence | Journal row with the counts |
-| `backup` | `backups/pre-native-<UTC ts>.db`, taken with the SQLite online backup, plus `.json`: projection files (path, sha256, size), a copy of the ID-reservation sidecar, the carryover snapshot and the domain digest. The backup is reopened and passes `integrity_check` before its path is journaled | Journal row with the backup path |
+| `reconcile` | A re-check, under the fence, for unexported projection work. The progress changelog itself is reconciled inside `activate` | Journal row with the counts |
+| `backup` | `carryover.snapshot_carryover` (before any marker change), then `backups/pre-native-<UTC ts>.db`, taken with the SQLite online backup, plus `.json`: projection files (path, sha256, size), a copy of the ID-reservation sidecar, the carryover snapshot and the domain digest. The backup is reopened and passes `integrity_check` before its path is journaled | Journal row with the backup path |
 | `backfill` | `migrate.backfill` in one transaction; sub-stage checkpoints go into the journal | Native staging `verified`, authority still `legacy` |
-| `compare` | `migrate.verify_carryover` against the backup's carryover snapshot. It must be empty | Journal row |
-| `activate` | One transaction: `schema_version=2`, `minimum_client_protocol=2`, `migration_state=ready`, fence owner/token removed, `authority=native`, `state=ready`, `local_state_imported=1`, graph repair, ID counter and reservation import, journal row | **The store is native. Roll forward only from here** |
+| `compare` | A trial of the whole activation transaction, always rolled back: `carryover.verify_carryover` against the backup's carry-over snapshot must be empty | Journal row with the trial's ID import and progress counts |
+| `activate` | One transaction: `schema_version=2`, `minimum_client_protocol=2`, `migration_state=ready`, fence owner/token removed, `authority=native`, `state=ready`, `local_state_imported=1`, graph repair, `carryover.import_id_state`, `carryover.reconcile_progress`, then `carryover.verify_carryover`. Any difference rolls the whole switch back. Then the journal row | **The store is native. Roll forward only from here** |
 | `release` | Journal row, then the ownership lock is released | Done |
 
 ### Verify
