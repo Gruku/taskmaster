@@ -5,18 +5,22 @@
 
 ## State
 
-- N14 is on `feat/native-n14` (worktree `.worktrees/n14`) at `5629e5e`. It is **not yet merged**
-  into `feat/database-native-foundation` (at `43acef1`: scope plus the F1 decision). Nothing is
-  pushed.
-- Evidence is in `docs/reports/2026-09-23-native-n14.md`, and the ledger row is updated on the N14
-  branch.
-- **Open gate:** the full suite (`-n 3`, ≥8 GB free). The session had about 5 GB. Run it
-  in `.worktrees/n14`. If it is green, merge `feat/native-n14` into foundation with
-  `--no-ff`, record the count in the ledger and report, and push only with approval.
-- Step worktrees `.worktrees/n14-paths`, `n14-deps` and `n14-compat` are merged and can be
-  removed (`git worktree remove` without `--force`).
-- Rehearsal copies are in `%TEMP%\tmn14\` (`cm`, `cml`, `cm2`, `cml2` plus logs). They are
-  disposable, and the old `%TEMP%\tmn13\` can go too.
+- N14 is merged into `feat/database-native-foundation` (merge `211ecdf`), together with the
+  test-RAM fix (`fix/test-ram`). Full suite at `df3844a`: **4,158 passed / 4 skipped / 0 failed**,
+  1,317 s at `-n 3`. Free RAM never dropped below 5.16 GB. Nothing is pushed; the foundation is
+  ahead of origin by N14.
+- Evidence is in `docs/reports/2026-09-23-native-n14.md`, and the ledger row is complete.
+- **Test RAM:** the recurring memory pressure was two batch fixtures leaking about 23 real
+  coordinator services (about 2.25 GB for 5 minutes).
+  - `tests/conftest.py` now refuses a real service launch unless the test is marked
+    `real_service_process`, and fails a test that leaves a child process running.
+  - The stress test runs 4×200 by default; the 8×200 profile runs with `-m scale`.
+  - Use `scripts/measure_test_memory.py` (psutil via `--target`, not project deps) when a new
+    test looks heavy.
+- Step worktrees `.worktrees/n14`, `n14-paths`, `n14-deps`, `n14-compat` and `test-ram` are
+  merged and can be removed (`git worktree remove` without `--force`).
+- Rehearsal copies are in `%TEMP%	mn14\` (`cm`, `cml`, `cm2`, `cml2` plus logs). They are
+  disposable, and `%TEMP%	mn13\` can go too.
 
 ## Decisions made
 
