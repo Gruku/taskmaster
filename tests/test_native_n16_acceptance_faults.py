@@ -539,9 +539,20 @@ def test_disjoint_composites_never_borrow_a_peers_task():
     assert not touched[0] & touched[1], touched
 
 
-LINKS = [(1, "c1", "issue", "ISS-001", ["id", "title"], {"id": "ISS-001"}),   # imported without links
-         (2, "c2", "issue", "ISS-001", ["links"], {"links": [{"target": "IDEA-001", "type": "relates_to"}]}),
-         (3, "c3", "issue", "ISS-001", ["links"], {})]                          # the last link removed
+REL = "relates_to"
+
+
+def _links(*targets):
+    return {"links": [{"target": t, "type": REL} for t in targets]} if targets else {}
+
+
+# ISS-001 and IDEA-001 imported unlinked; c3 links them (both ends, one commit); c5 unlinks them.
+LINKS = [(1, "c1", "issue", "ISS-001", ["id", "title"], {"id": "ISS-001"}),
+         (2, "c2", "idea", "IDEA-001", ["id", "title"], {"id": "IDEA-001"}),
+         (3, "c3", "issue", "ISS-001", ["links"], _links("IDEA-001")),
+         (4, "c3", "idea", "IDEA-001", ["links"], _links("ISS-001")),
+         (5, "c5", "issue", "ISS-001", ["links"], {}),
+         (6, "c5", "idea", "IDEA-001", ["links"], {})]
 
 
 def _link_noop(action, *, before, after, target="IDEA-001", w=0, n=0):
@@ -549,19 +560,113 @@ def _link_noop(action, *, before, after, target="IDEA-001", w=0, n=0):
             "hw_before": before, "hw_after": after}
 
 
-def test_a_link_noop_must_match_the_store_at_that_time(tmp_path):
+def test_a_link_noop_must_match_the_store_on_both_ends_at_that_time(tmp_path):
     root = _event_store(tmp_path, LINKS)
-    assert _noops_verified(root, [_link_noop("create", before=2, after=2)])     # already linked
-    assert _noops_verified(root, [_link_noop("create", before=1, after=2)])     # linked during the call
-    assert _noops_verified(root, [_link_noop("remove", before=1, after=1)])     # never linked
-    assert _noops_verified(root, [_link_noop("remove", before=3, after=3)])     # already removed
-    assert not _noops_verified(root, [_link_noop("create", before=1, after=1)])  # a dropped create
-    assert not _noops_verified(root, [_link_noop("create", before=3, after=3)])
-    assert not _noops_verified(root, [_link_noop("remove", before=2, after=2)])  # a dropped remove
-    assert not _noops_verified(root, [_link_noop("create", before=2, after=2, target="IDEA-002")])
-    assert not _noops_verified(root, [dict(_link_noop("create", before=2, after=2), hw_before=None)])
-    unknown = dict(_link_noop("remove", before=3, after=3), link=["ISS-009", "IDEA-001", "remove"])
+    assert _noops_verified(root, [_link_noop("create", before=4, after=4)])     # already linked
+    assert _noops_verified(root, [_link_noop("create", before=2, after=4)])     # linked during the call
+    assert _noops_verified(root, [_link_noop("remove", before=2, after=2)])     # never linked
+    assert _noops_verified(root, [_link_noop("remove", before=6, after=6)])     # already removed
+    assert not _noops_verified(root, [_link_noop("create", before=2, after=2)])  # a dropped create
+    assert not _noops_verified(root, [_link_noop("create", before=3, after=3)])  # the inverse not there yet
+    assert not _noops_verified(root, [_link_noop("create", before=6, after=6)])
+    assert not _noops_verified(root, [_link_noop("remove", before=4, after=4)])  # a dropped remove
+    assert not _noops_verified(root, [_link_noop("create", before=4, after=4, target="IDEA-002")])
+    assert not _noops_verified(root, [dict(_link_noop("create", before=4, after=4), hw_before=None)])
+    unknown = dict(_link_noop("remove", before=6, after=6), link=["ISS-009", "IDEA-001", "remove"])
     assert not _noops_verified(root, [unknown])  # an entity the store never held vouches for nothing
+
+
+def test_a_link_noop_needs_the_inverse_too(tmp_path):
+    root = _event_store(tmp_path, LINKS[:3])  # the forward link only
+    assert not _noops_verified(root, [_link_noop("create", before=3, after=3)])
+
+
+def _link_ack(seq, action, w=0, n=0, source="ISS-001", target="IDEA-001"):
+    return {"ok": True, "seq": seq, "w": w, "n": n, "link": [source, target, action]}
+
+
+def _link_checks(root, records):
+    result = runner.Result("x", "small")
+    runner.check_link_writes(result, root, records, ids=["ISS-001", "IDEA-001"], before=2)
+    return {c["check"]: c["ok"] for c in result.data["checks"]}
+
+
+def test_link_acks_explained_and_final_on_both_ends(tmp_path):
+    root = _event_store(tmp_path, LINKS)
+    assert _link_checks(root, [_link_ack(3, "create"), _link_ack(5, "remove", n=1)]) == {
+        "link_acks_hold": True, "link_changes_explained": True, "final_link_state": True}
+
+
+def test_an_unacked_commit_that_drops_a_link_is_a_lost_update(tmp_path):
+    # The create was acked truthfully, then a commit nobody acked removed it (clobber_link).
+    root = _event_store(tmp_path, LINKS)
+    checks = _link_checks(root, [_link_ack(3, "create")])
+    assert checks["link_changes_explained"] is False
+
+
+def test_an_ack_the_store_does_not_hold_as_of_its_commit_is_lost(tmp_path):
+    root = _event_store(tmp_path, LINKS)
+    assert _link_checks(root, [_link_ack(5, "create")])["link_acks_hold"] is False  # c5 removed it
+    assert _link_checks(root, [_link_ack(3, "remove")])["link_acks_hold"] is False
+
+
+def test_a_create_whose_inverse_was_skipped_fails(tmp_path):
+    events = LINKS[:3] + [(5, "c5", "issue", "ISS-001", ["links"], {})]
+    root = _event_store(tmp_path, events)
+    checks = _link_checks(root, [_link_ack(3, "create"), _link_ack(5, "remove", n=1)])
+    assert checks["link_acks_hold"] is False
+
+
+def test_final_link_state_reads_the_inverse(tmp_path):
+    events = LINKS[:4] + [(5, "c5", "issue", "ISS-001", ["links"], {})]  # the inverse left behind
+    root = _event_store(tmp_path, events)
+    checks = _link_checks(root, [_link_ack(3, "create"), _link_ack(5, "remove", n=1)])
+    assert checks["final_link_state"] is False
+
+
+def test_a_create_that_only_repairs_the_inverse_is_explained(tmp_path):
+    # backlog_link create of a link the source already holds still syncs a missing inverse: a
+    # seq-bearing answer whose commit touches only the target.
+    events = [(1, "c1", "issue", "ISS-001", ["id", "links"], dict(_links("IDEA-001"), id="ISS-001")),
+              (2, "c2", "idea", "IDEA-001", ["id"], {"id": "IDEA-001"}),
+              (3, "c3", "idea", "IDEA-001", ["links"], _links("ISS-001")),
+              (4, "c4", "issue", "ISS-001", ["links"], {}),
+              (5, "c4", "idea", "IDEA-001", ["links"], {})]
+    root = _event_store(tmp_path, events)
+    assert _link_checks(root, [_link_ack(3, "create"), _link_ack(4, "remove", n=1)]) == {
+        "link_acks_hold": True, "link_changes_explained": True, "final_link_state": True}
+
+
+def test_a_link_change_by_more_than_its_pair_is_unexplained(tmp_path):
+    events = LINKS[:2] + [(3, "c3", "issue", "ISS-001", ["links"], _links("IDEA-001", "IDEA-002")),
+                          (4, "c3", "idea", "IDEA-001", ["links"], _links("ISS-001"))]
+    root = _event_store(tmp_path, events)
+    assert _link_checks(root, [_link_ack(3, "create")])["link_changes_explained"] is False
+
+
+def test_legacy_links_the_tool_synthesizes_are_not_a_change(tmp_path):
+    # An idea without `links` reads its legacy `related_issues` as links; the first write stores them.
+    events = [(1, "c1", "issue", "ISS-001", ["id"], {"id": "ISS-001"}),
+              (2, "c2", "idea", "IDEA-001", ["id", "related_issues"], {"id": "IDEA-001", "related_issues": ["ISS-002"]}),
+              (3, "c3", "issue", "ISS-001", ["links"], _links("IDEA-001")),
+              (4, "c3", "idea", "IDEA-001", ["links"], {"links": runner.effective_links(
+                  {"related_issues": ["ISS-002"]}, "idea") + [{"type": REL, "target": "ISS-001"}]})]
+    root = _event_store(tmp_path, events)
+    assert _link_checks(root, [_link_ack(3, "create")])["link_changes_explained"] is True
+
+
+@pytest.mark.parametrize("mode, workers", [("disjoint", 3), ("same", 2)])
+def test_composites_have_at_least_two_members_or_are_refused(mode, workers):
+    import random
+    inv = dict(LINK_INV, tasks=[f"t-{i}" for i in range(4)])
+    for w in range(workers if mode == "same" else 2):
+        plan = runner.plan_write("composite", inv, worker=w, workers=workers if mode == "same" else 2, mode=mode,
+                                 count=6, warmup=0, rng=random.Random(w), scope="s")
+        assert all(len([c for c in op["kw"]["commands"] if not c["arguments"]["id"].startswith("n16-missing")]) >= 2
+                   for op in plan)
+    with pytest.raises(runner.Refused, match="composite"):
+        runner.plan_write("composite", dict(inv, tasks=["t-1"] if mode == "same" else inv["tasks"]), worker=0,
+                          workers=workers, mode=mode, count=2, warmup=0, rng=random.Random(1), scope="s")
 
 
 def test_a_same_mode_link_answer_without_a_sequence_is_a_noop_to_verify(monkeypatch, tmp_path):
@@ -586,10 +691,15 @@ def test_a_same_mode_link_answer_without_a_sequence_is_a_noop_to_verify(monkeypa
     ("drop_link", "disjoint", "no_lost_ack"),                  # acked with the high-water seq, nothing linked
     ("fake_link_noop", "disjoint", "no_unexpected_errors"),    # an owned pair answered as a no-op, nothing linked
     ("fake_link_noop", "same", "noop_answers_verified"),       # a contended no-op the store never held
+    ("clobber_link", "disjoint", "link_changes_explained"),    # acked create, then an unacked commit drops it
+    ("clobber_link", "same", "link_changes_explained"),
+    ("skip_inverse", "disjoint", "link_acks_hold"),            # the create commits the source side only
+    ("skip_inverse", "same", "link_acks_hold"),
 ])
 def test_a_lost_link_write_fails_the_runner(work, fault, mode, gate):
-    done, report = run_runner(work, "write.link", fault, worker=FAULT_WORKER, extra=["--modes", mode])
+    done, report = run_runner(work, "write.link", fault, worker=FAULT_WORKER,
+                              extra=["--clients", "4", "--modes", mode])
     assert done.returncode == 1, done.stdout[-2000:] + done.stderr[-2000:]
     failed, rows = failed_checks(report, "write.link")
-    assert all(r["verdict"] == "fail" for r in rows)
+    assert rows[0]["clients"] == 4 and all(r["verdict"] == "fail" for r in rows)
     assert gate in failed, (failed, rows[0]["checks"])
