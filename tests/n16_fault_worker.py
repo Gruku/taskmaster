@@ -83,6 +83,16 @@ elif fault == "partial_composite":  # an invalid composite commits its valid mem
             return "Error: unknown task n16-missing"
         return real_batch(*args, commands=commands, atomic=atomic, **kwargs)
     bs.backlog_batch_update = partial
+elif fault == "drop_link":  # acknowledge a link write with an existing sequence, link nothing
+    def drop_link(action="", source="", target="", type="relates_to", **_):
+        return f"ok: linked {source} -[{type}]-> {target} [seq {high_water()}]"
+    bs.backlog_link = drop_link
+elif fault == "fake_link_noop":  # link nothing, answer as though the link state already matched
+    def fake_link_noop(action="", source="", target="", type="relates_to", **_):
+        if action == "remove":
+            return f"ok: no-op (no links from {source} to {target})"
+        return f"ok: linked {source} -[{type}]-> {target} (no-op, link already present)"
+    bs.backlog_link = fake_link_noop
 elif fault == "die_before_ready":  # a client that crashes during startup
     sys.exit(7)
 

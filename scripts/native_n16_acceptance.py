@@ -230,6 +230,8 @@ class Worker:
                                      requested=kwargs.get("value"))
                 if ok and isinstance(result, str) and UNCHANGED.search(result):
                     record["noop"] = True
+                elif ok and op.get("noop_ok") and op.get("link") and seq_of(result) is None:
+                    record["noop"] = True  # the link state already matched: check_noops verifies the store
             except Exception as exc:  # noqa: BLE001 - an exception is an outcome to report
                 result, ok, error = None, False, f"{type(exc).__name__}: {exc}"[:300]
             record["ms"] = (time.perf_counter() - started) * 1000
@@ -928,6 +930,11 @@ def check_noops(result: Result, root: Path, records):
     the high-water read before it, or set by an event up to the one read after it."""
     last, unverified, checked = {}, [], 0
     for r in sorted(records, key=lambda r: (r.get("w"), r.get("n"))):
+        if r.get("link") and r.get("noop"):
+            checked += 1
+            if not link_noop_held_in_store(root, r):
+                unverified.append({"id": r["link"][0], "field": "links", "w": r.get("w"), "n": r.get("n")})
+            continue
         check = r.get("check")
         if not check or check[2] is None:
             continue
@@ -945,6 +952,35 @@ def check_noops(result: Result, root: Path, records):
             last.pop(key, None)  # a failed write's effect is unknown
     result.check("noop_answers_verified", not unverified, noops=checked, unverified=len(unverified) or None,
                  examples=unverified[:5] or None)
+
+
+def link_noop_held_in_store(root: Path, record) -> bool:
+    """A link no-op (create of a present link, remove of a missing one) is true only if the source's
+    stored links held that state at some point during the call: as of the high-water read before it,
+    or after an event up to the one read after it. An entity with no event by then vouches for nothing."""
+    before, after = record.get("hw_before"), record.get("hw_after")
+    if not isinstance(before, int) or not isinstance(after, int):
+        return False
+    source, target, action = record["link"][:3]
+    wanted = action == "create"
+    with ro(root) as c:
+        rows = c.execute("SELECT seq,fields,after FROM domain_events WHERE id=? AND seq<=? ORDER BY seq",
+                         (source, after)).fetchall()
+    if not any(seq <= before for seq, _, _ in rows):
+        return False
+    state = False  # imported without `links`: none
+    for seq, fields, doc in rows:
+        if seq > before and state == wanted:
+            return True  # held as of `before`, or after the last event up to here
+        if "links" in json.loads(fields or "[]"):
+            try:
+                doc = json.loads(doc) if doc else {}
+            except ValueError:
+                doc = {}
+            links = (doc if isinstance(doc, dict) else {}).get("links") or ()
+            state = any(isinstance(l, dict) and l.get("target") == target and l.get("type") == "relates_to"
+                        for l in links)
+    return state == wanted
 
 
 def noop_held_in_store(root: Path, record) -> bool:
@@ -1042,6 +1078,27 @@ def text_value(rng, worker, index, tag):
     return f"n16 {tag} w{worker} op{index} {uuid.UUID(int=rng.getrandbits(128)).hex[:10]}"
 
 
+def disjoint_link_pairs(sources, targets, links, workers) -> list:
+    """Every (source, target) pair a disjoint link run may use, in a fixed order the clients stripe.
+    Unordered: the tool writes the inverse link on the target, so A->B and B->A are one pair. A pair
+    already linked either way is left out (its create would be a no-op). Refused when the dataset
+    cannot give each client a pair of its own: overlapping clients would race, which is `same` mode."""
+    seen, pairs = set(), []
+    for source in sources:
+        for target in targets:
+            key = frozenset((source, target))
+            if source == target or key in seen:
+                continue
+            seen.add(key)
+            if target in (links.get(source) or ()) or source in (links.get(target) or ()):
+                continue
+            pairs.append((source, target))
+    if len(pairs) < workers:
+        raise Refused(f"disjoint link needs one unlinked source/target pair per client: dataset has "
+                      f"{len(pairs)} for {workers} clients")
+    return pairs
+
+
 def plan_write(kind: str, inv: dict, *, worker: int, workers: int, mode: str, count: int, warmup: int, rng,
                scope: str, current=None) -> list:
     """One client's ops. `current` holds the committed values before the run
@@ -1054,7 +1111,10 @@ def plan_write(kind: str, inv: dict, *, worker: int, workers: int, mode: str, co
     if mode == "same":
         own = [tasks[0]]
     else:
-        own = tasks[worker::workers][:max(1, min(50, len(tasks) // max(1, workers)))] or [tasks[worker % len(tasks)]]
+        # Disjoint: each client owns its own stripe of tasks; a stripe borrowed from a peer is not disjoint.
+        if kind not in ("link", "create", "archive") and len(tasks) < workers:
+            raise Refused(f"disjoint {kind} needs one task per client: dataset has {len(tasks)} for {workers} clients")
+        own = tasks[worker::workers][:max(1, min(50, len(tasks) // max(1, workers)))]
     ops = []
     total = count + warmup
     epics = inv["epics"] or [inv["task_epic"][tasks[0]]]
@@ -1065,6 +1125,10 @@ def plan_write(kind: str, inv: dict, *, worker: int, workers: int, mode: str, co
     must = "required" if mode != "same" else "optional"
     if kind == "link" and total % 2:
         total += 1  # every create is followed by its remove: the final state is known
+    if kind == "link" and mode != "same":
+        if not sources or not targets:
+            raise Refused("dataset has no link-capable issue/handover/idea ids")
+        mine = disjoint_link_pairs(sources, targets, current.get("links", {}), workers)[worker::workers]
     for index in range(total):
         measured = index >= warmup
         task = own[index % len(own)]
@@ -1098,16 +1162,21 @@ def plan_write(kind: str, inv: dict, *, worker: int, workers: int, mode: str, co
                             kw={"task_id": task, "field": "next_step", "value": value},
                             check=["task", task, "next_step", value]))
         elif kind == "link":
-            if not sources or not targets:
-                raise Refused("dataset has no link-capable issue/handover/idea ids")
-            source = sources[0] if mode == "same" else sources[worker % len(sources)]
-            linked = set(current.get("links", {}).get(source) or ())
-            free = [t for t in targets if t != source and t not in linked]
-            if not free:
-                raise Refused("no unlinked link target")
-            target = free[(index // 2 + worker) % len(free)]
             action = "create" if index % 2 == 0 else "remove"
-            ops.append(dict(base, tool="backlog_link", commit=must,
+            if mode == "same":
+                # Peers race on one source and overlapping targets: a create of a link a peer just made (or a
+                # remove of one a peer just removed) is a correct no-op, accepted only once the store confirms it.
+                if not sources or not targets:
+                    raise Refused("dataset has no link-capable issue/handover/idea ids")
+                source = sources[0]
+                linked = set(current.get("links", {}).get(source) or ())
+                free = [t for t in targets if t != source and t not in linked]
+                if not free:
+                    raise Refused("no unlinked link target")
+                target = free[(index // 2 + worker) % len(free)]
+            else:
+                source, target = mine[(index // 2) % len(mine)]
+            ops.append(dict(base, tool="backlog_link", commit=must, noop_ok=mode == "same",
                             kw={"action": action, "source": source, "target": target, "type": "relates_to"},
                             link=[source, target, action]))
         elif kind == "create":
@@ -1119,10 +1188,9 @@ def plan_write(kind: str, inv: dict, *, worker: int, workers: int, mode: str, co
                             kw={"title": f"n16 archive w{worker} c{index}", "epic": epic, "priority": "low",
                                 "phase": phases[0] if phases else ""}))
         elif kind == "composite":
+            # Up to three of this client's own tasks: padding from all tasks would borrow a peer's.
             group = [own[(index + k) % len(own)] for k in range(3)] if mode != "same" else [own[0]]
             group = list(dict.fromkeys(group))
-            if len(group) < 3 and mode != "same":
-                group = list(dict.fromkeys(group + rng.sample(tasks, min(3, len(tasks)))))[:3]
             # Every client sends invalid composites (one in five, the first at index 2 or its last op).
             invalid = index % 5 == 2 or (total < 3 and index == total - 1)
             commands, checks = [], []

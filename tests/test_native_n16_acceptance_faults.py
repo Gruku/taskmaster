@@ -25,12 +25,12 @@ COMMON = ["--dataset", "small", "--small-scale", "0.04", "--seed", "16", "--clie
           "--samples", "5", "--warmup", "1", "--smoke"]
 
 
-def run_runner(work: Path, scenarios: str, fault: str = "", *, worker: Path | None = None):
+def run_runner(work: Path, scenarios: str, fault: str = "", *, worker: Path | None = None, extra=()):
     environment = {k: v for k, v in os.environ.items() if k not in ("TASKMASTER_ROOT", "TASKMASTER_METRICS")}
     environment.update(TASKMASTER_SERVICE_IDLE_SECONDS="5", N16_FAULT=fault)
     results = work / f"results-{fault or 'clean'}-{scenarios.replace(',', '_')}.json"
     done = subprocess.run([sys.executable, "-c", DRIVER, str(SCRIPTS), str(worker or runner.SELF), "--work", str(work),
-                           "--scenarios", scenarios, "--results", str(results), *COMMON],
+                           "--scenarios", scenarios, "--results", str(results), *COMMON, *extra],
                           cwd=REPO, env=environment, capture_output=True, text=True, encoding="utf-8",
                           errors="replace", timeout=900)
     report = json.loads(results.read_text(encoding="utf-8")) if results.exists() else None
@@ -463,3 +463,133 @@ def _projection_db(tmp_path, *, quarantined=0, job_state=None, flagged=False):
 def test_blocked_replace_judges_the_target_files_own_projection_rows(tmp_path, flushed, db, ok):
     root = _projection_db(tmp_path, **db)
     assert runner.blocked_replace_settled(root, flushed, "tasks/t-1.md", "n16 blocked v1", "n16 blocked v1") is ok
+
+
+
+# ── link planning: disjoint means each client owns its pairs ─────────────────
+# A small-dataset run once "disjointly" linked from the same handovers as a peer (12 clients over 10
+# sources) and from ISS-001 -> ISS-002 while a peer linked ISS-002 -> ISS-001 (the tool writes the
+# inverse), so correct no-op answers failed as "acknowledged without a commit sequence".
+LINK_INV = {"tasks": [f"t-{i}" for i in range(40)], "epics": ["e"], "task_epic": {}, "phases": ["p"],
+            "link_sources": ["2026-01-06-h00004", "2026-01-07-h00007", "2026-01-11-h00023", "2026-01-14-h00033",
+                             "ISS-001", "ISS-002", "ISS-003", "ISS-004", "ISS-005", "ISS-006"],
+            "link_targets": ["IDEA-001", "IDEA-002", "IDEA-003", "ISS-001", "ISS-002", "ISS-003", "ISS-004",
+                             "ISS-005", "ISS-006"],
+            "entity_kind": {}}
+
+
+def _link_plans(inv, workers, mode="disjoint", current=None, count=40):
+    import random
+    return [runner.plan_write("link", inv, worker=w, workers=workers, mode=mode, count=count, warmup=4,
+                              rng=random.Random(w), scope="s", current=current) for w in range(workers)]
+
+
+def test_disjoint_link_plans_for_12_clients_share_no_pair():
+    plans = _link_plans(LINK_INV, 12)
+    owned = [{frozenset(op["link"][:2]) for op in plan} for plan in plans]
+    for a in range(12):
+        assert owned[a], a
+        for b in range(a + 1, 12):
+            assert not owned[a] & owned[b], (a, b, owned[a] & owned[b])  # unordered: the inverse counts
+    for plan in plans:
+        assert all(op["commit"] == "required" and not op.get("noop_ok") for op in plan)
+        state = {}
+        for op in plan:  # each create finds the pair unlinked and each remove finds it linked
+            source, target, action = op["link"][:3]
+            assert state.get(frozenset((source, target)), False) is (action == "remove"), op
+            state[frozenset((source, target))] = action == "create"
+        assert not any(state.values())  # the run ends with every pair unlinked again
+
+
+def test_disjoint_link_plans_skip_pairs_already_linked_either_way():
+    current = {"links": {"ISS-001": ["ISS-002", "IDEA-001"]}}
+    pairs = {frozenset(op["link"][:2]) for plan in _link_plans(LINK_INV, 10, current=current) for op in plan}
+    assert frozenset(("ISS-001", "ISS-002")) not in pairs and frozenset(("ISS-001", "IDEA-001")) not in pairs
+
+
+def test_disjoint_link_refuses_when_the_dataset_has_too_few_pairs():
+    inv = dict(LINK_INV, link_sources=["ISS-001"], link_targets=["IDEA-001", "IDEA-002"])
+    assert len(_link_plans(inv, 2)) == 2
+    with pytest.raises(runner.Refused, match="pair"):
+        _link_plans(inv, 3)
+
+
+def test_same_link_plans_contend_and_accept_only_verified_noops():
+    plans = _link_plans(LINK_INV, 4, mode="same")
+    assert {op["link"][0] for plan in plans for op in plan} == {"2026-01-06-h00004"}
+    assert all(op["commit"] == "optional" and op["noop_ok"] for plan in plans for op in plan)
+
+
+@pytest.mark.parametrize("kind", ["meta", "prose", "path", "membership", "composite", "noop", "invalid", "retry"])
+def test_disjoint_task_writes_refuse_fewer_tasks_than_clients(kind):
+    inv = dict(LINK_INV, tasks=["t-1", "t-2"], task_epic={"t-1": "e", "t-2": "e"}, anchors=["a", "b"])
+    current = {"priority": {"t-1": "low", "t-2": "low"}}
+    with pytest.raises(runner.Refused, match="disjoint"):
+        runner.plan_write(kind, inv, worker=2, workers=3, mode="disjoint", count=2, warmup=0,
+                          rng=__import__("random").Random(1), scope="s", current=current)
+
+
+def test_disjoint_composites_never_borrow_a_peers_task():
+    import random
+    inv = dict(LINK_INV, tasks=[f"t-{i}" for i in range(4)])
+    plans = [runner.plan_write("composite", inv, worker=w, workers=2, mode="disjoint", count=6, warmup=0,
+                               rng=random.Random(w), scope="s") for w in range(2)]
+    touched = [{c["arguments"]["id"] for op in plan for c in op["kw"]["commands"]
+                if not c["arguments"]["id"].startswith("n16-missing")} for plan in plans]
+    assert not touched[0] & touched[1], touched
+
+
+LINKS = [(1, "c1", "issue", "ISS-001", ["id", "title"], {"id": "ISS-001"}),   # imported without links
+         (2, "c2", "issue", "ISS-001", ["links"], {"links": [{"target": "IDEA-001", "type": "relates_to"}]}),
+         (3, "c3", "issue", "ISS-001", ["links"], {})]                          # the last link removed
+
+
+def _link_noop(action, *, before, after, target="IDEA-001", w=0, n=0):
+    return {"ok": True, "noop": True, "seq": None, "w": w, "n": n, "link": ["ISS-001", target, action],
+            "hw_before": before, "hw_after": after}
+
+
+def test_a_link_noop_must_match_the_store_at_that_time(tmp_path):
+    root = _event_store(tmp_path, LINKS)
+    assert _noops_verified(root, [_link_noop("create", before=2, after=2)])     # already linked
+    assert _noops_verified(root, [_link_noop("create", before=1, after=2)])     # linked during the call
+    assert _noops_verified(root, [_link_noop("remove", before=1, after=1)])     # never linked
+    assert _noops_verified(root, [_link_noop("remove", before=3, after=3)])     # already removed
+    assert not _noops_verified(root, [_link_noop("create", before=1, after=1)])  # a dropped create
+    assert not _noops_verified(root, [_link_noop("create", before=3, after=3)])
+    assert not _noops_verified(root, [_link_noop("remove", before=2, after=2)])  # a dropped remove
+    assert not _noops_verified(root, [_link_noop("create", before=2, after=2, target="IDEA-002")])
+    assert not _noops_verified(root, [dict(_link_noop("create", before=2, after=2), hw_before=None)])
+    unknown = dict(_link_noop("remove", before=3, after=3), link=["ISS-009", "IDEA-001", "remove"])
+    assert not _noops_verified(root, [unknown])  # an entity the store never held vouches for nothing
+
+
+def test_a_same_mode_link_answer_without_a_sequence_is_a_noop_to_verify(monkeypatch, tmp_path):
+    answers = iter(["ok: linked ISS-001 -[relates_to]-> IDEA-001 (no-op, link already present)",
+                    "ok: removed 1 link(s) between ISS-001 and IDEA-001 [seq 9]"])
+    fake = type("bs", (), {"backlog_link": staticmethod(lambda **_: next(answers))})
+    worker = runner.Worker({"root": str(tmp_path)})
+    monkeypatch.setattr(worker, "bs", lambda: fake)
+    monkeypatch.setattr(worker, "high_water", lambda: 5)
+    op = {"t": "tool", "tool": "backlog_link", "label": "write.link", "commit": "optional", "noop_ok": True,
+          "kw": {"action": "create", "source": "ISS-001", "target": "IDEA-001", "type": "relates_to"},
+          "link": ["ISS-001", "IDEA-001", "create"]}
+    first = worker.run(op)
+    assert first["ok"] and first["noop"] and first["hw_before"] == 5 and first["hw_after"] == 5
+    second = worker.run(dict(op, link=["ISS-001", "IDEA-001", "remove"]))
+    assert second["ok"] and not second.get("noop") and second["seq"] == 9
+
+
+@pytest.mark.real_service_process
+@pytest.mark.xdist_group("heavy_processes")
+@pytest.mark.parametrize("fault, mode, gate", [
+    ("drop_link", "disjoint", "no_lost_ack"),                  # acked with the high-water seq, nothing linked
+    ("fake_link_noop", "disjoint", "no_unexpected_errors"),    # an owned pair answered as a no-op, nothing linked
+    ("fake_link_noop", "same", "noop_answers_verified"),       # a contended no-op the store never held
+])
+def test_a_lost_link_write_fails_the_runner(work, fault, mode, gate):
+    done, report = run_runner(work, "write.link", fault, worker=FAULT_WORKER, extra=["--modes", mode])
+    assert done.returncode == 1, done.stdout[-2000:] + done.stderr[-2000:]
+    failed, rows = failed_checks(report, "write.link")
+    assert all(r["verdict"] == "fail" for r in rows)
+    assert gate in failed, (failed, rows[0]["checks"])
