@@ -53,6 +53,11 @@ protects the store; the fence is not enough on its own. This inventory comes fro
 
 Updating files on disk does not change a process that is already running. Stop the process.
 
+**Just before you stop the last client, run one tool call** (for example `backlog_handover_list`).
+Its scan adopts every file changed since the last one, such as a `git pull`, so a file that no
+longer parses is quarantined, and the dry run can name it, before the fence goes up. A file that
+changes after that is caught under the fence (section 3), and costs a `--rollback`.
+
 ## 2. Dry run
 
 ```
@@ -96,6 +101,7 @@ Deal with every `refused:` line before the real run:
 | `processes from the launcher inventory ...: pid N ...` | Stop each named process. If you have checked that a match is a false positive, add `--confirm-stopped` |
 | `the legacy handover-status backfill has not run on this store` | Start one bridge client, run `backlog_handover_list` once (it runs the one-shot backfill), then stop it again. A native store never runs that backfill |
 | `N projection file(s) are quarantined, and native managed Git refuses while any is: <path> (<reason>); ...` | Repair each named file, content preserved, and re-adopt it. See [Repairing quarantined files before the cutover](#repairing-quarantined-files-before-the-cutover) |
+| `N projection file(s) are flagged (the file and the store both changed), and native managed Git holds on them too: ...` | Resolve each with `backlog_resolve_conflict`. See the same section |
 | `malformed ID reservation sidecar` | Fix `.taskmaster/local/id-reservations.json`, which must map each kind to a list of ID strings |
 | `already a native authority` | Nothing to do |
 | `newer than this legacy->native cutover supports` | Wrong binary for this store. Upgrade |
@@ -111,9 +117,13 @@ running for *another* project is also listed. Check each match, then use `--conf
 The legacy store quarantines a projection file it cannot parse: it keeps the file exactly as
 written, imports nothing from it, and lists it under `Quarantined` in `backlog_store_status`.
 After activation, native managed Git operations (commit, checkout) refuse with "projections are
-not synchronized" for as long as any file is quarantined. So the cutover, and its dry run, refuse
-to start while the store has any quarantined file, and name each one with the reason the legacy
-store recorded (the same line it wrote to `.taskmaster/local/store.log`).
+not synchronized" for as long as any file is quarantined, and they hold on flagged files too
+(a file and the store both changed; `Flagged` in `backlog_store_status`). So the cutover, and
+its dry run, refuse to start while the store has any quarantined or flagged file. They name each
+quarantined file with the reason the legacy store recorded (the same line it wrote to
+`.taskmaster/local/store.log`). This includes a `project.yaml` that never parsed: it has no
+projection row, so `backlog_store_status` does not list it, but the store's quarantine log keeps
+it and the cutover names it.
 
 Repair each file in place and keep its content. Start one bridge client for this, and stop it
 again before the real run.
@@ -154,17 +164,40 @@ again before the real run.
      including 6.0.3 quarantined it anyway (CodeMaestro's B-339); the repair is described in
      [section 5](#5-post-activation-escape-hatch-manual-lossy-for-local-state), step 5.
    - **`... path id ... does not match frontmatter id ...`**: make `id` equal the file name.
+   - **A `project.yaml` YAML error**: fix the YAML. The file is a plain mapping, with no
+     frontmatter.
 3. Run any tool, for example `backlog_handover_list`. Its scan re-reads the changed file and
    adopts it.
-4. Run `backlog_store_status` again and confirm that it lists no `Quarantined:` files, then
-   re-run the dry run.
+4. Run `backlog_store_status` again and confirm that it lists no `Quarantined:` and no
+   `Flagged:` files, then re-run the dry run.
 
-`backlog_resolve_conflict` does not apply: it resolves flagged files, not quarantined ones.
+**When the repaired file is flagged instead.** If the store changed the entity while its file
+was quarantined (the export was suppressed; `backlog_store_status` lists the file under
+`Stuck exports`), step 3 does not adopt the repair. The store keeps its version, the file stays
+as you wrote it, and the file is **flagged**, because nothing records which of the two was meant.
+Then `backlog_resolve_conflict` is the next step:
 
-This check runs only on a fresh run. `--resume` logs the same list as a `warning:` and goes on:
-the fence refuses the bridge clients a repair is re-adopted through, so refusing there would leave
-only `--rollback`. A file quarantined after the fresh run's check is repaired after activation by
-editing it: native sync re-parses changed bytes and clears the quarantine.
+- `backlog_resolve_conflict(file="<path>")` shows both versions.
+- `take="store"` writes the store's version over the file. Use it when the repair only restored
+  what the store already holds.
+- `take="file"` imports the file as it is on disk.
+
+Either way the replaced text is kept in the change log. `backlog_resolve_conflict` does nothing
+for a file that is still quarantined: repair it first (steps 2 and 3).
+
+**Under the fence.** The preflight runs only on a fresh run. The `reconcile` stage checks again,
+after its flush scan, and so does `compare`, just before activation. A file that stopped parsing
+after the preflight (a `git pull`, an editor) or a flag raised by the flush aborts the run there,
+with exit code 1, naming the files, and nothing is activated. Run `--rollback`, repair the files
+as above with a bridge client, and start a fresh cutover. `--resume` cannot help, because the fence
+refuses the bridge client that re-adopts a repair.
+
+**After activation.** Native sync quarantines a file it cannot parse, and managed Git refuses
+until it is fixed. Edit the file: the next sync re-parses the changed bytes and, when they parse,
+clears the quarantine. If the store has no merge base for that file (activation seeds bases only
+for files whose bytes match what the legacy store recorded) and the repaired bytes differ from
+the store's version, the sync flags the file instead of importing it; resolve it with
+`backlog_resolve_conflict`.
 
 ## 3. Cut over
 
