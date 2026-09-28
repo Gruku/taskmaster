@@ -46,12 +46,40 @@ def failed_checks(report, scenario):
 
 
 @pytest.fixture(scope="module")
-def work(tmp_path_factory):
-    work = tmp_path_factory.mktemp("n16-faults")
-    done, report = run_runner(work, "write.prose")  # prepares the shared dataset; a clean run must pass
+def clean_work(tmp_path_factory):
+    work = tmp_path_factory.mktemp("n16-clean")
+    done, report = run_runner(work, "write.prose")  # a clean run must pass
     assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
     assert report["results"][0]["verdict"] == "pass"
     return work
+
+
+@pytest.fixture
+def work(clean_work, tmp_path_factory):
+    # A fresh --work per run: the runner refuses one that a prior run already mutated.
+    return tmp_path_factory.mktemp("n16-faults")
+
+
+@pytest.mark.real_service_process
+@pytest.mark.xdist_group("heavy_processes")
+def test_a_work_dir_a_prior_run_mutated_is_refused(clean_work):
+    before = {path: path.stat().st_mtime_ns for path in clean_work.rglob("*") if path.is_file()}
+    done, _ = run_runner(clean_work, "write.prose")
+    assert done.returncode != 0
+    # Refused before anything ran: no file of the prior run was touched and no new one written.
+    assert {path: path.stat().st_mtime_ns for path in clean_work.rglob("*") if path.is_file()} == before
+    assert "fresh --work" in done.stdout + done.stderr, done.stdout[-2000:] + done.stderr[-2000:]
+
+
+def test_claim_work_marks_a_fresh_dir_and_refuses_a_used_one(tmp_path):
+    runner.claim_work(tmp_path / "new")
+    assert (tmp_path / "new" / runner.WORK_MARKER).is_file()
+    with pytest.raises(runner.Refused, match="fresh --work"):
+        runner.claim_work(tmp_path / "new")
+    (tmp_path / "old" / "ds-small").mkdir(parents=True)  # datasets from a run before the marker existed
+    with pytest.raises(runner.Refused, match="fresh --work"):
+        runner.claim_work(tmp_path / "old")
+    assert not (tmp_path / "old" / runner.WORK_MARKER).exists()
 
 
 @pytest.mark.real_service_process
@@ -66,6 +94,7 @@ def work(tmp_path_factory):
     ("fail_first", "read.details", "no_warmup_errors"),
     ("fail_first_any", "read.details", "no_warmup_errors"),  # the prime (first call after start) fails
     ("fail_first_any", "read.during_writes", "no_warmup_errors"),
+    ("fail_first_any", "failure.expired_lease", "no_warmup_errors"),
     ("reuse_id", "write.create", "no_reused_id"),           # an existing id reported as created
     ("partial_composite", "write.composite", "no_partial_composite"),  # an invalid composite half-applied
     ("die_before_ready", "write.meta", None),               # a client that dies before the barrier

@@ -379,6 +379,24 @@ def git(root, *args, check=True):
     return done.stdout
 
 
+WORK_MARKER = ".n16-run"
+
+
+def claim_work(work: Path) -> None:
+    """Mark --work for this run, or refuse it. Scenarios write into the prepared datasets and the
+    seeded op plan repeats its values, so a second run on the same datasets meets its own earlier
+    writes (required commits answer "No change") - a false failure, never evidence. Nothing is
+    regenerated silently: a used --work is refused and the caller picks a fresh one."""
+    work = work.resolve()
+    used = [p.name for p in sorted(work.glob("ds-*"))] if work.is_dir() else []
+    if (work / WORK_MARKER).exists() or used:
+        raise Refused(f"--work {work} already holds a prior run's mutated datasets "
+                      f"({', '.join(used) or WORK_MARKER}); use a fresh --work")
+    work.mkdir(parents=True, exist_ok=True)
+    (work / WORK_MARKER).write_text(json.dumps({"started": time.strftime("%Y-%m-%d %H:%M:%S"),
+                                                "pid": os.getpid()}), encoding="utf-8")
+
+
 class Run:
     """Everything a scenario needs: args, work dir, dataset, instrumented flag, psutil."""
 
@@ -2071,6 +2089,7 @@ def failure_expired_lease(run: Run, ds: Dataset, clients, mode):
     records, meta = run_clients(run, root, [holder, taker], label="lease", prime=PRIME)
     got = {r["op"]: r for r in records}
     res.data["run"] = meta
+    check_unexpected(res, records)  # the prime and every op not expected to be refused
     res.check("holder_picked", got.get("lease.pick_a", {}).get("ok"), error=redact(got.get("lease.pick_a", {}).get("error")))
     res.check("live_lease_refuses_pick", got.get("lease.pick_b_live", {}).get("ok") is False)
     res.check("live_lease_refuses_release", got.get("lease.release_b_live", {}).get("ok") is False)
@@ -2535,7 +2554,7 @@ def main(argv=None) -> int:
     run = Run(args)
     run.required = args.samples
     run.sync_required = 0 if args.smoke else 200
-    run.work.mkdir(parents=True, exist_ok=True)
+    claim_work(run.work)
     os.environ.pop(METRICS_ENV, None)  # latency samples are uninstrumented, whatever the shell says
     metrics = metrics_module()
     if metrics is not None:
