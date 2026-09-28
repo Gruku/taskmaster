@@ -572,6 +572,10 @@ def legacy_flush(root: Path, token: str) -> dict:
     """
     from taskmaster import backlog_server as server  # Installs the exporter's derivers.
     from taskmaster import store as legacy
+    path = database_path(root)
+    with closing(_connect_readonly(path)) as reader:
+        sessions = {row[0]: row for row in reader.execute("SELECT * FROM sessions")} \
+            if _has_table(reader, "sessions") else {}
     with migration_owner(token):
         instance = server._store_for(Path(root) / ".taskmaster" / "backlog.yaml")
         try:
@@ -579,7 +583,30 @@ def legacy_flush(root: Path, token: str) -> dict:
                 pass
         finally:
             legacy.close_thread_connection()
+    _restore_flush_sessions(path, instance.session, sessions)
     return {"flushed": True}
+
+
+def _restore_flush_sessions(path: Path, session: str, before: dict) -> None:
+    """Undo the session rows the flush's own Store wrote (its session and its `session:t<thread>`
+    activity rows), so a flush that changed nothing else leaves the rows --rollback compares
+    exactly as they were. Other sessions' rows are left alone: a leaked client's touch stays
+    visible to the drift and rollback checks."""
+    with closing(_connect(path)) as connection:
+        if not _has_table(connection, "sessions"):
+            return
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            for row in connection.execute("SELECT * FROM sessions WHERE session=? OR substr(session,1,?)=?",
+                                          (session, len(session) + 1, session + ":")).fetchall():
+                connection.execute("DELETE FROM sessions WHERE session=?", (row[0],))
+                if row[0] in before:
+                    marks = ",".join("?" for _ in before[row[0]])
+                    connection.execute(f"INSERT INTO sessions VALUES({marks})", tuple(before[row[0]]))
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
 
 
 # ── Activation core (production; the twins fixture flips authority through it) ──
@@ -805,11 +832,13 @@ class _Run:
         # The progress changelog itself is reconciled inside the activation transaction,
         # after the final backfill (`carryover.reconcile_progress`): a meta entry written
         # after its seed marker would never be copied. Here: no export may be stranded.
-        flushed = None
         before = reconcile_counts(self.connection, self.root)
+        # Always, even with nothing pending: the flush's transaction is also the legacy scan of
+        # the files on disk, so a file that stopped parsing since the preflight (a git pull, an
+        # editor) is quarantined here and the `held_files` check below sees it. No bridge client
+        # can flush or scan through the fence, so the cutover does it itself.
+        flushed = legacy_flush(self.root, self.token)
         if _blocking(before):
-            # No bridge client can flush through the fence, so the cutover does it itself.
-            flushed = legacy_flush(self.root, self.token)
             self.log(f"[reconcile] flushed pending legacy exports ({'; '.join(_blocking(before))})")
         self._begin_owned()
         counts = reconcile_counts(self.connection, self.root)
@@ -1040,7 +1069,7 @@ def dry_run(root: Path, *, confirm_stopped: bool = False) -> dict:
         report["projection_files"] = len(projection_files(root, connection))
     report["planned"] = [] if report["refusals"] else [
         "fence: publish meta.migration_state='migrating' with owner/token under the ownership lock",
-        "reconcile: flush pending legacy exports under the fence (as one admitted bridge client)",
+        "reconcile: scan the files and flush pending legacy exports under the fence (as one admitted bridge client)",
         f"backup: {path.parent / 'backups' / 'pre-native-<UTC ts>.db'} + manifest ({report['projection_files']} projection files)",
         f"backfill: stage {counts['entities']} entities and {counts['changes']} changes into native tables",
         "compare: trial activation, rolled back; verify_carryover must report nothing lost",

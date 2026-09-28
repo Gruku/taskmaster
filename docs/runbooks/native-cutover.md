@@ -56,7 +56,8 @@ Updating files on disk does not change a process that is already running. Stop t
 **Just before you stop the last client, run one tool call** (for example `backlog_handover_list`).
 Its scan adopts every file changed since the last one, such as a `git pull`, so a file that no
 longer parses is quarantined, and the dry run can name it, before the fence goes up. A file that
-changes after that is caught under the fence (section 3), and costs a `--rollback`.
+changes after that is caught under the fence, and costs a `--rollback` (see "Under the fence" in
+[Repairing quarantined files before the cutover](#repairing-quarantined-files-before-the-cutover)).
 
 ## 2. Dry run
 
@@ -84,7 +85,7 @@ counts: {"changes":7,"dirty_unexported":0,"entities":6,"export_intents":0,"flagg
 quiesce: {"confirm_stopped":false,"live_owner":null,"open_writers":"not probed in dry run","processes":[],...}
 warning: open writers not probed in dry run (the probe can checkpoint the WAL); the real run probes them
 would fence: publish meta.migration_state='migrating' with owner/token under the ownership lock
-would reconcile: flush pending legacy exports under the fence (as one admitted bridge client)
+would reconcile: scan the files and flush pending legacy exports under the fence (as one admitted bridge client)
 would backup: <project>\.taskmaster\local\backups\pre-native-<UTC ts>.db + manifest (5 projection files)
 would backfill: stage 6 entities and 7 changes into native tables
 would compare: trial activation, rolled back; verify_carryover must report nothing lost
@@ -185,12 +186,18 @@ Then `backlog_resolve_conflict` is the next step:
 Either way the replaced text is kept in the change log. `backlog_resolve_conflict` does nothing
 for a file that is still quarantined: repair it first (steps 2 and 3).
 
-**Under the fence.** The preflight runs only on a fresh run. The `reconcile` stage checks again,
-after its flush scan, and so does `compare`, just before activation. A file that stopped parsing
-after the preflight (a `git pull`, an editor) or a flag raised by the flush aborts the run there,
-with exit code 1, naming the files, and nothing is activated. Run `--rollback`, repair the files
-as above with a bridge client, and start a fresh cutover. `--resume` cannot help, because the fence
-refuses the bridge client that re-adopts a repair.
+**Under the fence.** The preflight runs only on a fresh run. The `reconcile` stage always scans
+the files on disk (whether or not exports are pending) and checks again, and `compare` checks the
+recorded state just before activation. A file that stopped parsing after the preflight (a
+`git pull`, an editor) or a flag raised by the flush aborts the run there, with exit code 1,
+naming the files, and nothing is activated. Run `--rollback`, repair the files as above with a
+bridge client, and start a fresh cutover. `--resume` cannot help, because the fence refuses the
+bridge client that re-adopts a repair.
+
+A file changed after the backup differs from the backup's archive, so the run treats it as drift
+and re-runs `reconcile`, with its scan. Only a change in the short window between the reconcile
+scan and the backup goes unseen by the cutover. Native sync then quarantines that file after
+activation, and it is repaired as described next.
 
 **After activation.** Native sync quarantines a file it cannot parse, and managed Git refuses
 until it is fixed. Edit the file: the next sync re-parses the changed bytes and, when they parse,
@@ -227,7 +234,7 @@ What each stage does:
 | Stage | Writes | Committed state after it |
 |---|---|---|
 | `fence` | Sets `meta.migration_state='migrating'`, `migration_owner` and `migration_token`, and creates `native_cutover_journal`, all in one `BEGIN IMMEDIATE`. The coordinator ownership lock (`.taskmaster/local/coordinator/owner.lock`) is held for the whole run | Bridge clients refuse the store |
-| `reconcile` | Flushes pending legacy exports and export intents itself, under the fence: one no-op legacy write transaction admitted by `migration_owner`, the same drain a bridge client's next call runs. Whatever still cannot be exported is carried, and a warning lists it; `activate` queues it as native projection jobs (as native sync queues an entity). The progress changelog itself is reconciled inside `activate`, after the final backfill | Journal row with the counts before and after, and what was carried |
+| `reconcile` | Scans the projection files and flushes pending legacy exports and export intents itself, under the fence: one no-op legacy write transaction admitted by `migration_owner`, the same scan and drain a bridge client's next call runs. It always runs, even with nothing pending, so the held-file check after it sees the files as they are on disk (about 2.5 s on a CodeMaestro-sized store). The session rows the flush writes for itself are put back as they were. Whatever still cannot be exported is carried, and a warning lists it; `activate` queues it as native projection jobs (as native sync queues an entity). The progress changelog itself is reconciled inside `activate`, after the final backfill | Journal row with the counts before and after, and what was carried |
 | `backup` | All taken while the cutover holds the write lock, so they describe one committed state: `carryover.snapshot_carryover` (before any marker change), `backups/pre-native-<UTC ts>.db` (the SQLite online backup, made by a read-only connection), `pre-native-<UTC ts>.projection.zip` (the **projection set**, meaning the files the store tracks in its `projection` table: `backlog.yaml` and every document file; other files under `.taskmaster/` are the user's and are never archived, compared or restored; with the archive's sha256 and size recorded) and a `.json` manifest: projection files (path, sha256, size), a copy of the ID-reservation sidecar, the carry-over snapshot and the domain digest. The files are fsynced, and the backup is reopened and must pass `integrity_check` | Journal row with the backup path, the archive, the sidecar hash **and the carry-over snapshot**, so resume never depends on the manifest |
 | `backfill` | `migrate.backfill` in one transaction; sub-stage checkpoints go into the journal | Native staging `verified`; authority still `legacy` |
 | `compare` | A trial of the whole activation transaction, always rolled back: `carryover.verify_carryover` against the journaled snapshot must be empty | Journal row with the trial's ID import and progress counts |

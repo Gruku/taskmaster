@@ -46,9 +46,12 @@ def _age_projection(root: Path) -> None:
 def _adopted_without_bases(root: Path, monkeypatch=None) -> None:
     """A legacy store adopted from its files: no merge bases at all (CodeMaestro's shape),
     and one quarantined row. The cutover refuses a quarantined row (`cutover.held_files`), so
-    a cutover test passes `monkeypatch` to reach the seeding's own skip of such a row."""
+    a cutover test passes `monkeypatch` to reach the seeding's own skip of such a row. The
+    cutover's reconcile scan re-reads a quarantined file, so for a cutover the file is really
+    broken too: a parseable one would be re-adopted and seeded like any other."""
     if monkeypatch is not None:
         monkeypatch.setattr(cutover, "held_files", lambda connection, root: [])
+        (root / ".taskmaster" / QUARANTINED).write_bytes(b"no frontmatter any more\n")
     with _db(root) as connection:
         connection.execute("DELETE FROM projection_base")
         connection.execute("UPDATE projection SET quarantined=1,quarantine_hash=content_hash WHERE file=?",

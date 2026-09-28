@@ -178,9 +178,12 @@ def test_a_dirty_quarantined_file_is_flagged_on_repair_and_refused_until_resolve
 # ── Under the fence ──────────────────────────────────────────────────────────
 
 @pytest.mark.allow_projection_bypass  # The hook stands in for a hand edit on the cutover's stack.
-def test_a_quarantine_created_by_the_reconcile_flush_aborts_before_activation(project, quiesce, monkeypatch):
-    """A file broken after the preflight is quarantined by the reconcile flush's scan; the
-    fenced re-check aborts, --rollback clears the fence, and a fresh run after repair passes."""
+@pytest.mark.parametrize("pending_work", [True, False], ids=["pending-exports", "no-pending-work"])
+def test_a_quarantine_created_by_the_reconcile_flush_aborts_before_activation(project, quiesce, monkeypatch,
+                                                                              pending_work):
+    """A file broken after the preflight (a git pull, an editor) is quarantined by the reconcile
+    scan, which runs whether or not exports are pending; the fenced re-check aborts, --rollback
+    clears the fence, and a fresh run after repair passes."""
     with closing(sqlite3.connect(db(project))) as connection:
         bug = connection.execute("SELECT file FROM projection WHERE kind='bug'").fetchone()[0]
     bug_path = project / ".taskmaster" / bug
@@ -189,8 +192,9 @@ def test_a_quarantine_created_by_the_reconcile_flush_aborts_before_activation(pr
     def break_under_fence(name):
         if name == "reconcile:begin":
             bug_path.write_bytes(b"no frontmatter any more\n")
-            with closing(sqlite3.connect(db(project), isolation_level=None)) as connection:
-                connection.execute("UPDATE projection SET dirty=1 WHERE file='backlog.yaml'")  # the flush runs
+            if pending_work:
+                with closing(sqlite3.connect(db(project), isolation_level=None)) as connection:
+                    connection.execute("UPDATE projection SET dirty=1 WHERE file='backlog.yaml'")
     monkeypatch.setitem(cutover.HOOKS, "checkpoint", break_under_fence)
     with pytest.raises(cutover.CutoverAborted) as aborted:
         cutover.cutover(project)
