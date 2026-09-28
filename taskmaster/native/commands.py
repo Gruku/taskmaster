@@ -136,6 +136,9 @@ class Transaction:
         self.group = None
         self.seq = int(identity["event_high_water"])
         self.affected = {}
+        # Entities a write left exactly as stored, with the document the command
+        # observed. A reply to a no-op names this value, never a later read.
+        self.unchanged = {}
         # Every counter reports work actually issued. A "global rebuild" counter
         # lived here that nothing could increment, so it proved nothing; the
         # absence of graph work is asserted directly against the SQL instead.
@@ -146,6 +149,7 @@ class Transaction:
         fields = {f for f in set(before) | set(after) if (f in before) != (f in after) or encode(before.get(f)) != encode(after.get(f))}
         body_changed = before_body != body
         if not fields and not body_changed and operation != "create":
+            self.unchanged[(kind, ident)] = {"kind": kind, "id": ident, "fields": deepcopy(after)}
             return
         event_before = {f: before[f] for f in fields if f in before}
         event_after = {f: after[f] for f in fields if f in after}
@@ -315,6 +319,9 @@ def execute(connection: sqlite3.Connection, envelope, *, cancelled=lambda: False
         outcome = {"operation": request["operation"], "request_id": request.get("request_id"), "store_id": identity["store_id"],
                    "affected": list(transaction.affected.values()), "commit_seq": transaction.seq,
                    "projection_state": "pending" if transaction.affected else "unchanged", "work": transaction.counters}
+        unchanged = [item for key, item in transaction.unchanged.items() if key not in transaction.affected]
+        if unchanged:
+            outcome["unchanged"] = unchanged
         if hasattr(transaction, 'result'):
             outcome['result'] = transaction.result
         receipts.save(connection, request, fingerprint, outcome)

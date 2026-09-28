@@ -27,6 +27,7 @@ timings, never authored content (op arguments stay in --work).
 from __future__ import annotations
 
 import argparse
+import ast
 from contextlib import closing
 import fnmatch
 import hashlib
@@ -76,7 +77,7 @@ SERVICE_IDLE = "90"
 # when the op must commit, a commit sequence. Anything else - an unknown sentence, a stripped suffix,
 # "(not persisted)" - is a failure, never a silent pass.
 SUCCESS = {
-    "backlog_update_task": r"^Updated `",
+    "backlog_update_task": r"^(Updated|No change to) `",
     "backlog_add_task": r"^Added `",
     "backlog_archive_task": r"^Archived `",
     "backlog_link": r"^ok: ",
@@ -86,6 +87,8 @@ SUCCESS = {
     "backlog_claim": "json-ok",
 }
 NOT_PERSISTED = "(not persisted)"
+# A native write whose value already matched commits nothing and says so explicitly.
+UNCHANGED = re.compile(r"^No change to `|→ unchanged \(already `")
 
 
 def _json(result):
@@ -98,10 +101,11 @@ def _json(result):
     return result if isinstance(result, dict) else None
 
 
-def classify(result, *, success=None, commit="none", noop_ok=False) -> tuple[bool, str | None]:
+def classify(result, *, success=None, commit="none", noop_ok=False, requested=None) -> tuple[bool, str | None]:
     """(ok, error). `success`: a regex the answer must match, "json-ok" for a JSON {"ok": true}
     answer, or None (reads: any non-empty answer that is not an error). `commit`: "required" (the
-    answer must carry a commit sequence), "optional" or "none"."""
+    answer must carry a commit sequence), "optional" or "none". `requested`: the value the op wrote,
+    which an accepted no-op answer must name."""
     payload = _json(result)
     if isinstance(result, str) and result.lstrip().startswith("Error"):
         return False, result.lstrip()[:300]
@@ -110,11 +114,17 @@ def classify(result, *, success=None, commit="none", noop_ok=False) -> tuple[boo
     if result is None or (isinstance(result, str) and not result.strip()):
         return False, "empty answer"
     if isinstance(result, str) and NOT_PERSISTED in result:
-        # An unchanged value commits nothing and the native tool then answers "(not persisted)". That
-        # is accepted only where a no-op is the expected outcome, and only without a sequence; the
-        # scenario verifies the stored value separately.
-        if not (noop_ok and seq_of(result) is None):
-            return False, "answer says (not persisted)"
+        return False, "answer says (not persisted)"
+    if isinstance(result, str) and UNCHANGED.search(result):
+        # An unchanged value commits nothing and the native tool says so. That is accepted only
+        # where a no-op is the expected outcome, never where a commit is required, only without a
+        # sequence, and only naming the value this op asked for (the value the store kept at
+        # commit); the scenario verifies the stored value separately.
+        if not noop_ok or commit == "required" or seq_of(result) is not None:
+            return False, "answer says unchanged"
+        if requested is None or f"already `{requested}`" not in result:
+            return False, "unchanged answer does not name the requested value"
+        return True, None
     if success == "json-ok":
         if payload is None or payload.get("ok") is not True:
             return False, "unrecognized answer (expected JSON ok=true)"
@@ -190,6 +200,11 @@ class Worker:
         with closing(sqlite3.connect(f"{(self.root / '.taskmaster/local/store.db').as_uri()}?mode=ro", uri=True)) as c:
             return c.execute("SELECT value FROM native_manifest WHERE key='store_id'").fetchone()[0]
 
+    def high_water(self):
+        with closing(sqlite3.connect(f"{(self.root / '.taskmaster/local/store.db').as_uri()}?mode=ro", uri=True,
+                                     timeout=30)) as c:
+            return int(c.execute("SELECT COALESCE(MAX(seq),0) FROM domain_events").fetchone()[0])
+
     def revision_of(self, kind, ident):
         with closing(sqlite3.connect(f"{(self.root / '.taskmaster/local/store.db').as_uri()}?mode=ro", uri=True,
                                      timeout=30)) as c:
@@ -199,21 +214,27 @@ class Worker:
 
     def run(self, op) -> dict:
         kind = op["t"]
-        record = {"op": op["label"], "measured": op.get("measured", True), "expect": op.get("expect", "ok")}
+        record = {"op": op["label"], "measured": op.get("measured", True), "expect": op.get("expect", "ok"),
+                  "warmup": op.get("warmup", False)}
         if kind == "tool":
             kwargs = dict(op["kw"])
             if op.get("archive_created") is not None:
                 kwargs["task_id"] = self.created[op["archive_created"]] if op["archive_created"] < len(self.created) else "missing-created"
+            if op.get("noop_ok"):  # brackets a no-op answer in store time, outside the timed call
+                record["hw_before"] = self.high_water()
             started = time.perf_counter()
             try:
                 result = getattr(self.bs(), op["tool"])(**kwargs)
                 ok, error = classify(result, success=op.get("success", SUCCESS.get(op["tool"]) if op.get("expect", "ok") != "read" else None),
-                                     commit=op.get("commit", "none"), noop_ok=op.get("noop_ok", False))
-                if ok and isinstance(result, str) and NOT_PERSISTED in result:
+                                     commit=op.get("commit", "none"), noop_ok=op.get("noop_ok", False),
+                                     requested=kwargs.get("value"))
+                if ok and isinstance(result, str) and UNCHANGED.search(result):
                     record["noop"] = True
             except Exception as exc:  # noqa: BLE001 - an exception is an outcome to report
                 result, ok, error = None, False, f"{type(exc).__name__}: {exc}"[:300]
             record["ms"] = (time.perf_counter() - started) * 1000
+            if record.get("noop"):
+                record["hw_after"] = self.high_water()
             record.update(ok=ok, error=error, seq=seq_of(result), bytes=len(result) if isinstance(result, str) else None)
             if ok and op["tool"] == "backlog_add_task":
                 found = ADDED.search(result or "")
@@ -294,8 +315,13 @@ def worker_main(spec_path: Path) -> int:
     os.chdir(root)
     worker = Worker(spec)
     out = Path(spec["out"])
+    records = []
     if spec.get("prime"):
-        worker.run(spec["prime"])  # imports, snapshot and coordinator handshake: not measured
+        # Imports, snapshot and coordinator handshake: not measured, but kept as a warmup record, so a
+        # "first call after process start fails" defect fails no_warmup_errors instead of vanishing.
+        primed = worker.run(spec["prime"])
+        primed.update(w=spec["worker"], n=-1, t=time.time(), warmup=True)
+        records.append(primed)
     Path(spec["ready"]).write_text(str(os.getpid()), encoding="utf-8")
     barrier = Path(spec["barrier"])
     deadline = time.monotonic() + 600
@@ -304,7 +330,6 @@ def worker_main(spec_path: Path) -> int:
             return 3
         time.sleep(0.005)
     stop = Path(spec["stop"]) if spec.get("stop") else None
-    records = []
     ops = spec["ops"]
     index = 0
     while True:
@@ -316,7 +341,7 @@ def worker_main(spec_path: Path) -> int:
             break
         op = ops[index]
         record = worker.run(op)
-        record.update(w=spec["worker"], n=len(records), t=time.time())
+        record.update(w=spec["worker"], n=len(records) - bool(spec.get("prime")), t=time.time())
         records.append(record)
         index += 1
     with out.open("w", encoding="utf-8") as stream:
@@ -352,6 +377,24 @@ def git(root, *args, check=True):
     if check and done.returncode:
         raise RuntimeError(f"git {args} failed: {done.stderr[-800:]}")
     return done.stdout
+
+
+WORK_MARKER = ".n16-run"
+
+
+def claim_work(work: Path) -> None:
+    """Mark --work for this run, or refuse it. Scenarios write into the prepared datasets and the
+    seeded op plan repeats its values, so a second run on the same datasets meets its own earlier
+    writes (required commits answer "No change") - a false failure, never evidence. Nothing is
+    regenerated silently: a used --work is refused and the caller picks a fresh one."""
+    work = work.resolve()
+    used = [p.name for p in sorted(work.glob("ds-*"))] if work.is_dir() else []
+    if (work / WORK_MARKER).exists() or used:
+        raise Refused(f"--work {work} already holds a prior run's mutated datasets "
+                      f"({', '.join(used) or WORK_MARKER}); use a fresh --work")
+    work.mkdir(parents=True, exist_ok=True)
+    (work / WORK_MARKER).write_text(json.dumps({"started": time.strftime("%Y-%m-%d %H:%M:%S"),
+                                                "pid": os.getpid()}), encoding="utf-8")
 
 
 class Run:
@@ -482,13 +525,12 @@ def build_inventory(root: Path) -> dict:
     finally:
         store.reset_for_tests()
         shutil.rmtree(scratch, ignore_errors=True)
-    tasks = [(i, d) for (k, i), (d, b, a) in sorted(entities.items()) if k == "task" and not a
-             and d.get("status") not in ("archived", "done")]
+    tasks, orphans = inventory_tasks(entities)
     words = sorted({w for _, d in tasks[:400] for w in re.findall(r"[A-Za-z]{5,}", str(d.get("title", ""))).__iter__()})
-    anchors = sorted({a for _, d in tasks for a in (d.get("anchors") or []) if isinstance(a, str)})
+    anchors = sorted({a for _, d in tasks for a in inventory_anchors(d.get("anchors"))})
     return {
         "tasks": [i for i, _ in tasks],
-        "task_priority": {i: d.get("priority", "medium") for i, d in tasks},
+        "task_priority": {i: d.get("priority") for i, d in tasks},
         "task_epic": {i: d.get("epic") for i, d in tasks},
         "epics": sorted({i for (k, i), (d, b, a) in entities.items() if k == "epic" and not a
                          and d.get("status") not in ("archived", "done")}),
@@ -500,7 +542,45 @@ def build_inventory(root: Path) -> dict:
         "anchors": anchors[:2000] or ["src/n16/a.py", "src/n16/b.py"],
         "words": words[:500] or ["alpha"],
         "counts": {k: sum(1 for (kk, _) in entities if kk == k) for k in {k for k, _ in entities}},
+        "notes": [f"{orphans} task(s) without an epic or status excluded: the tools answer 'not found' for them"]
+        if orphans else [],
     }
+
+
+def inventory_tasks(entities) -> tuple[list, int]:
+    """Open tasks the tools can resolve, and how many were excluded as orphans: a task file with no
+    backlog row has no epic or status, and every tool (legacy too) answers "not found" for it."""
+    tasks, orphans = [], 0
+    for (kind, ident), (doc, _body, archived) in sorted(entities.items()):
+        if kind != "task" or archived or doc.get("status") in ("archived", "done"):
+            continue
+        if not doc.get("epic") or not doc.get("status"):
+            orphans += 1
+            continue
+        tasks.append((ident, doc))
+    return tasks, orphans
+
+
+def inventory_anchors(stored) -> list:
+    """The anchors a planner may sample: only values the tool stores back unchanged.
+
+    The tool splits a written value on commas, strips, and drops blanks, so an anchor that is
+    blank or holds a comma (a real one on the CodeMaestro copy is ",") cannot round-trip. Some
+    legacy anchors are one stringified Python list: parsed as a whole, never sampled as fragments.
+    """
+    if isinstance(stored, str):
+        text = stored.strip()
+        if text.startswith("["):
+            try:
+                stored = ast.literal_eval(text)
+            except (ValueError, SyntaxError):
+                return []
+        else:
+            stored = text.split(",")
+    if not isinstance(stored, (list, tuple)):
+        return []
+    items = [item.strip() for item in stored if isinstance(item, str)]
+    return [item for item in items if item and not any(ch in item for ch in ",[]\"'")]
 
 
 def prepare_dataset(run: Run, name: str) -> Dataset:
@@ -683,6 +763,11 @@ class Result:
     def note(self, text):
         self.data["notes"].append(text)
 
+    def precondition(self, reason):
+        """The dataset cannot exercise this scenario (e.g. the product rightly refuses it): reported as
+        its own verdict, never a pass and never a correctness failure, and never budget evidence."""
+        self.data["precondition"] = reason
+
     def skip(self, cell, reason):
         """A matrix cell this scenario could not exercise: reported under "Not run", never as a pass."""
         self.data["skipped_cells"].append({"cell": cell, "reason": reason})
@@ -719,7 +804,9 @@ class Result:
 
     def finish(self):
         checks = self.data["checks"]
-        if not checks:
+        if self.data.get("precondition") and all(c["ok"] for c in checks):
+            self.data["verdict"] = "precondition"
+        elif not checks:
             self.data["verdict"] = "skipped"
             if not self.data["skipped_cells"]:
                 self.skip("; ".join(self.data["cells"]) or self.data["scenario"], "no correctness check ran")
@@ -734,6 +821,29 @@ def norm(value) -> str:
     if isinstance(value, (list, tuple)):
         return ",".join(str(v) for v in value)
     return str(value)
+
+
+def claim_norm(field, value) -> str:
+    """A value as the tool would store it, for comparison with the store: an anchors value is split
+    on commas, stripped, and blanks dropped (native `task.update`)."""
+    if field == "anchors" and isinstance(value, str):
+        return ",".join(item.strip() for item in value.split(",") if item.strip())
+    return norm(value)
+
+
+def value_as_of(connection, kind, ident, field, seq):
+    """(found, value): the entity's `field` as of `seq`, from the latest event at or before it that
+    set the field (a removal reads as None). found is False when no event ever set it."""
+    rows = connection.execute("SELECT fields,after FROM domain_events WHERE kind=? AND id=? AND seq<=? "
+                              "ORDER BY seq DESC", (kind, ident, seq))
+    for fields, after in rows:
+        if field in json.loads(fields or "[]"):
+            try:
+                after = json.loads(after) if after else {}
+            except ValueError:
+                after = {}
+            return True, (after if isinstance(after, dict) else {}).get(field)
+    return False, None
 
 
 def commit_events(connection, seq):
@@ -786,8 +896,16 @@ def check_acks(result: Result, root: Path, records, *, writes_expected=True):
                 continue
             for kind, ident, field, value in record_claims(r):
                 hit = [e for e in events if e["id"] == ident and kind in ("*", e["kind"])]
-                if field is not None and value is not None:
-                    hit = [e for e in hit if field in e["after"] and norm(e["after"][field]) == norm(value)]
+                if field is not None and value is not None and hit:
+                    # Judge the value AS OF the acked seq, not that commit's diff: a same-value write
+                    # after the minute rolls over commits only `last_referenced`, truthfully.
+                    found, stored = value_as_of(c, hit[0]["kind"], ident, field, r["seq"])
+                    if not found and not value_as_of(c, hit[0]["kind"], ident, field, 1 << 62)[0]:
+                        stored = field_values(root, hit[0]["kind"], [ident], field)[ident]  # never evented
+                    elif not found:
+                        stored = None
+                    if claim_norm(field, stored) != claim_norm(field, value):
+                        hit = []
                 elif field is not None:
                     hit = [e for e in hit if field in e["fields"]]
                 if not hit:
@@ -803,10 +921,66 @@ def check_acks(result: Result, root: Path, records, *, writes_expected=True):
     return acked
 
 
+def check_noops(result: Result, root: Path, records):
+    """A no-op answer carries no sequence, so check_acks never sees it. It is accepted when it replays
+    the value this same client last acknowledged for that field (no later write of its own changed
+    it); otherwise the store must have held the requested value at some point during the call: as of
+    the high-water read before it, or set by an event up to the one read after it."""
+    last, unverified, checked = {}, [], 0
+    for r in sorted(records, key=lambda r: (r.get("w"), r.get("n"))):
+        check = r.get("check")
+        if not check or check[2] is None:
+            continue
+        key = (r.get("w"), check[0], check[1], check[2])
+        if r.get("noop"):
+            checked += 1
+            if last.get(key) != claim_norm(check[2], check[3]) and not noop_held_in_store(root, r):
+                unverified.append({"id": check[1], "field": check[2], "w": r.get("w"), "n": r.get("n")})
+                last.pop(key, None)
+                continue
+            last[key] = claim_norm(check[2], check[3])
+        elif r.get("ok") and r.get("seq"):
+            last[key] = claim_norm(check[2], check[3])
+        else:
+            last.pop(key, None)  # a failed write's effect is unknown
+    result.check("noop_answers_verified", not unverified, noops=checked, unverified=len(unverified) or None,
+                 examples=unverified[:5] or None)
+
+
+def noop_held_in_store(root: Path, record) -> bool:
+    before, after = record.get("hw_before"), record.get("hw_after")
+    if not isinstance(before, int) or not isinstance(after, int):
+        return False
+    kind, ident, field, value = record["check"]
+    wanted = claim_norm(field, value)
+    with ro(root) as c:
+        found, stored = value_as_of(c, kind, ident, field, before)
+        if found and claim_norm(field, stored) == wanted:
+            return True
+        for fields, event_after in c.execute("SELECT fields,after FROM domain_events WHERE kind=? AND id=? "
+                                             "AND seq>? AND seq<=?", (kind, ident, before, after)):
+            if field in json.loads(fields or "[]"):
+                try:
+                    doc = json.loads(event_after) if event_after else {}
+                except ValueError:
+                    doc = {}
+                if isinstance(doc, dict) and claim_norm(field, doc.get(field)) == wanted:
+                    return True
+    return False
+
+
 def check_unexpected(result: Result, records):
-    bad = [r for r in records if not r.get("ok") and r.get("expect", "ok") not in ("error", "conflict-or-ok")]
+    # Warmup ops stay out of latency and of this check, but a failing warmup is a real (cold-start)
+    # defect: counted and judged by its own check.
+    bad = [r for r in records if not r.get("ok") and not r.get("warmup")
+           and r.get("expect", "ok") not in ("error", "conflict-or-ok")]
     result.check("no_unexpected_errors", not bad, count=len(bad),
                  examples=sorted({redact(r.get("error")) for r in bad})[:3] or None)
+    warm = [r for r in records if not r.get("ok") and r.get("warmup")
+            and r.get("expect", "ok") not in ("error", "conflict-or-ok")]
+    result.data["warmup_errors"] = len(warm)
+    result.check("no_warmup_errors", not warm, count=len(warm),
+                 examples=sorted({redact(r.get("error")) for r in warm})[:3] or None)
 
 
 def check_workers(result: Result, meta):
@@ -842,7 +1016,7 @@ def check_last_value(result: Result, root: Path, records):
     wrong = []
     for (kind, ident, field), (seq, value) in sorted(last.items()):
         current = field_values(root, kind, [ident], field)[ident]
-        if norm(current) != norm(value):
+        if claim_norm(field, current) != claim_norm(field, value):
             wrong.append({"id": ident, "field": field, "seq": seq})
     result.check("acked_value_is_final", not wrong and bool(last or not planned), fields=len(last),
                  wrong=wrong[:5] or None)
@@ -895,7 +1069,7 @@ def plan_write(kind: str, inv: dict, *, worker: int, workers: int, mode: str, co
         measured = index >= warmup
         task = own[index % len(own)]
         label = f"write.{kind}"
-        base = {"t": "tool", "label": label, "measured": measured}
+        base = {"t": "tool", "label": label, "measured": measured, "warmup": not measured}
         if kind in ("meta", "path", "membership"):
             field = {"meta": "priority", "path": "anchors", "membership": "phase"}[kind]
             now = norm(current.get(field, {}).get(task))
@@ -964,7 +1138,12 @@ def plan_write(kind: str, inv: dict, *, worker: int, workers: int, mode: str, co
             op["composite" if not invalid else "invalid_composite"] = checks
             ops.append(op)
         elif kind == "noop":
-            value = norm(current.get("priority", {}).get(task)) or "medium"
+            # Only targets whose stored priority is known: a no-op of an invented value is a write.
+            known = [t for t in own if norm(current.get("priority", {}).get(t)) in PRIORITIES]
+            if not known:
+                raise Refused("no noop target with a known priority")
+            task = known[index % len(known)]
+            value = norm(current["priority"][task])
             ops.append(dict(base, tool="backlog_update_task", noop_ok=True, noop_check=["task", task, "priority", value],
                             kw={"task_id": task, "field": "priority", "value": value}))
         elif kind == "invalid":
@@ -973,12 +1152,12 @@ def plan_write(kind: str, inv: dict, *, worker: int, workers: int, mode: str, co
         elif kind == "retry":
             request = f"n16-retry-{uuid.UUID(int=rng.getrandbits(128)).hex}"
             value = text_value(rng, worker, index, "retry")
-            ops.append({"t": "raw", "label": label, "measured": measured, "scope": scope, "request_id": request,
+            ops.append({"t": "raw", "label": label, "measured": measured, "warmup": not measured, "scope": scope, "request_id": request,
                         "operation": "task.patch", "repeat": 2, "check": ["task", task, "next_step", value],
                         "arguments": {"id": task, "set": {"next_step": value}}})
         elif kind == "cas":
             value = text_value(rng, worker, index, "cas")
-            ops.append({"t": "raw", "label": label, "measured": measured, "scope": f"{scope}-w{worker}",
+            ops.append({"t": "raw", "label": label, "measured": measured, "warmup": not measured, "scope": f"{scope}-w{worker}",
                         "request_id": f"n16-cas-{worker}-{index}-{uuid.UUID(int=rng.getrandbits(128)).hex[:8]}",
                         "operation": "task.patch", "cas": True, "expect": "conflict-or-ok",
                         "check": ["task", task, "next_step", value],
@@ -999,17 +1178,17 @@ def plan_read(kind: str, inv: dict, *, count: int, warmup: int, rng, worker=0) -
         measured = index >= warmup
         task = rng.choice(tasks)
         if kind == "details":
-            ops.append({"t": "tool", "tool": "backlog_get_task", "label": "read.details", "measured": measured,
+            ops.append({"t": "tool", "tool": "backlog_get_task", "label": "read.details", "measured": measured, "warmup": not measured,
                         "kw": {"task_id": task}})
         elif kind == "search":
-            ops.append({"t": "tool", "tool": "backlog_search", "label": "read.search", "measured": measured,
+            ops.append({"t": "tool", "tool": "backlog_search", "label": "read.search", "measured": measured, "warmup": not measured,
                         "kw": {"query": rng.choice(inv["words"])}})
         elif kind == "context":
-            ops.append({"t": "tool", "tool": "backlog_context", "label": "read.context", "measured": measured,
+            ops.append({"t": "tool", "tool": "backlog_context", "label": "read.context", "measured": measured, "warmup": not measured,
                         "kw": {"focus": task, "scope": "task"}})
         elif kind in ("viewer.full", "viewer.unchanged", "viewer.delta"):
             mode = kind.split(".")[1]
-            op = {"t": "viewer", "mode": mode, "label": f"read.{kind}", "measured": measured}
+            op = {"t": "viewer", "mode": mode, "label": f"read.{kind}", "measured": measured, "warmup": not measured}
             if mode == "delta":
                 op.update(write_task=task, write_value=text_value(rng, worker, index, "viewer"))
             ops.append(op)
@@ -1079,6 +1258,7 @@ def read_during_writes(run: Run, ds: Dataset, clients, mode):
                           rng=run.rng, scope="n16")
         for op in plan:
             op["commit"] = "optional"  # a looping writer replays its values; a replay may be a no-op
+            op["noop_ok"] = True
         plans.append(plan)
     records, meta = run_clients(run, ds.root, plans, label="read-during-writes", prime=PRIME, loop_until_first=True)
     res.data["run"] = meta
@@ -1092,6 +1272,7 @@ def read_during_writes(run: Run, ds: Dataset, clients, mode):
               writes=len(writes))
     check_unexpected(res, records)
     check_acks(res, ds.root, writes)
+    check_noops(res, ds.root, writes)
     return res
 
 
@@ -1196,6 +1377,7 @@ def write_scenario(kind):
         else:
             check_unexpected(res, records)
         acked = check_acks(res, ds.root, records, writes_expected=kind not in ("noop", "invalid"))
+        check_noops(res, ds.root, records)
         distinct_acked = len({r["seq"] for r in acked})
         if kind not in ("noop", "invalid", "retry"):
             res.check("commits>=distinct_acked_seqs", commits >= distinct_acked, commits=commits, acked=distinct_acked)
@@ -1256,7 +1438,7 @@ def write_scenario(kind):
             values = field_values(ds.root, "task", sorted({t for t, _ in planned}), "priority")
             changed = [t for t, v in planned if norm(values.get(t)) != norm(v)]
             res.check("noop_value_unchanged", bool(planned) and not changed, tasks=len(planned), changed=len(changed) or None)
-            res.data["noop_answers_not_persisted"] = sum(bool(r.get("noop")) for r in records)
+            res.data["noop_answers_unchanged"] = sum(bool(r.get("noop")) for r in records)
             res.check("noop_changes_no_domain_field", not others, commits=after - before, fields=others or None)
         if kind == "invalid":
             res.check("no_commit", after == before and commits == 0, commits=commits)
@@ -1363,6 +1545,29 @@ def sync_once(client, **kwargs):
     return result, time.perf_counter() - started
 
 
+SYNC_SETTLE_S = 600  # bounded total for one sync retried under its own id while it answers pending
+
+
+def sync_retryable(result) -> bool:
+    """A pending sync the coordinator asks to be retried under the same id (e.g. its time budget ran
+    out); a pending held by quarantined or drifting files is settled, not retryable."""
+    return isinstance(result, dict) and result.get("state") == "pending" and any(
+        "retry the same sync id" in str(n) for n in result.get("notices") or ())
+
+
+def sync_settled(client, *, bound=SYNC_SETTLE_S, **kwargs):
+    """(result, seconds, attempts): one sync, retried with the SAME request id while it answers a
+    retryable pending, until it settles or `bound` seconds pass."""
+    request_id = uuid.uuid4().hex
+    started = time.perf_counter()
+    attempts = 0
+    while True:
+        result = client.sync(caller_scope="n16-sync", request_id=request_id, **kwargs)
+        attempts += 1
+        if not sync_retryable(result) or time.perf_counter() - started >= bound:
+            return result, time.perf_counter() - started, attempts
+
+
 def sync_summary(result) -> dict:
     if not isinstance(result, dict):
         return {"type": type(result).__name__}
@@ -1412,21 +1617,26 @@ def sync_dirty(run: Run, ds: Dataset, clients, mode):
     res = Result("sync.dirty", ds.name, clients=1, cells=["Sync: dirty projections"])
     client = start_coordinator(run, ds.root)
     inv = ds.inventory()
-    times, lost, summaries = [], [], []
+    times, lost, unsettled, summaries, retried = [], [], [], [], 0
     for index in range(run.args.sync_samples):
         task = inv["tasks"][(index * 7) % len(inv["tasks"])]
         marker = f"n16-external-edit-{uuid.uuid4().hex[:12]}"
         edit_task_file(ds.root, task, marker)
-        result, seconds = sync_once(client)
+        # A first sync of a fresh copy can exhaust its budget and answer pending: that sync is retried
+        # under its own id until it settles; only then is the edit judged.
+        result, seconds, attempts = sync_settled(client)
+        retried += attempts > 1
         times.append(seconds)
-        summaries.append(sync_summary(result))
+        summaries.append(dict(sync_summary(result), attempts=attempts))
         if marker not in body_of(ds.root, task):
-            lost.append(task)
+            (unsettled if sync_retryable(result) else lost).append(task)
     res.measure("sync.dirty_one_file", times)
     if run.sync_required:
         res.check(f"samples>={run.sync_required}", len(times) >= run.sync_required, measured=len(times))
     res.data["sync"] = summaries[:3]
-    res.check("external_edit_imported", not lost, edits=run.args.sync_samples, lost=len(lost))
+    res.data["retried_pending_syncs"] = retried
+    res.check("external_edit_imported", not lost and not unsettled, edits=run.args.sync_samples, lost=len(lost),
+              unsettled_after_bound=len(unsettled) or None)
     return res
 
 
@@ -1467,6 +1677,21 @@ def sync_conflict(run: Run, ds: Dataset, clients, mode):
     return res
 
 
+def checkout_precondition(baseline, quarantined) -> str | None:
+    """Why this copy cannot exercise managed checkouts, or None. Managed Git rightly refuses while
+    projections are unsynchronized; when every unresolved path is a file the store had already
+    quarantined before the run, that is the dataset's state, not a correctness failure."""
+    if not isinstance(baseline, dict) or baseline.get("state") != "refused":
+        return None
+    if not str(baseline.get("reason", "")).startswith("projections are not synchronized"):
+        return None
+    unresolved = set((baseline.get("sync") or {}).get("unresolved") or ())
+    if not unresolved or not unresolved <= set(quarantined):
+        return None
+    return (f"managed Git refuses: projections are not synchronized; {len(unresolved)} pre-existing "
+            f"quarantined file(s) unresolved")
+
+
 @scenario("sync.checkout", group="sync", kind="check", cells=("Sync: checkout/worktree",))
 def sync_checkout(run: Run, ds: Dataset, clients, mode):
     """Linked worktree edit imported against its own bases; managed checkouts keep store and files
@@ -1474,11 +1699,18 @@ def sync_checkout(run: Run, ds: Dataset, clients, mode):
     (N13), released with `take_published` without losing the store's value."""
     res = Result("sync.checkout", ds.name, kind="check", clients=1, cells=["Sync: checkout/worktree"])
     root = copy_project(run, ds.root, "sync-checkout")
+    # Snapshot before the coordinator starts: a quarantine that appears during the run is a failure.
+    preexisting = quarantined_files(root)
     client = start_coordinator(run, root)
     client.flush(high_water(root))
     started = time.perf_counter()
     baseline = client.git_run(kind="commit", message="n16 baseline", caller_scope="n16-git")
     res.measure("sync.managed_commit", [time.perf_counter() - started])
+    unmet = checkout_precondition(baseline, preexisting)
+    if unmet:
+        res.precondition(unmet)
+        stop_coordinator(root)
+        return res
     res.check("baseline_commit_completed", baseline.get("state") == "completed" and not git(root, "status", "--porcelain", "--", ".taskmaster").strip(),
               state=baseline.get("state"))
     inv = ds.inventory()
@@ -1779,6 +2011,23 @@ class blocked_export:
             handle.close()
 
 
+def blocked_replace_settled(root: Path, flushed, rel, text, value) -> bool:
+    """The released export landed: a flush answered, the target file holds the committed value, no
+    notice names it, and its own projection rows are settled - no pending, claimed or conflict job,
+    and the file is neither quarantined, flagged nor drifting. Notices that name no file ("durable
+    jobs remain", "publisher busy") are judged through those rows, never taken as settled."""
+    from taskmaster.native import projection
+    if not isinstance(flushed, dict) or value not in text:
+        return False
+    named = re.compile(rf"(?<![\w/.-]){re.escape(rel)}(?![\w/.-])")
+    if any(named.search(str(n)) for n in flushed.get("notices") or ()):
+        return False
+    with ro(root) as c:
+        open_jobs = c.execute("SELECT COUNT(*) FROM projection_jobs WHERE file=? AND state IN "
+                              "('pending','claimed','conflict')", (rel,)).fetchone()[0]
+        return open_jobs == 0 and projection.held_file(c, rel) is None
+
+
 @scenario("failure.blocked_replace", group="failure", kind="check", cells=("Failure: blocked file replacement",))
 def failure_blocked(run: Run, ds: Dataset, clients, mode):
     res = Result("failure.blocked_replace", ds.name, kind="check", clients=1, cells=["Failure: blocked file replacement"])
@@ -1796,11 +2045,12 @@ def failure_blocked(run: Run, ds: Dataset, clients, mode):
         time.sleep(1.0)
         during = client.flush(receipt["commit_seq"])
         on_disk_during = value in path.read_text(encoding="utf-8")
+    rel = f"tasks/{task}.md"
     after = None
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         after = client.flush(receipt["commit_seq"])
-        if after.get("state") == "exported":
+        if blocked_replace_settled(root, after, rel, path.read_text(encoding="utf-8"), value):
             break
         time.sleep(0.5)
     res.data["flush_during"] = {k: during.get(k) for k in ("state", "through")} if isinstance(during, dict) else None
@@ -1809,8 +2059,11 @@ def failure_blocked(run: Run, ds: Dataset, clients, mode):
     res.check("block_held_the_file", not on_disk_during)
     res.check("blocked_export_not_reported_exported", (during or {}).get("state") not in (None, "exported"),
               state=(during or {}).get("state"))
-    res.check("export_completes_after_release", (after or {}).get("state") == "exported"
-              and value in path.read_text(encoding="utf-8"))
+    # Judged on the target file: a whole-projection "exported" never holds while an unrelated file
+    # is quarantined (the CodeMaestro copy carries three).
+    res.check("export_completes_after_release",
+              blocked_replace_settled(root, after, rel, path.read_text(encoding="utf-8"), value),
+              state=(after or {}).get("state"))
     stop_coordinator(root)
     return res
 
@@ -1836,6 +2089,7 @@ def failure_expired_lease(run: Run, ds: Dataset, clients, mode):
     records, meta = run_clients(run, root, [holder, taker], label="lease", prime=PRIME)
     got = {r["op"]: r for r in records}
     res.data["run"] = meta
+    check_unexpected(res, records)  # the prime and every op not expected to be refused
     res.check("holder_picked", got.get("lease.pick_a", {}).get("ok"), error=redact(got.get("lease.pick_a", {}).get("error")))
     res.check("live_lease_refuses_pick", got.get("lease.pick_b_live", {}).get("ok") is False)
     res.check("live_lease_refuses_release", got.get("lease.release_b_live", {}).get("ok") is False)
@@ -2149,12 +2403,17 @@ def markdown(report) -> str:
              f"Code `{report['meta']['git_sha'][:10]}`, Python {report['meta']['python'].split()[0]}, "
              f"SQLite {report['meta']['sqlite']}, {report['meta']['machine']}. Samples >= {report['meta']['samples_required']} "
              f"per steady-state scenario after {report['meta']['warmup']} warmup ops.", ""]
-    failed = [r for r in report["results"] if r["verdict"] not in ("pass", "skipped")]
+    failed = [r for r in report["results"] if r["verdict"] not in ("pass", "skipped", "precondition")]
     skipped = [r for r in report["results"] if r["verdict"] == "skipped"]
+    unmet = [r for r in report["results"] if r["verdict"] == "precondition"]
     passed = sum(r["verdict"] == "pass" for r in report["results"])
     lines += ["## Correctness", "",
               f"{passed} of {len(report['results'])} scenario runs pass their checks; {len(failed)} fail; "
-              f"{len(skipped)} skipped (see Not run).", ""]
+              f"{len(unmet)} precondition not met; {len(skipped)} skipped (see Not run).", ""]
+    if unmet:
+        lines += ["Precondition not met (not evidence; not a correctness failure):", ""]
+        lines += [f"- {r['dataset']} {r['scenario']}: {r.get('precondition')}" for r in unmet]
+        lines.append("")
     if failed:
         lines += ["| Dataset | Scenario | Clients | Mode | Failed checks |", "|---|---|---|---|---|"]
         for r in failed:
@@ -2183,7 +2442,8 @@ def markdown(report) -> str:
     if report.get("datasets"):
         lines += ["## Datasets and adoption (cold, separate)", ""]
         for name, info in report["datasets"].items():
-            lines.append(f"- **{name}**: counts {info.get('counts')}, adoption {info.get('adoption')}")
+            lines.append(f"- **{name}**: counts {info.get('counts')}, adoption {info.get('adoption')}"
+                         + "".join(f"; {note}" for note in info.get("notes") or ()))
         lines.append("")
     if report.get("instrumented"):
         lines += ["## Instrumented pass (work counters; its latencies are not the reported latencies)", "",
@@ -2294,7 +2554,7 @@ def main(argv=None) -> int:
     run = Run(args)
     run.required = args.samples
     run.sync_required = 0 if args.smoke else 200
-    run.work.mkdir(parents=True, exist_ok=True)
+    claim_work(run.work)
     os.environ.pop(METRICS_ENV, None)  # latency samples are uninstrumented, whatever the shell says
     metrics = metrics_module()
     if metrics is not None:
@@ -2322,6 +2582,7 @@ def main(argv=None) -> int:
         ds = prepare_dataset(run, dataset_name)
         report["datasets"][dataset_name] = {"prepare_s": round(time.perf_counter() - started, 2),
                                             "adoption": ds.info.get("adoption"), "counts": ds.inventory()["counts"],
+                                            "notes": ds.inventory().get("notes") or [],
                                             "generator": {k: ds.info.get("generator", {}).get(k)
                                                           for k in ("seed", "scale", "stats_sha256", "files")}}
         for pass_name in ("uninstrumented", "instrumented") if args.instrumented else ("uninstrumented",):
@@ -2367,12 +2628,16 @@ def main(argv=None) -> int:
                       "pass": sum(r["verdict"] == "pass" for r in report["results"]),
                       "fail": sum(r["verdict"] == "fail" for r in report["results"]),
                       "skipped": sum(r["verdict"] == "skipped" for r in report["results"]),
+                      "precondition": sum(r["verdict"] == "precondition" for r in report["results"]),
                       "budget_missed": sum(b["status"] == "missed" for b in report["budgets"])}, indent=1))
-    everything = report["results"] + report["instrumented"]
+    return exit_status(report["results"] + report["instrumented"])
+
+
+def exit_status(everything) -> int:
     if any(r["verdict"] == "fail" for r in everything):
         return 1
-    if any(r["verdict"] == "skipped" or r.get("skipped_cells") for r in everything):
-        return 2  # nothing failed, but part of the selection did not run: not a clean pass
+    if any(r["verdict"] in ("skipped", "precondition") or r.get("skipped_cells") for r in everything):
+        return 2  # nothing failed, but part of the selection did not run (or could not): not a clean pass
     return 0
 
 

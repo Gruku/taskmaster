@@ -40,6 +40,34 @@ elif fault == "strip_seq":  # real write, answer without the sequence suffix
     bs.backlog_update_task = strip
 elif fault == "swallow":  # a failure that does not start with "Error"
     bs.backlog_update_task = lambda *args, **kwargs: "Could not update: store unavailable"
+elif fault == "fake_noop":  # write nothing, answer as though the value already matched
+    def fake_noop(task_id, field="", value="", **_):
+        return f"No change to `{task_id}` field `{field}` — already `{value}`"
+    bs.backlog_update_task = fake_noop
+elif fault == "fake_noop_half":  # every other update writes nothing and answers as though unchanged
+    def half(task_id, field="", value="", **kwargs):
+        calls["n"] += 1
+        if calls["n"] % 2 == 0:
+            return f"No change to `{task_id}` field `{field}` — already `{value}`"
+        return real_update(task_id, field, value, **kwargs)
+    bs.backlog_update_task = half
+elif fault == "fail_first":  # a client's first (warmup) call fails: a cold-start defect
+    real_get = bs.backlog_get_task
+
+    def first(real):
+        def call(*args, **kwargs):
+            calls["n"] += 1
+            return "Error: coordinator not ready" if calls["n"] == 1 else real(*args, **kwargs)
+        return call
+    bs.backlog_update_task, bs.backlog_get_task = first(real_update), first(real_get)
+elif fault == "fail_first_any":  # the process's first call of ANY tool fails - the unmeasured prime included
+    def first_call_fails(real):
+        def call(*args, **kwargs):
+            calls["n"] += 1
+            return "Error: coordinator not ready" if calls["n"] == 1 else real(*args, **kwargs)
+        return call
+    for name in ("backlog_list_tasks", "backlog_update_task", "backlog_get_task"):
+        setattr(bs, name, first_call_fails(getattr(bs, name)))
 elif fault == "reuse_id":  # creates report an EXISTING task id (distinct per call)
     existing = sorted(p.stem for p in (root / ".taskmaster/tasks").glob("*.md"))
 
