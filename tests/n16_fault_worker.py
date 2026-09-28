@@ -83,6 +83,75 @@ elif fault == "partial_composite":  # an invalid composite commits its valid mem
             return "Error: unknown task n16-missing"
         return real_batch(*args, commands=commands, atomic=atomic, **kwargs)
     bs.backlog_batch_update = partial
+elif fault == "drop_link":  # acknowledge a link write with an existing sequence, link nothing
+    def drop_link(action="", source="", target="", type="relates_to", **_):
+        return f"ok: linked {source} -[{type}]-> {target} [seq {high_water()}]"
+    bs.backlog_link = drop_link
+elif fault == "fake_link_noop":  # link nothing, answer as though the link state already matched
+    def fake_link_noop(action="", source="", target="", type="relates_to", **_):
+        if action == "remove":
+            return f"ok: no-op (no links from {source} to {target})"
+        return f"ok: linked {source} -[{type}]-> {target} (no-op, link already present)"
+    bs.backlog_link = fake_link_noop
+elif fault == "clobber_link":  # each create is acked truthfully, then an unacked commit removes it
+    real_link = bs.backlog_link
+
+    def clobber(action="", source="", target="", type="relates_to", **kwargs):
+        answer = real_link(action=action, source=source, target=target, type=type, **kwargs)
+        if action == "create":
+            real_link(action="remove", source=source, target=target, type=type)
+        return answer
+    bs.backlog_link = clobber
+elif fault == "skip_inverse":  # creates commit the source side only, in process, with a real sequence
+    import uuid
+    from taskmaster.native import workflow
+    from taskmaster.native.commands import execute
+    real_link, real_inverse = bs.backlog_link, workflow._write_inverse
+
+    def forward_only(transaction, target_kind, target, *, source, link_type, remove=False, fallback=False):
+        if remove:
+            real_inverse(transaction, target_kind, target, source=source, link_type=link_type, remove=True,
+                         fallback=fallback)
+    workflow._write_inverse = forward_only
+
+    def skip_inverse(action="", source="", target="", type="relates_to", **kwargs):
+        if action != "create":
+            return real_link(action=action, source=source, target=target, type=type, **kwargs)
+        connection = sqlite3.connect(root / ".taskmaster/local/store.db", isolation_level=None, timeout=60)
+        try:
+            store_id = connection.execute("SELECT value FROM native_manifest WHERE key='store_id'").fetchone()[0]
+            receipt = execute(connection, {"protocol": 2, "store_id": store_id, "caller_scope": "n16-fault",
+                                           "request_id": uuid.uuid4().hex, "operation": "link.create",
+                                           "arguments": {"source": source, "target": target, "type": type,
+                                                         "note": ""}, "expected_revisions": []})
+        finally:
+            connection.close()
+        return f"ok: linked {source} -[{type}]-> {target} [seq {receipt['commit_seq']}]"
+    bs.backlog_link = skip_inverse
+elif fault == "keep_last":  # the client's last remove commits, then the store's link rows come back, no event
+    real_link = bs.backlog_link
+    removes = {"left": sum(1 for op in json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))["ops"]
+                           if op.get("tool") == "backlog_link" and op["kw"].get("action") == "remove")}
+
+    def keep_last(action="", source="", target="", type="relates_to", **kwargs):
+        if action != "remove":
+            return real_link(action=action, source=source, target=target, type=type, **kwargs)
+        removes["left"] -= 1
+        if removes["left"]:
+            return real_link(action=action, source=source, target=target, type=type, **kwargs)
+        connection = sqlite3.connect(root / ".taskmaster/local/store.db", timeout=60, isolation_level=None)
+        try:
+            saved = connection.execute(
+                "SELECT d.* FROM declared_links d JOIN entity_core e ON e.entity_key=d.entity_key WHERE d.field='links' "
+                "AND ((e.public_id=? AND d.target_id=?) OR (e.public_id=? AND d.target_id=?))",
+                (source, target, target, source)).fetchall()
+            answer = real_link(action=action, source=source, target=target, type=type, **kwargs)
+            for row in saved:
+                connection.execute(f"INSERT OR REPLACE INTO declared_links VALUES({','.join('?' * len(row))})", row)
+        finally:
+            connection.close()
+        return answer
+    bs.backlog_link = keep_last
 elif fault == "die_before_ready":  # a client that crashes during startup
     sys.exit(7)
 

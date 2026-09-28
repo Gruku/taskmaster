@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import bisect
 from contextlib import closing
 import fnmatch
 import hashlib
@@ -230,6 +231,8 @@ class Worker:
                                      requested=kwargs.get("value"))
                 if ok and isinstance(result, str) and UNCHANGED.search(result):
                     record["noop"] = True
+                elif ok and op.get("noop_ok") and op.get("link") and seq_of(result) is None:
+                    record["noop"] = True  # the link state already matched: check_noops verifies the store
             except Exception as exc:  # noqa: BLE001 - an exception is an outcome to report
                 result, ok, error = None, False, f"{type(exc).__name__}: {exc}"[:300]
             record["ms"] = (time.perf_counter() - started) * 1000
@@ -877,8 +880,8 @@ def record_claims(record) -> list:
         claims.append(("task", record["id"], None, None))
     if record.get("target"):  # an archive
         claims.append(("task", record["target"], "status", "archived"))
-    if record.get("link"):
-        claims.append(("*", record["link"][0], "links", None))
+    if record.get("link"):  # the commit writes links on either end (a create may only repair the inverse)
+        claims.append(("*", tuple(record["link"][:2]), "links", None))
     return claims
 
 
@@ -895,7 +898,8 @@ def check_acks(result: Result, root: Path, records, *, writes_expected=True):
                 missing.append(r["seq"])
                 continue
             for kind, ident, field, value in record_claims(r):
-                hit = [e for e in events if e["id"] == ident and kind in ("*", e["kind"])]
+                hit = [e for e in events if (e["id"] in ident if isinstance(ident, tuple) else e["id"] == ident)
+                       and kind in ("*", e["kind"])]
                 if field is not None and value is not None and hit:
                     # Judge the value AS OF the acked seq, not that commit's diff: a same-value write
                     # after the minute rolls over commits only `last_referenced`, truthfully.
@@ -927,7 +931,14 @@ def check_noops(result: Result, root: Path, records):
     it); otherwise the store must have held the requested value at some point during the call: as of
     the high-water read before it, or set by an event up to the one read after it."""
     last, unverified, checked = {}, [], 0
+    link_noops = [r for r in records if r.get("link") and r.get("noop")]
+    ledger = LinkLedger(root, {x for r in link_noops for x in r["link"][:2]}) if link_noops else None
     for r in sorted(records, key=lambda r: (r.get("w"), r.get("n"))):
+        if r.get("link") and r.get("noop"):
+            checked += 1
+            if not link_noop_held_in_store(root, r, ledger):
+                unverified.append({"id": r["link"][0], "field": "links", "w": r.get("w"), "n": r.get("n")})
+            continue
         check = r.get("check")
         if not check or check[2] is None:
             continue
@@ -945,6 +956,165 @@ def check_noops(result: Result, root: Path, records):
             last.pop(key, None)  # a failed write's effect is unknown
     result.check("noop_answers_verified", not unverified, noops=checked, unverified=len(unverified) or None,
                  examples=unverified[:5] or None)
+
+
+LINK_TYPE = "relates_to"
+EVER = 1 << 62
+
+
+def effective_links(doc: dict, kind: str) -> list:
+    """The links the tools read: the stored `links`, or those synthesized from legacy fields."""
+    from taskmaster import taskmaster_v3 as v3
+    doc = dict(doc)
+    v3._fallback_links_if_absent(doc, kind)
+    return v3.entity_links(doc)
+
+
+class LinkLedger:
+    """Each entity's effective links after every one of its events (the documents folded from
+    domain_events), so a link state can be read as of any sequence."""
+
+    def __init__(self, root: Path, ids):
+        ids = sorted(set(ids))
+        rows = []
+        with ro(root) as c:
+            for at in range(0, len(ids), 500):
+                part = ids[at:at + 500]
+                rows += c.execute("SELECT seq,commit_key,kind,id,fields,after FROM domain_events WHERE id IN "
+                                  f"({','.join('?' * len(part))})", part).fetchall()
+        docs, self.points, self.kinds = {}, {}, {}
+        for seq, key, kind, ident, fields, after in sorted(rows):
+            fields = json.loads(fields or "[]")
+            try:
+                after = json.loads(after) if after else {}
+            except ValueError:
+                after = {}
+            after = after if isinstance(after, dict) else {}
+            doc = docs.setdefault(ident, {})
+            self.kinds[ident] = kind
+            for field in fields:
+                if field in after:
+                    doc[field] = after[field]
+                else:
+                    doc.pop(field, None)
+            links = frozenset((l.get("type"), l.get("target")) for l in effective_links(doc, kind) if isinstance(l, dict))
+            point = self.points.setdefault(ident, {"seq": [], "links": [], "commit": [], "touched": []})
+            point["seq"].append(seq)
+            point["links"].append(links)
+            point["commit"].append(key if key is not None else f"seq:{seq}")
+            point["touched"].append("links" in fields)
+
+    def as_of(self, ident, seq):
+        """The entity's effective links as of `seq`, or None when the store held no event of it yet."""
+        point = self.points.get(ident)
+        at = bisect.bisect_right(point["seq"], seq) - 1 if point else -1
+        return point["links"][at] if at >= 0 else None
+
+    def pair_as_of(self, source, target, seq):
+        """(source links target, target links back) as of `seq`; None when either end is unknown."""
+        forward, backward = self.as_of(source, seq), self.as_of(target, seq)
+        if forward is None or backward is None:
+            return None
+        return (LINK_TYPE, target) in forward, (LINK_TYPE, source) in backward
+
+    def seqs_between(self, ident, low, high):
+        return [q for q in (self.points.get(ident) or {"seq": []})["seq"] if low < q <= high]
+
+
+def store_links(root: Path, ids, kinds) -> dict:
+    """Each entity's effective links as the store holds them now (its current document, the legacy
+    fallback applied, as the tools read it); None for an entity the store does not hold."""
+    from taskmaster.native.queries import Repository
+    out = {}
+    with ro(root) as c:
+        with Repository(c).snapshot() as snap:
+            for ident in ids:
+                try:
+                    doc = snap.get(kinds.get(ident) or "issue", ident)["fields"]
+                except KeyError:
+                    out[ident] = None
+                    continue
+                out[ident] = frozenset((l.get("type"), l.get("target"))
+                                       for l in effective_links(doc, kinds.get(ident) or "issue") if isinstance(l, dict))
+    return out
+
+
+def link_store_divergence(ledger: LinkLedger, stored: dict) -> list:
+    """Entities whose links rebuilt from the event log differ from the store's: the event-based link
+    checks prove nothing about a store the log does not describe (a change without an event)."""
+    diverged = []
+    for ident in sorted(stored):
+        rebuilt = ledger.as_of(ident, EVER)
+        if rebuilt is None or stored[ident] is None or rebuilt != stored[ident]:
+            diverged.append({"id": ident, "events_only": len(rebuilt - stored[ident]) if rebuilt and stored[ident] is not None else None,
+                             "store_only": len(stored[ident] - rebuilt) if rebuilt is not None and stored[ident] else None})
+    return diverged
+
+
+def links_divergence(root: Path, ids, kinds) -> list:
+    ledger = LinkLedger(root, ids)
+    return link_store_divergence(ledger, store_links(root, ids, dict(kinds, **ledger.kinds)))
+
+
+def link_noop_held_in_store(root: Path, record, ledger=None) -> bool:
+    """A link no-op (create of a present link, remove of a missing one) is true only if both ends held
+    that state together at some point during the call: as of the high-water read before it, or after
+    an event of either end up to the one read after it. An unknown entity vouches for nothing."""
+    before, after = record.get("hw_before"), record.get("hw_after")
+    if not isinstance(before, int) or not isinstance(after, int):
+        return False
+    source, target, action = record["link"][:3]
+    ledger = ledger or LinkLedger(root, (source, target))
+    wanted = (action == "create",) * 2
+    points = [before] + sorted(set(ledger.seqs_between(source, before, after) + ledger.seqs_between(target, before, after)))
+    return any(ledger.pair_as_of(source, target, point) == wanted for point in points)
+
+
+def check_link_writes(result: Result, root: Path, records, *, ids, before):
+    """Link writes judged on BOTH ends (the tool writes the inverse on the target):
+    - link_acks_hold: as of the end of its commit, an acked create has the link and its inverse, an
+      acked remove has neither;
+    - link_changes_explained: every change to a scenario entity's links after `before` is exactly one
+      relates_to pair, made by a commit an op naming that pair (and action) acknowledged - an unacked
+      commit that drops or adds a link is a lost update;
+    - final_link_state: every create was followed by its remove, so no touched pair is left, either way."""
+    link_records = [r for r in records if r.get("link")]
+    ledger = LinkLedger(root, set(ids) | {x for r in link_records for x in r["link"][:2]})
+    acked = [r for r in link_records if r.get("ok") and r.get("seq")]
+    by_commit, wrong = {}, []
+    with ro(root) as c:
+        for r in acked:
+            row = c.execute("SELECT commit_key FROM domain_events WHERE seq=?", (r["seq"],)).fetchone()
+            if row is None:
+                wrong.append({"seq": r["seq"], "w": r.get("w"), "n": r.get("n")})
+                continue
+            key = row[0] if row[0] is not None else f"seq:{r['seq']}"
+            end = (c.execute("SELECT MAX(seq) FROM domain_events WHERE commit_key=?", (row[0],)).fetchone()[0]
+                   if row[0] is not None else r["seq"])
+            source, target, action = r["link"][:3]
+            by_commit.setdefault(key, set()).add((frozenset((source, target)), action))
+            if ledger.pair_as_of(source, target, end) != ((action == "create",) * 2):
+                wrong.append({"seq": r["seq"], "w": r.get("w"), "n": r.get("n")})
+    result.check("link_acks_hold", not wrong and bool(acked), acked=len(acked), wrong=len(wrong) or None,
+                 examples=wrong[:5] or None)
+    unexplained, changes = [], 0
+    for ident, point in ledger.points.items():
+        for at, seq in enumerate(point["seq"]):
+            if seq <= before or not point["touched"][at] or at == 0:
+                continue
+            diff = point["links"][at - 1] ^ point["links"][at]
+            if not diff:
+                continue
+            changes += 1
+            (link_type, other), = diff if len(diff) == 1 else ((None, None),)
+            action = "create" if (link_type, other) in point["links"][at] else "remove"
+            if link_type != LINK_TYPE or (frozenset((ident, other)), action) not in by_commit.get(point["commit"][at], ()):
+                unexplained.append({"id": ident, "seq": seq, "changed": len(diff)})
+    result.check("link_changes_explained", not unexplained, changes=changes, unexplained=len(unexplained) or None,
+                 examples=unexplained[:5] or None)
+    pairs = {frozenset(r["link"][:2]): tuple(r["link"][:2]) for r in link_records}
+    left = [pair for pair in pairs.values() if (ledger.pair_as_of(*pair, EVER) or (True, True)) != (False, False)]
+    result.check("final_link_state", not left, pairs=len(pairs), left=len(left))
 
 
 def noop_held_in_store(root: Path, record) -> bool:
@@ -1042,6 +1212,27 @@ def text_value(rng, worker, index, tag):
     return f"n16 {tag} w{worker} op{index} {uuid.UUID(int=rng.getrandbits(128)).hex[:10]}"
 
 
+def disjoint_link_pairs(sources, targets, links, workers) -> list:
+    """Every (source, target) pair a disjoint link run may use, in a fixed order the clients stripe.
+    Unordered: the tool writes the inverse link on the target, so A->B and B->A are one pair. A pair
+    already linked either way is left out (its create would be a no-op). Refused when the dataset
+    cannot give each client a pair of its own: overlapping clients would race, which is `same` mode."""
+    seen, pairs = set(), []
+    for source in sources:
+        for target in targets:
+            key = frozenset((source, target))
+            if source == target or key in seen:
+                continue
+            seen.add(key)
+            if target in (links.get(source) or ()) or source in (links.get(target) or ()):
+                continue
+            pairs.append((source, target))
+    if len(pairs) < workers:
+        raise Refused(f"disjoint link needs one unlinked source/target pair per client: dataset has "
+                      f"{len(pairs)} for {workers} clients")
+    return pairs
+
+
 def plan_write(kind: str, inv: dict, *, worker: int, workers: int, mode: str, count: int, warmup: int, rng,
                scope: str, current=None) -> list:
     """One client's ops. `current` holds the committed values before the run
@@ -1054,7 +1245,10 @@ def plan_write(kind: str, inv: dict, *, worker: int, workers: int, mode: str, co
     if mode == "same":
         own = [tasks[0]]
     else:
-        own = tasks[worker::workers][:max(1, min(50, len(tasks) // max(1, workers)))] or [tasks[worker % len(tasks)]]
+        # Disjoint: each client owns its own stripe of tasks; a stripe borrowed from a peer is not disjoint.
+        if kind not in ("link", "create", "archive") and len(tasks) < workers:
+            raise Refused(f"disjoint {kind} needs one task per client: dataset has {len(tasks)} for {workers} clients")
+        own = tasks[worker::workers][:max(1, min(50, len(tasks) // max(1, workers)))]
     ops = []
     total = count + warmup
     epics = inv["epics"] or [inv["task_epic"][tasks[0]]]
@@ -1065,6 +1259,10 @@ def plan_write(kind: str, inv: dict, *, worker: int, workers: int, mode: str, co
     must = "required" if mode != "same" else "optional"
     if kind == "link" and total % 2:
         total += 1  # every create is followed by its remove: the final state is known
+    if kind == "link" and mode != "same":
+        if not sources or not targets:
+            raise Refused("dataset has no link-capable issue/handover/idea ids")
+        mine = disjoint_link_pairs(sources, targets, current.get("links", {}), workers)[worker::workers]
     for index in range(total):
         measured = index >= warmup
         task = own[index % len(own)]
@@ -1098,16 +1296,21 @@ def plan_write(kind: str, inv: dict, *, worker: int, workers: int, mode: str, co
                             kw={"task_id": task, "field": "next_step", "value": value},
                             check=["task", task, "next_step", value]))
         elif kind == "link":
-            if not sources or not targets:
-                raise Refused("dataset has no link-capable issue/handover/idea ids")
-            source = sources[0] if mode == "same" else sources[worker % len(sources)]
-            linked = set(current.get("links", {}).get(source) or ())
-            free = [t for t in targets if t != source and t not in linked]
-            if not free:
-                raise Refused("no unlinked link target")
-            target = free[(index // 2 + worker) % len(free)]
             action = "create" if index % 2 == 0 else "remove"
-            ops.append(dict(base, tool="backlog_link", commit=must,
+            if mode == "same":
+                # Peers race on one source and overlapping targets: a create of a link a peer just made (or a
+                # remove of one a peer just removed) is a correct no-op, accepted only once the store confirms it.
+                if not sources or not targets:
+                    raise Refused("dataset has no link-capable issue/handover/idea ids")
+                source = sources[0]
+                linked = set(current.get("links", {}).get(source) or ())
+                free = [t for t in targets if t != source and t not in linked]
+                if not free:
+                    raise Refused("no unlinked link target")
+                target = free[(index // 2 + worker) % len(free)]
+            else:
+                source, target = mine[(index // 2) % len(mine)]
+            ops.append(dict(base, tool="backlog_link", commit=must, noop_ok=mode == "same",
                             kw={"action": action, "source": source, "target": target, "type": "relates_to"},
                             link=[source, target, action]))
         elif kind == "create":
@@ -1119,10 +1322,11 @@ def plan_write(kind: str, inv: dict, *, worker: int, workers: int, mode: str, co
                             kw={"title": f"n16 archive w{worker} c{index}", "epic": epic, "priority": "low",
                                 "phase": phases[0] if phases else ""}))
         elif kind == "composite":
-            group = [own[(index + k) % len(own)] for k in range(3)] if mode != "same" else [own[0]]
-            group = list(dict.fromkeys(group))
-            if len(group) < 3 and mode != "same":
-                group = list(dict.fromkeys(group + rng.sample(tasks, min(3, len(tasks)))))[:3]
+            # Two or three tasks: this client's own (padding from all tasks would borrow a peer's), or in
+            # `same` mode the first tasks, which every client contends on.
+            group = list(dict.fromkeys([own[(index + k) % len(own)] for k in range(3)] if mode != "same" else tasks[:3]))
+            if len(group) < 2:
+                raise Refused(f"{mode} composite needs two tasks per client: dataset has {len(tasks)} for {workers} clients")
             # Every client sends invalid composites (one in five, the first at index 2 or its last op).
             invalid = index % 5 == 2 or (total < 3 and index == total - 1)
             commands, checks = [], []
@@ -1329,11 +1533,9 @@ def current_values(root: Path, inv: dict, kind: str, clients: int) -> dict:
     ids = inv["tasks"][:clients * 50 + 50]
     out = {field: field_values(root, "task", ids, field) for field in ("priority", "anchors", "phase")}
     if kind == "link":
-        links = {}
-        for source in inv["link_sources"]:
-            value = field_values(root, inv["entity_kind"].get(source, "issue"), [source], "links")[source]
-            links[source] = [l.get("target") for l in value or [] if isinstance(l, dict)]
-        out["links"] = links
+        ids = set(inv["link_sources"]) | set(inv["link_targets"])
+        ledger = LinkLedger(root, ids)
+        out["links"] = {ident: sorted(target for _, target in ledger.as_of(ident, EVER) or ()) for ident in ids}
     return out
 
 
@@ -1351,6 +1553,9 @@ def write_scenario(kind):
             # Cross-process duplicates: odd workers replay their even neighbour's request ids concurrently.
             for w in range(1, clients, 2):
                 plans[w] = json.loads(json.dumps(plans[w - 1]))
+        link_ids = sorted(set(inv["link_sources"]) | set(inv["link_targets"]))
+        # The link checks rebuild state from the event log: the log must describe the store, before and after.
+        baseline = links_divergence(ds.root, link_ids, inv["entity_kind"]) if kind == "link" else []
         before, commits_before, tasks_before = high_water(ds.root), commit_count(ds.root), task_ids(ds.root)
         records, meta = run_clients(run, ds.root, plans, label=f"write-{kind}", prime=PRIME)
         after, commits_after, tasks_after = high_water(ds.root), commit_count(ds.root), task_ids(ds.root)
@@ -1379,7 +1584,9 @@ def write_scenario(kind):
         acked = check_acks(res, ds.root, records, writes_expected=kind not in ("noop", "invalid"))
         check_noops(res, ds.root, records)
         distinct_acked = len({r["seq"] for r in acked})
-        if kind not in ("noop", "invalid", "retry"):
+        if kind == "link":  # every link commit is an acknowledged one: no unacked write slips in
+            res.check("commits==distinct_acked_seqs", commits == distinct_acked, commits=commits, acked=distinct_acked)
+        elif kind not in ("noop", "invalid", "retry"):
             res.check("commits>=distinct_acked_seqs", commits >= distinct_acked, commits=commits, acked=distinct_acked)
         if kind in ("meta", "prose", "path", "membership"):
             check_last_value(res, ds.root, records)
@@ -1400,16 +1607,10 @@ def write_scenario(kind):
             res.check("archived_are_archived", bool(targets) and all(v == "archived" for v in status.values()),
                       archived=len(targets), wrong=len([i for i, v in status.items() if v != "archived"]) or None)
         if kind == "link":
-            touched = {}
-            for r in records:
-                if r.get("link"):
-                    touched.setdefault(r["link"][0], set()).add(r["link"][1])
-            present = []
-            for source, targets_ in touched.items():
-                value = field_values(ds.root, inv["entity_kind"].get(source, "issue"), [source], "links")[source]
-                now = {l.get("target") for l in value or [] if isinstance(l, dict)}
-                present += sorted(now & targets_)
-            res.check("final_link_state", not present, pairs=sum(len(v) for v in touched.values()), left=len(present))
+            check_link_writes(res, ds.root, records, ids=link_ids, before=before)
+            final = links_divergence(ds.root, link_ids, inv["entity_kind"])
+            res.check("links_match_store", not baseline and not final, entities=len(link_ids),
+                      before=len(baseline) or None, after=len(final) or None, examples=(final or baseline)[:5] or None)
         if kind == "composite":
             valid_ok = [r for r in records if r["op"] == "write.composite" and r.get("ok")]
             invalid_ops = [op for plan in plans for op in plan if op.get("invalid_composite")]
