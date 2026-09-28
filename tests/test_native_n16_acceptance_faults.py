@@ -199,3 +199,99 @@ def test_claimed_anchors_are_normalized_as_the_tool_stores_them(tmp_path, monkey
 ])
 def test_inventory_anchors_are_only_values_the_tool_round_trips(stored, usable):
     assert runner.inventory_anchors(stored) == usable
+
+
+# ── CodeMaestro-copy false positives (no processes) ─────────────────────────
+def test_inventory_drops_orphan_tasks_the_tools_cannot_resolve():
+    entities = {("task", "ok-001"): ({"epic": "e", "status": "todo"}, None, False),
+                ("task", "orphan-006"): ({"title": "file only"}, None, False),       # no backlog row
+                ("task", "no-epic-007"): ({"status": "todo"}, None, False),
+                ("task", "done-008"): ({"epic": "e", "status": "done"}, None, False)}
+    tasks, orphans = runner.inventory_tasks(entities)
+    assert [i for i, _ in tasks] == ["ok-001"] and orphans == 2
+
+
+def test_warmup_errors_are_not_unexpected_errors():
+    result = runner.Result("x", "small")
+    runner.check_unexpected(result, [{"ok": False, "warmup": True, "error": "x"}, {"ok": True}])
+    assert result.data["checks"][-1]["ok"] is True
+    runner.check_unexpected(result, [{"ok": False, "warmup": False, "error": "x"}])
+    assert result.data["checks"][-1]["ok"] is False
+
+
+def test_write_ops_mark_their_warmup():
+    inv = {"tasks": ["t-1"], "epics": ["e"], "task_epic": {"t-1": "e"}, "phases": ["p"], "link_sources": [],
+           "link_targets": []}
+    ops = runner.plan_write("prose", inv, worker=0, workers=1, mode="disjoint", count=2, warmup=1,
+                            rng=__import__("random").Random(1), scope="s")
+    assert [op.get("warmup") for op in ops] == [True, False, False]
+
+
+def test_noop_planner_skips_targets_whose_value_is_unknown():
+    inv = {"tasks": ["t-1", "t-2"], "epics": ["e"], "task_epic": {"t-1": "e", "t-2": "e"}, "phases": ["p"],
+           "link_sources": [], "link_targets": []}
+    plan = lambda current: runner.plan_write("noop", inv, worker=0, workers=1, mode="disjoint", count=4, warmup=0,
+                                             rng=__import__("random").Random(1), scope="s", current=current)
+    ops = plan({"priority": {"t-1": None, "t-2": "high"}})
+    assert {(op["kw"]["task_id"], op["kw"]["value"]) for op in ops} == {("t-2", "high")}
+    with pytest.raises(runner.Refused):
+        plan({"priority": {"t-1": None, "t-2": "<missing>"}})
+
+
+@pytest.mark.parametrize("notices, text, ok", [
+    ([], "body n16 blocked v1", True),
+    (["sync pending: handovers/_archive/2025/x.md: quarantined"], "body n16 blocked v1", True),  # unrelated file
+    ([], "body without the value", False),                                   # the file never got the value
+    (["export pending: tasks/t-1.md: retrying a blocked replace"], "body n16 blocked v1", False),
+    (["conflict: tasks/t-1.md differs from its base"], "body n16 blocked v1", False),
+])
+def test_blocked_replace_judges_the_target_file_not_the_whole_projection(notices, text, ok):
+    flushed = {"state": "pending", "notices": notices}
+    assert runner.blocked_replace_settled(flushed, "tasks/t-1.md", text, "n16 blocked v1") is ok
+
+
+def test_a_precondition_failure_is_distinct_and_never_evidence():
+    result = runner.Result("sync.checkout", "cm", kind="check")
+    result.precondition("projections are not synchronized: 3 pre-existing quarantined files")
+    data = result.finish()
+    assert data["verdict"] == "precondition"
+    assert runner.exit_status([data]) == 2  # not a clean pass, not a correctness failure
+    assert runner.exit_status([data, dict(data, verdict="fail")]) == 1
+    report = {"meta": {"started": "t", "git_sha": "0" * 10, "python": "3", "sqlite": "3", "machine": "m",
+                       "samples_required": 200, "warmup": 20}, "results": [data], "budgets": [], "skipped": []}
+    text = runner.markdown(report)
+    assert "precondition" in text.lower() and "0 of 1 scenario runs pass" in text
+
+
+def test_checkout_precondition_only_for_preexisting_quarantine():
+    refused = {"state": "refused", "reason": "projections are not synchronized; resolve the listed paths first",
+               "sync": {"state": "pending", "unresolved": ["handovers/a.md", "handovers/b.md"]}}
+    assert runner.checkout_precondition(refused, {"handovers/a.md", "handovers/b.md"})
+    assert runner.checkout_precondition(refused, {"handovers/a.md"}) is None      # a new unresolved file
+    assert runner.checkout_precondition({"state": "completed"}, {"handovers/a.md"}) is None
+    assert runner.checkout_precondition(dict(refused, reason="unknown checkout target"), {"handovers/a.md"}) is None
+
+
+class _PendingThenSettles:
+    def __init__(self, pending, final):
+        self.pending, self.final, self.ids = pending, final, []
+
+    def sync(self, *, caller_scope, request_id, **_):
+        self.ids.append(request_id)
+        if len(self.ids) <= self.pending:
+            return {"state": "pending", "unresolved": ["tasks/t.md"],
+                    "notices": ["sync pending: tasks/t.md: time budget exhausted or coordinator stopping; "
+                                "retry the same sync id"]}
+        return self.final
+
+
+def test_a_pending_sync_is_retried_with_the_same_id_until_it_settles():
+    client = _PendingThenSettles(2, {"state": "synchronized", "imports": [{"file": "tasks/t.md"}]})
+    result, seconds, attempts = runner.sync_settled(client, bound=60)
+    assert result["state"] == "synchronized" and attempts == 3 and len(set(client.ids)) == 1
+
+
+def test_a_sync_that_never_settles_stops_at_the_bound():
+    client = _PendingThenSettles(10 ** 6, None)
+    result, seconds, attempts = runner.sync_settled(client, bound=0.2)
+    assert result["state"] == "pending" and attempts >= 1 and len(set(client.ids)) == 1

@@ -209,7 +209,8 @@ class Worker:
 
     def run(self, op) -> dict:
         kind = op["t"]
-        record = {"op": op["label"], "measured": op.get("measured", True), "expect": op.get("expect", "ok")}
+        record = {"op": op["label"], "measured": op.get("measured", True), "expect": op.get("expect", "ok"),
+                  "warmup": op.get("warmup", False)}
         if kind == "tool":
             kwargs = dict(op["kw"])
             if op.get("archive_created") is not None:
@@ -493,13 +494,12 @@ def build_inventory(root: Path) -> dict:
     finally:
         store.reset_for_tests()
         shutil.rmtree(scratch, ignore_errors=True)
-    tasks = [(i, d) for (k, i), (d, b, a) in sorted(entities.items()) if k == "task" and not a
-             and d.get("status") not in ("archived", "done")]
+    tasks, orphans = inventory_tasks(entities)
     words = sorted({w for _, d in tasks[:400] for w in re.findall(r"[A-Za-z]{5,}", str(d.get("title", ""))).__iter__()})
     anchors = sorted({a for _, d in tasks for a in inventory_anchors(d.get("anchors"))})
     return {
         "tasks": [i for i, _ in tasks],
-        "task_priority": {i: d.get("priority", "medium") for i, d in tasks},
+        "task_priority": {i: d.get("priority") for i, d in tasks},
         "task_epic": {i: d.get("epic") for i, d in tasks},
         "epics": sorted({i for (k, i), (d, b, a) in entities.items() if k == "epic" and not a
                          and d.get("status") not in ("archived", "done")}),
@@ -511,7 +511,23 @@ def build_inventory(root: Path) -> dict:
         "anchors": anchors[:2000] or ["src/n16/a.py", "src/n16/b.py"],
         "words": words[:500] or ["alpha"],
         "counts": {k: sum(1 for (kk, _) in entities if kk == k) for k in {k for k, _ in entities}},
+        "notes": [f"{orphans} task(s) without an epic or status excluded: the tools answer 'not found' for them"]
+        if orphans else [],
     }
+
+
+def inventory_tasks(entities) -> tuple[list, int]:
+    """Open tasks the tools can resolve, and how many were excluded as orphans: a task file with no
+    backlog row has no epic or status, and every tool (legacy too) answers "not found" for it."""
+    tasks, orphans = [], 0
+    for (kind, ident), (doc, _body, archived) in sorted(entities.items()):
+        if kind != "task" or archived or doc.get("status") in ("archived", "done"):
+            continue
+        if not doc.get("epic") or not doc.get("status"):
+            orphans += 1
+            continue
+        tasks.append((ident, doc))
+    return tasks, orphans
 
 
 def inventory_anchors(stored) -> list:
@@ -716,6 +732,11 @@ class Result:
     def note(self, text):
         self.data["notes"].append(text)
 
+    def precondition(self, reason):
+        """The dataset cannot exercise this scenario (e.g. the product rightly refuses it): reported as
+        its own verdict, never a pass and never a correctness failure, and never budget evidence."""
+        self.data["precondition"] = reason
+
     def skip(self, cell, reason):
         """A matrix cell this scenario could not exercise: reported under "Not run", never as a pass."""
         self.data["skipped_cells"].append({"cell": cell, "reason": reason})
@@ -752,7 +773,9 @@ class Result:
 
     def finish(self):
         checks = self.data["checks"]
-        if not checks:
+        if self.data.get("precondition") and all(c["ok"] for c in checks):
+            self.data["verdict"] = "precondition"
+        elif not checks:
             self.data["verdict"] = "skipped"
             if not self.data["skipped_cells"]:
                 self.skip("; ".join(self.data["cells"]) or self.data["scenario"], "no correctness check ran")
@@ -868,7 +891,9 @@ def check_acks(result: Result, root: Path, records, *, writes_expected=True):
 
 
 def check_unexpected(result: Result, records):
-    bad = [r for r in records if not r.get("ok") and r.get("expect", "ok") not in ("error", "conflict-or-ok")]
+    # Warmup ops prime caches and connections; they are not the measured run.
+    bad = [r for r in records if not r.get("ok") and not r.get("warmup")
+           and r.get("expect", "ok") not in ("error", "conflict-or-ok")]
     result.check("no_unexpected_errors", not bad, count=len(bad),
                  examples=sorted({redact(r.get("error")) for r in bad})[:3] or None)
 
@@ -959,7 +984,7 @@ def plan_write(kind: str, inv: dict, *, worker: int, workers: int, mode: str, co
         measured = index >= warmup
         task = own[index % len(own)]
         label = f"write.{kind}"
-        base = {"t": "tool", "label": label, "measured": measured}
+        base = {"t": "tool", "label": label, "measured": measured, "warmup": not measured}
         if kind in ("meta", "path", "membership"):
             field = {"meta": "priority", "path": "anchors", "membership": "phase"}[kind]
             now = norm(current.get(field, {}).get(task))
@@ -1028,7 +1053,12 @@ def plan_write(kind: str, inv: dict, *, worker: int, workers: int, mode: str, co
             op["composite" if not invalid else "invalid_composite"] = checks
             ops.append(op)
         elif kind == "noop":
-            value = norm(current.get("priority", {}).get(task)) or "medium"
+            # Only targets whose stored priority is known: a no-op of an invented value is a write.
+            known = [t for t in own if norm(current.get("priority", {}).get(t)) in PRIORITIES]
+            if not known:
+                raise Refused("no noop target with a known priority")
+            task = known[index % len(known)]
+            value = norm(current["priority"][task])
             ops.append(dict(base, tool="backlog_update_task", noop_ok=True, noop_check=["task", task, "priority", value],
                             kw={"task_id": task, "field": "priority", "value": value}))
         elif kind == "invalid":
@@ -1037,12 +1067,12 @@ def plan_write(kind: str, inv: dict, *, worker: int, workers: int, mode: str, co
         elif kind == "retry":
             request = f"n16-retry-{uuid.UUID(int=rng.getrandbits(128)).hex}"
             value = text_value(rng, worker, index, "retry")
-            ops.append({"t": "raw", "label": label, "measured": measured, "scope": scope, "request_id": request,
+            ops.append({"t": "raw", "label": label, "measured": measured, "warmup": not measured, "scope": scope, "request_id": request,
                         "operation": "task.patch", "repeat": 2, "check": ["task", task, "next_step", value],
                         "arguments": {"id": task, "set": {"next_step": value}}})
         elif kind == "cas":
             value = text_value(rng, worker, index, "cas")
-            ops.append({"t": "raw", "label": label, "measured": measured, "scope": f"{scope}-w{worker}",
+            ops.append({"t": "raw", "label": label, "measured": measured, "warmup": not measured, "scope": f"{scope}-w{worker}",
                         "request_id": f"n16-cas-{worker}-{index}-{uuid.UUID(int=rng.getrandbits(128)).hex[:8]}",
                         "operation": "task.patch", "cas": True, "expect": "conflict-or-ok",
                         "check": ["task", task, "next_step", value],
@@ -1063,17 +1093,17 @@ def plan_read(kind: str, inv: dict, *, count: int, warmup: int, rng, worker=0) -
         measured = index >= warmup
         task = rng.choice(tasks)
         if kind == "details":
-            ops.append({"t": "tool", "tool": "backlog_get_task", "label": "read.details", "measured": measured,
+            ops.append({"t": "tool", "tool": "backlog_get_task", "label": "read.details", "measured": measured, "warmup": not measured,
                         "kw": {"task_id": task}})
         elif kind == "search":
-            ops.append({"t": "tool", "tool": "backlog_search", "label": "read.search", "measured": measured,
+            ops.append({"t": "tool", "tool": "backlog_search", "label": "read.search", "measured": measured, "warmup": not measured,
                         "kw": {"query": rng.choice(inv["words"])}})
         elif kind == "context":
-            ops.append({"t": "tool", "tool": "backlog_context", "label": "read.context", "measured": measured,
+            ops.append({"t": "tool", "tool": "backlog_context", "label": "read.context", "measured": measured, "warmup": not measured,
                         "kw": {"focus": task, "scope": "task"}})
         elif kind in ("viewer.full", "viewer.unchanged", "viewer.delta"):
             mode = kind.split(".")[1]
-            op = {"t": "viewer", "mode": mode, "label": f"read.{kind}", "measured": measured}
+            op = {"t": "viewer", "mode": mode, "label": f"read.{kind}", "measured": measured, "warmup": not measured}
             if mode == "delta":
                 op.update(write_task=task, write_value=text_value(rng, worker, index, "viewer"))
             ops.append(op)
@@ -1428,6 +1458,29 @@ def sync_once(client, **kwargs):
     return result, time.perf_counter() - started
 
 
+SYNC_SETTLE_S = 600  # bounded total for one sync retried under its own id while it answers pending
+
+
+def sync_retryable(result) -> bool:
+    """A pending sync the coordinator asks to be retried under the same id (e.g. its time budget ran
+    out); a pending held by quarantined or drifting files is settled, not retryable."""
+    return isinstance(result, dict) and result.get("state") == "pending" and any(
+        "retry the same sync id" in str(n) for n in result.get("notices") or ())
+
+
+def sync_settled(client, *, bound=SYNC_SETTLE_S, **kwargs):
+    """(result, seconds, attempts): one sync, retried with the SAME request id while it answers a
+    retryable pending, until it settles or `bound` seconds pass."""
+    request_id = uuid.uuid4().hex
+    started = time.perf_counter()
+    attempts = 0
+    while True:
+        result = client.sync(caller_scope="n16-sync", request_id=request_id, **kwargs)
+        attempts += 1
+        if not sync_retryable(result) or time.perf_counter() - started >= bound:
+            return result, time.perf_counter() - started, attempts
+
+
 def sync_summary(result) -> dict:
     if not isinstance(result, dict):
         return {"type": type(result).__name__}
@@ -1477,21 +1530,26 @@ def sync_dirty(run: Run, ds: Dataset, clients, mode):
     res = Result("sync.dirty", ds.name, clients=1, cells=["Sync: dirty projections"])
     client = start_coordinator(run, ds.root)
     inv = ds.inventory()
-    times, lost, summaries = [], [], []
+    times, lost, unsettled, summaries, retried = [], [], [], [], 0
     for index in range(run.args.sync_samples):
         task = inv["tasks"][(index * 7) % len(inv["tasks"])]
         marker = f"n16-external-edit-{uuid.uuid4().hex[:12]}"
         edit_task_file(ds.root, task, marker)
-        result, seconds = sync_once(client)
+        # A first sync of a fresh copy can exhaust its budget and answer pending: that sync is retried
+        # under its own id until it settles; only then is the edit judged.
+        result, seconds, attempts = sync_settled(client)
+        retried += attempts > 1
         times.append(seconds)
-        summaries.append(sync_summary(result))
+        summaries.append(dict(sync_summary(result), attempts=attempts))
         if marker not in body_of(ds.root, task):
-            lost.append(task)
+            (unsettled if sync_retryable(result) else lost).append(task)
     res.measure("sync.dirty_one_file", times)
     if run.sync_required:
         res.check(f"samples>={run.sync_required}", len(times) >= run.sync_required, measured=len(times))
     res.data["sync"] = summaries[:3]
-    res.check("external_edit_imported", not lost, edits=run.args.sync_samples, lost=len(lost))
+    res.data["retried_pending_syncs"] = retried
+    res.check("external_edit_imported", not lost and not unsettled, edits=run.args.sync_samples, lost=len(lost),
+              unsettled_after_bound=len(unsettled) or None)
     return res
 
 
@@ -1532,6 +1590,21 @@ def sync_conflict(run: Run, ds: Dataset, clients, mode):
     return res
 
 
+def checkout_precondition(baseline, quarantined) -> str | None:
+    """Why this copy cannot exercise managed checkouts, or None. Managed Git rightly refuses while
+    projections are unsynchronized; when every unresolved path is a file the store had already
+    quarantined before the run, that is the dataset's state, not a correctness failure."""
+    if not isinstance(baseline, dict) or baseline.get("state") != "refused":
+        return None
+    if not str(baseline.get("reason", "")).startswith("projections are not synchronized"):
+        return None
+    unresolved = set((baseline.get("sync") or {}).get("unresolved") or ())
+    if not unresolved or not unresolved <= set(quarantined):
+        return None
+    return (f"managed Git refuses: projections are not synchronized; {len(unresolved)} pre-existing "
+            f"quarantined file(s) unresolved")
+
+
 @scenario("sync.checkout", group="sync", kind="check", cells=("Sync: checkout/worktree",))
 def sync_checkout(run: Run, ds: Dataset, clients, mode):
     """Linked worktree edit imported against its own bases; managed checkouts keep store and files
@@ -1544,6 +1617,11 @@ def sync_checkout(run: Run, ds: Dataset, clients, mode):
     started = time.perf_counter()
     baseline = client.git_run(kind="commit", message="n16 baseline", caller_scope="n16-git")
     res.measure("sync.managed_commit", [time.perf_counter() - started])
+    unmet = checkout_precondition(baseline, quarantined_files(root))
+    if unmet:
+        res.precondition(unmet)
+        stop_coordinator(root)
+        return res
     res.check("baseline_commit_completed", baseline.get("state") == "completed" and not git(root, "status", "--porcelain", "--", ".taskmaster").strip(),
               state=baseline.get("state"))
     inv = ds.inventory()
@@ -1844,6 +1922,14 @@ class blocked_export:
             handle.close()
 
 
+def blocked_replace_settled(flushed, rel, text, value) -> bool:
+    """The released export landed: the target file holds the committed value and no pending or
+    conflict notice names the target file."""
+    named = re.compile(rf"(?<![\w/.-]){re.escape(rel)}(?![\w/.-])")
+    notices = (flushed or {}).get("notices") or [] if isinstance(flushed, dict) else []
+    return value in text and not any(named.search(str(n)) for n in notices)
+
+
 @scenario("failure.blocked_replace", group="failure", kind="check", cells=("Failure: blocked file replacement",))
 def failure_blocked(run: Run, ds: Dataset, clients, mode):
     res = Result("failure.blocked_replace", ds.name, kind="check", clients=1, cells=["Failure: blocked file replacement"])
@@ -1861,11 +1947,12 @@ def failure_blocked(run: Run, ds: Dataset, clients, mode):
         time.sleep(1.0)
         during = client.flush(receipt["commit_seq"])
         on_disk_during = value in path.read_text(encoding="utf-8")
+    rel = f"tasks/{task}.md"
     after = None
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         after = client.flush(receipt["commit_seq"])
-        if after.get("state") == "exported":
+        if blocked_replace_settled(after, rel, path.read_text(encoding="utf-8"), value):
             break
         time.sleep(0.5)
     res.data["flush_during"] = {k: during.get(k) for k in ("state", "through")} if isinstance(during, dict) else None
@@ -1874,8 +1961,11 @@ def failure_blocked(run: Run, ds: Dataset, clients, mode):
     res.check("block_held_the_file", not on_disk_during)
     res.check("blocked_export_not_reported_exported", (during or {}).get("state") not in (None, "exported"),
               state=(during or {}).get("state"))
-    res.check("export_completes_after_release", (after or {}).get("state") == "exported"
-              and value in path.read_text(encoding="utf-8"))
+    # Judged on the target file: a whole-projection "exported" never holds while an unrelated file
+    # is quarantined (the CodeMaestro copy carries three).
+    res.check("export_completes_after_release",
+              blocked_replace_settled(after, rel, path.read_text(encoding="utf-8"), value),
+              state=(after or {}).get("state"))
     stop_coordinator(root)
     return res
 
@@ -2214,12 +2304,17 @@ def markdown(report) -> str:
              f"Code `{report['meta']['git_sha'][:10]}`, Python {report['meta']['python'].split()[0]}, "
              f"SQLite {report['meta']['sqlite']}, {report['meta']['machine']}. Samples >= {report['meta']['samples_required']} "
              f"per steady-state scenario after {report['meta']['warmup']} warmup ops.", ""]
-    failed = [r for r in report["results"] if r["verdict"] not in ("pass", "skipped")]
+    failed = [r for r in report["results"] if r["verdict"] not in ("pass", "skipped", "precondition")]
     skipped = [r for r in report["results"] if r["verdict"] == "skipped"]
+    unmet = [r for r in report["results"] if r["verdict"] == "precondition"]
     passed = sum(r["verdict"] == "pass" for r in report["results"])
     lines += ["## Correctness", "",
               f"{passed} of {len(report['results'])} scenario runs pass their checks; {len(failed)} fail; "
-              f"{len(skipped)} skipped (see Not run).", ""]
+              f"{len(unmet)} precondition not met; {len(skipped)} skipped (see Not run).", ""]
+    if unmet:
+        lines += ["Precondition not met (not evidence; not a correctness failure):", ""]
+        lines += [f"- {r['dataset']} {r['scenario']}: {r.get('precondition')}" for r in unmet]
+        lines.append("")
     if failed:
         lines += ["| Dataset | Scenario | Clients | Mode | Failed checks |", "|---|---|---|---|---|"]
         for r in failed:
@@ -2248,7 +2343,8 @@ def markdown(report) -> str:
     if report.get("datasets"):
         lines += ["## Datasets and adoption (cold, separate)", ""]
         for name, info in report["datasets"].items():
-            lines.append(f"- **{name}**: counts {info.get('counts')}, adoption {info.get('adoption')}")
+            lines.append(f"- **{name}**: counts {info.get('counts')}, adoption {info.get('adoption')}"
+                         + "".join(f"; {note}" for note in info.get("notes") or ()))
         lines.append("")
     if report.get("instrumented"):
         lines += ["## Instrumented pass (work counters; its latencies are not the reported latencies)", "",
@@ -2387,6 +2483,7 @@ def main(argv=None) -> int:
         ds = prepare_dataset(run, dataset_name)
         report["datasets"][dataset_name] = {"prepare_s": round(time.perf_counter() - started, 2),
                                             "adoption": ds.info.get("adoption"), "counts": ds.inventory()["counts"],
+                                            "notes": ds.inventory().get("notes") or [],
                                             "generator": {k: ds.info.get("generator", {}).get(k)
                                                           for k in ("seed", "scale", "stats_sha256", "files")}}
         for pass_name in ("uninstrumented", "instrumented") if args.instrumented else ("uninstrumented",):
@@ -2432,12 +2529,16 @@ def main(argv=None) -> int:
                       "pass": sum(r["verdict"] == "pass" for r in report["results"]),
                       "fail": sum(r["verdict"] == "fail" for r in report["results"]),
                       "skipped": sum(r["verdict"] == "skipped" for r in report["results"]),
+                      "precondition": sum(r["verdict"] == "precondition" for r in report["results"]),
                       "budget_missed": sum(b["status"] == "missed" for b in report["budgets"])}, indent=1))
-    everything = report["results"] + report["instrumented"]
+    return exit_status(report["results"] + report["instrumented"])
+
+
+def exit_status(everything) -> int:
     if any(r["verdict"] == "fail" for r in everything):
         return 1
-    if any(r["verdict"] == "skipped" or r.get("skipped_cells") for r in everything):
-        return 2  # nothing failed, but part of the selection did not run: not a clean pass
+    if any(r["verdict"] in ("skipped", "precondition") or r.get("skipped_cells") for r in everything):
+        return 2  # nothing failed, but part of the selection did not run (or could not): not a clean pass
     return 0
 
 
