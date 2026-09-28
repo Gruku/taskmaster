@@ -200,6 +200,11 @@ class Worker:
         with closing(sqlite3.connect(f"{(self.root / '.taskmaster/local/store.db').as_uri()}?mode=ro", uri=True)) as c:
             return c.execute("SELECT value FROM native_manifest WHERE key='store_id'").fetchone()[0]
 
+    def high_water(self):
+        with closing(sqlite3.connect(f"{(self.root / '.taskmaster/local/store.db').as_uri()}?mode=ro", uri=True,
+                                     timeout=30)) as c:
+            return int(c.execute("SELECT COALESCE(MAX(seq),0) FROM domain_events").fetchone()[0])
+
     def revision_of(self, kind, ident):
         with closing(sqlite3.connect(f"{(self.root / '.taskmaster/local/store.db').as_uri()}?mode=ro", uri=True,
                                      timeout=30)) as c:
@@ -215,6 +220,8 @@ class Worker:
             kwargs = dict(op["kw"])
             if op.get("archive_created") is not None:
                 kwargs["task_id"] = self.created[op["archive_created"]] if op["archive_created"] < len(self.created) else "missing-created"
+            if op.get("noop_ok"):  # brackets a no-op answer in store time, outside the timed call
+                record["hw_before"] = self.high_water()
             started = time.perf_counter()
             try:
                 result = getattr(self.bs(), op["tool"])(**kwargs)
@@ -226,6 +233,8 @@ class Worker:
             except Exception as exc:  # noqa: BLE001 - an exception is an outcome to report
                 result, ok, error = None, False, f"{type(exc).__name__}: {exc}"[:300]
             record["ms"] = (time.perf_counter() - started) * 1000
+            if record.get("noop"):
+                record["hw_after"] = self.high_water()
             record.update(ok=ok, error=error, seq=seq_of(result), bytes=len(result) if isinstance(result, str) else None)
             if ok and op["tool"] == "backlog_add_task":
                 found = ADDED.search(result or "")
@@ -890,12 +899,66 @@ def check_acks(result: Result, root: Path, records, *, writes_expected=True):
     return acked
 
 
+def check_noops(result: Result, root: Path, records):
+    """A no-op answer carries no sequence, so check_acks never sees it. It is accepted when it replays
+    the value this same client last acknowledged for that field (no later write of its own changed
+    it); otherwise the store must have held the requested value at some point during the call: as of
+    the high-water read before it, or set by an event up to the one read after it."""
+    last, unverified, checked = {}, [], 0
+    for r in sorted(records, key=lambda r: (r.get("w"), r.get("n"))):
+        check = r.get("check")
+        if not check or check[2] is None:
+            continue
+        key = (r.get("w"), check[0], check[1], check[2])
+        if r.get("noop"):
+            checked += 1
+            if last.get(key) != claim_norm(check[2], check[3]) and not noop_held_in_store(root, r):
+                unverified.append({"id": check[1], "field": check[2], "w": r.get("w"), "n": r.get("n")})
+                last.pop(key, None)
+                continue
+            last[key] = claim_norm(check[2], check[3])
+        elif r.get("ok") and r.get("seq"):
+            last[key] = claim_norm(check[2], check[3])
+        else:
+            last.pop(key, None)  # a failed write's effect is unknown
+    result.check("noop_answers_verified", not unverified, noops=checked, unverified=len(unverified) or None,
+                 examples=unverified[:5] or None)
+
+
+def noop_held_in_store(root: Path, record) -> bool:
+    before, after = record.get("hw_before"), record.get("hw_after")
+    if not isinstance(before, int) or not isinstance(after, int):
+        return False
+    kind, ident, field, value = record["check"]
+    wanted = claim_norm(field, value)
+    with ro(root) as c:
+        found, stored = value_as_of(c, kind, ident, field, before)
+        if found and claim_norm(field, stored) == wanted:
+            return True
+        for fields, event_after in c.execute("SELECT fields,after FROM domain_events WHERE kind=? AND id=? "
+                                             "AND seq>? AND seq<=?", (kind, ident, before, after)):
+            if field in json.loads(fields or "[]"):
+                try:
+                    doc = json.loads(event_after) if event_after else {}
+                except ValueError:
+                    doc = {}
+                if isinstance(doc, dict) and claim_norm(field, doc.get(field)) == wanted:
+                    return True
+    return False
+
+
 def check_unexpected(result: Result, records):
-    # Warmup ops prime caches and connections; they are not the measured run.
+    # Warmup ops stay out of latency and of this check, but a failing warmup is a real (cold-start)
+    # defect: counted and judged by its own check.
     bad = [r for r in records if not r.get("ok") and not r.get("warmup")
            and r.get("expect", "ok") not in ("error", "conflict-or-ok")]
     result.check("no_unexpected_errors", not bad, count=len(bad),
                  examples=sorted({redact(r.get("error")) for r in bad})[:3] or None)
+    warm = [r for r in records if not r.get("ok") and r.get("warmup")
+            and r.get("expect", "ok") not in ("error", "conflict-or-ok")]
+    result.data["warmup_errors"] = len(warm)
+    result.check("no_warmup_errors", not warm, count=len(warm),
+                 examples=sorted({redact(r.get("error")) for r in warm})[:3] or None)
 
 
 def check_workers(result: Result, meta):
@@ -1187,6 +1250,7 @@ def read_during_writes(run: Run, ds: Dataset, clients, mode):
               writes=len(writes))
     check_unexpected(res, records)
     check_acks(res, ds.root, writes)
+    check_noops(res, ds.root, writes)
     return res
 
 
@@ -1291,6 +1355,7 @@ def write_scenario(kind):
         else:
             check_unexpected(res, records)
         acked = check_acks(res, ds.root, records, writes_expected=kind not in ("noop", "invalid"))
+        check_noops(res, ds.root, records)
         distinct_acked = len({r["seq"] for r in acked})
         if kind not in ("noop", "invalid", "retry"):
             res.check("commits>=distinct_acked_seqs", commits >= distinct_acked, commits=commits, acked=distinct_acked)
@@ -1612,12 +1677,14 @@ def sync_checkout(run: Run, ds: Dataset, clients, mode):
     (N13), released with `take_published` without losing the store's value."""
     res = Result("sync.checkout", ds.name, kind="check", clients=1, cells=["Sync: checkout/worktree"])
     root = copy_project(run, ds.root, "sync-checkout")
+    # Snapshot before the coordinator starts: a quarantine that appears during the run is a failure.
+    preexisting = quarantined_files(root)
     client = start_coordinator(run, root)
     client.flush(high_water(root))
     started = time.perf_counter()
     baseline = client.git_run(kind="commit", message="n16 baseline", caller_scope="n16-git")
     res.measure("sync.managed_commit", [time.perf_counter() - started])
-    unmet = checkout_precondition(baseline, quarantined_files(root))
+    unmet = checkout_precondition(baseline, preexisting)
     if unmet:
         res.precondition(unmet)
         stop_coordinator(root)
@@ -1922,12 +1989,21 @@ class blocked_export:
             handle.close()
 
 
-def blocked_replace_settled(flushed, rel, text, value) -> bool:
-    """The released export landed: the target file holds the committed value and no pending or
-    conflict notice names the target file."""
+def blocked_replace_settled(root: Path, flushed, rel, text, value) -> bool:
+    """The released export landed: a flush answered, the target file holds the committed value, no
+    notice names it, and its own projection rows are settled - no pending, claimed or conflict job,
+    and the file is neither quarantined, flagged nor drifting. Notices that name no file ("durable
+    jobs remain", "publisher busy") are judged through those rows, never taken as settled."""
+    from taskmaster.native import projection
+    if not isinstance(flushed, dict) or value not in text:
+        return False
     named = re.compile(rf"(?<![\w/.-]){re.escape(rel)}(?![\w/.-])")
-    notices = (flushed or {}).get("notices") or [] if isinstance(flushed, dict) else []
-    return value in text and not any(named.search(str(n)) for n in notices)
+    if any(named.search(str(n)) for n in flushed.get("notices") or ()):
+        return False
+    with ro(root) as c:
+        open_jobs = c.execute("SELECT COUNT(*) FROM projection_jobs WHERE file=? AND state IN "
+                              "('pending','claimed','conflict')", (rel,)).fetchone()[0]
+        return open_jobs == 0 and projection.held_file(c, rel) is None
 
 
 @scenario("failure.blocked_replace", group="failure", kind="check", cells=("Failure: blocked file replacement",))
@@ -1952,7 +2028,7 @@ def failure_blocked(run: Run, ds: Dataset, clients, mode):
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         after = client.flush(receipt["commit_seq"])
-        if blocked_replace_settled(after, rel, path.read_text(encoding="utf-8"), value):
+        if blocked_replace_settled(root, after, rel, path.read_text(encoding="utf-8"), value):
             break
         time.sleep(0.5)
     res.data["flush_during"] = {k: during.get(k) for k in ("state", "through")} if isinstance(during, dict) else None
@@ -1964,7 +2040,7 @@ def failure_blocked(run: Run, ds: Dataset, clients, mode):
     # Judged on the target file: a whole-projection "exported" never holds while an unrelated file
     # is quarantined (the CodeMaestro copy carries three).
     res.check("export_completes_after_release",
-              blocked_replace_settled(after, rel, path.read_text(encoding="utf-8"), value),
+              blocked_replace_settled(root, after, rel, path.read_text(encoding="utf-8"), value),
               state=(after or {}).get("state"))
     stop_coordinator(root)
     return res
