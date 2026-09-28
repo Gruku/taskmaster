@@ -366,6 +366,40 @@ def handover_refusal(connection) -> str | None:
             "client again, then retry")
 
 
+QUARANTINE_SECTION = "Repairing quarantined files before the cutover"
+
+
+def quarantine_refusal(connection) -> str | None:
+    """Native managed Git refuses while any projection file is quarantined, so a live project
+    cut over with one could not commit or check out. The rows are the ones `backlog_store_status`
+    lists (`Store.status`: `projection.quarantined=1`); each reason is the legacy store's
+    deduplicated quarantine log (`meta.quarantine_log`, the line it wrote to `store.log`)."""
+    if not _has_table(connection, "projection"):
+        return None
+    files = [row[0] for row in connection.execute(
+        "SELECT file FROM projection WHERE quarantined=1 ORDER BY file")]
+    if not files:
+        return None
+    row = connection.execute("SELECT value FROM meta WHERE key='quarantine_log'").fetchone()
+    try:
+        log = json.loads(row[0]) if row else {}
+    except ValueError:
+        log = {}
+    log = log if isinstance(log, dict) else {}
+
+    def reason(rel):
+        signature = log.get(rel)
+        message = signature[0] if isinstance(signature, list) and signature else None
+        prefix = f"quarantined {rel}: "
+        if isinstance(message, str) and message.startswith(prefix):
+            return message[len(prefix):]
+        return "reason not on record; see .taskmaster/local/store.log"
+    listed = "; ".join(f"{rel} ({reason(rel)})" for rel in files)
+    return (f"{len(files)} projection file(s) are quarantined, and native managed Git refuses while any is: "
+            f"{listed}. Repair each one and re-adopt it until backlog_store_status reports none "
+            f"(see {RUNBOOK}, \"{QUARANTINE_SECTION}\")")
+
+
 # ── Backup ───────────────────────────────────────────────────────────────────
 
 def _sha256(path: Path) -> str:
@@ -935,7 +969,7 @@ def dry_run(root: Path, *, confirm_stopped: bool = False) -> dict:
                 if _blocking(counts):
                     report["warnings"].append("; ".join(_blocking(counts)) + ": the cutover flushes them itself "
                                               "under the fence (reconcile stage)")
-                report["refusals"] += [r for r in [handover_refusal(connection)] if r]
+                report["refusals"] += [r for r in [handover_refusal(connection), quarantine_refusal(connection)] if r]
                 try:
                     assert_compatible(connection)
                 except UnsupportedStoreError as error:
@@ -984,14 +1018,21 @@ def cutover(root: Path, *, confirm_stopped: bool = False, resume: bool = False, 
         state = classify(probe)
         counts = reconcile_counts(probe, root)
         handovers = handover_refusal(probe)
+        quarantined = quarantine_refusal(probe)
     refusals = _store_refusals(state, mode=mode)
     activated = state["native"] or "activate" in state["completed_stages"]
     if resume and activated:
         return _finish_release(path, token=token, log=log)
     if not resume and _blocking(counts):
         log("note: " + "; ".join(_blocking(counts)) + " will be flushed by the cutover under the fence")
-    if not resume and not refusals and handovers:
-        refusals.append(handovers)
+    if not resume and not refusals:
+        refusals += [r for r in (handovers, quarantined) if r]
+    elif resume and quarantined:
+        # Not a refusal on resume: the fence refuses the legacy clients a repair is re-adopted
+        # through, so refusing here would leave only --rollback. The fresh run's preflight saw
+        # none; a file quarantined since is repaired after activation by editing it (native sync
+        # re-parses changed bytes and clears the quarantine).
+        log(f"warning: {quarantined}")
     if not activated:
         refusals += [r for r in [sidecar_refusal(root)] if r]
     quiesced = check_quiesced(root, confirm_stopped=confirm_stopped)

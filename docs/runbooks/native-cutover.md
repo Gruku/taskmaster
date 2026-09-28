@@ -95,6 +95,7 @@ Deal with every `refused:` line before the real run:
 | `the store has another open writer` (real run only) | Some client still has the store open. Go back to step 1 |
 | `processes from the launcher inventory ...: pid N ...` | Stop each named process. If you have checked that a match is a false positive, add `--confirm-stopped` |
 | `the legacy handover-status backfill has not run on this store` | Start one bridge client, run `backlog_handover_list` once (it runs the one-shot backfill), then stop it again. A native store never runs that backfill |
+| `N projection file(s) are quarantined, and native managed Git refuses while any is: <path> (<reason>); ...` | Repair each named file, content preserved, and re-adopt it. See [Repairing quarantined files before the cutover](#repairing-quarantined-files-before-the-cutover) |
 | `malformed ID reservation sidecar` | Fix `.taskmaster/local/id-reservations.json`, which must map each kind to a list of ID strings |
 | `already a native authority` | Nothing to do |
 | `newer than this legacy->native cutover supports` | Wrong binary for this store. Upgrade |
@@ -104,6 +105,66 @@ Deal with every `refused:` line before the real run:
 
 On Windows the scan cannot see a process's working directory, so a Taskmaster plugin server
 running for *another* project is also listed. Check each match, then use `--confirm-stopped`.
+
+### Repairing quarantined files before the cutover
+
+The legacy store quarantines a projection file it cannot parse: it keeps the file exactly as
+written, imports nothing from it, and lists it under `Quarantined` in `backlog_store_status`.
+After activation, native managed Git operations (commit, checkout) refuse with "projections are
+not synchronized" for as long as any file is quarantined. So the cutover, and its dry run, refuse
+to start while the store has any quarantined file, and name each one with the reason the legacy
+store recorded (the same line it wrote to `.taskmaster/local/store.log`).
+
+Repair each file in place and keep its content. Start one bridge client for this, and stop it
+again before the real run.
+
+1. Run `backlog_store_status` and note the `Quarantined:` files. The dry run lists the same files.
+2. Fix the cause the reason names:
+   - **`missing or invalid frontmatter`**: the file has no `---` frontmatter block, or an
+     empty one. For a markdown handover, add a minimal block above the unchanged text. For
+     `handovers/_archive/2026/2026-03-04-session-notes.md`:
+
+     ```
+     ---
+     id: 2026-03-04-session-notes
+     date: '2026-03-04'
+     tldr: One line saying what the session was about
+     next_action: ''
+     task_ids: []
+     session_kind: continuity
+     status: closed
+     archived: true
+     ---
+     <the original text, unchanged>
+     ```
+
+     The keys are what `build_handover_doc` (`taskmaster/taskmaster_v3.py`) always writes,
+     without the creation timestamps and empty lists it adds:
+     - `id` must equal the file name without `.md`. A different `id` is quarantined again.
+     - `date` is the `YYYY-MM-DD` prefix of the id.
+     - `session_kind` is one of `continuity`, `deep-context`, `milestone`, `auto-stage` or
+       `task-complete`.
+     - `status` is one of `open`, `closed` or `superseded`. Use `closed` for an archived
+       handover. With a status set, the handover is not owed the legacy status backfill.
+     - `archived: true` is what the exporter writes into every file under
+       `handovers/_archive/`. A file repaired in place is imported from its frontmatter, so
+       without this key the handover comes back as live.
+   - **`git conflict markers`**: resolve the whole-line `<<<<<<<` / `>>>>>>>` conflict. A body
+     line of `=======` alone is not a conflict marker in this build. Released builds up to and
+     including 6.0.3 quarantined it anyway (CodeMaestro's B-339); the repair is described in
+     [section 5](#5-post-activation-escape-hatch-manual-lossy-for-local-state), step 5.
+   - **`... path id ... does not match frontmatter id ...`**: make `id` equal the file name.
+3. Run any tool, for example `backlog_handover_list`. Its scan re-reads the changed file and
+   adopts it.
+4. Run `backlog_store_status` again and confirm that it lists no `Quarantined:` files, then
+   re-run the dry run.
+
+`backlog_resolve_conflict` does not apply: it resolves flagged files, not quarantined ones.
+
+This check runs only on a fresh run. `--resume` logs the same list as a `warning:` and goes on:
+the fence refuses the bridge clients a repair is re-adopted through, so refusing there would leave
+only `--rollback`. A file quarantined after the fresh run's check is repaired after activation by
+editing it: native sync re-parses changed bytes and clears the quarantine.
 
 ## 3. Cut over
 
@@ -452,7 +513,8 @@ If you have to leave native anyway, the projection files are the durable exchang
    `backlog_store_status` lists the quarantined files. Recover each one by editing the
    offending line (for example `---` instead of `=========`), then run any tool so it is
    imported. `backlog_resolve_conflict` does not apply: it resolves flagged files, not
-   quarantined ones.
+   quarantined ones. Other quarantine causes, such as a handover with no frontmatter, are
+   repaired as in [Repairing quarantined files before the cutover](#repairing-quarantined-files-before-the-cutover).
 6. Check that the tasks, handovers, bugs, issues, decisions, ideas and notes are all there.
 
 What is lost is **DB-local state only**: receipts, sessions, queue leases and Linear queue
@@ -491,7 +553,7 @@ Delete `aside-*` folders once you no longer need what they hold.
 - Backups: `.taskmaster/local/backups/pre-native-<UTC ts>.db`, with `.json` (the manifest),
   `.projection.zip` (the archived projection files) and `.id-reservations.json`. A manual
   restore copies what it replaces into `backups/aside-<UTC ts>/`.
-- Code: `taskmaster/native/cutover.py`. Tests: `tests/test_native_cutover.py` and
-  `tests/test_native_cutover_crash.py`. Every twins activation in the test suite runs the
+- Code: `taskmaster/native/cutover.py`. Tests: `tests/test_native_cutover.py`,
+  `tests/test_native_cutover_crash.py` and `tests/test_native_cutover_quarantine.py`. Every twins activation in the test suite runs the
   carry-over oracle by default (`TASKMASTER_TWINS_VERIFY=1`, set in `tests/conftest.py`, +2.3%
   suite time); set it to `0` to opt out.
