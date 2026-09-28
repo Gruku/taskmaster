@@ -55,9 +55,12 @@ Updating files on disk does not change a process that is already running. Stop t
 
 **Just before you stop the last client, run one tool call** (for example `backlog_handover_list`).
 Its scan adopts every file changed since the last one, such as a `git pull`, so a file that no
-longer parses is quarantined, and the dry run can name it, before the fence goes up. A file that
-changes after that is caught under the fence, and costs a `--rollback` (see "Under the fence" in
-[Repairing quarantined files before the cutover](#repairing-quarantined-files-before-the-cutover)).
+longer parses is quarantined, and the dry run can name it, before the fence goes up.
+
+**From that tool call until the cutover ends, do not pull, check out, add or edit files in the
+project.** The fenced run catches only some later changes, and those cost a `--rollback`. It
+never sees a new file added after its scan. See "Under the fence" in
+[Repairing quarantined files before the cutover](#repairing-quarantined-files-before-the-cutover).
 
 ## 2. Dry run
 
@@ -194,10 +197,18 @@ naming the files, and nothing is activated. Run `--rollback`, repair the files a
 bridge client, and start a fresh cutover. `--resume` cannot help, because the fence refuses the
 bridge client that re-adopts a repair.
 
-A file changed after the backup differs from the backup's archive, so the run treats it as drift
-and re-runs `reconcile`, with its scan. Only a change in the short window between the reconcile
-scan and the backup goes unseen by the cutover. Native sync then quarantines that file after
-activation, and it is repaired as described next.
+The drift check compares only the files the store already tracks. A tracked file changed after
+the backup differs from the backup's archive, so the run treats it as drift and re-runs
+`reconcile`, with its scan. The cutover does not see:
+
+- a tracked file changed between the reconcile scan and the backup;
+- a tracked file changed after the last drift check, which runs just before `activate`;
+- a **new** file added after the reconcile scan (for example a headerless handover brought in by
+  a `git pull`), because no drift check looks at untracked files.
+
+Native sync finds these only after activation: it quarantines a file that does not parse, and
+you repair it as described next. To avoid this, change nothing in the project from the final
+tool call before the cutover until the cutover ends (section 1).
 
 **After activation.** Native sync quarantines a file it cannot parse, and managed Git refuses
 until it is fixed. Edit the file: the next sync re-parses the changed bytes and, when they parse,
