@@ -60,6 +60,7 @@ def work(tmp_path_factory):
     ("drop_writes", "write.meta", "no_lost_ack"),           # acked with the high-water seq, nothing written
     ("strip_seq", "write.prose", "no_unexpected_errors"),   # real write, no sequence in the answer
     ("swallow", "write.meta", "no_unexpected_errors"),      # "Could not update: ..." is not a success
+    ("fake_noop", "write.prose", "no_unexpected_errors"),   # a required commit answered as a no-op, nothing written
     ("reuse_id", "write.create", "no_reused_id"),           # an existing id reported as created
     ("partial_composite", "write.composite", "no_partial_composite"),  # an invalid composite half-applied
     ("die_before_ready", "write.meta", None),               # a client that dies before the barrier
@@ -87,8 +88,15 @@ def test_injected_lie_fails_the_runner(work, fault, scenario, gate):
     ("Updated `t-1` field `priority` → (not persisted)", {"success": runner.SUCCESS["backlog_update_task"]}, False),
     ("Updated `t-1` field `priority` → (not persisted)", {"success": runner.SUCCESS["backlog_update_task"], "noop_ok": True}, False),
     ("No change to `t-1` field `priority` — already `low`", {"success": runner.SUCCESS["backlog_update_task"]}, False),
-    ("No change to `t-1` field `priority` — already `low`", {"success": runner.SUCCESS["backlog_update_task"], "noop_ok": True}, True),
-    ("No change to `t-1` field `priority` — already `low` [seq 4]", {"success": runner.SUCCESS["backlog_update_task"], "noop_ok": True}, False),
+    ("No change to `t-1` field `priority` — already `low`", {"success": runner.SUCCESS["backlog_update_task"], "noop_ok": True, "requested": "low"}, True),
+    ("`t-1`.priority → unchanged (already `low`)", {"noop_ok": True, "requested": "low"}, True),
+    # A no-op must name the value this op asked for, never another (e.g. a later peer write's).
+    ("No change to `t-1` field `priority` — already `high`", {"success": runner.SUCCESS["backlog_update_task"], "noop_ok": True, "requested": "low"}, False),
+    ("No change to `t-1` field `priority` — already `low`", {"success": runner.SUCCESS["backlog_update_task"], "noop_ok": True}, False),
+    ("No change to `t-1` field `priority` — already `low` [seq 4]", {"success": runner.SUCCESS["backlog_update_task"], "noop_ok": True, "requested": "low"}, False),
+    # A required commit can never pass as a no-op, whatever else the op allows.
+    ("No change to `t-1` field `priority` — already `low`", {"success": runner.SUCCESS["backlog_update_task"], "commit": "required", "requested": "low"}, False),
+    ("No change to `t-1` field `priority` — already `low`", {"success": runner.SUCCESS["backlog_update_task"], "commit": "required", "noop_ok": True, "requested": "low"}, False),
     ('{"ok": true, "receipt": {"commit_seq": 9}}', {"success": "json-ok", "commit": "required"}, True),
     ('{"ok": false, "error": "stale"}', {"success": "json-ok"}, False),
     ("", {}, False),

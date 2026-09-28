@@ -161,6 +161,19 @@ def committed(receipts) -> dict:
     return documents
 
 
+def unchanged(receipts) -> dict:
+    """`{(kind, id): document}` for entities a command wrote but left exactly as stored.
+
+    The document is the one the command observed inside its transaction, so it is
+    the stored value at commit, never a later read that a peer may have changed.
+    """
+    documents = {}
+    for receipt in receipts:
+        for item in receipt.get("unchanged", ()):
+            documents[(item["kind"], item["id"])] = deepcopy(item["fields"])
+    return documents
+
+
 ROW_KINDS = ("bug", "issue", "handover", "decision", "idea", "note", "area", "tracker")
 
 

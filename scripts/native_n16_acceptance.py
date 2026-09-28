@@ -100,10 +100,11 @@ def _json(result):
     return result if isinstance(result, dict) else None
 
 
-def classify(result, *, success=None, commit="none", noop_ok=False) -> tuple[bool, str | None]:
+def classify(result, *, success=None, commit="none", noop_ok=False, requested=None) -> tuple[bool, str | None]:
     """(ok, error). `success`: a regex the answer must match, "json-ok" for a JSON {"ok": true}
     answer, or None (reads: any non-empty answer that is not an error). `commit`: "required" (the
-    answer must carry a commit sequence), "optional" or "none"."""
+    answer must carry a commit sequence), "optional" or "none". `requested`: the value the op wrote,
+    which an accepted no-op answer must name."""
     payload = _json(result)
     if isinstance(result, str) and result.lstrip().startswith("Error"):
         return False, result.lstrip()[:300]
@@ -115,10 +116,13 @@ def classify(result, *, success=None, commit="none", noop_ok=False) -> tuple[boo
         return False, "answer says (not persisted)"
     if isinstance(result, str) and UNCHANGED.search(result):
         # An unchanged value commits nothing and the native tool says so. That is accepted only
-        # where a no-op is the expected outcome, and only without a sequence; the scenario
-        # verifies the stored value separately.
-        if not (noop_ok and seq_of(result) is None):
+        # where a no-op is the expected outcome, never where a commit is required, only without a
+        # sequence, and only naming the value this op asked for (the value the store kept at
+        # commit); the scenario verifies the stored value separately.
+        if not noop_ok or commit == "required" or seq_of(result) is not None:
             return False, "answer says unchanged"
+        if requested is None or f"already `{requested}`" not in result:
+            return False, "unchanged answer does not name the requested value"
         return True, None
     if success == "json-ok":
         if payload is None or payload.get("ok") is not True:
@@ -213,7 +217,8 @@ class Worker:
             try:
                 result = getattr(self.bs(), op["tool"])(**kwargs)
                 ok, error = classify(result, success=op.get("success", SUCCESS.get(op["tool"]) if op.get("expect", "ok") != "read" else None),
-                                     commit=op.get("commit", "none"), noop_ok=op.get("noop_ok", False))
+                                     commit=op.get("commit", "none"), noop_ok=op.get("noop_ok", False),
+                                     requested=kwargs.get("value"))
                 if ok and isinstance(result, str) and UNCHANGED.search(result):
                     record["noop"] = True
             except Exception as exc:  # noqa: BLE001 - an exception is an outcome to report
@@ -1084,6 +1089,7 @@ def read_during_writes(run: Run, ds: Dataset, clients, mode):
                           rng=run.rng, scope="n16")
         for op in plan:
             op["commit"] = "optional"  # a looping writer replays its values; a replay may be a no-op
+            op["noop_ok"] = True
         plans.append(plan)
     records, meta = run_clients(run, ds.root, plans, label="read-during-writes", prime=PRIME, loop_until_first=True)
     res.data["run"] = meta
@@ -1261,7 +1267,7 @@ def write_scenario(kind):
             values = field_values(ds.root, "task", sorted({t for t, _ in planned}), "priority")
             changed = [t for t, v in planned if norm(values.get(t)) != norm(v)]
             res.check("noop_value_unchanged", bool(planned) and not changed, tasks=len(planned), changed=len(changed) or None)
-            res.data["noop_answers_not_persisted"] = sum(bool(r.get("noop")) for r in records)
+            res.data["noop_answers_unchanged"] = sum(bool(r.get("noop")) for r in records)
             res.check("noop_changes_no_domain_field", not others, commits=after - before, fields=others or None)
         if kind == "invalid":
             res.check("no_commit", after == before and commits == 0, commits=commits)

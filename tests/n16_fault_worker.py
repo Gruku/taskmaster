@@ -40,6 +40,10 @@ elif fault == "strip_seq":  # real write, answer without the sequence suffix
     bs.backlog_update_task = strip
 elif fault == "swallow":  # a failure that does not start with "Error"
     bs.backlog_update_task = lambda *args, **kwargs: "Could not update: store unavailable"
+elif fault == "fake_noop":  # write nothing, answer as though the value already matched
+    def fake_noop(task_id, field="", value="", **_):
+        return f"No change to `{task_id}` field `{field}` — already `{value}`"
+    bs.backlog_update_task = fake_noop
 elif fault == "reuse_id":  # creates report an EXISTING task id (distinct per call)
     existing = sorted(p.stem for p in (root / ".taskmaster/tasks").glob("*.md"))
 

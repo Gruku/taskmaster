@@ -285,3 +285,47 @@ def test_native_update_that_changes_nothing_says_so(twins):
     assert keyword_again == "No change to `test-epic-002`: tldr already `Same`", keyword_again
     assert "`test-epic-002`.priority → unchanged (already `low`)" in batch, batch
     assert bs.NOT_PERSISTED not in answer + keyword_again + batch
+
+
+def test_native_no_op_reply_names_the_value_the_command_saw_not_a_later_peer_write(twins, monkeypatch):
+    """A peer write landing between the no-op commit and the reply must not leak into it.
+
+    The reply is grounded in the transaction: it names the value the command found
+    stored (which equals the caller's normalized value), never a later read.
+    """
+    from taskmaster.coordinator.adapter import NativeCall
+    from native_twins import CLOCK
+
+    CLOCK.update(tick=False)  # One minute throughout: a repeated value is then a true no-op.
+    peer_writes = []  # (operation, arguments) a peer commits right after the caller's commit
+    original = NativeCall.execute
+
+    def execute_then_peer_writes(self, operation, arguments, *, expected=None):
+        receipt = original(self, operation, arguments, expected=expected)
+        while peer_writes:
+            peer_operation, peer_arguments = peer_writes.pop(0)
+            original(NativeCall(self.connection, self.backlog_dir, "peer-session"), peer_operation, peer_arguments)
+        return receipt
+
+    with twins.at(twins.native):
+        bs.backlog_update_task("test-epic-002", "priority", "low")
+        bs.backlog_update_task("test-epic-002", tldr="Same")
+        bs.backlog_update_task("test-epic-002", "status", "in-progress")
+        monkeypatch.setattr(NativeCall, "execute", execute_then_peer_writes)
+        peer_writes.append(("task.update", {"id": "test-epic-002", "field": "priority", "value": "high"}))
+        answer = bs.backlog_update_task("test-epic-002", "priority", "low")
+        peer_writes.append(("task.update", {"id": "test-epic-002", "field": "tldr", "value": "Peer"}))
+        keyword = bs.backlog_update_task("test-epic-002", tldr="Same")
+        peer_writes.extend([
+            ("task.update", {"id": "test-epic-002", "field": "priority", "value": "medium"}),
+            ("task.update", {"id": "test-epic-002", "field": "status", "value": "blocked"}),
+            ("epic.batch_line", {"id": "test-epic", "field": "name", "value": "Peer Epic"})])
+        batch = bs.backlog_batch_update(operations="update test-epic-002 priority high\n"
+                                                   "status test-epic-002 in-progress\n"
+                                                   "update_epic test-epic name Test Epic")
+    assert answer == "No change to `test-epic-002` field `priority` — already `low`", answer
+    assert keyword == "No change to `test-epic-002`: tldr already `Same`", keyword
+    assert "`test-epic-002`.priority → unchanged (already `high`)" in batch, batch
+    assert "`test-epic-002` → unchanged (already `in-progress`)" in batch, batch
+    assert "epic `test-epic`.name → unchanged (already `Test Epic`)" in batch, batch
+    assert "medium" not in batch and "blocked" not in batch and "Peer" not in batch, batch
