@@ -43,9 +43,15 @@ def _age_projection(root: Path) -> None:
     age_projection(root)
 
 
-def _adopted_without_bases(root: Path) -> None:
+def _adopted_without_bases(root: Path, monkeypatch=None) -> None:
     """A legacy store adopted from its files: no merge bases at all (CodeMaestro's shape),
-    and one quarantined row."""
+    and one quarantined row. The cutover refuses a quarantined row (`cutover.held_files`), so
+    a cutover test passes `monkeypatch` to reach the seeding's own skip of such a row. The
+    cutover's reconcile scan re-reads a quarantined file, so for a cutover the file is really
+    broken too: a parseable one would be re-adopted and seeded like any other."""
+    if monkeypatch is not None:
+        monkeypatch.setattr(cutover, "held_files", lambda connection, root: [])
+        (root / ".taskmaster" / QUARANTINED).write_bytes(b"no frontmatter any more\n")
     with _db(root) as connection:
         connection.execute("DELETE FROM projection_base")
         connection.execute("UPDATE projection SET quarantined=1,quarantine_hash=content_hash WHERE file=?",
@@ -80,7 +86,7 @@ def _published(root: Path) -> dict[str, str]:
 # The hook stands in for a hand edit, but it runs on the cutover's stack.
 @pytest.mark.allow_projection_bypass
 def test_activation_seeds_bases_only_for_files_whose_bytes_it_hashed(project, quiesce, monkeypatch):
-    _adopted_without_bases(project)
+    _adopted_without_bases(project, monkeypatch)
     changed = _tamper_when_activation_begins(project, monkeypatch)
     report = cutover.cutover(project)
     assert report["ok"], report
@@ -111,8 +117,8 @@ def test_activation_never_replaces_an_existing_base(project, quiesce):
     assert {r: bases.get(r) for r in kept} == kept  # an existing base, trusted or not, is kept as it was
 
 
-def test_the_post_activation_oracle_allows_exactly_the_seeded_bases(project, quiesce):
-    _adopted_without_bases(project)
+def test_the_post_activation_oracle_allows_exactly_the_seeded_bases(project, quiesce, monkeypatch):
+    _adopted_without_bases(project, monkeypatch)
     assert cutover.cutover(project)["ok"]
     with _db(project) as connection:
         entries = cutover.journal(connection)
@@ -139,7 +145,7 @@ def test_the_post_activation_oracle_allows_exactly_the_seeded_bases(project, qui
 
 
 def test_a_crash_before_the_activation_commit_seeds_nothing_and_resume_seeds(project, quiesce, monkeypatch):
-    _adopted_without_bases(project)
+    _adopted_without_bases(project, monkeypatch)
 
     def hook(name):
         if name == "activate:before-commit":
@@ -159,7 +165,7 @@ def test_a_crash_before_the_activation_commit_seeds_nothing_and_resume_seeds(pro
 # The hook stands in for a hand edit, but it runs on the cutover's stack.
 @pytest.mark.allow_projection_bypass
 def test_activation_seeds_the_fingerprint_cache_from_the_bytes_it_read(project, quiesce, monkeypatch):
-    _adopted_without_bases(project)
+    _adopted_without_bases(project, monkeypatch)
     _age_projection(project)
     changed = _tamper_when_activation_begins(project, monkeypatch)  # fresh mtime: racy, never cached
     assert cutover.cutover(project)["ok"]

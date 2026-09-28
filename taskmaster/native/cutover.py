@@ -366,6 +366,77 @@ def handover_refusal(connection) -> str | None:
             "client again, then retry")
 
 
+QUARANTINE_SECTION = "Repairing quarantined files before the cutover"
+
+
+def _quarantine_log(connection) -> dict:
+    row = connection.execute("SELECT value FROM meta WHERE key='quarantine_log'").fetchone() \
+        if _has_table(connection, "meta") else None
+    try:
+        log = json.loads(row[0]) if row else {}
+    except (TypeError, ValueError):
+        log = {}
+    return log if isinstance(log, dict) else {}
+
+
+def quarantined_files(connection, root: Path) -> dict[str, str]:
+    """`{file: reason}` for every file the legacy store holds quarantined.
+
+    The rows `backlog_store_status` lists (`projection.quarantined=1`), plus every
+    `meta.quarantine_log` key whose file exists and whose projection row is missing or
+    quarantined: a `project.yaml` that never parsed gets no row, and the log keeps its entry
+    on purpose (`Store._prune_quarantine_log`). Each reason is the log's line, the one the
+    legacy store wrote to `store.log`."""
+    if not _has_table(connection, "projection"):
+        return {}
+    log = _quarantine_log(connection)
+    rows = dict(connection.execute("SELECT file,quarantined FROM projection"))
+    files = {rel for rel, quarantined in rows.items() if quarantined}
+    backlog = database_path(root).parent.parent
+    for rel in log:
+        if not isinstance(rel, str) or rows.get(rel, 1) == 0:
+            continue
+        try:
+            if (backlog / rel).is_file():
+                files.add(rel)
+        except (OSError, ValueError):
+            continue
+
+    def reason(rel):
+        signature = log.get(rel)
+        message = signature[0] if isinstance(signature, list) and signature else None
+        prefix = f"quarantined {rel}: "
+        if isinstance(message, str) and message.startswith(prefix):
+            return " ".join(message[len(prefix):].split())  # A YAML error spans lines; a refusal is one.
+        return "reason not on record; see .taskmaster/local/store.log"
+    return {rel: reason(rel) for rel in sorted(files)}
+
+
+def held_files(connection, root: Path) -> list[str]:
+    """Refusals for files native managed Git would hold on after activation: it refuses while
+    any projection file is quarantined or flagged, so a project cut over with one could not
+    commit or check out. Empty when there are none."""
+    refusals = []
+    quarantined = quarantined_files(connection, root)
+    if quarantined:
+        listed = "; ".join(f"{rel} ({reason})" for rel, reason in quarantined.items())
+        refusals.append(f"{len(quarantined)} projection file(s) are quarantined, and native managed Git refuses "
+                        f"while any is: {listed}. Repair each one and re-adopt it until backlog_store_status "
+                        f"reports none (see {RUNBOOK}, \"{QUARANTINE_SECTION}\")")
+    flagged = [row[0] for row in connection.execute("SELECT file FROM projection_conflict ORDER BY file")] \
+        if _has_table(connection, "projection_conflict") else []
+    if flagged:
+        refusals.append(f"{len(flagged)} projection file(s) are flagged (the file and the store both changed), and "
+                        f"native managed Git holds on them too: {', '.join(flagged)}. Resolve each with "
+                        f"backlog_resolve_conflict (see {RUNBOOK}, \"{QUARANTINE_SECTION}\")")
+    return refusals
+
+
+def _held_abort(refusals: list[str], where: str) -> "CutoverAborted":
+    return CutoverAborted(f"{where}, and nothing was activated: " + "; ".join(refusals)
+                          + ". Run --rollback, repair the files with a bridge client, then run the cutover again")
+
+
 # ── Backup ───────────────────────────────────────────────────────────────────
 
 def _sha256(path: Path) -> str:
@@ -501,6 +572,10 @@ def legacy_flush(root: Path, token: str) -> dict:
     """
     from taskmaster import backlog_server as server  # Installs the exporter's derivers.
     from taskmaster import store as legacy
+    path = database_path(root)
+    with closing(_connect_readonly(path)) as reader:
+        sessions = {row[0]: row for row in reader.execute("SELECT * FROM sessions")} \
+            if _has_table(reader, "sessions") else {}
     with migration_owner(token):
         instance = server._store_for(Path(root) / ".taskmaster" / "backlog.yaml")
         try:
@@ -508,7 +583,30 @@ def legacy_flush(root: Path, token: str) -> dict:
                 pass
         finally:
             legacy.close_thread_connection()
+    _restore_flush_sessions(path, instance.session, sessions)
     return {"flushed": True}
+
+
+def _restore_flush_sessions(path: Path, session: str, before: dict) -> None:
+    """Undo the session rows the flush's own Store wrote (its session and its `session:t<thread>`
+    activity rows), so a flush that changed nothing else leaves the rows --rollback compares
+    exactly as they were. Other sessions' rows are left alone: a leaked client's touch stays
+    visible to the drift and rollback checks."""
+    with closing(_connect(path)) as connection:
+        if not _has_table(connection, "sessions"):
+            return
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            for row in connection.execute("SELECT * FROM sessions WHERE session=? OR substr(session,1,?)=?",
+                                          (session, len(session) + 1, session + ":")).fetchall():
+                connection.execute("DELETE FROM sessions WHERE session=?", (row[0],))
+                if row[0] in before:
+                    marks = ",".join("?" for _ in before[row[0]])
+                    connection.execute(f"INSERT INTO sessions VALUES({marks})", tuple(before[row[0]]))
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
 
 
 # ── Activation core (production; the twins fixture flips authority through it) ──
@@ -734,11 +832,13 @@ class _Run:
         # The progress changelog itself is reconciled inside the activation transaction,
         # after the final backfill (`carryover.reconcile_progress`): a meta entry written
         # after its seed marker would never be copied. Here: no export may be stranded.
-        flushed = None
         before = reconcile_counts(self.connection, self.root)
+        # Always, even with nothing pending: the flush's transaction is also the legacy scan of
+        # the files on disk, so a file that stopped parsing since the preflight (a git pull, an
+        # editor) is quarantined here and the `held_files` check below sees it. No bridge client
+        # can flush or scan through the fence, so the cutover does it itself.
+        flushed = legacy_flush(self.root, self.token)
         if _blocking(before):
-            # No bridge client can flush through the fence, so the cutover does it itself.
-            flushed = legacy_flush(self.root, self.token)
             self.log(f"[reconcile] flushed pending legacy exports ({'; '.join(_blocking(before))})")
         self._begin_owned()
         counts = reconcile_counts(self.connection, self.root)
@@ -750,6 +850,14 @@ class _Run:
                        + " (the rows are kept; backlog_store_status on the native store lists them as pending)")
             self.report.setdefault("warnings", []).append(warning)
             self.log(f"warning: {warning}")
+        held = held_files(self.connection, self.root)
+        if held:
+            # The flush's scan (or a file changed since the preflight) left a file native managed
+            # Git would hold on. The row keeps the post-flush digest, so --rollback accepts it.
+            _record(self.connection, "reconcile", "held", self.owner, self.token,
+                    {"held": held, "counts": counts, "domain_digest": domain_digest(self.connection)})
+            self.connection.commit()
+            raise _held_abort(held, "the reconcile flush under the fence left files native managed Git holds on")
         self._commit_stage("reconcile", {"counts_before": before, "counts": counts, "flushed": flushed,
                                          "carried": carried, "domain_digest": domain_digest(self.connection)})
 
@@ -806,6 +914,10 @@ class _Run:
         except (CarryoverMismatch, UnsupportedStoreError, ValueError) as error:
             raise CutoverAborted(f"trial activation failed; nothing activated: {error}") from error
         self._begin_owned()
+        held = held_files(self.connection, self.root)
+        if held:
+            self.connection.rollback()
+            raise _held_abort(held, "files native managed Git holds on appeared under the fence before activation")
         self._commit_stage("compare", {"problems": [], "ids": trial["ids"], "progress": trial["progress"]})
 
     def activate(self):
@@ -936,6 +1048,7 @@ def dry_run(root: Path, *, confirm_stopped: bool = False) -> dict:
                     report["warnings"].append("; ".join(_blocking(counts)) + ": the cutover flushes them itself "
                                               "under the fence (reconcile stage)")
                 report["refusals"] += [r for r in [handover_refusal(connection)] if r]
+                report["refusals"] += held_files(connection, root)
                 try:
                     assert_compatible(connection)
                 except UnsupportedStoreError as error:
@@ -956,7 +1069,7 @@ def dry_run(root: Path, *, confirm_stopped: bool = False) -> dict:
         report["projection_files"] = len(projection_files(root, connection))
     report["planned"] = [] if report["refusals"] else [
         "fence: publish meta.migration_state='migrating' with owner/token under the ownership lock",
-        "reconcile: flush pending legacy exports under the fence (as one admitted bridge client)",
+        "reconcile: scan the files and flush pending legacy exports under the fence (as one admitted bridge client)",
         f"backup: {path.parent / 'backups' / 'pre-native-<UTC ts>.db'} + manifest ({report['projection_files']} projection files)",
         f"backfill: stage {counts['entities']} entities and {counts['changes']} changes into native tables",
         "compare: trial activation, rolled back; verify_carryover must report nothing lost",
@@ -984,14 +1097,17 @@ def cutover(root: Path, *, confirm_stopped: bool = False, resume: bool = False, 
         state = classify(probe)
         counts = reconcile_counts(probe, root)
         handovers = handover_refusal(probe)
+        held = held_files(probe, root)
     refusals = _store_refusals(state, mode=mode)
     activated = state["native"] or "activate" in state["completed_stages"]
     if resume and activated:
         return _finish_release(path, token=token, log=log)
     if not resume and _blocking(counts):
         log("note: " + "; ".join(_blocking(counts)) + " will be flushed by the cutover under the fence")
-    if not resume and not refusals and handovers:
-        refusals.append(handovers)
+    if not resume and not refusals:
+        # A resume skips this: the fenced reconcile and compare stages re-check held files
+        # (`_Run.reconcile`, `_Run.compare`), and nothing can repair a file through the fence anyway.
+        refusals += [r for r in [handovers] if r] + held
     if not activated:
         refusals += [r for r in [sidecar_refusal(root)] if r]
     quiesced = check_quiesced(root, confirm_stopped=confirm_stopped)
