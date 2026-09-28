@@ -982,7 +982,7 @@ class LinkLedger:
                 part = ids[at:at + 500]
                 rows += c.execute("SELECT seq,commit_key,kind,id,fields,after FROM domain_events WHERE id IN "
                                   f"({','.join('?' * len(part))})", part).fetchall()
-        docs, self.points = {}, {}
+        docs, self.points, self.kinds = {}, {}, {}
         for seq, key, kind, ident, fields, after in sorted(rows):
             fields = json.loads(fields or "[]")
             try:
@@ -991,6 +991,7 @@ class LinkLedger:
                 after = {}
             after = after if isinstance(after, dict) else {}
             doc = docs.setdefault(ident, {})
+            self.kinds[ident] = kind
             for field in fields:
                 if field in after:
                     doc[field] = after[field]
@@ -1018,6 +1019,41 @@ class LinkLedger:
 
     def seqs_between(self, ident, low, high):
         return [q for q in (self.points.get(ident) or {"seq": []})["seq"] if low < q <= high]
+
+
+def store_links(root: Path, ids, kinds) -> dict:
+    """Each entity's effective links as the store holds them now (its current document, the legacy
+    fallback applied, as the tools read it); None for an entity the store does not hold."""
+    from taskmaster.native.queries import Repository
+    out = {}
+    with ro(root) as c:
+        with Repository(c).snapshot() as snap:
+            for ident in ids:
+                try:
+                    doc = snap.get(kinds.get(ident) or "issue", ident)["fields"]
+                except KeyError:
+                    out[ident] = None
+                    continue
+                out[ident] = frozenset((l.get("type"), l.get("target"))
+                                       for l in effective_links(doc, kinds.get(ident) or "issue") if isinstance(l, dict))
+    return out
+
+
+def link_store_divergence(ledger: LinkLedger, stored: dict) -> list:
+    """Entities whose links rebuilt from the event log differ from the store's: the event-based link
+    checks prove nothing about a store the log does not describe (a change without an event)."""
+    diverged = []
+    for ident in sorted(stored):
+        rebuilt = ledger.as_of(ident, EVER)
+        if rebuilt is None or stored[ident] is None or rebuilt != stored[ident]:
+            diverged.append({"id": ident, "events_only": len(rebuilt - stored[ident]) if rebuilt and stored[ident] is not None else None,
+                             "store_only": len(stored[ident] - rebuilt) if rebuilt is not None and stored[ident] else None})
+    return diverged
+
+
+def links_divergence(root: Path, ids, kinds) -> list:
+    ledger = LinkLedger(root, ids)
+    return link_store_divergence(ledger, store_links(root, ids, dict(kinds, **ledger.kinds)))
 
 
 def link_noop_held_in_store(root: Path, record, ledger=None) -> bool:
@@ -1517,6 +1553,9 @@ def write_scenario(kind):
             # Cross-process duplicates: odd workers replay their even neighbour's request ids concurrently.
             for w in range(1, clients, 2):
                 plans[w] = json.loads(json.dumps(plans[w - 1]))
+        link_ids = sorted(set(inv["link_sources"]) | set(inv["link_targets"]))
+        # The link checks rebuild state from the event log: the log must describe the store, before and after.
+        baseline = links_divergence(ds.root, link_ids, inv["entity_kind"]) if kind == "link" else []
         before, commits_before, tasks_before = high_water(ds.root), commit_count(ds.root), task_ids(ds.root)
         records, meta = run_clients(run, ds.root, plans, label=f"write-{kind}", prime=PRIME)
         after, commits_after, tasks_after = high_water(ds.root), commit_count(ds.root), task_ids(ds.root)
@@ -1568,7 +1607,10 @@ def write_scenario(kind):
             res.check("archived_are_archived", bool(targets) and all(v == "archived" for v in status.values()),
                       archived=len(targets), wrong=len([i for i, v in status.items() if v != "archived"]) or None)
         if kind == "link":
-            check_link_writes(res, ds.root, records, ids=inv["link_sources"] + inv["link_targets"], before=before)
+            check_link_writes(res, ds.root, records, ids=link_ids, before=before)
+            final = links_divergence(ds.root, link_ids, inv["entity_kind"])
+            res.check("links_match_store", not baseline and not final, entities=len(link_ids),
+                      before=len(baseline) or None, after=len(final) or None, examples=(final or baseline)[:5] or None)
         if kind == "composite":
             valid_ok = [r for r in records if r["op"] == "write.composite" and r.get("ok")]
             invalid_ops = [op for plan in plans for op in plan if op.get("invalid_composite")]

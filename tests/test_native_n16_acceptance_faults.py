@@ -655,6 +655,18 @@ def test_legacy_links_the_tool_synthesizes_are_not_a_change(tmp_path):
     assert _link_checks(root, [_link_ack(3, "create")])["link_changes_explained"] is True
 
 
+def test_the_rebuilt_links_must_match_the_store_on_every_entity(tmp_path):
+    # keep_last: the store keeps a link its event log says was removed, so the ledger alone would pass.
+    ledger = runner.LinkLedger(_event_store(tmp_path, LINKS), ["ISS-001", "IDEA-001"])
+    empty = frozenset()
+    assert runner.link_store_divergence(ledger, {"ISS-001": empty, "IDEA-001": empty}) == []
+    kept = runner.link_store_divergence(ledger, {"ISS-001": frozenset({(REL, "IDEA-001")}), "IDEA-001": empty})
+    assert [d["id"] for d in kept] == ["ISS-001"]
+    assert [d["id"] for d in runner.link_store_divergence(ledger, {"ISS-001": empty, "IDEA-001": None})] == ["IDEA-001"]
+    unknown = runner.link_store_divergence(ledger, {"ISS-001": empty, "IDEA-001": empty, "ISS-009": empty})
+    assert [d["id"] for d in unknown] == ["ISS-009"]  # no event rebuilds it: not a match
+
+
 @pytest.mark.parametrize("mode, workers", [("disjoint", 3), ("same", 2)])
 def test_composites_have_at_least_two_members_or_are_refused(mode, workers):
     import random
@@ -695,6 +707,8 @@ def test_a_same_mode_link_answer_without_a_sequence_is_a_noop_to_verify(monkeypa
     ("clobber_link", "same", "link_changes_explained"),
     ("skip_inverse", "disjoint", "link_acks_hold"),            # the create commits the source side only
     ("skip_inverse", "same", "link_acks_hold"),
+    ("keep_last", "disjoint", "links_match_store"),         # the store keeps a link its events say was removed
+    ("keep_last", "same", "links_match_store"),
 ])
 def test_a_lost_link_write_fails_the_runner(work, fault, mode, gate):
     done, report = run_runner(work, "write.link", fault, worker=FAULT_WORKER,

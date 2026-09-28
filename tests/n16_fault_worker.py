@@ -128,6 +128,30 @@ elif fault == "skip_inverse":  # creates commit the source side only, in process
             connection.close()
         return f"ok: linked {source} -[{type}]-> {target} [seq {receipt['commit_seq']}]"
     bs.backlog_link = skip_inverse
+elif fault == "keep_last":  # the client's last remove commits, then the store's link rows come back, no event
+    real_link = bs.backlog_link
+    removes = {"left": sum(1 for op in json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))["ops"]
+                           if op.get("tool") == "backlog_link" and op["kw"].get("action") == "remove")}
+
+    def keep_last(action="", source="", target="", type="relates_to", **kwargs):
+        if action != "remove":
+            return real_link(action=action, source=source, target=target, type=type, **kwargs)
+        removes["left"] -= 1
+        if removes["left"]:
+            return real_link(action=action, source=source, target=target, type=type, **kwargs)
+        connection = sqlite3.connect(root / ".taskmaster/local/store.db", timeout=60, isolation_level=None)
+        try:
+            saved = connection.execute(
+                "SELECT d.* FROM declared_links d JOIN entity_core e ON e.entity_key=d.entity_key WHERE d.field='links' "
+                "AND ((e.public_id=? AND d.target_id=?) OR (e.public_id=? AND d.target_id=?))",
+                (source, target, target, source)).fetchall()
+            answer = real_link(action=action, source=source, target=target, type=type, **kwargs)
+            for row in saved:
+                connection.execute(f"INSERT OR REPLACE INTO declared_links VALUES({','.join('?' * len(row))})", row)
+        finally:
+            connection.close()
+        return answer
+    bs.backlog_link = keep_last
 elif fault == "die_before_ready":  # a client that crashes during startup
     sys.exit(7)
 
