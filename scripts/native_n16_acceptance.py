@@ -315,8 +315,13 @@ def worker_main(spec_path: Path) -> int:
     os.chdir(root)
     worker = Worker(spec)
     out = Path(spec["out"])
+    records = []
     if spec.get("prime"):
-        worker.run(spec["prime"])  # imports, snapshot and coordinator handshake: not measured
+        # Imports, snapshot and coordinator handshake: not measured, but kept as a warmup record, so a
+        # "first call after process start fails" defect fails no_warmup_errors instead of vanishing.
+        primed = worker.run(spec["prime"])
+        primed.update(w=spec["worker"], n=-1, t=time.time(), warmup=True)
+        records.append(primed)
     Path(spec["ready"]).write_text(str(os.getpid()), encoding="utf-8")
     barrier = Path(spec["barrier"])
     deadline = time.monotonic() + 600
@@ -325,7 +330,6 @@ def worker_main(spec_path: Path) -> int:
             return 3
         time.sleep(0.005)
     stop = Path(spec["stop"]) if spec.get("stop") else None
-    records = []
     ops = spec["ops"]
     index = 0
     while True:
@@ -337,7 +341,7 @@ def worker_main(spec_path: Path) -> int:
             break
         op = ops[index]
         record = worker.run(op)
-        record.update(w=spec["worker"], n=len(records), t=time.time())
+        record.update(w=spec["worker"], n=len(records) - bool(spec.get("prime")), t=time.time())
         records.append(record)
         index += 1
     with out.open("w", encoding="utf-8") as stream:

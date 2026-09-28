@@ -64,6 +64,8 @@ def work(tmp_path_factory):
     ("fake_noop_half", "read.during_writes", "noop_answers_verified"),  # half the writes dropped as "unchanged"
     ("fail_first", "write.prose", "no_warmup_errors"),      # the warmup call fails: a cold-start defect
     ("fail_first", "read.details", "no_warmup_errors"),
+    ("fail_first_any", "read.details", "no_warmup_errors"),  # the prime (first call after start) fails
+    ("fail_first_any", "read.during_writes", "no_warmup_errors"),
     ("reuse_id", "write.create", "no_reused_id"),           # an existing id reported as created
     ("partial_composite", "write.composite", "no_partial_composite"),  # an invalid composite half-applied
     ("die_before_ready", "write.meta", None),               # a client that dies before the barrier

@@ -60,6 +60,14 @@ elif fault == "fail_first":  # a client's first (warmup) call fails: a cold-star
             return "Error: coordinator not ready" if calls["n"] == 1 else real(*args, **kwargs)
         return call
     bs.backlog_update_task, bs.backlog_get_task = first(real_update), first(real_get)
+elif fault == "fail_first_any":  # the process's first call of ANY tool fails - the unmeasured prime included
+    def first_call_fails(real):
+        def call(*args, **kwargs):
+            calls["n"] += 1
+            return "Error: coordinator not ready" if calls["n"] == 1 else real(*args, **kwargs)
+        return call
+    for name in ("backlog_list_tasks", "backlog_update_task", "backlog_get_task"):
+        setattr(bs, name, first_call_fails(getattr(bs, name)))
 elif fault == "reuse_id":  # creates report an EXISTING task id (distinct per call)
     existing = sorted(p.stem for p in (root / ".taskmaster/tasks").glob("*.md"))
 
