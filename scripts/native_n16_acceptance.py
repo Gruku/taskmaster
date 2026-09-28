@@ -27,6 +27,7 @@ timings, never authored content (op arguments stay in --work).
 from __future__ import annotations
 
 import argparse
+import ast
 from contextlib import closing
 import fnmatch
 import hashlib
@@ -495,7 +496,7 @@ def build_inventory(root: Path) -> dict:
     tasks = [(i, d) for (k, i), (d, b, a) in sorted(entities.items()) if k == "task" and not a
              and d.get("status") not in ("archived", "done")]
     words = sorted({w for _, d in tasks[:400] for w in re.findall(r"[A-Za-z]{5,}", str(d.get("title", ""))).__iter__()})
-    anchors = sorted({a for _, d in tasks for a in (d.get("anchors") or []) if isinstance(a, str)})
+    anchors = sorted({a for _, d in tasks for a in inventory_anchors(d.get("anchors"))})
     return {
         "tasks": [i for i, _ in tasks],
         "task_priority": {i: d.get("priority", "medium") for i, d in tasks},
@@ -511,6 +512,28 @@ def build_inventory(root: Path) -> dict:
         "words": words[:500] or ["alpha"],
         "counts": {k: sum(1 for (kk, _) in entities if kk == k) for k in {k for k, _ in entities}},
     }
+
+
+def inventory_anchors(stored) -> list:
+    """The anchors a planner may sample: only values the tool stores back unchanged.
+
+    The tool splits a written value on commas, strips, and drops blanks, so an anchor that is
+    blank or holds a comma (a real one on the CodeMaestro copy is ",") cannot round-trip. Some
+    legacy anchors are one stringified Python list: parsed as a whole, never sampled as fragments.
+    """
+    if isinstance(stored, str):
+        text = stored.strip()
+        if text.startswith("["):
+            try:
+                stored = ast.literal_eval(text)
+            except (ValueError, SyntaxError):
+                return []
+        else:
+            stored = text.split(",")
+    if not isinstance(stored, (list, tuple)):
+        return []
+    items = [item.strip() for item in stored if isinstance(item, str)]
+    return [item for item in items if item and not any(ch in item for ch in ",[]\"'")]
 
 
 def prepare_dataset(run: Run, name: str) -> Dataset:
@@ -746,6 +769,29 @@ def norm(value) -> str:
     return str(value)
 
 
+def claim_norm(field, value) -> str:
+    """A value as the tool would store it, for comparison with the store: an anchors value is split
+    on commas, stripped, and blanks dropped (native `task.update`)."""
+    if field == "anchors" and isinstance(value, str):
+        return ",".join(item.strip() for item in value.split(",") if item.strip())
+    return norm(value)
+
+
+def value_as_of(connection, kind, ident, field, seq):
+    """(found, value): the entity's `field` as of `seq`, from the latest event at or before it that
+    set the field (a removal reads as None). found is False when no event ever set it."""
+    rows = connection.execute("SELECT fields,after FROM domain_events WHERE kind=? AND id=? AND seq<=? "
+                              "ORDER BY seq DESC", (kind, ident, seq))
+    for fields, after in rows:
+        if field in json.loads(fields or "[]"):
+            try:
+                after = json.loads(after) if after else {}
+            except ValueError:
+                after = {}
+            return True, (after if isinstance(after, dict) else {}).get(field)
+    return False, None
+
+
 def commit_events(connection, seq):
     """Every event of the commit that holds `seq` (one command commit may write several)."""
     row = connection.execute("SELECT commit_key FROM domain_events WHERE seq=?", (seq,)).fetchone()
@@ -796,8 +842,16 @@ def check_acks(result: Result, root: Path, records, *, writes_expected=True):
                 continue
             for kind, ident, field, value in record_claims(r):
                 hit = [e for e in events if e["id"] == ident and kind in ("*", e["kind"])]
-                if field is not None and value is not None:
-                    hit = [e for e in hit if field in e["after"] and norm(e["after"][field]) == norm(value)]
+                if field is not None and value is not None and hit:
+                    # Judge the value AS OF the acked seq, not that commit's diff: a same-value write
+                    # after the minute rolls over commits only `last_referenced`, truthfully.
+                    found, stored = value_as_of(c, hit[0]["kind"], ident, field, r["seq"])
+                    if not found and not value_as_of(c, hit[0]["kind"], ident, field, 1 << 62)[0]:
+                        stored = field_values(root, hit[0]["kind"], [ident], field)[ident]  # never evented
+                    elif not found:
+                        stored = None
+                    if claim_norm(field, stored) != claim_norm(field, value):
+                        hit = []
                 elif field is not None:
                     hit = [e for e in hit if field in e["fields"]]
                 if not hit:
@@ -852,7 +906,7 @@ def check_last_value(result: Result, root: Path, records):
     wrong = []
     for (kind, ident, field), (seq, value) in sorted(last.items()):
         current = field_values(root, kind, [ident], field)[ident]
-        if norm(current) != norm(value):
+        if claim_norm(field, current) != claim_norm(field, value):
             wrong.append({"id": ident, "field": field, "seq": seq})
     result.check("acked_value_is_final", not wrong and bool(last or not planned), fields=len(last),
                  wrong=wrong[:5] or None)

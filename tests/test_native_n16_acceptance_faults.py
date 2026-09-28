@@ -123,3 +123,79 @@ def test_budget_rows_are_not_evidence_when_invalid_or_smoke():
 def test_redact_keeps_no_authored_text():
     text = runner.redact("ValueError: task `secret-epic-001` titled Zorblax is locked")
     assert "Zorblax" not in text and "secret" not in text and text.startswith("ValueError#")
+
+
+# ── ack judgement against a minimal event log (no processes) ────────────────
+def _event_store(tmp_path, events):
+    """A store holding only `domain_events`: [(seq, commit_key, kind, id, fields, after)]."""
+    import sqlite3
+    (tmp_path / ".taskmaster/local").mkdir(parents=True)
+    with sqlite3.connect(tmp_path / ".taskmaster/local/store.db") as c:
+        c.execute("CREATE TABLE domain_events(seq INTEGER PRIMARY KEY, commit_key TEXT, kind TEXT, id TEXT, "
+                  "op TEXT, fields TEXT, after TEXT)")
+        for seq, commit_key, kind, ident, fields, after in events:
+            c.execute("INSERT INTO domain_events VALUES(?,?,?,?,?,?,?)",
+                      (seq, commit_key, kind, ident, "update", json.dumps(fields), json.dumps(after)))
+    return tmp_path
+
+
+def _lost_ack(root, records):
+    result = runner.Result("x", "small")
+    runner.check_acks(result, root, records)
+    return {c["check"]: c for c in result.data["checks"]}["no_lost_ack"]["ok"] is False
+
+
+def _ack(seq, field, value, ident="t-1"):
+    return {"ok": True, "seq": seq, "check": ["task", ident, field, value]}
+
+
+MINUTE_ROLLOVER = [  # t-1 set to low, then a same-value write after the minute: last_referenced only
+    (1, "c1", "task", "t-1", ["priority", "last_referenced"], {"priority": "low", "last_referenced": "12:00"}),
+    (2, "c2", "task", "t-2", ["priority"], {"priority": "high"}),
+    (3, "c3", "task", "t-1", ["last_referenced"], {"last_referenced": "12:01"}),
+]
+
+
+def test_a_same_value_write_after_the_minute_rolls_over_is_not_a_lost_ack(tmp_path):
+    root = _event_store(tmp_path, MINUTE_ROLLOVER)
+    assert not _lost_ack(root, [_ack(3, "priority", "low")])
+
+
+def test_an_ack_whose_value_as_of_its_seq_differs_is_still_lost(tmp_path):
+    root = _event_store(tmp_path, MINUTE_ROLLOVER)
+    assert _lost_ack(root, [_ack(3, "priority", "high")])
+
+
+def test_an_ack_naming_a_commit_of_another_entity_is_still_lost(tmp_path):
+    # A dropped write acknowledged with a real sequence that belongs to someone else's commit.
+    root = _event_store(tmp_path, MINUTE_ROLLOVER)
+    assert _lost_ack(root, [_ack(2, "priority", "high")])
+
+
+def test_a_later_value_does_not_rescue_an_ack(tmp_path):
+    events = MINUTE_ROLLOVER + [(4, "c4", "task", "t-1", ["priority"], {"priority": "high"})]
+    root = _event_store(tmp_path, events)
+    assert _lost_ack(root, [_ack(3, "priority", "high")])
+
+
+def test_claimed_anchors_are_normalized_as_the_tool_stores_them(tmp_path, monkeypatch):
+    root = _event_store(tmp_path, [(1, "c1", "task", "t-1", ["anchors"], {"anchors": ["x", "y"]})])
+    assert not _lost_ack(root, [_ack(1, "anchors", ",, x ,y,")])
+    assert _lost_ack(root, [_ack(1, "anchors", ",,x")])
+    monkeypatch.setattr(runner, "field_values", lambda root, kind, ids, field: {i: ["x", "y"] for i in ids})
+    result = runner.Result("x", "small")
+    runner.check_last_value(result, root, [_ack(1, "anchors", ",, x ,y,")])
+    assert result.data["checks"][-1]["ok"] is True
+    runner.check_last_value(result, root, [_ack(1, "anchors", "x")])
+    assert result.data["checks"][-1]["ok"] is False
+
+
+@pytest.mark.parametrize("stored, usable", [
+    (["src/a.py", ",", " ", "", "a,b"], ["src/a.py"]),
+    ('["docs/a.md", "docs/b.md"]', ["docs/a.md", "docs/b.md"]),   # a legacy stringified list
+    (['["docs/a.md"', '"docs/b.md"],'], []),                      # fragments of one: never sampled
+    ("src/a.py, src/b.py", ["src/a.py", "src/b.py"]),
+    (None, []),
+])
+def test_inventory_anchors_are_only_values_the_tool_round_trips(stored, usable):
+    assert runner.inventory_anchors(stored) == usable
