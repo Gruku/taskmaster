@@ -18,7 +18,11 @@ from .contracts import Conflict, _identifier
 from .migrate import encode
 from .sync_merge import protect_local
 
-OPERATIONS = {"sync.apply", "sync.begin", "sync.finish"}
+OPERATIONS = {"sync.apply", "sync.begin", "sync.finish", "sync.job"}
+# `backlog_sync` job records (coordinator/sync_jobs.py): one row per job id, written when the
+# job starts ("running") and when it ends; an ended record is immutable.
+JOB_PREFIX = "sync.job."
+JOB_STATES = {"running", "complete", "incomplete", "failed"}
 MAX_ROWS = 100
 MAX_FILES = 10000
 OPERATION_PREFIX = "sync.operation."
@@ -77,7 +81,20 @@ def operation_state(connection, scope):
     return None if row is None else json.loads(row[0])
 
 
+def job_record(connection, ident):
+    row = connection.execute("SELECT value_json FROM sync_state WHERE key=?", (JOB_PREFIX + ident,)).fetchone()
+    return None if row is None else json.loads(row[0])
+
+
 def validate(operation, arguments):
+    if operation == "sync.job":
+        record = arguments.get("record")
+        if (set(arguments) != {"id", "record"} or not isinstance(arguments["id"], str)
+                or not re.fullmatch(r"\d{8}T\d{6}Z-[0-9a-f]{8}", arguments["id"])):
+            raise ValueError("sync.job requires a job id and record")
+        if not isinstance(record, dict) or record.get("state") not in JOB_STATES:
+            raise ValueError("invalid sync job record")
+        return
     if operation == "sync.begin":
         if set(arguments) != {"input"}:
             raise ValueError("sync.begin requires input")
@@ -210,6 +227,15 @@ def _queue_entity(transaction, kind, ident, rel):
 
 def apply(transaction, operation, arguments):
     connection = transaction.connection
+    if operation == "sync.job":
+        ident, record = arguments["id"], arguments["record"]
+        before = job_record(connection, ident)
+        if before is not None and before["state"] != "running" and before != record:
+            raise Conflict("an ended sync job record is immutable")
+        connection.execute("INSERT INTO sync_state(key,value_json) VALUES(?,?) "
+                           "ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json", (JOB_PREFIX + ident, encode(record)))
+        transaction.result = {"id": ident, "state": record["state"]}
+        return
     if operation in {"sync.begin", "sync.finish"}:
         scope = transaction.request["caller_scope"]
         state = operation_state(connection, scope)

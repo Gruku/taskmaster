@@ -4,9 +4,11 @@
 
 # Runbook: native cutover
 
-> **Activating a live project is a release decision.** Nothing in this runbook authorizes
-> running the cutover against a real project. Until that decision is made, run it only on
-> disposable copies marked `.benchmark-copy`. Never point it at a CodeMaestro checkout.
+> **Rehearse on a copy first.** Before cutting over a real project, run this whole procedure on
+> a disposable copy of it (a clone with `hooksPath` outside the copy works) and deal with every
+> refusal there. Activation is one-way: after it commits, the only way back is the manual
+> escape hatch in section 5. See also the [native store guide](../native-store.md) for what
+> changes for agents and operators afterwards.
 
 The command is a CLI, not an MCP tool, because a running MCP server is itself a client that has
 to be stopped first.
@@ -18,6 +20,11 @@ python -m taskmaster.native.cutover --root <project> [--dry-run | --resume | --r
 ```
 
 `--clear-orphan-fence` is only valid with `--rollback`.
+
+`python -m` needs a source checkout and its dev venv. From an installed plugin, run
+`uv run <plugin>/taskmaster_cli.py cutover --root <project> ...` with the same arguments.
+It runs in the plugin's own uv environment. See
+[release-packaging.md](release-packaging.md#how-the-package-runs).
 
 Every run prints a report, including when it fails (`--json` prints it as JSON). After a
 failure the report carries `fence`, the fence state re-read from the store, and `next`/`hint`,
@@ -52,6 +59,21 @@ protects the store; the fence is not enough on its own. This inventory comes fro
 | Linear | server worker and `Store.linear_*` | Stops with the server; do not restart it until the cutover is verified |
 
 Updating files on disk does not change a process that is already running. Stop the process.
+
+After a cutover the project also runs a coordinator, a detached process started by the first
+native write. Closing the sessions does not stop it; it exits after 300 s idle. To stop it
+now, from the same build as the one running it:
+
+```
+uv run <plugin>/taskmaster_cli.py coordinator status --root <project>
+uv run <plugin>/taskmaster_cli.py coordinator stop --root <project>
+```
+
+`stop` on a coordinator of another build changes nothing, exits 1, and names its build, its
+pid and how to stop it. See
+[Stopping the coordinator](../native-store.md#stopping-the-coordinator). A legacy store has no
+coordinator; if one owns the project, the cutover refuses with
+`a live coordinator or service owns this project`.
 
 **Just before you stop the last client, run one tool call** (for example `backlog_handover_list`).
 Its scan adopts every file changed since the last one, such as a `git pull`, so a file that no
@@ -164,16 +186,54 @@ again before the real run.
        `handovers/_archive/`. A file repaired in place is imported from its frontmatter, so
        without this key the handover comes back as live.
    - **`git conflict markers`**: resolve the whole-line `<<<<<<<` / `>>>>>>>` conflict. A body
-     line of `=======` alone is not a conflict marker in this build. Released builds up to and
-     including 6.0.3 quarantined it anyway (CodeMaestro's B-339); the repair is described in
-     [section 5](#5-post-activation-escape-hatch-manual-lossy-for-local-state), step 5.
+     line of `=======` alone is not a conflict marker in this build
+     (`taskmaster/projection_parse.py`, `_CONFLICT_MARKER`). Released builds up to and
+     including 6.0.3 quarantined it anyway (CodeMaestro's B-339). Such a file needs no edit
+     under this build, only the touch in step 3.
    - **`... path id ... does not match frontmatter id ...`**: make `id` equal the file name.
    - **A `project.yaml` YAML error**: fix the YAML. The file is a plain mapping, with no
      frontmatter.
+
+   **Keep each file's own line endings, and check each file.** A project can mix them, so do
+   not assume one style: in the CodeMaestro copy most files are CRLF, but the three handovers
+   that need repair are LF. Before editing a file, run `git ls-files --eol <path>` (the `w/`
+   column is the working copy: `w/lf` or `w/crlf`), or look for `\r\n` in its bytes. Write the
+   added frontmatter in the same style: CRLF into a CRLF file, LF into an LF file. The parser
+   accepts either and normalizes them, so a mixed file still parses, but you would leave a file
+   with mixed line endings in the repository. An editor that saves the whole file in one style
+   is fine; a script that prepends a block with `\n` to a CRLF file, or with `\r\n` to an LF
+   file, is not.
 3. Run any tool, for example `backlog_handover_list`. Its scan re-reads the changed file and
    adopts it.
+
+   **A file quarantined by an older build's rule clears only after you touch it.** The scan
+   skips a quarantined file whose modification time and size still equal the stamp recorded
+   when it was quarantined (`Store._quarantine_stamp_matches` in `taskmaster/store.py`); it
+   re-reads the file only when either changes. A file you edited in step 2 has changed. A file
+   you did not need to edit (the B-339 case above: its bytes parse under this build, but an
+   older build quarantined them) keeps its old stamp and stays quarantined. Update its
+   modification time without changing its bytes, then run the tool call again:
+
+   ```
+   python -c "import os, sys; os.utime(sys.argv[1])" .taskmaster/bugs/B-339.md
+   ```
 4. Run `backlog_store_status` again and confirm that it lists no `Quarantined:` and no
    `Flagged:` files, then re-run the dry run.
+
+**Expect `backlog.yaml` to change after the cutover, not before.** Re-adopting a repaired
+entity that `backlog.yaml` indexes (a bug, for example) puts its index entry back in the
+store. The file itself is rewritten by the first native export after activation: every export
+drain refreshes a stale derived file (`_Render.derived` in
+`taskmaster/native_routing/projection.py`), and a coordinator drains when it starts and after
+each commit. A coordinator starts on the first native write, or on a `backlog_sync` or managed
+Git command. The cutover itself never queues `backlog.yaml` (`queue_carried_exports` in
+`taskmaster/native/cutover.py` skips it: on a native store it is a derived file). In the N17
+demonstration on a CodeMaestro copy, neither the re-adopt nor the cutover's `reconcile` flush
+changed it; `git status` showed `M .taskmaster/backlog.yaml` only after the first native
+write, and the first managed commit carried it. In an earlier CodeMaestro rehearsal the
+difference was exactly B-339's 11-line entry under `bugs:`. This is expected: let the first
+managed commit after the cutover (`git_run`, see [the native store guide](../native-store.md#git))
+include it.
 
 **When the repaired file is flagged instead.** If the store changed the entity while its file
 was quarantined (the export was suppressed; `backlog_store_status` lists the file under
@@ -556,7 +616,7 @@ If you have to leave native anyway, the projection files are the durable exchang
    project and commit or save them.
 4. Move `.taskmaster/local/store.db`, `store.db-wal` and `store.db-shm` aside. Keep them.
 5. Start the legacy build. With no store present, it adopts the projection files into a
-   fresh legacy store. **Use this build (the N15 cutover build) or later.** Released builds up
+   fresh legacy store. **Use this build or later.** Released builds up
    to and including 6.0.3 treat any body line containing `=======` (a setext heading
    underline such as `=========`) as a Git conflict marker. They quarantine the file, so it is
    never adopted: CodeMaestro's B-339 hit this. This build matches only whole `<<<<<<<`/`>>>>>>>`
@@ -577,7 +637,8 @@ store that holds every authored document: every kind, archived items, prose bodi
 fields. The documents match field for field, except two things a fresh adoption adds or
 derives, which are not authored state: the backlog row's derived index keys, and the
 `meta.projection_schema` stamp the legacy importer writes. The copy-only rehearsal on
-CodeMaestro (N15 step 9) is still outstanding.
+CodeMaestro passed with this build (N15 report, *escape*): 3,711 of 3,711 authored documents
+re-adopted. With 6.0.3 it re-quarantined B-339, as step 5 describes.
 
 ## Pruning backups
 
@@ -602,8 +663,10 @@ Delete `aside-*` folders once you no longer need what they hold.
 - The store: `.taskmaster/local/store.db`. The fence is in `meta`, and the journal is in
   `native_cutover_journal`.
 - Backups: `.taskmaster/local/backups/pre-native-<UTC ts>.db`, with `.json` (the manifest),
-  `.projection.zip` (the archived projection files) and `.id-reservations.json`. A manual
-  restore copies what it replaces into `backups/aside-<UTC ts>/`.
+  `.projection.zip` (the archived projection files) and `.id-reservations.json`, and usually
+  `.db-shm` and `.db-wal`: SQLite creates these companions when the backup is reopened for its
+  integrity check. They belong to that backup; keep and delete them with it (the pruning
+  command above does). A manual restore copies what it replaces into `backups/aside-<UTC ts>/`.
 - Code: `taskmaster/native/cutover.py`. Tests: `tests/test_native_cutover.py`,
   `tests/test_native_cutover_crash.py` and `tests/test_native_cutover_quarantine.py`. Every twins activation in the test suite runs the
   carry-over oracle by default (`TASKMASTER_TWINS_VERIFY=1`, set in `tests/conftest.py`, +2.3%

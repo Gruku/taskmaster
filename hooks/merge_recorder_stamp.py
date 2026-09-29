@@ -1,12 +1,19 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["fastmcp>=3.4,<4", "httpx", "pydantic>=2", "pyyaml"]
+# ///
 # User intent: after a merge succeeds, stamp the rung it reached onto the task,
 # through the server's own recorder so the write is v3-correct — and against the
 # checkout that owns the backlog, even when the merge ran in a linked worktree.
 """merge_recorder_stamp.py — Stamp module for hooks/merge_recorder.py.
 
 Called by merge_recorder.py as:
-    python merge_recorder_stamp.py <SRC_BRANCH> [PROJECT_CWD]
+    python merge_recorder_stamp.py <SRC_BRANCH> <TARGET_BRANCH> <MERGE_SHA> [PROJECT_CWD]
 
 SRC_BRANCH: the source (feature) branch that was merged in.
+TARGET_BRANCH, MERGE_SHA: the branch and commit HEAD named when the hook fired. The
+    stamp may run seconds later, detached, so it never re-reads HEAD: a checkout or
+    commit in between would otherwise stamp the wrong rung or SHA.
 PROJECT_CWD: optional; defaults to Path.cwd(). Production PostToolUse hooks
     inherit the user's project cwd so the default is correct in prod; the
     explicit argv lets the test harness point the resolver at the project root
@@ -16,7 +23,12 @@ CARDINAL RULE: NEVER BLOCKS. Wrap the ENTIRE body in try/except so a Python
 exception can never propagate to the shell as a non-zero exit.  The shell hook
 also has `|| true` around this call, but defence-in-depth is correct here.
 
-PERSISTENCE: we delegate the actual write to backlog_server.backlog_record_merge.
+NATIVE STORES: the write goes to the coordinator with autostart off — hooks never
+bootstrap one. With no coordinator running the stamp is queued durably in
+local/merge-stamps-pending.jsonl and the MCP server applies it on its next native
+call (taskmaster/native_routing/merge_stamps.py); merge_gate_state lags until then.
+
+PERSISTENCE (legacy): we delegate the write to backlog_server.backlog_record_merge.
 That is the ONE v3-correct path — it splits the heavy `merge_status` field into
 tasks/<id>.md, recomputes the slim `merge_gate_state` mirror, and persists
 without reformatting the whole backlog.yaml.  Importing backlog_server is
@@ -31,7 +43,6 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -181,30 +192,13 @@ def pin_root(cwd: Path) -> None:
         os.environ["TASKMASTER_ROOT"] = str(root)
 
 
-def _git(args: list[str], cwd: Path) -> str | None:
-    """Run a git subcommand, return stripped stdout or None on any error."""
-    try:
-        r = subprocess.run(
-            ["git"] + args,
-            cwd=str(cwd),
-            capture_output=True,
-            text=True,
-            timeout=10,
-            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
-        )
-        if r.returncode == 0:
-            return r.stdout.strip() or None
-        return None
-    except Exception:
-        return None
+SESSION = "merge-recorder-hook"
 
 
-def stamp(src: str, cwd: Path) -> None:
-    """Core stamp logic — silently returns on any unexpected state.
+def stamp(src: str, cwd: Path, target: str, sha: str) -> None:
+    """Record merge `sha` of `src` into `target` on the task whose branch is `src`.
 
-    Delegates the write to backlog_server.backlog_record_merge so the v3
-    storage split (heavy merge_status -> tasks/<id>.md) and merge_gate_state
-    recompute happen via the canonical path.
+    Every early return that loses the stamp says why in hook.log.
     """
     pin_root(cwd)
     root = resolve_root(cwd)
@@ -233,18 +227,12 @@ def stamp(src: str, cwd: Path) -> None:
 
     try:
         from taskmaster import backlog_server as _bs
-    except Exception:
-        # Import failure -> fail safe: no stamp, never blocks.
-        return
-
-    # Determine current branch (the merge TARGET, post-merge HEAD).
-    current = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd)
-    if not current or current == "HEAD":
-        return
-
-    # Determine merge commit SHA.
-    sha = _git(["rev-parse", "HEAD"], cwd)
-    if not sha:
+        from taskmaster.native.domain import now_stamp
+        from taskmaster.taskmaster_v3 import rung_for_branch
+    except Exception as exc:
+        # Import failure -> fail safe: no stamp, never blocks, but say why.
+        _log(root, f"cannot import the Taskmaster server on {sys.executable} ({exc!r}); "
+                   "not recording this merge")
         return
 
     # Resolve rung: named ladder rung, or "branch:<name>" for untracked targets.
@@ -253,37 +241,103 @@ def stamp(src: str, cwd: Path) -> None:
     # store outright. Neither may cost the stamp: `_resolved_merge_targets` is the
     # same fallback the legacy path takes, down to the default ladder, and the
     # reason is logged the way every other step in this function logs its own.
+    native = False
     try:
         ladder = native_ladder(db_file)
+        native = ladder is not None
     except Exception as exc:
         _log(root, f"native merge ladder unreadable ({exc!r}); resolving the rung from the projection")
         ladder = None
+        native = _is_native(db_file)
     if ladder is None:
         ladder = _bs._resolved_merge_targets()
-    rung = _bs._rung_for_branch(current, ladder) or f"branch:{current}"
+    rung = rung_for_branch(target, ladder) or f"branch:{target}"
 
-    # Delegate to the canonical recorder (v3-correct heavy write + state recompute).
-    _bs.backlog_record_merge(tid, rung, sha)
+    if native:
+        _stamp_native(root, db_file, tid, rung, sha, now_stamp())
+        return
+    # Legacy: the canonical recorder (v3-correct heavy write + state recompute).
+    result = _bs.backlog_record_merge(tid, rung, sha)
+    if isinstance(result, str) and result.startswith("Error"):
+        _log(root, f"recording {tid} {rung} {sha} was refused: {result}")
+
+
+def _is_native(db_file: Path) -> bool:
+    uri = Path(db_file).resolve().as_uri() + "?mode=ro"
+    con = sqlite3.connect(uri, uri=True, timeout=BUSY_TIMEOUT_SECONDS)
+    try:
+        from taskmaster.native_routing import hook_reads
+        return bool(hook_reads.is_native(con))
+    finally:
+        con.close()
+
+
+# The hook host kills a PostToolUse hook after 10 s (hooks.json). The current merge is
+# recorded first, with a short coordinator timeout; older queued stamps are replayed only in
+# what is left, so a slow queue can never cost the merge that just happened.
+CURRENT_STAMP_SECONDS = 4.0
+STAMP_BUDGET_SECONDS = 7.0
+# The budget runs from process start (this import), as the host's limit does.
+_STARTED = time.monotonic()
+
+
+def _stamp_native(root: Path, db_file: Path, tid: str, rung: str, sha: str, merged_at: str) -> None:
+    """Write through a running coordinator only (hooks never start one); queue the stamp
+    when none answers. Then replay older queued stamps within the hook's budget."""
+    from taskmaster.native_routing import merge_stamps
+
+    backlog_dir = root / ".taskmaster"
+    entry = {"task_id": tid, "rung": rung, "sha": sha, "merged_at": merged_at}
+    label = f"{tid} {rung} {sha}"
+    log = lambda text: _log(root, text)  # noqa: E731
+    try:
+        outcome = merge_stamps.native_apply(db_file, backlog_dir, SESSION, autostart=False,
+                                            client_timeout=CURRENT_STAMP_SECONDS)(entry)
+    except merge_stamps.Unavailable as exc:
+        outcome = ("queue", f"no coordinator reachable ({exc})")
+    except Exception as exc:  # noqa: BLE001
+        outcome = ("queue", f"recording failed ({exc!r})")
+    if outcome == "retry":
+        outcome = ("queue", "the task kept changing under the write")
+    if isinstance(outcome, tuple) and outcome[0] == "reject":
+        _log(root, f"recording {label} was refused: {outcome[1]}")
+    elif isinstance(outcome, tuple):
+        try:
+            merge_stamps.enqueue(backlog_dir, entry)
+        except Exception as exc:  # noqa: BLE001
+            _log(root, f"{outcome[1]}; could not queue merge stamp {label} either ({exc!r}); NOT RECORDED")
+            return
+        _log(root, f"{outcome[1]}; merge stamp {label} queued for the MCP server")
+        return  # no coordinator answered: replaying now would only wait again
+    # A queued stamp older than this one is dropped by ancestry when it is replayed.
+    try:
+        merge_stamps.replay(backlog_dir, db_file, SESSION, autostart=False, log=log,
+                            deadline=_STARTED + STAMP_BUDGET_SECONDS, client_timeout=CURRENT_STAMP_SECONDS)
+    except Exception as exc:  # noqa: BLE001 -- the queue's trouble is not this merge's
+        _log(root, f"replaying queued merge stamps failed ({exc!r}); they stay queued")
 
 
 def main() -> None:
-    # Top-level fail-open guard: any exception at all => silent exit 0.
+    # Top-level fail-open guard: any exception at all => exit 0, logged when a
+    # project can be found.
+    cwd = Path.cwd()
     try:
-        if len(sys.argv) < 2:
+        if len(sys.argv) < 4:
             return
-        src = sys.argv[1].strip()
-        if not src:
+        src, target, sha = (arg.strip() for arg in sys.argv[1:4])
+        if not (src and target and sha):
             return
-        # Optional argv[2] = project cwd; default to the real process cwd.
-        # Production hooks inherit the user's project cwd, so Path.cwd() is
-        # correct in prod.  Tests drive this by setting subprocess cwd=<dir>.
-        if len(sys.argv) >= 3 and sys.argv[2].strip():
-            cwd = Path(sys.argv[2].strip())
-        else:
-            cwd = Path.cwd()
-        stamp(src, cwd)
-    except Exception:
-        pass  # Never raises, never prints — PostToolUse advisory only
+        # Optional argv[4] = project cwd; default to the real process cwd.
+        if len(sys.argv) >= 5 and sys.argv[4].strip():
+            cwd = Path(sys.argv[4].strip())
+        stamp(src, cwd, target, sha)
+    except Exception as exc:  # noqa: BLE001 -- PostToolUse is advisory, never raises
+        try:
+            root = resolve_root(cwd)
+            if root is not None:
+                _log(root, f"stamp failed: {exc!r}")
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

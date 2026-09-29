@@ -1,7 +1,9 @@
 """Small shared IPC contract; importing a client never imports the service."""
 from contextlib import closing
+import hashlib
 import json
 from pathlib import Path
+import re
 import sqlite3
 
 from taskmaster.native import contracts, db, schema
@@ -56,6 +58,10 @@ class HandshakeError(ServiceUnavailable):
     pass
 
 
+class CoordinatorStopping(ServiceUnavailable):
+    """Refused before admission because the owner is stopping; a client waits for its successor."""
+
+
 def connect(root: Path, *, readonly=False):
     path = root / '.taskmaster/local/store.db'
     uri = path.as_uri() + ('?mode=ro' if readonly else '?mode=rw')
@@ -87,6 +93,107 @@ def encode(value, *, limit=MAX_MESSAGE_BYTES) -> bytes:
     return raw
 
 
-def check_handshake(value, identity, nonce):
-    if not isinstance(value, dict) or value != dict(identity, nonce=nonce):
+def package_digest(package: Path) -> str:
+    """A digest of every source file of `package`, with CRLF read as LF: a checkout's
+    line-ending setting is not a different build."""
+    digest = hashlib.sha256()
+    for path in sorted(package.rglob('*.py'), key=lambda item: item.relative_to(package).as_posix()):
+        data = path.read_bytes().replace(b'\r\n', b'\n')
+        digest.update(path.relative_to(package).as_posix().encode('utf-8') + b'\x00')
+        digest.update(len(data).to_bytes(8, 'big') + data)
+    return digest.hexdigest()[:32]
+
+
+def _compute_build():
+    """The installed package's build: its declared version plus a digest of every source
+    file. The version alone repeats across dev reinstalls and a path repeats across
+    in-place upgrades; the digest changes exactly when the code a process loads does."""
+    package = Path(__file__).resolve().parents[1]
+    return declared_version(package.parent), package_digest(package)
+
+
+def _build():
+    return _BUILD
+
+
+def declared_version(install_root: Path) -> str:
+    """The release an install declares, in any of its distribution layouts (Claude plugin,
+    Codex plugin snapshot, generated distribution, source checkout)."""
+    for manifest in ('.claude-plugin/plugin.json', '.codex-plugin/plugin.json', '.taskmaster-distribution.json'):
+        try:
+            version = json.loads((install_root / manifest).read_text(encoding='utf-8'))['version']
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        if isinstance(version, str) and version.strip():
+            return version.strip()
+    try:
+        match = re.search(r'(?m)^version\s*=\s*"([^"]+)"', (install_root / 'pyproject.toml').read_text(encoding='utf-8'))
+    except OSError:
+        match = None
+    return match.group(1) if match else 'unknown'
+
+
+def build_identity() -> dict:
+    version, digest = _build()
+    return {'version': version, 'digest': digest}
+
+
+# Taken at import, not at the first Client(): a process reports the code it loaded, even if
+# the files are upgraded in place while it runs.
+_BUILD = _compute_build()
+
+
+def valid_build(value) -> bool:
+    return (isinstance(value, dict) and set(value) == {'version', 'digest'} and
+            all(isinstance(item, str) and 0 < len(item) <= 128 for item in value.values()))
+
+
+def same_build(first, second) -> bool:
+    """The code is the identity: equal digests are one build whatever the version reads."""
+    return valid_build(first) and valid_build(second) and first['digest'] == second['digest']
+
+
+_SEMVER = re.compile(r'[vV]?(\d+(?:\.\d+)*)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?')
+
+
+def _semver(version):
+    match = _SEMVER.fullmatch(version.strip())
+    if match is None:
+        return None
+    core = [int(part) for part in match.group(1).split('.')]
+    while len(core) > 1 and core[-1] == 0:
+        core.pop()  # 7.0 == 7.0.0
+    pre = match.group(2)
+    # A final release sorts after all its pre-releases; identifiers compare per SemVer.
+    return (tuple(core), (1,) if pre is None else
+            (0, tuple((0, int(part), '') if part.isdigit() else (1, 0, part) for part in pre.split('.'))))
+
+
+def compare_versions(first, second):
+    """-1, 0 or 1 by SemVer precedence (build metadata ignored); None when either is unparseable."""
+    left, right = _semver(first['version']), _semver(second['version'])
+    if left is None or right is None:
+        return None
+    return (left > right) - (left < right)
+
+
+def older(build, than) -> bool:
+    """Whether `build` is a strictly older release than `than`."""
+    return compare_versions(build, than) == -1
+
+
+def describe(build):
+    return f"{build['version']}+{build['digest'][:12]}" if valid_build(build) else 'unknown (pre-build handshake)'
+
+
+def check_handshake(value, identity, nonce, build, *, any_build=False):
+    """Every command carries the sender's build and runs only on the same build. Only a
+    retirement request (`any_build`) crosses builds; the coordinator then decides."""
+    if not isinstance(value, dict) or {k: v for k, v in value.items() if k != 'build'} != dict(identity, nonce=nonce):
         raise HandshakeError('coordinator root/store/schema/protocol/generation mismatch; reconnect explicitly')
+    if same_build(value.get('build'), build) or (any_build and valid_build(value.get('build'))):
+        return
+    raise HandshakeError(
+        f"coordinator build {describe(build)} differs from the client build {describe(value.get('build'))}; "
+        'the request was refused. A newer client retires an idle older coordinator; an older client must restart '
+        'its session (reload the plugin) to use the current build', may_have_committed=False)

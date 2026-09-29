@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["fastmcp", "pyyaml"]
+# dependencies = ["fastmcp>=3.4,<4", "httpx", "pydantic>=2", "pyyaml"]
 # ///
 
 import asyncio
@@ -200,8 +200,6 @@ class _GuardedToolRegistrar:
         return getattr(self._inner, name)
 
 
-mcp = _GuardedToolRegistrar(FastMCP("taskmaster"))
-
 # Repo/plugin root — this module lives in the taskmaster/ package, one level down.
 SCRIPT_DIR = Path(__file__).resolve().parent.parent
 ROOT = Path(os.environ.get("TASKMASTER_ROOT", Path.cwd()))
@@ -211,9 +209,21 @@ CONFIG_PATH = ROOT / ".taskmaster" / "taskmaster.json"
 # keep working until the user runs `backlog_canonicalize_layout`.
 LEGACY_CONFIG_PATH = ROOT / ".claude" / "taskmaster.json"
 
-# Version from plugin.json
-_plugin_json = SCRIPT_DIR / ".claude-plugin" / "plugin.json"
-VERSION = json.loads(_plugin_json.read_text(encoding="utf-8"))["version"] if _plugin_json.exists() else "0.0.0"
+
+def _plugin_version(plugin_root: Path) -> str:
+    """The plugin's release version. The Codex distribution ships only `.codex-plugin/`."""
+    for manifest in (".claude-plugin", ".codex-plugin"):
+        path = plugin_root / manifest / "plugin.json"
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8"))["version"]
+    return "0.0.0"
+
+
+VERSION = _plugin_version(SCRIPT_DIR)
+
+# `version` is what the MCP handshake reports as serverInfo.version; without it FastMCP
+# reports its own version.
+mcp = _GuardedToolRegistrar(FastMCP("taskmaster", version=VERSION))
 
 # Priority mapping: canonical names ↔ legacy P-codes. The names, the table
 # and every task/epic/phase rule below come from the one shared domain layer
@@ -2920,6 +2930,40 @@ def backlog_resolve_conflict(file: str = "", take: str = "") -> str:
     if pending:
         message += " (" + "; ".join(pending) + ")"
     return _append_seq(message, outcome["seq"])
+
+
+@mcp.tool()
+def backlog_sync(files: list[str] | None = None, sync_id: str = "") -> str:
+    """Import hand edits to `.taskmaster/` files into a native store, on request.
+
+    A native store never scans its projection files during normal commands, so an
+    edit made by hand (or by another tool) to a task, epic, handover, `backlog.yaml`
+    or other projection file takes effect only through an explicit sync. Call this
+    when such an edit has not taken effect. It never runs automatically.
+
+    - no arguments: start a sync of every projection file. The coordinator runs it
+      to the end on its own; if another sync is already running, this attaches to it.
+    - `files`: sync only these paths, relative to `.taskmaster/`
+      (e.g. `["tasks/core-001.md"]`; a leading `.taskmaster/` is accepted).
+    - `sync_id`: check on (and wait for) the sync with this id, as issued by an
+      earlier answer. A finished sync answers its stored result, labelled with the
+      time it finished; edits made after that need a fresh `backlog_sync()`.
+
+    Each call returns within ~15 s. The answer is "Sync running" with progress and
+    the `backlog_sync(sync_id=...)` call to check again, "Sync complete" with counts
+    for the whole sync (imported, repaired, unchanged, conflicts), or "Sync finished
+    without synchronizing every file" naming the conflicts and quarantined files to
+    settle with `backlog_resolve_conflict` and any other reason.
+
+    On a legacy store this is a no-op: the legacy store imports hand edits on
+    every call already.
+    """
+    if not _backlog_path().exists():
+        return "No backlog found."
+    return (
+        "This project uses the legacy store, which imports hand edits to `.taskmaster/` "
+        "files on every call; there is nothing to sync. Nothing was changed."
+    )
 
 
 def _render_query_table(description, rows: list, limit: int) -> str:

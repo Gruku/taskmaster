@@ -199,6 +199,10 @@ EXERCISES = {
         _hand_edit(".taskmaster/handovers/2026-09-17-gate-handover.md"), bs.backlog_handover_resync())[1],
     ("backlog_issue_resync", None): lambda: (
         _hand_edit(".taskmaster/issues/ISS-001.md"), bs.backlog_issue_resync())[1],
+    # A full sync and a named one, each after a hand edit (N17 explicit import).
+    ("backlog_sync", None): lambda: [
+        (_hand_edit(".taskmaster/tasks/test-epic-002.md"), bs.backlog_sync())[1],
+        (_hand_edit(".taskmaster/issues/ISS-001.md"), bs.backlog_sync(files=["issues/ISS-001.md"]))[1]],
     ("backlog_thread_list", None): lambda: bs.backlog_thread_list(include_closed=True),
     ("backlog_thread_resume", None): lambda: [bs.backlog_thread_resume(ref="test-epic"),
                                               bs.backlog_thread_resume(ref="2026-09-17-gate-handover")],
@@ -457,9 +461,7 @@ def test_store_reading_hooks_never_reach_the_legacy_store_or_scan_the_projection
     resurface.format_line("a.py", resurface.resolve(database, "a.py"))
     assert decide.decide("feature/gate", root) == "ALLOW"
     monkeypatch.setenv("TASKMASTER_ROOT", str(root))
-    monkeypatch.setattr(stamp, "_git", lambda args, cwd: {"rev-parse --abbrev-ref HEAD": "main",
-                                                           "rev-parse HEAD": "cafe"}[" ".join(args)])
-    stamp.stamp("feature/gate", root)
+    stamp.stamp("feature/gate", root, "main", "cafe")
     assert rigged == [], f"a hook bypassed the native core: {rigged}"
     from native_twins import committed
     assert committed(root)[("task", "test-epic-001")][0]["merge_status"]["master"]["merge_commit"] == "cafe"

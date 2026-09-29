@@ -292,7 +292,9 @@ def synchronize(owner, **arguments):
 
 
 def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=0,
-                 files=None, take_file=False, timeout=SYNC_TIMEOUT, worktree=None):
+                 files=None, take_file=False, timeout=SYNC_TIMEOUT, worktree=None, progress=None):
+    """`progress` (in-process only, never over IPC) is a sync job's `sync_jobs.Progress`:
+    it is told what this round selects, reaches and commits, so a job's counts span rounds."""
     options = dict(import_files=import_files, through=through, files=files, take_file=take_file)
     sync.validate_input(options)
     validate_timeout(timeout)
@@ -301,7 +303,7 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
     scope = operation_scope(caller_scope, request_id)
     # `imports` are domain writes; `observed` counts committed observes (the published bytes
     # recorded as merge base) and `observes` lists any whose outcome the budget left unsettled.
-    result = dict(state='pending', through=through, captured=False, imports=[], observed=0, observes=[],
+    result = dict(state='pending', through=through, captured=False, selected=0, imports=[], observed=0, observes=[],
                   unresolved=[], notices=[], warnings=[], caller_scope=caller_scope,
                   request_id=request_id, receipt_scope=scope, import_files=import_files)
     deadline = time.monotonic() + max(0, timeout)
@@ -321,6 +323,8 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
         if rel and rel not in unresolved_seen:
             unresolved_seen.add(rel)
             result['unresolved'].append(rel)
+            if progress is not None:
+                progress.pending(rel)
         notice = f'sync pending: {rel}: {reason}' if rel else f'sync pending: {reason}'
         if notice not in notices_seen:
             notices_seen.add(notice)
@@ -422,6 +426,10 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
                         if rel not in inventory.duplicates and rel not in chosen:
                             chosen.add(rel)
                             selected.append(rel)
+            # How many paths this sync judges: the caller's denominator for "unchanged".
+            result['selected'] = len(selected)
+            if progress is not None:
+                progress.selecting(len(selected))
             if metrics.ENABLED:
                 metrics.add('files_selected', len(selected))
             # No size ceiling (N16): every selected path is enumerated here, and the per-file
@@ -439,7 +447,11 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
                 # Named files (MCP resync) are classified too; take_file is the explicit adopt.
                 try:
                     observation, found, warnings, seen = checkouts.detect(owner, observed_checkout, selected, drift,
-                                                                          scan=scan)
+                                                                          scan=scan, deadline=deadline - reserve)
+                except checkouts.DetectInterrupted as exc:
+                    # Nothing is imported unclassified; the scan keeps what this pass read.
+                    pending(None, f'Git classification stopped ({exc}); nothing imported; retry the same sync id')
+                    return result
                 except (GitRefused, OSError) as exc:
                     # Fail closed: nothing is imported while Git state is unknown.
                     unverified = f'Git state could not be inspected ({exc}); not imported, retry the sync'[:500]
@@ -460,6 +472,8 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
                     if remaining() <= reserve or owner.stopping.is_set():
                         pending(rel, 'time budget exhausted or coordinator stopping; retry the same sync id')
                         return result
+                    if progress is not None:
+                        progress.reached(rel)
                     if rel in drift and not take_file:
                         pending(rel, managed_git.DRIFT_GUIDANCE if linked is None else checkouts.LINKED_DRIFT)
                         continue
@@ -513,6 +527,9 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
                                 may_have_committed=outcome == 'uncertain'))
                             pending(rel, _UNSETTLED[observing, outcome])
                             continue  # the loop's budget check ends the sync once the time is gone
+                        if progress is not None:
+                            progress.committed(rel, 'observed' if plan.state == 'observe'
+                                               else receipt['result'].get('state'), receipt.get('commit_seq'))
                         if plan.state == 'observe':
                             result['observed'] += 1
                         else:
@@ -562,6 +579,8 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
                 return result
             result.update(through=max(through, captured), captured=True)
             owner.checkpoint('sync_pinned')
+            if progress is not None:
+                progress.phase = 'publishing'
             try:
                 publication = owner.flush(result['through'], timeout=remaining())
             except Exception as exc:
@@ -635,6 +654,9 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
         if not result['notices'] and not result['unresolved']:
             # The caller receives exactly what is stored, so a lost-response
             # replay returns the same result.
+            if progress is not None:
+                # The whole job's counts, stored with the result so a replay reports them too.
+                result['totals'] = progress.totals()
             completed = summarize(dict(result, state='synchronized'))
             try:
                 execute('sync.finish', 'finish', {'result': completed},

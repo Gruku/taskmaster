@@ -7,6 +7,7 @@ from __future__ import annotations
 import inspect
 import json
 import threading
+from pathlib import Path
 from typing import Callable
 
 from . import gate, runtime
@@ -98,9 +99,68 @@ def dispatch(tool: str, legacy: Callable, database, backlog_dir, session: str, a
             result = handler(call, **arguments)
         finally:
             _DEPTH.calls -= 1
-        return _with_flag_notices(call, result) if outermost else result
+        result = _with_flag_notices(call, result) if outermost and tool not in LISTS_OWN_FLAGS else result
+    if outermost and tool not in NO_STAMP_REPLAY:
+        _replay_merge_stamps(database, backlog_dir, session)
+    return result
 
 
+# backlog_sync promises an answer within its own bound; it never replays merge stamps.
+NO_STAMP_REPLAY = frozenset({"backlog_sync"})
+_REPLAYS: dict = {}  # project backlog dir -> the one background replay thread running for it
+_REPLAYS_GUARD = threading.Lock()
+
+
+def _replay_merge_stamps(database, backlog_dir, session):
+    """Apply merge stamps a hook queued while no coordinator ran (merge_stamps.py), after
+    the call, in the background, and only through a coordinator that is already running:
+    the call never waits for it (a slow coordinator can take its 30 s client timeout), and
+    a read never starts a coordinator just to replay. One replay per project at a time.
+    With no coordinator the queue waits, silently. Advisory: never costs the caller."""
+    from . import merge_stamps
+    if not merge_stamps.has_pending(backlog_dir):
+        return
+    if not (Path(backlog_dir) / "local" / "coordinator" / "discovery.json").exists():
+        return  # no coordinator has published an address: nothing to replay through
+    key = str(Path(backlog_dir).resolve())
+
+    def run():
+        try:
+            merge_stamps.replay(backlog_dir, database, session, autostart=False)
+        except Exception as exc:  # noqa: BLE001 -- the stamps stay queued for the next call
+            merge_stamps.hook_log(backlog_dir, f"replaying queued merge stamps failed ({exc!r}); kept queued")
+        finally:
+            with _REPLAYS_GUARD:
+                if _REPLAYS.get(key) is threading.current_thread():
+                    del _REPLAYS[key]
+
+    with _REPLAYS_GUARD:
+        running = _REPLAYS.get(key)
+        if running is not None and running.is_alive():
+            return
+        thread = threading.Thread(target=run, name="taskmaster-merge-stamp-replay", daemon=True)
+        _REPLAYS[key] = thread
+    thread.start()
+
+
+def wait_for_merge_stamp_replays(timeout: float) -> bool:
+    """Wait for background merge-stamp replays to end (tests, orderly shutdown)."""
+    import time
+    deadline = time.monotonic() + timeout
+    while True:
+        with _REPLAYS_GUARD:
+            threads = [thread for thread in _REPLAYS.values() if thread.is_alive()]
+        if not threads:
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        threads[0].join(remaining)
+
+
+# Tools whose answer already names every flagged file with its next step: the generic
+# per-file warning would list each one twice.
+LISTS_OWN_FLAGS = frozenset({"backlog_sync"})
 # Nesting depth of native dispatches on this thread: only the outermost call names
 # the flagged files, as the legacy wrapper leaves a nested tool's result alone.
 _DEPTH = threading.local()

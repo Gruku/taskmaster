@@ -24,6 +24,8 @@ SPECIAL = {
     "backlog_link": "action-router", "backlog_note": "action-router",
     "backlog_decision": "action-router", "backlog_linear": "action-router",
     "backlog_handover_resync": "synchronization", "backlog_issue_resync": "synchronization",
+    # N17: the explicit import of hand edits; its legacy body only answers a no-op.
+    "backlog_sync": "synchronization",
     "backlog_batch_update": "composite-command", "backlog_complete_task": "composite-command",
     "backlog_pick_task": "composite-command", "backlog_archive_epic": "composite-command",
     "backlog_advance_phase": "composite-command", "backlog_bug_promote": "composite-command",

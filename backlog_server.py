@@ -1,12 +1,13 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["fastmcp", "pyyaml"]
+# dependencies = ["fastmcp>=3.4,<4", "httpx", "pydantic>=2", "pyyaml"]
 # ///
 """Entry shim: keeps `.mcp.json` (`uv run ${CLAUDE_PLUGIN_ROOT}/backlog_server.py`)
 working unchanged after the core moved into the taskmaster/ package.
 
-Dependencies are declared twice by design: here (uv script mode) and in
-pyproject.toml (pip consumers). Keep them in sync.
+Dependencies are declared in every `uv run` script header (this file,
+taskmaster_cli.py, hooks/merge_recorder_stamp.py) and in pyproject.toml (pip
+consumers); tests/test_packaging.py keeps them identical.
 """
 import sys
 from pathlib import Path

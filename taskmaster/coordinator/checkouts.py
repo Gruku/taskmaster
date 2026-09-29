@@ -814,7 +814,13 @@ def _base_reader(owner, checkout: Checkout):
     return base_bytes
 
 
-def detect(owner, checkout: Checkout, selected, drift, *, scan=None) -> tuple[dict, dict, list[str], dict]:
+class DetectInterrupted(Exception):
+    """The classification ran out of the sync's budget, or the coordinator is stopping. Nothing
+    was held or recorded; the files read so far are fingerprinted in the sync's scan, so a retry
+    of the same sync continues where this pass stopped."""
+
+
+def detect(owner, checkout: Checkout, selected, drift, *, scan=None, deadline=None) -> tuple[dict, dict, list[str], dict]:
     """(current observation, {rel: reason} newly held as drift, warnings, {rel: digest
     or None (missing) or UNSEEN} of the bytes classified).
 
@@ -825,7 +831,10 @@ def detect(owner, checkout: Checkout, selected, drift, *, scan=None) -> tuple[di
 
     With the sync's `scan`, a file whose fingerprint is unchanged since its digests
     were recorded is compared by those digests (the classified digest is that
-    recorded digest); a file that differs, or any miss, is read in full."""
+    recorded digest); a file that differs, or any miss, is read in full.
+
+    `deadline` (time.monotonic()) bounds the pass, and the coordinator's stopping signal ends
+    it: either raises DetectInterrupted before anything is held."""
     from . import sync_files
     record = read_record(owner, checkout.id) or {}
     current = observe(checkout)
@@ -844,6 +853,10 @@ def detect(owner, checkout: Checkout, selected, drift, *, scan=None) -> tuple[di
         known = store.bases(connection, checkout.id) if checkout.linked else dict(generation)
     differing, seen = {}, {}
     for rel in selected:
+        if owner.stopping.is_set():
+            raise DetectInterrupted('coordinator stopping')
+        if deadline is not None and time.monotonic() >= deadline:
+            raise DetectInterrupted('time budget exhausted')
         if rel in drift or rel.startswith('local/') or (not checkout.linked and rel in skipped):
             continue
         # A fresh lstat, taken after HEAD was observed: a file Git rewrote between
