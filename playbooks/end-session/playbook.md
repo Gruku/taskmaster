@@ -71,7 +71,7 @@ Note: `backlog_complete_task` enforces this server-side too.
 - **Single task:** offer `git worktree remove .worktrees/{task_id}`.
 - **Bundle:** offer `git worktree remove .worktrees/{slug}` **only when all members are `done` or descoped** — check `_get_session_bundle()` first. Never `--force` (guard-hooks blocks it) and never `rm -rf`.
 
-**8. Commit tracking files.** Stage backlog.yaml, PROGRESS.md, .taskmaster/handovers/, issues/, tasks/. Commit with `chore: log session - {topic}`.
+**8. Commit tracking files.** Stage backlog.yaml, PROGRESS.md, .taskmaster/handovers/, issues/, tasks/. Commit `chore: log session - {topic}` (native store: edge-cases).
 
 **9. Confirm.** "Session logged. Task is now `{target_status}`." If a handover was written this session, end with its resume line verbatim: `Resume: <thread> — <next_action>`.
 
@@ -79,10 +79,10 @@ Note: `backlog_complete_task` enforces this server-side too.
 
 `todo -> in-progress -> in-review -> done -> archived`. In-review = blocked on a human-only action (`human_action` says what); done = Claude complete + gates passed (human review is downstream, not on the board).
 
-**Verifying writes.** A result ending in `[seq N]` is committed; `(export pending: …)` means the row committed and the file is being retried. `backlog_store_status` shows dirty/quarantined files and live sessions.
+**Verifying writes.** `[seq N]` = committed; `(export pending: …)` = committed, file pending; `No change … already …` (no seq) = already stored. `backlog_store_status` shows quarantined files.
 
 ## Additional Resources
 
 - `references/v3-pre-steps.md` - full v3 pre-step flows (handover auto-write, idea sweep).
 - `references/summary-modes.md` - light vs structured mode, patchnote format, status decision rules.
-- `references/edge-cases.md` - no in-progress task, not in git repo, multiple tasks changed.
+- `references/edge-cases.md` - no in-progress task, no git repo, native store, multiple tasks.

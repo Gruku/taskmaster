@@ -203,6 +203,26 @@ entity kind through the store's FTS, and `backlog_index_status` reports the
 derived tables and rebuilds them on demand (on a native store, `verify=True`
 checks the graph tables against the full oracle without changing them).
 
+### Native store (opt-in)
+
+7.0.0 adds a second storage mode, the **native authority**, which a project gets only when an
+operator runs the explicit cutover (`python -m taskmaster.native.cutover`). Nothing migrates
+automatically, and the legacy store above stays the default. On a native store one repository
+coordinator process owns all writes, files are exported after each commit, hand edits are
+imported only at an explicit sync, and `.taskmaster/` is committed with the managed Git command
+(`python -m taskmaster.coordinator.git_cli commit`). Replies can also say
+`No change to <task> ... — already <value>` (a no-op, no `[seq]`) or
+`(export pending: committed through sequence N; background export queued)`.
+
+- [Native store guide](docs/native-store.md): receipts, sync and Git obligations, service
+  recovery, context/delta tools and claims, compatibility and known limitations.
+- [Native cutover runbook](docs/runbooks/native-cutover.md): the migration procedure, recovery
+  and the escape hatch.
+
+The agent-facing tools `backlog_context`, `backlog_changes_since`, `backlog_claim`,
+`backlog_document` and `backlog_document_import` are new in this release and work on both
+stores except `backlog_document_import`, which needs a native store.
+
 ## Built-in workflows
 
 | Workflow | Example request |
