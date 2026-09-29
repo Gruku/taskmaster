@@ -22,7 +22,7 @@ cached environment per script on first use, from the script's own PEP 723 header
 | Coordinator | first native write: `sys.executable -m taskmaster.coordinator.service --root <project>`, detached, `PYTHONPATH` = plugin root; exits after 300 s idle | the caller's interpreter (the server's uv env) | caller's |
 | Managed Git helper | the coordinator: `sys._base_executable -I -S -c <bootstrap>`, assigned to a Windows Job Object before it may run Git | the real base interpreter, isolated, standard library only | none |
 | Hooks | `hooks.json` via `run_hook.sh`: first of `$CLAUDE_HOOKS_PYTHON`, `python3`, `python`, `py -3` that is 3.9+ | the machine's Python, **not** the uv env | standard library only, except the merge stamp below |
-| Merge stamp | `merge_recorder.py`: the hook interpreter if it can import `fastmcp`, `pydantic` and `yaml`; otherwise `uv run --script hooks/merge_recorder_stamp.py`, detached | hook's or uv env `merge-recorder-stamp-<hash>` | `merge_recorder_stamp.py` header |
+| Merge stamp | `merge_recorder.py` resolves the merge's target branch and SHA synchronously, then runs the stamp in-process only if the hook interpreter is Python 3.11+ with fastmcp >=3.4,<4, pydantic 2, pyyaml and httpx; otherwise `uv run --script hooks/merge_recorder_stamp.py`, detached (breaking away from the host's Windows job when allowed; output to `hook.log`) | hook's or uv env `merge-recorder-stamp-<hash>` | `merge_recorder_stamp.py` header |
 | Operator CLIs | `uv run <plugin>/taskmaster_cli.py {cutover,git,git-hook} ...` | uv env `taskmaster-cli-<hash>` | `taskmaster_cli.py` header |
 
 `<plugin>` is the installed plugin directory, `${CLAUDE_PLUGIN_ROOT}` inside Claude Code
@@ -36,10 +36,54 @@ uv run <plugin>/taskmaster_cli.py git status
 uv run <plugin>/taskmaster_cli.py git-hook pre-commit            # inside a user's pre-commit hook
 ```
 
-The dependency list is the same in `backlog_server.py`, `taskmaster_cli.py`,
-`hooks/merge_recorder_stamp.py` and `pyproject.toml`. `tests/test_packaging.py` fails if
-the four lists differ or if a third-party import is not declared. FastMCP is held below 4:
-a fresh environment resolved 4.0.10 before the pin, and no test has run against it.
+The dependency list is the same in `backlog_server.py`, `taskmaster/backlog_server.py`,
+`taskmaster_cli.py`, `hooks/merge_recorder_stamp.py` and `pyproject.toml`.
+`tests/test_packaging.py` fails if the lists differ or if a third-party import is not
+declared. FastMCP is held below 4: a fresh environment resolved 4.0.10 before the pin, and
+no test has run against it.
+
+### When a merge shows up on the task
+
+The merge recorder stamps the branch and commit that `HEAD` named when the hook fired,
+never a later `HEAD`. On the uv path the stamp is detached, so `merge_gate_state` and
+`merge_status` lag the merge by the stamp's run time: about 0.5 s with a warm
+environment, 3-4 s the first time the environment is built, longer with a cold package
+index. A merge gate evaluated in that window sees the previous rung.
+
+On a native store the stamp writes only through a running coordinator; a hook never
+starts one. If none is running (it exits after 5 minutes idle), the stamp is queued in
+`.taskmaster/local/merge-stamps-pending.jsonl`, logged to `hook.log`, and applied by the
+MCP server on its next native tool call. Until then the rung is not recorded. An older
+queued stamp is dropped when the rung already records that commit or a later one.
+
+Every reason a merge is not recorded, or not yet, is one line in
+`.taskmaster/local/hook.log`.
+
+### Wiring the pre-commit check into a project
+
+Taskmaster never installs Git hooks. The `git-hook` command takes the plugin's path, and
+a plugin installed through a marketplace cache lives in a versioned directory
+(`~/.claude/plugins/cache/<marketplace>/taskmaster/<version>/`) that disappears when the
+old version is cleaned up. A hook line with that path baked in then fails on every commit.
+Resolve the path when the hook runs, and let the check fail open if the plugin is gone:
+
+```sh
+#!/bin/sh
+# .git/hooks/pre-commit - Taskmaster projection check
+cli="${TASKMASTER_CLI:-}"
+if [ -z "$cli" ]; then
+  cli=$(ls -d "$HOME"/.claude/plugins/cache/*/taskmaster/*/taskmaster_cli.py 2>/dev/null | sort -V | tail -n 1)
+fi
+if [ -z "$cli" ] || [ ! -f "$cli" ]; then
+  echo "taskmaster pre-commit: taskmaster_cli.py not found; projection check skipped" >&2
+  exit 0
+fi
+exec uv run "$cli" git-hook pre-commit
+```
+
+A local-marketplace install (`claude-tools/plugins/taskmaster`) has a stable path; set
+`TASKMASTER_CLI` to it. The refusal message names the CLI path of the running plugin, which
+is correct at the moment it is printed but is not a path to copy into a hook.
 
 ## Version strings
 
@@ -124,6 +168,15 @@ the release needs:
 +    "taskmaster_cli.py",
      "viewer/index.html",
  )
+```
+
+Recommended alongside it: `check_plugin_version_bump.py` `_changelog_has` matches
+`^##\s+{version}\b`, so a `## 7.0.0-rc.1` heading satisfies a `7.0.0` release. Make it
+exact, as `bump_version.py` does:
+
+```diff
+-    return re.search(rf"^##\s+{re.escape(version)}\b", text, re.MULTILINE) is not None
++    return re.search(rf"^##\s+{re.escape(version)}(?=\s|$)", text, re.MULTILINE) is not None
 ```
 
 Everything else in claude-tools is data for each release (steps 4-7): the gitlink, the

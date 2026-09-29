@@ -62,6 +62,20 @@ already cached, and a warm one 0.4 s.
 | `5524695`, `14ae4fd` | A bump meant editing five files by hand, plus a test that hard-coded `6.0.3` | `scripts/bump_version.py <version>` and `--check`. The rehearsal found that a pre-release left the badge stale (shields.io escapes `-`). The script now accepts only `X.Y.Z` or `X.Y.Z-rc.N` |
 | `e0b57a0` | The pre-commit refusal told users to run `python -m taskmaster.coordinator.git_cli` | It prints `uv run "<plugin>/taskmaster_cli.py" git commit/status` |
 
+### Review fixes (merge recorder)
+
+A review of this branch reproduced six defects in the merge recorder and release tooling.
+Each fix was written test-first, and each probe was re-run against the fix:
+
+| Finding | Fix | Probe after the fix |
+|---|---|---|
+| HIGH: the detached stamp read `HEAD` late; a checkout or commit right after the merge stamped the wrong rung or SHA | The hook reads the target branch and SHA synchronously and passes them to the stamp, which no longer runs `git rev-parse` at all. A detached `HEAD` is logged, not stamped | Race probe: merge `3af9f14`, then a checkout and a new commit; `3af9f14` was recorded on `master`. Two quick merges each record their own SHA (test) |
+| MEDIUM-HIGH: the in-process path checked only that fastmcp was present; fastmcp 2.x or Python 3.10 fails inside the stamp and the error was swallowed | The in-process path requires Python 3.11+, fastmcp >=3.4,<4, pydantic 2, pyyaml and httpx, with the bounds tested against the stamp's header; anything short of that uses uv. Top-level exceptions and `Error:` answers are logged | fastmcp 2.14.7 hook Python: the hook returned in 0.3 s, and the uv stamp recorded the merge HEAD |
+| MEDIUM: a stamp could start a coordinator from the hook's interpreter, which the server then reused | Native stamps write with `autostart=False`. With no coordinator, the stamp is queued durably in `local/merge-stamps-pending.jsonl`, logged, and applied by the MCP server's next native call; the server may start a coordinator, a hook may not (N12: no writer fallback). A queued stamp older than the recorded one is dropped | fastmcp 3.1.0 hook Python on a native store: no coordinator process, stamp queued and logged. The packaged server's next `backlog_get_task` started the coordinator from its own uv environment and applied the stamp |
+| MEDIUM: detached failures unlogged | The detached stamp's output is appended to `hook.log`; a missing stamp script, having neither a usable interpreter nor uv, and a failed start are each logged | uv's own output appears in `hook.log` |
+| LOW-MEDIUM: a host's kill-on-close job could kill the detached stamp | Spawned with `CREATE_BREAKAWAY_FROM_JOB`, falling back when the job refuses it. The seconds-long `merge_gate_state` lag is documented in the runbook | unit test with a refusing job |
+| LOW | `taskmaster/backlog_server.py`'s script header pinned and covered by the header test; `bump_version.py` computes every rewrite before writing any; the CHANGELOG check is exact (`## 7.0.0-rc.1` does not satisfy `7.0.0`); the runbook gives a pre-commit hook that resolves the plugin path at run time instead of embedding a versioned cache path | tests |
+
 ## Version strings
 
 All of them currently read `6.0.3`. In taskmaster: `.claude-plugin/plugin.json`,
@@ -88,9 +102,10 @@ in the disposable clone (see the runbook).
    an install resolves the newest version inside each range. It resolved fastmcp 3.4.7;
    the suite ran on 3.4.3. `uv lock --script` would pin them exactly, but the lock files
    would need shipping in the Codex snapshot too.
-6. **A system Python that has fastmcp.** The stamp runs there, not in the uv
-   environment. On a native store with no coordinator running, it would start the
-   coordinator under that interpreter. Not observed; the risk is noted.
+6. **Queued stamps wait for the MCP server.** On a native store with no coordinator
+   running, a merge stamp is queued and applied on the server's next native tool call;
+   until then `merge_gate_state` does not show the rung. With no server running on that
+   project, the queue waits.
 7. **Not covered:** POSIX (no Job Object; `contained=False` by design); a Microsoft Store
    Python as the base interpreter (containment would fail closed, not open); the real
    Claude Code and Codex hosts.
