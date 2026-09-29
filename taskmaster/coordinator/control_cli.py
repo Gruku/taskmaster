@@ -29,7 +29,7 @@ def _other_build(record, mine) -> str:
     pid = record.get('pid')
     return (f'the coordinator (pid {pid}) runs taskmaster build {describe(record.get("build"))}, not this CLI\'s '
             f'build {describe(mine)}, and a command never runs on another build, so this CLI did not stop it. '
-            f'To stop it: run a write (or `coordinator stop`) from a newer build, which retires an idle older '
+            f'To stop it: run any write from a session of a newer build, which retires an idle older '
             f'coordinator; or wait until it is idle, when it exits by itself (TASKMASTER_SERVICE_IDLE_SECONDS, '
             f'300 s by default); or end the session that started it, or stop pid {pid}')
 

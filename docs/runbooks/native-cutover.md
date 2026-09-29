@@ -60,6 +60,21 @@ protects the store; the fence is not enough on its own. This inventory comes fro
 
 Updating files on disk does not change a process that is already running. Stop the process.
 
+After a cutover the project also runs a coordinator, a detached process started by the first
+native write. Closing the sessions does not stop it; it exits after 300 s idle. To stop it
+now, from the same build as the one running it:
+
+```
+uv run <plugin>/taskmaster_cli.py coordinator status --root <project>
+uv run <plugin>/taskmaster_cli.py coordinator stop --root <project>
+```
+
+`stop` on a coordinator of another build changes nothing, exits 1, and names its build, its
+pid and how to stop it. See
+[Stopping the coordinator](../native-store.md#stopping-the-coordinator). A legacy store has no
+coordinator; if one owns the project, the cutover refuses with
+`a live coordinator or service owns this project`.
+
 **Just before you stop the last client, run one tool call** (for example `backlog_handover_list`).
 Its scan adopts every file changed since the last one, such as a `git pull`, so a file that no
 longer parses is quarantined, and the dry run can name it, before the fence goes up.
@@ -179,12 +194,15 @@ again before the real run.
    - **A `project.yaml` YAML error**: fix the YAML. The file is a plain mapping, with no
      frontmatter.
 
-   **Keep the file's own line endings.** If the file uses CRLF (check with
-   `git ls-files --eol <path>`, or look for `\r\n` in its bytes), write the added frontmatter
-   in CRLF too; if it uses LF, write LF. The parser accepts either and normalizes them, so a
-   mixed file still parses, but you would leave a file with mixed line endings in the
-   repository. CodeMaestro's files are CRLF. An editor that saves the whole file in one style
-   is fine; a script that prepends a block with `\n` to a CRLF file is not.
+   **Keep each file's own line endings, and check each file.** A project can mix them, so do
+   not assume one style: in the CodeMaestro copy most files are CRLF, but the three handovers
+   that need repair are LF. Before editing a file, run `git ls-files --eol <path>` (the `w/`
+   column is the working copy: `w/lf` or `w/crlf`), or look for `\r\n` in its bytes. Write the
+   added frontmatter in the same style: CRLF into a CRLF file, LF into an LF file. The parser
+   accepts either and normalizes them, so a mixed file still parses, but you would leave a file
+   with mixed line endings in the repository. An editor that saves the whole file in one style
+   is fine; a script that prepends a block with `\n` to a CRLF file, or with `\r\n` to an LF
+   file, is not.
 3. Run any tool, for example `backlog_handover_list`. Its scan re-reads the changed file and
    adopts it.
 
@@ -202,13 +220,20 @@ again before the real run.
 4. Run `backlog_store_status` again and confirm that it lists no `Quarantined:` and no
    `Flagged:` files, then re-run the dry run.
 
-**Expect `backlog.yaml` to change.** Re-adopting a repaired entity that `backlog.yaml`
-indexes (a bug, for example) puts its index entry back, so the store exports a new
-`backlog.yaml`. The repair itself does not touch that file, so `git status` shows
-`M .taskmaster/backlog.yaml` after the re-adopt or after the cutover's `reconcile` flush. In
-the CodeMaestro rehearsal the difference was exactly B-339's 11-line entry under `bugs:`. This is
-expected: commit it with the repaired files, or let the first managed commit after the
-cutover (`git_run`, see [the native store guide](../native-store.md#git)) include it.
+**Expect `backlog.yaml` to change after the cutover, not before.** Re-adopting a repaired
+entity that `backlog.yaml` indexes (a bug, for example) puts its index entry back in the
+store. The file itself is rewritten by the first native export after activation: every export
+drain refreshes a stale derived file (`_Render.derived` in
+`taskmaster/native_routing/projection.py`), and a coordinator drains when it starts and after
+each commit. A coordinator starts on the first native write, or on a `backlog_sync` or managed
+Git command. The cutover itself never queues `backlog.yaml` (`queue_carried_exports` in
+`taskmaster/native/cutover.py` skips it: on a native store it is a derived file). In the N17
+demonstration on a CodeMaestro copy, neither the re-adopt nor the cutover's `reconcile` flush
+changed it; `git status` showed `M .taskmaster/backlog.yaml` only after the first native
+write, and the first managed commit carried it. In an earlier CodeMaestro rehearsal the
+difference was exactly B-339's 11-line entry under `bugs:`. This is expected: let the first
+managed commit after the cutover (`git_run`, see [the native store guide](../native-store.md#git))
+include it.
 
 **When the repaired file is flagged instead.** If the store changed the entity while its file
 was quarantined (the export was suppressed; `backlog_store_status` lists the file under
@@ -638,8 +663,10 @@ Delete `aside-*` folders once you no longer need what they hold.
 - The store: `.taskmaster/local/store.db`. The fence is in `meta`, and the journal is in
   `native_cutover_journal`.
 - Backups: `.taskmaster/local/backups/pre-native-<UTC ts>.db`, with `.json` (the manifest),
-  `.projection.zip` (the archived projection files) and `.id-reservations.json`. A manual
-  restore copies what it replaces into `backups/aside-<UTC ts>/`.
+  `.projection.zip` (the archived projection files) and `.id-reservations.json`, and usually
+  `.db-shm` and `.db-wal`: SQLite creates these companions when the backup is reopened for its
+  integrity check. They belong to that backup; keep and delete them with it (the pruning
+  command above does). A manual restore copies what it replaces into `backups/aside-<UTC ts>/`.
 - Code: `taskmaster/native/cutover.py`. Tests: `tests/test_native_cutover.py`,
   `tests/test_native_cutover_crash.py` and `tests/test_native_cutover_quarantine.py`. Every twins activation in the test suite runs the
   carry-over oracle by default (`TASKMASTER_TWINS_VERIFY=1`, set in `tests/conftest.py`, +2.3%

@@ -23,7 +23,7 @@ cached environment per script on first use, from the script's own PEP 723 header
 | Managed Git helper | the coordinator: `sys._base_executable -I -S -c <bootstrap>`, assigned to a Windows Job Object before it may run Git | the real base interpreter, isolated, standard library only | none |
 | Hooks | `hooks.json` via `run_hook.sh`: first of `$CLAUDE_HOOKS_PYTHON`, `python3`, `python`, `py -3` that is 3.9+ | the machine's Python, **not** the uv env | standard library only, except the merge stamp below |
 | Merge stamp | `merge_recorder.py` resolves the merge's target branch and SHA synchronously, then runs the stamp in-process only if the hook interpreter is Python 3.11+ with fastmcp >=3.4,<4, pydantic 2, pyyaml and httpx; otherwise `uv run --script hooks/merge_recorder_stamp.py`, detached (breaking away from the host's Windows job when allowed; output to `hook.log`) | hook's or uv env `merge-recorder-stamp-<hash>` | `merge_recorder_stamp.py` header |
-| Operator CLIs | `uv run <plugin>/taskmaster_cli.py {cutover,git,git-hook} ...` | uv env `taskmaster-cli-<hash>` | `taskmaster_cli.py` header |
+| Operator CLIs | `uv run <plugin>/taskmaster_cli.py {cutover,git,git-hook,coordinator} ...` | uv env `taskmaster-cli-<hash>` | `taskmaster_cli.py` header |
 
 `<plugin>` is the installed plugin directory, `${CLAUDE_PLUGIN_ROOT}` inside Claude Code
 (for a local marketplace, `claude-tools/plugins/taskmaster`). From a source checkout,
@@ -34,7 +34,13 @@ uv run <plugin>/taskmaster_cli.py cutover --root <project> --dry-run
 uv run <plugin>/taskmaster_cli.py git commit -m "<message>"      # cwd = the project
 uv run <plugin>/taskmaster_cli.py git status
 uv run <plugin>/taskmaster_cli.py git-hook pre-commit            # inside a user's pre-commit hook
+uv run <plugin>/taskmaster_cli.py coordinator status --root <project>
+uv run <plugin>/taskmaster_cli.py coordinator stop --root <project>
 ```
+
+Do not use `uv run --project <plugin> python ...` against an installed plugin: `--project`
+builds a `.venv` inside the plugin directory (the marketplace cache), and the Codex snapshot
+has no `pyproject.toml`, so there it fails with `No module named 'taskmaster'`.
 
 The dependency list is the same in `backlog_server.py`, `taskmaster/backlog_server.py`,
 `taskmaster_cli.py`, `hooks/merge_recorder_stamp.py` and `pyproject.toml`.

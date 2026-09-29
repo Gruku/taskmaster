@@ -264,7 +264,10 @@ durably in `.taskmaster/local/merge-stamps-pending.jsonl`. The MCP server applie
 the background after its next write, or after any later call while a coordinator is running
 (never after `backlog_sync`, and one replay per project at a time). Until then
 `merge_gate_state` does not show the new rung, so a merge gate checked in that window sees the
-previous one. A queued stamp older than the one already recorded is dropped (Git ancestry
+previous one. `backlog_get_task` does not show the merge stamp (`merge_status`,
+`merge_gate_state`); read it in the task file's frontmatter or in `backlog_changes_since`, where
+it is a `task.merge` commit changing those two fields. A queued stamp older than the one already
+recorded is dropped (Git ancestry
 decides), and the write is refused and re-decided if another merge is recorded in between. A
 queue line that cannot be read is moved to `merge-stamps-rejected.jsonl`. Every reason a merge is
 not recorded, or not yet, is a line in `.taskmaster/local/hook.log`.
@@ -375,7 +378,7 @@ it. Its files are in `.taskmaster/local/coordinator/`:
 | File | Purpose |
 |---|---|
 | `owner.lock` | The ownership lock, an OS byte lock. The OS releases it when the process exits, including a crash |
-| `discovery.json` | Port, token and identity. Clients check that it is private (owner-only) and matches the store's root, schema and protocol |
+| `discovery.json` | Port, token, pid, build and identity. Clients check that it is private (owner-only) and matches the store's root, schema and protocol. It stays behind after the coordinator exits, so it can name a pid that has exited (or been reused). That is harmless: clients trust the ownership lock, not the pid, and the next coordinator replaces the file |
 | `service.log` | Rotating log (1 MB, 2 backups). Read it first when the coordinator will not start |
 
 A coordinator exits after 300 s with no pending work, no sync and no managed Git operation
@@ -407,17 +410,36 @@ client rides through: it waits for the successor instead of failing. That applie
 same build. A client of the old build that meets the newer successor gets the older-client
 refusal above and must restart its session.
 
-To stop it yourself, for example before a cutover step, from the same build as the running
-coordinator:
+#### Stopping the coordinator
+
+To see or stop it yourself, for example before a cutover step or an escape-hatch restore, use
+the packaged CLI of the installed plugin (`<plugin>` as in the
+[release packaging runbook](runbooks/release-packaging.md#how-the-package-runs); from a source
+checkout, `python -m taskmaster.coordinator.control_cli` with the same arguments):
 
 ```
-uv run --project <taskmaster> python -c "from taskmaster.coordinator.client import Client; print(Client('.', autostart=False).shutdown())"
+uv run <plugin>/taskmaster_cli.py coordinator status [--root <project>]
+uv run <plugin>/taskmaster_cli.py coordinator stop [--root <project>] [--wait 30]
 ```
 
-`shutdown` is a command, so a client of another build is refused (it never runs commands on
-another build). To stop a coordinator of another build, let it reach its idle timeout (300 s),
-end the session that started it, or stop the process whose pid is in
-`.taskmaster/local/coordinator/discovery.json`.
+Both print JSON and never start a coordinator. `status` reports `stopped`, or `running` with
+its `pid`, `build` and `same_build` (plus its queue counts when it is this build). `stop` sends
+a coordinator of the CLI's own build the graceful `shutdown` command: it admits nothing new,
+finishes what it has in flight, and releases its lock. The CLI waits up to `--wait` seconds
+for that and answers `stopped` (exit 0), or exit 1 if it is still finishing.
+
+`shutdown` is a command, and a client never runs a command on another build. So for a
+coordinator of another build, `stop` changes nothing and exits 1; it reports that build and
+pid, and how to stop it:
+
+- run any write from a session of a newer build: a newer client retires an idle older
+  coordinator (see the handshake above);
+- wait until it is idle: it exits after its idle timeout (300 s by default);
+- end the session that started it, or stop that pid.
+
+Do not use `uv run --project <plugin> python -c "...shutdown()"`: `--project` builds a `.venv`
+inside the plugin directory, and the Codex snapshot has no `pyproject.toml`, so it fails there
+with `No module named 'taskmaster'`.
 
 **There is no writer fallback.** If the coordinator cannot be reached, writes fail; they never
 fall back to a second writer. The errors are:
@@ -515,7 +537,9 @@ ttl_seconds=0)` takes it; `backlog_claim(action="renew"|"release"|"status", task
 ttl_seconds)` renews, releases or lists it.
 
 - The default lease is 4 hours (`ttl_seconds=0`). Allowed values are 60 s to 7 days. Renewing
-  sets the expiry to now plus the TTL.
+  sets the expiry to now plus the TTL, not the old expiry plus the TTL, so a renew can
+  **shorten** a claim: a claim taken for 7 days and renewed with the default TTL now expires in
+  4 hours. Pass the TTL you want on every renew.
 - The holder is the session (`<host>-<pid>-<nonce>`). **Only the claim tools write
   `locked_by`**; `backlog_update_task(field="locked_by")` and the batch equivalent refuse.
 - Moving a task to `done` or `archived` always releases its claim.
