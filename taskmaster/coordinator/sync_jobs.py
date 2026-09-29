@@ -47,9 +47,11 @@ class Progress:
         self.round, self.phase, self.checked = number, 'selecting', 0
 
     def selecting(self, count):
-        self.selected, self.phase = count, 'checking'
+        # Found; before the per-file loop comes the whole-set Git classification.
+        self.selected, self.phase = count, 'classifying'
 
     def reached(self, rel):
+        self.phase = 'checking'
         self.checked += 1
 
     def committed(self, rel, state, seq):

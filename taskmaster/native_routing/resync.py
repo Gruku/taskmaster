@@ -190,6 +190,8 @@ def _render(call, answer) -> str:
             where = f"all {answer.get('selected', 0)} files checked; publishing the store's files"
         elif answer.get("phase") in ("starting", "selecting"):
             where = "finding the files to check"
+        elif answer.get("phase") == "classifying":
+            where = f"{answer.get('selected', 0)} files found; checking them against Git before importing"
         else:
             where = f"{answer.get('checked', 0)} of {answer.get('selected', 0)} files checked so far"
         rounds = f" (round {answer['round']})" if answer.get("round", 0) > 1 else ""
