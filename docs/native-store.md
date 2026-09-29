@@ -105,7 +105,8 @@ files you know). Nothing syncs on a schedule: an edit waits until someone asks.
 only the named paths (relative to `.taskmaster/`; a leading `.taskmaster/` is accepted). It is
 never run automatically.
 
-- **It starts a job and each call returns within about 15 s.** The coordinator runs the sync to
+- **It starts a job and each call returns within about 15 s**: it waits at most 15 s for the
+  coordinator, then answers. The coordinator runs the sync to
   the end on its own, in rounds of the sync budget below, under one sync id. A call that returns
   first answers `Sync running (sync id <id>): <progress>; N imported, M repaired so far. Call
   backlog_sync(sync_id="<id>") to check again.` The progress names the phase: finding the files,
@@ -256,10 +257,12 @@ has a hook that does, and fails open if the plugin is gone.
 **The merge recorder on a native store.** After a successful `git merge` of a task's branch,
 the merge-recorder hook records the merged branch and commit on the task (`merge_status`,
 `merge_gate_state`). It reads both when the hook fires, so a later checkout cannot change what
-is recorded. On a native store it writes only through a coordinator that is already running;
-a hook never starts one. With none running (it exits after 5 minutes idle) the stamp is queued
-durably in `.taskmaster/local/merge-stamps-pending.jsonl`. The MCP server applies the queue after
-its next write, or after any later call while a coordinator is running. Until then
+is recorded. It records that merge first and only then, in what is left of the hook's 10 s,
+replays older queued stamps. On a native store it writes only through a coordinator that is
+already running; a hook never starts one. With none running (it exits after 5 minutes idle) the stamp is queued
+durably in `.taskmaster/local/merge-stamps-pending.jsonl`. The MCP server applies the queue in
+the background after its next write, or after any later call while a coordinator is running
+(never after `backlog_sync`, and one replay per project at a time). Until then
 `merge_gate_state` does not show the new rung, so a merge gate checked in that window sees the
 previous one. A queued stamp older than the one already recorded is dropped (Git ancestry
 decides), and the write is refused and re-decided if another merge is recorded in between. A
@@ -399,14 +402,22 @@ coordinator of its own build. When it finds another build (`taskmaster/coordinat
   after its idle timeout (300 s by default), or you can end the session that started it or stop
   the process whose pid is in `discovery.json`.
 
-Clients of the coordinator's own build ride through its retirement: they wait for the
-successor instead of failing.
+When a coordinator of the client's own build stops (its idle expiry or a `shutdown`), the
+client rides through: it waits for the successor instead of failing. That applies only to the
+same build. A client of the old build that meets the newer successor gets the older-client
+refusal above and must restart its session.
 
-To stop it yourself, for example before a cutover step:
+To stop it yourself, for example before a cutover step, from the same build as the running
+coordinator:
 
 ```
 uv run --project <taskmaster> python -c "from taskmaster.coordinator.client import Client; print(Client('.', autostart=False).shutdown())"
 ```
+
+`shutdown` is a command, so a client of another build is refused (it never runs commands on
+another build). To stop a coordinator of another build, let it reach its idle timeout (300 s),
+end the session that started it, or stop the process whose pid is in
+`.taskmaster/local/coordinator/discovery.json`.
 
 **There is no writer fallback.** If the coordinator cannot be reached, writes fail; they never
 fall back to a second writer. The errors are:
@@ -528,7 +539,7 @@ only on a native store; on legacy it refuses, because the files are read directl
 
 | Client | Store | Result |
 |---|---|---|
-| This build | Legacy | Runs as a 6.0.3-compatible bridge client. New tools work; `backlog_document_import` and `backlog_batch_update(commands=...)` refuse ("native-authority stores only"). Nothing is migrated |
+| This build | Legacy | Runs as a 6.0.3-compatible bridge client. New tools work, except that `backlog_document_import` refuses with `Error: importing documents requires a native-authority store, which this project does not have. ... Nothing was changed.`, and `backlog_batch_update(commands=...)` refuses with `{"ok": false, "error": "legacy_store", ...}` (the `commands` form needs a native-authority store; use `operations` lines). Nothing is migrated |
 | This build | Native | Routes every tool through the native core and the coordinator |
 | 6.0.3 (bridge) | Native | Refuses cleanly: `Unsupported Taskmaster schema_version=2; this client supports 1. Upgrade the client; the database has not been rebuilt.` |
 | 6.0.2 or older (pre-bridge) | Native | **Not refused cleanly**: 6.0.2 fails with `IntegrityError` and leaves `store.recovery.lock` behind (N15 rehearsal). Stop every such process before the cutover and never start one afterwards |
@@ -616,8 +627,10 @@ latency.
 - A legacy `backlog_link create` was seen not persisting on a CodeMaestro copy (N14, D1), and the
   canonical `target_kind` fallback is still open.
 - Taskmaster 6.0.2 and older fail uncleanly on a native store (see [Compatibility](#compatibility)).
-- The Codex manifest sets `tool_timeout_sec: 30`. `backlog_sync` stays inside it (each call
-  returns within about 15 s), but the handover and issue resyncs and the Python client's sync
+- The Codex manifest sets `tool_timeout_sec: 30`. `backlog_sync` stays inside it: each call waits
+  at most 15 s for the coordinator and then answers (plus the call's own local work), and it
+  never replays queued merge stamps inline; other calls replay them in the background. The
+  handover and issue resyncs and the Python client's sync
   still wait for a whole round (120 s budget) and can outlast it on a large project, although the
   sync itself continues.
 - A merge recorded while no coordinator runs waits in the merge-stamp queue until the MCP server
