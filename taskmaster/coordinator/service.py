@@ -101,6 +101,8 @@ class Coordinator:
         self.admission = threading.Condition()
         self.pauses = 0
         self.active_syncs = 0
+        # `backlog_sync` jobs by id (sync_jobs.py): at most one runs at a time.
+        self.sync_jobs = {}
         # Managed Git (N13 step 8): `git_pin` blocks every publication path until an
         # interrupted operation is proven over and reconciled; `git_active` is the
         # operation currently holding `publication` in this process.
@@ -451,6 +453,10 @@ class Coordinator:
                              import_files=message.get('import_files', True), through=message.get('through', 0),
                              files=message.get('files'), take_file=message.get('take_file', False),
                              worktree=message.get('worktree'), timeout=message.get('timeout', ABSENT_SYNC_TIMEOUT))
+        if method == 'sync_job':
+            from . import sync_jobs
+            return sync_jobs.request(self, sync_id=message.get('sync_id'), files=message.get('files'),
+                                     wait_seconds=message.get('wait_seconds', 0))
         if method == 'sync_status':
             from .sync_worker import operation_scope
             from taskmaster.native.sync import operation_state
@@ -513,9 +519,12 @@ class Coordinator:
 
     def _busy(self):
         """Caller holds `guard` and `linear.guard` (and, from `retire`, `publication`).
-        Commands, Linear jobs and syncs are counted under the guards; a managed Git run holds
+        Commands, Linear jobs, syncs and backlog_sync jobs are counted under the guards; a managed Git run holds
         `publication` from before its stop check until after `git_active` is cleared."""
-        return bool(self.pending or self.linear.jobs or self.active_syncs or self.git_active is not None)
+        from .sync_jobs import running
+        # A backlog_sync job is busy between its rounds too, when active_syncs is 0.
+        return bool(self.pending or self.linear.jobs or self.active_syncs or self.git_active is not None
+                    or running(self) is not None)
 
     def idle_expired(self, seconds):
         with self.guard, self.linear.guard:

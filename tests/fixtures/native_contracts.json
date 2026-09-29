@@ -3930,6 +3930,30 @@
       "returns": "str",
       "transactional": false
     },
+    "backlog_sync": {
+      "category": "synchronization",
+      "documentation": "Import hand edits to `.taskmaster/` files into a native store, on request.\n\nA native store never scans its projection files during normal commands, so an\nedit made by hand (or by another tool) to a task, epic, handover, `backlog.yaml`\nor other projection file takes effect only through an explicit sync. Call this\nwhen such an edit has not taken effect. It never runs automatically.\n\n- no arguments: start a sync of every projection file. The coordinator runs it\n  to the end on its own; if another sync is already running, this attaches to it.\n- `files`: sync only these paths, relative to `.taskmaster/`\n  (e.g. `[\"tasks/core-001.md\"]`; a leading `.taskmaster/` is accepted).\n- `sync_id`: check on (and wait for) the sync with this id, as issued by an\n  earlier answer. A finished sync answers its stored result, labelled with the\n  time it finished; edits made after that need a fresh `backlog_sync()`.\n\nEach call returns within ~15 s. The answer is \"Sync running\" with progress and\nthe `backlog_sync(sync_id=...)` call to check again, \"Sync complete\" with counts\nfor the whole sync (imported, repaired, unchanged, conflicts), or \"Sync finished\nwithout synchronizing every file\" naming the conflicts and quarantined files to\nsettle with `backlog_resolve_conflict` and any other reason.\n\nOn a legacy store this is a no-op: the legacy store imports hand edits on\nevery call already.",
+      "parameters": [
+        {
+          "default_expression": "None",
+          "default_value": null,
+          "mode": "positional",
+          "name": "files",
+          "required": false,
+          "type": "list[str] | None"
+        },
+        {
+          "default_expression": "''",
+          "default_value": "",
+          "mode": "positional",
+          "name": "sync_id",
+          "required": false,
+          "type": "str"
+        }
+      ],
+      "returns": "str",
+      "transactional": false
+    },
     "backlog_task_pipeline": {
       "category": "targeted-query",
       "documentation": "Show a task's lane, its required gate pipeline, and each gate's recorded\nstate (pass/done/skipped/fail/pending), plus the one-line gate_state and the\nlist of outstanding gates blocking `done`.",

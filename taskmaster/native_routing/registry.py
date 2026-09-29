@@ -99,7 +99,7 @@ def dispatch(tool: str, legacy: Callable, database, backlog_dir, session: str, a
             result = handler(call, **arguments)
         finally:
             _DEPTH.calls -= 1
-        result = _with_flag_notices(call, result) if outermost else result
+        result = _with_flag_notices(call, result) if outermost and tool not in LISTS_OWN_FLAGS else result
     if outermost:
         _replay_merge_stamps(database, backlog_dir, session)
     return result
@@ -121,6 +121,9 @@ def _replay_merge_stamps(database, backlog_dir, session):
         merge_stamps.hook_log(backlog_dir, f"replaying queued merge stamps failed ({exc!r}); kept queued")
 
 
+# Tools whose answer already names every flagged file with its next step: the generic
+# per-file warning would list each one twice.
+LISTS_OWN_FLAGS = frozenset({"backlog_sync"})
 # Nesting depth of native dispatches on this thread: only the outermost call names
 # the flagged files, as the legacy wrapper leaves a nested tool's result alone.
 _DEPTH = threading.local()

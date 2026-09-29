@@ -2932,6 +2932,40 @@ def backlog_resolve_conflict(file: str = "", take: str = "") -> str:
     return _append_seq(message, outcome["seq"])
 
 
+@mcp.tool()
+def backlog_sync(files: list[str] | None = None, sync_id: str = "") -> str:
+    """Import hand edits to `.taskmaster/` files into a native store, on request.
+
+    A native store never scans its projection files during normal commands, so an
+    edit made by hand (or by another tool) to a task, epic, handover, `backlog.yaml`
+    or other projection file takes effect only through an explicit sync. Call this
+    when such an edit has not taken effect. It never runs automatically.
+
+    - no arguments: start a sync of every projection file. The coordinator runs it
+      to the end on its own; if another sync is already running, this attaches to it.
+    - `files`: sync only these paths, relative to `.taskmaster/`
+      (e.g. `["tasks/core-001.md"]`; a leading `.taskmaster/` is accepted).
+    - `sync_id`: check on (and wait for) the sync with this id, as issued by an
+      earlier answer. A finished sync answers its stored result, labelled with the
+      time it finished; edits made after that need a fresh `backlog_sync()`.
+
+    Each call returns within ~15 s. The answer is "Sync running" with progress and
+    the `backlog_sync(sync_id=...)` call to check again, "Sync complete" with counts
+    for the whole sync (imported, repaired, unchanged, conflicts), or "Sync finished
+    without synchronizing every file" naming the conflicts and quarantined files to
+    settle with `backlog_resolve_conflict` and any other reason.
+
+    On a legacy store this is a no-op: the legacy store imports hand edits on
+    every call already.
+    """
+    if not _backlog_path().exists():
+        return "No backlog found."
+    return (
+        "This project uses the legacy store, which imports hand edits to `.taskmaster/` "
+        "files on every call; there is nothing to sync. Nothing was changed."
+    )
+
+
 def _render_query_table(description, rows: list, limit: int) -> str:
     """Aligned text table plus the row-count footer `backlog_query` returns."""
     headers = [col[0] for col in description]
