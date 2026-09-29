@@ -98,9 +98,12 @@ def dispatch(tool: str, legacy: Callable, database, backlog_dir, session: str, a
             result = handler(call, **arguments)
         finally:
             _DEPTH.calls -= 1
-        return _with_flag_notices(call, result) if outermost else result
+        return _with_flag_notices(call, result) if outermost and tool not in LISTS_OWN_FLAGS else result
 
 
+# Tools whose answer already names every flagged file with its next step: the generic
+# per-file warning would list each one twice.
+LISTS_OWN_FLAGS = frozenset({"backlog_sync"})
 # Nesting depth of native dispatches on this thread: only the outermost call names
 # the flagged files, as the legacy wrapper leaves a nested tool's result alone.
 _DEPTH = threading.local()

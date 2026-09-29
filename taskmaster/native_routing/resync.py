@@ -5,14 +5,12 @@
 """Handover/issue resync and explicit `backlog_sync` adapters."""
 from __future__ import annotations
 
-import json
 import time
-import uuid
 
 from taskmaster import backlog_server as bs
 from taskmaster.coordinator import sync_files
+from taskmaster.coordinator import sync_jobs
 from taskmaster.coordinator.protocol import ServiceUnavailable
-from taskmaster.coordinator.sync_worker import FINISH_TIMEOUT
 from taskmaster.native import projection as outbox, sync
 from taskmaster.projection_parse import classify
 
@@ -107,15 +105,11 @@ def issue_resync(call):
     return _resync(call, "issue", lambda data: f"Issue index resynced — {len(data.get('issues') or [])} entries.")
 
 
-# `backlog_sync` must answer inside a client's fixed tool timeout (the Codex manifest sets
-# `tool_timeout_sec: 30`). The coordinator replies within its budget + FINISH_TIMEOUT, so the
-# budget is what REPLY_TARGET leaves after the coordinator is reached, at most TOOL_BUDGET; an
-# exhausted budget answers pending with the sync id to continue (N16's retry-the-same-id).
-TOOL_BUDGET = 15
-REPLY_TARGET = 25
-# One caller scope for every `backlog_sync`: the sync id alone names the operation, so another
-# session, or this one after a server restart, can continue it.
-SYNC_SCOPE = "backlog-sync"
+# The hard wall-clock limit of one `backlog_sync` call, everything included (reaching or
+# starting the coordinator, the request, the wait, the reply). Clients may have fixed tool
+# timeouts (the Codex manifest: `tool_timeout_sec: 30`); the sync itself runs on in the
+# coordinator, and a later call with its id attaches to it.
+TOOL_WAIT = 15
 _SHOWN = 20
 
 
@@ -127,11 +121,104 @@ def _relative(rel) -> str:
     return rel.removeprefix("./").removeprefix(".taskmaster/")
 
 
-def _listed(label: str, items: list[str]) -> list[str]:
-    if not items:
+def _listed(label: str, items: list[str], total: int) -> list[str]:
+    if not total:
         return []
-    more = f" (+{len(items) - _SHOWN} more)" if len(items) > _SHOWN else ""
-    return [f"{label}: {', '.join(items[:_SHOWN])}{more}"]
+    shown = items[:_SHOWN]
+    more = f" ({total - len(shown)} further results not listed)" if total > len(shown) else ""
+    return [f"{label}: {', '.join(shown)}{more}"]
+
+
+def _held(call) -> tuple[list[str], list[str]]:
+    with call.read() as snapshot:
+        connection = snapshot.connection
+        conflicts = list(outbox.flagged_files(connection))
+        quarantined = [row[0] for row in connection.execute(
+            "SELECT file FROM projection WHERE quarantined=1 ORDER BY file") if row[0] not in conflicts]
+    return conflicts, quarantined
+
+
+def _held_lines(conflicts, quarantined) -> list[str]:
+    lines = []
+    if conflicts:
+        lines.append("Conflicts (the file and the store both changed; nothing was merged, the store kept its version):")
+        lines += [f'- {rel}: compare with backlog_resolve_conflict(file="{rel}"), then keep one with '
+                  f'take="file" or take="store"' for rel in conflicts[:_SHOWN]]
+        if len(conflicts) > _SHOWN:
+            lines.append(f"- ({len(conflicts) - _SHOWN} further results not listed; see backlog_resolve_conflict())")
+    if quarantined:
+        lines.append("Quarantined (the file does not parse; its bytes are kept and the store's values stand):")
+        lines += [f'- {rel}: fix the file and run backlog_sync(files=["{rel}"]), or '
+                  f'backlog_resolve_conflict(file="{rel}", take="store")' for rel in quarantined[:_SHOWN]]
+        if len(quarantined) > _SHOWN:
+            lines.append(f"- ({len(quarantined) - _SHOWN} further results not listed; see backlog_resolve_conflict())")
+    return lines
+
+
+def _counts(totals) -> str:
+    return (f"{totals.get('selected', 0)} file(s) checked — {totals.get('imported', 0)} imported, "
+            f"{totals.get('repaired', 0)} repaired, {totals.get('unchanged', 0)} unchanged, "
+            f"{totals.get('conflicts', 0) + totals.get('quarantined', 0)} conflicts")
+
+
+def _reasons(answer, conflicts, quarantined) -> list[str]:
+    """The last round's pending reasons, less the held files' own (listed with their next steps)."""
+    held = tuple(prefix for rel in conflicts + quarantined for prefix in (f"{rel}: ", f"export pending: {rel} "))
+    reasons = [notice.removeprefix("sync pending: ") for notice in answer.get("notices") or []]
+    return [reason for reason in reasons
+            if not (held and (reason.startswith(held) or reason == "projection publication incomplete"))]
+
+
+def _render(call, answer) -> str:
+    ident, state = answer["sync_id"], answer["state"]
+    totals = answer.get("totals") or {}
+    if answer.get("replay"):
+        # A stored answer: say so, and never stamp it as if this call had committed anything.
+        return (f"Sync complete (sync id {ident}) — the stored result of a sync that finished at "
+                f"{answer.get('finished_at') or 'an earlier time'}: {_counts(totals)}. Edits made since then "
+                f"need a fresh backlog_sync().")
+    if isinstance(totals.get("seq"), int):
+        call.seq = max(call.seq or 0, totals["seq"])
+    lines = []
+    if "not_started" in answer:
+        lines.append("Another backlog_sync (with different files) is already running, so yours was not started; "
+                     "this is that sync. Call backlog_sync again once it has finished.")
+    elif answer.get("attached"):
+        lines.append("A backlog_sync was already running; attached to it instead of starting another.")
+    if state == "running":
+        if answer.get("phase") == "publishing":
+            where = f"all {answer.get('selected', 0)} files checked; publishing the store's files"
+        elif answer.get("phase") in ("starting", "selecting"):
+            where = "finding the files to check"
+        else:
+            where = f"{answer.get('checked', 0)} of {answer.get('selected', 0)} files checked so far"
+        rounds = f" (round {answer['round']})" if answer.get("round", 0) > 1 else ""
+        lines.insert(0, f"Sync running (sync id {ident}): {where}{rounds}; {totals.get('imported', 0)} imported, "
+                        f"{totals.get('repaired', 0)} repaired so far. Call backlog_sync(sync_id=\"{ident}\") "
+                        f"to check again.")
+        return "\n".join(lines)
+    if state == "failed":
+        lines.insert(0, f"Sync failed (sync id {ident}): {answer.get('error')}. Start a fresh backlog_sync().")
+        return "\n".join(lines)
+    conflicts, quarantined = _held(call)
+    if state == "complete":
+        lines.insert(0, f"Sync complete (sync id {ident}): {_counts(totals)}.")
+    else:
+        lines.insert(0, f"Sync finished without synchronizing every file (sync id {ident}): {_counts(totals)}; "
+                        f"the store holds {len(conflicts)} conflict(s) and {len(quarantined)} quarantined file(s).")
+    lines += _listed("Imported", totals.get("imported_files") or [], totals.get("imported", 0))
+    lines += _listed("Repaired from the store", totals.get("repaired_files") or [], totals.get("repaired", 0))
+    lines += _held_lines(conflicts, quarantined)
+    if state != "complete":
+        reasons = _reasons(answer, conflicts, quarantined)
+        if reasons:
+            lines.append("Not synchronized:")
+            lines += [f"- {reason}" for reason in reasons[:_SHOWN]]
+            if len(reasons) > _SHOWN:
+                lines.append(f"- ({len(reasons) - _SHOWN} further results not listed)")
+        lines.append("Settle what is listed above, then run backlog_sync() again.")
+    lines += [f"Warning: {warning}" for warning in (answer.get("warnings") or [])[:5]]
+    return "\n".join(lines)
 
 
 @adapter("backlog_sync")
@@ -140,58 +227,18 @@ def backlog_sync(call, *, files=None, sync_id=""):
         return "No backlog found."
     try:
         named = None if files is None else [_relative(rel) for rel in files]
+        if sync_id and not sync_jobs.ID_PATTERN.fullmatch(sync_id):
+            raise ValueError(f"{sync_id!r} is not a sync id backlog_sync issued; start a sync with backlog_sync()")
     except ValueError as exc:
         return error_text(exc)
-    ident = sync_id or uuid.uuid4().hex
-    retry = f'backlog_sync(sync_id="{ident}"' + ("" if named is None else f", files={json.dumps(named)}") + ")"
+    deadline = time.monotonic() + TOOL_WAIT
     try:
-        started = time.monotonic()
-        call.client.status()  # reaches (or starts) the coordinator; that time comes off the budget
-        budget = max(1, min(TOOL_BUDGET, REPLY_TARGET - FINISH_TIMEOUT - (time.monotonic() - started)))
-        result = call.client.sync(files=named, caller_scope=SYNC_SCOPE, request_id=ident, timeout=budget)
+        answer = call.client.sync_job(deadline=deadline, sync_id=sync_id or None, files=named)
     except ServiceUnavailable as exc:
-        return call.finish(f"Sync pending (sync id {ident}): the coordinator did not answer: {exc}\n"
-                           f"Nothing is lost; continue with {retry}.")
-    except (ValueError, KeyError, OSError) as exc:
+        how = (f'check it with backlog_sync(sync_id="{sync_id}")' if sync_id else
+               "call backlog_sync() again: it attaches to a sync already running rather than starting another")
+        return (f"Sync not confirmed: the coordinator did not answer within {TOOL_WAIT} s ({exc}). "
+                f"Nothing is lost; {how}.")
+    except (ValueError, KeyError) as exc:
         return error_text(exc)
-    imported, repaired, uncertain, reasons = _tally(call, [result])
-    with call.read() as snapshot:
-        connection = snapshot.connection
-        conflicts = list(outbox.flagged_files(connection))
-        quarantined = [row[0] for row in connection.execute(
-            "SELECT file FROM projection WHERE quarantined=1 ORDER BY file") if row[0] not in conflicts]
-    # A held file's own notices (why it is held, its paused export, the publication it keeps
-    # incomplete) are the conflict/quarantine lines below; one saying to retry is kept.
-    held = tuple(prefix for rel in conflicts + quarantined for prefix in (f"{rel}: ", f"export pending: {rel} "))
-    reasons = [reason for reason in reasons if "retry" in reason or not (
-        (held and reason.startswith(held)) or (held and reason == "projection publication incomplete"))]
-    selected = result.get("selected", 0)
-    if result.get("state") == "synchronized":
-        settled = len(result.get("imports") or []) + result.get("imports_omitted", 0)
-        lines = [f"Sync complete (sync id {ident}): {selected} file(s) checked — {len(imported)} imported, "
-                 f"{len(repaired)} repaired, {max(0, selected - settled)} unchanged, {len(conflicts)} conflicts."]
-    else:
-        lines = [f"Sync pending (sync id {ident}): not every file is synchronized. So far {len(imported)} imported, "
-                 f"{len(repaired)} repaired; the store holds {len(conflicts)} conflict(s) and "
-                 f"{len(quarantined)} quarantined file(s)."]
-    lines += _listed("Imported", imported) + _listed("Repaired from the store", repaired)
-    if conflicts:
-        lines.append("Conflicts (the file and the store both changed; nothing was merged, the store kept its version):")
-        lines += [f'- {rel}: compare with backlog_resolve_conflict(file="{rel}"), then keep one with '
-                  f'take="file" or take="store"' for rel in conflicts[:_SHOWN]]
-    if quarantined:
-        lines.append("Quarantined (the file does not parse; its bytes are kept and the store's values stand):")
-        lines += [f'- {rel}: fix the file and run backlog_sync(files=["{rel}"]), or '
-                  f'backlog_resolve_conflict(file="{rel}", take="store")' for rel in quarantined[:_SHOWN]]
-    problems = uncertain + reasons
-    if problems:
-        lines.append("Not synchronized yet:")
-        lines += [f"- {problem}" for problem in problems[:_SHOWN]]
-        if len(problems) > _SHOWN:
-            lines.append(f"- (+{len(problems) - _SHOWN} more)")
-        lines.append(f"Continue this sync with {retry}.")
-    elif result.get("state") != "synchronized":
-        lines.append("Once the files above are settled, run backlog_sync() again.")
-    warnings = list(result.get("warnings") or [])
-    lines += [f"Warning: {warning}" for warning in warnings[:5]]
-    return call.finish("\n".join(lines))
+    return call.finish(_render(call, answer))

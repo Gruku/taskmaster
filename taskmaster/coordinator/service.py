@@ -99,6 +99,8 @@ class Coordinator:
         self.admission = threading.Condition()
         self.pauses = 0
         self.active_syncs = 0
+        # `backlog_sync` jobs by id (sync_jobs.py): at most one runs at a time.
+        self.sync_jobs = {}
         # Managed Git (N13 step 8): `git_pin` blocks every publication path until an
         # interrupted operation is proven over and reconciled; `git_active` is the
         # operation currently holding `publication` in this process.
@@ -447,6 +449,10 @@ class Coordinator:
                              import_files=message.get('import_files', True), through=message.get('through', 0),
                              files=message.get('files'), take_file=message.get('take_file', False),
                              worktree=message.get('worktree'), timeout=message.get('timeout', ABSENT_SYNC_TIMEOUT))
+        if method == 'sync_job':
+            from . import sync_jobs
+            return sync_jobs.request(self, sync_id=message.get('sync_id'), files=message.get('files'),
+                                     wait_seconds=message.get('wait_seconds', 0))
         if method == 'sync_status':
             from .sync_worker import operation_scope
             from taskmaster.native.sync import operation_state
@@ -509,8 +515,9 @@ class Coordinator:
 
     def idle_expired(self, seconds):
         with self.guard, self.linear.guard:
+            from .sync_jobs import running
             return (not self.pending and not self.linear.jobs and not self.active_syncs and self.git_active is None
-                    and time.monotonic() - self.last_activity >= seconds)
+                    and not running(self) and time.monotonic() - self.last_activity >= seconds)
 
     def stop(self):
         # Admission's check and enqueue must finish before the writer can see

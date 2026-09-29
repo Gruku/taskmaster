@@ -233,6 +233,27 @@ class Client:
                             request_id=request_id, caller_scope=caller_scope,
                             may_have_committed=exc.may_have_committed) from exc
 
+    def sync_job(self, *, deadline, sync_id=None, files=None, margin=1.5):
+        """Start or attach to a coordinator-driven `backlog_sync` job, or look one up, within a
+        hard wall-clock `deadline` (time.monotonic()) covering startup, status, send and reply.
+        One attempt, no transport retry: a job is found again by id (or by attaching), never lost."""
+        saved = self.timeout
+        try:
+            self.timeout = max(0.05, deadline - time.monotonic())
+            record = self._ready()
+            left = deadline - time.monotonic()
+            margin = min(margin, left / 3)  # time left to send the reply, whatever the budget
+            if left <= 0.05:
+                raise ServiceUnavailable('coordinator reached too late in this call to wait for the sync',
+                                         may_have_committed=False)
+            self.timeout = left
+            return self._send(record, 'sync_job', sync_id=sync_id, files=files,
+                              wait_seconds=round(max(0.0, left - margin), 3))
+        except (ConnectionError, TimeoutError, http.client.HTTPException) as exc:
+            raise ServiceUnavailable(f'coordinator did not answer within the call deadline ({type(exc).__name__})') from None
+        finally:
+            self.timeout = saved
+
     def sync_status(self, caller_scope, request_id):
         return self.call('sync_status', caller_scope=caller_scope, request_id=request_id)
 

@@ -2931,18 +2931,19 @@ def backlog_sync(files: list[str] | None = None, sync_id: str = "") -> str:
     or other projection file takes effect only through an explicit sync. Call this
     when such an edit has not taken effect. It never runs automatically.
 
-    - no arguments: sync every projection file (the coordinator's full sync).
+    - no arguments: start a sync of every projection file. The coordinator runs it
+      to the end on its own; if another sync is already running, this attaches to it.
     - `files`: sync only these paths, relative to `.taskmaster/`
       (e.g. `["tasks/core-001.md"]`; a leading `.taskmaster/` is accepted).
-    - `sync_id`: continue a sync that answered "pending", with the same `files`
-      it was started with. A completed sync id answers its stored result again;
-      start a fresh sync (no `sync_id`) to pick up later edits.
+    - `sync_id`: check on (and wait for) the sync with this id, as issued by an
+      earlier answer. A finished sync answers its stored result, labelled with the
+      time it finished; edits made after that need a fresh `backlog_sync()`.
 
-    The answer is "Sync complete" with counts (imported, repaired, unchanged,
-    conflicts), or "Sync pending" with the reasons, the flagged or quarantined
-    files to settle with `backlog_resolve_conflict`, and the exact call to retry.
-    Each call spends at most ~15 s so it answers inside a 30 s client tool
-    timeout; a large first sync may need a few retries of the same sync id.
+    Each call returns within ~15 s. The answer is "Sync running" with progress and
+    the `backlog_sync(sync_id=...)` call to check again, "Sync complete" with counts
+    for the whole sync (imported, repaired, unchanged, conflicts), or "Sync finished
+    without synchronizing every file" naming the conflicts and quarantined files to
+    settle with `backlog_resolve_conflict` and any other reason.
 
     On a legacy store this is a no-op: the legacy store imports hand edits on
     every call already.
