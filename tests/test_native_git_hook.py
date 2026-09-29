@@ -39,7 +39,7 @@ def test_unmanaged_projection_staging_is_refused_with_guidance(repo):
         assert commit_count(repo) == before
         completed = __import__('subprocess').run(['git', 'commit', '-q', '-m', 'hand commit'], cwd=repo,
                                                  capture_output=True, text=True)
-        assert completed.returncode != 0 and 'git_cli commit' in completed.stderr, (refused, completed.stderr)
+        assert completed.returncode != 0 and 'taskmaster_cli.py" git commit' in completed.stderr, (refused, completed.stderr)
         git(repo, 'restore', '--staged', '.taskmaster')
         (repo / 'notes.txt').write_text('code change\n', encoding='utf-8')
         git(repo, 'add', 'notes.txt')

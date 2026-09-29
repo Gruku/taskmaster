@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["fastmcp", "pyyaml"]
+# dependencies = ["fastmcp>=3.4,<4", "httpx", "pydantic>=2", "pyyaml"]
 # ///
 
 import asyncio
@@ -200,8 +200,6 @@ class _GuardedToolRegistrar:
         return getattr(self._inner, name)
 
 
-mcp = _GuardedToolRegistrar(FastMCP("taskmaster"))
-
 # Repo/plugin root — this module lives in the taskmaster/ package, one level down.
 SCRIPT_DIR = Path(__file__).resolve().parent.parent
 ROOT = Path(os.environ.get("TASKMASTER_ROOT", Path.cwd()))
@@ -211,9 +209,21 @@ CONFIG_PATH = ROOT / ".taskmaster" / "taskmaster.json"
 # keep working until the user runs `backlog_canonicalize_layout`.
 LEGACY_CONFIG_PATH = ROOT / ".claude" / "taskmaster.json"
 
-# Version from plugin.json
-_plugin_json = SCRIPT_DIR / ".claude-plugin" / "plugin.json"
-VERSION = json.loads(_plugin_json.read_text(encoding="utf-8"))["version"] if _plugin_json.exists() else "0.0.0"
+
+def _plugin_version(plugin_root: Path) -> str:
+    """The plugin's release version. The Codex distribution ships only `.codex-plugin/`."""
+    for manifest in (".claude-plugin", ".codex-plugin"):
+        path = plugin_root / manifest / "plugin.json"
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8"))["version"]
+    return "0.0.0"
+
+
+VERSION = _plugin_version(SCRIPT_DIR)
+
+# `version` is what the MCP handshake reports as serverInfo.version; without it FastMCP
+# reports its own version.
+mcp = _GuardedToolRegistrar(FastMCP("taskmaster", version=VERSION))
 
 # Priority mapping: canonical names ↔ legacy P-codes. The names, the table
 # and every task/epic/phase rule below come from the one shared domain layer
