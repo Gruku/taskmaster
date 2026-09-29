@@ -178,8 +178,10 @@ def test_merge_recorder_never_starts_a_coordinator_and_queues_the_stamp(twins, m
     assert "queued" in log and "f00dcafe" in log, log
     assert "qa" not in (committed(twins.native)[("task", "test-epic-003")][0].get("merge_status") or {})
 
+    from taskmaster.native_routing import registry
     with twins.at(twins.native):
         bs.backlog_get_task(task_id="test-epic-003")
+        assert registry.wait_for_merge_stamp_replays(30)
     stamped = committed(twins.native)[("task", "test-epic-003")][0]
     assert stamped["merge_status"]["qa"]["merge_commit"] == "f00dcafe", stamped
     assert stamped["merge_status"]["qa"]["merged_at"] == entry["merged_at"]
@@ -203,6 +205,8 @@ def test_a_queued_stamp_older_than_the_recorded_one_is_dropped(twins, monkeypatc
         bs.backlog_record_merge(task_id="test-epic-003", rung="qa", sha="n3wsha", merged_at=later["merged_at"])
         pending.with_suffix(".hold").rename(pending)
         bs.backlog_get_task(task_id="test-epic-003")
+        from taskmaster.native_routing import registry
+        assert registry.wait_for_merge_stamp_replays(30)
     stamped = committed(twins.native)[("task", "test-epic-003")][0]["merge_status"]["qa"]
     assert stamped["merge_commit"] == "n3wsha", stamped
     assert not pending.exists()
@@ -250,9 +254,48 @@ def test_the_server_replays_only_without_starting_a_coordinator(twins, monkeypat
     merge_stamps.enqueue(twins.native / ".taskmaster", {"task_id": "test-epic-003", "rung": "qa", "sha": "abc"})
     calls = []
     monkeypatch.setattr(merge_stamps, "replay", lambda *a, **k: calls.append(k.get("autostart")) or {})
+    from taskmaster.native_routing import registry
     with twins.at(twins.native):
         bs.backlog_get_task(task_id="test-epic-003")
+        assert registry.wait_for_merge_stamp_replays(10)
     assert calls == [False]
+
+
+def test_the_current_merge_is_recorded_before_the_queue_is_replayed(twins, monkeypatch):
+    """A blocking queue entry used to hold the hook until the host killed it at 10 s, and the
+    merge being recorded was lost. The current stamp goes first, with a short client
+    timeout; the replay after it runs under a deadline that fits the hook limit."""
+    import time
+
+    from taskmaster.native_routing import merge_stamps
+
+    hook = _module("merge_recorder_stamp")
+    events = []
+    real_apply = merge_stamps.native_apply
+
+    def native_apply(*args, **kwargs):
+        events.append(("client_timeout", kwargs.get("client_timeout")))
+        inner = real_apply(*args, **kwargs)
+        return lambda entry: events.append(("apply", entry["sha"])) or inner(entry)
+
+    def replay(*args, **kwargs):
+        events.append(("replay", kwargs.get("deadline")))
+        return {}
+
+    monkeypatch.setattr(merge_stamps, "native_apply", native_apply)
+    monkeypatch.setattr(merge_stamps, "replay", replay)
+    monkeypatch.setenv("TASKMASTER_ROOT", str(twins.native))
+    began = time.monotonic()
+    with twins.at(twins.native):
+        hook.stamp("feature/late", twins.native, "qa-line", "f00dcafe")
+    kinds = [kind for kind, _ in events]
+    assert kinds.index("apply") < kinds.index("replay"), events
+    timeout = dict(events)["client_timeout"]
+    assert timeout is not None and timeout <= hook.CURRENT_STAMP_SECONDS, events
+    deadline = dict(events)["replay"]
+    assert deadline is not None and deadline - began <= hook.STAMP_BUDGET_SECONDS, events
+    stamped = committed(twins.native)[("task", "test-epic-003")][0]["merge_status"]
+    assert stamped["qa"]["merge_commit"] == "f00dcafe", stamped
 
 
 def test_a_stamp_decided_on_stale_state_is_redecided_not_forced(twins, monkeypatch):

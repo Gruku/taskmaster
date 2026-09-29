@@ -48,6 +48,7 @@ MIN_PYTHON = (3, 11)
 FASTMCP_MIN, FASTMCP_BELOW = (3, 4), 4
 PYDANTIC_MIN = 2
 CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+HOOK_SECONDS = 10  # hooks.json timeout for this hook; the host kills it after that
 LOG_MAX_BYTES = 1024 * 1024
 
 
@@ -100,7 +101,9 @@ def run_stamp(argv: list, *, detach: bool, log: Path | None = None) -> None:
     appended to hook.log. On Windows it breaks away from the host's job when the job
     allows it, so a kill-on-close job ending with the session does not kill it."""
     if not detach:
-        subprocess.run(argv, capture_output=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        # The stamp records the current merge first and budgets its replay inside this.
+        subprocess.run(argv, capture_output=True, timeout=HOOK_SECONDS - 1,
+                       creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         return
     sink = subprocess.DEVNULL
     if log is not None:
@@ -251,6 +254,9 @@ def main() -> int:
         return 0
     try:
         run_stamp(argv, detach=argv[0] != (sys.executable or "python"), log=_hook_log(root))
+    except subprocess.TimeoutExpired:
+        _log(root, f"merge stamp for {src} -> {target} {sha} was stopped at the hook limit; it records or "
+                   "queues the current merge first, so see its own lines above")
     except Exception as exc:
         _log(root, f"could not start the merge stamp ({exc!r}); not recording {src} -> {target} {sha}")
 

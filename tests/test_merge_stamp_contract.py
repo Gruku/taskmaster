@@ -419,3 +419,38 @@ def test_the_same_minute_without_ancestry_keeps_the_record():
     entry = _entry("queued")
     assert q.superseded(entry, {"merge_commit": "other", "merged_at": "2026-09-29T10:00"}, lambda a, b: None)
     assert not q.superseded(entry, {"merge_commit": "other", "merged_at": "2026-09-29T10:00"}, lambda a, b: False)
+
+
+# ── N17 integrated review: the hook's 10 s limit ──
+
+
+def test_replay_stops_at_its_deadline_and_keeps_the_rest_queued(tmp_path):
+    from taskmaster.native_routing import merge_stamps as q
+
+    backlog = _queue(tmp_path)
+    for sha in ("a", "b", "c"):
+        q.enqueue(backlog, _entry(sha))
+    applied = []
+
+    def slow(entry):
+        time.sleep(0.4)
+        applied.append(entry["sha"])
+        return "applied"
+
+    q.replay_queue(backlog, slow, deadline=time.monotonic() + 0.6)
+    assert applied == ["a", "b"]
+    assert [json.loads(line)["sha"] for line in
+            q.pending_path(backlog).read_text(encoding="utf-8").splitlines()] == ["c"]
+
+
+def test_the_in_process_stamp_is_bounded_by_the_hook_limit(monkeypatch):
+    recorder = _module("merge_recorder")
+    seen = {}
+
+    def run(argv, **kwargs):
+        seen.update(kwargs)
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(recorder.subprocess, "run", run)
+    recorder.run_stamp(["python", "stamp.py"], detach=False)
+    assert 0 < seen.get("timeout", 0) <= recorder.HOOK_SECONDS - 0.5

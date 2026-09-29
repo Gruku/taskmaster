@@ -259,10 +259,11 @@ def _finish(backlog_dir, mine, left: list[str], log) -> None:
         _write_atomic(claim, [])
 
 
-def replay_queue(backlog_dir, apply, *, log=None) -> dict:
+def replay_queue(backlog_dir, apply, *, log=None, deadline=None) -> dict:
     """Apply queued stamps in order through `apply(entry)`, which returns "applied",
     "dropped" (already recorded or superseded), "retry" (keep queued) or
-    ("reject", reason), or raises Unavailable. Never raises for a bad entry."""
+    ("reject", reason), or raises Unavailable. Never raises for a bad entry. At `deadline`
+    (time.monotonic()) it stops taking entries and keeps the rest queued."""
     log = log or (lambda text: hook_log(backlog_dir, text))
     counts = {"applied": 0, "dropped": 0, "retry": 0, "rejected": 0, "unavailable": False}
     taken = _take(backlog_dir)
@@ -271,6 +272,9 @@ def replay_queue(backlog_dir, apply, *, log=None) -> dict:
     mine, lines = taken
     left: list[str] = []
     for index, line in enumerate(lines):
+        if deadline is not None and time.monotonic() >= deadline:
+            left.extend(lines[index:])
+            break
         try:
             entry = json.loads(line)
             if not isinstance(entry, dict) or any(not isinstance(entry.get(k), str) or not entry[k]
@@ -340,7 +344,7 @@ def git_is_ancestor(root: Path):
     return check
 
 
-def native_apply(database, backlog_dir, session: str, *, autostart: bool):
+def native_apply(database, backlog_dir, session: str, *, autostart: bool, client_timeout=None):
     """`apply` for a native store: decide from a snapshot, write with that snapshot's
     task revision as the expected revision, re-decide on a Conflict."""
     from taskmaster.coordinator.protocol import ServiceUnavailable
@@ -353,7 +357,8 @@ def native_apply(database, backlog_dir, session: str, *, autostart: bool):
     def apply(entry):
         for _ in range(3):
             try:
-                with runtime.open_call(database, backlog_dir, session, autostart=autostart) as call:
+                with runtime.open_call(database, backlog_dir, session, autostart=autostart,
+                                       client_timeout=client_timeout) as call:
                     with call.read() as snapshot:
                         entity = reads.get(snapshot, "task", entry["task_id"])
                         targets = _merge_targets(snapshot) if entity is not None else []
@@ -378,5 +383,7 @@ def native_apply(database, backlog_dir, session: str, *, autostart: bool):
     return apply
 
 
-def replay(backlog_dir, database, session: str, *, autostart: bool, log=None) -> dict:
-    return replay_queue(backlog_dir, native_apply(database, backlog_dir, session, autostart=autostart), log=log)
+def replay(backlog_dir, database, session: str, *, autostart: bool, log=None, deadline=None,
+           client_timeout=None) -> dict:
+    apply = native_apply(database, backlog_dir, session, autostart=autostart, client_timeout=client_timeout)
+    return replay_queue(backlog_dir, apply, log=log, deadline=deadline)

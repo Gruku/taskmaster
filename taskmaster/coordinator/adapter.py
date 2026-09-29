@@ -14,7 +14,7 @@ from .protocol import connect
 
 class NativeCall:
     def __init__(self, connection: sqlite3.Connection, backlog_dir: Path, session: str, *, visibility='native',
-                 autostart=True):
+                 autostart=True, client_timeout=None):
         if visibility not in ('native', 'legacy'):
             raise ValueError('visibility must be native or legacy')
         self.connection, self.backlog_dir, self.session = connection, backlog_dir, session
@@ -22,6 +22,7 @@ class NativeCall:
         # False for hooks: they never bootstrap a coordinator (it would run on the hook's
         # interpreter and the MCP server would then reuse it).
         self.autostart = autostart
+        self.client_timeout = client_timeout  # None: the Client's default
         self.seq = None
         self.notices = []
         self.receipts = []
@@ -34,7 +35,8 @@ class NativeCall:
         # explicit publication barrier constructs its local IPC client.
         if self._client is None:
             self._client = Client(self.backlog_dir.parent, visibility=self.visibility,
-                                  **({} if self.autostart else {'autostart': False}))
+                                  **({} if self.autostart else {'autostart': False}),
+                                  **({} if self.client_timeout is None else {'timeout': self.client_timeout}))
         return self._client
 
     @contextmanager
@@ -83,9 +85,11 @@ class NativeCall:
 
 
 @contextmanager
-def open_call(database: Path, backlog_dir: Path, session: str, *, visibility='native', autostart=True):
+def open_call(database: Path, backlog_dir: Path, session: str, *, visibility='native', autostart=True,
+              client_timeout=None):
     backlog_dir = Path(backlog_dir).resolve(strict=True)
     if Path(database).resolve(strict=True) != backlog_dir / 'local/store.db':
         raise ValueError('native database does not belong to the requested backlog directory')
     with closing(connect(backlog_dir.parent, readonly=True)) as connection:
-        yield NativeCall(connection, backlog_dir, session, visibility=visibility, autostart=autostart)
+        yield NativeCall(connection, backlog_dir, session, visibility=visibility, autostart=autostart,
+                         client_timeout=client_timeout)
