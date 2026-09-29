@@ -22,8 +22,10 @@ Source-branch parser:
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -36,6 +38,24 @@ GIT_MERGE_RE = re.compile(r"git(\s+(-[A-Za-z]\S*\s+\S+|--[a-z][a-z-]*))*\s+merge
 ANON_REF_RE = re.compile(
     r"^[0-9a-fA-F]{7,}$|^HEAD[~^]|^@\{|^FETCH_HEAD$|^ORIG_HEAD$|^MERGE_HEAD$"
 )
+
+
+# What merge_recorder_stamp.py imports through the server. Hooks run on whatever
+# system Python exists; the plugin installs these only into its uv script environment.
+STAMP_MODULES = ("fastmcp", "pydantic", "yaml")
+
+
+def stamp_command(stamp_script: Path, src: str, *, deps_present: bool | None = None,
+                  uv: str | None = "") -> list[str] | None:
+    """argv for the stamp: this interpreter when it can import the server, else the
+    stamp's own `uv run --script` environment (its PEP 723 header); None if neither."""
+    if deps_present is None:
+        deps_present = all(importlib.util.find_spec(name) is not None for name in STAMP_MODULES)
+    if deps_present:
+        return [sys.executable or "python", str(stamp_script), src]
+    if uv == "":
+        uv = shutil.which("uv")
+    return [uv, "run", "--script", str(stamp_script), src] if uv else None
 
 
 def parse_src_branch(command: str) -> str:
@@ -105,9 +125,12 @@ def main() -> int:
     if not stamp_script.is_file():
         return 0
 
+    argv = stamp_command(stamp_script, src)
+    if argv is None:
+        return 0
     try:
         subprocess.run(
-            [sys.executable or "python", str(stamp_script), src],
+            argv,
             capture_output=True,
             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
         )

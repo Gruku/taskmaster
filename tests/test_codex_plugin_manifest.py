@@ -28,9 +28,10 @@ def test_distribution_versions_stay_aligned():
     claude = load_json(".claude-plugin/plugin.json")
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
 
-    assert codex["version"] == "6.0.3"
+    # No literal version here: a release bump is `scripts/bump_version.py <version>`,
+    # and test_packaging.py checks every other version string against these.
     assert claude["version"] == codex["version"]
-    assert 'version = "6.0.3"' in pyproject
+    assert f'version = "{codex["version"]}"' in pyproject
     assert f'## {codex["version"]}' in (ROOT / "CHANGELOG.md").read_text(
         encoding="utf-8"
     )

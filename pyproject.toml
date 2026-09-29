@@ -10,7 +10,11 @@ readme = "README.md"
 license = { file = "LICENSE" }
 authors = [{ name = "gruku" }]
 requires-python = ">=3.11"
-dependencies = ["fastmcp", "pyyaml"]
+dependencies = ["fastmcp>=3.4,<4", "httpx", "pydantic>=2", "pyyaml"]
+
+[project.optional-dependencies]
+# Test requirements (B-091): `uv pip install -e ".[dev]"` yields a venv that runs the suite.
+dev = ["pytest", "pytest-xdist", "pytest-timeout"]
 
 [tool.setuptools.packages.find]
 include = ["taskmaster*"]

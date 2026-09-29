@@ -1,3 +1,7 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["fastmcp>=3.4,<4", "httpx", "pydantic>=2", "pyyaml"]
+# ///
 # User intent: after a merge succeeds, stamp the rung it reached onto the task,
 # through the server's own recorder so the write is v3-correct — and against the
 # checkout that owns the backlog, even when the merge ran in a linked worktree.
@@ -233,8 +237,10 @@ def stamp(src: str, cwd: Path) -> None:
 
     try:
         from taskmaster import backlog_server as _bs
-    except Exception:
-        # Import failure -> fail safe: no stamp, never blocks.
+    except Exception as exc:
+        # Import failure -> fail safe: no stamp, never blocks, but say why.
+        _log(root, f"cannot import the Taskmaster server on {sys.executable} ({exc!r}); "
+                   "not recording this merge")
         return
 
     # Determine current branch (the merge TARGET, post-merge HEAD).
