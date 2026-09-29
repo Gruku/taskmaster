@@ -1,6 +1,5 @@
 """Small shared IPC contract; importing a client never imports the service."""
 from contextlib import closing
-import functools
 import hashlib
 import json
 from pathlib import Path
@@ -105,13 +104,16 @@ def package_digest(package: Path) -> str:
     return digest.hexdigest()[:32]
 
 
-@functools.lru_cache(maxsize=1)
-def _build():
+def _compute_build():
     """The installed package's build: its declared version plus a digest of every source
     file. The version alone repeats across dev reinstalls and a path repeats across
     in-place upgrades; the digest changes exactly when the code a process loads does."""
     package = Path(__file__).resolve().parents[1]
     return declared_version(package.parent), package_digest(package)
+
+
+def _build():
+    return _BUILD
 
 
 def declared_version(install_root: Path) -> str:
@@ -134,6 +136,11 @@ def declared_version(install_root: Path) -> str:
 def build_identity() -> dict:
     version, digest = _build()
     return {'version': version, 'digest': digest}
+
+
+# Taken at import, not at the first Client(): a process reports the code it loaded, even if
+# the files are upgraded in place while it runs.
+_BUILD = _compute_build()
 
 
 def valid_build(value) -> bool:

@@ -527,8 +527,14 @@ class Coordinator:
                     or running(self) is not None)
 
     def idle_expired(self, seconds):
+        """True, and stopping, once the owner has been idle for `seconds`. Stopping is set
+        under the same guard as the check, so nothing (a sync job, a command) can be
+        admitted between the verdict and the stop and then be refused mid-way."""
         with self.guard, self.linear.guard:
-            return not self._busy() and time.monotonic() - self.last_activity >= seconds
+            expired = not self._busy() and time.monotonic() - self.last_activity >= seconds
+            if expired:
+                self.stopping.set()
+            return expired
 
     def retire(self, requester):
         """A client of another build asks this owner to leave. It stops exactly as an idle

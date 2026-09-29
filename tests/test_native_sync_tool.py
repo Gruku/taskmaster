@@ -434,3 +434,91 @@ def test_the_call_deadline_bounds_the_wait_for_a_successor_coordinator(twins, mo
     client._deadline = started + 0.5
     client._await_successor(record, started + 60)  # the handshake's own budget is far longer
     assert time.monotonic() - started <= 0.8
+
+
+# ── N17 integrated review ──────────────────────────────────────────────────
+
+
+def test_queued_merge_stamps_never_hold_backlog_sync_or_a_read(twins, monkeypatch):
+    """Replaying queued merge stamps inline added the coordinator's 30 s client timeout (and a
+    retry) to every native call, breaking backlog_sync's 15 s bound. backlog_sync never
+    replays; other calls replay in the background, one replay per project at a time, and
+    the stamps are still applied."""
+    import threading
+
+    from taskmaster.native_routing import merge_stamps, registry
+
+    backlog = twins.native / ".taskmaster"
+    merge_stamps.enqueue(backlog, {"task_id": "test-epic-001", "rung": "master", "sha": "abc1234"})
+    started, finished = [], threading.Event()
+
+    def slow_replay(*args, **kwargs):
+        started.append(kwargs.get("autostart"))
+        time.sleep(3)
+        finished.set()
+        return {}
+
+    monkeypatch.setattr(merge_stamps, "replay", slow_replay)
+    with twins.at(twins.native):
+        began = time.monotonic()
+        answer = bs.backlog_sync()
+        assert time.monotonic() - began < resync.TOOL_WAIT + 1, answer
+        assert started == [], "backlog_sync must never replay merge stamps"
+        for _ in range(2):
+            began = time.monotonic()
+            bs.backlog_get_task(task_id="test-epic-001")
+            assert time.monotonic() - began < 2.0
+        assert registry.wait_for_merge_stamp_replays(10)
+    assert started == [False], started  # one replay, never starting a coordinator
+    assert finished.is_set()
+
+
+def test_idle_expiry_stops_in_the_same_guard_so_no_sync_is_admitted_after_it(twins):
+    from taskmaster.coordinator.protocol import CoordinatorStopping
+
+    owner = _owner(twins)
+    assert owner.idle_expired(0)
+    assert owner.stopping.is_set(), "an expired owner must be stopping before the guard is released"
+    with pytest.raises(CoordinatorStopping):
+        sync_jobs.request(owner)
+
+
+def test_a_finished_job_refreshes_activity_before_it_reports_done(twins, monkeypatch):
+    owner = _owner(twins)
+    seen = []
+    real_event = sync_jobs.threading.Event
+
+    class Watched(real_event().__class__):
+        def set(self):
+            seen.append(owner.last_activity)
+            super().set()
+
+    monkeypatch.setattr(sync_jobs.threading, "Event", Watched)
+    finished = []
+    real_finish = sync_jobs.Job.finish
+
+    def finish(self, owner_, state):
+        real_finish(self, owner_, state)
+        finished.append(time.monotonic())
+
+    monkeypatch.setattr(sync_jobs.Job, "finish", finish)
+    with twins.at(twins.native):
+        _poll(bs.backlog_sync())
+    assert finished and seen and seen[-1] >= finished[-1], (seen, finished)
+
+
+def test_a_handshake_refusal_is_rendered_with_its_own_guidance(twins, monkeypatch):
+    from taskmaster.coordinator.client import Client
+    from taskmaster.coordinator.protocol import HandshakeError
+
+    refusal = ("a newer taskmaster build (7.1.0) runs this repository's coordinator; this client (7.0.0) will "
+               "not downgrade it; restart this session to load the updated plugin")
+
+    def refuse(self, **kwargs):
+        raise HandshakeError(refusal, may_have_committed=False)
+
+    monkeypatch.setattr(Client, "sync_job", refuse)
+    with twins.at(twins.native):
+        answer = bs.backlog_sync()
+    assert "restart this session" in answer, answer
+    assert "did not answer" not in answer and "call backlog_sync() again" not in answer, answer

@@ -158,9 +158,10 @@ def _run(owner, job):
         except Exception as exc:  # noqa: BLE001 -- the in-memory answer stands; say it was not kept
             job.warnings = [f'this result was not stored ({type(exc).__name__}); it is lost if the coordinator stops']
     finally:
-        job.done.set()
+        # Activity first: a waiter woken by `done` must not find an owner already idle-expired.
         with owner.guard:
             owner.last_activity = time.monotonic()
+        job.done.set()
 
 
 def _start(owner, job):

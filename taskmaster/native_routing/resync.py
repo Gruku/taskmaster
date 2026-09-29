@@ -10,7 +10,7 @@ import time
 from taskmaster import backlog_server as bs
 from taskmaster.coordinator import sync_files
 from taskmaster.coordinator import sync_jobs
-from taskmaster.coordinator.protocol import ServiceUnavailable
+from taskmaster.coordinator.protocol import HandshakeError, ServiceUnavailable
 from taskmaster.native import sync
 from taskmaster.projection_parse import classify
 
@@ -254,6 +254,9 @@ def backlog_sync(call, *, files=None, sync_id=""):
     deadline = time.monotonic() + TOOL_WAIT
     try:
         answer = call.client.sync_job(deadline=deadline, sync_id=sync_id or None, files=named)
+    except HandshakeError as exc:
+        # Another build owns the coordinator: waiting or calling again cannot help.
+        return f"Sync not started: {exc}. Nothing was changed."
     except ServiceUnavailable as exc:
         how = (f'check it with backlog_sync(sync_id="{sync_id}")' if sync_id else
                "call backlog_sync() again: it attaches to a sync already running rather than starting another")
