@@ -19,6 +19,11 @@ python -m taskmaster.native.cutover --root <project> [--dry-run | --resume | --r
 
 `--clear-orphan-fence` is only valid with `--rollback`.
 
+`python -m` needs a source checkout and its dev venv. From an installed plugin, run
+`uv run <plugin>/taskmaster_cli.py cutover --root <project> ...` with the same arguments.
+It runs in the plugin's own uv environment. See
+[release-packaging.md](release-packaging.md#how-the-package-runs).
+
 Every run prints a report, including when it fails (`--json` prints it as JSON). After a
 failure the report carries `fence`, the fence state re-read from the store, and `next`/`hint`,
 the action that state calls for.
