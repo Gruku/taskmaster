@@ -117,12 +117,10 @@ def test_merge_recorder_stamps_the_live_native_task_on_the_native_ladder(twins, 
     assert hook.task_id_for_branch(_database(twins.native), "feature/late") == "test-epic-003"
     assert hook.task_id_for_branch(_database(twins.native), "feature/late") == \
         hook.task_id_for_branch(_database(twins.legacy), "feature/late")
-    answers = {"rev-parse --abbrev-ref HEAD": "qa-line", "rev-parse HEAD": "f00dcafe"}
-    monkeypatch.setattr(hook, "_git", lambda args, cwd: answers[" ".join(args)])
     for root in (twins.legacy, twins.native):
         monkeypatch.setenv("TASKMASTER_ROOT", str(root))
         with twins.at(root):
-            hook.stamp("feature/late", root)
+            hook.stamp("feature/late", root, "qa-line", "f00dcafe")
     legacy, native = committed(twins.legacy), committed(twins.native)
     assert legacy[("task", "test-epic-003")][0]["merge_status"]["qa"]["merge_commit"] == "f00dcafe"
     twins.assert_state_matches()
@@ -149,15 +147,65 @@ def test_merge_recorder_stamps_when_the_native_ladder_read_fails(twins, monkeypa
         return real(snapshot)
 
     monkeypatch.setattr(native_tasks, "_merge_targets", locked)
-    answers = {"rev-parse --abbrev-ref HEAD": "qa-line", "rev-parse HEAD": "f00dcafe"}
-    monkeypatch.setattr(hook, "_git", lambda args, cwd: answers[" ".join(args)])
     monkeypatch.setenv("TASKMASTER_ROOT", str(twins.native))
     with twins.at(twins.native):
-        hook.stamp("feature/late", twins.native)
+        hook.stamp("feature/late", twins.native, "qa-line", "f00dcafe")
     stamped = committed(twins.native)[("task", "test-epic-003")][0]["merge_status"]
     assert stamped["qa"]["merge_commit"] == "f00dcafe", stamped
     log = (twins.native / ".taskmaster" / "local" / "hook.log").read_text(encoding="utf-8")
     assert "merge_recorder_stamp" in log and "database is locked" in log, log
+
+
+def test_merge_recorder_never_starts_a_coordinator_and_queues_the_stamp(twins, monkeypatch):
+    """A hook must not bootstrap: a coordinator started from a hook's interpreter would
+    be reused by the MCP server. With none running, the stamp is queued durably, logged,
+    and applied by the server's next native call, which may start one."""
+    import json
+
+    from taskmaster.coordinator import client as client_module
+    from tests.native_coordinator_helpers import close_owned
+
+    hook = _module("merge_recorder_stamp")
+    close_owned()
+    monkeypatch.setattr(client_module, "_launch", lambda root: pytest.fail("a hook started a coordinator"))
+    monkeypatch.setenv("TASKMASTER_ROOT", str(twins.native))
+    hook.stamp("feature/late", twins.native, "qa-line", "f00dcafe")
+
+    pending = twins.native / ".taskmaster" / "local" / "merge-stamps-pending.jsonl"
+    entry = json.loads(pending.read_text(encoding="utf-8").splitlines()[0])
+    assert (entry["task_id"], entry["rung"], entry["sha"]) == ("test-epic-003", "qa", "f00dcafe")
+    log = (twins.native / ".taskmaster" / "local" / "hook.log").read_text(encoding="utf-8")
+    assert "queued" in log and "f00dcafe" in log, log
+    assert "qa" not in (committed(twins.native)[("task", "test-epic-003")][0].get("merge_status") or {})
+
+    with twins.at(twins.native):
+        bs.backlog_get_task(task_id="test-epic-003")
+    stamped = committed(twins.native)[("task", "test-epic-003")][0]
+    assert stamped["merge_status"]["qa"]["merge_commit"] == "f00dcafe", stamped
+    assert stamped["merge_status"]["qa"]["merged_at"] == entry["merged_at"]
+    assert not pending.exists()
+
+
+def test_a_queued_stamp_older_than_the_recorded_one_is_dropped(twins, monkeypatch):
+    import json
+
+    from tests.native_coordinator_helpers import close_owned
+
+    hook = _module("merge_recorder_stamp")
+    close_owned()
+    monkeypatch.setenv("TASKMASTER_ROOT", str(twins.native))
+    hook.stamp("feature/late", twins.native, "qa-line", "0ld5ha")
+    pending = twins.native / ".taskmaster" / "local" / "merge-stamps-pending.jsonl"
+    queued = json.loads(pending.read_text(encoding="utf-8").splitlines()[0])
+    later = dict(queued, merged_at="2999-01-01T00:00")  # recorded afterwards, by hand
+    with twins.at(twins.native):
+        pending.rename(pending.with_suffix(".hold"))
+        bs.backlog_record_merge(task_id="test-epic-003", rung="qa", sha="n3wsha", merged_at=later["merged_at"])
+        pending.with_suffix(".hold").rename(pending)
+        bs.backlog_get_task(task_id="test-epic-003")
+    stamped = committed(twins.native)[("task", "test-epic-003")][0]["merge_status"]["qa"]
+    assert stamped["merge_commit"] == "n3wsha", stamped
+    assert not pending.exists()
 
 
 # ── N14: the edit hook's related count from the canonical neighbourhood ──

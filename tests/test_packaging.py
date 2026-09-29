@@ -18,7 +18,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 # Scripts `uv run` executes in script mode: each carries its own PEP 723 header.
-SCRIPT_ENTRIES = ("backlog_server.py", "taskmaster_cli.py", "hooks/merge_recorder_stamp.py")
+SCRIPT_ENTRIES = ("backlog_server.py", "taskmaster/backlog_server.py", "taskmaster_cli.py",
+                  "hooks/merge_recorder_stamp.py")
 # Import name -> distribution name, where they differ.
 DISTRIBUTION = {"yaml": "pyyaml"}
 
@@ -218,8 +219,8 @@ def test_cli_launch_is_not_mistaken_for_a_store_client():
 
 def test_stamp_runs_on_the_hook_interpreter_when_it_has_the_dependencies():
     recorder = _load("hooks/merge_recorder.py", "merge_recorder_t")
-    argv = recorder.stamp_command(Path("s.py"), "feat", deps_present=True, uv="C:/bin/uv.exe")
-    assert argv == [sys.executable or "python", "s.py", "feat"]
+    argv = recorder.stamp_command(Path("s.py"), ["feat", "main", "abc"], in_process=True, uv="C:/bin/uv.exe")
+    assert argv == [sys.executable or "python", "s.py", "feat", "main", "abc"]
 
 
 def test_stamp_logs_when_the_server_cannot_be_imported(tmp_path):
@@ -234,7 +235,7 @@ def test_stamp_logs_when_the_server_cannot_be_imported(tmp_path):
     stamp = (ROOT / "hooks" / "merge_recorder_stamp.py").as_posix()
     code = ("import runpy, sys\n"
             "sys.modules['fastmcp'] = None\n"  # the hook interpreter has no fastmcp
-            f"sys.argv = [{stamp!r}, 'feature/x', {str(repo)!r}]\n"
+            f"sys.argv = [{stamp!r}, 'feature/x', 'master', 'abc1234', {str(repo)!r}]\n"
             f"runpy.run_path({stamp!r}, run_name='__main__')\n")
     subprocess.run([sys.executable, "-c", code], cwd=str(repo), capture_output=True, text=True, timeout=120,
                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -246,9 +247,9 @@ def test_stamp_runs_under_uv_when_the_hook_interpreter_lacks_them():
     """Hooks run on whatever system Python exists; the stamp imports the server (fastmcp,
     pydantic, pyyaml), which the plugin installs only into its uv script environment."""
     recorder = _load("hooks/merge_recorder.py", "merge_recorder_t")
-    argv = recorder.stamp_command(Path("s.py"), "feat", deps_present=False, uv="C:/bin/uv.exe")
-    assert argv == ["C:/bin/uv.exe", "run", "--script", "s.py", "feat"]
-    assert recorder.stamp_command(Path("s.py"), "feat", deps_present=False, uv=None) is None
+    argv = recorder.stamp_command(Path("s.py"), ["feat", "main", "abc"], in_process=False, uv="C:/bin/uv.exe")
+    assert argv == ["C:/bin/uv.exe", "run", "--script", "s.py", "feat", "main", "abc"]
+    assert recorder.stamp_command(Path("s.py"), ["feat"], in_process=False, uv=None) is None
 
 
 def test_a_uv_stamp_does_not_hold_the_hook_past_its_timeout(tmp_path):
@@ -284,3 +285,30 @@ def test_pre_commit_guidance_names_a_command_an_install_can_run():
     assert f'{cli} git commit -m "<message>"' in git_hook.GUIDANCE
     assert f"{cli} git status" in git_hook.GUIDANCE
     assert "python -m" not in git_hook.GUIDANCE
+
+
+def test_bump_writes_nothing_when_any_file_cannot_be_bumped(tmp_path):
+    """A half-applied bump leaves the repository misaligned; compute first, then write."""
+    bump = _load("scripts/bump_version.py", "bump_version_t")
+    for relative in bump.VERSIONED_FILES + ("CHANGELOG.md",):
+        (tmp_path / relative).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / relative, tmp_path / relative)
+    (tmp_path / "README.md").write_text("no badge here\n", encoding="utf-8")
+    before = {rel: (tmp_path / rel).read_bytes() for rel in bump.VERSIONED_FILES}
+    with pytest.raises(ValueError):
+        bump.bump(tmp_path, "9.8.7")
+    assert {rel: (tmp_path / rel).read_bytes() for rel in bump.VERSIONED_FILES} == before
+
+
+def test_a_release_candidate_heading_does_not_satisfy_the_final_version(tmp_path):
+    bump = _load("scripts/bump_version.py", "bump_version_t")
+    for relative in bump.VERSIONED_FILES + ("CHANGELOG.md",):
+        (tmp_path / relative).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / relative, tmp_path / relative)
+    bump.bump(tmp_path, "7.0.0")
+    with (tmp_path / "CHANGELOG.md").open("a", encoding="utf-8") as changelog:
+        changelog.write("\n## 7.0.0-rc.1\n")
+    assert bump.check(tmp_path) == ["CHANGELOG.md has no '## 7.0.0' heading"]
+    with (tmp_path / "CHANGELOG.md").open("a", encoding="utf-8") as changelog:
+        changelog.write("\n## 7.0.0 - final\n")
+    assert bump.check(tmp_path) == []

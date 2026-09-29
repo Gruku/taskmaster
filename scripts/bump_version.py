@@ -55,7 +55,9 @@ def check(root: Path = ROOT) -> list[str]:
     distinct = sorted({v for v in found.values() if v is not None})
     if len(distinct) > 1:
         problems.append("versions disagree: " + ", ".join(f"{rel}={v}" for rel, v in found.items()))
-    if len(distinct) == 1 and not re.search(rf"(?m)^##\s+{re.escape(distinct[0])}\b", _read(root, "CHANGELOG.md")):
+    # Exact: `## 7.0.0-rc.1` must not count as the `## 7.0.0` entry.
+    heading = rf"(?m)^##\s+{re.escape(distinct[0])}(?=\s|$)" if len(distinct) == 1 else None
+    if heading and not re.search(heading, _read(root, "CHANGELOG.md")):
         problems.append(f"CHANGELOG.md has no '## {distinct[0]}' heading")
     return problems
 
@@ -64,7 +66,9 @@ def bump(root: Path, new: str) -> list[str]:
     """Rewrite every version string to `new`; returns the files written."""
     if not SEMVER.fullmatch(new):
         raise ValueError(f"not a semantic version: {new!r}")
-    changed = []
+    # Compute every rewrite before writing any, so a file that cannot be bumped leaves
+    # the repository exactly as it was instead of half-bumped.
+    rewrites = {}
     for rel, pattern in PATTERNS.items():
         text = _read(root, rel)
         token = new.replace("-", "--") if rel == BADGE else new
@@ -72,10 +76,11 @@ def bump(root: Path, new: str) -> list[str]:
         if count != 1:
             raise ValueError(f"{rel}: expected one version string, found {count}")
         if updated != text:
-            with open(root / rel, "w", encoding="utf-8", newline="") as stream:
-                stream.write(updated)
-            changed.append(rel)
-    return changed
+            rewrites[rel] = updated
+    for rel, updated in rewrites.items():
+        with open(root / rel, "w", encoding="utf-8", newline="") as stream:
+            stream.write(updated)
+    return list(rewrites)
 
 
 def main(argv=None) -> int:

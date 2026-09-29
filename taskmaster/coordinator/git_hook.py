@@ -4,6 +4,8 @@ so staged projections are either the managed generation or refused with guidance
 Taskmaster never installs or overwrites hooks. Usage inside a user's hook:
     uv run <plugin>/taskmaster_cli.py git-hook pre-commit
     (from a source checkout: python -m taskmaster.coordinator.git_hook pre-commit)
+A marketplace-cache <plugin> path is versioned and vanishes on upgrade; resolve it when
+the hook runs (docs/runbooks/release-packaging.md, "Wiring the pre-commit check").
 Runs in the hook's own Git context (GIT_INDEX_FILE etc. are deliberately kept).
 """
 from __future__ import annotations
