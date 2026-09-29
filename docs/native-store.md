@@ -21,7 +21,7 @@ In short, on a native store:
 - **Files follow the database.** A write commits to the database first; the Markdown and YAML
   files under `.taskmaster/` are exported afterwards, in the background.
 - **Hand edits are imported only at an explicit sync.** Ordinary tool calls do not scan the
-  files.
+  files; `backlog_sync()` imports them when asked.
 - **Git is either managed or treated as drift.** Commits and checkouts of `.taskmaster/` go
   through the managed Git command. Git operations that bypass it are detected and held, never
   imported silently.
@@ -89,28 +89,56 @@ state only at one of these explicit sync points:
 | `backlog_issue_resync()` | Every issue file |
 | `backlog_resolve_conflict(file=<path>, take="file")` | That one file, if it is flagged or quarantined (the tool refuses any other file) |
 | A managed Git `commit` or `checkout` | Every projection file (a full sync runs first) |
-| A full sync through the Python client (below) | Every projection file |
+| `backlog_sync()`, or `backlog_sync(files=[...])` (below) | Every projection file, or the named ones |
 
 Until then the store keeps its own version. If the exporter later needs to write that file and
 finds it changed on disk, it does not overwrite it: it flags the file, keeps both versions and
 pauses exports to it until you choose one with `backlog_resolve_conflict`.
 
-**For agents:** change backlog state through the tools, not by editing files. If you did edit a
-handover or issue file by hand, run the matching resync. For any other file, tell the user a
-sync is needed; there is no general sync MCP tool.
+**For agents:** change backlog state through the tools, not by editing files. If you or the user
+edited a projection file by hand, call `backlog_sync()` (or `backlog_sync(files=[...])` for the
+files you know). Nothing syncs on a schedule: an edit waits until someone asks.
 
-### Running a full sync
+### Running a sync: `backlog_sync`
 
-There is no dedicated sync CLI. From the project directory, using the environment Taskmaster
-runs in (for a source checkout, `uv run --project <taskmaster checkout>`):
+`backlog_sync()` syncs every projection file; `backlog_sync(files=["tasks/core-001.md"])` syncs
+only the named paths (relative to `.taskmaster/`; a leading `.taskmaster/` is accepted). It is
+never run automatically.
+
+- **It starts a job and each call returns within about 15 s.** The coordinator runs the sync to
+  the end on its own, in rounds of the sync budget below, under one sync id. A call that returns
+  first answers `Sync running (sync id <id>): <progress>; N imported, M repaired so far. Call
+  backlog_sync(sync_id="<id>") to check again.` The progress names the phase: finding the files,
+  checking them against Git, `x of y files checked so far`, or publishing.
+- **One sync runs at a time.** `backlog_sync()` while one is running attaches to it: `A
+  backlog_sync was already running; attached to it instead of starting another.` If you named
+  different `files`, yours is not started, you are shown the running sync, and you call again
+  once it has finished.
+- **The counts cover the whole sync**, not one call: `N imported, N repaired, N unchanged, N
+  conflicts`, plus `N pending` and `N not checked` when there are any. The parts add up to the
+  files selected. The answer is `Sync complete (sync id <id>)` when every file is synchronized.
+  Otherwise it is `Sync finished without synchronizing every file`, listing each conflict and
+  quarantined file with its `backlog_resolve_conflict` next step, and the other pending reasons.
+- **A finished sync id replays its stored result.** The answer is labelled `the stored result of
+  a sync that finished at <time>` and shows the sync's true final state (complete, incomplete or
+  failed), also after a coordinator restart. Edits made since then need a fresh `backlog_sync()`.
+  Only ids the coordinator issued are accepted.
+- **A sync the coordinator was stopped during did not finish, and it is not resumed:** `Sync <id>
+  did not finish: the coordinator stopped while it ran (...). Imports it committed are kept; it is
+  not resumed. Call backlog_sync() to start a fresh sync.`
+- **No answer within 15 s** (for example a coordinator still starting): `Sync not confirmed ...
+  Nothing is lost`. Call `backlog_sync()` again (it attaches) or check the id.
+- **On a legacy store it is a no-op.** The legacy store imports hand edits on every call already.
+
+**From the Python client.** Operators and scripts can run a sync directly, with a request id of
+their own, from the project directory in the environment Taskmaster runs in (for a source
+checkout, `uv run --project <taskmaster checkout>`):
 
 ```
 uv run --project <taskmaster> python -c "import json, sys; from taskmaster.coordinator.client import Client; print(json.dumps(Client('.').sync(request_id=sys.argv[1]), indent=1, default=str))" my-sync-1
 ```
 
-Pick your own request id and keep it: it is the sync's identity (with the caller scope,
-`explicit-sync` by default).
-
+The request id, with the caller scope (`explicit-sync` by default), is the sync's identity.
 The reply's `state` is `synchronized` or `pending`:
 
 - `imports` lists the domain writes the sync made (edited files imported).
@@ -139,7 +167,16 @@ the link to the first attempt's receipts. To look up a sync without re-running i
 
 The target for a reply is the budget plus about 5 s. It is a target, not a bound: looking up an
 interrupted write's outcome, and the final publication and completion check, are not budgeted
-(see the runbook's *Verify* section).
+(see the runbook's *Verify* section). `backlog_sync` hides this from its caller: each of its
+calls waits at most 15 s, and the coordinator starts the next round itself.
+
+**Git classification is budgeted too.** Before importing, a sync checks the selected files
+against Git ([Bypassed Git is drift](#bypassed-git-is-drift)). That pass honours the sync's
+budget and the coordinator's stop signal. When either runs out it stops before holding or
+importing anything and answers pending with `Git classification stopped (...); nothing imported;
+retry the same sync id`. The fingerprints it already took are kept, so the retry (or the next
+`backlog_sync` round) continues where it stopped. A cold first sync of a very large project can
+therefore take several rounds, and several `backlog_sync(sync_id=...)` calls.
 
 ### Batched full sync
 
@@ -172,14 +209,18 @@ inside the worktree. At most 32 linked worktrees are tracked.
 ### Managed Git
 
 On a native store, commit and check out `.taskmaster/` with the managed Git command. It runs from
-the project (or a linked worktree) directory:
+the project (or a linked worktree) directory. With an installed plugin (`<plugin>` is its
+directory, `${CLAUDE_PLUGIN_ROOT}` inside Claude Code):
 
 ```
-uv run --project <taskmaster> python -m taskmaster.coordinator.git_cli commit -m "chore: log session"
-uv run --project <taskmaster> python -m taskmaster.coordinator.git_cli checkout <ref>
-uv run --project <taskmaster> python -m taskmaster.coordinator.git_cli status
-uv run --project <taskmaster> python -m taskmaster.coordinator.git_cli recover [--acknowledge-quiescent] [--accept-outcome] [--release-drift {import,take-published} [--worktree W]]
+uv run <plugin>/taskmaster_cli.py git commit -m "chore: log session"
+uv run <plugin>/taskmaster_cli.py git checkout <ref>
+uv run <plugin>/taskmaster_cli.py git status
+uv run <plugin>/taskmaster_cli.py git recover [--acknowledge-quiescent] [--accept-outcome] [--release-drift {import,take-published} [--worktree W]]
 ```
+
+From a source checkout, `uv run --project <taskmaster> python -m taskmaster.coordinator.git_cli
+...` takes the same arguments. Below, `git_cli` means either form.
 
 What a managed operation does (`taskmaster/coordinator/git.py`):
 
@@ -204,9 +245,26 @@ commit after a cutover typically carries a regenerated `backlog.yaml` (see the r
 with `--request-id <id>`; Git is not run twice. It exits 0 only for `completed`, `clear` or `accepted`.
 
 **Optional pre-commit check.** Taskmaster never installs hooks. You can call its validator from
-your own pre-commit hook: `python -m taskmaster.coordinator.git_hook pre-commit`. It refuses a
-commit that stages `.taskmaster/` files outside a managed operation, and says how to commit them
-or unstage them (`git restore --staged .taskmaster`).
+your own pre-commit hook: `uv run <plugin>/taskmaster_cli.py git-hook pre-commit` (from a source
+checkout, `python -m taskmaster.coordinator.git_hook pre-commit`). It refuses a commit that
+stages `.taskmaster/` files outside a managed operation, and says how to commit them or unstage
+them (`git restore --staged .taskmaster`). A plugin installed through a marketplace cache lives
+in a versioned directory that disappears on upgrade, so resolve the path when the hook runs; the
+[release packaging runbook](runbooks/release-packaging.md#wiring-the-pre-commit-check-into-a-project)
+has a hook that does, and fails open if the plugin is gone.
+
+**The merge recorder on a native store.** After a successful `git merge` of a task's branch,
+the merge-recorder hook records the merged branch and commit on the task (`merge_status`,
+`merge_gate_state`). It reads both when the hook fires, so a later checkout cannot change what
+is recorded. On a native store it writes only through a coordinator that is already running;
+a hook never starts one. With none running (it exits after 5 minutes idle) the stamp is queued
+durably in `.taskmaster/local/merge-stamps-pending.jsonl`. The MCP server applies the queue after
+its next write, or after any later call while a coordinator is running. Until then
+`merge_gate_state` does not show the new rung, so a merge gate checked in that window sees the
+previous one. A queued stamp older than the one already recorded is dropped (Git ancestry
+decides), and the write is refused and re-decided if another merge is recorded in between. A
+queue line that cannot be read is moved to `merge-stamps-rejected.jsonl`. Every reason a merge is
+not recorded, or not yet, is a line in `.taskmaster/local/hook.log`.
 
 ### Bypassed Git is drift
 
@@ -269,7 +327,9 @@ The [cutover runbook](runbooks/native-cutover.md) is the procedure. What it requ
    such as a `git pull`, so the dry run can name any file that no longer parses. From then until
    the cutover ends, do not pull, check out or edit files in the project.
 3. **Dry run:**
-   `python -m taskmaster.native.cutover --root <project> --dry-run`. Deal with every `refused:` line.
+   `uv run <plugin>/taskmaster_cli.py cutover --root <project> --dry-run` (from a source checkout,
+   `python -m taskmaster.native.cutover` with the same arguments). Deal with every `refused:`
+   line.
 4. **Quarantine preflight.** The cutover refuses while any projection file is quarantined or
    flagged, because native managed Git would refuse in that state afterwards. It names each
    file with its reason. Repair each one in place, keeping its content and its own line endings,
@@ -281,7 +341,8 @@ The [cutover runbook](runbooks/native-cutover.md) is the procedure. What it requ
    process scan cannot see a process's working directory, so a Taskmaster server running for
    another project is listed too. The flag turns the finding into a warning; it does not
    re-check.
-6. **Cut over:** `python -m taskmaster.native.cutover --root <project>`. Write down the token.
+6. **Cut over:** `uv run <plugin>/taskmaster_cli.py cutover --root <project>`. Write down the
+   token.
 7. **Verify** as the runbook describes, then commit `.taskmaster/` with the first managed commit.
 
 **Rollback limits.**
@@ -319,13 +380,29 @@ A coordinator exits after 300 s with no pending work, no sync and no managed Git
 takes about 6 s, and a first write from a fresh process about 8 s (measured; process spawn
 included).
 
-**After an upgrade.** <!-- TODO(N17): replace with the final behaviour of the coordinator
-build-version handshake (a parallel change): after an upgrade, an old idle coordinator retires. -->
-A build-version check in the coordinator handshake is being added so that, after an upgrade,
-an old idle coordinator retires. Until that behaviour is final, stop the old coordinator
-yourself after upgrading (below).
+**After an upgrade: the build handshake.** Every client and coordinator carries its build: the
+plugin version and a digest of the package's Python sources. The digest decides: a Claude
+install and a Codex install of one release are the same build. A client runs commands only on a
+coordinator of its own build. When it finds another build (`taskmaster/coordinator/client.py`,
+`_retire`):
 
-To stop it cleanly, for example before a cutover step or an upgrade:
+- **A newer client** asks the older coordinator to retire. An idle one stops (no queued command,
+  sync, Linear job or managed Git), and the client starts its own. A busy one keeps running; the
+  client waits and retries within its timeout, then answers `coordinator build <old> is busy ...
+  retry later`. Nothing ran.
+- **The same release with different code** (for example a source checkout beside an installed
+  plugin) retires the coordinator only while it is idle, and refuses at once when it is busy.
+- **An older client** refuses without touching the coordinator: `a newer taskmaster build (...)
+  runs this repository's coordinator; this client (...) will not downgrade it; restart this
+  session to load the updated plugin`. Restart that session.
+- **A coordinator from before the handshake** cannot be retired. The client says so: it exits
+  after its idle timeout (300 s by default), or you can end the session that started it or stop
+  the process whose pid is in `discovery.json`.
+
+Clients of the coordinator's own build ride through its retirement: they wait for the
+successor instead of failing.
+
+To stop it yourself, for example before a cutover step:
 
 ```
 uv run --project <taskmaster> python -c "from taskmaster.coordinator.client import Client; print(Client('.', autostart=False).shutdown())"
@@ -338,7 +415,10 @@ fall back to a second writer. The errors are:
 |---|---|---|
 | `coordinator startup unavailable; inspect .taskmaster/local/coordinator/service.log; no writer fallback` | The coordinator did not come up within about 15 s | Read `service.log` |
 | `repository coordinator is running but not responding; retry later` | The lock is held but the process does not answer | Wait and retry. If it persists, stop that process |
-| `discovery root/store/schema/protocol mismatch; no writer fallback` | A coordinator from a different build owns the project | Stop it (it also exits when idle), and run one build |
+| `discovery root/store/schema/protocol mismatch; no writer fallback` | A coordinator for a different store, schema or protocol owns the project | Stop it (it also exits when idle), and run one build |
+| `a newer taskmaster build (...) runs this repository's coordinator; ... restart this session to load the updated plugin` | This session runs an older plugin than the coordinator | Restart the session |
+| `coordinator build <build> is busy; ... retry later` | Another build's coordinator is working and cannot retire yet | Retry once it is idle |
+| `the running coordinator predates the build handshake ...` | A coordinator from a pre-handshake build | Wait for its idle exit, or stop it as the message says |
 | `coordinator IPC capacity reached; retry later` | More concurrent requests than the coordinator admits | Retry |
 | `coordinator disconnected; retry the same request_id to recover its receipt` | The connection dropped after the command was sent. It may have committed (`may_have_committed`) | See [Receipts](#receipts) |
 
@@ -453,10 +533,11 @@ only on a native store; on legacy it refuses, because the files are read directl
 | 6.0.3 (bridge) | Native | Refuses cleanly: `Unsupported Taskmaster schema_version=2; this client supports 1. Upgrade the client; the database has not been rebuilt.` |
 | 6.0.2 or older (pre-bridge) | Native | **Not refused cleanly**: 6.0.2 fails with `IntegrityError` and leaves `store.recovery.lock` behind (N15 rehearsal). Stop every such process before the cutover and never start one afterwards |
 | Any bridge client | During a cutover | Refuses: `Taskmaster migration state is 'migrating'; access refused until migration completes.` |
-| A different native build | Native | Must match the store's schema (2) and protocol (2), else `Unsupported native authority schema or protocol`. A running coordinator from another build refuses clients with a protocol mismatch (above) |
+| A different native build | Native | Must match the store's schema (2) and protocol (2), else `Unsupported native authority schema or protocol`. A running coordinator of another build is retired or refused by the [build handshake](#the-coordinator) |
 
 **Run one build per project.** Upgrade every host (Claude plugin cache, Codex plugin, manual
-servers) together, and stop the old coordinator, before using a native store.
+servers) together and restart their sessions. A newer client retires an idle older coordinator
+by itself; an older client refuses until its session is restarted.
 
 **Hooks of an older version fail open.** An older build's hooks refuse a native store the same
 way its server does, and the merge-gate hook allows the operation whenever it cannot decide
@@ -471,8 +552,9 @@ and `backlog_migrate_v4` (no migration needed), `backlog_canonicalize_layout` (a
 the handover and issue resyncs and `backlog_linear` bootstrap and retry, has a native
 implementation.
 
-**Tool changes that apply to both stores**: five new tools (`backlog_context`,
-`backlog_changes_since`, `backlog_document`, `backlog_document_import`, `backlog_claim`) and
+**Tool changes that apply to both stores**: six new tools (`backlog_context`,
+`backlog_changes_since`, `backlog_document`, `backlog_document_import`, `backlog_claim`,
+`backlog_sync`) and
 three extended ones (`backlog_get_task(provenance=)`, `backlog_pick_task(ttl_seconds=)`,
 `backlog_batch_update(commands=, expected_revisions=, atomic=)`). No tool was renamed or
 removed.
@@ -520,8 +602,10 @@ latency.
   budget.
 - A cold first sync or managed commit on a freshly copied or cloned project took 40–88 s in the
   acceptance harness. The unverified hypothesis is that a copy changes every file's change time,
-  so the fingerprint cache misses on every file. Whether a cold 37,010-file sync fits the 120 s
-  budget is not measured.
+  so the fingerprint cache misses on every file. A cold 37,010-file sync does not fit one 120 s
+  round: its Git classification alone ran past 9 minutes before it was budgeted. It now stops at
+  the budget and continues in the next round, so such a sync takes several rounds; the total
+  time is not measured.
 - Legacy adoption of very large projects is slow and grows roughly quadratically: 58 s at
   CodeMaestro's size, 551 s at 3×, about 87 min at 10×. The cutover depends on it; there is no
   direct native import.
@@ -532,8 +616,12 @@ latency.
 - A legacy `backlog_link create` was seen not persisting on a CodeMaestro copy (N14, D1), and the
   canonical `target_kind` fallback is still open.
 - Taskmaster 6.0.2 and older fail uncleanly on a native store (see [Compatibility](#compatibility)).
-- The Codex manifest sets `tool_timeout_sec: 30`, below the 120 s sync budget. A resync on a large
-  project can outlast the host's tool timeout even though the sync itself continues.
+- The Codex manifest sets `tool_timeout_sec: 30`. `backlog_sync` stays inside it (each call
+  returns within about 15 s), but the handover and issue resyncs and the Python client's sync
+  still wait for a whole round (120 s budget) and can outlast it on a large project, although the
+  sync itself continues.
+- A merge recorded while no coordinator runs waits in the merge-stamp queue until the MCP server
+  next writes, so `merge_gate_state` can lag the merge.
 
 ## Reference
 
@@ -557,6 +645,8 @@ can recognize it. Do not set it yourself.
 | `.taskmaster/local/cache/sync-fingerprints.json` | Sync fingerprint cache (one hour) |
 | `.taskmaster/local/backups/pre-native-*` | Cutover backups (see the runbook's *Pruning backups*) |
 | `.taskmaster/local/PROGRESS.md` | Rendered progress log; machine-local, not committed |
+| `.taskmaster/local/hook.log` | Why a hook did not act (merge stamps, resurfacing); capped at 1 MB |
+| `.taskmaster/local/merge-stamps-pending.jsonl` | Merge stamps waiting for a coordinator; `merge-stamps-rejected.jsonl` holds unreadable ones |
 
 **Deeper material:** [design](specs/2026-09-09-database-native-design.md),
 [compatibility inventory](specs/2026-09-09-native-compatibility.md),
