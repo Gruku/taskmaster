@@ -175,3 +175,39 @@ def test_crlf_detection_treats_refused_or_missing_paths_as_no_vote(tmp_path):
     assert store.detect_dominant_crlf(tmp_path, path_guard=guard) is True
     missing = tmp_path / "absent-root"
     assert store.detect_dominant_crlf(missing, path_guard=lambda rel: safe_path(missing, rel)) is False
+
+
+def test_concurrent_fingerprint_saves_use_their_own_temp_files(tmp_path, monkeypatch):
+    """Coordinator threads may save the fingerprint cache at once (a batched sync between
+    batches, git.generation outside the publication lock): each writes its own temp file
+    and replaces the cache atomically, so no save clobbers another's half-written temp."""
+    import json
+    import threading
+    backlog = tmp_path / ".taskmaster"
+    backlog.mkdir()
+    temps = []
+    original = Path.write_text
+
+    def recording(self, *args, **kwargs):
+        temps.append(self.name)
+        return original(self, *args, **kwargs)
+    monkeypatch.setattr(Path, "write_text", recording)
+    scans = []
+    for index in range(8):
+        scan = sync_files.Scan(backlog)
+        scan._entries[f"tasks/t-{index:03d}.md"] = [[1, 2, 3, 4, 5], ["a" * 40] * 5]
+        scans.append(scan)
+    start = threading.Barrier(len(scans))
+
+    def save(scan):
+        start.wait()
+        sync_files.save_scan(tmp_path, scan)
+    threads = [threading.Thread(target=save, args=(scan,)) for scan in scans]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert len(temps) == len(scans) and len(set(temps)) == len(temps), temps
+    cache = sync_files.cache_path(tmp_path)
+    assert json.loads(cache.read_text(encoding="utf-8"))["version"] == sync_files.CACHE_VERSION
+    assert [path.name for path in cache.parent.iterdir()] == [cache.name]  # no temp left behind

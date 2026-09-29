@@ -16,7 +16,9 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import stat
+import threading
 import time
+import uuid
 from typing import NamedTuple
 
 from taskmaster.native import metrics
@@ -339,14 +341,20 @@ class Scan:
         """Fingerprints this scan confirmed or recorded (persisted for the next sync)."""
         return dict(self._entries)
 
-    def merged(self) -> dict:
+    def merged(self, *, bound: bool = True) -> dict:
         """What to persist: the known entries this scan did not disprove, updated by
-        what it confirmed or recorded (a scan over some paths keeps the others')."""
+        what it confirmed or recorded (a scan over some paths keeps the others').
+        `bound=False` for a scan that stopped part-way (a batched sync between batches or
+        interrupted): the paths it has not reached yet are still looked up, so keep them."""
         merged = {rel: entry for rel, entry in self.known.items() if rel not in self._stale}
         merged.update(self._entries)
-        if len(merged) > 2 * len(self._entries) + 1024:
+        if bound and len(merged) > 2 * len(self._entries) + CACHE_SLACK:
             return dict(self._entries)  # bound entries for paths nobody looks up any more
         return merged
+
+
+# Carried-forward entries a scan may keep beyond twice what it confirmed (see `merged`).
+CACHE_SLACK = 1024
 
 
 def _valid_entry(entry) -> bool:
@@ -414,11 +422,12 @@ def open_scan(store_root: Path, backlog: Path, *, fast: bool = True) -> Scan:
     return Scan(backlog, item["entries"], since=item["since"])
 
 
-def save_scan(store_root: Path, scan: Scan) -> None:
-    """Replace `scan.root`'s fingerprints with what this scan confirmed; best effort."""
+def save_scan(store_root: Path, scan: Scan, *, complete: bool = True) -> None:
+    """Replace `scan.root`'s fingerprints with what this scan confirmed; best effort.
+    `complete=False`: the scan has not looked every path up yet (see `Scan.merged`)."""
     if not scan.cacheable:
         return
-    entries = scan.merged()
+    entries = scan.merged(bound=complete)
     checkouts = _load_cache(store_root)
     key = _cache_key(scan.root)
     stored = checkouts.pop(key, None)
@@ -428,7 +437,9 @@ def save_scan(store_root: Path, scan: Scan) -> None:
         checkouts.pop(next(iter(checkouts)))
     checkouts[key] = {"since": scan.since, "entries": entries}
     path = cache_path(store_root)
-    temp = path.with_name(f"{path.name}.tmp.{os.getpid()}")
+    # Unique per writer: coordinator threads (a sync between batches, git.generation outside
+    # the publication lock) may save concurrently; each replaces the file atomically.
+    temp = path.with_name(f"{path.name}.tmp.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         temp.write_text(json.dumps({"version": CACHE_VERSION, "checkouts": checkouts}, separators=(",", ":")),
