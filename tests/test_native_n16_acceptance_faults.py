@@ -3,6 +3,7 @@
 """Fault-injection regression tests for scripts/native_n16_acceptance.py, plus pure unit checks."""
 from __future__ import annotations
 
+from contextlib import closing
 import json
 import os
 from pathlib import Path
@@ -717,3 +718,166 @@ def test_a_lost_link_write_fails_the_runner(work, fault, mode, gate):
     failed, rows = failed_checks(report, "write.link")
     assert rows[0]["clients"] == 4 and all(r["verdict"] == "fail" for r in rows)
     assert gate in failed, (failed, rows[0]["checks"])
+
+
+# ── sync judging on the CodeMaestro run: a sync-wide refusal, a grown dataset, the summary ──
+from types import SimpleNamespace  # noqa: E402
+
+WIDE = "sync pending: more than 10000 projection files; bounded scan refused"
+
+
+class _FixedSync:
+    def __init__(self, answer):
+        self.answer, self.calls = answer, 0
+
+    def sync(self, *, caller_scope, request_id=None, **_):
+        self.calls += 1
+        return dict(self.answer)
+
+
+class _SyncDataset:
+    name = "cm"
+
+    def __init__(self, root):
+        self.root = root
+
+    def inventory(self):
+        return {"tasks": ["t-1", "t-2"]}
+
+
+def _sync_run(samples=3):
+    return SimpleNamespace(args=SimpleNamespace(sync_samples=samples, warmup=0), sync_required=0, instrumented=False)
+
+
+def _sync_harness(monkeypatch, tmp_path, answer, *, files=100, imported=False):
+    client = _FixedSync(answer)
+    monkeypatch.setattr(runner, "start_coordinator", lambda run, root: client)
+    monkeypatch.setattr(runner, "quarantined_files", lambda root: set())
+    monkeypatch.setattr(runner, "sync_file_count", lambda root: files)
+    markers = []
+    monkeypatch.setattr(runner, "edit_task_file", lambda root, task, marker: markers.append(marker))
+    monkeypatch.setattr(runner, "body_of", lambda root, task: markers[-1] if imported else "")
+    return client, _SyncDataset(tmp_path)
+
+
+def _checks(data):
+    return {c["check"]: c for c in data["checks"]}
+
+
+def test_a_sync_wide_refusal_is_refused_not_lost(monkeypatch, tmp_path):
+    answer = {"state": "pending", "unresolved": [], "notices": [WIDE], "imports": []}
+    client, ds = _sync_harness(monkeypatch, tmp_path, answer)
+    data = runner.SCENARIOS["sync.dirty"]["fn"](_sync_run(), ds, None, None).finish()
+    check = _checks(data)["external_edit_imported"]
+    assert data["verdict"] == "fail" and not check["ok"]
+    assert check.get("lost", 0) == 0
+    assert check["refused"] == 3 and "bounded scan refused" in check["reason"]
+
+
+def test_lost_means_the_sync_reported_success_and_the_edit_is_missing(monkeypatch, tmp_path):
+    for state in ("synchronized", "accepted"):
+        client, ds = _sync_harness(monkeypatch, tmp_path, {"state": state, "imports": [], "notices": []})
+        check = _checks(runner.SCENARIOS["sync.dirty"]["fn"](_sync_run(), ds, None, None).finish())["external_edit_imported"]
+        assert not check["ok"] and check["lost"] == 3
+    client, ds = _sync_harness(monkeypatch, tmp_path, {"state": "synchronized", "imports": [], "notices": []},
+                               imported=True)
+    assert _checks(runner.SCENARIOS["sync.dirty"]["fn"](_sync_run(), ds, None, None).finish())["external_edit_imported"]["ok"]
+
+
+def test_judge_sync_edit_classifies_every_outcome():
+    judge = runner.judge_sync_edit
+    assert judge({"state": "pending", "notices": [WIDE]}, True)[0] == "imported"
+    assert judge({"state": "synchronized"}, False)[0] == "lost"
+    assert judge({"state": "pending", "unresolved": [], "notices": [WIDE]}, False) == ("refused", WIDE)
+    assert judge({"state": "pending", "unresolved": ["tasks/t-1.md"],
+                  "notices": ["sync pending: tasks/t-1.md: time budget exhausted or coordinator stopping; "
+                              "retry the same sync id"]}, False)[0] == "unsettled"
+    kind, reason = judge({"state": "pending", "unresolved": ["tasks/t-1.md"],
+                          "notices": ["sync pending: tasks/t-1.md: quarantined"]}, False)
+    assert kind == "unsettled" and "quarantined" in reason
+    # A per-file notice is never sync-wide, even when its reason holds a colon.
+    assert runner.sync_wide_refusals({"unresolved": ["tasks/t-1.md"],
+                                      "notices": ["sync pending: tasks/t-1.md: a: b"]}) == []
+
+
+def test_a_no_edit_sync_held_by_a_sync_wide_refusal_does_not_settle(monkeypatch, tmp_path):
+    answer = {"state": "pending", "unresolved": [], "notices": [WIDE], "imports": []}
+    client, ds = _sync_harness(monkeypatch, tmp_path, answer)
+    data = runner.SCENARIOS["sync.no_edits"]["fn"](_sync_run(), ds, None, None).finish()
+    check = _checks(data)["no_edit_sync_settles"]
+    assert data["verdict"] == "fail" and not check["ok"] and "bounded scan refused" in check["reason"]
+
+
+@pytest.mark.parametrize("name", ["sync.no_edits", "sync.dirty", "sync.conflict", "sync.checkout",
+                                  "sync.missing_files"])
+def test_an_over_limit_dataset_is_a_precondition_not_a_verdict(monkeypatch, tmp_path, name):
+    def no_coordinator(run, root):
+        raise AssertionError("a sync scenario over the file limit must not run")
+
+    monkeypatch.setattr(runner, "copy_project", lambda run, root, label: tmp_path)
+    monkeypatch.setattr(runner, "stop_coordinator", lambda root: None)
+    monkeypatch.setattr(runner, "start_coordinator", no_coordinator)
+    monkeypatch.setattr(runner, "quarantined_files", lambda root: set())
+    monkeypatch.setattr(runner, "sync_file_count", lambda root: runner.sync_limit() + 1)
+    data = runner.SCENARIOS[name]["fn"](_sync_run(), _SyncDataset(tmp_path), None, None).finish()
+    assert data["verdict"] == "precondition", data
+    assert str(runner.sync_limit()) in data["precondition"]
+    assert runner.exit_status([data]) == 2
+
+
+def test_sync_file_count_counts_projection_files_on_disk_and_in_the_store(tmp_path):
+    import sqlite3
+    backlog = tmp_path / ".taskmaster"
+    (backlog / "tasks").mkdir(parents=True)
+    (backlog / "local").mkdir()
+    for ident in ("t-1", "t-2"):
+        (backlog / "tasks" / f"{ident}.md").write_text("x", encoding="utf-8")
+    with closing(sqlite3.connect(backlog / "local/store.db")) as c:
+        c.execute("CREATE TABLE projection(file TEXT PRIMARY KEY)")
+        c.executemany("INSERT INTO projection VALUES(?)", [("tasks/t-1.md",), ("tasks/t-3.md",), ("local/x.db",)])
+        c.commit()
+    assert runner.sync_file_count(tmp_path) == 3  # t-1, t-2 on disk; t-3 known to the store; local/ is not authored
+    assert runner.sync_file_count(tmp_path / "missing") == 0
+
+
+def _meta():
+    return {"started": "t", "git_sha": "0" * 10, "python": "3", "sqlite": "3", "machine": "m",
+            "samples_required": 200, "warmup": 20}
+
+
+def _row(scenario, verdict, failed=()):
+    return {"scenario": scenario, "dataset": "cm", "clients": 1, "mode": None, "verdict": verdict,
+            "checks": [{"check": c, "ok": False} for c in failed] + [{"check": "ok_check", "ok": True}],
+            "distributions": {}, "errors": {}}
+
+
+def test_the_summary_reports_an_instrumented_failure():
+    report = {"meta": _meta(), "results": [_row("sync.dirty", "pass")],
+              "instrumented": [_row("sync.dirty", "fail", ["external_edit_imported"])], "budgets": [], "skipped": []}
+    text = runner.markdown(report)
+    correctness = text.split("## Correctness", 1)[1].split("## Latency", 1)[0]
+    assert "Uninstrumented pass: 1 of 1 scenario runs pass" in correctness
+    assert "Instrumented pass: 0 of 1 scenario runs pass their checks; 1 fail" in correctness
+    assert "| instrumented | cm | sync.dirty |" in correctness and "external_edit_imported" in correctness
+    instrumented = text.split("## Instrumented pass", 1)[1]
+    assert "external_edit_imported" in instrumented
+    counts = runner.verdict_counts(report)
+    assert counts["instrumented"]["fail"] == 1 and counts["uninstrumented"]["pass"] == 1
+    assert counts["fail"] == 1 and runner.exit_status(report["results"] + report["instrumented"]) == 1
+
+
+def test_each_pass_runs_on_a_fresh_copy_of_the_prepared_dataset(monkeypatch, tmp_path):
+    root = tmp_path / "ds-cm" / "native"
+    (root / ".taskmaster/tasks").mkdir(parents=True)
+    (root / ".taskmaster/tasks/t-1.md").write_text("prepared", encoding="utf-8")
+    run = SimpleNamespace(work=tmp_path, guard=lambda r: r)
+    monkeypatch.setattr(runner, "stop_coordinator", lambda r: None)
+    ds = runner.Dataset("cm", root, None, {"adoption": 1})
+    ds._inventory = {"tasks": ["t-1"]}
+    datasets = runner.pass_datasets(run, ds, ("uninstrumented", "instrumented"))
+    first, second = datasets["uninstrumented"], datasets["instrumented"]
+    assert first.root != second.root and root not in (second.root, *second.root.parents)
+    (first.root / ".taskmaster/tasks/t-1.md").write_text("grown by the first pass", encoding="utf-8")
+    assert (second.root / ".taskmaster/tasks/t-1.md").read_text(encoding="utf-8") == "prepared"
+    assert second.inventory() == ds.inventory() and second.name == "cm" and second.info == ds.info
+    assert runner.pass_datasets(run, ds, ("uninstrumented",)) == {"uninstrumented": ds}

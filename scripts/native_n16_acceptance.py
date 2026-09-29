@@ -15,8 +15,9 @@ copy of `--source-copy` (which must carry `.benchmark-copy`; it is only read and
 Rules (plan N16): uninstrumented latency first; every steady-state scenario measures >= --samples ops
 after --warmup (the runner refuses fewer unless --smoke); p50/p95/p99/max, error counts and the worst
 op are reported; cold and adoption runs are separate records; `--instrumented` repeats the steady-state
-scenarios with TASKMASTER_METRICS=<abs path> (taskmaster.native.metrics: per-process JSONL, loaded and
-summarized per scenario, then deleted) and psutil RSS sampling. Each scenario
+scenarios on a fresh copy of the prepared dataset with TASKMASTER_METRICS=<abs path>
+(taskmaster.native.metrics: per-process JSONL, loaded and summarized per scenario, then deleted) and
+psutil RSS sampling. Each scenario
 records its correctness assertions and FAILS on any violation; the summary lists correctness first.
 Budgets (design §11: bounded reads p95 < 100 ms, DB command core p95 < 50 ms, simple tool writes
 p95 < 250 ms) are reported as met or missed for every applicable scenario, never hidden.
@@ -1778,12 +1779,77 @@ def sync_summary(result) -> dict:
             "notices": len(result.get("notices") or [])}
 
 
+def sync_wide_refusals(result) -> list:
+    """Pending notices that name no file (`sync pending: <reason>`): the whole sync was refused or
+    held, e.g. over the product's file limit. A per-file notice is `sync pending: <rel>: <reason>`."""
+    if not isinstance(result, dict):
+        return []
+    files = [str(rel) for rel in result.get("unresolved") or ()]
+    return [str(n) for n in result.get("notices") or ()
+            if str(n).startswith("sync pending: ")
+            and not any(str(n).startswith(f"sync pending: {rel}:") for rel in files)]
+
+
+def judge_sync_edit(result, imported: bool) -> tuple:
+    """(outcome, reason) for one external edit after its sync. `lost` only when the sync reported
+    success (synchronized/accepted) and the edit is missing; a sync-wide refusal is `refused`; any
+    other pending (retryable past its bound, or held on files) is `unsettled`."""
+    if imported:
+        return "imported", None
+    state = result.get("state") if isinstance(result, dict) else None
+    if state in ("synchronized", "accepted"):
+        return "lost", None
+    wide = sync_wide_refusals(result)
+    if wide and not sync_retryable(result):
+        return "refused", wide[0]
+    notices = (result or {}).get("notices") if isinstance(result, dict) else None
+    return "unsettled", str((notices or [f"sync answered {state}"])[0])
+
+
+def sync_limit() -> int:
+    from taskmaster.native import sync
+    return sync.MAX_FILES
+
+
+def sync_file_count(root: Path) -> int:
+    """The files a full sync selects: authored projection files on disk plus the importable paths
+    the store's projection table knows (as coordinator/sync_worker.py selects them)."""
+    from taskmaster.coordinator import sync_files
+    from taskmaster.projection_parse import classify
+    files = set(sync_files.discover(root / ".taskmaster").files)
+    try:
+        with ro(root) as c:
+            rows = [row[0] for row in c.execute("SELECT file FROM projection")]
+    except sqlite3.Error:
+        rows = []
+    for rel in rows:
+        try:
+            classify(rel)
+        except ValueError:
+            continue
+        files.add(rel)
+    return len(files)
+
+
+def sync_over_limit(res: Result, root: Path) -> bool:
+    """A dataset over the product's full-sync file limit cannot exercise a sync scenario: the product
+    rightly refuses the bounded scan. Reported as a precondition, never a pass and never "lost"."""
+    count, limit = sync_file_count(root), sync_limit()
+    if count <= limit:
+        return False
+    res.precondition(f"dataset has {count} projection files, over the full-sync limit of {limit} "
+                     f"(sync.MAX_FILES); the product refuses the bounded scan")
+    return True
+
+
 @scenario("sync.no_edits", group="sync", cells=("Sync: no external edits",))
 def sync_no_edits(run: Run, ds: Dataset, clients, mode):
     res = Result("sync.no_edits", ds.name, clients=1, cells=["Sync: no external edits"])
+    if sync_over_limit(res, ds.root):
+        return res
     client = start_coordinator(run, ds.root)
     quarantined = quarantined_files(ds.root)
-    times, states, blockers = [], set(), set()
+    times, states, blockers, refusals = [], set(), set(), []
     for index in range(run.args.sync_samples + run.args.warmup):
         result, seconds = sync_once(client)
         if index == 0:
@@ -1792,16 +1858,20 @@ def sync_no_edits(run: Run, ds: Dataset, clients, mode):
             times.append(seconds)
             states.add(sync_summary(result)["state"])
             blockers |= set((result or {}).get("unresolved") or [])
+            refusals += [n for n in sync_wide_refusals(result) if n not in refusals]
     res.measure("sync.no_edits", times)
     if run.sync_required:
         res.check(f"samples>={run.sync_required}", len(times) >= run.sync_required, measured=len(times))
     res.data.update(states=sorted(map(str, states)), preexisting_quarantined=len(quarantined))
     # A copied project may carry files the store already quarantined (CodeMaestro does): those keep a
-    # no-edit sync `pending`, honestly. Anything else unresolved fails.
+    # no-edit sync `pending`, honestly. Anything else unresolved fails, and so does a sync-wide
+    # refusal (a pending that names no file: nothing was scanned, so nothing settled).
     other = sorted(blockers - quarantined)
-    res.check("no_edit_sync_settles", states <= {"synchronized"} or (states <= {"synchronized", "pending"} and not other),
+    res.check("no_edit_sync_settles", not refusals and (states <= {"synchronized"}
+                                                        or (states <= {"synchronized", "pending"} and not other)),
               states=sorted(map(str, states)), unresolved_not_quarantined=other[:5] or None,
-              pending_only_quarantined=len(blockers & quarantined) or None)
+              pending_only_quarantined=len(blockers & quarantined) or None,
+              reason="; ".join(refusals[:3])[:300] if refusals else None)
     return res
 
 
@@ -1816,9 +1886,13 @@ def quarantined_files(root: Path) -> set:
 @scenario("sync.dirty", group="sync", cells=("Sync: dirty projections",))
 def sync_dirty(run: Run, ds: Dataset, clients, mode):
     res = Result("sync.dirty", ds.name, clients=1, cells=["Sync: dirty projections"])
+    if sync_over_limit(res, ds.root):
+        return res
     client = start_coordinator(run, ds.root)
     inv = ds.inventory()
-    times, lost, unsettled, summaries, retried = [], [], [], [], 0
+    times, summaries, retried = [], [], 0
+    outcomes = {"lost": [], "unsettled": [], "refused": []}
+    reasons = []
     for index in range(run.args.sync_samples):
         task = inv["tasks"][(index * 7) % len(inv["tasks"])]
         marker = f"n16-external-edit-{uuid.uuid4().hex[:12]}"
@@ -1829,15 +1903,19 @@ def sync_dirty(run: Run, ds: Dataset, clients, mode):
         retried += attempts > 1
         times.append(seconds)
         summaries.append(dict(sync_summary(result), attempts=attempts))
-        if marker not in body_of(ds.root, task):
-            (unsettled if sync_retryable(result) else lost).append(task)
+        outcome, reason = judge_sync_edit(result, marker in body_of(ds.root, task))
+        if outcome != "imported":
+            outcomes[outcome].append(task)
+            if reason and reason not in reasons:
+                reasons.append(reason)
     res.measure("sync.dirty_one_file", times)
     if run.sync_required:
         res.check(f"samples>={run.sync_required}", len(times) >= run.sync_required, measured=len(times))
     res.data["sync"] = summaries[:3]
     res.data["retried_pending_syncs"] = retried
-    res.check("external_edit_imported", not lost and not unsettled, edits=run.args.sync_samples, lost=len(lost),
-              unsettled_after_bound=len(unsettled) or None)
+    res.check("external_edit_imported", not any(outcomes.values()), edits=run.args.sync_samples,
+              lost=len(outcomes["lost"]), unsettled=len(outcomes["unsettled"]) or None,
+              refused=len(outcomes["refused"]) or None, reason="; ".join(reasons[:3])[:300] or None)
     return res
 
 
@@ -1848,6 +1926,8 @@ def sync_conflict(run: Run, ds: Dataset, clients, mode):
     names the conflict for that file."""
     res = Result("sync.conflict", ds.name, kind="check", clients=1, cells=["Sync: conflict"])
     root = copy_project(run, ds.root, "sync-conflict")
+    if sync_over_limit(res, root):
+        return res
     client = start_coordinator(run, root)
     inv = ds.inventory()
     task = inv["tasks"][3 % len(inv["tasks"])]
@@ -1900,6 +1980,8 @@ def sync_checkout(run: Run, ds: Dataset, clients, mode):
     (N13), released with `take_published` without losing the store's value."""
     res = Result("sync.checkout", ds.name, kind="check", clients=1, cells=["Sync: checkout/worktree"])
     root = copy_project(run, ds.root, "sync-checkout")
+    if sync_over_limit(res, root):
+        return res
     # Snapshot before the coordinator starts: a quarantine that appears during the run is a failure.
     preexisting = quarantined_files(root)
     client = start_coordinator(run, root)
@@ -1960,6 +2042,8 @@ def sync_missing(run: Run, ds: Dataset, clients, mode):
     """A deleted projection file is not a deletion: the entity stays and the file comes back."""
     res = Result("sync.missing_files", ds.name, kind="check", clients=1, cells=["Sync: missing files"])
     root = copy_project(run, ds.root, "sync-missing")
+    if sync_over_limit(res, root):
+        return res
     client = start_coordinator(run, root)
     client.flush(high_water(root))
     inv = ds.inventory()
@@ -2598,28 +2682,41 @@ def scaling_check(report) -> dict | None:
     return res.finish() if res.data["checks"] else None
 
 
+def failed_names(r) -> str:
+    return "; ".join(c["check"] for c in r["checks"] if not c["ok"]) or r.get("error", "error")
+
+
 def markdown(report) -> str:
     smoke = report["meta"].get("smoke")
     lines = [f"# N16 acceptance run {report['meta']['started']}" + (" (SMOKE - not acceptance evidence)" if smoke else ""), "",
              f"Code `{report['meta']['git_sha'][:10]}`, Python {report['meta']['python'].split()[0]}, "
              f"SQLite {report['meta']['sqlite']}, {report['meta']['machine']}. Samples >= {report['meta']['samples_required']} "
              f"per steady-state scenario after {report['meta']['warmup']} warmup ops.", ""]
-    failed = [r for r in report["results"] if r["verdict"] not in ("pass", "skipped", "precondition")]
-    skipped = [r for r in report["results"] if r["verdict"] == "skipped"]
-    unmet = [r for r in report["results"] if r["verdict"] == "precondition"]
-    passed = sum(r["verdict"] == "pass" for r in report["results"])
-    lines += ["## Correctness", "",
-              f"{passed} of {len(report['results'])} scenario runs pass their checks; {len(failed)} fail; "
-              f"{len(unmet)} precondition not met; {len(skipped)} skipped (see Not run).", ""]
+    # Both passes are judged (the exit code counts both): an instrumented failure is never hidden.
+    passes = [("uninstrumented", report["results"])]
+    if report.get("instrumented"):
+        passes.append(("instrumented", report["instrumented"]))
+    lines += ["## Correctness", ""]
+    failed, unmet = [], []
+    for pass_name, rows in passes:
+        pass_failed = [r for r in rows if r["verdict"] not in ("pass", "skipped", "precondition")]
+        pass_unmet = [r for r in rows if r["verdict"] == "precondition"]
+        skipped = sum(r["verdict"] == "skipped" for r in rows)
+        passed = sum(r["verdict"] == "pass" for r in rows)
+        lines.append(f"{pass_name.capitalize()} pass: {passed} of {len(rows)} scenario runs pass their checks; "
+                     f"{len(pass_failed)} fail; {len(pass_unmet)} precondition not met; {skipped} skipped (see Not run).")
+        failed += [(pass_name, r) for r in pass_failed]
+        unmet += [(pass_name, r) for r in pass_unmet]
+    lines.append("")
     if unmet:
         lines += ["Precondition not met (not evidence; not a correctness failure):", ""]
-        lines += [f"- {r['dataset']} {r['scenario']}: {r.get('precondition')}" for r in unmet]
+        lines += [f"- {pass_name} {r['dataset']} {r['scenario']}: {r.get('precondition')}" for pass_name, r in unmet]
         lines.append("")
     if failed:
-        lines += ["| Dataset | Scenario | Clients | Mode | Failed checks |", "|---|---|---|---|---|"]
-        for r in failed:
-            bad = "; ".join(c["check"] for c in r["checks"] if not c["ok"]) or r.get("error", "error")
-            lines.append(f"| {r['dataset']} | {r['scenario']} | {r['clients'] or ''} | {r['mode'] or ''} | {bad} |")
+        lines += ["| Pass | Dataset | Scenario | Clients | Mode | Failed checks |", "|---|---|---|---|---|---|"]
+        for pass_name, r in failed:
+            lines.append(f"| {pass_name} | {r['dataset']} | {r['scenario']} | {r['clients'] or ''} | {r['mode'] or ''} | "
+                         f"{failed_names(r)} |")
         lines.append("")
     lines += ["## Latency (uninstrumented)", "",
               "| Dataset | Scenario | Clients | Mode | Op | n | p50 ms | p95 ms | p99 ms | max ms | errors (unexpected) | verdict |",
@@ -2648,8 +2745,8 @@ def markdown(report) -> str:
         lines.append("")
     if report.get("instrumented"):
         lines += ["## Instrumented pass (work counters; its latencies are not the reported latencies)", "",
-                  "| Dataset | Scenario | Clients | Mode | verdict | records (skipped) | key counters (p95) | peak RSS MB |",
-                  "|---|---|---|---|---|---|---|---|"]
+                  "| Dataset | Scenario | Clients | Mode | verdict | failed checks | records (skipped) | key counters (p95) | peak RSS MB |",
+                  "|---|---|---|---|---|---|---|---|---|"]
         for r in report["instrumented"]:
             m = r.get("metrics", {})
             if m.get("available"):
@@ -2657,8 +2754,9 @@ def markdown(report) -> str:
                 recs = f"{m.get('records')} ({m.get('skipped')})"
             else:
                 counters, recs = m.get("reason", "unavailable"), "-"
+            bad = failed_names(r) if r["verdict"] == "fail" else ""
             lines.append(f"| {r['dataset']} | {r['scenario']} | {r['clients'] or ''} | {r['mode'] or ''} | {r['verdict']} | "
-                         f"{recs} | {counters} | {(r.get('run') or {}).get('rss_mb')} |")
+                         f"{bad} | {recs} | {counters} | {(r.get('run') or {}).get('rss_mb')} |")
         lines.append("")
     if report.get("skipped"):
         lines += ["## Not run", ""] + [f"- {s}" for s in report["skipped"]] + [""]
@@ -2679,6 +2777,30 @@ def frames_only(trace: str) -> str:
     lines = [line for line in trace.splitlines() if line.startswith("  File ")]
     last = trace.strip().splitlines()[-1] if trace.strip() else ""
     return "\n".join(lines[-12:] + [last.split(":", 1)[0]])
+
+
+def pass_datasets(run: Run, ds: Dataset, passes) -> dict:
+    """{pass: Dataset}: every pass after the first runs on its own copy of the prepared dataset, taken
+    before any pass ran, so the passes start from the same state and stay comparable (the first
+    pass's writes once grew the CodeMaestro copy past the product's full-sync file limit)."""
+    datasets = {passes[0]: ds}
+    if len(passes) > 1:
+        inventory = ds.inventory()
+        stop_coordinator(ds.root)
+        for name in passes[1:]:
+            twin = Dataset(ds.name, copy_project(run, ds.root, f"{ds.name}-{name}"), ds.legacy, ds.info)
+            twin._inventory = inventory
+            datasets[name] = twin
+    return datasets
+
+
+def verdict_counts(report) -> dict:
+    """Verdict counts over both passes, and per pass."""
+    passes = {"uninstrumented": report.get("results") or [], "instrumented": report.get("instrumented") or []}
+    verdicts = ("pass", "fail", "skipped", "precondition")
+    counts = {name: {v: sum(r["verdict"] == v for r in rows) for v in verdicts} for name, rows in passes.items()}
+    counts.update({v: sum(c[v] for c in list(counts.values())) for v in verdicts})
+    return counts
 
 
 def execute_scenario(run: Run, ds: Dataset, name: str, clients, mode):
@@ -2786,7 +2908,9 @@ def main(argv=None) -> int:
                                             "notes": ds.inventory().get("notes") or [],
                                             "generator": {k: ds.info.get("generator", {}).get(k)
                                                           for k in ("seed", "scale", "stats_sha256", "files")}}
-        for pass_name in ("uninstrumented", "instrumented") if args.instrumented else ("uninstrumented",):
+        passes = ("uninstrumented", "instrumented") if args.instrumented else ("uninstrumented",)
+        prepared = ds
+        for pass_name, ds in pass_datasets(run, prepared, passes).items():
             run.instrumented = pass_name == "instrumented"
             stop_coordinator(ds.root)
             for name in names:
@@ -2825,11 +2949,7 @@ def main(argv=None) -> int:
     summary_path = args.summary or results_path.with_suffix(".md")
     results_path.write_text(json.dumps(report, indent=1, default=str), encoding="utf-8")
     summary_path.write_text(markdown(report), encoding="utf-8")
-    print(json.dumps({"results": str(results_path), "summary": str(summary_path),
-                      "pass": sum(r["verdict"] == "pass" for r in report["results"]),
-                      "fail": sum(r["verdict"] == "fail" for r in report["results"]),
-                      "skipped": sum(r["verdict"] == "skipped" for r in report["results"]),
-                      "precondition": sum(r["verdict"] == "precondition" for r in report["results"]),
+    print(json.dumps({"results": str(results_path), "summary": str(summary_path), **verdict_counts(report),
                       "budget_missed": sum(b["status"] == "missed" for b in report["budgets"])}, indent=1))
     return exit_status(report["results"] + report["instrumented"])
 
