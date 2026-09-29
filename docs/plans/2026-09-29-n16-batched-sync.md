@@ -47,7 +47,9 @@ holds, and the fingerprint cache.
   consumption, the drift warning, `in_progress` and history walks see the whole set exactly as
   before. Memory is O(paths) digests, never O(bytes).
 - *Fingerprint cache / generation*: one `Scan` for the whole sync, as before. It is additionally
-  persisted after each batch (`save_scan`), so an interrupted sync keeps what it learned.
+  persisted after each batch (`save_scan(..., complete=False)`), so an interrupted sync keeps
+  what it learned. A partial save skips the carry-forward bound (`Scan.merged`); without that,
+  the bound would drop the fingerprints of the batches not yet reached.
 - *Unchanged rule*: per batch. Only that batch's `projection`/`projection_base` rows are loaded,
   so base blobs are hashed per batch. Flag and drift holds are whole-set sets of paths.
 - *Quarantine, flag and drift holds; derived-index check; completion check*: after the writer
