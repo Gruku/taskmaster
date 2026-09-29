@@ -8,7 +8,7 @@ from copy import deepcopy
 import re
 import sqlite3
 
-from . import contracts, events, neighbourhood, receipts, schema, search, relations
+from . import contracts, events, metrics, neighbourhood, receipts, schema, search, relations
 from .contracts import Conflict, CancelledBeforeExecution  # public exceptions
 from .db import assert_native
 from .migrate import encode, _put_entity, _put_manifest, _put_relations
@@ -136,6 +136,9 @@ class Transaction:
         self.group = None
         self.seq = int(identity["event_high_water"])
         self.affected = {}
+        # Entities a write left exactly as stored, with the document the command
+        # observed. A reply to a no-op names this value, never a later read.
+        self.unchanged = {}
         # Every counter reports work actually issued. A "global rebuild" counter
         # lived here that nothing could increment, so it proved nothing; the
         # absence of graph work is asserted directly against the SQL instead.
@@ -146,6 +149,7 @@ class Transaction:
         fields = {f for f in set(before) | set(after) if (f in before) != (f in after) or encode(before.get(f)) != encode(after.get(f))}
         body_changed = before_body != body
         if not fields and not body_changed and operation != "create":
+            self.unchanged[(kind, ident)] = {"kind": kind, "id": ident, "fields": deepcopy(after)}
             return
         event_before = {f: before[f] for f in fields if f in before}
         event_after = {f: after[f] for f in fields if f in after}
@@ -279,8 +283,14 @@ def execute(connection: sqlite3.Connection, envelope, *, cancelled=lambda: False
     connection.execute("PRAGMA foreign_keys=ON")
     # These connections belong to the native service; acknowledgement is FULL.
     connection.execute("PRAGMA synchronous=FULL")
+    # Opt-in N16 work counters: one flag check per point when disabled.
+    meter = metrics.CommandMeter(connection, request) if metrics.ENABLED else None
     try:
+        if meter:
+            meter.begin()
         connection.execute("BEGIN IMMEDIATE")
+        if meter:
+            meter.locked()
         identity = assert_native(connection)
         if cancelled():
             raise CancelledBeforeExecution("cancelled while waiting for admission")
@@ -289,6 +299,8 @@ def execute(connection: sqlite3.Connection, envelope, *, cancelled=lambda: False
         previous = receipts.lookup(connection, request, fingerprint)
         if previous is not None:
             connection.rollback()
+            if meter:
+                meter.replayed(previous)
             return previous
         for expected in request["expected_revisions"]:
             row = connection.execute("SELECT revision FROM entity_core WHERE kind=? AND public_id=? AND deleted=0", (expected["kind"], expected["id"])).fetchone()
@@ -307,6 +319,9 @@ def execute(connection: sqlite3.Connection, envelope, *, cancelled=lambda: False
         outcome = {"operation": request["operation"], "request_id": request.get("request_id"), "store_id": identity["store_id"],
                    "affected": list(transaction.affected.values()), "commit_seq": transaction.seq,
                    "projection_state": "pending" if transaction.affected else "unchanged", "work": transaction.counters}
+        unchanged = [item for key, item in transaction.unchanged.items() if key not in transaction.affected]
+        if unchanged:
+            outcome["unchanged"] = unchanged
         if hasattr(transaction, 'result'):
             outcome['result'] = transaction.result
         receipts.save(connection, request, fingerprint, outcome)
@@ -314,10 +329,16 @@ def execute(connection: sqlite3.Connection, envelope, *, cancelled=lambda: False
         if transaction.affected:
             _put_manifest(connection, event_high_water=transaction.seq)
         checkpoint("before_commit")
+        if meter:
+            meter.commit(outcome)
         connection.commit()
         return outcome
-    except BaseException:
+    except BaseException as exc:
         connection.rollback()
+        if meter:
+            meter.failed(exc)
         raise
     finally:
+        if meter:
+            meter.close()
         connection.execute(f"PRAGMA foreign_keys={int(original_fk)}")

@@ -7,9 +7,12 @@ never take publication, so an import cannot deadlock the writer it is awaiting.
 from concurrent.futures import TimeoutError as FutureTimeout
 from contextlib import closing
 import hashlib
+import json
+import sqlite3
 import time
 
-from taskmaster.native import contracts, projection, sync
+from taskmaster.native import contracts, metrics, projection, sync
+from taskmaster.native.contracts import CancelledBeforeExecution
 from taskmaster.native.migrate import encode
 from taskmaster.native.queries import Repository
 from taskmaster.projection_parse import classify
@@ -21,6 +24,35 @@ from .sync_prepare import prepare
 # sync.finish runs after the caller's budget may be spent on publication; it
 # gets its own short minimum so a synchronized run is not reported pending.
 FINISH_TIMEOUT = 5
+# A file is started only while more than this is left of the budget (at most RESERVE_SHARE
+# of it, so a short budget still starts files): room for one prepare and writer command.
+FILE_RESERVE = 1.0
+RESERVE_SHARE = 0.1
+# A sync.apply still running when the budget ends gets up to this long before its outcome is
+# settled from the admission queue and its durable receipt (`_settle`). The grace and the
+# sync.finish minimum share one FINISH_TIMEOUT allowance: a reply comes within budget + 5 s.
+IMPORT_GRACE = FINISH_TIMEOUT
+# sync.finish always gets at least this long, however much of the allowance the grace used.
+FINISH_FLOOR = 0.5
+
+
+def _finish_timeout(remaining, grace_used):
+    """The sync.finish wait: the rest of the budget, else what the grace left of
+    FINISH_TIMEOUT, never below FINISH_FLOOR (a zero wait would report a finished
+    completion receipt as uncertain)."""
+    return max(remaining, FINISH_TIMEOUT - grace_used, FINISH_FLOOR)
+# Why a file's write is unsettled, by (observe?, outcome). An observe records the published
+# bytes as the merge base and changes no task data, so it is never called an import.
+_UNSETTLED = {
+    (False, 'uncertain'): 'import outcome uncertain: the writer is still running it, or was interrupted, and no '
+                          'receipt exists yet; inspect its receipt or retry the same sync id',
+    (False, 'not_committed'): 'import not committed: it was cancelled before the writer ran it; retry the same '
+                              'sync id',
+    (True, 'uncertain'): 'base record (observe) outcome uncertain: the writer is still running it, or was '
+                         'interrupted; it changes no task data either way; retry the same sync id',
+    (True, 'not_committed'): 'base record (observe) not committed: it was cancelled before the writer ran it; it '
+                             'changes no task data; retry the same sync id',
+}
 # The completed result is stored durably and must fit one request envelope.
 SUMMARY_BYTES = 256 * 1024
 _WARNINGS_KEPT = 50
@@ -35,10 +67,30 @@ def _hit(scan, rel, *, fresh=False):
         return None
 
 
-def _unchanged_rule(owner, linked):
+# Parameters per `IN (...)` query (SQLite's default limit is 999 on older builds).
+_IN_CHUNK = 500
+
+
+def _rows_for(connection, sql, rels):
+    """`sql` (with one `{}` placeholder list) run over `rels` in bounded chunks."""
+    rels = list(rels)
+    for start in range(0, len(rels), _IN_CHUNK):
+        chunk = rels[start:start + _IN_CHUNK]
+        yield from connection.execute(sql.format(','.join('?' * len(chunk))), chunk)
+
+
+def batch_size():
+    """Paths per full-sync batch: the unit of per-batch reading and memory (N16)."""
+    return sync.MAX_FILES
+
+
+def _unchanged_rule(owner, linked, rels=None):
     """A predicate (rel, digests) -> True when `prepare` would certainly return a plan
     with nothing to submit, decided from one bulk read instead of a snapshot, a parse
     and a file read per file. `digests` come from an unchanged fingerprint.
+
+    `rels` bounds what is loaded to one batch's rows (every row when None); the rule
+    answers False (the full path) for any path outside it.
 
     It is prepare's own first tests, in prepare's order:
     main - `unchanged`: a projection row whose content_hash is the file's digest, a
@@ -52,31 +104,101 @@ def _unchanged_rule(owner, linked):
     with closing(owner._connect(readonly=True)) as connection:
         connection.execute('BEGIN')
         try:
+            wanted = None if rels is None else set(rels)
             if linked is None:
-                rows = connection.execute('SELECT p.file,p.content_hash,p.quarantined,b.content FROM projection p '
-                                          'LEFT JOIN projection_base b ON b.file=p.file').fetchall()
+                sql = ('SELECT p.file,p.content_hash,p.quarantined,b.content FROM projection p '
+                       'LEFT JOIN projection_base b ON b.file=p.file')
+                # Row by row: one base blob is in memory at a time, never the whole store's.
+                rows = (connection.execute(sql) if wanted is None
+                        else _rows_for(connection, sql + ' WHERE p.file IN ({})', sorted(wanted)))
                 held = set(projection.flagged_files(connection)) | set(projection.drift_files(connection))
                 clean = {rel: value for rel, value, quarantined, base in rows
                          if not quarantined and rel not in held and base is not None
                          and hashlib.sha1(bytes(base)).hexdigest() == value}
                 published = {}
             else:
-                clean = checkout_store.trusted_bases(connection, linked.id)
+                clean = {rel: value for rel, value in checkout_store.trusted_bases(connection, linked.id).items()
+                         if wanted is None or rel in wanted}
                 based = set(clean)
                 for rel in checkout_store.holds(connection, linked.id):
                     clean.pop(rel, None)
-                published = {rel: value for rel, value in connection.execute('SELECT file,content_hash FROM projection')
-                             if rel not in based}
+                sql = 'SELECT file,content_hash FROM projection'
+                rows = (connection.execute(sql) if wanted is None
+                        else _rows_for(connection, sql + ' WHERE file IN ({})', sorted(wanted)))
+                published = {rel: value for rel, value in rows if rel not in based}
         finally:
             connection.rollback()
 
     def skippable(rel, digests):
-        if digests is None:
+        if digests is None or (wanted is not None and rel not in wanted):
             return False
         if rel in published:
             return published[rel] in digests.variants
         return clean.get(rel) == digests.digest
     return skippable
+
+
+def _receipt(owner, scope, key):
+    with closing(owner._connect(readonly=True)) as connection:
+        row = connection.execute('SELECT outcome_json FROM command_receipts WHERE store_id=? AND caller_scope=? '
+                                 'AND request_id=?', (owner.identity['store_id'], scope, key)).fetchone()
+    return None if row is None else json.loads(row[0])
+
+
+def _await(future, timeout):
+    """`(receipt, 'committed')`, `(None, None)` while it is still running after `timeout`,
+    `(None, 'not_committed')` for a command cancelled before execution, or `(None, 'error')`
+    when the writer failed without a verdict (e.g. ServiceUnavailable: interrupted). A
+    refusal (Conflict and other ValueErrors: the transaction rolled back) is raised."""
+    try:
+        return future.result(timeout=timeout), 'committed'
+    except FutureTimeout:
+        return None, None
+    except CancelledBeforeExecution:
+        return None, 'not_committed'
+    except ValueError:
+        raise
+    except Exception:  # noqa: BLE001 - the durable receipt, not the transport error, decides
+        return None, 'error'
+
+
+def _settle(owner, future, scope, key, grace):
+    """`(receipt or None, outcome, grace waited)` of a submitted sync.apply that did not
+    simply finish; a store error while settling (a locked database) is `uncertain`.
+    """
+    started = time.monotonic()
+    receipt, outcome = _await(future, grace)
+    waited = time.monotonic() - started
+    try:
+        return (*_settled(owner, future, scope, key, receipt, outcome), waited)
+    except sqlite3.Error:
+        return None, 'uncertain', waited
+
+
+def _settled(owner, future, scope, key, receipt, outcome):
+    """The rest of `_settle`, after its grace wait: `(receipt or None, outcome)`.
+
+    - `committed`: it finished within `grace`, or its durable receipt exists (a receipt
+      commits in the command's own transaction).
+    - `not_committed`: it was cancelled before execution (cancel and admission share one
+      ordering point, so a cancelled command can never run).
+    - `uncertain`: the writer is still executing it, or failed without a verdict
+      (interrupted) and no receipt exists.
+    A refusal (a ValueError such as Conflict) is raised to the caller: nothing committed.
+    """
+    if outcome is None:
+        if owner.cancel(scope, key)['state'] == 'cancelled_before_execution':
+            return None, 'not_committed'
+        receipt = _receipt(owner, scope, key)
+        if receipt is not None:
+            return receipt, 'committed'
+        if not future.done():
+            return None, 'uncertain'
+        receipt, outcome = _await(future, 0)  # finished between the grace and the cancel
+    if outcome == 'error':
+        receipt = _receipt(owner, scope, key)
+        return (receipt, 'committed') if receipt is not None else (None, 'uncertain')
+    return receipt, outcome
 
 
 def summarize(result):
@@ -114,12 +236,12 @@ def bound(result, named=()):
     for the files the caller named come first, so a caller that asked about one
     file always learns its outcome however many other files are pending.
     """
-    lists = ('unresolved', 'notices', 'imports', 'warnings')  # the why first
+    lists = ('unresolved', 'notices', 'imports', 'observes', 'warnings')  # the why first
     named = set(named or ())
     prefixes = tuple(f'sync pending: {rel}: ' for rel in named)
 
     def pinned(key, item):
-        if key == 'imports':
+        if key in ('imports', 'observes'):
             return isinstance(item, dict) and item.get('file') in named
         if key == 'unresolved':
             return item in named
@@ -153,8 +275,18 @@ def operation_scope(caller_scope, request_id):
     return 'sync-' + hashlib.sha256(encode([caller_scope, request_id]).encode()).hexdigest()
 
 
+# The `sync` metrics record always carries these (0 when nothing was counted).
+SYNC_COUNTERS = dict.fromkeys(('files_selected', 'files_stated', 'files_read', 'bytes_read', 'files_parsed',
+                               'cache_hits', 'cache_misses', 'directories_listed', 'batches'), 0)
+
+
 def synchronize(owner, **arguments):
-    result = _synchronize(owner, **arguments)
+    with metrics.scope('sync', caller_scope=arguments.get('caller_scope'), request_id=arguments.get('request_id'),
+                       **SYNC_COUNTERS) as record:
+        result = _synchronize(owner, **arguments)
+        if metrics.ENABLED:
+            record.update(state=result.get('state'), imports=len(result.get('imports') or ()),
+                          unresolved=len(result.get('unresolved') or ()))
     # A completed result is already the bounded stored summary.
     return result if result.get('state') == 'synchronized' else bound(result, arguments.get('files') or ())
 
@@ -167,10 +299,14 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
     if worktree is not None and (not isinstance(worktree, str) or not worktree):
         raise ValueError('worktree must be an absolute checkout path')
     scope = operation_scope(caller_scope, request_id)
-    result = dict(state='pending', through=through, captured=False, imports=[], observed=0,
+    # `imports` are domain writes; `observed` counts committed observes (the published bytes
+    # recorded as merge base) and `observes` lists any whose outcome the budget left unsettled.
+    result = dict(state='pending', through=through, captured=False, imports=[], observed=0, observes=[],
                   unresolved=[], notices=[], warnings=[], caller_scope=caller_scope,
                   request_id=request_id, receipt_scope=scope, import_files=import_files)
     deadline = time.monotonic() + max(0, timeout)
+    reserve = min(FILE_RESERVE, max(0, timeout) * RESERVE_SHARE)
+    grace_used = 0.0  # past the budget, taken from the FINISH_TIMEOUT allowance
     acquired = False
     with owner.guard:
         owner.active_syncs += 1
@@ -178,25 +314,34 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
     def remaining():
         return max(0, deadline - time.monotonic())
 
+    # Membership sets beside the ordered lists: a sync may name tens of thousands of paths.
+    unresolved_seen, notices_seen = set(), set()
+
     def pending(rel, reason):
-        if rel and rel not in result['unresolved']:
+        if rel and rel not in unresolved_seen:
+            unresolved_seen.add(rel)
             result['unresolved'].append(rel)
         notice = f'sync pending: {rel}: {reason}' if rel else f'sync pending: {reason}'
-        if notice not in result['notices']:
+        if notice not in notices_seen:
+            notices_seen.add(notice)
             result['notices'].append(notice)
 
-    def execute(operation, key, arguments, timeout=None):
+    def submit(operation, key, arguments):
         envelope = dict(protocol=2, store_id=owner.identity['store_id'], caller_scope=scope,
                         request_id=key, operation=operation, arguments=arguments, expected_revisions=[])
         # Validate before enqueue, including the fully encoded 1 MiB limit.
         contracts.validate(envelope)
-        return owner.submit(envelope).result(timeout=remaining() if timeout is None else timeout)
+        return owner.submit(envelope)
+
+    def execute(operation, key, arguments, timeout=None):
+        return submit(operation, key, arguments).result(timeout=remaining() if timeout is None else timeout)
 
     backlog = owner.root / '.taskmaster'
     # Only a full ordinary sync takes the stat fast path; a named resync or take_file
     # always reads the bytes (the explicit escape from any fingerprint doubt).
     fast = files is None and not take_file
     scan = None
+    scanned_all = False  # every selected path went through the per-file loop
 
     def current(plan):
         if plan.observation is not None:
@@ -265,6 +410,7 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
                                           for rel, canonical in inventory.duplicates.items())
                 for rel, reason in inventory.refused.items():
                     pending(rel, reason)
+                chosen = set(selected)
                 with closing(owner._connect(readonly=True)) as connection:
                     # Include missing known authored paths so absence requests
                     # repair. Derived indexes/local files are not import inputs.
@@ -273,11 +419,15 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
                             classify(rel)
                         except ValueError:
                             continue
-                        if rel not in inventory.duplicates and rel not in selected:
+                        if rel not in inventory.duplicates and rel not in chosen:
+                            chosen.add(rel)
                             selected.append(rel)
-            if len(selected) > sync.MAX_FILES:
-                pending(None, f'more than {sync.MAX_FILES} projection files; bounded scan refused')
-                return result
+            if metrics.ENABLED:
+                metrics.add('files_selected', len(selected))
+            # No size ceiling (N16): every selected path is enumerated here, and the per-file
+            # loop below reads, parses and holds one batch at a time. The whole-set judgements
+            # (Git classification, holds, completion) still see every path; see
+            # docs/plans/2026-09-29-n16-batched-sync.md.
             from . import git as managed_git
             # Paths a managed checkout left differing from the published generation are
             # drift: restored ones resolve here; the rest are neither imported nor repaired.
@@ -296,64 +446,94 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
                     found, warnings = {}, [unverified]
                 result['warnings'].extend(warnings)
                 drift |= set(found)
-            skippable = _unchanged_rule(owner, linked) if fast else None
             owner.checkpoint('sync_files_selected')
-            for rel in selected:
-                if not remaining() or owner.stopping.is_set():
-                    pending(rel, 'time budget exhausted or coordinator stopping; retry the same sync id')
-                    return result
-                if rel in drift and not take_file:
-                    pending(rel, managed_git.DRIFT_GUIDANCE if linked is None else checkouts.LINKED_DRIFT)
-                    continue
-                if unverified:
-                    pending(rel, unverified)
-                    continue
-                if skippable is not None and skippable(rel, _hit(scan, rel)):
-                    continue  # exactly prepare's no-op outcome; see _unchanged_rule
-                try:
-                    with closing(owner._connect(readonly=True)) as connection, Repository(connection).snapshot() as snapshot:
-                        plan = prepare(snapshot, backlog, rel, take_file=take_file,
-                                       checkout=None if linked is None else linked.id, scan=scan)
-                    if plan.arguments is None:
-                        if plan.state not in ('unchanged', 'establish'):
-                            pending(rel, plan.reason)
-                        continue
-                    owner.checkpoint('sync_prepared')
-                    if not current(plan):
-                        pending(rel, 'file changed after parse; not imported')
-                        continue
-                    if rel in seen and seen[rel] != (None if plan.observation is None else plan.observation.digest):
-                        # Only the classified bytes were judged authored (a Git restore may land between).
-                        pending(rel, 'file changed after Git classification; not imported, retry the sync')
-                        continue
-                    if observation is not None and not moved and checkouts.observe(observed_checkout) != observation:
-                        moved = True
-                    if moved:
-                        pending(rel, 'HEAD moved during the sync; not imported, retry the sync')
-                        continue
-                    key = hashlib.sha256(encode(plan.arguments).encode()).hexdigest()
-                    try:
-                        receipt = execute('sync.apply', key, plan.arguments)
-                    except FutureTimeout:
-                        result['imports'].append(dict(file=rel, state='uncertain', caller_scope=scope, request_id=key,
-                                                      may_have_committed=True))
-                        pending(rel, 'import outcome uncertain; inspect its receipt or retry the same sync id')
+            size = batch_size()
+            for first in range(0, len(selected), size):
+                batch = selected[first:first + size]
+                if metrics.ENABLED:
+                    metrics.add('batches')
+                # Only this batch's rows (and base blobs) are loaded for the no-op rule.
+                skippable = _unchanged_rule(owner, linked, batch) if fast else None
+                for rel in batch:
+                    # Start a file only with room left to finish it: a write submitted as the budget
+                    # ends is what used to be reported "uncertain" although it committed.
+                    if remaining() <= reserve or owner.stopping.is_set():
+                        pending(rel, 'time budget exhausted or coordinator stopping; retry the same sync id')
                         return result
-                    if plan.state == 'observe':
-                        result['observed'] += 1
-                    else:
-                        result['imports'].append(dict(receipt['result'], commit_seq=receipt['commit_seq'],
-                                                      caller_scope=scope, request_id=key))
-                        if rel in drift and receipt['result'].get('state') == 'accepted' and linked is None:
-                            managed_git.drop_drift(owner, [rel])  # explicitly taken
-                            drift.discard(rel)
-                    owner.checkpoint('sync_import_committed')
-                    if not current(plan):
-                        pending(rel, 'file changed after import commit; newer bytes retained')
-                    if plan.state in {'conflict', 'quarantine'}:
-                        pending(rel, plan.reason)
-                except (ValueError, KeyError, OSError) as exc:
-                    pending(rel, str(exc))
+                    if rel in drift and not take_file:
+                        pending(rel, managed_git.DRIFT_GUIDANCE if linked is None else checkouts.LINKED_DRIFT)
+                        continue
+                    if unverified:
+                        pending(rel, unverified)
+                        continue
+                    if skippable is not None and skippable(rel, _hit(scan, rel)):
+                        continue  # exactly prepare's no-op outcome; see _unchanged_rule
+                    try:
+                        with closing(owner._connect(readonly=True)) as connection, Repository(connection).snapshot() as snapshot:
+                            plan = prepare(snapshot, backlog, rel, take_file=take_file,
+                                           checkout=None if linked is None else linked.id, scan=scan)
+                        if plan.arguments is None:
+                            if plan.state not in ('unchanged', 'establish'):
+                                pending(rel, plan.reason)
+                            continue
+                        owner.checkpoint('sync_prepared')
+                        if not current(plan):
+                            pending(rel, 'file changed after parse; not imported')
+                            continue
+                        if rel in seen and seen[rel] != (None if plan.observation is None else plan.observation.digest):
+                            # Only the classified bytes were judged authored (a Git restore may land between).
+                            pending(rel, 'file changed after Git classification; not imported, retry the sync')
+                            continue
+                        # The HEAD guard keeps bytes a bypassed Git operation put here from being
+                        # imported as authored edits. An `observe` imports nothing: sync.apply accepts
+                        # it only for bytes equal to the published generation's recorded digest (or,
+                        # D7, to its trusted base up to line endings) under the manifest token, and it
+                        # changes no domain row. Those bytes are the published generation whatever put
+                        # them on disk, so a HEAD move cannot change what an observe records; and the
+                        # completion check still re-reads HEAD before the observation may advance.
+                        # Every other mode (apply, conflict, quarantine, repair) keeps the check.
+                        guarded = plan.arguments['mode'] != 'observe'
+                        if (guarded and observation is not None and not moved
+                                and checkouts.observe(observed_checkout) != observation):
+                            moved = True
+                        if moved and guarded:
+                            pending(rel, 'HEAD moved during the sync; not imported, retry the sync')
+                            continue
+                        key = hashlib.sha256(encode(plan.arguments).encode()).hexdigest()
+                        future = submit('sync.apply', key, plan.arguments)
+                        receipt, outcome = _await(future, remaining())
+                        if outcome != 'committed':
+                            receipt, outcome, waited = _settle(
+                                owner, future, scope, key, max(0.0, IMPORT_GRACE - grace_used) if outcome is None else 0)
+                            grace_used += waited  # only the grace wait, not the cancel/receipt reads
+                        if receipt is None:
+                            observing = plan.state == 'observe'
+                            result['observes' if observing else 'imports'].append(dict(
+                                file=rel, state=outcome, caller_scope=scope, request_id=key,
+                                may_have_committed=outcome == 'uncertain'))
+                            pending(rel, _UNSETTLED[observing, outcome])
+                            continue  # the loop's budget check ends the sync once the time is gone
+                        if plan.state == 'observe':
+                            result['observed'] += 1
+                        else:
+                            result['imports'].append(dict(receipt['result'], commit_seq=receipt['commit_seq'],
+                                                          caller_scope=scope, request_id=key))
+                            if rel in drift and receipt['result'].get('state') == 'accepted' and linked is None:
+                                managed_git.drop_drift(owner, [rel])  # explicitly taken
+                                drift.discard(rel)
+                        owner.checkpoint('sync_import_committed')
+                        if not current(plan):
+                            pending(rel, 'file changed after import commit; newer bytes retained')
+                        if plan.state in {'conflict', 'quarantine'}:
+                            pending(rel, plan.reason)
+                    except (ValueError, KeyError, OSError) as exc:
+                        pending(rel, str(exc))
+                if scan is not None and fast:
+                    # Keep what this batch learned: a crash or an exhausted budget then
+                    # restarts the next attempt on stat calls for the scanned batches.
+                    sync_files.save_scan(owner.root, scan, complete=False)
+                owner.checkpoint('sync_batch_scanned')
+            scanned_all = True
 
         # No import is awaiting the sole writer when this pause is acquired.
         # Writers queued after this point remain durable intent for the next
@@ -389,7 +569,10 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
                 pending(None, f'projection publication failed: {exc}')
                 return result
             owner.checkpoint('sync_published')
-            result['notices'].extend(notice for notice in publication['notices'] if notice not in result['notices'])
+            for notice in publication['notices']:
+                if notice not in notices_seen:
+                    notices_seen.add(notice)
+                    result['notices'].append(notice)
             if publication['state'] != 'exported':
                 pending(None, 'projection publication incomplete')
             if linked is not None:
@@ -455,7 +638,7 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
             completed = summarize(dict(result, state='synchronized'))
             try:
                 execute('sync.finish', 'finish', {'result': completed},
-                        timeout=max(remaining(), FINISH_TIMEOUT))
+                        timeout=_finish_timeout(remaining(), grace_used))
             except FutureTimeout:
                 pending(None, 'completion receipt uncertain; retry the same sync id')
             except Exception as exc:
@@ -465,7 +648,8 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
         return result
     finally:
         if scan is not None and fast:
-            sync_files.save_scan(owner.root, scan)
+            # A sync that stopped before its last batch keeps the unscanned batches' entries.
+            sync_files.save_scan(owner.root, scan, complete=scanned_all)
         if acquired:
             owner.publication.release()
         with owner.guard:

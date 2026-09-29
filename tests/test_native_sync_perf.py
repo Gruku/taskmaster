@@ -31,10 +31,37 @@ def write(root, rel, content=b'authored\n'):
     return path
 
 
+def _backdate_change_time(path, past_ns):
+    """Windows: set NTFS ChangeTime (which `os.utime` itself moves to now) into the past."""
+    import ctypes
+    from ctypes import wintypes
+    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+    kernel32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+                                     wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    kernel32.SetFileInformationByHandle.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+    class Basic(ctypes.Structure):
+        _fields_ = [('creation', ctypes.c_int64), ('access', ctypes.c_int64), ('write', ctypes.c_int64),
+                    ('change', ctypes.c_int64), ('attributes', wintypes.DWORD)]
+    handle = kernel32.CreateFileW(str(path), 0x100, 0x7, None, 3, 0x00200000, None)  # FILE_WRITE_ATTRIBUTES
+    assert handle not in (None, wintypes.HANDLE(-1).value), ctypes.get_last_error()
+    try:
+        info = Basic(0, 0, 0, past_ns // 100 + 116444736000000000, 0)  # 0 = leave that time as it is
+        assert kernel32.SetFileInformationByHandle(handle, 0, ctypes.byref(info), ctypes.sizeof(info)), \
+            ctypes.get_last_error()
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def age(path, seconds=120):
-    """Older than the racy window: a stat fingerprint may be recorded for it."""
+    """Older than the racy window: a stat fingerprint may be recorded for it. The window
+    is judged on mtime and the real change time (NTFS ChangeTime, which utime moves)."""
     past = time.time_ns() - seconds * 1_000_000_000
     os.utime(path, ns=(past, past))
+    if os.name == 'nt':
+        _backdate_change_time(path, past)
 
 
 def age_projection(root):

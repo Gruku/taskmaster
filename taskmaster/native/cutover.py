@@ -12,7 +12,8 @@ Stages, in order, each idempotent and recorded in `native_cutover_journal`:
     backfill   `migrate.backfill` with its checkpoints wired into the journal
     compare    a trial activation (always rolled back): `carryover.verify_carryover` must be []
     activate   one transaction: markers, authority, graph repair, ID import, progress
-               reconcile, `verify_carryover` == [] (else the whole switch rolls back), ready
+               reconcile, `verify_carryover` == [] (else the whole switch rolls back), ready,
+               then additive projection merge bases for files whose bytes it hashed (N16)
     release    record completion and drop the ownership lock
 
 Journal design: a dedicated table, not `meta` keys. Every write to `meta` fires the
@@ -365,6 +366,77 @@ def handover_refusal(connection) -> str | None:
             "client again, then retry")
 
 
+QUARANTINE_SECTION = "Repairing quarantined files before the cutover"
+
+
+def _quarantine_log(connection) -> dict:
+    row = connection.execute("SELECT value FROM meta WHERE key='quarantine_log'").fetchone() \
+        if _has_table(connection, "meta") else None
+    try:
+        log = json.loads(row[0]) if row else {}
+    except (TypeError, ValueError):
+        log = {}
+    return log if isinstance(log, dict) else {}
+
+
+def quarantined_files(connection, root: Path) -> dict[str, str]:
+    """`{file: reason}` for every file the legacy store holds quarantined.
+
+    The rows `backlog_store_status` lists (`projection.quarantined=1`), plus every
+    `meta.quarantine_log` key whose file exists and whose projection row is missing or
+    quarantined: a `project.yaml` that never parsed gets no row, and the log keeps its entry
+    on purpose (`Store._prune_quarantine_log`). Each reason is the log's line, the one the
+    legacy store wrote to `store.log`."""
+    if not _has_table(connection, "projection"):
+        return {}
+    log = _quarantine_log(connection)
+    rows = dict(connection.execute("SELECT file,quarantined FROM projection"))
+    files = {rel for rel, quarantined in rows.items() if quarantined}
+    backlog = database_path(root).parent.parent
+    for rel in log:
+        if not isinstance(rel, str) or rows.get(rel, 1) == 0:
+            continue
+        try:
+            if (backlog / rel).is_file():
+                files.add(rel)
+        except (OSError, ValueError):
+            continue
+
+    def reason(rel):
+        signature = log.get(rel)
+        message = signature[0] if isinstance(signature, list) and signature else None
+        prefix = f"quarantined {rel}: "
+        if isinstance(message, str) and message.startswith(prefix):
+            return " ".join(message[len(prefix):].split())  # A YAML error spans lines; a refusal is one.
+        return "reason not on record; see .taskmaster/local/store.log"
+    return {rel: reason(rel) for rel in sorted(files)}
+
+
+def held_files(connection, root: Path) -> list[str]:
+    """Refusals for files native managed Git would hold on after activation: it refuses while
+    any projection file is quarantined or flagged, so a project cut over with one could not
+    commit or check out. Empty when there are none."""
+    refusals = []
+    quarantined = quarantined_files(connection, root)
+    if quarantined:
+        listed = "; ".join(f"{rel} ({reason})" for rel, reason in quarantined.items())
+        refusals.append(f"{len(quarantined)} projection file(s) are quarantined, and native managed Git refuses "
+                        f"while any is: {listed}. Repair each one and re-adopt it until backlog_store_status "
+                        f"reports none (see {RUNBOOK}, \"{QUARANTINE_SECTION}\")")
+    flagged = [row[0] for row in connection.execute("SELECT file FROM projection_conflict ORDER BY file")] \
+        if _has_table(connection, "projection_conflict") else []
+    if flagged:
+        refusals.append(f"{len(flagged)} projection file(s) are flagged (the file and the store both changed), and "
+                        f"native managed Git holds on them too: {', '.join(flagged)}. Resolve each with "
+                        f"backlog_resolve_conflict (see {RUNBOOK}, \"{QUARANTINE_SECTION}\")")
+    return refusals
+
+
+def _held_abort(refusals: list[str], where: str) -> "CutoverAborted":
+    return CutoverAborted(f"{where}, and nothing was activated: " + "; ".join(refusals)
+                          + ". Run --rollback, repair the files with a bridge client, then run the cutover again")
+
+
 # ── Backup ───────────────────────────────────────────────────────────────────
 
 def _sha256(path: Path) -> str:
@@ -375,19 +447,32 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _projection_reads(root: Path, connection) -> list[tuple[dict, bytes, float]]:
+    """`(entry, bytes, mtime)` for each file of the projection set, each read exactly once, so
+    the manifest entry, the archive entry and any comparison describe the same bytes."""
+    base = Path(root) / ".taskmaster"
+    if connection is None or not _has_table(connection, "projection"):
+        return []
+    reads = []
+    for (rel,) in connection.execute("SELECT file FROM projection ORDER BY file").fetchall():
+        path = base / rel
+        if not path.is_file():
+            continue
+        try:
+            with path.open("rb") as stream:
+                data = stream.read()
+                mtime = os.fstat(stream.fileno()).st_mtime
+        except FileNotFoundError:
+            continue
+        reads.append(({"path": rel, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}, data, mtime))
+    return reads
+
+
 def projection_files(root: Path, connection=None) -> list[dict]:
     """The projection set: files the store tracks in its `projection` table (backlog.yaml,
     task/bug/... documents) that exist on disk. Other files under `.taskmaster/` are the
     user's and are never archived, compared or restored."""
-    base = Path(root) / ".taskmaster"
-    if connection is None or not _has_table(connection, "projection"):
-        return []
-    files = []
-    for (rel,) in connection.execute("SELECT file FROM projection ORDER BY file").fetchall():
-        path = base / rel
-        if path.is_file():
-            files.append({"path": rel, "sha256": _sha256(path), "size": path.stat().st_size})
-    return files
+    return [entry for entry, _, _ in _projection_reads(root, connection)]
 
 
 def _fsync(path: Path) -> None:
@@ -453,7 +538,8 @@ def write_backup(connection, root: Path, carryover: dict) -> dict:
     backup_digest = verify_backup(target, domain_digest(connection))
     sidecar = database_path(root).parent / "id-reservations.json"
     sidecar_sha = _sha256(sidecar) if sidecar.exists() else None
-    archive = archive_projection(root, target.with_suffix(".projection.zip"), connection)
+    reads = _projection_reads(root, connection)  # one read per file: the archive and manifest agree
+    archive = archive_projection(root, target.with_suffix(".projection.zip"), connection, reads=reads)
     sidecar_copy = None
     if sidecar.exists():
         sidecar_copy = target.with_name(target.stem + ".id-reservations.json")
@@ -462,7 +548,7 @@ def write_backup(connection, root: Path, carryover: dict) -> dict:
     manifest = {
         "created_at": _now(), "store": str(database_path(root)), "backup": str(target),
         "backup_sha256": _sha256(target), "domain_digest": backup_digest,
-        "projection_files": projection_files(root, connection),
+        "projection_files": [entry for entry, _, _ in reads],
         "id_reservations": None if sidecar_copy is None else {
             "source": str(sidecar), "copy": str(sidecar_copy), "sha256": _sha256(sidecar_copy)},
         "projection_archive": archive,
@@ -486,6 +572,10 @@ def legacy_flush(root: Path, token: str) -> dict:
     """
     from taskmaster import backlog_server as server  # Installs the exporter's derivers.
     from taskmaster import store as legacy
+    path = database_path(root)
+    with closing(_connect_readonly(path)) as reader:
+        sessions = {row[0]: row for row in reader.execute("SELECT * FROM sessions")} \
+            if _has_table(reader, "sessions") else {}
     with migration_owner(token):
         instance = server._store_for(Path(root) / ".taskmaster" / "backlog.yaml")
         try:
@@ -493,7 +583,30 @@ def legacy_flush(root: Path, token: str) -> dict:
                 pass
         finally:
             legacy.close_thread_connection()
+    _restore_flush_sessions(path, instance.session, sessions)
     return {"flushed": True}
+
+
+def _restore_flush_sessions(path: Path, session: str, before: dict) -> None:
+    """Undo the session rows the flush's own Store wrote (its session and its `session:t<thread>`
+    activity rows), so a flush that changed nothing else leaves the rows --rollback compares
+    exactly as they were. Other sessions' rows are left alone: a leaked client's touch stays
+    visible to the drift and rollback checks."""
+    with closing(_connect(path)) as connection:
+        if not _has_table(connection, "sessions"):
+            return
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            for row in connection.execute("SELECT * FROM sessions WHERE session=? OR substr(session,1,?)=?",
+                                          (session, len(session) + 1, session + ":")).fetchall():
+                connection.execute("DELETE FROM sessions WHERE session=?", (row[0],))
+                if row[0] in before:
+                    marks = ",".join("?" for _ in before[row[0]])
+                    connection.execute(f"INSERT INTO sessions VALUES({marks})", tuple(before[row[0]]))
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
 
 
 # ── Activation core (production; the twins fixture flips authority through it) ──
@@ -502,16 +615,79 @@ class CarryoverMismatch(RuntimeError):
     """`verify_carryover` found local state the switch would lose; the switch rolled back."""
 
 
+def seed_projection_bases(connection, root: Path):
+    """Additive merge bases for the first sync after activation (N16 A); `(scan, seeded, counts)`.
+
+    A legacy store adopted from its files can hold no `projection_base` rows, and then every
+    file of the first sync takes the `observe` path (one writer command and one Git HEAD
+    probe per file: 310-682 s on CodeMaestro). Here, for each projection row that is not
+    quarantined, flagged or drift, has a recorded digest and has no base row, the file is read
+    once with `sync_files`' identity checks and hashed by this function; only bytes whose sha1
+    is the recorded `content_hash` become the base. A hash this code did not compute is never
+    trusted, an existing base (trusted or not) is never replaced, and a file that differs, is
+    missing or cannot be read safely keeps the ordinary sync path.
+
+    Runs inside the activation transaction after `verify_carryover`, so a crash rolls it back
+    with the switch; the carry-over oracle is told the seeded paths (`seeded_bases`). The
+    returned scan holds the fingerprints of exactly the files read here, for the sync cache.
+    """
+    from taskmaster.coordinator import sync_files
+    from . import projection
+    backlog = Path(root) / ".taskmaster"
+    scan = sync_files.open_scan(Path(root), backlog, fast=False)
+    held = set(projection.flagged_files(connection)) | set(projection.drift_files(connection))
+    counts = {"seeded": 0, "held": 0, "differs": 0, "missing": 0, "unreadable": 0}
+    seeded = []
+    rows = connection.execute(
+        "SELECT p.file,p.content_hash FROM projection p WHERE p.quarantined=0 AND p.file NOT LIKE 'local/%' "
+        "AND COALESCE(p.content_hash,'')!='' AND NOT EXISTS(SELECT 1 FROM projection_base b WHERE b.file=p.file) "
+        "ORDER BY p.file").fetchall()
+    for rel, value in rows:
+        if rel in held:
+            counts["held"] += 1
+            continue
+        try:
+            observed = scan.observe(rel, authored=False)
+        except (OSError, ValueError):  # UnsafePath, ChangedDuringRead and the byte limit are ValueErrors
+            counts["unreadable"] += 1
+            continue
+        if observed is None:
+            counts["missing"] += 1
+            continue
+        if hashlib.sha1(observed.content).hexdigest() != value:
+            counts["differs"] += 1
+            continue
+        connection.execute("INSERT INTO projection_base(file,content) VALUES(?,?)", (rel, observed.content))
+        seeded.append(rel)
+    counts["seeded"] = len(seeded)
+    return scan, seeded, counts
+
+
+def _save_seed_scan(root: Path, scan) -> None:
+    """Persist the fingerprints activation read (best effort, after commit: a cache, not state)."""
+    from taskmaster.coordinator import sync_files
+    if not scan.entries():
+        return  # nothing old enough to vouch for (racy window): leave any cache as it is
+    try:
+        sync_files.save_scan(Path(root), scan)
+    except Exception:  # noqa: BLE001 - a lost cache only means one cold read at the first sync
+        pass
+
+
 def activate(connection, root: Path, *, token: str | None = None, before: dict | None = None,
              record=None, trial: bool = False) -> dict:
     """One transaction: publish native markers and authority, repair the graph, import ID
     state, reconcile the progress changelog and, given the pre-backfill carry-over snapshot
     `before`, require `verify_carryover` to report nothing lost. A fenced cutover also
-    returns `migration_state` to `ready` here.
+    returns `migration_state` to `ready` here. Last, after verification, it seeds additive
+    projection merge bases from files it hashed (`seed_projection_bases`) and, after commit,
+    the sync fingerprint cache from the same reads.
 
     `token=None` is the unfenced fast path for test fixtures; it requires an unfenced store.
-    `record(connection)` runs inside the transaction, before commit (the journal row).
-    `trial=True` does all of it and rolls back: the cutover's compare stage.
+    `record(connection, detail)` runs inside the transaction, before commit (the journal row;
+    `detail["seeded_bases"]` names the seeded paths for the post-activation oracle).
+    `trial=True` does all of it but the seeding and rolls back: the cutover's compare stage.
+    The result's `seeded_bases` lists the seeded paths (the oracle's `seeded_bases`).
     """
     migrate, carryover = _migrate(), _carryover()
     from .db import manifest
@@ -559,10 +735,15 @@ def activate(connection, root: Path, *, token: str | None = None, before: dict |
         if trial:
             connection.rollback()
             return result
+        # After verification, so the oracle above compares the carried rows only; the bases
+        # added here are named to any later oracle run through the journal row.
+        scan, seeded, result["bases"] = seed_projection_bases(connection, root)
+        result["seeded_bases"] = seeded
         if record is not None:
-            record(connection)
+            record(connection, {"seeded_bases": seeded})
         _checkpoint("activate:before-commit")
         connection.commit()
+        _save_seed_scan(root, scan)
         return result
     except BaseException:
         if connection.in_transaction:
@@ -651,11 +832,13 @@ class _Run:
         # The progress changelog itself is reconciled inside the activation transaction,
         # after the final backfill (`carryover.reconcile_progress`): a meta entry written
         # after its seed marker would never be copied. Here: no export may be stranded.
-        flushed = None
         before = reconcile_counts(self.connection, self.root)
+        # Always, even with nothing pending: the flush's transaction is also the legacy scan of
+        # the files on disk, so a file that stopped parsing since the preflight (a git pull, an
+        # editor) is quarantined here and the `held_files` check below sees it. No bridge client
+        # can flush or scan through the fence, so the cutover does it itself.
+        flushed = legacy_flush(self.root, self.token)
         if _blocking(before):
-            # No bridge client can flush through the fence, so the cutover does it itself.
-            flushed = legacy_flush(self.root, self.token)
             self.log(f"[reconcile] flushed pending legacy exports ({'; '.join(_blocking(before))})")
         self._begin_owned()
         counts = reconcile_counts(self.connection, self.root)
@@ -667,6 +850,14 @@ class _Run:
                        + " (the rows are kept; backlog_store_status on the native store lists them as pending)")
             self.report.setdefault("warnings", []).append(warning)
             self.log(f"warning: {warning}")
+        held = held_files(self.connection, self.root)
+        if held:
+            # The flush's scan (or a file changed since the preflight) left a file native managed
+            # Git would hold on. The row keeps the post-flush digest, so --rollback accepts it.
+            _record(self.connection, "reconcile", "held", self.owner, self.token,
+                    {"held": held, "counts": counts, "domain_digest": domain_digest(self.connection)})
+            self.connection.commit()
+            raise _held_abort(held, "the reconcile flush under the fence left files native managed Git holds on")
         self._commit_stage("reconcile", {"counts_before": before, "counts": counts, "flushed": flushed,
                                          "carried": carried, "domain_digest": domain_digest(self.connection)})
 
@@ -723,19 +914,25 @@ class _Run:
         except (CarryoverMismatch, UnsupportedStoreError, ValueError) as error:
             raise CutoverAborted(f"trial activation failed; nothing activated: {error}") from error
         self._begin_owned()
+        held = held_files(self.connection, self.root)
+        if held:
+            self.connection.rollback()
+            raise _held_abort(held, "files native managed Git holds on appeared under the fence before activation")
         self._commit_stage("compare", {"problems": [], "ids": trial["ids"], "progress": trial["progress"]})
 
     def activate(self):
-        def record(connection):
-            _record(connection, "activate", "done", self.owner, self.token)
+        def record(connection, detail):
+            _record(connection, "activate", "done", self.owner, self.token, detail)
         try:
             result = activate(self.connection, self.root, token=self.token, before=self._before(), record=record)
         except StoreDamaged:
             raise
         except (CarryoverMismatch, ValueError) as error:
             raise CutoverAborted(str(error)) from error
+        result.pop("seeded_bases", None)  # journaled on the activate row; too long for the report
         self.report["stages"]["activate"] = result
-        self.log(f"[activate] done: authority=native; graph repair {result['graph_repair']}; ids {result['ids']}")
+        self.log(f"[activate] done: authority=native; graph repair {result['graph_repair']}; ids {result['ids']}; "
+                 f"merge bases {result['bases']}")
         _checkpoint("activate:after-commit")
 
     def release(self):
@@ -851,6 +1048,7 @@ def dry_run(root: Path, *, confirm_stopped: bool = False) -> dict:
                     report["warnings"].append("; ".join(_blocking(counts)) + ": the cutover flushes them itself "
                                               "under the fence (reconcile stage)")
                 report["refusals"] += [r for r in [handover_refusal(connection)] if r]
+                report["refusals"] += held_files(connection, root)
                 try:
                     assert_compatible(connection)
                 except UnsupportedStoreError as error:
@@ -871,12 +1069,13 @@ def dry_run(root: Path, *, confirm_stopped: bool = False) -> dict:
         report["projection_files"] = len(projection_files(root, connection))
     report["planned"] = [] if report["refusals"] else [
         "fence: publish meta.migration_state='migrating' with owner/token under the ownership lock",
-        "reconcile: flush pending legacy exports under the fence (as one admitted bridge client)",
+        "reconcile: scan the files and flush pending legacy exports under the fence (as one admitted bridge client)",
         f"backup: {path.parent / 'backups' / 'pre-native-<UTC ts>.db'} + manifest ({report['projection_files']} projection files)",
         f"backfill: stage {counts['entities']} entities and {counts['changes']} changes into native tables",
         "compare: trial activation, rolled back; verify_carryover must report nothing lost",
         "activate: one transaction: schema_version=2, minimum_client_protocol=2, migration_state=ready, "
-        "authority=native, graph repair, ID import, progress reconcile, verify_carryover (any loss rolls it back)",
+        "authority=native, graph repair, ID import, progress reconcile, verify_carryover (any loss rolls it back), "
+        "then merge bases for projection files whose bytes hash to their recorded digest",
         "release: record completion, release the ownership lock",
     ]
     report["ok"] = not report["refusals"]
@@ -898,14 +1097,17 @@ def cutover(root: Path, *, confirm_stopped: bool = False, resume: bool = False, 
         state = classify(probe)
         counts = reconcile_counts(probe, root)
         handovers = handover_refusal(probe)
+        held = held_files(probe, root)
     refusals = _store_refusals(state, mode=mode)
     activated = state["native"] or "activate" in state["completed_stages"]
     if resume and activated:
         return _finish_release(path, token=token, log=log)
     if not resume and _blocking(counts):
         log("note: " + "; ".join(_blocking(counts)) + " will be flushed by the cutover under the fence")
-    if not resume and not refusals and handovers:
-        refusals.append(handovers)
+    if not resume and not refusals:
+        # A resume skips this: the fenced reconcile and compare stages re-check held files
+        # (`_Run.reconcile`, `_Run.compare`), and nothing can repair a file through the fence anyway.
+        refusals += [r for r in [handovers] if r] + held
     if not activated:
         refusals += [r for r in [sidecar_refusal(root)] if r]
     quiesced = check_quiesced(root, confirm_stopped=confirm_stopped)
@@ -1056,18 +1258,26 @@ def _summarize_files(divergence: dict) -> str:
                      for kind, paths in divergence.items() if paths)
 
 
-def archive_projection(root: Path, target: Path, connection) -> dict:
-    """Zip the projection set beside the backup."""
-    base = Path(root) / ".taskmaster"
-    files = projection_files(root, connection)
+def _zip_time(mtime: float) -> tuple:
+    """A zip timestamp, clamped to the format's 1980..2107 range (as `strict_timestamps=False`)."""
+    stamp = _dt.datetime.fromtimestamp(max(mtime, 0)).timetuple()[:6]
+    return max((1980, 1, 1, 0, 0, 0), min(stamp, (2107, 12, 31, 23, 59, 59)))
+
+
+def archive_projection(root: Path, target: Path, connection, *, reads=None) -> dict:
+    """Zip the projection set beside the backup, from `reads` (`_projection_reads`) when given."""
+    reads = _projection_reads(root, connection) if reads is None else reads
     temp = target.with_name(target.name + ".partial")
     temp.unlink(missing_ok=True)
-    with zipfile.ZipFile(temp, "w", compression=zipfile.ZIP_DEFLATED, strict_timestamps=False) as archive:
-        for entry in files:
-            archive.write(base / entry["path"], entry["path"])
+    with zipfile.ZipFile(temp, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for entry, data, mtime in reads:
+            info = zipfile.ZipInfo(entry["path"], date_time=_zip_time(mtime))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = 0o100644 << 16
+            archive.writestr(info, data)
     os.replace(temp, target)
     _fsync(target)
-    return {"path": str(target), "sha256": _sha256(target), "size": target.stat().st_size, "files": len(files)}
+    return {"path": str(target), "sha256": _sha256(target), "size": target.stat().st_size, "files": len(reads)}
 
 
 def _archived(detail: dict) -> dict[str, bytes]:

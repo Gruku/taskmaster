@@ -275,17 +275,28 @@ def tree_blobs(checkout: Checkout, rev: str) -> dict[str, str]:
     return blobs
 
 
-def _blobs_of(content: bytes) -> set[str]:
+def _blobs_of(content) -> set[str]:
+    """The Git blob ids of `content` as is and LF-normalised; `content` may be bytes or
+    their `sync_files.Digests` (a full sync keeps digests, never every file's bytes)."""
     from .git import _blob_id
+    if not isinstance(content, bytes):
+        return {content.blob, content.blob_lf}
     return {_blob_id(content), _blob_id(projection._lf(content))}
+
+
+def _digest_of(content) -> str | None:
+    """sha1 of bytes, or of the bytes a `Digests` describes; None for a missing file."""
+    if content is None:
+        return None
+    return store.digest(content) if isinstance(content, bytes) else content.digest
 
 
 def classify(checkout: Checkout, differing: dict, previous: dict | None, current: dict | None,
              released: dict | None = None, base_bytes=None) -> tuple[dict, list[str]]:
     """({rel: reason} drift, warnings) for files that differ from the checkout's base.
 
-    `differing` maps rel -> observed bytes (None = missing). A file is drift (held, never
-    imported) when:
+    `differing` maps rel -> observed bytes or their `sync_files.Digests` (None = missing).
+    A file is drift (held, never imported) when:
     - Git is part-way through an operation (merge/cherry-pick/revert/rebase/squash state
       or unmerged index entries): every differing file, missing ones included;
     - Git rewrote this checkout and changed that path since the last observation (or the
@@ -312,7 +323,7 @@ def classify(checkout: Checkout, differing: dict, previous: dict | None, current
                             f"generation): {', '.join(mixed[:20])}")
     released = released or {}
     candidates = {rel: content for rel, content in sorted(differing.items())
-                  if not (rel in released and released[rel] == (None if content is None else store.digest(content)))}
+                  if not (rel in released and released[rel] == _digest_of(content))}
     if not candidates:
         return {}, warnings
     busy = in_progress(checkout)
@@ -396,6 +407,12 @@ def register(owner, checkout: Checkout) -> list[str]:
 
 
 # ── Linked publication ─────────────────────────────────────────────────────
+
+def published_digests(connection) -> dict[str, str]:
+    """{rel: recorded digest} of main's generation: `published` without loading any bytes."""
+    return dict(connection.execute("SELECT file,content_hash FROM projection WHERE file NOT LIKE 'local/%' "
+                                   "AND content_hash!='' ORDER BY file"))
+
 
 def published(connection, main_backlog: Path | None = None) -> dict[str, tuple[str, bytes | None, str | None]]:
     """{rel: (digest, bytes or None if untrusted, hold reason or None)} of main's generation.
@@ -809,6 +826,7 @@ def detect(owner, checkout: Checkout, selected, drift, *, scan=None) -> tuple[di
     With the sync's `scan`, a file whose fingerprint is unchanged since its digests
     were recorded is compared by those digests (the classified digest is that
     recorded digest); a file that differs, or any miss, is read in full."""
+    from . import sync_files
     record = read_record(owner, checkout.id) or {}
     current = observe(checkout)
     backlog = checkout.backlog
@@ -818,7 +836,8 @@ def detect(owner, checkout: Checkout, selected, drift, *, scan=None) -> tuple[di
         with closing(owner._connect(readonly=True)) as connection:
             return reference_bytes(connection, checkout, rel)
     with closing(owner._connect(readonly=True)) as connection:
-        generation = {rel: value for rel, (value, _, _) in published(connection).items()}
+        # Digests only: a store's retained bases are never all in memory at once.
+        generation = published_digests(connection)
         # Quarantined and flagged main files are already held with their bytes kept.
         skipped = {row[0] for row in connection.execute('SELECT file FROM projection WHERE quarantined=1')}
         skipped.update(projection.flagged_files(connection))
@@ -842,19 +861,21 @@ def detect(owner, checkout: Checkout, selected, drift, *, scan=None) -> tuple[di
             continue
         seen[rel] = None if content is None else store.digest(content)
         expected = known.get(rel)
+        # A differing file is kept as its digests, never its bytes: memory stays bounded
+        # however many files a full sync classifies (N16 batched sync).
         if expected is None:
             if content is None:
                 continue
             if checkout.linked and (generation.get(rel) in _variants(content)
                                     or same_text(reference(rel), content)):
                 continue  # identical bytes (or text) establish this checkout's base
-            differing[rel] = content
+            differing[rel] = sync_files.Digests.of(content)
         elif content is None or (expected not in _variants(content) and not same_text(reference(rel), content)):
-            differing[rel] = content
+            differing[rel] = None if content is None else sync_files.Digests.of(content)
     released = record.get('released') or {}
     # A release covers exactly the bytes it saw, once: consumed when they are imported or gone.
     kept = {rel: value for rel, value in released.items() if rel in differing
-            and (None if differing[rel] is None else store.digest(differing[rel])) == value}
+            and _digest_of(differing[rel]) == value}
     if kept != released:
         def consume(connection):
             value = dict(store.record(connection, checkout.id) or {})
@@ -871,19 +892,20 @@ def detect(owner, checkout: Checkout, selected, drift, *, scan=None) -> tuple[di
 
 
 def hold(owner, checkout: Checkout, contents: dict, reasons: dict) -> None:
-    """Durably hold drift: main in `git.drift`, a linked checkout in its own holds."""
+    """Durably hold drift: main in `git.drift`, a linked checkout in its own holds.
+    `contents` maps rel -> bytes, their `Digests`, or None (missing)."""
     if not checkout.linked:
         from . import git as managed_git
         state = dict(managed_git.read_state(owner, managed_git.DRIFT_KEY) or {'op_id': None, 'target': None})
         files = dict(state.get('files') or {})
-        files.update({rel: None if content is None else store.digest(content) for rel, content in contents.items()})
+        files.update({rel: _digest_of(content) for rel, content in contents.items()})
         state.update(files=files, reasons=dict(state.get('reasons') or {}, **reasons))
         managed_git.write_state(owner, drift=state)
         return
 
     def apply(connection):
         for rel, content in contents.items():
-            store.set_hold(connection, checkout.id, rel, 'drift', None if content is None else store.digest(content))
+            store.set_hold(connection, checkout.id, rel, 'drift', _digest_of(content))
     write(owner, apply)
 
 
@@ -892,7 +914,7 @@ def prune_drift(owner, checkout: Checkout) -> set[str]:
     with closing(owner._connect(readonly=True)) as connection:
         holding = {rel: value for rel, value in store.holds(connection, checkout.id).items() if value[0] == 'drift'}
         known = store.bases(connection, checkout.id)
-        generation = {rel: value for rel, (value, _, _) in published(connection).items()}
+        generation = published_digests(connection)
     cleared = []
     for rel in holding:
         content = read(checkout.backlog, rel)

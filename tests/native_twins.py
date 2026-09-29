@@ -115,7 +115,7 @@ def point_server_at(monkeypatch, root: Path) -> None:
     projection.reset_for_tests()
 
 
-def activate_native(root: Path) -> None:
+def activate_native(root: Path) -> dict:
     """Backfill a legacy project's store and flip it to a ready native authority
     through the production activation core (`native.cutover.activate`), which runs
     the production ID import (`carryover.import_id_state`) and progress reconcile.
@@ -124,7 +124,8 @@ def activate_native(root: Path) -> None:
     flips through exactly the function the real cutover commits with. With
     `TASKMASTER_TWINS_VERIFY=1` the full carry-over oracle runs too: a snapshot
     before backfill (JSON round-tripped, as the cutover journals it) and
-    `verify_carryover` inside the activation transaction.
+    `verify_carryover` inside the activation transaction. Returns the activation result
+    (its `seeded_bases` are the merge bases activation added after verifying, N16).
     """
     from taskmaster.native import carryover, cutover
     store.reset_for_tests()
@@ -134,7 +135,7 @@ def activate_native(root: Path) -> None:
         if os.environ.get("TASKMASTER_TWINS_VERIFY") == "1":
             before = json.loads(json.dumps(carryover.snapshot_carryover(connection)))
         backfill(connection)
-        cutover.activate(connection, root, before=before)
+        return cutover.activate(connection, root, before=before)
 
 
 def is_native(root: Path) -> bool:

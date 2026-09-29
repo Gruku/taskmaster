@@ -16,9 +16,12 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import stat
+import threading
 import time
+import uuid
 from typing import NamedTuple
 
+from taskmaster.native import metrics
 from taskmaster.projection_parse import ENTITY_FILE_SPECS, classify
 from taskmaster.projection_paths import UnsafePath, check_component as _check_component, relative, safe_path
 
@@ -61,6 +64,8 @@ def discover(root: Path, scan: "Scan | None" = None) -> Inventory:
     def listing(rel, *, directories_only=False):
         try:
             directory = scan.directory(rel)
+            if metrics.ENABLED:
+                metrics.add("directories_listed")
             with os.scandir(directory) as entries:
                 return sorted((entry.name for entry in entries
                                if not directories_only or entry.is_dir(follow_symlinks=False)
@@ -135,16 +140,70 @@ def _read_observed(root: Path, rel: str, limit: int) -> Observation | None:
         # An absent path is distinguishable from a parser failure; callers still
         # revalidate absence before treating it as a publication repair.
         return None
+    if metrics.ENABLED:
+        metrics.add("files_read")
+        metrics.add("bytes_read", len(content))
     if not (_signature(before) == _signature(opened) == _signature(after) == _signature(current)):
         raise ChangedDuringRead(f"projection changed during read: {rel}")
     return Observation(rel, content, hashlib.sha1(content).hexdigest(), after.st_mtime_ns,
-                       after.st_size, after.st_dev, after.st_ino, _fingerprint(current))
+                       after.st_size, after.st_dev, after.st_ino, _fingerprint(current, path))
 
 
-def _fingerprint(info) -> tuple:
-    """File identity plus size and both timestamps (ns). A different file at the path
-    (replaced, restored by Git, copied with preserved times) has another identity."""
-    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+_UNKNOWN_CHANGE = -1  # never recorded (see `Scan.record`), so it never matches
+
+
+def _windows_change_time():
+    """`path -> ChangeTime (Unix ns) or _UNKNOWN_CHANGE` on Windows, else None.
+
+    Windows `lstat().st_ctime` is the creation time (Python 3.12 keeps it so), which an
+    in-place rewrite followed by an mtime restore (`os.utime`) does not move. NTFS keeps a
+    real change time in FILE_BASIC_INFO.ChangeTime, which any data or metadata change
+    (including that utime) moves; one attribute-only handle per lookup, about 40 us.
+    A write through a memory mapping moves no timestamp at all, not even this one: that is
+    the remaining limit of any stat fingerprint (see CACHE_TTL)."""
+    if os.name != "nt":
+        return None
+    import ctypes
+    from ctypes import wintypes
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create = kernel32.CreateFileW
+    create.restype = wintypes.HANDLE
+    create.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD,
+                       wintypes.DWORD, wintypes.HANDLE]
+    query = kernel32.GetFileInformationByHandleEx
+    query.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+    close = kernel32.CloseHandle
+    close.argtypes = [wintypes.HANDLE]
+    invalid = wintypes.HANDLE(-1).value
+
+    class Basic(ctypes.Structure):
+        _fields_ = [("creation", ctypes.c_int64), ("access", ctypes.c_int64), ("write", ctypes.c_int64),
+                    ("change", ctypes.c_int64), ("attributes", wintypes.DWORD)]
+
+    def change_time(path) -> int:
+        # FILE_READ_ATTRIBUTES, share all, OPEN_EXISTING, the link itself / directories allowed.
+        handle = create(str(path), 0x80, 0x7, None, 3, 0x00200000 | 0x02000000, None)
+        if handle is None or handle == invalid:
+            return _UNKNOWN_CHANGE
+        try:
+            info = Basic()
+            if not query(handle, 0, ctypes.byref(info), ctypes.sizeof(info)) or info.change <= 0:
+                return _UNKNOWN_CHANGE
+            return (info.change - 116444736000000000) * 100  # FILETIME (1601, 100 ns) -> Unix ns
+        finally:
+            close(handle)
+    return change_time
+
+
+_change_time = _windows_change_time()
+
+
+def _fingerprint(info, path) -> tuple:
+    """File identity plus size, mtime and a real change time (ns). A different file at the
+    path (replaced, restored by Git, copied with preserved times) has another identity; an
+    in-place rewrite moves the change time even when the mtime is restored."""
+    changed = info.st_ctime_ns if _change_time is None else _change_time(path)
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, changed)
 
 
 # A fingerprint is recorded only for a file whose timestamps are older than this at
@@ -217,12 +276,18 @@ class Scan:
             raise found
         return found
 
+    def path(self, rel: str) -> Path:
+        """`rel` under its checked directory (raises what the directory check raised)."""
+        parent, _, name = str(relative(rel)).rpartition("/")
+        return self.directory(parent) / name
+
     def info(self, rel: str, *, fresh: bool = False):
         """lstat of a regular projection file, None when it (or its directory) is absent."""
         if fresh or rel not in self._info:
-            parent, _, name = str(relative(rel)).rpartition("/")
+            if metrics.ENABLED:
+                metrics.add("files_stated")
             try:
-                path = self.directory(parent) / name
+                path = self.path(rel)
                 info = _check_component(path)
             except FileNotFoundError:
                 info = None
@@ -236,12 +301,16 @@ class Scan:
         recorded under; None on any miss (absent, changed, never recorded)."""
         info = self.info(rel, fresh=fresh)
         entry = self._entries.get(rel) or self.known.get(rel)
-        if info is None or not _valid_entry(entry) or tuple(entry[0]) != _fingerprint(info):
+        if info is None or not _valid_entry(entry) or tuple(entry[0]) != _fingerprint(info, self.path(rel)):
             self._stale.add(rel)
             self._entries.pop(rel, None)
+            if metrics.ENABLED:
+                metrics.add("cache_misses")
             return None
         self._entries[rel] = entry
         self.hits += 1
+        if metrics.ENABLED:
+            metrics.add("cache_hits")
         return Digests(*entry[1])
 
     def observe(self, rel: str, *, authored: bool = True, limit: int = MAX_FILE_BYTES) -> Observation | None:
@@ -258,11 +327,10 @@ class Scan:
         if not fingerprint or not self.cacheable:
             return
         # A filesystem without stable file ids or timestamps cannot vouch for a file.
-        if not fingerprint[1] or not fingerprint[3]:
+        if not fingerprint[1] or not fingerprint[3] or fingerprint[4] <= 0:
             return
-        # POSIX ctime is the inode change time (a write moves it); Windows reports the
-        # creation time there, which says nothing about later writes.
-        changed = fingerprint[3] if os.name == "nt" else max(fingerprint[3], fingerprint[4])
+        # The later of mtime and the change time (POSIX inode ctime; Windows ChangeTime).
+        changed = max(fingerprint[3], fingerprint[4])
         now = time.time_ns()
         # Racy window: only timestamps safely in the past (a future one means clock skew).
         if RACY_NS < now - changed and changed <= now:
@@ -273,14 +341,20 @@ class Scan:
         """Fingerprints this scan confirmed or recorded (persisted for the next sync)."""
         return dict(self._entries)
 
-    def merged(self) -> dict:
+    def merged(self, *, bound: bool = True) -> dict:
         """What to persist: the known entries this scan did not disprove, updated by
-        what it confirmed or recorded (a scan over some paths keeps the others')."""
+        what it confirmed or recorded (a scan over some paths keeps the others').
+        `bound=False` for a scan that stopped part-way (a batched sync between batches or
+        interrupted): the paths it has not reached yet are still looked up, so keep them."""
         merged = {rel: entry for rel, entry in self.known.items() if rel not in self._stale}
         merged.update(self._entries)
-        if len(merged) > 2 * len(self._entries) + 1024:
+        if bound and len(merged) > 2 * len(self._entries) + CACHE_SLACK:
             return dict(self._entries)  # bound entries for paths nobody looks up any more
         return merged
+
+
+# Carried-forward entries a scan may keep beyond twice what it confirmed (see `merged`).
+CACHE_SLACK = 1024
 
 
 def _valid_entry(entry) -> bool:
@@ -290,10 +364,11 @@ def _valid_entry(entry) -> bool:
 
 
 # ── Persisted fingerprints (a cache: any doubt means a full read) ──────────────
-CACHE_VERSION = 2
+CACHE_VERSION = 3  # 3: Windows fingerprints carry ChangeTime, not creation time
 CACHE_CHECKOUTS = 40
 # Entries are carried forward at most this long; then one sync reads every file again,
-# so a change no fingerprint shows (same size, restored mtime) cannot persist forever.
+# so a change no fingerprint shows (a write through a memory mapping moves no timestamp)
+# only delays its import, never hides it for good.
 CACHE_TTL = 3600
 
 
@@ -347,11 +422,12 @@ def open_scan(store_root: Path, backlog: Path, *, fast: bool = True) -> Scan:
     return Scan(backlog, item["entries"], since=item["since"])
 
 
-def save_scan(store_root: Path, scan: Scan) -> None:
-    """Replace `scan.root`'s fingerprints with what this scan confirmed; best effort."""
+def save_scan(store_root: Path, scan: Scan, *, complete: bool = True) -> None:
+    """Replace `scan.root`'s fingerprints with what this scan confirmed; best effort.
+    `complete=False`: the scan has not looked every path up yet (see `Scan.merged`)."""
     if not scan.cacheable:
         return
-    entries = scan.merged()
+    entries = scan.merged(bound=complete)
     checkouts = _load_cache(store_root)
     key = _cache_key(scan.root)
     stored = checkouts.pop(key, None)
@@ -361,7 +437,9 @@ def save_scan(store_root: Path, scan: Scan) -> None:
         checkouts.pop(next(iter(checkouts)))
     checkouts[key] = {"since": scan.since, "entries": entries}
     path = cache_path(store_root)
-    temp = path.with_name(f"{path.name}.tmp.{os.getpid()}")
+    # Unique per writer: coordinator threads (a sync between batches, git.generation outside
+    # the publication lock) may save concurrently; each replaces the file atomically.
+    temp = path.with_name(f"{path.name}.tmp.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         temp.write_text(json.dumps({"version": CACHE_VERSION, "checkouts": checkouts}, separators=(",", ":")),

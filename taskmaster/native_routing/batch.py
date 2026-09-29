@@ -25,7 +25,7 @@ from taskmaster.native.contracts import MAX_BATCH_COMMANDS, Conflict
 from taskmaster.native.workflow import _bugs_found_in
 
 from . import reads
-from .tasks import _dependency_statuses as dependency_statuses
+from .tasks import _dependency_statuses as dependency_statuses, field_display
 from .registry import adapter
 from .runtime import error_text
 
@@ -90,23 +90,25 @@ def _summary(lines, errors):
     return text
 
 
-def _render(report, committed):
+def _render(report, committed, call):
     kind = report[0]
     if kind == "field":
         _kind, ident, field, expected = report
-        return f"`{ident}`.{field} → " + bs._committed_field_display(committed, ident, field, _expected(expected))
+        return f"`{ident}`.{field} → " + field_display(call, committed, ident, field, _expected(expected))
     if kind == "status":
         _kind, ident, status, reason_field = report
         document = committed.get(("task", ident))
-        if document is None or document.get("status") != status:
+        if document is None:  # Committed whole or refused: absent means already in that status.
+            return f"`{ident}` → " + field_display(call, committed, ident, "status", status)
+        if document.get("status") != status:
             return f"`{ident}` → {bs.NOT_PERSISTED}"
         if not reason_field:
             return f"`{ident}` → {status}"
         return f"`{ident}` → {status} ({document.get(reason_field, bs.NOT_PERSISTED)})"
     if kind == "epic-field":
         _kind, ident, field, expected = report
-        return f"epic `{ident}`.{field} → " + bs._committed_field_display(
-            committed, ident, field, _expected(expected), kind="epic")
+        return f"epic `{ident}`.{field} → " + field_display(
+            call, committed, ident, field, _expected(expected), kind="epic")
     _kind, ident, cascaded = report
     return (f"epic `{ident}`.status → "
             + bs._committed_field_display(committed, ident, "status", "archived", kind="epic")
@@ -203,7 +205,7 @@ def _lines(call, operations):
         return (f"Error: the batch was refused as a whole and nothing was applied "
                 f"(state changed since the lines were checked): {error_text(exc)[len('Error: '):]}")
     committed = reads.committed(call.receipts)
-    return call.finish(_summary([_render(report, committed) for report in reports], errors))
+    return call.finish(_summary([_render(report, committed, call) for report in reports], errors))
 
 
 @adapter("backlog_batch_preview")

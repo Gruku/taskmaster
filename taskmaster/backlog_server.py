@@ -39,6 +39,7 @@ from taskmaster import yaml_io
 from taskmaster.native import blockers as _blockers
 from taskmaster import dependency_chain as _dependency_chain
 from taskmaster.native import claims as _claims
+from taskmaster.native import metrics as _metrics
 from taskmaster.admission import UnsupportedStoreError
 from taskmaster.blast_radius import (
     BlastRadiusConfig,
@@ -58,6 +59,11 @@ def _guard_legacy_layout(fn):
 
     @wraps(fn)
     def wrapper(*args, **kwargs):
+        if _metrics.ENABLED:
+            return _measured_tool(fn.__name__, call, args, kwargs)
+        return call(*args, **kwargs)
+
+    def call(*args, **kwargs):
         try:
             result = fn(*args, **kwargs)
         except store.LegacyLayoutError as exc:
@@ -65,6 +71,35 @@ def _guard_legacy_layout(fn):
         return _attach_conflict_notices(result)
 
     return wrapper
+
+
+_TOOL_DEPTH = threading.local()
+
+
+def _measured_tool(name, call, args, kwargs):
+    """Opt-in N16 `tool` record: the outermost tool call's time and reply bytes."""
+    from time import perf_counter
+    depth = getattr(_TOOL_DEPTH, "value", 0)
+    _TOOL_DEPTH.value = depth + 1
+    started = perf_counter()
+    result, error = None, None
+    try:
+        result = call(*args, **kwargs)
+        return result
+    except BaseException as exc:
+        error = type(exc).__name__
+        raise
+    finally:
+        _TOOL_DEPTH.value = depth
+        if depth == 0:
+            try:
+                text = result if isinstance(result, str) else json.dumps(result, default=str)
+                size = len(text.encode("utf-8"))
+            except (TypeError, ValueError):
+                size = None
+            _metrics.emit("tool", op=name, request_id=kwargs.get("request_id"),
+                          ms=(perf_counter() - started) * 1000, output_bytes=size,
+                          **({"outcome": "error", "error": error} if error else {}))
 
 
 def _route_native(fn):
@@ -11407,6 +11442,9 @@ class ViewerHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(body)
+        if _metrics.ENABLED:
+            _metrics.emit("http", method=self.command, path=self.path.split("?", 1)[0], status=status,
+                          output_bytes=len(body), **{f"{key}_ms": value for key, value in timing.items()})
 
     def do_OPTIONS(self):
         """Allow cross-origin preflight for /api/* endpoints only."""
