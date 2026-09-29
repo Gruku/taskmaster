@@ -46,4 +46,4 @@ Task close-gate: a task cannot transition to `done` while any linked Bug has `st
 
 ## Verifying writes
 
-A mutating result ending in `[seq N]` is committed — that is the `changes` row the transaction produced. `(export pending: <file> — retried on next call)` means the row committed and only the file export is being retried; the write is not lost. `backlog_store_status` shows dirty and quarantined files and the live sessions the store is tracking.
+A mutating result ending in `[seq N]` is committed. `(export pending: …)` means the write committed and only the file export is pending; it is not lost. On a native store `No change … already …` without `[seq]` means the value was already stored, not a failure. `backlog_store_status` shows dirty and quarantined files and live sessions.
