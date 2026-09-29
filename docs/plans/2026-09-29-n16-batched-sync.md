@@ -82,3 +82,27 @@ already chunks.
 
 No user-visible sync semantics change: the result shape, notices, warnings, states and receipts
 are the unbatched ones.
+
+## Measurements (2026-09-29)
+
+Full sync, coordinator and client in one process, `client.sync(timeout=3600)`. Peak RSS is the
+process peak working set, including the ~28 MB interpreter baseline. Datasets come from
+`scripts/native_synthetic_dataset.py generate --native`, seed 16, under
+`%TEMP%\tmn16\batchsync\`.
+
+| dataset (files) | code | cold s | no-edit s | one-edit s | peak RSS MB |
+|---|---|---|---|---|---|
+| 1x (3,700) | before | 23.2 | 2.9 / 2.6 | 4.0 | 162-167 |
+| 1x (3,700) | batched | 15.2 | 2.6 / 2.6 | 4.1 | 164-167 |
+| 3x (11,098) | before | refused: "more than 10000 projection files" | | | 166 |
+| 3x (11,098) | batched | 68.4* | 14.3 | 19.9* | 189-199 |
+| 10x (37,010) | before | refused | | | 194 |
+| 10x (37,010) | batched | 34.3 | 29.7 / 24.5 | 25.3 (1 import) | 258-297 |
+
+\* This run overlapped the 10x dataset's legacy adoption. The 10x "cold" run was the first
+sync after the cutover, which had already seeded the fingerprint cache. Every 10x run finishes
+within the default 120 s sync budget.
+
+Generating the 10x dataset took 95.8 min: legacy adoption 5,231 s and cutover 360 s. Legacy
+adoption grows roughly quadratically: 58 s at 1x, 551 s at 3x. There is no native-direct
+generation path; the cutover requires an adopted legacy store.
