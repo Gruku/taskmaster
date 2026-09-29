@@ -1,7 +1,10 @@
 """Small shared IPC contract; importing a client never imports the service."""
 from contextlib import closing
+import functools
+import hashlib
 import json
 from pathlib import Path
+import re
 import sqlite3
 
 from taskmaster.native import contracts, db, schema
@@ -87,6 +90,67 @@ def encode(value, *, limit=MAX_MESSAGE_BYTES) -> bytes:
     return raw
 
 
-def check_handshake(value, identity, nonce):
-    if not isinstance(value, dict) or value != dict(identity, nonce=nonce):
-        raise HandshakeError('coordinator root/store/schema/protocol/generation mismatch; reconnect explicitly')
+@functools.lru_cache(maxsize=1)
+def _build():
+    """The installed package's build: its declared version plus a digest of every source
+    file. The version alone repeats across dev reinstalls and a path repeats across
+    in-place upgrades; the digest changes exactly when the code a process loads does."""
+    package = Path(__file__).resolve().parents[1]
+    digest = hashlib.sha256()
+    for path in sorted(package.rglob('*.py'), key=lambda item: item.relative_to(package).as_posix()):
+        data = path.read_bytes()
+        digest.update(path.relative_to(package).as_posix().encode('utf-8') + b'\x00')
+        digest.update(len(data).to_bytes(8, 'big') + data)
+    return _declared_version(package.parent), digest.hexdigest()[:32]
+
+
+def _declared_version(install_root):
+    try:
+        return str(json.loads((install_root / '.claude-plugin/plugin.json').read_text(encoding='utf-8'))['version'])
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    try:
+        match = re.search(r'(?m)^version\s*=\s*"([^"]+)"', (install_root / 'pyproject.toml').read_text(encoding='utf-8'))
+    except OSError:
+        match = None
+    return match.group(1) if match else 'unknown'
+
+
+def build_identity() -> dict:
+    version, digest = _build()
+    return {'version': version, 'digest': digest}
+
+
+def valid_build(value) -> bool:
+    return (isinstance(value, dict) and set(value) == {'version', 'digest'} and
+            all(isinstance(item, str) and 0 < len(item) <= 128 for item in value.values()))
+
+
+def _version_key(build):
+    match = re.match(r'\d+(?:\.\d+)*', build['version'])
+    return tuple(int(part) for part in match.group().split('.')) if match else ()
+
+
+def older(build, than) -> bool:
+    """Whether `build` is an older release than `than`. Equal versions (a reinstall or dev
+    build) are not ordered: the client that meets the other build is the newer one."""
+    return _version_key(build) < _version_key(than)
+
+
+def describe(build):
+    return f"{build['version']}+{build['digest'][:12]}" if valid_build(build) else 'unknown (pre-build handshake)'
+
+
+def check_handshake(value, identity, nonce, build, *, any_build=False):
+    """Every command carries the sender's build and runs only on the same build. Only a
+    retirement request (`any_build`) crosses builds; the coordinator then decides."""
+    if isinstance(value, dict) and value == dict(identity, nonce=nonce, build=build):
+        return
+    if isinstance(value, dict) and {k: v for k, v in value.items() if k != 'build'} == dict(identity, nonce=nonce):
+        if any_build and valid_build(value.get('build')):
+            return
+        raise HandshakeError(
+            f"coordinator build {describe(build)} differs from the client build {describe(value.get('build'))}; "
+            'no command ran. A newer client retires an idle older coordinator; an older client must restart '
+            'its session (reload the plugin) to use the current build', may_have_committed=False)
+    raise HandshakeError('coordinator root/store/schema/protocol/generation mismatch; reconnect explicitly')

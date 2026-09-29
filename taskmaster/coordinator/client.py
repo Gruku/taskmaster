@@ -15,9 +15,17 @@ from taskmaster.admission import UnsupportedStoreError
 from taskmaster.native import contracts, metrics
 from .ownership import ownership_held, verify_private
 from .protocol import (HandshakeError, MAX_RESPONSE_BYTES, REPLY_MARGIN, SYNC_TIMEOUT, ServiceUnavailable,
-                       encode, identify, validate_sync_timeout)
+                       build_identity, describe, encode, identify, older, valid_build, validate_sync_timeout)
 
 _START_LOCK = threading.Lock()
+_RETRY_PAUSE = 0.1
+
+
+class _ForeignBuild(Exception):
+    """A live coordinator of another build holds this repository."""
+    def __init__(self, record):
+        super().__init__('foreign coordinator build')
+        self.record = record
 
 
 def _launch(root):
@@ -35,6 +43,7 @@ class Client:
     def __init__(self, root, *, autostart=True, visibility='native', timeout=30):
         self.root = Path(root).resolve(strict=True)
         self.identity = identify(self.root)
+        self.build = build_identity()
         if visibility not in ('native', 'legacy'):
             raise ValueError('visibility must be native or legacy')
         self.autostart, self.visibility, self.timeout = autostart, visibility, timeout
@@ -65,7 +74,8 @@ class Client:
 
     def _send(self, record, method, *, wait=None, **arguments):
         """`wait` extends the reply timeout for a call whose own budget is longer."""
-        payload = encode(dict(identity=dict(self.identity, nonce=record['nonce']), method=method, **arguments))
+        payload = encode(dict(identity=dict(self.identity, nonce=record['nonce'], build=self.build), method=method,
+                              **arguments))
         connection = http.client.HTTPConnection('127.0.0.1', record['port'],
                                                 timeout=self.timeout if wait is None else max(self.timeout, wait))
         try:
@@ -103,6 +113,11 @@ class Client:
         """Return a ready discovery record, or None only on evidence that no owner is listening."""
         try:
             record = self._discovery()
+            if record.get('build') != self.build:
+                if ownership_held(self.root):
+                    raise _ForeignBuild(record)
+                # The record of an owner that has exited: no owner is listening.
+                raise FileNotFoundError('stale discovery of another build')
             self._send(record, 'status')
             return record
         except (FileNotFoundError, ConnectionRefusedError):
@@ -130,29 +145,87 @@ class Client:
             metrics.emit('ipc_connect', ms=(time.perf_counter() - started) * 1000, launched=bool(launched))
 
     def _connect_ready(self, launched=None):
-        record = self._probe()
-        if record is not None:
-            return record
-        with _START_LOCK:
-            # Another client in this process may already have completed startup.
-            record = self._probe()
-            if record is not None:
-                return record
-            child = _launch(self.root)
-            if launched is not None:
-                launched.append(child)
-            deadline = time.monotonic() + min(self.timeout, 15)
-            while time.monotonic() < deadline:
-                try:
-                    record = self._discovery()
-                    self._send(record, 'status')
-                    child.poll()  # Reap a startup loser, never signal an arbitrary PID.
+        # One budget covers waiting out a busy owner of another build and replacing it.
+        deadline = time.monotonic() + self.timeout
+        while True:
+            try:
+                record = self._probe()
+                if record is not None:
                     return record
-                except (FileNotFoundError, ConnectionError, TimeoutError, http.client.HTTPException):
-                    if child.poll() not in (None, 0):
-                        break
-                    time.sleep(0.05)
+                with _START_LOCK:
+                    # Another client in this process may already have completed startup.
+                    record = self._probe() or self._start(launched)
+                if record is not None:
+                    return record
+            except _ForeignBuild as foreign:
+                self._retire(foreign.record, deadline)
+            if time.monotonic() >= deadline:
+                raise ServiceUnavailable('coordinator startup unavailable; inspect .taskmaster/local/coordinator/'
+                                         'service.log; no writer fallback', may_have_committed=False)
+
+    def _start(self, launched):
+        """Launch an owner of this build; None when a live owner of another build won instead."""
+        child = _launch(self.root)
+        if launched is not None:
+            launched.append(child)
+        deadline = time.monotonic() + min(self.timeout, 15)
+        while time.monotonic() < deadline:
+            try:
+                record = self._discovery()
+                if record.get('build') != self.build:
+                    # The retired owner's record stays until ours publishes. If our child
+                    # already exited, a peer of another build won the kernel lock.
+                    if child.poll() is not None:
+                        return None
+                    raise FileNotFoundError('discovery of this build not yet published')
+                self._send(record, 'status')
+                child.poll()  # Reap a startup loser, never signal an arbitrary PID.
+                return record
+            except (FileNotFoundError, ConnectionError, TimeoutError, http.client.HTTPException):
+                if child.poll() not in (None, 0):
+                    break
+                time.sleep(0.05)
         raise ServiceUnavailable('coordinator startup unavailable; inspect .taskmaster/local/coordinator/service.log; no writer fallback')
+
+    def _retire(self, record, deadline):
+        """Never run a command on another build. Ask an older (or same-version) owner to
+        retire while idle and wait for its ownership lock to be released; a newer owner is
+        never downgraded. Every refusal here is before admission: nothing ran."""
+        theirs = record.get('build')
+        if not valid_build(theirs):
+            raise HandshakeError('the running coordinator predates the build handshake and cannot be retired; '
+                                 'it exits after its idle timeout (or stop it); no command ran', may_have_committed=False)
+        if older(self.build, theirs):
+            raise HandshakeError(f'a newer taskmaster build ({describe(theirs)}) runs this repository\'s coordinator; '
+                                 f'this client ({describe(self.build)}) will not downgrade it; restart this session '
+                                 'to load the updated plugin; no command ran', may_have_committed=False)
+        if not self.autostart:
+            raise HandshakeError(f'coordinator build {describe(theirs)} differs from this client build '
+                                 f'{describe(self.build)}; no command ran', may_have_committed=False)
+        try:
+            state = self._send(record, 'retire').get('state')
+        except (ConnectionError, TimeoutError, http.client.HTTPException):
+            state = 'unreachable'  # re-probe: it may just have exited, or a peer is starting
+        if state == 'refused':
+            raise HandshakeError(f'coordinator build {describe(theirs)} refused to retire; no command ran',
+                                 may_have_committed=False)
+        if state == 'retiring':
+            # It finishes in-flight work and releases its leases before the lock.
+            # A racing peer may already have replaced it: a new record means re-probe.
+            while ownership_held(self.root) and time.monotonic() < deadline:
+                try:
+                    if self._discovery().get('nonce') != record['nonce']:
+                        break
+                except FileNotFoundError:
+                    break
+                time.sleep(0.05)
+        elif time.monotonic() < deadline:
+            time.sleep(_RETRY_PAUSE)
+        if time.monotonic() >= deadline:
+            detail = {'busy': 'is busy', 'retiring': 'is still retiring'}.get(state, 'is not responding')
+            raise ServiceUnavailable(f'coordinator build {describe(theirs)} {detail}; this client '
+                                     f'({describe(self.build)}) does not run commands on another build; '
+                                     'retry later; no command ran', may_have_committed=False)
 
     def call(self, method, *, wait=None, **arguments):
         # Retain identical arguments across transport retries. In particular,

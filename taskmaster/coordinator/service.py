@@ -25,8 +25,8 @@ import time
 from taskmaster.native import commands, contracts, metrics
 from taskmaster.admission import UnsupportedStoreError
 from .ownership import Ownership, OwnershipUnavailable
-from .protocol import (MAX_MESSAGE_BYTES, MAX_RESPONSE_BYTES, ServiceUnavailable, check_handshake,
-                               connect, encode, identify, identify_connection)
+from .protocol import (MAX_MESSAGE_BYTES, MAX_RESPONSE_BYTES, ServiceUnavailable, build_identity, check_handshake,
+                               connect, describe, encode, identify, identify_connection, older)
 
 LOG = logging.getLogger(__name__)
 
@@ -80,6 +80,8 @@ class Coordinator:
                  linear_client_factory=None):
         self.root = Path(root).resolve(strict=True)
         self.identity = identify(self.root)
+        # The code this process runs; commands are served only to clients of the same build.
+        self.build = build_identity()
         self.ownership = Ownership(self.root)
         self.nonce, self.token = secrets.token_hex(24), secrets.token_hex(32)
         if type(queue_limit) is not int or queue_limit < 1:
@@ -180,7 +182,7 @@ class Coordinator:
 
     def discovery(self):
         return dict(self.identity, nonce=self.nonce, token=self.token, pid=os.getpid(),
-                    port=self.server.server_port)
+                    port=self.server.server_port, build=self.build)
 
     def submit(self, envelope):
         request, _ = contracts.validate(envelope)
@@ -430,15 +432,17 @@ class Coordinator:
     def dispatch(self, message):
         if not isinstance(message, dict):
             raise ValueError('IPC message must be an object')
-        check_handshake(message.get('identity'), self.identity, self.nonce)
+        method = message.get('method')
+        check_handshake(message.get('identity'), self.identity, self.nonce, self.build, any_build=method == 'retire')
         # Recheck the authority fence and identity, including after store swaps.
         if identify(self.root) != self.identity:
             self.stop()
             raise ServiceUnavailable('native authority changed; restart the coordinator')
         self.last_activity = time.monotonic()
-        method = message.get('method')
+        if method == 'retire':
+            return self.retire(message['identity']['build'])
         if method == 'status':
-            return dict(self.identity, nonce=self.nonce, queued=self.queue.qsize(),
+            return dict(self.identity, nonce=self.nonce, build=self.build, queued=self.queue.qsize(),
                         linear_queued=len(self.linear.jobs),
                         export_error=self.last_export_error, active_syncs=self.active_syncs)
         if method == 'sync':
@@ -507,10 +511,35 @@ class Coordinator:
             return {'state': 'stopping'}
         raise ValueError('unsupported coordinator method')
 
+    def _busy(self):
+        """Caller holds `guard` and `linear.guard`. Work admitted after this check still sees
+        `stopping` (sync, Git), or holds `publication`, which `close` takes before it
+        releases ownership."""
+        return bool(self.pending or self.linear.jobs or self.active_syncs or self.git_active is not None)
+
     def idle_expired(self, seconds):
         with self.guard, self.linear.guard:
-            return (not self.pending and not self.linear.jobs and not self.active_syncs and self.git_active is None
-                    and time.monotonic() - self.last_activity >= seconds)
+            return not self._busy() and time.monotonic() - self.last_activity >= seconds
+
+    def retire(self, requester):
+        """A client of another build asks this owner to leave. It stops exactly as an idle
+        expiry does (`main` then closes: queue drained, threads joined, publication held
+        while the ownership lock is released), and only while idle, so nothing in flight is
+        cut short. It never yields to an older release."""
+        if requester == self.build:
+            return {'state': 'refused', 'reason': 'the requester runs this build; nothing to retire'}
+        if older(requester, self.build):
+            return {'state': 'refused', 'build': self.build,
+                    'reason': f'coordinator build {describe(self.build)} is newer than {describe(requester)}; '
+                              'it is not downgraded'}
+        with self.guard, self.linear.guard:
+            if not self.stopping.is_set() and self._busy():
+                return {'state': 'busy', 'build': self.build}
+            # Under both guards: no command, Linear job or sync is admitted after this check.
+            self.stopping.set()
+        self.stop()
+        LOG.warning('retiring for coordinator build %s (this build %s)', describe(requester), describe(self.build))
+        return {'state': 'retiring', 'build': self.build}
 
     def stop(self):
         # Admission's check and enqueue must finish before the writer can see

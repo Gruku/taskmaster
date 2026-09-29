@@ -2233,7 +2233,8 @@ def send_and_drop(root: Path, env: dict) -> None:
     client = Client(root, autostart=False)
     record = client._discovery()
     request, _ = contracts.validate(env)
-    body = encode(dict(identity=dict(client.identity, nonce=record["nonce"]), method="execute", envelope=request,
+    body = encode(dict(identity=dict(client.identity, nonce=record["nonce"], build=client.build), method="execute",
+                       envelope=request,
                        visibility="native"))
     head = (f"POST /rpc HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n"
             f"Authorization: Bearer {record['token']}\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n")
