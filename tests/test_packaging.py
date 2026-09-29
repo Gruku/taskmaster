@@ -273,3 +273,14 @@ def test_a_uv_stamp_does_not_hold_the_hook_past_its_timeout(tmp_path):
     marker.unlink()
     recorder.run_stamp(slow, detach=False)
     assert marker.exists()
+
+
+def test_pre_commit_guidance_names_a_command_an_install_can_run():
+    """`python -m taskmaster.coordinator.git_cli` only works from a checkout with the package
+    on the path; an installed plugin has no such interpreter."""
+    from taskmaster.coordinator import git_hook
+
+    cli = f'uv run "{(ROOT / "taskmaster_cli.py").as_posix()}"'
+    assert f'{cli} git commit -m "<message>"' in git_hook.GUIDANCE
+    assert f"{cli} git status" in git_hook.GUIDANCE
+    assert "python -m" not in git_hook.GUIDANCE

@@ -2,7 +2,8 @@
 so staged projections are either the managed generation or refused with guidance.
 
 Taskmaster never installs or overwrites hooks. Usage inside a user's hook:
-    python -m taskmaster.coordinator.git_hook pre-commit
+    uv run <plugin>/taskmaster_cli.py git-hook pre-commit
+    (from a source checkout: python -m taskmaster.coordinator.git_hook pre-commit)
 Runs in the hook's own Git context (GIT_INDEX_FILE etc. are deliberately kept).
 """
 from __future__ import annotations
@@ -18,10 +19,12 @@ import subprocess
 import sys
 
 TOKEN_ENV = 'TASKMASTER_MANAGED_GIT'
+# The installed plugin's own front door: `python -m` works only from a source checkout.
+_CLI = f'uv run "{(Path(__file__).resolve().parents[2] / "taskmaster_cli.py").as_posix()}"'
 GUIDANCE = ('Taskmaster projections (.taskmaster/) may only be committed as one coherent generation.\n'
-            '  Commit them with:  python -m taskmaster.coordinator.git_cli commit -m "<message>"\n'
+            f'  Commit them with:  {_CLI} git commit -m "<message>"\n'
             '  Or leave them out: git restore --staged .taskmaster\n'
-            '  If a managed operation was interrupted: python -m taskmaster.coordinator.git_cli status')
+            f'  If a managed operation was interrupted: {_CLI} git status')
 _KEPT = 20
 
 
