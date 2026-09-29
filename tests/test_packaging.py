@@ -116,7 +116,18 @@ def test_bump_rewrites_every_version_string_and_nothing_else(tmp_path):
         assert len(old_lines) == len(new_lines), rel
         diff = [(a, b) for a, b in zip(old_lines, new_lines) if a != b]
         assert len(diff) == 1, (rel, diff)
-        assert diff[0][1] == diff[0][0].replace(old.encode(), b"9.8.7"), (rel, diff)
+        # uv.lock carries uv's own PEP 440 normal form (7.0.0-rc.1 -> 7.0.0rc1) and the
+        # README badge carries shields.io's escaped hyphen (7.0.0-rc.1 -> 7.0.0--rc.1);
+        # every other file carries `old` verbatim. When the running repo's version is
+        # final (no `-rc.`), both transforms are the identity, so this also exercises
+        # the non-rc path.
+        if rel == bump.LOCK:
+            old_token = bump._pep440(old)
+        elif rel == bump.BADGE:
+            old_token = old.replace("-", "--")
+        else:
+            old_token = old
+        assert diff[0][1] == diff[0][0].replace(old_token.encode(), b"9.8.7"), (rel, diff)
     assert bump.check(tmp_path) == ["CHANGELOG.md has no '## 9.8.7' heading"]
     with (tmp_path / "CHANGELOG.md").open("a", encoding="utf-8") as changelog:
         changelog.write("\n## 9.8.7\n")
