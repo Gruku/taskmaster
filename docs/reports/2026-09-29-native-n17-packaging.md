@@ -76,6 +76,17 @@ Each fix was written test-first, and each probe was re-run against the fix:
 | LOW-MEDIUM: a host's kill-on-close job could kill the detached stamp | Spawned with `CREATE_BREAKAWAY_FROM_JOB`, falling back when the job refuses it. The seconds-long `merge_gate_state` lag is documented in the runbook | unit test with a refusing job |
 | LOW | `taskmaster/backlog_server.py`'s script header pinned and covered by the header test; `bump_version.py` computes every rewrite before writing any; the CHANGELOG check is exact (`## 7.0.0-rc.1` does not satisfy `7.0.0`); the runbook gives a pre-commit hook that resolves the plugin path at run time instead of embedding a versioned cache path | tests |
 
+### Re-review fixes (merge-stamp queue)
+
+| Finding | Fix | Evidence |
+|---|---|---|
+| HIGH: one bad line wedged the queue, and the current merge was lost | Each line is parsed on its own; bad lines go to `merge-stamps-rejected.jsonl` with a log line. `_stamp_native` catches anything replay raises and still applies, or queues, the current stamp | Poison probe: the bad line was rejected and the current stamp queued, with no coordinator started. The server's next write applied the queued stamp, with the queue and claim empty afterwards |
+| LOW-MED: a Conflict was dropped as an `Error:` | Replay calls `task.merge` itself. A Conflict leads to a fresh decision, and a transient failure is re-queued (given up after 5 attempts) | tests |
+| LOW: concurrent replayers | An `O_EXCL` lock records owner pid and time, with stale recovery. The claim records its owner and is never removed by a replayer that lost it. The "already newer?" decision is enforced in the coordinator transaction through the task's expected revision | tests, including a merge recorded between the read and the write: the newer SHA survives |
+| LOW, POSIX: an append into a renamed file | Appends take the same lock and use one `os.write` of the complete line (`O_APPEND`) | tests |
+| LOW: `merged_at` minute fallback | Git ancestry first. Without it, a record from the same minute keeps its place (`>=`). Entries carry a full `queued_at` timestamp | tests |
+| LOW: a read could start a coordinator just to replay | The server replays after the call with `autostart=False`, and only when a coordinator has published a discovery file. `hook.log` is capped, and an unreachable coordinator logs nothing | tests |
+
 ## Version strings
 
 All of them currently read `6.0.3`. In taskmaster: `.claude-plugin/plugin.json`,
@@ -102,10 +113,10 @@ in the disposable clone (see the runbook).
    an install resolves the newest version inside each range. It resolved fastmcp 3.4.7;
    the suite ran on 3.4.3. `uv lock --script` would pin them exactly, but the lock files
    would need shipping in the Codex snapshot too.
-6. **Queued stamps wait for the MCP server.** On a native store with no coordinator
-   running, a merge stamp is queued and applied on the server's next native tool call;
-   until then `merge_gate_state` does not show the rung. With no server running on that
-   project, the queue waits.
+6. **Queued stamps wait for a coordinator.** On a native store with no coordinator
+   running, a merge stamp is queued. The MCP server applies it after its next native
+   call that finds a coordinator running, which means any write. A read never starts one
+   just to replay. Until then `merge_gate_state` does not show the rung.
 7. **Not covered:** POSIX (no Job Object; `contained=False` by design); a Microsoft Store
    Python as the base interpreter (containment would fail closed, not open); the real
    Claude Code and Codex hosts.

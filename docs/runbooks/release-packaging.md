@@ -52,9 +52,30 @@ index. A merge gate evaluated in that window sees the previous rung.
 
 On a native store the stamp writes only through a running coordinator; a hook never
 starts one. If none is running (it exits after 5 minutes idle), the stamp is queued in
-`.taskmaster/local/merge-stamps-pending.jsonl`, logged to `hook.log`, and applied by the
-MCP server on its next native tool call. Until then the rung is not recorded. An older
-queued stamp is dropped when the rung already records that commit or a later one.
+`.taskmaster/local/merge-stamps-pending.jsonl` and logged to `hook.log`. The MCP server
+applies the queue after a native tool call, but only through a coordinator that is
+already running: after any write, or after a read while one is up. A read never starts
+a coordinator just to replay, so until the next write the rung may stay unrecorded.
+
+Queue rules (`taskmaster/native_routing/merge_stamps.py`):
+
+- Every queue change happens under an `O_EXCL` lock file, `merge-stamps.lock`, which
+  records its owner's pid and time. A lock whose owner is dead, or that is older than
+  10 minutes, is broken.
+- A replayer moves the queue into `merge-stamps.claim` (owner on line 1), applies it
+  without the lock, then puts back what it could not apply ahead of anything queued
+  meanwhile. It never removes a claim another replayer took over.
+- A line that does not parse, or lacks `task_id`, `rung` or `sha`, is moved to
+  `merge-stamps-rejected.jsonl` with a log line. So is an entry refused outright, or one
+  that failed 5 times. A coordinator that is unreachable, or a Conflict, keeps the entry
+  queued. One bad line never blocks the rest.
+- Whether a queued stamp is still wanted is decided from a snapshot of the task. Git
+  ancestry is preferred; without it, a record from the same minute or later wins. The
+  write carries that snapshot's task revision as its expected revision, so if another
+  merge is recorded in between, the coordinator refuses it and the replayer decides
+  again from fresh state.
+- `hook.log` is capped at 1 MB (the last 256 KB is kept). An unreachable coordinator
+  logs nothing on the server path.
 
 Every reason a merge is not recorded, or not yet, is one line in
 `.taskmaster/local/hook.log`.
