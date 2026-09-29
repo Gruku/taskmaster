@@ -7,6 +7,8 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import os
+import time
 import subprocess
 import sys
 from pathlib import Path
@@ -254,3 +256,166 @@ def test_superseded_pending_stamps_are_skipped():
                                    lambda a, b: None)
     assert not merge_stamps.superseded(entry, {"merge_commit": "new", "merged_at": "2026-09-29T09:00"},
                                        lambda a, b: None)
+
+
+# ── the queue: robust to bad lines, transient refusals and concurrent replayers ──
+
+
+def _queue(tmp_path):
+    backlog = tmp_path / ".taskmaster"
+    (backlog / "local").mkdir(parents=True)
+    return backlog
+
+
+def _entry(sha, **extra):
+    return dict({"task_id": "t-1", "rung": "master", "sha": sha, "merged_at": "2026-09-29T10:00"}, **extra)
+
+
+def test_a_bad_line_is_rejected_and_the_rest_still_applies(tmp_path):
+    from taskmaster.native_routing import merge_stamps as q
+
+    backlog = _queue(tmp_path)
+    q.pending_path(backlog).write_text('{"task_id": "t-1", "rung": "mas\n{"rung": "x"}\n', encoding="utf-8")
+    q.enqueue(backlog, _entry("good"))
+    applied = []
+    counts = q.replay_queue(backlog, lambda e: applied.append(e["sha"]) or "applied")
+    assert applied == ["good"]
+    assert counts["rejected"] == 2
+    assert not q.has_pending(backlog)
+    rejected = q.rejected_path(backlog).read_text(encoding="utf-8").splitlines()
+    assert len(rejected) == 2 and "unreadable entry" in rejected[0]
+    assert "rejected" in (backlog / "local" / "hook.log").read_text(encoding="utf-8")
+    # And nothing is stuck: the next replay has nothing to do.
+    assert q.replay_queue(backlog, lambda e: pytest.fail("replayed twice")) ["applied"] == 0
+
+
+def test_a_failing_entry_is_retried_then_given_up_without_wedging_the_rest(tmp_path):
+    from taskmaster.native_routing import merge_stamps as q
+
+    backlog = _queue(tmp_path)
+    q.enqueue(backlog, _entry("boom"))
+    q.enqueue(backlog, _entry("fine"))
+
+    def apply(entry):
+        if entry["sha"] == "boom":
+            raise RuntimeError("database is locked")
+        return "applied"
+
+    for _ in range(q.MAX_ATTEMPTS - 1):
+        assert q.replay_queue(backlog, apply)["retry"] == 1
+    assert json.loads(q.pending_path(backlog).read_text(encoding="utf-8"))["sha"] == "boom"
+    assert q.replay_queue(backlog, apply)["rejected"] == 1
+    assert not q.has_pending(backlog)
+
+
+def test_a_retry_outcome_is_requeued_in_order_ahead_of_newer_entries(tmp_path):
+    """A Conflict or other transient refusal must not drop the stamp."""
+    from taskmaster.native_routing import merge_stamps as q
+
+    backlog = _queue(tmp_path)
+    q.enqueue(backlog, _entry("a"))
+    q.enqueue(backlog, _entry("b"))
+
+    def apply(entry):
+        q.enqueue(backlog, _entry("c")) if entry["sha"] == "a" else None  # arrives mid-replay
+        return "retry"
+
+    q.replay_queue(backlog, apply)
+    order = [json.loads(line)["sha"] for line in q.pending_path(backlog).read_text(encoding="utf-8").splitlines()]
+    assert order == ["a", "b", "c"]
+
+
+def test_unavailable_keeps_everything_from_that_entry_on(tmp_path):
+    from taskmaster.native_routing import merge_stamps as q
+
+    backlog = _queue(tmp_path)
+    for sha in ("a", "b", "c"):
+        q.enqueue(backlog, _entry(sha))
+    seen = []
+
+    def apply(entry):
+        seen.append(entry["sha"])
+        if entry["sha"] == "b":
+            raise q.Unavailable("no coordinator")
+        return "applied"
+
+    assert q.replay_queue(backlog, apply)["unavailable"] is True
+    order = [json.loads(line)["sha"] for line in q.pending_path(backlog).read_text(encoding="utf-8").splitlines()]
+    assert seen == ["a", "b"] and order == ["b", "c"]
+    assert not q.claim_path(backlog).exists()
+
+
+def test_a_live_replayer_s_claim_is_left_alone_and_a_dead_one_s_is_finished(tmp_path):
+    from taskmaster.native_routing import merge_stamps as q
+
+    backlog = _queue(tmp_path)
+    live = {"pid": os.getpid(), "at": time.time(), "token": "live"}
+    q.claim_path(backlog).write_text(json.dumps(live) + "\n" + json.dumps(_entry("claimed")) + "\n",
+                                     encoding="utf-8")
+    q.enqueue(backlog, _entry("queued"))
+    assert q.replay_queue(backlog, lambda e: pytest.fail("took a live claim"))["applied"] == 0
+    assert q.claim_path(backlog).exists()
+
+    dead = {"pid": 2 ** 31 - 7, "at": time.time(), "token": "dead"}
+    q.claim_path(backlog).write_text(json.dumps(dead) + "\n" + json.dumps(_entry("claimed")) + "\n",
+                                     encoding="utf-8")
+    applied = []
+    q.replay_queue(backlog, lambda e: applied.append(e["sha"]) or "applied")
+    assert applied == ["claimed", "queued"]
+    assert not q.has_pending(backlog)
+
+
+def test_a_replayer_never_removes_a_claim_it_lost(tmp_path):
+    from taskmaster.native_routing import merge_stamps as q
+
+    backlog = _queue(tmp_path)
+    q.enqueue(backlog, _entry("a"))
+    usurper = {"pid": os.getpid(), "at": time.time(), "token": "usurper"}
+
+    def apply(entry):
+        # Another replayer judged this one stale and took the batch over.
+        lines = q.claim_path(backlog).read_text(encoding="utf-8").splitlines()
+        q.claim_path(backlog).write_text("\n".join([json.dumps(usurper)] + lines[1:]) + "\n", encoding="utf-8")
+        return "retry"
+
+    q.replay_queue(backlog, apply)
+    assert json.loads(q.claim_path(backlog).read_text(encoding="utf-8").splitlines()[0])["token"] == "usurper"
+    assert not q.pending_path(backlog).exists()
+
+
+def test_the_queue_lock_is_exclusive_and_a_stale_one_is_broken(tmp_path):
+    from taskmaster.native_routing import merge_stamps as q
+
+    backlog = _queue(tmp_path)
+    with q.queue_lock(backlog):
+        with pytest.raises(TimeoutError):
+            with q.queue_lock(backlog, timeout=0.3):
+                pass
+    lock = backlog / "local" / q.LOCK
+    lock.write_text(json.dumps({"pid": 2 ** 31 - 7, "at": time.time(), "token": "dead"}), encoding="utf-8")
+    with q.queue_lock(backlog, timeout=2):
+        pass
+    lock.write_text(json.dumps({"pid": os.getpid(), "at": time.time() - q.STALE_SECONDS - 1, "token": "old"}),
+                    encoding="utf-8")
+    with q.queue_lock(backlog, timeout=2):
+        pass
+    assert not lock.exists()
+
+
+def test_hook_log_is_capped(tmp_path):
+    from taskmaster.native_routing import merge_stamps as q
+
+    backlog = _queue(tmp_path)
+    log = backlog / "local" / "hook.log"
+    log.write_bytes(b"x" * (q.LOG_MAX_BYTES + 10))
+    q.hook_log(backlog, "after the cap")
+    assert log.stat().st_size < q.LOG_MAX_BYTES
+    assert log.read_text(encoding="utf-8").endswith("after the cap\n")
+
+
+def test_the_same_minute_without_ancestry_keeps_the_record():
+    from taskmaster.native_routing import merge_stamps as q
+
+    entry = _entry("queued")
+    assert q.superseded(entry, {"merge_commit": "other", "merged_at": "2026-09-29T10:00"}, lambda a, b: None)
+    assert not q.superseded(entry, {"merge_commit": "other", "merged_at": "2026-09-29T10:00"}, lambda a, b: False)

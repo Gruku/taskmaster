@@ -208,6 +208,81 @@ def test_a_queued_stamp_older_than_the_recorded_one_is_dropped(twins, monkeypatc
     assert not pending.exists()
 
 
+def test_a_poisoned_queue_neither_wedges_nor_costs_the_current_stamp(twins, monkeypatch):
+    """One unparseable queue line used to escape replay before the claim was released,
+    wedging the queue for good and losing the merge being stamped."""
+    from taskmaster.native_routing import merge_stamps
+
+    hook = _module("merge_recorder_stamp")
+    local = twins.native / ".taskmaster" / "local"
+    (local / merge_stamps.PENDING).write_text('{"task_id": "test-epic-003", "rung": "mas', encoding="utf-8")
+    monkeypatch.setenv("TASKMASTER_ROOT", str(twins.native))
+    with twins.at(twins.native):
+        hook.stamp("feature/late", twins.native, "qa-line", "f00dcafe")
+    stamped = committed(twins.native)[("task", "test-epic-003")][0]["merge_status"]
+    assert stamped["qa"]["merge_commit"] == "f00dcafe", stamped
+    assert not merge_stamps.has_pending(twins.native / ".taskmaster")
+    assert "unreadable entry" in (local / merge_stamps.REJECTED).read_text(encoding="utf-8")
+
+
+def test_a_replay_failure_does_not_cost_the_current_stamp(twins, monkeypatch):
+    from taskmaster.native_routing import merge_stamps
+
+    hook = _module("merge_recorder_stamp")
+
+    def broken(*a, **k):
+        raise RuntimeError("replay exploded")
+
+    monkeypatch.setattr(merge_stamps, "replay", broken)
+    monkeypatch.setenv("TASKMASTER_ROOT", str(twins.native))
+    with twins.at(twins.native):
+        hook.stamp("feature/late", twins.native, "qa-line", "f00dcafe")
+    stamped = committed(twins.native)[("task", "test-epic-003")][0]["merge_status"]
+    assert stamped["qa"]["merge_commit"] == "f00dcafe", stamped
+    log = (twins.native / ".taskmaster" / "local" / "hook.log").read_text(encoding="utf-8")
+    assert "replay exploded" in log, log
+
+
+def test_the_server_replays_only_without_starting_a_coordinator(twins, monkeypatch):
+    """A read must not wait up to 15 s for a coordinator started only to replay."""
+    from taskmaster.native_routing import merge_stamps
+
+    merge_stamps.enqueue(twins.native / ".taskmaster", {"task_id": "test-epic-003", "rung": "qa", "sha": "abc"})
+    calls = []
+    monkeypatch.setattr(merge_stamps, "replay", lambda *a, **k: calls.append(k.get("autostart")) or {})
+    with twins.at(twins.native):
+        bs.backlog_get_task(task_id="test-epic-003")
+    assert calls == [False]
+
+
+def test_a_stamp_decided_on_stale_state_is_redecided_not_forced(twins, monkeypatch):
+    """The replay writes with the snapshot's task revision as the expected revision, so a
+    merge recorded between its read and its write makes it decide again, and the newer
+    record survives."""
+    from taskmaster.coordinator import adapter
+    from taskmaster.native_routing import merge_stamps
+
+    backlog = twins.native / ".taskmaster"
+    merge_stamps.enqueue(backlog, {"task_id": "test-epic-003", "rung": "qa", "sha": "0ld5ha",
+                                   "merged_at": "2026-01-01T00:00"})
+    real = adapter.NativeCall.execute
+    raced = []
+
+    def execute(self, operation, arguments, *, expected=None):
+        if operation == "task.merge" and arguments["sha"] == "0ld5ha" and not raced:
+            raced.append(expected)
+            real(self, operation, dict(arguments, sha="n3wsha", merged_at="2999-01-01T00:00"))
+        return real(self, operation, arguments, expected=expected)
+
+    monkeypatch.setattr(adapter.NativeCall, "execute", execute)
+    with twins.at(twins.native):
+        merge_stamps.replay(backlog, backlog / "local" / "store.db", "test", autostart=False)
+    assert raced and raced[0] and raced[0][0]["kind"] == "task"
+    stamped = committed(twins.native)[("task", "test-epic-003")][0]["merge_status"]["qa"]
+    assert stamped["merge_commit"] == "n3wsha", stamped
+    assert not merge_stamps.has_pending(backlog)
+
+
 # ── N14: the edit hook's related count from the canonical neighbourhood ──
 
 def _both(twins, hook, rels):

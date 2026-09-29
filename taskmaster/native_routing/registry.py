@@ -7,6 +7,7 @@ from __future__ import annotations
 import inspect
 import json
 import threading
+from pathlib import Path
 from typing import Callable
 
 from . import gate, runtime
@@ -91,8 +92,6 @@ def dispatch(tool: str, legacy: Callable, database, backlog_dir, session: str, a
             unknown = UNKNOWN_ACTION.get(tool, lambda action: f"Error: unknown action {action!r}")
             return unknown(arguments["action"])
         return unrouted_message(tool, arguments.get("action"))
-    if not getattr(_DEPTH, "calls", 0):
-        _replay_merge_stamps(database, backlog_dir, session)
     with runtime.open_call(database, backlog_dir, session) as call:
         outermost = not getattr(_DEPTH, "calls", 0)
         _DEPTH.calls = getattr(_DEPTH, "calls", 0) + 1
@@ -100,17 +99,24 @@ def dispatch(tool: str, legacy: Callable, database, backlog_dir, session: str, a
             result = handler(call, **arguments)
         finally:
             _DEPTH.calls -= 1
-        return _with_flag_notices(call, result) if outermost else result
+        result = _with_flag_notices(call, result) if outermost else result
+    if outermost:
+        _replay_merge_stamps(database, backlog_dir, session)
+    return result
 
 
 def _replay_merge_stamps(database, backlog_dir, session):
-    """Apply merge stamps a hook queued while no coordinator ran (merge_stamps.py). The
-    server may start one; a hook may not. Advisory: never costs the caller its call."""
+    """Apply merge stamps a hook queued while no coordinator ran (merge_stamps.py), after
+    the call, and only through a coordinator that is already running: a write has just
+    used one; a read must not wait for one started only to replay. With none running the
+    queue waits, silently. Advisory: never costs the caller its call."""
     from . import merge_stamps
     if not merge_stamps.has_pending(backlog_dir):
         return
+    if not (Path(backlog_dir) / "local" / "coordinator" / "discovery.json").exists():
+        return  # no coordinator has published an address: nothing to replay through
     try:
-        merge_stamps.replay(backlog_dir, database, session, autostart=True)
+        merge_stamps.replay(backlog_dir, database, session, autostart=False)
     except Exception as exc:  # noqa: BLE001 -- the stamps stay queued for the next call
         merge_stamps.hook_log(backlog_dir, f"replaying queued merge stamps failed ({exc!r}); kept queued")
 

@@ -273,25 +273,38 @@ def _is_native(db_file: Path) -> bool:
 
 
 def _stamp_native(root: Path, db_file: Path, tid: str, rung: str, sha: str, merged_at: str) -> None:
-    """Write through a running coordinator only; queue the stamp when none runs."""
-    from taskmaster.coordinator.protocol import ServiceUnavailable
-    from taskmaster.native_routing import merge_stamps, runtime, tasks
+    """Write through a running coordinator only (hooks never start one); queue the stamp
+    when none runs. A broken queue never costs this merge."""
+    from taskmaster.native_routing import merge_stamps
 
     backlog_dir = root / ".taskmaster"
     entry = {"task_id": tid, "rung": rung, "sha": sha, "merged_at": merged_at}
     log = lambda text: _log(root, text)  # noqa: E731
     try:
-        # Stamps queued earlier land first, so a later merge is never overwritten.
+        # Stamps queued earlier go first; a stale one never overwrites a newer record.
         merge_stamps.replay(backlog_dir, db_file, SESSION, autostart=False, log=log)
-        with runtime.open_call(db_file, backlog_dir, SESSION, autostart=False) as call:
-            result = tasks.record_merge(call, task_id=tid, rung=rung, sha=sha, merged_at=merged_at)
-    except ServiceUnavailable as exc:
-        merge_stamps.enqueue(backlog_dir, entry)
-        _log(root, f"no coordinator reachable ({exc}); merge stamp {tid} {rung} {sha} queued for the "
-                   "MCP server's next call")
+    except Exception as exc:  # noqa: BLE001 -- the queue's trouble is not this merge's
+        _log(root, f"replaying queued merge stamps failed ({exc!r}); recording this merge anyway")
+    label = f"{tid} {rung} {sha}"
+    try:
+        outcome = merge_stamps.native_apply(db_file, backlog_dir, SESSION, autostart=False)(entry)
+    except merge_stamps.Unavailable as exc:
+        outcome = ("queue", f"no coordinator reachable ({exc})")
+    except Exception as exc:  # noqa: BLE001
+        outcome = ("queue", f"recording failed ({exc!r})")
+    if outcome in ("applied", "dropped"):
         return
-    if isinstance(result, str) and result.startswith("Error"):
-        _log(root, f"recording {tid} {rung} {sha} was refused: {result}")
+    if outcome == "retry":
+        outcome = ("queue", "the task kept changing under the write")
+    if outcome[0] == "reject":
+        _log(root, f"recording {label} was refused: {outcome[1]}")
+        return
+    try:
+        merge_stamps.enqueue(backlog_dir, entry)
+    except Exception as exc:  # noqa: BLE001
+        _log(root, f"{outcome[1]}; could not queue merge stamp {label} either ({exc!r}); NOT RECORDED")
+        return
+    _log(root, f"{outcome[1]}; merge stamp {label} queued for the MCP server")
 
 
 def main() -> None:
