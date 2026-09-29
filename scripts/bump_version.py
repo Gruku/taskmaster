@@ -17,7 +17,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SEMVER = re.compile(r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?")
+# X.Y.Z or a release candidate X.Y.Z-rc.N: both semver and readable by pip/uv (PEP 440).
+SEMVER = re.compile(r"\d+\.\d+\.\d+(?:-rc\.\d+)?")
 
 # Each pattern's group 2 is the version; groups 1 and 3 are kept byte for byte.
 PATTERNS = {
@@ -25,8 +26,10 @@ PATTERNS = {
     ".codex-plugin/plugin.json": r'(\n\s*"version":\s*")([^"]+)(")',
     "pyproject.toml": r'(\[project\][^\[]*?\nversion = ")([^"]+)(")',
     "uv.lock": r'(\[\[package\]\]\r?\nname = "taskmaster"\r?\nversion = ")([^"]+)(")',
-    "README.md": r"(img\.shields\.io/badge/version-)([^-]+)(-)",
+    # shields.io reads `-` as its separator, so the badge spells a hyphen `--`.
+    "README.md": r"(img\.shields\.io/badge/version-)((?:[^-]|--)+)(-)",
 }
+BADGE = "README.md"
 VERSIONED_FILES = tuple(PATTERNS)
 
 
@@ -40,7 +43,8 @@ def versions(root: Path = ROOT) -> dict[str, str | None]:
     found = {}
     for rel, pattern in PATTERNS.items():
         matches = re.findall(pattern, _read(root, rel))
-        found[rel] = matches[0][1] if len(matches) == 1 else None
+        version = matches[0][1] if len(matches) == 1 else None
+        found[rel] = version.replace("--", "-") if version and rel == BADGE else version
     return found
 
 
@@ -63,7 +67,8 @@ def bump(root: Path, new: str) -> list[str]:
     changed = []
     for rel, pattern in PATTERNS.items():
         text = _read(root, rel)
-        updated, count = re.subn(pattern, lambda m: m.group(1) + new + m.group(3), text)
+        token = new.replace("-", "--") if rel == BADGE else new
+        updated, count = re.subn(pattern, lambda m: m.group(1) + token + m.group(3), text)
         if count != 1:
             raise ValueError(f"{rel}: expected one version string, found {count}")
         if updated != text:

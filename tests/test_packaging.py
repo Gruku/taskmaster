@@ -122,10 +122,22 @@ def test_bump_rewrites_every_version_string_and_nothing_else(tmp_path):
     assert bump.check(tmp_path) == []
 
 
-def test_bump_refuses_a_non_semver_version(tmp_path):
+def test_bump_carries_a_release_candidate_into_the_badge(tmp_path):
+    """shields.io reads `-` as a separator: a release candidate's badge needs `--`."""
+    bump = _load("scripts/bump_version.py", "bump_version_t")
+    for relative in bump.VERSIONED_FILES + ("CHANGELOG.md",):
+        (tmp_path / relative).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / relative, tmp_path / relative)
+    bump.bump(tmp_path, "6.9.0-rc.1")
+    assert set(bump.versions(tmp_path).values()) == {"6.9.0-rc.1"}
+    assert "badge/version-6.9.0--rc.1-" in (tmp_path / "README.md").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("version", ["6.1", "6.1.0-rehearsal", "v6.1.0"])
+def test_bump_refuses_a_version_pip_and_uv_cannot_read(tmp_path, version):
     bump = _load("scripts/bump_version.py", "bump_version_t")
     with pytest.raises(ValueError):
-        bump.bump(tmp_path, "6.1")
+        bump.bump(tmp_path, version)
 
 
 def test_version_falls_back_to_the_codex_manifest(tmp_path):
