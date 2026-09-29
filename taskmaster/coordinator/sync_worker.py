@@ -569,7 +569,10 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
                 pending(None, f'projection publication failed: {exc}')
                 return result
             owner.checkpoint('sync_published')
-            result['notices'].extend(notice for notice in publication['notices'] if notice not in result['notices'])
+            for notice in publication['notices']:
+                if notice not in notices_seen:
+                    notices_seen.add(notice)
+                    result['notices'].append(notice)
             if publication['state'] != 'exported':
                 pending(None, 'projection publication incomplete')
             if linked is not None:

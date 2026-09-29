@@ -26,7 +26,7 @@ completion check and one `sync.finish`. The batch is a unit of reading and memor
 per-batch is durable except what an unbatched sync already makes durable: import receipts, drift
 holds, and the fingerprint cache.
 
-- **Batch unit:** `sync_worker.BATCH_FILES` paths (default `sync.MAX_FILES`, i.e. 10,000), taken
+- **Batch unit:** `sync_worker.batch_size()` paths (`sync.MAX_FILES`, i.e. 10,000, read at call time), taken
   as consecutive slices of the selected path list.
 - **Ordering:** unchanged from the unbatched sync. Discovered files come first, in
   `ENTITY_FILE_SPECS` order and sorted per directory, then paths the store records that were not

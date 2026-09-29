@@ -16,7 +16,9 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import stat
+import threading
 import time
+import uuid
 from typing import NamedTuple
 
 from taskmaster.native import metrics
@@ -435,7 +437,9 @@ def save_scan(store_root: Path, scan: Scan, *, complete: bool = True) -> None:
         checkouts.pop(next(iter(checkouts)))
     checkouts[key] = {"since": scan.since, "entries": entries}
     path = cache_path(store_root)
-    temp = path.with_name(f"{path.name}.tmp.{os.getpid()}")
+    # Unique per writer: coordinator threads (a sync between batches, git.generation outside
+    # the publication lock) may save concurrently; each replaces the file atomically.
+    temp = path.with_name(f"{path.name}.tmp.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         temp.write_text(json.dumps({"version": CACHE_VERSION, "checkouts": checkouts}, separators=(",", ":")),
