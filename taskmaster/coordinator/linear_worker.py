@@ -15,7 +15,7 @@ import threading
 
 from taskmaster.native import contracts
 from taskmaster.native.queries import Repository
-from .protocol import ServiceUnavailable
+from .protocol import CoordinatorStopping, ServiceUnavailable
 
 
 class LinearWorker:
@@ -43,7 +43,7 @@ class LinearWorker:
                     raise contracts.Conflict('request_id reused with a different Linear retry')
                 return future
             if self.coordinator.stopping.is_set():
-                raise ServiceUnavailable('coordinator is stopping; retry the same request_id')
+                raise CoordinatorStopping('coordinator is stopping; retry the same request_id')
             future = Future()
             try:
                 self.queue.put_nowait((key, envelope, future))

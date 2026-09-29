@@ -14,10 +14,33 @@ import uuid
 from taskmaster.admission import UnsupportedStoreError
 from taskmaster.native import contracts, metrics
 from .ownership import ownership_held, verify_private
-from .protocol import (HandshakeError, MAX_RESPONSE_BYTES, REPLY_MARGIN, SYNC_TIMEOUT, ServiceUnavailable,
-                       encode, identify, validate_sync_timeout)
+from .protocol import (CoordinatorStopping, HandshakeError, MAX_RESPONSE_BYTES, REPLY_MARGIN, SYNC_TIMEOUT,
+                       ServiceUnavailable, build_identity, compare_versions, describe, encode, identify, same_build,
+                       valid_build, validate_sync_timeout)
 
 _START_LOCK = threading.Lock()
+_RETRY_PAUSE = 0.1
+
+
+class _ForeignBuild(Exception):
+    """A live coordinator of another build holds this repository."""
+    def __init__(self, record):
+        super().__init__('foreign coordinator build')
+        self.record = record
+
+
+class _Unresponsive(Exception):
+    """A live owner of this build did not answer (overloaded, or retiring)."""
+    def __init__(self, record):
+        super().__init__('coordinator not responding')
+        self.record = record
+
+
+def _annotated(exc, guidance, request_id, caller_scope):
+    """Name the request on a failure; offer receipt recovery only when it may have committed."""
+    return type(exc)(f"{exc}; {guidance if exc.may_have_committed else 'no command ran'}; "
+                     f'request_id={request_id!r}, caller_scope={caller_scope!r}',
+                     request_id=request_id, caller_scope=caller_scope, may_have_committed=exc.may_have_committed)
 
 
 def _launch(root):
@@ -35,6 +58,7 @@ class Client:
     def __init__(self, root, *, autostart=True, visibility='native', timeout=30):
         self.root = Path(root).resolve(strict=True)
         self.identity = identify(self.root)
+        self.build = build_identity()
         if visibility not in ('native', 'legacy'):
             raise ValueError('visibility must be native or legacy')
         self.autostart, self.visibility, self.timeout = autostart, visibility, timeout
@@ -65,7 +89,8 @@ class Client:
 
     def _send(self, record, method, *, wait=None, **arguments):
         """`wait` extends the reply timeout for a call whose own budget is longer."""
-        payload = encode(dict(identity=dict(self.identity, nonce=record['nonce']), method=method, **arguments))
+        payload = encode(dict(identity=dict(self.identity, nonce=record['nonce'], build=self.build), method=method,
+                              **arguments))
         connection = http.client.HTTPConnection('127.0.0.1', record['port'],
                                                 timeout=self.timeout if wait is None else max(self.timeout, wait))
         try:
@@ -93,8 +118,11 @@ class Client:
             if response.status != 200:
                 errors = {'Conflict': contracts.Conflict, 'CancelledBeforeExecution': contracts.CancelledBeforeExecution,
                           'ValueError': ValueError, 'KeyError': KeyError, 'HandshakeError': HandshakeError,
-                          'UnsupportedStoreError': UnsupportedStoreError}
-                raise errors.get(value.get('type'), ServiceUnavailable)(value.get('error', 'coordinator refused request'))
+                          'UnsupportedStoreError': UnsupportedStoreError, 'CoordinatorStopping': CoordinatorStopping}
+                error = errors.get(value.get('type'), ServiceUnavailable)(value.get('error', 'coordinator refused request'))
+                if isinstance(error, (HandshakeError, CoordinatorStopping)):
+                    error.may_have_committed = False  # refused before admission
+                raise error
             return value['result']
         finally:
             connection.close()
@@ -103,6 +131,11 @@ class Client:
         """Return a ready discovery record, or None only on evidence that no owner is listening."""
         try:
             record = self._discovery()
+            if not same_build(record.get('build'), self.build):
+                if ownership_held(self.root):
+                    raise _ForeignBuild(record)
+                # The record of an owner that has exited: no owner is listening.
+                raise FileNotFoundError('stale discovery of another build')
             self._send(record, 'status')
             return record
         except (FileNotFoundError, ConnectionRefusedError):
@@ -114,9 +147,10 @@ class Client:
                 raise ServiceUnavailable('repository coordinator unavailable; start it or retry later') from None
             # A reset, timeout or garbled reply at a recorded address is a live
             # but unhealthy owner (e.g. overloaded), unless the kernel lock is
-            # free: then the record is stale and its port may be reused.
+            # free: then the record is stale and its port may be reused. A retiring
+            # owner looks the same until it releases the lock: keep re-probing.
             if ownership_held(self.root):
-                raise ServiceUnavailable('repository coordinator is running but not responding; retry later') from exc
+                raise _Unresponsive(record) from exc
             return None
 
     def _ready(self):
@@ -130,40 +164,144 @@ class Client:
             metrics.emit('ipc_connect', ms=(time.perf_counter() - started) * 1000, launched=bool(launched))
 
     def _connect_ready(self, launched=None):
-        record = self._probe()
-        if record is not None:
-            return record
-        with _START_LOCK:
-            # Another client in this process may already have completed startup.
-            record = self._probe()
-            if record is not None:
-                return record
-            child = _launch(self.root)
-            if launched is not None:
-                launched.append(child)
-            deadline = time.monotonic() + min(self.timeout, 15)
-            while time.monotonic() < deadline:
-                try:
-                    record = self._discovery()
-                    self._send(record, 'status')
-                    child.poll()  # Reap a startup loser, never signal an arbitrary PID.
+        # One budget covers waiting out a busy owner of another build and replacing it.
+        deadline = time.monotonic() + self.timeout
+        while True:
+            try:
+                record = self._probe()
+                if record is not None:
                     return record
-                except (FileNotFoundError, ConnectionError, TimeoutError, http.client.HTTPException):
-                    if child.poll() not in (None, 0):
-                        break
-                    time.sleep(0.05)
+                with _START_LOCK:
+                    # Another client in this process may already have completed startup.
+                    record = self._probe() or self._start(launched)
+                if record is not None:
+                    return record
+            except _ForeignBuild as foreign:
+                self._retire(foreign.record, deadline)
+            except _Unresponsive:
+                if time.monotonic() >= deadline:
+                    raise ServiceUnavailable('repository coordinator is running but not responding; retry later',
+                                             may_have_committed=False) from None
+                time.sleep(_RETRY_PAUSE)
+                continue  # the next probe decides; this is not a failed startup
+            if time.monotonic() >= deadline:
+                raise ServiceUnavailable('coordinator startup unavailable; inspect .taskmaster/local/coordinator/'
+                                         'service.log; no writer fallback', may_have_committed=False)
+
+    def _await_successor(self, record, deadline):
+        """Wait while the owner named by `record` still holds the lock and no successor
+        has published: it is finishing in-flight work and releasing its leases."""
+        while ownership_held(self.root) and time.monotonic() < deadline:
+            try:
+                if self._discovery().get('nonce') != record['nonce']:
+                    return
+            except FileNotFoundError:
+                return
+            time.sleep(0.05)
+
+    def _start(self, launched):
+        """Launch an owner of this build; None when a live owner of another build won instead."""
+        child = _launch(self.root)
+        if launched is not None:
+            launched.append(child)
+        deadline = time.monotonic() + min(self.timeout, 15)
+        while time.monotonic() < deadline:
+            try:
+                record = self._discovery()
+                if not same_build(record.get('build'), self.build):
+                    # The retired owner's record stays until ours publishes. If our child
+                    # already exited, a peer of another build won the kernel lock.
+                    if child.poll() is not None:
+                        return None
+                    raise FileNotFoundError('discovery of this build not yet published')
+                self._send(record, 'status')
+                child.poll()  # Reap a startup loser, never signal an arbitrary PID.
+                return record
+            except (FileNotFoundError, ConnectionError, TimeoutError, http.client.HTTPException):
+                code = child.poll()
+                if code not in (None, 0):
+                    break
+                if code == 0 and not ownership_held(self.root):
+                    return None  # it lost to an owner that has since exited (e.g. retiring): relaunch
+                time.sleep(0.05)
         raise ServiceUnavailable('coordinator startup unavailable; inspect .taskmaster/local/coordinator/service.log; no writer fallback')
+
+    def _retire(self, record, deadline):
+        """The cross-build policy: never run a command on another build. Equal digests are one
+        build (see `_probe`). Otherwise, by SemVer precedence against the owner's release:
+          newer    - ask it to retire; while it is busy, wait and retry within the budget;
+          same or unordered (same release, other code; or an unparseable version) - ask it
+                     to retire only if idle, refusing at once when busy (limits churn between
+                     two installs used side by side);
+          older    - refuse; a newer owner is never downgraded.
+        The owner decides again under its own locks. Every refusal here is pre-admission."""
+        theirs = record.get('build')
+        if not valid_build(theirs):
+            raise HandshakeError(
+                "the running coordinator predates the build handshake (a pre-release build) and cannot be retired; "
+                'it exits after its idle timeout (TASKMASTER_SERVICE_IDLE_SECONDS, 300 s by default); to stop it '
+                'sooner, end the session that started it or stop the process whose pid is in '
+                '.taskmaster/local/coordinator/discovery.json', may_have_committed=False)
+        order = compare_versions(self.build, theirs)
+        if order == -1:
+            raise HandshakeError(f'a newer taskmaster build ({describe(theirs)}) runs this repository\'s coordinator; '
+                                 f'this client ({describe(self.build)}) will not downgrade it; restart this session '
+                                 'to load the updated plugin', may_have_committed=False)
+        if not self.autostart:
+            raise HandshakeError(f'coordinator build {describe(theirs)} differs from this client build '
+                                 f'{describe(self.build)}', may_have_committed=False)
+        try:
+            state = self._send(record, 'retire').get('state')
+        except HandshakeError:
+            raise
+        except (ConnectionError, TimeoutError, http.client.HTTPException, ServiceUnavailable):
+            # Re-probe: it may just have exited, its port may now be someone else's
+            # (403), or a peer is starting.
+            state = 'unreachable'
+        if state == 'refused':
+            raise HandshakeError(f'coordinator build {describe(theirs)} refused to retire', may_have_committed=False)
+        if state == 'busy' and order != 1:
+            raise ServiceUnavailable(f'coordinator build {describe(theirs)} is busy; this client '
+                                     f'({describe(self.build)}, same release, other code) retires it only while idle; '
+                                     'retry later', may_have_committed=False)
+        if state == 'retiring':
+            self._await_successor(record, deadline)  # a new record means re-probe
+        elif time.monotonic() < deadline:
+            time.sleep(_RETRY_PAUSE)
+        if time.monotonic() >= deadline:
+            detail = {'busy': 'is busy', 'retiring': 'is still retiring'}.get(state, 'is not responding')
+            raise ServiceUnavailable(f'coordinator build {describe(theirs)} {detail}; this client '
+                                     f'({describe(self.build)}) does not run commands on another build; '
+                                     'retry later', may_have_committed=False)
 
     def call(self, method, *, wait=None, **arguments):
         # Retain identical arguments across transport retries. In particular,
         # never mint a new command request_id after an ambiguous disconnect.
-        for attempt in range(2):
-            record = self._ready()
+        deadline = time.monotonic() + self.timeout
+        sent = False  # an earlier attempt reached a coordinator; its outcome is unknown
+        while True:
             try:
+                record = self._ready()
                 return self._send(record, method, wait=wait, **arguments)
+            except CoordinatorStopping as exc:
+                # A retiring owner refused it before admission: wait for its successor.
+                if time.monotonic() >= deadline:
+                    raise self._after_lost_reply(exc) if sent else exc
+                self._await_successor(record, deadline)
             except (ConnectionError, TimeoutError, http.client.HTTPException):
-                if attempt:
+                if sent:
                     raise ServiceUnavailable('coordinator disconnected; retry the same request_id to recover its receipt') from None
+                sent = True
+            except ServiceUnavailable as exc:
+                if sent:
+                    raise self._after_lost_reply(exc) from exc
+                raise
+
+    @staticmethod
+    def _after_lost_reply(exc):
+        """A retry's refusal says nothing about the first attempt, whose reply was lost."""
+        return ServiceUnavailable(f'the first attempt reached a coordinator but its reply was lost, so the command '
+                                  f'may have committed; the retry failed: {exc}', may_have_committed=True)
 
     def execute(self, envelope):
         request, _ = contracts.validate(envelope)
@@ -174,11 +312,8 @@ class Client:
         except ServiceUnavailable as exc:
             # Public adapters may have minted the ID on behalf of the caller;
             # expose it on ambiguity so the durable receipt is inspectable.
-            raise type(exc)(
-                f"{exc}; retry the same request to recover its receipt; "
-                f"request_id={request['request_id']!r}, caller_scope={request['caller_scope']!r}",
-                request_id=request['request_id'], caller_scope=request['caller_scope'],
-                may_have_committed=exc.may_have_committed) from exc
+            raise _annotated(exc, 'retry the same request to recover its receipt',
+                             request['request_id'], request['caller_scope']) from exc
 
     def status(self):
         return self.call('status')
@@ -195,9 +330,7 @@ class Client:
         try:
             return self.call('linear_retry', caller_scope=caller_scope, request_id=request_id, target_id=target_id)
         except ServiceUnavailable as exc:
-            raise type(exc)(f'{exc}; retry the same request; request_id={request_id!r}, caller_scope={caller_scope!r}',
-                            request_id=request_id, caller_scope=caller_scope,
-                            may_have_committed=exc.may_have_committed) from exc
+            raise _annotated(exc, 'retry the same request', request_id, caller_scope) from exc
 
     def linear_bootstrap(self, *, entry, default_workspace):
         """Add a Linear workspace to linear.yaml under the coordinator's publication
@@ -228,10 +361,7 @@ class Client:
             return self.call('sync', caller_scope=caller_scope, request_id=request_id, wait=budget + REPLY_MARGIN,
                              **options, **extra)
         except ServiceUnavailable as exc:
-            raise type(exc)(f'{exc}; inspect sync_status or retry the same sync id; '
-                            f'request_id={request_id!r}, caller_scope={caller_scope!r}',
-                            request_id=request_id, caller_scope=caller_scope,
-                            may_have_committed=exc.may_have_committed) from exc
+            raise _annotated(exc, 'inspect sync_status or retry the same sync id', request_id, caller_scope) from exc
 
     def sync_status(self, caller_scope, request_id):
         return self.call('sync_status', caller_scope=caller_scope, request_id=request_id)
@@ -253,10 +383,7 @@ class Client:
                              request_id=request_id, timeout=timeout, wait=budget + timeout + REPLY_MARGIN,
                              **extra, **extra_sync)
         except ServiceUnavailable as exc:
-            raise type(exc)(f'{exc}; inspect git_status or retry the same request; '
-                            f'request_id={request_id!r}, caller_scope={caller_scope!r}',
-                            request_id=request_id, caller_scope=caller_scope,
-                            may_have_committed=exc.may_have_committed) from exc
+            raise _annotated(exc, 'inspect git_status or retry the same request', request_id, caller_scope) from exc
 
     def git_status(self):
         return self.call('git_status')
