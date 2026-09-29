@@ -30,6 +30,17 @@ PATTERNS = {
     "README.md": r"(img\.shields\.io/badge/version-)((?:[^-]|--)+)(-)",
 }
 BADGE = "README.md"
+LOCK = "uv.lock"  # uv writes the PEP 440 normal form: 7.0.0-rc.1 is spelled 7.0.0rc1
+
+
+def _pep440(version: str) -> str:
+    match = re.fullmatch(r"(\d+\.\d+\.\d+)-rc\.(\d+)", version)
+    return f"{match.group(1)}rc{match.group(2)}" if match else version
+
+
+def _from_pep440(version: str) -> str:
+    match = re.fullmatch(r"(\d+\.\d+\.\d+)(?:-?rc\.?)(\d+)", version)
+    return f"{match.group(1)}-rc.{match.group(2)}" if match else version
 VERSIONED_FILES = tuple(PATTERNS)
 
 
@@ -44,7 +55,11 @@ def versions(root: Path = ROOT) -> dict[str, str | None]:
     for rel, pattern in PATTERNS.items():
         matches = re.findall(pattern, _read(root, rel))
         version = matches[0][1] if len(matches) == 1 else None
-        found[rel] = version.replace("--", "-") if version and rel == BADGE else version
+        if version and rel == BADGE:
+            version = version.replace("--", "-")
+        elif version and rel == LOCK:
+            version = _from_pep440(version)
+        found[rel] = version
     return found
 
 
@@ -71,7 +86,7 @@ def bump(root: Path, new: str) -> list[str]:
     rewrites = {}
     for rel, pattern in PATTERNS.items():
         text = _read(root, rel)
-        token = new.replace("-", "--") if rel == BADGE else new
+        token = new.replace("-", "--") if rel == BADGE else _pep440(new) if rel == LOCK else new
         updated, count = re.subn(pattern, lambda m: m.group(1) + token + m.group(3), text)
         if count != 1:
             raise ValueError(f"{rel}: expected one version string, found {count}")

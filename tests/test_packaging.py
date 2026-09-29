@@ -315,3 +315,32 @@ def test_a_release_candidate_heading_does_not_satisfy_the_final_version(tmp_path
     changelog.write_text("# Changelog\n\n## 9.9.0 - final\n\n## 9.9.0-rc.1\n", encoding="utf-8")
     bump.bump(tmp_path, "9.9.0")
     assert bump.check(tmp_path) == []
+
+
+def test_the_build_is_fixed_when_the_package_is_imported():
+    """A process reports the code it loaded: the digest is taken at import, not at the first
+    Client(), so an in-place upgrade after import cannot change what it claims to run."""
+    code = ("from taskmaster.coordinator import protocol\n"
+            "def unread(*a, **k):\n"
+            "    raise SystemExit('digest read after import')\n"
+            "protocol.package_digest = unread\n"
+            "protocol.declared_version = unread\n"
+            "print(protocol.build_identity()['digest'])\n")
+    result = subprocess.run([sys.executable, "-c", code], cwd=str(ROOT), capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0 and len(result.stdout.strip()) == 32, result.stdout + result.stderr
+
+
+def test_check_accepts_uv_s_normalized_pre_release_in_the_lock(tmp_path):
+    """uv writes a pre-release as 7.0.0rc1 in uv.lock; that is 7.0.0-rc.1."""
+    bump = _load("scripts/bump_version.py", "bump_version_t")
+    for relative in bump.VERSIONED_FILES:
+        (tmp_path / relative).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / relative, tmp_path / relative)
+    (tmp_path / "CHANGELOG.md").write_text("## 9.9.0-rc.1\n", encoding="utf-8")
+    bump.bump(tmp_path, "9.9.0-rc.1")
+    lock = (tmp_path / "uv.lock").read_bytes().decode("utf-8")
+    assert 'name = "taskmaster"\nversion = "9.9.0rc1"' in lock.replace("\r\n", "\n"), "bump writes uv's form"
+    assert bump.check(tmp_path) == []
+    for spelled, ok in (('"9.9.0-rc.1"', True), ('"9.9.0rc2"', False)):
+        (tmp_path / "uv.lock").write_bytes(lock.replace('"9.9.0rc1"', spelled).encode("utf-8"))
+        assert (bump.check(tmp_path) == []) is ok, spelled
