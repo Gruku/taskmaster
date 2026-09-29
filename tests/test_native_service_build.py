@@ -340,3 +340,217 @@ def test_handshake_names_a_build_mismatch():
     check_handshake(dict(identity, nonce='n', build=NEW), identity, 'n', OLD, any_build=True)
     with pytest.raises(HandshakeError, match='mismatch'):
         check_handshake(dict(identity, nonce='x', build=NEW), identity, 'n', OLD, any_build=True)
+
+
+# --- review fixes (N17 handshake review of 74b9302) ---
+
+PEER = {'version': '7.0.0', 'digest': 'd' * 32}  # same release as OLD, different code
+
+
+def test_retry_after_lost_reply_never_claims_nothing_ran(root, monkeypatch, owners):
+    """Attempt 0 commits and loses its reply; a newer build replaces the owner before the retry."""
+    serve, _ = owners
+    old = serve(OLD, root=root)
+    client = Client(root)
+    client.build = OLD
+    real, state = Client._send, {}
+
+    def send(self, record, method, **arguments):
+        result = real(self, record, method, **arguments)
+        if method == 'execute' and not state:
+            state['done'] = True
+            old.stop()
+            wait_released(root)
+            serve(NEW, root=root)
+            raise ConnectionResetError('reply lost')
+        return result
+    monkeypatch.setattr(Client, '_send', send)
+    with pytest.raises(ServiceUnavailable) as failure:
+        client.execute(request(client))
+    assert failure.value.may_have_committed is True
+    assert 'no command ran' not in str(failure.value)
+    assert 'request_id' in str(failure.value)
+    current = Client(root, autostart=False)
+    current.build = NEW
+    assert current.receipt('build-tests', 'one')['state'] == 'committed'
+
+
+def test_pre_admission_refusal_text_does_not_offer_receipt_recovery(root, monkeypatch, owners):
+    serve, _ = owners
+    serve(NEW, root=root)
+    forbid_launch(monkeypatch)
+    client = Client(root)
+    client.build = OLD
+    with pytest.raises(HandshakeError) as refused:
+        client.execute(request(client))
+    assert refused.value.may_have_committed is False
+    assert 'recover its receipt' not in str(refused.value) and 'no command ran' in str(refused.value)
+
+
+@pytest.mark.parametrize('manifest', ['.claude-plugin/plugin.json', '.codex-plugin/plugin.json',
+                                      '.taskmaster-distribution.json'])
+def test_every_install_layout_declares_its_version(tmp_path, manifest):
+    import json
+    from taskmaster.coordinator.protocol import declared_version
+    path = tmp_path / manifest
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({'version': '7.0.0'}), encoding='utf-8')
+    assert declared_version(tmp_path) == '7.0.0'
+    assert declared_version(tmp_path / 'missing') == 'unknown'
+
+
+def test_codex_layout_copy_is_the_same_build_even_with_crlf(tmp_path):
+    """A Codex snapshot of the same release: other manifest, CRLF sources, same code."""
+    import json
+    import shutil
+    from pathlib import Path
+    from taskmaster.coordinator.protocol import declared_version, package_digest, same_build
+    package = Path(__file__).resolve().parents[1] / 'taskmaster'
+    codex = tmp_path / 'codex'
+    shutil.copytree(package, codex / 'taskmaster', ignore=shutil.ignore_patterns('__pycache__'))
+    for path in (codex / 'taskmaster').rglob('*.py'):
+        path.write_bytes(path.read_bytes().replace(b'\r\n', b'\n').replace(b'\n', b'\r\n'))
+    (codex / '.codex-plugin').mkdir()
+    (codex / '.codex-plugin/plugin.json').write_text(json.dumps({'version': 'v7.0.0'}), encoding='utf-8')
+    theirs = {'version': declared_version(codex), 'digest': package_digest(codex / 'taskmaster')}
+    ours = build_identity()
+    assert theirs['version'] == 'v7.0.0' and theirs['digest'] == ours['digest']
+    assert same_build(theirs, dict(ours, version='unknown'))
+    identity = {'root': 'r', 'store_id': 's', 'schema': 1, 'protocol': 2, 'service_protocol': 4}
+    check_handshake(dict(identity, nonce='n', build=theirs), identity, 'n', dict(ours, version='7.0.0'))
+
+
+def test_versions_follow_semver_precedence():
+    from taskmaster.coordinator.protocol import compare_versions
+
+    def order(first, second):
+        return compare_versions({'version': first, 'digest': 'x'}, {'version': second, 'digest': 'y'})
+    assert order('7.0.0-rc.1', '7.0.0') == -1
+    assert order('7.0.0', '7.0.0-rc.1') == 1
+    assert order('7.0.0-rc.2', '7.0.0-rc.10') == -1
+    assert order('7.0.0-alpha', '7.0.0-alpha.1') == -1
+    assert order('7.0.0-1', '7.0.0-alpha') == -1
+    assert order('7.0', '7.0.0') == 0
+    assert order('v7.0.1', '7.0.0') == 1
+    assert order('7.0.0+build.5', '7.0.0') == 0
+    assert order('6.10.0', '6.9.9') == 1
+    assert order('unknown', '6.0.3') is None and order('6.0.3', 'unknown') is None
+
+
+def test_final_release_is_not_downgraded_to_a_release_candidate(root, monkeypatch, owners):
+    serve, _ = owners
+    final = serve({'version': '7.0.0', 'digest': 'f' * 32}, root=root)
+    forbid_launch(monkeypatch)
+    client = Client(root)
+    client.build = {'version': '7.0.0-rc.1', 'digest': 'e' * 32}
+    with pytest.raises(HandshakeError, match='newer'):
+        client.status()
+    assert final.retire(client.build)['state'] == 'refused' and not final.stopping.is_set()
+
+
+def test_same_release_other_code_retires_only_an_idle_owner_and_never_waits(root, monkeypatch, owners):
+    serve, _ = owners
+    entered, release = threading.Event(), threading.Event()
+
+    def checkpoint(stage):
+        if stage == 'admitted' and not release.is_set():
+            entered.set()
+            assert release.wait(20)
+    old = serve(OLD, root=root, checkpoint=checkpoint)
+    launched = []
+    launcher(monkeypatch, serve, PEER, launched)
+    old_client = Client(root, autostart=False)
+    old_client.build = OLD
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        in_flight = pool.submit(old_client.execute, request(old_client, key='in-flight'))
+        try:
+            assert entered.wait(10)
+            peer = Client(root, timeout=20)
+            peer.build = PEER
+            started = time.monotonic()
+            with pytest.raises(ServiceUnavailable, match='busy') as refused:
+                peer.execute(request(peer, key='peer'))
+            assert time.monotonic() - started < 5  # refused at once, not after the 20 s budget
+            assert refused.value.may_have_committed is False
+        finally:
+            release.set()
+        in_flight.result(timeout=10)
+    assert not old.stopping.is_set() and not launched
+    assert peer.execute(request(peer, key='peer', title='Peer'))['receipt']['affected']  # idle now: retired
+    assert old.stopping.is_set() and len(launched) == 1
+
+
+def test_same_build_clients_ride_through_their_owner_retiring(root, monkeypatch, owners):
+    """A retiring owner answers `stopping` and later refuses connections; its own clients
+    wait and attach to the successor instead of failing."""
+    serve, started = owners
+    owner = Coordinator(root)
+    owner.build = OLD
+    owner.start()
+    started.append(owner)
+    launched = []
+    launcher(monkeypatch, serve, OLD, launched)
+    assert owner.retire(NEW)['state'] == 'retiring'  # stopping, still serving IPC until close
+    client = Client(root, timeout=20)
+    client.build = OLD
+    assert owner.publication.acquire(timeout=5)  # hold close() after its server shuts
+    closer = threading.Thread(target=owner.close, daemon=True)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            outcome = pool.submit(client.execute, request(client))
+            time.sleep(0.5)
+            assert not outcome.done()
+            closer.start()
+            time.sleep(0.5)
+            owner.publication.release()
+            assert outcome.result(timeout=20)['receipt']['affected']
+    finally:
+        closer.join(timeout=10)
+    assert launched and client.status()['nonce'] == launched[-1].nonce
+
+
+def test_retire_while_publication_is_held_answers_busy(root, owners):
+    """A managed Git run holds `publication` before it sets `git_active`."""
+    serve, _ = owners
+    owner = serve(OLD, root=root)
+    holder, release = threading.Event(), threading.Event()
+
+    def hold():
+        with owner.publication:
+            holder.set()
+            release.wait(10)
+    thread = threading.Thread(target=hold)
+    thread.start()
+    try:
+        assert holder.wait(5)
+        assert owner.retire(NEW)['state'] == 'busy' and not owner.stopping.is_set()
+    finally:
+        release.set()
+        thread.join()
+    assert owner.retire(NEW)['state'] == 'retiring'
+
+
+def test_forbidden_reply_at_a_reused_port_is_re_probed(root, monkeypatch, owners):
+    serve, _ = owners
+    serve(OLD, root=root)
+    launched = []
+    launcher(monkeypatch, serve, NEW, launched)
+    real, seen = Client._send, []
+
+    def send(self, record, method, **arguments):
+        if method == 'retire' and not seen:
+            seen.append(method)
+            raise ServiceUnavailable('authentication required')
+        return real(self, record, method, **arguments)
+    monkeypatch.setattr(Client, '_send', send)
+    client = Client(root)
+    client.build = NEW
+    assert client.status()['build'] == NEW and seen and len(launched) == 1
+
+
+def test_pre_handshake_owner_refusal_says_how_to_stop_it(root, monkeypatch):
+    forbid_launch(monkeypatch)
+    client = Client(root)
+    with pytest.raises(HandshakeError, match='idle timeout') as refused:
+        client._retire({'nonce': 'n' * 48}, time.monotonic() + 1)
+    assert refused.value.may_have_committed is False

@@ -25,8 +25,8 @@ import time
 from taskmaster.native import commands, contracts, metrics
 from taskmaster.admission import UnsupportedStoreError
 from .ownership import Ownership, OwnershipUnavailable
-from .protocol import (MAX_MESSAGE_BYTES, MAX_RESPONSE_BYTES, ServiceUnavailable, build_identity, check_handshake,
-                               connect, describe, encode, identify, identify_connection, older)
+from .protocol import (MAX_MESSAGE_BYTES, MAX_RESPONSE_BYTES, CoordinatorStopping, ServiceUnavailable, build_identity,
+                       check_handshake, connect, describe, encode, identify, identify_connection, older, same_build)
 
 LOG = logging.getLogger(__name__)
 
@@ -194,7 +194,7 @@ class Coordinator:
         key = (request['caller_scope'], request['request_id'])
         with self.guard:
             if self.stopping.is_set():
-                raise ServiceUnavailable('coordinator is stopping; retry the same request_id')
+                raise CoordinatorStopping('coordinator is stopping; retry the same request_id')
             old = self.pending.get(key)
             # A cancelled entry the writer had already dequeued stays pending until it
             # fails at admission; a retry of the key is new work, never that cancelled future.
@@ -512,9 +512,9 @@ class Coordinator:
         raise ValueError('unsupported coordinator method')
 
     def _busy(self):
-        """Caller holds `guard` and `linear.guard`. Work admitted after this check still sees
-        `stopping` (sync, Git), or holds `publication`, which `close` takes before it
-        releases ownership."""
+        """Caller holds `guard` and `linear.guard` (and, from `retire`, `publication`).
+        Commands, Linear jobs and syncs are counted under the guards; a managed Git run holds
+        `publication` from before its stop check until after `git_active` is cleared."""
         return bool(self.pending or self.linear.jobs or self.active_syncs or self.git_active is not None)
 
     def idle_expired(self, seconds):
@@ -526,17 +526,25 @@ class Coordinator:
         expiry does (`main` then closes: queue drained, threads joined, publication held
         while the ownership lock is released), and only while idle, so nothing in flight is
         cut short. It never yields to an older release."""
-        if requester == self.build:
+        if same_build(requester, self.build):
             return {'state': 'refused', 'reason': 'the requester runs this build; nothing to retire'}
         if older(requester, self.build):
             return {'state': 'refused', 'build': self.build,
                     'reason': f'coordinator build {describe(self.build)} is newer than {describe(requester)}; '
                               'it is not downgraded'}
-        with self.guard, self.linear.guard:
-            if not self.stopping.is_set() and self._busy():
-                return {'state': 'busy', 'build': self.build}
-            # Under both guards: no command, Linear job or sync is admitted after this check.
-            self.stopping.set()
+        # Publication first (the lock order): a Git run, sync import, flush or Linear bootstrap
+        # holding it is in flight. Git sets `git_active` only after its stop check, both
+        # under publication, so holding it here closes that window.
+        if not self.publication.acquire(timeout=0.25):
+            return {'state': 'busy', 'build': self.build}
+        try:
+            with self.guard, self.linear.guard:
+                if not self.stopping.is_set() and self._busy():
+                    return {'state': 'busy', 'build': self.build}
+                # Under both guards: no command, Linear job or sync is admitted after this check.
+                self.stopping.set()
+        finally:
+            self.publication.release()
         self.stop()
         LOG.warning('retiring for coordinator build %s (this build %s)', describe(requester), describe(self.build))
         return {'state': 'retiring', 'build': self.build}
@@ -559,6 +567,10 @@ class Coordinator:
             self.server.server_close()
         for thread in self.threads:
             thread.join()
+        if self.server is not None:
+            # Handler threads are daemons: let in-flight replies (a receipt, a retire
+            # answer) reach their clients before this process may exit.
+            self.server.await_handlers(5.0)
         # An already-running compatibility barrier is an HTTP handler, not the
         # exporter thread. It must finish before a new owner can publish files.
         with self.publication:
@@ -618,8 +630,19 @@ class _Server(ThreadingHTTPServer):
     allow_reuse_address = False
 
     def __init__(self, *args, handler_limit, **kwargs):
+        self.handler_limit = handler_limit
         self.handlers = threading.BoundedSemaphore(handler_limit)
         super().__init__(*args, **kwargs)
+
+    def await_handlers(self, timeout):
+        """Bounded wait until no handler is running (all permits are free)."""
+        deadline, taken = time.monotonic() + timeout, 0
+        try:
+            while taken < self.handler_limit and self.handlers.acquire(timeout=max(0.0, deadline - time.monotonic())):
+                taken += 1
+        finally:
+            for _ in range(taken):
+                self.handlers.release()
 
     def process_request(self, request, address):
         if not self.handlers.acquire(blocking=False):
