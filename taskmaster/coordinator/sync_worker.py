@@ -323,6 +323,8 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
         if rel and rel not in unresolved_seen:
             unresolved_seen.add(rel)
             result['unresolved'].append(rel)
+            if progress is not None:
+                progress.pending(rel)
         notice = f'sync pending: {rel}: {reason}' if rel else f'sync pending: {reason}'
         if notice not in notices_seen:
             notices_seen.add(notice)

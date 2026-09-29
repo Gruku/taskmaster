@@ -38,6 +38,17 @@ class Client:
         if visibility not in ('native', 'legacy'):
             raise ValueError('visibility must be native or legacy')
         self.autostart, self.visibility, self.timeout = autostart, visibility, timeout
+        # An absolute time.monotonic() deadline for the whole connect path, or None (sync_job).
+        self._deadline = None
+
+    def _bounded(self):
+        """Before each blocking startup step under a call deadline: give it only the time left."""
+        if self._deadline is None:
+            return
+        left = self._deadline - time.monotonic()
+        if left <= 0:
+            raise ServiceUnavailable('call deadline reached while reaching the coordinator', may_have_committed=False)
+        self.timeout = left
 
     def _discovery(self):
         path = self.root / '.taskmaster/local/coordinator/discovery.json'
@@ -130,20 +141,30 @@ class Client:
             metrics.emit('ipc_connect', ms=(time.perf_counter() - started) * 1000, launched=bool(launched))
 
     def _connect_ready(self, launched=None):
+        self._bounded()
         record = self._probe()
         if record is not None:
             return record
-        with _START_LOCK:
+        left = None if self._deadline is None else self._deadline - time.monotonic()
+        if not _START_LOCK.acquire(timeout=-1 if left is None else max(0.0, left)):
+            raise ServiceUnavailable('another call in this process is starting the coordinator; call again',
+                                     may_have_committed=False)
+        try:
             # Another client in this process may already have completed startup.
+            self._bounded()
             record = self._probe()
             if record is not None:
                 return record
             child = _launch(self.root)
             if launched is not None:
                 launched.append(child)
+            self._bounded()
             deadline = time.monotonic() + min(self.timeout, 15)
+            if self._deadline is not None:
+                deadline = min(deadline, self._deadline)
             while time.monotonic() < deadline:
                 try:
+                    self._bounded()
                     record = self._discovery()
                     self._send(record, 'status')
                     child.poll()  # Reap a startup loser, never signal an arbitrary PID.
@@ -152,6 +173,8 @@ class Client:
                     if child.poll() not in (None, 0):
                         break
                     time.sleep(0.05)
+        finally:
+            _START_LOCK.release()
         raise ServiceUnavailable('coordinator startup unavailable; inspect .taskmaster/local/coordinator/service.log; no writer fallback')
 
     def call(self, method, *, wait=None, **arguments):
@@ -236,10 +259,31 @@ class Client:
     def sync_job(self, *, deadline, sync_id=None, files=None, margin=1.5):
         """Start or attach to a coordinator-driven `backlog_sync` job, or look one up, within a
         hard wall-clock `deadline` (time.monotonic()) covering startup, status, send and reply.
-        One attempt, no transport retry: a job is found again by id (or by attaching), never lost."""
-        saved = self.timeout
+
+        One attempt, no transport retry: a job is found again by id (or by attaching), never
+        lost. The deadline is threaded through every startup step, and the attempt runs on a
+        worker thread the caller stops waiting for at the deadline, so no stalled step (a hung
+        probe, a start lock held elsewhere) can hold the caller past it."""
+        outcome = {}
+
+        def attempt():
+            try:
+                outcome['value'] = self._sync_job(deadline, sync_id, files, margin)
+            except BaseException as exc:  # noqa: BLE001 -- handed to the waiting caller
+                outcome['error'] = exc
+
+        worker = threading.Thread(target=attempt, name='taskmaster-sync-job-call', daemon=True)
+        worker.start()
+        worker.join(max(0.0, deadline - time.monotonic()))
+        if worker.is_alive():
+            raise ServiceUnavailable('coordinator did not answer within the call deadline', may_have_committed=False)
+        if 'error' in outcome:
+            raise outcome['error']
+        return outcome['value']
+
+    def _sync_job(self, deadline, sync_id, files, margin):
+        self._deadline = deadline
         try:
-            self.timeout = max(0.05, deadline - time.monotonic())
             record = self._ready()
             left = deadline - time.monotonic()
             margin = min(margin, left / 3)  # time left to send the reply, whatever the budget
@@ -251,8 +295,6 @@ class Client:
                               wait_seconds=round(max(0.0, left - margin), 3))
         except (ConnectionError, TimeoutError, http.client.HTTPException) as exc:
             raise ServiceUnavailable(f'coordinator did not answer within the call deadline ({type(exc).__name__})') from None
-        finally:
-            self.timeout = saved
 
     def sync_status(self, caller_scope, request_id):
         return self.call('sync_status', caller_scope=caller_scope, request_id=request_id)

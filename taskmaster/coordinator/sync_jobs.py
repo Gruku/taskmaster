@@ -1,6 +1,6 @@
 # User intent: `backlog_sync` starts a sync that the coordinator itself drives to completion, so
 # a client with a fixed tool timeout (Codex: 30 s) only ever waits a bounded time and polls; the
-# counts are the whole sync's, one sync runs at a time, and a completed sync replays labelled.
+# counts are the whole sync's, one sync runs at a time, and an ended sync replays faithfully.
 """Coordinator-driven sync jobs behind the `backlog_sync` MCP tool."""
 from __future__ import annotations
 
@@ -11,12 +11,15 @@ import secrets
 import threading
 import time
 
-from taskmaster.native import sync
+from taskmaster.native import contracts, sync
 from .protocol import SYNC_TIMEOUT
 
 # The durable caller scope of every job's sync operation; ids are minted here, so no two
 # sessions can name the same operation.
 SCOPE = 'backlog-sync'
+# The receipts scope of the jobs' own durable records (native `sync.job`).
+RECORD_SCOPE = 'backlog-sync-job'
+RECORD_TIMEOUT = 30
 ID_PATTERN = re.compile(r'\d{8}T\d{6}Z-[0-9a-f]{8}')
 # One round is an ordinary sync under the normal budget (it bounds the publication hold).
 # A round that ends retryably is run again under the same operation id: files it already
@@ -40,11 +43,14 @@ class Progress:
 
     def __init__(self):
         self.round, self.phase, self.selected, self.checked = 0, 'starting', 0, 0
-        self.outcomes: dict[str, str] = {}  # file -> last committed state across rounds
+        self.reached_files: set[str] = set()   # every file a round's loop got to, across rounds
+        self.pending_files: set[str] = set()   # files the latest round left unsynchronized
+        self.outcomes: dict[str, str] = {}     # file -> last committed state across rounds
         self.seq = None
 
     def new_round(self, number):
         self.round, self.phase, self.checked = number, 'selecting', 0
+        self.pending_files = set()
 
     def selecting(self, count):
         # Found; before the per-file loop comes the whole-set Git classification.
@@ -53,6 +59,10 @@ class Progress:
     def reached(self, rel):
         self.phase = 'checking'
         self.checked += 1
+        self.reached_files.add(rel)
+
+    def pending(self, rel):
+        self.pending_files.add(rel)
 
     def committed(self, rel, state, seq):
         if state != 'observed':  # an observe records the published bytes as base: unchanged
@@ -61,13 +71,19 @@ class Progress:
             self.seq = max(self.seq or 0, seq)
 
     def totals(self) -> dict:
-        outcomes = dict(self.outcomes)
+        outcomes, reached, held = dict(self.outcomes), set(self.reached_files), set(self.pending_files)
         groups = {label: sorted(rel for rel, state in outcomes.items() if state == state_name)
                   for label, state_name in (('imported', 'accepted'), ('repaired', 'repair_pending'),
                                             ('conflicts', 'conflict'), ('quarantined', 'quarantined'))}
         totals = {label: len(files) for label, files in groups.items()}
+        # Unchanged means checked and found unchanged: never a file no round reached, nor one
+        # left pending (drift, held, a changed-after-parse file), nor one this job imported.
+        pending = held - set(outcomes)
+        unchanged = len(reached - set(outcomes) - held)
         totals.update({f'{label}_files': files[:NAMES] for label, files in groups.items()},
-                      selected=self.selected, unchanged=max(0, self.selected - len(outcomes)),
+                      selected=self.selected, unchanged=unchanged, pending=len(pending),
+                      pending_files=sorted(pending)[:NAMES],
+                      not_checked=max(0, self.selected - len(reached | set(outcomes) | held)),
                       rounds=self.round, seq=self.seq, finished_at=_now())
         return totals
 
@@ -77,37 +93,72 @@ class Job:
         self.id, self.files = ident, files
         self.state, self.started_at, self.finished_at = 'running', _now(), None
         self.progress, self.result, self.error = Progress(), None, None
-        self.totals, self.reported = None, False
+        self.totals, self.held, self.reported = None, None, False
         self.done = threading.Event()
 
-    def finish(self, state):
+    def finish(self, owner, state):
         self.totals = (self.result or {}).get('totals') or self.progress.totals()
+        try:
+            self.held = _held(owner)
+        except Exception as exc:  # noqa: BLE001 -- advisory: the job's own outcome stands
+            self.held = {'conflicts': [], 'quarantined': [], 'error': str(exc)[:200]}
         self.state, self.finished_at = state, self.totals['finished_at']
-        self.done.set()
+
+    def record(self) -> dict:
+        notices = list((self.result or {}).get('notices') or []) if self.state != 'complete' else []
+        return dict(state=self.state, files=self.files, started_at=self.started_at, finished_at=self.finished_at,
+                    totals=self.totals, held=self.held, error=self.error, notices=notices[:50],
+                    warnings=list((self.result or {}).get('warnings') or [])[:20])
+
+
+def _held(owner) -> dict:
+    from taskmaster.native import projection
+    with closing(owner._connect(readonly=True)) as connection:
+        conflicts = list(projection.flagged_files(connection))
+        quarantined = [row[0] for row in connection.execute(
+            "SELECT file FROM projection WHERE quarantined=1 ORDER BY file") if row[0] not in conflicts]
+    return {'conflicts': conflicts[:NAMES], 'conflict_count': len(conflicts),
+            'quarantined': quarantined[:NAMES], 'quarantined_count': len(quarantined)}
+
+
+def _write(owner, job, record):
+    """The job's durable record (native `sync.job`): replayable after a coordinator restart."""
+    envelope = dict(protocol=2, store_id=owner.identity['store_id'], caller_scope=RECORD_SCOPE,
+                    request_id=f"{job.id}:{record['state']}", operation='sync.job',
+                    arguments={'id': job.id, 'record': record}, expected_revisions=[])
+    contracts.validate(envelope)
+    owner.submit(envelope).result(timeout=RECORD_TIMEOUT)
 
 
 def _run(owner, job):
     try:
-        previous = None
-        for number in range(1, MAX_ROUNDS + 1):
-            job.progress.new_round(number)
-            job.result = owner.sync(caller_scope=SCOPE, request_id=job.id, files=job.files,
-                                    timeout=ROUND_BUDGET, progress=job.progress)
-            if job.result.get('state') == 'synchronized':
-                return job.finish('complete')
-            notices = list(job.result.get('notices') or [])
-            retryable = any(word in notice for notice in notices for word in RETRYABLE)
-            # No progress between two rounds (same reasons, same imports): stop, never spin.
-            seen = (tuple(notices), len(job.progress.outcomes))
-            if owner.stopping.is_set() or not retryable or seen == previous:
-                break
-            previous = seen
-            owner.stopping.wait(RETRY_PAUSE)
-        job.finish('incomplete')
-    except Exception as exc:  # noqa: BLE001 -- the job reports it; the coordinator lives on
-        job.error = f'{type(exc).__name__}: {exc}'[:500]
-        job.finish('failed')
+        try:
+            _write(owner, job, dict(state='running', files=job.files, started_at=job.started_at))
+            previous = None
+            for number in range(1, MAX_ROUNDS + 1):
+                job.progress.new_round(number)
+                job.result = owner.sync(caller_scope=SCOPE, request_id=job.id, files=job.files,
+                                        timeout=ROUND_BUDGET, progress=job.progress)
+                if job.result.get('state') == 'synchronized':
+                    break
+                notices = list(job.result.get('notices') or [])
+                retryable = any(word in notice for notice in notices for word in RETRYABLE)
+                # No progress between two rounds (same reasons, same imports): stop, never spin.
+                seen = (tuple(notices), len(job.progress.outcomes))
+                if owner.stopping.is_set() or not retryable or seen == previous:
+                    break
+                previous = seen
+                owner.stopping.wait(RETRY_PAUSE)
+            job.finish(owner, 'complete' if job.result.get('state') == 'synchronized' else 'incomplete')
+        except Exception as exc:  # noqa: BLE001 -- the job reports it; the coordinator lives on
+            job.error = f'{type(exc).__name__}: {exc}'[:500]
+            job.finish(owner, 'failed')
+        try:
+            _write(owner, job, job.record())
+        except Exception as exc:  # noqa: BLE001 -- the in-memory answer stands; say it was not kept
+            job.warnings = [f'this result was not stored ({type(exc).__name__}); it is lost if the coordinator stops']
     finally:
+        job.done.set()
         with owner.guard:
             owner.last_activity = time.monotonic()
 
@@ -122,14 +173,16 @@ def _start(owner, job):
     return job
 
 
-def running(owner) -> bool:
-    return any(job.state == 'running' for job in getattr(owner, 'sync_jobs', {}).values())
+def running(owner):
+    """The running `backlog_sync` job, or None. Anything that stops or retires the coordinator
+    while idle must treat a running job as busy: it lives between rounds too."""
+    with owner.guard:
+        return next((job for job in getattr(owner, 'sync_jobs', {}).values() if not job.done.is_set()), None)
 
 
 def _stored(owner, ident):
-    from .sync_worker import operation_scope
     with closing(owner._connect(readonly=True)) as connection:
-        return sync.operation_state(connection, operation_scope(SCOPE, ident))
+        return sync.job_record(connection, ident)
 
 
 def request(owner, *, sync_id=None, files=None, wait_seconds=0):
@@ -145,9 +198,10 @@ def request(owner, *, sync_id=None, files=None, wait_seconds=0):
     with owner.guard:
         if owner.stopping.is_set():
             raise ValueError('coordinator stopping; call backlog_sync again')
+        active = running(owner)
         if sync_id is None:
-            job = next((job for job in owner.sync_jobs.values() if job.state == 'running'), None)
-            if job is not None:
+            if active is not None:
+                job = active
                 answer['attached'] = True
                 if files != job.files:
                     answer['not_started'] = files
@@ -160,29 +214,29 @@ def request(owner, *, sync_id=None, files=None, wait_seconds=0):
                 stored = _stored(owner, sync_id)
                 if stored is None:
                     raise ValueError(f'unknown sync id {sync_id}; start a fresh backlog_sync()')
-                if stored.get('state') == 'complete':
-                    result = stored['result']
-                    totals = result.get('totals') or {}
-                    return dict(sync_id=sync_id, state='complete', replay=True, files=stored['input']['files'],
-                                finished_at=totals.get('finished_at'), totals=totals,
-                                warnings=result.get('warnings') or [])
-                # Begun but never finished (the coordinator restarted): resume the same operation.
-                job = _start(owner, Job(sync_id, stored['input']['files']))
-                answer['resumed'] = True
+                if files is not None and files != stored.get('files'):
+                    raise ValueError(f'sync {sync_id} was started with files={stored.get("files")}; a different '
+                                     f'set needs a fresh backlog_sync(files=...)')
+                if stored['state'] == 'running':
+                    # Begun under an earlier coordinator that stopped: never re-run it silently.
+                    return dict(sync_id=sync_id, state='interrupted', started_at=stored.get('started_at'),
+                                running=None if active is None else active.id)
+                return dict(stored, sync_id=sync_id, replay=True)
             if files is not None and files != job.files:
                 raise ValueError(f'sync {sync_id} was started with files={job.files}; a different set needs '
                                  f'a fresh backlog_sync(files=...)')
     job.done.wait(wait_seconds)
     with owner.guard:
-        replay = job.state != 'running' and job.reported
-        if job.state != 'running':
+        finished = job.done.is_set()
+        replay = finished and job.reported
+        if finished:
             job.reported = True
+    if finished:
+        answer.update(job.record(), sync_id=job.id, replay=replay)
+        answer['warnings'] = answer['warnings'] + list(getattr(job, 'warnings', []))
+        return answer
     progress = job.progress
-    answer.update(sync_id=job.id, state=job.state, replay=replay, files=job.files, started_at=job.started_at,
-                  finished_at=job.finished_at, round=progress.round, phase=progress.phase,
-                  selected=progress.selected, checked=progress.checked,
-                  totals=job.totals if job.totals is not None else progress.totals(), error=job.error)
-    if job.state != 'running' and job.result is not None:
-        answer.update(notices=list(job.result.get('notices') or []),
-                      warnings=list(job.result.get('warnings') or []))
+    answer.update(sync_id=job.id, state='running', started_at=job.started_at, files=job.files,
+                  round=progress.round, phase=progress.phase, selected=progress.selected,
+                  checked=progress.checked, totals=progress.totals())
     return answer

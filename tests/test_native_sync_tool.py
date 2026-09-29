@@ -83,12 +83,14 @@ def _poll(first, limit=60):
 
 
 def _counted(answer):
-    numbers = re.search(r"(\d+) file\(s\) checked — (\d+) imported, (\d+) repaired, (\d+) unchanged, (\d+) conflicts",
-                        answer)
-    assert numbers, answer
-    selected, *parts = map(int, numbers.groups())
-    assert sum(parts) == selected, answer
-    return dict(zip(("selected", "imported", "repaired", "unchanged", "conflicts"), [selected, *parts]))
+    """The counts of an ended sync; they always add up to the files it selected."""
+    head = re.search(r"(\d+) file\(s\) — ([^;.\n]+)", answer)
+    assert head, answer
+    counts = dict.fromkeys(("imported", "repaired", "unchanged", "conflicts", "pending", "not checked"), 0)
+    counts.update({label: int(number) for number, label in re.findall(r"(\d+) ([a-z ]+?)(?:,|$)", head.group(2))})
+    counts["selected"] = int(head.group(1))
+    assert sum(value for key, value in counts.items() if key != "selected") == counts["selected"], answer
+    return counts
 
 
 def test_sync_imports_a_hand_edit_with_counts_and_a_seq(twins):
@@ -291,3 +293,132 @@ def test_real_coordinator_sync_outlasts_the_call_and_polling_completes(tmp_path,
     assert counts["imported"] == 150 and counts["selected"] == 153, answers[-1]  # + backlog.yaml
     assert max(timings) <= wait + 0.5, timings
     assert _title(root, "test-epic-152") == "Hand 152"
+
+
+# ── Re-review (N17): faithful replays, no silent resume, honest counts, hard deadline ──
+
+def _conflicted(twins):
+    _replace(twins.native, T1, "title: First", "title: File title")
+    bs.backlog_update_task(task_id="test-epic-001", field="title", value="Store title")
+
+
+def test_a_replayed_unsynchronized_sync_is_rendered_as_it_ended(twins):
+    from tests.native_coordinator_helpers import close_owned
+    with twins.at(twins.native):
+        _conflicted(twins)
+        ended = _poll(bs.backlog_sync())[-1]
+        ident = _sync_id(ended)
+        again = bs.backlog_sync(sync_id=ident)
+    assert ended.startswith(f"Sync finished without synchronizing every file (sync id {ident}):"), ended
+    prefix = f"Sync finished without synchronizing every file (sync id {ident}) — the stored result of a sync"
+    assert again.startswith(prefix) and "Sync complete" not in again, again
+    assert f'backlog_resolve_conflict(file="{T1}")' in again, again
+    close_owned()  # the same answer from the store's job record
+    with twins.at(twins.native):
+        stored = bs.backlog_sync(sync_id=ident)
+    assert stored.startswith(prefix) and f'backlog_resolve_conflict(file="{T1}")' in stored, stored
+
+
+def test_a_failed_sync_replays_as_failed(twins, monkeypatch):
+    def broken(**arguments):
+        raise RuntimeError("injected failure")
+    monkeypatch.setattr(_owner(twins), "sync", broken)
+    with twins.at(twins.native):
+        failed = _poll(bs.backlog_sync())[-1]
+        again = bs.backlog_sync(sync_id=_sync_id(failed))
+    assert failed.startswith("Sync failed") and "injected failure" in failed, failed
+    assert again.startswith(f"Sync failed (sync id {_sync_id(failed)}) — the stored result"), again
+
+
+def test_an_unfinished_sync_is_reported_never_resumed_and_names_the_running_one(twins, monkeypatch):
+    owner = _owner(twins)
+    ghost = sync_jobs.Job("20260101T000000Z-0badc0de", None)
+    sync_jobs._write(owner, ghost, dict(state="running", files=None, started_at=ghost.started_at))
+    with twins.at(twins.native):
+        alone = bs.backlog_sync(sync_id=ghost.id)
+    assert alone.startswith(f"Sync {ghost.id} did not finish") and "not resumed" in alone, alone
+    assert "call backlog_sync() to start a fresh sync" in alone.lower(), alone
+    assert sync_jobs.running(owner) is None  # nothing was re-run
+    _new_tasks(twins.native, 3)
+    _slow_imports(monkeypatch, owner, 0.4)
+    monkeypatch.setattr(resync, "TOOL_WAIT", 0.6)
+    with twins.at(twins.native):
+        started = bs.backlog_sync()
+        ghost_again = bs.backlog_sync(sync_id=ghost.id)
+        running = [job for job in owner.sync_jobs.values() if not job.done.is_set()]
+        _poll(started)
+    assert len(running) == 1, running
+    assert f'backlog_sync(sync_id="{_sync_id(started)}")' in ghost_again, ghost_again
+
+
+def test_files_never_reached_are_not_counted_unchanged(twins, monkeypatch):
+    owner = _owner(twins)
+    monkeypatch.setattr(sync_jobs, "MAX_ROUNDS", 1)
+    monkeypatch.setattr(sync_jobs, "ROUND_BUDGET", 1)
+    monkeypatch.setattr(owner, "checkpoint", lambda stage: time.sleep(1.2) if stage == "sync_files_selected" else None)
+    _replace(twins.native, T1, "title: First", "title: never reached")
+    with twins.at(twins.native):
+        ended = _poll(bs.backlog_sync())[-1]
+    counts = _counted(ended)
+    assert counts["unchanged"] == 0 and counts["imported"] == 0, ended
+    assert counts["pending"] + counts["not checked"] == counts["selected"], ended
+
+
+def test_a_running_job_keeps_the_coordinator_busy_between_rounds(twins, monkeypatch):
+    owner = _owner(twins)
+    seen, real = [], owner.sync
+
+    def sync(**arguments):
+        result = real(**arguments)
+        seen.append((sync_jobs.running(owner) is not None, owner.idle_expired(0)))
+        if len(seen) == 1:
+            return dict(result, state="pending", notices=["sync pending: forced; retry the same sync id"])
+        return result
+    monkeypatch.setattr(owner, "sync", sync)
+    monkeypatch.setattr(sync_jobs, "RETRY_PAUSE", 0)
+    with twins.at(twins.native):
+        ended = _poll(bs.backlog_sync())[-1]
+    assert ended.startswith("Sync complete"), ended
+    assert seen == [(True, False), (True, False)], seen
+
+
+class _NoChild:
+    def poll(self):
+        return None
+
+
+def test_the_call_deadline_is_hard_on_a_slow_probe_and_a_start_that_never_publishes(twins, monkeypatch):
+    from taskmaster.coordinator import client as client_module
+    from taskmaster.coordinator.protocol import ServiceUnavailable
+    monkeypatch.setattr(client_module.Client, "_probe", lambda self: (time.sleep(1.5), None)[1])
+    monkeypatch.setattr(client_module, "_launch", lambda root: _NoChild())
+
+    def missing(self):
+        raise FileNotFoundError("no discovery")
+    monkeypatch.setattr(client_module.Client, "_discovery", missing)
+    client = client_module.Client(twins.native)
+    started = time.monotonic()
+    with pytest.raises(ServiceUnavailable):
+        client.sync_job(deadline=started + 2)
+    assert time.monotonic() - started <= 2.3
+
+
+def test_the_call_deadline_is_hard_while_another_thread_holds_the_start_lock(twins, monkeypatch):
+    import threading
+    from taskmaster.coordinator import client as client_module
+    from taskmaster.coordinator.protocol import ServiceUnavailable
+    monkeypatch.setattr(client_module.Client, "_probe", lambda self: None)
+    release = threading.Event()
+    holder = threading.Thread(target=lambda: (client_module._START_LOCK.acquire(), release.wait(5),
+                                              client_module._START_LOCK.release()))
+    holder.start()
+    time.sleep(0.1)
+    try:
+        client = client_module.Client(twins.native)
+        started = time.monotonic()
+        with pytest.raises(ServiceUnavailable):
+            client.sync_job(deadline=started + 1)
+        assert time.monotonic() - started <= 1.3
+    finally:
+        release.set()
+        holder.join()
