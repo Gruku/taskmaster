@@ -302,13 +302,16 @@ def test_bump_writes_nothing_when_any_file_cannot_be_bumped(tmp_path):
 
 def test_a_release_candidate_heading_does_not_satisfy_the_final_version(tmp_path):
     bump = _load("scripts/bump_version.py", "bump_version_t")
-    for relative in bump.VERSIONED_FILES + ("CHANGELOG.md",):
+    for relative in bump.VERSIONED_FILES:
         (tmp_path / relative).parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / relative, tmp_path / relative)
-    bump.bump(tmp_path, "7.0.0")
-    with (tmp_path / "CHANGELOG.md").open("a", encoding="utf-8") as changelog:
-        changelog.write("\n## 7.0.0-rc.1\n")
-    assert bump.check(tmp_path) == ["CHANGELOG.md has no '## 7.0.0' heading"]
-    with (tmp_path / "CHANGELOG.md").open("a", encoding="utf-8") as changelog:
-        changelog.write("\n## 7.0.0 - final\n")
+    # Its own changelog: the repository's real headings must not decide this test.
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text("# Changelog\n\n## 9.9.0-rc.1\n\nnotes\n\n## 9.8.0\n", encoding="utf-8")
+    bump.bump(tmp_path, "9.9.0")
+    assert bump.check(tmp_path) == ["CHANGELOG.md has no '## 9.9.0' heading"]
+    bump.bump(tmp_path, "9.9.0-rc.1")
+    assert bump.check(tmp_path) == []
+    changelog.write_text("# Changelog\n\n## 9.9.0 - final\n\n## 9.9.0-rc.1\n", encoding="utf-8")
+    bump.bump(tmp_path, "9.9.0")
     assert bump.check(tmp_path) == []
