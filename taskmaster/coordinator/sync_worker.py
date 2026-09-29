@@ -447,7 +447,11 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
                 # Named files (MCP resync) are classified too; take_file is the explicit adopt.
                 try:
                     observation, found, warnings, seen = checkouts.detect(owner, observed_checkout, selected, drift,
-                                                                          scan=scan)
+                                                                          scan=scan, deadline=deadline - reserve)
+                except checkouts.DetectInterrupted as exc:
+                    # Nothing is imported unclassified; the scan keeps what this pass read.
+                    pending(None, f'Git classification stopped ({exc}); nothing imported; retry the same sync id')
+                    return result
                 except (GitRefused, OSError) as exc:
                     # Fail closed: nothing is imported while Git state is unknown.
                     unverified = f'Git state could not be inspected ({exc}); not imported, retry the sync'[:500]
