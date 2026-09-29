@@ -58,6 +58,19 @@ def stamp_command(stamp_script: Path, src: str, *, deps_present: bool | None = N
     return [uv, "run", "--script", str(stamp_script), src] if uv else None
 
 
+def run_stamp(argv: list[str], *, detach: bool) -> None:
+    """Run the stamp. A `uv run` stamp may first build its environment (seconds), so it
+    is started detached with no pipes back to this hook, which must return within its
+    hooks.json timeout; the stamp logs its own outcome to .taskmaster/local/hook.log."""
+    if not detach:
+        subprocess.run(argv, capture_output=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        return
+    options = ({'creationflags': subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP}
+               if sys.platform == 'win32' else {'start_new_session': True})
+    subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     close_fds=True, **options)
+
+
 def parse_src_branch(command: str) -> str:
     """Parse source branch (cross-link: merge_gate.py parse_src_branch).
 
@@ -129,11 +142,7 @@ def main() -> int:
     if argv is None:
         return 0
     try:
-        subprocess.run(
-            argv,
-            capture_output=True,
-            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
-        )
+        run_stamp(argv, detach=argv[0] != (sys.executable or "python"))
     except Exception:
         pass
 

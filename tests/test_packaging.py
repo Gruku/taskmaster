@@ -249,3 +249,27 @@ def test_stamp_runs_under_uv_when_the_hook_interpreter_lacks_them():
     argv = recorder.stamp_command(Path("s.py"), "feat", deps_present=False, uv="C:/bin/uv.exe")
     assert argv == ["C:/bin/uv.exe", "run", "--script", "s.py", "feat"]
     assert recorder.stamp_command(Path("s.py"), "feat", deps_present=False, uv=None) is None
+
+
+def test_a_uv_stamp_does_not_hold_the_hook_past_its_timeout(tmp_path):
+    """hooks.json gives the recorder 10 s; building the stamp's uv environment the first
+    time takes about 4 s with warm wheels and more with a cold index, before the stamp's
+    own work. The uv path is started detached; the in-interpreter path still waits."""
+    import time
+
+    recorder = _load("hooks/merge_recorder.py", "merge_recorder_t")
+    marker = tmp_path / "done"
+    slow = [sys.executable, "-c", f"import time, pathlib; time.sleep(3); pathlib.Path({str(marker)!r}).touch()"]
+
+    started = time.monotonic()
+    recorder.run_stamp(slow, detach=True)
+    assert time.monotonic() - started < 2
+    assert not marker.exists()
+    deadline = time.monotonic() + 30
+    while not marker.exists() and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert marker.exists(), "the detached stamp must still run to completion"
+
+    marker.unlink()
+    recorder.run_stamp(slow, detach=False)
+    assert marker.exists()
