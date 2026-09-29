@@ -248,3 +248,41 @@ def test_batched_sync_equals_the_unbatched_sync(repo, tmp_path, monkeypatch):
             assert {key: (left.get(key), right.get(key)) for key in set(left) | set(right)
                     if left.get(key) != right.get(key)} == {}
         assert left == right
+
+
+@pytest.fixture
+def plain(tmp_path, monkeypatch):
+    """No Git: nothing but the batches themselves confirms fingerprints."""
+    def seed():
+        for index in range(TASKS):
+            bs.backlog_add_task(title=f'Task {index + 1}', epic='test-epic', phase='dev')
+    twins = make_twins(tmp_path, monkeypatch, seed, visibility=None)
+    with twins.at(twins.native):
+        yield twins.native
+
+
+def test_an_interrupted_batched_sync_keeps_the_fingerprints_of_unscanned_batches(plain, small_batches, monkeypatch):
+    from test_native_sync_perf import age_projection
+    # At 37,000 files the bound's 1,024-entry slack is negligible next to a 10,000-file batch.
+    monkeypatch.setattr(sync_files, 'CACHE_SLACK', 0)
+    backlog = plain / '.taskmaster'
+    with Coordinator(plain) as owner:
+        client = Client(plain, autostart=False, timeout=120)
+        settle(client)
+        age_projection(plain)
+        settle(client)  # records every file's fingerprint
+        known = sync_files._load_cache(plain)[sync_files._cache_key(backlog)]['entries']
+        assert rel(TASKS) in known and rel(1) in known
+        batches = []
+
+        def slow_after_first_batch(stage):
+            if stage == 'sync_batch_scanned':
+                batches.append(stage)
+                if len(batches) == 1:
+                    time.sleep(1.2)
+        owner.checkpoint = slow_after_first_batch
+        result = client.sync(timeout=1)
+        assert result['state'] == 'pending' and len(batches) == 1, result
+        kept = sync_files._load_cache(plain)[sync_files._cache_key(backlog)]['entries']
+        # The retry resumes on stat calls for every batch, scanned or not.
+        assert set(known) <= set(kept)

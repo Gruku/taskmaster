@@ -341,6 +341,7 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
     # always reads the bytes (the explicit escape from any fingerprint doubt).
     fast = files is None and not take_file
     scan = None
+    scanned_all = False  # every selected path went through the per-file loop
 
     def current(plan):
         if plan.observation is not None:
@@ -530,8 +531,9 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
                 if scan is not None and fast:
                     # Keep what this batch learned: a crash or an exhausted budget then
                     # restarts the next attempt on stat calls for the scanned batches.
-                    sync_files.save_scan(owner.root, scan)
+                    sync_files.save_scan(owner.root, scan, complete=False)
                 owner.checkpoint('sync_batch_scanned')
+            scanned_all = True
 
         # No import is awaiting the sole writer when this pause is acquired.
         # Writers queued after this point remain durable intent for the next
@@ -643,7 +645,8 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
         return result
     finally:
         if scan is not None and fast:
-            sync_files.save_scan(owner.root, scan)
+            # A sync that stopped before its last batch keeps the unscanned batches' entries.
+            sync_files.save_scan(owner.root, scan, complete=scanned_all)
         if acquired:
             owner.publication.release()
         with owner.guard:
