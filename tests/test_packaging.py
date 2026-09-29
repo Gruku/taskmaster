@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+from test_native_service_build import owners, root  # noqa: F401  (fixtures)
+
 ROOT = Path(__file__).resolve().parents[1]
 
 # Scripts `uv run` executes in script mode: each carries its own PEP 723 header.
@@ -187,6 +189,7 @@ def _cli(*args, code=None):
     ("cutover", "--dry-run"),
     ("git", "checkout"),
     ("git-hook", "pre-commit"),
+    ("coordinator", "stop"),
 ])
 def test_cli_dispatches_to_each_module(command, module_usage):
     result = _cli(command, "--help")
@@ -197,7 +200,7 @@ def test_cli_dispatches_to_each_module(command, module_usage):
 def test_cli_rejects_an_unknown_command():
     result = _cli("nope")
     assert result.returncode == 2
-    assert "cutover" in result.stderr and "git-hook" in result.stderr
+    assert "cutover" in result.stderr and "git-hook" in result.stderr and "coordinator" in result.stderr
 
 
 def test_cli_never_imports_the_server():
@@ -223,6 +226,70 @@ def test_cli_launch_is_not_mistaken_for_a_store_client():
     for command in (f"uv run C:/p/plugins/taskmaster/taskmaster_cli.py cutover --root {root} --dry-run",
                     f"C:/cache/env/Scripts/python.exe C:/p/plugins/taskmaster/taskmaster_cli.py cutover --root {root}"):
         assert quiesce._classify({"pid": 7, "command_line": command}, [root.lower()]) is None, command
+
+
+# ── coordinator stop/status ────────────────────────────────────────────────
+# The documented `uv run --project <taskmaster> python -c "...shutdown()"` built a .venv
+# inside the plugin cache and failed on the Codex snapshot (no pyproject.toml): the CLI is
+# the packaged way to stop a coordinator. Owners run in this process (see
+# test_native_service_build); the CLI runs as a separate process, as an operator's would.
+
+
+def _coordinator(*args):
+    result = _cli("coordinator", *args)
+    lines = result.stdout.strip().splitlines()
+    return result.returncode, (json.loads(result.stdout) if lines else None), result
+
+
+def test_coordinator_status_and_stop_a_coordinator_of_this_build(root, owners):
+    import os
+    from taskmaster.coordinator.ownership import ownership_held
+    from taskmaster.coordinator.protocol import build_identity
+
+    serve, _ = owners
+    owner = serve(build_identity(), root=root)
+    code, report, raw = _coordinator("status", "--root", str(root))
+    assert code == 0, raw.stdout + raw.stderr
+    assert report["state"] == "running" and report["same_build"] is True
+    assert report["pid"] == os.getpid() and report["build"] == owner.build
+
+    code, report, raw = _coordinator("stop", "--root", str(root))
+    assert code == 0, raw.stdout + raw.stderr
+    assert report["state"] == "stopped" and report["pid"] == os.getpid()
+    assert owner.stopping.is_set() and not ownership_held(root)
+
+    code, report, raw = _coordinator("status", "--root", str(root))
+    assert code == 0 and report["state"] == "stopped", raw.stdout + raw.stderr
+    assert "discovery.json" in report["note"] and "harmless" in report["note"]
+
+
+def test_coordinator_stop_reports_another_build_and_how_to_stop_it(root, owners):
+    import os
+    from test_native_service_build import OLD
+
+    serve, _ = owners
+    owner = serve(OLD, root=root)
+    code, report, raw = _coordinator("stop", "--root", str(root))
+    assert code == 1, raw.stdout + raw.stderr
+    assert report["state"] == "running" and report["same_build"] is False
+    assert report["pid"] == os.getpid() and report["build"] == OLD
+    guidance = report["guidance"]
+    assert OLD["version"] in guidance and str(os.getpid()) in guidance
+    for option in ("newer", "idle", "session"):
+        assert option in guidance, guidance
+    assert not owner.stopping.is_set(), "a command never runs on another build"
+
+    code, report, _ = _coordinator("status", "--root", str(root))
+    assert code == 0 and report["same_build"] is False and report["build"] == OLD
+
+
+def test_coordinator_stop_with_none_running_starts_nothing(root):
+    from taskmaster.coordinator.ownership import ownership_held
+
+    code, report, raw = _coordinator("stop", "--root", str(root))
+    assert code == 0, raw.stdout + raw.stderr
+    assert report["state"] == "stopped"
+    assert not ownership_held(root)
 
 
 # ── merge-recorder interpreter ─────────────────────────────────────────────

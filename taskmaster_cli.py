@@ -9,6 +9,7 @@ the package or its dependencies.
     uv run <plugin>/taskmaster_cli.py cutover --root <project> --dry-run
     uv run <plugin>/taskmaster_cli.py git status          (cwd = the project)
     uv run <plugin>/taskmaster_cli.py git-hook pre-commit  (inside a user's Git hook)
+    uv run <plugin>/taskmaster_cli.py coordinator {status,stop} [--root <project>]
 
 Each command runs its module exactly as `python -m <module>` would. The server module
 is never imported: importing it starts the viewer. Keep this file's name out of the
@@ -23,6 +24,7 @@ COMMANDS = {
     "cutover": "taskmaster.native.cutover",
     "git": "taskmaster.coordinator.git_cli",
     "git-hook": "taskmaster.coordinator.git_hook",
+    "coordinator": "taskmaster.coordinator.control_cli",
 }
 
 
