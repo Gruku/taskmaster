@@ -301,7 +301,7 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
     scope = operation_scope(caller_scope, request_id)
     # `imports` are domain writes; `observed` counts committed observes (the published bytes
     # recorded as merge base) and `observes` lists any whose outcome the budget left unsettled.
-    result = dict(state='pending', through=through, captured=False, imports=[], observed=0, observes=[],
+    result = dict(state='pending', through=through, captured=False, selected=0, imports=[], observed=0, observes=[],
                   unresolved=[], notices=[], warnings=[], caller_scope=caller_scope,
                   request_id=request_id, receipt_scope=scope, import_files=import_files)
     deadline = time.monotonic() + max(0, timeout)
@@ -422,6 +422,8 @@ def _synchronize(owner, *, caller_scope, request_id, import_files=True, through=
                         if rel not in inventory.duplicates and rel not in chosen:
                             chosen.add(rel)
                             selected.append(rel)
+            # How many paths this sync judges: the caller's denominator for "unchanged".
+            result['selected'] = len(selected)
             if metrics.ENABLED:
                 metrics.add('files_selected', len(selected))
             # No size ceiling (N16): every selected path is enumerated here, and the per-file

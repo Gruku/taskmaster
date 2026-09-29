@@ -787,6 +787,8 @@ NATIVE_MAPPING = {
     # N13 step 7: resync imports the documents through the coordinator's sync barrier.
     "backlog_handover_resync": ["sync.begin", "sync.apply", "sync.finish"],
     "backlog_issue_resync": ["sync.begin", "sync.apply", "sync.finish"],
+    # N17: the explicit import of hand edits is the same coordinator sync barrier.
+    "backlog_sync": ["sync.begin", "sync.apply", "sync.finish"],
     # N14 step 6: `rebuild=True` on a native store is the graph repair.
     "backlog_index_status": ["graph.repair"],
 }

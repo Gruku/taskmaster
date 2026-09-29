@@ -2922,6 +2922,39 @@ def backlog_resolve_conflict(file: str = "", take: str = "") -> str:
     return _append_seq(message, outcome["seq"])
 
 
+@mcp.tool()
+def backlog_sync(files: list[str] | None = None, sync_id: str = "") -> str:
+    """Import hand edits to `.taskmaster/` files into a native store, on request.
+
+    A native store never scans its projection files during normal commands, so an
+    edit made by hand (or by another tool) to a task, epic, handover, `backlog.yaml`
+    or other projection file takes effect only through an explicit sync. Call this
+    when such an edit has not taken effect. It never runs automatically.
+
+    - no arguments: sync every projection file (the coordinator's full sync).
+    - `files`: sync only these paths, relative to `.taskmaster/`
+      (e.g. `["tasks/core-001.md"]`; a leading `.taskmaster/` is accepted).
+    - `sync_id`: continue a sync that answered "pending", with the same `files`
+      it was started with. A completed sync id answers its stored result again;
+      start a fresh sync (no `sync_id`) to pick up later edits.
+
+    The answer is "Sync complete" with counts (imported, repaired, unchanged,
+    conflicts), or "Sync pending" with the reasons, the flagged or quarantined
+    files to settle with `backlog_resolve_conflict`, and the exact call to retry.
+    Each call spends at most ~15 s so it answers inside a 30 s client tool
+    timeout; a large first sync may need a few retries of the same sync id.
+
+    On a legacy store this is a no-op: the legacy store imports hand edits on
+    every call already.
+    """
+    if not _backlog_path().exists():
+        return "No backlog found."
+    return (
+        "This project uses the legacy store, which imports hand edits to `.taskmaster/` "
+        "files on every call; there is nothing to sync. Nothing was changed."
+    )
+
+
 def _render_query_table(description, rows: list, limit: int) -> str:
     """Aligned text table plus the row-count footer `backlog_query` returns."""
     headers = [col[0] for col in description]

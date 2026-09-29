@@ -10,7 +10,7 @@ in a disposable project, not merely another source scanner.
 
 ## API boundaries
 
-The fixture records all 83 registered tools, their parameter names/types/defaults,
+The fixture records all 90 registered tools (83 at N02; `backlog_sync` is the N17 addition), their parameter names/types/defaults,
 return annotations, full public documentation, transaction wrappers, and action
 dispatch targets. Categories describe their future core role, not a claim that
 current reads avoid projection reconciliation. All current Store-backed reads

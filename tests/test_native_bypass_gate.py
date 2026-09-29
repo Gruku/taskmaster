@@ -199,6 +199,10 @@ EXERCISES = {
         _hand_edit(".taskmaster/handovers/2026-09-17-gate-handover.md"), bs.backlog_handover_resync())[1],
     ("backlog_issue_resync", None): lambda: (
         _hand_edit(".taskmaster/issues/ISS-001.md"), bs.backlog_issue_resync())[1],
+    # A full sync and a named one, each after a hand edit (N17 explicit import).
+    ("backlog_sync", None): lambda: [
+        (_hand_edit(".taskmaster/tasks/test-epic-002.md"), bs.backlog_sync())[1],
+        (_hand_edit(".taskmaster/issues/ISS-001.md"), bs.backlog_sync(files=["issues/ISS-001.md"]))[1]],
     ("backlog_thread_list", None): lambda: bs.backlog_thread_list(include_closed=True),
     ("backlog_thread_resume", None): lambda: [bs.backlog_thread_resume(ref="test-epic"),
                                               bs.backlog_thread_resume(ref="2026-09-17-gate-handover")],
