@@ -723,16 +723,28 @@ def test_a_lost_link_write_fails_the_runner(work, fault, mode, gate):
 # ── sync judging on the CodeMaestro run: a sync-wide refusal, a grown dataset, the summary ──
 from types import SimpleNamespace  # noqa: E402
 
-WIDE = "sync pending: more than 10000 projection files; bounded scan refused"
+WIDE = "sync pending: publisher busy"  # a sync-wide refusal that is not the file-limit precondition
 
 
 class _FixedSync:
+    """A coordinator whose every sync (and managed-Git sync) answers `answer`."""
+
     def __init__(self, answer):
         self.answer, self.calls = answer, 0
 
     def sync(self, *, caller_scope, request_id=None, **_):
         self.calls += 1
         return dict(self.answer)
+
+    def flush(self, through):
+        return {"state": "blocked", "notices": ["tasks/t-2.md: hand edit kept and flagged"]}
+
+    def execute(self, request):
+        return {"receipt": {"commit_seq": 1}}
+
+    def git_run(self, **_):
+        return {"state": "refused", "reason": "projections are not synchronized; resolve the listed paths first",
+                "sync": dict(self.answer)}
 
 
 class _SyncDataset:
@@ -751,7 +763,14 @@ def _sync_run(samples=3):
 
 def _sync_harness(monkeypatch, tmp_path, answer, *, files=100, imported=False):
     client = _FixedSync(answer)
+    tasks = tmp_path / ".taskmaster/tasks"
+    tasks.mkdir(parents=True, exist_ok=True)
+    for ident in ("t-1", "t-2"):
+        (tasks / f"{ident}.md").write_text(f"id: {ident}\n", encoding="utf-8")
     monkeypatch.setattr(runner, "start_coordinator", lambda run, root: client)
+    monkeypatch.setattr(runner, "stop_coordinator", lambda root: None)
+    monkeypatch.setattr(runner, "copy_project", lambda run, root, label: tmp_path)
+    monkeypatch.setattr(runner, "high_water", lambda root: 0)
     monkeypatch.setattr(runner, "quarantined_files", lambda root: set())
     monkeypatch.setattr(runner, "sync_file_count", lambda root: files)
     markers = []
@@ -771,7 +790,7 @@ def test_a_sync_wide_refusal_is_refused_not_lost(monkeypatch, tmp_path):
     check = _checks(data)["external_edit_imported"]
     assert data["verdict"] == "fail" and not check["ok"]
     assert check.get("lost", 0) == 0
-    assert check["refused"] == 3 and "bounded scan refused" in check["reason"]
+    assert check["refused"] == 3 and "publisher busy" in check["reason"]
 
 
 def test_lost_means_the_sync_reported_success_and_the_edit_is_missing(monkeypatch, tmp_path):
@@ -805,24 +824,74 @@ def test_a_no_edit_sync_held_by_a_sync_wide_refusal_does_not_settle(monkeypatch,
     client, ds = _sync_harness(monkeypatch, tmp_path, answer)
     data = runner.SCENARIOS["sync.no_edits"]["fn"](_sync_run(), ds, None, None).finish()
     check = _checks(data)["no_edit_sync_settles"]
-    assert data["verdict"] == "fail" and not check["ok"] and "bounded scan refused" in check["reason"]
+    assert data["verdict"] == "fail" and not check["ok"] and "publisher busy" in check["reason"]
 
 
-@pytest.mark.parametrize("name", ["sync.no_edits", "sync.dirty", "sync.conflict", "sync.checkout",
-                                  "sync.missing_files"])
-def test_an_over_limit_dataset_is_a_precondition_not_a_verdict(monkeypatch, tmp_path, name):
-    def no_coordinator(run, root):
-        raise AssertionError("a sync scenario over the file limit must not run")
+LIMIT = "sync pending: more than 10000 projection files; bounded scan refused"
+SYNC_SCENARIOS = ["sync.no_edits", "sync.dirty", "sync.conflict", "sync.checkout", "sync.missing_files"]
 
-    monkeypatch.setattr(runner, "copy_project", lambda run, root, label: tmp_path)
-    monkeypatch.setattr(runner, "stop_coordinator", lambda root: None)
-    monkeypatch.setattr(runner, "start_coordinator", no_coordinator)
-    monkeypatch.setattr(runner, "quarantined_files", lambda root: set())
-    monkeypatch.setattr(runner, "sync_file_count", lambda root: runner.sync_limit() + 1)
-    data = runner.SCENARIOS[name]["fn"](_sync_run(), _SyncDataset(tmp_path), None, None).finish()
+
+@pytest.mark.parametrize("name", ["sync.no_edits", "sync.dirty"])
+def test_a_file_count_alone_never_makes_a_precondition(monkeypatch, tmp_path, name):
+    # Full sync may batch past MAX_FILES: only the product's own refusal is a precondition.
+    client, ds = _sync_harness(monkeypatch, tmp_path, {"state": "synchronized", "imports": [], "notices": []},
+                               files=50000, imported=True)
+    data = runner.SCENARIOS[name]["fn"](_sync_run(), ds, None, None).finish()
+    assert data["verdict"] == "pass" and client.calls >= 3, data
+    assert data["projection_files"]["at_scenario"] == 50000
+
+
+@pytest.mark.allow_projection_bypass  # the scenario hand-edits a projection file, as a user would
+@pytest.mark.parametrize("name", SYNC_SCENARIOS)
+def test_the_products_limit_refusal_is_a_precondition_not_a_verdict(monkeypatch, tmp_path, name):
+    answer = {"state": "pending", "unresolved": [], "notices": [LIMIT], "imports": []}
+    client, ds = _sync_harness(monkeypatch, tmp_path, answer, files=11532)
+    ds.prepared_files = 3800
+    monkeypatch.setattr(runner, "envelope", lambda root, task, value: {"value": value})
+    data = runner.SCENARIOS[name]["fn"](_sync_run(), ds, None, None).finish()
     assert data["verdict"] == "precondition", data
-    assert str(runner.sync_limit()) in data["precondition"]
+    assert "bounded scan refused" in data["precondition"]
+    assert "3800" in data["precondition"] and "11532" in data["precondition"]  # harness growth is visible
+    assert data["projection_files"] == {"prepared": 3800, "at_scenario": 11532}
     assert runner.exit_status([data]) == 2
+
+
+def test_limit_refusal_reads_only_the_products_sync_wide_notice():
+    assert runner.limit_refusal({"state": "pending", "unresolved": [], "notices": [LIMIT]}) == LIMIT
+    assert runner.limit_refusal({"state": "pending", "unresolved": [], "notices": [WIDE]}) is None
+    per_file = "sync pending: tasks/t-1.md: more than 10000 projection files; bounded scan refused"
+    assert runner.limit_refusal({"state": "pending", "unresolved": ["tasks/t-1.md"], "notices": [per_file]}) is None
+    assert runner.limit_refusal(None) is None
+
+
+RETRY = "sync pending: tasks/t-2.md: time budget exhausted or coordinator stopping; retry the same sync id"
+
+
+def test_a_no_edit_sync_left_retryable_does_not_settle(monkeypatch, tmp_path):
+    answer = {"state": "pending", "unresolved": ["tasks/t-2.md"], "notices": [RETRY], "imports": []}
+    client, ds = _sync_harness(monkeypatch, tmp_path, answer)
+    monkeypatch.setattr(runner, "quarantined_files", lambda root: {"tasks/t-2.md"})  # would excuse it before
+    data = runner.SCENARIOS["sync.no_edits"]["fn"](_sync_run(), ds, None, None).finish()
+    check = _checks(data)["no_edit_sync_settles"]
+    assert data["verdict"] == "fail" and not check["ok"] and check["retryable"] == 3
+
+
+@pytest.mark.allow_projection_bypass  # the scenario hand-edits a projection file, as a user would
+@pytest.mark.parametrize("answer, ok", [
+    ({"state": "pending", "unresolved": ["tasks/t-2.md"], "notices": [RETRY], "imports": []}, False),
+    ({"state": "pending", "unresolved": ["tasks/t-2.md"], "notices": ["sync pending: tasks/t-2.md: file changed "
+                                                                      "after parse; not imported"], "imports": []}, False),
+    ({"state": "pending", "unresolved": ["tasks/t-2.md"], "imports": [],
+      "notices": ["sync pending: tasks/t-2.md: overlapping edits retained in external history: next_step"]}, True),
+    ({"state": "synchronized", "notices": [], "imports": [{"file": "tasks/t-2.md", "state": "conflict"}]}, True),
+])
+def test_a_conflict_is_named_only_by_a_conflict_import_or_notice(monkeypatch, tmp_path, answer, ok):
+    client, ds = _sync_harness(monkeypatch, tmp_path, answer)
+    stored = []
+    monkeypatch.setattr(runner, "envelope", lambda root, task, value: stored.append(value) or {"value": value})
+    monkeypatch.setattr(runner, "body_of", lambda root, task: stored[-1])  # store edit kept, file edit not
+    data = runner.SCENARIOS["sync.conflict"]["fn"](_sync_run(), ds, None, None).finish()
+    assert _checks(data)["both_edits_kept_or_conflict_named"]["ok"] is ok, data["checks"]
 
 
 def test_sync_file_count_counts_projection_files_on_disk_and_in_the_store(tmp_path):

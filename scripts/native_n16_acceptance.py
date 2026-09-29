@@ -509,6 +509,7 @@ class Dataset:
     def __init__(self, name, root, legacy=None, info=None):
         self.name, self.root, self.legacy, self.info = name, root, legacy, info or {}
         self._inventory = None
+        self.prepared_files = None  # projection files when prepared, before any pass wrote to it
 
     def inventory(self):
         if self._inventory is None:
@@ -1806,11 +1807,6 @@ def judge_sync_edit(result, imported: bool) -> tuple:
     return "unsettled", str((notices or [f"sync answered {state}"])[0])
 
 
-def sync_limit() -> int:
-    from taskmaster.native import sync
-    return sync.MAX_FILES
-
-
 def sync_file_count(root: Path) -> int:
     """The files a full sync selects: authored projection files on disk plus the importable paths
     the store's projection table knows (as coordinator/sync_worker.py selects them)."""
@@ -1831,27 +1827,43 @@ def sync_file_count(root: Path) -> int:
     return len(files)
 
 
-def sync_over_limit(res: Result, root: Path) -> bool:
-    """A dataset over the product's full-sync file limit cannot exercise a sync scenario: the product
-    rightly refuses the bounded scan. Reported as a precondition, never a pass and never "lost"."""
-    count, limit = sync_file_count(root), sync_limit()
-    if count <= limit:
+LIMIT_REFUSAL = re.compile(r"more than \d+ projection files; bounded scan refused")
+
+
+def limit_refusal(result) -> str | None:
+    """The product's own sync-wide refusal of a full scan over its file limit, or None. Only the
+    product decides the limit (full sync may batch past MAX_FILES), so the harness never predicts it."""
+    return next((n for n in sync_wide_refusals(result) if LIMIT_REFUSAL.search(n)), None)
+
+
+def record_file_counts(res: Result, ds: Dataset, root: Path) -> None:
+    """Projection files when the dataset was prepared and when this scenario started: growth the
+    harness itself caused shows here."""
+    res.data["projection_files"] = {"prepared": getattr(ds, "prepared_files", None), "at_scenario": sync_file_count(root)}
+
+
+def refused_over_limit(res: Result, result) -> bool:
+    """A sync the product refused as over its file limit: a precondition, never a pass and never "lost"."""
+    notice = limit_refusal(result)
+    if notice is None:
         return False
-    res.precondition(f"dataset has {count} projection files, over the full-sync limit of {limit} "
-                     f"(sync.MAX_FILES); the product refuses the bounded scan")
+    counts = res.data.get("projection_files") or {}
+    res.precondition(f"the product refused the full sync ({notice}); projection files prepared "
+                     f"{counts.get('prepared')}, at scenario {counts.get('at_scenario')}")
     return True
 
 
 @scenario("sync.no_edits", group="sync", cells=("Sync: no external edits",))
 def sync_no_edits(run: Run, ds: Dataset, clients, mode):
     res = Result("sync.no_edits", ds.name, clients=1, cells=["Sync: no external edits"])
-    if sync_over_limit(res, ds.root):
-        return res
+    record_file_counts(res, ds, ds.root)
     client = start_coordinator(run, ds.root)
     quarantined = quarantined_files(ds.root)
-    times, states, blockers, refusals = [], set(), set(), []
+    times, states, blockers, refusals, retryable = [], set(), set(), [], 0
     for index in range(run.args.sync_samples + run.args.warmup):
         result, seconds = sync_once(client)
+        if refused_over_limit(res, result):
+            return res
         if index == 0:
             res.measure("sync.no_edits_first_round", [seconds])  # first touch of the files: kept apart
         if index >= run.args.warmup:
@@ -1859,17 +1871,20 @@ def sync_no_edits(run: Run, ds: Dataset, clients, mode):
             states.add(sync_summary(result)["state"])
             blockers |= set((result or {}).get("unresolved") or [])
             refusals += [n for n in sync_wide_refusals(result) if n not in refusals]
+            retryable += sync_retryable(result)
     res.measure("sync.no_edits", times)
     if run.sync_required:
         res.check(f"samples>={run.sync_required}", len(times) >= run.sync_required, measured=len(times))
     res.data.update(states=sorted(map(str, states)), preexisting_quarantined=len(quarantined))
     # A copied project may carry files the store already quarantined (CodeMaestro does): those keep a
     # no-edit sync `pending`, honestly. Anything else unresolved fails, and so does a sync-wide
-    # refusal (a pending that names no file: nothing was scanned, so nothing settled).
+    # refusal (a pending that names no file: nothing was scanned, so nothing settled), and so does a
+    # retryable pending (a time budget names the file it reached, quarantined or not: unsettled).
     other = sorted(blockers - quarantined)
-    res.check("no_edit_sync_settles", not refusals and (states <= {"synchronized"}
-                                                        or (states <= {"synchronized", "pending"} and not other)),
+    res.check("no_edit_sync_settles", not refusals and not retryable
+              and (states <= {"synchronized"} or (states <= {"synchronized", "pending"} and not other)),
               states=sorted(map(str, states)), unresolved_not_quarantined=other[:5] or None,
+              retryable=retryable or None,
               pending_only_quarantined=len(blockers & quarantined) or None,
               reason="; ".join(refusals[:3])[:300] if refusals else None)
     return res
@@ -1886,8 +1901,7 @@ def quarantined_files(root: Path) -> set:
 @scenario("sync.dirty", group="sync", cells=("Sync: dirty projections",))
 def sync_dirty(run: Run, ds: Dataset, clients, mode):
     res = Result("sync.dirty", ds.name, clients=1, cells=["Sync: dirty projections"])
-    if sync_over_limit(res, ds.root):
-        return res
+    record_file_counts(res, ds, ds.root)
     client = start_coordinator(run, ds.root)
     inv = ds.inventory()
     times, summaries, retried = [], [], 0
@@ -1900,6 +1914,8 @@ def sync_dirty(run: Run, ds: Dataset, clients, mode):
         # A first sync of a fresh copy can exhaust its budget and answer pending: that sync is retried
         # under its own id until it settles; only then is the edit judged.
         result, seconds, attempts = sync_settled(client)
+        if refused_over_limit(res, result):
+            break  # edits judged so far still count; the rest cannot be exercised
         retried += attempts > 1
         times.append(seconds)
         summaries.append(dict(sync_summary(result), attempts=attempts))
@@ -1909,11 +1925,11 @@ def sync_dirty(run: Run, ds: Dataset, clients, mode):
             if reason and reason not in reasons:
                 reasons.append(reason)
     res.measure("sync.dirty_one_file", times)
-    if run.sync_required:
+    if run.sync_required and not res.data.get("precondition"):
         res.check(f"samples>={run.sync_required}", len(times) >= run.sync_required, measured=len(times))
     res.data["sync"] = summaries[:3]
     res.data["retried_pending_syncs"] = retried
-    res.check("external_edit_imported", not any(outcomes.values()), edits=run.args.sync_samples,
+    res.check("external_edit_imported", not any(outcomes.values()), edits=len(times),
               lost=len(outcomes["lost"]), unsettled=len(outcomes["unsettled"]) or None,
               refused=len(outcomes["refused"]) or None, reason="; ".join(reasons[:3])[:300] or None)
     return res
@@ -1926,8 +1942,7 @@ def sync_conflict(run: Run, ds: Dataset, clients, mode):
     names the conflict for that file."""
     res = Result("sync.conflict", ds.name, kind="check", clients=1, cells=["Sync: conflict"])
     root = copy_project(run, ds.root, "sync-conflict")
-    if sync_over_limit(res, root):
-        return res
+    record_file_counts(res, ds, root)
     client = start_coordinator(run, root)
     inv = ds.inventory()
     task = inv["tasks"][3 % len(inv["tasks"])]
@@ -1945,10 +1960,12 @@ def sync_conflict(run: Run, ds: Dataset, clients, mode):
     res.check("export_flags_the_file", flushed.get("state") != "exported" and bool(flagged),
               state=flushed.get("state"), flagged=len(flagged))
     result, seconds = sync_once(client)
+    if refused_over_limit(res, result):
+        stop_coordinator(root)
+        return res
     summary = sync_summary(result)
     stored = body_of(root, task)
-    named = [n for n in (result.get("notices") or []) if rel in str(n)] + \
-        [i for i in (result.get("imports") or []) if i.get("file") == rel and i.get("state") == "conflict"]
+    named = conflict_named(result, rel)
     res.data["sync"] = summary
     res.check("store_edit_not_lost", store_value in stored)
     res.check("both_edits_kept_or_conflict_named", (store_value in stored and marker in stored) or bool(named),
@@ -1956,6 +1973,22 @@ def sync_conflict(run: Run, ds: Dataset, clients, mode):
     res.measure("sync.conflict", [seconds])
     stop_coordinator(root)
     return res
+
+
+CONFLICT_NOTICE = re.compile(r"conflict|explicit resolution required|overlapping edits|kept and flagged", re.I)
+
+
+def conflict_named(result, rel) -> list:
+    """What names a conflict for `rel`: a conflict import, or a pending notice for that file whose
+    reason is conflict-specific. A retryable or transient pending for the file names nothing."""
+    if not isinstance(result, dict):
+        return []
+    imports = [i for i in result.get("imports") or () if i.get("file") == rel and i.get("state") == "conflict"]
+    prefix = f"sync pending: {rel}: "
+    notices = [str(n) for n in result.get("notices") or ()
+               if str(n).startswith(prefix) and CONFLICT_NOTICE.search(str(n)[len(prefix):])
+               and "retry the same sync id" not in str(n)]
+    return imports + notices
 
 
 def checkout_precondition(baseline, quarantined) -> str | None:
@@ -1980,8 +2013,7 @@ def sync_checkout(run: Run, ds: Dataset, clients, mode):
     (N13), released with `take_published` without losing the store's value."""
     res = Result("sync.checkout", ds.name, kind="check", clients=1, cells=["Sync: checkout/worktree"])
     root = copy_project(run, ds.root, "sync-checkout")
-    if sync_over_limit(res, root):
-        return res
+    record_file_counts(res, ds, root)
     # Snapshot before the coordinator starts: a quarantine that appears during the run is a failure.
     preexisting = quarantined_files(root)
     client = start_coordinator(run, root)
@@ -1989,6 +2021,9 @@ def sync_checkout(run: Run, ds: Dataset, clients, mode):
     started = time.perf_counter()
     baseline = client.git_run(kind="commit", message="n16 baseline", caller_scope="n16-git")
     res.measure("sync.managed_commit", [time.perf_counter() - started])
+    if refused_over_limit(res, baseline.get("sync") if isinstance(baseline, dict) else None):
+        stop_coordinator(root)
+        return res
     unmet = checkout_precondition(baseline, preexisting)
     if unmet:
         res.precondition(unmet)
@@ -2008,6 +2043,9 @@ def sync_checkout(run: Run, ds: Dataset, clients, mode):
     started = time.perf_counter()
     second = client.sync(caller_scope="n16-sync", worktree=side)
     res.measure("sync.worktree_edit", [time.perf_counter() - started])
+    if refused_over_limit(res, first) or refused_over_limit(res, second):
+        stop_coordinator(root)
+        return res
     res.data["worktree_sync"] = [sync_summary(first), sync_summary(second)]
     res.check("worktree_edit_imported", marker in body_of(root, task), sync=sync_summary(second))
     git(side, "add", "-A")
@@ -2042,8 +2080,7 @@ def sync_missing(run: Run, ds: Dataset, clients, mode):
     """A deleted projection file is not a deletion: the entity stays and the file comes back."""
     res = Result("sync.missing_files", ds.name, kind="check", clients=1, cells=["Sync: missing files"])
     root = copy_project(run, ds.root, "sync-missing")
-    if sync_over_limit(res, root):
-        return res
+    record_file_counts(res, ds, root)
     client = start_coordinator(run, root)
     client.flush(high_water(root))
     inv = ds.inventory()
@@ -2051,6 +2088,9 @@ def sync_missing(run: Run, ds: Dataset, clients, mode):
     path = root / ".taskmaster/tasks" / f"{task}.md"
     path.unlink()
     result, seconds = sync_once(client)
+    if refused_over_limit(res, result):
+        stop_coordinator(root)
+        return res
     summary = sync_summary(result)
     client.flush(high_water(root))
     deadline = time.monotonic() + 15
@@ -2790,6 +2830,7 @@ def pass_datasets(run: Run, ds: Dataset, passes) -> dict:
         for name in passes[1:]:
             twin = Dataset(ds.name, copy_project(run, ds.root, f"{ds.name}-{name}"), ds.legacy, ds.info)
             twin._inventory = inventory
+            twin.prepared_files = ds.prepared_files
             datasets[name] = twin
     return datasets
 
@@ -2903,9 +2944,11 @@ def main(argv=None) -> int:
     for dataset_name in [d for d in args.dataset.split(",") if d]:
         started = time.perf_counter()
         ds = prepare_dataset(run, dataset_name)
+        ds.prepared_files = sync_file_count(ds.root)
         report["datasets"][dataset_name] = {"prepare_s": round(time.perf_counter() - started, 2),
                                             "adoption": ds.info.get("adoption"), "counts": ds.inventory()["counts"],
                                             "notes": ds.inventory().get("notes") or [],
+                                            "projection_files": ds.prepared_files,
                                             "generator": {k: ds.info.get("generator", {}).get(k)
                                                           for k in ("seed", "scale", "stats_sha256", "files")}}
         passes = ("uninstrumented", "instrumented") if args.instrumented else ("uninstrumented",)
