@@ -20,6 +20,7 @@ import shutil
 import sqlite3
 import subprocess
 
+from taskmaster.bounded_run import run_bounded
 from taskmaster.coordinator.ownership import ownership_held
 
 _SECRETS = ("token", "nonce")
@@ -209,9 +210,9 @@ def _windows_processes(timeout: float) -> tuple[list[dict] | None, str | None]:
     script = ("[Console]::OutputEncoding=[Text.Encoding]::UTF8; "
               "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine "
               "| ConvertTo-Json -Compress")
-    completed = subprocess.run([shell, "-NoProfile", "-NonInteractive", "-Command", script],
-                               stdin=subprocess.DEVNULL, capture_output=True, timeout=timeout, check=False,
-                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    completed = run_bounded([shell, "-NoProfile", "-NonInteractive", "-Command", script],
+                            timeout=timeout,
+                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     if completed.returncode != 0:
         return None, f"process scan failed (exit {completed.returncode}): " \
                      f"{completed.stderr.decode('utf-8', 'replace').strip()[:300]}"
@@ -264,8 +265,7 @@ def _posix_processes(timeout: float) -> tuple[list[dict] | None, str | None]:
     ps = shutil.which("ps")
     if ps is None:
         return None, "neither /proc nor ps is available; process scan skipped"
-    completed = subprocess.run([ps, "-A", "-o", "pid=", "-o", "ppid=", "-o", "args="], stdin=subprocess.DEVNULL,
-                               capture_output=True, timeout=timeout, check=False)
+    completed = run_bounded([ps, "-A", "-o", "pid=", "-o", "ppid=", "-o", "args="], timeout=timeout)
     if completed.returncode != 0:
         return None, f"ps failed (exit {completed.returncode})"
     return parse_ps(completed.stdout.decode("utf-8", "replace")), None

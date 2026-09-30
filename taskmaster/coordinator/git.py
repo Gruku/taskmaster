@@ -23,6 +23,7 @@ import sys
 import time
 import uuid
 
+from taskmaster.bounded_run import run_bounded
 from taskmaster.native import metrics
 from taskmaster.projection_paths import UnsafePath, check_component, safe_path
 from . import job as jobs
@@ -80,9 +81,8 @@ def probe(root, *args, ok=(0,), stdin=None, limit=PROBE_LIMIT, timeout=PROBE_TIM
     flags = {'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {}
     env = environment({'GIT_OPTIONAL_LOCKS': '0'})
     try:
-        completed = subprocess.run([executable(), '--no-optional-locks', *args], cwd=root, env=env,
-                                   input=stdin, stdin=None if stdin is not None else subprocess.DEVNULL,
-                                   capture_output=True, timeout=timeout, **flags)
+        completed = run_bounded([executable(), '--no-optional-locks', *args], cwd=root, env=env,
+                                input=stdin, timeout=timeout, **flags)
     except subprocess.TimeoutExpired:
         raise GitRefused(f'git {args[0]} timed out') from None
     if completed.returncode not in ok:

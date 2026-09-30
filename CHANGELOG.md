@@ -7,6 +7,10 @@ Versions follow [SemVer](https://semver.org/spec/v2.0.0.html) — major bumps
 indicate schema breaks or removed surfaces.
 
 ---
+## 7.0.0-rc.2
+
+**Fixed: a tool call could hang forever on Windows.** Every Git probe and process scan ran with a timeout, but on Windows `subprocess.run` kills only the process it started and then waits on its output with no limit. Git for Windows' `git.exe` is a launcher: the real `git.exe` it starts keeps that output open, so one stalled Git process hung the MCP server (seen on the first `backlog_store_status` after installing 7.0.0-rc.1). These calls now write output to temporary files and end the whole process tree when the timeout fires, so a stalled Git costs at most its timeout (5 s for the root lookup, once per server process).
+
 ## 7.0.0-rc.1
 
 **A second storage mode, the native authority, opt-in per checkout.** A project moves to it only when an operator runs the explicit cutover, `uv run <plugin>/taskmaster_cli.py cutover --root <project>` (`python -m taskmaster.native.cutover` from a source checkout), never automatically. The legacy store stays the default: this build opens every existing project as a legacy store and serves it as 6.0.3 did, plus the new tools below. On a native store one repository coordinator process owns every write; the Markdown and YAML files under `.taskmaster/` are exported after each commit; hand edits are imported only at an explicit sync, `backlog_sync()`; and `.taskmaster/` is committed with the managed Git command, `uv run <plugin>/taskmaster_cli.py git commit`. Git operations that bypass it are detected as drift and held, never imported silently. The [native store guide](docs/native-store.md) covers receipts, sync and Git obligations, service recovery, compatibility and known limitations; the [cutover runbook](docs/runbooks/native-cutover.md) is the migration procedure. Rehearse the cutover on a copy first. After activation it cannot be rolled back; the escape hatch re-adopts the files into a fresh legacy store and loses database-only state (receipts, sessions, queue leases, history sequence).

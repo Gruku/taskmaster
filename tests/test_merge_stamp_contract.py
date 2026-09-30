@@ -96,14 +96,15 @@ def test_the_stamp_never_reads_head(tmp_path):
     _init_git_repo(repo)
     tid = _seed(repo)
     stamp = (HOOKS / "merge_recorder_stamp.py").as_posix()
+    # Popen, not run: bounded probes start git through Popen directly on Windows.
     code = ("import runpy, subprocess, sys\n"
-            "real = subprocess.run\n"
-            "def guarded(argv, *a, **k):\n"
-            "    words = [str(x) for x in argv]\n"
-            "    if 'rev-parse' in words and 'HEAD' in words:\n"
-            "        open('head-read', 'w').write(' '.join(words))\n"
-            "    return real(argv, *a, **k)\n"
-            "subprocess.run = guarded\n"
+            "class Guarded(subprocess.Popen):\n"
+            "    def __init__(self, argv, *a, **k):\n"
+            "        words = [str(x) for x in argv]\n"
+            "        if 'rev-parse' in words and 'HEAD' in words:\n"
+            "            open('head-read', 'w').write(' '.join(words))\n"
+            "        super().__init__(argv, *a, **k)\n"
+            "subprocess.Popen = Guarded\n"
             f"sys.argv = [{stamp!r}, 'feature/x', 'master', 'abc1234def', {str(repo)!r}]\n"
             f"runpy.run_path({stamp!r}, run_name='__main__')\n")
     subprocess.run([sys.executable, "-c", code], cwd=str(repo), capture_output=True, timeout=120, check=True)
