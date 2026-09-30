@@ -140,8 +140,8 @@ claude-tools.
 
 1. **Write the CHANGELOG entry.** Add `## <version>` to `CHANGELOG.md` with the release notes.
    The heading must match the version exactly: a release candidate needs `## 7.0.0-rc.1`, and
-   `## 7.0.0-rc.1` does not count for `7.0.0`. The 7.0.0 entry is titled `## 7.0.0-rc.1` for the
-   candidate; retitle it `## 7.0.0` when the final release is bumped.
+   `## 7.0.0-rc.1` does not count for `7.0.0`. For the final release, fold the candidates'
+   entries into one `## <version>` entry (7.0.0 folded rc.1 and rc.2).
 2. **Bump.** `python scripts/bump_version.py <version>` rewrites strings #1-#5 and then
    runs the check. It exits 0 only when all five agree and the CHANGELOG heading exists.
    `python scripts/bump_version.py --check` repeats the check without changing anything.
