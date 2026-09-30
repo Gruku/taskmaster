@@ -890,6 +890,21 @@ def _resolve_for(backlog_path: Path | None, root: Path | None) -> RootResolution
         return resolved
 
 
+def _cached_explicit_resolution(backlog_path: Path) -> RootResolution | None:
+    """The cached resolution for a backlog path, as given or once resolved.
+
+    An absolute path is also cached as given, so the lookup every tool call makes
+    skips `Path.resolve()`, which costs a quarter of a millisecond on Windows.
+    """
+    absolute = backlog_path.is_absolute()
+    if absolute and backlog_path in _EXPLICIT_RESOLUTIONS:
+        return _EXPLICIT_RESOLUTIONS[backlog_path]
+    resolved = _EXPLICIT_RESOLUTIONS.get(_backlog_dir(backlog_path))
+    if resolved is not None and absolute:
+        _EXPLICIT_RESOLUTIONS[backlog_path] = resolved
+    return resolved
+
+
 def resolve_location(backlog_path: Path | None, root: Path | None = None) -> RootResolution:
     """`_resolve_for` without the projection-schema fence, which parses backlog.yaml.
 
@@ -900,9 +915,9 @@ def resolve_location(backlog_path: Path | None, root: Path | None = None) -> Roo
     global _ROOT_RESOLUTION
     with _STATE_LOCK:
         if backlog_path is not None:
-            backlog_dir = _backlog_dir(backlog_path)
-            resolved = _EXPLICIT_RESOLUTIONS.get(backlog_dir)
+            resolved = _cached_explicit_resolution(backlog_path)
             if resolved is None:
+                backlog_dir = _backlog_dir(backlog_path)
                 if backlog_dir.name != ".taskmaster":
                     raise LegacyLayoutError(
                         f"backlog lives at {backlog_dir}; the store is only ever at "
@@ -930,6 +945,8 @@ def resolve_location(backlog_path: Path | None, root: Path | None = None) -> Roo
                         filesystem_warning=_cloud_filesystem_reason(backlog_dir.parent),
                     )
                 _EXPLICIT_RESOLUTIONS[backlog_dir] = resolved
+                if backlog_path.is_absolute():
+                    _EXPLICIT_RESOLUTIONS[backlog_path] = resolved
         elif _ROOT_RESOLUTION is not None:
             resolved = _ROOT_RESOLUTION
         else:
@@ -1084,7 +1101,7 @@ def opened_store(backlog_path: Path | None = None) -> "Store | None":
         if backlog_path is None:
             resolved = _ROOT_RESOLUTION
         else:
-            resolved = _EXPLICIT_RESOLUTIONS.get(_backlog_dir(backlog_path))
+            resolved = _cached_explicit_resolution(backlog_path)
         if resolved is None:
             return None
         return _STORES.get(db_path(resolved.backlog_path))

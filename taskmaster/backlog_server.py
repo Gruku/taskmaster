@@ -18,7 +18,7 @@ import urllib.request
 import uuid
 import webbrowser
 from datetime import date, datetime, timezone
-from functools import partial
+from functools import lru_cache, partial
 from http import HTTPStatus
 from copy import deepcopy
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
@@ -510,6 +510,13 @@ def _expand_fm_links(fm: dict, kind: str, backlog_path: Path, links: "_LegacyLin
     return out
 
 
+@lru_cache(maxsize=16)
+def _same_directory(a: Path, b: Path) -> bool:
+    # Every tool call resolves its paths several times; two `Path.resolve()` calls
+    # cost about half a millisecond on Windows each time.
+    return a.resolve(strict=False) == b.resolve(strict=False)
+
+
 def _resolve_paths() -> tuple[Path, Path]:
     """Resolve backlog.yaml and PROGRESS.md paths from config or defaults.
 
@@ -521,7 +528,7 @@ def _resolve_paths() -> tuple[Path, Path]:
     resolve when ROOT is literally the plugin's own source directory. A
     backlog.yaml or .taskmaster/ found there is a fixture, not a project.
     """
-    if ROOT.resolve(strict=False) == SCRIPT_DIR.resolve(strict=False):
+    if _same_directory(ROOT, SCRIPT_DIR):
         raise RuntimeError(
             "Refusing to use the taskmaster plugin directory as a project root. "
             "A backlog.yaml adjacent to backlog_server.py is a fixture, not a "
