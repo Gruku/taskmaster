@@ -14,6 +14,8 @@ from taskmaster import store
 @pytest.mark.parametrize('helper', ['_git_common_root', '_git_checkout_root'])
 def test_git_root_probes_request_no_visible_windows(tmp_path, monkeypatch, helper):
     from taskmaster import root
+    # Only the git fallback spawns anything; GIT_DIR is one case that takes it.
+    monkeypatch.setenv('GIT_DIR', str(tmp_path / '.git'))
     observed = []
     def run(command, **kwargs):
         observed.append(kwargs)
