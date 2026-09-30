@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from pathlib import Path
 
+from taskmaster.bounded_run import run_bounded
+
 
 # ---------------------------------------------------------------------------
 # Task 1: Config helpers
@@ -42,9 +44,8 @@ def load_config(meta: dict) -> BlastRadiusConfig:
 def get_changed_files(branch: str, base: str, cwd: Path) -> list[str]:
     """Return list of files changed between base and branch via git diff."""
     try:
-        result = subprocess.run(
+        result = run_bounded(
             ["git", "diff", "--name-only", f"{base}...{branch}"],
-            capture_output=True,
             text=True,
             timeout=30,
             cwd=cwd,
@@ -325,9 +326,8 @@ def has_export_changes(file_rel: str, base_branch: str, project_root: Path) -> b
     """
     extension = Path(file_rel).suffix
     try:
-        result = subprocess.run(
+        result = run_bounded(
             ["git", "show", f"{base_branch}:{file_rel}"],
-            capture_output=True,
             text=True,
             timeout=30,
             cwd=project_root,

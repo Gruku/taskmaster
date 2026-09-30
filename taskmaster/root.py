@@ -17,6 +17,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from .bounded_run import run_bounded
+
 
 DB_RELPATH = Path("local") / "store.db"
 
@@ -35,10 +37,9 @@ def _absolute(path: Path) -> Path:
 
 def _git_common_root(start: Path) -> Path | None:
     try:
-        proc = subprocess.run(
+        proc = run_bounded(
             ["git", "-C", str(start), "rev-parse", "--git-common-dir"],
             check=True,
-            capture_output=True,
             text=True,
             timeout=5,
             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
@@ -53,10 +54,9 @@ def _git_common_root(start: Path) -> Path | None:
 
 def _git_checkout_root(start: Path) -> Path | None:
     try:
-        proc = subprocess.run(
+        proc = run_bounded(
             ["git", "-C", str(start), "rev-parse", "--show-toplevel"],
             check=True,
-            capture_output=True,
             text=True,
             timeout=5,
             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),

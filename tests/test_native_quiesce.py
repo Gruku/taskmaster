@@ -199,7 +199,7 @@ def test_scan_without_powershell_is_empty_with_a_note(tmp_path, monkeypatch):
 def test_scan_timeout_and_failure_never_raise(tmp_path, monkeypatch):
     def timeout(*args, **kwargs):
         raise subprocess.TimeoutExpired(args[0], 0.1)
-    monkeypatch.setattr(quiesce.subprocess, "run", timeout)
+    monkeypatch.setattr(quiesce, "run_bounded", timeout)
     monkeypatch.setattr(quiesce.os.path, "isdir", lambda path: False)  # force `ps` on POSIX
     result = quiesce.scan_processes(tmp_path, timeout=0.1)
     assert result == [] and result.note
@@ -207,7 +207,7 @@ def test_scan_timeout_and_failure_never_raise(tmp_path, monkeypatch):
 
     def broken(*args, **kwargs):
         raise OSError("no such executable")
-    monkeypatch.setattr(quiesce.subprocess, "run", broken)
+    monkeypatch.setattr(quiesce, "run_bounded", broken)
     result = quiesce.scan_processes(tmp_path)
     assert result == [] and result.note
 

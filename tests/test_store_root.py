@@ -18,7 +18,7 @@ def test_git_root_probes_request_no_visible_windows(tmp_path, monkeypatch, helpe
     def run(command, **kwargs):
         observed.append(kwargs)
         return subprocess.CompletedProcess(command, 0, stdout=str(tmp_path), stderr='')
-    monkeypatch.setattr(root.subprocess, 'run', run)
+    monkeypatch.setattr(root, 'run_bounded', run)
     getattr(root, helper)(tmp_path)
     assert len(observed) == 1
     assert observed[0]['creationflags'] == getattr(subprocess, 'CREATE_NO_WINDOW', 0)
@@ -211,7 +211,7 @@ def test_non_git_start_directory_is_the_absolute_normalized_fallback(
 
     # The suite's basetemp may itself sit inside this repository. Inject the
     # non-git discovery result so this remains a root-resolution unit test.
-    monkeypatch.setattr(store.subprocess, "run", no_repository)
+    monkeypatch.setattr("taskmaster.root.run_bounded", no_repository)
     resolution = store.resolve_root(non_normalized)
 
     _assert_resolution(resolution, start, "cwd")
@@ -232,7 +232,7 @@ def test_non_git_start_walks_up_to_the_nearest_backlog(tmp_path, monkeypatch):
     def no_repository(*_args, **_kwargs):
         raise subprocess.CalledProcessError(128, "git")
 
-    monkeypatch.setattr(store.subprocess, "run", no_repository)
+    monkeypatch.setattr("taskmaster.root.run_bounded", no_repository)
 
     _assert_resolution(store.resolve_root(start), project, "walk-up")
 
@@ -249,7 +249,7 @@ def test_walk_up_prefers_the_ancestor_that_owns_a_backlog_file(tmp_path, monkeyp
     def no_repository(*_args, **_kwargs):
         raise subprocess.CalledProcessError(128, "git")
 
-    monkeypatch.setattr(store.subprocess, "run", no_repository)
+    monkeypatch.setattr("taskmaster.root.run_bounded", no_repository)
 
     _assert_resolution(store.resolve_root(start), outer, "walk-up")
 

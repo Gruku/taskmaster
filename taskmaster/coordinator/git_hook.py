@@ -20,6 +20,8 @@ import sqlite3
 import subprocess
 import sys
 
+from taskmaster.bounded_run import run_bounded
+
 TOKEN_ENV = 'TASKMASTER_MANAGED_GIT'
 # The installed plugin's own front door: `python -m` works only from a source checkout.
 _CLI = f'uv run "{(Path(__file__).resolve().parents[2] / "taskmaster_cli.py").as_posix()}"'
@@ -32,7 +34,7 @@ _KEPT = 20
 
 def _git(root, *args, stdin=None):
     flags = {'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {}
-    completed = subprocess.run(['git', *args], cwd=root, input=stdin, capture_output=True, timeout=120, **flags)
+    completed = run_bounded(['git', *args], cwd=root, input=stdin, timeout=120, **flags)
     if completed.returncode:
         raise RuntimeError(f'git {args[0]} failed: {completed.stderr.decode("utf-8", "replace").strip()[:500]}')
     return completed.stdout

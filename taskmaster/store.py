@@ -18,9 +18,6 @@ import re
 import shutil
 import socket
 import sqlite3
-# The git probes moved to `taskmaster.root`, which uses this same module
-# object; tests that simulate a missing repository patch `store.subprocess`.
-import subprocess  # noqa: F401
 import threading
 import time
 import uuid

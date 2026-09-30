@@ -30,6 +30,8 @@ import subprocess
 import time
 import uuid
 
+from taskmaster.bounded_run import run_bounded
+
 PENDING = "merge-stamps-pending.jsonl"
 CLAIM = "merge-stamps.claim"
 LOCK = "merge-stamps.lock"
@@ -335,9 +337,9 @@ def git_is_ancestor(root: Path):
         if not old or not new:
             return None
         try:
-            completed = subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", old, new],
-                                       capture_output=True, timeout=10,
-                                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            completed = run_bounded(["git", "-C", str(root), "merge-base", "--is-ancestor", old, new],
+                                    timeout=10,
+                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except (OSError, subprocess.SubprocessError):
             return None
         return {0: True, 1: False}.get(completed.returncode)
