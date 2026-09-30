@@ -35,10 +35,22 @@ def _absolute(path: Path) -> Path:
     return path.expanduser().resolve(strict=False)
 
 
-def _git_common_root(start: Path) -> Path | None:
+# Discovery that the filesystem cannot answer the way git would: these change
+# where git looks or what it treats as the work tree.
+_GIT_DISCOVERY_ENV = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_CEILING_DIRECTORIES",
+    "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+)
+_ASK_GIT = object()
+
+
+def _git_rev_parse(start: Path, flag: str) -> str | None:
     try:
         proc = run_bounded(
-            ["git", "-C", str(start), "rev-parse", "--git-common-dir"],
+            ["git", "-C", str(start), "rev-parse", flag],
             check=True,
             text=True,
             timeout=5,
@@ -46,24 +58,134 @@ def _git_common_root(start: Path) -> Path | None:
         )
     except (OSError, subprocess.SubprocessError):
         return None
-    common = Path(proc.stdout.strip())
-    if not common.is_absolute():
-        common = start / common
-    return _absolute(common).parent
+    return proc.stdout.strip()
+
+
+def _core_settings(config: Path) -> dict[str, str] | None:
+    """`core.worktree` / `core.bare` from one git config file, `{}` when it is absent.
+
+    None when the file cannot be read plainly (unreadable, includes, quoting or
+    escapes), because then only git knows what those keys resolve to.
+    """
+    try:
+        text = config.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}
+    except (OSError, UnicodeError):
+        return None
+    settings: dict[str, str] = {}
+    section = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("["):
+            close = line.find("]")
+            if close < 0:
+                return None
+            section = line[1:close].strip().lower()
+            if section.startswith("include"):
+                return None
+            line = line[close + 1:].strip()
+        if not line or line[0] in "#;" or section != "core":
+            continue
+        key, sep, value = line.partition("=")
+        key = key.strip().lower()
+        if key not in ("worktree", "bare"):
+            continue
+        value = value.split("#", 1)[0].split(";", 1)[0].strip()
+        if '"' in value or "\\" in value:
+            return None
+        settings[key] = value if sep else "true"
+    return settings
+
+
+def _is_git_dir(path: Path) -> bool:
+    """What git's own `is_git_directory` checks, minus validating HEAD's contents."""
+    return (path / "HEAD").is_file() and (path / "objects").is_dir() and (path / "refs").is_dir()
+
+
+def _discover_git(start: Path):
+    """`(checkout root, common git dir)` read off the filesystem, as git discovery finds them.
+
+    None outside a repository; `_ASK_GIT` wherever only git can answer reliably:
+    discovery overridden from the environment, a `.git` file or `commondir` that
+    cannot be read, a start inside a git dir or bare repository, a work tree moved
+    by `core.worktree`, or a repository marked bare. Spawning git costs 50-150 ms
+    on Windows, and every tool call, hook and CLI resolves its root this way.
+    """
+    if any(os.environ.get(name) for name in _GIT_DISCOVERY_ENV):
+        return _ASK_GIT
+    for name, value in os.environ.items():
+        if name.upper().startswith("GIT_CONFIG") and (
+            "core.worktree" in value.lower() or "core.bare" in value.lower()
+        ):
+            return _ASK_GIT
+    start = _absolute(start)
+    if not start.is_dir():
+        return None  # `git -C` cannot enter it either
+    for directory in (start, *start.parents):
+        dot_git = directory / ".git"
+        if not os.path.lexists(dot_git):
+            if _is_git_dir(directory):
+                return _ASK_GIT
+            continue
+        if dot_git.is_dir():
+            git_dir = dot_git
+        elif dot_git.is_file():
+            # A linked worktree or a submodule: `gitdir: <path>`, relative to here.
+            try:
+                content = dot_git.read_text(encoding="utf-8").strip()
+            except (OSError, UnicodeError):
+                return _ASK_GIT
+            if not content.startswith("gitdir:") or "\n" in content:
+                return _ASK_GIT
+            git_dir = _absolute(directory / content[len("gitdir:"):].strip())
+        else:
+            return _ASK_GIT
+        common = git_dir
+        commondir = git_dir / "commondir"
+        if commondir.exists():
+            try:
+                common = _absolute(git_dir / commondir.read_text(encoding="utf-8").strip())
+            except (OSError, UnicodeError):
+                return _ASK_GIT
+        if not (git_dir / "HEAD").is_file() or not _is_git_dir(common):
+            return _ASK_GIT
+        # Git applies the shared config's core.bare/core.worktree only when there is
+        # no commondir; a linked worktree's own work tree is where its .git file is.
+        configs = [git_dir / "config.worktree"]
+        if common == git_dir:
+            configs.insert(0, common / "config")
+        for config in configs:
+            core = _core_settings(config)
+            if core is None:
+                return _ASK_GIT
+            if core.get("bare", "false").lower() not in ("false", "no", "off", "0", ""):
+                return _ASK_GIT
+            if "worktree" in core and _absolute(git_dir / core["worktree"]) != directory:
+                return _ASK_GIT
+        return directory, common
+    return None
+
+
+def _git_common_root(start: Path) -> Path | None:
+    found = _discover_git(start)
+    if found is _ASK_GIT:
+        common = _git_rev_parse(start, "--git-common-dir")
+        if common is None:
+            return None
+        common_path = Path(common)
+        if not common_path.is_absolute():
+            common_path = start / common_path
+        return _absolute(common_path).parent
+    return None if found is None else found[1].parent
 
 
 def _git_checkout_root(start: Path) -> Path | None:
-    try:
-        proc = run_bounded(
-            ["git", "-C", str(start), "rev-parse", "--show-toplevel"],
-            check=True,
-            text=True,
-            timeout=5,
-            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return _absolute(Path(proc.stdout.strip()))
+    found = _discover_git(start)
+    if found is _ASK_GIT:
+        top = _git_rev_parse(start, "--show-toplevel")
+        return None if top is None else _absolute(Path(top))
+    return None if found is None else found[0]
 
 
 def _cloud_filesystem_reason(path: Path) -> str | None:
