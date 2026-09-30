@@ -53,48 +53,59 @@ export function openDetailModal({ kind, id }) {
   document.body.classList.add('dm-open');
 
   let disposeComponent = null;
+  let unsubscribe = null;
+  let generation = 0, destroyed = false;
   let cur = { kind, id };
 
   function route(k, i) { return `#/${k}/${encodeURIComponent(i)}`; }
 
   async function load(k, i) {
+    const request = ++generation;
+    unsubscribe?.(); unsubscribe = null;
+    // The disposer locates inline editors in this DOM. Run it before clearing
+    // anything so abandoned drafts lose their timers and edit-state leases.
+    if (disposeComponent) { disposeComponent(); disposeComponent = null; }
     cur = { kind: k, id: i };
     openFull.setAttribute('href', route(k, i));
     titleEl.textContent = i;
     actions.replaceChildren();
     bodyEl.replaceChildren();
     bodyEl.classList.add('dm-loading');
-    if (disposeComponent) { disposeComponent(); disposeComponent = null; }
     try {
       if (k === 'epic') {
         const { getEpic } = await import('../api.js');
         const { mountEpicDetail } = await import('./epic-detail-document.js');
         const epic = await getEpic(i);
+        if (destroyed || request !== generation) return;
         titleEl.textContent = epic.name || i;
         disposeComponent = mountEpicDetail(bodyEl, {
           epic, store, chrome: 'embedded',
           onNavigate: (tid) => load('task', tid),
         });
       } else {
-        const { getTaskFull, getTaskRelatedFull } = await import('../store.js');
+        const { getTaskDetailFull } = await import('../store.js');
         const { mountTaskDetailDocument } = await import('./task-detail-document.js');
-        const [task, related] = await Promise.all([getTaskFull(i), getTaskRelatedFull(i)]);
+        const {task, related, claim, etag} = await getTaskDetailFull(i, {force: true});
+        if (destroyed || request !== generation) return;
         titleEl.textContent = task?.title || i;
         disposeComponent = mountTaskDetailDocument(bodyEl, {
-          task, related, prefs: store.getPrefs(), store, api,
+          task, related, claim, etag, prefs: store.getPrefs(), store, api,
           chrome: 'embedded', actionsHost: actions,
           onNavigate: (tid) => load('task', tid),
         });
+        unsubscribe = store.subscribe(`task:${i}`, () => { if (!store.isEditing(i)) load(k, i); });
       }
     } catch (e) {
+      if (destroyed || request !== generation) return;
       bodyEl.innerHTML = `<div class="dm-error">Could not load ${esc(i)}: ${esc(e.message)}. `
         + `<a href="${route(k, i)}">Open full</a>.</div>`;
     } finally {
-      bodyEl.classList.remove('dm-loading');
+      if (!destroyed && request === generation) bodyEl.classList.remove('dm-loading');
     }
   }
 
   function destroy() {
+    destroyed = true; generation++; unsubscribe?.(); unsubscribe = null;
     if (disposeComponent) { try { disposeComponent(); } catch {} disposeComponent = null; }
     overlay.remove();
     document.body.classList.remove('dm-open');

@@ -25,6 +25,7 @@ function makeStore(backlog = FAKE_BACKLOG) {
   return {
     getBacklog: () => _backlog,
     setBacklog: (b) => { _backlog = b; },
+    refreshBoard: async () => {},
   };
 }
 

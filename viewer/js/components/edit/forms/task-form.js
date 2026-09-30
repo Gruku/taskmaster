@@ -93,6 +93,7 @@ export function taskSchema({ getBacklog }) {
     systemManaged: [
       'id', 'created', 'started', 'completed', 'last_referenced',
       'activity', 'spec_review', 'auto_mode', 'locked_by',
+      'claim_expires', 'claim_expires_for',
     ],
     crossField: [
       // Self-dep guard.

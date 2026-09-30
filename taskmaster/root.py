@@ -41,6 +41,7 @@ def _git_common_root(start: Path) -> Path | None:
             capture_output=True,
             text=True,
             timeout=5,
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -58,6 +59,7 @@ def _git_checkout_root(start: Path) -> Path | None:
             capture_output=True,
             text=True,
             timeout=5,
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
         )
     except (OSError, subprocess.SubprocessError):
         return None

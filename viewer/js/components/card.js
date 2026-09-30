@@ -225,10 +225,12 @@ export function renderCard({ task, density = 'full', epicColors = {}, groupBy = 
   }
 
   // ── Callout: blocked + unmet deps ──
-  if (task.status === 'blocked' && Array.isArray(task.blockers) && task.blockers.length) {
+  // Keep full-payload consumers compatible while the live board uses counts.
+  const blockersCount = task.blockers_count ?? (Array.isArray(task.blockers) ? task.blockers.length : 0);
+  if (task.status === 'blocked' && blockersCount) {
     const callout = document.createElement('div');
     callout.className = 'card-callout warn';
-    callout.textContent = `⛔ blocked: ${task.blockers.length} unmet`;
+    callout.textContent = `⛔ blocked: ${blockersCount} unmet`;
     body.appendChild(callout);
   }
 

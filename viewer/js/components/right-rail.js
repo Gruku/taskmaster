@@ -194,6 +194,7 @@ function panelDeps(deps, unblocks, onNavigate) {
 }
 
 function panelBlockers(blockers) {
+  blockers = (Array.isArray(blockers) ? blockers : [blockers]).filter(Boolean);
   return h('section', { class: 'td-panel td-panel-blockers' },
     [panelHeader('Blockers'),
      blockers.length

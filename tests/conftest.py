@@ -2,7 +2,12 @@
 """Shared pytest fixtures for taskmaster tests."""
 from __future__ import annotations
 
+import functools
+import inspect
+import os
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -14,6 +19,11 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 if str(PLUGIN_ROOT) not in sys.path:
     sys.path.insert(0, str(PLUGIN_ROOT))
 
+# Every twins activation runs the full N15 carry-over oracle (snapshot + verify_carryover)
+# through the production activation core. Measured 2026-09-24 on the 20-file twins sample:
+# 258 s off vs 264 s on (+2.3%). Opt out with TASKMASTER_TWINS_VERIFY=0.
+os.environ.setdefault("TASKMASTER_TWINS_VERIFY", "1")
+
 
 def pytest_configure(config):
     """Register custom markers (avoids PytestUnknownMarkWarning)."""
@@ -24,11 +34,207 @@ def pytest_configure(config):
         "markers",
         "allow_projection_bypass: disable the store projection write guard",
     )
+    config.addinivalue_line(
+        "markers",
+        "xdist_group(name): tests sharing a name run on one xdist worker, in turn",
+    )
+    config.addinivalue_line(
+        "markers",
+        "real_service_process: the test may launch a real `taskmaster.coordinator.service` "
+        "process; without it any such launch fails (see `_child_process_guard`)",
+    )
+    config.addinivalue_line(
+        "markers",
+        "scale: full-size acceptance profiles, deselected by default; run with `-m scale`",
+    )
+    # Tests that run several Python processes at once are grouped as
+    # `heavy_processes`; under plain `-n N` (xdist's default `load`) the marker
+    # is ignored and eight-process stress tests stacked their peak RAM until the
+    # OS killed workers. Upgrade the default to `loadgroup` so at most one of
+    # them runs at a time (an explicit `--dist load` reads the same and is
+    # upgraded too); any other `--dist` mode is left alone.
+    # Workers decide the `@group` nodeid suffix from their own argv before this
+    # hook runs, so the controller hands them the decision (`pytest_configure_node`).
+    if getattr(config.option, "numprocesses", None) and getattr(config.option, "dist", None) == "load":
+        config.option.dist = "loadgroup"
+    workerinput = getattr(config, "workerinput", None)
+    if workerinput is not None and workerinput.get("taskmaster_loadgroup"):
+        config.option.loadgroup = True
+    # Configuration runs in the controller before xdist starts its workers;
+    # an autouse fixture alone starts too late to hide those first children.
+    config._taskmaster_child_patch = _windowless_test_children()
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_configure_node(node):
+    """xdist controller hook: tell each worker the run is grouped (see above)."""
+    if node.config.option.dist == "loadgroup":
+        node.workerinput["taskmaster_loadgroup"] = True
+
+
+def pytest_unconfigure(config):
+    patch = getattr(config, '_taskmaster_child_patch', None)
+    if patch is not None:
+        patch.undo()
+
+
+def pytest_collection_modifyitems(config, items):
+    """Deselect `scale` profiles unless the marker expression asks for them."""
+    if "scale" in (getattr(config.option, "markexpr", "") or ""):
+        return
+    kept = [item for item in items if item.get_closest_marker("scale") is None]
+    if len(kept) != len(items):
+        config.hook.pytest_deselected(items=[item for item in items if item.get_closest_marker("scale")])
+        items[:] = kept
 
 # Make `import skill_budget_helper` work from tests that live in this directory.
 TESTS_ROOT = Path(__file__).resolve().parent
 if str(TESTS_ROOT) not in sys.path:
     sys.path.insert(0, str(TESTS_ROOT))
+
+
+# ── Child-process guard ────────────────────────────────────────────────────
+# Leaked children were the suite's largest RAM cost: native fixtures autostarted
+# a real coordinator service (~100 MB each) that lived on for its idle timeout.
+# Every Popen made by a test is now watched: a real service launch needs the
+# `real_service_process` marker, and a Python child still alive after teardown
+# fails the test. Any service a marked test starts exits after a short idle.
+os.environ.setdefault("TASKMASTER_SERVICE_IDLE_SECONDS", "3")
+
+_SERVICE_MODULE = "taskmaster.coordinator.service"
+_LEFTOVER_GRACE_SECONDS = 2.0
+
+
+class RealServiceLaunchError(AssertionError):
+    """A test launched a real coordinator service process without opting in."""
+
+
+class _ChildWatch:
+    """Per-test state the Popen wrapper reads; one test runs at a time per process."""
+
+    allow_service = True  # outside a test (collection, xdist plumbing) nothing is checked
+    nodeid = None
+    spawned = None  # [(Popen, argv)] while a test's function-scoped guard is collecting
+
+
+_WATCH = _ChildWatch()
+
+
+def _argv(bound):
+    args = bound.arguments.get("args")
+    if isinstance(args, (str, bytes, os.PathLike)):
+        return [os.fsdecode(args)]
+    return [os.fsdecode(arg) if isinstance(arg, (bytes, os.PathLike)) else str(arg) for arg in (args or ())]
+
+
+def _is_python(argv) -> bool:
+    if not argv:
+        return False
+    head = argv[0]
+    if head == sys.executable:
+        return True
+    name = os.path.basename(head.split()[0] if len(argv) == 1 else head).lower()
+    return name.startswith("python") or name in ("py", "py.exe")
+
+
+def _is_service(argv) -> bool:
+    return any(_SERVICE_MODULE in arg for arg in argv)
+
+
+def _kill_tree(process) -> None:
+    # A venv `python.exe` is a launcher: killing it alone orphans the real interpreter.
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    else:
+        process.kill()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def _windowless_test_children():
+    """Test-created console helpers stay invisible; process semantics are intact.
+
+    The outer runner being hidden does not make every descendant windowless.
+    Preserve explicit detached/new-console tests, existing flags and Popen's
+    class identity; only supply the no-window flag to ordinary Windows children.
+    Production launch flags are tested separately with mocked subprocess.run.
+
+    The same wrapper feeds the child-process guard: it refuses an unmarked real
+    coordinator service launch and records each child a running test creates.
+    """
+    original = subprocess.Popen.__init__
+    signature = inspect.signature(original)
+    @functools.wraps(original)
+    def initialize(process, *args, **kwargs):
+        bound = signature.bind_partial(process, *args, **kwargs)
+        argv = _argv(bound)
+        if not _WATCH.allow_service and _is_service(argv):
+            raise RealServiceLaunchError(
+                f"{_WATCH.nodeid} launched a real coordinator service process ({' '.join(argv)[:200]}); "
+                "route it through tests.native_coordinator_helpers.compatibility_client, or mark the "
+                "test `@pytest.mark.real_service_process` if the process boundary is what it proves"
+            )
+        if os.name == 'nt':
+            flags = bound.arguments.get('creationflags', 0)
+            if not flags & (subprocess.CREATE_NEW_CONSOLE | subprocess.DETACHED_PROCESS):
+                bound.arguments['creationflags'] = flags | subprocess.CREATE_NO_WINDOW
+        original(*bound.args, **bound.kwargs)
+        spawned = _WATCH.spawned
+        if spawned is not None:
+            spawned.append((process, argv))
+    patch = pytest.MonkeyPatch()
+    patch.setattr(subprocess.Popen, '__init__', initialize)
+    return patch
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_protocol(item, nextitem):
+    """Scope the service permission to one test's setup, call and teardown."""
+    _WATCH.nodeid = item.nodeid
+    _WATCH.allow_service = item.get_closest_marker("real_service_process") is not None
+    try:
+        return (yield)
+    finally:
+        _WATCH.allow_service, _WATCH.nodeid = True, None
+
+
+@pytest.fixture(autouse=True)
+def _child_process_guard(request):
+    """Fail a test whose own Python children outlive its teardown.
+
+    Defined first among the autouse fixtures, so it is set up before and torn down
+    after every other function-scoped fixture: a fixture that reaps its process in
+    teardown is fine. Children made while a module- or session-scoped fixture was
+    set up predate this fixture and are that fixture's to own. A real service a
+    `real_service_process` test started is left to its short idle timeout.
+    """
+    spawned = _WATCH.spawned = []
+    try:
+        yield
+    finally:
+        _WATCH.spawned = None
+    exempt_services = request.node.get_closest_marker("real_service_process") is not None
+    watched = [(process, argv) for process, argv in spawned
+               if _is_python(argv) and not (exempt_services and _is_service(argv))]
+    deadline = time.monotonic() + _LEFTOVER_GRACE_SECONDS
+    alive = []
+    for process, argv in watched:
+        try:
+            process.wait(timeout=max(0.0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            alive.append((process, argv))
+    for process, _ in alive:
+        _kill_tree(process)
+    if alive:
+        listing = "\n".join(f"  pid {process.pid}: {' '.join(argv)[:200]}" for process, argv in alive)
+        pytest.fail(
+            f"{len(alive)} child Python process(es) outlived the test by {_LEFTOVER_GRACE_SECONDS:g}s "
+            f"(now killed); reap them in the test or its fixture:\n{listing}",
+            pytrace=False,
+        )
 
 
 @pytest.fixture(autouse=True)
@@ -47,6 +253,18 @@ def _store_isolation():
     finally:
         store.reset_for_tests()
         store.close_thread_connection()
+
+
+@pytest.fixture(autouse=True)
+def _native_coordinator_isolation(monkeypatch):
+    # The monkeypatch dependency keeps fixture clocks installed until every
+    # in-process coordinator thread has stopped. Only test-owned services close.
+    from tests.native_coordinator_helpers import close_owned
+    close_owned()
+    try:
+        yield
+    finally:
+        close_owned()
 
 
 @pytest.fixture()
@@ -173,6 +391,11 @@ _HOOKS_DIR = PLUGIN_ROOT / "hooks"
 # backlog, so a raw write from one is the same lost-write bug as from a tool.
 _SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 _STORE_FILE = _PACKAGE_DIR / "store.py"
+# A native-authority store has no legacy writer; its projection files are written
+# only by the native compatibility drain (N08), the native counterpart of the store,
+# through the outbox protocol (N11) that publishes and acknowledges each file.
+_NATIVE_EXPORT_FILE = _PACKAGE_DIR / "native_routing" / "projection.py"
+_NATIVE_OUTBOX_FILE = _PACKAGE_DIR / "native" / "projection.py"
 # The one legacy module tests may still drive directly to seed a v3/v4
 # projection *before* the store adopts it.  Production never enters here first —
 # every real entry point is an MCP tool or a viewer handler in backlog_server.
@@ -269,8 +492,8 @@ def _bypass_offender():
         frame = frame.f_back
     entry = None
     for path in reversed(files):  # outermost frame first
-        if path == _STORE_FILE:
-            return None  # the store owns the projection
+        if path in (_STORE_FILE, _NATIVE_EXPORT_FILE, _NATIVE_OUTBOX_FILE):
+            return None  # the store (or, on a native store, its drain) owns the projection
         if entry is None and (
             _is_under(path, _PACKAGE_DIR)
             or _is_under(path, _HOOKS_DIR)

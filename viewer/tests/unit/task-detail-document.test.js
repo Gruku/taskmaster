@@ -48,6 +48,7 @@ function makeCtx(task = FAKE_TASK) {
     store: {
       getBacklog: () => FAKE_BACKLOG,
       setBacklog: () => {},
+      refreshBoard: async () => {},
     },
     api: {
       patchTask: async (id, patch) => { patches.push({ id, patch }); return {}; },
@@ -68,6 +69,19 @@ function mount(ctx) {
 const { mountTaskDetailDocument } = await import('../../js/components/task-detail-document.js');
 
 // --- Tests ---
+
+test('a live claim banner disappears at expiry without a board refresh', async () => {
+  const ctx = makeCtx();
+  ctx.claim = {state: 'held', expired: false, holder: 'peer', expires_at: new Date(Date.now() + 100).toISOString()};
+  const root = document.createElement('div');
+  document.body.appendChild(root);
+  const dispose = mountTaskDetailDocument(root, ctx);
+  assert.ok(root.querySelector('.td-lock-banner'));
+  await new Promise(resolve => setTimeout(resolve, 140));
+  assert.equal(root.querySelector('.td-lock-banner'), null);
+  dispose();
+  root.remove();
+});
 
 test('title renders as inline-field host (has .if-wrap)', () => {
   const ctx = makeCtx();

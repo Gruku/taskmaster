@@ -8,7 +8,7 @@ Taskmaster is a local-first task and backlog system for AI-assisted software
 projects. It gives Claude Code and Codex a shared MCP core, disciplined workflow
 playbooks, durable session continuity, and a fast browser-based project board.
 
-[![Version](https://img.shields.io/badge/version-6.0.3-7c3aed?style=flat-square)](https://github.com/Gruku/taskmaster/releases)
+[![Version](https://img.shields.io/badge/version-7.0.0--rc.1-7c3aed?style=flat-square)](https://github.com/Gruku/taskmaster/releases)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776ab?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-22c55e?style=flat-square)](LICENSE)
 [![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-d97706?style=flat-square)](https://docs.anthropic.com/en/docs/claude-code)
@@ -200,7 +200,28 @@ nothing tracks the file, and also when there is no store yet, since a hook
 never builds one. `backlog_query(sql, limit)` runs guarded read-only SQL
 directly over the store for ad hoc lookups, `backlog_search` ranks across every
 entity kind through the store's FTS, and `backlog_index_status` reports the
-derived tables and rebuilds them on demand.
+derived tables and rebuilds them on demand (on a native store, `verify=True`
+checks the graph tables against the full oracle without changing them).
+
+### Native store (opt-in)
+
+7.0.0 adds a second storage mode, the **native authority**, which a project gets only when an
+operator runs the explicit cutover (`python -m taskmaster.native.cutover`). Nothing migrates
+automatically, and the legacy store above stays the default. On a native store one repository
+coordinator process owns all writes, files are exported after each commit, hand edits are
+imported only at an explicit sync, and `.taskmaster/` is committed with the managed Git command
+(`python -m taskmaster.coordinator.git_cli commit`). Replies can also say
+`No change to <task> ... — already <value>` (a no-op, no `[seq]`) or
+`(export pending: committed through sequence N; background export queued)`.
+
+- [Native store guide](docs/native-store.md): receipts, sync and Git obligations, service
+  recovery, context/delta tools and claims, compatibility and known limitations.
+- [Native cutover runbook](docs/runbooks/native-cutover.md): the migration procedure, recovery
+  and the escape hatch.
+
+The agent-facing tools `backlog_context`, `backlog_changes_since`, `backlog_claim`,
+`backlog_document` and `backlog_document_import` are new in this release and work on both
+stores except `backlog_document_import`, which needs a native store.
 
 ## Built-in workflows
 

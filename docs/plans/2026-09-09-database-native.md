@@ -3,7 +3,14 @@
 
 # Database-native Taskmaster implementation plan
 
-**Status:** implementation started on `feat/database-native-foundation`.
+**Status:** N00–N17 complete locally (N17 on `feat/native-n17`, to merge into
+`feat/database-native-foundation`); release candidate **7.0.0-rc.1** prepared. Publishing and live
+activation are not done: each is a separate authorized step (N16's 10× acceptance not run, user
+decision). Next action: the release steps in
+[the N17 handoff](../handoffs/2026-09-30-native-n17-rc-next-release.md) (merge to `master`, push,
+claude-tools release, install, live CodeMaestro cutover, final 7.0.0), each only when authorized.
+Native rollout remains outstanding. Merge the branch only after N03–N17 are complete (user
+instruction, 2026-09-12); the default branch is named `master` in this repository.
 **Design:** [database-native design](../specs/2026-09-09-database-native-design.md).
 **Baseline:** 6.0.2, `e9ea119`. Recheck before implementation; the current audit
 reports and benchmark scripts are uncommitted task-owned artifacts.
@@ -106,7 +113,17 @@ test the bridge across MCP, viewer, hooks, scripts and Linear. Inventory install
 launch paths and how they will be stopped/upgraded at real cutover. Protect
 existing open handles; a tracked projection marker alone is not sufficient.
 
-**Exit:** an unknown newer DB is unchanged after every supported entry point.
+Apply N00's diagnostic policy at this admission path, which the first pass of
+this step did not do: a corruption verdict from a retained connection must be
+confirmed against a fresh read-only snapshot before it can reach recovery.
+Until that landed, a peer commit to `entity_fts` made a healthy store's
+`quick_check` report a malformed FTS5 index and the live database family was
+renamed aside and rebuilt from the lagging projection (B-092).
+
+**Exit:** an unknown newer DB is unchanged after every supported entry point,
+**and** no retained-connection diagnostic can rename a healthy database aside
+while genuine, snapshot-confirmed damage is still detected and recovered
+([B-092 evidence](../reports/2026-09-16-b092-false-corruption.md)).
 Bridge installation is a later authorized rollout prerequisite, not performed
 automatically by this step.
 
@@ -232,6 +249,33 @@ Add a bypass gate: native normal reads/commands cannot call `_load()`,
 explicit sync, adoption, compatibility snapshot and maintenance operations.
 Track remaining fallback calls until the normal-path count is zero.
 
+Two N07 constraints bind this step.
+
+**The session changelog forces an explicit choice, and there is no option that
+is merely safe.** The native completion queues its PROGRESS.md paragraph into
+`sync_state.pending_progress_log`, which no exporter reads until N11. Routing
+`backlog_complete_task` as-is therefore stops the paragraph reaching PROGRESS.md
+silently — text that exists nowhere else. Compensating by also calling the
+legacy `_append_changelog` records it in both stores, so it renders twice the
+moment N11's drain lands. Pick one deliberately and write the choice down: either
+keep completion on the legacy writer until N11, or route it and pass the
+paragraph only to the legacy queue, leaving the native argument unused. Do not
+let the adapter do both by default.
+
+> **N08 outcome (2026-09-17):** neither option is feasible. The legacy writer
+> refuses a native database, and the legacy changelog queue is a `meta` write that
+> invalidates the native manifest. On a native store a completion carrying
+> `session_title`/`done`/`auto_summary` is therefore refused with nothing changed;
+> N11 must queue the paragraph once its drain exports it. There is also no
+> native-to-legacy "fallback" to count: unrouted tools refuse. See the
+> [N08 report](../reports/2026-09-17-native-n08.md).
+
+**Do not forward a whole `backlog_batch_update` line-set into the native
+structured batch**: the tool applies the lines it can and reports per-line
+errors, while the native batch is all-or-nothing, so the adapter must
+pre-validate lines or one refusal silently discards the rest.
+`tests/test_batch_partial_apply.py` pins the tool's contract.
+
 **Exit:** all legacy tools/routes use the core with compatible receipts/errors;
 full suite and copied-CodeMaestro parity pass. This is M1/M2 local compatibility,
 not asynchronous/native-mode activation.
@@ -284,6 +328,23 @@ existing visibility remains unchanged while the recovery protocol is tested.
 Inject failure before/after DB commit, temp write, replace, manifest update and
 job acknowledgement. Test a newer DB edit and an external file edit while an old
 job is rendering. Compare lossless v4 artifacts and unchanged-byte behavior.
+
+**The exporter must also drain `sync_state.pending_progress_log`.** N07's native
+completion queues its PROGRESS.md session paragraph there, because every write to
+the legacy `meta` row fires the staging-invalidation trigger and would fail the
+command's own authority check. Until this drain lands, that key only accumulates
+and N08 must not route a completion carrying a changelog. Two pending stores now
+exist — the legacy `meta.pending_progress_log` the current exporter reads, and
+the native one — and N15 must reconcile whatever sits in both at cutover rather
+than assuming either is empty.
+
+Two details for whoever builds that drain. The stored shape is the same
+`[{"ts", "text"}, …]` list `store._progress_entries` already parses, so the
+drain needs no format conversion — only a second source. And the writer reads
+and rewrites the whole JSON blob per completion against an unbounded list, so
+it is quadratic in completions over a store's lifetime; the legacy pending list
+has the same property, and the applied-log cap does not bound it. Bound it or
+move it to rows when the drain lands.
 
 **Exit:** no committed effect loses its export intent; no stale job overwrites
 newer content; retry/rollback preserves authored data and local-only state.
@@ -350,7 +411,11 @@ backup/restore tests, operator runbook.
 
 Rehearse the complete bridge → quiesce → reconcile → consistent backup → backfill
 → compare → activate sequence on copies. Preserve historical seq/IDs, queues,
-reservations, quarantine, unknown fields and in-flight export jobs. Refuse active
+reservations, quarantine, unknown fields and in-flight export jobs, and
+reconcile both pending changelog stores (`meta.pending_progress_log` and
+`sync_state.pending_progress_log`) rather than assuming either is empty. N11 seeds native from `meta` once, read-only, behind
+`sync_state['progress.seeded']` ([N11 report](../reports/2026-09-22-native-n11.md)),
+so the cutover verifies that seed. Refuse active
 old clients and incompatible launchers; test both warm and cold clients.
 
 Crash at each durable migration stage. Prove pre-activation rollback and post-
@@ -422,25 +487,70 @@ explicitly deferred scope when implementation actually occurs.
 
 | Step | Status | Commit / evidence |
 |---|---|---|
-| N00 | complete locally | [FTS matrix (40 cases), baseline oracles; 129 integration tests passed](../reports/2026-09-09-native-foundation.md) |
-| N01 | complete locally; bridge rollout pending | [292 integration tests passed; admission and cutover contract](../handoffs/2026-09-09-native-client-fencing.md) |
-| N02 | planned | — |
-| N03 | planned | — |
-| N04 | planned | — |
-| N05 | planned | — |
-| N06 | planned | — |
-| N07 | planned | — |
-| N08 | planned | — |
-| N09 | planned | — |
-| N10 | planned | — |
-| N11 | planned | — |
-| N12 | planned | — |
-| N13 | planned | — |
-| N14 | planned | — |
-| N15 | planned | — |
-| N16 | planned | — |
-| N17 | planned | — |
+| N00 | complete locally | `c940697`, `7470757`; [FTS matrix (40 cases), diagnostic policy and baseline oracles](../reports/2026-09-09-native-foundation.md) |
+| N01 | reopened for B-092, then complete locally; bridge rollout pending | `4aa6694` plus reservation-test follow-up, `92073f2` admission gate; [admission and cutover contract](../handoffs/2026-09-09-native-client-fencing.md), [diagnosis](../reports/2026-09-16-store-false-corruption.md), [fix evidence, 4/60 → 0/60](../reports/2026-09-16-b092-false-corruption.md) |
+| N02 | complete locally | [83 tools, route/field/SQL contracts and ownership map; M0 validation below](../specs/2026-09-09-native-compatibility.md) |
+| N03 | complete locally; activation gated | [Schema, transactional backfill, crash tests and 3,559-row copied-fixture evidence](../reports/2026-09-12-native-core.md) |
+| N04 | core complete locally; adapter parity remains N08 | [Bounded reads, snapshots, SQL isolation, stored/external document retrieval](../reports/2026-09-12-native-core.md) |
+| N05 | core complete locally | [Atomic owner, CAS, retry receipts, batches and immutable projection inputs](../reports/2026-09-12-native-core.md) |
+| N06 | core complete locally | [Selective graph/FTS maintenance and full-rebuild equivalence oracles](../reports/2026-09-12-native-core.md) |
+| N07 | complete locally; activation gated | `ce2e1b9`…`636b563` (13 commits); [26 further operations, shared rules layer, inventory coverage and nine recorded intentional differences](../reports/2026-09-16-native-n07.md). Two adversarial review passes found **eight** defects, all fixed: bundle pick resurrecting archived tasks, unvalidated `project.set` manifests, cascade Linear enqueues in `_epic_archive` and `_phase_advance`, lock-check ordering, a vacuous `global_graph_rebuilds` counter (deleted), handover membership declared as `tasks` instead of `task_ids` (staging schema 3, one-line frozen-contract change), and a raw `sqlite3.ProgrammingError` on a malformed `bundle`. Field shape/presence and transitive purity both verified clean by oracle. |
+| N08 | complete locally; activation gated | `b6637bd`…`a60cf81` (41 commits, including the review pass); [every normal-path tool/action, the viewer HTTP routes, the three store-reading hooks, `backlog_validate` and three host/external actions routed; bypass gate with normal-path fallback count 0; eleven maintenance/sync operations refuse on native stores with operator guidance](../reports/2026-09-17-native-n08.md). Changelog-carrying completions refuse until N11. One adversarial review pass found **four** defects, all fixed test-first: the viewer mistook an unservable native store for a legacy one and 500'd instead of refusing it, the merge recorder could lose a stamp with no log line, `NativeUnavailable` used prose where `backlog_link`/`backlog_linear` callers parse JSON, and the close gate silently completed a task with an open bug whose `found_in` was list-shaped. Four further categories verified clean (batch pre-validation, the eleven refusals, merge-gate fail-open, bypass-gate leaks). A non-hermetic parity oracle was also found and fixed: `compute_issue_aging` read real wall-clock past the test clock, making the viewer twin time-dependent. Full suite on frozen `a60cf81`: **2,940 passed / 1 skipped / 0 failed** of 2,941, 1,637 s. Copied-CodeMaestro parity: 76 tool calls and five mutations against a 3,662-entity copy and its native twin, answers, committed state, projected files, 3 resurface paths and 6 gate branches all identical, **0 failures**. |
+| N09 | complete locally; activation gated — exit met, per the user's reading of 2026-09-21: "a journey meets it when it uses fewer calls and its bytes are not materially worse" (bound: 10% above the old path). Pick and resume need fewer calls and fewer bytes on both stores; orient (+4.4%) and close (+1.5%) need fewer calls with bounded byte overhead that is required context. `mandatory` matches the close gate on every bug severity. On the CodeMaestro copy all four journeys need fewer calls on both stores and none regresses | `aac9a01`…`7cdcad6` (92 commits excluding master's 6.0.3, 78 non-merge; the range also carries the 6.0.3 back-merge and the N11 scope); [`backlog_context`, `backlog_changes_since`, `backlog_document`, `backlog_document_import` and `backlog_claim` added, `backlog_get_task`/`backlog_pick_task`/`backlog_batch_update` extended additively, nothing renamed, all dual on legacy and native](../reports/2026-09-21-native-n09.md). "Never reported as clear" is proven by the §5.2(1) invariant gate (5 seeds × 30 tasks against an independent oracle, legacy == native) with every availability reader pinned to it; the "fewer calls/bytes" half is measured by `tests/test_agent_journeys.py` (seeded, both stores, after the compact answer): pick 6→4 calls and 5,149→3,403 B, resume 6→4 and 2,284→1,405/1,565 B, orient 3→2 but 2,341→2,443 B, close 6→5 but 860→873 B (orient and close within the 10% bound, asserted). Context now blocks on every open bug the close refuses on, and the §5.2(1) gate checks it (the gate had never exercised bugs; fixed). On a CodeMaestro copy (2,457 tasks, 4,925 change rows; rerun alone 2026-09-22 at `82f8fe6`, both stores): orient 3→2 calls and 148,106→144,991 B, pick 6→4 and 168,201→19,495 B, resume 6→4 and 26,785→8,330 B (legacy) / 8,482 B (native), close 7→6 and 1,467→1,486 B (+1.3%, within the bound); the old pick path names none of the 3 required gates and the old resume path misses 3 of 5 required items. Scoped `changes_since` takes ≤22 ms in SQL over 4,677 events and 17.7–96.3 ms per native tool call over 4,925, so no index is needed. Only the pick-task playbook changed ([report](../reports/2026-09-21-native-n09.md#journey-measurement-the-exits-first-half)). Shipped-behaviour changes (scope §4f): only the claim tools write `locked_by`, a terminal status always releases a claim and leaving one clears it, a malformed `depends_on` blocks as unreadable instead of raising, and pick/`next_available` no longer hand out a peer-claimed task. Findings: one integration defect (context and claims held two liveness rules and together reported a held task clear), review A **4**, review B **6**, review C **6**, review D **3**, and a final re-probe clean, all fixed test-first on both stores; each sat between tracks or stores that passed their own tests. Carried forward: `budget.budget` quadratic to N16, viewer claim-expiry display to N10, native flag notices and exporter-lease visibility to N11. Full suite at `3421d42`: **3,464 passed / 1 skipped / 0 failed**, 1,362 s, `-n 6`. |
+| N10 | complete locally; activation gated | `aef3edc`…`fde1648` plus final evidence follow-up; [compact board DTO, row-sequence ETags/deltas, coherent per-task edits and final copy-only measurements](../reports/2026-09-22-native-n10.md). Client units: 325 passed. Browser matrix: 46 passed. Full Python: 3,671 passed / 1 failed / 1 skipped, then the unchanged architecture guard passed after relocating the prepared N12 IPC package; all 3,672 non-skipped baseline cases passed across those runs, not one clean invocation. Twenty serialized Chromium measurements: board body 89.15% smaller; all ten current 60-second idle windows had zero long tasks; historical modals failed the existing scalar-blocker defect, so no modal speedup ratio. Changed-board paint remains expensive. No installation or live activation. |
+| N11 | complete locally; activation gated — exit met for projection files and changelog paragraphs; PROGRESS.md's own file keeps two recorded windows (a stale render can transiently drop paragraphs that the next render restores; a hand edit between read and replace is overwritten, as on legacy) | `4fbbff5`…`7448204` (protocol, 22 non-merge commits, merged `22052d4`) and `506d203`…`1aa33c3` (changelog, 4 commits, merged `b3cbebc`); [durable projection outbox: exporter lease with generation fence, latest-per-file claim, per-job ack, aside-verified no-overwrite install, expected-base verification, native flag-and-keep-both (D2), write-then-remove moves, tombstones and retention, `backlog_resolve_conflict take="store"`; paragraph rows, one-time `meta` seed and fenced PROGRESS.md render with the changelog refusal lifted](../reports/2026-09-22-native-n11.md). No intent lost: the §5.2 matrix, every cell as exception and `os._exit`, with a lossless round-trip after each recovery. No stale overwrite: a paused exporter past its lease cannot install over its successor, plus the newer-edit, external-edit and two-process interleavings. Retry/rollback: a retried request executes once and logs its paragraph once, hand edits are flagged and kept byte for byte, and `meta` is never written. Gap: of the four PROGRESS checkpoints, only `progress_written` has an `os._exit` variant, although the scope says all four do. Reviews: protocol **7** (P1 HIGH, the rename window) then **3**, then clean; changelog **3** low, no loss; all fixed test-first. CodeMaestro copy (2,457 tasks, 176 epics, 44 seeded paragraphs): PROGRESS.md byte-identical at 17/17 comparisons across 16 twin calls (four picks, three changelog completions, one plain completion), with state and files identical; the dashboard's full read (D6) takes a median of 411 ms on native against 120 ms on legacy. Carried forward: N16 (more commits per export, the dashboard full read, no `mtime`/`size` short-circuit), N13 (`take="file"`, resyncs, `bootstrap_apply`), N12 (Linear retry, async export), N15 (verify the seed), and the pid-reuse limit of the exporter-lease line. Full suite: `c8b23a9` **3,570 passed / 1 skipped**; `1aa33c3` **3,593 / 1**; integrated `aa4ceff` **3,626 / 1 skipped / 4 xfailed** (N09's, asserted at `82f8fe6`); N11 files at `82f8fe6`'s code **128 passed**. |
+| N12 | complete locally; activation gated | [Repository coordinator checkpoint](../reports/2026-09-22-native-n12.md), scoped in `2026-09-22-n12-scope.md`. First integrated batch: 235 passed / 2 failed / 1 skipped; corrected service/resolution group 38 passed, cumulative-progress and affected crash/lease group 95 passed. Real coordinator browser matrix: 46 passed. Full Python: 3,735 passed / 2 failed / 2 skipped; both test-fixture failures corrected and their complete files passed, 97 tests. Normal-command no-render/no-glob and unchanged architecture gates passed. Clean full rerun at `21af5e7`: **3,737 passed / 2 skipped / 0 failed**, 2,056 s; merged `970e5fc`. No live activation. |
+| N13 | complete locally; activation gated — exit met: managed Git operations capture coherent projections; bypassed operations are held/reconciled with honest pending/conflict status, never silent loss, on a CodeMaestro copy at stock settings | `984d2a7`…`965bb7c` on `feat/native-n13` (import/`sync.apply`/barrier, take-file/resync/bootstrap, managed Git with a ctypes Job Object and durable pin, per-checkout bases and linked worktrees, bypassed-Git drift, rehearsal fixes D1-D8); [report](../reports/2026-09-22-native-n13.md), [scope](2026-09-22-n13-scope.md). Every step independently reviewed; findings fixed test-first: barrier 6, step 7 5, step 8 20 (3 high: helper escaped the job via the venv launcher, post-checkout store rollback, half-applied checkout released), steps 9-10 11 (3 high rollback paths), fast path 5, set-aside 6. Also fixed pre-existing defects: writer-wait stderr shutdown abort, overload RST spawning owners, publisher-busy flush dropping PROGRESS debt, repeated backlog.yaml parse. Rehearsal (2,460 tasks, 923 commits): first run failed D1 (sync never finished in 20 s), D2-D7; final run at stock settings passes all scenarios after D8. Timings: no-edit sync 1.3-1.6 s, managed commit 7-9 s, round trip out/back 10-15 s each, history walk 0.62 s for 500 paths. Full suite `6a135fd` **4,049 passed / 4 skipped / 0 failed** (1,082 s, `-n 3`; multi-process tests serialized). Carried forward: first post-activation sync ~350 s (N15/N16), full-read generation check 6-9 s per managed op (N16), POSIX containment boundary unverified (acknowledge-gated), crash-left `index.lock` needs manual removal, `_`-prefixed frontmatter keys dropped on both stores. No live import, hook installation or activation. |
+| N14 | complete locally; activation gated — exit met: native commands pay only for changed relation inputs (CodeMaestro copy: 12 vs 3,878 comparisons for an exact-anchor edit), graph consumers keep documented freshness (F1 = A: `related`/`links`/`handover_tasks`/`entity_paths` current at commit, full oracle as explicit repair) | `31a19b2`…`0a84810` on `feat/native-n14`; [report](../reports/2026-09-23-native-n14.md), [scope](2026-09-23-n14-scope.md). Indexed path neighbourhood and canonical `Snapshot.neighbourhood`; native edit hook off `related`; indexed `backlog_dependencies` with additive strict `depth` (1–10); native graph verify/repair via `backlog_index_status`, run once at activation; links written before their target re-resolved and epic/phase tie-break aligned on both stores. Reviews: steps 1–4 7+3, step 5 6+2, step 6 5+3, all fixed test-first. Rehearsal (copy, stock settings): live data carried 4,610 historical `links` differences, repaired at activation in 1.1 s; 21 twin mutations verify-clean; hook 206 paths identical; deps 100 tasks × 3 depths identical, depth 1 byte-equal to pre-N14. Focused run 2,206 passed / 2 over-specific tests fixed (`32c45b3`). Full suite at `df3844a` (N14 + test-RAM fix): **4,158 passed / 4 skipped / 0 failed**, 1,317 s, `-n 3`; machine free RAM never below 5.16 GB (from 5.8 GB). The suite's RAM was cut first (`fix/test-ram`, merged `df3844a`): two batch fixtures leaked ~23 real coordinator services (~2.25 GB for 5 min); now in-process, with a conftest guard (`real_service_process` marker, leftover-child check), 3 s test idle timeout via `TASKMASTER_SERVICE_IDLE_SECONDS`, stress default 4×200 (8×200 under `-m scale`), `scripts/measure_test_memory.py`. Carried forward: legacy `backlog_link` create not persisting on the copy (pre-existing, D1), production activation must call `repair_graph_for_activation` (N15), canonical `target_kind` fallback, no neighbourhood cursor. |
+| N15 | complete locally; native activation remains a release decision — exit met: executable dry-run, cutover, resume/rollback and a tested recovery runbook, rehearsed on CodeMaestro copies; zero live migrations | `feat/native-n15`; [report](../reports/2026-09-24-native-n15.md), [scope](2026-09-24-n15-scope.md), [runbook](../runbooks/native-cutover.md). `taskmaster/native/cutover.py` (fenced, journaled cutover with backup, drift absorption, crash resume, rollback that restores nothing and refuses on any leak), `carryover.py` (carry-over oracle, production ID import, progress reconcile), `quiesce.py` (owner/writer/process probes). M1 = A roll-forward only (user); rollback simplified to leak-refusing (user) after 4 review rounds; 6 review rounds total, all findings fixed test-first. Rehearsal: cutover 38–78 s, 4,610 graph rows repaired, 113/113 reads equal legacy, 14 crash points exact, leaked write kept by resume, manual restore exact, escape hatch 3,711/3,711. Full suite `54f9be4` 4,343 passed / 1 failed (socket import guard, fixed `19da0de`) / 4 skipped. Carried forward: first post-activation sync 310–492 s (N16), backup 28–53 s (N16), 6.0.2 pre-bridge fails uncleanly (stop list). |
+| N16 | complete locally; activation gated — exit met on the correctness gates; 10× acceptance not run (user decision) | `0259ce3`…`40512e8` on `feat/native-n16` (10 merges, 42 non-merge commits); [report](../reports/2026-09-29-native-n16.md), [scope](2026-09-24-n16-scope.md), [batched sync](2026-09-29-n16-batched-sync.md). A: activation seeds merge bases and sync fingerprints from bytes it hashed; observes skip per-file Git; honest committed/not_committed/uncertain after the budget; NTFS ChangeTime fingerprint — first post-activation sync on a CodeMaestro copy 626 s → 4.4 s in one round. B: `budget.budget` O(n²) → O(n) (6,400 rows 27.8 s → 0.18 s), slim dashboard read 230–450 → 103–120 ms (legacy 120), single-read backup archive 7.3 → 1.3 s; exporter fingerprint cache removed after a CRITICAL review finding (utime-restored/mmap hand edits could be overwritten) and no Windows gain once safe. C: opt-in per-process metrics (`TASKMASTER_METRICS`). D: anonymous-shape synthetic generator and the N16 matrix runner, non-vacuous gates proven by fault injection. E: no-op replies grounded in the transaction (receipt `unchanged`); cutover refuses on quarantined/flagged files (user) with fenced re-checks and an always-on reconcile scan (~2.5 s); batched full sync (user): no 10,000-file ceiling, 37,010 files in 25–34 s, no 1× regression. Every earlier lost ack and CodeMaestro failure was a harness/dataset artifact (minute-rollover no-ops, comma anchors, orphan tasks, quarantined handovers, shared link pairs, shared grown dataset), each fixed and re-reviewed with planted faults. Gates: full suite `fb25737` **4,550 passed / 4 skipped** (40.5 min, `-n 2`), `40512e8` **4,617 passed / 2 skipped** (43 min); `-m scale` pass (7.7 min, session result); native FTS probe: artifact only on a retained connection, fresh snapshot ok, same file, writes survive (supported outcome). Acceptance: small (`fb25737`) 105/106 (harness link overlap, fixed); CodeMaestro copy (`3f646c2`) 105/106 + 1 skipped, instrumented `sync.dirty` failed on the shared-dataset harness bug (fixed); final small at `40512e8` 106/106 by verdict (timing pass, no latency recorded). §11: reads and DB core met (core p95 2–5 ms) except CodeMaestro full viewer read 164 ms; writes met at 1 client (16/16 both runs), mostly at 4 (15/16 copy, 12/16 small), missed under 8–12-client contention (single writer, `synchronous=FULL`); 8+-client tails vary up to 2× between repeats. Cold coordinator start ~6.2 s, first write ~8 s. Rehearsal: cutover refused on 4 quarantined files, runbook repair, cutover ~30.6 s by journal (32.9 s wall), first sync 4.65 s, managed commit 11.5 s. Not run (user decision): 10× acceptance — the run was stopped during 10× dataset generation (legacy adoption ~87 min), so 10× latencies and the required-output vs unrelated-data scaling check are unmeasured; the only 10× evidence is batched sync (37,010 files, 25–34 s, peak RSS 258–297 MB, cache seeded). Carried forward: runbook repair gaps (touch to clear a stale quarantine (B-339), line endings, `backlog.yaml` not refreshed) to N17; fresh-copy sync/commit 40–88 s in the harness (hypothesis: cold fingerprint cache after copy, unverified) and whether a cold 37k-file sync fits the 120 s budget; repeat conflict `sync.apply` events per full sync; 4 unreachable orphan tasks; racing `backlog_link` create answers "linked" with no seq or no-op marker; minute-dependent identical-value commits; linked-worktree sync loads all published bytes at once; `generation()` 6.9–7.6 s per managed Git op; 10× legacy adoption ~87 min (roughly quadratic); N15 carry-overs. |
+| N17 | complete locally; release candidate 7.0.0-rc.1 prepared; publishing and live activation not done (separate authorized steps) | `a12d3aa`…`8309258` on `feat/native-n17` (4 merges: docs `7c6b89a`, packaging `b010597`, handshake `a270fa0`, `backlog_sync` `9b13edc`; 31 non-merge commits; release commit `6186ffe`); [report](../reports/2026-09-30-native-n17.md), [packaging](../reports/2026-09-29-native-n17-packaging.md), [native store guide](../native-store.md), [release packaging runbook](../runbooks/release-packaging.md). User decisions after the compatibility review: version 7.0.0 (behavioural/schema migration, not a patch), RC 7.0.0-rc.1; fix the build handshake in N17; `backlog_sync` tool-only (never automatic). Built: operator/agent guide, runbook gaps closed, 7.0.0 changelog, playbook receipts; packaged runtime (fastmcp `>=3.4,<4` with httpx/pydantic declared, `taskmaster_cli.py` front door, `bump_version.py`, correct `serverInfo` version, merge recorder on any machine); build handshake (version + source digest; newer client retires an idle older coordinator, older refuses, Codex snapshot = same build); `backlog_sync` sync jobs (15 s calls, attach, labelled replays, no silent resume); Git classification under the sync budget and stop signal (was 9+ min on a cold 37k checkout); durable merge-stamp queue that never wedges or holds a call; `taskmaster_cli.py coordinator stop/status` (after the demonstration). Every track reviewed; findings fixed test-first (packaging 2 rounds incl. 2 HIGH, handshake P1/P6, `backlog_sync` 2 rounds, integrated-branch and RC rounds). Evidence, kept apart: **local tests** — full suite `6186ffe` 4,744 passed / 1 failed (test bug, fixed `b892954`; `test_packaging` 30 passed) / 2 skipped, 39 min; the `604cc08` run was contaminated by mid-run commits and is not evidence; **packaged runtime** — the packaging report plus the demonstration; **copied-project migration** — CodeMaestro copy through the packaged rc.1: dry run refused on 4 quarantined files, runbook repair (3 LF handovers, B-339 touched), cutover 13.5 s by journal (3,718 bases seeded), parity 7/7 identical, `backlog_sync` 2.13 s (1 of 3,717 imported), managed commit completed, merge recorded, rc.2 retired rc.1 and rc.1 refused, Codex snapshot same build, live checkout unchanged. Not done: POSIX, a real Claude Code/Codex host session, live activation, full suite after `b7e2827`/`8309258`. Known limits: the guide's *Known limitations*. |
 
-**First implementation action:** start N00 on an isolated branch; capture the
-current baseline and narrow the existing FTS diagnostic. No schema rewrite or
-live migration is the first task.
+**M0 validation:** 2,421 passed, one live Linear smoke skipped, zero missing
+collected cases across the initial full run and corrective/completion runs.
+The default 8-process × 200-operation concurrency acceptance test passed in
+575.94 seconds. See [validation evidence](../reports/2026-09-09-native-foundation.md).
+
+**Next implementation action:** N08 client routing and its strict normal-path
+bypass gate. N07's command inventory and domain composites are complete: every
+mutating N02 tool now maps onto a native operation or onto a recorded deferral
+(maintenance/migration to N15, resync to N13, host actions never). Its recorded
+intentional differences — all-or-nothing batches, caller-supplied session
+identity, a tracker-row Linear gate, adapter-owned presentation, and the pending
+changelog living in native `sync_state` rather than the legacy `meta` row — are
+N08/N11 inputs, not open N07 work.
+N04 external-document retrieval is implemented; capturing file contents belongs
+to N13 sync/N15 pre-cutover import. Keep activation gated; no live project
+migration or installed-plugin changes. Do not merge the partial core checkpoint.
+
+**Staging schema version 3 (2026-09-16):** N07 corrected the handover
+membership declaration from `tasks` to `task_ids`, the field every handover
+document actually carries. Relocating it from the extension bag into the typed
+`memberships` table is a data-placement change that only a re-backfill applies,
+so the staging version moved to 3 and a version-2 staging database refuses
+admission until it is re-backfilled. `upgrade_staging` accepts 1 and 2. This
+also changed the frozen N02 ownership map by one line, correcting it to the
+field that exists.
+
+**N07 validation (2026-09-16):** 2,583 passed, one failed, one live-Linear smoke
+skipped, in 1,080.13 seconds single-process on `feat/native-n07-lifecycle` at
+`c1ef761`. The 75 cases above the 2,509-case baseline are 19 shared-rules, 53
+native command-family and 3 batch-characterization cases; no existing case was
+removed or renamed. The frozen N02 contract fixture changed by exactly one line,
+correcting handover membership ownership to `task_ids`.
+
+The single failure is a **pre-existing store defect**, not an N07 regression:
+`_prepare_schema`'s `PRAGMA quick_check` treats the retained-connection FTS5
+diagnostic that N00 documented as a false positive as real corruption, and
+quarantines a healthy database in response. Reproduced 5/40 in isolation here
+and 0/40 on the base commit, mechanism unidentified. See [a healthy store is
+quarantined as corrupt](../reports/2026-09-16-store-false-corruption.md). It
+belongs to the store's admission and recovery logic, which N00 assigned to N01,
+and is not addressed by this milestone. No benchmark was run; performance stays
+with N16.
+
+**Core checkpoint validation (2026-09-12):** 2,509 unique current test cases
+passed across the full run and corrective runs; one live Linear smoke skipped;
+zero unresolved failures or missing collected cases. The existing 8-process ×
+200-operation write-survival acceptance passed in 603.85 seconds. This does not
+substitute for N16's future native-service and viewer acceptance matrix.

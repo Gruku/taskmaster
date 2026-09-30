@@ -66,6 +66,11 @@ CANONICAL_SECTIONS: dict[str, tuple[str, ...]] = {
     "phase": ("notes", "design", "roadmap"),
 }
 
+# Kinds whose prose `backlog_document` retrieves. Kinds absent from
+# CANONICAL_SECTIONS have no named sections, so only their whole body is retrievable.
+DOCUMENT_KINDS: tuple[str, ...] = ("task", "epic", "phase", "handover", "issue", "bug",
+                                   "decision", "idea", "note")
+
 TASK_INLINE_SECTIONS: frozenset[str] = frozenset({"notes", "review_instructions"})
 TASK_DOC_SECTIONS: frozenset[str] = frozenset({"spec", "plan", "design", "analysis", "roadmap"})
 
@@ -194,6 +199,66 @@ def _split_body_by_heading(body: str) -> dict[str, str]:
     return out
 
 
+def assert_canonical_sections(kind: str, sections: list[str]) -> None:
+    """Refuse a section name this kind does not define, in the wording every tool uses."""
+    canon = CANONICAL_SECTIONS.get(kind, ())
+    for s in sections:
+        if s not in canon:
+            raise ValueError(f"{s!r} is not a canonical section for kind={kind!r}")
+
+
+def read_doc_section(
+    doc_path: str,
+    project_root: Path | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """One doc-backed section read from disk, with the provenance that says so.
+
+    This is the declared fallback for a section the store has not imported. It is
+    the only place a section's content comes off the filesystem, so a caller that
+    never reaches it never touches a file.
+    """
+    resolved = (project_root / doc_path) if project_root else Path(doc_path)
+    if resolved.exists():
+        return resolved.read_text(encoding="utf-8"), {"source": "filesystem", "path": doc_path, "imported": False}
+    return f"(unresolved: {doc_path})", {"source": "missing", "path": doc_path, "imported": False}
+
+
+def resolve_sections_with_provenance(
+    entity: dict[str, Any],
+    *,
+    kind: str,
+    sections: list[str],
+    body: str,
+    project_root: Path | None = None,
+) -> dict[str, tuple[str, dict[str, Any]]]:
+    """`section → (content, provenance)` for requested sections, off the filesystem.
+
+    The legacy store has no imported prose, so a task's doc-backed section always
+    resolves through `read_doc_section`; the native path substitutes stored prose
+    before falling back here.
+    """
+    assert_canonical_sections(kind, sections)
+    out: dict[str, tuple[str, dict[str, Any]]] = {}
+
+    if kind == "task":
+        for s in sections:
+            if s in TASK_INLINE_SECTIONS:
+                v = entity.get(s)
+                if v:
+                    out[s] = (v if isinstance(v, str) else str(v), {"source": "inline"})
+            elif s in TASK_DOC_SECTIONS:
+                doc_path = (entity.get("docs") or {}).get(s)
+                if doc_path:
+                    out[s] = read_doc_section(doc_path, project_root)
+        return out
+
+    body_sections = _split_body_by_heading(body)
+    for s in sections:
+        if s in body_sections:
+            out[s] = (body_sections[s], {"source": "body"})
+    return out
+
+
 def resolve_sections(
     entity: dict[str, Any],
     *,
@@ -203,35 +268,48 @@ def resolve_sections(
     project_root: Path | None = None,
 ) -> dict[str, str]:
     """Return a dict mapping section name → content for requested sections."""
-    canon = CANONICAL_SECTIONS.get(kind, ())
-    for s in sections:
-        if s not in canon:
-            raise ValueError(f"{s!r} is not a canonical section for kind={kind!r}")
+    resolved = resolve_sections_with_provenance(
+        entity, kind=kind, sections=sections, body=body, project_root=project_root)
+    return {s: content for s, (content, _) in resolved.items()}
 
-    out: dict[str, str] = {}
 
-    if kind == "task":
-        for s in sections:
-            if s in TASK_INLINE_SECTIONS:
-                v = entity.get(s)
-                if v:
-                    out[s] = v if isinstance(v, str) else str(v)
-            elif s in TASK_DOC_SECTIONS:
-                doc_path = (entity.get("docs") or {}).get(s)
-                if not doc_path:
-                    continue
-                resolved = (project_root / doc_path) if project_root else Path(doc_path)
-                if resolved.exists():
-                    out[s] = resolved.read_text(encoding="utf-8")
-                else:
-                    out[s] = f"(unresolved: {doc_path})"
-        return out
+def document_header(kind: str, ident: str, title: str = "") -> str:
+    """The one header both stores put above a retrieved document."""
+    return f"## {kind} `{ident}`" + (f" — {title}" if title else "")
 
-    body_sections = _split_body_by_heading(body)
-    for s in sections:
-        if s in body_sections:
-            out[s] = body_sections[s]
-    return out
+
+def render_document_body(header: str, body: str) -> str:
+    """The whole-document answer: no sections were selected, so this is the prose."""
+    return f"{header}\n\n{body}" if (body or "").strip() else f"{header}\n\n(no body)"
+
+
+def section_provenance_line(entry: dict[str, Any]) -> str:
+    """One italic line naming where a section's text actually came from."""
+    parts = [f"source: {entry.get('source', 'unknown')}"]
+    if entry.get("path"):
+        parts.append(f"path: `{entry['path']}`")
+    if entry.get("content_hash"):
+        parts.append(f"content_hash: `{entry['content_hash']}`")
+    if entry.get("imported_seq") is not None:
+        parts.append(f"imported_seq: {entry['imported_seq']}")
+    if entry.get("imported") is False:
+        parts.append("imported: false")
+    return "*" + " · ".join(parts) + "*"
+
+
+def render_sections(
+    header: str,
+    sections: dict[str, str],
+    provenance: dict[str, dict[str, Any]] | None = None,
+) -> str:
+    """The sections answer both stores render. Without `provenance` it is unchanged."""
+    lines = [header + "\n"]
+    for section, content in sections.items():
+        if provenance is None:
+            lines.append(f"### {section}\n{content}")
+        else:
+            lines.append(f"### {section}\n{section_provenance_line(provenance.get(section, {}))}\n{content}")
+    return "\n".join(lines)
 
 
 def expand_link_ids(
@@ -552,6 +630,18 @@ REVERSE_TYPE: dict[str, str] = {
 }
 LINK_TYPES: tuple[str, ...] = tuple(REVERSE_TYPE.keys())
 
+# Every kind a derived `links` row can record for an endpoint (the stored entity
+# kinds; `task` is also the fallback for an unresolved target). Both stores list
+# them so a lookup by target id alone still seeks `ix_links_dst(dst_kind,dst_id)`.
+LINK_ENDPOINT_KINDS: tuple[str, ...] = (
+    "task", "epic", "phase", "handover", "issue", "bug", "decision", "idea", "note",
+    "area", "tracker", "backlog", "project")
+# Declared links recorded against a target id, under any kind: one written before
+# its target existed carries the `task` fallback until the target is created.
+LINKS_TO_ID_SQL = (
+    "SELECT src_kind,src_id,type,dst_kind FROM links WHERE dst_kind IN ("
+    + ",".join("?" for _ in LINK_ENDPOINT_KINDS) + ") AND dst_id=? AND derived=0")
+
 # Entity-kind dispatch by ID prefix. Longest prefix wins (IDEA before I-).
 ENTITY_KIND_BY_PREFIX: dict[str, str] = {
     "T":    "task",
@@ -785,6 +875,32 @@ _LEGACY_LINK_RULES: dict[str, tuple[tuple[str, str, bool], ...]] = {
 }
 
 
+def dependency_ids(value):
+    """The one reading of a `depends_on` value: its task ids, or None when the
+    shape cannot be read.
+
+    Empty (None, "", []) is no dependencies; a bare string is one id, as every
+    tool has always read it. Anything else — a number, a mapping, a list holding
+    a non-string — is unreadable, and a reader reports it rather than raising or
+    guessing ids out of it (`native.blockers` turns it into an `unknown`
+    blocker). Every reader of `depends_on` goes through here.
+    """
+    if not value:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if not isinstance(value, (list, tuple)) or any(not isinstance(item, str) for item in value):
+        return None
+    return list(value)
+
+
+def dependency_shape(value) -> str:
+    """Why `dependency_ids(value)` is None, for a reader's message."""
+    if isinstance(value, (list, tuple)):
+        return "non-string dependency id"
+    return type(value).__name__
+
+
 def legacy_links_to_typed(entity: dict, kind: str) -> list[dict]:
     """Translate legacy linkage fields on `entity` into a typed `links` array.
 
@@ -798,9 +914,18 @@ def legacy_links_to_typed(entity: dict, kind: str) -> list[dict]:
         raw = entity.get(field)
         if raw is None or raw == [] or raw == "":
             continue
-        targets = raw if is_list else [raw]
+        # A bare string in a list field is one target, as every dependency
+        # reader reads it. A shape no tool writes derives no edge rather than
+        # raising — every write to the entity runs this — or guessing ids out of
+        # it: `native.blockers` reports that shape as unreadable instead.
+        if not is_list or isinstance(raw, str):
+            targets = [raw]
+        elif isinstance(raw, (list, tuple)):
+            targets = raw
+        else:
+            continue
         for tgt in targets:
-            if not tgt:
+            if not tgt or not isinstance(tgt, str):
                 continue
             key = (link_type, tgt)
             if key in seen:
@@ -2007,6 +2132,7 @@ def resolve_thread(
     backlog_data: dict[str, Any],
     backlog_path: Path,
     ref: str,
+    find_handover: "Callable[[str], dict[str, Any] | None] | None" = None,
 ) -> tuple[str, str]:
     """Resolve a resume token to (thread_name, newest_handover_id).
 
@@ -2021,15 +2147,19 @@ def resolve_thread(
         return name, threads[name]["handover_ids"][-1]
 
     fm: dict[str, Any] | None = None
-    p = handover_path(backlog_path, ref)
-    if p.exists():
-        fm, _ = read_task_file(p)
+    if find_handover is not None:
+        # A store-backed caller answers from rows, live or archived.
+        fm = find_handover(ref)
     else:
-        archive_root = handover_dir(backlog_path) / "_archive"
-        if archive_root.exists():
-            hits = list(archive_root.rglob(f"{ref}.md"))
-            if hits:
-                fm, _ = read_task_file(hits[0])
+        p = handover_path(backlog_path, ref)
+        if p.exists():
+            fm, _ = read_task_file(p)
+        else:
+            archive_root = handover_dir(backlog_path) / "_archive"
+            if archive_root.exists():
+                hits = list(archive_root.rglob(f"{ref}.md"))
+                if hits:
+                    fm, _ = read_task_file(hits[0])
     if fm is None:
         raise KeyError(ref)
     tname = fm.get("thread") or ""
@@ -3518,7 +3648,7 @@ VIEWER_PREFS_DEFAULTS = {
 }
 
 
-def viewer_prefs_path(backlog_path: Path) -> Path:
+def viewer_prefs_path(backlog_path: Path, v4: "bool | None" = None) -> Path:
     """Where this backlog's viewer prefs live.
 
     Takes the backlog path the caller already resolved rather than re-deriving
@@ -3527,18 +3657,20 @@ def viewer_prefs_path(backlog_path: Path) -> Path:
     exactly the class of bug the single store root exists to end.
     """
     root = backlog_path.parent
-    if _is_v4_project(root):
+    # A store-backed caller already knows the schema and passes `v4`, so it never
+    # re-reads backlog.yaml just to place a machine-local file.
+    if _is_v4_project(root) if v4 is None else v4:
         return local_dir(backlog_path) / "viewer.json"
     return root / "viewer.json"
 
-def load_viewer_prefs(backlog_path: Path) -> dict:
+def load_viewer_prefs(backlog_path: Path, v4: "bool | None" = None) -> dict:
     """Load viewer prefs, creating the file with defaults on first call.
     Unknown top-level keys are preserved across reads (forward-compat).
     Missing keys are filled from VIEWER_PREFS_DEFAULTS (deep-merged).
     """
     import json
     from copy import deepcopy
-    p = viewer_prefs_path(backlog_path)
+    p = viewer_prefs_path(backlog_path) if v4 is None else viewer_prefs_path(backlog_path, v4)
     if not p.exists():
         prefs = deepcopy(VIEWER_PREFS_DEFAULTS)
         atomic_write(p, json.dumps(prefs, indent=2))
@@ -3573,9 +3705,9 @@ def load_viewer_prefs(backlog_path: Path) -> dict:
 
     return _merge(VIEWER_PREFS_DEFAULTS, raw)
 
-def save_viewer_prefs(backlog_path: Path, prefs: dict) -> None:
+def save_viewer_prefs(backlog_path: Path, prefs: dict, v4: "bool | None" = None) -> None:
     import json
-    p = viewer_prefs_path(backlog_path)
+    p = viewer_prefs_path(backlog_path) if v4 is None else viewer_prefs_path(backlog_path, v4)
     p.parent.mkdir(parents=True, exist_ok=True)
     atomic_write(p, json.dumps(prefs, indent=2))
 
@@ -3779,9 +3911,11 @@ def compute_issue_aging(issue: dict, aging_cfg: dict, now=None) -> dict:
         Stale: pct >= 60
 
     `percent` may exceed 100 for very stale issues; clamp at 200 for display.
-    """
-    from datetime import datetime, timezone
 
+    `now` defaults to the module's `datetime`, never a function-local import: a
+    private import shadows the clock the twin harness patches, and the viewer's
+    aging percent is then read from the real clock on one half of a comparison.
+    """
     if now is None:
         now = datetime.now(timezone.utc)
 
@@ -3838,6 +3972,7 @@ def validate_task_write(
     backlog_path: Path | None = None,
     *,
     data: dict | None = None,
+    area_ids: "list[str] | None" = None,
 ) -> dict[str, str]:
     """Run cross-entity validation for a proposed task write.
 
@@ -3892,7 +4027,9 @@ def validate_task_write(
             errors["epic"] = f"unknown epic: {patch['epic']}"
 
     # Area must exist (areas live in files, not `data`).
-    if "area" in patch and patch["area"] and patch["area"] not in list_area_ids(bp):
+    # A store-backed caller passes the area ids it holds rather than globbing areas/.
+    known_areas = list_area_ids(bp) if area_ids is None else area_ids
+    if "area" in patch and patch["area"] and patch["area"] not in known_areas:
         errors["area"] = f"unknown area: {patch['area']}"
 
     # Phase must exist if set.
@@ -3914,7 +4051,10 @@ def validate_task_write(
 
     # Deps: each must exist; no self-dep; no cycle.
     if "depends_on" in patch:
-        deps = patch["depends_on"] or []
+        deps = dependency_ids(patch["depends_on"])
+        if deps is None:
+            errors["depends_on"] = "depends_on must be a task id or a list of task ids"
+            deps = []
         for d in deps:
             if d == task_id:
                 errors["depends_on"] = "cannot depend on itself"
@@ -3924,7 +4064,8 @@ def validate_task_write(
                 break
         if "depends_on" not in errors:
             # Cycle detection: BFS from each dep — if any path reaches task_id, cycle.
-            adj = {t.get("id"): list(t.get("depends_on") or []) for t in all_tasks if t.get("id")}
+            # A row whose `depends_on` cannot be read has no edges to follow.
+            adj = {t.get("id"): dependency_ids(t.get("depends_on")) or [] for t in all_tasks if t.get("id")}
             adj[task_id] = list(deps)  # simulate the proposed state
             if _has_cycle_to(adj, task_id):
                 errors["depends_on"] = "introduces a dependency cycle"

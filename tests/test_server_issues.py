@@ -178,3 +178,26 @@ def test_aging_override_changes_tier(running_server, tmp_path):
     payload = json.loads(urllib.request.urlopen(f"{base}/api/issues").read())
     by_id = {i["id"]: i for i in payload["issues"]}
     assert by_id["ISS-AG1"]["aging"]["tier"] == "Stale"
+
+
+def test_compute_issue_aging_default_now_honors_the_patched_module_clock(monkeypatch):
+    """The default `now` must read the module's `datetime`, not a private import.
+
+    `native_twins.install_clock` patches `taskmaster_v3.datetime` so both halves of
+    a twin read one instant. A function-local `from datetime import datetime`
+    shadows that patch, so the viewer's aging percent is taken from the real clock
+    and the two halves of `/api/issues` disagree in their last float digits.
+    """
+    from taskmaster import taskmaster_v3 as v3
+
+    pinned = datetime(2026, 4, 26, tzinfo=timezone.utc)
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return pinned
+
+    monkeypatch.setattr(v3, "datetime", FrozenDatetime)
+    issue = {"discovered": (pinned - timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%SZ"), "severity": "P1"}
+    aging_cfg = {"Critical": 14, "High": 30, "Medium": 60, "Low": 120}
+    assert v3.compute_issue_aging(issue, aging_cfg) == v3.compute_issue_aging(issue, aging_cfg, now=pinned)

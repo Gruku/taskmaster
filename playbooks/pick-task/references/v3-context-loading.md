@@ -2,9 +2,13 @@
 
 How pick-task behaves on v3 backlogs when context-loading sub-steps activate.
 
+## Resuming a task this session holds
+
+After a pause or a compaction in the same session, skip the thread board: call `backlog_context(scope="session", include=["handovers", "issues"])` and `backlog_claim(action="renew", task_id=<id>)`. If you took a cursor before the pause (`backlog_changes_since(epic=<epic>)`), pass it back as `backlog_changes_since(cursor=<cursor>, epic=<epic>)` to learn what moved; `resync_required: true` means re-read, never "nothing changed". Then continue at Step 6.
+
 ## Token budget for steps 5a–5b
 
-The v3 sub-steps (related handovers, related issues) add context on top of the base `backlog_pick_task` response. Budget targets:
+Steps 5a–5b read the `selected` half of the Step 3 `backlog_context` answer, which is bounded by `budget_bytes` (default 8,000) and reports what it left out in `budget.omitted`. Budget targets:
 
 | Source | Per-item | Cap | Worst case |
 |---|---|---|---|

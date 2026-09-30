@@ -55,3 +55,38 @@ no new speedup or tail-latency claim is made by this diagnostic change.
 
 Validation: 129 tests passed across native baseline, store recovery, schema,
 transactions, derived queries and merge/derived suites (55.59 seconds).
+
+## M0 completion validation
+
+Current collection: **2,422 cases; 2,421 passed, one skipped**, with no missing
+or unresolved failing case when reconciling the JUnit runs against a fresh
+`--collect-only` inventory. This is coverage across runs, not a claim that the
+first full invocation was green.
+
+The first full invocation stopped at its five-failure limit after 2,062 passes
+and one skip (1,811.19 seconds). Four failures were existing test portability
+problems: Python 3.12 does not accept `Path.read_text(newline=...)`, and a bare
+`python` subprocess selected the system interpreter without project dependencies.
+Those tests now use byte-preserving UTF-8 decode and `sys.executable`. The fifth
+test expected the removed newer-schema rebuild; it now proves schema refusal
+preserves the tombstone and ID reservation.
+
+After those test corrections, 70 focused cases passed; all 440 cases in the
+unreached-module run passed. Overlapping cases are deduplicated in the coverage
+check. The one skip is the credential-gated test that creates a real Linear
+issue; no live Linear operation was run.
+
+The default **8-process × 200-operation** public-tool write-survival acceptance
+test passed in **575.94 seconds**. It exercises real concurrent commands and
+checks acknowledged sequences, IDs, fields, projection convergence and rollback
+contracts. Its duration is a baseline, not a native speedup claim.
+
+Ignored evidence: `test-results/native-foundation/m0-junit.xml`,
+`m0-corrections.xml`, `m0-remaining.xml`, `collected.txt`, and `m0-coverage.json`.
+The initial verbose traceback report was sanitized to remove inherited credential
+values/environment locals; none of these raw artifacts are committed.
+
+Local implementation commits: `c940697` (baseline/diagnostics), `4aa6694`
+(client fencing), `7470757` (diagnostic SQLite capability requirement), followed
+by the inventory and test-portability completion commit. Native runtime
+replacement remains N03 onward; installed clients and CodeMaestro were untouched.

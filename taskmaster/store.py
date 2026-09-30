@@ -34,7 +34,7 @@ from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 import yaml
 
-from taskmaster import yaml_io
+from taskmaster import projection_parse, yaml_io
 from taskmaster.integrity import check_database
 from taskmaster.admission import (
     BRIDGE_CAPABILITIES, CLIENT_PROTOCOL, LEGACY_SCHEMA_VERSION,
@@ -69,6 +69,8 @@ from taskmaster.taskmaster_v3 import (
     SCHEMA_V3,
     SCHEMA_V4,
     REVERSE_TYPE,
+    LINK_ENDPOINT_KINDS,
+    LINKS_TO_ID_SQL,
     _split_entity_for_v3,
     _three_way_merge_fields,
     _v4_strip_private_fields,
@@ -407,6 +409,7 @@ CREATE INDEX IF NOT EXISTS ix_related_a ON related(a_kind, a_id);
 CREATE INDEX IF NOT EXISTS ix_related_b ON related(b_kind, b_id);
 CREATE INDEX IF NOT EXISTS ix_handover_tasks_pair ON handover_tasks(handover_id, task_id);
 CREATE INDEX IF NOT EXISTS ix_entities_kind_status ON entities(kind, status);
+CREATE INDEX IF NOT EXISTS ix_entities_id ON entities(id, deleted, kind);
 CREATE INDEX IF NOT EXISTS ix_changes_entity ON changes(kind, id, seq);
 CREATE INDEX IF NOT EXISTS ix_projection_entity ON projection(kind, id);
 """
@@ -465,6 +468,10 @@ class StoreStatus:
     # Files edited while the store owed them an export: both versions kept,
     # exports paused until `backlog_resolve_conflict` picks one.
     flagged_files: tuple[str, ...] = ()
+    # Native stores only (N11 §5.4): who holds the projection exporter lease and
+    # whether that process is still running. None on a legacy store, which has no
+    # exporter lease, and then the report has no line for it.
+    exporter_lease: str | None = None
     # In-memory, per reporting process: how many read-side projection scans in
     # a row this process had to skip because the store was busy. It cannot be
     # read out of the database, so a report built by a process that has never
@@ -716,10 +723,31 @@ def _quick_check(connection: sqlite3.Connection, limit: int | None = None) -> st
     return "" if row is None else str(row[0])
 
 
+# backlog.yaml path -> ((st_ino, st_mtime_ns, st_size), fenced schema). The fence
+# runs on every `open_store` -- several times per tool call -- and re-parsing the
+# whole file each time grew with the project (measured 4 x 12 ms per call on a
+# 12 KB projection). The stat key is taken *before* the read, so a write racing
+# the parse can only cost one extra parse, never pin a stale answer; projection
+# writes replace the file, which moves the inode as well as the mtime.
+_PROJECTION_SCHEMA_CACHE: dict[str, tuple[tuple[int, int, int], int | None]] = {}
+
+
 def _projection_schema(backlog_dir: Path) -> int | None:
     path = backlog_dir / "backlog.yaml"
-    if not path.exists():
+    try:
+        before = path.stat()
+    except OSError:
         return None
+    key = (before.st_ino, before.st_mtime_ns, before.st_size)
+    cached = _PROJECTION_SCHEMA_CACHE.get(str(path))
+    if cached is not None and cached[0] == key:
+        return cached[1]
+    value = _parse_projection_schema(path)
+    _PROJECTION_SCHEMA_CACHE[str(path)] = (key, value)
+    return value
+
+
+def _parse_projection_schema(path: Path) -> int | None:
     try:
         raw = yaml_io.safe_load(path.read_text(encoding="utf-8")) or {}
     except (OSError, UnicodeError, yaml.YAMLError):
@@ -741,32 +769,11 @@ def _projection_schema(backlog_dir: Path) -> int | None:
 
 
 def _schema_integer(value: Any) -> int:
-    if isinstance(value, bool):
-        raise ValueError("boolean is not a schema integer")
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str) and re.fullmatch(r"[0-9]+", value):
-        return int(value)
-    raise ValueError("schema value must be an integer")
+    return projection_parse.schema_integer(value)
 
 
 def _validate_backlog_document(raw: Any) -> None:
-    if not isinstance(raw, dict):
-        raise ValueError("backlog.yaml must be a mapping")
-    meta_value = raw.get("meta")
-    if meta_value is None:
-        meta: dict[str, Any] = {}
-    elif not isinstance(meta_value, dict):
-        raise ValueError("backlog.yaml meta must be a mapping")
-    else:
-        meta = meta_value
-    for field in ("schema_version", "projection_schema"):
-        if field not in meta:
-            continue
-        try:
-            _schema_integer(meta[field])
-        except ValueError as exc:
-            raise ValueError(f"backlog.yaml meta.{field} must be an integer") from exc
+    projection_parse.validate_backlog(raw)
 
 
 def _read_file_snapshot(path: Path) -> tuple[bytes, os.stat_result]:
@@ -810,14 +817,60 @@ def _validate_safe_identifier(ident: str) -> None:
         raise ValueError(f"unsafe entity id {ident!r}: expected one safe filename component")
 
 
+def _local_host() -> str:
+    """This machine, spelled exactly as `sessions.host` records it.
+
+    Named so a reader of a `sessions` row does not have to guess which spelling
+    the writer used; `native.claims` judges claim liveness through it.
+    """
+    return socket.gethostname()
+
+
 def _local_pid_alive(pid: int | None) -> bool:
-    if not pid:
-        return False
     try:
-        os.kill(int(pid), 0)
+        pid = int(pid)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    if not 0 < pid <= 0xFFFFFFFF:
+        return False
+    if os.name == "nt":
+        return _windows_pid_alive(pid)
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        # Lack of permission is not proof that a peer is dead.
+        return True
     except (OSError, ValueError):
         return False
     return True
+
+
+def _windows_pid_alive(pid: int) -> bool:
+    """Inspect a process handle without sending a signal.
+
+    Windows os.kill(pid, 0) calls TerminateProcess with exit code zero. It is
+    never a liveness probe. SYNCHRONIZE grants only the right to wait on the
+    process; a zero-time wait distinguishes running from exited, including a
+    process that exited with STILL_ACTIVE (259) as its application exit code.
+    Inaccessible or unqueryable processes are conservatively considered live.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+    kernel.WaitForSingleObject.restype = wintypes.DWORD
+    kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel.CloseHandle.restype = wintypes.BOOL
+    handle = kernel.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+    if not handle:
+        return ctypes.get_last_error() != 87  # ERROR_INVALID_PARAMETER: no such pid
+    try:
+        return kernel.WaitForSingleObject(handle, 0) != 0  # only WAIT_OBJECT_0 proves exit
+    finally:
+        kernel.CloseHandle(handle)
 
 
 def _resolve_for(backlog_path: Path | None, root: Path | None) -> RootResolution:
@@ -828,6 +881,24 @@ def _resolve_for(backlog_path: Path | None, root: Path | None) -> RootResolution
     that call creates the database, preps the schema, recovers export intents
     and can move a damaged file aside, none of which a diagnostic may do.
     `_STATE_LOCK` is re-entrant, so `open_store` may already hold it.
+    """
+    with _STATE_LOCK:
+        resolved = resolve_location(backlog_path, root)
+        forward = _projection_schema(resolved.backlog_path)
+        if forward is not None and forward > PROJECTION_SCHEMA:
+            raise RuntimeError(
+                f"projection schema {forward} is newer than supported schema "
+                f"{PROJECTION_SCHEMA}; upgrade Taskmaster"
+            )
+        return resolved
+
+
+def resolve_location(backlog_path: Path | None, root: Path | None = None) -> RootResolution:
+    """`_resolve_for` without the projection-schema fence, which parses backlog.yaml.
+
+    The native routing gate asks this on every tool call to find the database
+    it must classify; a native store never admits through the legacy
+    projection fence, so it must not pay for, or depend on, that file read.
     """
     global _ROOT_RESOLUTION
     with _STATE_LOCK:
@@ -869,13 +940,6 @@ def _resolve_for(backlog_path: Path | None, root: Path | None) -> RootResolution
             _ROOT_RESOLUTION = resolved
         if _ROOT_RESOLUTION is None:
             _ROOT_RESOLUTION = resolved
-
-        forward = _projection_schema(resolved.backlog_path)
-        if forward is not None and forward > PROJECTION_SCHEMA:
-            raise RuntimeError(
-                f"projection schema {forward} is newer than supported schema "
-                f"{PROJECTION_SCHEMA}; upgrade Taskmaster"
-            )
         return resolved
 
 
@@ -977,6 +1041,7 @@ def reset_for_tests() -> None:
         _STORES.clear()
         _CACHE.clear()
         _WARNED_CLOUD_ROOTS.clear()
+        _PROJECTION_SCHEMA_CACHE.clear()
         _CONTEXT_BUILDER = None
         _PROGRESS_RENDERER = None
         _WAIT_OBSERVER = None
@@ -1063,6 +1128,78 @@ def transaction_dict(
 
 def status(backlog_path: Path | None = None) -> StoreStatus:
     return open_store(backlog_path=backlog_path).status()
+
+
+def detect_dominant_crlf(backlog_path: Path, *, path_guard=None) -> bool:
+    """Whether a backlog directory's git-facing files are mostly CRLF.
+
+    Bounded sampling (see `_LINE_ENDING_SAMPLE_PER_DIR`), shared by the legacy
+    exporter and the native compatibility drain so a new file matches its
+    neighbours whichever writer creates it.
+    """
+    guard = path_guard or (lambda rel: backlog_path / rel)
+
+    def probe_crlf(rel):
+        # A path the guard refuses (a link, a missing root) casts no vote; it
+        # must never fail the write or export that asked for the default.
+        try:
+            return _probe_crlf(guard(rel))
+        except (OSError, ValueError):
+            return None
+
+    crlf = lf = 0.0
+    for name in ("backlog.yaml", "project.yaml"):
+        probe = probe_crlf(name)
+        if probe is True:
+            crlf += 1
+        elif probe is False:
+            lf += 1
+    for folder in _LINE_ENDING_SAMPLE_DIRS:
+        try:
+            directory = guard(folder)
+            # Listed eagerly, inside the guard: `Path.iterdir` is lazy on
+            # 3.11, so a project with no `bugs/` raised FileNotFoundError
+            # out of the loop below and took the write that asked with it.
+            # `os.listdir` also avoids a stat per name on a 2,300-file tree.
+            names = [
+                name for name in os.listdir(directory) if name.endswith(".md")
+            ]
+        except (OSError, ValueError):
+            continue
+        if not names:
+            continue
+        sampled_crlf = sampled_lf = 0
+        for name in names[:_LINE_ENDING_SAMPLE_PER_DIR]:
+            probe = probe_crlf(f"{folder}/{name}")
+            if probe is True:
+                sampled_crlf += 1
+            elif probe is False:
+                sampled_lf += 1
+        sampled = sampled_crlf + sampled_lf
+        if not sampled:
+            continue
+        # A directory votes with how many files it holds, not with how many
+        # of them were sampled: 20 read out of 2,300 tasks otherwise lost to
+        # 40 read out of two small directories.
+        weight = len(names) / sampled
+        crlf += sampled_crlf * weight
+        lf += sampled_lf * weight
+    return crlf > lf
+
+
+def count_linear_enqueue_failures(local_dir: Path) -> int:
+    """Enqueue failures `store.log` in a store's local directory still records."""
+    path = local_dir / "store.log"
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return 0
+    return sum(1 for line in text.splitlines() if _LINEAR_ENQUEUE_FAILURE_MARKER in line)
+
+
+def linear_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    """One `linear_queue` row as the status and drain code read it."""
+    return Store._linear_row(row)
 
 
 class Store:
@@ -2394,9 +2531,12 @@ class Store:
             if _CONTEXT_BUILDER is not None:
                 _CONTEXT_BUILDER(data)
             return data, before, seq
-        self._maybe_scan_on_read()
         connection = self.connection
         owns_snapshot = not connection.in_transaction
+        if owns_snapshot:
+            # A caller already holding a read snapshot has scanned before opening
+            # it; a scan here would need a write transaction nested inside it.
+            self._maybe_scan_on_read()
         if owns_snapshot:
             connection.execute("BEGIN")
         try:
@@ -3626,12 +3766,12 @@ class Store:
             return None, None
         target = self._entity_path(kind, str(ident), bool(entity["archived"]))
         target_rel = None if target is None else target.relative_to(self.backlog_path).as_posix()
-        rendered = _render_entity_file(kind, _from_json(entity["doc"], {}), entity["body"])
-        if rendered is None:
+        content, _expected = render_entity_file(kind, _from_json(entity["doc"], {}), entity["body"])
+        if content is None:
             return None, None
         if target_rel != rel:
             return None, target_rel
-        return rendered[0].decode("utf-8"), target_rel
+        return content.decode("utf-8"), target_rel
 
     def resolve_projection_conflict(
         self, rel: str, take: str, *, tool: str = "backlog_resolve_conflict"
@@ -4252,22 +4392,7 @@ class Store:
 
     # Ordered canonical-first: a legacy duplicate path is an import fallback
     # and never overrides the canonical one.
-    _ENTITY_FILE_SPECS = (
-        ("task", ("tasks/*.md", "tasks/archive/*.md")),
-        ("epic", ("epics/*.md",)),
-        ("phase", ("phases/*.md",)),
-        ("bug", ("bugs/*.md", "bugs/archive/*.md")),
-        ("issue", ("issues/*.md", "issues/archive/*.md")),
-        (
-            "handover",
-            ("handovers/*.md", "handovers/_archive/*/*.md", "handovers/archive/*.md"),
-        ),
-        ("decision", ("decisions/*.md",)),
-        ("idea", ("ideas/IDEA-*.md",)),
-        ("note", ("notes/NOTE-*.md", "notes/_archive/NOTE-*.md")),
-        ("area", ("areas/*.md",)),
-        ("tracker", ("trackers/*.md", "integrations/trackers/*.md")),
-    )
+    _ENTITY_FILE_SPECS = projection_parse.ENTITY_FILE_SPECS
 
     @contextmanager
     def _memoized_entity_files(self) -> Iterator[None]:
@@ -4356,23 +4481,11 @@ class Store:
         return self._parse_entity_text(kind, path.read_text(encoding="utf-8"))
 
     def _parse_entity_text(self, kind: str, raw: str) -> tuple[dict[str, Any], str | None]:
-        if any(marker in raw for marker in ("<<<<<<<", "=======", ">>>>>>>")):
-            raise ValueError("git conflict markers")
-        fm, body = parse_frontmatter(raw)
-        if not fm or not isinstance(fm, dict):
-            raise ValueError("missing or invalid frontmatter")
-        if kind == "task":
-            doc = task_v4_from_file(fm, body.removesuffix("\n"))
-            return _split_body(doc)
-        return _clean_doc(fm), body.removesuffix("\n") or None
+        return projection_parse.entity_text(kind, raw)
 
     @staticmethod
     def _validate_projected_identity(kind: str, ident: str, doc: Mapping[str, Any]) -> None:
-        declared = doc.get("id")
-        if declared is not None and str(declared) != ident:
-            raise ValueError(
-                f"{kind} path id {ident!r} does not match frontmatter id {declared!r}"
-            )
+        projection_parse.validate_identity(kind, ident, doc)
 
     def _scan_projection(
         self, tx: "Transaction", *, generation: str | None = None
@@ -4573,50 +4686,13 @@ class Store:
         import writes, which is what lets "would importing this change
         anything?" be answered without importing.
         """
-        text = content.decode("utf-8")
-        if kind == "backlog":
-            raw = yaml_io.safe_load(text) or {}
-            _validate_backlog_document(raw)
-            rows = _flatten_backlog_dict(raw)
-            for key, (doc, body) in list(rows.items()):
-                if key[0] not in {"epic", "phase"}:
-                    continue
-                current = tx.connection.execute(
-                    "SELECT doc,body FROM entities WHERE kind=? AND id=?", key
-                ).fetchone()
-                if current:
-                    current_doc = _from_json(current["doc"], {})
-                    heavy_fields = (
-                        EPIC_HEAVY_FIELDS if key[0] == "epic" else PHASE_HEAVY_FIELDS
-                    )
-                    for field in heavy_fields:
-                        if field in current_doc:
-                            doc[field] = current_doc[field]
-                    rows[key] = (doc, current["body"])
-            return rows
-        if kind == "project":
-            doc = yaml_io.safe_load(text) or {}
-            if not isinstance(doc, dict):
-                raise ValueError("project.yaml must be a mapping")
-            return {("project", ident or _PROJECT_ID): (doc, None)}
-        if not ident:
-            return None
-        doc, body = self._parse_entity_text(kind, text)
-        self._validate_projected_identity(kind, ident, doc)
-        if kind in {"epic", "phase"}:
+        def lookup(kind, ident):
             current = tx.connection.execute(
-                "SELECT doc FROM entities WHERE kind=? AND id=?", (kind, ident)
+                "SELECT doc,body FROM entities WHERE kind=? AND id=?", (kind, ident)
             ).fetchone()
-            if current:
-                merged = _from_json(current["doc"], {})
-                heavy_fields = EPIC_HEAVY_FIELDS if kind == "epic" else PHASE_HEAVY_FIELDS
-                for field in heavy_fields:
-                    if field in doc:
-                        merged[field] = doc[field]
-                    else:
-                        merged.pop(field, None)
-                doc = merged
-        return {(kind, ident): (doc, body)}
+            return (_from_json(current["doc"], {}), current["body"]) if current else None
+
+        return projection_parse.projected_file(kind, ident, content, lookup)
 
     def _apply_projected_file(
         self,
@@ -5104,8 +5180,41 @@ class Store:
                         (ident, str(task_id)),
                     )
         if tx._derived_keys:
+            for _kind, ident in tx._derived_keys:
+                self._reresolve_link_targets(tx.connection, ident)
             self._close_reverse_links(tx.connection)
             self._rebuild_related(tx.connection, tx._derived_keys)
+
+    @classmethod
+    def _reresolve_link_targets(cls, connection: sqlite3.Connection, ident: str) -> None:
+        """Give links to `ident` the kind it resolves to now, as a full rebuild would.
+
+        A link is resolved when it is written, so one written before its target
+        existed records the `task` fallback, and one whose target stops existing
+        keeps the old kind. Creating or deleting `ident` is when that answer can
+        change. The incoming rows are found on `ix_links_dst` (every endpoint kind
+        listed) and the kind on `ix_entities_id`, both index searches. The mirrors
+        follow in `_close_reverse_links`.
+        """
+        incoming = connection.execute(
+            LINKS_TO_ID_SQL, (*LINK_ENDPOINT_KINDS, ident)
+        ).fetchall()
+        if not incoming:
+            return
+        kind = cls._kind_for_id(connection, ident)
+        for src_kind, src_id, link_type, old_kind in incoming:
+            if old_kind == kind:
+                continue
+            connection.execute(
+                "DELETE FROM links WHERE src_kind=? AND src_id=? AND type=? AND dst_kind=? "
+                "AND dst_id=? AND derived=0",
+                (src_kind, src_id, link_type, old_kind, ident),
+            )
+            connection.execute(
+                "INSERT OR IGNORE INTO links(src_kind,src_id,type,dst_kind,dst_id,derived) "
+                "VALUES(?,?,?,?,?,0)",
+                (src_kind, src_id, link_type, kind, ident),
+            )
 
     @staticmethod
     def _close_reverse_links(connection: sqlite3.Connection) -> None:
@@ -5135,7 +5244,7 @@ class Store:
     def _kind_for_id(connection: sqlite3.Connection, ident: str) -> str:
         row = connection.execute(
             "SELECT kind FROM entities WHERE id=? AND deleted=0 "
-            "ORDER BY CASE kind WHEN 'task' THEN 0 WHEN 'issue' THEN 1 ELSE 2 END LIMIT 1",
+            "ORDER BY CASE kind WHEN 'task' THEN 0 WHEN 'issue' THEN 1 ELSE 2 END,kind LIMIT 1",
             (ident,),
         ).fetchone()
         return str(row[0]) if row else "task"
@@ -5387,15 +5496,7 @@ class Store:
         is "recent", not "ever" -- a count that under-reports an ancient failure
         is still the difference between an operator seeing the loss and not.
         """
-        path = self.db_path.parent / "store.log"
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            return 0
-        return sum(
-            1 for line in text.splitlines()
-            if _LINEAR_ENQUEUE_FAILURE_MARKER in line
-        )
+        return count_linear_enqueue_failures(self.db_path.parent)
 
     def _match_project_line_endings(
         self, content: bytes, path: Path, prior_crlf: bool | None = None
@@ -5424,44 +5525,7 @@ class Store:
         return self._dominant_crlf
 
     def _detect_dominant_line_ending(self) -> bool:
-        crlf = lf = 0.0
-        for name in ("backlog.yaml", "project.yaml"):
-            probe = _probe_crlf(self.backlog_path / name)
-            if probe is True:
-                crlf += 1
-            elif probe is False:
-                lf += 1
-        for folder in _LINE_ENDING_SAMPLE_DIRS:
-            directory = self.backlog_path / folder
-            try:
-                # Listed eagerly, inside the guard: `Path.iterdir` is lazy on
-                # 3.11, so a project with no `bugs/` raised FileNotFoundError
-                # out of the loop below and took the write that asked with it.
-                # `os.listdir` also avoids a stat per name on a 2,300-file tree.
-                names = [
-                    name for name in os.listdir(directory) if name.endswith(".md")
-                ]
-            except OSError:
-                continue
-            if not names:
-                continue
-            sampled_crlf = sampled_lf = 0
-            for name in names[:_LINE_ENDING_SAMPLE_PER_DIR]:
-                probe = _probe_crlf(directory / name)
-                if probe is True:
-                    sampled_crlf += 1
-                elif probe is False:
-                    sampled_lf += 1
-            sampled = sampled_crlf + sampled_lf
-            if not sampled:
-                continue
-            # A directory votes with how many files it holds, not with how many
-            # of them were sampled: 20 read out of 2,300 tasks otherwise lost to
-            # 40 read out of two small directories.
-            weight = len(names) / sampled
-            crlf += sampled_crlf * weight
-            lf += sampled_lf * weight
-        return crlf > lf
+        return detect_dominant_crlf(self.backlog_path)
 
     def _stamp_quarantine(
         self,
@@ -5632,8 +5696,8 @@ class Store:
             tx.connection.execute("DELETE FROM projection_base WHERE file=?", (prior_rel,))
         if any(old_row["file"] == rel for old_row in old_rows):
             old_rel = rel
-        rendered = _render_entity_file(kind, _from_json(row["doc"], {}), row["body"])
-        if rendered is None:
+        content, expected = render_entity_file(kind, _from_json(row["doc"], {}), row["body"])
+        if content is None:
             if old_rel:
                 if not self._remove_projection_file(
                     tx, self.backlog_path / old_rel, kind, ident, old_rel
@@ -5642,7 +5706,6 @@ class Store:
                 tx.connection.execute("DELETE FROM projection WHERE file=?", (old_rel,))
                 tx.connection.execute("DELETE FROM projection_base WHERE file=?", (old_rel,))
             return
-        content, expected = rendered
         # Matched here, once, so the verification below reads exactly the bytes
         # that land and `_replace_projection` does not probe the file a second
         # time — two extra opens per file across a 2,300-file adoption.
@@ -5877,33 +5940,7 @@ class Store:
         self, connection: sqlite3.Connection
     ) -> tuple[dict[str, Any], bytes]:
         """The index `backlog.yaml` is exported from, and the bytes it exports as."""
-        data = self._load_dict_from_connection(connection)
-        data.pop("context", None)
-        data.pop("_orphan_tasks", None)
-        slim_epics: list[dict[str, Any]] = []
-        for epic in data.get("epics", []):
-            persistable = {k: v for k, v in epic.items() if k != "tasks"}
-            slim, heavy, body = _split_entity_for_v3(persistable, EPIC_HEAVY_FIELDS)
-            slim_epics.append(
-                slim
-                if (any(field in heavy for field in EPIC_HEAVY_FIELDS) or body)
-                else _clean_doc(persistable)
-            )
-        data["epics"] = slim_epics
-        slim_phases: list[dict[str, Any]] = []
-        for phase in data.get("phases", []):
-            slim, heavy, body = _split_entity_for_v3(phase, PHASE_HEAVY_FIELDS)
-            slim_phases.append(
-                slim
-                if (any(field in heavy for field in PHASE_HEAVY_FIELDS) or body)
-                else _clean_doc(phase)
-            )
-        data["phases"] = slim_phases
-        meta = dict(data.get("meta") or {})
-        meta.pop("updated", None)
-        meta["projection_schema"] = PROJECTION_SCHEMA
-        data["meta"] = meta
-        content = yaml.dump(data, default_flow_style=False, sort_keys=False, allow_unicode=True).encode("utf-8")
+        content, data = render_backlog_file(self._load_dict_from_connection(connection))
         content = self._match_project_line_endings(
             content, self.backlog_path / "backlog.yaml"
         )
@@ -6086,6 +6123,71 @@ class Store:
             connection.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchall()
         except sqlite3.Error:
             pass
+
+
+
+def render_backlog_file(data: dict[str, Any]) -> tuple[bytes, dict[str, Any]]:
+    """LF-rendered backlog.yaml bytes, plus the document they encode.
+
+    `data` is a backlog document carrying `epics` and `phases` lists in export
+    order (each with its body under BODY_KEY). Consumed in place. Shared by the
+    legacy exporter and the native compatibility drain.
+    """
+    data.pop("context", None)
+    data.pop("_orphan_tasks", None)
+    slim_epics: list[dict[str, Any]] = []
+    for epic in data.get("epics", []):
+        persistable = {k: v for k, v in epic.items() if k != "tasks"}
+        slim, heavy, body = _split_entity_for_v3(persistable, EPIC_HEAVY_FIELDS)
+        slim_epics.append(
+            slim
+            if (any(field in heavy for field in EPIC_HEAVY_FIELDS) or body)
+            else _clean_doc(persistable)
+        )
+    data["epics"] = slim_epics
+    slim_phases: list[dict[str, Any]] = []
+    for phase in data.get("phases", []):
+        slim, heavy, body = _split_entity_for_v3(phase, PHASE_HEAVY_FIELDS)
+        slim_phases.append(
+            slim
+            if (any(field in heavy for field in PHASE_HEAVY_FIELDS) or body)
+            else _clean_doc(phase)
+        )
+    data["phases"] = slim_phases
+    meta = dict(data.get("meta") or {})
+    meta.pop("updated", None)
+    meta["projection_schema"] = PROJECTION_SCHEMA
+    data["meta"] = meta
+    content = yaml.dump(data, default_flow_style=False, sort_keys=False, allow_unicode=True).encode("utf-8")
+    return content, data
+
+
+def render_entity_file(
+    kind: str, doc: Mapping[str, Any], body: str | None
+) -> tuple[bytes | None, "tuple[Mapping[str, Any], str | None] | None"]:
+    """The LF-rendered projection bytes for one entity, and its round-trip oracle.
+
+    Content None means the entity owns no file (an epic or phase with no heavy
+    field and no body), so any file it had must go. The oracle is
+    `(expected_doc, expected_body)`, or None for a whole-document YAML file,
+    which has its own comparison. Shared by the legacy exporter and the native
+    compatibility drain so the two can never render one entity differently.
+    """
+    body = body or ""
+    if kind == "task":
+        fm, rendered_body = task_v4_to_file(dict(doc) | ({BODY_KEY: body} if body else {}))
+        return render_frontmatter(fm, rendered_body).encode("utf-8"), (doc, body)
+    if kind in {"epic", "phase"}:
+        heavy_fields = EPIC_HEAVY_FIELDS if kind == "epic" else PHASE_HEAVY_FIELDS
+        _slim, heavy, rendered_body = _split_entity_for_v3(
+            dict(doc) | ({BODY_KEY: body} if body else {}), heavy_fields
+        )
+        if not any(field in heavy for field in heavy_fields) and not rendered_body:
+            return None, None
+        return render_frontmatter(heavy, rendered_body).encode("utf-8"), (heavy, rendered_body)
+    if kind == "project":
+        return yaml.dump(dict(doc), default_flow_style=False, sort_keys=False, allow_unicode=True).encode("utf-8"), None
+    return render_frontmatter(dict(doc), body).encode("utf-8"), (doc, body)
 
 
 class Transaction:
@@ -6723,49 +6825,11 @@ class Transaction:
 
 
 def _clean_doc(doc: Mapping[str, Any]) -> dict[str, Any]:
-    return _v4_strip_private_fields(dict(doc), preserve_body=False)
+    return projection_parse.clean_doc(doc)
 
 
 def _split_body(doc: Mapping[str, Any]) -> tuple[dict[str, Any], str | None]:
-    materialized = copy.deepcopy(dict(doc))
-    body = materialized.pop(BODY_KEY, None)
-    if isinstance(body, str):
-        body = body.removesuffix("\n") or None
-    return _clean_doc(materialized), body
-
-
-def _render_entity_file(
-    kind: str, doc: Mapping[str, Any], body: str | None
-) -> tuple[bytes, tuple[Mapping[str, Any], str | None] | None] | None:
-    """The bytes an entity projects to, plus what they must read back as.
-
-    The second item is `(expected_doc, expected_body)` for the round-trip
-    check, or None for a whole-document YAML file, which has its own
-    comparison. None overall means the entity has no file of its own: an epic
-    or phase with nothing beyond what `backlog.yaml` already carries.
-    """
-    doc = dict(doc)
-    body = body or ""
-    if kind == "task":
-        fm, rendered_body = task_v4_to_file(doc | ({BODY_KEY: body} if body else {}))
-        return render_frontmatter(fm, rendered_body).encode("utf-8"), (doc, body)
-    if kind in {"epic", "phase"}:
-        heavy_fields = EPIC_HEAVY_FIELDS if kind == "epic" else PHASE_HEAVY_FIELDS
-        _slim, heavy, rendered_body = _split_entity_for_v3(
-            doc | ({BODY_KEY: body} if body else {}), heavy_fields
-        )
-        if not any(field in heavy for field in heavy_fields) and not rendered_body:
-            return None
-        return (
-            render_frontmatter(heavy, rendered_body).encode("utf-8"),
-            (heavy, rendered_body),
-        )
-    if kind == "project":
-        return (
-            yaml.dump(doc, default_flow_style=False, sort_keys=False, allow_unicode=True).encode("utf-8"),
-            None,
-        )
-    return render_frontmatter(doc, body).encode("utf-8"), (doc, body)
+    return projection_parse.split_body(doc)
 
 
 def _top_level_diff(
@@ -6973,46 +7037,7 @@ def name_missing_ids(
 def _flatten_backlog_dict(
     data: Mapping[str, Any],
 ) -> dict[tuple[str, str], tuple[dict[str, Any], str | None]]:
-    result: dict[tuple[str, str], tuple[dict[str, Any], str | None]] = {}
-
-    def claim(key: tuple[str, str], value: tuple[dict[str, Any], str | None]) -> None:
-        # Two documents under one id used to collapse silently here, which turned
-        # an accidental duplicate create into an update that replaced the live
-        # entity's fields.  A duplicate is never a legal write-back.
-        if key in result:
-            raise ValueError(
-                f"{key[0]} {key[1]} appears twice in the backlog dict; a create "
-                f"cannot reuse an existing id"
-            )
-        result[key] = value
-
-    backlog_doc = {
-        key: copy.deepcopy(value)
-        for key, value in data.items()
-        if key not in {"epics", "phases", "context"}
-        and not (isinstance(key, str) and key.startswith("_"))
-    }
-    if isinstance(backlog_doc.get("meta"), dict):
-        backlog_doc["meta"].pop("updated", None)
-    claim(("backlog", _BACKLOG_ID), (_clean_doc(backlog_doc), None))
-    for epic in data.get("epics") or []:
-        epic_doc = {key: copy.deepcopy(value) for key, value in epic.items() if key != "tasks"}
-        epic_doc, body = _split_body(epic_doc)
-        ident = str(epic_doc.get("id") or "")
-        if ident:
-            claim(("epic", ident), (epic_doc, body))
-        for task in epic.get("tasks") or []:
-            task_doc, task_body = _split_body(task)
-            task_id = str(task_doc.get("id") or "")
-            if task_id:
-                task_doc.setdefault("epic", ident)
-                claim(("task", task_id), (task_doc, task_body))
-    for phase in data.get("phases") or []:
-        phase_doc, body = _split_body(phase)
-        ident = str(phase_doc.get("id") or "")
-        if ident:
-            claim(("phase", ident), (phase_doc, body))
-    return result
+    return projection_parse.flatten_backlog(data)
 
 
 def _is_archive_path(path: Path, backlog_dir: Path) -> bool:

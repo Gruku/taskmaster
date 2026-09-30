@@ -34,8 +34,11 @@ from taskmaster import store
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 
-# The committed profile the plan specifies.  Overridable for local debugging only.
-STRESS_PROCESSES = int(os.environ.get("TM_STRESS_PROCESSES", "8"))
+# The acceptance profile the plan specifies (M0/N16 evidence): run it with `-m scale`.
+SCALE_PROCESSES, SCALE_OPS = 8, 200
+# The default run's profile: half the processes, so its peak RAM stays near 0.5 GB.
+# Overridable for local debugging only.
+STRESS_PROCESSES = int(os.environ.get("TM_STRESS_PROCESSES", "4"))
 STRESS_OPS = int(os.environ.get("TM_STRESS_OPS", "200"))
 
 
@@ -403,6 +406,7 @@ print(json.dumps(out))
 '''
 
 
+@pytest.mark.xdist_group("heavy_processes")  # conftest: one multi-process test at a time
 def test_two_processes_compat_and_direct_store_transactions_both_survive(tmp_path):
     """Defect 2: two OS processes, two write paths, no lost field and no lost creation."""
     root = tmp_path / "repo"
@@ -783,9 +787,37 @@ REQUIRED_OPS = (
 )
 
 
+@pytest.mark.xdist_group("heavy_processes")  # conftest: one multi-process test at a time
 @pytest.mark.slow
 def test_mixed_public_tool_operations_across_processes_never_lose_a_write(tmp_path):
     """The acceptance case: N processes x M real public tool calls on one store.
+
+    The default run uses 4 processes x 200 operations (`TM_STRESS_PROCESSES` /
+    `TM_STRESS_OPS` override it when debugging locally). The committed acceptance
+    profile, 8 x 200, is `test_mixed_public_tool_operations_at_acceptance_scale`,
+    marked `scale` and deselected by default; run it with
+    `pytest tests/test_store_concurrency.py -m scale`.
+
+    Marked `slow`: the fast development loop is `uv run pytest -q -m "not slow"`.
+    """
+    _run_mixed_stress(tmp_path, STRESS_PROCESSES, STRESS_OPS)
+
+
+@pytest.mark.scale
+@pytest.mark.xdist_group("heavy_processes")  # conftest: one multi-process test at a time
+@pytest.mark.slow
+def test_mixed_public_tool_operations_at_acceptance_scale(tmp_path):
+    """The M0/N16 acceptance profile, unchanged: 8 processes x 200 operations.
+
+    Deselected by default (about 1 GB of RAM for ~7 minutes); run it with
+    `pytest tests/test_store_concurrency.py -m scale`. Environment overrides do
+    not apply: this profile is the committed evidence.
+    """
+    _run_mixed_stress(tmp_path, SCALE_PROCESSES, SCALE_OPS)
+
+
+def _run_mixed_stress(tmp_path, workers, ops):
+    """N processes x M real public tool calls on one store, then prove nothing was lost.
 
     Every worker drives the real MCP tool functions in a real OS process — task
     add / update / pick / gate / merge / complete / archive / batch update, phase
@@ -799,15 +831,7 @@ def test_mixed_public_tool_operations_across_processes_never_lose_a_write(tmp_pa
     once, and the tools whose arguments are always legal must have refused nothing.
     Without that, a mix that silently stopped producing expectations would leave
     the survival loops iterating over nothing and the test would pass on air.
-
-    Profile is 8 processes x 200 operations by default; override with
-    `TM_STRESS_PROCESSES` / `TM_STRESS_OPS` when debugging locally.
-
-    Marked `slow`: it is roughly half the suite's wall clock, so the fast
-    development loop is `uv run pytest -q -m "not slow"`.  Nothing deselects it
-    otherwise — the full run, and CI, still execute it at the default profile.
     """
-    workers, ops = STRESS_PROCESSES, STRESS_OPS
     root = tmp_path / "repo"
     backlog_path = _seed_project(
         root, epics=("shared", *(f"w{index}" for index in range(workers)))

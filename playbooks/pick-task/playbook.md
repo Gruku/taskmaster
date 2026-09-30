@@ -14,7 +14,9 @@ If the user says "continue", "resume", or similar with no explicit `task_id` or 
 - If exactly one open thread, treat it as the resume target. If more than one, show the board and ask which (or accept a pasted thread name / handover id).
 - Call `backlog_thread_resume(<name>)` to load its latest handover. Take the first id in the handover's `task_ids`. Call `backlog_get_task(<id>)` slim.
 - If status is `done` or `archived`, fall through to Step 1.
-- Confirm: "Continuing `<task_id>` from thread `<name>` (`<tldr>`). Right task?" Default Yes → jump to Step 4.
+- Confirm: "Continuing `<task_id>` from thread `<name>` (`<tldr>`). Right task?" Default Yes → jump to Step 3.
+
+Same session resuming a task it holds: see `references/v3-context-loading.md`.
 
 v2 backlogs: skip silently.
 
@@ -24,11 +26,11 @@ Call `backlog_next_available` to get ready tasks. Phase-filtered when a phase is
 
 ## Step 2 — Parallel-task check
 
-Call `backlog_status` (slim). If 3+ tasks in-progress: "You have N tasks in-flight. Switch focus or pick this up in parallel?"
+Call `backlog_claim(action="status")` (this session's claims). If 3+: "You have N tasks in-flight. Switch focus or pick this up in parallel?"
 
-## Step 3 — Dependency check
+## Step 3 — What blocks it
 
-Call `backlog_dependencies(<task_id>)`. Warn on unmet deps — let user decide; do not skip silently.
+Call `backlog_context(focus=<task_id>, scope="task", include=["handovers", "issues"])`. If `clear` is false, warn with `mandatory.blockers` (dependencies, gates, open bugs, handovers, human action, claims; `unknown` = treat as blocked) — let user decide; do not skip silently.
 
 ## Step 4 — Pick the task
 
@@ -38,15 +40,7 @@ Lane'd tasks: if spec/body present, call `backlog_record_gate(<task_id>, "spec",
 
 ## Step 5 — Glance context load (v3)
 
-Run all sub-steps together. Budget: ~500 tokens.
-
-**5a. Open handovers for this task**
-
-Call `backlog_handover_list(task_id=<task_id>, status="open", limit=3)`. Surface: "N open handovers. Latest: `<tldr>`." If `session_kind: context-handoff` AND non-trivial `next_action`, load full body via `backlog_handover_get <id>`.
-
-**5b. Related issues**
-
-Call `backlog_issue_list(task_id=<task_id>)` for open P0/P1 issues.
+No new calls — from the Step 3 answer: **5a** `selected.handovers` ("N open handovers. Latest: `<next_action>`"; a non-trivial one → `backlog_handover_get <id>`); **5b** `selected.issues`, the open P0/P1 ones.
 
 **5c. Linkage pills**
 
@@ -109,4 +103,4 @@ todo → in-progress → in-review → done → archived
 
 ## Verifying writes
 
-A mutating result ending in `[seq N]` is committed — that is the `changes` row the transaction produced. `(export pending: <file> — retried on next call)` means the row committed and only the file export is being retried; the write is not lost. `backlog_store_status` shows dirty and quarantined files and the live sessions the store is tracking.
+A mutating result ending in `[seq N]` is committed. `(export pending: …)` means the write committed and only the file export is pending; it is not lost. On a native store `No change … already …` without `[seq]` means the value was already stored, not a failure. `backlog_store_status` shows dirty and quarantined files and live sessions.

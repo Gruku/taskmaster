@@ -58,6 +58,7 @@ class TestGetChangedFiles:
             text=True,
             timeout=30,
             cwd=Path("/repo"),
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
         )
 
     def test_empty_output(self):

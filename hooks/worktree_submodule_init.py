@@ -32,6 +32,7 @@ def _git(args: list, combined: bool = False) -> "subprocess.CompletedProcess":
         text=True,
         encoding="utf-8",
         errors="replace",
+        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
     )
 
 
