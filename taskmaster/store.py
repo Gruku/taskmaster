@@ -1107,25 +1107,6 @@ def opened_store(backlog_path: Path | None = None) -> "Store | None":
         return _STORES.get(db_path(resolved.backlog_path))
 
 
-def retained_connection(path: Path) -> sqlite3.Connection | None:
-    """This thread's open connection to the database at `path`, when a read on it is current.
-
-    None unless the connection is idle (a read inside a transaction sees an old
-    snapshot) and still open on the file now at `path` (a replaced database is a
-    different file). Lets a per-call probe skip opening a connection of its own.
-    """
-    connection = _connections().get(path)
-    if connection is None or connection.in_transaction:
-        return None
-    try:
-        stat = path.stat()
-    except OSError:
-        return None
-    if _CONNECTION_IDENTITIES.get(id(connection)) != (stat.st_dev, stat.st_ino):
-        return None
-    return connection
-
-
 def active_transaction(backlog_path: Path | None = None) -> "Transaction | None":
     """The `Transaction` behind the thread's open `transaction_dict`, if any.
 

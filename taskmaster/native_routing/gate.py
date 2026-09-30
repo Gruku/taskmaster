@@ -65,18 +65,6 @@ def native_database(backlog_path: Path) -> Path | None:
         return None   # no store can live there; the legacy tool reports the layout
     if not path.is_file():
         return None
-    retained = store.retained_connection(path)
-    if retained is not None:
-        # The legacy store's own idle connection on this thread reads the same
-        # committed state a new one would; anything but a legacy answer, or an
-        # error, is decided below on a connection of the gate's own.
-        try:
-            row = retained.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-        except sqlite3.Error:
-            pass
-        else:
-            if row is None or row[0] != "2":
-                return None
     try:
         uri = path.resolve().as_uri() + "?mode=ro"
         with closing(sqlite3.connect(uri, uri=True, isolation_level=None, timeout=30)) as connection:
