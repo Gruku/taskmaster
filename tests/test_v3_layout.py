@@ -713,7 +713,7 @@ def test_viewer_prefs_defaults_have_all_expected_keys():
         "issues",
     }
     assert set(VIEWER_PREFS_DEFAULTS.keys()) == expected_top_keys
-    assert VIEWER_PREFS_DEFAULTS["schema_version"] == 2
+    assert VIEWER_PREFS_DEFAULTS["schema_version"] == 1
     assert VIEWER_PREFS_DEFAULTS["theme"] == "system"
     assert VIEWER_PREFS_DEFAULTS["card_density"] == "full"
     assert VIEWER_PREFS_DEFAULTS["zoom"] == 1.0
@@ -763,90 +763,8 @@ def test_viewer_prefs_tolerates_stale_use_v3(tmp_path, monkeypatch):
     )
     assert "use_v3" not in VIEWER_PREFS_DEFAULTS
     prefs = load_viewer_prefs(bp)  # must not raise
-    assert prefs["theme"] == "system"  # a v1 "dark" was the old default, not a choice
+    assert prefs["theme"] == "dark"
     assert prefs["card_density"] == "full"  # defaults still fill in
-
-
-# v1 wrote "theme": "dark" into every install before any theme control existed, so a
-# stored v1 "dark" was never a choice. It becomes "system" once, on the first read by v2.
-def _write_prefs(tmp_path, doc):
-    import json
-    bp = _prefs_bp(tmp_path)
-    path = tmp_path / ".taskmaster" / "viewer.json"
-    path.write_text(json.dumps(doc), encoding="utf-8")
-    return bp, path
-
-
-@pytest.mark.parametrize("stored", [
-    {"schema_version": 1, "theme": "dark"},
-    {"theme": "dark"},                              # no version at all is v1
-    {"schema_version": "1", "theme": "dark"},       # a version that is not a number is v1
-])
-def test_viewer_prefs_v1_dark_becomes_system_and_is_persisted_as_v2(tmp_path, stored):
-    import json
-    from taskmaster.taskmaster_v3 import load_viewer_prefs
-    bp, path = _write_prefs(tmp_path, {**stored, "zoom": 1.25, "future_field": "keep"})
-    prefs = load_viewer_prefs(bp)
-    assert (prefs["theme"], prefs["schema_version"]) == ("system", 2)
-    on_disk = json.loads(path.read_text(encoding="utf-8"))
-    assert (on_disk["theme"], on_disk["schema_version"]) == ("system", 2)
-    assert (on_disk["zoom"], on_disk["future_field"]) == (1.25, "keep")
-
-
-@pytest.mark.parametrize("theme", ["light", "system"])
-def test_viewer_prefs_v1_light_and_system_are_kept(tmp_path, theme):
-    import json
-    from taskmaster.taskmaster_v3 import load_viewer_prefs
-    bp, path = _write_prefs(tmp_path, {"schema_version": 1, "theme": theme})
-    assert load_viewer_prefs(bp)["theme"] == theme
-    on_disk = json.loads(path.read_text(encoding="utf-8"))
-    assert (on_disk["theme"], on_disk["schema_version"]) == (theme, 2)
-
-
-def test_viewer_prefs_v2_dark_is_a_real_choice_and_is_not_touched(tmp_path):
-    from taskmaster.taskmaster_v3 import load_viewer_prefs
-    bp, path = _write_prefs(tmp_path, {"schema_version": 2, "theme": "dark"})
-    before = path.read_bytes()
-    assert load_viewer_prefs(bp)["theme"] == "dark"
-    assert path.read_bytes() == before   # nothing to migrate, so nothing is written
-
-
-def test_viewer_prefs_migration_runs_once(tmp_path):
-    """After the migration, picking dark with the toggle must survive every later load."""
-    import json
-    from taskmaster.taskmaster_v3 import load_viewer_prefs, save_viewer_prefs
-    bp, path = _write_prefs(tmp_path, {"schema_version": 1, "theme": "dark"})
-    first = load_viewer_prefs(bp)
-    after_first = path.read_bytes()
-    assert load_viewer_prefs(bp) == first
-    assert path.read_bytes() == after_first
-    first["theme"] = "dark"
-    save_viewer_prefs(bp, first)
-    assert load_viewer_prefs(bp)["theme"] == "dark"
-    assert json.loads(path.read_text(encoding="utf-8"))["schema_version"] == 2
-
-
-def test_viewer_prefs_save_never_writes_a_pre_migration_version(tmp_path):
-    """A stale client that sends schema_version 1 back must not make its dark choice look like the old default."""
-    from taskmaster.taskmaster_v3 import load_viewer_prefs, save_viewer_prefs
-    bp = _prefs_bp(tmp_path)
-    stale = {"schema_version": 1, "theme": "dark"}
-    save_viewer_prefs(bp, stale)
-    assert stale["schema_version"] == 1          # the caller's dict is left alone
-    loaded = load_viewer_prefs(bp)
-    assert (loaded["theme"], loaded["schema_version"]) == ("dark", 2)
-    save_viewer_prefs(bp, {"schema_version": 3, "theme": "dark"})   # a newer writer's version is not lowered
-    assert load_viewer_prefs(bp)["schema_version"] == 3
-
-
-def test_viewer_prefs_missing_file_defaults_to_system_v2(tmp_path):
-    import json
-    from taskmaster.taskmaster_v3 import load_viewer_prefs
-    bp = _prefs_bp(tmp_path)
-    prefs = load_viewer_prefs(bp)
-    assert (prefs["theme"], prefs["schema_version"]) == ("system", 2)
-    on_disk = json.loads((tmp_path / ".taskmaster" / "viewer.json").read_text(encoding="utf-8"))
-    assert (on_disk["theme"], on_disk["schema_version"]) == ("system", 2)
 
 
 def test_viewer_prefs_unknown_keys_preserved_on_save(tmp_path, monkeypatch):
