@@ -339,10 +339,45 @@ test('Edit: stored values the form cannot represent are shown, and survive a sav
   await expect(ctl(dialog, 'status')).toHaveValue('someday');
   await expect(ctl(dialog, 'phase')).toHaveValue('P0-retired');
   await expect(save(dialog)).toBeDisabled();
-  await ctl(dialog, 'release').fill('7.2.0');
+  await expect(field(dialog, 'estimate').locator('.ef-estimate-note')).toContainText('Current: 2 weeks');
+  for (let i = 0; i < 45; i++) await page.keyboard.press('Tab');   // through every field, the estimate included
+  await expect(save(dialog)).toBeDisabled();
+  await ctl(dialog, 'title').fill('Re-skin the board');
+  await expect(save(dialog)).toBeEnabled();
   await save(dialog).click();
   await expect(page.locator('.modal')).toHaveCount(0);
-  expect(patches.map((p) => p.body)).toEqual([{ release: '7.2.0' }]);
+  expect(patches.map((p) => p.body)).toEqual([{ title: 'Re-skin the board' }]);
+});
+
+test('Edit: changing a legacy estimate to an invalid one is refused with a visible message', async ({ page }) => {
+  const patches = writes(page, 'PATCH', '/api/tasks/T-102');
+  const dialog = await openEdit(page, { task: { ...RICH_TASK, estimate: '2 weeks' } });
+  await ctl(dialog, 'estimate').fill('0');
+  await save(dialog).click();
+  await expect(field(dialog, 'estimate').locator('.ef-error')).toHaveText('Use S, M, L or a whole number of days');
+  await expect(dialog.locator('[role="status"]').last()).toHaveText('1 field needs attention');
+  expect(patches).toEqual([]);
+  await page.keyboard.press('Escape');
+  await confirmBox(page).getByRole('button', { name: 'Discard' }).click();
+});
+
+test('a lone "-" or "e" in the days input does not clear the estimate: nothing changes and the field says what it expects', async ({ page }) => {
+  const dialog = await openEdit(page);
+  const days = ctl(dialog, 'estimate');
+  const medium = field(dialog, 'estimate').getByRole('button', { name: 'M', exact: true });
+  for (const key of ['-', 'e']) {
+    await days.focus();
+    await page.keyboard.type(key);
+    await expect(field(dialog, 'estimate').locator('.ef-estimate-unreadable')).toHaveText('Use S, M, L or a whole number of days');
+    await expect(medium).toHaveAttribute('aria-pressed', 'true');
+    await expect(save(dialog)).toBeDisabled();
+    await page.keyboard.press('Backspace');
+    await expect(field(dialog, 'estimate').locator('.ef-estimate-unreadable')).toHaveText('');
+  }
+  await page.keyboard.press('Tab');
+  await expect(save(dialog)).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.modal')).toHaveCount(0);
 });
 
 // ── A write that lost a race ──

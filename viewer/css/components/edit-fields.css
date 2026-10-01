@@ -60,7 +60,8 @@
 :is(.ef-text-input, .ef-num-input, .ef-date-input, .ef-enum-select, .ef-md-textarea, .ef-chip-input-text, .ef-estimate-days-input)[aria-invalid="true"],
 :is(.ef-text-input, .ef-num-input, .ef-date-input, .ef-enum-select, .ef-md-textarea, .ef-chip-input-text, .ef-estimate-days-input)[aria-invalid="true"]:hover:not(:disabled) { border-color: var(--tone-critical); }
 
-.ef-error {
+.ef-error,
+.ef-estimate-unreadable {
   display: flex;
   align-items: baseline;
   gap: var(--space-xs);
@@ -69,7 +70,8 @@
   font-size: var(--size-narrator-whisper);
   line-height: var(--leading-heading);
 }
-.ef-error::before {
+.ef-error::before,
+.ef-estimate-unreadable::before {
   content: '';
   flex: 0 0 auto;
   width: 8px;
@@ -77,7 +79,10 @@
   background: var(--tone-critical);
   clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
 }
-.ef-error:empty { display: none; }
+.ef-error:empty,
+.ef-estimate-unreadable:empty { display: none; }
+/* The estimate picker's own message takes a line of its own under the controls. */
+.ef-estimate-unreadable { flex: 1 0 100%; margin: 0; }
 
 /* Editing a title in place keeps the title's own type. */
 .if-wrap > .ef-text-input { font: inherit; letter-spacing: inherit; }

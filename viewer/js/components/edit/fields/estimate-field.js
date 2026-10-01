@@ -32,7 +32,8 @@ export const EstimateField = {
 
   // The id goes on the days input: a label click on a size button would press it.
   edit({ value, onChange, onCommit, onCancel, id, describedBy, autoFocus = true, label = 'Estimate' }) {
-    let current = coerce(value);
+    const initial = coerce(value);
+    let current = initial;
     const buttons = SIZES.map((size) => h('button', { type: 'button', class: 'ef-estimate-size', 'aria-pressed': 'false' }, size));
     const days = h('input', { type: 'number', class: 'ef-estimate-days-input', min: '1', step: '1', inputmode: 'numeric' });
     bindControl(days, { id, describedBy });
@@ -45,8 +46,11 @@ export const EstimateField = {
       h('span', { class: 'ef-estimate-sizes' }, buttons),
       h('label', { class: 'ef-estimate-days' }, [days, h('span', {}, 'days')]),
       custom,
-      custom && h('span', { class: 'ef-estimate-note' }, 'Stored value, not a size or a day count. It is kept unless you pick another.'),
+      custom && h('span', { class: 'ef-estimate-note' }, `Current: ${stored} — not a size or a day count. It is kept unless you pick another.`),
     ]);
+    // Shown by the field itself: an entry the browser cannot read as a number never becomes a value a form could judge.
+    const unreadable = h('div', { class: 'ef-estimate-unreadable' });
+    wrap.appendChild(unreadable);
     wrap.control = days;
 
     function paint({ keepDays = false } = {}) {
@@ -70,19 +74,29 @@ export const EstimateField = {
       onCommit?.(current);
     }));
     days.addEventListener('input', () => {
+      // A lone "-" or "e" reads as an empty value. It is not a request to clear the estimate: nothing changes, and
+      // the field says what it expects.
+      const bad = days.validity?.badInput === true;
+      unreadable.textContent = bad ? MESSAGE.charAt(0).toUpperCase() + MESSAGE.slice(1) : '';
+      if (bad) return;
       // What was typed is passed on even when it is not a valid day count, so the form can say so.
       const typed = days.value.trim();
+      // An empty days input clears a day count. Beside a size or a kept stored value it was empty all along.
+      if (typed === '' && !TYPED_DAYS_RE.test(current ?? '')) return;
       current = typed === '' ? null : `${typed}d`;
       paint({ keepDays: true });
       onChange?.(current);
     });
+    // Leaving the field with nothing changed is not a commit: the stored form (a bare 3, a lower-case "m") would go
+    // out normalised ("3d", "M") and be written back as an edit nobody made. An inline edit is simply closed.
+    const leave = () => { if (current === initial) onCancel?.(); else onCommit?.(current); };
     wrap.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && e.target === days) { e.preventDefault(); onCommit?.(current); }
+      if (e.key === 'Enter' && e.target === days) { e.preventDefault(); leave(); }
       else cancelOnEscape(e, onCancel);
     });
     // Moving between the sizes and the days stays inside the field; only leaving it commits.
     wrap.addEventListener('focusout', (e) => {
-      if (e.target === days && !wrap.contains(e.relatedTarget)) onCommit?.(current);
+      if (e.target === days && !wrap.contains(e.relatedTarget)) leave();
     });
     focusOnMount(days, autoFocus, { select: true });
     return wrap;

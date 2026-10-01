@@ -215,3 +215,28 @@ test('a click on a link inside a read-mode field follows the link instead of ope
     assert.ok(root.querySelector('textarea'), 'a click on the text still does');
   } finally { ctrl.destroy(); }
 });
+
+test('tabbing through an inline estimate editor writes nothing, whatever form the estimate is stored in', async () => {
+  const { EstimateField } = await import('../../js/components/edit/fields/estimate-field.js');
+  const schema = { entity: 'task', fields: [{ key: 'estimate', label: 'Estimate', renderer: EstimateField }] };
+  for (const stored of [3, 'm', '2 weeks']) {
+    const root = document.createElement('div');
+    document.body.append(root);
+    const saved = [];
+    const ctrl = mountInlineField(root, {
+      schema, fieldKey: 'estimate', entity: { id: 'est-tab', estimate: stored },
+      onSave: async (value) => { saved.push(value); },
+    });
+    try {
+      root.querySelector('.ef-estimate').click();
+      const days = root.querySelector('input[type="number"]');
+      assert.ok(days, 'the editor opened');
+      days.focus();
+      days.dispatchEvent(new dom.window.FocusEvent('focusout', { bubbles: true, relatedTarget: null }));
+      await new Promise(resolve => setTimeout(resolve, 700));   // past the autosave debounce
+      assert.deepEqual(saved, [], JSON.stringify(stored));
+      assert.ok(root.querySelector('.ef-estimate'), 'back in read mode');
+      assert.equal(root.querySelector('input'), null);
+    } finally { ctrl.destroy(); root.remove(); }
+  }
+});

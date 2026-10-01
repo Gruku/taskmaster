@@ -163,11 +163,17 @@ export function openEntityModal({ schema, mode, initialEntity, onSave, onCancel,
   const changes = () => Object.fromEntries(fields.filter(changed).map((f) => [f.key, f.value]));
   const draft = () => ({ ...initial, ...changes() });
 
-  // An existing task may hold values this form would refuse today (a status that was renamed, a free-text estimate).
-  // A field the user did not change is therefore never an error on edit: it is not sent, so it cannot be judged.
+  // A stored task may hold values this form would refuse today (a renamed status, a free-text estimate). A field the
+  // user did not change is not sent, so it is not judged — except that a required field left empty is still an
+  // error. A field the user changed is validated in full.
   function errors() {
     const all = runValidation({ ...initial, ...Object.fromEntries(fields.map((f) => [f.key, f.value])) }, schema).errors;
-    return Object.fromEntries(fields.filter((f) => all[f.key] && (create || changed(f))).map((f) => [f.key, all[f.key]]));
+    const out = {};
+    for (const f of fields) {
+      if (changed(f)) { if (all[f.key]) out[f.key] = all[f.key]; }
+      else if (f.spec.required && normal(f.value) == null) out[f.key] = 'required';
+    }
+    return out;
   }
 
   function paint() {

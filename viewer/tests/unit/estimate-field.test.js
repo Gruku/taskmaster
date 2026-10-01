@@ -179,3 +179,68 @@ test('a value the picker can express has no custom choice and no note', () => {
     assert.equal(el.querySelector('.ef-estimate-note'), null);
   }
 });
+
+test('leaving the days input with nothing changed commits nothing: a stored 3 or "m" is not rewritten as "3d" or "M"', () => {
+  for (const value of [3, 'm', ' S ', '03d', '2 weeks', null]) {
+    const commits = [];
+    let cancelled = 0;
+    const { days, changes } = mount({ value, onCommit: (v) => commits.push(v), onCancel: () => { cancelled++; } });
+    days.focus();
+    days.dispatchEvent(new dom.window.FocusEvent('focusout', { bubbles: true, relatedTarget: null }));
+    days.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    assert.deepEqual(commits, [], JSON.stringify(value));
+    assert.deepEqual(changes, []);
+    assert.equal(cancelled, 2, 'an inline edit is closed instead');
+  }
+  // In a form there is no cancel to call, and still no commit.
+  const commits = [];
+  const { days } = mount({ value: 3, onCommit: (v) => commits.push(v), onCancel: undefined });
+  days.dispatchEvent(new dom.window.FocusEvent('focusout', { bubbles: true, relatedTarget: null }));
+  assert.deepEqual(commits, []);
+});
+
+test('a real change still commits on leaving, and typing the stored value back does not', () => {
+  const commits = [];
+  const { days, type } = mount({ value: 3, onCommit: (v) => commits.push(v), onCancel: noop });
+  type('5');
+  days.dispatchEvent(new dom.window.FocusEvent('focusout', { bubbles: true, relatedTarget: null }));
+  assert.deepEqual(commits, ['5d']);
+  type('3');
+  days.dispatchEvent(new dom.window.FocusEvent('focusout', { bubbles: true, relatedTarget: null }));
+  assert.deepEqual(commits, ['5d']);
+});
+
+test('an entry the browser cannot read as a number ("-", "e") changes nothing and says what is expected', () => {
+  const { el, days, changes, pressed } = mount({ value: 'M' });
+  // What a browser reports for a lone "-": an empty value, flagged as bad input.
+  let bad = true;
+  Object.defineProperty(days, 'validity', { get: () => ({ badInput: bad }) });
+  days.value = '';
+  days.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  assert.deepEqual(changes, [], 'the estimate is not cleared');
+  assert.deepEqual(pressed(), ['M']);
+  assert.match(el.querySelector('.ef-estimate-unreadable').textContent, /S, M, L or a whole number of days/);
+  bad = false;
+  days.value = '4';
+  days.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  assert.equal(changes.at(-1), '4d');
+  assert.equal(el.querySelector('.ef-estimate-unreadable').textContent, '');
+});
+
+test('the stored value the picker cannot express is named in words beside the controls', () => {
+  const { el } = mount({ value: '2 weeks' });
+  assert.match(el.querySelector('.ef-estimate-note').textContent, /^Current: 2 weeks/);
+});
+
+test('emptying the days input clears a day count, but not a size or a kept stored value it never held', () => {
+  const size = mount({ value: 'M' });
+  size.type('');
+  assert.deepEqual(size.changes, []);
+  assert.deepEqual(size.pressed(), ['M']);
+  const kept = mount({ value: '2 weeks' });
+  kept.type('');
+  assert.deepEqual(kept.changes, []);
+  const count = mount({ value: '3d' });
+  count.type('');
+  assert.deepEqual(count.changes, [null]);
+});

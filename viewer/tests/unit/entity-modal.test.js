@@ -521,16 +521,48 @@ test('legacy: changing such a field is allowed, validated, and can be put back',
   assert.deepEqual(calls.saved[0].changes, { status: 'done', estimate: '5d' });
 });
 
-test('legacy: in a new task every field is validated, so a prefilled epic that no longer exists is refused', async () => {
-  const { calls, close } = open({ initialEntity: { ...CREATE, epic: 'gone' } });
+test('validation rule: an untouched value is not judged, in create as in edit — only a required field left empty is', async () => {
+  // A prefilled epic that no longer exists is shown and left to the server; the form does not block on it.
+  const a = open({ initialEntity: { ...CREATE, epic: 'gone' } });
   await tick();
   assert.equal(control('epic').selectedOptions[0].textContent, 'gone');
   type('title', 'x');
   saveBtn().click();
   await tick();
-  assert.equal(calls.saved.length, 0);
-  assert.match(errorOf('epic'), /unknown epic/i);
-  close();
+  assert.deepEqual(a.calls.saved[0].changes, { title: 'x' });
+
+  // An existing task whose required title is empty: editing something else still says so.
+  const b = openEdit({ ...RICH, title: '', estimate: '2h', phase: 'gone' });
+  await tick();
+  type('branch', 'feat/y');
+  saveBtn().click();
+  await tick();
+  assert.equal(b.calls.saved.length, 0);
+  assert.equal(errorOf('title'), 'Title is required');
+  assert.equal(errorOf('estimate'), '', 'the untouched legacy estimate is not an error');
+  assert.equal(errorOf('phase'), '');
+  assert.equal(status(), '1 field needs attention');
+  type('title', 'Named');
+  saveBtn().click();
+  await tick();
+  assert.deepEqual(b.calls.saved[0].changes, { title: 'Named', branch: 'feat/y' });
+  assert.equal(b.calls.saved[0].draft.estimate, '2h');
+  assert.equal(b.calls.saved[0].draft.phase, 'gone');
+});
+
+test('validation rule: a legacy value the user changed to something invalid is refused with a visible message', async () => {
+  for (const stored of ['2 weeks', 'XL', '2h', '0.5d']) {
+    const { calls, close } = openEdit({ ...RICH, estimate: stored });
+    await tick();
+    assert.equal(saveBtn().disabled, true, stored);
+    type('estimate', '0');
+    saveBtn().click();
+    await tick();
+    assert.equal(calls.saved.length, 0, stored);
+    assert.match(errorOf('estimate'), /S, M, L or a whole number of days/);
+    assert.equal(control('estimate').getAttribute('aria-invalid'), 'true');
+    close();
+  }
 });
 
 test('a required select with no stored value shows a placeholder instead of pretending the first option is chosen', async () => {
