@@ -69,6 +69,46 @@ test('active nav item has no shadow and no left rail; Task item is gone', async 
   await expect(page.locator('.sidebar-link .badge')).toHaveCount(0);
 });
 
+test('links with their own colour rule keep it; only unclaimed links take the signature colour', async ({ page }) => {
+  // The fallback for unclaimed links must not outrank a single-class rule such as .sidebar-link.
+  const missing = { '/api/task/NOPE-999/detail': { status: 404, json: { ok: false, error: 'unknown task' } } };
+  const probe = () => page.evaluate(() => {
+    const resolve = (v) => {
+      const i = document.createElement('i');
+      i.style.color = `var(${v})`;
+      document.body.appendChild(i);
+      const c = getComputedStyle(i).color;
+      i.remove();
+      return c;
+    };
+    const color = (sel) => {
+      const el = document.querySelector(sel);
+      // Transitions on colour would report a mid-fade value.
+      el.style.transition = 'none';
+      return getComputedStyle(el).color;
+    };
+    return {
+      signature: resolve('--signature-text'),
+      body: resolve('--foreground-default'),
+      nav: color('.sidebar-link:not(.active)'),
+      classless: color('#screen-mount .tm-empty__hint a'),
+    };
+  });
+  for (const theme of ['dark', 'light']) {
+    await mockApi(page, { ...missing, '/api/viewer/prefs': { theme, ui: {}, screens: {} } });
+    await page.goto('/#/task/NOPE-999');
+    await page.reload();
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+    await expect(page.locator('#screen-mount .tm-empty__hint a')).toBeVisible();
+    await expect(page.locator('.sidebar-link').first()).toBeVisible();
+    const c = await probe();
+    expect(c.signature, theme).not.toBe(c.body);
+    expect(c.nav, theme).not.toBe(c.signature);
+    expect(c.nav, theme).toBe(c.body);
+    expect(c.classless, theme).toBe(c.signature);
+  }
+});
+
 test('task detail highlights no nav item', async ({ page }) => {
   await page.goto('/#/kanban');
   await expect(page.locator('.sidebar-link.active')).toHaveCount(1);

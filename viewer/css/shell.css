@@ -8,8 +8,9 @@ html, body {
   color: var(--foreground-default);
 }
 button, input, select, textarea { font: inherit; color: inherit; }
-/* Links no rule has claimed: the browser's default blue is unreadable on the dark grounds. */
-a[href] { color: var(--signature-text); }
+/* Links no rule has claimed: the browser's default blue is unreadable on the dark grounds.
+   :where() keeps this at zero specificity so any class rule (.sidebar-link, .tm-action…) still wins. */
+:where(a[href]) { color: var(--signature-text); }
 :focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
 ::selection { background: var(--signature-dim); }
 .mono { font-family: var(--font-technical); font-weight: var(--font-technical-weight); }

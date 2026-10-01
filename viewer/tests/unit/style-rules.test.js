@@ -228,6 +228,17 @@ test('selftest: at-rules and nesting', () => {
     [['.a .b', 'y: 2;'], ['.a', 'x: 1; z: 3;']]);
 });
 
+test('selftest: functional pseudo-classes in a selector', () => {
+  // :where()/:is()/:not() carry parentheses and brackets; the rule under them is still found and checked.
+  assert.deepEqual(rules(':where(a[href]) { color: var(--signature-text); }').map((r) => [r.selector, r.body.trim()]),
+    [[':where(a[href])', 'color: var(--signature-text);']]);
+  clean(':where(a[href]) { color: var(--signature-text); }');
+  caught(':where(a[href]) { color: #5e79e6; }', 'color literal');
+  caught(':where(.a:hover) { transform: scale(1.1); }', 'transform on hover');
+  caught(':is(.a, .b):hover { translate: 0 -1px; }', 'transform on hover');
+  caught(':where(.a) { box-shadow: none; }', 'box-shadow');
+});
+
 test('selftest: tokens.css is checked for literals outside generated and @font-face blocks', () => {
   const t = (body) => `@font-face { font-family: 'X'; src: url('x.woff2#abc'); }\n:root {\n  /* @generated:rr-dark */\n  --signature: #5e79e6;\n  /* @generated:end */\n${body}\n}`;
   clean(t('  --card-bg: var(--surface-raised); --tilt: 0deg;'), 'tokens.css');
