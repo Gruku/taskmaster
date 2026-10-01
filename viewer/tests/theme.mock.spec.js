@@ -1,6 +1,9 @@
 // User intent: the theme choice survives reloads, never flashes the wrong theme, and still works when storage is blocked.
 import { test, expect } from '@playwright/test';
-import { mockApi } from './mock-api.js';
+import { mockApi, unmockedWrites } from './mock-api.js';
+
+// A write the mock did not expect means the page talked to an endpoint this spec never set up.
+test.afterEach(async ({ page }) => { expect(unmockedWrites(page)).toEqual([]); });
 
 test('light pref from the server is applied', async ({ page }) => {
   await mockApi(page, { '/api/viewer/prefs': { theme: 'light', ui: {}, screens: {} } });

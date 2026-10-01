@@ -1,6 +1,6 @@
 // User intent: whatever a navigation ends in — a screen, a failed load, a screen that crashes — the top bar never keeps the previous screen's controls.
 import { test, expect } from '@playwright/test';
-import { mockApi } from './mock-api.js';
+import { mockApi, unmockedWrites } from './mock-api.js';
 
 const SLOTS = ['#topbar-actions', '#topbar-count', '#topbar-primary'];
 
@@ -22,6 +22,8 @@ async function expectClearedTopbar(page) {
 const screenModule = (body) => (route) => route.fulfill({ contentType: 'text/javascript', body });
 
 test.beforeEach(async ({ page }) => { await mockApi(page); });
+// A write the mock did not expect means the page talked to an endpoint this spec never set up.
+test.afterEach(async ({ page }) => { expect(unmockedWrites(page)).toEqual([]); });
 
 test('a screen whose mount throws leaves a cleared top bar and a visible error', async ({ page }) => {
   const errors = [];

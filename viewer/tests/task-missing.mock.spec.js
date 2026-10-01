@@ -1,6 +1,9 @@
 // User intent: a task that doesn't exist must show a plain not-found state and no controls from the previously opened task.
 import { test, expect } from '@playwright/test';
-import { mockApi } from './mock-api.js';
+import { mockApi, unmockedWrites } from './mock-api.js';
+
+// A write the mock did not expect means the page talked to an endpoint this spec never set up.
+test.afterEach(async ({ page }) => { expect(unmockedWrites(page)).toEqual([]); });
 
 test('missing task shows not-found and clears the topbar', async ({ page }) => {
   await mockApi(page, {

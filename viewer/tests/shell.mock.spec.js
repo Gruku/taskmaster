@@ -1,10 +1,12 @@
 // User intent: the shell must be keyboard-usable, free of the banned visual patterns, and its theme toggle must work.
 import { test, expect } from '@playwright/test';
-import { mockApi } from './mock-api.js';
+import { mockApi, unmockedWrites } from './mock-api.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 test.beforeEach(async ({ page }) => { await mockApi(page); });
+// A write the mock did not expect means the page talked to an endpoint this spec never set up.
+test.afterEach(async ({ page }) => { expect(unmockedWrites(page)).toEqual([]); });
 
 test('theme toggle flips and persists the choice', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'dark' });
