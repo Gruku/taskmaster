@@ -24,7 +24,7 @@ body.modal-open { overflow: hidden; }
   width: min(640px, 100%);
   max-height: calc(100vh - 2 * var(--space-2xl));
   overflow: hidden;
-  background: var(--surface-overlay);
+  background: var(--overlay-surface);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-xl);
   color: var(--foreground-default);
@@ -78,23 +78,10 @@ body.modal-open { overflow: hidden; }
 .modal-actions { flex: 0 0 auto; display: flex; align-items: center; gap: var(--space-xs); }
 .modal-actions:empty { display: none; }
 
-.modal-close {
-  box-sizing: border-box;
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
-  color: var(--foreground-default);
-  cursor: pointer;
-  transition: background-color var(--dur-standard) var(--ease-hourglass), border-color var(--dur-standard) var(--ease-hourglass), color var(--dur-standard) var(--ease-hourglass);
-}
-.modal-close:hover { background: var(--ground-20); border-color: var(--border-strong); color: var(--foreground-bold); }
+/* The shared hover fill is the dialog surface itself in dark, so a transparent button on that surface
+   (the close button is a ghost icon button) steps one further. */
+:is(.modal-header, .modal-body) :is(.btn--secondary, .btn--ghost):hover:not(:disabled) { background: var(--overlay-surface-hover); }
+:is(.modal-header, .modal-body) :is(.btn--secondary, .btn--ghost):active:not(:disabled) { background: var(--overlay-surface-active); }
 
 .modal-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: var(--space-lg); }
 .modal-message { margin: 0; color: var(--foreground-default); font-size: var(--size-narrator-small); line-height: var(--leading-body); overflow-wrap: anywhere; }
@@ -106,7 +93,7 @@ body.modal-open { overflow: hidden; }
   gap: var(--space-sm);
   padding: var(--space-md) var(--space-lg);
   border-top: 1px solid var(--border-subtle);
-  background: var(--bg-recessed);
+  background: var(--overlay-surface-sunken);
 }
 .modal-footer:empty { display: none; }
 /* A decision's actions sit at the trailing edge, the answer last. */

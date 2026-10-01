@@ -36,7 +36,7 @@ async function open(page, name, { inputs = 2, veto = false, ...opts } = {}) {
 }
 
 const dialog = (page, name) => page.getByRole('dialog', { name: `Modal ${name}` });
-const activeId = (page) => page.evaluate(() => document.activeElement?.id || document.activeElement?.className || document.activeElement?.tagName);
+const activeId = (page) => page.evaluate(() => document.activeElement?.id || document.activeElement?.classList[0] || document.activeElement?.tagName);
 const count = (page) => page.evaluate(() => window.__m.openModalCount());
 
 test('Tab and Shift+Tab stay inside the dialog and wrap at both ends', async ({ page }) => {
@@ -244,12 +244,122 @@ for (const theme of ['dark', 'light']) {
       probe.remove();
       return value;
     }, name);
-    await expect(page.locator('.modal')).toHaveCSS('background-color', await token('--surface-overlay'));
+    await expect(page.locator('.modal')).toHaveCSS('background-color', await token('--overlay-surface'));
     await expect(page.locator('.modal-title')).toHaveCSS('color', await token('--foreground-bold'));
     await expect(page.locator('.modal-eyebrow')).toHaveCSS('color', await token('--foreground-subtle'));
-    await expect(page.locator('.modal-footer')).toHaveCSS('background-color', await token('--bg-recessed'));
+    await expect(page.locator('.modal-footer')).toHaveCSS('background-color', await token('--overlay-surface-sunken'));
+    // Light: the dialog is the lightest surface, as a card is. Dark: RR's overlay step.
+    expect(await token('--overlay-surface')).toBe(await token(theme === 'light' ? '--card-bg' : '--surface-overlay'));
+    expect(await token('--overlay-surface')).not.toBe(await token('--overlay-surface-sunken'));
+  });
+
+  test(`the close button and the confirm buttons take the shared button styles (${theme})`, async ({ page }) => {
+    await boot(page, { theme });
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+    const token = (name) => page.evaluate((n) => {
+      const probe = document.createElement('div');
+      probe.style.color = `var(${n})`;
+      document.body.appendChild(probe);
+      const value = getComputedStyle(probe).color;
+      probe.remove();
+      return value;
+    }, name);
+    await page.emulateMedia({ reducedMotion: 'reduce' });   // colours are read at rest, not mid-transition
+    await page.evaluate(() => { window.__answer = window.__m.confirmDialog({ title: 'Discard', message: 'Discard your edits?', confirmLabel: 'Discard', tone: 'critical' }); });
+    const close = page.locator('.modal-close');
+    const cancel = page.getByRole('button', { name: 'Cancel' });
+    const discard = page.getByRole('button', { name: 'Discard' });
+    expect(await close.boundingBox()).toMatchObject({ width: 32, height: 32 });
+    await expect(close).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+    await close.hover();
+    // On the dialog surface the hover fill must differ from the surface, or the hover shows nothing.
+    await expect(close).toHaveCSS('background-color', await token('--overlay-surface-hover'));
+    expect(await token('--overlay-surface-hover')).not.toBe(await token('--overlay-surface'));
+    await expect(discard).toHaveCSS('background-color', await token('--color-critical-bold'));
+    await expect(discard).toHaveCSS('color', await token('--foreground-on-accent'));
+    await expect(cancel).toHaveCSS('border-top-color', await token('--border-strong'));
+    await expect(cancel).toHaveCSS('color', await token('--foreground-bold'));
+    for (const button of [close, cancel, discard]) {
+      await expect(button).toHaveCSS('box-shadow', 'none');
+      await button.hover();
+      await expect(button).toHaveCSS('transform', 'none');
+    }
+    expect((await cancel.boundingBox()).height).toBeGreaterThanOrEqual(32);
+    await cancel.click();
+
+    await page.evaluate(() => { window.__answer = window.__m.confirmDialog({ title: 'Apply', message: 'Apply the change?' }); });
+    const confirm = page.getByRole('button', { name: 'Confirm' });
+    await expect(confirm).toHaveCSS('background-color', await token('--signature-fill'));
+    await expect(confirm).toHaveCSS('color', await token('--on-accent-fill'));
+    await confirm.click();
   });
 }
+
+// The banner asks the user to act while the edit form is open, so the keyboard must be able to reach it.
+async function showBanner(page) {
+  await page.evaluate(() => import('/js/components/edit/conflict-banner.js').then((b) => {
+    b.showFieldConflict({
+      entityKind: 'task', entityId: 'T-101', fieldKey: 'title', fieldLabel: 'Title',
+      localValue: 'Mine', currentValue: 'Theirs', currentEtag: 'e2',
+      onKeepMine: async () => {}, onUseServer: () => {},
+    });
+  }));
+  await expect(page.locator('#conflict-banner-host .cb-banner')).toBeVisible();
+}
+
+test('a conflict banner joins the Tab cycle of the open modal: banner, then dialog, wrapping both ways', async ({ page }) => {
+  await boot(page);
+  await open(page, 'a');
+  await expect.poll(() => activeId(page)).toBe('a-in-0');
+  await showBanner(page);
+  expect(await activeId(page)).toBe('a-in-0');                // the banner appearing does not take focus
+  await page.locator('#a-save').focus();
+  await page.keyboard.press('Tab');
+  expect(await activeId(page)).toBe('cb-use-server');         // last dialog control → the banner's first
+  await page.keyboard.press('Tab');
+  expect(await activeId(page)).toBe('cb-keep-mine');
+  await page.keyboard.press('Tab');
+  expect(await activeId(page)).toBe('modal-close');           // banner's last → the dialog's first
+  await page.keyboard.press('Shift+Tab');
+  expect(await activeId(page)).toBe('cb-keep-mine');          // dialog's first → the banner's last
+  await page.keyboard.press('Shift+Tab');
+  expect(await activeId(page)).toBe('cb-use-server');
+  await page.keyboard.press('Shift+Tab');
+  expect(await activeId(page)).toBe('a-save');                // banner's first → the dialog's last
+  // A full lap in each direction never leaves the banner and the dialog.
+  for (const key of ['Tab', 'Shift+Tab']) {
+    for (let i = 0; i < 14; i++) {
+      await page.keyboard.press(key);
+      expect(await page.evaluate(() => window.__h.a.dialog.contains(document.activeElement)
+        || document.getElementById('conflict-banner-host').contains(document.activeElement))).toBe(true);
+    }
+  }
+  // The banner is above the overlay and takes a real click and a real key press.
+  await page.locator('.cb-use-server').focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#conflict-banner-host .cb-banner')).toHaveCount(0);
+  await expect(dialog(page, 'a')).toBeVisible();
+  // With the banner gone the cycle is the dialog alone again.
+  await page.keyboard.press('Tab');
+  expect(await page.evaluate(() => window.__h.a.dialog.contains(document.activeElement))).toBe(true);
+  await page.locator('#a-save').focus();
+  await page.keyboard.press('Tab');
+  expect(await activeId(page)).toBe('modal-close');
+});
+
+test('with two modals open the banner is reached from the top one only', async ({ page }) => {
+  await boot(page);
+  await open(page, 'a');
+  await open(page, 'b', { size: 'sm' });
+  await showBanner(page);
+  await page.locator('#b-save').focus();
+  await page.keyboard.press('Tab');
+  expect(await activeId(page)).toBe('cb-use-server');
+  await page.keyboard.press('Tab');
+  await page.keyboard.press('Tab');
+  expect(await page.evaluate(() => window.__h.b.dialog.contains(document.activeElement))).toBe(true);
+  await page.evaluate(() => document.getElementById('conflict-banner-host').replaceChildren());
+});
 
 test('reduced motion: the entrance does not animate', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });

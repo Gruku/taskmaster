@@ -492,3 +492,126 @@ test('helpers: resolveFocusTarget prefers the opener, then a surviving ancestor,
   $('#fallback').remove();
   assert.equal(resolveFocusTarget(gone), null);
 });
+
+// ── Tab cycle: the dialog alone, or the conflict banner and then the dialog ──
+// jsdom does not move focus on Tab, so a press the shell leaves to the browser shows as "not prevented".
+const tab = (shiftKey = false) => !fire(document.activeElement ?? document.body, 'keydown', { key: 'Tab', shiftKey });
+function formModal() {
+  const m = openModal({ title: 'Edit task' });
+  const input = document.createElement('input');
+  const save = document.createElement('button');
+  m.body.appendChild(input);
+  m.footer.appendChild(save);
+  return { m, input, save, closeBtn: m.dialog.querySelector('.modal-close') };
+}
+function addBanner(controls = 2) {
+  const host = document.createElement('div');
+  host.id = 'conflict-banner-host';
+  const buttons = Array.from({ length: controls }, () => document.createElement('button'));
+  host.append(...buttons);
+  document.body.appendChild(host);
+  return { host, buttons };
+}
+
+test('4. with no conflict banner, Tab wraps inside the dialog at both ends and is left alone in between', async () => {
+  const { m, input, save, closeBtn } = formModal();
+  await tick();
+  assert.equal(document.activeElement, input);
+  assert.equal(tab(), false, 'mid-dialog Tab is the browser\'s');
+  assert.equal(tab(true), false);
+  save.focus();
+  assert.equal(tab(), true);
+  assert.equal(document.activeElement, closeBtn, 'forward from the last control wraps to the first');
+  assert.equal(tab(true), true);
+  assert.equal(document.activeElement, save, 'backward from the first control wraps to the last');
+  document.activeElement.blur();
+  assert.equal(tab(), true);
+  assert.equal(document.activeElement, closeBtn, 'lost focus is pulled back in');
+  m.close();
+});
+
+test('4. an empty conflict banner host changes nothing', async () => {
+  const { host } = addBanner(0);
+  host.appendChild(document.createElement('div')).textContent = 'no controls here';
+  const { m, save, closeBtn } = formModal();
+  await tick();
+  save.focus();
+  assert.equal(tab(), true);
+  assert.equal(document.activeElement, closeBtn);
+  assert.equal(tab(true), true);
+  assert.equal(document.activeElement, save);
+  m.close();
+});
+
+test('4. a conflict banner joins the top modal\'s Tab cycle: banner, then dialog, wrapping', async () => {
+  const { buttons: [useServer, keepMine] } = addBanner();
+  const { m, input, save, closeBtn } = formModal();
+  await tick();
+  assert.equal(document.activeElement, input, 'opening still focuses the dialog, not the banner');
+
+  save.focus();
+  assert.equal(tab(), true);
+  assert.equal(document.activeElement, useServer, 'Tab from the last dialog control reaches the banner\'s first');
+  assert.equal(tab(), false, 'inside the banner Tab is the browser\'s');
+  keepMine.focus();
+  assert.equal(tab(), true);
+  assert.equal(document.activeElement, closeBtn, 'Tab from the banner\'s last control enters the dialog');
+
+  assert.equal(tab(true), true);
+  assert.equal(document.activeElement, keepMine, 'Shift+Tab from the dialog\'s first control reaches the banner\'s last');
+  assert.equal(tab(true), false);
+  useServer.focus();
+  assert.equal(tab(true), true);
+  assert.equal(document.activeElement, save, 'Shift+Tab from the banner\'s first control wraps to the dialog\'s last');
+
+  document.activeElement.blur();
+  assert.equal(tab(), true);
+  assert.equal(document.activeElement, closeBtn, 'lost focus goes to the dialog, not the banner');
+  m.close();
+});
+
+test('4. the banner is reachable from the topmost modal only, and from a dialog with no controls of its own', async () => {
+  const { buttons: [only] } = addBanner(1);
+  const { m } = formModal();
+  const confirm = openModal({ title: 'Discard?' });
+  const confirmClose = confirm.dialog.querySelector('.modal-close');
+  await tick();
+  assert.equal(document.activeElement, confirmClose);
+  assert.equal(tab(), true);
+  assert.equal(document.activeElement, only);
+  assert.equal(tab(), true);
+  assert.equal(document.activeElement, confirmClose, 'never the covered dialog');
+  assert.equal(tab(true), true);
+  assert.equal(document.activeElement, only);
+  confirm.close();
+  m.close();
+
+  const bare = openModal({ title: 'Bare' });
+  bare.dialog.querySelector('.modal-close').remove();
+  bare.dialog.focus();
+  assert.equal(tab(), true);
+  assert.equal(document.activeElement, only);
+  assert.equal(tab(), true);
+  assert.equal(document.activeElement, bare.dialog);
+  assert.equal(tab(true), true);
+  assert.equal(document.activeElement, only);
+  bare.close();
+});
+
+test('4. a banner that goes away while the modal is open drops out of the cycle', async () => {
+  const { host } = addBanner();
+  const { m, save, closeBtn } = formModal();
+  await tick();
+  host.replaceChildren();
+  save.focus();
+  assert.equal(tab(), true);
+  assert.equal(document.activeElement, closeBtn);
+  m.close();
+});
+
+test('10. the close button is a ghost icon button from the shared button family', () => {
+  const m = openModal({ title: 'A' });
+  const close = m.dialog.querySelector('.modal-close');
+  for (const c of ['btn', 'btn--ghost', 'btn--icon']) assert.ok(close.classList.contains(c), c);
+  m.close();
+});

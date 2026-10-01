@@ -9,6 +9,8 @@ const stack = [];          // open modals, bottom → top
 let seq = 0;
 let shellWasInert = false; // .shell's own inert state before the first modal opened
 
+const BANNER_HOST = 'conflict-banner-host';   // filled by edit/conflict-banner.js; painted above every modal
+
 const CAN_FOCUS = 'a[href], button, input, select, textarea, summary, [tabindex], [contenteditable=""], [contenteditable="true"]';
 
 function canTakeFocus(el) {
@@ -55,17 +57,28 @@ function syncLayers() {
 }
 
 // Wraps Tab by hand so containment does not depend on the browser honouring `inert`.
+// A conflict banner asks the user to act while the form is open, so its controls join the topmost
+// modal's cycle: banner first, then the dialog, wrapping. Only the crossings are taken over; Tab
+// between two controls of the same group stays the browser's.
 function onTab(e) {
   const m = top();
   if (!m || e.key !== 'Tab') return;
-  const items = focusableIn(m.dialog);
+  const bannerHost = document.getElementById(BANNER_HOST);
+  const banner = focusableIn(bannerHost);
+  const own = focusableIn(m.dialog);
+  const groups = [banner, own.length ? own : [m.dialog]].filter((g) => g.length);
   const active = document.activeElement;
-  const first = items[0] ?? m.dialog;
-  const last = items.at(-1) ?? m.dialog;
+  const at = banner.length && bannerHost.contains(active) ? 0 : m.dialog.contains(active) ? groups.length - 1 : -1;
   let to = null;
-  if (!m.dialog.contains(active) || !items.length) to = e.shiftKey ? last : first;
-  else if (e.shiftKey && (active === first || active === m.dialog)) to = last;
-  else if (!e.shiftKey && active === last) to = first;
+  if (at < 0) {
+    // Focus lost to the page comes back to the dialog, not the banner.
+    to = e.shiftKey ? groups.at(-1).at(-1) : groups.at(-1)[0];
+  } else {
+    const group = groups[at];
+    const atEdge = active === (e.shiftKey ? group[0] : group.at(-1)) || (e.shiftKey && active === m.dialog);
+    const next = groups[(at + (e.shiftKey ? groups.length - 1 : 1)) % groups.length];
+    if (atEdge) to = e.shiftKey ? next.at(-1) : next[0];
+  }
   if (to) { e.preventDefault(); to.focus(); }
 }
 
@@ -87,7 +100,7 @@ export function openModal({ title, eyebrow, size = 'md', className, onRequestClo
   const eyebrowEl = h('div', { class: 'modal-eyebrow' });
   const titleEl = h('h2', { class: 'modal-title', id });
   const actions = h('div', { class: 'modal-actions' });
-  const closeBtn = h('button', { type: 'button', class: 'modal-close', 'aria-label': 'Close' }, icon('dismiss'));
+  const closeBtn = h('button', { type: 'button', class: 'modal-close btn btn--ghost btn--icon', 'aria-label': 'Close' }, icon('dismiss'));
   const header = h('header', { class: 'modal-header' },
     h('div', { class: 'modal-heading' }, eyebrowEl, titleEl), actions, closeBtn);
   const body = h('div', { class: 'modal-body' });
