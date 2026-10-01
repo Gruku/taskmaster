@@ -28,8 +28,14 @@ export function setThemePref(next) {
 }
 export function initTheme({ store, prefs }) {
   savePref = (p) => prefs.patch({ theme: p });
-  pref = normalizePref(store.getPrefs()?.theme);
-  try { localStorage.setItem(KEY, pref); } catch { /* ignore */ }
+  const loaded = store.getPrefs();
+  if (loaded) {
+    pref = normalizePref(loaded.theme);
+    try { localStorage.setItem(KEY, pref); } catch { /* ignore */ }
+  } else {
+    // Prefs fetch failed: keep the cached choice and leave the cache alone, so one bad boot can't erase it.
+    try { pref = normalizePref(localStorage.getItem(KEY)); } catch { pref = 'system'; }
+  }
   if (typeof matchMedia === 'function') {
     matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (pref === 'system') apply(); });
   }
