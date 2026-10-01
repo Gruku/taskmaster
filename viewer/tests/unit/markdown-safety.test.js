@@ -222,3 +222,66 @@ test('without the parser the text is shown escaped, never interpreted', () => {
     assert.equal(host.querySelector('pre.md-fallback').textContent, '<img src=x onerror=alert(1)> **b**');
   } finally { dom.window.marked = marked; }
 });
+
+// ── Task lists: plans are checkbox step lists, so a rendered plan must still say which steps are done. ──
+const taskState = (li) => {
+  const mark = [...li.children].find((c) => c.classList.contains('md-task')) ?? li.querySelector(':scope > p > .md-task');
+  return mark ? [...mark.classList].find((c) => c.startsWith('md-task--')) : null;
+};
+
+test('a task list keeps its checked state as an inert mark: no input survives, and the two states differ', () => {
+  const host = render('- [x] done step\n- [ ] open step');
+  assert.equal(host.querySelector('input'), null);
+  const [done, open] = host.querySelectorAll('li');
+  assert.notEqual(done.innerHTML.replace('done step', ''), open.innerHTML.replace('open step', ''));
+  assert.equal(taskState(done), 'md-task--done');
+  assert.equal(taskState(open), 'md-task--open');
+  // The state is announced as text, not carried by the drawn box alone.
+  assert.match(done.textContent, /^\s*done:\s+done step/);
+  assert.match(open.textContent, /^\s*to do:\s+open step/);
+  // Nothing clickable or focusable is created.
+  assert.equal(host.querySelector('button, a, [tabindex], [onclick], [role]'), null);
+  assertInert(host, 'task list');
+});
+
+test('a nested task list with mixed states keeps each item its own state', () => {
+  const host = render('- [x] parent done\n  - [ ] child open\n  - [x] child done\n- [ ] parent open\n  - plain child\n\n1. [x] numbered done\n2. [ ] numbered open');
+  const states = Object.fromEntries([...host.querySelectorAll('li')].map((li) => [li.firstChild.parentElement.childNodes.length && li.textContent.replace(/^(\s*(done|to do):)?\s*/, '').split('\n')[0].trim(), taskState(li)]));
+  assert.deepEqual(states, {
+    'parent done': 'md-task--done', 'child open': 'md-task--open', 'child done': 'md-task--done',
+    'parent open': 'md-task--open', 'plain child': null, 'numbered done': 'md-task--done', 'numbered open': 'md-task--open',
+  });
+  assert.equal(host.querySelector('input'), null);
+});
+
+test('an author cannot write the task mark: its class is stripped, and only a checkbox becomes one', () => {
+  for (const src of [
+    '<span class="md-task md-task--done">x</span> not done',
+    '- <span class="md-task md-task--done"><span class="md-task__label">done: </span></span> spoofed',
+    '<input type="text" value="x"> <input type="radio" checked> <input type="checkbox" checked onclick="alert(1)" id="c" name="n">',
+  ]) {
+    const host = render(src);
+    assert.equal(host.querySelector('input'), null, src);
+    assertInert(host, src);
+    for (const el of host.querySelectorAll('span')) {
+      if (el.closest('.md-task')) continue;
+      assert.equal(el.hasAttribute('class'), false, src);
+    }
+  }
+  assert.equal(render('<span class="md-task md-task--done">x</span> not done').querySelector('.md-task'), null);
+  assert.equal(render('- <span class="md-task md-task--done">x</span> spoofed').querySelector('.md-task'), null);
+  // A raw checkbox is the same inert mark, with none of its own attributes.
+  const marks = render('<input type="text" value="x"> <input type="checkbox" checked onclick="alert(1)" id="c">').querySelectorAll('.md-task');
+  assert.equal(marks.length, 1);
+  assert.equal(marks[0].className, 'md-task md-task--done');
+  assert.equal(marks[0].attributes.length, 1);
+});
+
+test('a slash, control characters, then a slash is still a link that leaves the site', () => {
+  for (const src of ['<a href="/\t/evil.example">x</a>', '<a href="/\n/evil.example">x</a>', '<a href="\\\t\\evil.example">x</a>', '<a href=" /\t/evil.example">x</a>']) {
+    const a = render(src).querySelector('a');
+    assert.ok(a.hasAttribute('href'), src);
+    assert.equal(a.getAttribute('rel'), 'noopener noreferrer', JSON.stringify(src));
+    assert.equal(a.getAttribute('target'), '_blank', JSON.stringify(src));
+  }
+});

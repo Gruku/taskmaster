@@ -58,11 +58,12 @@ export function formatElapsed(ms) {
 
 function _toMs(input) {
   if (input == null) return null;
-  if (input instanceof Date) return input.getTime();
-  if (typeof input === 'number') return Number.isFinite(input) ? input : null;
-  return isoToMs(input);
+  const ms = input instanceof Date ? input.getTime() : typeof input === 'number' ? input : isoToMs(input);
+  // An invalid Date, or a number no Date can hold, is no time at all — never "NaNy ago" or "Invalid Date".
+  return Number.isFinite(ms) && Math.abs(ms) <= MAX_DATE_MS ? ms : null;
 }
 
+const MAX_DATE_MS = 8.64e15;   // the range of ECMAScript Date
 const MONTH_MS = 30 * DAY_MS;
 const YEAR_MS  = 365 * DAY_MS;
 

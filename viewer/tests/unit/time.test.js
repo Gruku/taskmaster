@@ -167,3 +167,13 @@ test('formatStamp · missing or unparsable input is an em dash with no title, ne
 test('formatStamp · now defaults to the present', () => {
   assert.equal(formatStamp(new Date().toISOString()).text, 'now');
 });
+
+test('formatStamp · an invalid Date or a time outside the Date range is an em dash, never "NaNy ago" or "Invalid Date"', () => {
+  const now = Date.parse('2026-05-15T12:00:00Z');
+  for (const bad of [new Date(NaN), 1e30, -1e30, Infinity, 'not a date', '', null, undefined]) {
+    assert.deepEqual(formatStamp(bad, now), { text: '—', title: '' }, String(bad));
+    assert.equal(formatRelative(bad, { now }), '', String(bad));
+    assert.equal(formatAbsolute(bad, { now }), '', String(bad));
+  }
+  assert.equal(formatStamp(8.64e15, now).title.includes('Invalid'), false, 'the last representable instant is still a date');
+});

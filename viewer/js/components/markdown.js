@@ -41,7 +41,7 @@ export function renderMarkdown(src) {
     const clean = sanitise(window.marked.parse(text, { breaks: true, gfm: true }));
     // The caller parses this string again. If a second pass would still change it, the two parses disagree
     // about the markup, and that disagreement is where an injection hides — show the source as text instead.
-    if (sanitise(clean) === clean) return clean;
+    if (sanitise(clean) === clean) return markTasks(clean);
   } catch (e) {
     console.error('markdown render failed', e);
   }
@@ -62,10 +62,14 @@ function isAlign(value) {
   return /^(left|right|center)$/i.test(value);
 }
 
-// The scheme a browser would see: it ignores leading control characters and spaces, and tabs and newlines
+// The URL a browser would see: it ignores leading control characters and spaces, and tabs and newlines
 // anywhere, so they are removed before looking. No scheme means a relative or fragment reference.
+function visible(url) {
+  return url.replace(/[\u0000-\u0020\u007f-\u009f\u00a0\u1680\u2000-\u200f\u2028-\u202f\u205f-\u2064\u3000\ufeff]/g, '');
+}
+
 function schemeOf(url) {
-  const seen = url.replace(/[\u0000-\u0020\u007f-\u009f\u00a0\u1680\u2000-\u200f\u2028-\u202f\u205f-\u2064\u3000\ufeff]/g, '');
+  const seen = visible(url);
   const m = /^([a-z][a-z0-9+.-]*):/i.exec(seen);
   if (m) return m[1].toLowerCase();
   // A colon before any path, query or fragment separator that did not parse as a scheme is not trusted either.
@@ -80,7 +84,7 @@ function isSafeUrl(url) {
 // http(s) and protocol-relative links leave the viewer.
 function isExternal(url) {
   const scheme = schemeOf(url);
-  return scheme === 'http' || scheme === 'https' || (scheme === null && /^[\u0000-\u0020]*[/\\]{2}/.test(url));
+  return scheme === 'http' || scheme === 'https' || (scheme === null && /^[/\\]{2}/.test(visible(url)));
 }
 
 function sanitise(html) {
@@ -95,6 +99,8 @@ function sanitiseChildren(parent) {
     if (node.nodeType === 3) continue;                       // text
     if (node.nodeType !== 1) { node.remove(); continue; }    // comments, processing instructions, CDATA
     const tag = node.localName;
+    // A task-list checkbox is kept, bare, until the markup has been checked; markTasks then swaps it for a mark.
+    if (isCheckbox(node)) { bareCheckbox(node); continue; }
     if (node.namespaceURI !== HTML_NS || DROPPED_TAGS.has(tag)) { node.remove(); continue; }
     sanitiseChildren(node);
     if (!ALLOWED_TAGS.has(tag)) { node.replaceWith(...node.childNodes); continue; }
@@ -107,4 +113,35 @@ function sanitiseChildren(parent) {
       node.setAttribute('target', '_blank');
     }
   }
+}
+
+function isCheckbox(node) {
+  return node.namespaceURI === HTML_NS && node.localName === 'input' && (node.getAttribute('type') ?? '').toLowerCase() === 'checkbox';
+}
+
+function bareCheckbox(node) {
+  const checked = node.hasAttribute('checked');
+  for (const attr of [...node.attributes]) node.removeAttributeNode(attr);
+  node.setAttribute('type', 'checkbox');
+  node.setAttribute('disabled', '');
+  if (checked) node.setAttribute('checked', '');
+}
+
+// Plans are checkbox step lists. A form control cannot stay, so each checkbox becomes an inert mark that still
+// says whether the step is done — drawn by the stylesheet, and spoken through its hidden text. The class is
+// added here, after every authored class has been stripped, so task text cannot fake a mark.
+function markTasks(html) {
+  const tpl = document.createElement('template');
+  tpl.innerHTML = html;
+  for (const box of tpl.content.querySelectorAll('input')) {
+    const done = box.hasAttribute('checked');
+    const mark = document.createElement('span');
+    mark.className = `md-task md-task--${done ? 'done' : 'open'}`;
+    const label = document.createElement('span');
+    label.className = 'md-task__label';
+    label.textContent = done ? 'done: ' : 'to do: ';
+    mark.appendChild(label);
+    box.replaceWith(mark);
+  }
+  return tpl.innerHTML;
 }
