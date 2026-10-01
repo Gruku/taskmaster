@@ -12,7 +12,7 @@ export function unmockedWrites(page) {
 export async function mockApi(page, table = {}) {
   const base = {
     '/api/identity': { version: '0.0.0-test' },
-    '/api/viewer/prefs': { theme: 'system', ui: {}, screens: {} },
+    '/api/viewer/prefs': { theme: 'dark', ui: {}, screens: {} },
     // Boot, navigation and the theme toggle all save prefs.
     'PUT /api/viewer/prefs': {},
     '/api/ideas': { ideas: [] },

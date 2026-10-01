@@ -5,11 +5,11 @@
   <!-- Pre-paint theme apply. Duplicates resolveTheme() in js/lib/theme.js (key 'tm.theme') — keep the two in agreement. -->
   <script>
     (function () {
-      var p = 'system';
-      try { p = localStorage.getItem('tm.theme') || 'system'; } catch (e) {}
+      var p = 'dark';
+      try { p = localStorage.getItem('tm.theme') || 'dark'; } catch (e) {}
       var dark = true;
       try { dark = matchMedia('(prefers-color-scheme: dark)').matches; } catch (e) {}
-      document.documentElement.dataset.theme = p === 'dark' || p === 'light' ? p : (dark ? 'dark' : 'light');
+      document.documentElement.dataset.theme = p === 'system' ? (dark ? 'dark' : 'light') : (p === 'light' ? 'light' : 'dark');
     })();
   </script>
   <meta name="viewport" content="width=device-width, initial-scale=1">

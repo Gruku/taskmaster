@@ -714,7 +714,7 @@ def test_viewer_prefs_defaults_have_all_expected_keys():
     }
     assert set(VIEWER_PREFS_DEFAULTS.keys()) == expected_top_keys
     assert VIEWER_PREFS_DEFAULTS["schema_version"] == 1
-    assert VIEWER_PREFS_DEFAULTS["theme"] == "system"
+    assert VIEWER_PREFS_DEFAULTS["theme"] == "dark"
     assert VIEWER_PREFS_DEFAULTS["card_density"] == "full"
     assert VIEWER_PREFS_DEFAULTS["zoom"] == 1.0
     # screens.<name>.view holds A/B toggle per screen

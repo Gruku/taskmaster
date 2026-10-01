@@ -49,7 +49,7 @@ def test_get_viewer_prefs_returns_defaults_on_first_call(running_server):
     resp = urllib.request.urlopen(f"{base}/api/viewer/prefs")
     assert resp.status == 200
     body = json.loads(resp.read())
-    assert body["theme"] == "system"
+    assert body["theme"] == "dark"
     assert body["card_density"] == "full"
     assert body["zoom"] == 1.0
 

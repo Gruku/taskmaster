@@ -1,4 +1,4 @@
-// User intent: the theme choice survives reloads, never flashes the wrong theme, and still works when storage is blocked.
+// User intent: dark is the default theme; a choice survives reloads, never flashes the wrong theme, and still works when storage is blocked.
 import { test, expect } from '@playwright/test';
 import { mockApi, unmockedWrites } from './mock-api.js';
 
@@ -12,8 +12,29 @@ test('light pref from the server is applied', async ({ page }) => {
   await expect(page.locator('body')).toHaveCSS('background-color', 'rgb(230, 228, 221)');   // ground-5 light = #e6e4dd
 });
 
-test('system pref follows the OS scheme', async ({ page }) => {
-  await mockApi(page);
+test('with no stored pref the viewer is dark, even on a light OS', async ({ page }) => {
+  await mockApi(page, { '/api/viewer/prefs': { ui: {}, screens: {} } });
+  await page.emulateMedia({ colorScheme: 'light' });
+  await page.goto('/#/settings', { waitUntil: 'commit' });
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');   // the inline script, before boot
+  await expect(page.locator('#sidebar .sidebar-link').first()).toBeVisible();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');   // and after the prefs have loaded
+  expect(await page.evaluate(() => localStorage.getItem('tm.theme'))).toBe('dark');
+});
+
+test('an unknown stored pref is dark, even on a light OS', async ({ page }) => {
+  await mockApi(page, { '/api/viewer/prefs': { theme: 'sepia', ui: {}, screens: {} } });
+  await page.addInitScript(() => localStorage.setItem('tm.theme', 'sepia'));
+  await page.emulateMedia({ colorScheme: 'light' });
+  await page.goto('/#/settings', { waitUntil: 'commit' });
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await expect(page.locator('#sidebar .sidebar-link').first()).toBeVisible();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+});
+
+test('a stored system pref follows the OS scheme', async ({ page }) => {
+  await mockApi(page, { '/api/viewer/prefs': { theme: 'system', ui: {}, screens: {} } });
+  await page.addInitScript(() => localStorage.setItem('tm.theme', 'system'));
   await page.emulateMedia({ colorScheme: 'light' });
   await page.goto('/#/settings');
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
@@ -62,11 +83,12 @@ test('blocked localStorage does not break boot', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(window, 'localStorage', { get() { throw new Error('denied'); } });
   });
-  await mockApi(page);
-  await page.emulateMedia({ colorScheme: 'dark' });
+  await mockApi(page, { '/api/viewer/prefs': { ui: {}, screens: {} } });
+  await page.emulateMedia({ colorScheme: 'light' });
   await page.goto('/#/settings');
-  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');   // the default, not the OS
   await expect(page.locator('#sidebar .sidebar-link').first()).toBeVisible();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   expect(errors).toEqual([]);
 });
 
